@@ -93,35 +93,51 @@ def _misheard_pattern(misheard: str) -> re.Pattern[str]:
     return re.compile(not_after + re.escape(misheard) + not_before, re.IGNORECASE | re.ASCII)
 
 
+def _window(start: int, end: int, word: str) -> tuple[int, int]:
+    """The stretch of a text that holds every occurrence of `word` sharing a character with
+    `text[start:end]`: such an occurrence starts after start - len(word) and before end."""
+    return max(0, start - len(word) + 1), end + len(word) - 1
+
+
 def _overlaps_word(text: str, start: int, end: int, word: str) -> bool:
-    """Whether an occurrence of `word` in `text` shares a character with `text[start:end]`."""
-    # Such an occurrence starts after start - len(word) and before end, so it lies within this
-    # stretch of the text.
-    return text.find(word, max(0, start - len(word) + 1), end + len(word) - 1) != -1
+    """Whether `word`, spelled exactly like that, shares a character with `text[start:end]`."""
+    return text.find(word, *_window(start, end, word)) != -1
 
 
 def _apply_rule(text: str, misheard: str, word: str) -> str:
     """`text` with each match of `misheard` replaced by `word`, but not where `word` is already.
 
-    A match that shares a character with an occurrence of `word` is not a mishearing but the word
-    itself, or part of it, and stays as it is.
+    A match that shares a character with `word` as it is spelled in the text is not a mishearing
+    but the word itself, or part of it, and stays. When it shares one with the word in other
+    letter case ("claude code" for "Claude Code"), that whole occurrence is written as `word`.
     """
     pattern = _misheard_pattern(misheard)
     # A word that is shorter than the misheard text cannot contain a match, and a rule such as
     # ("Claude Code", "Claude") has to replace matches that contain the word.
     protect_word = len(word) >= len(misheard)
+    word_in_any_case = re.compile(re.escape(word), re.IGNORECASE | re.ASCII)
     pieces: list[str] = []
     copied = 0  # text[:copied] is in `pieces`, replaced or not
     position = 0  # where the search for the next match starts
     while (match := pattern.search(text, position)) is not None:
         start, end = match.span()
-        if protect_word and _overlaps_word(text, start, end, word):
-            position = start + 1  # the next match may start inside this one
-            continue
-        pieces.append(text[copied:start])
+        first, last = start, end  # what gets replaced: the match, or the word it overlaps
+        if protect_word:
+            if _overlaps_word(text, start, end, word):
+                position = start + 1  # the next match may start inside this one
+                continue
+            other_case = word_in_any_case.search(text, *_window(start, end, word))
+            if other_case is not None:
+                first, last = other_case.span()
+                # An occurrence that begins in text that is dealt with, or that overlaps the word
+                # as spelled, is the end of one word and the start of another, not a word.
+                if first < copied or _overlaps_word(text, first, last, word):
+                    position = start + 1
+                    continue
+        pieces.append(text[copied:first])
         # The word itself, so that backslashes in it are not read as escapes or group references.
         pieces.append(word)
-        copied = position = end
+        copied = position = last
     pieces.append(text[copied:])
     return "".join(pieces)
 
@@ -134,13 +150,17 @@ def apply_replacements(text: str, rules: Sequence[tuple[str, str]]) -> str:
     everything else exactly. A rule with empty `misheard` text is skipped.
 
     A text that starts or ends with an ASCII letter or digit matches only as a word of its own:
-    "cloud" is not found in "iCloud" or "clouds". And the rules never damage a word that is
-    already right: with ("Claude", "Claude Code"), the "Claude" in "Claude Code" stays. The brain
+    "cloud" is not found in "iCloud" or "clouds". And a match that overlaps the `word` itself is
+    not a mishearing: with ("Claude", "Claude Code"), the "Claude" in "Claude Code" stays, and
+    "claude code" is written as "Claude Code" instead of gaining a second "Code". The brain
     applies the rules to the speech-to-text result and again to the cleaned text, so the second
-    time must not add another "Code". Applied to its own result, a rule whose word is at least as
-    long as its misheard text changes nothing more. Rules can still undo or build on each other
-    (a word that holds the misheard text of an earlier rule), and a word shorter than its misheard
-    text can leave a second match behind.
+    time must not add another "Code". For a word at least as long as its misheard text, applying
+    the rule to its own result is meant to change nothing more. That does not extend to a word
+    shorter than its misheard text, which can leave another match behind, or to rules that build
+    on each other (a word that holds the misheard text of an earlier rule).
+
+    The word in other letter case is only rewritten where a match overlaps it. Elsewhere it stays
+    as it is: ("cloud", "Claude") leaves "CLAUDE" alone.
     """
     for misheard, word in rules:
         if misheard:

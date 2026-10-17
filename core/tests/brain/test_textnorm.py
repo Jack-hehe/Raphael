@@ -228,6 +228,13 @@ def test_non_ascii_rules_still_match_as_plain_substrings():
         (("code", "VS Code"), "open code and VS Code", "open VS Code and VS Code"),
         (("Lafia", "Lafia 先生"), "Lafia 先生，Lafia", "Lafia 先生，Lafia 先生"),
         (("拉菲爾", "拉菲爾先生"), "拉菲爾先生和拉菲爾", "拉菲爾先生和拉菲爾先生"),
+        # The word in other letter case is the word too: it is written right, not added to.
+        (("Claude", "Claude Code"), "claude Code", "Claude Code"),
+        (("Claude", "Claude Code"), "Claude code", "Claude Code"),
+        (("Claude", "Claude Code"), "I use Claude code today", "I use Claude Code today"),
+        (("Claude", "Claude Code"), "CLAUDE CODE and claude", "Claude Code and Claude Code"),
+        (("code", "VS Code"), "open vs code", "open VS Code"),
+        (("Lafia", "Lafia 先生"), "lafia 先生，LAFIA", "Lafia 先生，Lafia 先生"),
     ],
 )
 def test_a_word_that_contains_its_misheard_text_is_not_added_twice(rule, text, expected):
@@ -235,6 +242,11 @@ def test_a_word_that_contains_its_misheard_text_is_not_added_twice(rule, text, e
     once = apply_replacements(text, [rule])
     assert once == expected
     assert apply_replacements(once, [rule]) == expected
+
+
+def test_the_word_in_other_case_is_left_alone_when_no_match_touches_it():
+    # Only a mishearing, and the word it is part of, is written as the word.
+    assert apply_replacements("CLAUDE and cloud", [("cloud", "Claude")]) == "CLAUDE and Claude"
 
 
 def test_a_rule_that_hands_its_word_to_the_next_rule_does_not_add_it_twice():
@@ -290,7 +302,8 @@ def test_a_second_pass_over_the_result_changes_nothing(rules):
 def test_a_rule_applied_to_its_own_result_changes_nothing_for_every_short_text():
     # Every text of up to six characters from a small alphabet, against rules shaped like the ones
     # that go wrong: the word holds the misheard text and adds to it on one side or the other, in
-    # either case, with and without ASCII letters or digits at the ends.
+    # the same or the other case ("A" in "a A"), with and without ASCII letters or digits at the
+    # ends. A word that overlaps itself in another case ("a A a") is the hardest.
     alphabet = "aA- "
     texts = [
         "".join(chars)
@@ -305,6 +318,10 @@ def test_a_rule_applied_to_its_own_result_changes_nothing_for_every_short_text()
         (" a", "a a"),
         ("a-a", "a-a-a"),
         ("A-", "a-A"),
+        ("A", "a A"),
+        ("A", "A a"),
+        ("A", "a-A-"),
+        ("a", "A a "),
     ]:
         for text in texts:
             once = apply_replacements(text, [rule])
