@@ -1,10 +1,11 @@
 """Client for OpenRouter's chat completions API: asks a model for JSON that fits a schema.
 
 A call that fails raises an OpenRouterError that says what kind of failure it was, so callers
-need not know httpx's exceptions. A cancellation passes through untouched, as asyncio.wait_for
-needs, and so does an exception from the key provider. The key is read through `key_provider`
-for each call and goes only into the Authorization header. Nothing here logs it: a failure is
-logged with its status and kind, and nothing else.
+need not know the exceptions of httpx or of the key store: a key provider that fails is an auth
+error, with the original exception chained. A cancellation passes through untouched, as
+asyncio.wait_for needs. The key is read through `key_provider` for each call and goes only into
+the Authorization header. Nothing here logs it: a failure is logged with its status and kind, and
+the type of the exception behind it when there is one, and nothing else.
 """
 
 import json
@@ -64,7 +65,7 @@ class OpenRouterError(Exception):
     `status` is the HTTP status, or the code OpenRouter reports inside a 200 reply, or 0 when
     there was no reply. `kind` says what went wrong:
 
-    - auth: no key, a key that cannot be one, or a key OpenRouter rejects (401)
+    - auth: no key, a key that cannot be read or cannot be one, or a key OpenRouter rejects (401)
     - credits: no credit left, or a spending limit reached (402, or 403 naming a limit)
     - rate_limit: 429
     - bad_request: the request was refused (400, a 403 that is no limit, any other 4xx)
@@ -91,9 +92,20 @@ class _Reply:
     latency_ms: int
 
 
-def _failure(status: int, kind: str, message: str) -> OpenRouterError:
-    """The error to raise, after logging its status and kind (and nothing else) as a warning."""
-    logger.warning("OpenRouter call failed: status=%s kind=%s", status, kind)
+def _failure(
+    status: int, kind: str, message: str, cause: Exception | None = None
+) -> OpenRouterError:
+    """The error to raise, after logging its status and kind as a warning.
+
+    Nothing else is logged but the type of `cause`, when there is one: its message could hold
+    anything, a key included.
+    """
+    if cause is None:
+        logger.warning("OpenRouter call failed: status=%s kind=%s", status, kind)
+    else:
+        logger.warning(
+            "OpenRouter call failed: status=%s kind=%s cause=%s", status, kind, type(cause).__name__
+        )
     return OpenRouterError(status, kind, message)
 
 
@@ -156,16 +168,45 @@ def _reported_error(error: dict, status: int, default_message: str) -> OpenRoute
     )
 
 
-def _count(value: object) -> int:
-    return value if isinstance(value, int) else 0
+def _is_number(value: object) -> bool:
+    """Whether `value` is a JSON number. A bool is not, though Python makes it an int."""
+    return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 def _amount(value: object) -> float:
-    return value if isinstance(value, int | float) else 0.0
+    return value if _is_number(value) else 0.0
 
 
 def _amount_or_none(value: object) -> float | None:
-    return value if isinstance(value, int | float) else None
+    return value if _is_number(value) else None
+
+
+def _warn_unusable(field: str, value: object) -> None:
+    """Log that `usage[field]` is present but no use, naming the field and never the value.
+
+    A missing or null field is normal, since a reply need not carry a cost. A cost that read as 0
+    without a word would keep the monthly limit from ever being reached.
+    """
+    if value is not None:
+        logger.warning("OpenRouter usage.%s is not a usable number, counted as 0", field)
+
+
+def _usage_amount(usage: dict, field: str) -> float:
+    """usage[field], or 0.0 if it is missing, null or no number."""
+    value = usage.get(field)
+    if _is_number(value):
+        return value
+    _warn_unusable(field, value)
+    return 0.0
+
+
+def _usage_count(usage: dict, field: str) -> int:
+    """usage[field], or 0 if it is missing, null or no whole number."""
+    value = usage.get(field)
+    if isinstance(value, int) and _is_number(value):
+        return value
+    _warn_unusable(field, value)
+    return 0
 
 
 def _to_completion(reply: _Reply, requested_model: str) -> Completion:
@@ -195,9 +236,9 @@ def _to_completion(reply: _Reply, requested_model: str) -> Completion:
     return Completion(
         data=data,
         model=answered_by if isinstance(answered_by, str) and answered_by else requested_model,
-        cost_usd=_amount(usage.get("cost")),
-        prompt_tokens=_count(usage.get("prompt_tokens")),
-        completion_tokens=_count(usage.get("completion_tokens")),
+        cost_usd=_usage_amount(usage, "cost"),
+        prompt_tokens=_usage_count(usage, "prompt_tokens"),
+        completion_tokens=_usage_count(usage, "completion_tokens"),
         latency_ms=reply.latency_ms,
     )
 
@@ -222,8 +263,9 @@ class OpenRouterClient:
     """Calls OpenRouter with the key that `key_provider` returns.
 
     `key_provider` returns the key, or None when there is none. It is called for each request, so
-    a key that is replaced takes effect at once. `http` is the httpx client to use, which the
-    caller then owns. Without one, the client makes its own on first use, and `aclose` closes it.
+    a key that is replaced takes effect at once; if it raises, the call fails with an auth error.
+    `http` is the httpx client to use, which the caller then owns. Without one, the client makes
+    its own on first use, and `aclose` closes it.
     """
 
     def __init__(
@@ -272,7 +314,7 @@ class OpenRouterClient:
         if models:
             body["models"] = models
         reply = await self._request(
-            "POST", "/chat/completions", self._key_provider(), timeout_s, body
+            "POST", "/chat/completions", self._stored_key(), timeout_s, body
         )
         return _to_completion(reply, model)
 
@@ -282,19 +324,37 @@ class OpenRouterClient:
         This is how a key is checked: a key OpenRouter rejects raises an auth error. A `key` that
         is given but blank is not replaced by the stored one: it is an auth error too.
         """
-        key = self._key_provider() if key is None else key
+        key = self._stored_key() if key is None else key
         return _to_key_info(await self._request("GET", "/key", key, timeout_s))
 
     async def aclose(self) -> None:
-        """Close the httpx client this object made. One it was given stays open."""
-        if self._own_http is not None:
-            await self._own_http.aclose()
+        """Close the httpx client this object made. One it was given stays open.
+
+        A call after this makes a new client.
+        """
+        own_http, self._own_http = self._own_http, None
+        if own_http is not None:
+            await own_http.aclose()
+
+    def _stored_key(self) -> str | None:
+        """The key from the key provider, or an auth error if the provider itself fails.
+
+        A key store can fail in ways of its own (a locked vault, no keyring backend). Callers fall
+        back to the raw text on an OpenRouterError, and only on that.
+        """
+        try:
+            return self._key_provider()
+        except Exception as exc:
+            raise _failure(0, "auth", "Could not read the OpenRouter key", exc) from exc
 
     def _client(self) -> httpx.AsyncClient:
         if self._http is not None:
             return self._http
         if self._own_http is None:
-            self._own_http = httpx.AsyncClient()
+            # Dictations can be minutes apart, and httpx drops an idle connection after 5 s. Two
+            # minutes spares most dictations the DNS, TCP and TLS set-up. A connection the server
+            # closed in the meantime is noticed and replaced before it is used.
+            self._own_http = httpx.AsyncClient(limits=httpx.Limits(keepalive_expiry=120))
         return self._own_http
 
     async def _request(

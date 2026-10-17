@@ -9,6 +9,7 @@ import logging
 import time
 
 import httpx
+import keyring.errors
 import pytest
 
 from raphael_core.brain import openrouter
@@ -99,6 +100,15 @@ async def complete(client, **overrides):
 
 def key_info_of(client):
     return client.key_info()
+
+
+def openrouter_warnings(caplog):
+    """The warnings the client has logged, as text."""
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == openrouter.logger.name and r.levelno == logging.WARNING
+    ]
 
 
 # Both calls need a key and fail in the same ways, so some tests run against each.
@@ -306,6 +316,63 @@ async def test_the_key_is_read_again_for_every_request(client_with):
     ]
 
 
+FAILING_PROVIDERS = {
+    "RuntimeError": lambda: RuntimeError("vault locked"),
+    "OSError": lambda: OSError(5, "Access is denied"),
+    "KeyringLocked": lambda: keyring.errors.KeyringLocked("the vault is locked"),
+    "NoKeyringError": lambda: keyring.errors.NoKeyringError("no keyring backend"),
+}
+
+
+@EACH_CALL
+@pytest.mark.parametrize(
+    "make_error", list(FAILING_PROVIDERS.values()), ids=list(FAILING_PROVIDERS)
+)
+async def test_a_key_provider_that_fails_is_an_auth_error_and_nothing_is_sent(
+    client_with, call, make_error
+):
+    # The cleanup service falls back to the raw text on an OpenRouterError, and only on that.
+    error = make_error()
+
+    def failing():
+        raise error
+
+    seen = []
+    client = client_with(answering(lambda: ok_reply({"text": "x"}), seen), key=failing)
+    with pytest.raises(OpenRouterError) as e:
+        await call(client)
+    assert (e.value.status, e.value.kind) == (0, "auth")
+    assert e.value.message == "Could not read the OpenRouter key"
+    assert e.value.__cause__ is error
+    assert seen == []
+
+
+async def test_key_info_with_a_key_does_not_ask_the_key_provider(client_with):
+    def failing():
+        raise RuntimeError("vault locked")
+
+    seen = []
+    client = client_with(answering(key_reply, seen), key=failing)
+    info = await client.key_info(key="sk-or-v1-candidate")
+    assert info.label == "Raphael"
+    assert seen[0].headers["authorization"] == "Bearer sk-or-v1-candidate"
+
+
+async def test_a_key_provider_failure_is_logged_by_exception_type_only(client_with, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    def failing():
+        raise RuntimeError("vault locked, token sk-or-v1-LEAK")
+
+    with pytest.raises(OpenRouterError):
+        await complete(client_with(lambda r: ok_reply({"text": "x"}), key=failing))
+
+    logged = [r.getMessage() for r in caplog.records if r.name == openrouter.logger.name]
+    assert any("RuntimeError" in line and "auth" in line for line in logged)
+    assert "vault locked" not in caplog.text
+    assert "sk-or-v1-LEAK" not in caplog.text
+
+
 async def test_key_info_checks_the_key_it_is_given_not_the_stored_one(client_with):
     seen = []
     client = client_with(answering(key_reply, seen), key="sk-or-v1-stored")
@@ -361,11 +428,63 @@ def test_completion_fields_are_in_the_documented_order():
         pytest.param({"prompt_tokens": None, "completion_tokens": None, "cost": None}, id="nulls"),
     ],
 )
-async def test_missing_usage_counts_as_zero(client_with, usage):
+async def test_missing_usage_counts_as_zero(client_with, caplog, usage):
     reply = {"choices": [{"message": {"content": '{"text": "ok"}'}, "finish_reason": "stop"}]}
     reply["usage"] = usage
     c = await complete(client_with(lambda r: httpx.Response(200, json=reply)))
     assert (c.cost_usd, c.prompt_tokens, c.completion_tokens) == (0.0, 0, 0)
+    assert openrouter_warnings(caplog) == []  # a reply need not carry a cost
+
+
+async def test_a_normal_reply_logs_nothing(client_with, caplog):
+    await complete(client_with(lambda r: ok_reply({"text": "x"})))
+    assert openrouter_warnings(caplog) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("cost", "NOTANUMBER-7"),
+        ("cost", {"marker": "NOTANUMBER-7"}),
+        ("cost", True),
+        ("prompt_tokens", "NOTANUMBER-7"),
+        ("prompt_tokens", ["NOTANUMBER-7"]),
+        ("prompt_tokens", 12.5),
+        ("completion_tokens", "NOTANUMBER-7"),
+        ("completion_tokens", True),
+    ],
+    ids=[
+        "cost is a string",
+        "cost is an object",
+        "cost is a bool",
+        "prompt tokens is a string",
+        "prompt tokens is a list",
+        "prompt tokens is fractional",
+        "completion tokens is a string",
+        "completion tokens is a bool",
+    ],
+)
+async def test_a_usage_field_that_is_no_number_counts_as_zero_and_is_logged(
+    client_with, caplog, field, value
+):
+    # A cost that silently reads as 0 would keep the monthly limit from ever being reached.
+    usage = {"prompt_tokens": 120, "completion_tokens": 30, "cost": 0.0002}
+    usage[field] = value
+    reply = {
+        "choices": [{"message": {"content": '{"text": "ok"}'}, "finish_reason": "stop"}],
+        "usage": usage,
+    }
+    c = await complete(client_with(lambda r: httpx.Response(200, json=reply)))
+
+    expected = {"prompt_tokens": 120, "completion_tokens": 30, "cost": 0.0002}
+    expected[field] = 0
+    assert c.cost_usd == expected["cost"]
+    assert c.prompt_tokens == expected["prompt_tokens"]
+    assert c.completion_tokens == expected["completion_tokens"]
+    warned = openrouter_warnings(caplog)
+    assert len(warned) == 1
+    assert field in warned[0]
+    assert "NOTANUMBER" not in caplog.text  # the field is named, the value is not
 
 
 async def test_a_reply_without_usage_or_model_still_completes(client_with):
@@ -722,38 +841,69 @@ async def test_a_key_reply_without_data_is_a_bad_response(client_with, reply):
 # --- the http client --------------------------------------------------------------------------
 
 
-async def test_the_default_http_client_is_made_on_first_use_and_closed_by_aclose(monkeypatch):
-    made: list[httpx.AsyncClient] = []
+def patch_default_client(monkeypatch, build_seconds=0.0):
+    """Make the httpx client that OpenRouterClient builds for itself talk to a mock.
+
+    Returns the list of (client, keyword arguments) of each client built so far. `build_seconds`
+    is how long a build takes (a real one loads the CA bundle).
+    """
+    built = []
     real_client = httpx.AsyncClient
 
-    def mock_client(**kwargs):
-        http = real_client(
-            transport=httpx.MockTransport(lambda request: ok_reply({"text": "x"})), **kwargs
-        )
-        made.append(http)
-        return http
+    def build(**kwargs):
+        if build_seconds:
+            time.sleep(build_seconds)
+        transport = httpx.MockTransport(lambda request: ok_reply({"text": "x"}))
+        client = real_client(transport=transport, **kwargs)
+        built.append((client, kwargs))
+        return client
 
-    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+    monkeypatch.setattr(httpx, "AsyncClient", build)
+    return built
+
+
+async def test_the_default_http_client_is_made_on_first_use_and_closed_by_aclose(monkeypatch):
+    built = patch_default_client(monkeypatch)
     client = OpenRouterClient(lambda: KEY)
-    assert made == []
+    assert built == []
     await complete(client)
     await complete(client)
-    assert len(made) == 1
-    assert not made[0].is_closed
+    assert len(built) == 1
+    http = built[0][0]
+    assert not http.is_closed
     await client.aclose()
-    assert made[0].is_closed
+    assert http.is_closed
     await client.aclose()  # closing twice is fine
 
 
+async def test_a_call_after_aclose_builds_a_fresh_http_client(monkeypatch):
+    built = patch_default_client(monkeypatch)
+    client = OpenRouterClient(lambda: KEY)
+    await complete(client)
+    await client.aclose()
+    completion = await complete(client)
+    assert completion.data == {"text": "x"}
+    assert len(built) == 2
+    first, second = built[0][0], built[1][0]
+    assert first.is_closed
+    assert not second.is_closed
+    await client.aclose()
+    assert second.is_closed
+
+
+async def test_the_default_http_client_keeps_connections_alive_for_two_minutes(monkeypatch):
+    # So that dictations a minute or two apart reuse the TLS connection instead of opening one.
+    built = patch_default_client(monkeypatch)
+    client = OpenRouterClient(lambda: KEY)
+    try:
+        await complete(client)
+    finally:
+        await client.aclose()
+    assert built[0][1]["limits"].keepalive_expiry == 120
+
+
 async def test_building_the_default_http_client_is_not_counted_as_latency(monkeypatch):
-    real_client = httpx.AsyncClient
-
-    def slow_to_build(**kwargs):
-        time.sleep(0.2)  # what building a real client costs, exaggerated
-        transport = httpx.MockTransport(lambda request: ok_reply({"text": "x"}))
-        return real_client(transport=transport, **kwargs)
-
-    monkeypatch.setattr(httpx, "AsyncClient", slow_to_build)
+    patch_default_client(monkeypatch, build_seconds=0.2)
     client = OpenRouterClient(lambda: KEY)
     try:
         completion = await complete(client)

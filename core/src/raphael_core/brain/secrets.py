@@ -32,8 +32,11 @@ class CredentialKeyStore:
     PasswordDeleteError, which `clear` swallows; any other failure reaches the caller, because
     pretending a key is gone when it is not would be worse than failing.
 
-    The Windows backend of keyring 25.7.0 keeps the value that `set` replaces in a second
-    credential, named "<username>@<service>", until `clear` removes both.
+    `set` removes the stored key before it writes the new one. The Windows backend of keyring
+    25.7.0 keeps the value that an overwrite replaces in a second credential, named
+    "<username>@<service>", so overwriting alone would leave the previous key in the vault. The
+    two steps are not atomic: if the write fails, the old key is already gone, and the user
+    enters the key again.
     """
 
     def __init__(self, service: str = "Raphael", username: str = "openrouter") -> None:
@@ -44,6 +47,7 @@ class CredentialKeyStore:
         return keyring.get_password(self._service, self._username)
 
     def set(self, key: str) -> None:
+        self.clear()
         keyring.set_password(self._service, self._username, key)
 
     def clear(self) -> None:

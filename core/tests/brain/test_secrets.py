@@ -1,50 +1,13 @@
 """Tests for the OpenRouter key stores.
 
-The keyring is an in-memory fake that every test in this module installs (autouse), so nothing here
+The keyring is the in-memory fake from tests/conftest.py, which every test gets, so nothing here
 can reach the real Windows Credential Manager.
 """
 
-import keyring
-import keyring.backend
 import keyring.errors
 import pytest
 
 from raphael_core.brain.secrets import CredentialKeyStore, MemoryKeyStore
-
-
-class MemoryKeyring(keyring.backend.KeyringBackend):
-    """A keyring that keeps its passwords in a dict.
-
-    Like the Windows backend, it raises PasswordDeleteError when there is nothing to delete.
-    """
-
-    # Zero keeps it out of keyring's own search for a backend: tests install it with set_keyring.
-    priority = 0
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.passwords: dict[tuple[str, str], str] = {}
-
-    def get_password(self, service, username):
-        return self.passwords.get((service, username))
-
-    def set_password(self, service, username, password):
-        self.passwords[(service, username)] = password
-
-    def delete_password(self, service, username):
-        try:
-            del self.passwords[(service, username)]
-        except KeyError:
-            raise keyring.errors.PasswordDeleteError(service) from None
-
-
-@pytest.fixture(autouse=True)
-def memory_keyring():
-    previous = keyring.get_keyring()
-    backend = MemoryKeyring()
-    keyring.set_keyring(backend)
-    yield backend
-    keyring.set_keyring(previous)
 
 
 @pytest.fixture(params=["memory", "credential"])
@@ -83,7 +46,7 @@ def test_setting_a_key_again_replaces_it(store):
 
 def test_the_key_is_filed_under_service_raphael(memory_keyring):
     CredentialKeyStore().set("sk-or-v1-abc")
-    assert memory_keyring.passwords == {("Raphael", "openrouter"): "sk-or-v1-abc"}
+    assert memory_keyring.credentials == {"Raphael": ("openrouter", "sk-or-v1-abc")}
 
 
 def test_the_service_and_username_can_be_chosen(memory_keyring):
@@ -91,7 +54,29 @@ def test_the_service_and_username_can_be_chosen(memory_keyring):
     other.set("sk-or-v1-other")
     assert other.get() == "sk-or-v1-other"
     assert CredentialKeyStore().get() is None
-    assert memory_keyring.passwords == {("Elsewhere", "someone"): "sk-or-v1-other"}
+    assert memory_keyring.credentials == {"Elsewhere": ("someone", "sk-or-v1-other")}
+
+
+def test_replacing_the_key_leaves_exactly_one_credential(memory_keyring):
+    # Overwriting alone would leave the old key in the vault as "openrouter@Raphael".
+    s = CredentialKeyStore()
+    s.set("sk-or-v1-old")
+    s.set("sk-or-v1-new")
+    assert s.get() == "sk-or-v1-new"
+    assert memory_keyring.credentials == {"Raphael": ("openrouter", "sk-or-v1-new")}
+
+
+def test_a_key_that_cannot_be_removed_is_not_replaced(memory_keyring, monkeypatch):
+    s = CredentialKeyStore()
+    s.set("sk-or-v1-old")
+
+    def locked(service, username):
+        raise keyring.errors.KeyringLocked("the vault is locked")
+
+    monkeypatch.setattr(memory_keyring, "delete_password", locked)
+    with pytest.raises(keyring.errors.KeyringLocked):
+        s.set("sk-or-v1-new")
+    assert s.get() == "sk-or-v1-old"
 
 
 def test_clear_reports_failures_other_than_nothing_to_delete(memory_keyring, monkeypatch):
