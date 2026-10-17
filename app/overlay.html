@@ -5,16 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Raphael overlay</title>
     <style>
-      /* The overlay window is transparent and click-through. */
+      /* The overlay window is transparent and click-through: keep the page transparent from the
+         first paint, before overlay.css has loaded. */
       html,
       body {
         margin: 0;
         background: transparent;
       }
     </style>
+    <link rel="stylesheet" href="/src/overlay/overlay.css" />
   </head>
 
   <body>
-    <!-- Placeholder: the overlay window (emblem and notices) fills this page. -->
+    <canvas id="emblem" aria-hidden="true"></canvas>
+    <div id="subtitles" class="subs" aria-live="polite">
+      <div class="sub-zh"></div>
+      <div class="sub-ja" lang="ja"></div>
+    </div>
+    <script type="module" src="/src/overlay/overlay.ts"></script>
   </body>
 </html>

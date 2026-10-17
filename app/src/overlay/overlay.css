@@ -1,0 +1,87 @@
+/* The overlay window is transparent and click-through. The canvas sits in its bottom-right
+   corner; the subtitles are right-aligned to the left of the emblem, as in the approved preview.
+   --e is the emblem's diameter and --c its square canvas (1.3 times larger, room for the rays);
+   overlay.ts sets both from the size in the settings. */
+
+:root {
+  --e: 150px;
+  --c: 195px;
+  /* The canvas margin around the emblem's circle. */
+  --margin: calc((var(--c) - var(--e)) / 2);
+  /* Distance from the window's right edge to the subtitles: the emblem, and 14 px of air. */
+  --subs-right: calc(var(--margin) + var(--e) + 14px);
+
+  --zh-sub: "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif;
+  --ja: "Yu Gothic UI", "Yu Gothic", "Meiryo UI", "Meiryo", "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  pointer-events: none;
+  user-select: none;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+#emblem {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+}
+
+.subs {
+  position: fixed;
+  right: var(--subs-right);
+  /* A fifth of the emblem above its bottom edge, like the subtitles in the anime. */
+  bottom: calc(var(--margin) + var(--e) * 0.2);
+  max-width: min(380px, calc(100vw - var(--subs-right) - 8px));
+  text-align: right;
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.subs.on {
+  opacity: 1;
+}
+
+/* White, outlined in black, no box behind them. */
+.sub-zh,
+.sub-ja {
+  text-wrap: balance;
+  color: #fff;
+  text-shadow:
+    0 0 2px #000,
+    0 0 2px #000,
+    1px 1px 0 #000,
+    -1px 1px 0 #000,
+    1px -1px 0 #000,
+    -1px -1px 0 #000;
+}
+
+.sub-zh {
+  font-family: var(--zh-sub);
+  font-weight: 700;
+  font-size: 18px;
+  line-height: 1.45;
+}
+
+.sub-ja {
+  font-family: var(--ja);
+  font-style: italic;
+  font-size: 13.5px;
+  line-height: 1.45;
+  margin-top: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .subs {
+    transition: none;
+  }
+}
