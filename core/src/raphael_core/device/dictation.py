@@ -203,6 +203,10 @@ class DictationService:
 
     `stall_seconds` and `clock` (the time, in seconds) belong to the microphone watchdog and the
     level throttle; tests set them.
+
+    `on_idle`, if given, is called on the loop each time a session ends, whichever way it ends (a
+    stop, a cancel, a start that failed, a request that was itself cancelled, the watchdog), right
+    after the service has become idle. It must not block; what it raises is logged.
     """
 
     def __init__(
@@ -215,6 +219,7 @@ class DictationService:
         level_hz: float = 30.0,
         stall_seconds: float = MIC_STALL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        on_idle: Callable[[], None] | None = None,
     ) -> None:
         if not level_hz > 0:
             raise ValueError(f"level_hz must be more than 0, not {level_hz}")
@@ -233,6 +238,7 @@ class DictationService:
         self._stall_seconds = stall_seconds
         self._watch_interval = min(0.25, stall_seconds / 4)
         self._clock = clock
+        self._on_idle = on_idle
         self._session: _Session | None = None
         # Cancelled sessions whose worker has not exited yet (it may be inside the engine).
         self._retiring: list[_Session] = []
@@ -612,10 +618,16 @@ class DictationService:
             # Not "recording" any more, as in `_stop`: a watchdog that is busy closing the recorder
             # then ends when it is done, instead of going on looking and keeping this call waiting.
             session.state = "stopping"
-        await self._stop_watchdog(session)
-        with session.lock:
-            session.levels_on = False
-        await self._close_recorder(session)
+        try:
+            await self._stop_watchdog(session)
+            with session.lock:
+                session.levels_on = False
+            await self._close_recorder(session)
+        except BaseException:
+            # The cancel was itself cancelled (or failed) on the way: end the session anyway,
+            # without waiting, as `_stop` does, so the service is not left busy for good.
+            self._abandon(session)
+            raise
         with session.lock:
             session.closed = True
         self._tell_worker(session, _CANCEL)
@@ -648,8 +660,14 @@ class DictationService:
 
     def _end(self, session: _Session) -> None:
         session.state = "ended"
-        if self._session is session:
-            self._session = None
+        if self._session is not session:
+            return  # ended already, or never the active one
+        self._session = None
+        if self._on_idle is not None:
+            try:
+                self._on_idle()
+            except Exception:
+                logger.exception("on_idle failed")
 
     async def _tear_down(self, session: _Session) -> None:
         """A start that did not succeed: nothing stays open and the service is idle."""

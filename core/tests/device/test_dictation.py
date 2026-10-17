@@ -1565,3 +1565,117 @@ async def test_dictation_with_the_real_wav_recorder_segmenter_and_engine(router,
     assert r["text"] and brain.finalize_params[-1]["raw_text"] == r["text"]
     assert 0.5 * seconds <= r["audio_seconds"] <= 1.1 * seconds
     assert segmenters[0].speech_seconds == pytest.approx(r["audio_seconds"])
+
+
+# --- on_idle: the service says when it is free again (final review, item 5) ---------------------
+
+
+@pytest.fixture
+def idle_rig(make_rig):
+    """A rig whose on_idle records whether the service was idle when it was called."""
+    seen: list[bool] = []
+    holder: dict = {}
+
+    def on_idle() -> None:
+        seen.append(not holder["rig"].service.active)
+
+    holder["rig"] = rig = make_rig(on_idle=on_idle)
+    rig.idle_calls = seen
+    return rig
+
+
+async def test_on_idle_follows_a_stop(idle_rig, router, brain):
+    idle_rig.recorder.chunks = [chunk(1.0)]
+    seen_at_finalize: list[int] = []
+    brain.on_finalize = lambda: seen_at_finalize.append(len(idle_rig.idle_calls))
+    await start(router)
+    await idle_rig.recorder.fed(1)
+    assert idle_rig.idle_calls == []
+    await stop(router)
+    assert idle_rig.idle_calls == [True]
+    assert seen_at_finalize == [1]  # idle before the brain is asked, as the service is
+
+
+async def test_on_idle_follows_a_cancel(idle_rig, router):
+    await start(router)
+    await router.call("dictation.cancel", {"session_id": "s1"})
+    assert idle_rig.idle_calls == [True]
+
+
+async def test_on_idle_follows_a_start_that_failed(idle_rig, router):
+    idle_rig.recorder.fail_on_start = True
+    with pytest.raises(RpcError):
+        await start(router)
+    assert idle_rig.idle_calls == [True]
+
+
+async def test_on_idle_follows_a_stop_that_was_itself_cancelled(idle_rig, router):
+    idle_rig.engine.gate = threading.Event()
+    idle_rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await idle_rig.recorder.fed(1)
+    assert idle_rig.engine.entered.wait(5)
+    stopping = asyncio.create_task(stop(router))
+    await asyncio.sleep(0.05)
+    stopping.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await stopping
+    assert idle_rig.idle_calls == [True]
+    idle_rig.engine.gate.set()
+    await wait_until(lambda: not our_threads())
+
+
+async def test_on_idle_follows_a_session_nobody_stopped(make_rig, router):
+    clock = FakeClock()
+    calls: list[int] = []
+    rig = make_rig(clock=clock, stall_seconds=1e6, on_idle=lambda: calls.append(1))
+    await start(router)
+    clock.advance(dictation.LOST_SESSION_SECONDS + 1)
+    await wait_until(lambda: not rig.service.active)
+    assert calls == [1]
+
+
+async def test_a_busy_start_does_not_say_idle(idle_rig, router):
+    await start(router, "s1")
+    with pytest.raises(RpcError) as e:
+        await start(router, "s2")
+    assert e.value.code == BUSY and idle_rig.idle_calls == []
+
+
+async def test_an_on_idle_that_fails_is_logged_and_the_service_goes_on(make_rig, router, caplog):
+    def on_idle() -> None:
+        raise RuntimeError("the meter is broken")
+
+    rig = make_rig(on_idle=on_idle)
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    with caplog.at_level(logging.ERROR, logger=LOGGER):
+        r = await stop(router)
+    assert r["text"] == "text0"
+    assert "the meter is broken" in caplog.text
+    assert await start(router, "s2") == {}
+
+
+# --- a dictation.cancel that is itself cancelled (final review, item 8) -------------------------
+
+
+async def test_a_cancel_that_is_itself_cancelled_still_ends_the_session(rig, router, brain):
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    gate = rig.recorder.stop_gate = threading.Event()  # the cancel's close gets stuck
+    cancelling = asyncio.create_task(router.call("dictation.cancel", {"session_id": "s1"}))
+    await wait_until(rig.recorder.stop_entered.is_set)
+    cancelling.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelling
+    assert not rig.service.active  # not left half-ended, busy for good
+    await wait_until(lambda: rig.recorder.stop_count == 2)  # the microphone is closed anyway
+    await wait_until(lambda: not rig.recorder.running)
+    gate.set()
+    await wait_until(lambda: not our_threads())
+    assert brain.finalize_calls == 0
+    with pytest.raises(RpcError) as e:
+        await stop(router, "s1")
+    assert e.value.code == NOT_FOUND
