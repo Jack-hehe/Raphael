@@ -138,16 +138,19 @@ def _hotwords(hints: Sequence[str]) -> str:
     """`hints` as the comma-separated list that sherpa-onnx takes for Qwen3-ASR.
 
     A comma inside a hint would end a word there for sherpa-onnx too, so the hint is split at it.
-    Empty words are dropped. The list ends after _MAX_HINT_WORDS words, or before the word that
-    would take it past _MAX_HINT_CHARS characters (commas included), and the words after that are
-    left out: the dictionary lists the newest first, so the oldest are the ones lost.
+    Empty words are dropped. The words are taken in order until there are _MAX_HINT_WORDS of them.
+    A word that would take the list past _MAX_HINT_CHARS characters (commas included) is skipped,
+    and the later words are still tried, so one very long entry does not block the rest. The
+    dictionary lists the newest first, so a full list loses the oldest words.
     """
     words = [word.strip() for hint in hints for word in hint.split(",")]
     kept: list[str] = []
     length = -1  # the length of ",".join(kept); the first word has no comma before it
     for word in filter(None, words):
-        if len(kept) == _MAX_HINT_WORDS or length + 1 + len(word) > _MAX_HINT_CHARS:
+        if len(kept) == _MAX_HINT_WORDS:
             break
+        if length + 1 + len(word) > _MAX_HINT_CHARS:
+            continue
         kept.append(word)
         length += 1 + len(word)
     return ",".join(kept)
