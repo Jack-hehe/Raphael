@@ -166,3 +166,24 @@ def apply_replacements(text: str, rules: Sequence[tuple[str, str]]) -> str:
         if misheard:
             text = _apply_rule(text, misheard, word)
     return text
+
+
+def normalize_transcript(text: str, rules: Sequence[tuple[str, str]]) -> str:
+    """Speech-to-text output as the rest of the app sees it: Taiwan Traditional Chinese (Japanese
+    sentences left alone), then the dictionary's replacements. This is the text that is cleaned,
+    and the one pasted when the cleanup fails."""
+    return apply_replacements(to_taiwan_traditional(text), rules)
+
+
+def finish_cleaned_text(text: str, rules: Sequence[tuple[str, str]]) -> str:
+    """The text the user gets from what the cleanup model wrote: its reply, normalized again.
+
+    The model is told to write Traditional Chinese, and OpenCC would corrupt the kanji of a
+    Japanese text (学校 into 學校), so a reply with any hiragana is not converted, only given the
+    replacements. The gate is on the whole reply, a step beyond the sentence-by-sentence rule of
+    `to_taiwan_traditional`. A text that fell back to the raw speech-to-text result is already
+    normalized and must not go through this: a second pass could repeat a replacement.
+    """
+    if not _HIRAGANA.search(text):
+        text = to_taiwan_traditional(text)
+    return apply_replacements(text, rules)

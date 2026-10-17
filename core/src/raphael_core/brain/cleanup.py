@@ -40,6 +40,33 @@ def timeout_for(audio_seconds: float) -> float:
     return min(15.0, 3.0 + audio_seconds / 20.0)
 
 
+def build_user_message(raw: str) -> str:
+    """The user message of a cleanup call: the dictated text, marked as a transcript to clean."""
+    return f"<transcript>\n{raw}\n</transcript>"
+
+
+def max_tokens_for(raw: str) -> int:
+    """The most tokens a cleanup of `raw` may take: twice its length, and room for the JSON."""
+    return max(256, 2 * len(raw) + 64)
+
+
+def reply_length_limit(raw: str) -> float:
+    """The longest reply, in characters, that counts as a cleanup of `raw`.
+
+    A cleanup adds punctuation and the numbers of a list, so it may run longer than what was said.
+    """
+    return 1.5 * len(raw) + 20
+
+
+def is_suspicious_reply(raw: str, text: str) -> bool:
+    """Whether `text`, the model's reply to the cleanup of `raw`, is no cleanup: nothing at all,
+    or longer than `reply_length_limit(raw)`, which means the model wrote something of its own,
+    most likely an answer. Spaces around `text` do not count. The reply is judged as the model
+    wrote it, before the normalization that follows."""
+    text = text.strip()
+    return not text or len(text) > reply_length_limit(raw)
+
+
 @functools.cache
 def _prompt_template() -> str:
     return (
@@ -184,11 +211,11 @@ class CleanupService:
                     model=self._settings.get("cleanup_model"),
                     fallbacks=CLEANUP_FALLBACKS,
                     system=system,
-                    user=f"<transcript>\n{raw}\n</transcript>",
+                    user=build_user_message(raw),
                     schema=CLEANUP_SCHEMA,
                     schema_name="cleaned_dictation",
                     timeout_s=timeout,
-                    max_tokens=max(256, 2 * len(raw) + 64),
+                    max_tokens=max_tokens_for(raw),
                 ),
                 timeout,
             )
@@ -213,9 +240,7 @@ class CleanupService:
         cost_usd = _usable_cost(completion.cost_usd)
         text = completion.data.get("text")
         text = text.strip() if isinstance(text, str) else ""
-        # A cleanup adds punctuation and the numbers of a list, so it may run longer than what was
-        # said. Much longer means the model wrote something of its own, most likely an answer.
-        if not text or len(text) > 1.5 * len(raw) + 20:
+        if is_suspicious_reply(raw, text):
             logger.warning(
                 "Cleanup reply is empty or too long, using the raw text: reply %d characters,"
                 " dictation %d",

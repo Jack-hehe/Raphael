@@ -23,7 +23,7 @@ import contextlib
 import logging
 import sqlite3
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -37,7 +37,7 @@ from .secrets import KeyStore
 from .settings import SettingsStore
 from .spend import SpendTracker
 from .suggest import suggest_words
-from .textnorm import apply_replacements, to_taiwan_traditional
+from .textnorm import finish_cleaned_text, normalize_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,6 @@ KEY_CHECK_TIMEOUT_S = 10.0
 _DAY_MS = 86_400_000
 # SQLite stores integers in 64 bits and refuses to bind a larger one.
 _SQLITE_MAX_INT = 2**63 - 1
-_HIRAGANA = (0x3040, 0x309F)
 _SPEND_DAYS = 30
 
 
@@ -137,20 +136,6 @@ def _store_call() -> Iterator[None]:
         raise _invalid(f"unknown key {exc.args[0]!r}" if exc.args else "unknown key") from exc
     except (ValueError, TypeError) as exc:
         raise _invalid(str(exc)) from exc
-
-
-# --- text ---------------------------------------------------------------------------------------
-
-
-def _has_hiragana(text: str) -> bool:
-    return any(_HIRAGANA[0] <= ord(char) <= _HIRAGANA[1] for char in text)
-
-
-def _normalize(text: str, rules: Sequence[tuple[str, str]], *, convert: bool = True) -> str:
-    """Taiwan Traditional Chinese (unless `convert` is off), then the dictionary's replacements."""
-    if convert:
-        text = to_taiwan_traditional(text)
-    return apply_replacements(text, rules)
 
 
 # --- the key and the status ---------------------------------------------------------------------
@@ -245,7 +230,7 @@ class Brain:
         target_app = _opt_str(params, "target_app")
 
         rules = self._dictionary.replacements()
-        normalized = _normalize(raw_text, rules)
+        normalized = normalize_transcript(raw_text, rules)
         if not normalized.strip():
             return {
                 "id": None,
@@ -261,10 +246,8 @@ class Brain:
             # The model answered, so the time it took is a round trip to OpenRouter.
             self._openrouter.latency_ms = result.llm_ms
         if result.cleaned:
-            # The model is told to write Traditional Chinese, and OpenCC would corrupt the kanji of
-            # a Japanese text (学校 into 學校), so only a text without hiragana is converted. A
-            # fallback is the normalized text already; doing it twice could repeat a replacement.
-            text = _normalize(result.text, rules, convert=not _has_hiragana(result.text))
+            # A fallback is the normalized text already; doing it twice could repeat a replacement.
+            text = finish_cleaned_text(result.text, rules)
         else:
             text = result.text
 

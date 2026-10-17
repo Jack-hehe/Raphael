@@ -2,21 +2,25 @@
 
     uv run python -m raphael_core.evaluate.cleanup --cases ../eval/cleanup_cases.jsonl --models a,b
 
-Each case of the cases file is a line of speech-to-text output. Every model cleans every case with
-the system prompt the app uses (`build_system_prompt`), asked for the same JSON, with no fallback
-model, so that what is measured is the model that was named. The reply is checked against the
-case's `must_contain` and `must_not_contain` and against the length rule of `CleanupService`
-(a reply of more than 1.5 times the dictation plus 20 characters, or an empty one, is not used by
-the app: it pastes the raw text). That rule cannot catch a short answer to a short question, so the
-cases hold such questions and the prompt is what must keep the model from answering them.
+Each case of the cases file is a line of speech-to-text output. It goes through the same steps as in
+the app: normalized like a transcript (`normalize_transcript`), cleaned by the model with the
+system prompt, user message and token limit the app uses, with no fallback model so that what is
+measured is the model that was named, and the reply made final by `finish_cleaned_text`. The
+checks judge what the user would get: `must_contain` and `must_not_contain` are looked for in the
+final text, the length rule of `CleanupService` (`is_suspicious_reply`) is applied to the reply as
+the model wrote it. These are the functions the app itself uses, imported, not copied. The length
+rule cannot catch a short answer to a short question, so the cases hold such questions and the
+prompt is what must keep the model from answering them.
 
-The report (`cleanup_report.md` in the data folder) has the outputs, the latency and the cost of
-every call and the checks that failed. The key is read from Windows Credential Manager, where
-`--set-key` stores it; it is never printed or written to a file.
+The report (`cleanup_report.md` in the data folder) has, for every call, the final text, the
+model's own reply when it differs, the latency, the cost and the checks that failed. The key is
+read from Windows Credential Manager, where `--set-key` stores it; it is never printed or written
+to a file.
 
 Cases file: one JSON object per line with `id`, `input`, and optionally `dictionary` (a list of
 words), `must_contain` and `must_not_contain` (lists of text). Spaces are ignored when a text is
-looked for, so 打開 YouTube and 打開YouTube are the same.
+looked for, so 打開 YouTube and 打開YouTube are the same. The final text is Taiwan Traditional
+Chinese, which turns 打開 into 開啟, so a text to look for must be one the conversion leaves alone.
 """
 
 import argparse
@@ -31,13 +35,21 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from raphael_core.brain.cleanup import CLEANUP_SCHEMA, build_system_prompt
+from raphael_core.brain.cleanup import (
+    CLEANUP_SCHEMA,
+    build_system_prompt,
+    build_user_message,
+    is_suspicious_reply,
+    max_tokens_for,
+    reply_length_limit,
+)
 from raphael_core.brain.openrouter import (
     CLEANUP_MODEL_CHOICES,
     OpenRouterClient,
     OpenRouterError,
 )
 from raphael_core.brain.secrets import CredentialKeyStore
+from raphael_core.brain.textnorm import finish_cleaned_text, normalize_transcript
 from raphael_core.evaluate import use_utf8_output
 
 # Generous: this measures the models, and the app's own timeout (3 to 15 s) is not what is tested.
@@ -66,11 +78,12 @@ class Case:
 class Outcome:
     case_id: str
     model: str
-    text: str | None  # what the model wrote; None when the call failed
+    text: str | None  # the final text, as the app would paste it; None when the call failed
     error: str | None  # the kind of the OpenRouterError when the call failed
     latency_ms: int
     cost_usd: float
     failures: list[str]  # the checks that failed; empty when the case passed
+    reply: str | None = None  # what the model wrote, before the app's processing
 
     @property
     def passed(self) -> bool:
@@ -78,11 +91,15 @@ class Outcome:
 
 
 class Abort(Exception):
-    """The run cannot go on: the key is refused or there is no credit."""
+    """The run cannot go on: the key is refused or there is no credit.
 
-    def __init__(self, error: OpenRouterError) -> None:
+    `outcomes` are the results that were in before it.
+    """
+
+    def __init__(self, error: OpenRouterError, outcomes: list[Outcome] | None = None) -> None:
         super().__init__(error.kind)
         self.error = error
+        self.outcomes = outcomes or []
 
 
 def _string_list(entry: dict, field: str, where: str) -> list[str]:
@@ -126,46 +143,44 @@ def load_cases(path: Path) -> list[Case]:
     return cases
 
 
-def length_limit(raw: str) -> float:
-    return 1.5 * len(raw) + 20
+# The dictionary's replacement rules (misheard form -> word) come from the user's dictionary in the
+# app. A case lists only the words, so there are none to apply here.
+_NO_RULES: tuple[tuple[str, str], ...] = ()
 
 
-def is_suspicious(raw: str, text: str) -> bool:
-    """Whether the app would refuse `text` as the cleanup of `raw` and paste `raw` instead.
-
-    The same rule as CleanupService: an empty reply, or one longer than 1.5 times the dictation
-    plus 20 characters (it probably answered instead of cleaning). Keep the two in step.
-    """
-    text = text.strip()
-    return not text or len(text) > length_limit(raw)
+def transcript_for(case: Case) -> str:
+    """The case's input as the model gets it: normalized like speech-to-text output in the app."""
+    return normalize_transcript(case.input, _NO_RULES)
 
 
 def _squash(text: str) -> str:
     return "".join(text.split())
 
 
-def failed_checks(case: Case, text: str) -> list[str]:
-    """What is wrong with `text` as the cleanup of the case: one message per failed check.
+def failed_checks(case: Case, reply: str) -> list[str]:
+    """What is wrong with the model's `reply` to the case: one message per failed check.
 
-    `text` is what the model wrote, as it wrote it. The app turns the Chinese in it into Traditional
-    Chinese (Taiwan) afterwards, which changes some words (打開 into 開啟), so the checks must not
-    be run on that: they are about the model, and a model that writes Simplified characters, which
-    its prompt forbids, fails them.
+    This judges what the user would get. The length rule is applied to the reply as the model
+    wrote it, as `CleanupService` does. The words that must or must not be there are looked for in
+    the text after the app's processing of the reply (`finish_cleaned_text`: Traditional Chinese
+    with Taiwan usage, which turns 打開 into 開啟, and the dictionary's replacements), because that
+    is what is pasted. A reply that the length rule refuses is pasted as the raw text in the app;
+    it fails here, and the other checks still look at what the model wrote.
     """
-    text = text.strip()
-    if not text:
+    reply = reply.strip()
+    if not reply:
         return ["輸出是空的（app 會改貼原文）"]
     failures = []
-    if is_suspicious(case.input, text):
-        failures.append(
-            f"輸出過長（{len(text)} 字，上限 {length_limit(case.input):g} 字）：app 會當成可疑而改貼原文"
-        )
-    squashed = _squash(text)
+    sent = transcript_for(case)
+    if is_suspicious_reply(sent, reply):
+        limit = reply_length_limit(sent)
+        failures.append(f"輸出過長（{len(reply)} 字，上限 {limit:g} 字）：app 會當成可疑而改貼原文")
+    final = _squash(finish_cleaned_text(reply, _NO_RULES))
     for needle in case.must_contain:
-        if _squash(needle) not in squashed:
+        if _squash(needle) not in final:
             failures.append(f"缺少「{needle}」")
     for needle in case.must_not_contain:
-        if _squash(needle) in squashed:
+        if _squash(needle) in final:
             failures.append(f"不該出現「{needle}」")
     return failures
 
@@ -173,36 +188,39 @@ def failed_checks(case: Case, text: str) -> list[str]:
 async def run_case(
     client, model: str, case: Case, *, timeout_s: float = CALL_TIMEOUT_S
 ) -> Outcome:
-    """Have `model` clean the case, and check what it wrote.
+    """Have `model` clean the case, and check what the user would get.
 
     A call that fails gives an Outcome that says so, except when the key is refused or the credit
     is gone: that raises Abort.
     """
+    sent = transcript_for(case)
     try:
         completion = await client.complete_json(
             model=model,
             fallbacks=[],
             system=build_system_prompt(case.dictionary, []),
-            user=f"<transcript>\n{case.input}\n</transcript>",
+            user=build_user_message(sent),
             schema=CLEANUP_SCHEMA,
             schema_name="cleaned_dictation",
             timeout_s=timeout_s,
-            max_tokens=max(256, 2 * len(case.input) + 64),
+            max_tokens=max_tokens_for(sent),
         )
     except OpenRouterError as error:
         if error.kind in _ABORT_KINDS:
             raise Abort(error) from error
-        return Outcome(case.id, model, None, error.kind, 0, 0.0, [f"呼叫失敗（{error.kind}）：{error}"])
+        failure = f"呼叫失敗（{error.kind}）：{error}"
+        return Outcome(case.id, model, None, error.kind, 0, 0.0, [failure])
     reply = completion.data.get("text")
-    text = reply if isinstance(reply, str) else ""
+    reply = reply.strip() if isinstance(reply, str) else ""
     return Outcome(
         case_id=case.id,
         model=model,
-        text=text,
+        text=finish_cleaned_text(reply, _NO_RULES),
         error=None,
         latency_ms=completion.latency_ms,
         cost_usd=completion.cost_usd,
-        failures=failed_checks(case, text),
+        failures=failed_checks(case, reply),
+        reply=reply,
     )
 
 
@@ -213,11 +231,17 @@ async def run_all(
     *,
     on_outcome: Callable[[Outcome], None] | None = None,
 ) -> list[Outcome]:
-    """Every case with every model, one call at a time (so that the latencies are not a queue)."""
-    outcomes = []
+    """Every case with every model, one call at a time (so that the latencies are not a queue).
+
+    Abort, when the key or the credit gives out, carries the outcomes so far.
+    """
+    outcomes: list[Outcome] = []
     for model in models:
         for case in cases:
-            outcome = await run_case(client, model, case)
+            try:
+                outcome = await run_case(client, model, case)
+            except Abort as stop:
+                raise Abort(stop.error, outcomes) from stop.error
             outcomes.append(outcome)
             if on_outcome is not None:
                 on_outcome(outcome)
@@ -232,9 +256,14 @@ def _fence(text: str) -> str:
 
 
 def render_report(
-    cases: list[Case], models: list[str], outcomes: list[Outcome], when: str
+    cases: list[Case],
+    models: list[str],
+    outcomes: list[Outcome],
+    when: str,
+    note: str | None = None,
 ) -> str:
-    """The report as Markdown (in Traditional Chinese)."""
+    """The report as Markdown (in Traditional Chinese). `note` is a remark for the top, such as
+    why the report is not complete."""
     by_key = {(o.model, o.case_id): o for o in outcomes}
     lines = [
         "# 清理模型評估報告",
@@ -242,6 +271,10 @@ def render_report(
         f"- 產生時間：{when}",
         f"- 案例數：{len(cases)}",
         f"- 模型：{'、'.join(f'`{m}`' for m in models)}",
+    ]
+    if note:
+        lines.append(f"- 備註：{note}")
+    lines += [
         "",
         "## 總覽",
         "",
@@ -261,13 +294,21 @@ def render_report(
         )
     lines += [
         "",
-        "通過表示沒有任何檢查失敗（必須出現、不可出現、長度規則）。"
-        "延遲是 OpenRouter 這次呼叫本身花的時間，不含辨識與貼上。",
+        (
+            "通過表示沒有任何檢查失敗（必須出現、不可出現、長度規則）。"
+            "「必須出現」與「不可出現」檢查的是 App 最後會貼上的文字（模型輸出再經過繁體轉換與字典取代），"
+            "長度規則看的是模型原始輸出。"
+            "延遲是 OpenRouter 這次呼叫本身花的時間，不含辨識與貼上。"
+        ),
         "",
         "## 逐案結果",
     ]
     for case in cases:
-        lines += ["", f"### {case.id}", "", "輸入：", "", _fence(case.input), ""]
+        lines += ["", f"### {case.id}", "", "輸入：", "", _fence(case.input)]
+        sent = transcript_for(case)
+        if sent != case.input:
+            lines += ["", "送給模型的文字（App 先轉成繁體）：", "", _fence(sent)]
+        lines.append("")
         if case.dictionary:
             lines.append(f"- 字典：{'、'.join(case.dictionary)}")
         if case.must_contain:
@@ -282,7 +323,11 @@ def render_report(
             lines += ["", f"#### `{model}`：{verdict}", ""]
             lines.append(f"延遲 {outcome.latency_ms} ms，花費 US${outcome.cost_usd:.6f}")
             if outcome.text is not None:
-                lines += ["", _fence(outcome.text)]
+                lines += ["", "最終文字（App 會貼上的）：", "", _fence(outcome.text)]
+                if outcome.reply is not None and outcome.reply != outcome.text:
+                    lines += ["", "模型原始輸出：", "", _fence(outcome.reply)]
+                elif outcome.reply is not None:
+                    lines += ["", "模型原始輸出與最終文字相同。"]
             if outcome.failures:
                 lines += ["", "未通過的檢查："] + [f"- {failure}" for failure in outcome.failures]
     return "\n".join(lines) + "\n"
@@ -293,6 +338,14 @@ async def _run(client, models: list[str], cases: list[Case]) -> list[Outcome]:
         return await run_all(client, models, cases, on_outcome=_show_outcome)
     finally:
         await client.aclose()
+
+
+def _write_report(
+    path: Path, cases: list[Case], models: list[str], outcomes: list[Outcome], note: str | None = None
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    when = datetime.now().strftime("%Y-%m-%d %H:%M")
+    path.write_text(render_report(cases, models, outcomes, when, note), encoding="utf-8", newline="\n")
 
 
 def _show_outcome(outcome: Outcome) -> None:
@@ -376,14 +429,22 @@ def main(
         return 130
     except Abort as stop:
         if stop.error.kind == "auth":
-            print(f"OpenRouter 不接受這把金鑰（{stop.error}）。請用 --set-key 重新存入。", file=sys.stderr)
+            reason = f"OpenRouter 不接受這把金鑰（{stop.error}）"
+            print(f"{reason}。請用 --set-key 重新存入。", file=sys.stderr)
         else:
-            print(f"OpenRouter 沒有額度或已達花費上限：{stop.error}", file=sys.stderr)
+            reason = f"OpenRouter 沒有額度或已達花費上限（{stop.error}）"
+            print(f"{reason}。", file=sys.stderr)
+        # Models are run one after the other, so the ones that finished have complete results.
+        done = [m for m in models if sum(o.model == m for o in stop.outcomes) == len(cases)]
+        if done:
+            note = f"中止於 `{next(m for m in models if m not in done)}`：{reason}。"
+            note += "這份報告只有已經跑完的模型。"
+            kept = [o for o in stop.outcomes if o.model in done]
+            _write_report(args.report, cases, done, kept, note)
+            print(f"已跑完的模型的結果寫在 {args.report}", file=sys.stderr)
         return 1
 
-    args.report.parent.mkdir(parents=True, exist_ok=True)
-    report = render_report(cases, models, outcomes, datetime.now().strftime("%Y-%m-%d %H:%M"))
-    args.report.write_text(report, encoding="utf-8", newline="\n")
+    _write_report(args.report, cases, models, outcomes)
     print("\n結果：")
     for model in models:
         mine = [o for o in outcomes if o.model == model]

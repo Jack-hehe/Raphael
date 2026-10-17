@@ -13,8 +13,10 @@ import httpx
 import numpy as np
 import pytest
 
+from raphael_core.brain import cleanup as brain_cleanup
 from raphael_core.brain.openrouter import Completion, OpenRouterClient, OpenRouterError
 from raphael_core.brain.secrets import MemoryKeyStore
+from raphael_core.brain.textnorm import finish_cleaned_text
 from raphael_core.device.stt import SAMPLE_RATE, read_wav
 from raphael_core.evaluate import cleanup as eval_cleanup
 from raphael_core.evaluate import record as eval_record
@@ -33,7 +35,7 @@ def test_dictation_prompts_are_thirty_lines_in_all_three_languages():
     assert any("぀" <= ch <= "ゟ" for ch in text), "no Japanese (hiragana)"
     assert any("一" <= ch <= "鿿" for ch in text), "no Chinese"
     assert any(ch.isascii() and ch.isalpha() for ch in text), "no English"
-    assert min(map(len, lines)) < 15 < 60 < max(map(len, lines)), "short and long lines both"
+    assert min(map(len, lines)) < 15 and max(map(len, lines)) > 60, "short and long lines both"
     assert eval_record.load_prompts(REPO / "eval" / "dictation_prompts.txt") == lines
 
 
@@ -430,25 +432,55 @@ def test_failed_checks_name_what_is_missing_and_what_must_not_be_there():
 
 
 def test_failed_checks_ignore_spacing_between_scripts():
-    case = make_case(must_contain=["打開 YouTube", "race condition"], must_not_contain=["了。"])
+    case = make_case(must_contain=["開啟 YouTube", "race condition"], must_not_contain=["了。"])
     assert eval_cleanup.failed_checks(case, "打開YouTube，race  condition。") == []
 
 
-def test_failed_checks_judge_the_words_of_the_model_not_the_conversion_after_it():
-    # The app turns 打開 into 開啟 (OpenCC s2twp) after the cleanup: that must not decide the case.
-    case = make_case(must_contain=["打開 YouTube"])
-    assert eval_cleanup.failed_checks(case, "幫我打開 YouTube。") == []
-    # Simplified characters are against the prompt, and the app's conversion would hide them.
-    assert eval_cleanup.failed_checks(make_case(must_contain=["今天天氣"]), "今天天气很好。")
+def test_failed_checks_judge_the_text_the_user_gets_after_the_apps_processing():
+    # The app turns 打開 into 開啟 (OpenCC s2twp) and Simplified into Traditional Chinese after
+    # the cleanup, so that is the text the checks look at.
+    reply = "幫我打開 YouTube。"
+    assert eval_cleanup.failed_checks(make_case(must_contain=["開啟 YouTube"]), reply) == []
+    assert eval_cleanup.failed_checks(make_case(must_contain=["打開"]), reply) != []
+    assert eval_cleanup.failed_checks(make_case(must_not_contain=["打開"]), reply) == []
+    assert eval_cleanup.failed_checks(make_case(must_contain=["今天天氣"]), "今天天气很好。") == []
 
 
-def test_failed_checks_apply_the_length_rule_of_the_cleanup_service():
+def test_failed_checks_leave_the_kanji_of_a_text_with_hiragana_alone():
+    case = make_case(input="学校で会います", must_contain=["学校で会います"])
+    assert eval_cleanup.failed_checks(case, "学校で会います。") == []
+
+
+def test_failed_checks_apply_the_length_rule_to_the_reply_as_it_came():
     case = make_case(input="你好嗎")  # 3 characters: the limit is 1.5 * 3 + 20 = 24.5
-    assert not eval_cleanup.is_suspicious("你好嗎", "你" * 24)
-    assert eval_cleanup.is_suspicious("你好嗎", "你" * 25)
-    assert eval_cleanup.is_suspicious("你好嗎", "")
+    assert eval_cleanup.failed_checks(case, "你" * 24) == []
     assert any("過長" in f for f in eval_cleanup.failed_checks(case, "你" * 25))
     assert any("空" in f for f in eval_cleanup.failed_checks(case, "  "))
+    # Converting 开 into 開 does not change the length, but the rule is on the reply in any case.
+    assert any("過長" in f for f in eval_cleanup.failed_checks(case, "开" * 25))
+
+
+def test_the_length_rule_and_the_prompt_helpers_are_the_ones_of_the_service():
+    assert eval_cleanup.is_suspicious_reply is brain_cleanup.is_suspicious_reply
+    assert eval_cleanup.build_user_message is brain_cleanup.build_user_message
+    assert eval_cleanup.max_tokens_for is brain_cleanup.max_tokens_for
+    assert not hasattr(eval_cleanup, "is_suspicious") and not hasattr(eval_cleanup, "length_limit")
+
+
+def test_cases_survive_the_apps_text_processing():
+    """A text to look for that the app's conversion would change (打開 into 開啟) is never found."""
+    cases = eval_cleanup.load_cases(REPO / "eval" / "cleanup_cases.jsonl")
+    for case in cases:
+        for needle in case.must_contain:
+            assert finish_cleaned_text(needle, []) == needle, f"{case.id}: {needle}"
+        for needle in case.must_not_contain:
+            # It may change when the changed form is a text to avoid as well (台北 and 臺北).
+            converted = finish_cleaned_text(needle, [])
+            assert converted in (needle, *case.must_not_contain), f"{case.id}: {needle}"
+    by_id = {case.id: case for case in cases}
+    assert by_id["command-stays-text"].must_contain == ["YouTube"]
+    assert by_id["command-stays-text"].must_not_contain == ["了。"]
+    assert by_id["question-capital"].must_contain == ["首都是哪裡", "？"]
 
 
 class FakeClient:
@@ -492,6 +524,23 @@ async def test_run_case_sends_the_real_prompt_and_checks_the_reply():
     assert call["schema"] == eval_cleanup.CLEANUP_SCHEMA
     assert outcome.text == "拉斐爾老師你好。" and outcome.failures == []
     assert outcome.cost_usd == 0.000125 and outcome.latency_ms == 420 and outcome.error is None
+    assert call["max_tokens"] == brain_cleanup.max_tokens_for("拉菲爾老師你好")
+
+
+async def test_run_case_sends_the_transcript_normalized_like_the_app_does():
+    # The app converts speech-to-text output to Traditional Chinese before it asks the model.
+    case = make_case(input="我们用这个软件")
+    client = FakeClient(["我們用這個軟體。"])
+    await eval_cleanup.run_case(client, "m", case)
+    assert client.calls[0]["user"] == "<transcript>\n我們用這個軟體\n</transcript>"
+
+
+async def test_run_case_keeps_the_reply_and_the_final_text_apart():
+    case = make_case(input="幫我打開 YouTube", must_contain=["YouTube"], must_not_contain=["了。"])
+    outcome = await eval_cleanup.run_case(FakeClient(["幫我打开 YouTube。"]), "m", case)
+    assert outcome.reply == "幫我打开 YouTube。", "what the model wrote"
+    assert outcome.text == "幫我開啟 YouTube。", "what the app would paste"
+    assert outcome.failures == []
 
 
 async def test_run_case_records_a_failed_call_as_a_failure():
@@ -510,6 +559,13 @@ async def test_run_all_stops_when_the_key_or_the_credit_is_the_problem(kind):
     assert len(client.calls) == 1
 
 
+async def test_abort_carries_what_was_done_before_it():
+    client = FakeClient(["你好。", OpenRouterError(402, "credits", "no credit")])
+    with pytest.raises(eval_cleanup.Abort) as raised:
+        await eval_cleanup.run_all(client, ["m1", "m2"], [make_case()])
+    assert [(o.model, o.case_id) for o in raised.value.outcomes] == [("m1", "c")]
+
+
 def test_render_report_lists_outputs_latency_cost_and_failures():
     good, bad = make_case(id="good", must_contain=["後天"]), make_case(id="bad", must_contain=["後天"])
     outcomes = [
@@ -525,6 +581,25 @@ def test_render_report_lists_outputs_latency_cost_and_failures():
     assert "600" in report, "mean latency (400 and 800 ms)"
     assert "0.000300" in report, "total cost"
     assert "### bad" in report and "### good" in report
+
+
+def test_render_report_shows_the_final_text_and_the_model_reply():
+    case = make_case(id="c")
+    changed = eval_cleanup.Outcome("c", "m", "開啟 YouTube。", None, 1, 0.0, [], reply="打开 YouTube。")
+    report = eval_cleanup.render_report([case], ["m"], [changed], "now")
+    assert "最終文字" in report and "開啟 YouTube。" in report
+    assert "模型原始輸出" in report and "打开 YouTube。" in report
+    same = eval_cleanup.Outcome("c", "m", "你好。", None, 1, 0.0, [], reply="你好。")
+    report = eval_cleanup.render_report([case], ["m"], [same], "now")
+    assert report.count("你好。") == 1, "an unchanged reply is not shown twice"
+    assert "與最終文字相同" in report
+
+
+def test_render_report_notes_why_it_is_partial():
+    case = make_case(id="c")
+    outcome = eval_cleanup.Outcome("c", "m1", "你好。", None, 1, 0.0, [], reply="你好。")
+    report = eval_cleanup.render_report([case], ["m1"], [outcome], "now", note="中止了")
+    assert "中止了" in report
 
 
 def test_render_report_survives_backticks_in_the_output():
@@ -593,6 +668,20 @@ def test_cleanup_main_reports_an_unusable_key_and_writes_nothing(tmp_path, capsy
     )
     assert code == 1 and not report.exists() and client.closed
     assert "金鑰" in capsys.readouterr().err
+
+
+def test_cleanup_main_writes_a_partial_report_when_a_later_model_is_refused(tmp_path, capsys):
+    store = MemoryKeyStore()
+    store.set("sk-test")
+    client = FakeClient(["你好。", OpenRouterError(402, "credits", "no credit")])
+    code, report = run_cleanup_main(
+        tmp_path, ["--models", "m1,m2"], key_store=store, client_factory=lambda provider: client
+    )
+    assert code == 1 and client.closed
+    text = report.read_text(encoding="utf-8")
+    assert "`m1`" in text and "`m2`" not in text.split("## 逐案結果")[1]
+    assert "m2" in text and "中止" in text, "the report says that the run stopped, and at which model"
+    assert "額度" in capsys.readouterr().err
 
 
 def test_cleanup_main_set_key_stores_the_key_without_echoing_it(tmp_path, capsys):
