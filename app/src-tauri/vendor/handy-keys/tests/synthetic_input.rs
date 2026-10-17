@@ -440,6 +440,8 @@ mod windows_tests {
     #[test]
     #[ignore = "needs an interactive desktop session; run: cargo test --test synthetic_input -- --ignored"]
     fn injected_f20_reaches_listener() {
+        // Raphael patch: the hook ignores injected input unless it is told otherwise.
+        handy_keys::accept_injected_input(true);
         let listener = KeyboardListener::new().expect("failed to spawn keyboard listener");
         // Give the hook thread a moment to install the hooks; spawn() does
         // not currently wait for installation (known gap, see review notes).
@@ -492,6 +494,8 @@ mod windows_tests {
     #[test]
     #[ignore = "needs an interactive desktop session; run: cargo test --test synthetic_input -- --ignored"]
     fn punctuation_scancodes_map_positionally() {
+        // Raphael patch: the hook ignores injected input unless it is told otherwise.
+        handy_keys::accept_injected_input(true);
         const SC_GRAVE: u16 = 0x29; // left of 1 (US `~, UK `¬)
         const SC_QUOTE: u16 = 0x28; // right of ; (US '", UK '@)
 
@@ -574,6 +578,8 @@ mod windows_tests {
     #[test]
     #[ignore = "needs an interactive desktop session; run: cargo test --test synthetic_input -- --ignored"]
     fn injected_media_keys_reach_listener() {
+        // Raphael patch: the hook ignores injected input unless it is told otherwise.
+        handy_keys::accept_injected_input(true);
         let listener = KeyboardListener::new().expect("failed to spawn keyboard listener");
         std::thread::sleep(Duration::from_millis(200));
 

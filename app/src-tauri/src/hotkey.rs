@@ -10,18 +10,21 @@
 //! layout follows Handy's `shortcut/handy_keys.rs` (<https://github.com/cjpais/Handy>, MIT
 //! licence).
 //!
-//! Two known gaps in handy-keys 0.3.4, both seen with injected keys (Task 17, Step 5):
+//! handy-keys is vendored in `vendor/handy-keys` (0.3.4, patched; the note at the top of its
+//! `src/platform/windows/listener.rs` says what changed). Upstream had two gaps, found with
+//! injected keys:
 //!
-//! - For a modifier-only hotkey such as Right Alt it swallows only the first key-down. The
-//!   auto-repeat key-downs and the key-up reach the foreground app, which can open its menu bar
-//!   (or Office its KeyTips) after a long hold.
+//! - For a modifier-only hotkey such as Right Alt it swallowed only the first key-down. The
+//!   auto-repeat key-downs and the key-up reached the foreground app, which could open its menu
+//!   bar (or Office its KeyTips) after a long hold.
 //! - The system's `GetAsyncKeyState` never sees a key whose down was swallowed, so the first
-//!   other key or mouse click during the hold makes handy-keys think the modifier was released.
-//!   The hold ends early (`DictationUp` too soon) and a chord such as Right Alt+V never matches,
-//!   so no `PasteLast` arrives.
+//!   other key or mouse click during the hold made handy-keys think the modifier was released.
+//!   The hold ended early (`DictationUp` too soon) and a chord such as Right Alt+V never matched,
+//!   so no `PasteLast` arrived.
 //!
-//! Both come from the Windows listener and are fixed by one small patch to it, which means
-//! vendoring the crate. Until that is done, expect both symptoms.
+//! The patched hook also ignores injected keyboard events (`LLKHF_INJECTED`): Raphael's own paste
+//! (key-ups sent with `SendInput`, the Ctrl+V chord) can not produce a `DictationDown`,
+//! `DictationUp` or `PasteLast`, and the keys it sends are never swallowed.
 
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};

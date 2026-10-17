@@ -147,3 +147,7 @@ pub use types::{Hotkey, HotkeyEvent, HotkeyId, HotkeyState, Key, KeyEvent, Modif
 
 #[cfg(target_os = "macos")]
 pub use platform::macos::{check_accessibility, open_accessibility_settings};
+
+// Raphael patch: injected keyboard events are ignored unless this is turned on (Windows only).
+#[cfg(target_os = "windows")]
+pub use platform::windows::listener::accept_injected_input;

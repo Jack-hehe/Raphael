@@ -1,4 +1,27 @@
 //! Windows low-level keyboard hook implementation
+//!
+//! RAPHAEL PATCH (Task 17). This is handy-keys 0.3.4 (crates.io package, upstream commit e7d1b8e)
+//! with two changes in this file, a one-line re-export in `lib.rs` (`accept_injected_input`) and a
+//! call to it in the Windows tests of `tests/synthetic_input.rs`.
+//!
+//! First change: while a hotkey holds a modifier key swallowed (a modifier-only hotkey such as
+//! Right Alt), the hook also swallows that key's auto-repeat key-downs and its key-up until the
+//! key is released. Chord detection no longer relies on GetAsyncKeyState for swallowed keys: the
+//! hook remembers them (`swallowed_modifiers`, `swallow_modifier_event`) and
+//! `reconcile_modifiers` counts them as held.
+//!
+//! Why, found with an injected-key probe: (1) unpatched, the repeats and the key-up reached the
+//! foreground app, which read them as a tap of Alt and could open its menu bar or Office KeyTips
+//! after a long hold. (2) GetAsyncKeyState never sees a key whose down was swallowed, so the first
+//! other key or mouse button pressed during the hold made `reconcile_modifiers` believe the
+//! modifier had been released. The hold ended early, and a chord such as Right Alt+V never
+//! matched, so a hotkey on that chord (Raphael's PasteLast) never fired.
+//!
+//! Second change: injected keyboard events (LLKHF_INJECTED, such as Raphael's own paste with its
+//! SendInput key-ups and the Ctrl+V chord sent by enigo) pass the hook untouched and never count
+//! for hotkeys or get swallowed, unless the program calls `accept_injected_input(true)` (only
+//! tests that drive the hook with SendInput do). See `passes_untouched`. Mouse events are not
+//! affected.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -18,10 +41,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     MsgWaitForMultipleObjects, PeekMessageW, RegisterClassW, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG, MSLLHOOKSTRUCT, PM_REMOVE,
-    QS_ALLINPUT, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_POWERBROADCAST, WM_QUIT,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW,
+    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED,
+    LLKHF_LOWER_IL_INJECTED, MSG, MSLLHOOKSTRUCT, PM_REMOVE, QS_ALLINPUT, WH_KEYBOARD_LL,
+    WH_MOUSE_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_POWERBROADCAST, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SYSKEYDOWN, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW,
 };
 
 use crate::error::Result;
@@ -50,6 +74,31 @@ const MENU_MASK_VK: u16 = 0xE8;
 /// recognizes its own injections and passes them through untouched
 /// ("HKMM" in ASCII).
 const MENU_MASK_EXTRA_INFO: usize = 0x484B_4D4D;
+
+/// Whether the keyboard hook takes injected key events (SendInput, other programs' simulated
+/// typing) into account. Off by default: they pass through untouched, so a program that types
+/// for the user, such as a paste routine, can never trigger or swallow a hotkey. Only tests
+/// that drive the hook with SendInput turn it on.
+static ACCEPT_INJECTED: AtomicBool = AtomicBool::new(false);
+
+/// Sets whether injected keyboard events count for hotkeys (default: they do not). The setting
+/// is process-wide and takes effect on the next key event.
+pub fn accept_injected_input(accept: bool) {
+    ACCEPT_INJECTED.store(accept, Ordering::Relaxed);
+}
+
+fn injected_input_accepted() -> bool {
+    ACCEPT_INJECTED.load(Ordering::Relaxed)
+}
+
+/// Whether a keyboard event must pass the hook untouched: no modifier tracking, no reconciliation,
+/// no event, no swallowing. That is the menu mask we inject ourselves, and (unless injected input
+/// is accepted) any event with an injected flag. `flags` is `KBDLLHOOKSTRUCT::flags`.
+fn passes_untouched(vk_code: u16, flags: u32, extra_info: usize, accept_injected: bool) -> bool {
+    let own_mask = vk_code == MENU_MASK_VK && extra_info == MENU_MASK_EXTRA_INFO;
+    let injected = flags & (LLKHF_INJECTED.0 | LLKHF_LOWER_IL_INJECTED.0) != 0;
+    own_mask || (injected && !accept_injected)
+}
 
 // WTS session notification plumbing not exposed by the `windows` crate bindings.
 const NOTIFY_FOR_THIS_SESSION: u32 = 0;
@@ -95,6 +144,11 @@ struct HookContext {
     /// hold defuses the shell's menu heuristic for the whole hold; cleared
     /// once no Win/Alt modifier remains held.
     menu_mask_sent: bool,
+    /// Modifier keys whose key-down a hotkey swallowed and whose key-up has not been seen yet.
+    /// While a key is in here its auto-repeats and its key-up are swallowed too, and
+    /// reconciliation treats it as physically held (the system's async key state never saw the
+    /// swallowed key-down). Cleared by a session change or resume, where key-ups get lost.
+    swallowed_modifiers: Modifiers,
 }
 
 thread_local! {
@@ -225,7 +279,8 @@ fn adoptable_modifiers(
 /// unavoidable with this API — macOS avoids it because CGEvent flags are
 /// stamped per event.
 fn reconcile_modifiers(ctx: &mut HookContext) {
-    let physical = physical_modifiers();
+    // Keys whose down we swallowed never reached the async key state but are still held.
+    let physical = physical_modifiers() | ctx.swallowed_modifiers;
     // Phantom Ctrl only exists while AltGr is held; if LCtrl reads as up,
     // the phantom is gone (covers a phantom key-up swallowed by a secure
     // desktop transition, which would otherwise suppress CTRL_LEFT adoption
@@ -256,6 +311,8 @@ fn reconcile_modifiers(ctx: &mut HookContext) {
 fn reconcile_modifiers_in_context() {
     HOOK_CONTEXT.with(|ctx_cell| {
         if let Some(ctx) = ctx_cell.borrow_mut().as_mut() {
+            // The key-ups of swallowed keys may have gone to the secure desktop.
+            ctx.swallowed_modifiers = Modifiers::empty();
             reconcile_modifiers(ctx);
         }
     });
@@ -406,6 +463,7 @@ pub(crate) fn spawn(blocking_hotkeys: Option<BlockingHotkeys>) -> Result<Windows
                 blocking_hotkeys: thread_blocking,
                 altgr_phantom_ctrl: false,
                 menu_mask_sent: false,
+                swallowed_modifiers: Modifiers::empty(),
             });
         });
 
@@ -538,7 +596,13 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
             // Our own injected menu mask: pass it through untouched. It
             // exists solely for the shell's benefit and must not update
             // modifier state, trigger reconciliation, or be emitted.
-            if vk_code == MENU_MASK_VK && kb_struct.dwExtraInfo == MENU_MASK_EXTRA_INFO {
+            // Likewise any other injected event (see ACCEPT_INJECTED).
+            if passes_untouched(
+                vk_code,
+                kb_struct.flags.0,
+                kb_struct.dwExtraInfo,
+                injected_input_accepted(),
+            ) {
                 return;
             }
 
@@ -584,6 +648,16 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                         changed_modifier: Some(modifier),
                     });
                 }
+
+                // The foreground app never saw the first key-down, so it must not see the
+                // auto-repeats (they would look like fresh presses) or the key-up (a lone
+                // Alt/Win release opens a menu) either.
+                should_block = swallow_modifier_event(
+                    &mut ctx.swallowed_modifiers,
+                    modifier,
+                    is_key_down,
+                    should_block,
+                );
 
                 // The hold ends once no Win/Alt modifier remains held; the
                 // next hold gets a fresh mask.
@@ -760,6 +834,31 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
 /// dedupes auto-repeat, release edges, and later events within one hold.
 fn needs_menu_mask(should_block: bool, modifiers: Modifiers, already_sent: bool) -> bool {
     should_block && !already_sent && modifiers.intersects(MENU_MODIFIERS)
+}
+
+/// Whether a modifier key event must be swallowed, and bookkeeping for keys held swallowed.
+///
+/// `blocked_by_hotkey` is what the hotkey table said for this event; for an auto-repeat it is
+/// false, because a repeat does not change the modifier state. A key-down that a hotkey blocks
+/// starts a swallowed hold; the repeats and the key-up of that hold are swallowed too, and the
+/// key-up ends it. Any other event follows the hotkey table.
+fn swallow_modifier_event(
+    swallowed: &mut Modifiers,
+    modifier: Modifiers,
+    is_key_down: bool,
+    blocked_by_hotkey: bool,
+) -> bool {
+    if is_key_down {
+        if blocked_by_hotkey {
+            swallowed.insert(modifier);
+        }
+        blocked_by_hotkey || swallowed.contains(modifier)
+    } else if swallowed.contains(modifier) {
+        swallowed.remove(modifier);
+        true
+    } else {
+        blocked_by_hotkey
+    }
 }
 
 /// Inject a press+release of the menu mask key via SendInput. Must be called
@@ -1070,6 +1169,7 @@ mod tests {
             blocking_hotkeys: None,
             altgr_phantom_ctrl: false,
             menu_mask_sent: true,
+            swallowed_modifiers: Modifiers::empty(),
         };
         reconcile_modifiers(&mut ctx);
         assert_eq!(ctx.current_modifiers, Modifiers::empty());
@@ -1078,6 +1178,211 @@ mod tests {
         let release = rx.try_recv().expect("expected a synthetic release");
         assert_eq!(release.changed_modifier, Some(Modifiers::CMD_LEFT));
         assert!(!release.is_key_down);
+    }
+
+    #[test]
+    fn injected_key_events_pass_untouched_unless_accepted() {
+        // Raphael's own paste sends key-ups with SendInput and dwExtraInfo 0, and the paste chord
+        // through enigo. None of it may reach the hotkey logic. Real events carry the flags 0x80
+        // (up), 0x01 (extended) or 0x20 (Alt down), never the injected bits.
+        let injected = [
+            LLKHF_INJECTED.0,
+            LLKHF_INJECTED.0 | 0x80,
+            LLKHF_INJECTED.0 | LLKHF_EXTENDED.0,
+            LLKHF_LOWER_IL_INJECTED.0,
+            LLKHF_LOWER_IL_INJECTED.0 | LLKHF_INJECTED.0,
+        ];
+        for flags in injected {
+            assert!(passes_untouched(0xA5, flags, 0, false), "flags {flags:#x}");
+            assert!(!passes_untouched(0xA5, flags, 0, true), "flags {flags:#x}");
+        }
+    }
+
+    #[test]
+    fn real_key_events_are_handled() {
+        for flags in [0, 0x80, LLKHF_EXTENDED.0, 0x20, 0xA1] {
+            assert!(!passes_untouched(0xA5, flags, 0, false), "flags {flags:#x}");
+            assert!(!passes_untouched(0xA5, flags, 0, true), "flags {flags:#x}");
+        }
+    }
+
+    #[test]
+    fn the_menu_mask_always_passes_untouched() {
+        // Marked with its extra info, whatever the flags and the setting say.
+        for accept in [false, true] {
+            assert!(passes_untouched(
+                MENU_MASK_VK,
+                0,
+                MENU_MASK_EXTRA_INFO,
+                accept
+            ));
+        }
+        // The marker alone, or the key alone, is not the mask.
+        assert!(!passes_untouched(MENU_MASK_VK, 0, 0, true));
+        assert!(!passes_untouched(0xA5, 0, MENU_MASK_EXTRA_INFO, true));
+    }
+
+    #[test]
+    fn injected_input_is_ignored_until_the_application_accepts_it() {
+        assert!(!injected_input_accepted());
+        accept_injected_input(true);
+        assert!(injected_input_accepted());
+        accept_injected_input(false);
+        assert!(!injected_input_accepted());
+    }
+
+    #[test]
+    fn swallowed_modifier_repeats_and_release_are_swallowed_too() {
+        let mut swallowed = Modifiers::empty();
+        // The first key-down: the hotkey table blocks it.
+        assert!(swallow_modifier_event(
+            &mut swallowed,
+            Modifiers::OPT_RIGHT,
+            true,
+            true
+        ));
+        assert_eq!(swallowed, Modifiers::OPT_RIGHT);
+        // Auto-repeats leave the modifier state alone, so the table says "not blocked".
+        for _ in 0..2 {
+            assert!(swallow_modifier_event(
+                &mut swallowed,
+                Modifiers::OPT_RIGHT,
+                true,
+                false
+            ));
+        }
+        // The release is swallowed and ends the hold.
+        assert!(swallow_modifier_event(
+            &mut swallowed,
+            Modifiers::OPT_RIGHT,
+            false,
+            false
+        ));
+        assert_eq!(swallowed, Modifiers::empty());
+        // The next press that no hotkey blocks passes, with its release.
+        assert!(!swallow_modifier_event(
+            &mut swallowed,
+            Modifiers::OPT_RIGHT,
+            true,
+            false
+        ));
+        assert!(!swallow_modifier_event(
+            &mut swallowed,
+            Modifiers::OPT_RIGHT,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn only_the_swallowed_modifier_is_swallowed() {
+        let mut swallowed = Modifiers::empty();
+        assert!(swallow_modifier_event(
+            &mut swallowed,
+            Modifiers::OPT_RIGHT,
+            true,
+            true
+        ));
+        // Left Shift is an ordinary key: pressed and released while Right Alt is held.
+        assert!(!swallow_modifier_event(
+            &mut swallowed,
+            Modifiers::SHIFT_LEFT,
+            true,
+            false
+        ));
+        assert!(!swallow_modifier_event(
+            &mut swallowed,
+            Modifiers::SHIFT_LEFT,
+            false,
+            false
+        ));
+        assert_eq!(swallowed, Modifiers::OPT_RIGHT);
+    }
+
+    #[test]
+    fn a_release_that_was_not_swallowed_follows_the_hotkey_table() {
+        let mut swallowed = Modifiers::empty();
+        assert!(swallow_modifier_event(
+            &mut swallowed,
+            Modifiers::CMD_LEFT,
+            false,
+            true
+        ));
+        assert!(!swallow_modifier_event(
+            &mut swallowed,
+            Modifiers::CMD_LEFT,
+            false,
+            false
+        ));
+        assert_eq!(swallowed, Modifiers::empty());
+    }
+
+    #[test]
+    fn reconcile_keeps_a_modifier_held_swallowed() {
+        // Right Alt is held with its key-down swallowed, so GetAsyncKeyState reports it up. The
+        // next other key must not make reconciliation release it.
+        let (tx, rx) = mpsc::channel();
+        let mut ctx = HookContext {
+            event_sender: tx,
+            current_modifiers: Modifiers::OPT_RIGHT,
+            blocking_hotkeys: None,
+            altgr_phantom_ctrl: false,
+            menu_mask_sent: true,
+            swallowed_modifiers: Modifiers::OPT_RIGHT,
+        };
+        reconcile_modifiers(&mut ctx);
+        assert_eq!(ctx.current_modifiers, Modifiers::OPT_RIGHT);
+        assert!(rx.try_recv().is_err(), "no synthetic release");
+    }
+
+    #[test]
+    fn a_chord_on_a_swallowed_modifier_is_still_blocked() {
+        // Right Alt (dictation) is held with its key-down swallowed, and Right Alt+V is a hotkey
+        // too. Pressing V reconciles first (see keyboard_hook_proc); that must not drop Right
+        // Alt, or the chord would never match and the V would reach the foreground app.
+        use crate::types::Hotkey;
+        let mut hotkeys = std::collections::HashSet::new();
+        hotkeys.insert(Hotkey::new(Modifiers::OPT_RIGHT, None).unwrap());
+        hotkeys.insert(Hotkey::new(Modifiers::OPT_RIGHT, Key::V).unwrap());
+        let (tx, _rx) = mpsc::channel();
+        let mut ctx = HookContext {
+            event_sender: tx,
+            current_modifiers: Modifiers::OPT_RIGHT,
+            blocking_hotkeys: Some(std::sync::Arc::new(std::sync::Mutex::new(hotkeys))),
+            altgr_phantom_ctrl: false,
+            menu_mask_sent: true,
+            swallowed_modifiers: Modifiers::OPT_RIGHT,
+        };
+        reconcile_modifiers(&mut ctx);
+        assert!(should_block_hotkey(
+            &ctx.blocking_hotkeys,
+            ctx.current_modifiers,
+            Some(Key::V)
+        ));
+    }
+
+    #[test]
+    fn a_session_change_forgets_swallowed_modifiers() {
+        let (tx, rx) = mpsc::channel();
+        HOOK_CONTEXT.with(|cell| {
+            *cell.borrow_mut() = Some(HookContext {
+                event_sender: tx,
+                current_modifiers: Modifiers::OPT_RIGHT,
+                blocking_hotkeys: None,
+                altgr_phantom_ctrl: false,
+                menu_mask_sent: true,
+                swallowed_modifiers: Modifiers::OPT_RIGHT,
+            });
+        });
+        reconcile_modifiers_in_context();
+        HOOK_CONTEXT.with(|cell| {
+            let ctx = cell.borrow_mut().take().unwrap();
+            assert_eq!(ctx.swallowed_modifiers, Modifiers::empty());
+            assert_eq!(ctx.current_modifiers, Modifiers::empty());
+        });
+        // No key is physically held while tests run: the stale Right Alt was released.
+        let release = rx.try_recv().expect("expected a synthetic release");
+        assert_eq!(release.changed_modifier, Some(Modifiers::OPT_RIGHT));
     }
 
     #[test]
