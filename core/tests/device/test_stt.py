@@ -344,10 +344,51 @@ def test_without_words_there_is_no_hotwords_option(hints, qwen3, sherpa, speech)
     assert sherpa.recognizer.decoded[0].options == {}
 
 
-def test_only_the_first_fifty_hint_words_are_kept(qwen3, sherpa, speech):
+def test_only_the_first_twenty_hint_words_are_kept(qwen3, sherpa, speech):
     words = [f"word{i}" for i in range(60)]
     qwen3.transcribe(speech, hints=words)
-    assert sherpa.recognizer.decoded[0].options["hotwords"] == ",".join(words[:50])
+    assert sherpa.recognizer.decoded[0].options["hotwords"] == ",".join(words[:20])
+
+
+def ten_characters(count: int) -> list[str]:
+    return [f"hintword{i:02d}" for i in range(count)]
+
+
+def test_hint_text_stops_before_it_passes_200_characters(qwen3, sherpa, speech):
+    words = ten_characters(20)  # 19 of them with their commas would be 208 characters
+    qwen3.transcribe(speech, hints=words)
+    hotwords = sherpa.recognizer.decoded[0].options["hotwords"]
+    assert hotwords == ",".join(words[:18])  # 197 characters
+    assert len(hotwords) <= 200
+
+
+@pytest.mark.parametrize(("last", "kept"), [("ab", 19), ("abc", 18)])
+def test_hint_text_of_200_characters_is_kept_and_of_201_is_not(last, kept, qwen3, sherpa, speech):
+    words = [*ten_characters(18), last]  # 197 characters, and with the last one 200 or 201
+    qwen3.transcribe(speech, hints=words)
+    hotwords = sherpa.recognizer.decoded[0].options["hotwords"]
+    assert hotwords == ",".join(words[:kept])
+    assert len(hotwords) <= 200
+
+
+@pytest.mark.parametrize(
+    ("hints", "hotwords"),
+    [
+        # Words are dropped from the end, so a word that does not fit ends the list.
+        (["Codex", "x" * 500, "Tauri"], "Codex"),
+        (["Codex", "x" * 201, "Tauri"], "Codex"),
+        (["x" * 200, "Tauri"], "x" * 200),
+    ],
+    ids=["500 characters", "201 characters", "200 characters"],
+)
+def test_one_very_long_entry_cannot_take_the_prompt(hints, hotwords, qwen3, sherpa, speech):
+    qwen3.transcribe(speech, hints=hints)
+    assert sherpa.recognizer.decoded[0].options == {"hotwords": hotwords}
+
+
+def test_a_first_entry_over_200_characters_leaves_no_hints(qwen3, sherpa, speech):
+    qwen3.transcribe(speech, hints=["x" * 500, "Codex"])
+    assert sherpa.recognizer.decoded[0].options == {}
 
 
 @pytest.mark.parametrize("code", LANGUAGE_NAMES)
