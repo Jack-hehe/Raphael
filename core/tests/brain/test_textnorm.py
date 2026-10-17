@@ -1,3 +1,4 @@
+import itertools
 import subprocess
 import sys
 
@@ -168,6 +169,146 @@ def test_a_rule_matches_its_text_literally():
 
 def test_no_rules_leave_the_text_alone():
     assert apply_replacements("你好", []) == "你好"
+
+
+# --- apply_replacements: word boundaries ---
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "iCloud",  # a letter before the match
+        "clouds",  # a letter after it
+        "9cloud",  # a digit before it
+        "cloud9",  # a digit after it
+    ],
+)
+def test_an_ascii_rule_does_not_match_inside_a_longer_run_of_letters_and_digits(text):
+    assert apply_replacements(text, [("cloud", "Claude")]) == text
+
+
+def test_an_ascii_rule_matches_next_to_anything_that_is_not_a_letter_or_digit():
+    text = "Cloud Code, (cloud), cloud's, cloud-based.\ncloud"
+    expected = "Claude Code, (Claude), Claude's, Claude-based.\nClaude"
+    assert apply_replacements(text, [("Cloud", "Claude")]) == expected
+
+
+def test_only_the_ends_of_a_rule_that_are_letters_or_digits_are_checked():
+    # "c++" starts with a letter but ends with a plus: "abc++" does not match, "c++x" does.
+    assert apply_replacements("c++x abc++ c++", [("c++", "Cpp")]) == "Cppx abc++ Cpp"
+    # ".net" starts with a dot but ends with a letter: "asp.net" matches, ".nets" does not.
+    assert apply_replacements("asp.net .nets", [(".net", ".NET")]) == "asp.NET .nets"
+
+
+def test_chinese_and_japanese_characters_next_to_a_match_do_not_block_it():
+    rules = [("Lafia 先生", "ラファエル先生"), ("cloud", "Claude"), ("拉菲爾", "拉斐爾")]
+    text = "我Lafia 先生你好，用cloud做事，我拉菲爾你"
+    assert apply_replacements(text, rules) == "我ラファエル先生你好，用Claude做事，我拉斐爾你"
+
+
+def test_non_ascii_rules_still_match_as_plain_substrings():
+    # The accent of é is no ASCII letter either, so "é" is found in the middle of "café".
+    rules = [("拉菲爾", "拉斐爾"), ("é", "e")]
+    assert apply_replacements("我拉菲爾你 café", rules) == "我拉斐爾你 cafe"
+
+
+# --- apply_replacements: a word that contains its misheard text ---
+
+
+@pytest.mark.parametrize(
+    "rule, text, expected",
+    [
+        (("Claude", "Claude Code"), "Claude", "Claude Code"),
+        (("Claude", "Claude Code"), "Claude Code", "Claude Code"),
+        (
+            ("Claude", "Claude Code"),
+            "I use Claude Code, Claude and CLAUDE.",
+            "I use Claude Code, Claude Code and Claude Code.",
+        ),
+        (("code", "VS Code"), "open code and VS Code", "open VS Code and VS Code"),
+        (("Lafia", "Lafia 先生"), "Lafia 先生，Lafia", "Lafia 先生，Lafia 先生"),
+        (("拉菲爾", "拉菲爾先生"), "拉菲爾先生和拉菲爾", "拉菲爾先生和拉菲爾先生"),
+    ],
+)
+def test_a_word_that_contains_its_misheard_text_is_not_added_twice(rule, text, expected):
+    # The brain applies the rules twice: to the speech-to-text result and to the cleaned text.
+    once = apply_replacements(text, [rule])
+    assert once == expected
+    assert apply_replacements(once, [rule]) == expected
+
+
+def test_a_rule_that_hands_its_word_to_the_next_rule_does_not_add_it_twice():
+    rules = [("Cloud", "Claude"), ("Claude", "Claude Code")]
+    assert apply_replacements("Cloud", rules) == "Claude Code"
+    once = apply_replacements("iCloud and Cloud Code", rules)
+    assert once == "iCloud and Claude Code"
+    assert apply_replacements(once, rules) == once
+
+
+def test_a_word_inside_the_misheard_text_does_not_stop_the_rule():
+    # Every match of "Claude Code" holds the word "Claude", and the rule must still replace it.
+    rules = [("Claude Code", "Claude")]
+    assert apply_replacements("use Claude Code now", rules) == "use Claude now"
+
+
+def test_a_match_that_overlaps_the_word_is_left_alone_too():
+    # After "go--" has become "go-go-", "go-" is found again: the end of the word and the "-" that
+    # followed the first match. That is no mishearing either.
+    rules = [("go-", "go-go")]
+    once = apply_replacements("go--", rules)
+    assert once == "go-go-"
+    assert apply_replacements(once, rules) == once
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        [("Claude", "Claude Code")],
+        [("Cloud", "Claude"), ("Claude", "Claude Code")],
+        [("Lafia 先生", "ラファエル先生"), ("Lafia", "ラファエル"), ("拉菲爾", "拉斐爾")],
+        [("open router", "OpenRouter"), ("openrouter", "OpenRouter")],
+        [("拉菲爾", "拉菲爾先生"), ("code", "VS Code")],
+    ],
+)
+def test_a_second_pass_over_the_result_changes_nothing(rules):
+    texts = [
+        "",
+        "Claude",
+        "claude code",
+        "Claude Code, Claude",
+        "iCloud, Cloud Code and cloud",
+        "Lafia 先生你好，Lafia，拉菲爾",
+        "拉菲爾先生和拉菲爾",
+        "open router, OPENROUTER and OpenRouter",
+        "use code or VS Code",
+    ]
+    for text in texts:
+        once = apply_replacements(text, rules)
+        assert apply_replacements(once, rules) == once, text
+
+
+def test_a_rule_applied_to_its_own_result_changes_nothing_for_every_short_text():
+    # Every text of up to six characters from a small alphabet, against rules shaped like the ones
+    # that go wrong: the word holds the misheard text and adds to it on one side or the other, in
+    # either case, with and without ASCII letters or digits at the ends.
+    alphabet = "aA- "
+    texts = [
+        "".join(chars)
+        for length in range(7)
+        for chars in itertools.product(alphabet, repeat=length)
+    ]
+    for rule in [
+        ("a", "a a"),
+        ("a", "A a"),
+        ("a-", "a-a"),
+        ("-a", "a-a"),
+        (" a", "a a"),
+        ("a-a", "a-a-a"),
+        ("A-", "a-A"),
+    ]:
+        for text in texts:
+            once = apply_replacements(text, [rule])
+            assert apply_replacements(once, [rule]) == once, (rule, text)
 
 
 # --- the converter ---

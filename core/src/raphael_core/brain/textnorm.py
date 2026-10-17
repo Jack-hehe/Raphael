@@ -9,6 +9,7 @@ by sentence.
 
 import functools
 import re
+import string
 from collections.abc import Sequence
 
 import opencc
@@ -40,7 +41,8 @@ _CJK = _in_blocks(
 # A sentence whose CJK characters are at least this many percent hiragana is Japanese.
 _JAPANESE_PERCENT = 10
 
-_ASCII_LETTER = re.compile("[A-Za-z]")
+# What may not stand next to a rule's text when that text starts or ends with one of them.
+_ASCII_LETTERS_AND_DIGITS = string.ascii_letters + string.digits
 
 
 @functools.cache
@@ -74,22 +76,73 @@ def to_taiwan_traditional(text: str) -> str:
     )
 
 
+def _misheard_pattern(misheard: str) -> re.Pattern[str]:
+    """The pattern that finds the text of one rule.
+
+    ASCII letters match in either case, everything else exactly. re.ASCII keeps the case folding
+    to the ASCII letters. Otherwise é would match É, and the Kelvin sign (U+212A) would match k.
+
+    A text that starts with an ASCII letter or digit does not match right after another one, and a
+    text that ends with one does not match right before another one: "cloud" is not found in
+    "iCloud" or "clouds". At an end that is anything else, nothing is checked. Chinese and Japanese
+    characters next to a match do not matter either, as there are no spaces between the words.
+    """
+    letters_and_digits = f"[{_ASCII_LETTERS_AND_DIGITS}]"
+    not_after = f"(?<!{letters_and_digits})" if misheard[0] in _ASCII_LETTERS_AND_DIGITS else ""
+    not_before = f"(?!{letters_and_digits})" if misheard[-1] in _ASCII_LETTERS_AND_DIGITS else ""
+    return re.compile(not_after + re.escape(misheard) + not_before, re.IGNORECASE | re.ASCII)
+
+
+def _overlaps_word(text: str, start: int, end: int, word: str) -> bool:
+    """Whether an occurrence of `word` in `text` shares a character with `text[start:end]`."""
+    # Such an occurrence starts after start - len(word) and before end, so it lies within this
+    # stretch of the text.
+    return text.find(word, max(0, start - len(word) + 1), end + len(word) - 1) != -1
+
+
+def _apply_rule(text: str, misheard: str, word: str) -> str:
+    """`text` with each match of `misheard` replaced by `word`, but not where `word` is already.
+
+    A match that shares a character with an occurrence of `word` is not a mishearing but the word
+    itself, or part of it, and stays as it is.
+    """
+    pattern = _misheard_pattern(misheard)
+    # A word that is shorter than the misheard text cannot contain a match, and a rule such as
+    # ("Claude Code", "Claude") has to replace matches that contain the word.
+    protect_word = len(word) >= len(misheard)
+    pieces: list[str] = []
+    copied = 0  # text[:copied] is in `pieces`, replaced or not
+    position = 0  # where the search for the next match starts
+    while (match := pattern.search(text, position)) is not None:
+        start, end = match.span()
+        if protect_word and _overlaps_word(text, start, end, word):
+            position = start + 1  # the next match may start inside this one
+            continue
+        pieces.append(text[copied:start])
+        # The word itself, so that backslashes in it are not read as escapes or group references.
+        pieces.append(word)
+        copied = position = end
+    pieces.append(text[copied:])
+    return "".join(pieces)
+
+
 def apply_replacements(text: str, rules: Sequence[tuple[str, str]]) -> str:
     """Replace each `misheard` text by its `word`, rule after rule in the order given.
 
     `DictionaryStore.replacements()` returns the rules longest first, so that a long form gets
     its chance before a shorter one inside it. ASCII letters in a rule match in either case,
     everything else exactly. A rule with empty `misheard` text is skipped.
+
+    A text that starts or ends with an ASCII letter or digit matches only as a word of its own:
+    "cloud" is not found in "iCloud" or "clouds". And the rules never damage a word that is
+    already right: with ("Claude", "Claude Code"), the "Claude" in "Claude Code" stays. The brain
+    applies the rules to the speech-to-text result and again to the cleaned text, so the second
+    time must not add another "Code". Applied to its own result, a rule whose word is at least as
+    long as its misheard text changes nothing more. Rules can still undo or build on each other
+    (a word that holds the misheard text of an earlier rule), and a word shorter than its misheard
+    text can leave a second match behind.
     """
     for misheard, word in rules:
-        if not misheard:
-            continue
-        if _ASCII_LETTER.search(misheard):
-            # re.ASCII keeps the case folding to the ASCII letters. Otherwise é would match É,
-            # and the Kelvin sign (U+212A) would match k.
-            pattern = re.compile(re.escape(misheard), re.IGNORECASE | re.ASCII)
-            # A function, so that backslashes in `word` are not read as escapes or group refs.
-            text = pattern.sub(lambda _match: word, text)
-        else:
-            text = text.replace(misheard, word)
+        if misheard:
+            text = _apply_rule(text, misheard, word)
     return text
