@@ -13,7 +13,7 @@ import json
 import logging
 import sys
 import threading
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 
 from .protocol import (
     INTERNAL_ERROR,
@@ -124,18 +124,24 @@ def _decoded_lines(read: Callable[[int], bytes]) -> Iterator[str]:
         yield pending.decode("utf-8", errors="replace")
 
 
-def run_stdio(router: Router) -> None:
+def run_stdio(router: Router, on_close: Callable[[], Awaitable[None]] | None = None) -> None:
     """Serve JSON-RPC on stdin and stdout until stdin closes, then return.
 
     stdout carries protocol lines and nothing else; logging goes to stderr, where the app reads it.
+
+    `on_close` runs on the event loop once the input has ended and every request is answered, for
+    what has to be closed on the loop (an async client, say). A failure in it is logged, not raised:
+    the server is stopping anyway.
     """
     logging.basicConfig(
         stream=sys.stderr, level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
-    asyncio.run(_serve_stdio(router))
+    asyncio.run(_serve_stdio(router, on_close))
 
 
-async def _serve_stdio(router: Router) -> None:
+async def _serve_stdio(
+    router: Router, on_close: Callable[[], Awaitable[None]] | None = None
+) -> None:
     loop = asyncio.get_running_loop()
     inbox: asyncio.Queue[str | None] = asyncio.Queue()
 
@@ -172,3 +178,8 @@ async def _serve_stdio(router: Router) -> None:
     logger.info("Serving JSON-RPC on stdio")
     await serve(router, lines(), write)
     logger.info("Input closed, stopping")
+    if on_close is not None:
+        try:
+            await on_close()
+        except Exception:
+            logger.exception("Shutdown did not finish cleanly")

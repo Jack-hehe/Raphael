@@ -1,0 +1,1452 @@
+"""Tests for the entry point's wiring (Task 13).
+
+The speech side is a fake kit: a microphone that delivers scripted chunks, a segmenter that makes
+one segment per chunk, an engine that always hears the same words, and the real DictationService.
+So the whole wiring (router, brain, models, dictation, the level meter) runs here without a
+microphone, a speech model, sherpa-onnx at work or the network. The real thing, in a child process
+with the real models, is tests/test_e2e.py.
+"""
+
+import asyncio
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import httpx
+import numpy as np
+import pytest
+
+import raphael_core
+from raphael_core import __main__ as entry
+from raphael_core import app as app_module
+from raphael_core.app import (
+    APP_MODELS,
+    DICTATION_SEGMENT_SECONDS,
+    STT_THREADS,
+    App,
+    EchoClient,
+    LevelMonitor,
+    SpeechModels,
+    build_app,
+)
+from raphael_core.brain import textnorm
+from raphael_core.brain.cleanup import build_user_message
+from raphael_core.device import audio, dictation, models
+from raphael_core.device.models import REGISTRY, ModelFile, ModelManager, ModelSpec
+from raphael_core.protocol import (
+    INVALID_PARAMS,
+    NO_MICROPHONE,
+    NOT_CONFIGURED,
+    PROTOCOL_VERSION,
+    RpcError,
+)
+from raphael_core.router import Router
+
+RATE = 16_000
+WORDS = "你好世界"
+
+
+def loud(seconds: float = 0.5) -> np.ndarray:
+    return np.full(round(seconds * RATE), 0.2, dtype=np.float32)
+
+
+async def wait_until(predicate, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("timed out waiting for a condition")
+        await asyncio.sleep(0.005)
+
+
+def make_models(root: Path, names=APP_MODELS) -> None:
+    """The files that make each model 'ready' (existence is all the registry looks at)."""
+    for name in names:
+        for relative in REGISTRY[name].files:
+            path = root / name / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"x")
+
+
+# --- a fake speech side -----------------------------------------------------------------------
+
+
+class FakeMic:
+    """A microphone: start() delivers the kit's scripted chunks at once, on the calling thread."""
+
+    def __init__(self, kit, on_frames, device=None):
+        self.kit = kit
+        self.on_frames = on_frames
+        self.device = device
+        self.error = None
+        self.started = 0
+        self.stopped = 0
+        self.fail_to_start = False
+
+    @property
+    def open(self) -> bool:
+        return self.started > self.stopped
+
+    def start(self):
+        if self.fail_to_start:
+            raise audio.NoMicrophoneError("no microphone to open")
+        self.started += 1
+        for chunk in self.kit.script:
+            self.on_frames(chunk)
+
+    def stop(self):
+        if self.open:
+            self.stopped += 1
+
+
+class FakeWav:
+    def __init__(self, on_frames, path, realtime=True):
+        self.on_frames = on_frames
+        self.path = path
+        self.realtime = realtime
+        self.error = None
+        self.started = 0
+        self.stopped = 0
+
+    def start(self):
+        self.started += 1
+
+    def stop(self):
+        self.stopped += 1
+
+
+class FakeSegmenter:
+    """One segment per chunk. `speech_seconds` starts again at the first chunk after a flush."""
+
+    def __init__(self, kit, path, **kwargs):
+        self.path = path
+        self.kwargs = kwargs
+        self.speech_seconds = 0.0
+        self.flushes = 0
+        self._flushed = False
+        self.calls_from: set[int] = set()
+        kit.segmenters.append(self)
+
+    def accept(self, frames):
+        self.calls_from.add(threading.get_ident())
+        if self._flushed:
+            self._flushed = False
+            self.speech_seconds = 0.0
+        self.speech_seconds += frames.size / RATE
+        return [frames]
+
+    def flush(self):
+        self.flushes += 1
+        self._flushed = True
+        return []
+
+
+class FakeEngine:
+    name = "qwen3-asr"
+
+    def __init__(self, kit, **kwargs):
+        self.kit = kit
+        self.kwargs = kwargs
+
+    def transcribe(self, samples, *, hints=(), language="auto"):
+        self.kit.transcriptions.append({"hints": list(hints), "language": language})
+        return WORDS
+
+
+def make_kit(*, script=None, devices=None, engine_gate=None, segmenter_gate=None):
+    """The things the app imports lazily, with fakes for the speech side."""
+    kit = SimpleNamespace(
+        script=[loud(), loud()] if script is None else script,
+        mics=[],
+        wavs=[],
+        segmenters=[],
+        engines=[],
+        transcriptions=[],
+        devices=[] if devices is None else devices,
+    )
+
+    def make_mic(on_frames, device=None):
+        mic = FakeMic(kit, on_frames, device)
+        kit.mics.append(mic)
+        return mic
+
+    def make_wav(on_frames, path, realtime=True):
+        wav = FakeWav(on_frames, path, realtime)
+        kit.wavs.append(wav)
+        return wav
+
+    def make_segmenter(path, **kwargs):
+        if segmenter_gate is not None:
+            assert segmenter_gate.wait(30)
+        return FakeSegmenter(kit, path, **kwargs)
+
+    def create_engine(name, manager, num_threads=4):
+        if engine_gate is not None:
+            assert engine_gate.wait(30)
+        engine = FakeEngine(kit, name=name, num_threads=num_threads)
+        kit.engines.append(engine)
+        return engine
+
+    kit.DictationService = dictation.DictationService
+    kit.MicRecorder = make_mic
+    kit.WavRecorder = make_wav
+    kit.NoMicrophoneError = audio.NoMicrophoneError
+    kit.rms_level = audio.rms_level
+    kit.list_input_devices = lambda: kit.devices
+    kit.Segmenter = make_segmenter
+    kit.create_engine = create_engine
+    return kit
+
+
+@pytest.fixture
+async def make_app(tmp_path):
+    """`make_app(kit, ...)` is a started App on a data directory of its own."""
+    apps: list[App] = []
+
+    def make(kit=None, *, ready=APP_MODELS, fake_llm=True, fake_audio=None, manager=None):
+        data = tmp_path / "data"
+        make_models(data / "models", ready)
+        app = App(
+            data_dir=data,
+            fake_audio=fake_audio,
+            fake_llm=fake_llm,
+            manager=manager,
+            load_kit=lambda: make_kit() if kit is None else kit,
+        )
+        apps.append(app)
+        app.start()
+        return app
+
+    yield make
+    for app in apps:
+        await app.aclose()
+
+
+@pytest.fixture
+def notes():
+    """Every notification an App sends, as (method, params)."""
+
+    class Notes(list):
+        def methods(self, method):
+            return [params for name, params in self if name == method]
+
+    return Notes()
+
+
+def listen(app, notes) -> None:
+    app.set_notifier(lambda method, params: notes.append((method, params)))
+
+
+async def dictate(app, session="s1"):
+    await app.call("dictation.start", {"session_id": session})
+    return await app.call("dictation.stop", {"session_id": session, "target_app": "notepad.exe"})
+
+
+# --- the fake LLM -----------------------------------------------------------------------------
+
+
+async def test_the_fake_llm_gives_the_transcript_back_at_no_cost():
+    client = EchoClient()
+    text = "嗯 我想 呃 想買 OpenRouter 的額度"
+    done = await client.complete_json(
+        model="m",
+        fallbacks=[],
+        system="s",
+        user=build_user_message(text),  # how the cleanup service words its question
+        schema={},
+        schema_name="x",
+        timeout_s=1.0,
+        max_tokens=64,
+    )
+    assert done.data == {"text": text}
+    assert done.cost_usd == 0.0 and done.prompt_tokens == 0 and done.completion_tokens == 0
+    assert (await client.key_info()).label  # a key check passes
+    client.warm_up()
+    await client.aclose()
+
+
+async def test_the_fake_llm_keeps_a_transcript_with_line_breaks_whole():
+    text = "第一段\n\n第二段"
+    done = await EchoClient().complete_json(
+        model="m",
+        fallbacks=[],
+        system="s",
+        user=build_user_message(text),
+        schema={},
+        schema_name="x",
+        timeout_s=1.0,
+        max_tokens=64,
+    )
+    assert done.data == {"text": text}
+
+
+# --- the models, loaded once and shared -------------------------------------------------------
+
+
+class Loads:
+    """Stand-ins for the segmenter and the engine of SpeechModels, counting their loads."""
+
+    def __init__(self, engine_gate=None, segmenter_gate=None):
+        self.engine_gate = engine_gate
+        self.segmenter_gate = segmenter_gate
+        self.segmenters: list = []
+        self.engines: list = []
+        self.engine_errors: list[Exception] = []
+
+    def make_segmenter(self, path):
+        if self.segmenter_gate is not None:
+            assert self.segmenter_gate.wait(30)
+        segmenter = SimpleNamespace(path=path, speech_seconds=0.0, fed=[], flushed=0)
+        segmenter.accept = lambda frames: segmenter.fed.append(frames) or []
+        segmenter.flush = lambda: setattr(segmenter, "flushed", segmenter.flushed + 1) or []
+        self.segmenters.append(segmenter)
+        return segmenter
+
+    def make_engine(self):
+        if self.engine_gate is not None:
+            assert self.engine_gate.wait(30)
+        if self.engine_errors:
+            raise self.engine_errors.pop(0)
+        engine = SimpleNamespace(name="qwen3-asr")
+        self.engines.append(engine)
+        return engine
+
+
+@pytest.fixture
+def speech_in(tmp_path):
+    def make(ready=APP_MODELS, **gates):
+        root = tmp_path / "models"
+        make_models(root, ready)
+        loads = Loads(**gates)
+        manager = ModelManager(root)
+        speech = SpeechModels(
+            manager, make_segmenter=loads.make_segmenter, make_engine=loads.make_engine
+        )
+        return speech, loads, manager
+
+    return make
+
+
+def test_loading_builds_the_segmenter_and_the_engine_once(speech_in):
+    speech, loads, manager = speech_in()
+    speech.load_pending()
+    speech.load_pending()
+    assert len(loads.segmenters) == 1 and len(loads.engines) == 1
+    assert loads.segmenters[0].path == manager.dir("silero-vad") / "silero_vad_v5.onnx"
+    assert speech.engine() is loads.engines[0]
+    assert speech.dictation_segmenter is speech.dictation_segmenter
+
+
+def test_loading_builds_only_what_is_downloaded(speech_in):
+    speech, loads, _ = speech_in(ready=("silero-vad",))
+    speech.load_pending()
+    assert len(loads.segmenters) == 1 and loads.engines == []
+
+
+def test_a_model_that_is_not_downloaded_is_a_file_not_found(speech_in):
+    speech, loads, _ = speech_in(ready=())
+    speech.load_pending()
+    assert loads.segmenters == [] and loads.engines == []
+    with pytest.raises(FileNotFoundError, match="qwen3-asr"):
+        speech.engine()
+    with pytest.raises(FileNotFoundError, match="silero-vad"):
+        speech.dictation_segmenter.accept(loud())
+
+
+def test_require_models_says_not_configured_for_what_is_missing(speech_in):
+    speech, _, manager = speech_in(ready=("silero-vad",))
+    with pytest.raises(RpcError) as caught:
+        speech.require_models()
+    assert caught.value.code == NOT_CONFIGURED and "qwen3-asr" in caught.value.message
+    make_models(manager.dir("qwen3-asr").parent, ("qwen3-asr",))
+    speech.require_models()  # on disk is enough: it is loaded on the way
+
+
+def test_the_engine_call_waits_for_a_load_that_is_under_way(speech_in):
+    gate = threading.Event()
+    speech, loads, _ = speech_in(engine_gate=gate)
+    loader = threading.Thread(target=speech.load_pending)
+    loader.start()
+    deadline = time.monotonic() + 10
+    while not loads.segmenters and time.monotonic() < deadline:
+        time.sleep(0.005)
+    got: list = []
+    waiter = threading.Thread(target=lambda: got.append(speech.engine()))
+    waiter.start()
+    waiter.join(0.3)
+    assert waiter.is_alive() and not got  # still loading: it waits, it does not load a second one
+    gate.set()
+    waiter.join(10)
+    loader.join(10)
+    assert got == loads.engines and len(loads.engines) == 1
+
+
+def test_the_segmenter_call_waits_for_a_load_that_is_under_way(speech_in):
+    gate = threading.Event()
+    speech, loads, _ = speech_in(segmenter_gate=gate)
+    loader = threading.Thread(target=speech.load_pending)
+    loader.start()
+    fed: list = []
+    waiter = threading.Thread(target=lambda: fed.append(speech.dictation_segmenter.accept(loud())))
+    waiter.start()
+    waiter.join(0.3)
+    assert waiter.is_alive()
+    gate.set()
+    waiter.join(10)
+    loader.join(10)
+    assert len(loads.segmenters) == 1 and len(loads.segmenters[0].fed) == 1
+
+
+def test_the_segmenter_is_there_as_soon_as_it_is_built_not_when_the_engine_is_too(speech_in):
+    # The first dictation's audio can be cut into speech at once; the engine loads for seconds more.
+    gate = threading.Event()
+    speech, loads, _ = speech_in(engine_gate=gate)
+    loader = threading.Thread(target=speech.load_pending)
+    loader.start()
+    got: list = []
+    waiter = threading.Thread(target=lambda: got.append(speech.dictation_segmenter.accept(loud())))
+    waiter.start()
+    waiter.join(5)
+    assert not waiter.is_alive() and got == [[]]  # fed to the detector, with the engine unloaded
+    assert loads.engines == [] and loader.is_alive()
+    gate.set()
+    loader.join(10)
+    assert len(loads.engines) == 1
+
+
+def test_a_model_that_arrives_later_is_loaded_when_it_is_asked_for(speech_in):
+    speech, loads, manager = speech_in(ready=())
+    speech.load_pending()
+    make_models(manager.dir("qwen3-asr").parent, ("qwen3-asr",))  # downloaded since
+    assert speech.engine() is loads.engines[0]
+
+
+def test_an_engine_that_failed_to_load_is_tried_again(speech_in):
+    speech, loads, _ = speech_in()
+    loads.engine_errors += [RuntimeError("out of memory"), RuntimeError("still no memory")]
+    speech.load_pending()  # the first try fails: logged, and start-up goes on
+    with pytest.raises(RuntimeError, match="still no memory"):
+        speech.engine()  # asking tries again
+    assert speech.engine() is loads.engines[0]  # and again
+
+
+def test_flushing_the_shared_segmenter_before_anything_was_built_builds_nothing(speech_in):
+    speech, loads, _ = speech_in()
+    shared = speech.dictation_segmenter
+    assert shared.flush() == [] and shared.speech_seconds == 0.0  # nothing built or heard yet
+    assert loads.segmenters == []  # and asking did not build one
+    speech.load_pending()
+    loads.segmenters[0].speech_seconds = 2.5
+    assert shared.speech_seconds == 2.5
+    shared.flush()
+    assert loads.segmenters[0].flushed == 1
+
+
+def test_close_lets_go_of_the_models(speech_in):
+    speech, loads, _ = speech_in()
+    speech.load_pending()
+    speech.close()
+    assert speech.built_segmenter() is None
+    # Closed for good: nothing is loaded again behind it.
+    speech.load_pending()
+    assert len(loads.segmenters) == 1
+
+
+# --- the level meter --------------------------------------------------------------------------
+
+
+class MeterMic:
+    def __init__(self, on_frames):
+        self.on_frames = on_frames
+        self.started = 0
+        self.stopped = 0
+        self.fail_to_start = False
+        self.error = None
+
+    @property
+    def open(self):
+        return self.started > self.stopped
+
+    def start(self):
+        if self.fail_to_start:
+            raise audio.NoMicrophoneError("unplugged")
+        self.started += 1
+
+    def stop(self):
+        if self.open:
+            self.stopped += 1
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.fixture
+def meter(notes):
+    router = Router()
+    router.set_notifier(lambda method, params: notes.append((method, params)))
+    clock = FakeClock()
+    mics: list[MeterMic] = []
+    state = SimpleNamespace(unplugged=False)
+
+    def make_recorder(on_frames):
+        mic = MeterMic(on_frames)
+        mic.fail_to_start = state.unplugged
+        mics.append(mic)
+        return mic
+
+    monitor = LevelMonitor(
+        router,
+        make_recorder=make_recorder,
+        level_of=lambda frames: float(frames.max()),
+        no_microphone=audio.NoMicrophoneError,
+        hz=10.0,
+        clock=clock,
+    )
+    return SimpleNamespace(monitor=monitor, mics=mics, clock=clock, notes=notes, state=state)
+
+
+async def levels(meter, count):
+    await wait_until(lambda: len(meter.notes.methods("audio.level")) >= count)
+    return meter.notes.methods("audio.level")
+
+
+async def test_the_meter_sends_the_level_with_no_session(meter):
+    await meter.monitor.set_on(True)
+    assert len(meter.mics) == 1 and meter.mics[0].open
+    meter.mics[0].on_frames(np.full(320, 0.25, dtype=np.float32))
+    assert await levels(meter, 1) == [{"session_id": None, "level": 0.25}]
+
+
+async def test_the_meter_sends_at_most_hz_levels_a_second(meter):
+    await meter.monitor.set_on(True)
+    on_frames = meter.mics[0].on_frames
+    for _ in range(5):
+        on_frames(np.full(320, 0.1, dtype=np.float32))
+    meter.clock.now += 0.05  # half of a tenth of a second
+    on_frames(np.full(320, 0.1, dtype=np.float32))
+    meter.clock.now += 0.06
+    on_frames(np.full(320, 0.3, dtype=np.float32))
+    got = await levels(meter, 2)
+    await asyncio.sleep(0.05)
+    assert [n["level"] for n in meter.notes.methods("audio.level")] == pytest.approx([0.1, 0.3])
+    assert len(got) >= 2
+
+
+async def test_switching_the_meter_off_closes_the_microphone_and_ends_the_levels(meter):
+    await meter.monitor.set_on(True)
+    mic = meter.mics[0]
+    await meter.monitor.set_on(False)
+    assert not mic.open
+    mic.on_frames(np.full(320, 0.9, dtype=np.float32))  # a late block
+    await asyncio.sleep(0.05)
+    assert meter.notes.methods("audio.level") == []
+    await meter.monitor.set_on(False)  # again: nothing to do
+
+
+async def test_switching_the_meter_on_twice_opens_one_microphone(meter):
+    await meter.monitor.set_on(True)
+    await meter.monitor.set_on(True)
+    assert len(meter.mics) == 1
+
+
+async def test_no_microphone_is_reported_and_the_meter_can_be_tried_again(meter):
+    meter.state.unplugged = True
+    with pytest.raises(RpcError) as caught:
+        await meter.monitor.set_on(True)
+    assert caught.value.code == NO_MICROPHONE and not meter.mics[0].open
+    meter.state.unplugged = False
+    await meter.monitor.set_on(True)
+    assert meter.mics[-1].open
+
+
+async def test_a_meter_that_failed_to_open_is_not_wanted_when_a_dictation_ends(meter):
+    meter.state.unplugged = True
+    with pytest.raises(RpcError):
+        await meter.monitor.set_on(True)
+    meter.state.unplugged = False
+    await meter.monitor.suspend()
+    await meter.monitor.resume()
+    assert not meter.mics[-1].open  # the page was told it failed; it asks again if it wants to
+
+
+async def test_the_meter_gives_the_microphone_up_to_a_dictation_and_takes_it_back(meter):
+    await meter.monitor.set_on(True)
+    first = meter.mics[0]
+    await meter.monitor.suspend()
+    assert not first.open
+    first.on_frames(np.full(320, 0.9, dtype=np.float32))
+    await asyncio.sleep(0.05)
+    assert meter.notes.methods("audio.level") == []
+    await meter.monitor.resume()
+    assert len(meter.mics) == 2 and meter.mics[1].open
+
+
+async def test_a_meter_that_was_off_stays_off_after_a_dictation(meter):
+    await meter.monitor.suspend()
+    await meter.monitor.resume()
+    assert meter.mics == []
+
+
+async def test_switching_the_meter_on_during_a_dictation_waits_for_its_end(meter):
+    await meter.monitor.suspend()
+    await meter.monitor.set_on(True)
+    assert meter.mics == []  # the dictation has the microphone
+    await meter.monitor.resume()
+    assert len(meter.mics) == 1 and meter.mics[0].open
+
+
+async def test_a_microphone_that_cannot_be_taken_back_is_logged_not_raised(meter, caplog):
+    await meter.monitor.set_on(True)
+    await meter.monitor.suspend()
+    meter.state.unplugged = True
+    await meter.monitor.resume()  # the dictation is over; the meter's microphone is gone
+    assert not meter.mics[-1].open and "meter" in caplog.text
+    meter.state.unplugged = False
+    await meter.monitor.restart()  # the user picks another one in the settings
+    assert meter.mics[-1].open
+
+
+async def test_restart_moves_the_meter_to_the_new_microphone(meter):
+    await meter.monitor.set_on(True)
+    await meter.monitor.restart()
+    assert len(meter.mics) == 2 and not meter.mics[0].open and meter.mics[1].open
+
+
+async def test_restart_leaves_a_meter_that_is_off_alone(meter):
+    await meter.monitor.restart()
+    assert meter.mics == []
+
+
+async def test_closing_the_meter_closes_the_microphone(meter):
+    await meter.monitor.set_on(True)
+    await meter.monitor.aclose()
+    assert not meter.mics[0].open
+
+
+# --- the app: what it answers while the speech side loads -------------------------------------
+
+
+EXPECTED_METHODS = {
+    "core.hello",
+    "core.shutdown",
+    "models.status",
+    "models.ensure",
+    "audio.devices",
+    "audio.set_device",
+    "audio.monitor",
+    "dictation.start",
+    "dictation.stop",
+    "dictation.cancel",
+    "brain.finalize_dictation",
+    "history.list",
+    "history.latest",
+    "history.delete",
+    "dictionary.list",
+    "dictionary.add",
+    "dictionary.delete",
+    "dictionary.suggestions",
+    "dictionary.dismiss",
+    "settings.get",
+    "settings.set",
+    "secrets.status",
+    "secrets.set_openrouter_key",
+    "secrets.clear_openrouter_key",
+    "status.get",
+    "status.check_openrouter",
+}
+
+
+async def test_every_method_is_there_from_the_start_even_while_the_kit_loads(tmp_path):
+    release = threading.Event()
+
+    def slow_kit():
+        assert release.wait(30)
+        return make_kit()
+
+    app = App(data_dir=tmp_path, fake_llm=True, load_kit=slow_kit)
+    app.start()
+    try:
+        assert EXPECTED_METHODS <= set(app.methods())
+        # The app asks for all of these as soon as the core is up, long before the speech side is.
+        assert await app.call("core.hello") == {
+            "protocol": PROTOCOL_VERSION,
+            "version": raphael_core.__version__,
+        }
+        assert (await app.call("settings.get"))["settings"]["monthly_limit_usd"] == 10.0
+        assert await app.call("audio.set_device", {"name": "USB Mic"}) == {}
+        assert [m["ready"] for m in (await app.call("models.status"))["models"]] == [False, False]
+        assert (await app.call("secrets.status")) == {"has_key": True}
+        pending = asyncio.ensure_future(app.call("dictation.cancel"))
+        await asyncio.sleep(0.2)
+        assert not pending.done()  # the dictation side is not there yet; it waits, it does not fail
+        release.set()
+        assert await asyncio.wait_for(pending, 10) == {}
+    finally:
+        release.set()
+        await app.aclose()
+
+
+async def test_a_request_that_gives_up_waiting_for_the_speech_side_does_not_spoil_it(tmp_path):
+    release = threading.Event()
+    app = App(
+        data_dir=tmp_path,
+        fake_llm=True,
+        load_kit=lambda: release.wait(30) and make_kit(),
+    )
+    app.start()
+    try:
+        waiting = asyncio.ensure_future(app.call("dictation.cancel"))
+        await asyncio.sleep(0.1)
+        waiting.cancel()  # the page closed, say
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        release.set()
+        assert await asyncio.wait_for(app.call("dictation.cancel"), 10) == {}
+        assert (await app.call("audio.devices"))["devices"] == []
+    finally:
+        release.set()
+        await app.aclose()
+
+
+async def test_a_speech_side_that_cannot_load_is_an_error_but_the_core_goes_on(tmp_path, caplog):
+    def broken_kit():
+        raise ImportError("PortAudio library not found")
+
+    app = App(data_dir=tmp_path, fake_llm=True, load_kit=broken_kit)
+    app.start()
+    try:
+        with pytest.raises(RpcError) as caught:
+            await app.call("dictation.start", {"session_id": "s"})
+        assert "PortAudio" in caught.value.message
+        with pytest.raises(RpcError):
+            await app.call("audio.devices")
+        assert (await app.call("core.hello"))["protocol"] == PROTOCOL_VERSION
+        assert "PortAudio" in caplog.text
+    finally:
+        await app.aclose()
+
+
+async def test_wait_for_libraries_returns_when_the_kit_is_imported(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    started = time.monotonic()
+    await asyncio.to_thread(app.wait_for_libraries, 10)
+    assert time.monotonic() - started < 5
+    assert app._kit.done() and app._kit.result() is kit
+
+
+async def test_wait_for_libraries_gives_up_after_its_timeout(tmp_path):
+    release = threading.Event()
+    app = App(data_dir=tmp_path, fake_llm=True, load_kit=lambda: release.wait(30) and make_kit())
+    app.start()
+    try:
+        started = time.monotonic()
+        await asyncio.to_thread(app.wait_for_libraries, 0.2)
+        assert 0.15 < time.monotonic() - started < 5
+    finally:
+        release.set()
+        await app.aclose()
+
+
+async def test_wait_for_libraries_returns_when_the_import_failed(tmp_path):
+    def broken():
+        raise ImportError("no PortAudio")
+
+    app = App(data_dir=tmp_path, fake_llm=True, load_kit=broken)
+    app.start()
+    try:
+        await asyncio.to_thread(app.wait_for_libraries, 10)  # does not raise; the use reports it
+    finally:
+        await app.aclose()
+
+
+async def test_the_version_is_the_packages(make_app):
+    hello = await make_app().call("core.hello")
+    assert hello == {"protocol": 1, "version": raphael_core.__version__}
+
+
+# --- start-up loads the heavy things, not the first key press ---------------------------------
+
+
+async def test_the_models_load_at_start_without_any_dictation(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await wait_until(lambda: kit.segmenters and kit.engines)
+    segmenter, engine = kit.segmenters[0], kit.engines[0]
+    assert DICTATION_SEGMENT_SECONDS == 10.0 and STT_THREADS == 4
+    assert segmenter.kwargs == {"max_segment_s": 10.0}  # ruling 2: speech without pauses is cut
+    assert segmenter.path == app.manager.dir("silero-vad") / "silero_vad_v5.onnx"
+    assert engine.kwargs == {"name": "qwen3-asr", "num_threads": 4}
+
+
+async def test_nothing_is_loaded_for_a_model_that_is_not_downloaded(make_app):
+    kit = make_kit()
+    app = make_app(kit, ready=())
+    await asyncio.sleep(0.3)
+    await app.call("core.hello")
+    assert kit.segmenters == [] and kit.engines == []
+
+
+async def test_the_opencc_converter_is_warmed_up_at_start(make_app):
+    textnorm._converter.cache_clear()
+    make_app(make_kit())
+    await wait_until(lambda: textnorm._converter.cache_info().currsize == 1)
+
+
+async def test_the_openrouter_client_is_warmed_up_at_start(make_app):
+    app = make_app(make_kit())
+    await wait_until(lambda: app.client.warmed_up)
+
+
+# --- models.status and models.ensure ----------------------------------------------------------
+
+
+async def test_models_status_lists_the_two_models_the_app_uses(make_app):
+    app = make_app(ready=())
+    assert await app.call("models.status") == {
+        "models": [
+            {"name": "silero-vad", "ready": False},
+            {"name": "qwen3-asr", "ready": False},
+        ]
+    }
+
+
+async def test_models_status_follows_what_is_on_disk(make_app, tmp_path):
+    app = make_app(ready=("silero-vad",))
+    status = (await app.call("models.status"))["models"]
+    assert status == [{"name": "silero-vad", "ready": True}, {"name": "qwen3-asr", "ready": False}]
+    make_models(tmp_path / "data" / "models", ("qwen3-asr",))
+    status = (await app.call("models.status"))["models"]
+    assert [m["ready"] for m in status] == [True, True]
+
+
+@pytest.fixture
+def downloads(monkeypatch):
+    """Tiny stand-ins for the two registry models, served by a mock transport."""
+    served: list[str] = []
+    specs = {
+        "silero-vad": ModelSpec(
+            name="silero-vad",
+            files=("silero_vad_v5.onnx",),
+            downloads=(ModelFile("https://models.test/vad.onnx", "silero_vad_v5.onnx", 200_000),),
+        ),
+        "qwen3-asr": ModelSpec(
+            name="qwen3-asr",
+            files=("encoder.onnx", "tokenizer/vocab.json"),
+            downloads=(
+                ModelFile("https://models.test/encoder.onnx", "encoder.onnx", 1_500_000),
+                ModelFile("https://models.test/vocab.json", "tokenizer/vocab.json", 100),
+            ),
+        ),
+    }
+    sizes = {file.url: file.size for spec in specs.values() for file in spec.downloads}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        served.append(url)
+        if url not in sizes:
+            return httpx.Response(404)
+        return httpx.Response(200, content=b"\0" * sizes[url])
+
+    for name, spec in specs.items():
+        monkeypatch.setitem(models.REGISTRY, name, spec)
+    http = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    yield SimpleNamespace(served=served, http=http, specs=specs, sizes=sizes)
+    http.close()
+
+
+async def test_models_ensure_downloads_and_reports_progress(make_app, downloads, tmp_path, notes):
+    kit = make_kit()
+    root = tmp_path / "data" / "models"
+    app = make_app(kit, ready=(), manager=ModelManager(root, downloads.http))
+    listen(app, notes)
+    result = await app.call("models.ensure", {"names": ["silero-vad", "qwen3-asr"]})
+    assert result == {"ok": True}
+    assert (root / "silero-vad" / "silero_vad_v5.onnx").is_file()
+    assert (root / "qwen3-asr" / "tokenizer" / "vocab.json").is_file()
+    await asyncio.sleep(0.05)
+    progress = notes.methods("models.progress")
+    first = [p for p in progress if p["name"] == "silero-vad"]
+    assert first and first[-1] == {"name": "silero-vad", "done": 200_000, "total": 200_000}
+    assert all(set(p) == {"name", "done", "total"} for p in progress)
+    # In order, and all of it before the answer: the page ends on a full bar.
+    order = [p["name"] for p in progress]
+    assert order == sorted(order, key=APP_MODELS.index)
+    assert [m["ready"] for m in (await app.call("models.status"))["models"]] == [True, True]
+
+
+async def test_models_ensure_throttles_the_progress_it_sends(make_app, downloads, tmp_path, notes):
+    app = make_app(make_kit(), ready=(), manager=ModelManager(tmp_path / "m", downloads.http))
+    listen(app, notes)
+    await app.call("models.ensure", {"names": ["qwen3-asr"]})
+    await asyncio.sleep(0.05)
+    # 1.5 MB in 512 KiB chunks is 3 chunks; a burst this quick is not sent chunk by chunk.
+    sent = [p for p in notes.methods("models.progress") if p["total"] == 1_500_000]
+    assert 1 <= len(sent) < 3 and sent[-1]["done"] == 1_500_000
+
+
+async def test_the_speech_models_load_once_they_are_downloaded(make_app, downloads, tmp_path):
+    kit = make_kit()
+    app = make_app(kit, ready=(), manager=ModelManager(tmp_path / "m", downloads.http))
+    await asyncio.sleep(0.2)
+    assert kit.segmenters == [] and kit.engines == []
+    await app.call("models.ensure", {"names": ["silero-vad", "qwen3-asr"]})
+    await wait_until(lambda: kit.segmenters and kit.engines)  # with no dictation asked for
+    result = await dictate(app)
+    assert result["text"] == WORDS + WORDS and len(kit.segmenters) == 1
+
+
+async def test_models_ensure_of_nothing_is_fine(make_app):
+    assert await make_app().call("models.ensure", {"names": []}) == {"ok": True}
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"names": "qwen3-asr"},
+        {"names": [1]},
+        {"names": ["no-such-model"]},
+        {"names": ["breeze-asr-25"]},  # evaluation only: the app does not download it
+        {"names": ["sensevoice"]},
+    ],
+)
+async def test_models_ensure_checks_its_params(make_app, params):
+    with pytest.raises(RpcError) as caught:
+        await make_app().call("models.ensure", params)
+    assert caught.value.code == INVALID_PARAMS
+
+
+async def test_a_download_that_fails_is_an_error_and_loads_nothing(
+    make_app, downloads, tmp_path, monkeypatch
+):
+    kit = make_kit()
+    spec = downloads.specs["silero-vad"]
+    monkeypatch.setitem(
+        models.REGISTRY,
+        "silero-vad",
+        ModelSpec(
+            "silero-vad", spec.files, downloads=(ModelFile("https://models.test/gone", "a", 5),)
+        ),
+    )
+    app = make_app(kit, ready=(), manager=ModelManager(tmp_path / "m", downloads.http))
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.ensure", {"names": ["silero-vad"]})
+    assert "404" in caught.value.message
+    await asyncio.sleep(0.1)
+    assert kit.segmenters == []
+
+
+# --- the microphone ---------------------------------------------------------------------------
+
+
+async def test_audio_devices_lists_the_microphones_and_the_selected_one(make_app):
+    kit = make_kit(
+        devices=[
+            SimpleNamespace(index=1, name="Headset", is_default=True),
+            SimpleNamespace(index=2, name="Array", is_default=False),
+        ]
+    )
+    app = make_app(kit)
+    assert await app.call("audio.devices") == {
+        "devices": [
+            {"index": 1, "name": "Headset", "is_default": True},
+            {"index": 2, "name": "Array", "is_default": False},
+        ],
+        "selected": None,
+    }
+    await app.call("audio.set_device", {"name": "Array"})
+    assert (await app.call("audio.devices"))["selected"] == "Array"
+
+
+async def test_the_selected_microphone_is_the_one_a_dictation_opens(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.set_device", {"name": "Array"})
+    await dictate(app, "a")
+    assert kit.mics[-1].device == "Array"
+    await app.call("audio.set_device", {"name": None})  # null: the system default
+    await dictate(app, "b")
+    assert kit.mics[-1].device is None
+    await app.call("audio.set_device", {"name": "Headset"})
+    await app.call("audio.set_device", {})  # left out is null too
+    assert (await app.call("audio.devices"))["selected"] is None
+
+
+@pytest.mark.parametrize("name", [5, ["Array"], True])
+async def test_audio_set_device_wants_a_name_or_null(make_app, name):
+    with pytest.raises(RpcError) as caught:
+        await make_app().call("audio.set_device", {"name": name})
+    assert caught.value.code == INVALID_PARAMS
+
+
+async def test_a_blank_microphone_name_means_the_default(make_app):
+    app = make_app()
+    await app.call("audio.set_device", {"name": "   "})
+    assert (await app.call("audio.devices"))["selected"] is None
+
+
+async def test_audio_monitor_sends_levels_with_no_session(make_app, notes):
+    kit = make_kit()
+    app = make_app(kit)
+    listen(app, notes)
+    assert await app.call("audio.monitor", {"on": True}) == {}
+    await wait_until(lambda: notes.methods("audio.level"))
+    assert all(level["session_id"] is None for level in notes.methods("audio.level"))
+    notes.clear()
+    assert await app.call("audio.monitor", {"on": False}) == {}
+    assert not kit.mics[0].open
+
+
+@pytest.mark.parametrize("params", [{}, {"on": "yes"}, {"on": 1}, {"on": None}])
+async def test_audio_monitor_wants_a_boolean(make_app, params):
+    with pytest.raises(RpcError) as caught:
+        await make_app().call("audio.monitor", params)
+    assert caught.value.code == INVALID_PARAMS
+
+
+async def test_audio_monitor_without_a_microphone_is_no_microphone(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    original = kit.MicRecorder
+
+    def broken(on_frames, device=None):
+        mic = original(on_frames, device)
+        mic.fail_to_start = True
+        return mic
+
+    kit.MicRecorder = broken
+    with pytest.raises(RpcError) as caught:
+        await app.call("audio.monitor", {"on": True})
+    assert caught.value.code == NO_MICROPHONE
+
+
+async def test_changing_the_microphone_moves_a_running_meter(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    await app.call("audio.set_device", {"name": "Array"})
+    assert len(kit.mics) == 2 and not kit.mics[0].open
+    assert kit.mics[1].device == "Array" and kit.mics[1].open
+
+
+async def test_a_dictation_takes_the_microphone_from_the_meter_and_gives_it_back(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    meter = kit.mics[0]
+    await app.call("dictation.start", {"session_id": "s"})
+    assert not meter.open and kit.mics[1].open  # one microphone open, and it is the dictation's
+    await app.call("dictation.stop", {"session_id": "s", "target_app": None})
+    assert len(kit.mics) == 3 and kit.mics[2].open  # the meter is back
+    await app.call("audio.monitor", {"on": False})
+    assert not any(mic.open for mic in kit.mics)
+
+
+async def test_a_meter_switched_on_during_a_dictation_waits_for_its_end(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("dictation.start", {"session_id": "s"})
+    await app.call("audio.monitor", {"on": True})
+    assert len(kit.mics) == 1 and kit.mics[0].open  # only the dictation's
+    await app.call("dictation.stop", {"session_id": "s", "target_app": None})
+    assert len(kit.mics) == 2 and kit.mics[1].open and not kit.mics[0].open
+
+
+async def test_a_cancelled_dictation_gives_the_microphone_back_to_the_meter_too(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    await app.call("dictation.start", {"session_id": "s"})
+    await app.call("dictation.cancel", {"session_id": "s"})
+    assert kit.mics[-1].open and len(kit.mics) == 3
+
+
+async def test_a_meter_that_cannot_make_way_or_come_back_does_not_spoil_the_dictation(
+    make_app, caplog
+):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    original = kit.MicRecorder
+
+    def flaky(on_frames, device=None):
+        if len(kit.mics) >= 2:  # the meter's second microphone, after the dictation's
+            raise OSError("PortAudio went away")
+        return original(on_frames, device)
+
+    kit.MicRecorder = flaky
+
+    def will_not_close():
+        raise OSError("it will not close")
+
+    kit.mics[0].stop = will_not_close  # making way fails, and then taking back
+    result = await dictate(app)
+    assert result["text"] == WORDS + WORDS  # the dictation went on without the meter
+    assert caplog.text.count("The level meter could not") == 2
+
+
+async def test_a_dictation_that_fails_to_start_gives_the_microphone_back_too(make_app):
+    kit = make_kit()
+    app = make_app(kit, ready=("silero-vad",))
+    await app.call("audio.monitor", {"on": True})
+    with pytest.raises(RpcError) as caught:
+        await app.call("dictation.start", {"session_id": "s"})  # no engine downloaded
+    assert caught.value.code == NOT_CONFIGURED
+    assert kit.mics[-1].open and sum(mic.open for mic in kit.mics) == 1
+
+
+# --- dictation through the app ----------------------------------------------------------------
+
+
+async def test_a_dictation_goes_through_the_whole_app(make_app, notes):
+    kit = make_kit()
+    app = make_app(kit)
+    listen(app, notes)
+    await app.call("dictionary.add", {"word": "拉斐爾"})
+    await app.call("settings.set", {"key": "language", "value": "zh"})
+    result = await dictate(app)
+    assert result["text"] == WORDS + WORDS  # joined without a space: CJK on both sides
+    assert result["cleaned"] is True and result["fallback_reason"] is None
+    assert result["audio_seconds"] == pytest.approx(1.0)
+    assert kit.transcriptions == [{"hints": ["拉斐爾"], "language": "zh"}] * 2
+    history = (await app.call("history.list"))["items"]
+    assert len(history) == 1
+    assert history[0]["text"] == result["text"] and history[0]["target_app"] == "notepad.exe"
+    assert history[0]["model"] == "fake/echo" and history[0]["cost_usd"] == 0
+    assert (await app.call("history.latest"))["item"]["id"] == result["id"]
+    # The ring of the overlay: levels with the session's id.
+    assert {level["session_id"] for level in notes.methods("audio.level")} == {"s1"}
+
+
+async def test_one_segmenter_and_one_engine_serve_every_dictation(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    first = await dictate(app, "a")
+    second = await dictate(app, "b")
+    assert first["text"] == second["text"] == WORDS + WORDS
+    assert second["audio_seconds"] == pytest.approx(1.0)  # not 2.0: per dictation
+    assert len(kit.segmenters) == 1 and len(kit.engines) == 1
+    assert kit.segmenters[0].flushes == 2
+    assert kit.segmenters[0].path == Path(app.manager.dir("silero-vad")) / "silero_vad_v5.onnx"
+    assert len(kit.mics) == 2  # a recorder for each dictation
+
+
+async def test_the_audio_goes_to_the_segmenter_on_a_worker_thread(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await dictate(app)
+    assert threading.get_ident() not in kit.segmenters[0].calls_from
+
+
+async def test_start_does_not_wait_for_the_engine_and_stop_does(make_app):
+    gate = threading.Event()
+    kit = make_kit(engine_gate=gate)
+    app = make_app(kit)
+    started = await asyncio.wait_for(app.call("dictation.start", {"session_id": "s"}), 5)
+    assert started == {}  # recording, with the engine still loading
+    stopping = asyncio.ensure_future(
+        app.call("dictation.stop", {"session_id": "s", "target_app": None})
+    )
+    await asyncio.sleep(0.3)
+    assert not stopping.done()
+    gate.set()
+    result = await asyncio.wait_for(stopping, 10)
+    assert result["text"] == WORDS + WORDS and len(kit.engines) == 1
+
+
+async def test_start_does_not_wait_for_the_first_segmenter_either(make_app):
+    gate = threading.Event()
+    kit = make_kit(segmenter_gate=gate)
+    app = make_app(kit)
+    await asyncio.wait_for(app.call("dictation.start", {"session_id": "s"}), 5)
+    stopping = asyncio.ensure_future(
+        app.call("dictation.stop", {"session_id": "s", "target_app": None})
+    )
+    await asyncio.sleep(0.3)
+    assert not stopping.done()
+    gate.set()
+    result = await asyncio.wait_for(stopping, 10)
+    assert result["text"] == WORDS + WORDS and len(kit.segmenters) == 1
+
+
+async def test_dictating_without_the_models_is_not_configured_and_opens_no_microphone(make_app):
+    kit = make_kit()
+    app = make_app(kit, ready=())
+    with pytest.raises(RpcError) as caught:
+        await app.call("dictation.start", {"session_id": "s"})
+    assert caught.value.code == NOT_CONFIGURED
+    assert kit.mics == []
+    # The service is idle again: with the models in place the next one works.
+    make_models(Path(app.manager.dir("silero-vad")).parent)
+    assert (await dictate(app, "t"))["text"] == WORDS + WORDS
+
+
+async def test_a_dictation_with_the_wav_file_of_fake_audio_uses_it_instead_of_the_microphone(
+    make_app, tmp_path
+):
+    kit = make_kit()
+    wav = tmp_path / "speech.wav"
+    app = make_app(kit, fake_audio=wav)
+    await app.call("dictation.start", {"session_id": "s"})
+    assert kit.mics == [] and len(kit.wavs) == 1
+    assert (
+        kit.wavs[0].path == wav and kit.wavs[0].realtime is True
+    )  # in real time, as the plan says
+    await app.call("dictation.cancel", {"session_id": "s"})
+    assert kit.wavs[0].stopped == 1
+
+
+async def test_without_a_key_the_text_comes_back_as_spoken(make_app):
+    # The real client with no key stored, and no request: the cleanup falls back before asking.
+    app = make_app(fake_llm=False)
+    assert await app.call("secrets.status") == {"has_key": False}
+    result = await dictate(app)
+    assert result["text"] == WORDS + WORDS
+    assert result["cleaned"] is False and result["fallback_reason"] == "no_key"
+
+
+async def test_the_fake_llm_has_a_key(make_app):
+    assert await make_app().call("secrets.status") == {"has_key": True}
+
+
+# --- shutting down ----------------------------------------------------------------------------
+
+
+async def test_closing_the_app_closes_the_microphone_of_a_dictation_in_progress(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("dictation.start", {"session_id": "s"})
+    await app.aclose()
+    assert not kit.mics[0].open
+
+
+async def test_closing_the_app_closes_the_meter_and_the_client(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    await app.aclose()
+    assert not kit.mics[0].open
+    assert app.client.closed
+
+
+async def test_closing_the_app_twice_is_fine(make_app):
+    app = make_app()
+    await app.aclose()
+    await app.aclose()
+
+
+async def test_closing_the_app_waits_for_the_start_up_to_finish(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.aclose()
+    assert not app.startup_running
+
+
+async def test_closing_the_app_does_not_wait_for_a_load_that_has_not_begun(tmp_path):
+    release = threading.Event()
+    app = App(data_dir=tmp_path, fake_llm=True, load_kit=lambda: release.wait(30) and make_kit())
+    app.start()
+    started = time.monotonic()
+    await app.aclose(patience=0.2)  # the kit is still loading; no point waiting for what it builds
+    assert time.monotonic() - started < 5
+    release.set()
+
+
+async def test_core_shutdown_closes_everything_and_answers(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    assert await app.call("core.shutdown") == {}
+    assert not kit.mics[0].open and app.client.closed
+
+
+async def test_the_database_is_closed_with_the_app(make_app):
+    app = make_app()
+    await app.aclose()
+    with pytest.raises(RpcError):
+        await app.call("history.list")
+
+
+def test_the_real_kit_takes_the_arguments_the_app_gives_it():
+    # The fake kit of these tests would take anything; the real one has to take what the app passes.
+    import inspect
+
+    from raphael_core.app import _import_kit
+
+    kit = _import_kit()
+    assert "max_segment_s" in inspect.signature(kit.Segmenter).parameters
+    assert "num_threads" in inspect.signature(kit.create_engine).parameters
+    assert list(inspect.signature(kit.MicRecorder).parameters)[:2] == ["on_frames", "device"]
+    assert list(inspect.signature(kit.WavRecorder).parameters) == ["on_frames", "path", "realtime"]
+    for name in ("recorder_factory", "segmenter_factory", "engine_provider"):
+        assert name in inspect.signature(kit.DictationService).parameters
+    assert callable(kit.rms_level) and callable(kit.list_input_devices)
+    assert issubclass(kit.NoMicrophoneError, Exception)
+
+
+# --- build_app, with the real kit -------------------------------------------------------------
+
+
+async def test_build_app_returns_a_router_that_answers(tmp_path):
+    app = build_app(data_dir=tmp_path, fake_llm=True)
+    try:
+        assert isinstance(app, Router)
+        assert (await app.call("core.hello"))["protocol"] == 1
+        assert (await app.call("secrets.status")) == {"has_key": True}
+        # Nothing is downloaded in an empty data directory.
+        assert [m["ready"] for m in (await app.call("models.status"))["models"]] == [False, False]
+        # The real kit loads (sherpa-onnx, numpy, PortAudio): the dictation methods answer.
+        with pytest.raises(RpcError) as caught:
+            await app.call("dictation.start", {"session_id": "s"})
+        assert caught.value.code == NOT_CONFIGURED
+    finally:
+        await app.aclose()
+
+
+async def test_the_models_dir_override_is_honoured_by_the_app(tmp_path, monkeypatch):
+    shared = tmp_path / "shared"
+    make_models(shared, ("silero-vad",))
+    monkeypatch.setenv("RAPHAEL_MODELS_DIR", str(shared))
+    app = App(data_dir=tmp_path / "data", fake_llm=True, load_kit=lambda: make_kit())
+    try:
+        status = (await app.call("models.status"))["models"]
+        assert [m["ready"] for m in status] == [True, False]
+    finally:
+        await app.aclose()
+
+
+async def test_starting_twice_starts_one_set_of_threads(tmp_path):
+    kit, loads = make_kit(), []
+    app = App(data_dir=tmp_path, fake_llm=True, load_kit=lambda: loads.append(1) or kit)
+    make_models(tmp_path / "models")
+    app.start()
+    app.start()
+    try:
+        await wait_until(lambda: kit.engines)
+        await asyncio.sleep(0.1)
+        assert loads == [1] and len(kit.engines) == 1 and len(kit.segmenters) == 1
+    finally:
+        await app.aclose()
+
+
+async def test_nothing_is_built_for_an_app_that_was_closed_while_the_kit_loaded(tmp_path):
+    release, kit = threading.Event(), make_kit()
+    app = App(data_dir=tmp_path, fake_llm=True, load_kit=lambda: release.wait(30) and kit)
+    make_models(tmp_path / "models")
+    app.start()
+    await app.aclose(patience=0.1)
+    release.set()
+    await wait_until(lambda: not app.startup_running)
+    assert kit.segmenters == [] and kit.engines == []
+    with pytest.raises(RuntimeError, match="closing"):
+        app._service.result()  # and the dictation methods say so instead of waiting
+
+
+async def test_the_keyring_backend_is_found_ahead_of_time_only_when_it_will_be_used(
+    make_app, monkeypatch
+):
+    found = []
+    monkeypatch.setattr(app_module.keyring, "get_keyring", lambda: found.append(1))
+    make_app(make_kit(), fake_llm=True)
+    await asyncio.sleep(0.3)
+    assert found == []  # the fake LLM has an in-memory key
+    make_app(make_kit(), fake_llm=False)
+    await wait_until(lambda: found)
+
+
+def test_importing_the_entry_point_does_not_load_the_speech_libraries():
+    # core.hello has to answer quickly: numpy, sherpa-onnx and PortAudio take seconds to import.
+    code = (
+        "import sys, raphael_core.app, raphael_core.__main__\n"
+        "loaded = {'numpy', 'sherpa_onnx', 'sounddevice', 'soxr'} & set(sys.modules)\n"
+        "assert not loaded, loaded\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code], check=False, capture_output=True, text=True, timeout=120
+    )
+    assert done.returncode == 0, done.stderr
+
+
+# --- main -------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def entry_point(monkeypatch, tmp_path):
+    """`entry.main()` with build_app and run_stdio replaced, to see what it passes them."""
+    seen = SimpleNamespace(built=None, ran=None, exits=[], steps=[], waited=None)
+
+    def wait_for_libraries(timeout=None):
+        seen.steps.append("wait_for_libraries")
+        seen.waited = timeout
+
+    fake_app = SimpleNamespace(
+        aclose=lambda: None, startup_running=False, wait_for_libraries=wait_for_libraries
+    )
+
+    def build(**kwargs):
+        seen.steps.append("build_app")
+        seen.built = kwargs
+        return fake_app
+
+    def run(app, on_close=None):
+        seen.steps.append("run_stdio")
+        seen.ran = (app, on_close)
+
+    monkeypatch.setattr(entry, "build_app", build)
+    monkeypatch.setattr(entry, "run_stdio", run)
+    monkeypatch.setattr(entry.os, "_exit", lambda code: seen.exits.append(code))
+    for name in ("RAPHAEL_DATA_DIR", "RAPHAEL_FAKE_AUDIO", "RAPHAEL_FAKE_LLM"):
+        monkeypatch.delenv(name, raising=False)
+    seen.app = fake_app
+    return seen
+
+
+def test_main_builds_the_app_from_the_environment_and_serves_it(entry_point, monkeypatch, tmp_path):
+    monkeypatch.setenv("RAPHAEL_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RAPHAEL_FAKE_AUDIO", str(tmp_path / "speech.wav"))
+    monkeypatch.setenv("RAPHAEL_FAKE_LLM", "1")
+    entry.main()
+    assert entry_point.built == {
+        "data_dir": tmp_path / "data",
+        "fake_audio": tmp_path / "speech.wav",
+        "fake_llm": True,
+    }
+    app, on_close = entry_point.ran
+    assert app is entry_point.app and on_close == app.aclose
+    assert entry_point.exits == []
+
+
+def test_main_waits_for_numpy_before_it_reads_stdin(entry_point):
+    # On Windows numpy's DLLs hang while loading if another thread is blocked reading the stdin
+    # pipe, which is what run_stdio's reader is from its start (see the docstring of app.py).
+    entry.main()
+    assert entry_point.steps == ["build_app", "wait_for_libraries", "run_stdio"]
+    assert entry_point.waited == entry.LIBRARIES_TIMEOUT_S
+
+
+def test_main_without_a_setting_uses_the_real_things(entry_point):
+    entry.main()
+    assert entry_point.built == {"data_dir": None, "fake_audio": None, "fake_llm": False}
+
+
+@pytest.mark.parametrize("value", ["0", "", "true", "yes"])
+def test_only_a_one_turns_the_fake_llm_on(entry_point, monkeypatch, value):
+    monkeypatch.setenv("RAPHAEL_FAKE_LLM", value)
+    entry.main()
+    assert entry_point.built["fake_llm"] is False
+
+
+def test_main_leaves_at_once_when_start_up_is_still_in_native_code(entry_point):
+    # A thread inside ONNX Runtime cannot be stopped; waiting for the interpreter to tear it down
+    # risks a crash on the way out, and the app is closing anyway.
+    entry_point.app.startup_running = True
+    entry.main()
+    assert entry_point.exits == [0]

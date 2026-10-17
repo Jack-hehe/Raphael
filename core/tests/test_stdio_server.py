@@ -517,3 +517,56 @@ def test_run_stdio_survives_a_line_that_is_not_valid_utf8(child):
     assert first["id"] is None and first["error"]["code"] == -32700
     assert second == {"jsonrpc": "2.0", "id": 5, "result": {}}
     assert child.returncode == 0
+
+
+# --- run_stdio's on_close: what the entry point does on the way out (Task 13) -----------------
+
+_CHILD_ON_CLOSE = """
+import asyncio
+import sys
+from raphael_core.router import Router
+from raphael_core.stdio_server import run_stdio
+
+router = Router()
+
+async def slow(params):
+    await asyncio.sleep(0.3)
+    print("slow finished", file=sys.stderr, flush=True)
+    return {"done": True}
+
+async def on_close():
+    print("on_close started", file=sys.stderr, flush=True)
+    await asyncio.sleep(0.05)  # it can await: the loop is still running
+    if "--fail" in sys.argv:
+        raise RuntimeError("shutdown broke")
+    print("on_close finished", file=sys.stderr, flush=True)
+
+router.register("t.slow", slow)
+run_stdio(router, on_close=on_close)
+"""
+
+
+def run_on_close_child(*args):
+    return subprocess.run(
+        [sys.executable, "-c", _CHILD_ON_CLOSE, *args],
+        input=b'{"jsonrpc":"2.0","id":1,"method":"t.slow","params":{}}\n',
+        capture_output=True,
+        timeout=60,
+    )
+
+
+def test_run_stdio_calls_on_close_after_the_last_reply_and_before_it_returns():
+    done = run_on_close_child()
+    assert json.loads(done.stdout) == {"jsonrpc": "2.0", "id": 1, "result": {"done": True}}
+    log = done.stderr.decode()
+    order = [log.index(m) for m in ("slow finished", "on_close started", "on_close finished")]
+    assert order == sorted(order)
+    assert done.returncode == 0
+
+
+def test_run_stdio_logs_a_failing_on_close_and_still_exits_cleanly():
+    done = run_on_close_child("--fail")
+    assert json.loads(done.stdout)["result"] == {"done": True}
+    log = done.stderr.decode()
+    assert "shutdown broke" in log and "Traceback" in log
+    assert done.returncode == 0
