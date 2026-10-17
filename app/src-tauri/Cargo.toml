@@ -31,8 +31,22 @@ tokio = { version = "1", features = ["sync"] }
 tauri-plugin-single-instance = "2.5"
 
 [target.'cfg(windows)'.dependencies]
-# Same version as Tauri's own (the HWND type must match). The overlay keeps itself out of Alt+Tab.
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+# Pasting (src/paste): the paste key chord.
+enigo = "0.6"
+# 0.62 is the version Tauri 2.12 uses, so the HWND types match. The overlay uses it to stay out of
+# Alt+Tab, pasting for the clipboard and the focused window.
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_System_DataExchange",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

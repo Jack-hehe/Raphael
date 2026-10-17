@@ -2,6 +2,7 @@
 //! allows only one running copy.
 
 mod overlay;
+mod paste;
 mod tray;
 
 use tauri::{AppHandle, Manager, Runtime, WindowEvent, plugin::TauriPlugin};
