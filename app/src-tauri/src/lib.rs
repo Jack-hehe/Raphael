@@ -1,7 +1,9 @@
 //! Raphael's desktop shell: a tray app with a hidden main window that starts with Windows and
 //! allows only one running copy.
 
+pub mod commands;
 pub mod core_process;
+pub mod device_settings;
 pub mod holdtap;
 pub mod hotkey;
 mod overlay;
@@ -57,7 +59,15 @@ pub fn run() {
         })
         // Tauri keeps only the last `invoke_handler` call, so every command of the app goes into
         // this one list.
-        .invoke_handler(tauri::generate_handler![overlay::overlay_subscribe])
+        .invoke_handler(tauri::generate_handler![
+            overlay::overlay_subscribe,
+            commands::core_call,
+            commands::device_settings_get,
+            commands::device_settings_set,
+            commands::keyboard_has_altgr,
+            commands::hotkeys_pause,
+            commands::main_events,
+        ])
         .setup(|app| {
             // Tauri keeps only the last `setup` call, so each part of the app starts in its own
             // section of this one closure, in dependency order: a part that needs another part's
@@ -114,6 +124,12 @@ pub fn run() {
                 }
                 Err(err) => log::error!("global hotkeys are off: {err}"),
             }
+
+            // ---- Device settings ----
+            // `device.json`: loads it, puts it in force (hotkeys, overlay size and subtitles,
+            // theme, autostart) and keeps the core told which microphone to use. It takes the
+            // overlay, the core and the hotkeys from the app state, so it comes after them.
+            commands::start(app.handle());
 
             Ok(())
         })
