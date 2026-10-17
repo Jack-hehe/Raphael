@@ -261,6 +261,38 @@ async def test_max_tokens_follows_the_length_of_the_text(svc, fake_client, lengt
     assert fake_client.calls[0]["max_tokens"] == max_tokens
 
 
+# --- the rules the evaluation tool shares with the service ---------------------------------------
+
+
+def test_is_suspicious_reply_follows_the_length_rule():
+    raw = "你好嗎"  # 3 characters: the limit is 1.5 * 3 + 20 = 24.5
+    assert cleanup.reply_length_limit(raw) == 24.5
+    assert not cleanup.is_suspicious_reply(raw, "你" * 24)
+    assert cleanup.is_suspicious_reply(raw, "你" * 25)
+    assert cleanup.is_suspicious_reply(raw, "") and cleanup.is_suspicious_reply(raw, "  \n")
+    assert not cleanup.is_suspicious_reply(raw, "  " + "你" * 24 + "  "), "spaces do not count"
+
+
+def test_build_user_message_wraps_the_text_in_the_transcript_tags():
+    assert cleanup.build_user_message("你好\n再見") == "<transcript>\n你好\n再見\n</transcript>"
+
+
+@pytest.mark.parametrize(("length", "max_tokens"), [(2, 256), (96, 256), (97, 258), (200, 464)])
+def test_max_tokens_for_follows_the_length_of_the_text(length, max_tokens):
+    assert cleanup.max_tokens_for("字" * length) == max_tokens
+
+
+async def test_the_service_asks_the_shared_functions(svc, fake_client, monkeypatch):
+    # The evaluation tool uses these three, so the service must not keep copies of its own.
+    monkeypatch.setattr(cleanup, "build_user_message", lambda raw: f"[{raw}]")
+    monkeypatch.setattr(cleanup, "max_tokens_for", lambda raw: 7)
+    monkeypatch.setattr(cleanup, "is_suspicious_reply", lambda raw, text: True)
+    fake_client.reply = completion({"text": "你好。"})
+    r = await svc.clean("你好", audio_seconds=1)
+    assert fake_client.calls[0]["user"] == "[你好]" and fake_client.calls[0]["max_tokens"] == 7
+    assert r.fallback_reason == "suspicious"
+
+
 # --- the dictionary in the prompt ---------------------------------------------------------------
 
 

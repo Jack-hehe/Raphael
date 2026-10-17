@@ -327,6 +327,34 @@ def test_importing_the_module_does_not_load_the_converter():
     assert result.stdout.strip() == "0"
 
 
+# --- normalize_transcript and finish_cleaned_text ---
+
+
+def test_normalize_transcript_converts_then_applies_the_replacements():
+    rules = [("拉菲爾", "拉斐爾")]
+    assert textnorm.normalize_transcript("拉菲爾说这个软件", rules) == "拉斐爾說這個軟體"
+
+
+def test_finish_cleaned_text_converts_and_applies_the_replacements():
+    rules = [("拉菲爾", "拉斐爾")]
+    assert textnorm.finish_cleaned_text("拉菲爾说：打开软件。", rules) == "拉斐爾說：開啟軟體。"
+
+
+def test_finish_cleaned_text_leaves_a_text_with_hiragana_to_the_replacements_only():
+    # OpenCC would turn 学校 into 學校 (and 会 into 會): a text with kana is Japanese.
+    rules = [("ラファエロ", "ラファエル")]
+    text = "ラファエロさんと学校で会います。"
+    assert textnorm.finish_cleaned_text(text, rules) == "ラファエルさんと学校で会います。"
+
+
+def test_finish_cleaned_text_gates_on_hiragana_in_the_whole_text():
+    # A Chinese sentence next to a Japanese one: to_taiwan_traditional alone would convert the
+    # Chinese part, but the service has never converted a cleaned text that has hiragana.
+    text = "这个软件很好用。今日は学校に行きます。"
+    assert textnorm.finish_cleaned_text(text, []) == text
+    assert textnorm.normalize_transcript(text, []) == "這個軟體很好用。今日は学校に行きます。"
+
+
 def test_the_converter_is_created_once(monkeypatch):
     created = []
     real_opencc = opencc.OpenCC
