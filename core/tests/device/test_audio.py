@@ -4,6 +4,7 @@ The microphone tests put a fake `sounddevice` in place of the real one: no test 
 device, so they run anywhere and never make a sound or record one.
 """
 
+import logging
 import threading
 import time
 import wave
@@ -211,6 +212,7 @@ class FakeStream:
         self.stops = 0
         self.closes = 0
         self.active = False
+        self.stop_error = None
 
     def start(self):
         if self.fake.start_error is not None:
@@ -220,6 +222,8 @@ class FakeStream:
 
     def stop(self):
         self.stops += 1
+        if self.stop_error is not None:
+            raise self.stop_error
         if self.active:
             self.active = False
             self.finished_callback()
@@ -227,10 +231,11 @@ class FakeStream:
     def close(self):
         self.closes += 1
 
-    def feed(self, block):
+    def feed(self, block, status=None):
         """Deliver `block` (1-D) the way PortAudio does: a 2-D view that is reused afterwards."""
         indata = np.asarray(block, dtype=np.float32).reshape(-1, 1)
-        return self.callback(indata, indata.shape[0], None, sounddevice.CallbackFlags())
+        status = sounddevice.CallbackFlags() if status is None else status
+        return self.callback(indata, indata.shape[0], None, status)
 
     def unplug(self):
         """The device goes away: the stream finishes without anyone calling stop()."""
@@ -265,6 +270,9 @@ class FakeSd:
         self.open_error = None
         self.refreshes = 0
         self.after_refresh = None
+        self._initialized = 1  # like sounddevice's: how many times PortAudio is initialised
+        self.initialize_calls = 0
+        self.initialize_errors: list[Exception] = []  # raised by _initialize, one per call
 
     @staticmethod
     def device(index, name, inputs, rate):
@@ -303,8 +311,13 @@ class FakeSd:
 
     def _terminate(self):
         self.refreshes += 1
+        self._initialized -= 1
 
     def _initialize(self):
+        self.initialize_calls += 1
+        if self.initialize_errors:
+            raise self.initialize_errors.pop(0)
+        self._initialized += 1
         if self.after_refresh is not None:
             self.after_refresh(self)
 
@@ -357,6 +370,8 @@ def test_mic_recorder_opens_at_16k_when_the_device_takes_it(fake_sd):
     assert stream.kwargs["channels"] == 1
     assert stream.kwargs["dtype"] == "float32"
     assert stream.kwargs["device"] == 1
+    assert stream.kwargs["blocksize"] == 320  # 20 ms, so the level meter moves 50 times a second
+    assert stream.kwargs["latency"] == "low"
     assert stream.started == 1
 
     block = np.linspace(-0.5, 0.5, 320, dtype=np.float32)
@@ -397,6 +412,8 @@ def test_mic_recorder_falls_back_to_the_default_rate_and_resamples(fake_sd):
     rec.start()
     (stream,) = fake_sd.streams
     assert stream.kwargs["samplerate"] == 44100
+    assert stream.kwargs["blocksize"] == 882  # 20 ms at the device's own rate
+    assert stream.kwargs["latency"] == "low"
     t = np.arange(44100) / 44100
     tone = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
     for block in np.array_split(tone, 100):
@@ -419,8 +436,10 @@ def test_mic_recorder_falls_back_when_the_rate_check_gives_another_error(fake_sd
 
 
 def test_mic_recorder_default_device_is_the_system_default(fake_sd):
-    MicRecorder(lambda frames: None).start()
+    rec = MicRecorder(lambda frames: None)
+    rec.start()
     assert fake_sd.streams[0].kwargs["device"] == 1
+    rec.stop()
 
 
 def test_mic_recorder_picks_a_device_by_name(fake_sd):
@@ -428,6 +447,7 @@ def test_mic_recorder_picks_a_device_by_name(fake_sd):
     rec.start()
     assert fake_sd.streams[0].kwargs["device"] == 2
     assert fake_sd.streams[0].kwargs["samplerate"] == 48000
+    assert fake_sd.streams[0].kwargs["blocksize"] == 960
     rec.stop()
 
 
@@ -559,6 +579,83 @@ def test_mic_recorder_receiver_that_raises_aborts_the_stream_and_sets_error(fake
         fake_sd.streams[0].feed(np.zeros(320, np.float32))
     assert isinstance(rec.error, RuntimeError)
     rec.stop()
+
+
+def test_mic_recorder_does_not_deliver_a_tail_when_the_stream_would_not_stop(fake_sd):
+    """If stop() failed, the callback may still be running; the tail must not race with it."""
+    got = []
+    rec = MicRecorder(got.append)
+    rec.start()
+    stream = fake_sd.streams[0]
+    for block in np.array_split(np.full(44100, 0.1, np.float32), 100):
+        stream.feed(block)
+    delivered = len(got)
+    stream.stop_error = sounddevice.PortAudioError("could not stop")
+    rec.stop()
+    assert len(got) == delivered
+    assert stream.closes == 1  # it is still closed
+    rec.stop()  # and the recorder is finished all the same
+    assert stream.stops == 1
+
+
+def test_mic_recorder_logs_an_input_overflow_at_debug_level(fake_sd, caplog):
+    fake_sd.rates_at_16k[1] = True
+    got = []
+    rec = MicRecorder(got.append)
+    rec.start()
+    flags = sounddevice.CallbackFlags()
+    flags.input_overflow = True
+    with caplog.at_level(logging.DEBUG, logger=audio.logger.name):
+        fake_sd.streams[0].feed(np.zeros(320, np.float32), status=flags)
+        fake_sd.streams[0].feed(np.zeros(320, np.float32))
+    overflow = [r for r in caplog.records if "input overflow" in r.getMessage()]
+    assert len(overflow) == 1 and overflow[0].levelno == logging.DEBUG
+    assert len(got) == 2  # the audio still arrives
+    rec.stop()
+
+
+def test_reading_the_devices_again_restarts_portaudio_if_it_was_left_stopped(fake_sd, caplog):
+    fake_sd.devices = [FakeSd.device(0, "Speakers", 0, 44100.0)]
+    fake_sd.default_input = -1
+
+    def plug_in(fake):
+        fake.devices = [FakeSd.device(0, "New Mic", 1, 44100.0)]
+        fake.default_input = 0
+
+    fake_sd.after_refresh = plug_in
+    fake_sd.initialize_errors = [sounddevice.PortAudioError("Unanticipated host error")]
+    rec = MicRecorder(lambda frames: None)
+    rec.start()  # the first _initialize() failed, the second one worked, and the retry found it
+    assert fake_sd.initialize_calls == 2
+    assert fake_sd._initialized == 1
+    assert fake_sd.streams[0].kwargs["device"] == 0
+    assert "could not be restarted" in caplog.text
+    rec.stop()
+
+
+def test_portaudio_that_will_not_restart_gives_the_original_error(fake_sd):
+    fake_sd.devices = [FakeSd.device(0, "Speakers", 0, 44100.0)]
+    fake_sd.default_input = -1
+    fake_sd.initialize_errors = [
+        sounddevice.PortAudioError("first"),
+        sounddevice.PortAudioError("second"),
+    ]
+    with pytest.raises(NoMicrophoneError, match="no default recording device"):
+        MicRecorder(lambda frames: None).start()
+    assert fake_sd.initialize_calls == 2  # it tried twice and then gave up
+
+
+def test_a_failed_terminate_does_not_start_portaudio_a_second_time(fake_sd):
+    fake_sd.devices = [FakeSd.device(0, "Speakers", 0, 44100.0)]
+    fake_sd.default_input = -1
+
+    def broken():
+        raise sounddevice.PortAudioError("could not terminate")
+
+    fake_sd._terminate = broken
+    with pytest.raises(NoMicrophoneError):
+        MicRecorder(lambda frames: None).start()
+    assert fake_sd.initialize_calls == 0  # PortAudio was never stopped, so nothing to restart
 
 
 def test_mic_recorder_callback_never_takes_the_recorders_lock(fake_sd):

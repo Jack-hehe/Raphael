@@ -212,6 +212,42 @@ def test_speech_seconds_adds_up_the_segments_found(fake_detector, model_file):
     assert seg.speech_seconds == pytest.approx(1.75)  # flush does not reset it
 
 
+def test_speech_seconds_counts_only_the_current_recording(fake_detector, model_file):
+    """One Segmenter serves many dictations: each reports its own speech, not the sum."""
+    fake_detector.plan = {1: [[0.1] * 16000], 3: [[0.1] * 8000]}
+    fake_detector.flush_plan = [[0.1] * 4000]
+    seg = Segmenter(model_file)
+    seg.accept(np.zeros(WINDOW, np.float32))
+    seg.flush()
+    assert seg.speech_seconds == pytest.approx(1.25)  # still readable after flush
+    assert seg.speech_seconds == pytest.approx(1.25)  # and reading it changes nothing
+    seg.accept(np.zeros(2 * WINDOW, np.float32))  # a new dictation: windows 2 and 3
+    assert seg.speech_seconds == pytest.approx(0.5)
+    seg.flush()
+    assert seg.speech_seconds == pytest.approx(0.75)
+
+
+def test_a_new_recording_with_no_speech_reports_none(fake_detector, model_file):
+    fake_detector.plan = {1: [[0.1] * 16000]}
+    seg = Segmenter(model_file)
+    seg.accept(np.zeros(WINDOW, np.float32))
+    seg.flush()
+    assert seg.speech_seconds == pytest.approx(1.0)
+    seg.accept(np.zeros(WINDOW, np.float32))
+    seg.flush()
+    assert seg.speech_seconds == 0.0
+
+
+def test_a_rejected_call_does_not_end_the_reading_of_speech_seconds(fake_detector, model_file):
+    fake_detector.plan = {1: [[0.1] * 16000]}
+    seg = Segmenter(model_file)
+    seg.accept(np.zeros(WINDOW, np.float32))
+    seg.flush()
+    with pytest.raises(ValueError):
+        seg.accept(np.zeros((2, 2), np.float32))
+    assert seg.speech_seconds == pytest.approx(1.0)
+
+
 def test_speech_seconds_counts_a_split_segment_once(fake_detector, model_file):
     fake_detector.plan = {1: [[0.1] * (30 * 16000)]}
     seg = Segmenter(model_file)
@@ -290,6 +326,8 @@ def test_a_segmenter_can_be_used_again_after_flush():
     speech = read_wav(models.dir("sensevoice") / "test_wavs" / "zh.wav")
     audio = np.concatenate([np.zeros(16000, np.float32), speech, np.zeros(16000, np.float32)])
     first = seg.accept(audio) + seg.flush()
+    first_seconds = seg.speech_seconds
     second = seg.accept(audio) + seg.flush()
     assert first and second
     assert [p.size for p in second] == [p.size for p in first]
+    assert seg.speech_seconds == pytest.approx(first_seconds)  # not the sum of the two

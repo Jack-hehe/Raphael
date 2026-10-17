@@ -32,9 +32,11 @@ class Segmenter:
     `accept` takes the next frames (1-D float32 at 16 kHz, any number of them) and returns the
     stretches of speech that have ended since; `flush` ends the one that is still going, at the
     end of the recording. A stretch ends when `min_silence_s` of quiet follows it. None is longer
-    than `max_segment_s`. After `flush` the segmenter starts afresh and can be used again.
+    than `max_segment_s`. After `flush` the segmenter starts afresh and can be used again, one
+    recording after another.
 
-    `speech_seconds` is the total length of the speech found so far, over all calls.
+    `speech_seconds` is the total length of the speech found in the current recording. It can still
+    be read after `flush`; the first `accept` of the next recording sets it back to zero.
 
     Not safe to call from several threads at once.
     """
@@ -62,6 +64,7 @@ class Segmenter:
         self._vad = sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=_BUFFER_S)
         self._max_samples = max(1, int(max_segment_s * SAMPLE_RATE))
         self._rest = np.zeros(0, dtype=np.float32)  # the end of the audio, short of a window
+        self._flushed = False  # a recording has ended, and no new one has begun
         self.speech_seconds = 0.0
 
     def accept(self, frames: np.ndarray) -> list[np.ndarray]:
@@ -69,6 +72,9 @@ class Segmenter:
         frames = np.asarray(frames, dtype=np.float32)
         if frames.ndim != 1:
             raise ValueError(f"Expected 1-D frames, not {frames.ndim}-D")
+        if self._flushed:
+            self._flushed = False
+            self.speech_seconds = 0.0
         audio = np.concatenate([self._rest, frames]) if self._rest.size else frames
         whole = audio.size - audio.size % _WINDOW
         segments: list[np.ndarray] = []
@@ -88,6 +94,7 @@ class Segmenter:
         self._vad.flush()
         segments = self._drain()
         self._vad.reset()  # flush leaves the model's memory of the sound it just heard
+        self._flushed = True
         return segments
 
     def _drain(self) -> list[np.ndarray]:
