@@ -2,8 +2,10 @@
 //! allows only one running copy.
 
 pub mod core_process;
+mod dictation;
 pub mod holdtap;
 pub mod hotkey;
+mod notices;
 mod overlay;
 mod paste;
 pub mod rpc;
@@ -64,15 +66,10 @@ pub fn run() {
             // handle comes after it.
 
             // ---- Tray ----
-            // The tray reports its menu actions on this channel. For now they are only logged;
-            // the dictation controller takes over the receiving end.
-            let (tray_commands, mut tray_command_rx) = tokio::sync::mpsc::unbounded_channel();
+            // The tray reports its menu actions on this channel; the dictation controller (below)
+            // takes the receiving end.
+            let (tray_commands, tray_command_rx) = tokio::sync::mpsc::unbounded_channel();
             tray::build(app.handle(), tray_commands)?;
-            tauri::async_runtime::spawn(async move {
-                while let Some(command) = tray_command_rx.recv().await {
-                    log::info!("tray command: {command:?}");
-                }
-            });
 
             // ---- Overlay ----
             // Raphael's emblem in the bottom-right corner, 150 px with both subtitle lines until
@@ -98,21 +95,32 @@ pub fn run() {
             }
 
             // ---- Hotkeys ----
-            // The hotkey service reports key events on this channel. For now they are only
-            // logged; the dictation controller takes over the receiving end. The service sits in
-            // the app state as an `Arc` so the controller can hold it too. If the keyboard hook
-            // cannot start, the app runs on without hotkeys.
-            let (hotkey_events, mut hotkey_event_rx) = tokio::sync::mpsc::unbounded_channel();
-            match hotkey::HotkeyService::start(&hotkey::Bindings::default(), hotkey_events) {
-                Ok(service) => {
-                    app.manage(std::sync::Arc::new(service));
-                    tauri::async_runtime::spawn(async move {
-                        while let Some(event) = hotkey_event_rx.recv().await {
-                            log::info!("hotkey event: {event:?}");
-                        }
-                    });
-                }
-                Err(err) => log::error!("global hotkeys are off: {err}"),
+            // The hotkey service reports key events on this channel; the dictation controller
+            // (below) takes the receiving end. The service sits in the app state as an `Arc` so
+            // the controller can hold it too. If the keyboard hook cannot start, the app runs on
+            // without hotkeys.
+            let (hotkey_events, hotkey_event_rx) = tokio::sync::mpsc::unbounded_channel();
+            let hotkey_event_rx =
+                match hotkey::HotkeyService::start(&hotkey::Bindings::default(), hotkey_events) {
+                    Ok(service) => {
+                        app.manage(std::sync::Arc::new(service));
+                        Some(hotkey_event_rx)
+                    }
+                    Err(err) => {
+                        log::error!("global hotkeys are off: {err}");
+                        None
+                    }
+                };
+
+            // ---- Dictation controller ----
+            // Ties the hotkeys, the core, the overlay, pasting and the tray's dictation items
+            // together. It takes whatever of them started; without the core, dictation is off.
+            #[cfg(windows)]
+            dictation::spawn(app.handle(), hotkey_event_rx, tray_command_rx);
+            #[cfg(not(windows))]
+            {
+                log::error!("dictation needs Windows");
+                drop((hotkey_event_rx, tray_command_rx));
             }
 
             Ok(())
