@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { ModelDownload, type ModelPhase, type ModelsApi, downloadPhase, formatProgress } from "./models";
+import { ModelDownload, type ModelPhase, type ModelsApi, downloadPhase, formatProgress, resumeModels } from "./models";
 import type { MainEvent, ModelsStatus } from "./types";
 
 /** The sizes the plan gives (Task 9): the bar does not jump when the second model starts. */
@@ -236,5 +236,47 @@ describe("ModelDownload", () => {
     await download.start();
     await download.start();
     expect(statusCalls()).toBe(1);
+  });
+});
+
+describe("resumeModels", () => {
+  test("fetches what is missing, and says nothing when that works", async () => {
+    const { api, ensures } = fakeApi([{ name: "qwen3-asr", ready: false }]);
+    const warnings: string[] = [];
+    const done = resumeModels(api, (message) => warnings.push(message));
+    await settle();
+    expect(ensures.map((e) => e.names)).toEqual([["qwen3-asr"]]);
+    ensures[0].end.resolve({ ok: true });
+    await done;
+    expect(warnings).toEqual([]);
+  });
+
+  test("asks nothing more when the models are there", async () => {
+    const { api, ensures } = fakeApi([{ name: "qwen3-asr", ready: true }]);
+    const warnings: string[] = [];
+    await resumeModels(api, (message) => warnings.push(message));
+    expect(ensures).toHaveLength(0);
+    expect(warnings).toEqual([]);
+  });
+
+  test("warns, with the reason, when the models cannot be fetched", async () => {
+    const { api, ensures } = fakeApi([{ name: "qwen3-asr", ready: false }]);
+    const warnings: string[] = [];
+    const done = resumeModels(api, (message) => warnings.push(message));
+    await settle();
+    ensures[0].end.reject("[-32603] download failed: offline");
+    await done;
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("download failed: offline");
+  });
+
+  test("warns when the core cannot even say which models are there", async () => {
+    const api: ModelsApi = {
+      status: () => Promise.reject("Raphael's core is not running"),
+      ensure: () => Promise.reject(new Error("must not be called")),
+    };
+    const warnings: string[] = [];
+    await resumeModels(api, (message) => warnings.push(message));
+    expect(warnings).toHaveLength(1);
   });
 });
