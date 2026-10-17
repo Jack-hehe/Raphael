@@ -7,11 +7,15 @@
 //! has its own session id; a result for a session that is no longer the current one (cancelled,
 //! or the core restarted meanwhile) is dropped.
 //!
-//! Two rules keep it out of trouble with the real overlay and paster:
+//! Rules that keep it out of trouble with the real core, overlay and paster:
 //!
 //! - Overlay calls are made outside the state lock: they can wait for the main thread, and the
-//!   tray's handlers run on the main thread.
+//!   tray's handlers run on the main thread. The cancel switch is only a flag (a channel send),
+//!   so it is set under the lock, together with the phase it follows.
 //! - `hide` never follows a `notice`: a hide cancels the notice and the ones queued after it.
+//! - The core hears of a session's `stop` or `cancel` only after it has answered that session's
+//!   `dictation.start`: the calls are made by separate tasks, and a stop that overtook its start
+//!   would find no session, leaving the microphone open and the core busy for good.
 //!
 //! [`spawn`] builds the controller from the app state and runs it in a task that listens to the
 //! hotkeys, the core's notifications and the tray.
@@ -19,6 +23,7 @@
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::holdtap::{Action, HoldTap};
@@ -28,6 +33,8 @@ use crate::overlay::{Mode, OverlayApi};
 use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
 use crate::rpc::{CoreApi, lock};
 
+/// `BUSY` in the core's `protocol.py`: a dictation session is already active.
+const BUSY: i64 = 1003;
 /// `NO_MICROPHONE` in the core's `protocol.py`.
 const NO_MICROPHONE: i64 = 1004;
 /// A paste-last press this soon after a recording started cancels that recording: Right Alt+V
@@ -43,11 +50,42 @@ pub enum Phase {
     Processing,
 }
 
+/// What became of a session's `dictation.start` call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Started {
+    /// The core has not answered yet.
+    Pending,
+    Yes,
+    /// The call failed: the core has no such session, so there is nothing to stop or cancel.
+    Failed,
+}
+
+/// A recording's session: its id, and whether the core has finished starting it.
+#[derive(Clone)]
+struct Session {
+    id: String,
+    started: watch::Receiver<Started>,
+}
+
+impl Session {
+    /// Waits for the core's answer to this session's `dictation.start`. True if it started; false
+    /// if the call failed (or its task is gone without an answer): then a `dictation.stop` or
+    /// `dictation.cancel` would find no session.
+    async fn start_succeeded(&self) -> bool {
+        let mut started = self.started.clone();
+        let answer = started
+            .wait_for(|started| *started != Started::Pending)
+            .await
+            .map(|started| *started);
+        matches!(answer, Ok(Started::Yes))
+    }
+}
+
 struct State {
     phase: Phase,
     holdtap: HoldTap,
-    /// The current recording's session id, while not idle.
-    session: Option<String>,
+    /// The current recording's session, while not idle.
+    session: Option<Session>,
     /// When the current recording started, on the clock of [`DictationController::on_hotkey`].
     started_ms: u64,
     /// The fallback notices already shown in this app session: each is shown once.
@@ -139,9 +177,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             state.phase = Phase::Idle;
             state.session = None;
             state.holdtap.reset();
+            self.cancel.set(false);
             was
         };
-        self.cancel.set(false);
         if was != Phase::Idle {
             log::warn!("the core restarted during a dictation; it is lost");
             self.overlay.hide();
@@ -163,48 +201,64 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     }
 
     fn start(&self, now_ms: u64) -> Option<JoinHandle<()>> {
-        let session = uuid::Uuid::new_v4().to_string();
+        let id = uuid::Uuid::new_v4().to_string();
+        let (answered, started) = watch::channel(Started::Pending);
         {
             let mut state = lock(&self.state);
             if state.phase != Phase::Idle {
                 return None;
             }
             state.phase = Phase::Recording;
-            state.session = Some(session.clone());
+            state.session = Some(Session {
+                id: id.clone(),
+                started,
+            });
             state.started_ms = now_ms;
+            self.cancel.set(true);
         }
         self.overlay.show(Mode::Listening);
-        self.cancel.set(true);
 
         let this = self.clone();
         Some(tokio::spawn(async move {
-            let started = this
+            let reply = this
                 .core
-                .call("dictation.start", json!({ "session_id": session }))
+                .call("dictation.start", json!({ "session_id": id }))
                 .await;
-            let Err(err) = started else { return };
-            if !this.end_session(&session) {
+            let Err(err) = reply else {
+                answered.send_replace(Started::Yes);
                 return;
+            };
+            match err.code {
+                NO_MICROPHONE => log::warn!("dictation.start: no microphone ({err})"),
+                // Some other session holds the core. It is not ours (this id was just made up),
+                // so there is no cancel to send for it; all that can be done is to say so.
+                BUSY => log::error!(
+                    "dictation.start: the core is busy with another dictation session ({err}); \
+                     this dictation is dropped"
+                ),
+                _ => log::error!("dictation.start failed: {err}"),
             }
-            if err.code == NO_MICROPHONE {
-                log::warn!("dictation.start: no microphone ({err})");
-                this.show(notices::NO_MIC);
-            } else {
-                log::error!("dictation.start failed: {err}");
-                this.overlay.hide();
-            }
+            this.finish(&id, |this| {
+                if err.code == NO_MICROPHONE {
+                    this.show(notices::NO_MIC);
+                } else {
+                    this.overlay.hide();
+                }
+            });
+            // Only now: a stop or cancel waiting for this answer has nothing left to stop.
+            answered.send_replace(Started::Failed);
         }))
     }
 
     fn stop(&self) -> Option<JoinHandle<()>> {
         let session = {
             let mut state = lock(&self.state);
-            let session = state.session.clone();
-            if state.phase != Phase::Recording || session.is_none() {
+            if state.phase != Phase::Recording {
                 return None;
             }
+            let session = state.session.clone()?;
             state.phase = Phase::Processing;
-            session?
+            session
         };
         // The window to paste into is the one that has focus when the key is released.
         let target = self.paster.foreground();
@@ -212,15 +266,29 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
 
         let this = self.clone();
         Some(tokio::spawn(async move {
+            // Released before the core answered the start? Then wait: a stop that got there first
+            // would find no session. If the start failed, its own error path has dealt with the
+            // overlay and there is nothing to stop.
+            if !session.start_succeeded().await {
+                log::info!("dictation.start failed; no dictation.stop to send");
+                return;
+            }
+            // Esc may have come while waiting; its cancel is on its way, and a stop would only
+            // have the core transcribe speech nobody wants.
+            if !this.is_current(&session.id) {
+                log::info!("the dictation was cancelled before it started; no dictation.stop");
+                return;
+            }
+            let id = session.id;
             let target_app = target.as_ref().map(|target| target.process_name.clone());
             let reply = this
                 .core
                 .call(
                     "dictation.stop",
-                    json!({ "session_id": session, "target_app": target_app }),
+                    json!({ "session_id": id, "target_app": target_app }),
                 )
                 .await;
-            if !this.is_current(&session) {
+            if !this.is_current(&id) {
                 log::info!("dropping the result of a dictation that was cancelled");
                 return;
             }
@@ -228,18 +296,14 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 Ok(reply) => reply,
                 Err(err) => {
                     log::error!("dictation.stop failed: {err}");
-                    if this.end_session(&session) {
-                        this.overlay.hide();
-                    }
+                    this.finish(&id, |this| this.overlay.hide());
                     return;
                 }
             };
             let text = reply.get("text").and_then(Value::as_str).unwrap_or("");
             if text.is_empty() {
                 log::info!("the dictation has no text; nothing to paste");
-                if this.end_session(&session) {
-                    this.overlay.hide();
-                }
+                this.finish(&id, |this| this.overlay.hide());
                 return;
             }
             let reason = reply
@@ -247,12 +311,11 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 .and_then(Value::as_str)
                 .map(str::to_owned);
 
-            let outcome = this.deliver(text.to_owned(), target).await;
-            if !this.end_session(&session) {
-                return;
-            }
-            let fallback = this.first_time(notices::notice_for_fallback(reason.as_deref()));
-            this.report(outcome, fallback, true);
+            let outcome = this.deliver(text.to_owned(), target, Some(&id)).await;
+            this.finish(&id, |this| {
+                let fallback = this.first_time(notices::notice_for_fallback(reason.as_deref()));
+                this.report(outcome, fallback, true);
+            });
         }))
     }
 
@@ -264,17 +327,15 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             }
             state.phase = Phase::Idle;
             state.holdtap.reset();
+            self.cancel.set(false);
             state.session.take()
         };
-        self.cancel.set(false);
         self.overlay.hide();
         let session = session?;
-        Some(self.spawn_cancel_call(session))
-    }
-
-    fn spawn_cancel_call(&self, session: String) -> JoinHandle<()> {
         let core = self.core.clone();
-        tokio::spawn(async move { cancel_call(core.as_ref(), &session).await })
+        Some(tokio::spawn(async move {
+            cancel_after_start(core.as_ref(), &session).await;
+        }))
     }
 
     fn paste_last_at(&self, now_ms: Option<u64>) -> JoinHandle<()> {
@@ -288,45 +349,75 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             }
             state.phase = Phase::Idle;
             state.holdtap.reset();
+            self.cancel.set(false);
             state.session.take()
         });
         if cancelled.is_some() {
-            self.cancel.set(false);
             self.overlay.hide();
         }
         let target = self.paster.foreground();
 
         let this = self.clone();
         tokio::spawn(async move {
-            if let Some(session) = cancelled {
-                cancel_call(this.core.as_ref(), &session).await;
-            }
-            let latest = match this.core.call("history.latest", json!({})).await {
-                Ok(latest) => latest,
-                Err(err) => {
-                    log::error!("history.latest failed: {err}");
-                    return;
+            // The cancel waits for the session's start reply; the paste does not wait for the
+            // cancel, so a slow start cannot hold up the text the user asked for.
+            let cancel = async {
+                if let Some(session) = &cancelled {
+                    cancel_after_start(this.core.as_ref(), session).await;
                 }
             };
-            let text = latest
-                .get("item")
-                .and_then(|item| item.get("text"))
-                .and_then(Value::as_str)
-                .filter(|text| !text.is_empty());
-            let Some(text) = text else {
-                log::info!("paste last: the history is empty");
-                return;
-            };
-            let outcome = this.deliver(text.to_owned(), target).await;
-            this.report(outcome, None, false);
+            tokio::join!(cancel, this.paste_latest(target));
         })
     }
 
+    async fn paste_latest(&self, target: Option<Target>) {
+        let latest = match self.core.call("history.latest", json!({})).await {
+            Ok(latest) => latest,
+            Err(err) => {
+                log::error!("history.latest failed: {err}");
+                return;
+            }
+        };
+        let text = latest
+            .get("item")
+            .and_then(|item| item.get("text"))
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty());
+        let Some(text) = text else {
+            log::info!("paste last: the history is empty");
+            return;
+        };
+        let outcome = self.deliver(text.to_owned(), target, None).await;
+        self.report(outcome, None, false);
+    }
+
     /// Pastes on a blocking thread: the paster can take seconds.
-    async fn deliver(&self, text: String, target: Option<Target>) -> Option<PasteOutcome> {
-        let paster = self.paster.clone();
-        match tokio::task::spawn_blocking(move || paster.deliver(&text, target.as_ref())).await {
-            Ok(outcome) => Some(outcome),
+    ///
+    /// With a `session`, the paste is dropped if that session is no longer current when the
+    /// blocking thread gets to it (Esc, or a core restart, came while it waited in the queue).
+    /// That is the last point where Esc can stop it: once `Paster::deliver` has begun, the paste
+    /// completes (it takes the clipboard and sends the keys), and a cancel arriving then only
+    /// hides the emblem.
+    async fn deliver(
+        &self,
+        text: String,
+        target: Option<Target>,
+        session: Option<&str>,
+    ) -> Option<PasteOutcome> {
+        let this = self.clone();
+        let session = session.map(str::to_owned);
+        let delivered = tokio::task::spawn_blocking(move || {
+            if let Some(session) = &session
+                && !this.is_current(session)
+            {
+                log::info!("the dictation was cancelled before it was pasted; not pasting");
+                return None;
+            }
+            Some(this.paster.deliver(&text, target.as_ref()))
+        })
+        .await;
+        match delivered {
+            Ok(outcome) => outcome,
             Err(err) => {
                 log::error!("pasting failed: {err}");
                 None
@@ -370,24 +461,61 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     }
 
     fn is_current(&self, session: &str) -> bool {
-        lock(&self.state).session.as_deref() == Some(session)
+        lock(&self.state)
+            .session
+            .as_ref()
+            .is_some_and(|current| current.id == session)
     }
 
     /// Ends `session` if it is still the current one: back to idle, cancel keys off. Returns
     /// whether it was current; if not, whoever ended it has taken care of the overlay.
     fn end_session(&self, session: &str) -> bool {
+        let mut state = lock(&self.state);
+        if state
+            .session
+            .as_ref()
+            .is_none_or(|current| current.id != session)
         {
-            let mut state = lock(&self.state);
-            if state.session.as_deref() != Some(session) {
-                return false;
-            }
-            state.phase = Phase::Idle;
-            state.session = None;
-            state.holdtap.reset();
+            return false;
         }
+        state.phase = Phase::Idle;
+        state.session = None;
+        state.holdtap.reset();
+        // Under the lock, with the phase: a dictation started right after this one must not have
+        // its cancel keys switched off by us. The switch is a flag (a channel send), so this
+        // neither waits nor calls the overlay.
         self.cancel.set(false);
         true
     }
+
+    /// The end of a session that ran its course: ends it, then shows what became of it with
+    /// `show` (overlay calls). If the session was cancelled meanwhile, whoever cancelled it has
+    /// taken care of the overlay, and `show` is not called.
+    ///
+    /// `show` is also skipped if another dictation has started since: the overlay is that one's
+    /// now, and a hide or a notice for the old one would wipe its emblem. The check is made right
+    /// before `show` and not atomically with it, because overlay calls must stay outside the state
+    /// lock; the window that is left is a few instructions wide.
+    fn finish(&self, session: &str, show: impl FnOnce(&Self)) {
+        if !self.end_session(session) {
+            return;
+        }
+        if self.phase() != Phase::Idle {
+            log::info!("a new dictation has started; leaving the overlay to it");
+            return;
+        }
+        show(self);
+    }
+}
+
+/// Sends `dictation.cancel` for `session` once the core has answered its `dictation.start`. If
+/// the start failed there is no session to cancel.
+async fn cancel_after_start<C: CoreApi>(core: &C, session: &Session) {
+    if !session.start_succeeded().await {
+        log::info!("dictation.start failed; no dictation.cancel to send");
+        return;
+    }
+    cancel_call(core, &session.id).await;
 }
 
 async fn cancel_call<C: CoreApi>(core: &C, session: &str) {
@@ -643,6 +771,9 @@ mod tests {
     struct FakeCore {
         results: Mutex<HashMap<String, Result<Value, RpcError>>>,
         calls: Mutex<Vec<(String, Value)>>,
+        /// What reached the core and when a gated reply was let go: the method name when a call
+        /// arrives, and `<method>:reply` when its gate opens.
+        order: Mutex<Vec<String>>,
         /// Replies to this method wait until the gate is opened.
         gate: Option<(String, Arc<Notify>)>,
     }
@@ -682,6 +813,10 @@ mod tests {
                 .count()
         }
 
+        fn order(&self) -> Vec<String> {
+            self.order.lock().unwrap().clone()
+        }
+
         fn call_params(&self, method: &str) -> Value {
             self.calls
                 .lock()
@@ -697,10 +832,12 @@ mod tests {
     impl CoreApi for FakeCore {
         async fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
             self.calls.lock().unwrap().push((method.to_owned(), params));
+            self.order.lock().unwrap().push(method.to_owned());
             if let Some((gated, gate)) = &self.gate
                 && gated == method
             {
                 gate.notified().await;
+                self.order.lock().unwrap().push(format!("{method}:reply"));
             }
             let scripted = self.results.lock().unwrap().get(method).cloned();
             scripted.unwrap_or_else(|| Ok(json!({})))
@@ -799,16 +936,28 @@ mod tests {
     #[derive(Default)]
     struct FakeCancel {
         last: Mutex<Option<bool>>,
+        /// The controller's state lock, to see whether it is held while the switch is set.
+        probe: Mutex<Option<Arc<Mutex<State>>>>,
+        /// Every `set`: the value, and whether the controller's state lock was held.
+        sets: Mutex<Vec<(bool, bool)>>,
     }
 
     impl FakeCancel {
         fn last(&self) -> Option<bool> {
             *self.last.lock().unwrap()
         }
+
+        fn sets(&self) -> Vec<(bool, bool)> {
+            self.sets.lock().unwrap().clone()
+        }
     }
 
     impl CancelSwitch for FakeCancel {
         fn set(&self, on: bool) {
+            let held = self.probe.lock().unwrap().as_ref().is_some_and(|state| {
+                matches!(state.try_lock(), Err(std::sync::TryLockError::WouldBlock))
+            });
+            self.sets.lock().unwrap().push((on, held));
             *self.last.lock().unwrap() = Some(on);
         }
     }
@@ -836,6 +985,20 @@ mod tests {
 
     fn notice(zh: &str) -> String {
         format!("notice:{zh}")
+    }
+
+    /// Lets every task that can run, run.
+    async fn settle() {
+        for _ in 0..5 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    fn position(order: &[String], what: &str) -> usize {
+        order
+            .iter()
+            .position(|entry| entry == what)
+            .unwrap_or_else(|| panic!("{what} is not in {order:?}"))
     }
 
     // ---------- tests ----------
@@ -1233,5 +1396,378 @@ mod tests {
             c.overlay().events(),
             vec!["show:listening", "level:0.25", "mode:thinking", "hide"]
         );
+    }
+
+    // ---------- stop and cancel wait for the session's start reply ----------
+
+    /// A controller whose `dictation.start` reply is held back until the returned gate is opened.
+    fn with_gated_start(core: FakeCore) -> (Ctl, Arc<Notify>) {
+        let (core, gate) = core.gated("dictation.start");
+        (controller(core, FakePaster::pasting("notepad.exe")), gate)
+    }
+
+    #[tokio::test]
+    async fn release_before_the_start_reply_sends_the_stop_after_it() {
+        let (c, gate) = with_gated_start(FakeCore::with("dictation.stop", stop_result("好", None)));
+        let down = c
+            .on_hotkey(HotkeyEvent::DictationDown, 0)
+            .expect("the start runs in a task");
+        tokio::task::yield_now().await;
+        // a hold just over the tap threshold: released while the core is still starting
+        let up = c
+            .on_hotkey(HotkeyEvent::DictationUp, 400)
+            .expect("the stop runs in a task");
+        settle().await;
+        assert_eq!(c.phase(), Phase::Processing);
+        assert_eq!(
+            c.core().count("dictation.stop"),
+            0,
+            "the core must not see the stop before the start's reply"
+        );
+
+        gate.notify_one();
+        down.await.unwrap();
+        up.await.unwrap();
+        assert_eq!(
+            c.core().order(),
+            vec!["dictation.start", "dictation.start:reply", "dictation.stop"]
+        );
+        assert_eq!(c.paster().delivered(), vec!["好"]);
+        assert_eq!(
+            c.overlay().events(),
+            vec!["show:listening", "mode:thinking", "hide"]
+        );
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.cancel().last(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn escape_before_the_start_reply_sends_the_cancel_after_it() {
+        let (c, gate) = with_gated_start(FakeCore::default());
+        let down = c
+            .on_hotkey(HotkeyEvent::DictationDown, 0)
+            .expect("the start runs in a task");
+        tokio::task::yield_now().await;
+        let esc = c
+            .on_hotkey(HotkeyEvent::Cancel, 150)
+            .expect("the cancel runs in a task");
+        settle().await;
+        // the user sees the cancel at once; the core hears of it once it has started
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
+        assert_eq!(
+            c.core().count("dictation.cancel"),
+            0,
+            "the core must not see the cancel before the start's reply"
+        );
+
+        gate.notify_one();
+        down.await.unwrap();
+        esc.await.unwrap();
+        assert_eq!(
+            c.core().order(),
+            vec![
+                "dictation.start",
+                "dictation.start:reply",
+                "dictation.cancel"
+            ]
+        );
+        assert_eq!(
+            c.core().call_params("dictation.cancel")["session_id"],
+            c.core().call_params("dictation.start")["session_id"]
+        );
+        assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
+    }
+
+    #[tokio::test]
+    async fn escape_after_release_before_the_start_reply_sends_only_the_cancel() {
+        let (c, gate) = with_gated_start(FakeCore::with(
+            "dictation.stop",
+            stop_result("太晚了", None),
+        ));
+        let down = c
+            .on_hotkey(HotkeyEvent::DictationDown, 0)
+            .expect("the start runs in a task");
+        tokio::task::yield_now().await;
+        let up = c
+            .on_hotkey(HotkeyEvent::DictationUp, 400)
+            .expect("the stop runs in a task");
+        let esc = c
+            .on_hotkey(HotkeyEvent::Cancel, 450)
+            .expect("the cancel runs in a task");
+        settle().await;
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        assert_eq!(c.core().count("dictation.cancel"), 0);
+
+        gate.notify_one();
+        down.await.unwrap();
+        up.await.unwrap();
+        esc.await.unwrap();
+        // the stop was overtaken by the cancel: it is not sent at all, so nothing is transcribed
+        assert_eq!(
+            c.core().order(),
+            vec![
+                "dictation.start",
+                "dictation.start:reply",
+                "dictation.cancel"
+            ]
+        );
+        assert!(c.paster().delivered().is_empty());
+        assert_eq!(
+            c.overlay().events(),
+            vec!["show:listening", "mode:thinking", "hide"]
+        );
+        assert_eq!(c.phase(), Phase::Idle);
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_means_no_stop_is_sent() {
+        let (c, gate) = with_gated_start(FakeCore::failing(
+            "dictation.start",
+            RpcError::new(CORE_EXITED, "the core exited"),
+        ));
+        let down = c
+            .on_hotkey(HotkeyEvent::DictationDown, 0)
+            .expect("the start runs in a task");
+        tokio::task::yield_now().await;
+        let up = c
+            .on_hotkey(HotkeyEvent::DictationUp, 400)
+            .expect("the stop runs in a task");
+        settle().await;
+        gate.notify_one();
+        down.await.unwrap();
+        up.await.unwrap();
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        assert_eq!(c.core().count("dictation.cancel"), 0);
+        assert!(c.paster().delivered().is_empty());
+        // the start's own error path took care of the overlay
+        assert_eq!(
+            c.overlay().events(),
+            vec!["show:listening", "mode:thinking", "hide"]
+        );
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.cancel().last(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_means_no_cancel_is_sent() {
+        let (c, gate) = with_gated_start(FakeCore::failing(
+            "dictation.start",
+            RpcError::new(1004, "no microphone"),
+        ));
+        let down = c
+            .on_hotkey(HotkeyEvent::DictationDown, 0)
+            .expect("the start runs in a task");
+        tokio::task::yield_now().await;
+        let esc = c
+            .on_hotkey(HotkeyEvent::Cancel, 100)
+            .expect("the cancel runs in a task");
+        settle().await;
+        gate.notify_one();
+        down.await.unwrap();
+        esc.await.unwrap();
+        assert_eq!(c.core().count("dictation.cancel"), 0);
+        // Esc already hid the emblem; the late failure must not put a notice over it
+        assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
+        assert_eq!(c.phase(), Phase::Idle);
+    }
+
+    #[tokio::test]
+    async fn paste_last_cancel_waits_for_the_start_reply() {
+        let (c, gate) = with_gated_start(FakeCore::with(
+            "history.latest",
+            json!({"item": {"id": 3, "text": "上一次"}}),
+        ));
+        let down = c
+            .on_hotkey(HotkeyEvent::DictationDown, 0)
+            .expect("the start runs in a task");
+        tokio::task::yield_now().await;
+        let paste = c
+            .on_hotkey(HotkeyEvent::PasteLast, 200)
+            .expect("the paste runs in a task");
+        settle().await;
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
+        assert_eq!(
+            c.core().count("dictation.cancel"),
+            0,
+            "the core must not see the cancel before the start's reply"
+        );
+
+        gate.notify_one();
+        down.await.unwrap();
+        paste.await.unwrap();
+        let order = c.core().order();
+        assert!(
+            position(&order, "dictation.start:reply") < position(&order, "dictation.cancel"),
+            "{order:?}"
+        );
+        assert_eq!(c.paster().delivered(), vec!["上一次"]);
+    }
+
+    #[tokio::test]
+    async fn a_busy_core_hides_the_overlay_and_gets_no_cancel_for_a_session_it_does_not_know() {
+        let c = controller(
+            FakeCore::failing("dictation.start", RpcError::new(1003, "busy")),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.cancel().last(), Some(false));
+        // the busy session is somebody else's: our id means nothing to the core
+        assert_eq!(c.core().count("dictation.cancel"), 0);
+        // and the next try starts afresh
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        run(&c, HotkeyEvent::DictationDown, 5000).await;
+        assert_eq!(c.core().count("dictation.start"), 2);
+    }
+
+    // ---------- the end of a session ----------
+
+    #[tokio::test]
+    async fn the_cancel_switch_is_set_under_the_state_lock() {
+        let c = controller(
+            FakeCore::with(
+                "history.latest",
+                json!({"item": {"id": 3, "text": "上一次"}}),
+            ),
+            FakePaster::pasting("notepad.exe"),
+        );
+        *c.cancel().probe.lock().unwrap() = Some(c.state.clone());
+        // a dictation to the end
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        // Esc
+        run(&c, HotkeyEvent::DictationDown, 5000).await;
+        run(&c, HotkeyEvent::Cancel, 5100).await;
+        // the core restarting
+        run(&c, HotkeyEvent::DictationDown, 9000).await;
+        c.on_core_restarted();
+        // Right Alt+V
+        run(&c, HotkeyEvent::DictationDown, 12000).await;
+        run(&c, HotkeyEvent::PasteLast, 12200).await;
+
+        // A session that starts right after another ended must not have its keys switched off by
+        // the old one: so the switch moves together with the phase, under the lock.
+        let sets = c.cancel().sets();
+        assert_eq!(
+            sets.iter().map(|(on, _)| *on).collect::<Vec<_>>(),
+            vec![true, false, true, false, true, false, true, false]
+        );
+        assert!(
+            sets.iter().all(|(_, held)| *held),
+            "(value, lock held) per call: {sets:?}"
+        );
+    }
+
+    #[test]
+    fn escape_while_the_paste_is_queued_stops_the_paste() {
+        // One thread for blocking work, kept busy: the paste has to wait in the queue, which is
+        // where Esc can still catch it.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let c = controller(
+                FakeCore::with("dictation.stop", stop_result("太晚了", None)),
+                FakePaster::pasting("notepad.exe"),
+            );
+            run(&c, HotkeyEvent::DictationDown, 0).await;
+            let (release, held) = std::sync::mpsc::channel::<()>();
+            let busy = tokio::task::spawn_blocking(move || {
+                let _ = held.recv();
+            });
+            let up = c
+                .on_hotkey(HotkeyEvent::DictationUp, 900)
+                .expect("the stop runs in a task");
+            settle().await;
+            assert_eq!(c.phase(), Phase::Processing);
+            assert!(
+                c.paster().delivered().is_empty(),
+                "the paste is still queued"
+            );
+
+            run(&c, HotkeyEvent::Cancel, 1000).await;
+            release.send(()).unwrap();
+            busy.await.unwrap();
+            up.await.unwrap();
+            assert!(
+                c.paster().delivered().is_empty(),
+                "Esc came before the paste began"
+            );
+            assert_eq!(
+                c.overlay().events(),
+                vec!["show:listening", "mode:thinking", "hide"]
+            );
+            assert_eq!(c.phase(), Phase::Idle);
+        });
+    }
+
+    #[tokio::test]
+    async fn core_restart_while_processing_drops_the_late_result() {
+        let (core, gate) =
+            FakeCore::with("dictation.stop", stop_result("太晚了", None)).gated("dictation.stop");
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        let up = c
+            .on_hotkey(HotkeyEvent::DictationUp, 900)
+            .expect("the stop runs in a task");
+        settle().await;
+        assert_eq!(c.phase(), Phase::Processing);
+
+        c.on_core_restarted();
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.cancel().last(), Some(false));
+        let events_after_restart = c.overlay().events();
+        assert_eq!(
+            events_after_restart,
+            vec!["show:listening", "mode:thinking", "hide"]
+        );
+
+        // the reply of the old core's session turns up anyway
+        gate.notify_one();
+        up.await.unwrap();
+        assert!(c.paster().delivered().is_empty());
+        assert_eq!(c.overlay().events(), events_after_restart);
+        assert_eq!(c.phase(), Phase::Idle);
+        // the dead core is not sent a cancel
+        assert_eq!(c.core().count("dictation.cancel"), 0);
+    }
+
+    // ---------- Right Alt+V: the one-second boundary ----------
+
+    #[tokio::test]
+    async fn paste_last_just_under_a_second_after_the_start_cancels_the_recording() {
+        let c = controller(
+            FakeCore::with(
+                "history.latest",
+                json!({"item": {"id": 3, "text": "上一次"}}),
+            ),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::PasteLast, 999).await;
+        assert_eq!(c.core().count("dictation.cancel"), 1);
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.paster().delivered(), vec!["上一次"]);
+    }
+
+    #[tokio::test]
+    async fn paste_last_a_full_second_after_the_start_keeps_the_recording() {
+        let c = controller(
+            FakeCore::with(
+                "history.latest",
+                json!({"item": {"id": 3, "text": "上一次"}}),
+            ),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::PasteLast, 1000).await;
+        assert_eq!(c.core().count("dictation.cancel"), 0);
+        assert_eq!(c.phase(), Phase::Recording);
+        assert_eq!(c.paster().delivered(), vec!["上一次"]);
     }
 }
