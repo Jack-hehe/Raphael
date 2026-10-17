@@ -170,6 +170,33 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .toast { pointer-events: auto; display: flex; align-items: center; gap: 12px; padding: 7px 8px 7px 16px; border-radius: 8px; background: var(--text); color: var(--content); font-size: 13px; box-shadow: var(--pop); max-width: min(560px, calc(100vw - 32px)); }
 .toast .btn.quiet { color: var(--accent); }
 
+/* ---------- first run ---------- */
+.ob { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; min-height: 0; background: var(--content); border-top: 1px solid var(--edge); }
+.ob-steps { display: flex; justify-content: center; gap: 6px; padding: 18px 0 0; }
+.ob-steps i { width: 28px; height: 4px; border-radius: 2px; background: var(--track); }
+.ob-steps i.done { background: var(--accent); }
+.ob-steps i.now { background: var(--accent); opacity: 0.55; }
+.ob-body { overflow: auto; display: flex; justify-content: center; padding: 14px 24px 18px; }
+.ob-col { width: 520px; max-width: 100%; }
+.ob-col h2 { font-size: 22px; font-weight: 600; margin: 10px 0 6px; line-height: 1.3; }
+.ob-col h2:focus { outline: none; }
+.ob-col > p { color: var(--text-2); margin: 0 0 14px; max-width: 60ch; text-wrap: pretty; }
+.ob-col .stage { height: 190px; margin: 6px 0 18px; }
+.ob-col .stage canvas.emb { top: 23px; }
+.ob-skip { margin: 14px 0 0; font-size: 13px; }
+.ob-foot { display: flex; align-items: center; gap: 8px; padding: 12px 24px; border-top: 1px solid var(--line); }
+.ob-count { margin-right: auto; font-size: 12px; color: var(--text-3); }
+.ctl-model { display: inline-flex; align-items: center; gap: 8px; }
+.ob-bar { display: inline-block; width: 140px; }
+.dot.busy { background: var(--accent); animation: ob-pulse 1.2s ease-in-out infinite; }
+@keyframes ob-pulse { 50% { opacity: 0.35; } }
+.trybox { display: block; width: 100%; min-height: 110px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--btn-edge); background: var(--content); font-size: 14px; line-height: 1.6; resize: none; }
+.trybox::placeholder { color: var(--text-3); }
+.ob-tryline { min-height: 22px; margin-top: 8px; font-size: 13px; color: var(--text-2); }
+.ob-modelline { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.keyline { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 18px; }
+.keyline > div { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 13px; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
