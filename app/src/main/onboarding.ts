@@ -7,6 +7,7 @@
 
 import * as api from "./api";
 import { describeError, formatSeconds, keyReasonText, parseLimit } from "./format";
+import { wireKeyField } from "./keyfield";
 import { bindingLabels } from "./keys";
 import { MonitorSwitch } from "./monitor";
 import { ModelDownload, type ModelPhase, formatProgress } from "./models";
@@ -76,6 +77,55 @@ export function micChoices(devices: AudioDevices | null, saved: string | null): 
 export function tryTiming(last: Status["last"], sinceMs: number): string | null {
   if (!last || last.created_at_ms < sinceMs) return null;
   return `辨識與整理花了 ${formatSeconds(last.stt_ms + last.llm_ms)}`;
+}
+
+/** How soon after a dictation the history is looked at again, if it was not in it yet. */
+export const TIMING_RETRY_MS = 1000;
+
+/**
+ * The line about how long the dictation in the try box took. The history row may not be written
+ * yet when the box sees the paste, so a lookup that finds nothing is made once more after
+ * `TIMING_RETRY_MS`. `wait` is how the time passes (a test gives its own).
+ */
+export async function timingWithRetry(
+  fetchLast: () => Promise<Status["last"]>,
+  sinceMs: number,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<string | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await wait(TIMING_RETRY_MS);
+    try {
+      const text = tryTiming(await fetchLast(), sinceMs);
+      if (text) return text;
+    } catch {
+      // the core did not answer; the second look may be luckier
+    }
+  }
+  return null;
+}
+
+export interface Advance {
+  /** Where 「下一步」 (or 先跳過) leads; null stays on the step. */
+  to: Step | "done" | null;
+  /** Whether the key was skipped, now. A skip counts only when the step is really left. */
+  skipKey: boolean;
+}
+
+/**
+ * What 「下一步」 does, or 先跳過 with `skip`. On the key step a limit typed but not yet saved is
+ * saved first (`commitLimit`, true if the limit is fine); a bad limit keeps the guide where it is,
+ * and then a skip is not counted: it would otherwise unlock 「下一步」 behind the person's back.
+ */
+export async function advanceFrom(
+  step: Step,
+  opts: KeyProgress,
+  skip: boolean,
+  commitLimit: () => Promise<boolean>,
+): Promise<Advance> {
+  if (step === 1 && !(await commitLimit())) return { to: null, skipKey: opts.skipKey };
+  const skipKey = opts.skipKey || (step === 1 && skip);
+  const to = next(step, { keySaved: opts.keySaved, skipKey });
+  return { to: to === step ? null : to, skipKey };
 }
 
 /** The dictation keys in words: 「右 Alt」, or 「右 Alt 或 F9」 with two. */
@@ -209,10 +259,10 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
     }
     return row(
       "金鑰",
-      "貼上後馬上測試",
+      "貼上後按 Enter 或「貼上」，馬上測試",
       fieldHTML("sk-or-v1-…", "", { w: 220, label: "OpenRouter 金鑰", id: "ob-key-input", type: "password", invalid: keyError !== null }) +
         btn(keyBusy ? "檢查中…" : "貼上", "pri", ` data-ob="key-paste"${keyBusy ? " disabled" : ""}`) +
-        (keySaved ? btn("取消", "", ' data-ob="key-cancel"') : ""),
+        (keySaved ? btn("取消", "", ` data-ob="key-cancel"${keyBusy ? " disabled" : ""}`) : ""),
     );
   }
 
@@ -389,19 +439,24 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
 
   function go(to: Step): void {
     step = to;
+    // A replacement that was being typed is given up when the step is left, not kept for later.
+    replacingKey = false;
+    keyError = null;
     render();
   }
 
-  async function advance(): Promise<void> {
+  async function advance(skip = false): Promise<void> {
     if (advancing || finishing) return;
     advancing = true;
     try {
-      // A limit typed but not yet saved (the field has not lost focus) is saved first.
-      if (step === 1 && !(await commitLimit())) return;
-      const to = next(step, { keySaved, skipKey });
-      if (to === step) return;
-      if (to === "done") await finish();
-      else go(to);
+      const result = await advanceFrom(step, { keySaved, skipKey }, skip, commitLimit);
+      skipKey = result.skipKey;
+      if (result.to === null) {
+        paintFoot();
+        return;
+      }
+      if (result.to === "done") await finish();
+      else go(result.to);
     } finally {
       advancing = false;
     }
@@ -551,15 +606,9 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
   // ---------- step 3: the try box ----------
 
   async function showTiming(): Promise<void> {
-    let last: Status["last"] = null;
-    try {
-      last = (await api.statusGet()).last;
-    } catch {
-      return;
-    }
-    const text = tryTiming(last, tryOpenedAt);
+    const text = await timingWithRetry(async () => (await api.statusGet()).last, tryOpenedAt);
     const line = root.querySelector<HTMLElement>("#ob-try-t");
-    if (line && text) line.textContent = text;
+    if (line && text && !destroyed) line.textContent = text;
   }
 
   // ---------- events ----------
@@ -582,8 +631,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
         go(prev(step));
         break;
       case "skip":
-        skipKey = true;
-        void advance();
+        void advance(true);
         break;
       case "key-paste":
         void pasteKey();
@@ -605,12 +653,12 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
     }
   });
 
-  // `change` comes when a field loses focus or Enter is pressed: no extra button needed.
+  // The limit is saved when its field is left or Enter is pressed. The key is not: it is sent by
+  // Enter or 貼上 only, never by leaving the field (see keyfield.ts).
   root.addEventListener("change", (e) => {
-    const input = e.target as HTMLInputElement;
-    if (input.id === "ob-key-input") void submitKey(input.value);
-    else if (input.id === "ob-limit") void commitLimit();
+    if ((e.target as HTMLInputElement).id === "ob-limit") void commitLimit();
   });
+  wireKeyField(root, { inputId: "ob-key-input", pasteSelector: '[data-ob="key-paste"]', submit: (value) => void submitKey(value) });
 
   root.addEventListener("input", (e) => {
     const input = e.target as HTMLInputElement;

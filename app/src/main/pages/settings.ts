@@ -6,6 +6,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
 import { KEEP_FOREVER_DAYS, describeError, formatRetention, keyReasonText, parseLimit } from "../format";
+import { wireKeyField } from "../keyfield";
 import { KeyRecorder, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "../keys";
 import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, Page, Status } from "../types";
 import {
@@ -167,10 +168,10 @@ export function createSettings(app: AppContext): Page {
     }
     return row(
       "金鑰",
-      "到 openrouter.ai 建立一把，貼在這裡",
+      "到 openrouter.ai 建立一把，貼在這裡後按 Enter 測試",
       fieldHTML("sk-or-v1-…", "", { w: 200, label: "OpenRouter 金鑰", id: "key-input", type: "password", invalid: keyError !== null }) +
         btn(keyBusy ? "檢查中…" : "貼上", "pri sm", ` data-act="key-paste"${keyBusy ? " disabled" : ""}`) +
-        (hasKey ? btn("取消", "sm", ' data-act="key-cancel"') : ""),
+        (hasKey ? btn("取消", "sm", ` data-act="key-cancel"${keyBusy ? " disabled" : ""}`) : ""),
     );
   }
 
@@ -463,12 +464,14 @@ export function createSettings(app: AppContext): Page {
     }
   });
 
-  // `change` comes when a field loses focus or Enter is pressed: no save button needed.
+  // `change` comes when a field loses focus or Enter is pressed: no save button needed. The key is
+  // the exception: it is sent by Enter or 貼上 only, never by leaving the field (keyfield.ts), so
+  // that 取消 after typing a replacement does not store it.
   el.addEventListener("change", (e) => {
     const input = e.target as HTMLInputElement;
-    if (input.id === "key-input") void submitKey(input.value);
-    else if (input.id === "limit-input") commitLimit(input);
+    if (input.id === "limit-input") commitLimit(input);
   });
+  wireKeyField(el, { inputId: "key-input", pasteSelector: '[data-act="key-paste"]', submit: (value) => void submitKey(value) });
 
   const onFocus = (): void => {
     windowFocused = true;

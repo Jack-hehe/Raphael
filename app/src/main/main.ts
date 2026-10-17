@@ -8,7 +8,7 @@ import { createHistory } from "./pages/history";
 import { createHome } from "./pages/home";
 import { createSettings } from "./pages/settings";
 import { DeviceState } from "./device";
-import { ModelDownload } from "./models";
+import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
 import type { AppContext, DeviceSettings, MainEvent, Page, PageId } from "./types";
 import { Undoable } from "./undo";
@@ -137,24 +137,36 @@ async function start(): Promise<void> {
   // Until the first-run guide is done it takes the place of the pages. (Settings that could not be
   // read are no reason to start a guide for someone who has been through it.)
   if (deviceRead && !device.get().onboarded) {
-    const body = document.querySelector<HTMLElement>(".wbody")!;
     const guide = document.getElementById("ob")!;
-    body.hidden = true;
     guide.hidden = false;
     mountOnboarding(
       guide,
       () => {
         guide.hidden = true;
-        body.hidden = false;
+        showPages();
         go("home");
       },
       ctx,
     );
   } else {
+    showPages();
     go("home");
     // A guide that was left before the speech models were all there: fetch what is missing.
-    void new ModelDownload({ status: api.modelsStatus, ensure: api.modelsEnsure }).start();
+    void resumeModels({ status: api.modelsStatus, ensure: api.modelsEnsure }, (message) => console.warn("main:", message));
   }
 }
 
-start().catch((err) => console.error("main: could not start", err));
+/**
+ * The pages are hidden in the HTML until `start` knows whether this is a first run: the window of
+ * a first run opens while the page is still being built, and would show an empty sidebar.
+ */
+function showPages(): void {
+  document.querySelector<HTMLElement>(".wbody")!.hidden = false;
+}
+
+start().catch((err) => {
+  console.error("main: could not start", err);
+  // Whatever went wrong, the window must not stay blank.
+  document.getElementById("ob")!.hidden = true;
+  showPages();
+});

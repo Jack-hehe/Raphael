@@ -64,6 +64,17 @@ export function formatProgress(done: number, total: number): string {
   return `${Math.round(done / MB)} / ${Math.round(total / MB)} MB`;
 }
 
+/**
+ * A start of the app after the guide: fetches the models that are missing, without any window to
+ * show it in. A failure is only reported to `warn`.
+ */
+export async function resumeModels(api: ModelsApi, warn: (message: string) => void): Promise<void> {
+  const download = new ModelDownload(api);
+  await download.start();
+  const { phase } = download;
+  if (phase.kind === "failed") warn(`could not fetch the speech models: ${phase.reason}`);
+}
+
 /** One run of getting the models, from the window's side. */
 export class ModelDownload {
   private current: ModelPhase = { kind: "idle" };
