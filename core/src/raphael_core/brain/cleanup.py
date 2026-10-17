@@ -154,8 +154,9 @@ class CleanupService:
         The first of these that applies decides the reason: blank text is "empty", no key is
         "no_key", the monthly limit reached is "budget". Then the model is asked, and the raw text
         stays when it does not answer in time ("timeout"), when the call fails (f"error:{kind}"),
-        or when its answer is no cleanup of the text: nothing, or more than twice what was said
-        and 40 characters more ("suspicious"). Anything else that goes wrong is "error:unexpected".
+        or when its answer is no cleanup of the text: nothing, or longer than 1.5 times what was
+        said plus 20 characters ("suspicious"). Anything else that goes wrong is
+        "error:unexpected".
 
         An answer is paid for, so it is recorded in the spend whatever it holds. A cancellation
         passes through.
@@ -212,7 +213,9 @@ class CleanupService:
         cost_usd = _usable_cost(completion.cost_usd)
         text = completion.data.get("text")
         text = text.strip() if isinstance(text, str) else ""
-        if not text or len(text) > 2 * len(raw) + 40:
+        # A cleanup adds punctuation and the numbers of a list, so it may run longer than what was
+        # said. Much longer means the model wrote something of its own, most likely an answer.
+        if not text or len(text) > 1.5 * len(raw) + 20:
             logger.warning(
                 "Cleanup reply is empty or too long, using the raw text: reply %d characters,"
                 " dictation %d",

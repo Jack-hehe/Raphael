@@ -147,8 +147,9 @@ async def test_cleans_and_records_spend(svc, fake_client, spend):
 
 
 async def test_no_key_and_budget_skip_the_llm(make_svc, fake_client, spend):
-    r = await make_svc(has_key=False).clean("你好", audio_seconds=1)
-    assert r.fallback_reason == "no_key"
+    assert (
+        await make_svc(has_key=False).clean("你好", audio_seconds=1)
+    ).fallback_reason == "no_key"
     spend.record(purpose="cleanup", model="m", cost_usd=10.0, prompt_tokens=1, completion_tokens=1)
     assert (await make_svc().clean("你好", audio_seconds=1)).fallback_reason == "budget"
     assert fake_client.calls == []
@@ -166,17 +167,12 @@ async def test_api_error_falls_back(svc, fake_client):
 
 
 async def test_answer_instead_of_cleanup_is_rejected(svc, fake_client):
-    raw = "可以幫我規劃一下嗎"
-    # A short answer (up to 2 * 9 + 40 = 58 characters) would pass for a cleanup of this question.
-    # This one is a realistic answer: longer than the limit.
-    answer = (
-        "當然可以！以下是規劃專案的步驟：\n1. 先確定目標與範圍\n2. 列出所有需求\n"
-        "3. 排出時程與里程碑\n4. 分配工作給團隊成員\n5. 定期檢查進度"
+    fake_client.reply = completion(
+        {"text": "當然可以！以下是規劃步驟：\n1. 先確定目標\n2. 列出需求\n3. 排時程\n4. 分配工作"},
+        cost=0.0001,
     )
-    assert len(answer) > 2 * len(raw) + 40
-    fake_client.reply = completion({"text": answer}, cost=0.0001)
-    r = await svc.clean(raw, audio_seconds=2)
-    assert r.text == raw and r.fallback_reason == "suspicious"
+    r = await svc.clean("可以幫我規劃一下嗎", audio_seconds=2)
+    assert r.text == "可以幫我規劃一下嗎" and r.fallback_reason == "suspicious"
 
 
 async def test_prompt_carries_dictionary_and_transcript(svc, fake_client, dictionary):
@@ -341,15 +337,37 @@ async def test_a_reply_without_text_is_suspicious_but_was_paid_for(svc, fake_cli
     assert spend_rows(conn) == [("cleanup", "google/gemini-3.1-flash-lite", 0.0004, 120, 30)]
 
 
-async def test_a_reply_may_have_twice_the_length_of_the_text_plus_forty(svc, fake_client, conn):
-    raw = "你好嗎"  # 3 characters: up to 46 are fine
-    fake_client.reply = completion({"text": "好" * 46})
+@pytest.mark.parametrize(("length", "longest_ok"), [(9, 33), (10, 35), (100, 170)])
+async def test_a_reply_may_be_one_and_a_half_times_the_text_plus_twenty_characters(
+    svc, fake_client, conn, length, longest_ok
+):
+    # The limit is 1.5 * length + 20 characters: 33.5, 35 and 170 for these three lengths.
+    raw = "字" * length
+    fake_client.reply = completion({"text": "好" * longest_ok})
     r = await svc.clean(raw, audio_seconds=1)
     assert (r.cleaned, r.fallback_reason) == (True, None)
-    fake_client.reply = completion({"text": "好" * 47})
+    fake_client.reply = completion({"text": "好" * (longest_ok + 1)})
     r = await svc.clean(raw, audio_seconds=1)
     assert (r.text, r.cleaned, r.fallback_reason) == (raw, False, "suspicious")
     assert len(spend_rows(conn)) == 2  # the rejected reply cost money too
+
+
+async def test_a_long_cleanup_that_grows_by_a_third_is_not_taken_for_an_answer(svc, fake_client):
+    # Punctuation, line breaks and the numbers of a list make a cleanup longer than what was said.
+    raw = (
+        "週末的待辦事項 打掃客廳和廚房 把換季的衣服收進衣櫃 去郵局寄包裹給姊姊 預約下個月的健康檢查"
+        " 整理這個月的發票 幫陽台的植物澆水施肥 修好書房的檯燈 洗車並且加滿油 買下週要用的食材"
+        " 回覆朋友的生日邀請"
+    )
+    cleaned = (
+        "週末的待辦事項：\n1. 打掃客廳和廚房\n2. 把換季的衣服收進衣櫃\n3. 去郵局寄包裹給姊姊\n"
+        "4. 預約下個月的健康檢查\n5. 整理這個月的發票\n6. 幫陽台的植物澆水施肥\n7. 修好書房的檯燈\n"
+        "8. 洗車並且加滿油\n9. 買下週要用的食材\n10. 回覆朋友的生日邀請"
+    )
+    assert len(raw) >= 100 and 1.25 <= len(cleaned) / len(raw) <= 1.35  # 102 -> 134 characters
+    fake_client.reply = completion({"text": cleaned})
+    r = await svc.clean(raw, audio_seconds=25)
+    assert (r.text, r.cleaned, r.fallback_reason) == (cleaned, True, None)
 
 
 # --- the call fails -----------------------------------------------------------------------------
