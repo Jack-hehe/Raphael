@@ -8,6 +8,8 @@ import { createHistory } from "./pages/history";
 import { createHome } from "./pages/home";
 import { createSettings } from "./pages/settings";
 import { DeviceState } from "./device";
+import { ModelDownload } from "./models";
+import { mountOnboarding } from "./onboarding";
 import type { AppContext, DeviceSettings, MainEvent, Page, PageId } from "./types";
 import { Undoable } from "./undo";
 import { type IconName, ico, toaster } from "./ui";
@@ -58,8 +60,10 @@ prefersDark.addEventListener("change", applyTheme);
 
 async function start(): Promise<void> {
   applyTheme();
+  let deviceRead = false;
   try {
     await device.refresh();
+    deviceRead = true;
   } catch (err) {
     console.error("main: could not read the device settings", err);
   }
@@ -130,7 +134,27 @@ async function start(): Promise<void> {
     console.warn("main: no events from the core", err);
   });
 
-  go("home");
+  // Until the first-run guide is done it takes the place of the pages. (Settings that could not be
+  // read are no reason to start a guide for someone who has been through it.)
+  if (deviceRead && !device.get().onboarded) {
+    const body = document.querySelector<HTMLElement>(".wbody")!;
+    const guide = document.getElementById("ob")!;
+    body.hidden = true;
+    guide.hidden = false;
+    mountOnboarding(
+      guide,
+      () => {
+        guide.hidden = true;
+        body.hidden = false;
+        go("home");
+      },
+      ctx,
+    );
+  } else {
+    go("home");
+    // A guide that was left before the speech models were all there: fetch what is missing.
+    void new ModelDownload({ status: api.modelsStatus, ensure: api.modelsEnsure }).start();
+  }
 }
 
 start().catch((err) => console.error("main: could not start", err));

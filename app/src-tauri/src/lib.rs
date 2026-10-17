@@ -5,6 +5,7 @@ pub mod commands;
 pub mod core_process;
 pub mod device_settings;
 mod dictation;
+mod first_run;
 pub mod holdtap;
 pub mod hotkey;
 mod notices;
@@ -138,6 +139,11 @@ pub fn run() {
             // theme, autostart) and keeps the core told which microphone to use. It takes the
             // overlay, the core and the hotkeys from the app state, so it comes after them.
             commands::start(app.handle());
+
+            // ---- First run ----
+            // Until the first-run guide has been gone through, the main window opens by itself.
+            // It reads the device settings, so it comes after them.
+            first_run::start(app.handle());
 
             Ok(())
         })
