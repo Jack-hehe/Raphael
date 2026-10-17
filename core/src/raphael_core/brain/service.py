@@ -9,8 +9,8 @@ does not say is here:
   RpcError(INVALID_PARAMS), and so is a value that a store refuses (it raises ValueError,
   KeyError or TypeError). A param that may be null may also be left out. A whole number is an
   int and a bool is no number.
-- Dictation does not fail over bookkeeping. If the history cannot be written, the text still
-  comes back (with id None); if the key store fails, the text is pasted as spoken.
+- A dictation is not lost to bookkeeping. If the history cannot be written, the text still comes
+  back (with id None); if the key store fails, it comes back as spoken, without cleanup.
 - The status of OpenRouter is the latest contact: a key check or a cleanup call. It starts as
   "unknown" and it is "no_key" for as long as no key is stored, whatever happened before.
 - Nothing here logs the dictated text, a key or the message of a failure. A failure of OpenRouter

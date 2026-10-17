@@ -370,9 +370,7 @@ async def test_replacements_apply_to_the_cleaned_text(router, fake_client, keys)
 
 async def test_replacements_apply_to_cleaned_text_that_has_hiragana(router, fake_client, keys):
     keys.set(KEY)
-    await router.call(
-        "dictionary.add", {"word": "ラファエル", "misheard": ["ラファエロ"]}
-    )
+    await router.call("dictionary.add", {"word": "ラファエル", "misheard": ["ラファエロ"]})
     fake_client.next_completion = completion({"text": "ラファエロさんに会います。"})
     r = await finalize(router, "ラファエロさんに会います")
     assert r["raw_text"] == "ラファエルさんに会います"
