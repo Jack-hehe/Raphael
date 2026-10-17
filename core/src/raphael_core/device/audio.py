@@ -151,7 +151,14 @@ def _read_devices_again() -> bool:
             sd._initialize()
         except Exception:
             logger.warning("PortAudio could not be restarted", exc_info=True)
-            return False
+            if getattr(sd, "_initialized", 1) != 0:
+                return False  # it was never stopped, so nothing was lost
+            # Stopped, and not started again: no recorder could ever open a stream. Try once more.
+            try:
+                sd._initialize()
+            except Exception:
+                logger.error("PortAudio is stopped and could not be started", exc_info=True)
+                return False
     return True
 
 
@@ -204,14 +211,20 @@ class MicRecorder:
             return
         capture.stopping = True
         assert capture.stream is not None
-        for step in (capture.stream.stop, capture.stream.close):
-            try:
-                step()
-            except Exception:
-                logger.warning("The microphone stream did not stop cleanly", exc_info=True)
+        stopped = True
+        try:
+            capture.stream.stop()
+        except Exception:
+            stopped = False
+            logger.warning("The microphone stream did not stop cleanly", exc_info=True)
+        try:
+            capture.stream.close()
+        except Exception:
+            logger.warning("The microphone stream did not close cleanly", exc_info=True)
         with _active_lock:
             _active -= 1
-        if capture.resampler is not None and self.error is None:
+        # A stream that would not stop may still be in its callback, which uses the resampler.
+        if stopped and capture.resampler is not None and self.error is None:
             try:
                 tail = resample_block(capture.resampler, np.zeros(0, np.float32), last=True)
                 if tail.size:
@@ -244,7 +257,11 @@ class MicRecorder:
                 channels=1,
                 dtype="float32",
                 device=index,
-                callback=lambda indata, frames, time_info, status: self._deliver(capture, indata),
+                blocksize=rate // 50,  # 20 ms, so the level meter moves 50 times a second
+                latency="low",
+                callback=lambda indata, frames, time_info, status: self._deliver(
+                    capture, indata, status
+                ),
                 finished_callback=lambda: self._finished(capture),
             )
             capture.stream = stream
@@ -262,8 +279,10 @@ class MicRecorder:
             _active += 1
         return capture
 
-    def _deliver(self, capture: _Capture, indata: np.ndarray) -> None:
+    def _deliver(self, capture: _Capture, indata: np.ndarray, status) -> None:
         """PortAudio's callback: copy, resample, pass on. It must not wait for anything."""
+        if status:
+            logger.debug("PortAudio reported: %s", status)  # an overflow means lost sound
         try:
             block = indata[:, 0].copy()  # PortAudio reuses its buffer once this returns
             if capture.resampler is not None:
