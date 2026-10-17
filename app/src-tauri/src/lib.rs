@@ -1,6 +1,8 @@
 //! Raphael's desktop shell: a tray app with a hidden main window that starts with Windows and
 //! allows only one running copy.
 
+pub mod holdtap;
+pub mod hotkey;
 mod tray;
 
 use tauri::{AppHandle, Manager, Runtime, WindowEvent, plugin::TauriPlugin};
@@ -67,6 +69,24 @@ pub fn run() {
                     log::info!("tray command: {command:?}");
                 }
             });
+
+            // ---- Hotkeys ----
+            // The hotkey service reports key events on this channel. For now they are only
+            // logged; the dictation controller takes over the receiving end. The service sits in
+            // the app state as an `Arc` so the controller can hold it too. If the keyboard hook
+            // cannot start, the app runs on without hotkeys.
+            let (hotkey_events, mut hotkey_event_rx) = tokio::sync::mpsc::unbounded_channel();
+            match hotkey::HotkeyService::start(&hotkey::Bindings::default(), hotkey_events) {
+                Ok(service) => {
+                    app.manage(std::sync::Arc::new(service));
+                    tauri::async_runtime::spawn(async move {
+                        while let Some(event) = hotkey_event_rx.recv().await {
+                            log::info!("hotkey event: {event:?}");
+                        }
+                    });
+                }
+                Err(err) => log::error!("global hotkeys are off: {err}"),
+            }
 
             Ok(())
         })
