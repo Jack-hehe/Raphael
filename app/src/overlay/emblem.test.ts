@@ -226,6 +226,17 @@ test("vanish plays for 0.467 s and then the emblem is hidden", () => {
   expect(e.phase).toBe("hidden");
 });
 
+test("vanish while already vanishing does not start the animation over", () => {
+  const e = new Emblem(fakeCanvas(), 150, { visible: true });
+  e.vanish();
+  e.step(0.3);
+  e.vanish();
+  expect(e.phase).toBe("vanish");
+  // 0.3 s in already: hidden at 0.467 s, not 0.3 s later than that
+  e.step(0.17);
+  expect(e.phase).toBe("hidden");
+});
+
 test("vanish does nothing to a hidden emblem", () => {
   const e = new Emblem(fakeCanvas(), 150);
   e.vanish();

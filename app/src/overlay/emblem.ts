@@ -535,7 +535,8 @@ export class Emblem {
   }
 
   vanish(): void {
-    if (this._phase === "hidden") return;
+    // Already going: starting over would make the emblem grow back and vanish twice.
+    if (this._phase === "hidden" || this._phase === "vanish") return;
     this.reduce = prefersReducedMotion();
     this._phase = this.reduce ? "hidden" : "vanish";
     this.pt = 0;
