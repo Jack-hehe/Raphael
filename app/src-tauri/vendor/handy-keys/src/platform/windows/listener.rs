@@ -20,6 +20,18 @@
 //! modifier had been released. The hold ended early, and a chord such as Right Alt+V never
 //! matched, so a hotkey on that chord (Raphael's PasteLast) never fired.
 //!
+//! A swallowed key whose key-up is missed (an elevated window took focus, the hook timed out)
+//! would stay "held" for good, so a bare V would fire PasteLast and Esc would become Right
+//! Alt+Esc. Guard: a physically held key keeps producing auto-repeat key-downs, so each swallowed
+//! key remembers the time of its last event (`SwallowedModifiers`), and when a new non-modifier
+//! key goes down (`handle_regular_key`), a swallowed key that has been silent for more than
+//! `STALE_SWALLOW_MS` and that the async key state does not report held is forgotten, and the
+//! reconciliation then releases it. In Right Alt+V the Alt repeats until V goes down, so the
+//! chord works; the auto-repeats of a V that was accepted do not ask again (`last_key_down`),
+//! because Windows repeats the V and not the Alt while V is down. Limit: Alt held, another key
+//! pressed and released, then 1.5 s of silence with Alt still held, and the next key press ends
+//! the Alt hold (Windows stops repeating the Alt once another key was pressed).
+//!
 //! Second change: injected keyboard events (LLKHF_INJECTED, such as Raphael's own paste with its
 //! SendInput key-ups and the Ctrl+V chord sent by enigo) pass the hook untouched and never count
 //! for hotkeys or get swallowed, unless the program calls `accept_injected_input(true)` (only
@@ -28,8 +40,9 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -150,8 +163,12 @@ struct HookContext {
     /// Modifier keys whose key-down a hotkey swallowed and whose key-up has not been seen yet.
     /// While a key is in here its auto-repeats and its key-up are swallowed too, and
     /// reconciliation treats it as physically held (the system's async key state never saw the
-    /// swallowed key-down). Cleared by a session change or resume, where key-ups get lost.
-    swallowed_modifiers: Modifiers,
+    /// swallowed key-down). Cleared by a session change or resume, where key-ups get lost, and
+    /// per key when it has been silent for `STALE_SWALLOW_MS` as another key goes down.
+    swallowed_modifiers: SwallowedModifiers,
+    /// The last non-modifier key that went down and has not come up yet. A key-down of the same
+    /// key again is an auto-repeat.
+    last_key_down: Option<Key>,
 }
 
 thread_local! {
@@ -282,8 +299,14 @@ fn adoptable_modifiers(
 /// unavoidable with this API — macOS avoids it because CGEvent flags are
 /// stamped per event.
 fn reconcile_modifiers(ctx: &mut HookContext) {
+    reconcile_modifiers_from(ctx, physical_modifiers());
+}
+
+/// [`reconcile_modifiers`] with the async key state given, so that the logic can be tested
+/// without reading the real keyboard.
+fn reconcile_modifiers_from(ctx: &mut HookContext, async_held: Modifiers) {
     // Keys whose down we swallowed never reached the async key state but are still held.
-    let physical = physical_modifiers() | ctx.swallowed_modifiers;
+    let physical = async_held | ctx.swallowed_modifiers.held();
     // Phantom Ctrl only exists while AltGr is held; if LCtrl reads as up,
     // the phantom is gone (covers a phantom key-up swallowed by a secure
     // desktop transition, which would otherwise suppress CTRL_LEFT adoption
@@ -314,11 +337,18 @@ fn reconcile_modifiers(ctx: &mut HookContext) {
 fn reconcile_modifiers_in_context() {
     HOOK_CONTEXT.with(|ctx_cell| {
         if let Some(ctx) = ctx_cell.borrow_mut().as_mut() {
-            // The key-ups of swallowed keys may have gone to the secure desktop.
-            ctx.swallowed_modifiers = Modifiers::empty();
-            reconcile_modifiers(ctx);
+            reconcile_after_session_change(ctx, physical_modifiers());
         }
     });
+}
+
+/// What a session change or a resume does to the hook state, given the async key state. The
+/// key-ups of swallowed keys (and of an ordinary key that was down) may have gone to the secure
+/// desktop, so the hook forgets them and takes the system's word for what is held.
+fn reconcile_after_session_change(ctx: &mut HookContext, async_held: Modifiers) {
+    ctx.swallowed_modifiers.clear();
+    ctx.last_key_down = None;
+    reconcile_modifiers_from(ctx, async_held);
 }
 
 /// Wndproc for the watcher window. (The `windows` crate's DefWindowProcW is
@@ -466,7 +496,8 @@ pub(crate) fn spawn(blocking_hotkeys: Option<BlockingHotkeys>) -> Result<Windows
                 blocking_hotkeys: thread_blocking,
                 altgr_phantom_ctrl: false,
                 menu_mask_sent: false,
-                swallowed_modifiers: Modifiers::empty(),
+                swallowed_modifiers: SwallowedModifiers::default(),
+                last_key_down: None,
             });
         });
 
@@ -660,6 +691,7 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                     modifier,
                     is_key_down,
                     should_block,
+                    now_ms(),
                 );
 
                 // The hold ends once no Win/Alt modifier remains held; the
@@ -668,37 +700,16 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                     ctx.menu_mask_sent = false;
                 }
             } else {
-                // Non-modifier key: reconcile tracked modifiers against the
-                // physical keyboard first, so a key-up missed during a secure
-                // desktop transition can't stick a modifier onto this event.
-                // (Not done for modifier events: inside a low-level hook the
-                // async key state does not yet include the in-flight change,
-                // so reconciling there would fight the toggle logic above.)
-                reconcile_modifiers(ctx);
-
-                if let Some(key) = map_key(vk_code, scan_code, is_extended) {
-                    // Regular key event
-                    should_block = should_block_hotkey(
-                        &ctx.blocking_hotkeys,
-                        ctx.current_modifiers,
-                        Some(key),
-                    );
-
-                    // The shell can no longer see the key we are about to
-                    // swallow; without a substitute, releasing Win/Alt would
-                    // read as a lone tap and open the Start menu (#917).
-                    if needs_menu_mask(should_block, ctx.current_modifiers, ctx.menu_mask_sent) {
-                        ctx.menu_mask_sent = true;
-                        needs_mask = true;
-                    }
-
-                    let _ = ctx.event_sender.send(KeyEvent {
-                        modifiers: ctx.current_modifiers,
-                        key: Some(key),
-                        is_key_down,
-                        changed_modifier: None,
-                    });
-                }
+                // Non-modifier key (see `handle_regular_key`).
+                let outcome = handle_regular_key(
+                    ctx,
+                    map_key(vk_code, scan_code, is_extended),
+                    is_key_down,
+                    physical_modifiers(),
+                    now_ms(),
+                );
+                should_block = outcome.should_block;
+                needs_mask = outcome.needs_mask;
             }
         }
     });
@@ -839,30 +850,178 @@ fn needs_menu_mask(should_block: bool, modifiers: Modifiers, already_sent: bool)
     should_block && !already_sent && modifiers.intersects(MENU_MODIFIERS)
 }
 
+/// How long a swallowed modifier key may be silent before another key press treats it as
+/// released. While a key is physically held, Windows repeats it (the most recently pressed key
+/// repeats; the first repeat comes after the keyboard delay setting, at most 1 s), so a swallowed
+/// modifier that is really held produces an event at least every 1 s until some other key goes
+/// down. Longer than that means its key-up was missed (an elevated window took focus, the hook
+/// timed out, ...): see `SwallowedModifiers::stale`. In Right Alt+V the Alt repeats until V goes
+/// down, so the last Alt event is recent when V arrives and the chord still works.
+const STALE_SWALLOW_MS: u64 = 1500;
+
+/// Milliseconds on a monotonic clock, counted from the first call. Only differences matter.
+fn now_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// The modifier keys whose key-down a hotkey swallowed and whose key-up has not been seen, each
+/// with the time of its last event (the key-down or the latest auto-repeat).
+#[derive(Debug)]
+struct SwallowedModifiers {
+    held: Modifiers,
+    /// Clock value of each key's last event, in `MODIFIER_KEYS` order; meaningful while the key
+    /// is in `held`.
+    last_event_ms: [u64; MODIFIER_KEYS.len()],
+}
+
+impl Default for SwallowedModifiers {
+    fn default() -> Self {
+        Self {
+            held: Modifiers::empty(),
+            last_event_ms: [0; MODIFIER_KEYS.len()],
+        }
+    }
+}
+
+impl SwallowedModifiers {
+    fn held(&self) -> Modifiers {
+        self.held
+    }
+
+    /// Records a swallowed key-down (the first or a repeat) of `modifier` at `now_ms`.
+    fn touch(&mut self, modifier: Modifiers, now_ms: u64) {
+        self.held.insert(modifier);
+        if let Some(index) = MODIFIER_KEYS.iter().position(|(_, m)| *m == modifier) {
+            self.last_event_ms[index] = now_ms;
+        }
+    }
+
+    /// The swallowed keys to treat as released: silent for more than `STALE_SWALLOW_MS` at
+    /// `now_ms` and not reported held by the system (`reported_held`, the async key state).
+    /// A pure function of its arguments.
+    fn stale(&self, now_ms: u64, reported_held: Modifiers) -> Modifiers {
+        let mut stale = Modifiers::empty();
+        for (index, (_, modifier)) in MODIFIER_KEYS.iter().enumerate() {
+            let silent_for = now_ms.saturating_sub(self.last_event_ms[index]);
+            if self.held.contains(*modifier)
+                && !reported_held.contains(*modifier)
+                && silent_for > STALE_SWALLOW_MS
+            {
+                stale |= *modifier;
+            }
+        }
+        stale
+    }
+
+    fn forget(&mut self, gone: Modifiers) {
+        self.held.remove(gone);
+    }
+
+    fn clear(&mut self) {
+        self.held = Modifiers::empty();
+    }
+}
+
 /// Whether a modifier key event must be swallowed, and bookkeeping for keys held swallowed.
 ///
 /// `blocked_by_hotkey` is what the hotkey table said for this event; for an auto-repeat it is
 /// false, because a repeat does not change the modifier state. A key-down that a hotkey blocks
 /// starts a swallowed hold; the repeats and the key-up of that hold are swallowed too, and the
-/// key-up ends it. Any other event follows the hotkey table.
+/// key-up ends it. The key-up of a key whose key-down was not swallowed is never swallowed,
+/// whatever the table says after it: the app saw the press, so it must see the release, or the
+/// key would stay down system-wide.
 fn swallow_modifier_event(
-    swallowed: &mut Modifiers,
+    swallowed: &mut SwallowedModifiers,
     modifier: Modifiers,
     is_key_down: bool,
     blocked_by_hotkey: bool,
+    now_ms: u64,
 ) -> bool {
     if is_key_down {
-        if blocked_by_hotkey {
-            swallowed.insert(modifier);
+        let swallow = blocked_by_hotkey || swallowed.held.contains(modifier);
+        if swallow {
+            swallowed.touch(modifier, now_ms);
         }
-        blocked_by_hotkey || swallowed.contains(modifier)
-    } else if swallowed.contains(modifier) {
-        swallowed.remove(modifier);
+        swallow
+    } else if swallowed.held.contains(modifier) {
+        swallowed.forget(modifier);
         true
     } else {
-        // The app saw this key go down, so it must see it come up, whatever the table says now.
         false
     }
+}
+
+/// What the hook decides for a key event, besides sending the `KeyEvent`.
+#[derive(Debug, Default)]
+struct KeyOutcome {
+    /// Swallow the event.
+    should_block: bool,
+    /// Inject the menu mask once the event is handled.
+    needs_mask: bool,
+}
+
+/// Handles a key event that is not a modifier key, given the async key state and the clock
+/// (`key` is `None` for a key the crate does not know). Everything the hook does for such a key
+/// except the system calls, so that it can be tested without a keyboard.
+fn handle_regular_key(
+    ctx: &mut HookContext,
+    key: Option<Key>,
+    is_key_down: bool,
+    async_held: Modifiers,
+    now_ms: u64,
+) -> KeyOutcome {
+    let is_repeat = match key {
+        Some(key) if is_key_down => ctx.last_key_down.replace(key) == Some(key),
+        Some(key) => {
+            if ctx.last_key_down == Some(key) {
+                ctx.last_key_down = None;
+            }
+            false
+        }
+        None => false,
+    };
+
+    // A swallowed modifier that has been silent too long lost its key-up: forget it before the
+    // reconciliation below, which then releases it from the tracked state. Only a new key press
+    // asks the question. The release of a chord key and the repeats of a key that was already
+    // accepted come while the modifier is quiet (Windows repeats the most recent key only), and
+    // must not undo the chord.
+    if is_key_down && !is_repeat {
+        let stale = ctx.swallowed_modifiers.stale(now_ms, async_held);
+        ctx.swallowed_modifiers.forget(stale);
+    }
+
+    // Reconcile tracked modifiers against the physical keyboard first, so a key-up missed during
+    // a secure desktop transition can't stick a modifier onto this event. (Not done for modifier
+    // events: inside a low-level hook the async key state does not yet include the in-flight
+    // change, so reconciling there would fight the toggle logic.)
+    reconcile_modifiers_from(ctx, async_held);
+
+    let mut outcome = KeyOutcome::default();
+    if let Some(key) = key {
+        outcome.should_block =
+            should_block_hotkey(&ctx.blocking_hotkeys, ctx.current_modifiers, Some(key));
+
+        // The shell can no longer see the key we are about to swallow; without a substitute,
+        // releasing Win/Alt would read as a lone tap and open the Start menu (#917).
+        if needs_menu_mask(
+            outcome.should_block,
+            ctx.current_modifiers,
+            ctx.menu_mask_sent,
+        ) {
+            ctx.menu_mask_sent = true;
+            outcome.needs_mask = true;
+        }
+
+        let _ = ctx.event_sender.send(KeyEvent {
+            modifiers: ctx.current_modifiers,
+            key: Some(key),
+            is_key_down,
+            changed_modifier: None,
+        });
+    }
+    outcome
 }
 
 /// Inject a press+release of the menu mask key via SendInput. Must be called
@@ -1163,9 +1322,10 @@ mod tests {
     fn reconcile_clears_mask_flag_when_hold_ends_off_desktop() {
         // Win+L: the Win-up happens on the secure desktop and never reaches
         // the hook. Reconciliation emits the stale release and must also
-        // clear the mask flag so the next hold gets its own mask. (No keys
-        // are physically held while tests run, so GetAsyncKeyState reports
-        // everything up and CMD_LEFT reads as stale.)
+        // clear the mask flag so the next hold gets its own mask. (The async
+        // key state is passed in as "nothing held", the answer on the secure
+        // desktop; upstream called GetAsyncKeyState here, which fails when a
+        // key is really held while the tests run.)
         let (tx, rx) = mpsc::channel();
         let mut ctx = HookContext {
             event_sender: tx,
@@ -1173,9 +1333,10 @@ mod tests {
             blocking_hotkeys: None,
             altgr_phantom_ctrl: false,
             menu_mask_sent: true,
-            swallowed_modifiers: Modifiers::empty(),
+            swallowed_modifiers: SwallowedModifiers::default(),
+            last_key_down: None,
         };
-        reconcile_modifiers(&mut ctx);
+        reconcile_modifiers_from(&mut ctx, Modifiers::empty());
         assert_eq!(ctx.current_modifiers, Modifiers::empty());
         assert!(!ctx.menu_mask_sent);
         // The stale CMD_LEFT was cleared via a synthetic release event.
@@ -1237,22 +1398,24 @@ mod tests {
 
     #[test]
     fn swallowed_modifier_repeats_and_release_are_swallowed_too() {
-        let mut swallowed = Modifiers::empty();
+        let mut swallowed = SwallowedModifiers::default();
         // The first key-down: the hotkey table blocks it.
         assert!(swallow_modifier_event(
             &mut swallowed,
             Modifiers::OPT_RIGHT,
             true,
-            true
+            true,
+            0
         ));
-        assert_eq!(swallowed, Modifiers::OPT_RIGHT);
+        assert_eq!(swallowed.held(), Modifiers::OPT_RIGHT);
         // Auto-repeats leave the modifier state alone, so the table says "not blocked".
         for _ in 0..2 {
             assert!(swallow_modifier_event(
                 &mut swallowed,
                 Modifiers::OPT_RIGHT,
                 true,
-                false
+                false,
+                30
             ));
         }
         // The release is swallowed and ends the hold.
@@ -1260,47 +1423,53 @@ mod tests {
             &mut swallowed,
             Modifiers::OPT_RIGHT,
             false,
-            false
+            false,
+            60
         ));
-        assert_eq!(swallowed, Modifiers::empty());
+        assert_eq!(swallowed.held(), Modifiers::empty());
         // The next press that no hotkey blocks passes, with its release.
         assert!(!swallow_modifier_event(
             &mut swallowed,
             Modifiers::OPT_RIGHT,
             true,
-            false
+            false,
+            90
         ));
         assert!(!swallow_modifier_event(
             &mut swallowed,
             Modifiers::OPT_RIGHT,
             false,
-            false
+            false,
+            120
         ));
     }
 
     #[test]
     fn only_the_swallowed_modifier_is_swallowed() {
-        let mut swallowed = Modifiers::empty();
+        let mut swallowed = SwallowedModifiers::default();
         assert!(swallow_modifier_event(
             &mut swallowed,
             Modifiers::OPT_RIGHT,
             true,
-            true
+            true,
+            0
         ));
         // Left Shift is an ordinary key: pressed and released while Right Alt is held.
         assert!(!swallow_modifier_event(
             &mut swallowed,
             Modifiers::SHIFT_LEFT,
             true,
-            false
+            false,
+            10
         ));
         assert!(!swallow_modifier_event(
             &mut swallowed,
             Modifiers::SHIFT_LEFT,
             false,
-            false
+            false,
+            20
         ));
-        assert_eq!(swallowed, Modifiers::OPT_RIGHT);
+        assert_eq!(swallowed.held(), Modifiers::OPT_RIGHT);
     }
 
     #[test]
@@ -1310,57 +1479,173 @@ mod tests {
         // is now exactly Right Alt, so the hotkey table says "blocked" for this Shift release. It
         // must still reach the app: the app saw the press, and a swallowed release would leave
         // Shift stuck down system-wide.
-        let mut swallowed = Modifiers::empty();
+        let mut swallowed = SwallowedModifiers::default();
         assert!(!swallow_modifier_event(
             &mut swallowed,
             Modifiers::SHIFT_LEFT,
             true,
-            false
+            false,
+            0
         ));
         assert!(!swallow_modifier_event(
             &mut swallowed,
             Modifiers::SHIFT_LEFT,
             false,
-            true
+            true,
+            100
         ));
-        assert_eq!(swallowed, Modifiers::empty());
+        assert_eq!(swallowed.held(), Modifiers::empty());
     }
 
     #[test]
     fn the_release_of_a_swallowed_key_is_swallowed_whatever_the_table_says() {
-        let mut swallowed = Modifiers::empty();
+        let mut swallowed = SwallowedModifiers::default();
         assert!(swallow_modifier_event(
             &mut swallowed,
             Modifiers::CMD_LEFT,
             true,
-            true
+            true,
+            0
         ));
         // The release changes the tracked state to "nothing", which no hotkey blocks.
         assert!(swallow_modifier_event(
             &mut swallowed,
             Modifiers::CMD_LEFT,
             false,
-            false
+            false,
+            50
         ));
-        assert_eq!(swallowed, Modifiers::empty());
+        assert_eq!(swallowed.held(), Modifiers::empty());
+    }
+
+    #[test]
+    fn the_staleness_limit_is_longer_than_the_longest_repeat_delay() {
+        // Windows waits at most 1 s before a held key starts to repeat.
+        const { assert!(STALE_SWALLOW_MS > 1000) };
+    }
+
+    #[test]
+    fn a_swallowed_modifier_is_stale_only_after_the_limit() {
+        let mut swallowed = SwallowedModifiers::default();
+        swallow_modifier_event(&mut swallowed, Modifiers::OPT_RIGHT, true, true, 1000);
+        assert_eq!(
+            swallowed.stale(1000, Modifiers::empty()),
+            Modifiers::empty()
+        );
+        // Exactly at the limit it still counts as held; one millisecond later it does not.
+        assert_eq!(
+            swallowed.stale(1000 + STALE_SWALLOW_MS, Modifiers::empty()),
+            Modifiers::empty()
+        );
+        assert_eq!(
+            swallowed.stale(1000 + STALE_SWALLOW_MS + 1, Modifiers::empty()),
+            Modifiers::OPT_RIGHT
+        );
+        // A clock that reads earlier than the last event is never stale.
+        assert_eq!(swallowed.stale(10, Modifiers::empty()), Modifiers::empty());
+    }
+
+    #[test]
+    fn a_swallowed_modifier_the_system_reports_held_is_not_stale() {
+        let mut swallowed = SwallowedModifiers::default();
+        swallow_modifier_event(&mut swallowed, Modifiers::OPT_RIGHT, true, true, 0);
+        let late = STALE_SWALLOW_MS * 10;
+        assert_eq!(
+            swallowed.stale(late, Modifiers::OPT_RIGHT),
+            Modifiers::empty()
+        );
+        // Another key being held says nothing about this one.
+        assert_eq!(
+            swallowed.stale(late, Modifiers::CTRL_LEFT),
+            Modifiers::OPT_RIGHT
+        );
+    }
+
+    #[test]
+    fn auto_repeats_keep_a_swallowed_modifier_fresh() {
+        let mut swallowed = SwallowedModifiers::default();
+        swallow_modifier_event(&mut swallowed, Modifiers::OPT_RIGHT, true, true, 0);
+        // The user keeps holding: Windows repeats the key every ~30 ms after the first delay.
+        for at in (500..5000).step_by(30) {
+            assert!(swallow_modifier_event(
+                &mut swallowed,
+                Modifiers::OPT_RIGHT,
+                true,
+                false,
+                at
+            ));
+        }
+        assert_eq!(
+            swallowed.stale(5000, Modifiers::empty()),
+            Modifiers::empty()
+        );
+        assert_eq!(
+            swallowed.stale(4970 + STALE_SWALLOW_MS + 1, Modifiers::empty()),
+            Modifiers::OPT_RIGHT
+        );
+    }
+
+    #[test]
+    fn each_swallowed_modifier_ages_on_its_own() {
+        let mut swallowed = SwallowedModifiers::default();
+        swallow_modifier_event(&mut swallowed, Modifiers::OPT_RIGHT, true, true, 0);
+        swallow_modifier_event(&mut swallowed, Modifiers::CTRL_RIGHT, true, true, 1000);
+        let now = STALE_SWALLOW_MS + 1;
+        assert_eq!(
+            swallowed.stale(now, Modifiers::empty()),
+            Modifiers::OPT_RIGHT
+        );
+        swallowed.forget(Modifiers::OPT_RIGHT);
+        assert_eq!(swallowed.held(), Modifiers::CTRL_RIGHT);
+        assert_eq!(swallowed.stale(now, Modifiers::empty()), Modifiers::empty());
+        assert_eq!(
+            swallowed.stale(1000 + STALE_SWALLOW_MS + 1, Modifiers::empty()),
+            Modifiers::CTRL_RIGHT
+        );
+    }
+
+    /// A hook context in the middle of a Right Alt hold: Right Alt (dictation) and Right Alt+V
+    /// (paste last) are blocking hotkeys, Right Alt is tracked, and its key-down was swallowed
+    /// at `since_ms` (its last event). Nothing here reads the real keyboard.
+    fn right_alt_held_since(since_ms: u64) -> (HookContext, mpsc::Receiver<KeyEvent>) {
+        use crate::types::Hotkey;
+        let mut hotkeys = std::collections::HashSet::new();
+        hotkeys.insert(Hotkey::new(Modifiers::OPT_RIGHT, None).unwrap());
+        hotkeys.insert(Hotkey::new(Modifiers::OPT_RIGHT, Key::V).unwrap());
+        let mut swallowed = SwallowedModifiers::default();
+        assert!(swallow_modifier_event(
+            &mut swallowed,
+            Modifiers::OPT_RIGHT,
+            true,
+            true,
+            since_ms
+        ));
+        let (tx, rx) = mpsc::channel();
+        let ctx = HookContext {
+            event_sender: tx,
+            current_modifiers: Modifiers::OPT_RIGHT,
+            blocking_hotkeys: Some(std::sync::Arc::new(std::sync::Mutex::new(hotkeys))),
+            altgr_phantom_ctrl: false,
+            menu_mask_sent: true,
+            swallowed_modifiers: swallowed,
+            last_key_down: None,
+        };
+        (ctx, rx)
+    }
+
+    /// The events a context has sent so far.
+    fn sent(rx: &mpsc::Receiver<KeyEvent>) -> Vec<KeyEvent> {
+        rx.try_iter().collect()
     }
 
     #[test]
     fn reconcile_keeps_a_modifier_held_swallowed() {
         // Right Alt is held with its key-down swallowed, so GetAsyncKeyState reports it up. The
         // next other key must not make reconciliation release it.
-        let (tx, rx) = mpsc::channel();
-        let mut ctx = HookContext {
-            event_sender: tx,
-            current_modifiers: Modifiers::OPT_RIGHT,
-            blocking_hotkeys: None,
-            altgr_phantom_ctrl: false,
-            menu_mask_sent: true,
-            swallowed_modifiers: Modifiers::OPT_RIGHT,
-        };
-        reconcile_modifiers(&mut ctx);
+        let (mut ctx, rx) = right_alt_held_since(0);
+        reconcile_modifiers_from(&mut ctx, Modifiers::empty());
         assert_eq!(ctx.current_modifiers, Modifiers::OPT_RIGHT);
-        assert!(rx.try_recv().is_err(), "no synthetic release");
+        assert!(sent(&rx).is_empty(), "no synthetic release");
     }
 
     #[test]
@@ -1368,20 +1653,8 @@ mod tests {
         // Right Alt (dictation) is held with its key-down swallowed, and Right Alt+V is a hotkey
         // too. Pressing V reconciles first (see keyboard_hook_proc); that must not drop Right
         // Alt, or the chord would never match and the V would reach the foreground app.
-        use crate::types::Hotkey;
-        let mut hotkeys = std::collections::HashSet::new();
-        hotkeys.insert(Hotkey::new(Modifiers::OPT_RIGHT, None).unwrap());
-        hotkeys.insert(Hotkey::new(Modifiers::OPT_RIGHT, Key::V).unwrap());
-        let (tx, _rx) = mpsc::channel();
-        let mut ctx = HookContext {
-            event_sender: tx,
-            current_modifiers: Modifiers::OPT_RIGHT,
-            blocking_hotkeys: Some(std::sync::Arc::new(std::sync::Mutex::new(hotkeys))),
-            altgr_phantom_ctrl: false,
-            menu_mask_sent: true,
-            swallowed_modifiers: Modifiers::OPT_RIGHT,
-        };
-        reconcile_modifiers(&mut ctx);
+        let (mut ctx, _rx) = right_alt_held_since(0);
+        reconcile_modifiers_from(&mut ctx, Modifiers::empty());
         assert!(should_block_hotkey(
             &ctx.blocking_hotkeys,
             ctx.current_modifiers,
@@ -1391,26 +1664,140 @@ mod tests {
 
     #[test]
     fn a_session_change_forgets_swallowed_modifiers() {
-        let (tx, rx) = mpsc::channel();
-        HOOK_CONTEXT.with(|cell| {
-            *cell.borrow_mut() = Some(HookContext {
-                event_sender: tx,
-                current_modifiers: Modifiers::OPT_RIGHT,
-                blocking_hotkeys: None,
-                altgr_phantom_ctrl: false,
-                menu_mask_sent: true,
-                swallowed_modifiers: Modifiers::OPT_RIGHT,
-            });
-        });
-        reconcile_modifiers_in_context();
-        HOOK_CONTEXT.with(|cell| {
-            let ctx = cell.borrow_mut().take().unwrap();
-            assert_eq!(ctx.swallowed_modifiers, Modifiers::empty());
-            assert_eq!(ctx.current_modifiers, Modifiers::empty());
-        });
-        // No key is physically held while tests run: the stale Right Alt was released.
-        let release = rx.try_recv().expect("expected a synthetic release");
-        assert_eq!(release.changed_modifier, Some(Modifiers::OPT_RIGHT));
+        // The key-ups of swallowed keys may have gone to the secure desktop. The system reports
+        // nothing held, as it does on the lock screen.
+        let (mut ctx, rx) = right_alt_held_since(0);
+        reconcile_after_session_change(&mut ctx, Modifiers::empty());
+        assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::empty());
+        assert_eq!(ctx.current_modifiers, Modifiers::empty());
+        let events = sent(&rx);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].changed_modifier, Some(Modifiers::OPT_RIGHT));
+        assert!(!events[0].is_key_down);
+    }
+
+    #[test]
+    fn a_session_change_keeps_a_key_the_system_reports_held() {
+        let (mut ctx, rx) = right_alt_held_since(0);
+        reconcile_after_session_change(&mut ctx, Modifiers::OPT_RIGHT);
+        assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::empty());
+        assert_eq!(ctx.current_modifiers, Modifiers::OPT_RIGHT);
+        assert!(sent(&rx).is_empty());
+    }
+
+    #[test]
+    fn a_fresh_swallowed_modifier_makes_the_next_key_a_chord() {
+        // Right Alt+V: Right Alt repeats until V goes down, so its last event is recent.
+        let (mut ctx, rx) = right_alt_held_since(1000);
+        let outcome = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), 1200);
+        assert!(outcome.should_block, "Right Alt+V is a hotkey");
+        assert_eq!(ctx.current_modifiers, Modifiers::OPT_RIGHT);
+        assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::OPT_RIGHT);
+        let events = sent(&rx);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].key, Some(Key::V));
+        assert_eq!(events[0].modifiers, Modifiers::OPT_RIGHT);
+    }
+
+    #[test]
+    fn a_stale_swallowed_modifier_is_dropped_before_the_next_key_is_matched() {
+        // Right Alt's key-up was missed (an elevated window took focus, the hook timed out), so
+        // it has been "held" for seconds with no event. A bare V is just a V: it must not match
+        // Right Alt+V (PasteLast) and must not be swallowed.
+        let (mut ctx, rx) = right_alt_held_since(1000);
+        let now = 1000 + STALE_SWALLOW_MS + 1;
+        let outcome = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), now);
+        assert!(!outcome.should_block);
+        assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::empty());
+        assert_eq!(ctx.current_modifiers, Modifiers::empty());
+        let events = sent(&rx);
+        assert_eq!(events.len(), 2, "{events:?}");
+        // First the synthetic release of the stale key, so consumers recover ...
+        assert_eq!(events[0].changed_modifier, Some(Modifiers::OPT_RIGHT));
+        assert!(!events[0].is_key_down);
+        assert_eq!(events[0].modifiers, Modifiers::empty());
+        // ... then the V as a bare key, which no hotkey matches.
+        assert_eq!(events[1].key, Some(Key::V));
+        assert_eq!(events[1].modifiers, Modifiers::empty());
+    }
+
+    #[test]
+    fn the_staleness_boundary_is_exclusive() {
+        for (age, chord) in [
+            (STALE_SWALLOW_MS - 1, true),
+            (STALE_SWALLOW_MS, true),
+            (STALE_SWALLOW_MS + 1, false),
+        ] {
+            let (mut ctx, _rx) = right_alt_held_since(1000);
+            let outcome =
+                handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), 1000 + age);
+            assert_eq!(outcome.should_block, chord, "age {age} ms");
+        }
+    }
+
+    #[test]
+    fn a_stale_swallowed_modifier_the_system_still_reports_held_stays() {
+        let (mut ctx, rx) = right_alt_held_since(0);
+        let now = STALE_SWALLOW_MS * 4;
+        let outcome = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::OPT_RIGHT, now);
+        assert!(outcome.should_block);
+        assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::OPT_RIGHT);
+        assert_eq!(sent(&rx).len(), 1);
+    }
+
+    #[test]
+    fn only_a_key_press_drops_a_stale_swallowed_modifier() {
+        // The release of a chord key arrives long after Right Alt's last event (Right Alt does
+        // not repeat while V is down). It must still be part of the chord.
+        let (mut ctx, _rx) = right_alt_held_since(0);
+        let outcome = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), 100);
+        assert!(outcome.should_block);
+        let late = STALE_SWALLOW_MS * 3;
+        let outcome = handle_regular_key(&mut ctx, Some(Key::V), false, Modifiers::empty(), late);
+        assert!(outcome.should_block, "the V release belongs to the chord");
+        assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::OPT_RIGHT);
+    }
+
+    #[test]
+    fn holding_the_chord_key_down_keeps_the_chord_going() {
+        // V is held for longer than the limit. Windows repeats V, not Right Alt, so Right Alt's
+        // last event gets old; the repeats of the V that passed the check must not undo it.
+        let (mut ctx, rx) = right_alt_held_since(900);
+        let down = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), 1000);
+        assert!(down.should_block);
+        for at in (1500..5000).step_by(30) {
+            let repeat = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), at);
+            assert!(repeat.should_block, "repeat at {at} ms leaked");
+        }
+        assert_eq!(ctx.current_modifiers, Modifiers::OPT_RIGHT);
+        assert!(
+            sent(&rx).iter().all(|e| e.is_key_down && e.key.is_some()),
+            "no synthetic release"
+        );
+        // After the V is released, the next new key press finds Right Alt silent for too long.
+        let up = handle_regular_key(&mut ctx, Some(Key::V), false, Modifiers::empty(), 5100);
+        assert!(up.should_block);
+        let next = handle_regular_key(&mut ctx, Some(Key::X), true, Modifiers::empty(), 5200);
+        assert!(!next.should_block);
+        assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::empty());
+    }
+
+    #[test]
+    fn a_new_press_of_the_same_key_is_not_a_repeat() {
+        let (mut ctx, _rx) = right_alt_held_since(0);
+        let first = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), 100);
+        assert!(first.should_block);
+        let up = handle_regular_key(&mut ctx, Some(Key::V), false, Modifiers::empty(), 150);
+        assert!(up.should_block);
+        // Pressed again after the limit, with Right Alt silent since the first press.
+        let again = handle_regular_key(
+            &mut ctx,
+            Some(Key::V),
+            true,
+            Modifiers::empty(),
+            STALE_SWALLOW_MS + 200,
+        );
+        assert!(!again.should_block);
     }
 
     #[test]
