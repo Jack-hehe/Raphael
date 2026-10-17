@@ -570,3 +570,54 @@ def test_run_stdio_logs_a_failing_on_close_and_still_exits_cleanly():
     log = done.stderr.decode()
     assert "shutdown broke" in log and "Traceback" in log
     assert done.returncode == 0
+
+
+# --- claim_stdout: native code that writes to fd 1 cannot spoil the protocol ------------------
+
+_CHILD_NOISY = """
+import ctypes
+import os
+import sys
+from raphael_core.router import Router
+from raphael_core.stdio_server import claim_stdout, run_stdio
+
+protocol = claim_stdout()
+router = Router()
+
+async def noise(params):
+    os.write(1, b"noise through fd 1\\n")  # what a C library's printf does
+    print("a stray print", flush=True)
+    if sys.platform == "win32":  # and what native code that asks Windows for its stdout does
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetStdHandle.restype = ctypes.c_void_p
+        kernel32.WriteFile.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_void_p
+        ]
+        written = ctypes.c_ulong()
+        data = b"noise through the standard output handle\\n"
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        assert kernel32.WriteFile(handle, data, len(data), ctypes.byref(written), None)
+    return {"ok": True}
+
+router.register("t.noise", noise)
+run_stdio(router, output=protocol)
+"""
+
+
+def test_claim_stdout_sends_whatever_else_writes_to_fd_1_to_stderr():
+    requests = b"".join(
+        b'{"jsonrpc":"2.0","id":%d,"method":"t.noise","params":{}}\n' % i for i in (1, 2)
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", _CHILD_NOISY], input=requests, capture_output=True, timeout=60
+    )
+    assert done.returncode == 0, done.stderr.decode(errors="replace")
+    lines = done.stdout.split(b"\n")
+    assert lines[-1] == b""
+    messages = [json.loads(line) for line in lines[:-1]]  # every line is a JSON-RPC message
+    assert sorted(m["id"] for m in messages) == [1, 2]
+    assert all(m["result"] == {"ok": True} for m in messages)
+    assert done.stderr.count(b"noise through fd 1") == 2
+    assert done.stderr.count(b"a stray print") == 2
+    if sys.platform == "win32":
+        assert done.stderr.count(b"noise through the standard output handle") == 2

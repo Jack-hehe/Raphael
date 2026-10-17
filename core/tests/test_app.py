@@ -1396,12 +1396,21 @@ def entry_point(monkeypatch, tmp_path):
         seen.built = kwargs
         return fake_app
 
-    def run(app, on_close=None):
+    def run(app, on_close=None, *, output=None, stop=None):
         seen.steps.append("run_stdio")
         seen.ran = (app, on_close)
+        seen.output, seen.stop = output, stop
 
-    monkeypatch.setattr(entry, "build_app", build)
+    protocol = object()
+
+    def claim():  # the real one would take pytest's own stdout
+        seen.steps.append("claim_stdout")
+        return protocol
+
+    monkeypatch.setattr(app_module, "build_app", build)
     monkeypatch.setattr(entry, "run_stdio", run)
+    monkeypatch.setattr(entry, "claim_stdout", claim)
+    seen.protocol = protocol
     monkeypatch.setattr(entry.os, "_exit", lambda code: seen.exits.append(code))
     for name in ("RAPHAEL_DATA_DIR", "RAPHAEL_FAKE_AUDIO", "RAPHAEL_FAKE_LLM"):
         monkeypatch.delenv(name, raising=False)
@@ -1428,8 +1437,31 @@ def test_main_waits_for_numpy_before_it_reads_stdin(entry_point):
     # On Windows numpy's DLLs hang while loading if another thread is blocked reading the stdin
     # pipe, which is what run_stdio's reader is from its start (see the docstring of app.py).
     entry.main()
-    assert entry_point.steps == ["build_app", "wait_for_libraries", "run_stdio"]
+    assert entry_point.steps == ["claim_stdout", "build_app", "wait_for_libraries", "run_stdio"]
     assert entry_point.waited == entry.LIBRARIES_TIMEOUT_S
+
+
+def test_main_writes_the_protocol_to_the_stdout_it_claimed(entry_point):
+    entry.main()
+    assert entry_point.output is entry_point.protocol
+
+
+def test_main_claims_stdout_before_any_native_library_is_imported():
+    # OpenCC comes in with the app module; ONNX Runtime and PortAudio with its start-up thread.
+    code = (
+        "import sys\n"
+        "import raphael_core.__main__ as entry\n"
+        "def claim():\n"
+        "    loaded = {'opencc', 'numpy', 'sherpa_onnx', 'sounddevice'} & set(sys.modules)\n"
+        "    assert not loaded, loaded\n"
+        "    raise SystemExit(7)\n"
+        "entry.claim_stdout = claim\n"
+        "entry.main()\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code], check=False, capture_output=True, text=True, timeout=120
+    )
+    assert done.returncode == 7, done.stderr
 
 
 def test_main_without_a_setting_uses_the_real_things(entry_point):
