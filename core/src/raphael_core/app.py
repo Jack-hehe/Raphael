@@ -483,6 +483,7 @@ class App(Router):
         self._threads: list[threading.Thread] = []
         self._closing = threading.Event()
         self._closed = False
+        self._shutdown_requested = asyncio.Event()
 
         methods = {
             "core.hello": self._hello,
@@ -636,9 +637,15 @@ class App(Router):
         return {"protocol": PROTOCOL_VERSION, "version": __version__}
 
     async def _shutdown(self, params: dict) -> dict:
-        """Close what the app opened. The process ends when the app closes its stdin."""
+        """Close what the app opened, then end the process: the server stops once this is
+        answered (`wait_for_shutdown`), as it would when the app closes its stdin."""
         await self.aclose()
+        self._shutdown_requested.set()
         return {}
+
+    async def wait_for_shutdown(self) -> None:
+        """Return once `core.shutdown` has closed the app: run_stdio's `stop`."""
+        await self._shutdown_requested.wait()
 
     # --- models ---------------------------------------------------------------------------------
 

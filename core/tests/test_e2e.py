@@ -190,6 +190,21 @@ def test_core_shutdown_answers_and_the_core_exits_with_its_stdin(spawn):
     assert p.close() == 0
 
 
+def test_core_shutdown_ends_the_core_with_its_stdin_still_open(spawn):
+    p = spawn()
+    p.call("audio.devices")  # the speech side is up
+    assert p.call("core.shutdown")["result"] == {}
+    try:
+        code = p.proc.wait(timeout=30)  # and stdin stays open
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"the core did not exit after core.shutdown\n{p.log()}")
+    assert code == 0
+    for line in p.raw_stdout:
+        assert json.loads(line)["jsonrpc"] == "2.0"
+    assert b"Traceback" not in bytes(p.stderr), p.log()
+    assert b"Fatal Python error" not in bytes(p.stderr), p.log()
+
+
 def test_a_bad_request_is_an_error_not_a_crash(spawn):
     p = spawn()
     assert p.call("no.such.method")["error"]["code"] == -32601

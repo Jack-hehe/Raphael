@@ -40,7 +40,8 @@ def main() -> None:
     )
     # numpy hangs on Windows if it first loads while stdin is being read: see app.py.
     app.wait_for_libraries(LIBRARIES_TIMEOUT_S)
-    run_stdio(app, on_close=app.aclose, output=protocol)
+    # Until stdin closes or core.shutdown is answered; either way the app is closed on the way out.
+    run_stdio(app, on_close=app.aclose, output=protocol, stop=app.wait_for_shutdown)
     if app.startup_running:
         # A thread inside ONNX Runtime (loading a model) cannot be stopped, and letting the
         # interpreter tear down around it risks a crash on the way out. The app is closing anyway.

@@ -621,3 +621,48 @@ def test_claim_stdout_sends_whatever_else_writes_to_fd_1_to_stderr():
     assert done.stderr.count(b"a stray print") == 2
     if sys.platform == "win32":
         assert done.stderr.count(b"noise through the standard output handle") == 2
+
+
+# --- run_stdio's stop: ending the server with stdin still open (core.shutdown) ----------------
+
+_CHILD_STOP = """
+import asyncio
+import sys
+from raphael_core.router import Router
+from raphael_core.stdio_server import run_stdio
+
+router = Router()
+asked = asyncio.Event()
+
+async def quit_later(params):
+    asked.set()
+    await asyncio.sleep(0.2)  # the reply is still sent, after the stop was asked for
+    return {"bye": True}
+
+async def on_close():
+    print("on_close ran", file=sys.stderr, flush=True)
+
+router.register("t.quit", quit_later)
+run_stdio(router, on_close=on_close, stop=asked.wait)
+print("run_stdio returned", file=sys.stderr, flush=True)
+"""
+
+
+def test_run_stdio_stops_when_told_with_stdin_still_open():
+    with subprocess.Popen(
+        [sys.executable, "-c", _CHILD_STOP],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ) as proc:
+        try:
+            proc.stdin.write(b'{"jsonrpc":"2.0","id":1,"method":"t.quit","params":{}}\n')
+            proc.stdin.flush()  # and stdin stays open
+            assert proc.wait(timeout=30) == 0
+            out, err = proc.stdout.read(), proc.stderr.read()
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+    assert json.loads(out) == {"jsonrpc": "2.0", "id": 1, "result": {"bye": True}}
+    assert b"on_close ran" in err and b"run_stdio returned" in err
+    assert b"Fatal Python error" not in err

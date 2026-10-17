@@ -1268,6 +1268,22 @@ async def test_core_shutdown_closes_everything_and_answers(make_app):
     assert not kit.mics[0].open and app.client.closed
 
 
+async def test_core_shutdown_tells_the_server_to_stop(make_app):
+    app = make_app()
+    waiting = asyncio.ensure_future(app.wait_for_shutdown())
+    await asyncio.sleep(0.05)
+    assert not waiting.done()  # nothing asked for it yet
+    await app.call("core.shutdown")
+    await asyncio.wait_for(waiting, 5)
+
+
+async def test_closing_the_app_by_its_stdin_does_not_ask_the_server_to_stop(make_app):
+    app = make_app()
+    await app.aclose()
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(app.wait_for_shutdown(), 0.1)
+
+
 async def test_the_database_is_closed_with_the_app(make_app):
     app = make_app()
     await app.aclose()
@@ -1388,7 +1404,10 @@ def entry_point(monkeypatch, tmp_path):
         seen.waited = timeout
 
     fake_app = SimpleNamespace(
-        aclose=lambda: None, startup_running=False, wait_for_libraries=wait_for_libraries
+        aclose=lambda: None,
+        wait_for_shutdown=lambda: None,
+        startup_running=False,
+        wait_for_libraries=wait_for_libraries,
     )
 
     def build(**kwargs):
@@ -1444,6 +1463,11 @@ def test_main_waits_for_numpy_before_it_reads_stdin(entry_point):
 def test_main_writes_the_protocol_to_the_stdout_it_claimed(entry_point):
     entry.main()
     assert entry_point.output is entry_point.protocol
+
+
+def test_main_stops_serving_when_core_shutdown_asks(entry_point):
+    entry.main()
+    assert entry_point.stop == entry_point.app.wait_for_shutdown
 
 
 def test_main_claims_stdout_before_any_native_library_is_imported():
