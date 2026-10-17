@@ -1071,21 +1071,21 @@ mod tests {
     #[tokio::test]
     async fn a_refused_binding_changes_nothing_else() {
         let fake = Fake::failing("bindings");
-        let (old, new) = changed(json!({"dictation_keys": ["AltLeft"], "emblem_size": 194}));
+        let (old, new) = changed(json!({"dictation_keys": ["F9"], "emblem_size": 194}));
         let err = apply_changes(&fake, &old, &new).await.unwrap_err();
         assert_eq!(err, "bindings failed");
-        assert_eq!(fake.done(), ["bindings AltLeft"]);
+        assert_eq!(fake.done(), ["bindings F9"]);
     }
 
     #[tokio::test]
     async fn a_failed_microphone_puts_the_old_bindings_back() {
         let fake = Fake::failing("microphone");
         let (old, new) =
-            changed(json!({"dictation_keys": ["AltLeft"], "microphone": "x", "emblem_size": 194}));
+            changed(json!({"dictation_keys": ["F9"], "microphone": "x", "emblem_size": 194}));
         assert!(apply_changes(&fake, &old, &new).await.is_err());
         assert_eq!(
             fake.done(),
-            ["bindings AltLeft", "microphone x", "bindings AltRight"]
+            ["bindings F9", "microphone x", "bindings AltRight"]
         );
     }
 
@@ -1093,7 +1093,7 @@ mod tests {
     async fn a_failed_autostart_puts_back_the_bindings_and_the_microphone() {
         let fake = Fake::failing("autostart");
         let (old, new) = changed(json!({
-            "dictation_keys": ["AltLeft"],
+            "dictation_keys": ["F9"],
             "microphone": "x",
             "autostart": false,
             "emblem_size": 194,
@@ -1102,7 +1102,7 @@ mod tests {
         assert_eq!(
             fake.done(),
             [
-                "bindings AltLeft",
+                "bindings F9",
                 "microphone x",
                 "autostart false",
                 "microphone default",
