@@ -190,14 +190,18 @@ impl HotkeyService {
     /// [`parse_binding`]), is used twice, or is one of the cancel keys (Esc, and Esc with the
     /// dictation modifiers held). Keys that stay the same stay registered.
     pub fn update_bindings(&self, bindings: &Bindings) -> Result<(), String> {
+        self.update_bindings_within(bindings, REPLY_TIMEOUT)
+    }
+
+    /// [`update_bindings`](Self::update_bindings) with the time to wait for the thread's answer
+    /// given. After a timeout the thread may still apply the new keys.
+    fn update_bindings_within(&self, bindings: &Bindings, timeout: Duration) -> Result<(), String> {
         let wanted = Wanted::from_bindings(bindings)?;
         let (reply, answer) = mpsc::channel();
         self.commands
             .send(Command::Update { wanted, reply })
             .map_err(|_| NOT_RUNNING.to_string())?;
-        answer
-            .recv_timeout(REPLY_TIMEOUT)
-            .map_err(|_| NOT_RUNNING.to_string())?
+        await_reply(&answer, timeout)
     }
 
     /// Turns the cancel keys on or off. They are registered only while a dictation is active,
@@ -223,6 +227,19 @@ impl HotkeyService {
         if self.commands.send(command).is_err() {
             log::warn!("hotkey command dropped: {NOT_RUNNING}");
         }
+    }
+}
+
+/// Waits up to `timeout` for the hotkey thread's answer. No answer in time and a thread that is
+/// gone (it dropped its end of the channel) are different failures and say so.
+fn await_reply(answer: &Receiver<Result<(), String>>, timeout: Duration) -> Result<(), String> {
+    match answer.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(RecvTimeoutError::Timeout) => Err(format!(
+            "the hotkey service timed out: no answer within {} ms, the new keys may still apply",
+            timeout.as_millis()
+        )),
+        Err(RecvTimeoutError::Disconnected) => Err(NOT_RUNNING.to_string()),
     }
 }
 
@@ -1184,6 +1201,48 @@ mod tests {
             .unwrap();
         assert!(err.contains("could not register"), "{err}");
         assert_eq!(Arc::strong_count(&fake.0), 1, "nothing is left running");
+    }
+
+    #[test]
+    fn a_service_that_does_not_answer_in_time_is_reported_as_timed_out() {
+        let fake = FakeBackend::default();
+        let (svc, _rx) = service(&fake, &Bindings::default());
+        // While the test holds the fake's lock, the hotkey thread blocks on its next call into
+        // it and can not answer.
+        let blocked = fake.0.lock().unwrap();
+        let err = svc
+            .update_bindings_within(&bindings(&["F9"], &[]), Duration::from_millis(50))
+            .unwrap_err();
+        drop(blocked);
+        assert!(err.contains("timed out"), "{err}");
+        assert!(!err.contains("not running"), "the thread is alive: {err}");
+    }
+
+    #[test]
+    fn waiting_for_an_answer_tells_a_timeout_from_a_stopped_service() {
+        let (reply, answer) = mpsc::channel::<Result<(), String>>();
+        let err = await_reply(&answer, Duration::from_millis(20)).unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        assert_ne!(err, NOT_RUNNING);
+
+        // The thread's end of the channel is gone: it has stopped.
+        drop(reply);
+        assert_eq!(
+            await_reply(&answer, Duration::from_millis(20)),
+            Err(NOT_RUNNING.to_string())
+        );
+    }
+
+    #[test]
+    fn waiting_for_an_answer_passes_the_answer_on() {
+        let (reply, answer) = mpsc::channel();
+        reply.send(Ok(())).unwrap();
+        reply.send(Err("bad key".to_string())).unwrap();
+        assert_eq!(await_reply(&answer, Duration::from_millis(20)), Ok(()));
+        assert_eq!(
+            await_reply(&answer, Duration::from_millis(20)),
+            Err("bad key".to_string())
+        );
     }
 
     #[test]
