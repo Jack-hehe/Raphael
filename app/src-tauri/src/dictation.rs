@@ -230,13 +230,19 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             };
             match err.code {
                 NO_MICROPHONE => log::warn!("dictation.start: no microphone ({err})"),
-                // Some other session holds the core. It is not ours (this id was just made up),
-                // so there is no cancel to send for it; all that can be done is to say so.
                 BUSY => log::error!(
                     "dictation.start: the core is busy with another dictation session ({err}); \
-                     this dictation is dropped"
+                     this dictation is dropped and the stuck session is cancelled"
                 ),
                 _ => log::error!("dictation.start failed: {err}"),
+            }
+            // Some other session holds the core. It is not ours (this id was just made up), so
+            // the recovery cancel names no session: the core cancels whatever is active. The next
+            // press then starts normally; this dictation is not retried. It is sent while this
+            // session is still current, so no new session can have started and fall victim to it,
+            // and not at all if the session was cancelled meanwhile (the next BUSY recovers).
+            if err.code == BUSY && this.is_current(&id) {
+                recovery_cancel(this.core.as_ref()).await;
             }
             this.finish(&id, |this| {
                 if err.code == NO_MICROPHONE {
@@ -516,6 +522,14 @@ async fn cancel_after_start<C: CoreApi>(core: &C, session: &Session) {
         return;
     }
     cancel_call(core, &session.id).await;
+}
+
+/// `dictation.cancel` with no session id: the core cancels whatever session is active, and does
+/// not fail if there is none.
+async fn recovery_cancel<C: CoreApi>(core: &C) {
+    if let Err(err) = core.call("dictation.cancel", json!({})).await {
+        log::warn!("the recovery dictation.cancel failed: {err}");
+    }
 }
 
 async fn cancel_call<C: CoreApi>(core: &C, session: &str) {
@@ -1606,7 +1620,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_busy_core_hides_the_overlay_and_gets_no_cancel_for_a_session_it_does_not_know() {
+    async fn a_busy_core_gets_one_recovery_cancel_without_a_session_id() {
         let c = controller(
             FakeCore::failing("dictation.start", RpcError::new(1003, "busy")),
             FakePaster::pasting("notepad.exe"),
@@ -1615,12 +1629,43 @@ mod tests {
         assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
         assert_eq!(c.phase(), Phase::Idle);
         assert_eq!(c.cancel().last(), Some(false));
-        // the busy session is somebody else's: our id means nothing to the core
-        assert_eq!(c.core().count("dictation.cancel"), 0);
-        // and the next try starts afresh
+        // The busy session is somebody else's, so the id we made up means nothing to the core:
+        // the recovery cancel names no session and cancels whatever is active.
+        assert_eq!(c.core().count("dictation.cancel"), 1);
+        assert_eq!(c.core().call_params("dictation.cancel"), json!({}));
+        // no automatic retry of the start
+        assert_eq!(c.core().count("dictation.start"), 1);
+        // the user's next press starts normally
         run(&c, HotkeyEvent::DictationUp, 900).await;
         run(&c, HotkeyEvent::DictationDown, 5000).await;
         assert_eq!(c.core().count("dictation.start"), 2);
+        // (the fake core stays busy, so that press gets its own recovery cancel)
+        assert_eq!(c.core().count("dictation.cancel"), 2);
+    }
+
+    #[tokio::test]
+    async fn a_busy_reply_after_escape_sends_no_recovery_cancel() {
+        // Esc has ended the session, and the user may have started the next one already: a
+        // cancel without a session id could kill that one. The stuck session is cleared by the
+        // recovery of the next BUSY instead.
+        let (c, gate) = with_gated_start(FakeCore::failing(
+            "dictation.start",
+            RpcError::new(1003, "busy"),
+        ));
+        let down = c
+            .on_hotkey(HotkeyEvent::DictationDown, 0)
+            .expect("the start runs in a task");
+        tokio::task::yield_now().await;
+        let esc = c
+            .on_hotkey(HotkeyEvent::Cancel, 100)
+            .expect("the cancel runs in a task");
+        settle().await;
+        gate.notify_one();
+        down.await.unwrap();
+        esc.await.unwrap();
+        assert_eq!(c.core().count("dictation.cancel"), 0);
+        assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
+        assert_eq!(c.phase(), Phase::Idle);
     }
 
     // ---------- the end of a session ----------
