@@ -26,7 +26,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 tokio = { version = "1", features = ["sync"] }
-handy-keys = "0.3.4"
+# Vendored copy of handy-keys 0.3.4 (crates.io package, commit e7d1b8e).
+handy-keys = { path = "vendor/handy-keys" }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2.5"
