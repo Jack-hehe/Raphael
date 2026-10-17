@@ -1401,10 +1401,17 @@ def test_the_real_kit_takes_the_arguments_the_app_gives_it():
 # --- build_app, with the real kit -------------------------------------------------------------
 
 
+def test_build_app_is_typed_as_returning_the_app():
+    # __main__ uses what only an App has (wait_for_libraries, aclose, startup_running).
+    import typing
+
+    assert typing.get_type_hints(build_app)["return"] is App
+
+
 async def test_build_app_returns_a_router_that_answers(tmp_path):
     app = build_app(data_dir=tmp_path, fake_llm=True)
     try:
-        assert isinstance(app, Router)
+        assert isinstance(app, App) and isinstance(app, Router)
         assert (await app.call("core.hello"))["protocol"] == 1
         assert (await app.call("secrets.status")) == {"has_key": True}
         # Nothing is downloaded in an empty data directory.

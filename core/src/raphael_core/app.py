@@ -847,8 +847,8 @@ class App(Router):
 
 def build_app(
     *, data_dir: Path | None = None, fake_audio: Path | None = None, fake_llm: bool = False
-) -> Router:
-    """The core's Router, with the speech side already loading.
+) -> App:
+    """The core's App (its Router), with the speech side already loading.
 
     `data_dir` is where the database lives (default: Raphael's folder in the user's application
     data, or RAPHAEL_DATA_DIR). `fake_audio` is a WAV file that the recorder plays in real time in
