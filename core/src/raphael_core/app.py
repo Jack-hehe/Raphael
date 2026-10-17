@@ -341,8 +341,12 @@ class LevelMonitor:
             self._suspended = True
             await self._close()
 
-    async def resume(self) -> None:
+    async def resume(self, may_resume: Callable[[], bool] | None = None) -> None:
+        """Take the microphone back after a dictation. `may_resume` is asked once the meter is
+        this call's, so a dictation that started while it waited keeps the meter suspended."""
         async with self._lock:
+            if may_resume is not None and not may_resume():
+                return
             self._suspended = False
             if self._wanted:
                 await self._open(strict=False)
@@ -479,10 +483,13 @@ class App(Router):
         self._kit: concurrent.futures.Future[Any] = concurrent.futures.Future()
         self._service: concurrent.futures.Future[Any] = concurrent.futures.Future()
         self._monitor: LevelMonitor | None = None
+        self._starts = 0  # dictation.start requests under way (the meter makes way for them)
+        self._meter_tasks: set[asyncio.Task[None]] = set()
         self._device_name: str | None = None  # the microphone, set by the app from device.json
         self._threads: list[threading.Thread] = []
         self._closing = threading.Event()
         self._closed = False
+        self._shutdown_requested = asyncio.Event()
 
         methods = {
             "core.hello": self._hello,
@@ -513,9 +520,16 @@ class App(Router):
     def wait_for_libraries(self, timeout: float | None = None) -> None:
         """Wait until the speech libraries are imported (or failed to be), up to `timeout` s.
 
-        Call it before the first read of stdin: see the module docstring.
+        Call it before the first read of stdin: see the module docstring. Giving up is logged as
+        an error: the core serves on, but numpy may now hang until stdin closes.
         """
-        concurrent.futures.wait([self._kit], timeout)
+        done, _ = concurrent.futures.wait([self._kit], timeout)
+        if not done:
+            logger.error(
+                "The speech libraries were not imported within %g s; serving without them for now "
+                "(on Windows their import may now hang until stdin closes)",
+                timeout,
+            )
 
     @property
     def startup_running(self) -> bool:
@@ -568,6 +582,7 @@ class App(Router):
             recorder_factory=self._new_recorder,
             segmenter_factory=lambda: self._speech.dictation_segmenter,
             engine_provider=self._speech.engine,
+            on_idle=self._on_dictation_idle,
         )
         service.register(self._inner)
         self._service.set_result(service)
@@ -588,19 +603,52 @@ class App(Router):
 
     async def aclose(self, patience: float = SHUTDOWN_PATIENCE_S) -> None:
         """Cancel a dictation in progress, close the microphone, the HTTP client and the database.
-        Safe to call more than once. Waits up to `patience` seconds for the start-up threads."""
+        Safe to call more than once. Waits up to `patience` seconds for the start-up threads.
+
+        Every step is tried whatever happened to the ones before it: a step that fails is logged,
+        and a cancellation is passed on once the rest are done.
+        """
         if self._closed:
             return
         self._closed = True
         self._closing.set()
-        if self._service.done() and self._service.exception() is None:
-            await self._service.result().aclose()
-        if self._monitor is not None:
-            await self._monitor.aclose()
-        await self.client.aclose()
-        await asyncio.to_thread(self._join_threads, patience)
-        self._speech.close()
-        self._conn.close()
+
+        async def close_dictation() -> None:
+            if self._service.done() and self._service.exception() is None:
+                await self._service.result().aclose()
+
+        async def close_meter() -> None:
+            await self._meter_settled()  # a meter being given back, first
+            if self._monitor is not None:
+                await self._monitor.aclose()
+
+        async def join_threads() -> None:
+            await asyncio.to_thread(self._join_threads, patience)
+
+        async def close_speech() -> None:
+            self._speech.close()
+
+        async def close_database() -> None:
+            self._conn.close()
+
+        steps: list[tuple[str, Callable[[], Awaitable[None]]]] = [
+            ("cancel the dictation", close_dictation),
+            ("close the level meter", close_meter),
+            ("close the HTTP client", self.client.aclose),
+            ("wait for the start-up threads", join_threads),
+            ("let go of the speech models", close_speech),
+            ("close the database", close_database),
+        ]
+        interrupted: BaseException | None = None
+        for what, step in steps:
+            try:
+                await step()
+            except Exception:
+                logger.exception("Closing the core: could not %s", what)
+            except BaseException as exc:  # cancelled, say: the rest still has to be closed
+                interrupted = interrupted or exc
+        if interrupted is not None:
+            raise interrupted
 
     def _join_threads(self, patience: float) -> None:
         deadline = time.monotonic() + patience
@@ -636,9 +684,15 @@ class App(Router):
         return {"protocol": PROTOCOL_VERSION, "version": __version__}
 
     async def _shutdown(self, params: dict) -> dict:
-        """Close what the app opened. The process ends when the app closes its stdin."""
+        """Close what the app opened, then end the process: the server stops once this is
+        answered (`wait_for_shutdown`), as it would when the app closes its stdin."""
         await self.aclose()
+        self._shutdown_requested.set()
         return {}
+
+    async def wait_for_shutdown(self) -> None:
+        """Return once `core.shutdown` has closed the app: run_stdio's `stop`."""
+        await self._shutdown_requested.wait()
 
     # --- models ---------------------------------------------------------------------------------
 
@@ -732,16 +786,53 @@ class App(Router):
 
     async def _dictation(self, method: str, params: dict) -> Any:
         """`dictation.*`, from the service once it exists. It makes way for the meter's
-        microphone, and gives it back when the dictation is over."""
+        microphone, and gives it back when the dictation is over.
+
+        The meter comes back through the service's `on_idle`, whichever way a session ends (the
+        watchdog's cancel of a lost session has no request behind it). A request waits for that
+        before it answers. A start that did not start gives it back itself: while a start is under
+        way the meter stays suspended, so a stop that ends meanwhile cannot reopen it beside the
+        new dictation.
+        """
         service = await self._wait_for(self._service)
-        if method == "dictation.start":
-            self._speech.require_models()
-            await self._meter("make way for the dictation", lambda m: m.suspend())
+        if method != "dictation.start":
+            try:
+                return await self._inner.call(method, params)
+            finally:
+                await self._meter_settled()
+        self._speech.require_models()
+        self._starts += 1
         try:
+            await self._meter("make way for the dictation", lambda m: m.suspend())
             return await self._inner.call(method, params)
         finally:
-            if not service.active:  # over: stopped, cancelled, or never started
-                await self._meter("take the microphone back", lambda m: m.resume())
+            self._starts -= 1
+            await self._meter_settled()
+            if not service.active:  # never started (or already over)
+                await self._give_meter_back()
+
+    def _dictation_idle(self) -> bool:
+        """No dictation has, or is about to take, the microphone."""
+        if self._starts:
+            return False
+        service = self._service
+        return not (service.done() and service.exception() is None and service.result().active)
+
+    def _on_dictation_idle(self) -> None:
+        """The service's `on_idle`, on the loop: give the meter its microphone back."""
+        if self._monitor is None:
+            return
+        task = asyncio.get_running_loop().create_task(self._give_meter_back())
+        self._meter_tasks.add(task)
+        task.add_done_callback(self._meter_tasks.discard)
+
+    async def _give_meter_back(self) -> None:
+        await self._meter("take the microphone back", lambda m: m.resume(self._dictation_idle))
+
+    async def _meter_settled(self) -> None:
+        """Wait for the meter to be given back, if it is being (without cancelling that)."""
+        if self._meter_tasks:
+            await asyncio.wait(list(self._meter_tasks))
 
     async def _meter(self, what: str, step: Callable[[LevelMonitor], Awaitable[None]]) -> None:
         """Do `step` to the level meter, if there is one. What goes wrong with the meter is logged
@@ -756,8 +847,8 @@ class App(Router):
 
 def build_app(
     *, data_dir: Path | None = None, fake_audio: Path | None = None, fake_llm: bool = False
-) -> Router:
-    """The core's Router, with the speech side already loading.
+) -> App:
+    """The core's App (its Router), with the speech side already loading.
 
     `data_dir` is where the database lives (default: Raphael's folder in the user's application
     data, or RAPHAEL_DATA_DIR). `fake_audio` is a WAV file that the recorder plays in real time in

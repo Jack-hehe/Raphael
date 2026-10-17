@@ -8,6 +8,7 @@ with the real models, is tests/test_e2e.py.
 """
 
 import asyncio
+import logging
 import subprocess
 import sys
 import threading
@@ -624,6 +625,28 @@ async def test_restart_leaves_a_meter_that_is_off_alone(meter):
     assert meter.mics == []
 
 
+async def test_resume_leaves_the_meter_off_while_a_dictation_still_has_the_microphone(meter):
+    await meter.monitor.set_on(True)
+    await meter.monitor.suspend()
+    await meter.monitor.resume(lambda: False)  # a new dictation took the microphone meanwhile
+    assert len(meter.mics) == 1 and not meter.mics[0].open
+    await meter.monitor.resume(lambda: True)
+    assert len(meter.mics) == 2 and meter.mics[1].open
+
+
+async def test_resume_asks_whether_it_may_once_it_holds_the_meter(meter):
+    await meter.monitor.set_on(True)
+    await meter.monitor.suspend()
+    state = SimpleNamespace(free=True)
+    await meter.monitor._lock.acquire()  # someone else is busy with the meter
+    resuming = asyncio.create_task(meter.monitor.resume(lambda: state.free))
+    await asyncio.sleep(0.05)
+    state.free = False  # a dictation starts while the resume waits its turn
+    meter.monitor._lock.release()
+    await resuming
+    assert not any(mic.open for mic in meter.mics)
+
+
 async def test_closing_the_meter_closes_the_microphone(meter):
     await meter.monitor.set_on(True)
     await meter.monitor.aclose()
@@ -733,23 +756,27 @@ async def test_a_speech_side_that_cannot_load_is_an_error_but_the_core_goes_on(t
         await app.aclose()
 
 
-async def test_wait_for_libraries_returns_when_the_kit_is_imported(make_app):
+async def test_wait_for_libraries_returns_when_the_kit_is_imported(make_app, caplog):
     kit = make_kit()
     app = make_app(kit)
     started = time.monotonic()
     await asyncio.to_thread(app.wait_for_libraries, 10)
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert time.monotonic() - started < 5
     assert app._kit.done() and app._kit.result() is kit
 
 
-async def test_wait_for_libraries_gives_up_after_its_timeout(tmp_path):
+async def test_wait_for_libraries_gives_up_after_its_timeout(tmp_path, caplog):
     release = threading.Event()
     app = App(data_dir=tmp_path, fake_llm=True, load_kit=lambda: release.wait(30) and make_kit())
     app.start()
     try:
         started = time.monotonic()
-        await asyncio.to_thread(app.wait_for_libraries, 0.2)
+        with caplog.at_level(logging.ERROR, logger=app_module.logger.name):
+            await asyncio.to_thread(app.wait_for_libraries, 0.2)
         assert 0.15 < time.monotonic() - started < 5
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(errors) == 1 and "0.2 s" in errors[0].getMessage()  # said, not silent
     finally:
         release.set()
         await app.aclose()
@@ -1093,6 +1120,43 @@ async def test_a_meter_that_cannot_make_way_or_come_back_does_not_spoil_the_dict
     assert caplog.text.count("The level meter could not") == 2
 
 
+async def test_a_stop_that_ends_while_a_new_start_makes_way_does_not_reopen_the_meter(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    await app.call("dictation.start", {"session_id": "s1"})
+    service = app._service.result()
+    monitor = app._monitor
+    await monitor._lock.acquire()  # the meter is busy (a restart, say)
+    starting = asyncio.create_task(app.call("dictation.start", {"session_id": "s2"}))
+    await asyncio.sleep(0.05)  # s2 waits to make way for itself ...
+    stopping = asyncio.create_task(
+        app.call("dictation.stop", {"session_id": "s1", "target_app": None})
+    )
+    await wait_until(lambda: not service.active)  # ... and s1's stop is over, waiting to resume
+    await asyncio.sleep(0.05)
+    monitor._lock.release()
+    await stopping
+    assert await starting == {}  # s1 was over by the time s2 got that far
+    await asyncio.sleep(0.1)
+    assert service.active
+    assert sum(mic.open for mic in kit.mics) == 1  # s2's: no meter beside a dictation
+    await app.call("dictation.stop", {"session_id": "s2", "target_app": None})
+    assert kit.mics[-1].open and sum(mic.open for mic in kit.mics) == 1  # the meter is back
+
+
+async def test_the_meter_comes_back_after_a_session_nobody_stopped(make_app, monkeypatch):
+    monkeypatch.setattr(dictation, "LOST_SESSION_SECONDS", 0.3)
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    await app.call("dictation.start", {"session_id": "s"})  # and nobody stops it
+    service = app._service.result()
+    await wait_until(lambda: not service.active)  # the watchdog cancelled it
+    await wait_until(lambda: len(kit.mics) == 3 and kit.mics[2].open)  # the meter is back
+    assert sum(mic.open for mic in kit.mics) == 1
+
+
 async def test_a_dictation_that_fails_to_start_gives_the_microphone_back_too(make_app):
     kit = make_kit()
     app = make_app(kit, ready=("silero-vad",))
@@ -1237,6 +1301,32 @@ async def test_closing_the_app_closes_the_meter_and_the_client(make_app):
     assert app.client.closed
 
 
+async def test_a_close_step_that_fails_does_not_skip_the_rest(make_app, caplog):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    await app.call("dictation.start", {"session_id": "s"})
+    service = app._service.result()
+    closes = SimpleNamespace(service=service.aclose)
+
+    def broken(what):
+        async def aclose():
+            raise RuntimeError(f"the {what} will not close")
+
+        return aclose
+
+    service.aclose = broken("dictation")
+    app._monitor.aclose = broken("meter")
+    app.client.aclose = broken("client")
+    await app.aclose()  # logs, does not raise
+    assert app._speech._closed
+    with pytest.raises(RpcError):
+        await app.call("history.list")  # the database is closed too
+    for what in ("dictation", "meter", "client"):
+        assert f"the {what} will not close" in caplog.text
+    await closes.service()  # let the test leave nothing running
+
+
 async def test_closing_the_app_twice_is_fine(make_app):
     app = make_app()
     await app.aclose()
@@ -1268,6 +1358,22 @@ async def test_core_shutdown_closes_everything_and_answers(make_app):
     assert not kit.mics[0].open and app.client.closed
 
 
+async def test_core_shutdown_tells_the_server_to_stop(make_app):
+    app = make_app()
+    waiting = asyncio.ensure_future(app.wait_for_shutdown())
+    await asyncio.sleep(0.05)
+    assert not waiting.done()  # nothing asked for it yet
+    await app.call("core.shutdown")
+    await asyncio.wait_for(waiting, 5)
+
+
+async def test_closing_the_app_by_its_stdin_does_not_ask_the_server_to_stop(make_app):
+    app = make_app()
+    await app.aclose()
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(app.wait_for_shutdown(), 0.1)
+
+
 async def test_the_database_is_closed_with_the_app(make_app):
     app = make_app()
     await app.aclose()
@@ -1286,7 +1392,7 @@ def test_the_real_kit_takes_the_arguments_the_app_gives_it():
     assert "num_threads" in inspect.signature(kit.create_engine).parameters
     assert list(inspect.signature(kit.MicRecorder).parameters)[:2] == ["on_frames", "device"]
     assert list(inspect.signature(kit.WavRecorder).parameters) == ["on_frames", "path", "realtime"]
-    for name in ("recorder_factory", "segmenter_factory", "engine_provider"):
+    for name in ("recorder_factory", "segmenter_factory", "engine_provider", "on_idle"):
         assert name in inspect.signature(kit.DictationService).parameters
     assert callable(kit.rms_level) and callable(kit.list_input_devices)
     assert issubclass(kit.NoMicrophoneError, Exception)
@@ -1295,10 +1401,17 @@ def test_the_real_kit_takes_the_arguments_the_app_gives_it():
 # --- build_app, with the real kit -------------------------------------------------------------
 
 
+def test_build_app_is_typed_as_returning_the_app():
+    # __main__ uses what only an App has (wait_for_libraries, aclose, startup_running).
+    import typing
+
+    assert typing.get_type_hints(build_app)["return"] is App
+
+
 async def test_build_app_returns_a_router_that_answers(tmp_path):
     app = build_app(data_dir=tmp_path, fake_llm=True)
     try:
-        assert isinstance(app, Router)
+        assert isinstance(app, App) and isinstance(app, Router)
         assert (await app.call("core.hello"))["protocol"] == 1
         assert (await app.call("secrets.status")) == {"has_key": True}
         # Nothing is downloaded in an empty data directory.
@@ -1388,7 +1501,10 @@ def entry_point(monkeypatch, tmp_path):
         seen.waited = timeout
 
     fake_app = SimpleNamespace(
-        aclose=lambda: None, startup_running=False, wait_for_libraries=wait_for_libraries
+        aclose=lambda: None,
+        wait_for_shutdown=lambda: None,
+        startup_running=False,
+        wait_for_libraries=wait_for_libraries,
     )
 
     def build(**kwargs):
@@ -1396,12 +1512,21 @@ def entry_point(monkeypatch, tmp_path):
         seen.built = kwargs
         return fake_app
 
-    def run(app, on_close=None):
+    def run(app, on_close=None, *, output=None, stop=None):
         seen.steps.append("run_stdio")
         seen.ran = (app, on_close)
+        seen.output, seen.stop = output, stop
 
-    monkeypatch.setattr(entry, "build_app", build)
+    protocol = object()
+
+    def claim():  # the real one would take pytest's own stdout
+        seen.steps.append("claim_stdout")
+        return protocol
+
+    monkeypatch.setattr(app_module, "build_app", build)
     monkeypatch.setattr(entry, "run_stdio", run)
+    monkeypatch.setattr(entry, "claim_stdout", claim)
+    seen.protocol = protocol
     monkeypatch.setattr(entry.os, "_exit", lambda code: seen.exits.append(code))
     for name in ("RAPHAEL_DATA_DIR", "RAPHAEL_FAKE_AUDIO", "RAPHAEL_FAKE_LLM"):
         monkeypatch.delenv(name, raising=False)
@@ -1428,8 +1553,36 @@ def test_main_waits_for_numpy_before_it_reads_stdin(entry_point):
     # On Windows numpy's DLLs hang while loading if another thread is blocked reading the stdin
     # pipe, which is what run_stdio's reader is from its start (see the docstring of app.py).
     entry.main()
-    assert entry_point.steps == ["build_app", "wait_for_libraries", "run_stdio"]
+    assert entry_point.steps == ["claim_stdout", "build_app", "wait_for_libraries", "run_stdio"]
     assert entry_point.waited == entry.LIBRARIES_TIMEOUT_S
+
+
+def test_main_writes_the_protocol_to_the_stdout_it_claimed(entry_point):
+    entry.main()
+    assert entry_point.output is entry_point.protocol
+
+
+def test_main_stops_serving_when_core_shutdown_asks(entry_point):
+    entry.main()
+    assert entry_point.stop == entry_point.app.wait_for_shutdown
+
+
+def test_main_claims_stdout_before_any_native_library_is_imported():
+    # OpenCC comes in with the app module; ONNX Runtime and PortAudio with its start-up thread.
+    code = (
+        "import sys\n"
+        "import raphael_core.__main__ as entry\n"
+        "def claim():\n"
+        "    loaded = {'opencc', 'numpy', 'sherpa_onnx', 'sounddevice'} & set(sys.modules)\n"
+        "    assert not loaded, loaded\n"
+        "    raise SystemExit(7)\n"
+        "entry.claim_stdout = claim\n"
+        "entry.main()\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code], check=False, capture_output=True, text=True, timeout=120
+    )
+    assert done.returncode == 7, done.stderr
 
 
 def test_main_without_a_setting_uses_the_real_things(entry_point):

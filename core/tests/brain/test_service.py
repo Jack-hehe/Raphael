@@ -1064,3 +1064,52 @@ async def test_nothing_secret_is_logged_and_no_traceback(router, fake_client, ke
     assert_no_traceback_logged(caplog)
     mine = [r for r in caplog.records if r.name == service.logger.name]
     assert any("auth" in r.getMessage() for r in mine), "the failure's kind is logged"
+
+
+# --- history retention while the core runs ------------------------------------------------------
+
+
+async def test_changing_the_retention_prunes_the_history_at_once(router, conn):
+    store = HistoryStore(conn)
+    old = store.add(item(created_at_ms=NOW_MS - 8 * DAY_MS))
+    kept = store.add(item(created_at_ms=NOW_MS - 6 * DAY_MS))
+    await router.call("settings.set", {"key": "history_retention_days", "value": 7})
+    assert store.get(old) is None and store.get(kept) is not None
+
+
+async def test_a_retention_that_is_refused_prunes_nothing(router, conn):
+    store = HistoryStore(conn)
+    old = store.add(item(created_at_ms=NOW_MS - 8 * DAY_MS))
+    with pytest.raises(RpcError):
+        await router.call("settings.set", {"key": "history_retention_days", "value": "7"})
+    assert store.get(old) is not None
+
+
+async def test_a_core_that_runs_for_days_prunes_once_a_day_when_it_dictates(router, conn, clock):
+    store = HistoryStore(conn)
+    # Kept when the brain was made (pruned at NOW_MS): one hour inside the 30 days.
+    aging = store.add(item(created_at_ms=NOW_MS - 30 * DAY_MS + 3_600_000))
+    clock.now_ms += 2 * 3_600_000  # now it is past the retention
+    await finalize(router)
+    assert store.get(aging) is not None  # less than a day since the last prune: not again yet
+    clock.now_ms = NOW_MS + DAY_MS
+    await finalize(router)
+    assert store.get(aging) is None
+    # The dictation just saved is fresh and stays.
+    assert [entry["raw_text"] for entry in (await router.call("history.list", {}))["items"]] == [
+        "你好",
+        "你好",
+    ]
+
+
+async def test_changing_the_retention_starts_the_day_again(router, conn, clock):
+    store = HistoryStore(conn)
+    clock.now_ms += 12 * 3_600_000
+    await router.call("settings.set", {"key": "history_retention_days", "value": 30})  # prunes
+    aging = store.add(item(created_at_ms=clock.now_ms - 30 * DAY_MS + 3_600_000))
+    clock.now_ms = NOW_MS + DAY_MS + 3_600_000  # a day after the start, not after the change
+    await finalize(router)
+    assert store.get(aging) is not None
+    clock.now_ms = NOW_MS + 12 * 3_600_000 + DAY_MS
+    await finalize(router)
+    assert store.get(aging) is None

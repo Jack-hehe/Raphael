@@ -53,6 +53,9 @@ _DAY_MS = 86_400_000
 # SQLite stores integers in 64 bits and refuses to bind a larger one.
 _SQLITE_MAX_INT = 2**63 - 1
 _SPEND_DAYS = 30
+# While the core runs, the history is pruned at most this often (at the start of a dictation's
+# finalize), besides at start-up and whenever the retention setting changes.
+PRUNE_INTERVAL_MS = _DAY_MS
 
 
 def _wall_clock_ms() -> int:
@@ -167,7 +170,9 @@ class Brain:
 
     `conn` is the open database, `client` the OpenRouter client and `keys` where the key lives.
     `now_ms` is the clock. Making a Brain prunes the history older than the retention setting and
-    makes no network call. `key_check_timeout_s` is the longest a key check may take.
+    makes no network call. The history is pruned again when the retention changes, and at most once
+    every PRUNE_INTERVAL_MS while dictations are finalized. `key_check_timeout_s` is the longest a
+    key check may take.
     """
 
     def __init__(
@@ -184,6 +189,7 @@ class Brain:
         self._now_ms = now_ms
         self._key_check_timeout_s = key_check_timeout_s
         self._openrouter = _OpenRouterState()
+        self._pruned_at_ms: int | None = None
         self._history = HistoryStore(conn)
         self._dictionary = DictionaryStore(conn, now_ms)
         self._settings = SettingsStore(conn)
@@ -228,6 +234,7 @@ class Brain:
         audio_seconds = _non_negative(params, "audio_seconds")
         stt_ms = _milliseconds(params, "stt_ms")
         target_app = _opt_str(params, "target_app")
+        self._prune_history_if_due()
 
         rules = self._dictionary.replacements()
         normalized = normalize_transcript(raw_text, rules)
@@ -346,6 +353,8 @@ class Brain:
         value = _required(params, "value")
         with _store_call():
             self._settings.set(key, value)
+        if key == "history_retention_days":
+            self._prune_history()
         return {"settings": self._settings.all()}
 
     # --- the key --------------------------------------------------------------------------------
@@ -494,7 +503,16 @@ class Brain:
 
     # --- history retention ----------------------------------------------------------------------
 
+    def _prune_history_if_due(self) -> None:
+        last = self._pruned_at_ms
+        now = self._now_ms()
+        # A clock that went back (the user changed it) counts as due, rather than never.
+        if last is None or now - last >= PRUNE_INTERVAL_MS or now < last:
+            self._prune_history()
+
     def _prune_history(self) -> None:
+        # Tried now, whether it works or not: a failing prune is not retried at every dictation.
+        self._pruned_at_ms = self._now_ms()
         try:
             days = self._settings.get("history_retention_days")
             if days < 0:
