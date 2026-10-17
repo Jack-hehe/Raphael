@@ -1296,6 +1296,32 @@ async def test_closing_the_app_closes_the_meter_and_the_client(make_app):
     assert app.client.closed
 
 
+async def test_a_close_step_that_fails_does_not_skip_the_rest(make_app, caplog):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    await app.call("dictation.start", {"session_id": "s"})
+    service = app._service.result()
+    closes = SimpleNamespace(service=service.aclose)
+
+    def broken(what):
+        async def aclose():
+            raise RuntimeError(f"the {what} will not close")
+
+        return aclose
+
+    service.aclose = broken("dictation")
+    app._monitor.aclose = broken("meter")
+    app.client.aclose = broken("client")
+    await app.aclose()  # logs, does not raise
+    assert app._speech._closed
+    with pytest.raises(RpcError):
+        await app.call("history.list")  # the database is closed too
+    for what in ("dictation", "meter", "client"):
+        assert f"the {what} will not close" in caplog.text
+    await closes.service()  # let the test leave nothing running
+
+
 async def test_closing_the_app_twice_is_fine(make_app):
     app = make_app()
     await app.aclose()

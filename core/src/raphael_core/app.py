@@ -596,19 +596,52 @@ class App(Router):
 
     async def aclose(self, patience: float = SHUTDOWN_PATIENCE_S) -> None:
         """Cancel a dictation in progress, close the microphone, the HTTP client and the database.
-        Safe to call more than once. Waits up to `patience` seconds for the start-up threads."""
+        Safe to call more than once. Waits up to `patience` seconds for the start-up threads.
+
+        Every step is tried whatever happened to the ones before it: a step that fails is logged,
+        and a cancellation is passed on once the rest are done.
+        """
         if self._closed:
             return
         self._closed = True
         self._closing.set()
-        if self._service.done() and self._service.exception() is None:
-            await self._service.result().aclose()
-        if self._monitor is not None:
-            await self._monitor.aclose()
-        await self.client.aclose()
-        await asyncio.to_thread(self._join_threads, patience)
-        self._speech.close()
-        self._conn.close()
+
+        async def close_dictation() -> None:
+            if self._service.done() and self._service.exception() is None:
+                await self._service.result().aclose()
+
+        async def close_meter() -> None:
+            await self._meter_settled()  # a meter being given back, first
+            if self._monitor is not None:
+                await self._monitor.aclose()
+
+        async def join_threads() -> None:
+            await asyncio.to_thread(self._join_threads, patience)
+
+        async def close_speech() -> None:
+            self._speech.close()
+
+        async def close_database() -> None:
+            self._conn.close()
+
+        steps: list[tuple[str, Callable[[], Awaitable[None]]]] = [
+            ("cancel the dictation", close_dictation),
+            ("close the level meter", close_meter),
+            ("close the HTTP client", self.client.aclose),
+            ("wait for the start-up threads", join_threads),
+            ("let go of the speech models", close_speech),
+            ("close the database", close_database),
+        ]
+        interrupted: BaseException | None = None
+        for what, step in steps:
+            try:
+                await step()
+            except Exception:
+                logger.exception("Closing the core: could not %s", what)
+            except BaseException as exc:  # cancelled, say: the rest still has to be closed
+                interrupted = interrupted or exc
+        if interrupted is not None:
+            raise interrupted
 
     def _join_threads(self, patience: float) -> None:
         deadline = time.monotonic() + patience
