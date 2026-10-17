@@ -81,6 +81,58 @@ def test_a_word_starting_with_a_digit_is_no_candidate_and_is_not_cut():
     assert suggest(["1Password"] * 3) == []
 
 
+def test_a_latin_word_needs_two_letters():
+    # The "A" of "A 方案" is no name, and a digit is no letter: "x86" and "A4" have only one.
+    assert suggest(["A 方案", "B 方案", "用X光", "x86", "A4"] * 3) == []
+    assert suggest(["Qt"] * 3) == [("Qt", 3)]
+
+
+def test_cjk_text_next_to_a_word_does_not_hide_it():
+    # Chinese and Japanese have no spaces around a Latin word.
+    texts = ["用Tailscale連回家", "Tailscaleを使う", "使うTailscale"]
+    assert suggest(texts) == [("Tailscale", 3)]
+
+
+@pytest.mark.parametrize(
+    "word",
+    [
+        f"Caf{chr(0xE9)}",  # Café
+        f"Pok{chr(0xE9)}mon",  # Pokémon
+        f"{chr(0xC9)}COLE",  # ÉCOLE: "COLE" is not a word either
+        "Didn't",
+        f"Didn{chr(0x2019)}t",  # with a typographic apostrophe
+        "O'Brien",  # "Brien" is not a word either
+        "GPT-4's",  # nor is "GPT", what is left of a hyphenated word
+    ],
+)
+def test_a_word_touching_an_accented_letter_or_an_apostrophe_is_no_word(word):
+    assert suggest([f"用{word}連回家"] * 3) == []
+
+
+# --- everyday words that began a sentence ---
+
+
+def test_a_capitalized_word_is_dropped_when_its_lowercase_form_is_met_too():
+    # Alone, "This" could be a name; a "this" elsewhere shows that it is an everyday word.
+    assert suggest(["This is fine"] * 3) == [("This", 3)]
+    assert suggest(["This is fine"] * 3 + ["I like this"]) == []
+    # The lowercase form counts even when it is glued to CJK text.
+    assert suggest(["This is fine"] * 3 + ["我覺得this很好"]) == []
+
+
+@pytest.mark.parametrize(
+    "word, count",
+    [
+        ("OpenRouter", 3),  # an inner capital
+        ("GPT", 3),  # capitals only
+        ("Python3", 4),  # a digit; the lowercase spelling has one too, so it counts as well
+        ("GPT-SoVITS", 4),  # a hyphen; likewise
+    ],
+)
+def test_more_than_a_first_capital_keeps_a_word_even_with_its_lowercase_form(word, count):
+    assert suggest([word] * 3 + [word.lower()]) == [(word, count)]
+
+
 # --- katakana words ---
 
 
@@ -93,6 +145,12 @@ def test_the_prolonged_sound_mark_belongs_to_a_katakana_word():
     computer = f"コンピュ{PROLONGED}タ{PROLONGED}"
     game = f"ゲ{PROLONGED}ム"  # three characters only with the mark
     assert suggest([f"{computer}と{game}"] * 3) == [(game, 3), (computer, 3)]
+
+
+def test_katakana_letters_reach_up_to_the_vu():
+    # ヴァイオリン: ヴ (U+30F4) comes after ン (U+30F3) in the block.
+    violin = "".join(chr(code) for code in (0x30F4, 0x30A1, 0x30A4, 0x30AA, 0x30EA, 0x30F3))
+    assert suggest([violin] * 3) == [(violin, 3)]
 
 
 @pytest.mark.parametrize(
@@ -122,6 +180,8 @@ def test_every_occurrence_counts():
 def test_spellings_that_differ_in_case_are_one_word_in_the_most_common_spelling():
     assert suggest(["OpenRouter"] * 3 + ["Openrouter"] * 2 + ["OPENROUTER"]) == [("OpenRouter", 6)]
     assert suggest(["Openrouter"] * 3 + ["OpenRouter"]) == [("Openrouter", 4)]
+    # The most common one wins, whichever was met first.
+    assert suggest(["OPENROUTER"] + ["OpenRouter"] * 3) == [("OpenRouter", 4)]
 
 
 def test_equally_common_spellings_go_to_the_one_met_first():
@@ -130,8 +190,8 @@ def test_equally_common_spellings_go_to_the_one_met_first():
 
 
 def test_a_spelling_that_is_no_candidate_adds_nothing():
-    # The all-lowercase one is not a candidate; two capitalized ones are too few.
-    assert suggest(["Tailscale"] * 2 + ["tailscale"] * 5) == []
+    # The all-lowercase one is not a candidate; two "OpenRouter" are too few.
+    assert suggest(["OpenRouter"] * 2 + ["openrouter"] * 5) == []
 
 
 def test_min_count_is_the_fewest_uses_that_count():
