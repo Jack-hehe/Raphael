@@ -8,6 +8,7 @@ import * as api from "../api";
 import { KEEP_FOREVER_DAYS, describeError, formatRetention, keyReasonText, parseLimit } from "../format";
 import { wireKeyField } from "../keyfield";
 import { KeyRecorder, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "../keys";
+import { MonitorSwitch } from "../monitor";
 import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, Page, Status } from "../types";
 import {
   type Choice,
@@ -390,22 +391,14 @@ export function createSettings(app: AppContext): Page {
 
   // ---------- the microphone meter ----------
 
-  let monitoring = false;
-  let monitorCalls: Promise<unknown> = Promise.resolve();
+  // After a core restart the app switches the new core's monitoring back on by itself.
+  const monitor = new MonitorSwitch(api.audioMonitor);
   /** The window is in use. It is taken to be, until it says otherwise: the page was just opened by a person. */
   let windowFocused = true;
 
   /** The microphone is listened to while the page is on screen and the window is in use. */
   function syncMonitor(): void {
-    const want = visible && !document.hidden && windowFocused;
-    if (want === monitoring) return;
-    monitoring = want;
-    monitorCalls = monitorCalls
-      .then(() => api.audioMonitor(want))
-      .catch(() => {
-        // The core is not there; the next focus or show tries again.
-        if (want) monitoring = false;
-      });
+    monitor.set(visible && !document.hidden && windowFocused);
   }
 
   function onLevel(value: number): void {
