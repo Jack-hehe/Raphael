@@ -486,9 +486,9 @@ class DictationService:
         A session that nobody has stopped or cancelled for LOST_SESSION_SECONDS is cancelled, the
         way `dictation.cancel` would, and the microphone closed.
         """
-        while session.state == "recording":
+        while session.state == "recording" and not session.cancelled:
             await asyncio.sleep(self._watch_interval)
-            if session.state != "recording":
+            if session.state != "recording" or session.cancelled:
                 return
             now = self._clock()
             if now - session.started_at >= LOST_SESSION_SECONDS:
@@ -608,6 +608,10 @@ class DictationService:
             # The start sees the flag at its next step, closes what it opened and ends the session.
             await session.ready.wait()
             return
+        if session.state == "recording":
+            # Not "recording" any more, as in `_stop`: a watchdog that is busy closing the recorder
+            # then ends when it is done, instead of going on looking and keeping this call waiting.
+            session.state = "stopping"
         await self._stop_watchdog(session)
         with session.lock:
             session.levels_on = False
@@ -615,7 +619,7 @@ class DictationService:
         with session.lock:
             session.closed = True
         self._tell_worker(session, _CANCEL)
-        if session.worker is not None:
+        if session.worker is not None and session not in self._retiring:
             self._retiring.append(session)
         self._end(session)
 

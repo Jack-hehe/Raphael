@@ -1458,14 +1458,72 @@ async def test_a_stop_during_the_lost_session_cancel_gets_not_found(make_rig, ro
     gate = rig.recorder.stop_gate = threading.Event()  # closing the microphone takes a while
     clock.advance(dictation.LOST_SESSION_SECONDS + 1)
     await wait_until(rig.recorder.stop_entered.is_set)
-    stopping = asyncio.create_task(stop(router))
-    await asyncio.sleep(0.1)
-    assert not stopping.done()
-    gate.set()
-    with pytest.raises(RpcError) as e:
-        await stopping
+    with pytest.raises(RpcError) as e:  # the session is already being cancelled
+        await stop(router)
     assert e.value.code == NOT_FOUND
-    assert brain.finalize_calls == 0 and not rig.service.active
+    assert rig.service.active  # the microphone is still being closed
+    gate.set()
+    await wait_until(lambda: not rig.service.active)
+    assert brain.finalize_calls == 0
+    assert rig.recorder.stop_count == 1
+
+
+async def test_cancel_while_the_watchdog_is_closing_a_stalled_microphone(make_rig, router, brain):
+    clock = FakeClock()
+    rig = make_rig(clock=clock)  # the default 2 s stall watchdog
+    rig.recorder.chunks = [chunk(1.0)]
+    tasks = len(asyncio.all_tasks())
+    await start(router)
+    await rig.recorder.fed(1)
+    gate = rig.recorder.stop_gate = threading.Event()  # the watchdog's close gets stuck
+    clock.advance(MIC_STALL_SECONDS + 1)
+    await wait_until(rig.recorder.stop_entered.is_set)
+    cancelling = asyncio.create_task(router.call("dictation.cancel", {"session_id": "s1"}))
+    await asyncio.sleep(0.05)
+    assert not cancelling.done()  # it answers once the microphone is closed
+    gate.set()
+    done, _ = await asyncio.wait([cancelling], timeout=3)
+    assert done, "dictation.cancel is still waiting after the stalled microphone was closed"
+    assert await cancelling == {}
+    assert not rig.service.active and rig.recorder.stop_count == 1  # closed once
+    assert len(asyncio.all_tasks()) == tasks  # the watchdog ended with the session
+    assert brain.finalize_calls == 0
+    clock.advance(dictation.LOST_SESSION_SECONDS)  # nothing is left to look at the clock
+    await asyncio.sleep(0.4)
+    assert rig.recorder.stop_count == 1
+    assert await start(router, "s2") == {}
+
+
+async def test_cancel_while_the_watchdog_is_cancelling_a_lost_session(make_rig, router):
+    clock = FakeClock()
+    rig = make_rig(clock=clock, stall_seconds=1e6)
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    gate = rig.recorder.stop_gate = threading.Event()
+    clock.advance(dictation.LOST_SESSION_SECONDS + 1)
+    await wait_until(rig.recorder.stop_entered.is_set)  # the watchdog is cancelling the session
+    cancelling = asyncio.create_task(router.call("dictation.cancel", {"session_id": "s1"}))
+    await asyncio.sleep(0.05)
+    gate.set()
+    done, _ = await asyncio.wait([cancelling], timeout=3)
+    assert done
+    assert not rig.service.active and rig.recorder.stop_count == 1
+
+
+async def test_two_cancels_at_once_retire_the_session_once(rig, router):
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    session = rig.service._session
+    gate = rig.recorder.stop_gate = threading.Event()
+    first = asyncio.create_task(router.call("dictation.cancel", {"session_id": "s1"}))
+    second = asyncio.create_task(router.call("dictation.cancel", {"session_id": "s1"}))
+    await wait_until(rig.recorder.stop_entered.is_set)
+    await asyncio.sleep(0.05)
+    gate.set()
+    assert await first == {} and await second == {}
+    assert rig.service._retiring.count(session) == 1
     assert rig.recorder.stop_count == 1
 
 
