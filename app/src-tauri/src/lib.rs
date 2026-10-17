@@ -49,9 +49,13 @@ pub fn run() {
                 }
             }
         })
+        // Tauri keeps only the last `invoke_handler` call, so every command of the app goes into
+        // this one list.
+        .invoke_handler(tauri::generate_handler![])
         .setup(|app| {
-            // Each part of the app starts in its own section below, in dependency order: a part
-            // that needs another part's handle comes after it.
+            // Tauri keeps only the last `setup` call, so each part of the app starts in its own
+            // section of this one closure, in dependency order: a part that needs another part's
+            // handle comes after it.
 
             // ---- Tray ----
             // The tray reports its menu actions on this channel. For now they are only logged;
