@@ -1,0 +1,84 @@
+// The main window's way to the rest of the app: calls to the core through `core_call`, and the
+// commands of commands.rs. Every function rejects with the reason as a string (`describeError`
+// makes it fit to show).
+
+import { Channel, invoke } from "@tauri-apps/api/core";
+import type {
+  AudioDevices,
+  BrainSettings,
+  DeviceSettings,
+  DictionaryEntry,
+  HistoryItem,
+  KeyCheck,
+  MainEvent,
+  ModelsStatus,
+  Status,
+} from "./types";
+
+/** Calls `method` of the core. Only the methods of the main window go through (commands.rs). */
+export function core<T>(method: string, params: object = {}): Promise<T> {
+  return invoke<T>("core_call", { method, params });
+}
+
+// ---------- status ----------
+
+export const statusGet = (): Promise<Status> => core("status.get");
+
+/** Asks OpenRouter again; answers with the `openrouter` part of the status. */
+export const statusCheckOpenrouter = (): Promise<Status["openrouter"]> => core("status.check_openrouter");
+
+// ---------- history ----------
+
+export interface HistoryQuery {
+  /** Only items whose text contains this. */
+  query?: string;
+  limit?: number;
+  /** Only items older than this: the cursor of the next page. */
+  before_ms?: number;
+}
+
+export const historyList = (q: HistoryQuery): Promise<{ items: HistoryItem[] }> => core("history.list", q);
+export const historyDelete = (id: number): Promise<{ deleted: boolean }> => core("history.delete", { id });
+
+// ---------- dictionary ----------
+
+export const dictionaryList = (): Promise<{ entries: DictionaryEntry[] }> => core("dictionary.list");
+export const dictionaryAdd = (word: string, misheard: string[]): Promise<{ entry: DictionaryEntry }> =>
+  core("dictionary.add", { word, misheard });
+export const dictionaryDelete = (id: number): Promise<{ deleted: boolean }> => core("dictionary.delete", { id });
+export const dictionarySuggestions = (): Promise<{ words: { word: string; count: number }[] }> =>
+  core("dictionary.suggestions");
+
+// ---------- the brain's settings and the key ----------
+
+export const settingsGet = (): Promise<{ settings: BrainSettings }> => core("settings.get");
+export const settingsSet = (key: keyof BrainSettings, value: string | number): Promise<{ settings: BrainSettings }> =>
+  core("settings.set", { key, value });
+export const secretsStatus = (): Promise<{ has_key: boolean }> => core("secrets.status");
+/** Checks the key with OpenRouter and, if it works, stores it. */
+export const secretsSetOpenrouterKey = (key: string): Promise<KeyCheck> => core("secrets.set_openrouter_key", { key });
+
+// ---------- the device side of the core ----------
+
+export const audioDevices = (): Promise<AudioDevices> => core("audio.devices");
+/** Turns the loudness readings on or off (they arrive as `Level` events). */
+export const audioMonitor = (on: boolean): Promise<Record<string, never>> => core("audio.monitor", { on });
+export const modelsStatus = (): Promise<ModelsStatus> => core("models.status");
+/** Downloads the models that are missing; progress arrives as `ModelProgress` events. */
+export const modelsEnsure = (names: string[]): Promise<{ ok: boolean }> => core("models.ensure", { names });
+
+// ---------- commands of the app ----------
+
+export const deviceSettingsGet = (): Promise<DeviceSettings> => invoke("device_settings_get");
+export const deviceSettingsSet = (patch: Partial<DeviceSettings>): Promise<DeviceSettings> =>
+  invoke("device_settings_set", { patch });
+/** Whether the keyboard layout has an AltGr key (Right Alt types characters). */
+export const keyboardHasAltgr = (): Promise<boolean> => invoke("keyboard_has_altgr");
+/** Pauses the global hotkeys while the page records a new one. */
+export const hotkeysPause = (paused: boolean): Promise<void> => invoke("hotkeys_pause", { paused });
+
+/** Starts hearing the events of the core. Call once; a page that calls again replaces the first. */
+export async function subscribeMainEvents(handler: (event: MainEvent) => void): Promise<void> {
+  const channel = new Channel<MainEvent>(handler);
+  await invoke("main_events", { channel });
+}
