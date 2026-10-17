@@ -341,8 +341,12 @@ class LevelMonitor:
             self._suspended = True
             await self._close()
 
-    async def resume(self) -> None:
+    async def resume(self, may_resume: Callable[[], bool] | None = None) -> None:
+        """Take the microphone back after a dictation. `may_resume` is asked once the meter is
+        this call's, so a dictation that started while it waited keeps the meter suspended."""
         async with self._lock:
+            if may_resume is not None and not may_resume():
+                return
             self._suspended = False
             if self._wanted:
                 await self._open(strict=False)
@@ -479,6 +483,8 @@ class App(Router):
         self._kit: concurrent.futures.Future[Any] = concurrent.futures.Future()
         self._service: concurrent.futures.Future[Any] = concurrent.futures.Future()
         self._monitor: LevelMonitor | None = None
+        self._starts = 0  # dictation.start requests under way (the meter makes way for them)
+        self._meter_tasks: set[asyncio.Task[None]] = set()
         self._device_name: str | None = None  # the microphone, set by the app from device.json
         self._threads: list[threading.Thread] = []
         self._closing = threading.Event()
@@ -569,6 +575,7 @@ class App(Router):
             recorder_factory=self._new_recorder,
             segmenter_factory=lambda: self._speech.dictation_segmenter,
             engine_provider=self._speech.engine,
+            on_idle=self._on_dictation_idle,
         )
         service.register(self._inner)
         self._service.set_result(service)
@@ -739,16 +746,53 @@ class App(Router):
 
     async def _dictation(self, method: str, params: dict) -> Any:
         """`dictation.*`, from the service once it exists. It makes way for the meter's
-        microphone, and gives it back when the dictation is over."""
+        microphone, and gives it back when the dictation is over.
+
+        The meter comes back through the service's `on_idle`, whichever way a session ends (the
+        watchdog's cancel of a lost session has no request behind it). A request waits for that
+        before it answers. A start that did not start gives it back itself: while a start is under
+        way the meter stays suspended, so a stop that ends meanwhile cannot reopen it beside the
+        new dictation.
+        """
         service = await self._wait_for(self._service)
-        if method == "dictation.start":
-            self._speech.require_models()
-            await self._meter("make way for the dictation", lambda m: m.suspend())
+        if method != "dictation.start":
+            try:
+                return await self._inner.call(method, params)
+            finally:
+                await self._meter_settled()
+        self._speech.require_models()
+        self._starts += 1
         try:
+            await self._meter("make way for the dictation", lambda m: m.suspend())
             return await self._inner.call(method, params)
         finally:
-            if not service.active:  # over: stopped, cancelled, or never started
-                await self._meter("take the microphone back", lambda m: m.resume())
+            self._starts -= 1
+            await self._meter_settled()
+            if not service.active:  # never started (or already over)
+                await self._give_meter_back()
+
+    def _dictation_idle(self) -> bool:
+        """No dictation has, or is about to take, the microphone."""
+        if self._starts:
+            return False
+        service = self._service
+        return not (service.done() and service.exception() is None and service.result().active)
+
+    def _on_dictation_idle(self) -> None:
+        """The service's `on_idle`, on the loop: give the meter its microphone back."""
+        if self._monitor is None:
+            return
+        task = asyncio.get_running_loop().create_task(self._give_meter_back())
+        self._meter_tasks.add(task)
+        task.add_done_callback(self._meter_tasks.discard)
+
+    async def _give_meter_back(self) -> None:
+        await self._meter("take the microphone back", lambda m: m.resume(self._dictation_idle))
+
+    async def _meter_settled(self) -> None:
+        """Wait for the meter to be given back, if it is being (without cancelling that)."""
+        if self._meter_tasks:
+            await asyncio.wait(list(self._meter_tasks))
 
     async def _meter(self, what: str, step: Callable[[LevelMonitor], Awaitable[None]]) -> None:
         """Do `step` to the level meter, if there is one. What goes wrong with the meter is logged

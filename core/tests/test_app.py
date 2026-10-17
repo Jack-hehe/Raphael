@@ -624,6 +624,28 @@ async def test_restart_leaves_a_meter_that_is_off_alone(meter):
     assert meter.mics == []
 
 
+async def test_resume_leaves_the_meter_off_while_a_dictation_still_has_the_microphone(meter):
+    await meter.monitor.set_on(True)
+    await meter.monitor.suspend()
+    await meter.monitor.resume(lambda: False)  # a new dictation took the microphone meanwhile
+    assert len(meter.mics) == 1 and not meter.mics[0].open
+    await meter.monitor.resume(lambda: True)
+    assert len(meter.mics) == 2 and meter.mics[1].open
+
+
+async def test_resume_asks_whether_it_may_once_it_holds_the_meter(meter):
+    await meter.monitor.set_on(True)
+    await meter.monitor.suspend()
+    state = SimpleNamespace(free=True)
+    await meter.monitor._lock.acquire()  # someone else is busy with the meter
+    resuming = asyncio.create_task(meter.monitor.resume(lambda: state.free))
+    await asyncio.sleep(0.05)
+    state.free = False  # a dictation starts while the resume waits its turn
+    meter.monitor._lock.release()
+    await resuming
+    assert not any(mic.open for mic in meter.mics)
+
+
 async def test_closing_the_meter_closes_the_microphone(meter):
     await meter.monitor.set_on(True)
     await meter.monitor.aclose()
@@ -1093,6 +1115,43 @@ async def test_a_meter_that_cannot_make_way_or_come_back_does_not_spoil_the_dict
     assert caplog.text.count("The level meter could not") == 2
 
 
+async def test_a_stop_that_ends_while_a_new_start_makes_way_does_not_reopen_the_meter(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    await app.call("dictation.start", {"session_id": "s1"})
+    service = app._service.result()
+    monitor = app._monitor
+    await monitor._lock.acquire()  # the meter is busy (a restart, say)
+    starting = asyncio.create_task(app.call("dictation.start", {"session_id": "s2"}))
+    await asyncio.sleep(0.05)  # s2 waits to make way for itself ...
+    stopping = asyncio.create_task(
+        app.call("dictation.stop", {"session_id": "s1", "target_app": None})
+    )
+    await wait_until(lambda: not service.active)  # ... and s1's stop is over, waiting to resume
+    await asyncio.sleep(0.05)
+    monitor._lock.release()
+    await stopping
+    assert await starting == {}  # s1 was over by the time s2 got that far
+    await asyncio.sleep(0.1)
+    assert service.active
+    assert sum(mic.open for mic in kit.mics) == 1  # s2's: no meter beside a dictation
+    await app.call("dictation.stop", {"session_id": "s2", "target_app": None})
+    assert kit.mics[-1].open and sum(mic.open for mic in kit.mics) == 1  # the meter is back
+
+
+async def test_the_meter_comes_back_after_a_session_nobody_stopped(make_app, monkeypatch):
+    monkeypatch.setattr(dictation, "LOST_SESSION_SECONDS", 0.3)
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    await app.call("dictation.start", {"session_id": "s"})  # and nobody stops it
+    service = app._service.result()
+    await wait_until(lambda: not service.active)  # the watchdog cancelled it
+    await wait_until(lambda: len(kit.mics) == 3 and kit.mics[2].open)  # the meter is back
+    assert sum(mic.open for mic in kit.mics) == 1
+
+
 async def test_a_dictation_that_fails_to_start_gives_the_microphone_back_too(make_app):
     kit = make_kit()
     app = make_app(kit, ready=("silero-vad",))
@@ -1302,7 +1361,7 @@ def test_the_real_kit_takes_the_arguments_the_app_gives_it():
     assert "num_threads" in inspect.signature(kit.create_engine).parameters
     assert list(inspect.signature(kit.MicRecorder).parameters)[:2] == ["on_frames", "device"]
     assert list(inspect.signature(kit.WavRecorder).parameters) == ["on_frames", "path", "realtime"]
-    for name in ("recorder_factory", "segmenter_factory", "engine_provider"):
+    for name in ("recorder_factory", "segmenter_factory", "engine_provider", "on_idle"):
         assert name in inspect.signature(kit.DictationService).parameters
     assert callable(kit.rms_level) and callable(kit.list_input_devices)
     assert issubclass(kit.NoMicrophoneError, Exception)
