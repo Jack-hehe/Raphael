@@ -77,6 +77,8 @@ class FakeRecorder:
         self.start_gate: threading.Event | None = None  # start() waits for it
         self.start_entered = threading.Event()
         self.stop_gate: threading.Event | None = None  # the next stop() waits for it (only once)
+        self.next_stop_gate: threading.Event | None = None  # ... and the one after that
+        self.stop_threads: list[int] = []
         self.stop_entered = threading.Event()
         self.clock: FakeClock | None = None  # advanced by each chunk's length before it is fed
         self.start_count = 0
@@ -119,7 +121,8 @@ class FakeRecorder:
 
     def stop(self) -> None:
         self.stop_count += 1
-        gate, self.stop_gate = self.stop_gate, None
+        self.stop_threads.append(threading.get_ident())
+        gate, self.stop_gate, self.next_stop_gate = self.stop_gate, self.next_stop_gate, None
         if gate is not None:
             self.stop_entered.set()
             gate.wait(10)
@@ -973,9 +976,32 @@ async def test_a_stop_that_is_cancelled_while_closing_the_microphone_closes_it_i
     stopping.cancel()
     with pytest.raises(asyncio.CancelledError):
         await stopping
-    assert rig.recorder.stop_count == 2 and not rig.recorder.running  # it closed it by itself
     assert not rig.service.active
+    await wait_until(lambda: rig.recorder.stop_count == 2)  # it closed it by itself ...
+    await wait_until(lambda: not rig.recorder.running)  # ... on a thread
     gate.set()
+    await wait_until(lambda: not our_threads())
+
+
+async def test_a_cancelled_stop_does_not_wait_for_the_microphone_to_close(rig, router):
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    first = rig.recorder.stop_gate = threading.Event()  # the close in progress gets stuck
+    second = rig.recorder.next_stop_gate = threading.Event()  # and so would the one that follows
+    loop_thread = threading.get_ident()
+    stopping = asyncio.create_task(stop(router))
+    await wait_until(rig.recorder.stop_entered.is_set)
+    began = time.monotonic()
+    stopping.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await stopping
+    assert time.monotonic() - began < 2  # the loop was not held up by the stuck close
+    assert not rig.service.active
+    await wait_until(lambda: rig.recorder.stop_count == 2)
+    assert loop_thread not in rig.recorder.stop_threads  # no close ran on the loop thread
+    first.set()
+    second.set()
     await wait_until(lambda: not our_threads())
 
 
@@ -1333,6 +1359,114 @@ async def test_the_tail_of_a_watchdog_close_is_kept_once(make_rig, router):
     r = await stop(router)
     assert r["text"] == "甲乙"
     assert rig.segmenter.accepted_samples == 2 * RATE
+
+
+# --- a session nobody stops (ruling 8, clarified) ------------------------------------------------
+
+
+def test_a_lost_session_is_given_a_minute_over_the_recording_cap():
+    assert dictation.LOST_SESSION_SECONDS == MAX_RECORDING_SECONDS + 60 == 360
+
+
+async def test_a_session_nobody_stops_is_cancelled(make_rig, router, brain, caplog):
+    clock = FakeClock()
+    rig = make_rig(clock=clock, stall_seconds=1e6)  # the stall watchdog stays out of this
+    rig.recorder.chunks = [chunk(1.0)]
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        await start(router, "s1")
+        await rig.recorder.fed(1)
+        clock.advance(dictation.LOST_SESSION_SECONDS - 5)
+        await asyncio.sleep(0.4)  # a few checks
+        assert rig.service.active and rig.recorder.stop_count == 0  # not yet
+        clock.advance(10)
+        await wait_until(lambda: not rig.service.active)
+    assert rig.recorder.stop_count == 1 and not rig.recorder.running  # the microphone is closed
+    assert [r for r in caplog.records if r.levelno == logging.WARNING and "lost" in r.getMessage()]
+    await wait_until(lambda: not our_threads())
+    assert brain.finalize_calls == 0
+    with pytest.raises(RpcError) as e:  # as after a cancel
+        await stop(router, "s1")
+    assert e.value.code == NOT_FOUND
+    assert await start(router, "s2") == {}  # and a new dictation can begin
+
+
+async def test_a_session_that_is_stopped_in_time_is_left_alone(make_rig, router, brain):
+    clock = FakeClock()
+    rig = make_rig(clock=clock, stall_seconds=1e6)
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    clock.advance(dictation.LOST_SESSION_SECONDS - 5)
+    r = await stop(router)
+    assert r["text"] == "text0" and brain.finalize_calls == 1
+    clock.advance(100)
+    await asyncio.sleep(0.4)
+    assert rig.recorder.stop_count == 1  # only the stop's own
+
+
+async def test_the_limit_is_counted_from_the_start_of_each_session(make_rig, router):
+    clock = FakeClock()
+    rig = make_rig(clock=clock, stall_seconds=1e6)
+    await start(router, "s1")
+    clock.advance(dictation.LOST_SESSION_SECONDS - 5)
+    await router.call("dictation.cancel", {"session_id": "s1"})
+    await start(router, "s2")  # a new timer
+    clock.advance(dictation.LOST_SESSION_SECONDS - 5)
+    await asyncio.sleep(0.4)
+    assert rig.service.active
+
+
+async def test_a_session_whose_microphone_stalled_is_still_cancelled_at_the_limit(
+    make_rig, router, brain, caplog
+):
+    clock = FakeClock()
+    rig = make_rig(clock=clock)  # the default 2 s stall watchdog
+    rig.recorder.chunks = [chunk(1.0)]
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        await start(router)
+        await rig.recorder.fed(1)
+        clock.advance(MIC_STALL_SECONDS + 1)
+        await wait_until(lambda: rig.recorder.stop_count >= 1)  # the stall closed the microphone
+        await asyncio.sleep(0.8)  # the watchdog goes on looking, but says it once
+    assert len([r for r in caplog.records if "No audio" in r.getMessage()]) == 1
+    assert rig.service.active
+    clock.advance(dictation.LOST_SESSION_SECONDS)
+    await wait_until(lambda: not rig.service.active)
+    assert rig.recorder.stop_count == 1 and brain.finalize_calls == 0
+
+
+async def test_a_stop_right_after_the_stall_does_not_wait_for_the_next_check(make_rig, router):
+    clock = FakeClock()
+    rig = make_rig(clock=clock)
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    clock.advance(MIC_STALL_SECONDS + 1)
+    await wait_until(lambda: rig.recorder.stop_count >= 1)
+    tasks = len(asyncio.all_tasks())
+    r = await stop(router)
+    assert r["text"] == "text0"
+    assert len(asyncio.all_tasks()) == tasks - 1  # the watchdog went with the stop
+
+
+async def test_a_stop_during_the_lost_session_cancel_gets_not_found(make_rig, router, brain):
+    clock = FakeClock()
+    rig = make_rig(clock=clock, stall_seconds=1e6)
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    gate = rig.recorder.stop_gate = threading.Event()  # closing the microphone takes a while
+    clock.advance(dictation.LOST_SESSION_SECONDS + 1)
+    await wait_until(rig.recorder.stop_entered.is_set)
+    stopping = asyncio.create_task(stop(router))
+    await asyncio.sleep(0.1)
+    assert not stopping.done()
+    gate.set()
+    with pytest.raises(RpcError) as e:
+        await stopping
+    assert e.value.code == NOT_FOUND
+    assert brain.finalize_calls == 0 and not rig.service.active
+    assert rig.recorder.stop_count == 1
 
 
 # --- the real recorder, segmenter and engine -----------------------------------------------------

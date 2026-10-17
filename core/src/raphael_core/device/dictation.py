@@ -61,6 +61,11 @@ MIN_SPEECH_SECONDS = 0.3
 # Windows MME may never tell us that a microphone was unplugged: the frames just stop. A recording
 # that gets no frames for this long is treated like one whose recorder reported an error.
 MIC_STALL_SECONDS = 2.0
+# A session still recording this long after its start has been forgotten: the controller should
+# have stopped or cancelled it long since (the audio stops being kept at MAX_RECORDING_SECONDS). It
+# is cancelled and the microphone closed, so the service does not stay busy, and the microphone
+# open, for good.
+LOST_SESSION_SECONDS = MAX_RECORDING_SECONDS + 60
 
 _LEVEL_METHOD = "audio.level"
 
@@ -133,6 +138,8 @@ class _Session:
         self.worker: threading.Thread | None = None
         self.worker_told = False
         self.watch: asyncio.Task[None] | None = None
+        self.watch_busy = False  # the watchdog is closing the recorder or cancelling the session
+        self.started_at = now  # when the recording began, on the service's clock
         self.stalled = False
         self.close_lock = asyncio.Lock()
         self.hints: list[str] = []
@@ -295,7 +302,7 @@ class DictationService:
             opening.add_done_callback(lambda done: self._close_late(recorder, done))
             raise
         session.recorder_open = True
-        session.last_frame_at = self._clock()
+        session.started_at = session.last_frame_at = self._clock()
         self._check_not_cancelled(session)
         session.worker = threading.Thread(
             target=self._run, args=(session,), name=f"raphael-dictation-{session.id}", daemon=True
@@ -471,28 +478,52 @@ class DictationService:
     # --- the microphone watchdog ----------------------------------------------------------------
 
     async def _watchdog(self, session: _Session) -> None:
-        """Close a recorder that has gone quiet. The session goes on, as for a recorder error: the
-        stop uses the speech that was captured, or says there is no microphone."""
+        """Two things to look out for while a session is recording.
+
+        A recorder that has gone quiet is closed. The session goes on, as for a recorder error: the
+        stop uses the speech that was captured, or says there is no microphone.
+
+        A session that nobody has stopped or cancelled for LOST_SESSION_SECONDS is cancelled, the
+        way `dictation.cancel` would, and the microphone closed.
+        """
         while session.state == "recording":
             await asyncio.sleep(self._watch_interval)
             if session.state != "recording":
                 return
-            if self._clock() - session.last_frame_at >= self._stall_seconds:
-                break
-        else:
-            return
-        logger.warning(
-            "No audio from the microphone for %g s: taking it as gone and closing it",
-            self._stall_seconds,
-        )
-        session.stalled = True
-        await self._close_recorder(session)
+            now = self._clock()
+            if now - session.started_at >= LOST_SESSION_SECONDS:
+                logger.warning(
+                    "The dictation session %r is lost: it has been recording for %g s with no "
+                    "stop or cancel; cancelling it and closing the microphone",
+                    session.id,
+                    now - session.started_at,
+                )
+                session.watch_busy = True
+                try:
+                    await self._cancel_session(session)
+                finally:
+                    session.watch_busy = False
+                return
+            if not session.stalled and now - session.last_frame_at >= self._stall_seconds:
+                logger.warning(
+                    "No audio from the microphone for %g s: taking it as gone and closing it",
+                    self._stall_seconds,
+                )
+                session.stalled = True
+                session.watch_busy = True
+                try:
+                    await self._close_recorder(session)
+                finally:
+                    session.watch_busy = False
 
     async def _stop_watchdog(self, session: _Session) -> None:
+        """Make the watchdog end: wake it if it is asleep, wait for it if it is busy closing the
+        recorder or cancelling. Called from the watchdog itself (through its cancel): nothing to do.
+        """
         watch = session.watch
-        if watch is None or watch.done():
+        if watch is None or watch.done() or watch is asyncio.current_task():
             return
-        if not session.stalled:  # asleep: safe to wake. Otherwise it is closing the recorder.
+        if not session.watch_busy:
             watch.cancel()
         await asyncio.wait([watch])
 
@@ -632,11 +663,13 @@ class DictationService:
         with session.lock:
             session.closed = True
             session.levels_on = False
-        if session.watch is not None and not session.stalled:
+        if session.watch is not None and not session.watch_busy:
             session.watch.cancel()
         if session.recorder is not None and session.recorder_open:
             session.recorder_open = False
-            self._stop_recorder(session.recorder)
+            # Fire and forget, like `_close_late`: the request that is being abandoned must not
+            # hold up the loop for as long as the microphone takes to close.
+            session.loop.run_in_executor(None, self._stop_recorder, session.recorder)
         self._tell_worker(session, _CANCEL)
         if session.worker is not None and session not in self._retiring:
             self._retiring.append(session)
