@@ -38,9 +38,11 @@ LANGUAGE_NAMES = {"zh": "Chinese", "ja": "Japanese", "en": "English"}
 # for a 20 second segment with hints.
 _QWEN3_MAX_TOTAL_LEN = 1024
 _QWEN3_MAX_NEW_TOKENS = 384
-# Each hint word takes room in the prompt that the audio then lacks, and time: on the development
-# laptop (4 threads) 20 words added about 0.2 s to a segment of 5 s and 50 words about 0.8 s.
-_MAX_HINT_WORDS = 50
+# Hints take room in the prompt that the audio then lacks, and time: on the development laptop
+# (4 threads) 20 words added about 0.2 s to a segment of 5 s and 50 words about 0.8 s. So at most 20
+# words, and at most 200 characters in all, or one very long dictionary entry would take the prompt.
+_MAX_HINT_WORDS = 20
+_MAX_HINT_CHARS = 200
 # Qwen3-ASR writes "language Chinese<asr_text>" ahead of the text. sherpa-onnx takes that away, but
 # not when it is all the model wrote (for a short burst of noise, say): the marker is then the text.
 _QWEN3_MARKUP = re.compile(r"(?:language\s+\w+)?<asr_text>|<\|[^|<>]*\|>")
@@ -136,11 +138,22 @@ def _hotwords(hints: Sequence[str]) -> str:
     """`hints` as the comma-separated list that sherpa-onnx takes for Qwen3-ASR.
 
     A comma inside a hint would end a word there for sherpa-onnx too, so the hint is split at it.
-    Empty words are dropped, and so is every word after the first _MAX_HINT_WORDS: the dictionary
-    lists the newest words first.
+    Empty words are dropped. The words are taken in order until there are _MAX_HINT_WORDS of them.
+    A word that would take the list past _MAX_HINT_CHARS characters (commas included) is skipped,
+    and the later words are still tried, so one very long entry does not block the rest. The
+    dictionary lists the newest first, so a full list loses the oldest words.
     """
     words = [word.strip() for hint in hints for word in hint.split(",")]
-    return ",".join([word for word in words if word][:_MAX_HINT_WORDS])
+    kept: list[str] = []
+    length = -1  # the length of ",".join(kept); the first word has no comma before it
+    for word in filter(None, words):
+        if len(kept) == _MAX_HINT_WORDS:
+            break
+        if length + 1 + len(word) > _MAX_HINT_CHARS:
+            continue
+        kept.append(word)
+        length += 1 + len(word)
+    return ",".join(kept)
 
 
 class Qwen3AsrEngine(_SherpaEngine):

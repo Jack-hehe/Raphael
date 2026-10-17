@@ -344,10 +344,68 @@ def test_without_words_there_is_no_hotwords_option(hints, qwen3, sherpa, speech)
     assert sherpa.recognizer.decoded[0].options == {}
 
 
-def test_only_the_first_fifty_hint_words_are_kept(qwen3, sherpa, speech):
+def test_only_the_first_twenty_hint_words_are_kept(qwen3, sherpa, speech):
     words = [f"word{i}" for i in range(60)]
     qwen3.transcribe(speech, hints=words)
-    assert sherpa.recognizer.decoded[0].options["hotwords"] == ",".join(words[:50])
+    assert sherpa.recognizer.decoded[0].options["hotwords"] == ",".join(words[:20])
+
+
+def ten_characters(count: int) -> list[str]:
+    return [f"hintword{i:02d}" for i in range(count)]
+
+
+def test_hint_text_does_not_pass_200_characters(qwen3, sherpa, speech):
+    words = ten_characters(20)  # 19 of them with their commas would be 208 characters
+    qwen3.transcribe(speech, hints=words)
+    hotwords = sherpa.recognizer.decoded[0].options["hotwords"]
+    assert hotwords == ",".join(words[:18])  # 197 characters
+    assert len(hotwords) <= 200
+
+
+@pytest.mark.parametrize(
+    ("after", "kept"),
+    [
+        (["ab"], ["ab"]),  # 200 characters in all: it fits
+        (["abc"], []),  # 201: it does not
+        (["abc", "ab"], ["ab"]),  # the one that does not fit is skipped, a shorter one still does
+        (["abc", "ab", "c"], ["ab"]),  # and then nothing more fits
+    ],
+    ids=["200", "201", "201 then 200", "201 then 200 then more"],
+)
+def test_the_200_character_limit_is_exact(after, kept, qwen3, sherpa, speech):
+    first = ten_characters(18)  # 197 characters
+    qwen3.transcribe(speech, hints=[*first, *after])
+    hotwords = sherpa.recognizer.decoded[0].options["hotwords"]
+    assert hotwords == ",".join([*first, *kept])
+    assert len(hotwords) <= 200
+
+
+@pytest.mark.parametrize(
+    ("hints", "hotwords"),
+    [
+        # An entry too long for what is left is skipped, and the later words are still sent.
+        (["x" * 500, "Codex", "Tauri"], "Codex,Tauri"),
+        (["Codex", "x" * 500, "Tauri"], "Codex,Tauri"),
+        (["Codex", "x" * 201, "Tauri"], "Codex,Tauri"),
+        (["Codex", "Tauri", "x" * 500], "Codex,Tauri"),
+        (["x" * 200, "Tauri"], "x" * 200),
+    ],
+    ids=["first", "middle", "201 characters", "last", "200 characters"],
+)
+def test_one_very_long_entry_cannot_take_the_prompt(hints, hotwords, qwen3, sherpa, speech):
+    qwen3.transcribe(speech, hints=hints)
+    assert sherpa.recognizer.decoded[0].options == {"hotwords": hotwords}
+
+
+def test_only_very_long_entries_leave_no_hints(qwen3, sherpa, speech):
+    qwen3.transcribe(speech, hints=["x" * 500, "y" * 300])
+    assert sherpa.recognizer.decoded[0].options == {}
+
+
+def test_a_skipped_entry_does_not_count_towards_the_twenty_words(qwen3, sherpa, speech):
+    words = [f"w{i}" for i in range(30)]
+    qwen3.transcribe(speech, hints=["x" * 500, *words])
+    assert sherpa.recognizer.decoded[0].options["hotwords"] == ",".join(words[:20])
 
 
 @pytest.mark.parametrize("code", LANGUAGE_NAMES)
