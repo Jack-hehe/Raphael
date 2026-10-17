@@ -11,6 +11,7 @@ def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.delenv("RAPHAEL_DATA_DIR", raising=False)
+    monkeypatch.delenv("RAPHAEL_MODELS_DIR", raising=False)
     monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
@@ -33,6 +34,36 @@ def test_models_and_the_database_live_in_the_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("RAPHAEL_DATA_DIR", str(tmp_path / "data"))
     assert paths.models_dir() == tmp_path / "data" / "models"
     assert paths.db_path() == tmp_path / "data" / "raphael.db"
+
+
+def test_models_dir_can_name_another_data_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAPHAEL_DATA_DIR", str(tmp_path / "data"))
+    other = tmp_path / "elsewhere"
+    assert paths.models_dir(other) == other / "models"
+    assert not other.exists()  # only a path is made, nothing on disk
+
+
+def test_the_database_path_can_name_another_data_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAPHAEL_DATA_DIR", str(tmp_path / "data"))
+    assert paths.db_path(tmp_path / "other") == tmp_path / "other" / "raphael.db"
+    assert not (tmp_path / "other").exists()
+
+
+def test_the_models_can_live_outside_the_data_dir(tmp_path, monkeypatch):
+    # The end-to-end test runs the core on an empty data dir but with the models that are already
+    # downloaded, which are in the real one.
+    monkeypatch.setenv("RAPHAEL_DATA_DIR", str(tmp_path / "data"))
+    shared = tmp_path / "shared-models"
+    monkeypatch.setenv("RAPHAEL_MODELS_DIR", str(shared))
+    assert paths.models_dir() == shared
+    assert paths.models_dir(tmp_path / "other") == shared  # the override wins over any base
+    assert paths.db_path() == tmp_path / "data" / "raphael.db"  # the database stays put
+
+
+def test_an_empty_models_override_is_ignored(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAPHAEL_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RAPHAEL_MODELS_DIR", "")
+    assert paths.models_dir() == tmp_path / "data" / "models"
 
 
 def test_windows_default_is_raphael_under_appdata(fake_home, monkeypatch):

@@ -11,6 +11,7 @@ the type of the exception behind it when there is one, and nothing else.
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -274,6 +275,7 @@ class OpenRouterClient:
         self._key_provider = key_provider
         self._http = http
         self._own_http: httpx.AsyncClient | None = None
+        self._own_http_lock = threading.Lock()  # warm_up runs on another thread than the requests
 
     async def complete_json(
         self,
@@ -327,6 +329,14 @@ class OpenRouterClient:
         key = self._stored_key() if key is None else key
         return _to_key_info(await self._request("GET", "/key", key, timeout_s))
 
+    def warm_up(self) -> None:
+        """Make the httpx client now instead of at the first request.
+
+        Building it takes over a second (it loads the TLS certificates), which a dictation should
+        not wait for. Makes no request. Safe to call from any thread, and more than once.
+        """
+        self._client()
+
     async def aclose(self) -> None:
         """Close the httpx client this object made. One it was given stays open.
 
@@ -350,12 +360,13 @@ class OpenRouterClient:
     def _client(self) -> httpx.AsyncClient:
         if self._http is not None:
             return self._http
-        if self._own_http is None:
-            # Dictations can be minutes apart, and httpx drops an idle connection after 5 s. Two
-            # minutes spares most dictations the DNS, TCP and TLS set-up. A connection the server
-            # closed in the meantime is noticed and replaced before it is used.
-            self._own_http = httpx.AsyncClient(limits=httpx.Limits(keepalive_expiry=120))
-        return self._own_http
+        with self._own_http_lock:
+            if self._own_http is None:
+                # Dictations can be minutes apart, and httpx drops an idle connection after 5 s.
+                # Two minutes spares most dictations the DNS, TCP and TLS set-up. A connection the
+                # server closed in the meantime is noticed and replaced before it is used.
+                self._own_http = httpx.AsyncClient(limits=httpx.Limits(keepalive_expiry=120))
+            return self._own_http
 
     async def _request(
         self, method: str, path: str, key: str | None, timeout_s: float, body: dict | None = None

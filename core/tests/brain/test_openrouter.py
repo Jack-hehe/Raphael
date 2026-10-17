@@ -924,6 +924,29 @@ async def test_aclose_without_a_request_does_nothing():
     await OpenRouterClient(lambda: KEY).aclose()
 
 
+async def test_warm_up_makes_the_http_client_ahead_of_the_first_request():
+    # Building an httpx client takes over a second here (it loads the TLS certificates), and the
+    # first dictation should not pay for it. No request is made.
+    client = OpenRouterClient(lambda: KEY)
+    assert client._own_http is None
+    client.warm_up()
+    made = client._own_http
+    assert made is not None and not made.is_closed
+    client.warm_up()
+    assert client._own_http is made  # once
+    await client.aclose()
+    assert made.is_closed
+
+
+async def test_warm_up_leaves_a_client_it_was_given_alone():
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: ok_reply({"text": "x"}))
+    ) as http:
+        client = OpenRouterClient(lambda: KEY, http=http)
+        client.warm_up()
+        assert client._own_http is None
+
+
 # --- models -----------------------------------------------------------------------------------
 
 
