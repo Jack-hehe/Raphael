@@ -25,7 +25,7 @@ tauri-plugin-log = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["sync", "time", "macros", "rt-multi-thread"] }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2.5"
@@ -33,13 +33,14 @@ tauri-plugin-single-instance = "2.5"
 [target.'cfg(windows)'.dependencies]
 # Pasting (src/paste): the paste key chord.
 enigo = "0.6"
-# 0.62 is the version Tauri 2.12 uses, so the HWND types match. The overlay uses it to stay out of
-# Alt+Tab, pasting for the clipboard and the focused window.
+# 0.62 is the version Tauri 2.12 uses, so the HWND types match. Used by the overlay (Alt+Tab),
+# pasting (clipboard, focus) and the core process (Job Object).
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_System_DataExchange",
+  "Win32_System_JobObjects",
   "Win32_System_LibraryLoader",
   "Win32_System_Memory",
   "Win32_System_Ole",
@@ -47,6 +48,9 @@ windows = { version = "0.62", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }
+
+[dev-dependencies]
+tempfile = "3"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
