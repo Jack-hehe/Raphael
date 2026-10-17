@@ -8,6 +8,7 @@
 /voice/
 /models/
 /assets-private/
+/app/public/private/
 *.ckpt
 *.pth
 *.onnx
@@ -21,6 +22,7 @@
 *.ogg
 *.m4a
 *.mp4
+/eval/data/
 
 # Secrets
 .env
