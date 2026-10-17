@@ -494,6 +494,9 @@ export function createSettings(app: AppContext): Page {
         api.audioDevices(),
         api.keyboardHasAltgr(),
         getVersion(),
+        // Read again: the settings may have changed since the window started. `refreshDevice` puts
+        // the answer in `app.device()` itself, or drops it if a newer read or write overtook it.
+        app.refreshDevice(),
       ]);
       if (mine !== loads || !visible) return;
       brain = brainResult.status === "fulfilled" ? brainResult.value.settings : null;

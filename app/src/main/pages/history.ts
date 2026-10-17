@@ -5,7 +5,7 @@ import * as api from "../api";
 import { dayLabel, describeError, formatClock, formatRetention, KEEP_FOREVER_DAYS } from "../format";
 import { bindingLabels } from "../keys";
 import type { AppContext, HistoryItem, Page } from "../types";
-import { debounce } from "../undo";
+import { Deletions, debounce } from "../undo";
 import { btn, copyText, esc, fieldHTML, iconBtn, toaster } from "../ui";
 
 /** The search waits this long after the last key. */
@@ -51,6 +51,8 @@ export function createHistory(app: AppContext): Page {
   let items: HistoryItem[] = [];
   /** Deleted, but not yet for the core (the toast is still there): left out of the list. */
   const deleting = new Set<number>();
+  /** Deleted for good: a load that started before the delete must not bring the item back. */
+  const deletions = new Deletions();
   const expanded = new Set<number>();
   let query = "";
   let canLoadMore = false;
@@ -103,13 +105,15 @@ export function createHistory(app: AppContext): Page {
   /** Loads the newest items (or, with `append`, the ones after what is loaded). */
   async function load(append: boolean): Promise<void> {
     const mine = ++loads;
+    const read = deletions.startRead();
     const params: api.HistoryQuery = { limit: PAGE_SIZE };
     if (query) params.query = query;
     if (append && items.length > 0) params.before_ms = items[items.length - 1].created_at_ms;
     try {
       const { items: got } = await api.historyList(params);
       if (mine !== loads) return;
-      items = append ? [...items, ...got.filter((g) => !items.some((i) => i.id === g.id))] : got;
+      const alive = deletions.filter(read, got);
+      items = append ? [...items, ...alive.filter((g) => !items.some((i) => i.id === g.id))] : alive;
       canLoadMore = got.length === PAGE_SIZE;
       failure = null;
     } catch (err) {
@@ -137,6 +141,7 @@ export function createHistory(app: AppContext): Page {
       message: "已刪除 1 筆紀錄",
       commit: async () => {
         await api.historyDelete(id);
+        deletions.confirm(id);
         items = items.filter((item) => item.id !== id);
         deleting.delete(id);
       },

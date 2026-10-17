@@ -69,6 +69,35 @@ export class Undoable {
   }
 }
 
+/**
+ * Remembers what was deleted for good, so that a list that was asked for just before the delete
+ * reached the core, and answers after it, does not bring the item back.
+ *
+ * It judges a list by when its read started, not by the id alone: the core's ids are SQLite row
+ * ids, and the id of the last row is given out again after that row is deleted. A list read after
+ * the delete may therefore hold a new item with a deleted id, and it must be shown.
+ */
+export class Deletions {
+  private clock = 0;
+  /** When (the clock) the delete of each id was confirmed by the core. */
+  private readonly confirmed = new Map<number, number>();
+
+  /** Call when a list is asked for; give the result to [`filter`](Deletions.filter) with the answer. */
+  startRead(): number {
+    return this.clock;
+  }
+
+  /** The core has deleted `id`. */
+  confirm(id: number): void {
+    this.confirmed.set(id, ++this.clock);
+  }
+
+  /** What a list that started at `read` found, without the items that were deleted after it started. */
+  filter<T extends { id: number }>(read: number, found: readonly T[]): T[] {
+    return found.filter((item) => (this.confirmed.get(item.id) ?? 0) <= read);
+  }
+}
+
 /** `fn`, but it runs `ms` after the last call, once. `cancel()` drops the call that is waiting. */
 export function debounce<A extends unknown[]>(
   fn: (...args: A) => void,

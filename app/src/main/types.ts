@@ -126,6 +126,8 @@ export interface AppContext {
   go(page: PageId): void;
   /** The device settings as they are now. */
   device(): DeviceSettings;
+  /** Reads the device settings from the app again; rejects if they cannot be read. */
+  refreshDevice(): Promise<DeviceSettings>;
   /** Changes some device settings; rejects with the reason. */
   setDevice(patch: Partial<DeviceSettings>): Promise<DeviceSettings>;
   /** Hears the events of the core (microphone level, model download). Returns how to stop hearing. */

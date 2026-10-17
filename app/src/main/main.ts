@@ -7,6 +7,7 @@ import { createDictionary } from "./pages/dictionary";
 import { createHistory } from "./pages/history";
 import { createHome } from "./pages/home";
 import { createSettings } from "./pages/settings";
+import { DeviceState } from "./device";
 import type { AppContext, DeviceSettings, MainEvent, Page, PageId } from "./types";
 import { Undoable } from "./undo";
 import { type IconName, ico, toaster } from "./ui";
@@ -39,11 +40,16 @@ const NAV: { id: PageId; name: string; icon: IconName }[] = [
 // ---------- the theme ----------
 
 const prefersDark = matchMedia("(prefers-color-scheme: dark)");
-let device: DeviceSettings = DEFAULT_DEVICE;
+/** The device settings, kept right when reads and writes overlap. */
+const device = new DeviceState(
+  DEFAULT_DEVICE,
+  { get: api.deviceSettingsGet, set: api.deviceSettingsSet },
+  () => applyTheme(),
+);
 
 /** Light or dark, as `appearance` says; `system` follows the system. */
 function applyTheme(): void {
-  const { appearance } = device;
+  const { appearance } = device.get();
   document.documentElement.dataset.theme = appearance === "system" ? (prefersDark.matches ? "dark" : "light") : appearance;
 }
 prefersDark.addEventListener("change", applyTheme);
@@ -53,8 +59,7 @@ prefersDark.addEventListener("change", applyTheme);
 async function start(): Promise<void> {
   applyTheme();
   try {
-    device = await api.deviceSettingsGet();
-    applyTheme();
+    await device.refresh();
   } catch (err) {
     console.error("main: could not read the device settings", err);
   }
@@ -68,19 +73,9 @@ async function start(): Promise<void> {
   const listeners = new Set<(event: MainEvent) => void>();
   const ctx: AppContext = {
     go,
-    device: () => device,
-    async setDevice(patch) {
-      try {
-        device = await api.deviceSettingsSet(patch);
-      } catch (err) {
-        // The settings may have changed although the call failed (a file that could not be saved).
-        device = await api.deviceSettingsGet().catch(() => device);
-        throw err;
-      } finally {
-        applyTheme();
-      }
-      return device;
-    },
+    device: () => device.get(),
+    refreshDevice: () => device.refresh(),
+    setDevice: (patch) => device.set(patch),
     onEvent(handler) {
       listeners.add(handler);
       return () => void listeners.delete(handler);

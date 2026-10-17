@@ -5,6 +5,7 @@
 import * as api from "../api";
 import { describeError, parseMisheard } from "../format";
 import type { AppContext, DictionaryEntry, Page } from "../types";
+import { Deletions } from "../undo";
 import { btn, esc, fieldHTML, ico, iconBtn, row, toaster } from "../ui";
 
 const wordRow = (entry: DictionaryEntry): string =>
@@ -39,6 +40,8 @@ export function createDictionary(app: AppContext): Page {
   let suggested: string[] = [];
   /** Deleted, but not yet for the core (the toast is still there): left out of the list. */
   const deleting = new Set<number>();
+  /** Deleted for good: a load that started before the delete must not bring the word back. */
+  const deletions = new Deletions();
   let loads = 0;
 
   function render(): void {
@@ -55,9 +58,10 @@ export function createDictionary(app: AppContext): Page {
 
   async function load(): Promise<void> {
     const mine = ++loads;
+    const read = deletions.startRead();
     const [listed, found] = await Promise.allSettled([api.dictionaryList(), api.dictionarySuggestions()]);
     if (mine !== loads) return;
-    if (listed.status === "fulfilled") entries = listed.value.entries;
+    if (listed.status === "fulfilled") entries = deletions.filter(read, listed.value.entries);
     else toaster.info(`無法讀取字典：${describeError(listed.reason)}`);
     suggested = found.status === "fulfilled" ? found.value.words.map((w) => w.word) : [];
     render();
@@ -95,6 +99,7 @@ export function createDictionary(app: AppContext): Page {
       message: "已刪除",
       commit: async () => {
         await api.dictionaryDelete(id);
+        deletions.confirm(id);
         entries = entries.filter((entry) => entry.id !== id);
         deleting.delete(id);
       },

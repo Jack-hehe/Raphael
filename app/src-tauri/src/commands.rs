@@ -31,7 +31,7 @@ use crate::core_process::{CORE_RESTARTED, CoreApi, CoreProcess};
 use crate::device_settings::{self, Appearance, DeviceSettings, DeviceStore, FILE_NAME, Subtitles};
 use crate::hotkey::{Bindings, HotkeyService, PauseReason};
 use crate::overlay::Overlay;
-use crate::rpc::{CORE_EXITED, Notification, TIMEOUT};
+use crate::rpc::{CORE_EXITED, Notification, RpcError, TIMEOUT};
 
 /// What `core_call` says when there is no core to call.
 const CORE_NOT_RUNNING: &str = "Raphael's core is not running";
@@ -212,8 +212,9 @@ pub async fn main_events(app: AppHandle, channel: Channel<MainEvent>) -> Result<
 
 /// What changing the device settings does outside the settings file.
 pub trait Effects: Send + Sync {
-    /// Registers new hotkeys.
-    fn bindings(&self, bindings: &Bindings) -> Result<(), String>;
+    /// Registers new hotkeys. The hotkey thread answers within 2 s, so this must not hold up the
+    /// async runtime.
+    fn bindings(&self, bindings: &Bindings) -> impl Future<Output = Result<(), String>> + Send;
     /// Tells the core which microphone to use (`None`: the system's default).
     fn microphone(&self, name: Option<&str>) -> impl Future<Output = Result<(), String>> + Send;
     /// Starts Raphael with Windows, or no longer does.
@@ -244,15 +245,15 @@ pub async fn apply_changes<E: Effects>(
     let microphone_changed = old.microphone != new.microphone;
 
     if bindings_changed {
-        effects.bindings(&bindings_of(new))?;
+        effects.bindings(&bindings_of(new)).await?;
     }
-    let put_back_bindings = || {
-        if bindings_changed && let Err(err) = effects.bindings(&bindings_of(old)) {
+    let put_back_bindings = async || {
+        if bindings_changed && let Err(err) = effects.bindings(&bindings_of(old)).await {
             log::error!("could not put the old hotkeys back: {err}");
         }
     };
     if microphone_changed && let Err(err) = effects.microphone(new.microphone.as_deref()).await {
-        put_back_bindings();
+        put_back_bindings().await;
         return Err(err);
     }
     if old.autostart != new.autostart
@@ -262,7 +263,7 @@ pub async fn apply_changes<E: Effects>(
         {
             log::error!("could not put the old microphone back: {err}");
         }
-        put_back_bindings();
+        put_back_bindings().await;
         return Err(err);
     }
     if old.emblem_size != new.emblem_size || old.subtitles != new.subtitles {
@@ -321,13 +322,22 @@ struct AppEffects {
     app: AppHandle,
 }
 
-impl Effects for AppEffects {
-    fn bindings(&self, bindings: &Bindings) -> Result<(), String> {
-        let hotkeys = self
-            .app
+impl AppEffects {
+    /// The hotkey service, if the keyboard hook started.
+    fn hotkeys(&self) -> Result<Arc<HotkeyService>, String> {
+        self.app
             .try_state::<Arc<HotkeyService>>()
-            .ok_or("全域快捷鍵沒有啟動，現在無法變更快捷鍵")?;
-        hotkeys.update_bindings(bindings)
+            .map(|hotkeys| Arc::clone(&hotkeys))
+            .ok_or_else(|| "全域快捷鍵沒有啟動，現在無法變更快捷鍵".to_owned())
+    }
+}
+
+impl Effects for AppEffects {
+    async fn bindings(&self, bindings: &Bindings) -> Result<(), String> {
+        let hotkeys = self.hotkeys()?;
+        let bindings = bindings.clone();
+        // `update_bindings` waits for the hotkey thread's answer, up to 2 s.
+        run_blocking(move || hotkeys.update_bindings(&bindings)).await
     }
 
     async fn microphone(&self, name: Option<&str>) -> Result<(), String> {
@@ -336,15 +346,7 @@ impl Effects for AppEffects {
             log::warn!("the microphone is saved, but the core is not running to be told");
             return Ok(());
         };
-        match core.call("audio.set_device", json!({ "name": name })).await {
-            Ok(_) => Ok(()),
-            // The core is down or slow. It is told again when it is back (`start`).
-            Err(err) if err.code == CORE_EXITED || err.code == TIMEOUT => {
-                log::warn!("the microphone is saved, but the core could not be told: {err}");
-                Ok(())
-            }
-            Err(err) => Err(format!("無法切換麥克風：{}", err.message)),
-        }
+        microphone_outcome(core.call("audio.set_device", json!({ "name": name })).await)
     }
 
     fn autostart(&self, on: bool) -> Result<(), String> {
@@ -385,6 +387,37 @@ impl Effects for AppEffects {
             log::warn!("could not set the theme of the main window: {err}");
         }
     }
+}
+
+/// What the core's answer to `audio.set_device` means for the settings change. A core that is
+/// down is not a failure: the saved choice is sent when it is back (`watch_core`). A core that
+/// does not answer is one: it may or may not have switched, so the change is refused and the page
+/// says so.
+fn microphone_outcome(reply: Result<Value, RpcError>) -> Result<(), String> {
+    match reply {
+        Ok(_) => Ok(()),
+        Err(err) if err.code == CORE_EXITED => {
+            log::warn!("the microphone is saved, but the core could not be told: {err}");
+            Ok(())
+        }
+        Err(err) if err.code == TIMEOUT => {
+            log::warn!("the core did not answer audio.set_device: {err}");
+            Err("無法切換麥克風：核心沒有回應，請稍後再試".to_owned())
+        }
+        Err(err) => Err(format!("無法切換麥克風：{}", err.message)),
+    }
+}
+
+/// Runs `work` on a thread meant for blocking work, so that waiting for it does not hold up the
+/// async runtime.
+async fn run_blocking<T, F>(work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|err| format!("a background task failed: {err}"))?
 }
 
 // ---------- hotkeys and the keyboard ----------
@@ -501,7 +534,10 @@ fn apply_saved(app: &AppHandle, settings: &DeviceSettings) {
 
     if (&settings.dictation_keys, &settings.paste_last_keys)
         != (&fresh.dictation_keys, &fresh.paste_last_keys)
-        && let Err(err) = effects.bindings(&bindings_of(settings))
+        // Startup is not an async context and nothing else is waiting yet, so this blocks.
+        && let Err(err) = effects
+            .hotkeys()
+            .and_then(|hotkeys| hotkeys.update_bindings(&bindings_of(settings)))
     {
         log::error!("could not use the saved hotkeys: {err}");
     }
@@ -792,7 +828,7 @@ mod tests {
     }
 
     impl Effects for Fake {
-        fn bindings(&self, bindings: &Bindings) -> Result<(), String> {
+        async fn bindings(&self, bindings: &Bindings) -> Result<(), String> {
             self.record("bindings", bindings.dictation.join(","))
         }
 
@@ -811,6 +847,64 @@ mod tests {
         fn theme(&self, appearance: Appearance) {
             let _ = self.record("theme", format!("{appearance:?}"));
         }
+    }
+
+    // ---- the core's answer to audio.set_device ----
+
+    #[test]
+    fn a_microphone_the_core_accepted_is_a_success() {
+        assert_eq!(microphone_outcome(Ok(json!({}))), Ok(()));
+    }
+
+    #[test]
+    fn a_core_that_is_down_is_told_again_when_it_is_back() {
+        let reply = Err(RpcError::new(CORE_EXITED, "the core is not running"));
+        assert_eq!(microphone_outcome(reply), Ok(()));
+    }
+
+    #[test]
+    fn a_core_that_does_not_answer_is_a_failure() {
+        let reply = Err(RpcError::new(TIMEOUT, "no answer within 5 s"));
+        let err = microphone_outcome(reply).unwrap_err();
+        assert!(err.contains("麥克風"), "{err}");
+    }
+
+    #[test]
+    fn a_core_that_refuses_the_microphone_is_a_failure() {
+        let reply = Err(RpcError::new(1004, "no such device"));
+        let err = microphone_outcome(reply).unwrap_err();
+        assert!(err.contains("no such device"), "{err}");
+    }
+
+    // ---- blocking work ----
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_work_does_not_hold_up_the_runtime() {
+        use std::time::{Duration, Instant};
+        // A task on this one-thread runtime. It can only run while this test awaits.
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        let task = tokio::spawn(async move { flag.store(true, Ordering::SeqCst) });
+        let seen = Arc::clone(&ran);
+        let result = run_blocking(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !seen.load(Ordering::SeqCst) {
+                if Instant::now() > deadline {
+                    return Err("the runtime was held up".to_owned());
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Ok(7)
+        })
+        .await;
+        task.await.unwrap();
+        assert_eq!(result, Ok(7));
+    }
+
+    #[tokio::test]
+    async fn blocking_work_passes_its_error_on() {
+        let result: Result<(), String> = run_blocking(|| Err("nope".to_owned())).await;
+        assert_eq!(result, Err("nope".to_owned()));
     }
 
     fn changed(patch: Value) -> (DeviceSettings, DeviceSettings) {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { UNDO_MS, Undoable, debounce, type Notifier } from "./undo";
+import { Deletions, UNDO_MS, Undoable, debounce, type Notifier } from "./undo";
 
 function notifier() {
   const shown: { message: string; hasUndo: boolean }[] = [];
@@ -134,5 +134,49 @@ describe("debounce", () => {
     d.cancel();
     vi.advanceTimersByTime(1000);
     expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe("Deletions", () => {
+  const item = (id: number) => ({ id, text: `item ${id}` });
+  const ids = (items: { id: number }[]) => items.map((i) => i.id);
+
+  test("a list that was read before the delete reached the core does not bring the item back", () => {
+    const d = new Deletions();
+    const read = d.startRead(); // the list is asked for ...
+    d.confirm(2); // ... the delete is done ...
+    expect(ids(d.filter(read, [item(3), item(2), item(1)]))).toEqual([3, 1]); // ... the list answers
+  });
+
+  test("a list that was read after the delete shows what the core says", () => {
+    // SQLite gives the id of a deleted last row to the next row, so a new item can have it.
+    const d = new Deletions();
+    d.confirm(2);
+    const read = d.startRead();
+    expect(ids(d.filter(read, [item(2), item(1)]))).toEqual([2, 1]);
+  });
+
+  test("items that were not deleted pass in their order", () => {
+    const d = new Deletions();
+    d.confirm(9);
+    expect(ids(d.filter(d.startRead(), [item(5), item(7), item(6)]))).toEqual([5, 7, 6]);
+  });
+
+  test("with nothing deleted nothing is left out", () => {
+    const d = new Deletions();
+    expect(ids(d.filter(d.startRead(), [item(1), item(2)]))).toEqual([1, 2]);
+  });
+
+  test("each read is judged by when it started", () => {
+    const d = new Deletions();
+    const early = d.startRead();
+    d.confirm(1);
+    const middle = d.startRead();
+    d.confirm(2);
+    const late = d.startRead();
+    const all = [item(1), item(2), item(3)];
+    expect(ids(d.filter(early, all))).toEqual([3]);
+    expect(ids(d.filter(middle, all))).toEqual([1, 3]);
+    expect(ids(d.filter(late, all))).toEqual([1, 2, 3]);
   });
 });
