@@ -3,7 +3,12 @@
 Every test runs with an in-memory keyring in place of Windows Credential Manager, so no test, in
 any directory, can reach the real vault of whoever runs the suite. The guard fails closed: outside
 a test's own in-memory keyring, any use of the keyring raises.
+
+Tests marked `models` need the speech models downloaded and take a while to load them, so they are
+skipped unless the environment variable RAPHAEL_TEST_MODELS is 1.
 """
+
+import os
 
 import keyring
 import keyring.backend
@@ -58,6 +63,16 @@ class MemoryKeyring(keyring.backend.KeyringBackend):
 def pytest_configure(config):
     """Before any test: a keyring that raises on every use, instead of the real vault."""
     keyring.set_keyring(keyring.backends.fail.Keyring())
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip the tests marked `models` unless RAPHAEL_TEST_MODELS=1."""
+    if os.environ.get("RAPHAEL_TEST_MODELS") == "1":
+        return
+    skip = pytest.mark.skip(reason="needs the speech models: set RAPHAEL_TEST_MODELS=1")
+    for item in items:
+        if item.get_closest_marker("models"):
+            item.add_marker(skip)
 
 
 @pytest.fixture(autouse=True)
