@@ -29,7 +29,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::core_process::{CORE_RESTARTED, CoreApi, CoreProcess};
 use crate::device_settings::{self, Appearance, DeviceSettings, DeviceStore, FILE_NAME, Subtitles};
-use crate::hotkey::{Bindings, HotkeyService};
+use crate::hotkey::{Bindings, HotkeyService, PauseReason};
 use crate::overlay::Overlay;
 use crate::rpc::{CORE_EXITED, Notification, TIMEOUT};
 
@@ -390,13 +390,14 @@ impl Effects for AppEffects {
 // ---------- hotkeys and the keyboard ----------
 
 /// Pauses (`true`) or resumes (`false`) the dictation hotkeys, so that the settings page can
-/// record a new one.
+/// record a new one. It uses its own pause reason ([`PauseReason::KeyRecorder`]), so resuming
+/// never ends the tray's 「暫停 1 小時」.
 #[tauri::command]
 pub fn hotkeys_pause(app: AppHandle, paused: bool) -> Result<(), String> {
     let hotkeys = app
         .try_state::<Arc<HotkeyService>>()
         .ok_or("全域快捷鍵沒有啟動")?;
-    hotkeys.set_paused(paused);
+    hotkeys.set_paused(PauseReason::KeyRecorder, paused);
     Ok(())
 }
 

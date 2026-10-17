@@ -576,7 +576,7 @@ mod app {
 
     use super::DictationController;
     use crate::core_process::{CORE_DOWN, CORE_RESTARTED, CoreProcess};
-    use crate::hotkey::{CancelSwitch, HotkeyEvent, HotkeyService};
+    use crate::hotkey::{CancelSwitch, HotkeyEvent, HotkeyService, PauseReason};
     use crate::overlay::{Mode, Overlay, OverlayApi};
     use crate::paste::WindowsPaster;
     use crate::rpc::Notification;
@@ -729,14 +729,15 @@ mod app {
         }
     }
 
-    /// Pauses the hotkeys for an hour. Pausing again starts the hour over.
+    /// Pauses the hotkeys for an hour ([`PauseReason::Tray`], independent of the key recorder in
+    /// the settings). Pausing again starts the hour over.
     fn pause(hotkeys: Option<&Arc<HotkeyService>>, resume: &mut Option<JoinHandle<()>>) {
         let Some(hotkeys) = hotkeys else {
             log::warn!("pause ignored: the hotkeys are off");
             return;
         };
         log::info!("hotkeys paused for {PAUSE:?}");
-        hotkeys.set_paused(true);
+        hotkeys.set_paused(PauseReason::Tray, true);
         if let Some(previous) = resume.take() {
             previous.abort();
         }
@@ -744,7 +745,7 @@ mod app {
         *resume = Some(tokio::spawn(async move {
             tokio::time::sleep(PAUSE).await;
             log::info!("hotkeys resumed");
-            hotkeys.set_paused(false);
+            hotkeys.set_paused(PauseReason::Tray, false);
         }));
     }
 
