@@ -1,0 +1,1068 @@
+"""Tests for the brain's RPC service.
+
+No test touches the network: the OpenRouter client is a FakeClient that answers as told (the last
+section uses the real client on an httpx.MockTransport), the key store is a MemoryKeyStore (or a
+broken one), and the stores are real ones on an in-memory database. Every call goes through a
+Router, the way the device side makes it.
+"""
+
+import asyncio
+import json
+import logging
+from datetime import UTC, datetime
+
+import httpx
+import pytest
+
+from raphael_core.brain import service
+from raphael_core.brain.history import HistoryStore
+from raphael_core.brain.openrouter import Completion, KeyInfo, OpenRouterClient, OpenRouterError
+from raphael_core.brain.secrets import MemoryKeyStore
+from raphael_core.brain.service import Brain
+from raphael_core.brain.settings import DEFAULTS, SettingsStore
+from raphael_core.protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
+from raphael_core.router import Router
+
+from .conftest import item
+
+NOW_MS = int(datetime(2026, 10, 17, 12, tzinfo=UTC).timestamp() * 1000)
+DAY_MS = 86_400_000
+KEY = "sk-or-v1-test"
+SECRET = "sk-or-v1-TOPSECRET"
+
+METHODS = [
+    "brain.finalize_dictation",
+    "history.list",
+    "history.latest",
+    "history.delete",
+    "dictionary.list",
+    "dictionary.add",
+    "dictionary.delete",
+    "dictionary.suggestions",
+    "dictionary.dismiss",
+    "settings.get",
+    "settings.set",
+    "secrets.status",
+    "secrets.set_openrouter_key",
+    "secrets.clear_openrouter_key",
+    "status.get",
+    "status.check_openrouter",
+]
+
+
+def completion(data, cost=0.0002, model="google/gemini-3.1-flash-lite"):
+    """A Completion carrying `data`, as the client returns it."""
+    return Completion(
+        data=data,
+        model=model,
+        cost_usd=cost,
+        prompt_tokens=120,
+        completion_tokens=30,
+        latency_ms=250,
+    )
+
+
+class FakeClient:
+    """Stands in for OpenRouterClient.
+
+    `complete_json` raises `next_error` if there is one, else returns `next_completion`.
+    `key_info` waits `key_info_delay` seconds, then raises `key_info_error` if there is one, else
+    returns `key_info_result`. The calls are kept: the keyword arguments of each `complete_json`
+    in `calls` and the `key` argument of each `key_info` in `key_info_calls`.
+    """
+
+    def __init__(self):
+        self.next_completion = None
+        self.next_error = None
+        self.key_info_result = KeyInfo(
+            label="test key",
+            limit=20.0,
+            limit_remaining=17.5,
+            limit_reset="monthly",
+            usage_daily=0.1,
+            usage_monthly=2.5,
+        )
+        self.key_info_error = None
+        self.key_info_delay = 0.0
+        self.key_info_hook = None  # called with the key as soon as a check starts
+        self.calls = []
+        self.key_info_calls = []
+
+    async def complete_json(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.next_error is not None:
+            raise self.next_error
+        return self.next_completion
+
+    async def key_info(self, key=None, timeout_s=5.0):
+        self.key_info_calls.append(key)
+        if self.key_info_hook is not None:
+            self.key_info_hook(key)
+        if self.key_info_delay:
+            await asyncio.sleep(self.key_info_delay)
+        if self.key_info_error is not None:
+            raise self.key_info_error
+        return self.key_info_result
+
+
+class BrokenKeyStore:
+    """A key store whose vault fails, with an error message that holds the key."""
+
+    def get(self):
+        raise RuntimeError(f"vault locked; the key is {SECRET}")
+
+    def set(self, key):
+        raise RuntimeError(f"vault locked; the key is {SECRET}")
+
+    def clear(self):
+        raise RuntimeError(f"vault locked; the key is {SECRET}")
+
+
+class Clock:
+    """The brain's clock, which a test can move."""
+
+    def __init__(self, now_ms=NOW_MS):
+        self.now_ms = now_ms
+
+    def __call__(self):
+        return self.now_ms
+
+
+@pytest.fixture
+def fake_client():
+    return FakeClient()
+
+
+@pytest.fixture
+def keys():
+    return MemoryKeyStore()
+
+
+@pytest.fixture
+def clock():
+    return Clock()
+
+
+@pytest.fixture
+def make_brain(conn, fake_client, keys, clock):
+    """`make_brain(**overrides)` is a Brain on the fakes and the database above."""
+
+    def make(**overrides):
+        return Brain(conn, fake_client, keys, now_ms=clock, **overrides)
+
+    return make
+
+
+def routed(brain):
+    router = Router()
+    brain.register(router)
+    return router
+
+
+@pytest.fixture
+def router(make_brain):
+    return routed(make_brain())
+
+
+async def finalize(router, raw_text="你好", **overrides):
+    """brain.finalize_dictation with plausible values for what the test does not care about."""
+    params = {
+        "raw_text": raw_text,
+        "audio_seconds": 1.0,
+        "stt_ms": 10,
+        "target_app": None,
+        **overrides,
+    }
+    return await router.call("brain.finalize_dictation", params)
+
+
+def seed_history(conn, count, start_ms=1_000):
+    """`count` history rows, one millisecond apart: "第0句" (oldest) and so on."""
+    store = HistoryStore(conn)
+    for i in range(count):
+        store.add(item(created_at_ms=start_ms + i, text=f"第{i}句", raw_text=f"原{i}"))
+
+
+def assert_no_traceback_logged(caplog):
+    assert all(record.exc_info is None for record in caplog.records), "a traceback was logged"
+
+
+# --- the tests of the plan ----------------------------------------------------------------------
+
+
+async def test_finalize_cleans_normalizes_and_saves(router, fake_client, keys):
+    keys.set("sk-or-v1-test")
+    fake_client.next_completion = completion({"text": "明天下午三點開會。"}, cost=0.0002)
+    r = await router.call(
+        "brain.finalize_dictation",
+        {
+            "raw_text": "嗯 明天下午三点开会",
+            "audio_seconds": 2.0,
+            "stt_ms": 300,
+            "target_app": "Code.exe",
+        },
+    )
+    assert r["cleaned"] is True and r["text"] == "明天下午三點開會。"
+    assert r["raw_text"] == "嗯 明天下午三點開會"
+    items = (await router.call("history.list", {}))["items"]
+    assert len(items) == 1 and items[0]["target_app"] == "Code.exe"
+
+
+async def test_finalize_empty_writes_nothing(router):
+    r = await router.call(
+        "brain.finalize_dictation",
+        {"raw_text": "  ", "audio_seconds": 0.2, "stt_ms": 10, "target_app": None},
+    )
+    assert r["id"] is None and r["fallback_reason"] == "empty"
+    assert (await router.call("history.list", {}))["items"] == []
+
+
+async def test_finalize_without_key_pastes_raw(router):
+    r = await router.call(
+        "brain.finalize_dictation",
+        {"raw_text": "你好", "audio_seconds": 1.0, "stt_ms": 10, "target_app": None},
+    )
+    assert r["cleaned"] is False and r["fallback_reason"] == "no_key" and r["text"] == "你好"
+
+
+async def test_invalid_key_is_not_stored(router, fake_client, keys):
+    fake_client.key_info_error = OpenRouterError(401, "auth", "bad key")
+    r = await router.call("secrets.set_openrouter_key", {"key": "sk-or-v1-bad"})
+    assert r == {"valid": False, "reason": "auth"} and keys.get() is None
+
+
+async def test_status_reports_error_after_network_failure(router, fake_client, keys):
+    keys.set("sk-or-v1-test")
+    fake_client.next_error = OpenRouterError(0, "network", "offline")
+    await router.call(
+        "brain.finalize_dictation",
+        {"raw_text": "測試", "audio_seconds": 1.0, "stt_ms": 10, "target_app": None},
+    )
+    status = await router.call("status.get", {})
+    assert status["openrouter"]["state"] == "error" and status["openrouter"]["error"] == "network"
+
+
+async def test_settings_set_rejects_bad_value(router):
+    with pytest.raises(RpcError) as e:
+        await router.call("settings.set", {"key": "history_retention_days", "value": "x"})
+    assert e.value.code == INVALID_PARAMS
+
+
+# --- the contract -------------------------------------------------------------------------------
+
+
+def test_registers_every_method_of_the_contract(router):
+    assert router.methods() == sorted(METHODS)
+
+
+# --- brain.finalize_dictation -------------------------------------------------------------------
+
+
+async def test_finalize_result_and_history_row(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "明天下午三點開會。"}, cost=0.0002)
+    r = await finalize(
+        router, "嗯 明天下午三点开会", audio_seconds=2.0, stt_ms=300, target_app="Code.exe"
+    )
+    assert set(r) == {"id", "text", "raw_text", "cleaned", "fallback_reason", "llm_ms"}
+    assert isinstance(r["id"], int) and isinstance(r["llm_ms"], int)
+    assert r["fallback_reason"] is None
+    assert (await router.call("history.latest", {}))["item"] == {
+        "id": r["id"],
+        "created_at_ms": NOW_MS,
+        "kind": "dictation",
+        "raw_text": "嗯 明天下午三點開會",
+        "text": "明天下午三點開會。",
+        "cleaned": True,
+        "fallback_reason": None,
+        "target_app": "Code.exe",
+        "audio_seconds": 2.0,
+        "stt_ms": 300,
+        "llm_ms": r["llm_ms"],
+        "model": "google/gemini-3.1-flash-lite",
+        "cost_usd": 0.0002,
+    }
+
+
+@pytest.mark.parametrize("raw_text", ["", "  ", "\n \t\n"])
+async def test_finalize_blank_text_is_empty_and_never_asks_the_model(
+    router, fake_client, keys, raw_text
+):
+    keys.set(KEY)
+    assert await finalize(router, raw_text) == {
+        "id": None,
+        "text": "",
+        "raw_text": "",
+        "cleaned": False,
+        "fallback_reason": "empty",
+        "llm_ms": 0,
+    }
+    assert fake_client.calls == []
+    assert (await router.call("history.list", {}))["items"] == []
+
+
+async def test_finalize_without_key_saves_the_raw_text(router, fake_client):
+    r = await finalize(router, "你好", target_app="notepad.exe")
+    assert fake_client.calls == []
+    row = (await router.call("history.latest", {}))["item"]
+    assert (row["id"], row["text"], row["raw_text"]) == (r["id"], "你好", "你好")
+    assert (row["cleaned"], row["fallback_reason"], row["model"], row["cost_usd"]) == (
+        False,
+        "no_key",
+        None,
+        0.0,
+    )
+
+
+async def test_finalize_converts_and_replaces_before_the_model_sees_the_text(
+    router, fake_client, keys
+):
+    keys.set(KEY)
+    await router.call("dictionary.add", {"word": "拉斐爾", "misheard": ["拉菲爾"]})
+    fake_client.next_completion = completion({"text": "拉斐爾你好，這是測試。"})
+    r = await finalize(router, "拉菲爾你好，这是测试")
+    assert r["raw_text"] == "拉斐爾你好，這是測試"
+    assert "拉斐爾你好，這是測試" in fake_client.calls[0]["user"]
+
+
+async def test_finalize_failure_falls_back_to_the_raw_text(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_error = OpenRouterError(0, "network", "offline")
+    r = await finalize(router, "你好")
+    assert (r["text"], r["cleaned"], r["fallback_reason"]) == ("你好", False, "error:network")
+    assert (await router.call("history.latest", {}))["item"]["fallback_reason"] == "error:network"
+
+
+async def test_finalize_accepts_any_number_for_the_times_and_no_target_app(router):
+    await router.call(
+        "brain.finalize_dictation", {"raw_text": "你好", "audio_seconds": 2, "stt_ms": 312.6}
+    )
+    row = (await router.call("history.latest", {}))["item"]
+    assert (row["audio_seconds"], row["stt_ms"], row["target_app"]) == (2.0, 313, None)
+
+
+# After the model has answered, the text is normalized once more. The model is told to write
+# Traditional Chinese, so a Japanese text is trusted to be right; it would be corrupted otherwise:
+# OpenCC turns the kanji-only line 学校 into 學校.
+
+
+async def test_cleaned_chinese_is_converted_to_taiwan_traditional(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "明天下午三点开会。"})
+    r = await finalize(router, "明天下午三點開會")
+    assert r["cleaned"] is True and r["text"] == "明天下午三點開會。"
+    assert (await router.call("history.latest", {}))["item"]["text"] == "明天下午三點開會。"
+
+
+async def test_cleaned_text_with_hiragana_is_not_converted(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "今日は学校です。\n学校"})
+    r = await finalize(router, "今日は学校です 学校")
+    assert r["cleaned"] is True and r["text"] == "今日は学校です。\n学校"
+
+
+async def test_replacements_apply_to_the_cleaned_text(router, fake_client, keys):
+    keys.set(KEY)
+    await router.call("dictionary.add", {"word": "拉斐爾", "misheard": ["拉菲爾"]})
+    fake_client.next_completion = completion({"text": "拉菲爾說好。"})
+    assert (await finalize(router, "拉斐爾說好"))["text"] == "拉斐爾說好。"
+
+
+async def test_replacements_apply_to_cleaned_text_that_has_hiragana(router, fake_client, keys):
+    keys.set(KEY)
+    await router.call(
+        "dictionary.add", {"word": "ラファエル", "misheard": ["ラファエロ"]}
+    )
+    fake_client.next_completion = completion({"text": "ラファエロさんに会います。"})
+    r = await finalize(router, "ラファエロさんに会います")
+    assert r["raw_text"] == "ラファエルさんに会います"
+    assert r["text"] == "ラファエルさんに会います。"
+
+
+async def test_fallback_text_is_not_normalized_a_second_time(router):
+    # The text pasted when there is no cleanup is the normalized raw text as it is. A rule whose
+    # word holds its own misheard form would add its word again on a second pass.
+    await router.call("dictionary.add", {"word": "Claude Code", "misheard": ["Claude"]})
+    r = await finalize(router, "用Claude寫程式")
+    assert r["cleaned"] is False
+    assert r["text"] == r["raw_text"] == "用Claude Code寫程式"
+
+
+async def test_finalize_still_answers_when_the_history_cannot_be_written(
+    router, fake_client, keys, conn, caplog
+):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "你好。"})
+    conn.execute("DROP TABLE history")
+    caplog.set_level(logging.DEBUG)
+    r = await finalize(router, "你好")
+    assert (r["id"], r["text"], r["cleaned"]) == (None, "你好。", True)
+    assert_no_traceback_logged(caplog)
+    assert "你好" not in caplog.text
+
+
+# --- parameters ---------------------------------------------------------------------------------
+
+FIN = "brain.finalize_dictation"
+GOOD = {"raw_text": "你好", "audio_seconds": 1.0, "stt_ms": 10, "target_app": None}
+
+
+def without(params, name):
+    return {key: value for key, value in params.items() if key != name}
+
+
+# Each of these is wrong in exactly one way. The brain must answer INVALID_PARAMS, and must not let
+# an AttributeError or an OverflowError reach the router, which would call that INTERNAL_ERROR.
+# Some are caught by the brain's own checks; others are what a store refuses (a blank word, an
+# unknown setting, a bool for a number: ValueError, KeyError and TypeError).
+BAD_PARAMS = [
+    (FIN, {}, "finalize: nothing"),
+    (FIN, {**GOOD, "raw_text": 5}, "finalize: raw_text number"),
+    (FIN, {**GOOD, "raw_text": None}, "finalize: raw_text null"),
+    (FIN, without(GOOD, "raw_text"), "finalize: no raw_text"),
+    (FIN, {**GOOD, "audio_seconds": "1"}, "finalize: audio_seconds str"),
+    (FIN, {**GOOD, "audio_seconds": True}, "finalize: audio_seconds bool"),
+    (FIN, {**GOOD, "audio_seconds": -1.0}, "finalize: audio_seconds < 0"),
+    (FIN, without(GOOD, "audio_seconds"), "finalize: no audio_seconds"),
+    (FIN, {**GOOD, "stt_ms": "10"}, "finalize: stt_ms str"),
+    (FIN, {**GOOD, "stt_ms": -1}, "finalize: stt_ms < 0"),
+    (FIN, {**GOOD, "stt_ms": 10**30}, "finalize: stt_ms beyond SQLite"),
+    (FIN, without(GOOD, "stt_ms"), "finalize: no stt_ms"),
+    (FIN, {**GOOD, "target_app": 5}, "finalize: target_app number"),
+    ("history.list", {"query": 5}, "history.list: query number"),
+    ("history.list", {"limit": "5"}, "history.list: limit str"),
+    ("history.list", {"limit": 2.5}, "history.list: limit float"),
+    ("history.list", {"limit": True}, "history.list: limit bool"),
+    ("history.list", {"before_ms": "x"}, "history.list: before_ms str"),
+    ("history.delete", {}, "history.delete: no id"),
+    ("history.delete", {"id": "1"}, "history.delete: id str"),
+    ("history.delete", {"id": True}, "history.delete: id bool"),
+    ("history.delete", {"id": 10**30}, "history.delete: id beyond SQLite"),
+    ("dictionary.add", {}, "dictionary.add: no word"),
+    ("dictionary.add", {"word": 5}, "dictionary.add: word number"),
+    ("dictionary.add", {"word": None}, "dictionary.add: word null"),
+    ("dictionary.add", {"word": "  "}, "dictionary.add: blank word"),
+    ("dictionary.add", {"word": "x", "misheard": "y"}, "dictionary.add: misheard str"),
+    ("dictionary.add", {"word": "x", "misheard": [1]}, "dictionary.add: misheard [number]"),
+    ("dictionary.add", {"word": "x", "misheard": {"a": "b"}}, "dictionary.add: misheard object"),
+    ("dictionary.delete", {}, "dictionary.delete: no id"),
+    ("dictionary.delete", {"id": "1"}, "dictionary.delete: id str"),
+    ("dictionary.dismiss", {}, "dictionary.dismiss: no word"),
+    ("dictionary.dismiss", {"word": 5}, "dictionary.dismiss: word number"),
+    ("dictionary.dismiss", {"word": " "}, "dictionary.dismiss: blank word"),
+    ("settings.set", {}, "settings.set: nothing"),
+    ("settings.set", {"key": "language"}, "settings.set: no value"),
+    ("settings.set", {"value": "ja"}, "settings.set: no key"),
+    ("settings.set", {"key": 5, "value": 1}, "settings.set: key number"),
+    ("settings.set", {"key": "no_such_setting", "value": 1}, "settings.set: unknown key"),
+    ("settings.set", {"key": "monthly_limit_usd", "value": True}, "settings.set: bool for float"),
+    ("settings.set", {"key": "monthly_limit_usd", "value": None}, "settings.set: null"),
+    ("secrets.set_openrouter_key", {}, "set_openrouter_key: no key"),
+    ("secrets.set_openrouter_key", {"key": 5}, "set_openrouter_key: key number"),
+]
+
+
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [pytest.param(method, params, id=name) for method, params, name in BAD_PARAMS],
+)
+async def test_bad_params_are_invalid_params(router, method, params):
+    with pytest.raises(RpcError) as e:
+        await router.call(method, params)
+    assert e.value.code == INVALID_PARAMS
+
+
+async def test_a_bad_dictation_writes_nothing_and_asks_nothing(router, fake_client, keys):
+    keys.set(KEY)
+    with pytest.raises(RpcError):
+        await finalize(router, 5)
+    assert fake_client.calls == []
+    assert (await router.call("history.list", {}))["items"] == []
+
+
+async def test_optional_params_may_be_null(router, conn):
+    seed_history(conn, 2)
+    listed = await router.call("history.list", {"query": None, "limit": None, "before_ms": None})
+    assert len(listed["items"]) == 2
+    added = await router.call("dictionary.add", {"word": "Tailscale", "misheard": None})
+    assert added["entry"]["misheard"] == []
+
+
+# --- history ------------------------------------------------------------------------------------
+
+
+async def test_history_list_defaults_to_50_and_clamps_to_200(router, conn):
+    seed_history(conn, 205)
+    assert len((await router.call("history.list", {}))["items"]) == 50
+    assert len((await router.call("history.list", {"limit": 7}))["items"]) == 7
+    assert len((await router.call("history.list", {"limit": 200}))["items"]) == 200
+    assert len((await router.call("history.list", {"limit": 1000}))["items"]) == 200
+
+
+@pytest.mark.parametrize("limit", [0, -1, -100])
+async def test_history_list_never_means_everything(router, conn, limit):
+    # SQLite reads LIMIT -1 as "no limit".
+    seed_history(conn, 5)
+    assert len((await router.call("history.list", {"limit": limit}))["items"]) == 1
+
+
+async def test_history_list_is_newest_first_and_filters_and_pages(router, conn):
+    seed_history(conn, 5)
+
+    async def texts(**params):
+        return [entry["text"] for entry in (await router.call("history.list", params))["items"]]
+
+    assert await texts() == [f"第{i}句" for i in (4, 3, 2, 1, 0)]
+    assert await texts(query="第3") == ["第3句"]
+    assert await texts(query="原1") == ["第1句"]  # the query looks at the raw text too
+    assert await texts(before_ms=1_003, limit=2) == ["第2句", "第1句"]
+
+
+async def test_history_latest_and_delete(router, conn):
+    assert await router.call("history.latest", {}) == {"item": None}
+    seed_history(conn, 3)
+    latest = (await router.call("history.latest", {}))["item"]
+    assert latest["text"] == "第2句"
+    assert await router.call("history.delete", {"id": latest["id"]}) == {"deleted": True}
+    assert await router.call("history.delete", {"id": latest["id"]}) == {"deleted": False}
+    assert (await router.call("history.latest", {}))["item"]["text"] == "第1句"
+
+
+# --- dictionary ---------------------------------------------------------------------------------
+
+
+async def test_dictionary_add_list_delete(router):
+    added = await router.call("dictionary.add", {"word": "拉斐爾", "misheard": ["拉菲爾"]})
+    entry = added["entry"]
+    assert entry == {
+        "id": entry["id"],
+        "word": "拉斐爾",
+        "misheard": ["拉菲爾"],
+        "source": "manual",
+    }
+    other = (await router.call("dictionary.add", {"word": "Tailscale"}))["entry"]
+    assert other["misheard"] == [] and other["id"] != entry["id"]
+    listed = await router.call("dictionary.list", {})
+    assert [e["word"] for e in listed["entries"]] == ["Tailscale", "拉斐爾"]  # newest first
+    assert set(listed["entries"][0]) == {"id", "word", "misheard", "source"}
+    assert await router.call("dictionary.delete", {"id": entry["id"]}) == {"deleted": True}
+    assert await router.call("dictionary.delete", {"id": entry["id"]}) == {"deleted": False}
+    assert [e["word"] for e in (await router.call("dictionary.list", {}))["entries"]] == [
+        "Tailscale"
+    ]
+
+
+async def test_dictionary_add_merges_the_misheard_forms_of_a_known_word(router):
+    await router.call("dictionary.add", {"word": "拉斐爾", "misheard": ["拉菲爾"]})
+    merged = await router.call("dictionary.add", {"word": "拉斐爾", "misheard": ["拉非爾"]})
+    assert merged["entry"]["misheard"] == ["拉菲爾", "拉非爾"]
+    assert len((await router.call("dictionary.list", {}))["entries"]) == 1
+
+
+def seed_mentions(conn, word, count, created_at_ms):
+    store = HistoryStore(conn)
+    for i in range(count):
+        store.add(item(created_at_ms=created_at_ms + i, text=f"今天用 {word} 連回家"))
+
+
+async def test_suggestions_come_from_the_last_seven_days(router, conn):
+    seed_mentions(conn, "Tailscale", 3, NOW_MS - 2 * DAY_MS)
+    seed_mentions(conn, "OpenRouter", 3, NOW_MS - 8 * DAY_MS)
+    assert await router.call("dictionary.suggestions", {}) == {
+        "words": [{"word": "Tailscale", "count": 3}]
+    }
+
+
+async def test_suggestions_window_is_exactly_seven_days(router, conn):
+    seed_mentions(conn, "Tailscale", 3, NOW_MS - 7 * DAY_MS)  # from the very start of the window
+    stale = HistoryStore(conn)
+    for _ in range(3):
+        stale.add(item(created_at_ms=NOW_MS - 7 * DAY_MS - 1, text="今天用 OpenRouter"))
+    words = (await router.call("dictionary.suggestions", {}))["words"]
+    assert [w["word"] for w in words] == ["Tailscale"]
+
+
+async def test_suggestions_skip_known_and_dismissed_words(router, conn):
+    seed_mentions(conn, "Tailscale", 3, NOW_MS - DAY_MS)
+    seed_mentions(conn, "OpenRouter", 3, NOW_MS - DAY_MS)
+    assert len((await router.call("dictionary.suggestions", {}))["words"]) == 2
+    await router.call("dictionary.add", {"word": "tailscale"})  # known, in any letter case
+    assert await router.call("dictionary.dismiss", {"word": "OpenRouter"}) == {}
+    assert await router.call("dictionary.suggestions", {}) == {"words": []}
+
+
+# --- settings -----------------------------------------------------------------------------------
+
+
+async def test_settings_get_and_set_round_trip(router):
+    assert await router.call("settings.get", {}) == {"settings": DEFAULTS}
+    after = await router.call("settings.set", {"key": "language", "value": "ja"})
+    assert after == {"settings": {**DEFAULTS, "language": "ja"}}
+    assert (await router.call("settings.get", {}))["settings"]["language"] == "ja"
+    # A whole number is a valid float setting.
+    limit = await router.call("settings.set", {"key": "monthly_limit_usd", "value": 5})
+    assert limit["settings"]["monthly_limit_usd"] == 5.0
+
+
+async def test_a_rejected_setting_changes_nothing(router):
+    with pytest.raises(RpcError):
+        await router.call("settings.set", {"key": "monthly_limit_usd", "value": "lots"})
+    assert (await router.call("settings.get", {}))["settings"] == DEFAULTS
+
+
+# --- secrets ------------------------------------------------------------------------------------
+
+
+async def test_secrets_status_follows_the_key_store(router, keys):
+    assert await router.call("secrets.status", {}) == {"has_key": False}
+    keys.set(KEY)
+    assert await router.call("secrets.status", {}) == {"has_key": True}
+
+
+async def test_a_valid_key_is_checked_with_itself_and_then_stored(router, fake_client, keys):
+    stored_during_check = []
+    fake_client.key_info_hook = lambda key: stored_during_check.append(keys.get())
+    r = await router.call("secrets.set_openrouter_key", {"key": "sk-or-v1-good"})
+    assert r == {
+        "valid": True,
+        "label": "test key",
+        "limit": 20.0,
+        "limit_remaining": 17.5,
+        "limit_reset": "monthly",
+    }
+    assert fake_client.key_info_calls == ["sk-or-v1-good"]
+    assert stored_during_check == [None]  # not stored before it was found valid
+    assert keys.get() == "sk-or-v1-good"
+    assert await router.call("secrets.status", {}) == {"has_key": True}
+
+
+async def test_a_key_is_trimmed_before_it_is_checked_and_stored(router, fake_client, keys):
+    await router.call("secrets.set_openrouter_key", {"key": "  sk-or-v1-good\n"})
+    assert fake_client.key_info_calls == ["sk-or-v1-good"]
+    assert keys.get() == "sk-or-v1-good"
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n\t"])
+async def test_a_blank_key_is_an_auth_failure_without_a_call(router, fake_client, keys, blank):
+    r = await router.call("secrets.set_openrouter_key", {"key": blank})
+    assert r == {"valid": False, "reason": "auth"}
+    assert fake_client.key_info_calls == [] and keys.get() is None
+
+
+@pytest.mark.parametrize(
+    ("status", "kind"),
+    [(401, "auth"), (0, "network"), (0, "timeout"), (429, "rate_limit"), (503, "server")],
+)
+async def test_a_key_that_cannot_be_checked_is_not_stored(router, fake_client, keys, status, kind):
+    keys.set("sk-or-v1-old")
+    fake_client.key_info_error = OpenRouterError(status, kind, "no")
+    r = await router.call("secrets.set_openrouter_key", {"key": "sk-or-v1-new"})
+    assert r == {"valid": False, "reason": kind}
+    assert keys.get() == "sk-or-v1-old"  # the key in use stays
+    # Nothing was learned about the key in use, so the status does not change.
+    assert (await router.call("status.get", {}))["openrouter"]["state"] == "unknown"
+
+
+async def test_a_key_check_that_hangs_gives_up(make_brain, fake_client, keys):
+    router = routed(make_brain(key_check_timeout_s=0.05))
+    fake_client.key_info_delay = 5.0
+    r = await router.call("secrets.set_openrouter_key", {"key": "sk-or-v1-slow"})
+    assert r == {"valid": False, "reason": "timeout"} and keys.get() is None
+
+
+async def test_clearing_the_key_forgets_the_status(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_error = OpenRouterError(0, "network", "offline")
+    await finalize(router)
+    assert (await router.call("status.get", {}))["openrouter"]["state"] == "error"
+    assert await router.call("secrets.clear_openrouter_key", {}) == {}
+    assert keys.get() is None
+    assert await router.call("secrets.status", {}) == {"has_key": False}
+    assert (await router.call("status.get", {}))["openrouter"]["state"] == "no_key"
+    keys.set(KEY)  # a key that arrives later starts afresh
+    fresh = (await router.call("status.get", {}))["openrouter"]
+    assert (fresh["state"], fresh["error"], fresh["key"]) == ("unknown", None, None)
+
+
+# --- the key store fails ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("secrets.status", {}),
+        ("secrets.set_openrouter_key", {"key": "sk-or-v1-good"}),
+        ("secrets.clear_openrouter_key", {}),
+    ],
+)
+async def test_a_failing_key_store_is_an_internal_error_without_its_message(
+    conn, fake_client, method, params, caplog
+):
+    caplog.set_level(logging.DEBUG)
+    router = routed(Brain(conn, fake_client, BrokenKeyStore(), now_ms=Clock()))
+    with pytest.raises(RpcError) as e:
+        await router.call(method, params)
+    assert e.value.code == INTERNAL_ERROR and SECRET not in e.value.message
+    assert SECRET not in caplog.text
+    assert_no_traceback_logged(caplog)
+
+
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [("secrets.set_openrouter_key", {"key": SECRET}), ("status.check_openrouter", {})],
+)
+async def test_a_client_that_breaks_is_an_internal_error_without_its_message(
+    router, fake_client, keys, method, params, caplog
+):
+    # OpenRouterClient fails with OpenRouterError and nothing else; if it ever does, the message
+    # of the bug could hold the key, and neither the log nor the reply may carry it.
+    keys.set("sk-or-v1-old")
+    fake_client.key_info_error = RuntimeError(f"a bug; the key is {SECRET}")
+    caplog.set_level(logging.DEBUG)
+    with pytest.raises(RpcError) as e:
+        await router.call(method, params)
+    assert e.value.code == INTERNAL_ERROR and SECRET not in e.value.message
+    assert SECRET not in caplog.text
+    assert_no_traceback_logged(caplog)
+    assert keys.get() == "sk-or-v1-old"
+
+
+async def test_dictation_survives_a_failing_key_store(conn, fake_client, caplog):
+    caplog.set_level(logging.DEBUG)
+    router = routed(Brain(conn, fake_client, BrokenKeyStore(), now_ms=Clock()))
+    r = await finalize(router, "你好")
+    assert (r["text"], r["cleaned"], r["fallback_reason"]) == ("你好", False, "error:unexpected")
+    assert fake_client.calls == []
+    assert SECRET not in caplog.text
+    assert_no_traceback_logged(caplog)
+
+
+async def test_status_reports_a_failing_key_store_as_an_auth_error(conn, fake_client):
+    router = routed(Brain(conn, fake_client, BrokenKeyStore(), now_ms=Clock()))
+    status = await router.call("status.get", {})
+    assert (status["openrouter"]["state"], status["openrouter"]["error"]) == ("error", "auth")
+    assert set(status) == {"openrouter", "spend", "last"}
+
+
+# --- status -------------------------------------------------------------------------------------
+
+
+async def test_status_without_a_key_or_history(router):
+    assert await router.call("status.get", {}) == {
+        "openrouter": {
+            "state": "no_key",
+            "latency_ms": None,
+            "checked_at_ms": None,
+            "error": None,
+            "key": None,
+        },
+        "spend": {
+            "month_usd": 0.0,
+            "today_usd": 0.0,
+            "limit_usd": 10.0,
+            "forecast_usd": 0.0,
+            "daily": [0.0] * 30,
+        },
+        "last": None,
+    }
+
+
+async def test_status_is_unknown_until_openrouter_has_been_in_touch(router, fake_client, keys):
+    keys.set(KEY)
+    openrouter = (await router.call("status.get", {}))["openrouter"]
+    assert openrouter == {
+        "state": "unknown",
+        "latency_ms": None,
+        "checked_at_ms": None,
+        "error": None,
+        "key": None,
+    }
+    assert fake_client.calls == [] and fake_client.key_info_calls == []  # asking costs nothing
+
+
+async def test_status_after_a_cleanup(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "你好。"}, cost=0.0003)
+    r = await finalize(router, "你好", audio_seconds=1.5, stt_ms=120, target_app="Code.exe")
+    status = await router.call("status.get", {})
+    assert status["openrouter"] == {
+        "state": "ok",
+        "latency_ms": r["llm_ms"],
+        "checked_at_ms": NOW_MS,
+        "error": None,
+        "key": None,
+    }
+    spend = status["spend"]
+    assert spend["month_usd"] == pytest.approx(0.0003)
+    assert spend["today_usd"] == pytest.approx(0.0003)
+    assert spend["limit_usd"] == 10.0
+    assert len(spend["daily"]) == 30 and spend["daily"][-1] == pytest.approx(0.0003)
+    assert spend["forecast_usd"] >= spend["month_usd"]
+    assert status["last"] == {
+        "text": "你好。",
+        "created_at_ms": NOW_MS,
+        "target_app": "Code.exe",
+        "stt_ms": 120,
+        "llm_ms": r["llm_ms"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "kind"), [(0, "network"), (0, "timeout"), (401, "auth"), (402, "credits")]
+)
+async def test_status_holds_the_kind_of_the_last_failure(router, fake_client, keys, status, kind):
+    keys.set(KEY)
+    fake_client.next_error = OpenRouterError(status, kind, "no")
+    await finalize(router)
+    openrouter = (await router.call("status.get", {}))["openrouter"]
+    assert (openrouter["state"], openrouter["error"], openrouter["latency_ms"]) == (
+        "error",
+        kind,
+        None,
+    )
+    assert openrouter["checked_at_ms"] == NOW_MS
+
+
+async def test_status_recovers_when_a_later_call_succeeds(router, fake_client, clock, keys):
+    keys.set(KEY)
+    fake_client.next_error = OpenRouterError(0, "network", "offline")
+    await finalize(router)
+    clock.now_ms += 60_000
+    fake_client.next_error = None
+    fake_client.next_completion = completion({"text": "你好。"})
+    await finalize(router)
+    openrouter = (await router.call("status.get", {}))["openrouter"]
+    assert (openrouter["state"], openrouter["error"]) == ("ok", None)
+    assert openrouter["checked_at_ms"] == NOW_MS + 60_000
+
+
+async def test_status_ignores_dictations_that_never_asked_the_model(
+    router, fake_client, keys, conn
+):
+    keys.set(KEY)
+    SettingsStore(conn).set("monthly_limit_usd", 0.0)  # the budget is used up
+    r = await finalize(router)
+    assert r["fallback_reason"] == "budget" and fake_client.calls == []
+    assert (await router.call("status.get", {}))["openrouter"]["state"] == "unknown"
+
+
+async def test_a_valid_key_makes_the_status_ok(router):
+    await router.call("secrets.set_openrouter_key", {"key": "sk-or-v1-good"})
+    openrouter = (await router.call("status.get", {}))["openrouter"]
+    assert (openrouter["state"], openrouter["error"], openrouter["checked_at_ms"]) == (
+        "ok",
+        None,
+        NOW_MS,
+    )
+    assert isinstance(openrouter["latency_ms"], int)
+    assert openrouter["key"]["label"] == "test key"
+
+
+async def test_check_without_a_key_makes_no_call(router, fake_client):
+    r = await router.call("status.check_openrouter", {})
+    assert (r["state"], r["key"], r["checked_at_ms"]) == ("no_key", None, None)
+    assert fake_client.key_info_calls == []
+
+
+async def test_check_asks_openrouter_about_the_stored_key(router, fake_client, keys):
+    keys.set(KEY)
+    r = await router.call("status.check_openrouter", {})
+    assert fake_client.key_info_calls == [None]  # no key passed: the client reads the stored one
+    assert (r["state"], r["error"], r["checked_at_ms"]) == ("ok", None, NOW_MS)
+    assert isinstance(r["latency_ms"], int)
+    assert r["key"] == {
+        "label": "test key",
+        "limit": 20.0,
+        "limit_remaining": 17.5,
+        "limit_reset": "monthly",
+        "usage_daily": 0.1,
+        "usage_monthly": 2.5,
+    }
+    assert (await router.call("status.get", {}))["openrouter"] == r
+
+
+async def test_a_failed_check_is_reported_and_keeps_the_last_key_info(router, fake_client, keys):
+    keys.set(KEY)
+    first = await router.call("status.check_openrouter", {})
+    fake_client.key_info_error = OpenRouterError(0, "network", "offline")
+    r = await router.call("status.check_openrouter", {})
+    assert (r["state"], r["error"], r["latency_ms"]) == ("error", "network", None)
+    assert r["key"] == first["key"]
+    assert (await router.call("status.get", {}))["openrouter"] == r
+
+
+async def test_a_check_that_hangs_gives_up(make_brain, fake_client, keys):
+    router = routed(make_brain(key_check_timeout_s=0.05))
+    keys.set(KEY)
+    fake_client.key_info_delay = 5.0
+    r = await router.call("status.check_openrouter", {})
+    assert (r["state"], r["error"]) == ("error", "timeout")
+
+
+# --- construction -------------------------------------------------------------------------------
+
+
+def test_construction_prunes_history_older_than_the_retention(make_brain, conn):
+    store = HistoryStore(conn)
+    old = store.add(item(created_at_ms=NOW_MS - 30 * DAY_MS - 1))
+    edge = store.add(item(created_at_ms=NOW_MS - 30 * DAY_MS))
+    fresh = store.add(item(created_at_ms=NOW_MS - DAY_MS))
+    make_brain()
+    assert store.get(old) is None
+    assert store.get(edge) is not None and store.get(fresh) is not None
+
+
+def test_construction_follows_the_retention_setting(make_brain, conn):
+    SettingsStore(conn).set("history_retention_days", 7)
+    store = HistoryStore(conn)
+    old = store.add(item(created_at_ms=NOW_MS - 8 * DAY_MS))
+    kept = store.add(item(created_at_ms=NOW_MS - 6 * DAY_MS))
+    make_brain()
+    assert store.get(old) is None and store.get(kept) is not None
+
+
+@pytest.mark.parametrize("days", [-1, 10**30])
+def test_construction_survives_a_retention_that_makes_no_sense(make_brain, conn, days):
+    SettingsStore(conn).set("history_retention_days", days)
+    store = HistoryStore(conn)
+    ancient = store.add(item(created_at_ms=1))
+    make_brain()
+    assert store.get(ancient) is not None
+
+
+def test_construction_goes_on_when_pruning_fails(make_brain, conn, caplog):
+    conn.execute("DROP TABLE history")
+    caplog.set_level(logging.DEBUG)
+    make_brain()
+    assert_no_traceback_logged(caplog)
+    mine = [r.getMessage() for r in caplog.records if r.name == service.logger.name]
+    assert any("prune" in message for message in mine), "the failure is logged"
+
+
+def test_construction_makes_no_network_call(make_brain, fake_client, keys):
+    keys.set(KEY)
+    make_brain()
+    assert fake_client.calls == [] and fake_client.key_info_calls == []
+
+
+# --- with the real client -----------------------------------------------------------------------
+# The fakes above could drift from OpenRouterClient. These tests wire the brain the way the entry
+# point does (OpenRouterClient(keys.get)) and put a fake OpenRouter behind it, on httpx.
+
+
+class FakeOpenRouter:
+    """The HTTP side of OpenRouter, as a handler for httpx.MockTransport.
+
+    Only `valid_key` is accepted; any other key gets a 401. A chat completion answers with
+    `reply_text`, or fails with `chat_status` if that is not 200.
+    """
+
+    def __init__(self, valid_key=KEY):
+        self.valid_key = valid_key
+        self.reply_text = "你好。"
+        self.chat_status = 200
+        self.requests = []
+
+    def __call__(self, request):
+        self.requests.append(request)
+        if request.headers.get("Authorization") != f"Bearer {self.valid_key}":
+            return httpx.Response(401, json={"error": {"message": "No auth credentials found"}})
+        if request.url.path.endswith("/key"):
+            data = {
+                "label": "Raphael",
+                "limit": 20,
+                "limit_remaining": 17.5,
+                "limit_reset": "monthly",
+                "usage_daily": 0.1,
+                "usage_monthly": 2.5,
+            }
+            return httpx.Response(200, json={"data": data})
+        if self.chat_status != 200:
+            return httpx.Response(self.chat_status, json={"error": {"message": "unavailable"}})
+        content = json.dumps({"text": self.reply_text}, ensure_ascii=False)
+        choice = {"message": {"content": content}, "finish_reason": "stop"}
+        usage = {"prompt_tokens": 120, "completion_tokens": 30, "cost": 0.0002}
+        return httpx.Response(200, json={"choices": [choice], "usage": usage})
+
+
+@pytest.fixture
+async def real_router(conn, keys, clock):
+    """`real_router(handler)` is a router on a brain whose client talks HTTP to `handler`."""
+    opened = []
+
+    def make(handler):
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        opened.append(http)
+        return routed(Brain(conn, OpenRouterClient(keys.get, http=http), keys, now_ms=clock))
+
+    yield make
+    for http in opened:
+        await http.aclose()
+
+
+async def test_real_client_a_key_is_checked_over_http_then_used(real_router, keys):
+    openrouter = FakeOpenRouter(valid_key="sk-or-v1-good")
+    router = real_router(openrouter)
+
+    bad = await router.call("secrets.set_openrouter_key", {"key": "sk-or-v1-bad"})
+    assert bad == {"valid": False, "reason": "auth"} and keys.get() is None
+
+    good = await router.call("secrets.set_openrouter_key", {"key": "sk-or-v1-good"})
+    assert good == {
+        "valid": True,
+        "label": "Raphael",
+        "limit": 20.0,
+        "limit_remaining": 17.5,
+        "limit_reset": "monthly",
+    }
+    assert keys.get() == "sk-or-v1-good"
+
+    # The key just stored is the one the client sends from now on.
+    openrouter.reply_text = "明天下午三點開會。"
+    r = await finalize(router, "明天下午三点开会")
+    assert (r["cleaned"], r["text"]) == (True, "明天下午三點開會。")
+    assert openrouter.requests[-1].headers["Authorization"] == "Bearer sk-or-v1-good"
+    assert (await router.call("status.get", {}))["openrouter"]["state"] == "ok"
+    checked = await router.call("status.check_openrouter", {})
+    assert (checked["state"], checked["key"]["label"]) == ("ok", "Raphael")
+
+
+async def test_real_client_a_server_error_pastes_the_raw_text(real_router, keys):
+    keys.set(KEY)
+    openrouter = FakeOpenRouter()
+    openrouter.chat_status = 503
+    router = real_router(openrouter)
+    r = await finalize(router, "你好")
+    assert (r["text"], r["cleaned"], r["fallback_reason"]) == ("你好", False, "error:server")
+    assert (await router.call("status.get", {}))["openrouter"]["error"] == "server"
+
+
+async def test_real_client_a_key_that_has_become_invalid_shows_as_an_auth_error(real_router, keys):
+    keys.set("sk-or-v1-revoked")
+    router = real_router(FakeOpenRouter(valid_key=KEY))
+    checked = await router.call("status.check_openrouter", {})
+    assert (checked["state"], checked["error"]) == ("error", "auth")
+
+
+# --- logging ------------------------------------------------------------------------------------
+
+
+async def test_nothing_secret_is_logged_and_no_traceback(router, fake_client, keys, caplog):
+    # The failures below carry the key in their message and in their cause, as a key store's might.
+    caplog.set_level(logging.DEBUG)
+    error = OpenRouterError(401, "auth", f"rejected {SECRET}")
+    error.__cause__ = RuntimeError(f"the key store said {SECRET}")
+    fake_client.key_info_error = error
+    assert await router.call("secrets.set_openrouter_key", {"key": SECRET}) == {
+        "valid": False,
+        "reason": "auth",
+    }
+    keys.set(SECRET)
+    await router.call("status.check_openrouter", {})
+    fake_client.next_error = error
+    await finalize(router, "機密內容")
+    assert SECRET not in caplog.text
+    assert "機密內容" not in caplog.text
+    assert_no_traceback_logged(caplog)
+    mine = [r for r in caplog.records if r.name == service.logger.name]
+    assert any("auth" in r.getMessage() for r in mine), "the failure's kind is logged"
