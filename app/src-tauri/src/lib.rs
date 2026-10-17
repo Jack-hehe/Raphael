@@ -1,6 +1,8 @@
 //! Raphael's desktop shell: a tray app with a hidden main window that starts with Windows and
 //! allows only one running copy.
 
+pub mod core_process;
+pub mod rpc;
 mod tray;
 
 use tauri::{AppHandle, Manager, Runtime, WindowEvent, plugin::TauriPlugin};
@@ -67,6 +69,17 @@ pub fn run() {
                     log::info!("tray command: {command:?}");
                 }
             });
+
+            // ---- Python core ----
+            // Started in the background and kept in Tauri state for the dictation controller. The
+            // app does not need it to run (tray, settings), so a core that cannot be started is
+            // logged and the app carries on without dictation.
+            match core_process::resolve_core_command().and_then(core_process::CoreProcess::start) {
+                Ok(core) => {
+                    app.manage(core);
+                }
+                Err(err) => log::error!("the Python core is not running: {err}"),
+            }
 
             Ok(())
         })
