@@ -31,12 +31,14 @@ use crate::hotkey::{CancelSwitch, HotkeyEvent};
 use crate::notices::{self, Notice};
 use crate::overlay::{Mode, OverlayApi};
 use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
-use crate::rpc::{CoreApi, lock};
+use crate::rpc::{CORE_EXITED, CoreApi, RpcError, TIMEOUT, lock};
 
 /// `BUSY` in the core's `protocol.py`: a dictation session is already active.
 const BUSY: i64 = 1003;
 /// `NO_MICROPHONE` in the core's `protocol.py`.
 const NO_MICROPHONE: i64 = 1004;
+/// `NOT_CONFIGURED` in the core's `protocol.py`: the speech model is not ready.
+const NOT_CONFIGURED: i64 = 1001;
 /// A paste-last press this soon after a recording started cancels that recording: Right Alt+V
 /// pressed the dictation key first.
 const PASTE_LAST_CANCELS_WITHIN_MS: u64 = 1000;
@@ -90,6 +92,9 @@ struct State {
     started_ms: u64,
     /// The fallback notices already shown in this app session: each is shown once.
     shown: Vec<Notice>,
+    /// [`notices::CORE_DOWN`] was shown since the core last (re)started: it is shown once per
+    /// down-state.
+    down_noticed: bool,
 }
 
 /// The dictation controller. Cheap to clone: the clones share their state.
@@ -128,6 +133,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 session: None,
                 started_ms: 0,
                 shown: Vec::new(),
+                down_noticed: false,
             })),
         }
     }
@@ -157,7 +163,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 self.act(action, now_ms)
             }
             HotkeyEvent::Cancel => self.cancel_current(),
-            HotkeyEvent::PasteLast => Some(self.paste_last_at(Some(now_ms))),
+            HotkeyEvent::PasteLast => Some(self.paste_last_at(now_ms)),
         }
     }
 
@@ -168,9 +174,21 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
     }
 
-    /// The core was started again (or is gone for good): whatever it was doing is lost. Back to
-    /// idle; the overlay is hidden only if a dictation was showing, so a notice stays.
+    /// The core was started again: whatever it was doing is lost (see [`Self::reset`]). If it goes
+    /// down again, that is a new down-state, worth a new [`notices::CORE_DOWN`].
     pub fn on_core_restarted(&self) {
+        lock(&self.state).down_noticed = false;
+        self.reset();
+    }
+
+    /// The core is gone for good (`core.down`): whatever it was doing is lost (see
+    /// [`Self::reset`]). The next dictation's failure says so, once.
+    pub fn on_core_down(&self) {
+        self.reset();
+    }
+
+    /// Back to idle; the overlay is hidden only if a dictation was showing, so a notice stays.
+    fn reset(&self) {
         let was = {
             let mut state = lock(&self.state);
             let was = state.phase;
@@ -186,10 +204,27 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
     }
 
-    /// Pastes the latest dictation from the history into the window that has focus now (the
-    /// tray's 「貼上上一次聽寫」).
-    pub fn paste_last(&self) -> JoinHandle<()> {
-        self.paste_last_at(None)
+    /// The tray's 「貼上上一次聽寫」: copies the latest dictation from the history and says to
+    /// press Ctrl+V. It is not pasted: the tray menu has taken the focus (its own window, or the
+    /// taskbar), so there is no window to paste into. The clipboard is not put back. During a
+    /// dictation the notice is left out, because the overlay is that dictation's.
+    pub fn copy_last(&self) -> JoinHandle<()> {
+        let this = self.clone();
+        tokio::spawn(async move {
+            let Some(text) = this.latest_text().await else {
+                return;
+            };
+            let paster = this.paster.clone();
+            if let Err(err) = tokio::task::spawn_blocking(move || paster.copy(&text)).await {
+                log::error!("copying the last dictation failed: {err}");
+                return;
+            }
+            if this.phase() == Phase::Idle {
+                this.show(notices::LAST_COPIED);
+            } else {
+                log::info!("the last dictation is copied; no notice during a dictation");
+            }
+        })
     }
 
     fn act(&self, action: Action, now_ms: u64) -> Option<JoinHandle<()>> {
@@ -229,28 +264,27 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 return;
             };
             match err.code {
-                NO_MICROPHONE => log::warn!("dictation.start: no microphone ({err})"),
                 BUSY => log::error!(
                     "dictation.start: the core is busy with another dictation session ({err}); \
                      this dictation is dropped and the stuck session is cancelled"
                 ),
-                _ => log::error!("dictation.start failed: {err}"),
+                TIMEOUT => log::error!(
+                    "dictation.start timed out ({err}); the core may start it late, so it is \
+                     cancelled"
+                ),
+                _ => log::warn!("dictation.start failed: {err}"),
             }
-            // Some other session holds the core. It is not ours (this id was just made up), so
-            // the recovery cancel names no session: the core cancels whatever is active. The next
-            // press then starts normally; this dictation is not retried. It is sent while this
-            // session is still current, so no new session can have started and fall victim to it,
-            // and not at all if the session was cancelled meanwhile (the next BUSY recovers).
-            if err.code == BUSY && this.is_current(&id) {
+            // BUSY: some other session holds the core. TIMEOUT: the core may yet start this one,
+            // late, and nobody would stop it. Either way the recovery cancel names no session
+            // (for BUSY our id means nothing to the core): the core cancels whatever is active.
+            // The next press then starts normally; this dictation is not retried. It is sent
+            // while this session is still current, so no new session can have started and fall
+            // victim to it, and not at all if the session was cancelled meanwhile (the next
+            // BUSY recovers).
+            if matches!(err.code, BUSY | TIMEOUT) && this.is_current(&id) {
                 recovery_cancel(this.core.as_ref()).await;
             }
-            this.finish(&id, |this| {
-                if err.code == NO_MICROPHONE {
-                    this.show(notices::NO_MIC);
-                } else {
-                    this.overlay.hide();
-                }
-            });
+            this.finish(&id, |this| this.show_failure(&err));
             // Only now: a stop or cancel waiting for this answer has nothing left to stop.
             answered.send_replace(Started::Failed);
         }))
@@ -301,8 +335,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             let reply = match reply {
                 Ok(reply) => reply,
                 Err(err) => {
-                    log::error!("dictation.stop failed: {err}");
-                    this.finish(&id, |this| this.overlay.hide());
+                    log::warn!("dictation.stop failed: {err}");
+                    this.finish(&id, |this| this.show_failure(&err));
                     return;
                 }
             };
@@ -344,20 +378,23 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }))
     }
 
-    fn paste_last_at(&self, now_ms: Option<u64>) -> JoinHandle<()> {
+    /// The paste-last hotkey: pastes the latest dictation from the history into the window that
+    /// has focus now.
+    fn paste_last_at(&self, now_ms: u64) -> JoinHandle<()> {
         // Right Alt+V: the Right Alt went down first and started a recording. Drop it quietly.
-        let cancelled = now_ms.and_then(|now_ms| {
+        let cancelled = {
             let mut state = lock(&self.state);
             let fresh = state.phase == Phase::Recording
                 && now_ms.saturating_sub(state.started_ms) < PASTE_LAST_CANCELS_WITHIN_MS;
-            if !fresh {
-                return None;
+            if fresh {
+                state.phase = Phase::Idle;
+                state.holdtap.reset();
+                self.cancel.set(false);
+                state.session.take()
+            } else {
+                None
             }
-            state.phase = Phase::Idle;
-            state.holdtap.reset();
-            self.cancel.set(false);
-            state.session.take()
-        });
+        };
         if cancelled.is_some() {
             self.overlay.hide();
         }
@@ -377,11 +414,20 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     }
 
     async fn paste_latest(&self, target: Option<Target>) {
+        let Some(text) = self.latest_text().await else {
+            return;
+        };
+        let outcome = self.deliver(text, target, None).await;
+        self.report(outcome, None, false);
+    }
+
+    /// The text of the latest dictation in the history, if there is one.
+    async fn latest_text(&self) -> Option<String> {
         let latest = match self.core.call("history.latest", json!({})).await {
             Ok(latest) => latest,
             Err(err) => {
                 log::error!("history.latest failed: {err}");
-                return;
+                return None;
             }
         };
         let text = latest
@@ -389,12 +435,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             .and_then(|item| item.get("text"))
             .and_then(Value::as_str)
             .filter(|text| !text.is_empty());
-        let Some(text) = text else {
+        if text.is_none() {
             log::info!("paste last: the history is empty");
-            return;
-        };
-        let outcome = self.deliver(text.to_owned(), target, None).await;
-        self.report(outcome, None, false);
+        }
+        text.map(str::to_owned)
     }
 
     /// Pastes on a blocking thread: the paster can take seconds.
@@ -453,6 +497,31 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
 
     fn show(&self, notice: Notice) {
         self.overlay.notice(notice.zh, notice.ja);
+    }
+
+    /// The end of a dictation whose `dictation.start` or `dictation.stop` failed: Raphael's
+    /// notice for the errors the user can do something about, a plain hide for the others.
+    fn show_failure(&self, err: &RpcError) {
+        match self.failure_notice(err) {
+            Some(notice) => self.show(notice),
+            None => self.overlay.hide(),
+        }
+    }
+
+    fn failure_notice(&self, err: &RpcError) -> Option<Notice> {
+        match err.code {
+            NO_MICROPHONE => Some(notices::NO_MIC),
+            NOT_CONFIGURED => Some(notices::NOT_READY),
+            CORE_EXITED => {
+                let mut state = lock(&self.state);
+                if state.down_noticed {
+                    return None;
+                }
+                state.down_noticed = true;
+                Some(notices::CORE_DOWN)
+            }
+            _ => None,
+        }
     }
 
     /// `notice`, unless it was shown before in this app session.
@@ -577,6 +646,7 @@ mod app {
     use super::DictationController;
     use crate::core_process::{CORE_DOWN, CORE_RESTARTED, CoreProcess};
     use crate::hotkey::{CancelSwitch, HotkeyEvent, HotkeyService, PauseReason};
+    use crate::notices;
     use crate::overlay::{Mode, Overlay, OverlayApi};
     use crate::paste::WindowsPaster;
     use crate::rpc::Notification;
@@ -650,10 +720,11 @@ mod app {
             .map(|hotkeys| hotkeys.inner().clone());
 
         let notifications = core.as_ref().map(|core| core.subscribe());
+        let overlay = Arc::new(MaybeOverlay(overlay));
         let controller = match core {
             Some(core) => Some(DictationController::new(
                 core,
-                Arc::new(MaybeOverlay(overlay)),
+                overlay.clone(),
                 Arc::new(WindowsPaster::new()),
                 Arc::new(MaybeHotkeys(hotkeys.clone())),
             )),
@@ -664,6 +735,7 @@ mod app {
         };
         tauri::async_runtime::spawn(run(
             controller,
+            overlay,
             hotkeys,
             hotkey_events,
             notifications,
@@ -673,6 +745,7 @@ mod app {
 
     async fn run(
         controller: Option<Controller>,
+        overlay: Arc<MaybeOverlay>,
         hotkeys: Option<Arc<HotkeyService>>,
         mut hotkey_events: Option<UnboundedReceiver<HotkeyEvent>>,
         mut notifications: Option<broadcast::Receiver<Notification>>,
@@ -681,6 +754,9 @@ mod app {
         let clock = Instant::now();
         let now_ms = || u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
         let mut resume: Option<JoinHandle<()>> = None;
+        // Without a core, the dictation key is still swallowed: the first press says why
+        // nothing happens. There is no core to come back, so it is said once.
+        let mut told_no_core = false;
 
         loop {
             tokio::select! {
@@ -688,7 +764,13 @@ mod app {
                     Some(event) => match &controller {
                         // The task runs by itself; nothing waits for it.
                         Some(controller) => drop(controller.on_hotkey(event, now_ms())),
-                        None => log::info!("hotkey {event:?} ignored: the core is not running"),
+                        None => {
+                            log::info!("hotkey {event:?} ignored: the core is not running");
+                            if event == HotkeyEvent::DictationDown && !told_no_core {
+                                told_no_core = true;
+                                overlay.notice(notices::CORE_DOWN.zh, notices::CORE_DOWN.ja);
+                            }
+                        }
                     },
                     None => hotkey_events = None,
                 },
@@ -707,7 +789,7 @@ mod app {
                 }
                 command = next(&mut tray_commands) => match command {
                     Some(TrayCommand::PasteLast) => match &controller {
-                        Some(controller) => drop(controller.paste_last()),
+                        Some(controller) => drop(controller.copy_last()),
                         None => log::info!("paste last ignored: the core is not running"),
                     },
                     Some(TrayCommand::PauseOneHour) => pause(hotkeys.as_ref(), &mut resume),
@@ -724,7 +806,8 @@ mod app {
                     controller.on_level(level as f32);
                 }
             }
-            CORE_RESTARTED | CORE_DOWN => controller.on_core_restarted(),
+            CORE_RESTARTED => controller.on_core_restarted(),
+            CORE_DOWN => controller.on_core_down(),
             _ => {}
         }
     }
@@ -771,10 +854,12 @@ mod app {
 mod tests {
     use super::*;
     use crate::hotkey::{CancelSwitch, HotkeyEvent};
-    use crate::notices::{ELEVATED, FOCUS_CHANGED, NO_MIC, OFFLINE};
+    use crate::notices::{
+        CORE_DOWN, ELEVATED, FOCUS_CHANGED, LAST_COPIED, NO_MIC, NOT_READY, OFFLINE,
+    };
     use crate::overlay::{Mode, OverlayApi};
     use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
-    use crate::rpc::{CORE_EXITED, CoreApi, RpcError};
+    use crate::rpc::{CORE_EXITED, CoreApi, RpcError, TIMEOUT};
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -900,6 +985,7 @@ mod tests {
         foreground: Option<Target>,
         outcome: PasteOutcome,
         delivered: Mutex<Vec<String>>,
+        copied: Mutex<Vec<String>>,
     }
 
     impl FakePaster {
@@ -917,6 +1003,7 @@ mod tests {
                 foreground: Some(Self::target(process_name)),
                 outcome: PasteOutcome::Pasted,
                 delivered: Mutex::default(),
+                copied: Mutex::default(),
             }
         }
 
@@ -929,6 +1016,10 @@ mod tests {
 
         fn delivered(&self) -> Vec<String> {
             self.delivered.lock().unwrap().clone()
+        }
+
+        fn copied(&self) -> Vec<String> {
+            self.copied.lock().unwrap().clone()
         }
     }
 
@@ -945,6 +1036,10 @@ mod tests {
             );
             self.delivered.lock().unwrap().push(text.to_owned());
             self.outcome
+        }
+
+        fn copy(&self, text: &str) {
+            self.copied.lock().unwrap().push(text.to_owned());
         }
     }
 
@@ -1223,15 +1318,15 @@ mod tests {
     #[tokio::test]
     async fn core_failure_still_returns_to_idle() {
         let c = controller(
-            FakeCore::failing(
-                "dictation.stop",
-                RpcError::new(CORE_EXITED, "the core exited"),
-            ),
+            FakeCore::failing("dictation.stop", RpcError::new(-32603, "internal error")),
             FakePaster::pasting("notepad.exe"),
         );
         run(&c, HotkeyEvent::DictationDown, 0).await;
         run(&c, HotkeyEvent::DictationUp, 900).await;
-        assert_eq!(c.overlay().events().last().unwrap(), "hide");
+        assert_eq!(
+            c.overlay().events(),
+            vec!["show:listening", "mode:thinking", "hide"]
+        );
         assert_eq!(c.phase(), Phase::Idle);
         assert_eq!(c.cancel().last(), Some(false));
         assert!(c.paster().delivered().is_empty());
@@ -1240,16 +1335,172 @@ mod tests {
     #[tokio::test]
     async fn a_failed_start_returns_to_idle() {
         let c = controller(
+            FakeCore::failing("dictation.start", RpcError::new(-32603, "internal error")),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.cancel().last(), Some(false));
+    }
+
+    // ---------- failures get a word from Raphael ----------
+
+    /// The overlay's last call is the notice `expected`: no hide came after it to cancel it.
+    fn ends_with_notice(c: &Ctl, expected: &str) {
+        let events = c.overlay().events();
+        assert_eq!(events.last().unwrap(), &notice(expected), "{events:?}");
+    }
+
+    #[tokio::test]
+    async fn no_microphone_at_stop_shows_the_notice() {
+        let c = controller(
+            FakeCore::failing("dictation.stop", RpcError::new(1004, "no microphone")),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        ends_with_notice(&c, NO_MIC.zh);
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.cancel().last(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn not_configured_at_start_says_the_model_is_not_ready() {
+        let c = controller(
+            FakeCore::failing("dictation.start", RpcError::new(1001, "not configured")),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        assert_eq!(
+            c.overlay().events(),
+            vec!["show:listening".to_owned(), notice(NOT_READY.zh)]
+        );
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.cancel().last(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn not_configured_at_stop_says_the_model_is_not_ready() {
+        let c = controller(
+            FakeCore::failing("dictation.stop", RpcError::new(1001, "not configured")),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        ends_with_notice(&c, NOT_READY.zh);
+        assert_eq!(c.phase(), Phase::Idle);
+    }
+
+    #[tokio::test]
+    async fn a_core_that_is_gone_is_reported_once_until_it_restarts() {
+        let c = controller(
             FakeCore::failing(
                 "dictation.start",
+                RpcError::new(CORE_EXITED, "the core is not running"),
+            ),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        assert_eq!(
+            c.overlay().events(),
+            vec!["show:listening".to_owned(), notice(CORE_DOWN.zh)]
+        );
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.cancel().last(), Some(false));
+
+        // the same down-state: no second notice, the emblem just goes away
+        run(&c, HotkeyEvent::DictationUp, 300).await;
+        run(&c, HotkeyEvent::DictationDown, 5000).await;
+        let events = c.overlay().events();
+        assert_eq!(&events[2..], ["show:listening", "hide"]);
+        // a core.down while it is down changes nothing
+        c.on_core_down();
+        run(&c, HotkeyEvent::DictationUp, 5300).await;
+        run(&c, HotkeyEvent::DictationDown, 9000).await;
+        assert_eq!(c.overlay().events().last().unwrap(), "hide");
+
+        // back up, then down again: a new down-state gets its notice
+        c.on_core_restarted();
+        run(&c, HotkeyEvent::DictationUp, 9300).await;
+        run(&c, HotkeyEvent::DictationDown, 12000).await;
+        ends_with_notice(&c, CORE_DOWN.zh);
+        let count = c
+            .overlay()
+            .events()
+            .iter()
+            .filter(|e| **e == notice(CORE_DOWN.zh))
+            .count();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn a_core_that_exits_during_the_stop_is_reported() {
+        let c = controller(
+            FakeCore::failing(
+                "dictation.stop",
                 RpcError::new(CORE_EXITED, "the core exited"),
             ),
             FakePaster::pasting("notepad.exe"),
         );
         run(&c, HotkeyEvent::DictationDown, 0).await;
-        assert_eq!(c.overlay().events().last().unwrap(), "hide");
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        ends_with_notice(&c, CORE_DOWN.zh);
         assert_eq!(c.phase(), Phase::Idle);
-        assert_eq!(c.cancel().last(), Some(false));
+        assert!(c.paster().delivered().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_core_down_notification_keeps_the_notice_once() {
+        // core.down comes first; the press after it still gets the notice, once.
+        let c = controller(
+            FakeCore::failing(
+                "dictation.start",
+                RpcError::new(CORE_EXITED, "the core is not running"),
+            ),
+            FakePaster::pasting("notepad.exe"),
+        );
+        c.on_core_down();
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        ends_with_notice(&c, CORE_DOWN.zh);
+        run(&c, HotkeyEvent::DictationUp, 300).await;
+        run(&c, HotkeyEvent::DictationDown, 5000).await;
+        assert_eq!(c.overlay().events().last().unwrap(), "hide");
+    }
+
+    #[tokio::test]
+    async fn a_start_timeout_gets_one_recovery_cancel_without_a_session_id() {
+        // The core may still start the session after the timeout; nobody would ever stop it.
+        let c = controller(
+            FakeCore::failing("dictation.start", RpcError::new(TIMEOUT, "timed out")),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        assert_eq!(c.core().count("dictation.cancel"), 1);
+        assert_eq!(c.core().call_params("dictation.cancel"), json!({}));
+        assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
+        assert_eq!(c.phase(), Phase::Idle);
+    }
+
+    #[tokio::test]
+    async fn a_start_timeout_after_escape_sends_no_recovery_cancel() {
+        let (c, gate) = with_gated_start(FakeCore::failing(
+            "dictation.start",
+            RpcError::new(TIMEOUT, "timed out"),
+        ));
+        let down = c
+            .on_hotkey(HotkeyEvent::DictationDown, 0)
+            .expect("the start runs in a task");
+        tokio::task::yield_now().await;
+        let esc = c
+            .on_hotkey(HotkeyEvent::Cancel, 100)
+            .expect("the cancel runs in a task");
+        settle().await;
+        gate.notify_one();
+        down.await.unwrap();
+        esc.await.unwrap();
+        assert_eq!(c.core().count("dictation.cancel"), 0);
+        assert_eq!(c.phase(), Phase::Idle);
     }
 
     #[tokio::test]
@@ -1316,7 +1567,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paste_last_from_the_tray_pastes_the_latest_item() {
+    async fn the_tray_copies_the_latest_item_and_says_so() {
+        // The tray menu has taken the focus (its own window, or the taskbar): a paste would land
+        // nowhere. The text is left on the clipboard instead, and Raphael says to press Ctrl+V.
         let c = controller(
             FakeCore::with(
                 "history.latest",
@@ -1324,20 +1577,55 @@ mod tests {
             ),
             FakePaster::pasting("notepad.exe"),
         );
-        c.paste_last().await.unwrap();
-        assert_eq!(c.paster().delivered(), vec!["上一次"]);
+        c.copy_last().await.unwrap();
+        assert_eq!(c.paster().copied(), vec!["上一次"]);
+        assert!(c.paster().delivered().is_empty(), "nothing is pasted");
         assert_eq!(c.core().count("dictation.cancel"), 0);
-        assert!(c.overlay().events().is_empty());
+        assert_eq!(c.overlay().events(), vec![notice(LAST_COPIED.zh)]);
     }
 
     #[tokio::test]
-    async fn paste_last_with_an_empty_history_does_nothing() {
+    async fn the_tray_with_an_empty_history_does_nothing() {
         let c = controller(
             FakeCore::with("history.latest", json!({"item": null})),
             FakePaster::pasting("notepad.exe"),
         );
-        c.paste_last().await.unwrap();
+        c.copy_last().await.unwrap();
+        assert!(c.paster().copied().is_empty());
         assert!(c.paster().delivered().is_empty());
+        assert!(c.overlay().events().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_tray_during_a_dictation_copies_without_a_notice() {
+        // The overlay belongs to the dictation; a notice would wipe its emblem.
+        let c = controller(
+            FakeCore::with(
+                "history.latest",
+                json!({"item": {"id": 3, "text": "上一次"}}),
+            ),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        c.copy_last().await.unwrap();
+        assert_eq!(c.paster().copied(), vec!["上一次"]);
+        assert_eq!(c.overlay().events(), vec!["show:listening"]);
+        assert_eq!(c.phase(), Phase::Recording);
+    }
+
+    #[tokio::test]
+    async fn paste_last_hotkey_pastes_into_the_focused_window() {
+        let c = controller(
+            FakeCore::with(
+                "history.latest",
+                json!({"item": {"id": 3, "text": "上一次"}}),
+            ),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::PasteLast, 5000).await;
+        assert_eq!(c.paster().delivered(), vec!["上一次"]);
+        assert!(c.paster().copied().is_empty());
+        assert!(c.overlay().events().is_empty());
     }
 
     #[tokio::test]
@@ -1349,7 +1637,7 @@ mod tests {
             ),
             FakePaster::copying("powershell.exe", CopyReason::Elevated),
         );
-        c.paste_last().await.unwrap();
+        run(&c, HotkeyEvent::PasteLast, 5000).await;
         assert_eq!(c.overlay().events(), vec![notice(ELEVATED.zh)]);
     }
 
@@ -1539,7 +1827,7 @@ mod tests {
     async fn a_failed_start_means_no_stop_is_sent() {
         let (c, gate) = with_gated_start(FakeCore::failing(
             "dictation.start",
-            RpcError::new(CORE_EXITED, "the core exited"),
+            RpcError::new(-32603, "internal error"),
         ));
         let down = c
             .on_hotkey(HotkeyEvent::DictationDown, 0)

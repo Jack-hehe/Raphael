@@ -121,6 +121,11 @@ pub trait Paster: Send + Sync + 'static {
     /// be used at all (another program keeps it open), nothing is pasted or copied: that is
     /// logged, and the outcome is still the one [`decide`] chose.
     fn deliver(&self, text: &str, at_stop: Option<&Target>) -> PasteOutcome;
+
+    /// Leaves `text` on the clipboard for the user to paste by hand (kept out of clipboard
+    /// history like a paste) and does not put the user's clipboard back. If the clipboard cannot
+    /// be used, that is logged.
+    fn copy(&self, text: &str);
 }
 
 #[cfg(test)]
