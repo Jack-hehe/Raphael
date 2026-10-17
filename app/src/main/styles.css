@@ -153,9 +153,14 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .addword .field:first-child { flex: 1.2; }
 .addword .field { flex: 1; }
 .sugg { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; font-size: 12px; color: var(--text-3); }
-.chip { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px; border-radius: 13px; border: 1px dashed var(--btn-edge); background: transparent; font-size: 12px; color: var(--text); }
-.chip:hover { border-style: solid; border-color: var(--accent); }
-.chip .i { width: 12px; height: 12px; color: var(--accent-text); }
+.chip { display: inline-flex; align-items: center; height: 26px; border-radius: 13px; border: 1px dashed var(--btn-edge); background: transparent; font-size: 12px; color: var(--text); }
+.chip:hover, .chip:focus-within { border-style: solid; border-color: var(--accent); }
+.chip button { display: inline-flex; align-items: center; height: 100%; border: 0; background: transparent; color: inherit; font: inherit; }
+.chip .chip-add { gap: 4px; padding: 0 4px 0 10px; border-radius: 13px 0 0 13px; }
+.chip-add .i { width: 12px; height: 12px; color: var(--accent-text); }
+.chip .chip-x { padding: 0 8px 0 4px; border-radius: 0 13px 13px 0; color: var(--text-3); }
+.chip-x .i { width: 10px; height: 10px; opacity: .55; }
+.chip-x:hover .i, .chip-x:focus-visible .i { opacity: 1; }
 .wrow .acts { visibility: hidden; }
 .wrow:hover .acts, .wrow:focus-within .acts { visibility: visible; }
 .word { font-weight: 600; overflow-wrap: anywhere; }
