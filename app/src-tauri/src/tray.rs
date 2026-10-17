@@ -1,8 +1,8 @@
 //! The system tray icon and its menu.
 //!
 //! Left click shows the main window. The right-click menu has the items below. "Open" and
-//! "Quit" act at once; the two dictation items only send a [`TrayCommand`] to whoever holds the
-//! receiving end of the channel given to [`build`] (the dictation controller).
+//! "Quit" act at once; the two dictation items only send a [`TrayCommand`] on the channel given
+//! to [`build`], whose receiving end the dictation controller holds.
 
 use tauri::{
     AppHandle,
@@ -11,13 +11,14 @@ use tauri::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-/// Id of the tray icon, for `AppHandle::tray_by_id` (later tasks change the icon's look).
+/// Id of the tray icon (`AppHandle::tray_by_id` finds it by this).
 pub const TRAY_ID: &str = "raphael";
 
 /// What a tray menu item asks the rest of the app to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayCommand {
-    /// 「貼上上一次聽寫」: paste the latest dictation again.
+    /// 「貼上上一次聽寫」: put the latest dictation on the clipboard again (the menu has taken the
+    /// focus, so it cannot be pasted for the user) and say to press Ctrl+V.
     PasteLast,
     /// 「暫停 1 小時」: stop listening to the dictation hotkey for an hour.
     PauseOneHour,

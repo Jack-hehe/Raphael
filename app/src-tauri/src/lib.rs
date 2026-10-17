@@ -24,8 +24,22 @@ const MAIN_WINDOW: &str = "main";
 /// Label of the overlay window. It is created in Rust, never by the config.
 const OVERLAY_WINDOW: &str = "overlay";
 
+/// Writes a panic to the log before the default hook runs. The release build aborts on a panic
+/// (`panic = "abort"`) and has no console, so without this a crash would leave no trace.
+fn log_panics() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("unnamed");
+        log::error!("panic in thread {name}: {info}");
+        log::logger().flush();
+        default_hook(info);
+    }));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    log_panics();
     let builder = tauri::Builder::default();
 
     // The single-instance plugin must come first: a second launch hands over to the running
