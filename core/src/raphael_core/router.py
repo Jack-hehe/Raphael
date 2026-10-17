@@ -8,6 +8,7 @@ machine later.
 Never log params or results here: `secrets.set_openrouter_key` carries the OpenRouter key.
 """
 
+import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -47,8 +48,9 @@ class Router:
         """Run a handler. Every failure comes out as an RpcError.
 
         A handler's own RpcError passes through unchanged; any other exception becomes
-        RpcError(INTERNAL_ERROR) and is logged with its traceback. Cancellation, KeyboardInterrupt
-        and SystemExit are not failures of the call and pass through.
+        RpcError(INTERNAL_ERROR) and is logged with its traceback. So does a CancelledError that is
+        not the call's own cancellation: a task the handler awaited was cancelled by someone else.
+        Cancelling the call itself, KeyboardInterrupt and SystemExit pass through.
         """
         handler = self._handlers.get(method)
         if handler is None:
@@ -63,6 +65,15 @@ class Router:
             result = await handler(wire_params)
         except RpcError:
             raise
+        except asyncio.CancelledError as exc:
+            # The call's own cancellation must propagate. A sub-task or future the handler awaited
+            # that someone else cancelled is only a failed call: it has to be answered, or the
+            # request vanishes (and serve's drain at the end of input would abort).
+            task = asyncio.current_task()
+            if task is None or task.cancelling():
+                raise
+            logger.warning("%s was cancelled from outside", method)
+            raise RpcError(INTERNAL_ERROR, f"{method} was cancelled") from exc
         except Exception as exc:
             logger.exception("Handler for %s failed", method)
             raise RpcError(INTERNAL_ERROR, str(exc) or type(exc).__name__) from exc

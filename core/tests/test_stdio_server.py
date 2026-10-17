@@ -1,12 +1,15 @@
 import asyncio
 import json
+import logging
 import os
 import queue
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
+import numpy as np
 import pytest
 
 from raphael_core.protocol import BUSY, RpcError
@@ -159,6 +162,31 @@ async def test_rpc_error_from_a_handler_is_sent_with_its_code_and_data():
     ]
 
 
+@pytest.mark.parametrize(
+    "data",
+    [{"missing": {"a"}}, {"file": Path("a.wav")}, {"level": np.float32(0.5)}, {"level": float("nan")}],
+    ids=["set", "path", "numpy-scalar", "nan"],
+)
+async def test_error_data_that_cannot_be_encoded_still_gets_an_answer(data, caplog):
+    # A handler's RpcError reaches serve untouched, so its data may be anything.
+    r = echo_router()
+
+    async def busy(p):
+        raise RpcError(BUSY, "busy", data)
+
+    r.register("t.busy", busy)
+    with caplog.at_level(logging.ERROR, logger="raphael_core.stdio_server"):
+        msgs = await run(r, call(1, "t.busy"), call(2, "t.echo", {"a": 1}))
+    by_id = {m["id"]: m for m in msgs}
+    assert by_id[1] == {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {"code": -32603, "message": "Response could not be encoded"},
+    }
+    assert by_id[2]["result"] == {"a": 1}  # and the server went on
+    assert any(rec.exc_info for rec in caplog.records)  # the cause is in the log, with a traceback
+
+
 async def test_unexpected_handler_error_is_sent_as_internal_error():
     r = Router()
 
@@ -170,6 +198,33 @@ async def test_unexpected_handler_error_is_sent_as_internal_error():
     assert msgs == [
         {"jsonrpc": "2.0", "id": 1, "error": {"code": -32603, "message": "x went wrong"}}
     ]
+
+
+async def test_a_request_whose_sub_task_another_request_cancels_is_answered():
+    # dictation.stop awaits the pipeline task that dictation.cancel cancels. The input ends while
+    # both are in flight, which is when serve drains them with gather().
+    r = Router()
+    pipeline = None
+    started = asyncio.Event()
+
+    async def stop(p):
+        nonlocal pipeline
+        pipeline = asyncio.create_task(asyncio.sleep(3600))
+        started.set()
+        await pipeline
+
+    async def cancel(p):
+        await started.wait()
+        pipeline.cancel()
+        await asyncio.sleep(0.05)  # still in flight after stop's request has failed
+        return "cancelled"
+
+    r.register("t.stop", stop)
+    r.register("t.cancel", cancel)
+    msgs = await asyncio.wait_for(run(r, call(1, "t.stop"), call(2, "t.cancel")), timeout=5)
+    by_id = {m["id"]: m for m in msgs}
+    assert by_id[1]["error"] == {"code": -32603, "message": "t.stop was cancelled"}
+    assert by_id[2]["result"] == "cancelled"
 
 
 async def test_params_that_are_not_an_object_get_invalid_params():
@@ -278,13 +333,15 @@ async def test_cancelling_serve_cancels_the_requests_in_flight():
         yield call(1, "t.hang")
         await asyncio.Event().wait()  # stdin stays open
 
-    server = asyncio.create_task(serve(r, endless(), lambda line: None))
+    out = []
+    server = asyncio.create_task(serve(r, endless(), out.append))
     await asyncio.wait_for(started.wait(), timeout=5)
     server.cancel()
     with pytest.raises(asyncio.CancelledError):
         await server
     await asyncio.wait_for(cancelled.wait(), timeout=5)
-    r.notify("audio.level", {"level": 0.5})  # and the notifier is gone: this must not raise
+    r.notify("audio.level", {"level": 0.5})  # the notifier is gone too
+    assert out == []  # the cancelled request was not answered, and nothing was notified
 
 
 # --- the line splitter behind run_stdio's stdin thread ---------------------------------------

@@ -168,6 +168,49 @@ async def test_cancellation_is_not_turned_into_an_rpc_error():
         await task
 
 
+async def test_a_sub_task_cancelled_by_someone_else_is_an_internal_error():
+    # E.g. dictation.stop awaiting the pipeline task that dictation.cancel cancels: the call
+    # itself was not cancelled, so it must fail with an answer rather than vanish.
+    sub = None
+    started = asyncio.Event()
+
+    async def stop(p):
+        nonlocal sub
+        sub = asyncio.create_task(asyncio.sleep(3600))
+        started.set()
+        await sub
+
+    r = _router_with("t.stop", stop)
+    task = asyncio.create_task(r.call("t.stop", {}))
+    await started.wait()
+    sub.cancel()
+    with pytest.raises(RpcError) as e:
+        await task
+    assert e.value.code == INTERNAL_ERROR
+    assert e.value.message == "t.stop was cancelled"
+    assert isinstance(e.value.__cause__, asyncio.CancelledError)
+    assert not task.cancelled()
+
+
+async def test_cancelling_the_call_while_it_awaits_a_sub_task_still_propagates():
+    sub = None
+    started = asyncio.Event()
+
+    async def stop(p):
+        nonlocal sub
+        sub = asyncio.create_task(asyncio.sleep(3600))
+        started.set()
+        await sub
+
+    r = _router_with("t.stop", stop)
+    task = asyncio.create_task(r.call("t.stop", {}))
+    await started.wait()
+    task.cancel()  # the call's own cancellation, which reaches the handler through the sub-task
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert task.cancelled()
+
+
 def test_methods_lists_the_registered_names():
     async def h(p):
         return None

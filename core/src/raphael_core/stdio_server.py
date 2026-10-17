@@ -15,7 +15,15 @@ import sys
 import threading
 from collections.abc import AsyncIterator, Callable, Iterator
 
-from .protocol import RpcError, error_response, notification, parse_message, peek_id, response
+from .protocol import (
+    INTERNAL_ERROR,
+    RpcError,
+    error_response,
+    notification,
+    parse_message,
+    peek_id,
+    response,
+)
 from .router import Router
 
 logger = logging.getLogger(__name__)
@@ -27,19 +35,38 @@ def _encode(message: dict) -> str:
     return json.dumps(message, separators=(",", ":"), allow_nan=False)
 
 
+def _encode_message(message: dict) -> str:
+    """`_encode`, except that a reply that cannot be encoded becomes an error reply.
+
+    Router.call checks results, but a handler's RpcError reaches serve untouched, so its `data` may
+    hold anything (a set, a Path, a numpy scalar). The request must still be answered.
+    """
+    try:
+        return _encode(message)
+    except Exception:
+        if "id" not in message:  # a notification: nothing waits for it
+            raise
+        logger.exception("The reply to request %r cannot be encoded", message["id"])
+        # The id was validated on the way in, so this always encodes.
+        return _encode(
+            error_response(message["id"], RpcError(INTERNAL_ERROR, "Response could not be encoded"))
+        )
+
+
 async def serve(router: Router, lines: AsyncIterator[str], write: Callable[[str], None]) -> None:
     """Answer the JSON-RPC requests in `lines` through `write` until `lines` ends.
 
     `lines` yields one message per item. `write` receives one compact JSON document per call, with
-    no newline: the sink does the framing. Each request runs as its own task, so requests may
-    overlap, and the ones still running when the input ends are answered before this returns.
-    An incoming notification is run but never answered, not even with an error. An incoming
-    response is ignored: the core makes no requests of its own.
+    no newline: the sink does the framing. It may be called from any thread (a `Router.notify` from
+    the audio thread, say), so it must be thread-safe. Each request runs as its own task, so
+    requests may overlap, and the ones still running when the input ends are answered before this
+    returns. An incoming notification is run but never answered, not even with an error. An
+    incoming response is ignored: the core makes no requests of its own.
     """
 
     def send(message: dict) -> None:
         try:
-            write(_encode(message))
+            write(_encode_message(message))
         except Exception:
             logger.exception("Could not write a message")
 
