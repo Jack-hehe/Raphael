@@ -72,15 +72,14 @@ const MODIFIERS = new Set([
   "MetaLeft",
   "MetaRight",
 ]);
-const ALT = new Set(["AltLeft", "AltRight"]);
 const SHIFT = new Set(["ShiftLeft", "ShiftRight"]);
 const FUNCTION_KEY = /^F([1-9]|1\d|2[0-4])$/;
 
 /**
  * Why the keys `codes` cannot be a hotkey, or null if they can. A hotkey must not get in the way of
  * typing: a key without a modifier is only a hotkey if it is a function key; Shift is no modifier
- * for this, since Shift+V is a capital V; a modifier on its own must be Alt (Right Alt is the
- * default), never Shift, Ctrl or Win alone; and Esc cancels a dictation, so it is never a hotkey.
+ * for this, since Shift+V is a capital V; a modifier on its own must be Right Alt, never Left Alt,
+ * Shift, Ctrl or Win alone; and Esc cancels a dictation, so it is never a hotkey.
  */
 export function validateCodes(codes: string[]): string | null {
   const modifiers = codes.filter((code) => MODIFIERS.has(code));
@@ -88,8 +87,8 @@ export function validateCodes(codes: string[]): string | null {
   if (keys.length > 1) return "一組快捷鍵只能搭配一個一般按鍵";
   if (keys[0] === "Escape") return "Esc 用來取消聽寫，不能當快捷鍵";
   if (keys.length === 0) {
-    const aloneAlt = modifiers.length === 1 && ALT.has(modifiers[0]);
-    return aloneAlt ? null : "只有 Alt 可以單獨當快捷鍵；Shift、Ctrl、Win 要搭配其他按鍵";
+    const aloneRightAlt = modifiers.length === 1 && modifiers[0] === "AltRight";
+    return aloneRightAlt ? null : "只有右 Alt 可以單獨當快捷鍵；左 Alt、Ctrl、Shift、Win 要搭配其他按鍵";
   }
   if (FUNCTION_KEY.test(keys[0])) return null;
   if (modifiers.some((code) => !SHIFT.has(code))) return null;

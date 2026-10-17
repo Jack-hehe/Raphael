@@ -37,7 +37,8 @@ use crate::rpc::{CORE_EXITED, Notification, RpcError, TIMEOUT};
 const CORE_NOT_RUNNING: &str = "Raphael's core is not running";
 
 /// Whether the core is sending the microphone's loudness to the settings page: set by a
-/// successful `audio.monitor`, cleared when the core restarts (a new core does not monitor).
+/// successful `audio.monitor` from the page. When the core restarts it is switched on again in
+/// the new core ([`restore_core`]), so the page need not know about restarts.
 static MONITORING: AtomicBool = AtomicBool::new(false);
 /// The task that passes the core's notifications on to the page that last called `main_events`.
 static FORWARDER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
@@ -555,8 +556,9 @@ fn apply_saved(app: &AppHandle, settings: &DeviceSettings) {
     }
 }
 
-/// Tells the core which microphone to use: at start, and again each time the core restarts. Also
-/// stops counting the microphone as monitored, as a new core does not monitor.
+/// Tells the core which microphone to use, and whether the settings page's meter is on: at
+/// start, and again each time the core restarts (a new core uses the default microphone and does
+/// not monitor). Missed notifications may have held a restart, so they count as one.
 fn watch_core(app: &AppHandle) {
     let Some(core) = app.try_state::<Arc<CoreProcess>>() else {
         return;
@@ -564,34 +566,58 @@ fn watch_core(app: &AppHandle) {
     let mut notifications = core.subscribe();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        send_microphone(&app).await;
+        restore_from(&app).await;
         loop {
             match notifications.recv().await {
                 Ok(notification) if notification.method == CORE_RESTARTED => {
-                    MONITORING.store(false, Ordering::Relaxed);
-                    send_microphone(&app).await;
+                    restore_from(&app).await;
                 }
-                Ok(_) | Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Lagged(missed)) => {
+                    log::warn!("missed {missed} notifications from the core; telling it again");
+                    restore_from(&app).await;
+                }
+                Ok(_) => {}
                 Err(RecvError::Closed) => break,
             }
         }
     });
 }
 
-/// Sends the saved microphone to the core. Nothing is sent for the default one: that is what a
-/// new core starts with.
-async fn send_microphone(app: &AppHandle) {
-    let Some(store) = app.try_state::<DeviceStore>() else {
-        return;
-    };
-    let Some(name) = store.get().await.microphone else {
-        return;
-    };
+/// [`restore_core`] with the saved microphone and [`MONITORING`].
+async fn restore_from(app: &AppHandle) {
     let Some(core) = app.try_state::<Arc<CoreProcess>>() else {
         return;
     };
-    if let Err(err) = core.call("audio.set_device", json!({ "name": name })).await {
+    let microphone = match app.try_state::<DeviceStore>() {
+        Some(store) => store.get().await.microphone,
+        None => None,
+    };
+    restore_core(core.inner().as_ref(), microphone.as_deref(), &MONITORING).await;
+}
+
+/// Puts back what a new core does not know. Sends `microphone` (nothing for the default one,
+/// which is what a new core starts with), then `audio.monitor` on if the settings page has its
+/// meter on (`monitoring`). `monitoring` stays the one record of whether the core monitors: it is
+/// cleared if the core refuses, and if the page switched the meter off while the call was on its
+/// way, the core is told to stop again.
+async fn restore_core<C: CoreApi>(core: &C, microphone: Option<&str>, monitoring: &AtomicBool) {
+    if let Some(name) = microphone
+        && let Err(err) = core.call("audio.set_device", json!({ "name": name })).await
+    {
         log::warn!("could not tell the core which microphone to use: {err}");
+    }
+    if !monitoring.load(Ordering::Relaxed) {
+        return;
+    }
+    if let Err(err) = core.call("audio.monitor", json!({ "on": true })).await {
+        log::warn!("could not switch the meter back on: {err}");
+        monitoring.store(false, Ordering::Relaxed);
+        return;
+    }
+    if !monitoring.load(Ordering::Relaxed)
+        && let Err(err) = core.call("audio.monitor", json!({ "on": false })).await
+    {
+        log::warn!("could not switch the meter off: {err}");
     }
 }
 
@@ -797,6 +823,102 @@ mod tests {
         );
     }
 
+    // ---- after the core (re)starts ----
+
+    /// A core that records its calls; `audio.monitor` fails if `monitor_fails`, and turns
+    /// `page_turns_off` false while it runs (the page switching the meter off meanwhile).
+    #[derive(Default)]
+    struct RecordingCore {
+        calls: Mutex<Vec<(String, Value)>>,
+        monitor_fails: bool,
+        page_turns_off: Option<Arc<AtomicBool>>,
+    }
+
+    impl RecordingCore {
+        fn calls(&self) -> Vec<(String, Value)> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl CoreApi for RecordingCore {
+        async fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
+            self.calls.lock().unwrap().push((method.to_owned(), params));
+            if method == "audio.monitor" {
+                if let Some(flag) = &self.page_turns_off {
+                    flag.store(false, Ordering::Relaxed);
+                }
+                if self.monitor_fails {
+                    return Err(RpcError::new(-32603, "no"));
+                }
+            }
+            Ok(json!({}))
+        }
+    }
+
+    fn call(method: &str, params: Value) -> (String, Value) {
+        (method.to_owned(), params)
+    }
+
+    #[tokio::test]
+    async fn a_new_core_gets_the_microphone_and_the_meter_back() {
+        let core = RecordingCore::default();
+        let monitoring = AtomicBool::new(true);
+        restore_core(&core, Some("USB Mic"), &monitoring).await;
+        assert_eq!(
+            core.calls(),
+            vec![
+                call("audio.set_device", json!({"name": "USB Mic"})),
+                call("audio.monitor", json!({"on": true})),
+            ]
+        );
+        assert!(monitoring.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn a_new_core_is_not_asked_to_monitor_when_the_page_was_not() {
+        let core = RecordingCore::default();
+        let monitoring = AtomicBool::new(false);
+        restore_core(&core, None, &monitoring).await;
+        assert!(
+            core.calls().is_empty(),
+            "the default microphone needs no call"
+        );
+        assert!(!monitoring.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn a_failed_monitor_is_not_counted_as_monitoring() {
+        let core = RecordingCore {
+            monitor_fails: true,
+            ..RecordingCore::default()
+        };
+        let monitoring = AtomicBool::new(true);
+        restore_core(&core, None, &monitoring).await;
+        assert_eq!(
+            core.calls(),
+            vec![call("audio.monitor", json!({"on": true}))]
+        );
+        assert!(!monitoring.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn the_meter_switched_off_meanwhile_is_switched_off_again() {
+        let monitoring = Arc::new(AtomicBool::new(true));
+        let core = RecordingCore {
+            page_turns_off: Some(monitoring.clone()),
+            ..RecordingCore::default()
+        };
+        restore_core(&core, None, &monitoring).await;
+        assert_eq!(
+            core.calls(),
+            vec![
+                call("audio.monitor", json!({"on": true})),
+                call("audio.monitor", json!({"on": false})),
+            ]
+        );
+        assert!(!monitoring.load(Ordering::Relaxed));
+    }
+
     // ---- changing the device settings ----
 
     /// Records what is done, and fails at the step named in `fail`.
@@ -949,21 +1071,21 @@ mod tests {
     #[tokio::test]
     async fn a_refused_binding_changes_nothing_else() {
         let fake = Fake::failing("bindings");
-        let (old, new) = changed(json!({"dictation_keys": ["AltLeft"], "emblem_size": 194}));
+        let (old, new) = changed(json!({"dictation_keys": ["F9"], "emblem_size": 194}));
         let err = apply_changes(&fake, &old, &new).await.unwrap_err();
         assert_eq!(err, "bindings failed");
-        assert_eq!(fake.done(), ["bindings AltLeft"]);
+        assert_eq!(fake.done(), ["bindings F9"]);
     }
 
     #[tokio::test]
     async fn a_failed_microphone_puts_the_old_bindings_back() {
         let fake = Fake::failing("microphone");
         let (old, new) =
-            changed(json!({"dictation_keys": ["AltLeft"], "microphone": "x", "emblem_size": 194}));
+            changed(json!({"dictation_keys": ["F9"], "microphone": "x", "emblem_size": 194}));
         assert!(apply_changes(&fake, &old, &new).await.is_err());
         assert_eq!(
             fake.done(),
-            ["bindings AltLeft", "microphone x", "bindings AltRight"]
+            ["bindings F9", "microphone x", "bindings AltRight"]
         );
     }
 
@@ -971,7 +1093,7 @@ mod tests {
     async fn a_failed_autostart_puts_back_the_bindings_and_the_microphone() {
         let fake = Fake::failing("autostart");
         let (old, new) = changed(json!({
-            "dictation_keys": ["AltLeft"],
+            "dictation_keys": ["F9"],
             "microphone": "x",
             "autostart": false,
             "emblem_size": 194,
@@ -980,7 +1102,7 @@ mod tests {
         assert_eq!(
             fake.done(),
             [
-                "bindings AltLeft",
+                "bindings F9",
                 "microphone x",
                 "autostart false",
                 "microphone default",

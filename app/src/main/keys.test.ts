@@ -46,7 +46,6 @@ describe("the binding that is saved", () => {
 describe("which recordings are offered (the same rules as the Rust side)", () => {
   test.each([
     ["AltRight"],
-    ["AltLeft"],
     ["AltRight", "KeyV"],
     ["AltRight", "Space"],
     ["ControlLeft", "AltLeft", "KeyD"],
@@ -61,6 +60,7 @@ describe("which recordings are offered (the same rules as the Rust side)", () =>
     ["KeyV"],
     ["Space"],
     ["Digit1"],
+    ["AltLeft"],
     ["ShiftLeft"],
     ["ControlRight"],
     ["MetaLeft"],
@@ -76,7 +76,17 @@ describe("which recordings are offered (the same rules as the Rust side)", () =>
     expect(reason).toEqual(expect.any(String));
     expect(reason).not.toBe("");
   });
+
+  test.each([["AltLeft"], ["ShiftRight"], ["ControlLeft"], ["MetaRight"]])(
+    "%s on its own is refused: only Right Alt may be alone",
+    (...codes) => {
+      expect(validateCodes(codes)).toBe(LONE_MODIFIER);
+    },
+  );
 });
+
+/** The same words as `validate_binding` in device_settings.rs. */
+const LONE_MODIFIER = "只有右 Alt 可以單獨當快捷鍵；左 Alt、Ctrl、Shift、Win 要搭配其他按鍵";
 
 describe("recording", () => {
   test("a combination is done when every key is up", () => {

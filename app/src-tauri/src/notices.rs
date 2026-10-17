@@ -44,6 +44,24 @@ pub const NO_MIC: Notice = Notice {
     ja: "《否。マイクが見つかりません。》",
 };
 
+/// The tray's 「貼上上一次聽寫」: the menu took the focus, so the text is only copied.
+pub const LAST_COPIED: Notice = Notice {
+    zh: "《告。上一次的聽寫已複製。請按 Ctrl+V 貼上。》",
+    ja: "《告。前回の音声入力をコピーしました。Ctrl+V で貼り付けてください。》",
+};
+
+/// The core cannot dictate yet: the speech model is not ready (`NOT_CONFIGURED`).
+pub const NOT_READY: Notice = Notice {
+    zh: "《否。語音模型尚未就緒。》",
+    ja: "《否。音声モデルの準備ができていません。》",
+};
+
+/// The core is not running, so nothing can be dictated.
+pub const CORE_DOWN: Notice = Notice {
+    zh: "《否。核心程序未執行，請重新啟動拉斐爾。》",
+    ja: "《否。コアが動作していません。ラファエルを再起動してください。》",
+};
+
 /// The notice for the `fallback_reason` of a `dictation.stop` result, if it gets one. A plain
 /// `"timeout"` (the cleanup took too long) and the other reasons are not worth a notice.
 pub fn notice_for_fallback(reason: Option<&str>) -> Option<Notice> {
@@ -79,7 +97,17 @@ mod tests {
 
     #[test]
     fn notices_are_raphael_lines() {
-        for notice in [ELEVATED, FOCUS_CHANGED, BUDGET, OFFLINE, NO_KEY, NO_MIC] {
+        for notice in [
+            ELEVATED,
+            FOCUS_CHANGED,
+            BUDGET,
+            OFFLINE,
+            NO_KEY,
+            NO_MIC,
+            LAST_COPIED,
+            NOT_READY,
+            CORE_DOWN,
+        ] {
             for line in [notice.zh, notice.ja] {
                 assert!(
                     line.starts_with("《告。") || line.starts_with("《否。"),

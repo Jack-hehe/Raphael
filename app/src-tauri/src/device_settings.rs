@@ -307,20 +307,20 @@ fn is_function_key(key: Key) -> bool {
 /// Besides being a key combination `hotkey::parse_binding` understands, it must not get in the
 /// way of typing. Without a modifier a key is a hotkey only if it is a function key; Shift
 /// does not count as a modifier here, because Shift+V is a capital V; a modifier on its own
-/// must be an Alt key (Right Alt is the default), never Shift, Ctrl or Win alone; and Esc, which
-/// cancels a dictation, is never part of a hotkey.
+/// must be Right Alt, never Left Alt, Shift, Ctrl or Win alone; and Esc, which cancels a
+/// dictation, is never part of a hotkey.
 pub fn validate_binding(text: &str) -> Result<(), String> {
     let Hotkey { modifiers, key } =
         parse_binding(text).map_err(|_| "這組按鍵無法使用".to_owned())?;
     match key {
         None => {
-            let alt = modifiers == Modifiers::OPT_LEFT
-                || modifiers == Modifiers::OPT_RIGHT
-                || modifiers == Modifiers::OPT;
-            if alt {
+            if modifiers == Modifiers::OPT_RIGHT {
                 Ok(())
             } else {
-                Err("只有 Alt 可以單獨當快捷鍵；Shift、Ctrl、Win 要搭配其他按鍵".to_owned())
+                Err(
+                    "只有右 Alt 可以單獨當快捷鍵；左 Alt、Ctrl、Shift、Win 要搭配其他按鍵"
+                        .to_owned(),
+                )
             }
         }
         Some(Key::Escape) => Err("Esc 用來取消聽寫，不能當快捷鍵".to_owned()),
@@ -518,7 +518,7 @@ mod tests {
         let path = dir.path().join("Raphael").join(FILE_NAME); // the folder does not exist yet
         let mut s = DeviceSettings::default();
         s.apply_patch(&json!({
-            "dictation_keys": ["AltLeft"],
+            "dictation_keys": ["F9"],
             "microphone": "麥克風陣列",
             "emblem_size": 120,
             "subtitles": "off",
@@ -590,9 +590,13 @@ mod tests {
     #[test]
     fn a_patch_checks_the_key_combinations() {
         let mut s = DeviceSettings::default();
-        s.apply_patch(&json!({"dictation_keys": ["AltLeft"]}))
-            .unwrap();
-        assert_eq!(s.dictation_keys, ["AltLeft"]);
+        s.apply_patch(&json!({"dictation_keys": ["F9"]})).unwrap();
+        assert_eq!(s.dictation_keys, ["F9"]);
+        // a lone Left Alt: only Right Alt may be alone
+        assert!(
+            s.apply_patch(&json!({"dictation_keys": ["AltLeft"]}))
+                .is_err()
+        );
         // none at all would leave no way to dictate
         assert!(s.apply_patch(&json!({"dictation_keys": []})).is_err());
         // a bare typing key, a lone Shift
@@ -603,7 +607,7 @@ mod tests {
         );
         // the same combination twice, or for both actions
         assert!(
-            s.apply_patch(&json!({"dictation_keys": ["AltLeft", "AltLeft"]}))
+            s.apply_patch(&json!({"dictation_keys": ["F9", "F9"]}))
                 .is_err()
         );
         assert!(
@@ -611,14 +615,13 @@ mod tests {
                 .is_err(),
             "AltRight+V already pastes the last dictation"
         );
-        assert_eq!(s.dictation_keys, ["AltLeft"]);
+        assert_eq!(s.dictation_keys, ["F9"]);
     }
 
     #[test]
     fn offered_key_combinations() {
         for good in [
             "AltRight",
-            "AltLeft",
             "AltRight+V",
             "AltRight+KeyV",
             "AltRight+Space",
@@ -641,6 +644,8 @@ mod tests {
             "ControlLeft+Escape",
             "Enter",
             "Digit1",
+            "AltLeft",
+            "Alt",
             "ShiftLeft",
             "ShiftRight",
             "ControlLeft",
@@ -656,6 +661,16 @@ mod tests {
         ] {
             assert!(validate_binding(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn only_right_alt_may_be_alone() {
+        // keys.ts gives the same words
+        let lone = "只有右 Alt 可以單獨當快捷鍵；左 Alt、Ctrl、Shift、Win 要搭配其他按鍵";
+        for text in ["AltLeft", "Alt", "ShiftRight", "ControlLeft", "MetaRight"] {
+            assert_eq!(validate_binding(text), Err(lone.to_owned()), "{text}");
+        }
+        assert_eq!(validate_binding("AltRight"), Ok(()));
     }
 
     #[test]

@@ -5,8 +5,9 @@
 import * as api from "../api";
 import { describeError, parseMisheard } from "../format";
 import type { AppContext, DictionaryEntry, Page } from "../types";
+import { dismissMessage, suggestionsHTML, visibleSuggestions } from "../suggest";
 import { Deletions } from "../undo";
-import { btn, esc, fieldHTML, ico, iconBtn, row, toaster } from "../ui";
+import { btn, esc, fieldHTML, iconBtn, row, toaster } from "../ui";
 
 const wordRow = (entry: DictionaryEntry): string =>
   row(
@@ -42,18 +43,17 @@ export function createDictionary(app: AppContext): Page {
   const deleting = new Set<number>();
   /** Deleted for good: a load that started before the delete must not bring the word back. */
   const deletions = new Deletions();
+  /** Suggestions dismissed, but not yet for the core (the toast is still there): left out. */
+  const dismissing = new Set<string>();
   let loads = 0;
 
   function render(): void {
     const shown = entries.filter((entry) => !deleting.has(entry.id));
     count.textContent = `${shown.length} 個詞`;
     list.innerHTML = shown.map(wordRow).join("");
-    suggestions.hidden = suggested.length === 0;
-    suggestions.innerHTML =
-      `<span>從最近的聽寫找到：</span>` +
-      suggested
-        .map((word) => `<button type="button" class="chip" data-act="suggest" data-word="${esc(word)}">${ico("plus")}${esc(word)}</button>`)
-        .join("");
+    const words = visibleSuggestions(suggested, dismissing);
+    suggestions.hidden = words.length === 0;
+    suggestions.innerHTML = suggestionsHTML(words);
   }
 
   async function load(): Promise<void> {
@@ -111,11 +111,30 @@ export function createDictionary(app: AppContext): Page {
     });
   }
 
+  function dismiss(word: string): void {
+    dismissing.add(word);
+    render();
+    app.undo.begin({
+      message: dismissMessage(word),
+      commit: async () => {
+        await api.dictionaryDismiss(word);
+        suggested = suggested.filter((w) => w !== word);
+        dismissing.delete(word);
+      },
+      restore: () => {
+        dismissing.delete(word);
+        render();
+      },
+      failure: (err) => `無法略過：${describeError(err)}`,
+    });
+  }
+
   el.addEventListener("click", (e) => {
     const act = (e.target as Element).closest<HTMLElement>("[data-act]");
     if (!act) return;
     if (act.dataset.act === "add") void addFromFields();
     else if (act.dataset.act === "suggest") void add(act.dataset.word ?? "", []);
+    else if (act.dataset.act === "dismiss" && act.dataset.word) dismiss(act.dataset.word);
     else if (act.dataset.act === "delete") remove(Number(act.closest<HTMLElement>(".wrow")?.dataset.id));
   });
   el.addEventListener("keydown", (e) => {

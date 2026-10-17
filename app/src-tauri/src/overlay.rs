@@ -24,8 +24,6 @@ use tauri::{
 };
 
 /// What the emblem shows while it is on screen (spec §6.5).
-// The dictation controller (Task 20) is the one that picks a mode.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
@@ -34,8 +32,16 @@ pub enum Mode {
     /// The glyph ring turns six times faster.
     Thinking,
     /// The white ring follows Raphael's voice.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Raphael speaks from Phase 3 on (TTS)")
+    )]
     Speaking,
     /// Just there, with a thin ring (used for notices).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the overlay page picks it for a notice by itself")
+    )]
     Steady,
 }
 
@@ -61,8 +67,6 @@ pub enum OverlayEvent {
 /// How the rest of the app drives the overlay. Calls do not wait for the page and none of them
 /// can fail: a problem with the window is logged, because the overlay must never get in the way
 /// of dictation.
-// Used by the dictation controller (Task 20).
-#[allow(dead_code)]
 pub trait OverlayApi: Send + Sync + 'static {
     /// The emblem appears and shows `mode`. The window is put back in its corner first (the
     /// taskbar or the screen's scale may have changed).
@@ -126,9 +130,16 @@ pub fn place(work: Rect, emblem_px: u32, scale: f64) -> Rect {
     let margin = (canvas - e) / 2.0;
     let w = (WINDOW_WIDTH * scale).round() as i32;
     let h = ((canvas + SUBTITLE_ROOM) * scale).round() as i32;
-    let right = (f64::from(work.x) + f64::from(work.w) + (margin - RIGHT_GAP) * scale).round() as i32;
-    let bottom = (f64::from(work.y) + f64::from(work.h) + (margin - BOTTOM_GAP) * scale).round() as i32;
-    Rect { x: right - w, y: bottom - h, w, h }
+    let right =
+        (f64::from(work.x) + f64::from(work.w) + (margin - RIGHT_GAP) * scale).round() as i32;
+    let bottom =
+        (f64::from(work.y) + f64::from(work.h) + (margin - BOTTOM_GAP) * scale).round() as i32;
+    Rect {
+        x: right - w,
+        y: bottom - h,
+        w,
+        h,
+    }
 }
 
 // ---------- the pages that listen ----------
@@ -153,7 +164,10 @@ impl Bus {
     fn new(emblem_px: u32, subtitles: &str) -> Self {
         Bus {
             subscribers: Vec::new(),
-            settings: OverlayEvent::Settings { px: emblem_px, subtitles: subtitles.to_owned() },
+            settings: OverlayEvent::Settings {
+                px: emblem_px,
+                subtitles: subtitles.to_owned(),
+            },
             backlog: VecDeque::new(),
         }
     }
@@ -176,13 +190,14 @@ impl Bus {
             }
             return;
         }
-        self.subscribers.retain(|(label, channel)| match channel.send(event.clone()) {
-            Ok(()) => true,
-            Err(err) => {
-                log::warn!("the overlay page \"{label}\" does not take events any more: {err}");
-                false
-            }
-        });
+        self.subscribers
+            .retain(|(label, channel)| match channel.send(event.clone()) {
+                Ok(()) => true,
+                Err(err) => {
+                    log::warn!("the overlay page \"{label}\" does not take events any more: {err}");
+                    false
+                }
+            });
     }
 
     fn subscribe(&mut self, label: &str, channel: Channel<OverlayEvent>) {
@@ -259,12 +274,13 @@ impl Overlay {
 
     /// A new emblem size or subtitle language, from the settings: puts the window back in its
     /// corner (it may have a new size) and tells the page.
-    // Used by the settings page (Task 21).
-    #[allow(dead_code)]
     pub fn apply_settings(&self, emblem_px: u32, subtitles: &str) {
         self.emblem_px.store(emblem_px, Ordering::Relaxed);
         self.place_window();
-        self.publish(OverlayEvent::Settings { px: emblem_px, subtitles: subtitles.to_owned() });
+        self.publish(OverlayEvent::Settings {
+            px: emblem_px,
+            subtitles: subtitles.to_owned(),
+        });
     }
 
     fn publish(&self, event: OverlayEvent) {
@@ -304,8 +320,10 @@ impl Overlay {
         {
             return Ok(());
         }
-        self.window.set_size(PhysicalSize::new(target.w as u32, target.h as u32))?;
-        self.window.set_position(PhysicalPosition::new(target.x, target.y))?;
+        self.window
+            .set_size(PhysicalSize::new(target.w as u32, target.h as u32))?;
+        self.window
+            .set_position(PhysicalPosition::new(target.x, target.y))?;
         // tao rebuilds the extended window style whenever it changes flags or the size.
         hide_from_alt_tab(&self.window);
         Ok(())
@@ -329,7 +347,10 @@ impl OverlayApi for Overlay {
     fn notice(&self, zh: &str, ja: &str) {
         // A report shows the emblem too.
         self.place_window();
-        self.publish(OverlayEvent::Notice { zh: zh.to_owned(), ja: ja.to_owned() });
+        self.publish(OverlayEvent::Notice {
+            zh: zh.to_owned(),
+            ja: ja.to_owned(),
+        });
     }
 
     fn hide(&self) {
@@ -344,7 +365,9 @@ pub fn overlay_subscribe(
     webview: Webview,
     channel: Channel<OverlayEvent>,
 ) -> Result<(), String> {
-    let overlay = app.try_state::<Arc<Overlay>>().ok_or("the overlay is not running")?;
+    let overlay = app
+        .try_state::<Arc<Overlay>>()
+        .ok_or("the overlay is not running")?;
     overlay.subscribe(webview.label(), channel);
     Ok(())
 }
@@ -401,7 +424,12 @@ mod tests {
     #[test]
     fn emblem_sits_18px_from_the_right_and_12px_above_the_taskbar() {
         for (scale, e) in [(1.0, 150u32), (1.5, 194u32)] {
-            let work = Rect { x: 0, y: 0, w: 2560, h: 1392 };
+            let work = Rect {
+                x: 0,
+                y: 0,
+                w: 2560,
+                h: 1392,
+            };
             let r = place(work, e, scale);
             let c = (1.3 * e as f64).round() * scale; // canvas size in physical px
             let center_x = (r.x + r.w) as f64 - c / 2.0;
@@ -416,23 +444,72 @@ mod tests {
     #[test]
     fn window_is_the_canvas_plus_40px_tall() {
         for (scale, e, canvas) in [(1.0, 120u32, 156.0), (1.0, 150, 195.0), (1.25, 194, 252.0)] {
-            let r = place(Rect { x: 0, y: 0, w: 1920, h: 1032 }, e, scale);
-            assert_eq!(r.h, ((canvas + 40.0) * scale).round() as i32, "emblem {e} at {scale}");
+            let r = place(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 1920,
+                    h: 1032,
+                },
+                e,
+                scale,
+            );
+            assert_eq!(
+                r.h,
+                ((canvas + 40.0) * scale).round() as i32,
+                "emblem {e} at {scale}"
+            );
         }
     }
 
     #[test]
     fn placement_follows_the_work_area() {
-        let at_zero = place(Rect { x: 0, y: 0, w: 1920, h: 1032 }, 150, 1.0);
-        let moved = place(Rect { x: 100, y: 40, w: 1920, h: 1032 }, 150, 1.0);
+        let at_zero = place(
+            Rect {
+                x: 0,
+                y: 0,
+                w: 1920,
+                h: 1032,
+            },
+            150,
+            1.0,
+        );
+        let moved = place(
+            Rect {
+                x: 100,
+                y: 40,
+                w: 1920,
+                h: 1032,
+            },
+            150,
+            1.0,
+        );
         assert_eq!((moved.x - at_zero.x, moved.y - at_zero.y), (100, 40));
         assert_eq!((moved.w, moved.h), (at_zero.w, at_zero.h));
     }
 
     #[test]
     fn a_taller_taskbar_moves_the_emblem_up() {
-        let thin = place(Rect { x: 0, y: 0, w: 1920, h: 1040 }, 150, 1.0);
-        let thick = place(Rect { x: 0, y: 0, w: 1920, h: 1000 }, 150, 1.0);
+        let thin = place(
+            Rect {
+                x: 0,
+                y: 0,
+                w: 1920,
+                h: 1040,
+            },
+            150,
+            1.0,
+        );
+        let thick = place(
+            Rect {
+                x: 0,
+                y: 0,
+                w: 1920,
+                h: 1000,
+            },
+            150,
+            1.0,
+        );
         assert_eq!(thin.y - thick.y, 40);
         assert_eq!(thin.x, thick.x);
     }
@@ -452,7 +529,15 @@ mod tests {
             position: tauri::PhysicalPosition::new(-1920, 10),
             size: tauri::PhysicalSize::new(1920u32, 1040u32),
         };
-        assert_eq!(Rect::from(&work), Rect { x: -1920, y: 10, w: 1920, h: 1040 });
+        assert_eq!(
+            Rect::from(&work),
+            Rect {
+                x: -1920,
+                y: 10,
+                w: 1920,
+                h: 1040
+            }
+        );
     }
 
     // ---- what the page receives ----
@@ -461,29 +546,44 @@ mod tests {
     fn events_have_the_shape_the_page_expects() {
         let json = |e: OverlayEvent| serde_json::to_string(&e).unwrap();
         assert_eq!(
-            json(OverlayEvent::Show { mode: Mode::Listening }),
+            json(OverlayEvent::Show {
+                mode: Mode::Listening
+            }),
             r#"{"type":"show","mode":"listening"}"#
         );
         assert_eq!(
-            json(OverlayEvent::Mode { mode: Mode::Thinking }),
+            json(OverlayEvent::Mode {
+                mode: Mode::Thinking
+            }),
             r#"{"type":"mode","mode":"thinking"}"#
         );
         assert_eq!(
-            json(OverlayEvent::Mode { mode: Mode::Speaking }),
+            json(OverlayEvent::Mode {
+                mode: Mode::Speaking
+            }),
             r#"{"type":"mode","mode":"speaking"}"#
         );
         assert_eq!(
             json(OverlayEvent::Mode { mode: Mode::Steady }),
             r#"{"type":"mode","mode":"steady"}"#
         );
-        assert_eq!(json(OverlayEvent::Level { value: 0.5 }), r#"{"type":"level","value":0.5}"#);
         assert_eq!(
-            json(OverlayEvent::Notice { zh: "《了。》".into(), ja: "《了。》".into() }),
+            json(OverlayEvent::Level { value: 0.5 }),
+            r#"{"type":"level","value":0.5}"#
+        );
+        assert_eq!(
+            json(OverlayEvent::Notice {
+                zh: "《了。》".into(),
+                ja: "《了。》".into()
+            }),
             r#"{"type":"notice","zh":"《了。》","ja":"《了。》"}"#
         );
         assert_eq!(json(OverlayEvent::Hide), r#"{"type":"hide"}"#);
         assert_eq!(
-            json(OverlayEvent::Settings { px: 150, subtitles: "both".into() }),
+            json(OverlayEvent::Settings {
+                px: 150,
+                subtitles: "both".into()
+            }),
             r#"{"type":"settings","px":150,"subtitles":"both"}"#
         );
     }
@@ -506,7 +606,10 @@ mod tests {
     }
 
     fn notice(n: usize) -> OverlayEvent {
-        OverlayEvent::Notice { zh: n.to_string(), ja: String::new() }
+        OverlayEvent::Notice {
+            zh: n.to_string(),
+            ja: String::new(),
+        }
     }
 
     const SETTINGS_150_BOTH: &str = r#"{"type":"settings","px":150,"subtitles":"both"}"#;
@@ -516,24 +619,38 @@ mod tests {
         let mut bus = Bus::new(150, "zh");
         let (channel, got) = page();
         bus.subscribe("overlay", channel);
-        assert_eq!(received(&got), [r#"{"type":"settings","px":150,"subtitles":"zh"}"#]);
+        assert_eq!(
+            received(&got),
+            [r#"{"type":"settings","px":150,"subtitles":"zh"}"#]
+        );
     }
 
     #[test]
     fn only_the_latest_settings_reach_a_page_that_loads_late() {
         let mut bus = Bus::new(150, "both");
-        bus.publish(OverlayEvent::Settings { px: 194, subtitles: "off".into() });
+        bus.publish(OverlayEvent::Settings {
+            px: 194,
+            subtitles: "off".into(),
+        });
         let (channel, got) = page();
         bus.subscribe("overlay", channel);
-        assert_eq!(received(&got), [r#"{"type":"settings","px":194,"subtitles":"off"}"#]);
+        assert_eq!(
+            received(&got),
+            [r#"{"type":"settings","px":194,"subtitles":"off"}"#]
+        );
     }
 
     #[test]
     fn events_from_before_the_page_loaded_arrive_in_order_after_the_settings() {
         let mut bus = Bus::new(150, "both");
-        bus.publish(OverlayEvent::Show { mode: Mode::Listening });
+        bus.publish(OverlayEvent::Show {
+            mode: Mode::Listening,
+        });
         bus.publish(OverlayEvent::Level { value: 0.3 }); // a loudness reading is stale by then
-        bus.publish(OverlayEvent::Notice { zh: "了".into(), ja: "了".into() });
+        bus.publish(OverlayEvent::Notice {
+            zh: "了".into(),
+            ja: "了".into(),
+        });
         let (channel, got) = page();
         bus.subscribe("overlay", channel);
         assert_eq!(
@@ -605,7 +722,10 @@ mod tests {
         bus.publish(OverlayEvent::Hide);
         assert_eq!(bus.subscribers.len(), 1);
         assert_eq!(received(&got_old), [SETTINGS_150_BOTH]);
-        assert_eq!(received(&got_new), [SETTINGS_150_BOTH, r#"{"type":"hide"}"#]);
+        assert_eq!(
+            received(&got_new),
+            [SETTINGS_150_BOTH, r#"{"type":"hide"}"#]
+        );
     }
 
     #[test]
@@ -630,6 +750,9 @@ mod tests {
         bus.publish(notice(7)); // nobody is listening any more
         let (channel, got) = page();
         bus.subscribe("overlay", channel);
-        assert_eq!(received(&got), [SETTINGS_150_BOTH, r#"{"type":"notice","zh":"7","ja":""}"#]);
+        assert_eq!(
+            received(&got),
+            [SETTINGS_150_BOTH, r#"{"type":"notice","zh":"7","ja":""}"#]
+        );
     }
 }
