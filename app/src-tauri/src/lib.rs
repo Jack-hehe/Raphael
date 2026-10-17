@@ -1,6 +1,7 @@
 //! Raphael's desktop shell: a tray app with a hidden main window that starts with Windows and
 //! allows only one running copy.
 
+mod overlay;
 mod tray;
 
 use tauri::{AppHandle, Manager, Runtime, WindowEvent, plugin::TauriPlugin};
@@ -51,7 +52,7 @@ pub fn run() {
         })
         // Tauri keeps only the last `invoke_handler` call, so every command of the app goes into
         // this one list.
-        .invoke_handler(tauri::generate_handler![])
+        .invoke_handler(tauri::generate_handler![overlay::overlay_subscribe])
         .setup(|app| {
             // Tauri keeps only the last `setup` call, so each part of the app starts in its own
             // section of this one closure, in dependency order: a part that needs another part's
@@ -67,6 +68,18 @@ pub fn run() {
                     log::info!("tray command: {command:?}");
                 }
             });
+
+            // ---- Overlay ----
+            // Raphael's emblem in the bottom-right corner, 150 px with both subtitle lines until
+            // the settings say otherwise (`Overlay::apply_settings`). The dictation controller
+            // takes it from the app state as `Arc<Overlay>`. Without the overlay the app still
+            // works, so a failure is only logged.
+            match overlay::Overlay::create(app.handle(), 150, "both") {
+                Ok(overlay) => {
+                    app.manage(overlay);
+                }
+                Err(err) => log::error!("could not create the overlay window: {err}"),
+            }
 
             Ok(())
         })

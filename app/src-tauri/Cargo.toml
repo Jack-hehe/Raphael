@@ -30,6 +30,10 @@ tokio = { version = "1", features = ["sync"] }
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2.5"
 
+[target.'cfg(windows)'.dependencies]
+# Same version as Tauri's own (the HWND type must match). The overlay keeps itself out of Alt+Tab.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
