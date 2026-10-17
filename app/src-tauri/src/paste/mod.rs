@@ -7,21 +7,12 @@
 //! focus moved on, an elevated window we cannot type into) gets the text left on the clipboard
 //! instead, so the user can paste it by hand after Raphael's notice.
 
-#![expect(
-    dead_code,
-    reason = "the dictation controller (Task 20) is the first user of this module"
-)]
-
 #[cfg(windows)]
 mod clipboard;
 #[cfg(windows)]
 mod windows;
 
 #[cfg(windows)]
-#[expect(
-    unused_imports,
-    reason = "the dictation controller (Task 20) is its first user"
-)]
 pub use self::windows::WindowsPaster;
 
 /// A window that can receive the dictated text.
