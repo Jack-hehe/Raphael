@@ -8,7 +8,10 @@
 //! Right Alt), the hook also swallows that key's auto-repeat key-downs and its key-up until the
 //! key is released. Chord detection no longer relies on GetAsyncKeyState for swallowed keys: the
 //! hook remembers them (`swallowed_modifiers`, `swallow_modifier_event`) and
-//! `reconcile_modifiers` counts them as held.
+//! `reconcile_modifiers` counts them as held. Only a key-up whose key-down was swallowed is
+//! swallowed: a modifier release whose press reached the app always reaches it too (upstream
+//! also swallowed a release when the tracked state matched a blocking hotkey after it, which left
+//! Shift stuck system-wide in "hold Shift, press Right Alt, release Shift").
 //!
 //! Why, found with an injected-key probe: (1) unpatched, the repeats and the key-up reached the
 //! foreground app, which read them as a tap of Alt and could open its menu bar or Office KeyTips
@@ -857,7 +860,8 @@ fn swallow_modifier_event(
         swallowed.remove(modifier);
         true
     } else {
-        blocked_by_hotkey
+        // The app saw this key go down, so it must see it come up, whatever the table says now.
+        false
     }
 }
 
@@ -1300,15 +1304,39 @@ mod tests {
     }
 
     #[test]
-    fn a_release_that_was_not_swallowed_follows_the_hotkey_table() {
+    fn a_release_whose_press_was_not_swallowed_is_not_swallowed() {
+        // Hold Left Shift, press Right Alt (no hotkey blocks that: Shift+Right Alt is not the
+        // Right Alt hotkey, so its press reached the app), release Left Shift. The tracked state
+        // is now exactly Right Alt, so the hotkey table says "blocked" for this Shift release. It
+        // must still reach the app: the app saw the press, and a swallowed release would leave
+        // Shift stuck down system-wide.
+        let mut swallowed = Modifiers::empty();
+        assert!(!swallow_modifier_event(
+            &mut swallowed,
+            Modifiers::SHIFT_LEFT,
+            true,
+            false
+        ));
+        assert!(!swallow_modifier_event(
+            &mut swallowed,
+            Modifiers::SHIFT_LEFT,
+            false,
+            true
+        ));
+        assert_eq!(swallowed, Modifiers::empty());
+    }
+
+    #[test]
+    fn the_release_of_a_swallowed_key_is_swallowed_whatever_the_table_says() {
         let mut swallowed = Modifiers::empty();
         assert!(swallow_modifier_event(
             &mut swallowed,
             Modifiers::CMD_LEFT,
-            false,
+            true,
             true
         ));
-        assert!(!swallow_modifier_event(
+        // The release changes the tracked state to "nothing", which no hotkey blocks.
+        assert!(swallow_modifier_event(
             &mut swallowed,
             Modifiers::CMD_LEFT,
             false,
