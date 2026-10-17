@@ -520,9 +520,16 @@ class App(Router):
     def wait_for_libraries(self, timeout: float | None = None) -> None:
         """Wait until the speech libraries are imported (or failed to be), up to `timeout` s.
 
-        Call it before the first read of stdin: see the module docstring.
+        Call it before the first read of stdin: see the module docstring. Giving up is logged as
+        an error: the core serves on, but numpy may now hang until stdin closes.
         """
-        concurrent.futures.wait([self._kit], timeout)
+        done, _ = concurrent.futures.wait([self._kit], timeout)
+        if not done:
+            logger.error(
+                "The speech libraries were not imported within %g s; serving without them for now "
+                "(on Windows their import may now hang until stdin closes)",
+                timeout,
+            )
 
     @property
     def startup_running(self) -> bool:

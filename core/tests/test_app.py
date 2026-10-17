@@ -8,6 +8,7 @@ with the real models, is tests/test_e2e.py.
 """
 
 import asyncio
+import logging
 import subprocess
 import sys
 import threading
@@ -755,23 +756,27 @@ async def test_a_speech_side_that_cannot_load_is_an_error_but_the_core_goes_on(t
         await app.aclose()
 
 
-async def test_wait_for_libraries_returns_when_the_kit_is_imported(make_app):
+async def test_wait_for_libraries_returns_when_the_kit_is_imported(make_app, caplog):
     kit = make_kit()
     app = make_app(kit)
     started = time.monotonic()
     await asyncio.to_thread(app.wait_for_libraries, 10)
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert time.monotonic() - started < 5
     assert app._kit.done() and app._kit.result() is kit
 
 
-async def test_wait_for_libraries_gives_up_after_its_timeout(tmp_path):
+async def test_wait_for_libraries_gives_up_after_its_timeout(tmp_path, caplog):
     release = threading.Event()
     app = App(data_dir=tmp_path, fake_llm=True, load_kit=lambda: release.wait(30) and make_kit())
     app.start()
     try:
         started = time.monotonic()
-        await asyncio.to_thread(app.wait_for_libraries, 0.2)
+        with caplog.at_level(logging.ERROR, logger=app_module.logger.name):
+            await asyncio.to_thread(app.wait_for_libraries, 0.2)
         assert 0.15 < time.monotonic() - started < 5
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(errors) == 1 and "0.2 s" in errors[0].getMessage()  # said, not silent
     finally:
         release.set()
         await app.aclose()
