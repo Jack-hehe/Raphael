@@ -1,0 +1,34 @@
+# Brainstorm mockups: contain frames from the anime (personal use only)
+.superpowers/
+
+# Reference recordings of the anime (copyrighted, personal use only)
+/raphael_ref/
+
+# Voice models, training data and anime-derived assets: never publish
+/voice/
+/models/
+/assets-private/
+*.ckpt
+*.pth
+*.onnx
+*.safetensors
+
+# Audio and video: the user's own recordings (evaluation set, history) and
+# anything rendered with the private voice model. Generate test audio in tests.
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.mp4
+
+# Secrets
+.env
+*.key
+
+# Build output and environments
+__pycache__/
+.venv/
+node_modules/
+target/
+dist/
