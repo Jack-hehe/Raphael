@@ -32,8 +32,8 @@ class Segmenter:
     `accept` takes the next frames (1-D float32 at 16 kHz, any number of them) and returns the
     stretches of speech that have ended since; `flush` ends the one that is still going, at the
     end of the recording. A stretch ends when `min_silence_s` of quiet follows it. None is longer
-    than `max_segment_s`. After `flush` the segmenter starts afresh and can be used again, one
-    recording after another.
+    than `max_segment_s` (which `set_max_segment_s` changes for the recordings that follow). After
+    `flush` the segmenter starts afresh and can be used again, one recording after another.
 
     `speech_seconds` is the total length of the speech found in the current recording. It can still
     be read after `flush`; the first `accept` of the next recording sets it back to zero.
@@ -58,14 +58,33 @@ class Segmenter:
         config.silero_vad.min_silence_duration = min_silence_s
         config.silero_vad.min_speech_duration = _MIN_SPEECH_S
         config.silero_vad.window_size = _WINDOW
-        # Only makes the detector stricter as a stretch gets long, so it is not a limit: see _split.
-        config.silero_vad.max_speech_duration = max_segment_s
         config.sample_rate = SAMPLE_RATE
-        self._vad = sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=_BUFFER_S)
-        self._max_samples = max(1, int(max_segment_s * SAMPLE_RATE))
+        self._config = config
+        self._max_segment_s = 0.0
+        self._wanted_max_s = max_segment_s
+        self._build(max_segment_s)
         self._rest = np.zeros(0, dtype=np.float32)  # the end of the audio, short of a window
         self._flushed = False  # a recording has ended, and no new one has begun
+        self._fresh = True  # nothing has been fed since the detector was built or flushed
         self.speech_seconds = 0.0
+
+    def _build(self, max_segment_s: float) -> None:
+        # Only makes the detector stricter as a stretch gets long, so it is not a limit: see _split.
+        self._config.silero_vad.max_speech_duration = max_segment_s
+        self._vad = sherpa_onnx.VoiceActivityDetector(
+            self._config, buffer_size_in_seconds=_BUFFER_S
+        )
+        self._max_segment_s = max_segment_s
+        self._max_samples = max(1, int(max_segment_s * SAMPLE_RATE))
+
+    def set_max_segment_s(self, seconds: float) -> None:
+        """Make `seconds` the longest a segment may be, from the start of the next recording (at
+        once if nothing has been fed since the last `flush`). The detector is built anew for it,
+        which takes a moment, so only when the limit really changes. Called from the thread that
+        feeds the segmenter, or while nobody feeds it."""
+        if not seconds > 0:
+            raise ValueError(f"max_segment_s must be more than 0, not {seconds}")
+        self._wanted_max_s = seconds
 
     def accept(self, frames: np.ndarray) -> list[np.ndarray]:
         """Take the next frames; the segments of speech that are now complete, oldest first."""
@@ -75,6 +94,10 @@ class Segmenter:
         if self._flushed:
             self._flushed = False
             self.speech_seconds = 0.0
+        if self._fresh:
+            self._fresh = False
+            if self._wanted_max_s != self._max_segment_s:
+                self._build(self._wanted_max_s)
         audio = np.concatenate([self._rest, frames]) if self._rest.size else frames
         whole = audio.size - audio.size % _WINDOW
         segments: list[np.ndarray] = []
@@ -95,6 +118,7 @@ class Segmenter:
         segments = self._drain()
         self._vad.reset()  # flush leaves the model's memory of the sound it just heard
         self._flushed = True
+        self._fresh = True
         return segments
 
     def _drain(self) -> list[np.ndarray]:

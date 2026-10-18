@@ -166,6 +166,7 @@ class _Session:
         # The worker's; the loop reads them once `done` is set.
         self.engine: SttEngine | None = None
         self.texts: list[str] = []
+        self.stt_used: list[str] = []  # the model that heard each segment, in order
         self.fed_any = False
         self.failure: Exception | None = None  # the first thing that went wrong
         self.fatal = False  # ... and it was one that ends the session's work
@@ -489,6 +490,10 @@ class DictationService:
         text = str(text).strip()
         if text and not session.cancelled:
             session.texts.append(text)
+            # A cloud engine says which model heard the segment (it may have fallen back).
+            used = getattr(session.engine, "last_used", None) or getattr(session.engine, "name", "")
+            if used and used not in session.stt_used:
+                session.stt_used.append(used)
 
     # --- the microphone watchdog ----------------------------------------------------------------
 
@@ -615,6 +620,7 @@ class DictationService:
                 "audio_seconds": speech,
                 "stt_ms": stt_ms,
                 "target_app": target_app,
+                "stt": "+".join(session.stt_used) or None,
             },
         )
         return {**result, "audio_seconds": speech, "stt_ms": stt_ms, "silent": False}

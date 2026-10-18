@@ -45,6 +45,9 @@ SCHEMA_V1 = {
     ],
     "settings": ["key TEXT PK", "value TEXT NOT NULL"],
 }
+# Schema v2 adds the speech-to-text that heard each dictation to the history.
+SCHEMA_V2 = {**SCHEMA_V1, "history": [*SCHEMA_V1["history"], "stt TEXT"]}
+LATEST = 2
 
 
 def schema_names(conn, kind):
@@ -67,12 +70,43 @@ def describe_columns(conn, table):
     return columns
 
 
-def test_connect_creates_the_v1_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V1)
+def test_connect_creates_the_latest_schema(conn):
+    assert schema_names(conn, "table") == set(SCHEMA_V2)
     assert "history_created" in schema_names(conn, "index")
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
-    for table, columns in SCHEMA_V1.items():
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
+    for table, columns in SCHEMA_V2.items():
         assert describe_columns(conn, table) == columns
+
+
+def test_a_v1_database_is_migrated_to_v2_and_keeps_its_rows(tmp_path):
+    path = tmp_path / "old.db"
+    raw = sqlite3.connect(path)
+    raw.executescript(db._MIGRATION_V1)
+    raw.execute(
+        "INSERT INTO history (created_at_ms, kind, raw_text, text, cleaned, audio_seconds,"
+        " stt_ms, llm_ms, model) VALUES (5, 'dictation', 'a', 'A', 1, 1.0, 10, 20, 'm')"
+    )
+    raw.commit()
+    raw.close()
+
+    conn = db.connect(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
+    assert describe_columns(conn, "history") == SCHEMA_V2["history"]
+    old = HistoryStore(conn).latest()
+    assert (old.text, old.model, old.stt) == ("A", "m", None)
+    conn.close()
+
+
+def test_a_failed_v2_migration_leaves_the_database_at_v1():
+    raw = sqlite3.connect(":memory:")
+    raw.executescript(db._MIGRATION_V1)
+    raw.execute("ALTER TABLE history ADD COLUMN stt TEXT")  # in the way of the v2 migration
+    raw.commit()
+    with pytest.raises(sqlite3.OperationalError):
+        db.migrate(raw)
+    assert not raw.in_transaction
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 1
+    raw.close()
 
 
 def test_dictionary_words_are_unique(conn):
@@ -94,7 +128,7 @@ def test_a_file_database_uses_wal_and_keeps_its_data_when_reopened(tmp_path):
 
     second = db.connect(str(path))  # must not try to create the tables again
     assert SettingsStore(second).get("language") == "ja"
-    assert second.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert second.execute("PRAGMA user_version").fetchone()[0] == LATEST
     second.close()
 
 

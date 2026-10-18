@@ -8,6 +8,7 @@ with the real models, is tests/test_e2e.py.
 """
 
 import asyncio
+import json
 import logging
 import subprocess
 import sys
@@ -128,7 +129,12 @@ class FakeSegmenter:
         self.flushes = 0
         self._flushed = False
         self.calls_from: set[int] = set()
+        self.max_segment_s: list[float] = []  # each limit it was told, as set_max_segment_s keeps
         kit.segmenters.append(self)
+
+    def set_max_segment_s(self, seconds):
+        if not self.max_segment_s or self.max_segment_s[-1] != seconds:
+            self.max_segment_s.append(seconds)
 
     def accept(self, frames):
         self.calls_from.add(threading.get_ident())
@@ -1603,3 +1609,127 @@ def test_main_leaves_at_once_when_start_up_is_still_in_native_code(entry_point):
     entry_point.app.startup_running = True
     entry.main()
     assert entry_point.exits == [0]
+
+
+# --- speech-to-text in the cloud or on this computer ------------------------------------------
+
+CLOUD_KEY = "sk-or-v1-test"
+
+
+@pytest.fixture
+async def openrouter_mock():
+    """`openrouter_mock(app, transcription)` sends the app's OpenRouter requests to a mock.
+
+    `transcription(request)` answers POST /audio/transcriptions; every cleanup call fails with a
+    500, so the cleanup falls back to the text as heard. `requests` keeps the bodies, by path.
+    """
+    opened: list[httpx.AsyncClient] = []
+
+    def install(app, transcription):
+        requests: dict[str, list] = {"transcriptions": [], "chat": []}
+
+        def handler(request):
+            body = json.loads(request.content) if request.content else None
+            if request.url.path.endswith("/audio/transcriptions"):
+                requests["transcriptions"].append(body)
+                return transcription(request)
+            requests["chat"].append(body)
+            return httpx.Response(500, json={"error": {"message": "no cleanup here"}})
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        opened.append(http)
+        app.client._http = http
+        app.keys.set(CLOUD_KEY)
+        return requests
+
+    yield install
+    for http in opened:
+        await http.aclose()
+
+
+def cloud_says(text="cloud words", cost=0.0001):
+    return lambda request: httpx.Response(
+        200, json={"text": text, "usage": {"seconds": 0.5, "cost": cost}}
+    )
+
+
+async def test_speech_to_text_is_in_the_cloud_by_default(make_app, openrouter_mock):
+    kit = make_kit()
+    app = make_app(kit, fake_llm=False)
+    requests = openrouter_mock(app, cloud_says())
+    await app.call("settings.set", {"key": "language", "value": "zh"})
+    result = await dictate(app)
+    assert result["text"] == "cloud words cloud words"
+    assert kit.transcriptions == []  # the local engine heard nothing
+    assert len(requests["transcriptions"]) == 2  # one per segment
+    body = requests["transcriptions"][0]
+    assert body["model"] == "openai/gpt-transcribe"
+    assert body["input_audio"]["format"] == "wav"
+    assert body["provider"]["options"]["openai"]["languages"] == ["zh"]
+    assert kit.segmenters[0].max_segment_s == [30.0]  # longer stretches for the cloud
+    item = (await app.call("history.latest"))["item"]
+    assert item["stt"] == "openai/gpt-transcribe"
+    spend = (await app.call("status.get"))["spend"]
+    assert spend["month_usd"] == pytest.approx(0.0002)  # both segments were paid for
+
+
+async def test_the_chosen_cloud_model_is_the_one_asked(make_app, openrouter_mock):
+    app = make_app(make_kit(), fake_llm=False)
+    requests = openrouter_mock(app, cloud_says())
+    await app.call("settings.set", {"key": "stt_cloud_model", "value": "elevenlabs/scribe-v2"})
+    await dictate(app)
+    assert {body["model"] for body in requests["transcriptions"]} == {"elevenlabs/scribe-v2"}
+
+
+async def test_a_cloud_that_times_out_falls_back_to_the_local_engine(make_app, openrouter_mock):
+    def slow(request):
+        raise httpx.ReadTimeout("no answer", request=request)
+
+    kit = make_kit()
+    app = make_app(kit, fake_llm=False)
+    requests = openrouter_mock(app, slow)
+    result = await dictate(app)
+    assert result["text"] == WORDS + WORDS
+    assert len(kit.transcriptions) == 2
+    assert len(requests["transcriptions"]) == 1  # after a failure, the rest of it stays local
+    assert (await app.call("history.latest"))["item"]["stt"] == "qwen3-asr"
+
+
+async def test_without_a_key_the_cloud_falls_back_to_the_local_engine(make_app):
+    kit = make_kit()
+    app = make_app(kit, fake_llm=False)  # the real client, and no key stored
+    result = await dictate(app)
+    assert result["text"] == WORDS + WORDS and len(kit.transcriptions) == 2
+
+
+async def test_the_fake_llm_falls_back_to_the_local_engine_too(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    result = await dictate(app)
+    assert result["text"] == WORDS + WORDS and len(kit.transcriptions) == 2
+    assert (await app.call("history.latest"))["item"]["stt"] == "qwen3-asr"
+
+
+async def test_local_speech_to_text_never_calls_the_cloud(make_app, openrouter_mock):
+    kit = make_kit()
+    app = make_app(kit, fake_llm=False)
+    requests = openrouter_mock(app, cloud_says())
+    await app.call("settings.set", {"key": "stt_engine", "value": "local"})
+    result = await dictate(app)
+    assert result["text"] == WORDS + WORDS
+    assert requests["transcriptions"] == []
+    assert kit.segmenters[0].max_segment_s == [10.0]
+    assert (await app.call("history.latest"))["item"]["stt"] == "qwen3-asr"
+
+
+async def test_a_change_of_engine_takes_effect_from_the_next_dictation(make_app, openrouter_mock):
+    kit = make_kit()
+    app = make_app(kit, fake_llm=False)
+    requests = openrouter_mock(app, cloud_says())
+    await dictate(app, "a")
+    await app.call("settings.set", {"key": "stt_engine", "value": "local"})
+    await dictate(app, "b")
+    await app.call("settings.set", {"key": "stt_engine", "value": "cloud"})
+    await dictate(app, "c")
+    assert len(requests["transcriptions"]) == 4 and len(kit.transcriptions) == 2
+    assert kit.segmenters[0].max_segment_s == [30.0, 10.0, 30.0]

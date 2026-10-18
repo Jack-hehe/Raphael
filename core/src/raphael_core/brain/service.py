@@ -30,6 +30,7 @@ from typing import Any
 from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from ..router import Router
 from .cleanup import CleanupService
+from .cloud_stt import CloudTranscriber
 from .dictionary import DictionaryStore
 from .history import HistoryItem, HistoryStore
 from .openrouter import KeyInfo, OpenRouterClient, OpenRouterError
@@ -202,12 +203,14 @@ class Brain:
             has_key=self._has_key,
             on_result=self._on_cleanup_result,
         )
+        self._stt = CloudTranscriber(client, self._settings, self._spend, has_key=self._has_key)
         self._prune_history()
 
     def register(self, router: Router) -> None:
         """Put every method of the brain on `router`."""
         methods = {
             "brain.finalize_dictation": self._finalize_dictation,
+            "stt.transcribe": self._stt.transcribe,
             "history.list": self._history_list,
             "history.latest": self._history_latest,
             "history.delete": self._history_delete,
@@ -234,6 +237,7 @@ class Brain:
         audio_seconds = _non_negative(params, "audio_seconds")
         stt_ms = _milliseconds(params, "stt_ms")
         target_app = _opt_str(params, "target_app")
+        stt = _opt_str(params, "stt")
         self._prune_history_if_due()
 
         rules = self._dictionary.replacements()
@@ -281,6 +285,7 @@ class Brain:
                 llm_ms=result.llm_ms,
                 model=result.model,
                 cost_usd=result.cost_usd,
+                stt=stt,
             )
         )
         return {

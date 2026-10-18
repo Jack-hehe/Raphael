@@ -1,7 +1,7 @@
 // Settings: one page, only what matters (spec §12.3). A change takes effect at once; there is no
-// save button. The settings of the brain (limit, model, language, retention) go to the core with
-// `settings.set`; the settings of this computer (hotkeys, microphone, emblem, theme, autostart) go
-// to the Rust side with `device_settings_set`.
+// save button. The settings of the brain (limit, model, language, speech-to-text, retention) go to
+// the core with `settings.set`; the settings of this computer (hotkeys, microphone, emblem, theme,
+// autostart) go to the Rust side with `device_settings_set`.
 
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
@@ -42,6 +42,20 @@ const MODELS: Choice[] = [
   { value: "google/gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite" },
   { value: "openai/gpt-6-luna", label: "GPT-6 Luna" },
   { value: "anthropic/claude-haiku-5.5", label: "Claude Haiku 5.5" },
+];
+const STT_ENGINES: Choice[] = [
+  { value: "cloud", label: "雲端（較準，需要網路）" },
+  { value: "local", label: "本機（離線，不上傳聲音）" },
+];
+/** The cloud models the core accepts (brain/settings.py STT_CLOUD_MODELS), the default first. */
+const STT_MODELS: Choice[] = [
+  { value: "openai/gpt-transcribe", label: "OpenAI GPT Transcribe（預設）" },
+  { value: "elevenlabs/scribe-v2", label: "ElevenLabs Scribe v2" },
+  { value: "microsoft/mai-transcribe-2", label: "Microsoft MAI Transcribe 2" },
+  { value: "assemblyai/universal-3-6-pro", label: "AssemblyAI Universal 3.6 Pro" },
+  { value: "qwen/qwen3-asr-1.7b", label: "Qwen3 ASR 1.7B" },
+  { value: "google/gemini-3.5-transcribe", label: "Gemini 3.5 Transcribe" },
+  { value: "openai/whisper-large-v3-turbo", label: "Whisper Large v3 Turbo（便宜）" },
 ];
 const SUBTITLES: Choice[] = [
   { value: "both", label: "中文＋日文" },
@@ -127,6 +141,12 @@ export function createSettings(app: AppContext): Page {
         };
       case "language":
         return { choices: LANGUAGES, current: brain?.language ?? "auto", pick: (v) => void changeBrain("language", v) };
+      case "stt":
+        return { choices: STT_ENGINES, current: sttEngine(), pick: (v) => void changeBrain("stt_engine", v) };
+      case "stt-model": {
+        const current = sttModel();
+        return { choices: withCurrent(STT_MODELS, current), current, pick: (v) => void changeBrain("stt_cloud_model", v) };
+      }
       case "model": {
         const current = brain?.cleanup_model ?? MODELS[0].value;
         return { choices: withCurrent(MODELS, current), current, pick: (v) => void changeBrain("cleanup_model", v) };
@@ -154,6 +174,24 @@ export function createSettings(app: AppContext): Page {
       default:
         return null;
     }
+  }
+
+  const sttEngine = (): string => brain?.stt_engine ?? "cloud";
+  const sttModel = (): string => brain?.stt_cloud_model ?? STT_MODELS[0].value;
+
+  /** 「語音轉文字」, and the cloud model when it is the cloud. */
+  function sttRows(): string[] {
+    const rows = [
+      row(
+        "語音轉文字",
+        sttEngine() === "cloud" ? "連不上或沒有金鑰時，自動改用本機" : "",
+        sel(STT_ENGINES, sttEngine(), "語音轉文字", ' data-k="stt"'),
+      ),
+    ];
+    if (sttEngine() === "cloud") {
+      rows.push(row("雲端模型", "從下一次聽寫開始使用", sel(withCurrent(STT_MODELS, sttModel()), sttModel(), "雲端模型", ' data-k="stt-model"')));
+    }
+    return rows;
   }
 
   function keyRow(): string {
@@ -199,6 +237,7 @@ export function createSettings(app: AppContext): Page {
         row("聽寫方式", esc(modeDescription(d.dictation_mode)), seg(DICTATION_MODES, d.dictation_mode, "聽寫方式", ' data-k="mode"')),
         row("麥克風", "", meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, "麥克風", ' data-k="mic"')),
         row("語言", "中文一律輸出繁體（台灣用語）", sel(LANGUAGES, brain?.language ?? "auto", "語言", ' data-k="language"')),
+        ...sttRows(),
       ]) +
       group("OpenRouter", [
         keyRow(),

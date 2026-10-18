@@ -28,6 +28,18 @@ PRAGMA user_version = 1;
 COMMIT;
 """
 
+# v2: which speech-to-text heard each dictation (a cloud model's slug or a local engine's name,
+# several joined with "+" when the cloud fell back for part of it); NULL for older rows.
+_MIGRATION_V2 = """
+BEGIN;
+ALTER TABLE history ADD COLUMN stt TEXT;
+PRAGMA user_version = 2;
+COMMIT;
+"""
+
+_MIGRATIONS = {1: _MIGRATION_V1, 2: _MIGRATION_V2}
+LATEST_VERSION = max(_MIGRATIONS)
+
 
 def connect(path: Path | str) -> sqlite3.Connection:
     """Open the database at `path` (":memory:" works) with its schema in place.
@@ -46,14 +58,15 @@ def connect(path: Path | str) -> sqlite3.Connection:
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    """Create the schema in a database that has none yet (`user_version` 0).
+    """Bring the schema up to LATEST_VERSION, one migration at a time from `user_version`.
 
-    A database that already has a version is left alone, so reopening a file is safe.
+    A database that is already current is left alone, so reopening a file is safe. Each migration
+    is its own transaction: one that fails leaves the database at the version before it.
     """
     (version,) = conn.execute("PRAGMA user_version").fetchone()
-    if version == 0:
+    for target in range(version + 1, LATEST_VERSION + 1):
         try:
-            conn.executescript(_MIGRATION_V1)
+            conn.executescript(_MIGRATIONS[target])
         except BaseException:
             conn.rollback()  # a failed statement leaves the script's transaction open
             raise

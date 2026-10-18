@@ -22,6 +22,12 @@ app closed stdin. The import takes a fraction of a second when the files are cac
 else heavy that a later phase imports at run time (PyTorch for TTS, say) is exposed to the same
 trap.
 
+Speech-to-text. The `stt_engine` setting, read at each `dictation.start`, picks the engine for that
+dictation: "local" is the engine on this computer; "cloud" sends each stretch of speech to the
+brain's `stt.transcribe` (OpenRouter) and falls back to the local engine, which still loads at
+start-up so the fallback costs no wait. Cloud stretches are cut at 30 s, not 10: the model hears
+more context, and it is fast enough that the last stretch is no long tail.
+
 Threads. The event loop runs the brain and the router; the SQLite connection is used on it only.
 Everything that blocks (downloading a model, opening the microphone, loading a model) runs on a
 worker thread: `asyncio.to_thread` for a call, a thread of its own for the loading.
@@ -47,7 +53,7 @@ import keyring
 from . import __version__, paths
 from .brain import textnorm
 from .brain.db import connect
-from .brain.openrouter import Completion, KeyInfo, OpenRouterClient
+from .brain.openrouter import Completion, KeyInfo, OpenRouterClient, OpenRouterError
 from .brain.secrets import CredentialKeyStore, KeyStore, MemoryKeyStore
 from .brain.service import Brain
 from .device.models import REGISTRY, ModelManager
@@ -71,6 +77,9 @@ APP_MODELS = (VAD_MODEL, ENGINE_MODEL)
 # Speech without a pause is cut into pieces of at most this long and transcribed while the key is
 # still held, so there is no long tail to wait for after the release (the engine takes 20 s).
 DICTATION_SEGMENT_SECONDS = 10.0
+# The same for cloud speech-to-text: longer, so the model gets context (OpenRouter's upstream limit
+# is 60 s a request).
+CLOUD_SEGMENT_SECONDS = 30.0
 # More threads do not make Qwen3-ASR faster (Task 10).
 STT_THREADS = 4
 # audio.level notifications a second, for the settings page's meter.
@@ -121,6 +130,11 @@ class EchoClient:
             latency_ms=0,
         )
 
+    async def transcribe(self, **kwargs: Any) -> Any:
+        # No cloud speech-to-text without the network: the local engine takes over, as it would
+        # for a real failure.
+        raise OpenRouterError(0, "bad_request", "The fake LLM does not transcribe")
+
     async def key_info(self, key: str | None = None, timeout_s: float = 5.0) -> KeyInfo:
         return KeyInfo(
             label="fake",
@@ -151,9 +165,20 @@ class _SharedSegmenter:
 
     def __init__(self, speech: SpeechModels) -> None:
         self._speech = speech
+        # The longest stretch for the coming dictation, or None for what the detector was built
+        # with. Set before the dictation's worker starts; the detector takes it at the start of
+        # its next recording.
+        self.max_segment_s: float | None = None
+
+    def for_dictation(self, max_segment_s: float) -> _SharedSegmenter:
+        self.max_segment_s = max_segment_s
+        return self
 
     def accept(self, frames: Any) -> list:
-        return self._speech.segmenter().accept(frames)
+        segmenter = self._speech.segmenter()
+        if self.max_segment_s is not None:
+            segmenter.set_max_segment_s(self.max_segment_s)
+        return segmenter.accept(frames)
 
     def flush(self) -> list:
         segmenter = self._speech.built_segmenter()
@@ -486,6 +511,9 @@ class App(Router):
         self._starts = 0  # dictation.start requests under way (the meter makes way for them)
         self._meter_tasks: set[asyncio.Task[None]] = set()
         self._device_name: str | None = None  # the microphone, set by the app from device.json
+        self._stt_engine = "local"  # the stt_engine setting, as read at the latest dictation.start
+        self._stt_warned: set[str] = set()  # kinds of cloud failure already logged as warnings
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._threads: list[threading.Thread] = []
         self._closing = threading.Event()
         self._closed = False
@@ -580,8 +608,8 @@ class App(Router):
         service = kit.DictationService(
             self,
             recorder_factory=self._new_recorder,
-            segmenter_factory=lambda: self._speech.dictation_segmenter,
-            engine_provider=self._speech.engine,
+            segmenter_factory=self._dictation_segmenter,
+            engine_provider=self._dictation_engine,
             on_idle=self._on_dictation_idle,
         )
         service.register(self._inner)
@@ -664,6 +692,50 @@ class App(Router):
 
     def _make_engine(self) -> Any:
         return self._kit.result().create_engine(ENGINE_MODEL, self.manager, num_threads=STT_THREADS)
+
+    def _dictation_segmenter(self) -> Any:
+        """The shared detector, cutting at the length that suits this dictation's engine."""
+        cloud = self._stt_engine == "cloud"
+        seconds = CLOUD_SEGMENT_SECONDS if cloud else DICTATION_SEGMENT_SECONDS
+        return self._speech.dictation_segmenter.for_dictation(seconds)
+
+    def _dictation_engine(self) -> Any:
+        """The engine for this dictation (the service's `engine_provider`, on its worker): the
+        local one, or the cloud with the local one behind it."""
+        if self._stt_engine != "cloud":
+            return self._speech.engine()
+        from .device.cloud_stt import CloudSttEngine  # numpy: the kit has loaded it already
+
+        return CloudSttEngine(
+            self._call_from_thread, fallback=self._speech.engine, warned=self._stt_warned
+        )
+
+    def _call_from_thread(self, method: str, params: dict, timeout: float) -> Any:
+        """`self.call(method, params)` on the event loop, from a worker thread; waits `timeout`
+        seconds at most (concurrent.futures.TimeoutError), and then gives the call up."""
+        loop = self._loop
+        if loop is None:
+            raise RuntimeError("No event loop to call the brain on")
+        future = asyncio.run_coroutine_threadsafe(self.call(method, params), loop)
+        try:
+            return future.result(timeout)
+        except BaseException:
+            future.cancel()
+            raise
+
+    async def _read_stt_engine(self) -> None:
+        """Note which speech-to-text the coming dictation uses. Local if the setting cannot be
+        read: nothing leaves the computer that the user has not asked to send."""
+        self._loop = asyncio.get_running_loop()
+        try:
+            settings = (await self.call("settings.get", {}))["settings"]
+            engine = settings.get("stt_engine")
+        except Exception as exc:
+            logger.warning(
+                "Could not read the speech-to-text setting; using the local one: %s", exc
+            )
+            engine = "local"
+        self._stt_engine = engine if engine in ("cloud", "local") else "local"
 
     def _new_recorder(self, on_frames: Callable[[Any], None]) -> Any:
         kit = self._kit.result()
@@ -803,6 +875,7 @@ class App(Router):
         self._speech.require_models()
         self._starts += 1
         try:
+            await self._read_stt_engine()
             await self._meter("make way for the dictation", lambda m: m.suspend())
             return await self._inner.call(method, params)
         finally:
