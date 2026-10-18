@@ -10,15 +10,15 @@ import {
   modeDescription,
   tryBoxText,
 } from "./dictation";
-import { esc, seg } from "./ui";
+import { esc, sel } from "./ui";
 
 const MODES: DictationMode[] = ["toggle", "hold"];
 
 describe("the choices", () => {
   test("two modes, toggle first, with the words of the settings page", () => {
     expect(DICTATION_MODES).toEqual([
-      { value: "toggle", label: "按一下開始，再按一下結束" },
-      { value: "hold", label: "按住說話，放開結束" },
+      { value: "toggle", label: "按一下開始／結束", desc: modeDescription("toggle") },
+      { value: "hold", label: "按住說話", desc: modeDescription("hold") },
     ]);
   });
 
@@ -34,11 +34,11 @@ describe("the choices", () => {
     }
   });
 
-  test("the segmented control marks the current mode", () => {
-    const html = seg(DICTATION_MODES, "hold", "聽寫方式", ' data-k="mode"');
+  test("the dropdown shows only the current mode", () => {
+    const html = sel(DICTATION_MODES, "hold", "聽寫方式", ' data-k="mode"');
     expect(html).toContain('data-k="mode"');
-    expect(html).toContain('<button type="button" data-v="toggle" aria-pressed="false">按一下開始，再按一下結束</button>');
-    expect(html).toContain('<button type="button" data-v="hold" aria-pressed="true">按住說話，放開結束</button>');
+    expect(html).toContain("<span>按住說話</span>");
+    expect(html).not.toContain("按一下開始／結束");
   });
 });
 

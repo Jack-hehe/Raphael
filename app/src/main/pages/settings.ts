@@ -10,17 +10,28 @@ import {
   KEEP_FOREVER_DAYS,
   describeError,
   formatClock,
-  formatLimit,
   formatRetention,
   formatUsd,
   keyReasonText,
   parseLimit,
 } from "../format";
 import { wireKeyField } from "../keyfield";
+import {
+  AUTO_DETECT_HINT,
+  type LanguageGroup,
+  MAX_LANGUAGES,
+  languageButtonHTML,
+  languageChipsHTML,
+  languageLabel,
+  languagePanelHTML,
+  normalizeLanguages,
+  toggleLanguage,
+} from "../languages";
 import { KeyRecorder, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "../keys";
 import { MonitorSwitch } from "../monitor";
 import { cleanupPriceShort, cleanupPriceText, priceOf, pricingNote, sttPriceShort, sttPriceText } from "../pricing";
 import { runOutDay } from "../report";
+import { WARN_FROM, spendVisual, spentShare } from "../spend";
 import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, Page, Pricing, Status } from "../types";
 import {
   type Choice,
@@ -34,8 +45,9 @@ import {
   meter,
   note,
   openMenu,
+  openPopover,
+  placeMenu,
   row,
-  seg,
   sel,
   setMeter,
   st,
@@ -43,20 +55,14 @@ import {
   toaster,
 } from "../ui";
 
-const LANGUAGES: Choice[] = [
-  { value: "auto", label: "自動" },
-  { value: "zh", label: "中文" },
-  { value: "ja", label: "日文" },
-  { value: "en", label: "英文" },
-];
 const MODELS: Choice[] = [
   { value: "openai/gpt-6-luna", label: "GPT-6 Luna（預設）" },
   { value: "anthropic/claude-haiku-5.5", label: "Claude Haiku 5.5" },
   { value: "google/gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite（最快）" },
 ];
 const STT_ENGINES: Choice[] = [
-  { value: "cloud", label: "雲端（較準，需要網路）" },
-  { value: "local", label: "本機（離線，不上傳聲音）" },
+  { value: "cloud", label: "雲端", desc: "較準，需要網路" },
+  { value: "local", label: "本機", desc: "離線辨識，聲音不會上傳" },
 ];
 /** The cloud models the core accepts (brain/settings.py STT_CLOUD_MODELS), the default first. */
 const STT_MODELS: Choice[] = [
@@ -75,14 +81,14 @@ const SUBTITLES: Choice[] = [
   { value: "off", label: "關閉" },
 ];
 const APPEARANCES: Choice[] = [
-  { value: "system", label: "跟系統" },
+  { value: "system", label: "跟系統", desc: "隨 Windows 的淺色或深色模式切換" },
   { value: "light", label: "淺色" },
   { value: "dark", label: "深色" },
 ];
 const SIZES: Choice[] = [
-  { value: "120", label: "小" },
-  { value: "150", label: "中" },
-  { value: "194", label: "跟動畫一樣大" },
+  { value: "120", label: "小", desc: "120 px，最不擋畫面" },
+  { value: "150", label: "中", desc: "150 px，預設大小" },
+  { value: "194", label: "跟動畫一樣大", desc: "194 px，看得到最多細節" },
 ];
 /** At least a day (the core only checks that it is a number); "keep" is a hundred years. */
 const RETENTIONS: Choice[] = [1, 7, 30, 365, KEEP_FOREVER_DAYS].map((days) => ({
@@ -92,8 +98,6 @@ const RETENTIONS: Choice[] = [1, 7, 30, 365, KEEP_FOREVER_DAYS].map((days) => ({
 
 const AUTO_MICROPHONE = "";
 
-/** From this share of the monthly limit on, the spend bar is orange. */
-const WARN_FROM = 0.8;
 /** What the prices in the cleanup model's menu are. */
 const CLEANUP_PRICE_HEAD = "每百萬 token 的價格：輸入 / 輸出";
 const PRICES_LOADING = "價格載入中…";
@@ -135,6 +139,11 @@ export function createSettings(app: AppContext): Page {
   let limitDraft: string | null = null;
   let limitError: string | null = null;
   let recording: Recording | null = null;
+  /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
+  let languageGroups: LanguageGroup[] | null = null;
+  /** The group of the language panel whose variants are shown. */
+  let openGroup: string | null = null;
+  let languagePanel: HTMLElement | null = null;
   let visible = false;
   let loads = 0;
 
@@ -160,8 +169,33 @@ export function createSettings(app: AppContext): Page {
           current: d.microphone ?? AUTO_MICROPHONE,
           pick: (v) => void changeDevice({ microphone: v === AUTO_MICROPHONE ? null : v }),
         };
-      case "language":
-        return { choices: LANGUAGES, current: brain?.language ?? "auto", pick: (v) => void changeBrain("language", v) };
+      case "mode":
+        return {
+          choices: DICTATION_MODES,
+          current: d.dictation_mode,
+          pick: (v) => {
+            if (isDictationMode(v) && v !== app.device().dictation_mode) void changeDevice({ dictation_mode: v });
+          },
+        };
+      case "appearance":
+        return {
+          choices: APPEARANCES,
+          current: d.appearance,
+          pick: (v) => {
+            const value = v as DeviceSettings["appearance"];
+            if (APPEARANCES.some((c) => c.value === value) && value !== app.device().appearance) void changeDevice({ appearance: value });
+          },
+        };
+      case "size":
+        return {
+          choices: SIZES,
+          current: String(d.emblem_size),
+          pick: (v) => {
+            if (SIZES.some((c) => c.value === v) && v !== String(app.device().emblem_size)) {
+              void changeDevice({ emblem_size: Number(v) as DeviceSettings["emblem_size"] });
+            }
+          },
+        };
       case "stt":
         return { choices: STT_ENGINES, current: sttEngine(), pick: (v) => void changeBrain("stt_engine", v) };
       case "stt-model": {
@@ -199,6 +233,9 @@ export function createSettings(app: AppContext): Page {
         return null;
     }
   }
+
+  /** The chosen languages, never none. */
+  const languages = (): string[] => normalizeLanguages(brain?.languages);
 
   const sttEngine = (): string => brain?.stt_engine ?? "cloud";
   const sttModel = (): string => brain?.stt_cloud_model ?? STT_MODELS[0].value;
@@ -313,26 +350,20 @@ export function createSettings(app: AppContext): Page {
   function spendRow(): string[] {
     if (!spend) return [];
     const { month_usd: month, limit_usd: limit } = spend;
-    const used = limit > 0 ? month / limit : 1;
+    const used = spentShare(month, limit);
     let forecast = "";
     if (month >= limit) forecast = "本月額度已用完，聽寫先不整理";
     else if (used >= WARN_FROM) {
       const { m, d } = runOutDay(month, limit, Date.now());
       forecast = `照目前的速度，${m} 月 ${d} 日會用完`;
     } else if (spend.forecast_usd > 0) forecast = `照目前的速度，月底約 ${formatUsd(spend.forecast_usd)}`;
-    const width = (Math.min(1, Math.max(0, used)) * 100).toFixed(1);
-    return [
-      row(
-        "本月花費",
-        month >= limit ? st("warn", forecast) : esc(forecast),
-        `<div class="spend"><div class="bar"><i class="${used >= WARN_FROM ? "warn" : ""}" style="width:${width}%"></i></div>` +
-          `<span class="val num">${esc(formatUsd(month))} / ${esc(formatLimit(limit))}</span></div>`,
-      ),
-    ];
+    return [row("本月花費", month >= limit ? st("warn", forecast) : esc(forecast), spendVisual(month, limit))];
   }
 
   function render(): void {
     const focused = (document.activeElement as HTMLElement | null)?.dataset?.k;
+    // A menu that is open stays open when the page is drawn again (a status that came in, say).
+    const openK = Array.from(el.querySelectorAll<HTMLElement>(".sel")).find(menuIsOpenFor)?.dataset.k;
     const d = app.device();
     const usesAltRight = d.dictation_keys.some((binding) => binding.split("+").includes("AltRight"));
     const limit = brain?.monthly_limit_usd ?? 10;
@@ -353,9 +384,14 @@ export function createSettings(app: AppContext): Page {
             { attrs: ' data-row="hotkey"' },
           ),
           ...(altgr && usesAltRight ? [note(st("warn", "你的鍵盤配置把右 Alt 當 AltGr 用，建議換一個快捷鍵。"))] : []),
-          row("聽寫方式", esc(modeDescription(d.dictation_mode)), seg(DICTATION_MODES, d.dictation_mode, "聽寫方式", ' data-k="mode"')),
+          row("聽寫方式", esc(modeDescription(d.dictation_mode)), sel(DICTATION_MODES, d.dictation_mode, "聽寫方式", ' data-k="mode"')),
           row("麥克風", "", meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, "麥克風", ' data-k="mic"')),
-          row("語言", "中文一律輸出繁體（台灣用語）", sel(LANGUAGES, brain?.language ?? "auto", "語言", ' data-k="language"')),
+          row(
+            "語言",
+            esc(`${AUTO_DETECT_HINT}，最多 ${MAX_LANGUAGES} 個`),
+            languageButtonHTML(languageGroups ?? [], languages(), ' data-k="languages"'),
+            { cls: "row-lang" },
+          ),
         ],
         "",
         "panel",
@@ -381,8 +417,8 @@ export function createSettings(app: AppContext): Page {
       group(
         "外觀",
         [
-          row("主題", "", seg(APPEARANCES, d.appearance, "主題", ' data-k="appearance"')),
-          row("桌面圖案大小", "聽寫時出現在右下角的圖案", seg(SIZES, String(d.emblem_size), "桌面圖案大小", ' data-k="size"')),
+          row("主題", "", sel(APPEARANCES, d.appearance, "主題", ' data-k="appearance"')),
+          row("桌面圖案大小", "聽寫時出現在右下角的圖案", sel(SIZES, String(d.emblem_size), "桌面圖案大小", ' data-k="size"')),
           row("字幕", "圖案旁邊的報告文字", sel(SUBTITLES, d.subtitles, "字幕", ' data-k="subtitles"')),
         ],
         "",
@@ -409,6 +445,105 @@ export function createSettings(app: AppContext): Page {
       );
 
     if (focused) el.querySelector<HTMLElement>(`[data-k="${focused}"]`)?.focus();
+    if (openK) {
+      const anchor = el.querySelector<HTMLElement>(`.sel[data-k="${openK}"]`);
+      const menu = menuFor(openK);
+      if (anchor && openK === "languages") openLanguages(anchor, true);
+      else if (anchor && menu) openMenu(anchor, menu.choices, menu.current, menu.pick, menu.head);
+    }
+  }
+
+  // ---------- the languages ----------
+
+  /** Opens the language panel under its button. `keep`: the same group stays open (drawn again). */
+  function openLanguages(anchor: HTMLElement, keep = false): void {
+    if (!keep) openGroup = null;
+    const panel = openPopover(anchor, languagePanelHTML(languageGroups, languages(), openGroup), {
+      className: "menu lang-panel",
+      role: "dialog",
+      label: "語言",
+      onKey: languageKey,
+    });
+    languagePanel = panel;
+    panel.addEventListener("click", (e) => {
+      const item = (e.target as Element).closest<HTMLElement>(".lang-item");
+      if (!item) return;
+      if (item.dataset.group) {
+        openGroup = openGroup === item.dataset.group ? null : item.dataset.group;
+        paintLanguages();
+      } else if (item.dataset.lang) {
+        void pickLanguage(item.dataset.lang);
+      }
+    });
+    panel.querySelector<HTMLElement>(".lang-item")?.focus();
+    if (languageGroups === null) void loadLanguages();
+  }
+
+  /** In the panel: the right arrow shows a group's variants, the left arrow folds them away again. */
+  function languageKey(e: KeyboardEvent): boolean {
+    const active = document.activeElement as HTMLElement | null;
+    if (!languagePanel || !active || !languagePanel.contains(active)) return false;
+    if (e.key === "ArrowRight" && active.dataset.group && active.getAttribute("aria-expanded") === "false") {
+      openGroup = active.dataset.group;
+      paintLanguages();
+      return true;
+    }
+    if (e.key === "ArrowLeft" && openGroup && (active.classList.contains("lang-variant") || active.dataset.group === openGroup)) {
+      const group = openGroup;
+      openGroup = null;
+      paintLanguages();
+      languagePanel.querySelector<HTMLElement>(`[data-group="${CSS.escape(group)}"]`)?.focus();
+      return true;
+    }
+    return false;
+  }
+
+  /** Shows the chosen languages on the button, and in the panel if it is open (keeping the focus). */
+  function paintLanguages(): void {
+    const anchor = el.querySelector<HTMLElement>('.sel[data-k="languages"]');
+    if (!anchor) return;
+    const groups = languageGroups ?? [];
+    anchor.innerHTML = languageChipsHTML(groups, languages());
+    anchor.setAttribute("aria-label", languageLabel(groups, languages()));
+    if (!languagePanel || !menuIsOpenFor(anchor)) return;
+    const active = document.activeElement as HTMLElement | null;
+    let again: string | null = null;
+    if (active && languagePanel.contains(active)) {
+      if (active.dataset.lang) again = `[data-lang="${CSS.escape(active.dataset.lang)}"]`;
+      else if (active.dataset.group) again = `[data-group="${CSS.escape(active.dataset.group)}"]`;
+    }
+    languagePanel.innerHTML = languagePanelHTML(languageGroups, languages(), openGroup);
+    placeMenu();
+    (again ? languagePanel.querySelector<HTMLElement>(again) : null)?.focus();
+  }
+
+  /** Chooses or drops a language; the button shows it at once, and goes back if the core refuses. */
+  async function pickLanguage(id: string): Promise<void> {
+    const before = languages();
+    const result = toggleLanguage(languageGroups ?? [], before, id);
+    if (!result.ok) {
+      toaster.info(result.reason);
+      return;
+    }
+    if (brain) brain = { ...brain, languages: result.languages };
+    paintLanguages();
+    try {
+      brain = (await api.settingsSet("languages", result.languages)).settings;
+    } catch (err) {
+      if (brain) brain = { ...brain, languages: before };
+      toaster.info(describeError(err));
+    }
+    if (visible) paintLanguages();
+  }
+
+  /** Reads the list of languages (again, when the panel is opened without one). */
+  async function loadLanguages(): Promise<void> {
+    try {
+      languageGroups = (await api.languagesList()).groups;
+    } catch {
+      return; // the panel says the list cannot be had
+    }
+    if (visible) paintLanguages();
   }
 
   // ---------- changes ----------
@@ -664,30 +799,13 @@ export function createSettings(app: AppContext): Page {
         closeMenu();
         return;
       }
+      if (choose.dataset.k === "languages") {
+        openLanguages(choose);
+        return;
+      }
       const menu = menuFor(choose.dataset.k ?? "");
       if (menu) openMenu(choose, menu.choices, menu.current, menu.pick, menu.head);
       if (choose.dataset.k === "mic") void refreshMicrophones(choose);
-      return;
-    }
-
-    const size = target.closest<HTMLElement>('.seg[data-k="size"] button');
-    if (size) {
-      void changeDevice({ emblem_size: Number(size.dataset.v) as DeviceSettings["emblem_size"] });
-      return;
-    }
-
-    const appearance = target.closest<HTMLElement>('.seg[data-k="appearance"] button');
-    if (appearance) {
-      const value = appearance.dataset.v as DeviceSettings["appearance"];
-      if (APPEARANCES.some((c) => c.value === value) && value !== app.device().appearance) void changeDevice({ appearance: value });
-      return;
-    }
-
-    const mode = target.closest<HTMLElement>('.seg[data-k="mode"] button');
-    if (mode) {
-      if (isDictationMode(mode.dataset.v) && mode.dataset.v !== app.device().dictation_mode) {
-        void changeDevice({ dictation_mode: mode.dataset.v });
-      }
       return;
     }
 
@@ -750,13 +868,14 @@ export function createSettings(app: AppContext): Page {
     async show() {
       visible = true;
       const mine = ++loads;
-      const [brainResult, keyResult, statusResult, devicesResult, altgrResult, versionResult] = await Promise.allSettled([
+      const [brainResult, keyResult, statusResult, devicesResult, altgrResult, versionResult, languagesResult] = await Promise.allSettled([
         api.settingsGet(),
         api.secretsStatus(),
         api.statusGet(),
         api.audioDevices(),
         api.keyboardHasAltgr(),
         getVersion(),
+        api.languagesList(),
         // Read again: the settings may have changed since the window started. `refreshDevice` puts
         // the answer in `app.device()` itself, or drops it if a newer read or write overtook it.
         app.refreshDevice(),
@@ -769,6 +888,7 @@ export function createSettings(app: AppContext): Page {
       devices = devicesResult.status === "fulfilled" ? devicesResult.value : null;
       altgr = altgrResult.status === "fulfilled" && altgrResult.value;
       version = versionResult.status === "fulfilled" ? versionResult.value : "0.1.0";
+      if (languagesResult.status === "fulfilled") languageGroups = languagesResult.value.groups;
       replacingKey = false;
       keyError = null;
       limitDraft = null;

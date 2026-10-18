@@ -60,20 +60,17 @@ export interface Choice {
   label: string;
   /** A second, quieter text after the label in a menu: a price, say. */
   detail?: string;
-}
-
-/** A row of exclusive buttons. Each button carries its value in `data-v`. */
-export function seg(options: Choice[], current: string, label: string, attrs = ""): string {
-  const buttons = options
-    .map((o) => `<button type="button" data-v="${esc(o.value)}" aria-pressed="${o.value === current}">${esc(o.label)}</button>`)
-    .join("");
-  return `<div class="seg" role="group" aria-label="${esc(label)}"${attrs}>${buttons}</div>`;
+  /** A line under the label in a menu: what the choice does. */
+  desc?: string;
 }
 
 /** The button that opens a menu; it shows `current`'s label. `attrs` names it for the page. */
 export function sel(options: Choice[], current: string, label: string, attrs = ""): string {
   const shown = options.find((o) => o.value === current)?.label ?? current;
-  return `<button type="button" class="sel" aria-haspopup="menu" aria-label="${esc(label)}"${attrs}><span>${esc(shown)}</span>${ico("down")}</button>`;
+  return (
+    `<button type="button" class="sel" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(label)}"${attrs}>` +
+    `<span>${esc(shown)}</span>${ico("down")}</button>`
+  );
 }
 
 export const btn = (label: string, kind = "", attrs = ""): string =>
@@ -134,13 +131,20 @@ export const line = (zh: string, ja: string): string =>
 
 // ---------- menu ----------
 
-let menu: { el: HTMLElement; anchor: HTMLElement } | null = null;
+/** The menu or panel that is open, the button that opened it, and what it does with keys of its own. */
+let menu: { el: HTMLElement; anchor: HTMLElement; onKey?: (e: KeyboardEvent) => boolean } | null = null;
 let menuListening = false;
 
 export function closeMenu(): void {
-  menu?.el.remove();
+  if (!menu) return;
+  menu.anchor.setAttribute("aria-expanded", "false");
+  menu.el.remove();
   menu = null;
 }
+
+/** The buttons of the open menu that can be reached with the arrow keys. */
+const menuItems = (el: HTMLElement): HTMLButtonElement[] =>
+  Array.from(el.querySelectorAll<HTMLButtonElement>("button")).filter((b) => !b.disabled && b.offsetParent !== null);
 
 function listenForMenuEvents(): void {
   if (menuListening) return;
@@ -155,7 +159,12 @@ function listenForMenuEvents(): void {
   );
   document.addEventListener("keydown", (e) => {
     if (!menu) return;
-    const items = Array.from(menu.el.querySelectorAll("button"));
+    if (menu.onKey?.(e)) {
+      e.preventDefault();
+      return;
+    }
+    const items = menuItems(menu.el);
+    if (items.length === 0) return;
     const i = items.indexOf(document.activeElement as HTMLButtonElement);
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -180,11 +189,61 @@ function listenForMenuEvents(): void {
   });
   window.addEventListener("blur", closeMenu);
   window.addEventListener("resize", closeMenu);
-  document.addEventListener("scroll", closeMenu, true);
+  // Scrolling inside the menu (a long list) leaves it alone; scrolling the page carries it along
+  // with its button, and closes it once the button is out of sight.
+  document.addEventListener(
+    "scroll",
+    (e) => {
+      if (!menu || (e.target instanceof Node && menu.el.contains(e.target))) return;
+      const r = menu.anchor.getBoundingClientRect();
+      if (!menu.anchor.isConnected || r.bottom < 0 || r.top > innerHeight) closeMenu();
+      else placeMenu();
+    },
+    true,
+  );
 }
 
 /** Whether a menu is open for `anchor`. */
 export const menuIsOpenFor = (anchor: HTMLElement): boolean => menu?.anchor === anchor;
+
+/** Puts the open menu under its button (above it when there is no room below), right-aligned with it. */
+export function placeMenu(): void {
+  if (!menu) return;
+  const { el, anchor } = menu;
+  const r = anchor.getBoundingClientRect();
+  const h = el.offsetHeight;
+  const w = el.offsetWidth;
+  el.style.left = `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8))}px`;
+  el.style.top = `${r.bottom + 4 + h > innerHeight - 8 ? Math.max(8, r.top - 4 - h) : r.bottom + 4}px`;
+}
+
+export interface PopoverOptions {
+  /** The classes of the panel, `menu` among them. */
+  className: string;
+  role: string;
+  label?: string;
+  /** Keys the panel handles itself (return true when it did); the others move between its buttons. */
+  onKey?: (e: KeyboardEvent) => boolean;
+}
+
+/**
+ * Opens a panel with `html` under `anchor`: it closes on Escape, Tab, a click outside or the window
+ * going away, and the arrow keys move between its buttons. Returns the panel; the caller focuses in it.
+ */
+export function openPopover(anchor: HTMLElement, html: string, o: PopoverOptions): HTMLElement {
+  listenForMenuEvents();
+  closeMenu();
+  const el = document.createElement("div");
+  el.className = o.className;
+  el.setAttribute("role", o.role);
+  if (o.label) el.setAttribute("aria-label", o.label);
+  el.innerHTML = html;
+  document.body.append(el);
+  menu = { el, anchor, onKey: o.onKey };
+  anchor.setAttribute("aria-expanded", "true");
+  placeMenu();
+  return el;
+}
 
 /**
  * Opens a menu of `options` under `anchor`, with `current` checked. `onPick` gets the value chosen.
@@ -197,29 +256,27 @@ export function openMenu(
   onPick: (value: string) => void,
   head?: string,
 ): void {
-  listenForMenuEvents();
-  closeMenu();
-  const el = document.createElement("div");
   const detailed = options.some((o) => o.detail);
-  el.className = detailed ? "menu detailed" : "menu";
-  el.setAttribute("role", "menu");
-  el.innerHTML =
+  const described = options.some((o) => o.desc);
+  const html =
     (head ? `<div class="menu-head" aria-hidden="true">${esc(head)}</div>` : "") +
     options
       .map(
         (o) =>
           `<button type="button" role="menuitemradio" data-value="${esc(o.value)}" aria-checked="${o.value === current}">` +
-          `<span class="ck">${o.value === current ? "✓" : ""}</span><span class="mt">${esc(o.label)}</span>` +
+          `<span class="ck">${o.value === current ? CHECK : ""}</span>` +
+          (o.desc
+            ? `<span class="mtd"><span class="mt">${esc(o.label)}</span><span class="mdesc">${esc(o.desc)}</span></span>`
+            : `<span class="mt">${esc(o.label)}</span>`) +
           (o.detail ? `<span class="md num">${esc(o.detail)}</span>` : "") +
           `</button>`,
       )
       .join("");
-  document.body.append(el);
-  const r = anchor.getBoundingClientRect();
-  const h = el.offsetHeight;
-  const w = el.offsetWidth;
-  el.style.left = `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8))}px`;
-  el.style.top = `${r.bottom + 4 + h > innerHeight ? Math.max(8, r.top - 4 - h) : r.bottom + 4}px`;
+  const el = openPopover(anchor, html, {
+    className: `menu${detailed ? " detailed" : ""}${described ? " described" : ""}`,
+    role: "menu",
+    label: anchor.getAttribute("aria-label") ?? undefined,
+  });
   el.addEventListener("click", (e) => {
     const pick = (e.target as Element).closest("button");
     if (!pick) return;
@@ -227,9 +284,11 @@ export function openMenu(
     anchor.focus();
     onPick(pick.dataset.value ?? "");
   });
-  menu = { el, anchor };
   (el.querySelector<HTMLElement>('[aria-checked="true"]') ?? el.querySelector<HTMLElement>("button"))?.focus();
 }
+
+/** The check mark of a chosen item: drawn, so that it is the same in every font. */
+export const CHECK = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.6 8.4 6.6 11.2 12.4 4.8"/></svg>`;
 
 // ---------- toasts ----------
 

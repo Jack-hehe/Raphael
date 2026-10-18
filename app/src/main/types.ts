@@ -117,7 +117,8 @@ export interface DictionaryEntry {
 export interface BrainSettings {
   monthly_limit_usd: number;
   cleanup_model: string;
-  language: string;
+  /** The languages the speech recognition listens for: locale ids such as "zh-TW", one to five. */
+  languages: string[];
   history_retention_days: number;
   /** "cloud" (OpenRouter, the local engine as fallback) or "local". */
   stt_engine: string;

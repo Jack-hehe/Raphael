@@ -1,7 +1,10 @@
 /* The main window. Layout and components follow the approved mockup (raphael-settings.html, view
-   "main window"); the palette is the cool one that replaced the warm amber of spec section 12.2:
-   cool neutrals and one soft-indigo accent taken from the light of the Great Sage glyph ring.
-   Backgrounds are solid (Mica is left for later). */
+   "main window"). The palette is sapphire and aqua (碧藍、藍寶石): cool neutrals that lean a little
+   blue, one sapphire-azure accent in light and a luminous aqua-azure in dark, like the light of the
+   Great Sage glyph ring on the desktop. Backgrounds are solid (Mica is left for later).
+   Contrast (WCAG 2.x, checked on --side, --content, --panel and --surface-2): body text 14.5:1 or
+   more, --text-2 6.4:1 or more, --text-3 4.8:1 or more, --accent-text 5.0:1 or more in light and
+   8.8:1 in dark; text on the accent 4.75:1 (light) and 8.3:1 (dark). */
 
 /* ---------- tokens ---------- */
 :root {
@@ -11,35 +14,36 @@
   --zh-sub: "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif;
 
   /* surfaces: the window (sidebar), the page, the panels on it, a recessed fill */
-  --side: #eef1f5; --content: #f8f9fb; --panel: #ffffff; --surface-2: #e9ecf2;
-  --edge: rgba(22, 32, 60, 0.08); --line: rgba(22, 32, 60, 0.075); --hover: rgba(22, 32, 60, 0.045);
+  --side: #edf2f8; --content: #f5f8fc; --panel: #ffffff; --surface-2: #e4ebf3;
+  --edge: rgba(16, 42, 80, 0.09); --line: rgba(16, 42, 80, 0.08); --hover: rgba(20, 90, 170, 0.055);
   /* text: body, secondary, muted (all at least AA on every surface above) */
-  --text: #151a23; --text-2: #4e5768; --text-3: #646d80;
-  /* the one accent: soft indigo */
-  --accent: #4655d6; --accent-text: #3a47c2; --on-accent: #ffffff; --accent-soft: rgba(70, 85, 214, 0.12);
-  --ok: #13753f; --warn: #b04a0e; --err: #c22b3c; --warn-soft: rgba(176, 74, 14, 0.07); --warn-edge: rgba(176, 74, 14, 0.2);
-  --btn: #ffffff; --btn-edge: rgba(22, 32, 60, 0.14); --key: #f4f6f9; --key-edge: rgba(22, 32, 60, 0.16);
-  --track: rgba(22, 32, 60, 0.08); --menu: #ffffff; --scrim: rgba(16, 22, 36, 0.28);
-  --seg-on: #ffffff; --seg-shadow: 0 1px 2px rgba(22, 32, 60, 0.16), 0 0 0 1px rgba(22, 32, 60, 0.04);
-  --pop: 0 12px 32px rgba(18, 26, 48, 0.14), 0 1px 3px rgba(18, 26, 48, 0.1);
-  --toast-action: #b9c2ff;
-  --bar-past: #bcc3ef; --bar-today: var(--accent);
-  --stage: #0a0d16; --stage-glow: rgba(120, 140, 255, 0.2);
+  --text: #0e1a2b; --text-2: #44546a; --text-3: #56677e;
+  /* the one accent: sapphire-azure */
+  --accent: #1a73d1; --accent-text: #1462b8; --on-accent: #ffffff; --accent-soft: rgba(26, 115, 209, 0.11);
+  --accent-ring: rgba(26, 115, 209, 0.22);
+  --ok: #12703d; --warn: #a8470d; --err: #bf2a3b; --warn-soft: rgba(168, 71, 13, 0.07); --warn-edge: rgba(168, 71, 13, 0.2);
+  --btn: #ffffff; --btn-edge: rgba(16, 42, 80, 0.15); --key: #f2f6fa; --key-edge: rgba(16, 42, 80, 0.17);
+  --track: rgba(16, 42, 80, 0.08); --menu: #ffffff; --scrim: rgba(8, 20, 38, 0.28);
+  --pop: 0 14px 34px rgba(10, 34, 70, 0.14), 0 1px 3px rgba(10, 34, 70, 0.1);
+  --toast-action: #8fd3ff;
+  --bar-past: #a9d2f3; --bar-today: var(--accent);
+  --stage: #07111d; --stage-glow: rgba(70, 180, 255, 0.24);
   color-scheme: light;
 }
 :root[data-theme="dark"] {
-  --side: #0d1016; --content: #12161e; --panel: #181d27; --surface-2: #222836;
-  --edge: rgba(200, 215, 255, 0.07); --line: rgba(200, 215, 255, 0.07); --hover: rgba(200, 215, 255, 0.05);
-  --text: #e7ebf2; --text-2: #a6afbf; --text-3: #8a93a5;
-  --accent: #9aa8ff; --accent-text: #aeb9ff; --on-accent: #0d1233; --accent-soft: rgba(154, 168, 255, 0.14);
+  --side: #0a1018; --content: #0e1620; --panel: #141e2a; --surface-2: #1c2836;
+  --edge: rgba(150, 200, 255, 0.08); --line: rgba(150, 200, 255, 0.075); --hover: rgba(130, 200, 255, 0.06);
+  --text: #e5edf6; --text-2: #a2b2c5; --text-3: #8596ab;
+  /* the one accent: luminous aqua-azure */
+  --accent: #5cc3ff; --accent-text: #7fd0ff; --on-accent: #04213a; --accent-soft: rgba(92, 195, 255, 0.14);
+  --accent-ring: rgba(92, 195, 255, 0.26);
   --ok: #5bcb8b; --warn: #f2a15a; --err: #ff7a86; --warn-soft: rgba(242, 161, 90, 0.08); --warn-edge: rgba(242, 161, 90, 0.22);
-  --btn: #1e2430; --btn-edge: rgba(200, 215, 255, 0.12); --key: #222836; --key-edge: rgba(200, 215, 255, 0.16);
-  --track: rgba(200, 215, 255, 0.09); --menu: #1d2230; --scrim: rgba(0, 0, 0, 0.5);
-  --seg-on: #343c50; --seg-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --pop: 0 12px 32px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
-  --toast-action: #3a47c2;
-  --bar-past: #3a4372; --bar-today: var(--accent);
-  --stage: #070a12; --stage-glow: rgba(120, 140, 255, 0.16);
+  --btn: #172230; --btn-edge: rgba(150, 200, 255, 0.13); --key: #1c2836; --key-edge: rgba(150, 200, 255, 0.17);
+  --track: rgba(150, 200, 255, 0.09); --menu: #182433; --scrim: rgba(0, 0, 0, 0.5);
+  --pop: 0 14px 34px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --toast-action: #1462b8;
+  --bar-past: #1f4a70; --bar-today: var(--accent);
+  --stage: #050c15; --stage-glow: rgba(92, 195, 255, 0.2);
   color-scheme: dark;
 }
 
@@ -95,7 +99,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .group.panel { margin-top: 26px; }
 .group.panel > h3 { margin: 0 0 8px 2px; }
 .group.panel > .list { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; padding: 0 16px; }
-/* A control too wide to sit beside its name (a long segmented control at the window's smallest)
+/* A control too wide to sit beside its name (the language chips at the window's smallest)
    goes below it rather than squeezing the name into a column. */
 .group.panel > .list > .row { min-height: 56px; padding: 11px 0; flex-wrap: wrap; row-gap: 8px; }
 .group.panel > .list > .row > .lbl { min-width: 11em; }
@@ -108,13 +112,10 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .tg::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--text-2); transition: transform 0.12s, background 0.12s; }
 .tg[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
 .tg[aria-checked="true"]::after { transform: translateX(16px); background: var(--on-accent); }
-.seg { display: inline-flex; background: var(--surface-2); border-radius: 8px; padding: 2px; gap: 2px; }
-.seg button { border: 0; background: transparent; height: 26px; padding: 0 12px; border-radius: 6px; font-size: 13px; color: var(--text-2); white-space: nowrap; transition: background 0.12s, color 0.12s; }
-.seg button:hover { color: var(--text); }
-.seg button[aria-pressed="true"] { background: var(--seg-on); color: var(--text); font-weight: 600; box-shadow: var(--seg-shadow); }
 .sel { display: inline-flex; align-items: center; gap: 6px; height: 30px; max-width: 260px; padding: 0 8px 0 11px; border-radius: 7px; border: 1px solid var(--btn-edge); background: var(--btn); font-size: 13px; color: var(--text); }
 .sel > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sel:hover { border-color: var(--text-3); }
+.sel[aria-expanded="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 .sel .i { width: 12px; height: 12px; color: var(--text-2); }
 .btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--btn-edge); background: var(--btn); font-size: 13px; color: var(--text); white-space: nowrap; }
 .btn:hover { background: var(--hover); }
@@ -160,7 +161,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .subs .line { opacity: 0; transition: opacity 0.18s ease; }
 .subs .line.on { opacity: 1; }
 .stage .act { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
-.stage .btn.pri { background: #e6eaff; border-color: #e6eaff; color: #111733; }
+.stage .btn.pri { background: #dff1ff; border-color: #dff1ff; color: #06213a; }
 
 /* What keeps dictation from working fully, with the way to fix it. */
 .alert { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 8px 8px 8px 14px; border-radius: 10px; background: var(--warn-soft); border: 1px solid var(--warn-edge); }
@@ -240,7 +241,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .menu button { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; text-align: left; }
 .menu button:hover { background: var(--hover); }
 .menu button:focus-visible { background: var(--hover); outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
-.menu .ck { width: 14px; flex: none; color: var(--accent-text); }
+.menu .ck { width: 14px; height: 14px; flex: none; color: var(--accent-text); }
+.menu .ck svg { display: block; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .menu .mt { white-space: nowrap; }
 /* A menu whose choices have a detail (a price): the details line up on the right. */
 .menu.detailed { min-width: 340px; }
@@ -249,7 +251,36 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .menu .md { flex: none; margin-left: 16px; font-size: 12px; color: var(--text-3); white-space: nowrap; }
 .menu button[aria-checked="true"] .mt { font-weight: 600; }
 .menu button[aria-checked="true"] .md { color: var(--text-2); }
+/* A menu whose choices say what they do: the name, and a quieter line under it. */
+.menu.described { min-width: 260px; max-width: min(340px, calc(100vw - 16px)); }
+.menu.described button { height: auto; min-height: 32px; padding: 7px 10px; align-items: flex-start; }
+.menu.described .ck { margin-top: 2px; }
+.menu .mtd { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.menu .mtd .mt { white-space: normal; }
+.menu .mdesc { font-size: 12px; line-height: 1.4; color: var(--text-3); text-wrap: pretty; }
 .menu-head { padding: 6px 10px; font-size: 11px; color: var(--text-3); text-align: right; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+/* The languages: chips on the button, and a panel of groups whose variants fold out. */
+.sel.lang-sel { height: auto; min-height: 30px; max-width: 360px; padding: 3px 8px 3px 3px; }
+.sel.lang-sel > .lang-chips { display: flex; flex-wrap: wrap; gap: 3px; overflow: visible; white-space: normal; }
+.lchip { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 5px; background: var(--accent-soft); color: var(--text); font-size: 12px; white-space: nowrap; }
+.menu.lang-panel { width: 320px; padding: 4px; overflow: hidden; display: flex; flex-direction: column; }
+.lang-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 10px 6px; }
+.lang-title { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.lang-count { font-size: 12px; color: var(--text-3); }
+.lang-list { overflow: auto; max-height: min(340px, calc(100vh - 140px)); }
+.menu .lang-item .mt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.menu .lang-item .md { margin-left: 12px; }
+.menu .lang-group .md { color: var(--text-2); }
+.menu .lang-group .i { width: 12px; height: 12px; color: var(--text-3); transition: transform 0.15s ease; }
+.menu .lang-group[aria-expanded="true"] .i { transform: rotate(180deg); }
+.menu .lang-group[aria-expanded="true"] .md { visibility: hidden; }
+.menu .lang-item[aria-pressed="true"] .mt { font-weight: 600; }
+.menu .lang-item[aria-disabled="true"] { color: var(--text-3); cursor: not-allowed; }
+.lang-variants { margin: 0 0 4px 16px; padding-left: 6px; border-left: 1px solid var(--line); }
+.lang-variant .radio { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 1.5px solid var(--text-3); }
+.lang-variant[aria-pressed="true"] .radio { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 0 3.5px, transparent 4px); }
+.lang-foot { margin: 4px 0 0; padding: 8px 10px 6px; border-top: 1px solid var(--line); font-size: 12px; color: var(--text-3); }
+.lang-empty { margin: 0; padding: 6px 10px 12px; font-size: 13px; color: var(--text-2); }
 .toasts { position: fixed; left: 50%; bottom: 20px; z-index: 40; transform: translateX(-50%); display: flex; flex-direction: column-reverse; align-items: center; gap: 8px; pointer-events: none; }
 .toast { pointer-events: auto; display: flex; align-items: center; gap: 12px; padding: 7px 8px 7px 16px; border-radius: 8px; background: var(--text); color: var(--content); font-size: 13px; box-shadow: var(--pop); max-width: min(560px, calc(100vw - 32px)); }
 .toast .btn.quiet { color: var(--toast-action); }

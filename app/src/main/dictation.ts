@@ -13,10 +13,10 @@ export type DictationMode = DeviceSettings["dictation_mode"];
 /** The same as `DictationMode::default()` in device_settings.rs. */
 export const DEFAULT_DICTATION_MODE: DictationMode = "toggle";
 
-/** The segmented control of the settings page. */
+/** The menu of the settings page: a short name, and what the mode does under it. */
 export const DICTATION_MODES: Choice[] = [
-  { value: "toggle", label: "按一下開始，再按一下結束" },
-  { value: "hold", label: "按住說話，放開結束" },
+  { value: "toggle", label: "按一下開始／結束", desc: modeDescription("toggle") },
+  { value: "hold", label: "按住說話", desc: modeDescription("hold") },
 ];
 
 export function isDictationMode(value: unknown): value is DictationMode {
