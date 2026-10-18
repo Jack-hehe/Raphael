@@ -223,15 +223,22 @@ const progress = (stage: "transcribing" | "cleaning" | "done", done = 0, total =
   audio_seconds: 6,
 });
 
-test("a dictation with progress: no glyph ring while listening, it draws in through the stages, then the emblem vanishes", () => {
+test("a dictation with progress: the whole ring while listening, swept away at the stop, drawn in through the stages, then the emblem vanishes", () => {
   const p = page();
   p.send(SETTINGS);
   for (let round = 0; round < 2; round++) {
     p.send({ type: "show", mode: "listening" });
     run(1200);
-    expect(p.emblem.revealShown, `round ${round}: a new dictation has no glyph ring`).toEqual({ fraction: 0, rest: 0, flash: 0, echo: 0 });
+    expect(p.emblem.revealShown, `round ${round}: a new dictation shows the whole ring`).toEqual({ fraction: 0, rest: 0, flash: 0, away: 0, boost: 0 });
+    p.send({ type: "level", value: 0.6 });
+    run(100);
+    expect(p.emblem.revealShown?.boost).toBeGreaterThan(0);
+    p.send({ type: "level", value: 0 }); // the speech ends
     p.send({ type: "mode", mode: "thinking" }, progress("transcribing", 1, 3));
-    expect(p.drawsNow()).toBe(true);
+    expect(p.drawsNow()).toBe(true); // 100 ms
+    expect(p.emblem.revealShown?.away).toBeGreaterThan(0); // the ring is swept away first
+    expect(p.emblem.revealShown?.fraction).toBe(0);
+    run(220);
     const first = p.emblem.revealShown?.fraction ?? 0;
     expect(first).toBeGreaterThan(0);
     expect(first).toBeLessThanOrEqual(0.2 + 1e-9);
