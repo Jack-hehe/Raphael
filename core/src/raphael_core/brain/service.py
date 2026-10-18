@@ -1,4 +1,5 @@
-"""The brain as RPC methods: dictation, history, dictionary, settings, the OpenRouter key, status.
+"""The brain as RPC methods: dictation, history, dictionary, settings, the OpenRouter key, status,
+model prices and dictation statistics.
 
 `Brain` owns the stores and the cleanup service and registers its methods on a Router. The device
 side and the app reach it only through `router.call`, so every param arrives as JSON and every
@@ -25,6 +26,7 @@ import sqlite3
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
+from datetime import tzinfo
 from typing import Any
 
 from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
@@ -34,9 +36,11 @@ from .cloud_stt import CloudTranscriber
 from .dictionary import DictionaryStore
 from .history import HistoryItem, HistoryStore
 from .openrouter import KeyInfo, OpenRouterClient, OpenRouterError
+from .pricing import PricingService
 from .secrets import KeyStore
 from .settings import SettingsStore
 from .spend import SpendTracker
+from .stats import StatsStore
 from .suggest import suggest_words
 from .textnorm import apply_replacements, finish_cleaned_text, normalize_transcript
 
@@ -173,7 +177,8 @@ class Brain:
     `now_ms` is the clock. Making a Brain prunes the history older than the retention setting and
     makes no network call. The history is pruned again when the retention changes, and at most once
     every PRUNE_INTERVAL_MS while dictations are finalized. `key_check_timeout_s` is the longest a
-    key check may take.
+    key check may take. `tz` is the time zone of the days and months of the spend and the
+    statistics (this machine's, if None).
     """
 
     def __init__(
@@ -184,6 +189,7 @@ class Brain:
         now_ms: Callable[[], int] = _wall_clock_ms,
         *,
         key_check_timeout_s: float = KEY_CHECK_TIMEOUT_S,
+        tz: tzinfo | None = None,
     ) -> None:
         self._client = client
         self._keys = keys
@@ -194,7 +200,9 @@ class Brain:
         self._history = HistoryStore(conn)
         self._dictionary = DictionaryStore(conn, now_ms)
         self._settings = SettingsStore(conn)
-        self._spend = SpendTracker(conn, now_ms)
+        self._spend = SpendTracker(conn, now_ms, tz)
+        self._stats = StatsStore(conn, now_ms, tz)
+        self._pricing = PricingService(conn, client, now_ms)
         self._cleanup = CleanupService(
             client,
             self._settings,
@@ -226,6 +234,8 @@ class Brain:
             "secrets.clear_openrouter_key": self._secrets_clear_openrouter_key,
             "status.get": self._status_get,
             "status.check_openrouter": self._status_check_openrouter,
+            "pricing.get": self._pricing_get,
+            "stats.summary": self._stats_summary,
         }
         for method, handler in methods.items():
             router.register(method, handler)
@@ -513,6 +523,14 @@ class Brain:
             else:
                 self._note("ok", latency_ms=latency_ms, key=info)
         return self._openrouter_view(has_key)
+
+    # --- pricing and statistics -----------------------------------------------------------------
+
+    async def _pricing_get(self, params: dict) -> dict:
+        return await self._pricing.get()
+
+    async def _stats_summary(self, params: dict) -> dict:
+        return self._stats.summary()
 
     # --- history retention ----------------------------------------------------------------------
 

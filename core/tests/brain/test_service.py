@@ -48,6 +48,8 @@ METHODS = [
     "secrets.clear_openrouter_key",
     "status.get",
     "status.check_openrouter",
+    "pricing.get",
+    "stats.summary",
 ]
 
 

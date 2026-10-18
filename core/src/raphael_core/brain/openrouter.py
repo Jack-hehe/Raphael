@@ -450,6 +450,21 @@ class OpenRouterClient:
         key = self._stored_key() if key is None else key
         return _to_key_info(await self._request("GET", "/key", key, timeout_s))
 
+    async def models(self, timeout_s: float = 5.0) -> list[dict]:
+        """Every model OpenRouter lists, of every kind (text, transcription, image, ...), as the
+        API gives them: the `data` list of GET /models?output_modalities=all.
+
+        The list is public, so no key is sent and none is needed: this works without one, and with
+        a key store that fails. `timeout_s` applies to each stage of the request, like the others.
+        """
+        reply = await self._request(
+            "GET", "/models?output_modalities=all", None, timeout_s, public=True
+        )
+        data = reply.body.get("data") if isinstance(reply.body, dict) else None
+        if not isinstance(data, list):
+            raise _failure(reply.status, "bad_response", "The reply is not a list of models")
+        return data
+
     def warm_up(self) -> None:
         """Make the httpx client now instead of at the first request.
 
@@ -490,10 +505,22 @@ class OpenRouterClient:
             return self._own_http
 
     async def _request(
-        self, method: str, path: str, key: str | None, timeout_s: float, body: dict | None = None
+        self,
+        method: str,
+        path: str,
+        key: str | None,
+        timeout_s: float,
+        body: dict | None = None,
+        *,
+        public: bool = False,
     ) -> _Reply:
-        """Send one request and return the decoded reply, or raise the OpenRouterError it earns."""
-        headers = {"Authorization": _authorization(key), **_APP_HEADERS}
+        """Send one request and return the decoded reply, or raise the OpenRouterError it earns.
+
+        A `public` request is for an endpoint that needs no key: `key` is ignored and not sent.
+        """
+        headers = dict(_APP_HEADERS)
+        if not public:
+            headers["Authorization"] = _authorization(key)
         client = self._client()  # made before the clock starts: building it takes a while
         started = time.perf_counter()
         try:
