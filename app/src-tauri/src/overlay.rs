@@ -45,6 +45,38 @@ pub enum Mode {
     Steady,
 }
 
+/// How far a dictation has come after the key was released: the speech that is left is
+/// transcribed, then the brain cleans the text, then it is pasted (the core's
+/// `dictation.progress`; `Done` is the stop's reply).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Stage {
+    Transcribing,
+    Cleaning,
+    Done,
+}
+
+/// What the emblem's progress ring shows: `done` of `total` segments transcribed (while
+/// transcribing), and the length of the speech, which sets how long the cleanup is expected to
+/// take.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Progress {
+    pub stage: Stage,
+    pub done: u32,
+    pub total: u32,
+    pub audio_seconds: f32,
+}
+
+impl Progress {
+    /// The text is there: the ring is full.
+    pub const DONE: Progress = Progress {
+        stage: Stage::Done,
+        done: 0,
+        total: 0,
+        audio_seconds: 0.0,
+    };
+}
+
 /// What the overlay page is told. `subtitles` in [`OverlayEvent::Settings`] is `"both"`, `"zh"`,
 /// `"ja"` or `"off"`.
 #[derive(Clone, Debug, Serialize)]
@@ -56,6 +88,9 @@ pub enum OverlayEvent {
     Mode { mode: Mode },
     /// Loudness from 0 to 1: the white ring's width while listening or speaking.
     Level { value: f32 },
+    /// How far the dictation has come since the key was released: an arc of light fills the
+    /// glyph ring.
+    Progress(Progress),
     /// Raphael's report: the emblem appears with subtitles, then vanishes.
     Notice { zh: String, ja: String },
     /// The vanish animation.
@@ -80,6 +115,8 @@ pub trait OverlayApi: Send + Sync + 'static {
     fn notice(&self, zh: &str, ja: &str);
     /// The vanish animation plays; the window stays, empty, where it is.
     fn hide(&self);
+    /// How far the dictation has come since the key was released.
+    fn progress(&self, progress: Progress);
 }
 
 // ---------- placement (spec §6.1) ----------
@@ -170,6 +207,7 @@ impl OverlayEvent {
             OverlayEvent::Show { .. } => "show",
             OverlayEvent::Mode { .. } => "mode",
             OverlayEvent::Level { .. } => "level",
+            OverlayEvent::Progress(_) => "progress",
             OverlayEvent::Notice { .. } => "notice",
             OverlayEvent::Hide => "hide",
             OverlayEvent::Settings { .. } => "settings",
@@ -197,9 +235,11 @@ impl Bus {
         let kind = event.kind();
         if self.subscribers.is_empty() {
             match event {
-                // Replayed to a new page as `self.settings`, and a loudness reading is stale by
-                // the time a page could use it.
-                OverlayEvent::Settings { .. } | OverlayEvent::Level { .. } => {}
+                // Replayed to a new page as `self.settings`, and a loudness reading or a progress
+                // report is stale by the time a page could use it.
+                OverlayEvent::Settings { .. }
+                | OverlayEvent::Level { .. }
+                | OverlayEvent::Progress(_) => {}
                 _ => {
                     if self.backlog_warned {
                         log::debug!("overlay: no page is listening, \"{kind}\" waits");
@@ -391,6 +431,10 @@ impl OverlayApi for Overlay {
 
     fn hide(&self) {
         self.publish(OverlayEvent::Hide);
+    }
+
+    fn progress(&self, progress: Progress) {
+        self.publish(OverlayEvent::Progress(progress));
     }
 }
 
@@ -661,6 +705,26 @@ mod tests {
         );
         assert_eq!(json(OverlayEvent::Hide), r#"{"type":"hide"}"#);
         assert_eq!(
+            json(OverlayEvent::Progress(Progress {
+                stage: Stage::Transcribing,
+                done: 1,
+                total: 3,
+                audio_seconds: 4.5
+            })),
+            r#"{"type":"progress","stage":"transcribing","done":1,"total":3,"audio_seconds":4.5}"#
+        );
+        assert_eq!(
+            json(OverlayEvent::Progress(Progress {
+                stage: Stage::Cleaning,
+                ..Progress::DONE
+            })),
+            r#"{"type":"progress","stage":"cleaning","done":0,"total":0,"audio_seconds":0.0}"#
+        );
+        assert_eq!(
+            json(OverlayEvent::Progress(Progress::DONE)),
+            r#"{"type":"progress","stage":"done","done":0,"total":0,"audio_seconds":0.0}"#
+        );
+        assert_eq!(
             json(OverlayEvent::Settings {
                 px: 150,
                 subtitles: "both".into()
@@ -728,6 +792,7 @@ mod tests {
             mode: Mode::Listening,
         });
         bus.publish(OverlayEvent::Level { value: 0.3 }); // a loudness reading is stale by then
+        bus.publish(OverlayEvent::Progress(Progress::DONE)); // and so is a progress report
         bus.publish(OverlayEvent::Notice {
             zh: "了".into(),
             ja: "了".into(),
@@ -873,6 +938,7 @@ mod tests {
             OverlayEvent::Show { mode: Mode::Steady },
             OverlayEvent::Mode { mode: Mode::Steady },
             OverlayEvent::Level { value: 0.0 },
+            OverlayEvent::Progress(Progress::DONE),
             notice(0),
             OverlayEvent::Hide,
             OverlayEvent::Settings {

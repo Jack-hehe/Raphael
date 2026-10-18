@@ -31,7 +31,7 @@ use crate::device_settings::DictationMode;
 use crate::holdtap::{Action, HoldTap};
 use crate::hotkey::{CancelSwitch, HotkeyEvent};
 use crate::notices::{self, Notice};
-use crate::overlay::{Mode, OverlayApi};
+use crate::overlay::{Mode, OverlayApi, Progress, Stage};
 use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
 use crate::rpc::{CORE_EXITED, CoreApi, RpcError, TIMEOUT, lock};
 
@@ -207,6 +207,26 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
     }
 
+    /// The core's `dictation.progress`: shown on the emblem if it is about the current session and
+    /// the key has been released. Anything else (another session's, a malformed one) is dropped.
+    pub fn on_progress(&self, params: &Value) {
+        let Some((session, progress)) = parse_progress(params) else {
+            log::debug!("dictation.progress ignored: {params}");
+            return;
+        };
+        let current = {
+            let state = lock(&self.state);
+            state.phase == Phase::Processing
+                && state
+                    .session
+                    .as_ref()
+                    .is_some_and(|current| current.id == session)
+        };
+        if current {
+            self.overlay.progress(progress);
+        }
+    }
+
     /// The core was started again: whatever it was doing is lost (see [`Self::reset`]). If it goes
     /// down again, that is a new down-state, worth a new [`notices::CORE_DOWN`].
     pub fn on_core_restarted(&self) {
@@ -379,6 +399,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                     return;
                 }
             };
+            // The text is there: the emblem's progress ring fills, then the paste, the hide or
+            // the notice follow as before.
+            this.overlay.progress(Progress::DONE);
             let text = reply.get("text").and_then(Value::as_str).unwrap_or("");
             if text.is_empty() {
                 // Nothing to paste. If the microphone also delivered no sound, say so, every
@@ -633,6 +656,39 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     }
 }
 
+/// The session id and what to show, from a `dictation.progress` notification's params
+/// (`{session_id, stage, done, total, audio_seconds}`, stage "transcribing" or "cleaning"). Counts
+/// past `u32::MAX` are clamped; a missing or unusable `audio_seconds` is 0.
+fn parse_progress(params: &Value) -> Option<(&str, Progress)> {
+    let session = params.get("session_id")?.as_str()?;
+    let stage = match params.get("stage")?.as_str()? {
+        "transcribing" => Stage::Transcribing,
+        "cleaning" => Stage::Cleaning,
+        "done" => Stage::Done,
+        _ => return None,
+    };
+    let count = |key: &str| {
+        params
+            .get(key)?
+            .as_u64()
+            .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
+    };
+    let audio_seconds = params
+        .get("audio_seconds")
+        .and_then(Value::as_f64)
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+        .unwrap_or(0.0) as f32;
+    Some((
+        session,
+        Progress {
+            stage,
+            done: count("done")?,
+            total: count("total")?,
+            audio_seconds,
+        },
+    ))
+}
+
 /// Sends `dictation.cancel` for `session` once the core has answered its `dictation.start`. If
 /// the start failed there is no session to cancel.
 async fn cancel_after_start<C: CoreApi>(core: &C, session: &Session) {
@@ -700,7 +756,7 @@ mod app {
     use crate::core_process::{CORE_DOWN, CORE_RESTARTED, CoreProcess};
     use crate::hotkey::{CancelSwitch, HotkeyEvent, HotkeyService, PauseReason};
     use crate::notices;
-    use crate::overlay::{Mode, Overlay, OverlayApi};
+    use crate::overlay::{Mode, Overlay, OverlayApi, Progress};
     use crate::paste::WindowsPaster;
     use crate::rpc::Notification;
     use crate::tray::TrayCommand;
@@ -736,6 +792,11 @@ mod app {
         fn hide(&self) {
             if let Some(overlay) = &self.0 {
                 overlay.hide();
+            }
+        }
+        fn progress(&self, progress: Progress) {
+            if let Some(overlay) = &self.0 {
+                overlay.progress(progress);
             }
         }
     }
@@ -865,6 +926,7 @@ mod app {
                     controller.on_level(level as f32);
                 }
             }
+            "dictation.progress" => controller.on_progress(&notification.params),
             CORE_RESTARTED => controller.on_core_restarted(),
             CORE_DOWN => controller.on_core_down(),
             _ => {}
@@ -917,7 +979,7 @@ mod tests {
     use crate::notices::{
         CORE_DOWN, ELEVATED, FOCUS_CHANGED, LAST_COPIED, NO_MIC, NO_SOUND, NOT_READY, OFFLINE,
     };
-    use crate::overlay::{Mode, OverlayApi};
+    use crate::overlay::{Mode, OverlayApi, Progress};
     use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
     use crate::rpc::{CORE_EXITED, CoreApi, RpcError, TIMEOUT};
     use serde_json::{Value, json};
@@ -1004,9 +1066,12 @@ mod tests {
         }
     }
 
+    /// Records what the overlay is told. `events` leaves out the progress, which most tests are
+    /// not about; `timeline` has everything, in order.
     #[derive(Default)]
     struct FakeOverlay {
         events: Mutex<Vec<String>>,
+        timeline: Mutex<Vec<String>>,
     }
 
     impl FakeOverlay {
@@ -1014,7 +1079,19 @@ mod tests {
             self.events.lock().unwrap().clone()
         }
 
+        fn timeline(&self) -> Vec<String> {
+            self.timeline.lock().unwrap().clone()
+        }
+
+        fn progress(&self) -> Vec<String> {
+            self.timeline()
+                .into_iter()
+                .filter(|event| event.starts_with("progress:"))
+                .collect()
+        }
+
         fn push(&self, event: String) {
+            self.timeline.lock().unwrap().push(event.clone());
             self.events.lock().unwrap().push(event);
         }
     }
@@ -1038,6 +1115,13 @@ mod tests {
         }
         fn hide(&self) {
             self.push("hide".to_owned());
+        }
+        fn progress(&self, progress: Progress) {
+            let stage = format!("{:?}", progress.stage).to_lowercase();
+            self.timeline.lock().unwrap().push(format!(
+                "progress:{stage}:{}/{}:{}",
+                progress.done, progress.total, progress.audio_seconds
+            ));
         }
     }
 
@@ -2707,5 +2791,172 @@ mod tests {
             assert_eq!(c.phase(), Phase::Recording, "{mode:?}");
             assert_eq!(c.paster().delivered(), vec!["上一次"], "{mode:?}");
         }
+    }
+
+    // ---------- progress after the stop ----------
+
+    fn session_of(c: &Ctl) -> String {
+        c.core().call_params("dictation.start")["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    fn progress_params(session: &str, stage: &str, done: u64, total: u64) -> Value {
+        json!({
+            "session_id": session, "stage": stage, "done": done, "total": total,
+            "audio_seconds": 4.5,
+        })
+    }
+
+    #[tokio::test]
+    async fn progress_for_the_current_session_reaches_the_overlay_while_processing() {
+        let (core, gate) =
+            FakeCore::with("dictation.stop", stop_result("好", None)).gated("dictation.stop");
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        let id = session_of(&c);
+        let stop = c
+            .on_hotkey(HotkeyEvent::DictationUp, 900)
+            .expect("the stop runs in a task");
+        settle().await;
+        c.on_progress(&progress_params(&id, "transcribing", 1, 3));
+        c.on_progress(&progress_params(&id, "cleaning", 3, 3));
+        assert_eq!(
+            c.overlay().progress(),
+            vec!["progress:transcribing:1/3:4.5", "progress:cleaning:3/3:4.5",]
+        );
+        gate.notify_one();
+        stop.await.unwrap();
+        assert_eq!(
+            c.overlay().timeline(),
+            vec![
+                "show:listening",
+                "mode:thinking",
+                "progress:transcribing:1/3:4.5",
+                "progress:cleaning:3/3:4.5",
+                "progress:done:0/0:0",
+                "hide",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_for_another_session_is_ignored() {
+        let (core, gate) =
+            FakeCore::with("dictation.stop", stop_result("好", None)).gated("dictation.stop");
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        let stop = c.on_hotkey(HotkeyEvent::DictationUp, 900).unwrap();
+        settle().await;
+        c.on_progress(&progress_params("an-old-session", "transcribing", 1, 3));
+        c.on_progress(&json!({"stage": "cleaning", "done": 1, "total": 1}));
+        assert!(c.overlay().progress().is_empty());
+        gate.notify_one();
+        stop.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn progress_while_recording_or_idle_is_ignored() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        c.on_progress(&progress_params("nobody", "transcribing", 0, 1));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        let id = session_of(&c);
+        c.on_progress(&progress_params(&id, "transcribing", 0, 1));
+        assert!(c.overlay().progress().is_empty());
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        // the dictation is over: a late message for it changes nothing
+        c.on_progress(&progress_params(&id, "cleaning", 1, 1));
+        assert_eq!(c.overlay().progress(), vec!["progress:done:0/0:0"]);
+    }
+
+    #[tokio::test]
+    async fn malformed_progress_is_ignored() {
+        let (core, gate) =
+            FakeCore::with("dictation.stop", stop_result("好", None)).gated("dictation.stop");
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        let id = session_of(&c);
+        let stop = c.on_hotkey(HotkeyEvent::DictationUp, 900).unwrap();
+        settle().await;
+        for params in [
+            json!({"session_id": id, "stage": "dreaming", "done": 1, "total": 2}),
+            json!({"session_id": id, "stage": "transcribing", "done": -1, "total": 2}),
+            json!({"session_id": id, "stage": "transcribing", "done": "1", "total": 2}),
+            json!({"session_id": id, "stage": "transcribing"}),
+            json!("nonsense"),
+        ] {
+            c.on_progress(&params);
+        }
+        assert!(c.overlay().progress().is_empty());
+        // counts past u32 are clamped, a missing or bad audio length is 0
+        c.on_progress(&json!({
+            "session_id": id, "stage": "transcribing", "done": 1, "total": u64::MAX,
+            "audio_seconds": "long",
+        }));
+        assert_eq!(
+            c.overlay().progress(),
+            vec![format!("progress:transcribing:1/{}:0", u32::MAX)]
+        );
+        gate.notify_one();
+        stop.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_reply_fills_the_ring_before_the_no_sound_notice() {
+        let c = controller(
+            FakeCore::with("dictation.stop", empty_result(true)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        let timeline = c.overlay().timeline();
+        assert_eq!(
+            timeline[timeline.len() - 2..],
+            ["progress:done:0/0:0".to_owned(), notice(NO_SOUND.zh)]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_reply_fills_the_ring_before_the_paste_notice() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::copying("notepad.exe", CopyReason::Elevated),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        let timeline = c.overlay().timeline();
+        assert_eq!(
+            timeline[timeline.len() - 2..],
+            ["progress:done:0/0:0".to_owned(), notice(ELEVATED.zh)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_stop_does_not_fill_the_ring() {
+        let c = controller(
+            FakeCore::failing("dictation.stop", RpcError::new(NO_MICROPHONE, "gone")),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        assert!(c.overlay().progress().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_dictation_does_not_fill_the_ring() {
+        let (core, gate) =
+            FakeCore::with("dictation.stop", stop_result("好", None)).gated("dictation.stop");
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        let stop = c.on_hotkey(HotkeyEvent::DictationUp, 900).unwrap();
+        settle().await;
+        run(&c, HotkeyEvent::Cancel, 1000).await;
+        gate.notify_one();
+        stop.await.unwrap();
+        assert!(c.overlay().progress().is_empty());
     }
 }
