@@ -318,6 +318,12 @@ fn reconcile_modifiers_from(ctx: &mut HookContext, async_held: Modifiers) {
         ctx.current_modifiers,
         stale_modifiers(ctx.current_modifiers, physical),
     ) {
+        log::debug!(
+            "hook: reconcile releases {:?} (tracked {:?}, async {async_held:?}, swallowed {:?})",
+            event.changed_modifier,
+            ctx.current_modifiers,
+            ctx.swallowed_modifiers.held()
+        );
         ctx.current_modifiers = event.modifiers;
         let _ = ctx.event_sender.send(event);
     }
@@ -346,6 +352,7 @@ fn reconcile_modifiers_in_context() {
 /// key-ups of swallowed keys (and of an ordinary key that was down) may have gone to the secure
 /// desktop, so the hook forgets them and takes the system's word for what is held.
 fn reconcile_after_session_change(ctx: &mut HookContext, async_held: Modifiers) {
+    log::debug!("hook: session change or resume; forgetting swallowed keys");
     ctx.swallowed_modifiers.clear();
     ctx.last_key_down = None;
     reconcile_modifiers_from(ctx, async_held);
@@ -693,6 +700,11 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                     should_block,
                     now_ms(),
                 );
+                log::debug!(
+                    "hook: modifier vk=0x{vk_code:02X} down={is_key_down} {prev_modifiers:?} -> {:?} block={should_block} swallowed={:?}",
+                    ctx.current_modifiers,
+                    ctx.swallowed_modifiers.held()
+                );
 
                 // The hold ends once no Win/Alt modifier remains held; the
                 // next hold gets a fresh mask.
@@ -989,6 +1001,9 @@ fn handle_regular_key(
     // must not undo the chord.
     if is_key_down && !is_repeat {
         let stale = ctx.swallowed_modifiers.stale(now_ms, async_held);
+        if !stale.is_empty() {
+            log::debug!("hook: forgetting stale swallowed {stale:?}");
+        }
         ctx.swallowed_modifiers.forget(stale);
     }
 

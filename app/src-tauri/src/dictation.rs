@@ -229,8 +229,14 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
 
     fn act(&self, action: Action, now_ms: u64) -> Option<JoinHandle<()>> {
         match action {
-            Action::StartRecording => self.start(now_ms),
-            Action::StopRecording => self.stop(),
+            Action::StartRecording => {
+                log::info!("dictation: recording");
+                self.start(now_ms)
+            }
+            Action::StopRecording => {
+                log::info!("dictation: stopping");
+                self.stop()
+            }
             Action::None => None,
         }
     }

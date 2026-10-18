@@ -182,8 +182,13 @@ fn show_main_window(app: &AppHandle) {
 
 /// Logging to stdout (visible in `tauri dev`) and to `raphael.log` in the app log directory
 /// (`%LOCALAPPDATA%\app.raphael.desktop\logs`), with local timestamps. The file rotates at 1 MB
-/// and the three newest rotated files are kept.
+/// and the three newest rotated files are kept. `RAPHAEL_LOG=debug` (or `trace`) logs more, for
+/// tracking a problem down.
 fn log_plugin<R: Runtime>() -> TauriPlugin<R> {
+    let level = std::env::var("RAPHAEL_LOG")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(log::LevelFilter::Info);
     tauri_plugin_log::Builder::new()
         .targets([
             Target::new(TargetKind::Stdout),
@@ -191,7 +196,10 @@ fn log_plugin<R: Runtime>() -> TauriPlugin<R> {
                 file_name: Some("raphael".into()),
             }),
         ])
-        .level(log::LevelFilter::Info)
+        .level(level)
+        // Other crates (the webview, the HTTP stack) stay at Info even when Raphael logs more.
+        .level_for("tao", log::LevelFilter::Info)
+        .level_for("wry", log::LevelFilter::Info)
         .max_file_size(1_000_000)
         .rotation_strategy(RotationStrategy::KeepSome(3))
         .timezone_strategy(TimezoneStrategy::UseLocal)
