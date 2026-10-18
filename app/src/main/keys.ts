@@ -3,9 +3,11 @@
 // joined by `+`, in the spelling `hotkey::parse_binding` takes. The Rust side checks a binding
 // again (`device_settings::validate_binding`), with the same rules.
 
+import { t } from "./i18n";
+
 const LABELS: Record<string, string> = {
-  AltRight: "右 Alt",
-  AltLeft: "左 Alt",
+  get AltRight() { return t("keys.001"); },
+  get AltLeft() { return t("keys.002"); },
   ControlLeft: "Ctrl",
   ControlRight: "Ctrl",
   ShiftLeft: "Shift",
@@ -84,15 +86,15 @@ const FUNCTION_KEY = /^F([1-9]|1\d|2[0-4])$/;
 export function validateCodes(codes: string[]): string | null {
   const modifiers = codes.filter((code) => MODIFIERS.has(code));
   const keys = codes.filter((code) => !MODIFIERS.has(code));
-  if (keys.length > 1) return "一組快捷鍵只能搭配一個一般按鍵";
-  if (keys[0] === "Escape") return "Esc 用來取消聽寫，不能當快捷鍵";
+  if (keys.length > 1) return t("keys.003");
+  if (keys[0] === "Escape") return t("keys.004");
   if (keys.length === 0) {
     const aloneRightAlt = modifiers.length === 1 && modifiers[0] === "AltRight";
-    return aloneRightAlt ? null : "只有右 Alt 可以單獨當快捷鍵；左 Alt、Ctrl、Shift、Win 要搭配其他按鍵";
+    return aloneRightAlt ? null : t("keys.005");
   }
   if (FUNCTION_KEY.test(keys[0])) return null;
   if (modifiers.some((code) => !SHIFT.has(code))) return null;
-  return "單獨的字母、數字或符號鍵會干擾平常打字，請搭配 Alt、Ctrl 或 Win，或使用功能鍵（F1 到 F24）";
+  return t("keys.006");
 }
 
 /** The binding for the keys `codes`: the modifiers, then the key, whatever order they were pressed in. */

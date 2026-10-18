@@ -164,6 +164,7 @@ export interface DeviceSettings {
   emblem_size: 120 | 150 | 194;
   subtitles: "both" | "zh" | "ja" | "off";
   appearance: "system" | "light" | "dark";
+  ui_language: "zh-TW" | "en" | "ja";
   autostart: boolean;
   onboarded: boolean;
 }

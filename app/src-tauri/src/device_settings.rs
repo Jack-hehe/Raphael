@@ -1,11 +1,11 @@
 //! Settings that belong to this computer: the hotkeys and how the dictation key works (press to
 //! start and again to stop, or hold while talking), the microphone, how the emblem looks, the
-//! theme, autostart, and whether the first-run guide has been done.
+//! theme, interface language, autostart, and whether the first-run guide has been done.
 //!
 //! They live in `device.json` in Raphael's data folder (`%APPDATA%\Raphael`, or the folder named
 //! by `RAPHAEL_DATA_DIR`, like the core's database). The settings of the brain (monthly limit,
-//! model, language, history retention) are not here: they live in the core's database and the
-//! main window reads and writes them through `settings.get` and `settings.set`.
+//! model, dictation language, history retention) are not here: they live in the core's database
+//! and the main window reads and writes them through `settings.get` and `settings.set`.
 
 use std::ffi::OsString;
 use std::fs;
@@ -25,6 +25,9 @@ pub const FILE_NAME: &str = "device.json";
 /// The emblem's diameters in logical pixels: small, medium (the default) and as large as in the
 /// anime.
 pub const EMBLEM_SIZES: [u32; 3] = [120, 150, 194];
+
+/// The interface languages offered by the main window.
+const UI_LANGUAGES: [&str; 3] = ["zh-TW", "en", "ja"];
 
 /// Which subtitle lines the overlay shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +101,8 @@ pub struct DeviceSettings {
     pub emblem_size: u32,
     pub subtitles: Subtitles,
     pub appearance: Appearance,
+    /// The main window's interface language, independent of the dictation language.
+    pub ui_language: String,
     /// Start with Windows.
     pub autostart: bool,
     /// The first-run guide has been done.
@@ -115,6 +120,7 @@ impl Default for DeviceSettings {
             emblem_size: 150,
             subtitles: Subtitles::default(),
             appearance: Appearance::default(),
+            ui_language: "zh-TW".to_owned(),
             autostart: true,
             onboarded: false,
         }
@@ -125,8 +131,8 @@ impl DeviceSettings {
     /// Reads `path`. A missing file gives the defaults. A file that cannot be understood is
     /// renamed to `device.json.bad` (so that it is not lost) and the defaults are used. A file
     /// that is understood but holds a value that could not be set (an emblem size that does not
-    /// exist, a key combination that is no good, a dictation mode that is not one of the two)
-    /// gets the default for that one value.
+    /// exist, a key combination that is no good, a dictation mode or interface language that is
+    /// not offered) gets the default for that one value.
     pub fn load(path: &Path) -> DeviceSettings {
         let text = match fs::read_to_string(path) {
             Ok(text) => text,
@@ -173,6 +179,7 @@ impl DeviceSettings {
                 "emblem_size" => next.emblem_size = parse_value(name, value)?,
                 "subtitles" => next.subtitles = parse_value(name, value)?,
                 "appearance" => next.appearance = parse_value(name, value)?,
+                "ui_language" => next.ui_language = parse_value(name, value)?,
                 "autostart" => next.autostart = parse_value(name, value)?,
                 "onboarded" => next.onboarded = parse_value(name, value)?,
                 other => return Err(format!("unknown setting \"{other}\"")),
@@ -210,6 +217,12 @@ impl DeviceSettings {
 
     /// Whether the settings are ones the app can run with.
     fn validate(&self) -> Result<(), String> {
+        if !UI_LANGUAGES.contains(&self.ui_language.as_str()) {
+            return Err(format!(
+                "ui_language must be one of {UI_LANGUAGES:?}, not {:?}",
+                self.ui_language
+            ));
+        }
         if !EMBLEM_SIZES.contains(&self.emblem_size) {
             return Err(format!(
                 "emblem_size must be one of {EMBLEM_SIZES:?}, not {}",
@@ -227,6 +240,13 @@ impl DeviceSettings {
     /// Replaces each value that [`validate`](Self::validate) would refuse with its default.
     fn repair(&mut self) {
         let default = Self::default();
+        if !UI_LANGUAGES.contains(&self.ui_language.as_str()) {
+            log::warn!(
+                "device settings: interface language {:?} is not offered",
+                self.ui_language
+            );
+            self.ui_language = default.ui_language;
+        }
         if !EMBLEM_SIZES.contains(&self.emblem_size) {
             log::warn!(
                 "device settings: emblem size {} is not offered",
@@ -255,8 +275,9 @@ impl DeviceSettings {
 
 /// The settings in `text`. A `dictation_mode` that is not `"toggle"` or `"hold"` (a mode that a
 /// newer version of the app wrote, a typo, a value of the wrong type) is left out first, so that
-/// the default takes its place and the rest of the file is kept. (The other enums are strict: an
-/// unknown value there makes the whole file unreadable.)
+/// the default takes its place and the rest of the file is kept. A `ui_language` of the wrong
+/// type is treated the same way; unsupported strings are handled by `repair`. (The other enums
+/// are strict: an unknown value there makes the whole file unreadable.)
 fn parse_settings(text: &str) -> Result<DeviceSettings, serde_json::Error> {
     let mut value: Value = serde_json::from_str(text)?;
     if let Some(mode) = value.get("dictation_mode")
@@ -265,6 +286,14 @@ fn parse_settings(text: &str) -> Result<DeviceSettings, serde_json::Error> {
         log::warn!("device settings: dictation mode {mode} is not offered");
         if let Some(fields) = value.as_object_mut() {
             fields.remove("dictation_mode");
+        }
+    }
+    if let Some(language) = value.get("ui_language")
+        && !language.is_string()
+    {
+        log::warn!("device settings: interface language {language} must be a string");
+        if let Some(fields) = value.as_object_mut() {
+            fields.remove("ui_language");
         }
     }
     serde_json::from_value(value)
@@ -477,6 +506,7 @@ mod tests {
         assert_eq!(s.emblem_size, 150);
         assert_eq!(s.subtitles, Subtitles::Both);
         assert_eq!(s.appearance, Appearance::System);
+        assert_eq!(s.ui_language, "zh-TW");
         assert!(s.autostart);
         assert!(!s.onboarded);
     }
@@ -499,6 +529,7 @@ mod tests {
                 "emblem_size": 150,
                 "subtitles": "zh",
                 "appearance": "light",
+                "ui_language": "zh-TW",
                 "autostart": true,
                 "onboarded": false,
             })
@@ -532,6 +563,123 @@ mod tests {
         assert_eq!(s.dictation_mode, DictationMode::Hold);
         s.apply_patch(&json!({"dictation_mode": "toggle"})).unwrap();
         assert_eq!(s.dictation_mode, DictationMode::Toggle);
+    }
+
+    #[test]
+    fn ui_language_defaults_for_new_and_older_settings() {
+        let defaults = serde_json::to_value(DeviceSettings::default()).unwrap();
+        assert_eq!(defaults["ui_language"], "zh-TW");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{"emblem_size": 120, "dictation_mode": "hold", "onboarded": true}"#,
+        )
+        .unwrap();
+        let loaded = DeviceSettings::load(&path);
+        assert_eq!(
+            serde_json::to_value(&loaded).unwrap()["ui_language"],
+            "zh-TW"
+        );
+        assert_eq!(loaded.emblem_size, 120);
+        assert_eq!(loaded.dictation_mode, DictationMode::Hold);
+        assert!(loaded.onboarded);
+    }
+
+    #[test]
+    fn ui_language_patch_and_persistence_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let mut settings = DeviceSettings::default();
+        for language in ["en", "ja", "zh-TW"] {
+            settings
+                .apply_patch(&json!({"ui_language": language, "appearance": "dark"}))
+                .unwrap();
+            settings.save(&path).unwrap();
+
+            let saved: Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(saved["ui_language"], language);
+            let loaded = DeviceSettings::load(&path);
+            assert_eq!(loaded, settings);
+            assert_eq!(
+                serde_json::to_value(&loaded).unwrap()["ui_language"],
+                language
+            );
+            assert_eq!(loaded.appearance, Appearance::Dark);
+        }
+    }
+
+    #[test]
+    fn an_invalid_ui_language_patch_changes_nothing() {
+        let mut settings = DeviceSettings::default();
+        settings
+            .apply_patch(&json!({"ui_language": "ja", "emblem_size": 194}))
+            .unwrap();
+        let before = settings.clone();
+        for bad in [
+            json!("zh-CN"),
+            json!("zh-tw"),
+            json!("EN"),
+            json!(""),
+            json!(" en"),
+            json!(7),
+            json!(true),
+            json!(null),
+            json!(["en"]),
+            json!({"language": "en"}),
+        ] {
+            let patch = json!({"ui_language": bad, "appearance": "dark", "autostart": false});
+            assert!(settings.apply_patch(&patch).is_err(), "{patch}");
+            assert_eq!(settings, before, "{patch}: no field changes");
+        }
+    }
+
+    #[test]
+    fn an_invalid_stored_ui_language_only_defaults_that_field() {
+        for bad in [
+            json!("zh-CN"),
+            json!("zh-tw"),
+            json!("EN"),
+            json!(""),
+            json!(" en"),
+            json!(7),
+            json!(true),
+            json!(null),
+            json!(["en"]),
+            json!({"language": "en"}),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(FILE_NAME);
+            let stored = json!({
+                "ui_language": bad,
+                "dictation_mode": "hold",
+                "emblem_size": 120,
+                "subtitles": "ja",
+                "appearance": "dark",
+                "onboarded": true,
+            });
+            std::fs::write(&path, stored.to_string()).unwrap();
+
+            let loaded = DeviceSettings::load(&path);
+            assert_eq!(
+                serde_json::to_value(&loaded).unwrap()["ui_language"],
+                "zh-TW"
+            );
+            assert_eq!(loaded.dictation_mode, DictationMode::Hold, "{bad}");
+            assert_eq!(loaded.emblem_size, 120, "{bad}");
+            assert_eq!(loaded.subtitles, Subtitles::Ja, "{bad}");
+            assert_eq!(loaded.appearance, Appearance::Dark, "{bad}");
+            assert!(loaded.onboarded, "{bad}");
+            assert!(path.exists(), "{bad}: the file is not set aside");
+            assert!(!dir.path().join("device.json.bad").exists(), "{bad}");
+            assert_eq!(
+                serde_json::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap(),
+                stored,
+                "{bad}: loading does not rewrite the file"
+            );
+        }
     }
 
     #[test]

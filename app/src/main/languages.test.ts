@@ -79,10 +79,11 @@ describe("names", () => {
     expect(DEFAULT_LANGUAGES).toEqual(["zh-TW"]);
   });
 
-  test("the button shows each chosen language as a chip, escaped", () => {
+  test("the variant button is separate from UI language, with an escaped accessible summary", () => {
     const html = languageButtonHTML(GROUPS, ["zh-TW", "x-1"], ' data-k="languages"');
     expect(html).toContain('data-k="languages"');
-    expect(html).toContain('<span class="lchip">繁體中文（台灣）</span>');
+    expect(html).toContain("選擇語言變體");
+    expect(html).not.toContain('class="lchip"');
     expect(html).toContain("&lt;i&gt;one&lt;/i&gt;");
     expect(html).not.toContain("<i>one</i>");
     expect(languageLabel(GROUPS, ["zh-TW", "ja-JP"])).toBe("語言：繁體中文（台灣）、日本語");
@@ -100,7 +101,7 @@ describe("the panel", () => {
     expect(open).toContain('data-group="zh" aria-expanded="true"');
     expect(open).toContain('data-lang="zh-HK" aria-pressed="true"');
     expect(open).toContain('data-lang="zh-TW" aria-pressed="false"');
-    expect(open).toContain("粵語");
+    expect(open).toContain("香港用語，例如 軟件、數據");
     expect(open).toContain('data-lang="ja-JP" aria-pressed="true"');
   });
 

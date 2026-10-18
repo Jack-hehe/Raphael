@@ -2,6 +2,8 @@
 // how many words were dictated that day. Days the history no longer knows (before the first day it
 // has, or pruned by the retention) are hatched; days still to come in this week are outlines.
 
+import { t } from "./i18n";
+
 import { formatCount, longDate } from "./stats";
 import type { StatsSummary } from "./types";
 import { esc } from "./ui";
@@ -80,14 +82,14 @@ export function monthLabels(weeks: Cell[][]): { column: number; text: string }[]
     const month = Number(column[0].date.slice(5, 7));
     if (month !== last) {
       // a month that starts in the last days of the first column is named from the next one
-      if (k > 0 || Number(column[0].date.slice(8, 10)) <= 7) labels.push({ column: k, text: `${month} 月` });
+      if (k > 0 || Number(column[0].date.slice(8, 10)) <= 7) labels.push({ column: k, text: t("heatmap.001", { p0: month }) });
       last = month;
     }
   });
   return labels;
 }
 
-const DAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"];
+const DAY_NAMES = () => [t("heatmap.002"), t("heatmap.003"), t("heatmap.004"), t("heatmap.005"), t("heatmap.006"), t("heatmap.007"), t("heatmap.008")];
 export const CELL = 13;
 export const GAP = 3;
 const PITCH = CELL + GAP;
@@ -107,8 +109,8 @@ export function heatmapSVG(grid: Grid): string {
   const active = days.filter((c) => c.dictations > 0).length;
   const label =
     weeks.length > 0
-      ? `${longDate(weeks[0][0].date)}到${longDate(weeks[weeks.length - 1][6].date)}，有 ${active} 天聽寫，共 ${formatCount(words)} 字`
-      : "沒有資料";
+      ? t("heatmap.009", { p0: longDate(weeks[0][0].date), p1: longDate(weeks[weeks.length - 1][6].date), p2: active, p3: formatCount(words) })
+      : t("heatmap.010");
   const cells = weeks
     .map((column, w) =>
       column
@@ -117,13 +119,13 @@ export function heatmapSVG(grid: Grid): string {
           const y = d * PITCH;
           const cls = typeof c.state === "number" ? `h${c.state}` : c.state;
           const tip =
-            c.state === "future" ? "" : c.state === "nodata" ? `${longDate(c.date)}：沒有紀錄` : `${longDate(c.date)}：${formatCount(c.words)} 字`;
+            c.state === "future" ? "" : c.state === "nodata" ? t("heatmap.011", { p0: longDate(c.date) }) : t("heatmap.012", { p0: longDate(c.date), p1: formatCount(c.words) });
           return `<rect class="${cls}" x="${x}" y="${y}" width="${CELL}" height="${CELL}" rx="3">${tip ? `<title>${esc(tip)}</title>` : ""}</rect>`;
         })
         .join(""),
     )
     .join("");
-  const rows = DAY_NAMES.map((name, d) =>
+  const rows = DAY_NAMES().map((name, d) =>
     d % 2 === 1 ? `<text class="ax" x="0" y="${d * PITCH + CELL - 2}">${name}</text>` : "",
   ).join("");
   const months = monthLabels(weeks)

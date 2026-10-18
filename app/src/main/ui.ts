@@ -2,6 +2,8 @@
 // buttons, menus and toasts. The functions that make HTML take HTML for `t`, `d`, `ctl`, `rows`
 // and `foot`: whatever a person or the core wrote goes through `esc` first.
 
+import { onLocaleChange, t, translatedMessage } from "./i18n";
+
 import type { Notifier } from "./undo";
 
 // ---------- HTML ----------
@@ -36,6 +38,7 @@ const ICON = {
   left: "M10 3.8 5.8 8l4.2 4.2",
   right: "M6 3.8 10.2 8 6 12.2",
   user: "M8 2.6a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2zM3 13.4c.6-2.4 2.6-3.8 5-3.8s4.4 1.4 5 3.8",
+  refresh: "M13 6.5A5.2 5.2 0 0 0 3.4 4.3L2 6M2 2.8V6h3.2M3 9.5a5.2 5.2 0 0 0 9.6 2.2L14 10M10.8 10H14v3.2",
 } as const;
 
 export type IconName = keyof typeof ICON;
@@ -313,6 +316,18 @@ const infoMs = (message: string): number => Math.min(8000, 2000 + 100 * message.
 class Toaster implements Notifier {
   private host: HTMLElement | null = null;
   private undoToast: HTMLElement | null = null;
+  private messages = new Map<HTMLElement, () => string>();
+
+  constructor() {
+    onLocaleChange(() => {
+      for (const [toast, message] of this.messages) {
+        if (!toast.isConnected) { this.messages.delete(toast); continue; }
+        toast.querySelector("span")!.textContent = message();
+        const undo = toast.querySelector("button");
+        if (undo) undo.textContent = t("ui.001");
+      }
+    });
+  }
 
   private container(): HTMLElement {
     if (!this.host) {
@@ -329,15 +344,16 @@ class Toaster implements Notifier {
     toast.className = "toast";
     toast.setAttribute("role", "status");
     const text = document.createElement("span");
+    this.messages.set(toast, translatedMessage(message));
     text.textContent = message;
     toast.append(text);
     if (undo) {
       this.undoToast?.remove();
       this.undoToast = toast;
-      toast.insertAdjacentHTML("beforeend", btn("復原", "quiet"));
+      toast.insertAdjacentHTML("beforeend", btn(t("ui.001"), "quiet"));
       toast.querySelector("button")?.addEventListener("click", undo);
     } else {
-      setTimeout(() => toast.remove(), infoMs(message));
+      setTimeout(() => { toast.remove(); this.messages.delete(toast); }, infoMs(message));
     }
     this.container().append(toast);
   }
@@ -349,6 +365,7 @@ class Toaster implements Notifier {
 
   /** Takes the toast with 「復原」 away. */
   hide(): void {
+    if (this.undoToast) this.messages.delete(this.undoToast);
     this.undoToast?.remove();
     this.undoToast = null;
   }
@@ -375,5 +392,5 @@ export async function copyText(text: string): Promise<void> {
   area.select();
   const copied = document.execCommand("copy");
   area.remove();
-  if (!copied) throw new Error("無法複製到剪貼簿");
+  if (!copied) throw new Error(t("ui.002"));
 }

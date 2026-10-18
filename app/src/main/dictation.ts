@@ -5,6 +5,8 @@
 //   hold    hold the key while talking, let go to stop and transcribe
 // The texts are plain: a page escapes them where it puts them into HTML.
 
+import { t } from "./i18n";
+
 import type { DeviceSettings } from "./types";
 import type { Choice } from "./ui";
 
@@ -15,8 +17,8 @@ export const DEFAULT_DICTATION_MODE: DictationMode = "toggle";
 
 /** The menu of the settings page: a short name, and what the mode does under it. */
 export const DICTATION_MODES: Choice[] = [
-  { value: "toggle", label: "按一下開始／結束", desc: modeDescription("toggle") },
-  { value: "hold", label: "按住說話", desc: modeDescription("hold") },
+  { value: "toggle", get label() { return t("dictation.001"); }, get desc() { return modeDescription("toggle"); } },
+  { value: "hold", get label() { return t("dictation.002"); }, get desc() { return modeDescription("hold"); } },
 ];
 
 export function isDictationMode(value: unknown): value is DictationMode {
@@ -25,26 +27,26 @@ export function isDictationMode(value: unknown): value is DictationMode {
 
 /** The line under 「聽寫方式」 in the settings: what the chosen mode does with the speech. */
 export function modeDescription(mode: DictationMode): string {
-  return mode === "toggle" ? "按一下開始聽，再按一下就轉成文字並貼上" : "按住時聽，放開就轉成文字並貼上";
+  return mode === "toggle" ? t("dictation.003") : t("dictation.004");
 }
 
 /** The home page's hint, after the keys. */
 export function homeHint(mode: DictationMode): string {
-  return mode === "toggle" ? "按一下開始說話，再按一下就貼上" : "按住說話，放開就貼上";
+  return mode === "toggle" ? t("dictation.005") : t("dictation.006");
 }
 
 /** The empty history's line; `key` is the name of the dictation key. */
 export function historyEmptyHint(mode: DictationMode, key: string): string {
-  return mode === "toggle" ? `按一下${key} 開始說話，結果會出現在這裡。` : `按住${key} 說話，結果會出現在這裡。`;
+  return mode === "toggle" ? t("dictation.007", { p0: key }) : t("dictation.008", { p0: key });
 }
 
 /** The first-run guide's step 4, above the try box; `keys` names the dictation keys. */
 export function tryBoxText(mode: DictationMode, keys: string): string {
-  const how = mode === "toggle" ? `按一下${keys} 開始說話，再按一下就會貼上整理好的文字。` : `按住${keys} 說話，放開就會貼上整理好的文字。`;
-  return `把游標放在下面的框裡，${how}之後在任何程式裡都一樣。`;
+  const how = mode === "toggle" ? t("dictation.009", { p0: keys }) : t("dictation.010", { p0: keys });
+  return t("dictation.011", { p0: how });
 }
 
 /** The first-run guide's key line: what the dictation keys do, next to the keys. */
 export function keylineAction(mode: DictationMode): string {
-  return mode === "toggle" ? "按一下開始聽寫，再按一下結束" : "按住聽寫，放開結束";
+  return mode === "toggle" ? t("dictation.012") : t("dictation.013");
 }
