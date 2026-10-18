@@ -17,10 +17,16 @@ test("formatUsd", () => {
   expect(formatUsd(0)).toBe("US$0.00");
 });
 
-test("formatUsd rounds to cents", () => {
+test("formatUsd rounds to cents from a cent up", () => {
   expect(formatUsd(17.2)).toBe("US$17.20");
-  expect(formatUsd(0.004)).toBe("US$0.00");
+  expect(formatUsd(0.01)).toBe("US$0.01");
   expect(formatUsd(10)).toBe("US$10.00");
+});
+
+test("formatUsd shows small amounts to a hundredth of a cent", () => {
+  expect(formatUsd(0.0037418)).toBe("US$0.0037");
+  expect(formatUsd(0.004)).toBe("US$0.0040");
+  expect(formatUsd(0.42)).toBe("US$0.42");
 });
 
 test("formatClock is the local time of day", () => {

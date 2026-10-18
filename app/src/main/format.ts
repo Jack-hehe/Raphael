@@ -2,8 +2,10 @@
 
 const pad = (n: number): string => String(n).padStart(2, "0");
 
-/** `3.42` -> `US$3.42` */
+/** `3.42` -> `US$3.42`. Under a cent shows four decimals, so a month of a few dictations
+ * (`0.0037`) does not read as nothing spent. */
 export function formatUsd(n: number): string {
+  if (n > 0 && n < 0.01) return `US$${n.toFixed(4)}`;
   return `US$${n.toFixed(2)}`;
 }
 
