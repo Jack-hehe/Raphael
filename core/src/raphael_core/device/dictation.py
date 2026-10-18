@@ -58,6 +58,12 @@ SAMPLE_RATE = 16_000
 MAX_RECORDING_SECONDS = 300
 # Less speech than this is a cough or a tap, not a dictation.
 MIN_SPEECH_SECONDS = 0.3
+# A recording whose loudest block (root-mean-square amplitude, 1.0 being full scale) stayed below
+# this, about -50 dBFS, has picked up no sound: the microphone is muted or asleep (a wireless
+# headset's delivered about 1.5e-5), and speech is far above it. If nothing came of the recording
+# either, the result of `dictation.stop` says `silent`, so the app can tell the user to check the
+# microphone instead of leaving them to wonder why nothing was pasted.
+SILENT_PEAK = 0.003
 # Windows MME may never tell us that a microphone was unplugged: the frames just stop. A recording
 # that gets no frames for this long is treated like one whose recorder reported an error.
 MIC_STALL_SECONDS = 2.0
@@ -151,6 +157,7 @@ class _Session:
         self.closed = False  # the recorder is closed: late frames are dropped
         self.levels_on = True
         self.received = 0
+        self.peak = 0.0  # the loudest block so far, as an RMS amplitude (audio.rms)
         self.max_samples = max_samples
         self.capped = False
         self.last_frame_at = now
@@ -228,6 +235,7 @@ class DictationService:
         # Only here, not at import: audio.py brings in sherpa-onnx and PortAudio.
         from raphael_core.device import audio
 
+        self._rms = audio.rms
         self._rms_level = audio.rms_level
         self._no_microphone = audio.NoMicrophoneError
         self._router = router
@@ -374,6 +382,7 @@ class DictationService:
             if room > 0:
                 frames = frames[:room]
                 session.received += frames.size
+                session.peak = max(session.peak, self._rms(frames))
             keep = room > 0
             send_level = (
                 keep and session.levels_on and now - session.last_level_at >= self._level_interval
@@ -576,6 +585,16 @@ class DictationService:
             if mic_failed:
                 reason = session.recorder.error or "no sound for %g s" % self._stall_seconds
                 raise RpcError(NO_MICROPHONE, f"The microphone stopped working: {reason}")
+            # Nothing to paste. If the microphone also delivered no sound at all, the app says so.
+            # A recording with no blocks at all (stopped before the first one came) has no sound
+            # to judge, and is not blamed on the microphone.
+            with session.lock:
+                received, peak = session.received, session.peak
+            silent = received > 0 and peak < SILENT_PEAK
+            if silent:
+                logger.info(
+                    "The microphone picked up no sound: the loudest block was %.1e (RMS)", peak
+                )
             return {
                 "id": None,
                 "text": "",
@@ -585,6 +604,7 @@ class DictationService:
                 "llm_ms": 0,
                 "audio_seconds": speech,
                 "stt_ms": stt_ms,
+                "silent": silent,
             }
         if mic_failed:
             logger.warning("The microphone stopped during the recording; using what was captured")
@@ -597,7 +617,7 @@ class DictationService:
                 "target_app": target_app,
             },
         )
-        return {**result, "audio_seconds": speech, "stt_ms": stt_ms}
+        return {**result, "audio_seconds": speech, "stt_ms": stt_ms, "silent": False}
 
     # --- dictation.cancel -----------------------------------------------------------------------
 

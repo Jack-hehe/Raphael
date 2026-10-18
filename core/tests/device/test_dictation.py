@@ -21,6 +21,7 @@ from raphael_core.device.audio import NoMicrophoneError
 from raphael_core.device.dictation import (
     MAX_RECORDING_SECONDS,
     MIC_STALL_SECONDS,
+    SILENT_PEAK,
     DictationService,
     join_segments,
 )
@@ -518,6 +519,137 @@ async def test_text_that_comes_out_empty_skips_the_brain(rig, router, brain):
     r = await stop(router)
     assert r["text"] == "" and r["fallback_reason"] == "empty" and brain.finalize_calls == 0
     assert r["audio_seconds"] == pytest.approx(2.0)
+
+
+# --- a microphone that picks up no sound ---------------------------------------------------------
+
+# What a muted or sleeping wireless headset delivered: RMS about 1.5e-5, peak 3e-5, for 20 s.
+DEAD_MIC = 1.5e-5
+
+
+def test_the_silence_threshold_is_about_minus_50_dbfs():
+    assert SILENT_PEAK == 0.003
+
+
+async def test_a_dead_microphone_is_reported_silent(rig, router, brain):
+    rig.segmenter.emit_nothing = True  # the detector hears no speech in it, as it should not
+    rig.recorder.chunks = [chunk(1.0, DEAD_MIC)] * 3
+    await start(router)
+    await rig.recorder.fed(3)
+    r = await stop(router)
+    assert r["text"] == "" and r["fallback_reason"] == "empty" and brain.finalize_calls == 0
+    assert r["silent"] is True
+
+
+async def test_near_silence_that_the_engine_turns_into_nothing_is_reported_silent(
+    rig, router, brain
+):
+    # a detector that lets the hiss through to the engine, which finds no words in it
+    rig.engine.texts = ["", ""]
+    rig.recorder.chunks = [chunk(1.0, DEAD_MIC)] * 2
+    await start(router)
+    await rig.recorder.fed(2)
+    r = await stop(router)
+    assert r["text"] == "" and brain.finalize_calls == 0
+    assert r["silent"] is True
+
+
+async def test_sound_that_holds_no_speech_is_not_reported_silent(rig, router, brain):
+    rig.segmenter.emit_nothing = True  # the detector finds no speech in a room's noise
+    rig.recorder.chunks = [chunk(1.0, 0.05)] * 2
+    await start(router)
+    await rig.recorder.fed(2)
+    r = await stop(router)
+    assert r["text"] == "" and r["fallback_reason"] == "empty" and brain.finalize_calls == 0
+    assert r["silent"] is False
+
+
+async def test_sound_whose_text_comes_out_empty_is_not_reported_silent(rig, router, brain):
+    rig.engine.texts = ["", "  "]
+    rig.recorder.chunks = [chunk(1.0)] * 2
+    await start(router)
+    await rig.recorder.fed(2)
+    r = await stop(router)
+    assert r["text"] == "" and brain.finalize_calls == 0
+    assert r["silent"] is False
+
+
+async def test_a_tap_on_the_desk_is_not_reported_silent(rig, router, brain):
+    rig.recorder.chunks = [chunk(0.29)]  # under MIN_SPEECH_SECONDS, but there is sound
+    rig.engine.texts = ["嗯"]
+    await start(router)
+    await rig.recorder.fed(1)
+    r = await stop(router)
+    assert r["text"] == "" and r["fallback_reason"] == "empty"
+    assert r["silent"] is False
+
+
+async def test_a_dictation_with_text_is_not_silent(rig, router, brain):
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    r = await stop(router)
+    assert r["text"] == "text0" and r["silent"] is False
+
+
+async def test_text_from_a_quiet_voice_is_not_silent(rig, router, brain):
+    # not empty, so never silent, whatever the level (the engine heard words)
+    rig.recorder.chunks = [chunk(1.0, DEAD_MIC)]
+    await start(router)
+    await rig.recorder.fed(1)
+    r = await stop(router)
+    assert r["text"] == "text0" and r["silent"] is False
+
+
+async def test_the_session_peak_decides_not_the_average(rig, router, brain):
+    # two seconds of nothing around one 20 ms block of real sound
+    rig.segmenter.emit_nothing = True
+    rig.recorder.chunks = [chunk(1.0, DEAD_MIC), chunk(0.02, 0.05), chunk(1.0, DEAD_MIC)]
+    await start(router)
+    await rig.recorder.fed(3)
+    r = await stop(router)
+    assert r["text"] == "" and r["silent"] is False
+
+
+async def test_the_silence_threshold_is_where_it_says(rig, router, brain):
+    rig.segmenter.emit_nothing = True
+    for level, silent in [(SILENT_PEAK * 0.9, True), (SILENT_PEAK * 1.1, False)]:
+        rig.recorder.chunks = [chunk(0.5, level)]
+        await start(router)
+        await rig.recorder.fed(1)
+        r = await stop(router)
+        assert r["silent"] is silent, level
+
+
+async def test_the_peak_is_kept_per_dictation(rig, router, brain):
+    rig.segmenter.emit_nothing = True
+    rig.recorder.chunks = [chunk(0.5, 0.1)]
+    await start(router, "s1")
+    await rig.recorder.fed(1)
+    assert (await stop(router, "s1"))["silent"] is False
+    rig.recorder.chunks = [chunk(0.5, DEAD_MIC)]
+    await start(router, "s2")
+    await rig.recorder.fed(1)
+    assert (await stop(router, "s2"))["silent"] is True
+
+
+async def test_a_recording_that_got_no_frames_at_all_is_not_called_silent(rig, router, brain):
+    # a stop right after the start, before the first block: nothing to judge, so no blame
+    rig.segmenter.emit_nothing = True
+    await start(router)
+    r = await stop(router)
+    assert r["text"] == "" and r["fallback_reason"] == "empty"
+    assert r["silent"] is False
+
+
+async def test_the_tail_the_recorder_delivers_at_stop_counts_for_the_peak(rig, router, brain):
+    rig.segmenter.emit_nothing = True
+    rig.recorder.chunks = [chunk(0.5, DEAD_MIC)]
+    rig.recorder.tail = chunk(0.02, 0.05)
+    await start(router)
+    await rig.recorder.fed(1)
+    r = await stop(router)
+    assert r["silent"] is False
 
 
 # --- starting and stopping -----------------------------------------------------------------------

@@ -381,8 +381,19 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             };
             let text = reply.get("text").and_then(Value::as_str).unwrap_or("");
             if text.is_empty() {
-                log::info!("the dictation has no text; nothing to paste");
-                this.finish(&id, |this| this.overlay.hide());
+                // Nothing to paste. If the microphone also delivered no sound, say so, every
+                // time: the person would otherwise think the app is broken.
+                let silent = reply
+                    .get("silent")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if silent {
+                    log::info!("the dictation has no text and the microphone was silent");
+                    this.finish(&id, |this| this.show(notices::NO_SOUND));
+                } else {
+                    log::info!("the dictation has no text; nothing to paste");
+                    this.finish(&id, |this| this.overlay.hide());
+                }
                 return;
             }
             let reason = reply
@@ -904,7 +915,7 @@ mod tests {
     use crate::device_settings::DeviceSettings;
     use crate::hotkey::{CancelSwitch, HotkeyEvent};
     use crate::notices::{
-        CORE_DOWN, ELEVATED, FOCUS_CHANGED, LAST_COPIED, NO_MIC, NOT_READY, OFFLINE,
+        CORE_DOWN, ELEVATED, FOCUS_CHANGED, LAST_COPIED, NO_MIC, NO_SOUND, NOT_READY, OFFLINE,
     };
     use crate::overlay::{Mode, OverlayApi};
     use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
@@ -1578,6 +1589,144 @@ mod tests {
         assert!(c.paster().delivered().is_empty());
         assert_eq!(c.overlay().events().last().unwrap(), "hide");
         assert_eq!(c.phase(), Phase::Idle);
+    }
+
+    // ---------- a microphone that picked up no sound ----------
+
+    fn empty_result(silent: bool) -> Value {
+        json!({"id": null, "text": "", "fallback_reason": "empty", "silent": silent})
+    }
+
+    #[tokio::test]
+    async fn empty_and_silent_result_shows_the_no_sound_notice() {
+        let c = controller(
+            FakeCore::with("dictation.stop", empty_result(true)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        assert!(c.paster().delivered().is_empty());
+        assert_eq!(
+            c.overlay().events(),
+            vec![
+                "show:listening".to_owned(),
+                "mode:thinking".to_owned(),
+                notice(NO_SOUND.zh)
+            ],
+            "no hide after the notice: it would cancel it"
+        );
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.cancel().last(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn empty_and_not_silent_result_just_hides() {
+        let c = controller(
+            FakeCore::with("dictation.stop", empty_result(false)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        assert!(c.paster().delivered().is_empty());
+        assert_eq!(
+            c.overlay().events(),
+            vec!["show:listening", "mode:thinking", "hide"]
+        );
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.cancel().last(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn a_silent_flag_that_is_not_a_boolean_is_not_silent() {
+        for silent in [json!(null), json!("true"), json!(1)] {
+            let c = controller(
+                FakeCore::with(
+                    "dictation.stop",
+                    json!({"id": null, "text": "", "fallback_reason": "empty", "silent": silent}),
+                ),
+                FakePaster::pasting("notepad.exe"),
+            );
+            run(&c, HotkeyEvent::DictationDown, 0).await;
+            run(&c, HotkeyEvent::DictationUp, 900).await;
+            assert_eq!(c.overlay().events().last().unwrap(), "hide", "{silent}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_no_sound_notice_is_shown_every_time() {
+        let c = controller(
+            FakeCore::with("dictation.stop", empty_result(true)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        for start in [0, 10_000] {
+            run(&c, HotkeyEvent::DictationDown, start).await;
+            run(&c, HotkeyEvent::DictationUp, start + 900).await;
+        }
+        let shown = c
+            .overlay()
+            .events()
+            .into_iter()
+            .filter(|event| *event == notice(NO_SOUND.zh))
+            .count();
+        assert_eq!(shown, 2);
+        assert_eq!(c.phase(), Phase::Idle);
+    }
+
+    #[tokio::test]
+    async fn the_no_sound_notice_works_in_toggle_mode_too() {
+        let c = toggle_controller(
+            FakeCore::with("dictation.stop", empty_result(true)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 100).await;
+        run(&c, HotkeyEvent::DictationDown, 3000).await;
+        ends_with_notice(&c, NO_SOUND.zh);
+        assert_eq!(c.phase(), Phase::Idle);
+    }
+
+    #[tokio::test]
+    async fn escape_while_processing_drops_a_late_silent_result() {
+        let (core, gate) =
+            FakeCore::with("dictation.stop", empty_result(true)).gated("dictation.stop");
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        let up = c
+            .on_hotkey(HotkeyEvent::DictationUp, 900)
+            .expect("the stop runs in a task");
+        tokio::task::yield_now().await;
+        run(&c, HotkeyEvent::Cancel, 1200).await;
+        assert_eq!(c.overlay().events().last().unwrap(), "hide");
+        let events_after_cancel = c.overlay().events();
+
+        gate.notify_one();
+        up.await.unwrap();
+        assert_eq!(c.overlay().events(), events_after_cancel, "no late notice");
+        assert_eq!(c.phase(), Phase::Idle);
+    }
+
+    #[tokio::test]
+    async fn a_late_silent_result_leaves_a_new_dictation_its_overlay() {
+        let (core, gate) =
+            FakeCore::with("dictation.stop", empty_result(true)).gated("dictation.stop");
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        let up = c
+            .on_hotkey(HotkeyEvent::DictationUp, 900)
+            .expect("the stop runs in a task");
+        tokio::task::yield_now().await;
+        // Esc, then a new press: the new recording is the current session, the old stop is stale
+        run(&c, HotkeyEvent::Cancel, 1000).await;
+        run(&c, HotkeyEvent::DictationDown, 1500).await;
+        assert_eq!(c.phase(), Phase::Recording);
+
+        gate.notify_one();
+        up.await.unwrap();
+        assert!(
+            !c.overlay().events().contains(&notice(NO_SOUND.zh)),
+            "the old dictation's notice must not wipe the new one's emblem"
+        );
+        assert_eq!(c.phase(), Phase::Recording);
     }
 
     #[tokio::test]

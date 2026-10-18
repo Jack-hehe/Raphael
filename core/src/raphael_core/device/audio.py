@@ -73,6 +73,13 @@ class Recorder(Protocol):
     def stop(self) -> None: ...
 
 
+def rms(frames: np.ndarray) -> float:
+    """The root-mean-square amplitude of `frames` (1.0 is full scale); 0 for no samples."""
+    if frames.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(np.square(frames, dtype=np.float64))))
+
+
 def rms_level(frames: np.ndarray) -> float:
     """How loud `frames` are, from 0 (quiet) to 1 (loud), for the ring that shows the level.
 
@@ -81,8 +88,7 @@ def rms_level(frames: np.ndarray) -> float:
     """
     if frames.size == 0:
         return 0.0
-    rms = float(np.sqrt(np.mean(np.square(frames, dtype=np.float64))))
-    level = (20 * math.log10(rms + 1e-8) - _QUIET_DB) / (_LOUD_DB - _QUIET_DB)
+    level = (20 * math.log10(rms(frames) + 1e-8) - _QUIET_DB) / (_LOUD_DB - _QUIET_DB)
     return min(max(level, 0.0), 1.0)
 
 

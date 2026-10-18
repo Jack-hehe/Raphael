@@ -25,6 +25,7 @@ from raphael_core.device.audio import (
     WavRecorder,
     list_input_devices,
     resample_block,
+    rms,
     rms_level,
 )
 
@@ -66,6 +67,19 @@ def test_rms_level_of_no_samples_is_zero():
 
 def test_rms_level_is_a_plain_float():
     assert type(rms_level(np.full(160, 0.01, np.float32))) is float
+
+
+def test_rms_is_the_root_mean_square_amplitude():
+    assert rms(np.zeros(1600, np.float32)) == 0.0
+    assert rms(np.full(1600, 0.25, np.float32)) == pytest.approx(0.25)
+    assert rms(np.array([0.3, -0.3, 0.3, -0.3], np.float32)) == pytest.approx(0.3)
+    # a muted wireless headset's hiss: about -96 dBFS
+    assert rms(np.full(1600, 1.5e-5, np.float32)) == pytest.approx(1.5e-5)
+
+
+def test_rms_of_no_samples_is_zero_and_a_plain_float():
+    assert rms(np.zeros(0, np.float32)) == 0.0
+    assert type(rms(np.full(160, 0.01, np.float32))) is float
 
 
 def test_resample_48k_to_16k():

@@ -44,6 +44,13 @@ pub const NO_MIC: Notice = Notice {
     ja: "《否。マイクが見つかりません。》",
 };
 
+/// The microphone is there but delivered no sound (muted, or a wireless headset asleep), and
+/// nothing came of the recording (`silent` in the result of `dictation.stop`).
+pub const NO_SOUND: Notice = Notice {
+    zh: "《否。沒有收到聲音，請檢查麥克風。》",
+    ja: "《否。音声が届いていません。マイクを確認してください。》",
+};
+
 /// The tray's 「貼上上一次聽寫」: the menu took the focus, so the text is only copied.
 pub const LAST_COPIED: Notice = Notice {
     zh: "《告。上一次的聽寫已複製。請按 Ctrl+V 貼上。》",
@@ -104,6 +111,7 @@ mod tests {
             OFFLINE,
             NO_KEY,
             NO_MIC,
+            NO_SOUND,
             LAST_COPIED,
             NOT_READY,
             CORE_DOWN,
