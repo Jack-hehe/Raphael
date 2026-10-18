@@ -1,4 +1,4 @@
-//! What the user corrected in a pasted dictation: pure logic, no Windows.
+//! What the user corrected in a pasted dictation, with pure rules over character origins.
 //!
 //! [`Tracker`] starts from the field's text right after the paste, finds the pasted text in it,
 //! and follows the field from snapshot to snapshot. Between two snapshots (half a second apart)
@@ -271,6 +271,32 @@ impl Tracker {
     /// case only, a change across a line break, or digits and punctuation alone. None at all when
     /// the edits change more than 30% of the pasted text: that is a rewrite, not a correction.
     pub fn corrections(&self) -> Vec<Correction> {
+        // The OS adapter is optional. All alignment and acceptance rules below also work with
+        // injected scalar ranges; a failed provider preserves the original conservative rules.
+        let needs_words = self
+            .edits_in_span()
+            .iter()
+            .any(|edit| self.single_han_replacement(edit));
+        let ranges = needs_words.then(|| {
+            let before: String = self.before.iter().collect();
+            let current: String = self.current.iter().collect();
+            Some((
+                super::cjk_words::word_ranges(&before)?,
+                super::cjk_words::word_ranges(&current)?,
+            ))
+        });
+        match ranges.flatten() {
+            Some((before, current)) => self.corrections_with_word_ranges(&before, &current),
+            None => self.corrections_with_word_ranges(&[], &[]),
+        }
+    }
+
+    /// Pure correction rules with optional, nonoverlapping word ranges in scalar indexes.
+    pub(crate) fn corrections_with_word_ranges(
+        &self,
+        before_words: &[Range<usize>],
+        current_words: &[Range<usize>],
+    ) -> Vec<Correction> {
         let edits = self.edits_in_span();
         // How much of the pasted text was changed: what was replaced or deleted, and for an
         // insertion what was inserted (before words are made whole: "Open Router" joined into
@@ -289,8 +315,13 @@ impl Tracker {
             return Vec::new();
         }
         self.whole_words(edits)
-            .iter()
+            .into_iter()
             .filter_map(|edit| {
+                let edit = if self.single_han_replacement(&edit) {
+                    self.whole_han_word(edit, before_words, current_words)?
+                } else {
+                    edit
+                };
                 let misheard = trimmed(&self.before[edit.old.clone()]);
                 let word = trimmed(&self.current[edit.new.clone()]);
                 is_correction(&misheard, &word).then_some(Correction { word, misheard })
@@ -298,6 +329,153 @@ impl Tracker {
             .take(MAX_CORRECTIONS)
             .collect()
     }
+
+    fn single_han_replacement(&self, edit: &Edit) -> bool {
+        edit.old.len() == 1
+            && edit.new.len() == 1
+            && is_han(self.before[edit.old.start])
+            && is_han(self.current[edit.new.start])
+    }
+
+    fn whole_han_word(
+        &self,
+        mut edit: Edit,
+        before_words: &[Range<usize>],
+        current_words: &[Range<usize>],
+    ) -> Option<Edit> {
+        if !valid_word_ranges(before_words, self.before.len())
+            || !valid_word_ranges(current_words, self.current.len())
+        {
+            return None;
+        }
+        let word = current_words
+            .iter()
+            .find(|word| word.start <= edit.new.start && edit.new.end <= word.end)?;
+        if !(2..=MAX_CJK).contains(&word.len())
+            || !self.current[word.clone()].iter().copied().all(is_han)
+            || is_common_grammar_word(&self.current[word.clone()])
+        {
+            return None;
+        }
+        while edit.new.start > word.start {
+            if edit.old.start <= self.span.start
+                || self.origin[edit.new.start - 1] != Some(edit.old.start - 1)
+            {
+                return None;
+            }
+            edit.old.start -= 1;
+            edit.new.start -= 1;
+        }
+        while edit.new.end < word.end {
+            if edit.old.end >= self.span.end || self.origin[edit.new.end] != Some(edit.old.end) {
+                return None;
+            }
+            edit.old.end += 1;
+            edit.new.end += 1;
+        }
+        // Both original edges must be real word boundaries. If the original was already one
+        // complete multi-character word, this could be a meaning/style edit, so do not alias it.
+        let starts_word = before_words.iter().any(|word| word.start == edit.old.start);
+        let ends_word = before_words.iter().any(|word| word.end == edit.old.end);
+        let was_word = before_words
+            .iter()
+            .any(|word| word.start <= edit.old.start && edit.old.end <= word.end && word.len() > 1);
+        (starts_word && ends_word && !was_word).then_some(edit)
+    }
+}
+
+fn valid_word_ranges(words: &[Range<usize>], text_len: usize) -> bool {
+    !words.is_empty()
+        && words
+            .iter()
+            .all(|word| word.start < word.end && word.end <= text_len)
+        && words.windows(2).all(|pair| pair[0].end <= pair[1].start)
+}
+
+/// These common grammar/stance/time words are conservative exclusions, not a POS or semantic
+/// classifier. Word boundaries alone cannot prove that an edit is a misheard name or noun.
+fn is_common_grammar_word(chars: &[char]) -> bool {
+    matches!(
+        chars.iter().collect::<String>().as_str(),
+        "已經"
+            | "已经"
+            | "已是"
+            | "一直"
+            | "一起"
+            | "一些"
+            | "一樣"
+            | "一样"
+            | "因為"
+            | "因为"
+            | "所以"
+            | "但是"
+            | "可是"
+            | "如果"
+            | "雖然"
+            | "虽然"
+            | "就是"
+            | "只是"
+            | "還是"
+            | "还是"
+            | "不是"
+            | "不要"
+            | "不能"
+            | "不會"
+            | "不会"
+            | "不再"
+            | "沒有"
+            | "没有"
+            | "可以"
+            | "可能"
+            | "能夠"
+            | "能够"
+            | "應該"
+            | "应该"
+            | "需要"
+            | "自己"
+            | "我們"
+            | "我们"
+            | "你們"
+            | "你们"
+            | "他們"
+            | "他们"
+            | "她們"
+            | "她们"
+            | "這個"
+            | "这个"
+            | "那個"
+            | "那个"
+            | "這些"
+            | "这些"
+            | "那些"
+            | "什麼"
+            | "什么"
+            | "怎麼"
+            | "怎么"
+            | "為什麼"
+            | "为什么"
+            | "如何"
+            | "感覺"
+            | "感觉"
+            | "感到"
+            | "覺得"
+            | "觉得"
+            | "記得"
+            | "记得"
+            | "今年"
+            | "明年"
+            | "今天"
+            | "明天"
+            | "昨天"
+    )
+}
+
+fn is_han(character: char) -> bool {
+    matches!(character,
+        '\u{3400}'..='\u{4DBF}'
+        | '\u{4E00}'..='\u{9FFF}'
+        | '\u{F900}'..='\u{FAFF}'
+        | '\u{20000}'..='\u{2FFFF}')
 }
 
 /// The text without whitespace and punctuation at its ends.
@@ -370,7 +548,7 @@ mod tests {
             tracker = tracker.advanced(text);
         }
         tracker
-            .corrections()
+            .corrections_with_word_ranges(&[], &[])
             .into_iter()
             .map(|c| (c.misheard, c.word))
             .collect()
@@ -433,6 +611,255 @@ mod tests {
     }
 
     // ---------- CJK ----------
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs the Windows zh-TW word breaker"]
+    fn windows_word_boundaries_learn_phone_and_name() {
+        let learned = |pasted: &str, from: &str, to: &str| {
+            Tracker::new(pasted, pasted)
+                .unwrap()
+                .advanced(&pasted.replacen(from, to, 1))
+                .corrections()
+                .into_iter()
+                .map(|correction| (correction.misheard, correction.word))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(learned(PASTED, "首機", "手機"), pairs(&[("首機", "手機")]));
+        let pasted = "我今天使用拉菲爾整理會議紀錄，整體操作很流暢，明天也會繼續使用";
+        assert_eq!(
+            learned(pasted, "拉菲爾", "拉斐爾"),
+            pairs(&[("拉菲爾", "拉斐爾")])
+        );
+        let pasted = "😀今天帶著首機去開會\n下午再一起確認新的工作安排";
+        assert_eq!(learned(pasted, "首機", "手機"), pairs(&[("首機", "手機")]));
+        for (from, to) in [
+            ("房子", "孩子"),
+            ("台北", "臺北"),
+            ("可能", "可以"),
+            ("感覺", "感到"),
+            ("以經", "已經"),
+            ("可已", "可以"),
+            ("敢覺", "感覺"),
+            ("阿咪咕", "阿米咕"),
+        ] {
+            let pasted = format!("今天討論{from}的相關內容，下午還會繼續確認其他細節");
+            assert!(
+                learned(&pasted, from, to).is_empty(),
+                "{from} must not alias {to}"
+            );
+        }
+        for (field, pasted) in [
+            (
+                "手雞已放在桌上，下午再拿去開會",
+                "雞已放在桌上，下午再拿去開會",
+            ),
+            ("今天開會之前請先帶著首機", "今天開會之前請先帶著首"),
+        ] {
+            let current = field.replace("手雞", "手機").replace("首機", "手機");
+            assert!(
+                Tracker::new(field, pasted)
+                    .unwrap()
+                    .advanced(&current)
+                    .corrections()
+                    .is_empty()
+            );
+        }
+    }
+
+    fn word_range(text: &str, word: &str) -> Range<usize> {
+        let byte = text.find(word).expect("fixture word is present");
+        let start = text[..byte].chars().count();
+        start..start + word.chars().count()
+    }
+
+    fn with_han_word(pasted: &str, from: &str, to: &str) -> Vec<Correction> {
+        let current = pasted.replacen(from, to, 1);
+        let old = word_range(pasted, from);
+        let fragments: Vec<_> = old.clone().map(|index| index..index + 1).collect();
+        Tracker::new(pasted, pasted)
+            .unwrap()
+            .advanced(&current)
+            .corrections_with_word_ranges(&fragments, &[word_range(&current, to)])
+    }
+
+    #[test]
+    fn one_han_edit_uses_the_complete_injected_word() {
+        assert_eq!(
+            with_han_word(PASTED, "首機", "手機"),
+            vec![Correction {
+                word: "手機".into(),
+                misheard: "首機".into()
+            }]
+        );
+        let pasted = "今天使用拉菲爾整理文件，明天也會繼續使用這個工具";
+        assert_eq!(
+            with_han_word(pasted, "拉菲爾", "拉斐爾"),
+            vec![Correction {
+                word: "拉斐爾".into(),
+                misheard: "拉菲爾".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn scalar_word_ranges_remain_correct_after_emoji_and_newlines() {
+        let pasted = "😀今天帶著首機去開會\n下午再一起確認新的工作安排";
+        assert_eq!(
+            with_han_word(pasted, "首機", "手機"),
+            vec![Correction {
+                word: "手機".into(),
+                misheard: "首機".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_word_that_was_already_complete_is_not_aliased() {
+        for (from, to) in [
+            ("房子", "孩子"),
+            ("台北", "臺北"),
+            ("可能", "可以"),
+            ("感覺", "感到"),
+        ] {
+            let pasted = format!("今天討論{from}的相關內容，下午還會繼續確認其他細節");
+            let current = pasted.replacen(from, to, 1);
+            let tracker = Tracker::new(&pasted, &pasted).unwrap().advanced(&current);
+            assert!(
+                tracker
+                    .corrections_with_word_ranges(
+                        &[word_range(&pasted, from)],
+                        &[word_range(&current, to)]
+                    )
+                    .is_empty(),
+                "{from} must not become an alias of {to}"
+            );
+        }
+    }
+
+    #[test]
+    fn grammar_words_are_excluded_even_when_the_old_spelling_was_fragmented() {
+        for (from, to) in [
+            ("以經", "已經"),
+            ("可已", "可以"),
+            ("可熊", "可能"),
+            ("敢覺", "感覺"),
+            ("感倒", "感到"),
+            ("今夭", "今天"),
+        ] {
+            let pasted = format!("今天討論{from}的相關內容，下午還會繼續確認其他細節");
+            assert!(
+                with_han_word(&pasted, from, to).is_empty(),
+                "{to} is a grammar exclusion"
+            );
+        }
+    }
+
+    #[test]
+    fn word_expansion_stops_at_both_pasted_edges() {
+        let before = "手雞已放在桌上，下午再拿去開會";
+        let current = before.replace("手雞", "手機");
+        let tracker = Tracker::new(before, "雞已放在桌上，下午再拿去開會")
+            .unwrap()
+            .advanced(&current);
+        assert!(
+            tracker
+                .corrections_with_word_ranges(&[0..1, 1..2], std::slice::from_ref(&(0..2)))
+                .is_empty()
+        );
+
+        let before = "今天開會之前請先帶著首機";
+        let current = before.replace("首機", "手機");
+        let tracker = Tracker::new(before, "今天開會之前請先帶著首")
+            .unwrap()
+            .advanced(&current);
+        let old = word_range(before, "首機");
+        let fragments: Vec<_> = old.map(|index| index..index + 1).collect();
+        assert!(
+            tracker
+                .corrections_with_word_ranges(&fragments, &[word_range(&current, "手機")])
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn only_unchanged_origin_characters_can_complete_a_han_word() {
+        let pasted = "今天使用拉菲小耳整理文件，明天也會繼續使用這個工具";
+        let first = pasted.replace('菲', "斐");
+        let current = first.replace('耳', "爾");
+        let tracker = Tracker::new(pasted, pasted)
+            .unwrap()
+            .advanced(&first)
+            .advanced(&current);
+        let fragments: Vec<_> = word_range(pasted, "拉菲小耳")
+            .map(|index| index..index + 1)
+            .collect();
+        assert!(
+            tracker
+                .corrections_with_word_ranges(&fragments, &[word_range(&current, "拉斐小爾")])
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn missing_invalid_or_overlapping_ranges_fail_closed() {
+        let current = PASTED.replace("首機", "手機");
+        let tracker = Tracker::new(PASTED, PASTED).unwrap().advanced(&current);
+        for (before, after) in [
+            (vec![], std::slice::from_ref(&(9..11)).to_vec()),
+            (vec![9..10, 10..11], vec![]),
+            (
+                vec![9..10, 10..11],
+                std::slice::from_ref(&(9..1000)).to_vec(),
+            ),
+            (vec![9..10, 10..11], vec![9..10, 9..11]),
+            (
+                vec![9..10, 10..1000],
+                std::slice::from_ref(&(9..11)).to_vec(),
+            ),
+            (vec![9..11, 10..11], std::slice::from_ref(&(9..11)).to_vec()),
+        ] {
+            assert!(
+                tracker
+                    .corrections_with_word_ranges(&before, &after)
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn partial_original_word_edges_are_not_expanded() {
+        let current = PASTED.replace("首機", "手機");
+        let tracker = Tracker::new(PASTED, PASTED).unwrap().advanced(&current);
+        assert!(
+            tracker
+                .corrections_with_word_ranges(&[8..10, 10..11], std::slice::from_ref(&(9..11)))
+                .is_empty()
+        );
+        assert!(
+            tracker
+                .corrections_with_word_ranges(&[9..10, 10..12], std::slice::from_ref(&(9..11)))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn han_expansion_does_not_override_the_rewrite_or_script_guards() {
+        assert!(with_han_word("首機", "首機", "手機").is_empty());
+        let mixed = "今天帶著首a機去開會，下午再一起確認新的工作安排";
+        assert!(with_han_word(mixed, "首a機", "手a機").is_empty());
+        let kana = "今天帶著カ機去開會，下午再一起確認新的工作安排";
+        assert!(with_han_word(kana, "カ機", "手機").is_empty());
+        let long = "今天使用首一二三四五六七八九十甲乙處理資料，明天也會繼續確認其他細節";
+        assert!(
+            with_han_word(
+                long,
+                "首一二三四五六七八九十甲乙",
+                "手一二三四五六七八九十甲乙"
+            )
+            .is_empty()
+        );
+    }
 
     #[test]
     fn a_word_selected_and_retyped_is_learned_whole() {

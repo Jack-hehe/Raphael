@@ -43,6 +43,7 @@ windows-core = "0.62"
 # pasting (clipboard, focus), the core process (Job Object) and learning from corrections (UI
 # Automation, COM).
 windows = { version = "0.62", features = [
+  "Data_Text",
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_Security",
@@ -54,6 +55,7 @@ windows = { version = "0.62", features = [
   "Win32_System_Ole",
   "Win32_System_Threading",
   "Win32_System_Variant",
+  "Win32_System_WinRT",
   "Win32_UI_Accessibility",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",

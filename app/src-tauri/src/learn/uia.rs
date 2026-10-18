@@ -1,17 +1,23 @@
 //! Paste-scoped UIA reads, terminal regions, and an opt-in ASCII keyboard fallback.
 //! The focused element and its edit/document ancestors are the only text sources queried.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use handy_keys::{
     EditCancellation, EditEvent, EditObservation, observe_edits, observe_submissions,
 };
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{E_INVALIDARG, E_POINTER, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
+    SAFEARRAY,
 };
+use windows::Win32::System::Ole::{
+    SafeArrayDestroy, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetElemsize,
+    SafeArrayGetLBound, SafeArrayGetUBound, SafeArrayGetVartype,
+};
+use windows::Win32::System::Variant::VT_I4;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationCacheRequest, IUIAutomationElement,
     IUIAutomationFocusChangedEventHandler, IUIAutomationFocusChangedEventHandler_Impl,
@@ -120,7 +126,23 @@ impl FieldProbe for UiaProbe {
         if foreground() != target.hwnd || !scope.active() {
             return probe_step(None, "target_changed_after_discovery");
         }
-        let focus = Arc::new(FocusWatch::default());
+        let metadata = focus_element_metadata(&focused, target.pid);
+        log::info!(
+            "learn: initial focus metadata (role: {:?}, has_keyboard_focus: {:?}, target_process: {:?})",
+            metadata.role,
+            metadata.has_keyboard_focus,
+            metadata.target_process
+        );
+        let identity = runtime_id(&focused);
+        log::info!(
+            "learn: focus identity (available: {}, hresult: {:?})",
+            identity.is_ok(),
+            identity
+                .as_ref()
+                .err()
+                .map(|error| format!("0x{:08X}", error.code().0 as u32))
+        );
+        let focus = Arc::new(FocusWatch::new(identity.ok(), target.pid, target.hwnd));
         let handler: IUIAutomationFocusChangedEventHandler = FocusChanged(focus.clone()).into();
         // Plain fields can still be polled without events. Terminals require a submission guard.
         let subscribed = unsafe {
@@ -152,12 +174,16 @@ impl FieldProbe for UiaProbe {
                 failure.declared_password,
                 failure.hresult.map(|code| format!("0x{:08X}", code as u32))
             );
+            field.log_failed_focus_snapshot();
             return None;
         }
         if kind == AppKind::Terminal {
             // Screen text cannot prove whether a command has already been submitted. Cover the
             // discovery window too, before accepting any initial terminal text.
-            if !subscribed || !field.paste_input_is_current() {
+            if !subscribed
+                || !field.paste_input_is_current()
+                || !field.focus.input_observation_allowed()
+            {
                 return probe_step(None, "terminal_checkpoint_or_subscription");
             }
             field.set_observation(observe_submissions(
@@ -178,6 +204,7 @@ impl FieldProbe for UiaProbe {
                 && matches!(field.mode, ReadMode::Pending)
                 && keyboard_field
                 && field.keys.is_some()
+                && field.focus.input_observation_allowed()
                 && field
                     .scope
                     .input
@@ -579,10 +606,8 @@ impl WatchedField for UiaField {
 
 impl UiaField {
     fn set_observation(&mut self, observation: Option<EditObservation>) {
-        if let Some(observation) = &observation {
-            self.focus.attach(observation.cancellation());
-        }
-        self.observation = observation;
+        self.observation =
+            observation.filter(|observation| self.focus.attach(observation.cancellation()));
     }
 
     fn paste_input_is_current(&self) -> bool {
@@ -656,6 +681,39 @@ impl UiaField {
         self.check_focus().is_ok()
     }
 
+    /// Only the initial failed probe reads this metadata; it never changes cancellation state.
+    fn log_failed_focus_snapshot(&self) {
+        let now = match unsafe { self.automation.GetFocusedElement() } {
+            Ok(now) => now,
+            Err(error) => {
+                log::info!(
+                    "learn: failed focus snapshot (focused_element: false, hresult: 0x{:08X})",
+                    error.code().0 as u32
+                );
+                return;
+            }
+        };
+        let metadata = focus_element_metadata(&now, self.focus.target_pid);
+        let same_element = unsafe { self.automation.CompareElements(&now, &self.focused) }
+            .map(|same| same.as_bool())
+            .map_err(|error| error.code().0);
+        let same_runtime_id = runtime_id(&now)
+            .map(|current| {
+                self.focus
+                    .runtime_id
+                    .as_ref()
+                    .filter(|original| !original.is_empty())
+                    .map(|original| original == &current)
+            })
+            .map_err(|error| error.code().0);
+        log::info!(
+            "learn: failed focus snapshot (focused_element: true, role: {:?}, has_keyboard_focus: {:?}, target_process: {:?}, same_element: {same_element:?}, same_runtime_id: {same_runtime_id:?})",
+            metadata.role,
+            metadata.has_keyboard_focus,
+            metadata.target_process
+        );
+    }
+
     /// Preserve the original short-circuit order before and after the provider calls.
     fn focus_guard(&self, final_recheck: bool) -> Result<(), FocusFailure> {
         let reason = if !self.scope.active() {
@@ -720,30 +778,160 @@ impl Drop for UiaField {
     }
 }
 
+/// Read numeric and Boolean properties only, including provider HRESULTs on failure.
+struct FocusElementMetadata {
+    role: Result<i32, i32>,
+    has_keyboard_focus: Result<bool, i32>,
+    target_process: Result<bool, i32>,
+}
+
+fn focus_element_metadata(element: &IUIAutomationElement, target_pid: u32) -> FocusElementMetadata {
+    // SAFETY: the reference stays on its current apartment/callback thread.
+    unsafe {
+        FocusElementMetadata {
+            role: element
+                .CurrentControlType()
+                .map(|role| role.0)
+                .map_err(|error| error.code().0),
+            has_keyboard_focus: element
+                .CurrentHasKeyboardFocus()
+                .map(|focused| focused.as_bool())
+                .map_err(|error| error.code().0),
+            target_process: element
+                .CurrentProcessId()
+                .map(|pid| pid as u32 == target_pid)
+                .map_err(|error| error.code().0),
+        }
+    }
+}
+
+/// UIA returns caller-owned arrays; copy only integer values before crossing callback threads.
+fn runtime_id(element: &IUIAutomationElement) -> windows::core::Result<Vec<i32>> {
+    // SAFETY: this COM reference is used only on its current apartment/callback thread.
+    let array = unsafe { element.GetRuntimeId() }?;
+    // SAFETY: GetRuntimeId transfers ownership of its returned SAFEARRAY to the caller.
+    unsafe { copy_owned_runtime_id(array) }
+}
+
+struct RuntimeIdArray(*mut SAFEARRAY);
+
+impl Drop for RuntimeIdArray {
+    fn drop(&mut self) {
+        // SAFETY: the array is owned here and SafeArrayGetElement leaves no locks outstanding.
+        unsafe {
+            drop(SafeArrayDestroy(self.0));
+        }
+    }
+}
+
+/// Takes ownership of a valid, nullable SAFEARRAY returned by UIA; never interprets ID values.
+///
+/// # Safety
+/// A non-null pointer must identify a live, exclusively owned SAFEARRAY.
+unsafe fn copy_owned_runtime_id(array: *mut SAFEARRAY) -> windows::core::Result<Vec<i32>> {
+    if array.is_null() {
+        return Err(windows::core::Error::from_hresult(E_POINTER));
+    }
+    let _owned = RuntimeIdArray(array);
+    // Microsoft requires clients to destroy received arrays and recommends GetElement:
+    // https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-workingwithsafearrays
+    // SAFETY: validate the shape, VARTYPE and element width before copying into i32 storage.
+    unsafe {
+        if SafeArrayGetDim(array) != 1
+            || SafeArrayGetVartype(array)? != VT_I4
+            || SafeArrayGetElemsize(array) != std::mem::size_of::<i32>() as u32
+        {
+            return Err(windows::core::Error::from_hresult(E_INVALIDARG));
+        }
+        let lower = SafeArrayGetLBound(array, 1)?;
+        let upper = SafeArrayGetUBound(array, 1)?;
+        let count = i64::from(upper) - i64::from(lower) + 1;
+        // Bound metadata allocation; an empty or unexpectedly large identity remains unknown.
+        if !(1..=128).contains(&count) {
+            return Err(windows::core::Error::from_hresult(E_INVALIDARG));
+        }
+        let mut identity = Vec::with_capacity(count as usize);
+        for index in lower..=upper {
+            let mut value = 0_i32;
+            SafeArrayGetElement(array, &index, (&mut value as *mut i32).cast())?;
+            identity.push(value);
+        }
+        Ok(identity)
+    }
+}
+
 /// A focus subscription can cancel only the observation attached to this watch.
 #[derive(Default)]
 struct FocusWatch {
+    runtime_id: Option<Vec<i32>>,
+    target_pid: u32,
+    hwnd: isize,
     left: AtomicBool,
+    input_blocked: AtomicBool,
     cancellation: Mutex<Option<EditCancellation>>,
+    event_reports: AtomicUsize,
 }
 
 impl FocusWatch {
-    fn attach(&self, cancellation: EditCancellation) {
+    fn new(runtime_id: Option<Vec<i32>>, target_pid: u32, hwnd: isize) -> Self {
+        Self {
+            runtime_id,
+            target_pid,
+            hwnd,
+            ..Self::default()
+        }
+    }
+
+    fn changed_from(
+        &self,
+        sender_runtime_id: Option<&[i32]>,
+        has_keyboard_focus: Option<bool>,
+        foreground_matches: bool,
+    ) -> Option<bool> {
+        let same = self
+            .runtime_id
+            .as_deref()
+            .filter(|identity| !identity.is_empty())
+            .zip(sender_runtime_id.filter(|identity| !identity.is_empty()))
+            .map(|(original, sender)| original == sender);
+        if !foreground_matches || same.is_none() || has_keyboard_focus.is_none() {
+            self.changed();
+        } else if has_keyboard_focus == Some(false) {
+            // A stale sender must not poison field reads, but cannot vouch for an input gap.
+            self.block_input_observation();
+        } else if same != Some(true) {
+            self.changed();
+        }
+        same
+    }
+
+    fn input_observation_allowed(&self) -> bool {
+        !self.left.load(Ordering::SeqCst) && !self.input_blocked.load(Ordering::SeqCst)
+    }
+
+    fn attach(&self, cancellation: EditCancellation) -> bool {
         let mut slot = self
             .cancellation
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if self.left.load(Ordering::SeqCst) {
+        if !self.input_observation_allowed() {
             // A focus event may arrive before observation arming has finished.
             drop(slot);
             cancellation.cancel();
+            false
         } else {
             *slot = Some(cancellation);
+            true
         }
     }
 
     fn changed(&self) {
         self.left.store(true, Ordering::SeqCst);
+        self.block_input_observation();
+    }
+
+    fn block_input_observation(&self) {
+        self.input_blocked.store(true, Ordering::SeqCst);
         let cancellation = self
             .cancellation
             .lock()
@@ -761,9 +949,39 @@ struct FocusChanged(Arc<FocusWatch>);
 impl IUIAutomationFocusChangedEventHandler_Impl for FocusChanged_Impl {
     fn HandleFocusChangedEvent(
         &self,
-        _sender: Ref<IUIAutomationElement>,
+        sender: Ref<IUIAutomationElement>,
     ) -> windows::core::Result<()> {
-        self.0.changed();
+        let identity = sender.as_ref().map(runtime_id);
+        let has_keyboard_focus = sender.as_ref().map(|element| {
+            unsafe { element.CurrentHasKeyboardFocus() }
+                .map(|focused| focused.as_bool())
+                .map_err(|error| error.code().0)
+        });
+        let foreground_matches = foreground() == self.0.hwnd;
+        let same = self.0.changed_from(
+            identity.as_ref().and_then(|result| result.as_deref().ok()),
+            has_keyboard_focus.and_then(Result::ok),
+            foreground_matches,
+        );
+        // A small per-watch cap keeps repeated provider notifications from spamming the log.
+        if self.0.event_reports.fetch_add(1, Ordering::Relaxed) < 3 {
+            let metadata = sender
+                .as_ref()
+                .map(|element| focus_element_metadata(element, self.0.target_pid));
+            log::info!(
+                "learn: focus event (sender_present: {}, same_runtime_id: {same:?}, hresult: {:?}, role: {:?}, has_keyboard_focus: {:?}, target_process: {:?}, foreground_matches: {foreground_matches}, input_blocked: {}, field_left: {})",
+                identity.is_some(),
+                identity
+                    .as_ref()
+                    .and_then(|result| result.as_ref().err())
+                    .map(|error| format!("0x{:08X}", error.code().0 as u32)),
+                metadata.as_ref().map(|metadata| metadata.role),
+                has_keyboard_focus,
+                metadata.as_ref().map(|metadata| metadata.target_process),
+                self.0.input_blocked.load(Ordering::SeqCst),
+                self.0.left.load(Ordering::SeqCst)
+            );
+        }
         Ok(())
     }
 }
@@ -806,6 +1024,219 @@ fn checked_read<S, T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_focus_events_for_the_same_runtime_id_do_not_cancel() {
+        let original = vec![42, 7, 19];
+        let focus = FocusWatch::new(Some(original.clone()), 0, 11);
+        for _ in 0..3 {
+            focus.changed_from(Some(&original), Some(true), true);
+            assert!(!focus.left.load(Ordering::SeqCst));
+        }
+    }
+
+    #[test]
+    fn different_or_unknown_focus_runtime_ids_cancel_immediately() {
+        for (original, sender) in [
+            (Some(vec![42, 7, 19]), Some(vec![42, 7, 20])),
+            (Some(vec![42, 7, 19]), None),
+            (None, Some(vec![42, 7, 19])),
+            (None, None),
+            (Some(vec![42, 7, 19]), Some(Vec::new())),
+            (Some(Vec::new()), Some(Vec::new())),
+        ] {
+            let focus = FocusWatch::new(original, 0, 11);
+            focus.changed_from(sender.as_deref(), Some(true), true);
+            assert!(focus.left.load(Ordering::SeqCst));
+        }
+    }
+
+    #[test]
+    fn a_matching_focus_event_never_revives_a_cancelled_watch() {
+        let original = vec![42, 7, 19];
+        let focus = FocusWatch::new(Some(original.clone()), 0, 11);
+        focus.changed_from(Some(&[42, 7, 20]), Some(true), true);
+        focus.changed_from(Some(&original), Some(true), true);
+        assert!(focus.left.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn unfocused_background_event_preserves_field_and_blocks_input_observation() {
+        let original = vec![42, 7, 19];
+        let focus = FocusWatch::new(Some(original.clone()), 0, 11);
+        focus.changed_from(Some(&[42, 7, 20]), Some(false), true);
+        assert!(!focus.left.load(Ordering::SeqCst));
+        assert!(focus.input_blocked.load(Ordering::SeqCst));
+        assert!(!focus.input_observation_allowed());
+        // A later duplicate cannot re-arm keyboard capture for the same watch.
+        focus.changed_from(Some(&original), Some(true), true);
+        assert!(!focus.left.load(Ordering::SeqCst));
+        assert!(!focus.input_observation_allowed());
+    }
+
+    #[test]
+    fn focus_events_fail_closed_when_foreground_or_sender_focus_is_unknown() {
+        let original = vec![42, 7, 19];
+        for (sender, has_keyboard_focus, foreground_matches) in [
+            (Some(original.clone()), Some(true), false),
+            (Some(vec![42, 7, 20]), Some(false), false),
+            (Some(original.clone()), None, true),
+            (Some(vec![42, 7, 20]), None, true),
+            (None, Some(false), true),
+        ] {
+            let focus = FocusWatch::new(Some(original.clone()), 0, 11);
+            focus.changed_from(sender.as_deref(), has_keyboard_focus, foreground_matches);
+            assert!(focus.left.load(Ordering::SeqCst));
+        }
+    }
+
+    #[test]
+    fn runtime_id_arrays_copy_integer_values_with_checked_native_bounds() {
+        use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayPutElement};
+
+        let values = [42_i32, 7, 19];
+        for lower in [-3, 0, 5] {
+            // SAFETY: these test-owned arrays use the same integer element type as UIA IDs.
+            unsafe {
+                let array = SafeArrayCreateVector(VT_I4, lower, values.len() as u32);
+                assert!(!array.is_null());
+                let owned = RuntimeIdArray(array);
+                for (offset, value) in values.iter().enumerate() {
+                    let index = lower + offset as i32;
+                    SafeArrayPutElement(array, &index, (value as *const i32).cast()).unwrap();
+                }
+                // Transfer exactly one ownership obligation to the production copier.
+                std::mem::forget(owned);
+                let copied = copy_owned_runtime_id(array).unwrap();
+                assert!(copied == values);
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_id_arrays_reject_null_empty_wrong_type_and_wrong_dimensions() {
+        use windows::Win32::System::Com::SAFEARRAYBOUND;
+        use windows::Win32::System::Ole::{SafeArrayCreate, SafeArrayCreateVector};
+        use windows::Win32::System::Variant::VT_UI4;
+
+        // SAFETY: every non-null array is newly allocated and consumed exactly once.
+        unsafe {
+            assert!(copy_owned_runtime_id(std::ptr::null_mut()).is_err());
+            for (kind, count) in [(VT_I4, 0), (VT_UI4, 3), (VT_I4, 129)] {
+                let array = SafeArrayCreateVector(kind, 0, count);
+                assert!(!array.is_null());
+                assert!(copy_owned_runtime_id(array).is_err());
+            }
+            let bounds = [
+                SAFEARRAYBOUND {
+                    cElements: 2,
+                    lLbound: 0,
+                },
+                SAFEARRAYBOUND {
+                    cElements: 2,
+                    lLbound: 0,
+                },
+            ];
+            let array = SafeArrayCreate(VT_I4, 2, bounds.as_ptr());
+            assert!(!array.is_null());
+            assert!(copy_owned_runtime_id(array).is_err());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an explicitly prepared non-sensitive foreground field"]
+    fn native_read_only_foreground_probe() {
+        use crate::paste::{Paster, WindowsPaster};
+
+        let pasted = match std::env::var("RAPHAEL_NATIVE_PROBE_TEXT") {
+            Ok(text) => text,
+            Err(std::env::VarError::NotPresent) => {
+                eprintln!("native learn probe: result=skipped reason=fixture_missing");
+                return;
+            }
+            Err(std::env::VarError::NotUnicode(_)) => {
+                panic!("native learn probe: result=failed reason=fixture_not_unicode");
+            }
+        };
+        assert!(
+            !pasted.trim().is_empty(),
+            "native learn probe: result=failed reason=fixture_empty"
+        );
+
+        struct MetadataLogger;
+        impl log::Log for MetadataLogger {
+            fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+                metadata.target().ends_with("::learn::uia")
+            }
+
+            fn log(&self, record: &log::Record<'_>) {
+                if !self.enabled(record.metadata()) {
+                    return;
+                }
+                let message = record.args().to_string();
+                if message.starts_with("learn: probe stopped (stage:")
+                    || message.starts_with("learn: field probe (sources:")
+                    || message.starts_with("learn: focus identity (")
+                    || message.starts_with("learn: focus event (")
+                    || message.starts_with("learn: initial focus metadata (")
+                    || message.starts_with("learn: failed focus snapshot (")
+                {
+                    eprintln!("{message}");
+                }
+            }
+
+            fn flush(&self) {}
+        }
+        // This opt-in test runs alone; only fixed probe metadata reaches the terminal.
+        static LOGGER: MetadataLogger = MetadataLogger;
+        assert!(
+            log::set_logger(&LOGGER).is_ok(),
+            "native learn probe: result=failed reason=logger_already_installed; run this test alone"
+        );
+        log::set_max_level(log::LevelFilter::Info);
+
+        let target = WindowsPaster::new().foreground().unwrap_or_else(|| {
+            panic!("native learn probe: result=failed reason=foreground_unavailable")
+        });
+        eprintln!(
+            "native learn probe: phase=discovery target_kind={:?} elevated={} fixture_chars={}",
+            classify(&target.process_name),
+            target.is_elevated,
+            pasted.chars().count()
+        );
+        let scope = WatchScope {
+            deadline: Instant::now() + Duration::from_secs(60),
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            started: 0,
+            cancellation: super::super::CANCELLATION.load(Ordering::SeqCst),
+            input: None,
+        };
+        let mut field = UiaProbe
+            .after_paste(&target, &pasted, scope)
+            .unwrap_or_else(|| {
+                panic!(
+                    "native learn probe: result=failed phase=discovery; see fixed probe metadata above"
+                )
+            });
+        match field.read() {
+            Snapshot::Text(text) => {
+                let found = Tracker::new(&text, &pasted).is_some();
+                eprintln!(
+                    "native learn probe: phase=initial snapshot=text read_chars={} fixture_found={found}",
+                    text.chars().count()
+                );
+                assert!(
+                    found,
+                    "native learn probe: result=failed phase=initial reason=fixture_not_found"
+                );
+            }
+            Snapshot::Left => {
+                panic!("native learn probe: result=failed phase=initial reason=field_left");
+            }
+        }
+        drop(field);
+        eprintln!("native learn probe: result=passed");
+    }
 
     #[test]
     fn only_explicitly_non_password_fields_are_safe() {

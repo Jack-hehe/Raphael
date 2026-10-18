@@ -157,6 +157,6 @@ pub use platform::windows::listener::accept_injected_input;
 
 #[cfg(target_os = "windows")]
 pub use platform::windows::observation::{
-    cancel_edit_observations, input_checkpoint, observe_edits, observe_submissions, EditCancellation,
-    EditObservation, InputCheckpoint,
+    cancel_edit_observations, input_checkpoint, observe_edits, observe_submissions,
+    EditCancellation, EditObservation, InputCheckpoint,
 };
