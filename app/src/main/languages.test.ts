@@ -95,7 +95,7 @@ describe("the panel", () => {
     expect(closed).toContain('data-group="zh" aria-expanded="false"');
     expect(closed).not.toContain('data-lang="zh-TW"');
     expect(closed).toContain("已選 2／5");
-    expect(closed).toContain("選多個語言時會自動偵測");
+    expect(closed).toContain("會自動偵測你說的語言");
     const open = languagePanelHTML(GROUPS, ["zh-HK", "ja-JP"], "zh");
     expect(open).toContain('data-group="zh" aria-expanded="true"');
     expect(open).toContain('data-lang="zh-HK" aria-pressed="true"');
@@ -115,6 +115,17 @@ describe("the panel", () => {
     expect(html).toContain("&lt;b&gt;x&lt;/b&gt;");
     expect(html).not.toContain("<b>x</b>");
     expect(html).not.toContain("<i>one</i>");
+  });
+
+  test("languages with variants come first; the single ones follow under 其他語言", () => {
+    const html = languagePanelHTML(GROUPS, ["zh-TW"], null);
+    const zh = html.indexOf('data-group="zh"');
+    const others = html.indexOf("其他語言");
+    const ja = html.indexOf('data-lang="ja-JP"');
+    expect(zh).toBeGreaterThan(-1);
+    expect(others).toBeGreaterThan(zh);
+    expect(ja).toBeGreaterThan(others);
+    expect(html).not.toContain('data-group="ja"');
   });
 
   test("without a list it says so", () => {

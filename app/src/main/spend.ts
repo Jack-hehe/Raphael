@@ -20,3 +20,13 @@ export function spendVisual(month: number, limit: number): string {
     `<span class="val num">${esc(formatUsd(month))} / ${esc(formatLimit(limit))}</span></div>`
   );
 }
+
+/** The small version for the sidebar: a thin bar and the amounts, without the explanation. */
+export function spendMini(month: number, limit: number): string {
+  const used = spentShare(month, limit);
+  const width = (Math.min(1, Math.max(0, used)) * 100).toFixed(1);
+  return (
+    `<div class="bar thin"><i class="${used >= WARN_FROM ? "warn" : ""}" style="width:${width}%"></i></div>` +
+    `<div class="usage-num num">${esc(formatUsd(month))} / ${esc(formatLimit(limit))}</div>`
+  );
+}

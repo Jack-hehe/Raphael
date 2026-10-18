@@ -1,5 +1,5 @@
-// Settings: one page, only what matters (spec §12.3). A change takes effect at once; there is no
-// save button. The settings of the brain (limit, model, language, speech-to-text, retention) go to
+// Settings: a panel over the main window with two parts, 設定 and 關於 (spec §12.3). A change
+// takes effect at once; there is no save button. The settings of the brain (limit, model, language, speech-to-text, retention) go to
 // the core with `settings.set`; the settings of this computer (hotkeys, microphone, emblem, theme,
 // autostart) go to the Rust side with `device_settings_set`.
 
@@ -7,10 +7,8 @@ import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
 import { DICTATION_MODES, isDictationMode, modeDescription } from "../dictation";
 import {
-  KEEP_FOREVER_DAYS,
   describeError,
   formatClock,
-  formatRetention,
   formatUsd,
   keyReasonText,
   parseLimit,
@@ -19,7 +17,7 @@ import { wireKeyField } from "../keyfield";
 import {
   AUTO_DETECT_HINT,
   type LanguageGroup,
-  MAX_LANGUAGES,
+  groupOf,
   languageButtonHTML,
   languageChipsHTML,
   languageLabel,
@@ -35,11 +33,13 @@ import { WARN_FROM, spendVisual, spentShare } from "../spend";
 import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, Page, Pricing, Status } from "../types";
 import {
   type Choice,
+  type IconName,
   btn,
   closeMenu,
   esc,
   fieldHTML,
-  group,
+  ico,
+  iconBtn,
   keys,
   menuIsOpenFor,
   meter,
@@ -90,12 +90,6 @@ const SIZES: Choice[] = [
   { value: "150", label: "中", desc: "150 px，預設大小" },
   { value: "194", label: "跟動畫一樣大", desc: "194 px，看得到最多細節" },
 ];
-/** At least a day (the core only checks that it is a number); "keep" is a hundred years. */
-const RETENTIONS: Choice[] = [1, 7, 30, 365, KEEP_FOREVER_DAYS].map((days) => ({
-  value: String(days),
-  label: formatRetention(days),
-}));
-
 const AUTO_MICROPHONE = "";
 
 /** What the prices in the cleanup model's menu are. */
@@ -117,9 +111,20 @@ function withCurrent(choices: Choice[], current: string, label: (value: string) 
 
 export function createSettings(app: AppContext): Page {
   const el = document.createElement("div");
-  el.className = "page";
+  el.className = "modal-scrim";
   el.dataset.page = "settings";
   el.hidden = true;
+  el.innerHTML =
+    `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="set-title">` +
+    `<nav class="modal-nav" aria-label="設定的分頁">` +
+    `<button type="button" class="nav" data-pane="settings" aria-current="page">${ico("gear")}<span>設定</span></button>` +
+    `<button type="button" class="nav" data-pane="about" aria-current="false">${ico("info")}<span>關於</span></button>` +
+    `</nav>` +
+    `<div class="modal-body"></div>` +
+    `${iconBtn("x", "關閉", ' data-act="close"').replace('class="icon-btn"', 'class="icon-btn modal-x"')}` +
+    `</div>`;
+  const body = el.querySelector<HTMLElement>(".modal-body")!;
+  let pane: "settings" | "about" = "settings";
 
   let brain: BrainSettings | null = null;
   let hasKey = false;
@@ -221,14 +226,6 @@ export function createSettings(app: AppContext): Page {
           current: d.subtitles,
           pick: (v) => void changeDevice({ subtitles: v as DeviceSettings["subtitles"] }),
         };
-      case "retention": {
-        const current = String(brain?.history_retention_days ?? 30);
-        return {
-          choices: withCurrent(RETENTIONS, current, (days) => formatRetention(Number(days))),
-          current,
-          pick: (v) => void changeBrain("history_retention_days", Number(v)),
-        };
-      }
       default:
         return null;
     }
@@ -360,104 +357,109 @@ export function createSettings(app: AppContext): Page {
     return [row("本月花費", month >= limit ? st("warn", forecast) : esc(forecast), spendVisual(month, limit))];
   }
 
-  function render(): void {
-    const focused = (document.activeElement as HTMLElement | null)?.dataset?.k;
-    // A menu that is open stays open when the page is drawn again (a status that came in, say).
-    const openK = Array.from(el.querySelectorAll<HTMLElement>(".sel")).find(menuIsOpenFor)?.dataset.k;
+  /** A section of the settings: an icon and a title, then its rows. */
+  const section = (icon: IconName, title: string, rows: string[], foot = ""): string =>
+    `<section class="sgroup"><h2>${ico(icon)}${esc(title)}</h2><div class="slist">${rows.join("")}</div>` +
+    (foot ? `<p class="foot">${foot}</p>` : "") +
+    `</section>`;
+
+  /** The button whose menu or panel is open, by what the page calls it. */
+  function openAnchorKey(): string | undefined {
+    const anchor = Array.from(el.querySelectorAll<HTMLElement>(".sel, [data-act='variants']")).find(menuIsOpenFor);
+    return anchor ? (anchor.dataset.k ?? "variants") : undefined;
+  }
+
+  function settingsHTML(): string {
     const d = app.device();
     const usesAltRight = d.dictation_keys.some((binding) => binding.split("+").includes("AltRight"));
     const limit = brain?.monthly_limit_usd ?? 10;
     const limitShown = limitDraft ?? String(limit);
-    const retention = String(brain?.history_retention_days ?? 30);
-
-    el.innerHTML =
-      `<h1>設定</h1>` +
+    return (
+      `<h1 id="set-title" tabindex="-1">設定</h1>` +
       (brain === null ? `<p class="lede">${st("err", "Raphael 的核心沒有回應，有些設定暫時無法使用")}</p>` : "") +
-      group(
-        "聽寫",
-        [
-          row(
-            "快捷鍵",
-            "聽寫到一半按 Esc 可以取消",
-            d.dictation_keys.map((binding) => keys(bindingLabels(binding))).join('<span class="val">或</span>') +
-              btn("變更", "quiet", ' data-act="rec"'),
-            { attrs: ' data-row="hotkey"' },
-          ),
-          ...(altgr && usesAltRight ? [note(st("warn", "你的鍵盤配置把右 Alt 當 AltGr 用，建議換一個快捷鍵。"))] : []),
-          row("聽寫方式", esc(modeDescription(d.dictation_mode)), sel(DICTATION_MODES, d.dictation_mode, "聽寫方式", ' data-k="mode"')),
-          row("麥克風", "", meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, "麥克風", ' data-k="mic"')),
-          row(
-            "語言",
-            esc(`${AUTO_DETECT_HINT}，最多 ${MAX_LANGUAGES} 個`),
-            languageButtonHTML(languageGroups ?? [], languages(), ' data-k="languages"'),
-            { cls: "row-lang" },
-          ),
-        ],
-        "",
-        "panel",
-      ) +
-      group("語音轉文字與整理", modelRows(), priceSpan("note"), "panel") +
-      group(
-        "帳號與花費",
-        [
-          keyRow(),
-          ...(keyError ? [note(st("err", keyError))] : []),
-          ...connectionRow(),
-          ...spendRow(),
-          row(
-            "每月上限",
-            "到了就只聽寫、不整理",
-            fieldHTML("", limitShown, { w: 96, pre: "US$", label: "每月上限", num: true, id: "limit-input", invalid: limitError !== null }),
-          ),
-          ...(limitError ? [note(st("err", limitError))] : []),
-        ],
-        "",
-        "panel",
-      ) +
-      group(
-        "外觀",
-        [
-          row("主題", "", sel(APPEARANCES, d.appearance, "主題", ' data-k="appearance"')),
-          row("桌面圖案大小", "聽寫時出現在右下角的圖案", sel(SIZES, String(d.emblem_size), "桌面圖案大小", ' data-k="size"')),
-          row("字幕", "圖案旁邊的報告文字", sel(SUBTITLES, d.subtitles, "字幕", ' data-k="subtitles"')),
-        ],
-        "",
-        "panel",
-      ) +
-      group(
-        "一般",
-        [
-          row("開機時自動啟動", "", tg(d.autostart, "開機時自動啟動", ' data-k="autostart"')),
-          row(
-            "歷史紀錄保留",
-            "超過的紀錄會自動刪除",
-            sel(withCurrent(RETENTIONS, retention, (days) => formatRetention(Number(days))), retention, "歷史紀錄保留", ' data-k="retention"'),
-          ),
-        ],
-        "",
-        "panel",
-      ) +
-      group(
-        "關於",
-        [row("Raphael", esc(`版本 ${version}`), `<a href="#" class="link" data-act="license">開源授權</a>`)],
-        "粉絲自製，跟《關於我轉生變成史萊姆這檔事》的原作與動畫製作方無關；聲音模型和從動畫取樣的素材只限個人使用。",
-        "panel",
-      );
+      section("keyboard", "快捷鍵", [
+        row(
+          "聽寫",
+          "按下開始或停止聽寫",
+          d.dictation_keys.map((binding) => keys(bindingLabels(binding))).join('<span class="val">或</span>') +
+            btn("變更", "sm", ' data-act="rec"'),
+          { attrs: ' data-row="hotkey"' },
+        ),
+        ...(altgr && usesAltRight ? [note(st("warn", "你的鍵盤配置把右 Alt 當 AltGr 用，建議換一個快捷鍵。"))] : []),
+        row("聽寫方式", esc(modeDescription(d.dictation_mode)), sel(DICTATION_MODES, d.dictation_mode, "聽寫方式", ' data-k="mode"')),
+        ...(d.paste_last_keys.length
+          ? [row("貼上上一次", "再貼一次最近一次聽寫的結果", d.paste_last_keys.map((b) => keys(bindingLabels(b))).join('<span class="val">或</span>'))]
+          : []),
+        row("取消", "聽寫到一半按下，這次就不貼上", keys(["Esc"])),
+      ]) +
+      section("globe", "語言", [
+        row("語言", esc(AUTO_DETECT_HINT), languageButtonHTML(languageGroups ?? [], languages(), ' data-k="languages"'), {
+          cls: "row-lang",
+        }),
+        row("語言變體", "每種語言用哪種寫法，例如繁體或簡體、美式或英式拼法", btn("選擇語言變體", "", ' data-act="variants" aria-haspopup="dialog" aria-expanded="false"')),
+      ]) +
+      section("mic", "音訊", [
+        row("麥克風", "Raphael 用哪一支麥克風聽你說話", meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, "麥克風", ' data-k="mic"')),
+      ]) +
+      section("wave", "語音轉文字與整理", modelRows(), priceSpan("note")) +
+      section("wallet", "帳號與花費", [
+        keyRow(),
+        ...(keyError ? [note(st("err", keyError))] : []),
+        ...connectionRow(),
+        ...spendRow(),
+        row(
+          "每月上限",
+          "到了就只聽寫、不整理",
+          fieldHTML("", limitShown, { w: 96, pre: "US$", label: "每月上限", num: true, id: "limit-input", invalid: limitError !== null }),
+        ),
+        ...(limitError ? [note(st("err", limitError))] : []),
+      ]) +
+      section("laptop", "一般", [
+        row("主題", "淺色、深色，或跟著 Windows", sel(APPEARANCES, d.appearance, "主題", ' data-k="appearance"')),
+        row("桌面圖案大小", "聽寫時出現在右下角的圖案", sel(SIZES, String(d.emblem_size), "桌面圖案大小", ' data-k="size"')),
+        row("字幕", "圖案旁邊的報告文字", sel(SUBTITLES, d.subtitles, "字幕", ' data-k="subtitles"')),
+        row("開機時自動啟動", "電腦開機後 Raphael 就在背景待命", tg(d.autostart, "開機時自動啟動", ' data-k="autostart"')),
+      ])
+    );
+  }
+
+  function aboutHTML(): string {
+    return (
+      `<h1 id="set-title" tabindex="-1">關於</h1>` +
+      `<div class="slist about">` +
+      row("版本", esc(version || "0.1.0"), "") +
+      row("開源授權", "這個專案使用的授權", `<a href="#" class="link" data-act="license">查看</a>`) +
+      `</div>` +
+      `<p class="foot">粉絲自製，跟《關於我轉生變成史萊姆這檔事》的原作與動畫製作方無關；聲音模型和從動畫取樣的素材只限個人使用。</p>`
+    );
+  }
+
+  function render(): void {
+    const focused = (document.activeElement as HTMLElement | null)?.dataset?.k;
+    // A menu that is open stays open when the page is drawn again (a status that came in, say).
+    const openK = openAnchorKey();
+    const scroll = body.scrollTop;
+    body.innerHTML = pane === "settings" ? settingsHTML() : aboutHTML();
+    body.scrollTop = scroll;
+    el.querySelectorAll<HTMLElement>("[data-pane]").forEach((b) => b.setAttribute("aria-current", b.dataset.pane === pane ? "page" : "false"));
 
     if (focused) el.querySelector<HTMLElement>(`[data-k="${focused}"]`)?.focus();
     if (openK) {
-      const anchor = el.querySelector<HTMLElement>(`.sel[data-k="${openK}"]`);
+      const anchor = el.querySelector<HTMLElement>(openK === "variants" ? "[data-act='variants']" : `.sel[data-k="${openK}"]`);
       const menu = menuFor(openK);
-      if (anchor && openK === "languages") openLanguages(anchor, true);
+      if (anchor && (openK === "languages" || openK === "variants")) openLanguages(anchor, true);
       else if (anchor && menu) openMenu(anchor, menu.choices, menu.current, menu.pick, menu.head);
     }
   }
 
   // ---------- the languages ----------
 
-  /** Opens the language panel under its button. `keep`: the same group stays open (drawn again). */
+  /**
+   * Opens the language panel under its button. `keep`: the same group stays open (drawn again);
+   * else 「選擇語言變體」 opens on the first chosen language that has variants, and 語言 folded.
+   */
   function openLanguages(anchor: HTMLElement, keep = false): void {
-    if (!keep) openGroup = null;
+    if (!keep) openGroup = anchor.dataset.act === "variants" ? firstVariantGroup() : null;
     const panel = openPopover(anchor, languagePanelHTML(languageGroups, languages(), openGroup), {
       className: "menu lang-panel",
       role: "dialog",
@@ -477,6 +479,16 @@ export function createSettings(app: AppContext): Page {
     });
     panel.querySelector<HTMLElement>(".lang-item")?.focus();
     if (languageGroups === null) void loadLanguages();
+  }
+
+  /** The group of the first chosen language that has variants (中文 when none is chosen). */
+  function firstVariantGroup(): string | null {
+    const groups = languageGroups ?? [];
+    for (const id of languages()) {
+      const g = groupOf(groups, id);
+      if (g && g.variants.length > 1) return g.id;
+    }
+    return groups.find((g) => g.variants.length > 1)?.id ?? null;
   }
 
   /** In the panel: the right arrow shows a group's variants, the left arrow folds them away again. */
@@ -500,12 +512,13 @@ export function createSettings(app: AppContext): Page {
 
   /** Shows the chosen languages on the button, and in the panel if it is open (keeping the focus). */
   function paintLanguages(): void {
-    const anchor = el.querySelector<HTMLElement>('.sel[data-k="languages"]');
-    if (!anchor) return;
+    const chips = el.querySelector<HTMLElement>('.sel[data-k="languages"]');
+    if (!chips) return;
     const groups = languageGroups ?? [];
-    anchor.innerHTML = languageChipsHTML(groups, languages());
-    anchor.setAttribute("aria-label", languageLabel(groups, languages()));
-    if (!languagePanel || !menuIsOpenFor(anchor)) return;
+    chips.innerHTML = languageChipsHTML(groups, languages());
+    chips.setAttribute("aria-label", languageLabel(groups, languages()));
+    const anchor = [chips, el.querySelector<HTMLElement>("[data-act='variants']")].find((a) => a && menuIsOpenFor(a));
+    if (!languagePanel || !anchor) return;
     const active = document.activeElement as HTMLElement | null;
     let again: string | null = null;
     if (active && languagePanel.contains(active)) {
@@ -792,6 +805,24 @@ export function createSettings(app: AppContext): Page {
 
   el.addEventListener("click", (e) => {
     const target = e.target as Element;
+    if (target === el) {
+      app.closeSettings(); // a click on the dimmed window around the panel
+      return;
+    }
+    const paneButton = target.closest<HTMLElement>("[data-pane]");
+    if (paneButton) {
+      closeMenu();
+      pane = paneButton.dataset.pane as "settings" | "about";
+      body.scrollTop = 0;
+      render();
+      return;
+    }
+    const variants = target.closest<HTMLElement>("[data-act='variants']");
+    if (variants) {
+      if (menuIsOpenFor(variants)) closeMenu();
+      else openLanguages(variants);
+      return;
+    }
 
     const choose = target.closest<HTMLElement>(".sel");
     if (choose) {
@@ -815,6 +846,9 @@ export function createSettings(app: AppContext): Page {
     }
 
     switch (target.closest<HTMLElement>("[data-act]")?.dataset.act) {
+      case "close":
+        app.closeSettings();
+        break;
       case "rec":
         void startRecording();
         break;
@@ -848,6 +882,28 @@ export function createSettings(app: AppContext): Page {
   el.addEventListener("change", (e) => {
     const input = e.target as HTMLInputElement;
     if (input.id === "limit-input") commitLimit(input);
+  });
+  // Esc closes the panel (a menu that is open takes its Esc itself: its keys do not reach here), and
+  // Tab stays inside it.
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !recording && !e.defaultPrevented) {
+      e.preventDefault();
+      app.closeSettings();
+    } else if (e.key === "Tab") {
+      const items = Array.from(
+        el.querySelectorAll<HTMLElement>("button:not([disabled]), input, a[href], [tabindex='0']"),
+      ).filter((x) => x.offsetParent !== null);
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
   });
   wireKeyField(el, { inputId: "key-input", pasteSelector: '[data-act="key-paste"]', submit: (value) => void submitKey(value) });
 
@@ -893,7 +949,10 @@ export function createSettings(app: AppContext): Page {
       keyError = null;
       limitDraft = null;
       limitError = null;
+      pane = "settings";
+      body.scrollTop = 0;
       render();
+      if (!el.contains(document.activeElement)) el.querySelector<HTMLElement>("#set-title")?.focus();
       void loadPrices();
 
       stopEvents?.();

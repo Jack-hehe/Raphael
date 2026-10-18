@@ -33,7 +33,8 @@ export const statusCheckOpenrouter = (): Promise<Status["openrouter"]> => core("
 // ---------- usage and prices ----------
 
 /** The numbers of the home page: words, time, speed, the last 14 days. */
-export const statsSummary = (): Promise<StatsSummary> => core("stats.summary");
+export const statsSummary = (days?: number): Promise<StatsSummary> =>
+  core("stats.summary", days === undefined ? {} : { days });
 /** The prices of the cleanup and speech-to-text models, read from OpenRouter when it can be. */
 export const pricingGet = (): Promise<Pricing> => core("pricing.get");
 
