@@ -999,6 +999,64 @@ async def test_audio_devices_lists_the_microphones_and_the_selected_one(make_app
     assert (await app.call("audio.devices"))["selected"] == "Array"
 
 
+async def test_audio_devices_reads_with_the_meter_closed_and_gives_the_meter_back(make_app):
+    """Listing the microphones reads the devices again, which is not done while a stream is open:
+    the settings meter's stream is closed for it and opened again after."""
+    kit = make_kit()
+    open_while_listing = []
+
+    def list_devices():
+        open_while_listing.append([mic.open for mic in kit.mics])
+        return []
+
+    kit.list_input_devices = list_devices
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    await app.call("audio.devices")
+    assert open_while_listing == [[False]]  # the meter's first microphone was closed meanwhile
+    assert len(kit.mics) == 2 and kit.mics[1].open  # and the meter is back
+
+
+async def test_audio_devices_opens_no_meter_that_is_not_wanted(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.devices")
+    assert kit.mics == []
+    await app.call("audio.monitor", {"on": True})
+    await app.call("audio.monitor", {"on": False})
+    await app.call("audio.devices")
+    assert len(kit.mics) == 1 and not kit.mics[0].open
+
+
+async def test_audio_devices_during_a_dictation_leaves_the_meter_for_the_dictations_end(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    await app.call("dictation.start", {"session_id": "s"})
+    assert len(kit.mics) == 2 and kit.mics[1].open and not kit.mics[0].open
+    await app.call("audio.devices")
+    assert len(kit.mics) == 2 and kit.mics[1].open  # the dictation's microphone is untouched
+    await app.call("dictation.stop", {"session_id": "s", "target_app": None})
+    assert len(kit.mics) == 3 and kit.mics[2].open  # the meter comes back with the dictation's end
+
+
+async def test_audio_devices_still_answers_when_the_meter_cannot_come_back(make_app, caplog):
+    kit = make_kit(devices=[SimpleNamespace(index=1, name="Headset", is_default=True)])
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    original = kit.MicRecorder
+
+    def flaky(on_frames, device=None):
+        if len(kit.mics) >= 1:
+            raise OSError("PortAudio went away")
+        return original(on_frames, device)
+
+    kit.MicRecorder = flaky
+    listing = await app.call("audio.devices")
+    assert [d["name"] for d in listing["devices"]] == ["Headset"]
+    assert "The level meter could not take the microphone back" in caplog.text
+
+
 async def test_the_selected_microphone_is_the_one_a_dictation_opens(make_app):
     kit = make_kit()
     app = make_app(kit)

@@ -13,6 +13,11 @@ own stream waits for itself).
 Which microphone: the device list is that of PortAudio's default host API, MME on Windows. MME
 resamples through Windows, so a microphone opens at 16 kHz whatever rate it works at; WASAPI shared
 mode would not, and lists every microphone once per host API besides.
+
+PortAudio keeps the list of devices, and which of them is the default, as they were when it started.
+So a recorder follows a change of the Windows default microphone, or a headset plugged in since,
+only by having PortAudio read the devices again (`_read_devices_again`), which takes about 35 ms and
+is possible only while none of our streams is open.
 """
 
 import logging
@@ -117,7 +122,12 @@ def _input_infos() -> tuple[list[dict], int]:
 
 
 def list_input_devices() -> list[InputDevice]:
-    """The microphones of the default host API, each once; MicRecorder takes their names."""
+    """The microphones of the default host API, each once; MicRecorder takes their names.
+
+    The devices are read again first, so a headset plugged in since shows up; not while a stream
+    is open (see `_read_devices_again`), when the list is the one PortAudio has.
+    """
+    _read_devices_again()
     infos, default = _input_infos()
     return [
         InputDevice(index=info["index"], name=info["name"], is_default=info["index"] == default)
@@ -126,30 +136,41 @@ def list_input_devices() -> list[InputDevice]:
     ]
 
 
-def _pick_device(name: str | None) -> dict:
-    """The description of the microphone called `name`, or of the system default for None."""
+def _has_device(name: str) -> bool:
+    """Whether PortAudio's list has a microphone called `name`."""
+    return any(info["name"] == name for info in _input_infos()[0])
+
+
+def _pick_device(name: str | None) -> tuple[dict, bool]:
+    """The description of the microphone called `name`, or of the system default for None, and
+    whether it is the one called `name`. A name that is not there gives the default."""
     infos, default = _input_infos()
     if name is not None:
         for info in infos:
             if info["name"] == name:
-                return info
+                return info, True
         logger.warning("The microphone %r is not there; using the system default", name)
     for info in infos:
         if info["index"] == default:
-            return info
+            return info, False
     raise NoMicrophoneError("There is no microphone: Windows has no default recording device")
 
 
 # PortAudio reads the list of devices once, when sounddevice is imported. A microphone plugged in
-# since (or the default one unplugged) shows only after it is read again, which closes every open
-# stream. So a recorder that cannot start reads it again, but only when none of ours is recording.
+# since, or a new default microphone, shows only after it is read again, which closes every open
+# stream. So a recorder reads it again before it opens, and the list of microphones does, but only
+# when none of ours is recording.
 _active = 0
 _active_lock = threading.Lock()
+# Held while a stream is being opened and while the devices are read again, so that neither pulls
+# the ground from under the other: a stream that is still opening is not yet counted in `_active`.
+# Taken before `_active_lock`, never the other way round.
+_devices_lock = threading.Lock()
 
 
 def _read_devices_again() -> bool:
     """Make PortAudio list the devices anew. False if a stream is open (so it was left alone)."""
-    with _active_lock:
+    with _devices_lock, _active_lock:
         if _active:
             return False
         try:
@@ -182,6 +203,11 @@ class MicRecorder:
 
     A name that is not there falls back to the default microphone, with a warning in the log; the
     microphone someone chose last month may well be unplugged today.
+
+    Every start with no name, "automatic", has PortAudio read the devices again first, so that it
+    opens whichever microphone Windows has as its default now; a name that is not in the list gets
+    one such reading, in case that microphone was plugged in since. Both are skipped while another
+    stream is open. The log says, once per start, which microphone was opened.
     """
 
     def __init__(self, on_frames: OnFrames, device: str | None = None) -> None:
@@ -200,10 +226,14 @@ class MicRecorder:
             if self._capture is not None:
                 return
             self.error = None
+            read = False  # whether this start has had the devices read again already
+            if self._device is None or not _has_device(self._device):
+                _read_devices_again()
+                read = True
             try:
                 capture = self._open()
             except NoMicrophoneError:
-                if not _read_devices_again():
+                if read or not _read_devices_again():
                     raise
                 capture = self._open()
             self._capture = capture
@@ -240,10 +270,14 @@ class MicRecorder:
                 self.error = exc
 
     def _open(self) -> _Capture:
+        with _devices_lock:
+            return self._open_stream()
+
+    def _open_stream(self) -> _Capture:
         global _active
         stream = None
         try:
-            info = _pick_device(self._device)
+            info, chosen = _pick_device(self._device)
             index = info["index"]
             rate = SAMPLE_RATE
             try:
@@ -283,6 +317,7 @@ class MicRecorder:
             raise NoMicrophoneError(f"The microphone could not be opened: {exc}") from exc
         with _active_lock:
             _active += 1
+        logger.info("Microphone: %s (%s)", info["name"], "chosen" if chosen else "automatic")
         return capture
 
     def _deliver(self, capture: _Capture, indata: np.ndarray, status) -> None:

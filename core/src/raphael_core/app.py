@@ -811,7 +811,14 @@ class App(Router):
 
     async def _audio_devices(self, params: dict) -> dict:
         kit = await self._wait_for(self._kit)
-        devices = await asyncio.to_thread(kit.list_input_devices)
+        # Listing reads the devices again, so that a headset plugged in since shows up, and that is
+        # not done while a stream is open. The settings meter's stream is the one that usually is:
+        # it makes way for the reading and comes back after, as it does for a dictation.
+        await self._meter("make way for reading the devices", lambda m: m.suspend())
+        try:
+            devices = await asyncio.to_thread(kit.list_input_devices)
+        finally:
+            await self._give_meter_back()
         return {
             "devices": [
                 {"index": d.index, "name": d.name, "is_default": d.is_default} for d in devices
