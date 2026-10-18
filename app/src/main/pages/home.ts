@@ -9,6 +9,7 @@ import { onLocaleChange, t } from "../i18n";
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
 import { homeHint } from "../dictation";
+import { loadingHTML } from "../loading";
 import { formatUsd } from "../format";
 import { buildGrid, heatmapSVG, weeksThatFit } from "../heatmap";
 import { bindingLabels } from "../keys";
@@ -16,7 +17,7 @@ import { blockingAlert, buildReport, coreDownReport } from "../report";
 import { Stage } from "../stage";
 import { durationParts, formatCount, hasDictations, periodSpeed } from "../stats";
 import type { AppContext, Page, Status, StatsSummary } from "../types";
-import { btn, esc, iconBtn, keys, st } from "../ui";
+import { btn, esc, ico, iconBtn, keys, st } from "../ui";
 
 /** How often the page is read again while it is on screen. */
 const REFRESH_MS = 30_000;
@@ -65,6 +66,9 @@ const LEGEND =
   t("home.015");
 
 export function createHome(app: AppContext): Page {
+  const compact = matchMedia("(max-height: 700px), (max-width: 960px) and (max-height: 820px)");
+  let activityOpen = !compact.matches;
+  let shortcutsOpen = !compact.matches;
   const el = document.createElement("div");
   el.className = "page page-home";
   el.dataset.page = "home";
@@ -75,7 +79,9 @@ export function createHome(app: AppContext): Page {
     `<div class="stage" role="region" aria-label="Raphael"><canvas class="emb" aria-hidden="true"></canvas><div class="subs" aria-live="polite"></div></div>` +
     `<div class="alert-slot"></div><div class="usage"></div>` +
     `</div>` +
-    t("home.016") +
+    `<aside class="home-side" aria-label="${esc(t("home.shortcuts"))}"><details class="card keys-disclosure"${shortcutsOpen ? " open" : ""}>` +
+    `<summary class="compact-summary">${ico("keyboard")}<span>${esc(t("home.shortcuts"))}</span>${ico("down")}</summary>` +
+    `<section class="keys-card"></section></details></aside>` +
     `</div>` +
     `<p class="ver num"></p>`;
   const alertSlot = el.querySelector<HTMLElement>(".alert-slot")!;
@@ -132,19 +138,20 @@ export function createHome(app: AppContext): Page {
 
   function activityHTML(s: StatsSummary): string {
     return (
-      t("home.022") +
+      `<details class="card activity"${activityOpen ? " open" : ""}><summary class="compact-summary">${ico("clock")}<span>${esc(t("home.activity"))}</span>${ico("down")}</summary><div class="activity-body">` +
       activityHead(s) +
       `<div class="heat-wrap">${iconBtn("left", t("home.023"), ' data-act="older"')}<div class="heat-box"></div>${iconBtn("right", t("home.024"), ' data-act="newer"')}</div>` +
       LEGEND() +
-      `</section>`
+      `</div></details>`
     );
   }
 
   function paint(status: Status | null, s: StatsSummary | null): void {
     lastStatus = status;
     const now = Date.now();
-    const alert = status ? blockingAlert(status) : null;
     const report = status ? buildReport(status, now) : coreDownReport();
+    // A retry already lives beside the report; avoid repeating the same warning below it.
+    const alert = status && report.action?.target === "settings" ? blockingAlert(status) : null;
     // The line under the stage carries the way to the settings; the stage keeps only "try again".
     stage.show(alert && report.action?.target === "settings" ? { zh: report.zh, ja: report.ja } : report);
     alertSlot.innerHTML = alert
@@ -170,6 +177,8 @@ export function createHome(app: AppContext): Page {
   /** `replay`: the page was just shown, so the emblem appears again. */
   async function load(replay: boolean): Promise<void> {
     const mine = ++loads;
+    if (!stats) usage.innerHTML = loadingHTML();
+    usage.setAttribute("aria-busy", "true");
     if (replay) stage.play();
     const [statusResult, statsResult] = await Promise.allSettled([api.statusGet(), api.statsSummary(daysWanted)]);
     if (mine !== loads || !visible) return;
@@ -177,6 +186,7 @@ export function createHome(app: AppContext): Page {
     const status = statusResult.status === "fulfilled" ? statusResult.value : null;
     const s = statsResult.status === "fulfilled" ? statsResult.value : null;
     paint(status, s);
+    usage.setAttribute("aria-busy", "false");
     if (replay && status?.openrouter.state === "unknown") void checkOpenrouter();
   }
 
@@ -229,6 +239,19 @@ export function createHome(app: AppContext): Page {
     if (act === "older" || act === "newer") void turn(act === "older");
   });
 
+  el.addEventListener("toggle", (event) => {
+    const details = event.target;
+    if (!(details instanceof HTMLDetailsElement)) return;
+    if (details.classList.contains("activity")) activityOpen = details.open;
+    if (details.classList.contains("keys-disclosure")) shortcutsOpen = details.open;
+    if (details.open) paintGrid();
+  }, true);
+  compact.addEventListener("change", () => {
+    activityOpen = shortcutsOpen = !compact.matches;
+    el.querySelectorAll<HTMLDetailsElement>("details").forEach((details) => { details.open = !compact.matches; });
+    paintGrid();
+  });
+
   // The grid shows as many weeks as fit.
   let lastWidth = 0;
   new ResizeObserver(() => {
@@ -247,7 +270,8 @@ export function createHome(app: AppContext): Page {
     .catch(() => undefined);
 
   onLocaleChange(() => {
-    el.querySelector("aside")!.setAttribute("aria-label", t("history.012"));
+    el.querySelector("aside")!.setAttribute("aria-label", t("home.shortcuts"));
+    el.querySelector(".keys-disclosure summary span")!.textContent = t("home.shortcuts");
     if (version) ver.textContent = t("home.027", { p0: version });
     paint(lastStatus, stats);
   });

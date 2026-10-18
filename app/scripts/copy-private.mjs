@@ -1,27 +1,32 @@
-// Copies the private glyph ring texture to where Vite serves it (/private/glyph-ring.png).
-//
-// The texture is sampled from the anime, so it lives in the gitignored assets-private/ folder at
-// the repository root and is never committed (the copy in public/private/ is gitignored too).
-// Without it the overlay draws a plain vector ring. This script prints one line either way and
-// never fails the build.
+// Private media and its public/private/ copies are gitignored. Missing assets use UI fallbacks;
+// the optional media must never prevent a frontend build.
 
 import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { privateAssetsDirectory } from "./private-assets.mjs";
 
 const app = resolve(import.meta.dirname, "..");
-const source = resolve(app, "../assets-private/glyph-ring.png");
-const target = resolve(app, "public/private/glyph-ring.png");
+const privateDir = privateAssetsDirectory(app);
 
-try {
-  if (existsSync(source)) {
-    mkdirSync(dirname(target), { recursive: true });
-    copyFileSync(source, target);
-    console.log("copy-private: glyph-ring.png copied to public/private/");
-  } else {
-    // An old copy must not outlive its source, or the plain ring could never be tried.
-    rmSync(target, { force: true });
-    console.log("copy-private: assets-private/glyph-ring.png not found, the overlay will draw a plain vector ring");
+for (const name of ["glyph-ring.png", "app-icon.png"]) {
+  const source = join(privateDir, name);
+  const target = resolve(app, "public/private", name);
+  try {
+    if (existsSync(source)) {
+      mkdirSync(dirname(target), { recursive: true });
+      copyFileSync(source, target);
+      console.log(`copy-private: ${name} copied to public/private/`);
+    } else {
+      // An old copy must not outlive its source.
+      rmSync(target, { force: true });
+      console.log(`copy-private: ${name} not found, the UI will use its fallback`);
+    }
+  } catch (err) {
+    try {
+      rmSync(target, { force: true });
+    } catch {
+      // Read-only or invalid targets must not make these optional assets block the build.
+    }
+    console.log(`copy-private: could not copy ${name} (${err.message}), the UI will use its fallback`);
   }
-} catch (err) {
-  console.log(`copy-private: could not copy glyph-ring.png (${err.message}), the overlay will draw a plain vector ring`);
 }

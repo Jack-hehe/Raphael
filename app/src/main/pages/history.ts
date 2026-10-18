@@ -6,11 +6,12 @@ import { onLocaleChange, t } from "../i18n";
 
 import * as api from "../api";
 import { historyEmptyHint } from "../dictation";
+import { loadingHTML } from "../loading";
 import { dayLabel, describeError, formatClock, formatRetention, KEEP_FOREVER_DAYS } from "../format";
 import { bindingLabels } from "../keys";
 import type { AppContext, HistoryItem, Page } from "../types";
 import { Deletions, debounce } from "../undo";
-import { type Choice, btn, closeMenu, copyText, esc, fieldHTML, ico, iconBtn, menuIsOpenFor, openMenu, row, sel, toaster } from "../ui";
+import { type Choice, btn, closeMenu, copyText, esc, fieldHTML, ico, iconBtn, menuIsOpenFor, openMenu, openMenuOnArrow, row, sel, toaster } from "../ui";
 
 /** The search waits this long after the last key. */
 const SEARCH_DELAY_MS = 200;
@@ -80,8 +81,16 @@ export function createHistory(app: AppContext): Page {
   let loads = 0;
   let retentionDays: number | null = null;
   let filter: Filter = "all";
+  let pending = false;
 
   function render(): void {
+    days.setAttribute("aria-busy", String(pending));
+    if (pending && items.length === 0) {
+      days.innerHTML = loadingHTML();
+      empty.hidden = more.hidden = true;
+      paintTop();
+      return;
+    }
     const shown = items.filter(
       (item) => !deleting.has(item.id) && (filter === "all" || (filter === "cleaned") === item.cleaned),
     );
@@ -141,6 +150,8 @@ export function createHistory(app: AppContext): Page {
   /** Loads the newest items (or, with `append`, the ones after what is loaded). */
   async function load(append: boolean): Promise<void> {
     const mine = ++loads;
+    pending = true;
+    render();
     const read = deletions.startRead();
     const params: api.HistoryQuery = { limit: PAGE_SIZE };
     if (query) params.query = query;
@@ -158,6 +169,7 @@ export function createHistory(app: AppContext): Page {
       canLoadMore = false;
       failure = () => describeError(err);
     }
+    pending = false;
     render();
   }
 
@@ -266,6 +278,7 @@ export function createHistory(app: AppContext): Page {
     }
   });
   el.addEventListener("keydown", (e) => {
+    if (openMenuOnArrow(e)) return;
     if ((e.key === "Enter" || e.key === " ") && (e.target as Element).matches(".hrow")) {
       e.preventDefault();
       toggle(e.target as HTMLElement);

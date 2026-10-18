@@ -7,6 +7,8 @@ import { isUiLocale, onLocaleChange, t } from "../i18n";
 
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
+import { brandIcon, hydrateBrandIcons } from "../brand";
+import "../settings-polish.css";
 import { DICTATION_MODES, isDictationMode, modeDescription } from "../dictation";
 import {
   describeError,
@@ -47,6 +49,7 @@ import {
   meter,
   note,
   openMenu,
+  openMenuOnArrow,
   openPopover,
   placeMenu,
   row,
@@ -157,6 +160,7 @@ export function createSettings(app: AppContext): Page {
   let openGroup: string | null = null;
   let languagePanel: HTMLElement | null = null;
   let visible = false;
+  let loading = false;
   let loads = 0;
 
   // ---------- drawing ----------
@@ -287,7 +291,7 @@ export function createSettings(app: AppContext): Page {
       row(
         t("settings.031"),
         sttEngine() === "cloud" ? t("settings.032") : t("settings.033"),
-        sel(STT_ENGINES, sttEngine(), t("settings.031"), ' data-k="stt"'),
+        sel(STT_ENGINES, sttEngine(), t("settings.031"), ` data-k="stt"${brain ? "" : " disabled"}`),
       ),
     ];
     if (sttEngine() === "cloud") {
@@ -295,7 +299,7 @@ export function createSettings(app: AppContext): Page {
         row(
           t("settings.034"),
           priceSpan("stt-model"),
-          sel(withCurrent(STT_MODELS, sttModel()), sttModel(), t("settings.034"), ' data-k="stt-model"'),
+          sel(withCurrent(STT_MODELS, sttModel()), sttModel(), t("settings.034"), ` data-k="stt-model"${brain ? "" : " disabled"}`),
         ),
       );
     }
@@ -303,7 +307,7 @@ export function createSettings(app: AppContext): Page {
       row(
         t("settings.035"),
         priceSpan("model"),
-        sel(withCurrent(MODELS, cleanupModel()), cleanupModel(), t("settings.035"), ' data-k="model"'),
+        sel(withCurrent(MODELS, cleanupModel()), cleanupModel(), t("settings.035"), ` data-k="model"${brain ? "" : " disabled"}`),
       ),
     );
     return rows;
@@ -407,7 +411,7 @@ export function createSettings(app: AppContext): Page {
       ]) +
       section("globe", t("settings.058"), [
         row(t("settings.059"), t("settings.060"), sel(UI_LANGUAGES, d.ui_language, t("settings.059"), ' data-k="ui-language"'), { cls: "row-ui-language" }),
-        row(t("settings.061"), `<span class="variant-summary">${esc(AUTO_DETECT_HINT())}</span>`, languageButtonHTML(languageGroups ?? [], languages(), ' data-k="languages" data-act="variants"'), { cls: "row-lang" }),
+        row(t("settings.061"), `<span class="variant-summary">${esc(AUTO_DETECT_HINT())}</span>`, languageButtonHTML(languageGroups ?? [], languages(), ` data-k="languages" data-act="variants"${brain ? "" : " disabled"}`), { cls: "row-lang" }),
       ]) +
       section("mic", t("settings.062"), [
         row(t("onboarding.021"), t("settings.063"), meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, t("onboarding.021"), ' data-k="mic"') + iconBtn("refresh", t("action.refreshMicrophones"), ' data-act="mic-refresh"')),
@@ -415,15 +419,15 @@ export function createSettings(app: AppContext): Page {
       section("wave", t("settings.064"), modelRows(), priceSpan("note")) +
       section("wallet", t("settings.065"), [
         keyRow(),
-        ...(keyError ? [note(st("err", keyError()))] : []),
+        ...(keyError ? [note(st("err", keyError()), ' role="alert"')] : []),
         ...connectionRow(),
         ...spendRow(),
         row(
           t("onboarding.032"),
           t("onboarding.033"),
-          fieldHTML("", limitShown, { w: 96, pre: "US$", get label() { return t("onboarding.032"); }, num: true, id: "limit-input", invalid: limitError !== null }),
+          fieldHTML("", limitShown, { w: 96, pre: "US$", get label() { return t("onboarding.032"); }, num: true, id: "limit-input", invalid: limitError !== null, disabled: brain === null }),
         ),
-        ...(limitError ? [note(st("err", limitError()))] : []),
+        ...(limitError ? [note(st("err", limitError()), ' role="alert"')] : []),
       ]) +
       section("laptop", t("settings.066"), [
         row(t("settings.067"), t("settings.068"), sel(APPEARANCES, d.appearance, t("settings.067"), ' data-k="appearance"')),
@@ -442,12 +446,20 @@ export function createSettings(app: AppContext): Page {
   function aboutHTML(): string {
     return (
       t("settings.077") +
+      `<div class="about-brand">${brandIcon("about-icon")}<span class="about-name">Raphael</span></div>` +
       `<div class="slist about">` +
       row(t("settings.078"), esc(version || "0.1.0"), "") +
       row(t("settings.079"), t("settings.080"), t("settings.081")) +
       `</div>` +
       t("settings.082")
     );
+  }
+
+  function loadingHTML(): string {
+    return t("settings.051") +
+      `<p class="settings-loading" role="status">${esc(t("settings.loading"))}</p>` +
+      `<div class="settings-skeleton" aria-hidden="true">${Array.from({ length: 3 }, () =>
+        `<div class="skeleton-section"><i class="skeleton-heading"></i><div class="skeleton-row"><i></i><i></i></div><div class="skeleton-row"><i></i><i></i></div></div>`).join("")}</div>`;
   }
 
   function render(): void {
@@ -459,7 +471,9 @@ export function createSettings(app: AppContext): Page {
     // A menu that is open stays open when the page is drawn again (a status that came in, say).
     const openK = openAnchorKey();
     const scroll = body.scrollTop;
-    body.innerHTML = pane === "settings" ? settingsHTML() : aboutHTML();
+    body.setAttribute("aria-busy", String(loading && pane === "settings"));
+    body.innerHTML = pane === "settings" ? (loading ? loadingHTML() : settingsHTML()) : aboutHTML();
+    hydrateBrandIcons(body);
     const keyInput = el.querySelector<HTMLInputElement>("#key-input");
     if (keyInput && keyDraft !== undefined) keyInput.value = keyDraft;
     const limitInput = el.querySelector<HTMLInputElement>("#limit-input");
@@ -512,7 +526,7 @@ export function createSettings(app: AppContext): Page {
         void pickLanguage(item.dataset.lang);
       }
     });
-    panel.querySelector<HTMLElement>(".lang-item")?.focus();
+    (panel.querySelector<HTMLElement>(".lang-item") ?? panel).focus();
     if (languageGroups === null) void loadLanguages();
   }
 
@@ -530,9 +544,10 @@ export function createSettings(app: AppContext): Page {
   function languageKey(e: KeyboardEvent): boolean {
     const active = document.activeElement as HTMLElement | null;
     if (!languagePanel || !active || !languagePanel.contains(active)) return false;
-    if (e.key === "ArrowRight" && active.dataset.group && active.getAttribute("aria-expanded") === "false") {
+    if (e.key === "ArrowRight" && active.dataset.group) {
       openGroup = active.dataset.group;
       paintLanguages();
+      languagePanel.querySelector<HTMLElement>(`#${CSS.escape(`language-variants-${encodeURIComponent(openGroup)}`)} .lang-variant`)?.focus();
       return true;
     }
     if (e.key === "ArrowLeft" && openGroup && (active.classList.contains("lang-variant") || active.dataset.group === openGroup)) {
@@ -935,6 +950,7 @@ export function createSettings(app: AppContext): Page {
   // Esc closes the panel (a menu that is open takes its Esc itself: its keys do not reach here), and
   // Tab stays inside it.
   el.addEventListener("keydown", (e) => {
+    if (openMenuOnArrow(e)) return;
     if (e.key === "Escape" && !recording && !e.defaultPrevented) {
       e.preventDefault();
       app.closeSettings();
@@ -973,6 +989,12 @@ export function createSettings(app: AppContext): Page {
     async show() {
       visible = true;
       const mine = ++loads;
+      loading = true;
+      pane = "settings";
+      body.scrollTop = 0;
+      closeMenu();
+      render();
+      el.querySelector<HTMLElement>("#set-title")?.focus();
       const [brainResult, keyResult, statusResult, devicesResult, altgrResult, versionResult, languagesResult] = await Promise.allSettled([
         api.settingsGet(),
         api.secretsStatus(),
@@ -998,8 +1020,7 @@ export function createSettings(app: AppContext): Page {
       keyError = null;
       limitDraft = null;
       limitError = null;
-      pane = "settings";
-      body.scrollTop = 0;
+      loading = false;
       render();
       if (!el.contains(document.activeElement)) el.querySelector<HTMLElement>("#set-title")?.focus();
       void loadPrices();
@@ -1020,6 +1041,7 @@ export function createSettings(app: AppContext): Page {
     },
     hide() {
       visible = false;
+      loading = false;
       loads++;
       closeMenu();
       void endRecording();

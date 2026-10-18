@@ -1,6 +1,10 @@
 import type { Messages } from './zh-TW';
 
 export const en = {
+  "settings.loading": "Loading settings…",
+  "common.loading": "Loading…",
+  "home.activity": "Activity",
+  "home.shortcuts": "Shortcuts",
   "nav.settings": "Settings",
   "backend.limit": "Enter a monthly limit of 0 or more",
   "backend.retention": "Keep history for at least 1 day",

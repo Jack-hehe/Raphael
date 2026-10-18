@@ -1,6 +1,10 @@
 import type { Messages } from './zh-TW';
 
 export const ja = {
+  "settings.loading": "設定を読み込んでいます…",
+  "common.loading": "読み込み中…",
+  "home.activity": "アクティビティ",
+  "home.shortcuts": "ショートカット",
   "nav.settings": "設定",
   "backend.limit": "月額上限には0以上の数値を入力してください",
   "backend.retention": "履歴の保存期間は1日以上にしてください",

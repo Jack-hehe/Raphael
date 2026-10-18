@@ -1,5 +1,9 @@
 // Traditional Chinese is the source catalogue. Placeholders are interpolated by t().
 export const zhTW = {
+  "settings.loading": "正在載入設定…",
+  "common.loading": "正在載入…",
+  "home.activity": "活動紀錄",
+  "home.shortcuts": "快捷鍵",
   "nav.settings": "設定",
   "backend.limit": "每月上限要是 0 以上的數字",
   "backend.retention": "歷史紀錄至少要保留 1 天",

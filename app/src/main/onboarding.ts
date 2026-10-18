@@ -8,6 +8,7 @@
 import { onLocaleChange, t, translatedMessage } from "./i18n";
 
 import * as api from "./api";
+import { brandIcon, hydrateBrandIcons } from "./brand";
 import { type DictationMode, keylineAction, tryBoxText } from "./dictation";
 import { describeError, formatSeconds, keyReasonText, parseLimit } from "./format";
 import { wireKeyField } from "./keyfield";
@@ -16,7 +17,7 @@ import { MonitorSwitch } from "./monitor";
 import { ModelDownload, type ModelPhase, formatProgress } from "./models";
 import { Stage } from "./stage";
 import type { AppContext, AudioDevices, Status } from "./types";
-import { type Choice, btn, closeMenu, esc, fieldHTML, group, keys, menuIsOpenFor, meter, note, openMenu, row, sel, setMeter, st, toaster } from "./ui";
+import { type Choice, btn, closeMenu, esc, fieldHTML, group, keys, menuIsOpenFor, meter, note, openMenu, openMenuOnArrow, row, sel, setMeter, st, toaster } from "./ui";
 
 // ---------- the rules ----------
 
@@ -294,6 +295,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
     switch (step) {
       case 0:
         return (
+          `<div class="onboarding-brand">${brandIcon()}<span>Raphael</span></div>` +
           `<div class="stage"><canvas class="emb" aria-hidden="true"></canvas><div class="subs" aria-live="polite"></div></div>` +
           t("onboarding.036") +
           t("onboarding.037")
@@ -328,11 +330,13 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
   function paintFoot(): void {
     const foot = root.querySelector<HTMLElement>(".ob-foot");
     if (!foot) return;
+    const focus = focusSelector(foot);
     const opts = { keySaved, skipKey };
     foot.innerHTML =
       `<span class="ob-count">${stepCaption(step)}</span>` +
       (step > 0 ? btn(t("onboarding.045"), "", ' data-ob="back"') : "") +
       btn(primaryLabel(step), "pri", ` data-ob="next"${canAdvance(step, opts) && !finishing ? "" : " disabled"}`);
+    if (focus) foot.querySelector<HTMLElement>(focus)?.focus({ preventScroll: true });
   }
 
   function render(): void {
@@ -344,6 +348,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
       `<div class="ob-steps" aria-hidden="true">${dots}</div>` +
       `<div class="ob-body"><div class="ob-col">${bodyHTML()}</div></div>` +
       `<div class="ob-foot"></div>`;
+    hydrateBrandIcons(root);
     paintFoot();
     enterStep();
   }
@@ -457,6 +462,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
       skipKey = result.skipKey;
       if (result.to === null) {
         paintFoot();
+        if (limitError) root.querySelector<HTMLElement>("#ob-limit")?.focus();
         return;
       }
       if (result.to === "done") await finish();
@@ -534,8 +540,13 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
       keyError = () => describeError(err);
     }
     keyBusy = false;
+    const active = document.activeElement as HTMLElement | null;
+    const keyFocused = active?.id === "ob-key-input" || active?.dataset.ob === "key-paste";
     paintKeyGroup();
     paintFoot();
+    if (keySaved && !replacingKey && keyFocused && !destroyed && step === 1) {
+      root.querySelector<HTMLElement>('[data-ob="next"]')?.focus({ preventScroll: true });
+    }
   }
 
   async function pasteKey(): Promise<void> {
@@ -702,6 +713,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
   root.addEventListener("change", (e) => {
     if ((e.target as HTMLInputElement).id === "ob-limit") void commitLimit();
   });
+  root.addEventListener("keydown", openMenuOnArrow);
   wireKeyField(root, { inputId: "ob-key-input", pasteSelector: '[data-ob="key-paste"]', submit: (value) => void submitKey(value) });
 
   root.addEventListener("input", (e) => {

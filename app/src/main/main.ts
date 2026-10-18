@@ -13,6 +13,7 @@ import { createSettings } from "./pages/settings";
 import { DeviceState } from "./device";
 import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
+import { brandIcon, hydrateBrandIcons } from "./brand";
 import { installWindowHotkeys } from "./window-hotkeys";
 import type { AppContext, DeviceSettings, MainEvent, Page, PageId } from "./types";
 import { spendMini } from "./spend";
@@ -46,11 +47,8 @@ const NAV: { id: Exclude<PageId, "settings">; name: string; icon: IconName }[] =
   { id: "dictionary", get name() { return t("main.003"); }, icon: "book" },
 ];
 
-/** The app's name at the top of the sidebar, with a small ring like the emblem's. */
-const BRAND =
-  `<div class="brand"><svg viewBox="0 0 18 18" aria-hidden="true">` +
-  `<circle class="r1" cx="9" cy="9" r="7.6"/><circle class="r2" cx="9" cy="9" r="5.2"/><circle class="r3" cx="9" cy="9" r="1.6"/>` +
-  `</svg><span>Raphael</span></div>`;
+/** The sidebar uses the same app portrait as About and the first-run guide. */
+const BRAND = `<div class="brand">${brandIcon()}<span>Raphael</span></div>`;
 
 // ---------- the theme ----------
 
@@ -123,6 +121,7 @@ async function start(): Promise<void> {
     `<button type="button" class="usage-box" data-go="settings" hidden></button>` +
     t("main.004", { p0: ico("gear") });
   const usageBox = nav.querySelector<HTMLElement>(".usage-box")!;
+  hydrateBrandIcons(nav);
   function translateNavigation(): void {
     nav.setAttribute("aria-label", t("nav.pages"));
     for (const item of NAV) nav.querySelector<HTMLElement>(`[data-go="${item.id}"] span`)!.textContent = item.name;
