@@ -163,7 +163,7 @@ impl ClipboardSession {
     /// the cloud clipboard and clipboard managers. The window hands the text over when a
     /// program reads it.
     pub fn publish_text(&mut self, text: &str) -> Result<(), String> {
-        *self.shared.text.borrow_mut() = text.encode_utf16().chain([0]).collect();
+        *self.shared.text.borrow_mut() = with_crlf(text).encode_utf16().chain([0]).collect();
         let offered = {
             let _opened = self.open()?;
             // SAFETY: the clipboard is open, by our window.
@@ -675,6 +675,21 @@ unsafe fn copy_global(block: HGLOBAL) -> Option<Vec<u8>> {
     Some(data)
 }
 
+/// Line breaks as Windows text uses them (`\r\n`): CF_UNICODETEXT with bare `\n` shows a list as
+/// one run of text in older edit controls. Breaks that already are `\r\n` stay as they are.
+fn with_crlf(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + text.matches('\n').count());
+    let mut previous = '\0';
+    for c in text.chars() {
+        if c == '\n' && previous != '\r' {
+            out.push('\r');
+        }
+        out.push(c);
+        previous = c;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,6 +698,16 @@ mod tests {
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
+    }
+
+    #[test]
+    fn line_breaks_become_crlf_once() {
+        assert_eq!(
+            with_crlf("清單：\n\n1. 一\n2. 二"),
+            "清單：\r\n\r\n1. 一\r\n2. 二"
+        );
+        assert_eq!(with_crlf("a\r\nb"), "a\r\nb");
+        assert_eq!(with_crlf("no breaks"), "no breaks");
     }
 
     #[test]
