@@ -41,6 +41,7 @@ METHODS = [
     "dictionary.delete",
     "dictionary.suggestions",
     "dictionary.dismiss",
+    "dictionary.learn",
     "settings.get",
     "settings.set",
     "languages.list",
@@ -511,6 +512,11 @@ BAD_PARAMS = [
     ("dictionary.add", {"word": "x", "misheard": {"a": "b"}}, "dictionary.add: misheard object"),
     ("dictionary.delete", {}, "dictionary.delete: no id"),
     ("dictionary.delete", {"id": "1"}, "dictionary.delete: id str"),
+    ("dictionary.learn", {}, "dictionary.learn: no corrections"),
+    ("dictionary.learn", {"corrections": "x"}, "dictionary.learn: corrections str"),
+    ("dictionary.learn", {"corrections": [{"word": "x"}]}, "dictionary.learn: no misheard"),
+    ("dictionary.learn", {"corrections": [{"word": 1, "misheard": "y"}]}, "learn: word number"),
+    ("dictionary.learn", {"corrections": ["x"]}, "dictionary.learn: item str"),
     ("dictionary.dismiss", {}, "dictionary.dismiss: no word"),
     ("dictionary.dismiss", {"word": 5}, "dictionary.dismiss: word number"),
     ("dictionary.dismiss", {"word": " "}, "dictionary.dismiss: blank word"),
@@ -621,6 +627,61 @@ async def test_dictionary_add_merges_the_misheard_forms_of_a_known_word(router):
     merged = await router.call("dictionary.add", {"word": "拉斐爾", "misheard": ["拉非爾"]})
     assert merged["entry"]["misheard"] == ["拉菲爾", "拉非爾"]
     assert len((await router.call("dictionary.list", {}))["entries"]) == 1
+
+
+async def test_dictionary_learn_adds_the_corrected_words(router):
+    learned = await router.call(
+        "dictionary.learn",
+        {
+            "corrections": [
+                {"word": "手機", "misheard": "首機"},
+                {"word": "Typeless", "misheard": "type less"},
+            ]
+        },
+    )
+    assert learned == {"learned": ["手機", "Typeless"]}
+    entries = (await router.call("dictionary.list", {}))["entries"]
+    assert {(e["word"], tuple(e["misheard"]), e["source"]) for e in entries} == {
+        ("手機", ("首機",), "learned"),
+        ("Typeless", ("type less",), "learned"),
+    }
+
+
+async def test_dictionary_learn_reports_only_what_changed(router):
+    await router.call("dictionary.dismiss", {"word": "Typeless"})
+    await router.call("dictionary.add", {"word": "手機", "misheard": ["首機"]})
+    learned = await router.call(
+        "dictionary.learn",
+        {
+            "corrections": [
+                {"word": "手機", "misheard": "首機"},  # known already
+                {"word": "Typeless", "misheard": "type less"},  # dismissed
+                {"word": "手機", "misheard": "手雞"},  # a new form of a known word
+            ]
+        },
+    )
+    assert learned == {"learned": ["手機"]}
+
+
+async def test_dictionary_learn_takes_at_most_three(router):
+    corrections = [{"word": f"Word{i}", "misheard": f"ward{i}"} for i in range(5)]
+    learned = await router.call("dictionary.learn", {"corrections": corrections})
+    assert learned == {"learned": ["Word0", "Word1", "Word2"]}
+
+
+async def test_dictionary_learn_does_nothing_when_the_setting_is_off(router):
+    await router.call("settings.set", {"key": "learn_corrections", "value": False})
+    learned = await router.call(
+        "dictionary.learn", {"corrections": [{"word": "手機", "misheard": "首機"}]}
+    )
+    assert learned == {"learned": []}
+    assert (await router.call("dictionary.list", {}))["entries"] == []
+
+
+async def test_dictionary_learn_does_not_log_the_words(router, caplog):
+    caplog.set_level(logging.DEBUG)
+    await router.call("dictionary.learn", {"corrections": [{"word": "手機", "misheard": "首機"}]})
+    assert "手機" not in caplog.text and "首機" not in caplog.text
 
 
 def seed_mentions(conn, word, count, created_at_ms):

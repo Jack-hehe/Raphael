@@ -12,6 +12,7 @@ import { btn, esc, fieldHTML, iconBtn, row, toaster } from "../ui";
 const wordRow = (entry: DictionaryEntry): string =>
   row(
     `<span class="word">${esc(entry.word)}</span>` +
+      (entry.source === "learned" ? `<span class="tag">自動學到</span>` : "") +
       (entry.misheard.length > 0 ? `<span class="mis">常被聽成 ${esc(entry.misheard.join("、"))}</span>` : ""),
     "",
     `<span class="acts">${iconBtn("trash", "刪除", ' data-act="delete"')}</span>`,
