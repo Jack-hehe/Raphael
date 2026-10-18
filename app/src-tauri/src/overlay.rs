@@ -158,6 +158,23 @@ struct Bus {
     /// Events from before the first page subscribed. The webview takes a moment to load, and a
     /// report at start-up (say, "the core did not start") must not be lost.
     backlog: VecDeque<OverlayEvent>,
+    /// Whether "no page is listening" has been logged since the last page subscribed. An event
+    /// that waits is normal at start-up, but one during a dictation means the emblem cannot show.
+    backlog_warned: bool,
+}
+
+impl OverlayEvent {
+    /// The event's `type`, for the log.
+    fn kind(&self) -> &'static str {
+        match self {
+            OverlayEvent::Show { .. } => "show",
+            OverlayEvent::Mode { .. } => "mode",
+            OverlayEvent::Level { .. } => "level",
+            OverlayEvent::Notice { .. } => "notice",
+            OverlayEvent::Hide => "hide",
+            OverlayEvent::Settings { .. } => "settings",
+        }
+    }
 }
 
 impl Bus {
@@ -169,6 +186,7 @@ impl Bus {
                 subtitles: subtitles.to_owned(),
             },
             backlog: VecDeque::new(),
+            backlog_warned: false,
         }
     }
 
@@ -176,12 +194,22 @@ impl Bus {
         if matches!(event, OverlayEvent::Settings { .. }) {
             self.settings = event.clone();
         }
+        let kind = event.kind();
         if self.subscribers.is_empty() {
             match event {
                 // Replayed to a new page as `self.settings`, and a loudness reading is stale by
                 // the time a page could use it.
                 OverlayEvent::Settings { .. } | OverlayEvent::Level { .. } => {}
                 _ => {
+                    if self.backlog_warned {
+                        log::debug!("overlay: no page is listening, \"{kind}\" waits");
+                    } else {
+                        self.backlog_warned = true;
+                        log::warn!(
+                            "overlay: no page is listening, the \"{kind}\" event waits for one \
+                             (the overlay page has not loaded yet or could not subscribe)"
+                        );
+                    }
                     if self.backlog.len() >= BACKLOG_MAX {
                         self.backlog.pop_front();
                     }
@@ -189,6 +217,12 @@ impl Bus {
                 }
             }
             return;
+        }
+        // A loudness reading comes many times a second.
+        if matches!(event, OverlayEvent::Level { .. }) {
+            log::trace!("overlay: \"{kind}\" to {} page(s)", self.subscribers.len());
+        } else {
+            log::debug!("overlay: \"{kind}\" to {} page(s)", self.subscribers.len());
         }
         self.subscribers
             .retain(|(label, channel)| match channel.send(event.clone()) {
@@ -207,7 +241,9 @@ impl Bus {
             alive = channel.send(event).is_ok();
         }
         if alive {
+            log::info!("overlay: the page \"{label}\" subscribed");
             self.subscribers.push((label.to_owned(), channel));
+            self.backlog_warned = false;
         } else {
             log::warn!("the overlay page \"{label}\" went away while it subscribed");
         }
@@ -365,11 +401,56 @@ pub fn overlay_subscribe(
     webview: Webview,
     channel: Channel<OverlayEvent>,
 ) -> Result<(), String> {
-    let overlay = app
-        .try_state::<Arc<Overlay>>()
-        .ok_or("the overlay is not running")?;
+    let Some(overlay) = app.try_state::<Arc<Overlay>>() else {
+        log::warn!(
+            "overlay: the page \"{}\" subscribed before the overlay was running",
+            webview.label()
+        );
+        return Err("the overlay is not running".into());
+    };
     overlay.subscribe(webview.label(), channel);
     Ok(())
+}
+
+/// The longest page message that is logged, in characters.
+const PAGE_LOG_MAX: usize = 2000;
+
+/// The overlay page reports a problem (an event it could not handle, an uncaught error, a
+/// subscription that failed, animation frames that stopped) or, at `info` and `debug`, what it
+/// is doing. It has no console anyone can see, so this is the only trace. `level` is `"error"`,
+/// `"warn"`, `"info"` or `"debug"`; errors are logged as warnings, because the overlay never
+/// stops dictation.
+#[tauri::command]
+pub fn overlay_log(webview: Webview, level: String, message: String) {
+    let label = webview.label();
+    let message = page_message(&message);
+    match page_log_level(&level) {
+        log::Level::Info => log::info!("overlay page \"{label}\": {message}"),
+        log::Level::Debug => log::debug!("overlay page \"{label}\": {message}"),
+        _ => log::warn!("overlay page \"{label}\": {message}"),
+    }
+}
+
+/// How a page message of `level` is logged: unknown levels count as warnings.
+fn page_log_level(level: &str) -> log::Level {
+    match level {
+        "info" => log::Level::Info,
+        "debug" => log::Level::Debug,
+        _ => log::Level::Warn,
+    }
+}
+
+/// `message` on one line, cut to [`PAGE_LOG_MAX`] characters.
+fn page_message(message: &str) -> String {
+    let mut out: String = message
+        .chars()
+        .take(PAGE_LOG_MAX)
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    if message.chars().count() > PAGE_LOG_MAX {
+        out.push('\u{2026}');
+    }
+    out
 }
 
 // ---------- keeping the window out of Alt+Tab ----------
@@ -739,6 +820,91 @@ mod tests {
         assert_eq!(bus.subscribers.len(), 1);
         assert_eq!(bus.subscribers[0].0, "alive");
         assert_eq!(received(&got), [SETTINGS_150_BOTH, r#"{"type":"hide"}"#]);
+    }
+
+    #[test]
+    fn page_messages_are_logged_at_their_level_and_errors_as_warnings() {
+        assert_eq!(page_log_level("info"), log::Level::Info);
+        assert_eq!(page_log_level("debug"), log::Level::Debug);
+        assert_eq!(page_log_level("warn"), log::Level::Warn);
+        assert_eq!(page_log_level("error"), log::Level::Warn);
+        assert_eq!(page_log_level("whatever"), log::Level::Warn);
+    }
+
+    #[test]
+    fn page_messages_are_one_line_and_cut_when_long() {
+        assert_eq!(page_message("a\nb\tc"), "a b c");
+        let long = "x".repeat(PAGE_LOG_MAX + 10);
+        let cut = page_message(&long);
+        assert_eq!(cut.chars().count(), PAGE_LOG_MAX + 1);
+        assert!(cut.ends_with('\u{2026}'));
+        assert_eq!(
+            page_message(&"x".repeat(PAGE_LOG_MAX)).chars().count(),
+            PAGE_LOG_MAX
+        );
+    }
+
+    #[test]
+    fn waiting_without_a_page_is_warned_about_once_until_a_page_subscribes() {
+        let mut bus = Bus::new(150, "both");
+        bus.publish(OverlayEvent::Level { value: 0.2 }); // dropped, not worth a warning
+        bus.publish(OverlayEvent::Settings {
+            px: 150,
+            subtitles: "both".into(),
+        });
+        assert!(!bus.backlog_warned);
+        bus.publish(OverlayEvent::Show {
+            mode: Mode::Listening,
+        });
+        assert!(bus.backlog_warned);
+        bus.publish(OverlayEvent::Hide);
+        assert!(bus.backlog_warned);
+        let (channel, _got) = page();
+        bus.subscribe("overlay", channel);
+        assert!(
+            !bus.backlog_warned,
+            "a page that comes and goes is worth a new warning"
+        );
+    }
+
+    #[test]
+    fn every_event_has_its_kind_for_the_log() {
+        let events = [
+            OverlayEvent::Show { mode: Mode::Steady },
+            OverlayEvent::Mode { mode: Mode::Steady },
+            OverlayEvent::Level { value: 0.0 },
+            notice(0),
+            OverlayEvent::Hide,
+            OverlayEvent::Settings {
+                px: 150,
+                subtitles: "both".into(),
+            },
+        ];
+        for event in events {
+            let json = serde_json::to_value(&event).unwrap();
+            assert_eq!(json["type"], event.kind());
+        }
+    }
+
+    #[test]
+    fn the_window_on_a_1920x1080_screen_overhangs_only_by_the_transparent_margin() {
+        // What GetWindowRect showed on the user's screen (work area 1920x1032, scale 1). The
+        // window has no frame, so this is the window itself, and the overhang is the canvas's
+        // transparent margin.
+        let work = Rect {
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1032,
+        };
+        let r = place(work, 150, 1.0);
+        assert_eq!((r.x, r.y, r.x + r.w, r.y + r.h), (1385, 808, 1925, 1043));
+        // The emblem's circle (the 195 px canvas sits in the bottom-right corner) is inside the
+        // work area, about 18 px from its right edge and 12 px above the taskbar.
+        let center = (f64::from(r.x + r.w) - 97.5, f64::from(r.y + r.h) - 97.5);
+        assert!(center.0 + 75.0 <= 1920.0 - 17.0);
+        assert!(center.1 + 75.0 <= 1032.0 - 11.0);
+        assert!(center.0 - 75.0 >= 0.0 && center.1 - 75.0 >= 0.0);
     }
 
     #[test]

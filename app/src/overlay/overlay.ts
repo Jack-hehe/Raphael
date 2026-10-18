@@ -10,6 +10,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { Emblem, canvasSize, loadGlyphTexture, type Mode, type Phase } from "./emblem";
 import { noticeDurationMs } from "./notice";
+import { FrameWatch, describeError, guardHandler, subscribeWithRetry, type LogLevel } from "./diagnostics";
 
 export { noticeDurationMs };
 
@@ -184,7 +185,33 @@ const DEFAULT_PX = 150;
 /** The texture is a local file; if it takes longer than this, start without it. */
 const TEXTURE_WAIT_MS = 2000;
 
+/**
+ * Writes `message` to the app's log (raphael.log, as "overlay page: ..."). Never throws and never
+ * reports its own failure, so that it cannot loop.
+ */
+function pageLog(level: LogLevel, message: string): void {
+  invoke("overlay_log", { level, message }).catch(() => {});
+}
+
+/** Uncaught errors anywhere in the page go to the app's log too. */
+function reportUncaught(): void {
+  window.addEventListener("error", (event) => {
+    const where = event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : "";
+    pageLog("error", `uncaught error${where}: ${describeError(event.error ?? event.message)}`);
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    pageLog("error", `unhandled rejection: ${describeError(event.reason)}`);
+  });
+  // A webview that thinks its window cannot be seen stops the animation frames.
+  document.addEventListener("visibilitychange", () => {
+    pageLog("info", `document ${document.visibilityState}`);
+  });
+}
+
 async function start(): Promise<void> {
+  reportUncaught();
+  pageLog("info", `loaded (document ${document.visibilityState}, ${window.innerWidth}x${window.innerHeight} at ${window.devicePixelRatio})`);
+
   const canvas = document.getElementById("emblem");
   const box = document.getElementById("subtitles");
   const zh = box?.querySelector<HTMLElement>(".sub-zh");
@@ -195,7 +222,9 @@ async function start(): Promise<void> {
 
   const view = new DomView(document.documentElement, box, zh, ja);
   view.layout(DEFAULT_PX);
-  const controller = new OverlayController(new Emblem(canvas, DEFAULT_PX), view);
+  const emblem = new Emblem(canvas, DEFAULT_PX);
+  const controller = new OverlayController(emblem, view);
+  const frames = new FrameWatch(() => emblem.frames, () => document.visibilityState, pageLog);
 
   // The texture comes first, so that no event meets a half-ready emblem. Without the file the
   // load fails and the plain vector ring is drawn.
@@ -204,12 +233,22 @@ async function start(): Promise<void> {
     new Promise((resolve) => setTimeout(resolve, TEXTURE_WAIT_MS)),
   ]);
 
-  // Subscribe once. Events that came before this point wait on the Rust side.
-  const channel = new Channel<OverlayEvent>((event) => controller.handle(event));
-  await invoke("overlay_subscribe", { channel });
+  // Subscribe once (again if that fails). Events that came before this point wait on the Rust
+  // side. An event that fails is reported and the channel goes on.
+  const handle = guardHandler((event) => {
+    controller.handle(event);
+    if (event.type === "show" || event.type === "notice") frames.expectFrames(event.type);
+  }, pageLog);
+  await subscribeWithRetry(() => {
+    const channel = new Channel<OverlayEvent>(handle);
+    return invoke("overlay_subscribe", { channel });
+  }, pageLog);
 }
 
 // Only in the overlay page (the tests import this file in Node).
 if (typeof document !== "undefined" && document.getElementById("emblem")) {
-  start().catch((err) => console.error("overlay: could not start", err));
+  start().catch((err) => {
+    console.error("overlay: could not start", err);
+    pageLog("error", `could not start: ${describeError(err)}`);
+  });
 }

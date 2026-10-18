@@ -78,6 +78,7 @@ pub fn run() {
         // this one list.
         .invoke_handler(tauri::generate_handler![
             overlay::overlay_subscribe,
+            overlay::overlay_log,
             commands::core_call,
             commands::device_settings_get,
             commands::device_settings_set,
