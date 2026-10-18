@@ -33,7 +33,7 @@ use crate::device_settings::{
     self, Appearance, DeviceSettings, DeviceStore, DictationMode, FILE_NAME, Subtitles,
 };
 use crate::dictation::ModeCell;
-use crate::hotkey::{Bindings, HotkeyService, PauseReason};
+use crate::hotkey::{Bindings, HotkeyService, PauseReason, WindowHotkey};
 use crate::overlay::Overlay;
 use crate::rpc::{CORE_EXITED, Notification, RpcError, TIMEOUT};
 
@@ -448,6 +448,20 @@ where
 }
 
 // ---------- hotkeys and the keyboard ----------
+
+/// Focused-main-webview fallback. The worker applies the same pause/cancel state as the hook.
+/// A key-up synthesized on blur is allowed so hold mode cannot get stuck after focus moves.
+#[tauri::command]
+pub fn window_hotkey(
+    window: tauri::WebviewWindow,
+    hotkeys: State<'_, Arc<HotkeyService>>,
+    kind: WindowHotkey,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("window hotkeys are only available to the main webview".to_string());
+    }
+    hotkeys.window_hotkey(kind)
+}
 
 /// Pauses (`true`) or resumes (`false`) the dictation hotkeys, so that the settings page can
 /// record a new one. It uses its own pause reason ([`PauseReason::KeyRecorder`]), so resuming

@@ -13,6 +13,7 @@ import { createSettings } from "./pages/settings";
 import { DeviceState } from "./device";
 import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
+import { installWindowHotkeys } from "./window-hotkeys";
 import type { AppContext, DeviceSettings, MainEvent, Page, PageId } from "./types";
 import { spendMini } from "./spend";
 import { Undoable } from "./undo";
@@ -82,6 +83,7 @@ async function start(): Promise<void> {
   } catch (err) {
     console.error("main: could not read the device settings", err);
   }
+  installWindowHotkeys(() => device.get());
   void loadGlyphTexture(GLYPH_URL);
 
   // The browser's own menu (reload, back, ...) has no place in an app. Text fields keep theirs.

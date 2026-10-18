@@ -3,6 +3,7 @@
 // makes it fit to show).
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { withWindowHotkeyPause } from "./window-hotkeys";
 import type { LanguageGroup } from "./languages";
 import type {
   AudioDevices,
@@ -90,7 +91,8 @@ export const deviceSettingsSet = (patch: Partial<DeviceSettings>): Promise<Devic
 /** Whether the keyboard layout has an AltGr key (Right Alt types characters). */
 export const keyboardHasAltgr = (): Promise<boolean> => invoke("keyboard_has_altgr");
 /** Pauses the global hotkeys while the page records a new one. */
-export const hotkeysPause = (paused: boolean): Promise<void> => invoke("hotkeys_pause", { paused });
+export const hotkeysPause = (paused: boolean): Promise<void> =>
+  withWindowHotkeyPause(paused, () => invoke("hotkeys_pause", { paused }));
 
 /** Starts hearing the events of the core. Call once; a page that calls again replaces the first. */
 export async function subscribeMainEvents(handler: (event: MainEvent) => void): Promise<void> {
