@@ -1365,6 +1365,26 @@ async def test_closing_the_app_closes_the_meter_and_the_client(make_app):
     assert app.client.closed
 
 
+async def test_closing_the_app_stops_usage_refresh_before_closing_the_client(make_app):
+    app = make_app()
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def key_info(**kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            assert not app.client.closed
+            cancelled.set()
+            raise
+
+    app.client.key_info = key_info
+    await app.call("status.get")
+    await asyncio.wait_for(started.wait(), 1)
+    await app.aclose()
+    assert cancelled.is_set() and app.client.closed
+
+
 async def test_a_close_step_that_fails_does_not_skip_the_rest(make_app, caplog):
     kit = make_kit()
     app = make_app(kit)

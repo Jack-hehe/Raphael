@@ -662,6 +662,7 @@ class App(Router):
         steps: list[tuple[str, Callable[[], Awaitable[None]]]] = [
             ("cancel the dictation", close_dictation),
             ("close the level meter", close_meter),
+            ("stop the account usage refresh", self.brain.aclose),
             ("close the HTTP client", self.client.aclose),
             ("wait for the start-up threads", join_threads),
             ("let go of the speech models", close_speech),

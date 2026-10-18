@@ -13,6 +13,7 @@ function status(openrouter: Partial<Status["openrouter"]>, month: number, limit:
       checked_at_ms: now,
       error: null,
       key: null,
+      usage: null,
       ...openrouter,
     },
     spend: { month_usd: month, today_usd: 0, limit_usd: limit, forecast_usd: 0, daily: [] },

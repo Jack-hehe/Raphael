@@ -795,11 +795,13 @@ async def test_key_info_parses_fields(client_with):
             "limit_remaining": 46.58,
             "limit_reset": "monthly",
             "usage_daily": 0.21,
+            "usage_weekly": 1.23,
             "usage_monthly": 3.42,
+            "usage": 12.34,
         }
     }
     info = await client_with(lambda r: httpx.Response(200, json=data)).key_info()
-    assert info == KeyInfo("Raphael", 50, 46.58, "monthly", 0.21, 3.42)
+    assert info == KeyInfo("Raphael", 50, 46.58, "monthly", 0.21, 3.42, 1.23, 12.34)
 
 
 async def test_a_key_without_a_limit_has_none_not_zero(client_with):
@@ -820,7 +822,26 @@ async def test_a_key_without_a_limit_has_none_not_zero(client_with):
 
 async def test_key_info_fills_in_what_the_reply_leaves_out(client_with):
     info = await client_with(lambda r: httpx.Response(200, json={"data": {}})).key_info()
-    assert info == KeyInfo("", None, None, None, 0.0, 0.0)
+    assert info == KeyInfo("", None, None, None, None, None)
+
+
+@pytest.mark.parametrize("value", [None, True, "1.2", [], {}])
+async def test_key_usage_unknown_amounts_are_none(client_with, value):
+    data = {
+        field: value
+        for field in (
+            "usage_daily", "usage_weekly", "usage_monthly", "usage", "limit", "limit_remaining"
+        )
+    }
+    info = await client_with(lambda r: httpx.Response(200, json={"data": data})).key_info()
+    assert (
+        info.usage_daily,
+        info.usage_weekly,
+        info.usage_monthly,
+        info.usage_total,
+        info.limit,
+        info.limit_remaining,
+    ) == (None, None, None, None, None, None)
 
 
 async def test_a_rejected_key_is_an_auth_error(client_with):

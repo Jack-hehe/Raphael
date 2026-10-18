@@ -14,6 +14,8 @@ does not say is here:
   back (with id None); if the key store fails, it comes back as spoken, without cleanup.
 - The status of OpenRouter is the latest contact: a key check or a cleanup call. It starts as
   "unknown" and it is "no_key" for as long as no key is stored, whatever happened before.
+- Account usage is from the last successful key check. Status reads refresh it in the background
+  after a minute, without making a dictation wait for that check.
 - Nothing here logs the dictated text, a key or the message of a failure. A failure of OpenRouter
   is logged by its kind and status, any other by the name of its type: the message, cause or
   traceback of an OpenRouterError can hold the text of the key store.
@@ -21,6 +23,7 @@ does not say is here:
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import sqlite3
 import time
@@ -56,6 +59,8 @@ SUGGESTION_DAYS = 7
 # How long a key check may take in all. The client's timeout applies to each stage of a request
 # (connect, send, wait, read), so by itself a check could outlast the 15 s the app waits for it.
 KEY_CHECK_TIMEOUT_S = 10.0
+# Status polls return cached usage and refresh it in the background at most once a minute.
+KEY_USAGE_REFRESH_INTERVAL_MS = 60_000
 
 _DAY_MS = 86_400_000
 # SQLite stores integers in 64 bits and refuses to bind a larger one.
@@ -199,6 +204,12 @@ class Brain:
         self._now_ms = now_ms
         self._key_check_timeout_s = key_check_timeout_s
         self._openrouter = _OpenRouterState()
+        self._key_identity: bytes | None = None
+        self._key_generation = 0
+        self._key_check_revision = 0
+        self._key_checked_at_ms: int | None = None
+        self._key_refresh_task: asyncio.Task[None] | None = None
+        self._closed = False
         self._pruned_at_ms: int | None = None
         self._history = HistoryStore(conn)
         self._dictionary = DictionaryStore(conn, now_ms)
@@ -216,6 +227,15 @@ class Brain:
         )
         self._stt = CloudTranscriber(client, self._settings, self._spend, has_key=self._has_key)
         self._prune_history()
+
+    async def aclose(self) -> None:
+        """Stop the status refresh before its HTTP client is closed."""
+        self._closed = True
+        task = self._key_refresh_task
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     def register(self, router: Router) -> None:
         """Put every method of the brain on `router`."""
@@ -418,7 +438,8 @@ class Brain:
     def _has_key(self) -> bool:
         """Whether a key is stored. Raises if the key store fails; each caller decides what then."""
         key = self._keys.get()
-        return key is not None and bool(key.strip())
+        self._remember_key(key)
+        return self._key_identity is not None
 
     def _has_key_or_none(self) -> bool | None:
         """Like `_has_key`, but None when the key store fails (logged by the type of the error)."""
@@ -429,6 +450,23 @@ class Brain:
                 "The key store failed to read the OpenRouter key: %s", type(exc).__name__
             )
             return None
+
+    def _remember_key(self, key: str | None) -> None:
+        """Discard status from a different key, including an in-flight refresh's result.
+
+        Keep only a digest for comparison, never an extra copy of the credential.
+        """
+        key = (key or "").strip()
+        identity = hashlib.sha256(key.encode()).digest() if key else None
+        if identity == self._key_identity:
+            return
+        self._key_identity = identity
+        self._key_generation += 1
+        self._key_checked_at_ms = None
+        self._openrouter = _OpenRouterState()
+        if self._key_refresh_task is not None:
+            self._key_refresh_task.cancel()
+            self._key_refresh_task = None
 
     async def _secrets_status(self, params: dict) -> dict:
         try:
@@ -450,6 +488,8 @@ class Brain:
             self._keys.set(key)
         except Exception as exc:
             raise _key_store_failure(exc, "store") from None
+        self._remember_key(key)
+        self._key_check_revision += 1
         self._note("ok", latency_ms=latency_ms, key=info)
         return {
             "valid": True,
@@ -464,6 +504,7 @@ class Brain:
             self._keys.clear()
         except Exception as exc:
             raise _key_store_failure(exc, "remove") from None
+        self._remember_key(None)
         self._openrouter = _OpenRouterState()  # what was known belonged to the key that is gone
         return {}
 
@@ -499,6 +540,8 @@ class Brain:
     ) -> None:
         """Record how the latest contact with OpenRouter went. The last key info stays if no new
         one is given."""
+        if key is not None:
+            self._key_checked_at_ms = self._now_ms()
         self._openrouter = _OpenRouterState(
             state=state,
             latency_ms=latency_ms,
@@ -520,13 +563,54 @@ class Brain:
         """The `openrouter` object. `has_key` is None when the key store failed."""
         if has_key is None:
             # The client calls a key it cannot read an auth error, and so does the status.
-            return asdict(_OpenRouterState(state="error", error="auth"))
-        return asdict(self._openrouter if has_key else _OpenRouterState(state="no_key"))
+            state = _OpenRouterState(state="error", error="auth")
+        else:
+            state = self._openrouter if has_key else _OpenRouterState(state="no_key")
+        view = asdict(state)
+        info = state.key
+        view["usage"] = (
+            None
+            if info is None
+            else {
+                "daily": info.usage_daily,
+                "weekly": info.usage_weekly,
+                "monthly": info.usage_monthly,
+                "total": info.usage_total,
+                "limit": info.limit,
+                "limit_remaining": info.limit_remaining,
+            }
+        )
+        return view
+
+    def _refresh_key_usage_if_due(self) -> None:
+        task = self._key_refresh_task
+        if self._closed or (task is not None and not task.done()):
+            return
+        now, last = self._now_ms(), self._key_checked_at_ms
+        if last is not None and 0 <= now - last < KEY_USAGE_REFRESH_INTERVAL_MS:
+            return
+        # Record attempts too, so an outage does not turn every UI poll into another request.
+        self._key_checked_at_ms = now
+        self._key_refresh_task = asyncio.create_task(self._refresh_key_usage())
+
+    async def _refresh_key_usage(self) -> None:
+        try:
+            await self._status_check_openrouter({})
+        except RpcError:
+            # _check_key already logs the type only; background failures never escape as an
+            # unobserved task exception or put the key store's message into a log.
+            pass
+        finally:
+            if self._key_refresh_task is asyncio.current_task():
+                self._key_refresh_task = None
 
     async def _status_get(self, params: dict) -> dict:
+        has_key = self._has_key_or_none()
+        if has_key:
+            self._refresh_key_usage_if_due()
         latest = self._history.latest()
         return {
-            "openrouter": self._openrouter_view(self._has_key_or_none()),
+            "openrouter": self._openrouter_view(has_key),
             "spend": {
                 "month_usd": self._spend.month_total(),
                 "today_usd": self._spend.today_total(),
@@ -548,13 +632,40 @@ class Brain:
     async def _status_check_openrouter(self, params: dict) -> dict:
         has_key = self._has_key_or_none()
         if has_key:
+            generation = self._key_generation
+            self._key_check_revision += 1
+            revision = self._key_check_revision
+            self._key_checked_at_ms = self._now_ms()
             try:
                 info, latency_ms = await self._check_key(None)
             except OpenRouterError as error:
                 _log_failure("The OpenRouter check failed", error)
-                self._note("error", error=error.kind)
+                has_key = self._has_key_or_none()
+                if (
+                    has_key
+                    and generation == self._key_generation
+                    and revision == self._key_check_revision
+                ):
+                    self._note("error", error=error.kind)
+            except RpcError:
+                has_key = self._has_key_or_none()
+                if (
+                    has_key
+                    and generation == self._key_generation
+                    and revision == self._key_check_revision
+                ):
+                    self._note("error", error="unexpected")
+                raise
             else:
-                self._note("ok", latency_ms=latency_ms, key=info)
+                has_key = self._has_key_or_none()
+                # An older background response must not replace a newer explicit check's data,
+                # even when both requests checked the same key.
+                if (
+                    has_key
+                    and generation == self._key_generation
+                    and revision == self._key_check_revision
+                ):
+                    self._note("ok", latency_ms=latency_ms, key=info)
         return self._openrouter_view(has_key)
 
     # --- pricing and statistics -----------------------------------------------------------------

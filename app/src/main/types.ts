@@ -12,6 +12,15 @@ export interface Status {
     /** The kind of the OpenRouter error when `state` is `error`: auth, network, timeout, ... */
     error: string | null;
     key: KeyInfo | null;
+    /** Last successful key usage reading; missing API fields stay unknown. Amounts are USD. */
+    usage: {
+      daily: number | null;
+      weekly: number | null;
+      monthly: number | null;
+      total: number | null;
+      limit: number | null;
+      limit_remaining: number | null;
+    } | null;
   };
   spend: {
     month_usd: number;
@@ -34,8 +43,10 @@ export interface KeyInfo {
   limit: number | null;
   limit_remaining: number | null;
   limit_reset: string | null;
-  usage_daily: number;
-  usage_monthly: number;
+  usage_daily: number | null;
+  usage_monthly: number | null;
+  usage_weekly: number | null;
+  usage_total: number | null;
 }
 
 /** One price of `pricing.get`: US$ per million tokens or per minute of audio; null when unknown. */
