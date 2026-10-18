@@ -21,13 +21,14 @@ class HistoryItem:
     audio_seconds: float
     stt_ms: int
     llm_ms: int
-    model: str | None
+    model: str | None  # the cleanup model
     cost_usd: float
+    stt: str | None = None  # the speech-to-text that heard it (cloud model or local engine)
 
 
 _COLUMNS = (
     "id, created_at_ms, kind, raw_text, text, cleaned, fallback_reason, target_app, "
-    "audio_seconds, stt_ms, llm_ms, model, cost_usd"
+    "audio_seconds, stt_ms, llm_ms, model, cost_usd, stt"
 )
 _NEWEST_FIRST = "ORDER BY created_at_ms DESC, id DESC"
 
@@ -54,10 +55,10 @@ class HistoryStore:
         with self._conn:
             cursor = self._conn.execute(
                 "INSERT INTO history (created_at_ms, kind, raw_text, text, cleaned,"
-                " fallback_reason, target_app, audio_seconds, stt_ms, llm_ms, model, cost_usd)"
+                " fallback_reason, target_app, audio_seconds, stt_ms, llm_ms, model, cost_usd, stt)"
                 " VALUES (:created_at_ms, :kind, :raw_text, :text, :cleaned,"
                 " :fallback_reason, :target_app, :audio_seconds, :stt_ms, :llm_ms, :model,"
-                " :cost_usd)",
+                " :cost_usd, :stt)",
                 values,
             )
         return cursor.lastrowid

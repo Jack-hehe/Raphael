@@ -113,3 +113,11 @@ def test_prune_keeps_items_at_the_cutoff(conn):
     assert h.prune(older_than_ms=1000) == 0
     assert h.prune(older_than_ms=1001) == 1
     assert h.latest() is None
+
+
+def test_the_speech_to_text_that_heard_a_dictation_is_kept(conn):
+    h = HistoryStore(conn)
+    with_stt = h.add(item(stt="openai/gpt-transcribe"))
+    without = h.add(item())
+    assert h.get(with_stt).stt == "openai/gpt-transcribe"
+    assert h.get(without).stt is None

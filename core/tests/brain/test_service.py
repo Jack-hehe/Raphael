@@ -32,6 +32,7 @@ SECRET = "sk-or-v1-TOPSECRET"
 
 METHODS = [
     "brain.finalize_dictation",
+    "stt.transcribe",
     "history.list",
     "history.latest",
     "history.delete",
@@ -281,7 +282,14 @@ async def test_finalize_result_and_history_row(router, fake_client, keys):
         "llm_ms": r["llm_ms"],
         "model": "google/gemini-3.1-flash-lite",
         "cost_usd": 0.0002,
+        "stt": None,
     }
+
+
+async def test_finalize_keeps_which_speech_to_text_heard_it(router):
+    await finalize(router, "你好", stt="openai/gpt-transcribe+qwen3-asr")
+    row = (await router.call("history.latest", {}))["item"]
+    assert row["stt"] == "openai/gpt-transcribe+qwen3-asr"
 
 
 @pytest.mark.parametrize("raw_text", ["", "  ", "\n \t\n"])
@@ -427,6 +435,7 @@ BAD_PARAMS = [
     (FIN, {**GOOD, "stt_ms": 10**30}, "finalize: stt_ms beyond SQLite"),
     (FIN, without(GOOD, "stt_ms"), "finalize: no stt_ms"),
     (FIN, {**GOOD, "target_app": 5}, "finalize: target_app number"),
+    (FIN, {**GOOD, "stt": 5}, "finalize: stt number"),
     ("history.list", {"query": 5}, "history.list: query number"),
     ("history.list", {"limit": "5"}, "history.list: limit str"),
     ("history.list", {"limit": 2.5}, "history.list: limit float"),
