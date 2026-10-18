@@ -3,9 +3,11 @@
     uv run python -m raphael_core.evaluate.cleanup --cases ../eval/cleanup_cases.jsonl --models a,b
 
 Each case of the cases file is a line of speech-to-text output. It goes through the same steps as in
-the app: normalized like a transcript (`normalize_transcript`), cleaned by the model with the
-system prompt, user message and token limit the app uses, with no fallback model so that what is
-measured is the model that was named, and the reply made final by `finish_cleaned_text`. The
+the app: given to the model as it was heard (without OpenCC, which the app applies only to the
+raw text it pastes when there is no cleanup), cleaned by the model with the system prompt (the
+case's target app included), user message and token limit the app uses, with no fallback model
+so that what is measured is the model that was named, and the reply made final by
+`finish_cleaned_text`. The
 checks judge what the user would get: `must_contain` and `must_not_contain` are looked for in the
 final text, the length rule of `CleanupService` (`is_suspicious_reply`) is applied to the reply as
 the model wrote it. These are the functions the app itself uses, imported, not copied. The length
@@ -18,9 +20,11 @@ read from Windows Credential Manager, where `--set-key` stores it; it is never p
 to a file.
 
 Cases file: one JSON object per line with `id`, `input`, and optionally `dictionary` (a list of
-words), `must_contain` and `must_not_contain` (lists of text). Spaces are ignored when a text is
-looked for, so 打開 YouTube and 打開YouTube are the same. The final text is Taiwan Traditional
-Chinese, which turns 打開 into 開啟, so a text to look for must be one the conversion leaves alone.
+words), `must_contain` and `must_not_contain` (lists of text) and `target_app` (the process name
+of the window the text goes to, such as LINE.exe). Spaces are ignored when a text is looked for,
+so 打開 YouTube and 打開YouTube are the same. What the model leaves in Simplified Chinese is
+converted to Taiwan Traditional Chinese (打开 into 開啟), so a text to look for must be one that
+conversion leaves alone: Traditional Chinese is.
 """
 
 import argparse
@@ -41,6 +45,7 @@ from raphael_core.brain.cleanup import (
     build_user_message,
     is_suspicious_reply,
     max_tokens_for,
+    reply_length,
     reply_length_limit,
 )
 from raphael_core.brain.openrouter import (
@@ -49,7 +54,7 @@ from raphael_core.brain.openrouter import (
     OpenRouterError,
 )
 from raphael_core.brain.secrets import CredentialKeyStore
-from raphael_core.brain.textnorm import finish_cleaned_text, normalize_transcript
+from raphael_core.brain.textnorm import apply_replacements, finish_cleaned_text
 from raphael_core.evaluate import use_utf8_output
 
 # Generous: this measures the models, and the app's own timeout (3 to 15 s) is not what is tested.
@@ -72,6 +77,7 @@ class Case:
     dictionary: list[str]
     must_contain: list[str]
     must_not_contain: list[str]
+    target_app: str | None = None  # the process name of the window the text goes to
 
 
 @dataclass(frozen=True)
@@ -131,6 +137,9 @@ def load_cases(path: Path) -> list[Case]:
         if case_id in seen:
             raise ValueError(f"{where}：id「{case_id}」重複")
         seen.add(case_id)
+        target_app = entry.get("target_app")
+        if target_app is not None and not isinstance(target_app, str):
+            raise ValueError(f"{where}：target_app 必須是文字")
         cases.append(
             Case(
                 id=case_id,
@@ -138,6 +147,7 @@ def load_cases(path: Path) -> list[Case]:
                 dictionary=_string_list(entry, "dictionary", where),
                 must_contain=_string_list(entry, "must_contain", where),
                 must_not_contain=_string_list(entry, "must_not_contain", where),
+                target_app=target_app,
             )
         )
     return cases
@@ -149,8 +159,9 @@ _NO_RULES: tuple[tuple[str, str], ...] = ()
 
 
 def transcript_for(case: Case) -> str:
-    """The case's input as the model gets it: normalized like speech-to-text output in the app."""
-    return normalize_transcript(case.input, _NO_RULES)
+    """The case's input as the model gets it. The app gives the model the speech-to-text result
+    as it was heard, with the dictionary's replacements (a case has none) and without OpenCC."""
+    return apply_replacements(case.input, _NO_RULES)
 
 
 def _squash(text: str) -> str:
@@ -162,8 +173,9 @@ def failed_checks(case: Case, reply: str) -> list[str]:
 
     This judges what the user would get. The length rule is applied to the reply as the model
     wrote it, as `CleanupService` does. The words that must or must not be there are looked for in
-    the text after the app's processing of the reply (`finish_cleaned_text`: Traditional Chinese
-    with Taiwan usage, which turns 打開 into 開啟, and the dictionary's replacements), because that
+    the text after the app's processing of the reply (`finish_cleaned_text`: what is still
+    Simplified Chinese made Taiwan Traditional, which turns 打开 into 開啟, and the dictionary's
+    replacements), because that
     is what is pasted. A reply that the length rule refuses is pasted as the raw text in the app;
     it fails here, and the other checks still look at what the model wrote.
     """
@@ -174,7 +186,10 @@ def failed_checks(case: Case, reply: str) -> list[str]:
     sent = transcript_for(case)
     if is_suspicious_reply(sent, reply):
         limit = reply_length_limit(sent)
-        failures.append(f"輸出過長（{len(reply)} 字，上限 {limit:g} 字）：app 會當成可疑而改貼原文")
+        failures.append(
+            f"輸出過長（{reply_length(reply)} 字，不算換行，上限 {limit:g} 字）："
+            "app 會當成可疑而改貼原文"
+        )
     final = _squash(finish_cleaned_text(reply, _NO_RULES))
     for needle in case.must_contain:
         if _squash(needle) not in final:
@@ -198,7 +213,7 @@ async def run_case(
         completion = await client.complete_json(
             model=model,
             fallbacks=[],
-            system=build_system_prompt(case.dictionary, []),
+            system=build_system_prompt(case.dictionary, [], case.target_app),
             user=build_user_message(sent),
             schema=CLEANUP_SCHEMA,
             schema_name="cleaned_dictation",
@@ -305,10 +320,9 @@ def render_report(
     ]
     for case in cases:
         lines += ["", f"### {case.id}", "", "輸入：", "", _fence(case.input)]
-        sent = transcript_for(case)
-        if sent != case.input:
-            lines += ["", "送給模型的文字（App 先轉成繁體）：", "", _fence(sent)]
         lines.append("")
+        if case.target_app:
+            lines.append(f"- 目標 App：`{case.target_app}`")
         if case.dictionary:
             lines.append(f"- 字典：{'、'.join(case.dictionary)}")
         if case.must_contain:
