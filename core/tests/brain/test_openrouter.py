@@ -129,7 +129,7 @@ async def test_complete_json_sends_schema_and_fallbacks(client_with):
         return ok_reply({"text": "好。"})
 
     c = await client_with(handler).complete_json(
-        model="google/gemini-3.1-flash-lite",
+        model="openai/gpt-6-luna",
         fallbacks=CLEANUP_FALLBACKS,
         system="s",
         user="u",
@@ -172,7 +172,7 @@ async def test_the_request_body_is_exactly_the_documented_one(client_with):
         max_tokens=256,
     )
     assert seen == {
-        "model": "google/gemini-3.1-flash-lite",
+        "model": "openai/gpt-6-luna",
         "models": ["fallback/one", "fallback/two"],
         "messages": [
             {"role": "system", "content": "只整理文字。"},
