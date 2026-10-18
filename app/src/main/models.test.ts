@@ -215,7 +215,7 @@ describe("ModelDownload", () => {
     };
     const download = new ModelDownload(api);
     await download.start();
-    expect(download.phase).toEqual({ kind: "failed", reason: "拉斐爾的核心沒有在執行" });
+    expect(download.phase).toEqual({ kind: "failed", reason: "Raphael 的核心沒有在執行" });
   });
 
   test("starting twice while it runs asks the core once", async () => {

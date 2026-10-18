@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildReport, coreDownReport } from "./report";
+import { blockingAlert, buildReport, coreDownReport } from "./report";
 import type { Status } from "./types";
 
 const now = Date.parse("2026-10-17T21:42:00+08:00");
@@ -142,4 +142,13 @@ test("when the core does not answer", () => {
   expect(r.zh.endsWith("》")).toBe(true);
   expect(r.ja.startsWith("《告。")).toBe(true);
   expect(r.action).toEqual({ label: "重新連線", target: "retry" });
+});
+
+test("blockingAlert: no key, bad key, offline and the limit stop dictation; the rest does not", () => {
+  expect(blockingAlert(status({ state: "no_key" }, 0, 10))?.action).toBe("設定金鑰");
+  expect(blockingAlert(status({ state: "error", error: "auth" }, 0, 10))?.text).toContain("無效");
+  expect(blockingAlert(status({ state: "error", error: "network" }, 0, 10))?.text).toContain("連不上");
+  expect(blockingAlert(status({}, 10, 10))?.action).toBe("調整上限");
+  expect(blockingAlert(status({}, 9, 10))).toBeNull();
+  expect(blockingAlert(status({ state: "unknown" }, 1, 10))).toBeNull();
 });

@@ -12,7 +12,9 @@ import type {
   KeyCheck,
   MainEvent,
   ModelsStatus,
+  Pricing,
   Status,
+  StatsSummary,
 } from "./types";
 
 /** Calls `method` of the core. Only the methods of the main window go through (commands.rs). */
@@ -26,6 +28,13 @@ export const statusGet = (): Promise<Status> => core("status.get");
 
 /** Asks OpenRouter again; answers with the `openrouter` part of the status. */
 export const statusCheckOpenrouter = (): Promise<Status["openrouter"]> => core("status.check_openrouter");
+
+// ---------- usage and prices ----------
+
+/** The numbers of the home page: words, time, speed, the last 14 days. */
+export const statsSummary = (): Promise<StatsSummary> => core("stats.summary");
+/** The prices of the cleanup and speech-to-text models, read from OpenRouter when it can be. */
+export const pricingGet = (): Promise<Pricing> => core("pricing.get");
 
 // ---------- history ----------
 

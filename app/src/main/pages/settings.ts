@@ -6,11 +6,22 @@
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
 import { DICTATION_MODES, isDictationMode, modeDescription } from "../dictation";
-import { KEEP_FOREVER_DAYS, describeError, formatRetention, keyReasonText, parseLimit } from "../format";
+import {
+  KEEP_FOREVER_DAYS,
+  describeError,
+  formatClock,
+  formatLimit,
+  formatRetention,
+  formatUsd,
+  keyReasonText,
+  parseLimit,
+} from "../format";
 import { wireKeyField } from "../keyfield";
 import { KeyRecorder, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "../keys";
 import { MonitorSwitch } from "../monitor";
-import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, Page, Status } from "../types";
+import { cleanupPriceShort, cleanupPriceText, priceOf, pricingNote, sttPriceShort, sttPriceText } from "../pricing";
+import { runOutDay } from "../report";
+import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, Page, Pricing, Status } from "../types";
 import {
   type Choice,
   btn,
@@ -81,6 +92,12 @@ const RETENTIONS: Choice[] = [1, 7, 30, 365, KEEP_FOREVER_DAYS].map((days) => ({
 
 const AUTO_MICROPHONE = "";
 
+/** From this share of the monthly limit on, the spend bar is orange. */
+const WARN_FROM = 0.8;
+/** What the prices in the cleanup model's menu are. */
+const CLEANUP_PRICE_HEAD = "每百萬 token 的價格：輸入 / 輸出";
+const PRICES_LOADING = "價格載入中…";
+
 interface Recording {
   recorder: KeyRecorder;
   /** The cell with the keys, which shows the keys while they are held. */
@@ -103,6 +120,10 @@ export function createSettings(app: AppContext): Page {
   let brain: BrainSettings | null = null;
   let hasKey = false;
   let openrouter: Status["openrouter"] | null = null;
+  let spend: Status["spend"] | null = null;
+  /** The prices of the models: being read (`loading`), read, or not to be had (`failed`). */
+  let pricing: Pricing | "loading" | "failed" = "loading";
+  let checkingOpenrouter = false;
   let devices: AudioDevices | null = null;
   let altgr = false;
   let version = "";
@@ -130,7 +151,7 @@ export function createSettings(app: AppContext): Page {
   }
 
   /** The menu of each `sel` (by its `data-k`): what it offers, what is chosen and what choosing does. */
-  function menuFor(k: string): { choices: Choice[]; current: string; pick: (value: string) => void } | null {
+  function menuFor(k: string): { choices: Choice[]; current: string; pick: (value: string) => void; head?: string } | null {
     const d = app.device();
     switch (k) {
       case "mic":
@@ -145,23 +166,26 @@ export function createSettings(app: AppContext): Page {
         return { choices: STT_ENGINES, current: sttEngine(), pick: (v) => void changeBrain("stt_engine", v) };
       case "stt-model": {
         const current = sttModel();
-        return { choices: withCurrent(STT_MODELS, current), current, pick: (v) => void changeBrain("stt_cloud_model", v) };
+        return {
+          choices: withPrices(withCurrent(STT_MODELS, current), (id) => sttPriceShort(priceOf(prices()?.stt, id))),
+          current,
+          pick: (v) => void changeBrain("stt_cloud_model", v),
+        };
       }
       case "model": {
-        const current = brain?.cleanup_model ?? MODELS[0].value;
-        return { choices: withCurrent(MODELS, current), current, pick: (v) => void changeBrain("cleanup_model", v) };
+        const current = cleanupModel();
+        return {
+          choices: withPrices(withCurrent(MODELS, current), (id) => cleanupPriceShort(priceOf(prices()?.cleanup, id))),
+          current,
+          pick: (v) => void changeBrain("cleanup_model", v),
+          head: prices() ? CLEANUP_PRICE_HEAD : undefined,
+        };
       }
       case "subtitles":
         return {
           choices: SUBTITLES,
           current: d.subtitles,
           pick: (v) => void changeDevice({ subtitles: v as DeviceSettings["subtitles"] }),
-        };
-      case "appearance":
-        return {
-          choices: APPEARANCES,
-          current: d.appearance,
-          pick: (v) => void changeDevice({ appearance: v as DeviceSettings["appearance"] }),
         };
       case "retention": {
         const current = String(brain?.history_retention_days ?? 30);
@@ -178,19 +202,63 @@ export function createSettings(app: AppContext): Page {
 
   const sttEngine = (): string => brain?.stt_engine ?? "cloud";
   const sttModel = (): string => brain?.stt_cloud_model ?? STT_MODELS[0].value;
+  const cleanupModel = (): string => brain?.cleanup_model ?? MODELS[0].value;
+  /** The prices once they are read. */
+  const prices = (): Pricing | null => (typeof pricing === "object" ? pricing : null);
 
-  /** 「語音轉文字」, and the cloud model when it is the cloud. */
-  function sttRows(): string[] {
+  /** The choices with their prices as details, while there are prices to show. */
+  function withPrices(choices: Choice[], price: (id: string) => string): Choice[] {
+    if (pricing === "failed") return choices;
+    return choices.map((c) => ({ ...c, detail: pricing === "loading" ? PRICES_LOADING : price(c.value) }));
+  }
+
+  /** The texts that depend on the prices, by the `data-price` of the element that shows them. */
+  function priceTexts(): Record<string, string> {
+    const p = prices();
+    if (pricing === "loading") return { model: PRICES_LOADING, "stt-model": PRICES_LOADING, note: "" };
+    if (!p) return { model: "", "stt-model": "", note: "目前無法取得模型價格。" };
+    return {
+      model: cleanupPriceText(priceOf(p.cleanup, cleanupModel())),
+      "stt-model": sttPriceText(priceOf(p.stt, sttModel())),
+      note: pricingNote(p, Date.now()),
+    };
+  }
+
+  /** Shows the prices where they go, without drawing the page again (a key being typed stays). */
+  function paintPrices(): void {
+    const texts = priceTexts();
+    el.querySelectorAll<HTMLElement>("[data-price]").forEach((node) => {
+      node.textContent = texts[node.dataset.price ?? ""] ?? "";
+    });
+  }
+
+  const priceSpan = (k: string): string => `<span data-price="${k}">${esc(priceTexts()[k] ?? "")}</span>`;
+
+  /** 「語音轉文字」, the cloud model when it is the cloud, and the cleanup model. */
+  function modelRows(): string[] {
     const rows = [
       row(
         "語音轉文字",
-        sttEngine() === "cloud" ? "連不上或沒有金鑰時，自動改用本機" : "",
+        sttEngine() === "cloud" ? "連不上或沒有金鑰時，自動改用本機" : "在這台電腦上辨識，聲音不會上傳",
         sel(STT_ENGINES, sttEngine(), "語音轉文字", ' data-k="stt"'),
       ),
     ];
     if (sttEngine() === "cloud") {
-      rows.push(row("雲端模型", "從下一次聽寫開始使用", sel(withCurrent(STT_MODELS, sttModel()), sttModel(), "雲端模型", ' data-k="stt-model"')));
+      rows.push(
+        row(
+          "雲端模型",
+          priceSpan("stt-model"),
+          sel(withCurrent(STT_MODELS, sttModel()), sttModel(), "雲端模型", ' data-k="stt-model"'),
+        ),
+      );
     }
+    rows.push(
+      row(
+        "整理用的模型",
+        priceSpan("model"),
+        sel(withCurrent(MODELS, cleanupModel()), cleanupModel(), "整理用的模型", ' data-k="model"'),
+      ),
+    );
     return rows;
   }
 
@@ -201,18 +269,66 @@ export function createSettings(app: AppContext): Page {
           ? st("err", openrouter.error === "auth" ? "金鑰無效，請更換" : "目前連不上 OpenRouter")
           : "存在 Windows 認證管理員";
       return row(
-        "金鑰",
+        "OpenRouter 金鑰",
         detail,
         `<span class="val num">••••••••</span>${btn("更換", "sm", ' data-act="key-replace" data-k="key"')}`,
       );
     }
     return row(
-      "金鑰",
+      "OpenRouter 金鑰",
       "到 openrouter.ai 建立一把，貼在這裡後按 Enter 測試",
       fieldHTML("sk-or-v1-…", "", { w: 200, label: "OpenRouter 金鑰", id: "key-input", type: "password", invalid: keyError !== null }) +
         btn(keyBusy ? "檢查中…" : "貼上", "pri sm", ` data-act="key-paste"${keyBusy ? " disabled" : ""}`) +
         (hasKey ? btn("取消", "sm", ` data-act="key-cancel"${keyBusy ? " disabled" : ""}`) : ""),
     );
+  }
+
+  /** How the latest contact with OpenRouter went, with a way to ask again. Not shown without a key. */
+  function connectionRow(): string[] {
+    if (!hasKey || openrouter === null || openrouter.state === "no_key") return [];
+    let status: string;
+    let detail = "";
+    switch (openrouter.state) {
+      case "ok":
+        status = st("ok", "已連線");
+        if (openrouter.latency_ms !== null) detail = `延遲 ${openrouter.latency_ms} ms`;
+        break;
+      case "error":
+        status = st("err", openrouter.error === "auth" ? "金鑰無效" : "無法連線");
+        if (openrouter.checked_at_ms !== null) detail = `最後檢查 ${formatClock(openrouter.checked_at_ms)}`;
+        break;
+      default:
+        status = st("idle", "尚未檢查");
+    }
+    return [
+      row(
+        "連線狀態",
+        esc(detail),
+        status + btn(checkingOpenrouter ? "檢查中…" : "重新檢查", "quiet", ` data-act="or-check"${checkingOpenrouter ? " disabled" : ""}`),
+      ),
+    ];
+  }
+
+  /** This month's spend against the limit, and when it will run out at this pace. */
+  function spendRow(): string[] {
+    if (!spend) return [];
+    const { month_usd: month, limit_usd: limit } = spend;
+    const used = limit > 0 ? month / limit : 1;
+    let forecast = "";
+    if (month >= limit) forecast = "本月額度已用完，聽寫先不整理";
+    else if (used >= WARN_FROM) {
+      const { m, d } = runOutDay(month, limit, Date.now());
+      forecast = `照目前的速度，${m} 月 ${d} 日會用完`;
+    } else if (spend.forecast_usd > 0) forecast = `照目前的速度，月底約 ${formatUsd(spend.forecast_usd)}`;
+    const width = (Math.min(1, Math.max(0, used)) * 100).toFixed(1);
+    return [
+      row(
+        "本月花費",
+        month >= limit ? st("warn", forecast) : esc(forecast),
+        `<div class="spend"><div class="bar"><i class="${used >= WARN_FROM ? "warn" : ""}" style="width:${width}%"></i></div>` +
+          `<span class="val num">${esc(formatUsd(month))} / ${esc(formatLimit(limit))}</span></div>`,
+      ),
+    ];
   }
 
   function render(): void {
@@ -221,59 +337,76 @@ export function createSettings(app: AppContext): Page {
     const usesAltRight = d.dictation_keys.some((binding) => binding.split("+").includes("AltRight"));
     const limit = brain?.monthly_limit_usd ?? 10;
     const limitShown = limitDraft ?? String(limit);
+    const retention = String(brain?.history_retention_days ?? 30);
 
     el.innerHTML =
       `<h1>設定</h1>` +
-      (brain === null ? `<p class="lede">${st("err", "拉斐爾的核心沒有回應，有些設定暫時無法使用")}</p>` : "") +
-      group("聽寫", [
-        row(
-          "快捷鍵",
-          "聽寫到一半按 Esc 可以取消",
-          d.dictation_keys.map((binding) => keys(bindingLabels(binding))).join('<span class="val">或</span>') +
-            btn("變更", "quiet", ' data-act="rec"'),
-          { attrs: ' data-row="hotkey"' },
-        ),
-        ...(altgr && usesAltRight ? [note(st("warn", "你的鍵盤配置把右 Alt 當 AltGr 用，建議換一個快捷鍵。"))] : []),
-        row("聽寫方式", esc(modeDescription(d.dictation_mode)), seg(DICTATION_MODES, d.dictation_mode, "聽寫方式", ' data-k="mode"')),
-        row("麥克風", "", meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, "麥克風", ' data-k="mic"')),
-        row("語言", "中文一律輸出繁體（台灣用語）", sel(LANGUAGES, brain?.language ?? "auto", "語言", ' data-k="language"')),
-        ...sttRows(),
-      ]) +
-      group("OpenRouter", [
-        keyRow(),
-        ...(keyError ? [note(st("err", keyError))] : []),
-        row(
-          "每月上限",
-          "到了就只聽寫、不整理",
-          fieldHTML("", limitShown, { w: 96, pre: "US$", label: "每月上限", num: true, id: "limit-input", invalid: limitError !== null }),
-        ),
-        ...(limitError ? [note(st("err", limitError))] : []),
-        row(
-          "整理用的模型",
-          "",
-          sel(withCurrent(MODELS, brain?.cleanup_model ?? MODELS[0].value), brain?.cleanup_model ?? MODELS[0].value, "整理用的模型", ' data-k="model"'),
-        ),
-      ]) +
-      group("拉斐爾", [
-        row("圖案大小", "", seg(SIZES, String(d.emblem_size), "圖案大小", ' data-k="size"')),
-        row("字幕", "", sel(SUBTITLES, d.subtitles, "字幕", ' data-k="subtitles"')),
-      ]) +
-      group("一般", [
-        row("外觀", "", sel(APPEARANCES, d.appearance, "外觀", ' data-k="appearance"')),
-        row("開機時自動啟動", "", tg(d.autostart, "開機時自動啟動", ' data-k="autostart"')),
-        row(
-          "歷史紀錄保留",
-          "",
-          sel(
-            withCurrent(RETENTIONS, String(brain?.history_retention_days ?? 30), (days) => formatRetention(Number(days))),
-            String(brain?.history_retention_days ?? 30),
-            "歷史紀錄保留",
-            ' data-k="retention"',
+      (brain === null ? `<p class="lede">${st("err", "Raphael 的核心沒有回應，有些設定暫時無法使用")}</p>` : "") +
+      group(
+        "聽寫",
+        [
+          row(
+            "快捷鍵",
+            "聽寫到一半按 Esc 可以取消",
+            d.dictation_keys.map((binding) => keys(bindingLabels(binding))).join('<span class="val">或</span>') +
+              btn("變更", "quiet", ' data-act="rec"'),
+            { attrs: ' data-row="hotkey"' },
           ),
-        ),
-      ]) +
-      `<p class="foot">拉斐爾 ${esc(version)}。粉絲自製，跟《關於我轉生變成史萊姆這檔事》的原作與動畫製作方無關；聲音模型和從動畫取樣的素材只限個人使用。 ` +
-      `<a href="#" data-act="license">開源授權</a></p>`;
+          ...(altgr && usesAltRight ? [note(st("warn", "你的鍵盤配置把右 Alt 當 AltGr 用，建議換一個快捷鍵。"))] : []),
+          row("聽寫方式", esc(modeDescription(d.dictation_mode)), seg(DICTATION_MODES, d.dictation_mode, "聽寫方式", ' data-k="mode"')),
+          row("麥克風", "", meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, "麥克風", ' data-k="mic"')),
+          row("語言", "中文一律輸出繁體（台灣用語）", sel(LANGUAGES, brain?.language ?? "auto", "語言", ' data-k="language"')),
+        ],
+        "",
+        "panel",
+      ) +
+      group("語音轉文字與整理", modelRows(), priceSpan("note"), "panel") +
+      group(
+        "帳號與花費",
+        [
+          keyRow(),
+          ...(keyError ? [note(st("err", keyError))] : []),
+          ...connectionRow(),
+          ...spendRow(),
+          row(
+            "每月上限",
+            "到了就只聽寫、不整理",
+            fieldHTML("", limitShown, { w: 96, pre: "US$", label: "每月上限", num: true, id: "limit-input", invalid: limitError !== null }),
+          ),
+          ...(limitError ? [note(st("err", limitError))] : []),
+        ],
+        "",
+        "panel",
+      ) +
+      group(
+        "外觀",
+        [
+          row("主題", "", seg(APPEARANCES, d.appearance, "主題", ' data-k="appearance"')),
+          row("桌面圖案大小", "聽寫時出現在右下角的圖案", seg(SIZES, String(d.emblem_size), "桌面圖案大小", ' data-k="size"')),
+          row("字幕", "圖案旁邊的報告文字", sel(SUBTITLES, d.subtitles, "字幕", ' data-k="subtitles"')),
+        ],
+        "",
+        "panel",
+      ) +
+      group(
+        "一般",
+        [
+          row("開機時自動啟動", "", tg(d.autostart, "開機時自動啟動", ' data-k="autostart"')),
+          row(
+            "歷史紀錄保留",
+            "超過的紀錄會自動刪除",
+            sel(withCurrent(RETENTIONS, retention, (days) => formatRetention(Number(days))), retention, "歷史紀錄保留", ' data-k="retention"'),
+          ),
+        ],
+        "",
+        "panel",
+      ) +
+      group(
+        "關於",
+        [row("Raphael", esc(`版本 ${version}`), `<a href="#" class="link" data-act="license">開源授權</a>`)],
+        "粉絲自製，跟《關於我轉生變成史萊姆這檔事》的原作與動畫製作方無關；聲音模型和從動畫取樣的素材只限個人使用。",
+        "panel",
+      );
 
     if (focused) el.querySelector<HTMLElement>(`[data-k="${focused}"]`)?.focus();
   }
@@ -283,10 +416,57 @@ export function createSettings(app: AppContext): Page {
   async function changeBrain(key: keyof BrainSettings, value: string | number): Promise<void> {
     try {
       brain = (await api.settingsSet(key, value)).settings;
+      if (spend) spend = { ...spend, limit_usd: brain.monthly_limit_usd };
     } catch (err) {
       toaster.info(describeError(err));
     }
     render();
+  }
+
+  /** Reads the connection and the spend again (after a new key, or 「重新檢查」). */
+  async function readStatus(): Promise<void> {
+    try {
+      const status = await api.statusGet();
+      openrouter = status.openrouter;
+      spend = status.spend;
+    } catch {
+      openrouter = null;
+    }
+  }
+
+  async function checkOpenrouter(): Promise<void> {
+    if (checkingOpenrouter) return;
+    checkingOpenrouter = true;
+    render();
+    try {
+      await api.statusCheckOpenrouter();
+    } catch (err) {
+      toaster.info(describeError(err));
+    }
+    await readStatus();
+    checkingOpenrouter = false;
+    if (visible) render();
+  }
+
+  /** Reads the prices. The page is shown at once with 「價格載入中…」; the prices go in when they come. */
+  async function loadPrices(): Promise<void> {
+    const mine = loads;
+    let next: Pricing | "failed";
+    try {
+      next = await api.pricingGet();
+    } catch {
+      // keep prices read earlier; else say they cannot be had
+      next = prices() ?? "failed";
+    }
+    if (mine !== loads || !visible) return;
+    pricing = next;
+    paintPrices();
+    // a price menu that is open shows the prices too
+    for (const k of ["model", "stt-model"]) {
+      const anchor = el.querySelector<HTMLElement>(`.sel[data-k="${k}"]`);
+      const menu = menuFor(k);
+      if (anchor && menu && menuIsOpenFor(anchor)) openMenu(anchor, menu.choices, menu.current, menu.pick, menu.head);
+    }
   }
 
   async function changeDevice(patch: Partial<DeviceSettings>): Promise<void> {
@@ -310,7 +490,7 @@ export function createSettings(app: AppContext): Page {
         hasKey = true;
         replacingKey = false;
         toaster.info("金鑰有效，已存進 Windows 認證管理員");
-        openrouter = await api.statusGet().then((s) => s.openrouter, () => null);
+        await readStatus();
       } else {
         keyError = keyReasonText(result.reason);
       }
@@ -485,7 +665,7 @@ export function createSettings(app: AppContext): Page {
         return;
       }
       const menu = menuFor(choose.dataset.k ?? "");
-      if (menu) openMenu(choose, menu.choices, menu.current, menu.pick);
+      if (menu) openMenu(choose, menu.choices, menu.current, menu.pick, menu.head);
       if (choose.dataset.k === "mic") void refreshMicrophones(choose);
       return;
     }
@@ -493,6 +673,13 @@ export function createSettings(app: AppContext): Page {
     const size = target.closest<HTMLElement>('.seg[data-k="size"] button');
     if (size) {
       void changeDevice({ emblem_size: Number(size.dataset.v) as DeviceSettings["emblem_size"] });
+      return;
+    }
+
+    const appearance = target.closest<HTMLElement>('.seg[data-k="appearance"] button');
+    if (appearance) {
+      const value = appearance.dataset.v as DeviceSettings["appearance"];
+      if (APPEARANCES.some((c) => c.value === value) && value !== app.device().appearance) void changeDevice({ appearance: value });
       return;
     }
 
@@ -526,6 +713,9 @@ export function createSettings(app: AppContext): Page {
         break;
       case "key-paste":
         void pasteKey();
+        break;
+      case "or-check":
+        void checkOpenrouter();
         break;
       case "license":
         e.preventDefault();
@@ -575,6 +765,7 @@ export function createSettings(app: AppContext): Page {
       brain = brainResult.status === "fulfilled" ? brainResult.value.settings : null;
       hasKey = keyResult.status === "fulfilled" && keyResult.value.has_key;
       openrouter = statusResult.status === "fulfilled" ? statusResult.value.openrouter : null;
+      spend = statusResult.status === "fulfilled" ? statusResult.value.spend : null;
       devices = devicesResult.status === "fulfilled" ? devicesResult.value : null;
       altgr = altgrResult.status === "fulfilled" && altgrResult.value;
       version = versionResult.status === "fulfilled" ? versionResult.value : "0.1.0";
@@ -583,6 +774,7 @@ export function createSettings(app: AppContext): Page {
       limitDraft = null;
       limitError = null;
       render();
+      void loadPrices();
 
       stopEvents?.();
       const stopLevels = app.onEvent((event) => event.type === "Level" && onLevel(event.value));

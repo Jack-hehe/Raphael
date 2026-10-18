@@ -40,6 +40,12 @@ const NAV: { id: PageId; name: string; icon: IconName }[] = [
   { id: "dictionary", name: "字典", icon: "book" },
 ];
 
+/** The app's name at the top of the sidebar, with a small ring like the emblem's. */
+const BRAND =
+  `<div class="brand"><svg viewBox="0 0 18 18" aria-hidden="true">` +
+  `<circle class="r1" cx="9" cy="9" r="7.6"/><circle class="r2" cx="9" cy="9" r="5.2"/><circle class="r3" cx="9" cy="9" r="1.6"/>` +
+  `</svg><span>Raphael</span></div>`;
+
 // ---------- the theme ----------
 
 const prefersDark = matchMedia("(prefers-color-scheme: dark)");
@@ -100,7 +106,9 @@ async function start(): Promise<void> {
   const button = (id: PageId, name: string, icon: IconName, extra = ""): string =>
     `<button type="button" class="nav${extra}" data-go="${id}" aria-current="false">${ico(icon)}<span>${name}</span></button>`;
   nav.innerHTML =
-    NAV.map((item) => button(item.id, item.name, item.icon)).join("") + button("settings", "設定", "sliders", " nav-bottom");
+    BRAND +
+    NAV.map((item) => button(item.id, item.name, item.icon)).join("") +
+    button("settings", "設定", "sliders", " nav-bottom");
   nav.addEventListener("click", (e) => {
     const target = (e.target as Element).closest<HTMLElement>("[data-go]");
     if (target) go(target.dataset.go as PageId);

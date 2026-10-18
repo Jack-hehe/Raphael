@@ -27,11 +27,11 @@ pub enum TrayCommand {
 /// Builds the tray icon. Menu items `paste_last` and `pause` send their [`TrayCommand`] on
 /// `commands`; the icon stays for the life of the app.
 pub fn build(app: &AppHandle, commands: UnboundedSender<TrayCommand>) -> tauri::Result<TrayIcon> {
-    let open = MenuItem::with_id(app, "open", "打開拉斐爾", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "打開 Raphael", true, None::<&str>)?;
     let paste_last = MenuItem::with_id(app, "paste_last", "貼上上一次聽寫", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", "暫停 1 小時", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "結束拉斐爾", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "結束 Raphael", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &paste_last, &pause, &separator, &quit])?;
 
     let icon = app.default_window_icon().cloned().ok_or_else(|| {
@@ -43,7 +43,7 @@ pub fn build(app: &AppHandle, commands: UnboundedSender<TrayCommand>) -> tauri::
 
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
-        .tooltip("拉斐爾")
+        .tooltip("Raphael")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id().as_ref() {

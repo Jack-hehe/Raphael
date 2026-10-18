@@ -80,6 +80,22 @@ export function runOutDay(month: number, limit: number, nowMs: number): { m: num
   return { m: day.getMonth() + 1, d: day.getDate() };
 }
 
+/**
+ * The line at the top of the home page when something keeps dictation from working fully: no key,
+ * a key that does not work, no connection, the monthly limit reached. Null when all is well (the
+ * details of the key and the spend are on the settings page). First that applies, as in `buildReport`.
+ */
+export function blockingAlert(s: Status): { text: string; action: string } | null {
+  const { openrouter, spend } = s;
+  if (openrouter.state === "no_key") return { text: "還沒設定 OpenRouter 金鑰，聽寫只會貼上未整理的文字。", action: "設定金鑰" };
+  if (openrouter.state === "error") {
+    if (openrouter.error === "auth") return { text: "OpenRouter 金鑰無效，聽寫只會貼上未整理的文字。", action: "更換金鑰" };
+    return { text: "連不上 OpenRouter，聽寫先貼上未整理的文字。", action: "查看設定" };
+  }
+  if (spend.month_usd >= spend.limit_usd) return { text: "本月額度已用完，聽寫先不整理。", action: "調整上限" };
+  return null;
+}
+
 /** What Raphael reports when the core does not answer `status.get`. */
 export function coreDownReport(): Report {
   return {

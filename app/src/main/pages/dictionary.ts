@@ -24,8 +24,8 @@ export function createDictionary(app: AppContext): Page {
   el.dataset.page = "dictionary";
   el.hidden = true;
   el.innerHTML =
-    `<h1>字典</h1><p class="lede">放常用詞、專有名詞和常被聽錯的詞。拉斐爾轉文字和整理時會優先用這些寫法。</p>` +
-    `<div class="addword">${fieldHTML("新增詞，例如：拉斐爾", "", { id: "nw-word", label: "新增詞" })}` +
+    `<h1>字典</h1><p class="lede">放常用詞、專有名詞和常被聽錯的詞。Raphael 轉文字和整理時會優先用這些寫法。</p>` +
+    `<div class="addword">${fieldHTML("新增詞，例如：轉生史萊姆", "", { id: "nw-word", label: "新增詞" })}` +
     `${fieldHTML("常被聽成（選填），例如：拉菲爾", "", { id: "nw-mis", label: "常被聽成" })}` +
     `${btn("新增", "pri", ' data-act="add"')}</div>` +
     `<div class="sugg" hidden></div>` +

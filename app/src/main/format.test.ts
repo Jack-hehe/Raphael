@@ -79,13 +79,13 @@ test("formatRetention names the choices of the settings page", () => {
 
 describe("describeError says what went wrong in words the page can show", () => {
   test("the core is not there", () => {
-    expect(describeError("Raphael's core is not running")).toBe("拉斐爾的核心沒有在執行");
-    expect(describeError(new Error("[-32000] the core exited"))).toBe("拉斐爾的核心沒有在執行");
-    expect(describeError("[-32000] the core is not running")).toBe("拉斐爾的核心沒有在執行");
+    expect(describeError("Raphael's core is not running")).toBe("Raphael 的核心沒有在執行");
+    expect(describeError(new Error("[-32000] the core exited"))).toBe("Raphael 的核心沒有在執行");
+    expect(describeError("[-32000] the core is not running")).toBe("Raphael 的核心沒有在執行");
   });
 
   test("the core is slow", () => {
-    expect(describeError("[-32001] history.list got no answer within 15s")).toBe("拉斐爾的核心沒有及時回應");
+    expect(describeError("[-32001] history.list got no answer within 15s")).toBe("Raphael 的核心沒有及時回應");
   });
 
   test("an error of the core keeps its message but not its code", () => {
