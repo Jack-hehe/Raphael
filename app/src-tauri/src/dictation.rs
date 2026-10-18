@@ -125,6 +125,9 @@ pub struct DictationController<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSw
     cancel: Arc<S>,
     mode: ModeCell,
     state: Arc<Mutex<State>>,
+    /// Serializes state transitions with their overlay calls. Only background controller work
+    /// takes this lock; UI-thread readers use `state`, which is never held across an overlay call.
+    transitions: Arc<Mutex<()>>,
     /// Told of each dictation that was pasted and each that starts: learns from the user's
     /// corrections (`learn`).
     after_paste: Option<Arc<dyn AfterPaste>>,
@@ -141,6 +144,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Clone
             cancel: self.cancel.clone(),
             mode: self.mode.clone(),
             state: self.state.clone(),
+            transitions: self.transitions.clone(),
             after_paste: self.after_paste.clone(),
         }
     }
@@ -170,6 +174,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 shown: Vec::new(),
                 down_noticed: false,
             })),
+            transitions: Arc::new(Mutex::new(())),
             after_paste: None,
         }
     }
@@ -188,6 +193,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// forward). Returns the task that makes the core calls, if any. Must be called from within
     /// a Tokio runtime.
     pub fn on_hotkey(&self, ev: HotkeyEvent, now_ms: u64) -> Option<JoinHandle<()>> {
+        let _transition = lock(&self.transitions);
         match ev {
             HotkeyEvent::DictationDown => {
                 // Only a press that begins a dictation looks at the mode; one that is under way
@@ -214,6 +220,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
 
     /// The microphone's loudness, from 0 to 1. Shown only while recording.
     pub fn on_level(&self, level: f32) {
+        let _transition = lock(&self.transitions);
         if self.phase() == Phase::Recording {
             self.overlay.level(level);
         }
@@ -226,6 +233,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             log::debug!("dictation.progress ignored: {params}");
             return;
         };
+        let _transition = lock(&self.transitions);
         let current = {
             let state = lock(&self.state);
             state.phase == Phase::Processing
@@ -254,6 +262,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
 
     /// Back to idle; the overlay is hidden only if a dictation was showing, so a notice stays.
     fn reset(&self) {
+        let _transition = lock(&self.transitions);
         let was = {
             let mut state = lock(&self.state);
             let was = state.phase;
@@ -416,7 +425,13 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             };
             // The text is there: the emblem's progress ring fills, then the paste, the hide or
             // the notice follow as before.
-            this.overlay.progress(Progress::DONE);
+            {
+                let _transition = lock(&this.transitions);
+                if !this.is_current(&id) {
+                    return;
+                }
+                this.overlay.progress(Progress::DONE);
+            }
             let text = reply.get("text").and_then(Value::as_str).unwrap_or("");
             if text.is_empty() {
                 // Nothing to paste. If the microphone also delivered no sound, say so, every
@@ -466,6 +481,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             self.cancel.set(false);
             state.session.take()
         };
+        log::info!("dictation: cancelled");
         self.overlay.hide();
         let session = session?;
         let core = self.core.clone();
@@ -663,16 +679,12 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// `show` (overlay calls). If the session was cancelled meanwhile, whoever cancelled it has
     /// taken care of the overlay, and `show` is not called.
     ///
-    /// `show` is also skipped if another dictation has started since: the overlay is that one's
-    /// now, and a hide or a notice for the old one would wipe its emblem. The check is made right
-    /// before `show` and not atomically with it, because overlay calls must stay outside the state
-    /// lock; the window that is left is a few instructions wide.
+    /// A new recording must not publish its show between ending this session and publishing its
+    /// hide or notice. Serialize that whole transition with the hotkeys, while keeping window
+    /// calls outside the state lock so UI-thread readers can still run.
     fn finish(&self, session: &str, show: impl FnOnce(&Self)) {
+        let _transition = lock(&self.transitions);
         if !self.end_session(session) {
-            return;
-        }
-        if self.phase() != Phase::Idle {
-            log::info!("a new dictation has started; leaving the overlay to it");
             return;
         }
         show(self);
@@ -1103,6 +1115,12 @@ mod tests {
     struct FakeOverlay {
         events: Mutex<Vec<String>>,
         timeline: Mutex<Vec<String>>,
+        paused_hide: Mutex<
+            Option<(
+                std::sync::mpsc::SyncSender<()>,
+                std::sync::mpsc::Receiver<()>,
+            )>,
+        >,
     }
 
     impl FakeOverlay {
@@ -1145,6 +1163,10 @@ mod tests {
             self.push(format!("notice:{zh}"));
         }
         fn hide(&self) {
+            if let Some((entered, resume)) = self.paused_hide.lock().unwrap().take() {
+                entered.send(()).unwrap();
+                resume.recv().unwrap();
+            }
             self.push("hide".to_owned());
         }
         fn progress(&self, progress: Progress) {
@@ -1934,6 +1956,71 @@ mod tests {
         run(&c, HotkeyEvent::DictationDown, 4000).await;
         assert_eq!(c.core().count("dictation.start"), 2);
         assert_eq!(c.phase(), Phase::Recording);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_finishing_hide_cannot_overtake_the_next_recordings_show() {
+        let c = toggle_controller(FakeCore::default(), FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 100).await;
+        let id = c.core().call_params("dictation.start")["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (entered, waiting) = std::sync::mpsc::sync_channel(0);
+        let (resume, paused) = std::sync::mpsc::sync_channel(0);
+        *c.overlay().paused_hide.lock().unwrap() = Some((entered, paused));
+        let ending = c.clone();
+        let finish = std::thread::spawn(move || {
+            ending.finish(&id, |this| this.overlay.hide());
+        });
+        waiting.recv().unwrap();
+
+        // Start precisely after finish's idle check, before its hide is published. A real
+        // window call may wait here for the UI thread; a new hotkey arrives on another worker.
+        let next = c.clone();
+        let runtime = tokio::runtime::Handle::current();
+        let (attempted, attempt) = std::sync::mpsc::sync_channel(0);
+        let (started, start_done) = std::sync::mpsc::sync_channel(1);
+        let start = std::thread::spawn(move || {
+            let _runtime = runtime.enter();
+            attempted.send(()).unwrap();
+            let task = next.on_hotkey(HotkeyEvent::DictationDown, 3000);
+            started.send(()).unwrap();
+            task
+        });
+        attempt.recv().unwrap();
+        // The fixed controller queues this start behind the unfinished overlay transition.
+        // The old one completes it immediately, exposing show -> show -> hide.
+        let _ = start_done.recv_timeout(std::time::Duration::from_millis(100));
+        resume.send(()).unwrap();
+        finish.join().unwrap();
+        if let Some(task) = start.join().unwrap() {
+            task.await.unwrap();
+        }
+        assert_eq!(c.phase(), Phase::Recording);
+        assert_eq!(
+            c.overlay().events(),
+            vec!["show:listening", "hide", "show:listening"]
+        );
+    }
+
+    #[tokio::test]
+    async fn toggle_cancel_between_recordings_resets_holdtap_and_shows_each_session() {
+        let c = toggle_controller(FakeCore::default(), FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 100).await;
+        run(&c, HotkeyEvent::Cancel, 2000).await;
+        run(&c, HotkeyEvent::DictationDown, 3000).await;
+        run(&c, HotkeyEvent::DictationUp, 3100).await;
+        assert_eq!(c.phase(), Phase::Recording);
+        assert_eq!(c.core().count("dictation.start"), 2);
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        assert_eq!(c.core().count("dictation.cancel"), 1);
+        assert_eq!(
+            c.overlay().events(),
+            vec!["show:listening", "hide", "show:listening"]
+        );
     }
 
     #[tokio::test]

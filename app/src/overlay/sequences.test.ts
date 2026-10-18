@@ -21,21 +21,36 @@ class NullView implements OverlayView {
 
 /** Counts the canvas draws that put something on it (anything besides clearing it). */
 function countingCanvas() {
-  const stats = { drawn: 0 };
+  const stats = { drawn: 0, ink: false, reads: 0 };
   let marked = false;
-  const ctx = new Proxy({} as Record<string, unknown>, {
+  const state: Record<string, unknown> = { globalAlpha: 1, globalCompositeOperation: "source-over", filter: "none" };
+  const stack: Array<Record<string, unknown>> = [];
+  const ctx = new Proxy(state, {
     get(target, prop: string) {
       if (prop in target) return target[prop];
       if (prop === "createRadialGradient") return () => ({ addColorStop: () => {} });
-      return () => {
-        if (prop === "clearRect") marked = false;
-        else if (!marked && (prop === "stroke" || prop === "fill" || prop === "drawImage")) {
+      if (prop === "getImageData") return () => {
+        stats.reads++;
+        return { data: new Uint8ClampedArray([0, 0, 0, stats.ink ? 255 : 0]) };
+      };
+      return (...args: unknown[]) => {
+        for (const arg of args) {
+          if (typeof arg === "number") expect(Number.isFinite(arg), prop).toBe(true);
+        }
+        if (prop === "save") stack.push({ ...target });
+        else if (prop === "restore") Object.assign(target, stack.pop());
+        else if (prop === "clearRect") {
+          marked = false;
+          stats.ink = false;
+        } else if (!marked && (target.globalAlpha as number) > 0 && (prop === "stroke" || prop === "fill" || prop === "drawImage")) {
           marked = true;
+          stats.ink = true;
           stats.drawn++;
         }
       };
     },
     set(target, prop: string, value) {
+      if (typeof value === "number") expect(Number.isFinite(value), prop).toBe(true);
       target[prop] = value;
       return true;
     },
@@ -95,7 +110,7 @@ function page() {
     run(100);
     return stats.drawn > before;
   };
-  return { emblem, view, send, drawsNow };
+  return { emblem, view, send, drawsNow, stats, canvas, controller };
 }
 
 const SETTINGS: OverlayEvent = { type: "settings", px: 150, subtitles: "both" };
@@ -302,4 +317,98 @@ test("progress that comes after the hide changes nothing", () => {
   expect(p.emblem.phase).toBe("hidden");
   expect(p.drawsNow()).toBe(false);
   expect(frames).toHaveLength(0);
+});
+
+test("two shows without a hide reset a swept ring and keep the real emblem drawing", () => {
+  const p = page();
+  p.send({ type: "show", mode: "listening" });
+  run(1200);
+  p.send({ type: "level", value: 0.7 }, { type: "mode", mode: "thinking" }, progress("transcribing", 1, 3));
+  run(500);
+  expect(p.emblem.revealShown?.away).toBe(1);
+  p.send({ type: "show", mode: "listening" }, { type: "show", mode: "listening" });
+  run(2000);
+  expect(p.emblem.phase).toBe("listening");
+  expect(p.emblem.revealShown).toMatchObject({ fraction: 0, away: 0, rest: 0 });
+  expect(p.stats.ink).toBe(true);
+});
+
+test("a notice timer cannot hide the next recording after show takes over", () => {
+  const p = page();
+  p.send(NO_SOUND);
+  run(1200); // The notice's final hide is still pending.
+  p.send({ type: "show", mode: "listening" });
+  run(10_000);
+  expect(p.emblem.phase).toBe("listening");
+  expect(p.emblem.revealShown).toMatchObject({ away: 0, fraction: 0 });
+  expect(p.stats.ink).toBe(true);
+  expect(p.view.lines).toBeNull();
+});
+
+test("the log's recording, Cancel, recording sequence shows again after an idle clock", () => {
+  const p = page();
+  p.send({ type: "show", mode: "listening" });
+  run(2000);
+  p.send({ type: "hide" }); // 15:47:36 Cancel, not a stop or a second start bug.
+  run(1000);
+  expect(p.stats.ink).toBe(false);
+  now += 60_000;
+  vi.advanceTimersByTime(60_000);
+  p.send({ type: "show", mode: "listening" });
+  run(2000);
+  expect(p.emblem.phase).toBe("listening");
+  expect(p.stats.ink).toBe(true);
+});
+
+test("an old hide delivered after a new show clears the real emblem despite continuing levels", () => {
+  const p = page();
+  p.send({ type: "show", mode: "listening" });
+  run(1200);
+  // The failing Rust interleaving: finish ended the first session, then a hotkey started the
+  // next one before finish could publish its hide. The renderer correctly obeys that late hide.
+  p.send({ type: "show", mode: "listening" }, { type: "hide" });
+  for (let i = 0; i < 40; i++) {
+    p.send({ type: "level", value: 0.7 });
+    run(50);
+  }
+  expect(p.emblem.phase).toBe("hidden");
+  expect(p.stats.ink).toBe(false);
+  expect(frames).toHaveLength(0);
+});
+
+test("an unexpectedly hidden real emblem still warns while the controller expects paint", async () => {
+  const p = page();
+  const logged: Array<[string, string]> = [];
+  const { FrameWatch } = await import("./diagnostics");
+  const watch = new FrameWatch(() => p.emblem.frames, () => "visible", (level, message) => {
+    logged.push([level, message]);
+  }, { canvas: p.canvas, expected: () => p.controller.expectsPaint });
+  p.send({ type: "show", mode: "listening" });
+  watch.expectFrames("show");
+  run(2000);
+  expect(logged).toEqual([]);
+  // Simulate a renderer state regression without a Rust hide: visibility intent must not be
+  // inferred from the broken renderer's phase, or this blank would silently disable the watch.
+  p.emblem.vanish();
+  run(3000);
+  expect(p.emblem.phase).toBe("hidden");
+  expect(logged).toEqual([["warn", expect.stringContaining("all-transparent")]]);
+});
+
+test("an expired notice stops paint monitoring without an all-transparent warning", async () => {
+  const p = page();
+  const logged: Array<[string, string]> = [];
+  const { FrameWatch } = await import("./diagnostics");
+  const watch = new FrameWatch(() => p.emblem.frames, () => "visible", (level, message) => {
+    logged.push([level, message]);
+  }, { canvas: p.canvas, expected: () => p.controller.expectsPaint });
+  p.send(NO_SOUND);
+  watch.expectFrames("notice");
+  run(10_000);
+  expect(p.emblem.phase).toBe("hidden");
+  const reads = p.stats.reads;
+  expect(reads).toBeGreaterThan(0);
+  run(3000);
+  expect(p.stats.reads).toBe(reads);
+  expect(logged).toEqual([]);
 });

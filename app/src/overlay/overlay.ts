@@ -69,6 +69,8 @@ export class OverlayController {
   private readonly queue: Notice[] = [];
   /** A notice is on screen, or about to be. */
   private busy = false;
+  /** A show owns the emblem until a hide or notice takes over, regardless of renderer state. */
+  private activeShow = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
@@ -76,12 +78,18 @@ export class OverlayController {
     private readonly view: OverlayView,
   ) {}
 
+  /** Visibility intent for diagnostics, independent of a possibly broken renderer phase. */
+  get expectsPaint(): boolean {
+    return this.activeShow || this.busy;
+  }
+
   handle(event: OverlayEvent): void {
     switch (event.type) {
       case "show":
         // Dictation (and anything else that shows the emblem) takes over from a notice, and
         // starts without the last dictation's progress.
         this.cancelNotices();
+        this.activeShow = true;
         this.emblem.clearProgress();
         this.appearIfHidden();
         this.emblem.set(event.mode);
@@ -103,11 +111,13 @@ export class OverlayController {
         break;
       case "notice":
         // Raphael speaks: the dictation's progress has said what it had to.
+        this.activeShow = false;
         this.emblem.clearProgress();
         this.queue.push({ zh: event.zh, ja: event.ja });
         if (!this.busy) this.next();
         break;
       case "hide":
+        this.activeShow = false;
         this.cancelNotices();
         this.emblem.vanish();
         break;
@@ -243,7 +253,10 @@ async function start(): Promise<void> {
   view.layout(DEFAULT_PX);
   const emblem = new Emblem(canvas, DEFAULT_PX);
   const controller = new OverlayController(emblem, view);
-  const frames = new FrameWatch(() => emblem.frames, () => document.visibilityState, pageLog);
+  const frames = new FrameWatch(() => emblem.frames, () => document.visibilityState, pageLog, {
+    canvas,
+    expected: () => controller.expectsPaint,
+  });
 
   // The texture comes first, so that no event meets a half-ready emblem. Without the file the
   // load fails and the plain vector ring is drawn.
