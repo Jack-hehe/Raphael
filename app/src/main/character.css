@@ -1,0 +1,16 @@
+/* Personal character artwork never doubles as the application icon. */
+.character-portrait { position: relative; display: inline-grid; place-items: center; width: 112px; height: 112px; flex: 0 0 auto; color: var(--accent-text); }
+.character-portrait img, .character-fallback { grid-area: 1 / 1; display: block; width: 100%; height: 100%; object-fit: contain; }
+.character-portrait img { visibility: hidden; }
+.character-portrait.has-portrait img { visibility: visible; }
+.character-portrait.has-portrait .character-fallback { visibility: hidden; }
+.character-portrait img[hidden] { display: none; }
+.about-brand .character-portrait { width: 120px; height: 120px; }
+.ob-col .onboarding-stage { grid-template-columns: 156px minmax(0, 1fr); }
+.onboarding-stage .character-portrait { width: 156px; height: 156px; margin-bottom: 8px; }
+.onboarding-stage canvas[hidden] { display: none; }
+@media (max-height: 600px) {
+  .about-brand .character-portrait { width: 88px; height: 88px; }
+  .ob-col .onboarding-stage { grid-template-columns: 104px minmax(0, 1fr); }
+  .onboarding-stage .character-portrait { width: 104px; height: 104px; }
+}

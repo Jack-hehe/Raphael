@@ -8,12 +8,13 @@
 import { onLocaleChange, t, translatedMessage } from "./i18n";
 
 import * as api from "./api";
-import { brandIcon, hydrateBrandIcons } from "./brand";
+import { characterPortrait, hydrateBrandIcons } from "./brand";
 import { type DictationMode, keylineAction, tryBoxText } from "./dictation";
 import { describeError, formatSeconds, keyReasonText, parseLimit } from "./format";
 import { wireKeyField } from "./keyfield";
 import { bindingLabels } from "./keys";
 import { MonitorSwitch } from "./monitor";
+import { automaticMicrophoneLabel } from "./microphone";
 import { ModelDownload, type ModelPhase, formatProgress } from "./models";
 import { Stage } from "./stage";
 import type { AppContext, AudioDevices, Status } from "./types";
@@ -70,7 +71,7 @@ const AUTO_MICROPHONE = "";
 /** The microphones to choose from: the automatic choice, those found, and the saved one even if it is gone. */
 export function micChoices(devices: AudioDevices | null, saved: string | null): Choice[] {
   const choices: Choice[] = [
-    { value: AUTO_MICROPHONE, get label() { return t("onboarding.005"); } },
+    { value: AUTO_MICROPHONE, get label() { return automaticMicrophoneLabel(devices); } },
     ...(devices?.devices ?? []).map((d) => ({ value: d.name, label: d.name })),
   ];
   if (saved !== null && !choices.some((c) => c.value === saved)) choices.push({ value: saved, get label() { return t("onboarding.006", { p0: saved }); } });
@@ -236,6 +237,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
   let tryTimer: ReturnType<typeof setTimeout> | undefined;
   let modelTimer: ReturnType<typeof setTimeout> | undefined;
   let windowFocused = true;
+  let microphoneTimer: ReturnType<typeof setInterval> | undefined;
 
   const monitor = new MonitorSwitch(api.audioMonitor);
   const download = new ModelDownload({ status: api.modelsStatus, ensure: api.modelsEnsure }, onModelChange);
@@ -295,8 +297,8 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
     switch (step) {
       case 0:
         return (
-          `<div class="onboarding-brand">${brandIcon()}<span>Raphael</span></div>` +
-          `<div class="stage"><canvas class="emb" aria-hidden="true"></canvas><div class="subs" aria-live="polite"></div></div>` +
+          `<div class="onboarding-brand"><span>Raphael</span></div>` +
+          `<div class="stage onboarding-stage">${characterPortrait()}<canvas class="emb" aria-hidden="true" hidden></canvas><div class="subs" aria-live="polite"></div></div>` +
           t("onboarding.036") +
           t("onboarding.037")
         );
@@ -412,7 +414,18 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
   // ---------- going through the steps ----------
 
   function syncMonitor(): void {
-    monitor.set(!destroyed && step === 2 && !document.hidden && windowFocused);
+    const want = !destroyed && step === 2 && !document.hidden && windowFocused;
+    monitor.set(want);
+    if (want && microphoneTimer === undefined) {
+      microphoneTimer = setInterval(() => {
+        const anchor = root.querySelector<HTMLElement>('[data-ob="mic"]');
+        if (anchor) void refreshMicrophones(anchor, false);
+      }, 750);
+    } else if (!want) {
+      clearInterval(microphoneTimer);
+      microphoneTimer = undefined;
+      microphoneReads++;
+    }
   }
 
   function enterStep(): void {
@@ -623,11 +636,11 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
    * the Windows default changed, since the step was shown. The menu is already open with the list
    * there was; if the new list differs, the row is drawn again and the menu opened again under it.
    */
-  async function refreshMicrophones(anchor: HTMLElement): Promise<void> {
+  async function refreshMicrophones(anchor: HTMLElement, refresh = true): Promise<void> {
     const mine = ++microphoneReads;
     let fresh: AudioDevices;
     try {
-      fresh = await api.audioDevices();
+      fresh = await api.audioDevices(refresh);
     } catch {
       return; // the list there was stays
     }

@@ -7,7 +7,7 @@ import { isUiLocale, onLocaleChange, t } from "../i18n";
 
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
-import { brandIcon, hydrateBrandIcons } from "../brand";
+import { characterPortrait, hydrateBrandIcons } from "../brand";
 import "../settings-polish.css";
 import { DICTATION_MODES, isDictationMode, modeDescription } from "../dictation";
 import {
@@ -21,16 +21,21 @@ import { wireKeyField } from "../keyfield";
 import {
   AUTO_DETECT_HINT,
   type LanguageGroup,
-  groupOf,
+  chooseLanguageVariant,
   languageButtonHTML,
+  languageChipsHTML,
   languageLabel,
   languageName,
-  languagePanelHTML,
   normalizeLanguages,
-  toggleLanguage,
+  toggleTranscriptionLanguage,
+  transcriptionButtonHTML,
+  transcriptionLabel,
+  transcriptionPanelHTML,
+  variantPanelHTML,
 } from "../languages";
 import { KeyRecorder, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "../keys";
 import { MonitorSwitch } from "../monitor";
+import { automaticMicrophoneLabel } from "../microphone";
 import { cleanupPriceShort, cleanupPriceText, priceOf, pricingNote, sttPriceShort, sttPriceText } from "../pricing";
 import { runOutDay } from "../report";
 import { WARN_FROM, spendVisual, spentShare } from "../spend";
@@ -156,8 +161,7 @@ export function createSettings(app: AppContext): Page {
   let recording: Recording | null = null;
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
   let languageGroups: LanguageGroup[] | null = null;
-  /** The group of the language panel whose variants are shown. */
-  let openGroup: string | null = null;
+  let languagePanelKind: "languages" | "variants" = "languages";
   let languagePanel: HTMLElement | null = null;
   let visible = false;
   let loading = false;
@@ -168,7 +172,7 @@ export function createSettings(app: AppContext): Page {
   function microphoneChoices(): Choice[] {
     const found = devices?.devices ?? [];
     const choices: Choice[] = [
-      { value: AUTO_MICROPHONE, get label() { return t("onboarding.005"); } },
+      { value: AUTO_MICROPHONE, get label() { return automaticMicrophoneLabel(devices); } },
       ...found.map((d) => ({ value: d.name, label: d.name })),
     ];
     const saved = app.device().microphone;
@@ -436,7 +440,8 @@ export function createSettings(app: AppContext): Page {
       ]) +
       section("globe", t("settings.058"), [
         row(t("settings.059"), t("settings.060"), sel(UI_LANGUAGES, d.ui_language, t("settings.059"), ' data-k="ui-language"'), { cls: "row-ui-language" }),
-        row(t("settings.061"), `<span class="variant-summary">${esc(AUTO_DETECT_HINT())}</span>`, languageButtonHTML(languageGroups ?? [], languages(), ` data-k="languages" data-act="variants"${brain ? "" : " disabled"}`), { cls: "row-lang" }),
+        row(t("transcription.title"), esc(AUTO_DETECT_HINT()), transcriptionButtonHTML(languageGroups ?? [], languages(), ` data-k="languages" data-act="transcription-languages"${brain ? "" : " disabled"}`), { cls: "row-lang row-transcription" }),
+        row(t("settings.061"), esc(t("variants.description")), languageButtonHTML(languageGroups ?? [], languages(), ` data-k="variants" data-act="variants"${brain ? "" : " disabled"}`), { cls: "row-lang row-variants" }),
       ]) +
       section("mic", t("settings.062"), [
         row(t("onboarding.021"), t("settings.063"), meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, t("onboarding.021"), ' data-k="mic"') + iconBtn("refresh", t("action.refreshMicrophones"), ' data-act="mic-refresh"')),
@@ -472,7 +477,7 @@ export function createSettings(app: AppContext): Page {
   function aboutHTML(): string {
     return (
       t("settings.077") +
-      `<div class="about-brand">${brandIcon("about-icon")}<span class="about-name">Raphael</span></div>` +
+      `<div class="about-brand">${characterPortrait()}<span class="about-name">Raphael</span></div>` +
       `<div class="slist about">` +
       row(t("settings.078"), esc(version || "0.1.0"), "") +
       row(t("settings.079"), t("settings.080"), t("settings.081")) +
@@ -512,7 +517,7 @@ export function createSettings(app: AppContext): Page {
     if (openK) {
       const anchor = el.querySelector<HTMLElement>(openK === "variants" ? "[data-act='variants']" : `.sel[data-k="${openK}"]`);
       const menu = menuFor(openK);
-      if (anchor && (openK === "languages" || openK === "variants")) openLanguages(anchor, true);
+      if (anchor && (openK === "languages" || openK === "variants")) openLanguages(anchor);
       else if (anchor && menu) openMenu(anchor, menu.choices, menu.current, menu.pick, menu.head);
     }
   }
@@ -529,87 +534,72 @@ export function createSettings(app: AppContext): Page {
 
   // ---------- the languages ----------
 
-  /**
-   * Opens the language panel under its button. `keep`: the same group stays open (drawn again);
-   * else 「選擇語言變體」 opens on the first chosen language that has variants, and 語言 folded.
-   */
-  function openLanguages(anchor: HTMLElement, keep = false): void {
-    if (!keep) openGroup = anchor.dataset.act === "variants" ? firstVariantGroup() : null;
-    const panel = openPopover(anchor, languagePanelHTML(languageGroups, languages(), openGroup), {
-      className: "menu lang-panel",
+  function languagePickerHTML(): string {
+    return languagePanelKind === "variants"
+      ? variantPanelHTML(languageGroups, languages())
+      : transcriptionPanelHTML(languageGroups, languages());
+  }
+
+  /** Each control opens its own picker; variants only edit already selected languages. */
+  function openLanguages(anchor: HTMLElement): void {
+    languagePanelKind = anchor.dataset.k === "variants" ? "variants" : "languages";
+    const panel = openPopover(anchor, languagePickerHTML(), {
+      className: `menu lang-panel ${languagePanelKind === "variants" ? "variants-picker" : "transcription-picker"}`,
       role: "dialog",
-      get label() { return t("settings.058"); },
+      label: languagePanelKind === "variants" ? t("settings.061") : t("transcription.title"),
       onKey: languageKey,
     });
     languagePanel = panel;
     panel.addEventListener("click", (e) => {
       const item = (e.target as Element).closest<HTMLElement>(".lang-item");
       if (!item) return;
-      if (item.dataset.group) {
-        openGroup = openGroup === item.dataset.group ? null : item.dataset.group;
-        paintLanguages();
-      } else if (item.dataset.lang) {
-        void pickLanguage(item.dataset.lang);
-      }
+      if (item.dataset.language) void pickLanguage(item.dataset.language, false);
+      else if (item.dataset.variant) void pickLanguage(item.dataset.variant, true);
     });
-    (panel.querySelector<HTMLElement>(".lang-item") ?? panel).focus();
+    (panel.querySelector<HTMLElement>('[aria-checked="true"], .lang-item') ?? panel).focus();
     if (languageGroups === null) void loadLanguages();
   }
 
-  /** The group of the first chosen language that has variants (中文 when none is chosen). */
-  function firstVariantGroup(): string | null {
-    const groups = languageGroups ?? [];
-    for (const id of languages()) {
-      const g = groupOf(groups, id);
-      if (g && g.variants.length > 1) return g.id;
-    }
-    return groups.find((g) => g.variants.length > 1)?.id ?? null;
-  }
-
-  /** In the panel: the right arrow shows a group's variants, the left arrow folds them away again. */
+  /** Left and right move and select within the current variant's radio group. */
   function languageKey(e: KeyboardEvent): boolean {
     const active = document.activeElement as HTMLElement | null;
-    if (!languagePanel || !active || !languagePanel.contains(active)) return false;
-    if (e.key === "ArrowRight" && active.dataset.group) {
-      openGroup = active.dataset.group;
-      paintLanguages();
-      languagePanel.querySelector<HTMLElement>(`#${CSS.escape(`language-variants-${encodeURIComponent(openGroup)}`)} .lang-variant`)?.focus();
-      return true;
-    }
-    if (e.key === "ArrowLeft" && openGroup && (active.classList.contains("lang-variant") || active.dataset.group === openGroup)) {
-      const group = openGroup;
-      openGroup = null;
-      paintLanguages();
-      languagePanel.querySelector<HTMLElement>(`[data-group="${CSS.escape(group)}"]`)?.focus();
-      return true;
-    }
-    return false;
+    if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || !active?.dataset.variant || !languagePanel?.contains(active)) return false;
+    const items = Array.from(active.closest('[role="radiogroup"]')!.querySelectorAll<HTMLElement>("[data-variant]"));
+    const next = items[(items.indexOf(active) + (e.key === "ArrowRight" ? 1 : items.length - 1)) % items.length];
+    next.focus();
+    void pickLanguage(next.dataset.variant!, true);
+    return true;
   }
 
   /** Shows the chosen languages on the button, and in the panel if it is open (keeping the focus). */
   function paintLanguages(): void {
     const button = el.querySelector<HTMLElement>('[data-k="languages"]');
-    if (!button) return;
+    const variants = el.querySelector<HTMLElement>('[data-k="variants"]');
+    if (!button || !variants) return;
     const groups = languageGroups ?? [];
-    button.setAttribute("aria-label", languageLabel(groups, languages()));
-    button.title = languages().map((id) => languageName(groups, id)).join(", ");
-    const anchor = menuIsOpenFor(button) ? button : null;
+    button.innerHTML = languageChipsHTML(groups, languages());
+    button.setAttribute("aria-label", transcriptionLabel(groups, languages()));
+    variants.setAttribute("aria-label", languageLabel(groups, languages()));
+    variants.title = languages().map((id) => languageName(groups, id)).join(", ");
+    const anchor = [button, variants].find(menuIsOpenFor);
     if (!languagePanel || !anchor) return;
     const active = document.activeElement as HTMLElement | null;
     let again: string | null = null;
     if (active && languagePanel.contains(active)) {
-      if (active.dataset.lang) again = `[data-lang="${CSS.escape(active.dataset.lang)}"]`;
-      else if (active.dataset.group) again = `[data-group="${CSS.escape(active.dataset.group)}"]`;
+      if (active.dataset.variant) again = `[data-variant="${CSS.escape(active.dataset.variant)}"]`;
+      else if (active.dataset.language) again = `[data-language="${CSS.escape(active.dataset.language)}"]`;
     }
-    languagePanel.innerHTML = languagePanelHTML(languageGroups, languages(), openGroup);
+    languagePanel.innerHTML = languagePickerHTML();
     placeMenu();
     (again ? languagePanel.querySelector<HTMLElement>(again) : null)?.focus();
   }
 
   /** Chooses or drops a language; the button shows it at once, and goes back if the core refuses. */
-  async function pickLanguage(id: string): Promise<void> {
+  async function pickLanguage(id: string, variant: boolean): Promise<void> {
     const before = languages();
-    const result = toggleLanguage(languageGroups ?? [], before, id);
+    const result = variant
+      ? chooseLanguageVariant(languageGroups ?? [], before, id)
+      : toggleTranscriptionLanguage(languageGroups ?? [], before, id);
     if (!result.ok) {
       toaster.info(result.reason);
       return;
@@ -840,10 +830,22 @@ export function createSettings(app: AppContext): Page {
   const monitor = new MonitorSwitch(api.audioMonitor);
   /** The window is in use. It is taken to be, until it says otherwise: the page was just opened by a person. */
   let windowFocused = true;
+  let microphoneTimer: ReturnType<typeof setInterval> | undefined;
 
   /** The microphone is listened to while the page is on screen and the window is in use. */
   function syncMonitor(): void {
-    monitor.set(visible && !document.hidden && windowFocused);
+    const want = visible && pane === "settings" && !document.hidden && windowFocused;
+    monitor.set(want);
+    if (want && microphoneTimer === undefined) {
+      microphoneTimer = setInterval(() => {
+        const anchor = el.querySelector<HTMLElement>('[data-k="mic"]');
+        if (anchor) void refreshMicrophones(anchor, false);
+      }, 750);
+    } else if (!want) {
+      clearInterval(microphoneTimer);
+      microphoneTimer = undefined;
+      microphoneReads++;
+    }
   }
 
   function onLevel(value: number): void {
@@ -858,11 +860,11 @@ export function createSettings(app: AppContext): Page {
    * the Windows default changed, since the page was shown. The menu is already open with the list
    * there was; if the new list differs, the menu and the button's own label are drawn again.
    */
-  async function refreshMicrophones(anchor: HTMLElement): Promise<void> {
+  async function refreshMicrophones(anchor: HTMLElement, refresh = true): Promise<void> {
     const mine = ++microphoneReads;
     let fresh: AudioDevices;
     try {
-      fresh = await api.audioDevices();
+      fresh = await api.audioDevices(refresh);
     } catch {
       return; // the list there was stays
     }
@@ -872,7 +874,9 @@ export function createSettings(app: AppContext): Page {
     if (JSON.stringify(microphoneChoices()) === before) return;
     const current = app.device().microphone ?? AUTO_MICROPHONE;
     const label = anchor.querySelector("span");
-    if (label) label.textContent = microphoneChoices().find((c) => c.value === current)?.label ?? current;
+    const shown = microphoneChoices().find((c) => c.value === current)?.label ?? current;
+    if (label) label.textContent = shown;
+    anchor.title = shown;
     const menu = menuFor("mic");
     if (menu && menuIsOpenFor(anchor)) openMenu(anchor, menu.choices, menu.current, menu.pick);
   }
@@ -889,6 +893,7 @@ export function createSettings(app: AppContext): Page {
     if (paneButton) {
       closeMenu();
       pane = paneButton.dataset.pane as "settings" | "about";
+      syncMonitor();
       body.scrollTop = 0;
       render();
       return;

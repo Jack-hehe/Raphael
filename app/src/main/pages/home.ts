@@ -1,13 +1,14 @@
 // Home: Raphael's report on the stage, then what the history says: four insight cards
 // (words, time saved, speed, time spoken), and the activity card with the active days, the streaks
-// and a grid of the days (`stats.summary`, all from this computer's history). A column on the
-// right lists the shortcuts. The key, the connection and the spend are in the settings; home only
+// and a grid of the days (`stats.summary`, all from this computer's history). Shortcuts follow
+// the activity, or sit on the right in wide windows. The key, connection and spend are in settings; home only
 // says so when one of them keeps dictation from working fully. Loads when shown and every 30 seconds.
 
 import { onLocaleChange, t } from "../i18n";
 
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
+import { characterPortrait, hydrateBrandIcons } from "../brand";
 import { homeHint } from "../dictation";
 import { loadingHTML } from "../loading";
 import { formatUsd } from "../format";
@@ -17,7 +18,7 @@ import { blockingAlert, buildReport, coreDownReport } from "../report";
 import { Stage } from "../stage";
 import { durationParts, formatCount, hasDictations, periodSpeed } from "../stats";
 import type { AppContext, Page, Status, StatsSummary } from "../types";
-import { btn, esc, ico, iconBtn, keys, st } from "../ui";
+import { btn, esc, iconBtn, keys, st } from "../ui";
 
 /** How often the page is read again while it is on screen. */
 const REFRESH_MS = 30_000;
@@ -66,9 +67,6 @@ const LEGEND =
   t("home.015");
 
 export function createHome(app: AppContext): Page {
-  const compact = matchMedia("(max-height: 700px), (max-width: 960px) and (max-height: 820px)");
-  let activityOpen = !compact.matches;
-  let shortcutsOpen = !compact.matches;
   const el = document.createElement("div");
   el.className = "page page-home";
   el.dataset.page = "home";
@@ -76,14 +74,13 @@ export function createHome(app: AppContext): Page {
   el.innerHTML =
     `<div class="home">` +
     `<div class="home-main">` +
-    `<div class="stage" role="region" aria-label="Raphael"><canvas class="emb" aria-hidden="true"></canvas><div class="subs" aria-live="polite"></div></div>` +
+    `<div class="stage home-stage" role="region" aria-label="Raphael">${characterPortrait()}<canvas class="emb" aria-hidden="true" hidden></canvas><div class="subs" aria-live="polite"></div></div>` +
     `<div class="alert-slot"></div><div class="usage"></div>` +
     `</div>` +
-    `<aside class="home-side" aria-label="${esc(t("home.shortcuts"))}"><details class="card keys-disclosure"${shortcutsOpen ? " open" : ""}>` +
-    `<summary class="compact-summary">${ico("keyboard")}<span>${esc(t("home.shortcuts"))}</span>${ico("down")}</summary>` +
-    `<section class="keys-card"></section></details></aside>` +
+    `<aside class="home-side" aria-label="${esc(t("home.shortcuts"))}"><section class="card keys-card"></section></aside>` +
     `</div>` +
     `<p class="ver num"></p>`;
+  hydrateBrandIcons(el);
   const alertSlot = el.querySelector<HTMLElement>(".alert-slot")!;
   const usage = el.querySelector<HTMLElement>(".usage")!;
   const keysCard = el.querySelector<HTMLElement>(".keys-card")!;
@@ -138,11 +135,11 @@ export function createHome(app: AppContext): Page {
 
   function activityHTML(s: StatsSummary): string {
     return (
-      `<details class="card activity"${activityOpen ? " open" : ""}><summary class="compact-summary">${ico("clock")}<span>${esc(t("home.activity"))}</span>${ico("down")}</summary><div class="activity-body">` +
+      `<section class="card activity" aria-labelledby="activity-h"><h2 id="activity-h">${esc(t("home.activity"))}</h2><div class="activity-body">` +
       activityHead(s) +
       `<div class="heat-wrap">${iconBtn("left", t("home.023"), ' data-act="older"')}<div class="heat-box"></div>${iconBtn("right", t("home.024"), ' data-act="newer"')}</div>` +
       LEGEND() +
-      `</div></details>`
+      `</div></section>`
     );
   }
 
@@ -174,7 +171,7 @@ export function createHome(app: AppContext): Page {
     }
   }
 
-  /** `replay`: the page was just shown, so the emblem appears again. */
+  /** `replay`: the page was just shown, so the report starts again. */
   async function load(replay: boolean): Promise<void> {
     const mine = ++loads;
     if (!stats) usage.innerHTML = loadingHTML();
@@ -239,19 +236,6 @@ export function createHome(app: AppContext): Page {
     if (act === "older" || act === "newer") void turn(act === "older");
   });
 
-  el.addEventListener("toggle", (event) => {
-    const details = event.target;
-    if (!(details instanceof HTMLDetailsElement)) return;
-    if (details.classList.contains("activity")) activityOpen = details.open;
-    if (details.classList.contains("keys-disclosure")) shortcutsOpen = details.open;
-    if (details.open) paintGrid();
-  }, true);
-  compact.addEventListener("change", () => {
-    activityOpen = shortcutsOpen = !compact.matches;
-    el.querySelectorAll<HTMLDetailsElement>("details").forEach((details) => { details.open = !compact.matches; });
-    paintGrid();
-  });
-
   // The grid shows as many weeks as fit.
   let lastWidth = 0;
   new ResizeObserver(() => {
@@ -271,7 +255,6 @@ export function createHome(app: AppContext): Page {
 
   onLocaleChange(() => {
     el.querySelector("aside")!.setAttribute("aria-label", t("home.shortcuts"));
-    el.querySelector(".keys-disclosure summary span")!.textContent = t("home.shortcuts");
     if (version) ver.textContent = t("home.027", { p0: version });
     paint(lastStatus, stats);
   });

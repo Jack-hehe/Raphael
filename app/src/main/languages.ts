@@ -1,19 +1,12 @@
-// The languages and their variants (the 語言 section of the settings). The speech recognition
-// always tells by itself which language is spoken; what a person chooses here is how each one is
-// written: 繁體 or 簡體, American or British spelling. The core lists the languages in groups
-// (`languages.list`): a group with several variants (中文: 台灣、香港、簡體…) or a single language
-// (日本語). A person keeps up to five, at most one variant of each group, and at least one. The
-// choice is the `languages` setting: locale ids such as ["zh-TW", "en-US"]. The texts are plain;
-// the functions that make HTML escape them.
-
+// Transcription languages and written variants are separate controls. The persisted core setting
+// remains an ordered list of variant ids, with one variant per selected language (one to five).
 import { t } from "./i18n";
-
 import { CHECK, esc, ico } from "./ui";
 
 export interface LanguageVariant {
   id: string;
   name: string;
-  /** How the variant is written, such as 「台灣用語，例如 軟體、視窗」; may be empty. */
+  /** Guidance about a variant's spelling or vocabulary; may be empty. */
   note?: string;
 }
 
@@ -38,129 +31,120 @@ const groupName = (g: LanguageGroup): string => g.id === "zh" ? t("language.zh")
 const variantName = (v: LanguageVariant): string => VARIANT_NAMES[v.id] ? t(VARIANT_NAMES[v.id]) : v.name;
 const variantNote = (v: LanguageVariant): string => VARIANT_NOTES[v.id] ? t(VARIANT_NOTES[v.id]) : v.note ?? "";
 
-/** The group a locale id belongs to, or undefined when the list does not have it. */
+/** The language group containing a persisted variant id. */
 export function groupOf(groups: LanguageGroup[], id: string): LanguageGroup | undefined {
   return groups.find((g) => g.variants.some((v) => v.id === id));
 }
 
-/** What a locale id is called; an id the list does not know is shown as it is. */
+/** Selected language groups in the persisted priority order, without changing their variants. */
+export function selectedLanguageGroups(groups: LanguageGroup[], selected: string[]): LanguageGroup[] {
+  const chosen: LanguageGroup[] = [];
+  for (const id of selected) {
+    const group = groupOf(groups, id);
+    if (group && !chosen.some((g) => g.id === group.id)) chosen.push(group);
+  }
+  return chosen;
+}
+
+/** Unknown ids remain readable while the core list is unavailable. */
 export function languageName(groups: LanguageGroup[], id: string): string {
-  for (const g of groups) {
-    const v = g.variants.find((x) => x.id === id);
-    if (v) return variantName(v);
-  }
-  return id;
+  const variant = groupOf(groups, id)?.variants.find((v) => v.id === id);
+  return variant ? variantName(variant) : id;
 }
 
-export type Toggle = { ok: true; languages: string[] } | { ok: false; reason: string };
+export type LanguageChange = { ok: true; languages: string[] } | { ok: false; reason: string };
 
-/**
- * What choosing `id` in the panel makes of `selected`: a chosen one is taken out (unless it is the
- * last); another variant of a group that has one chosen takes its place; a new one is added at the
- * end while there are fewer than five.
- */
-export function toggleLanguage(groups: LanguageGroup[], selected: string[], id: string): Toggle {
-  if (selected.includes(id)) {
-    if (selected.length <= 1) return { ok: false, reason: t("languages.002") };
-    return { ok: true, languages: selected.filter((x) => x !== id) };
+/** Adding a language uses its first variant; removing it leaves all other variants untouched. */
+export function toggleTranscriptionLanguage(groups: LanguageGroup[], selected: string[], groupId: string): LanguageChange {
+  const group = groups.find((g) => g.id === groupId);
+  if (!group?.variants.length) return { ok: false, reason: t("languages.unavailable") };
+  const remaining = selected.filter((id) => !group.variants.some((v) => v.id === id));
+  if (remaining.length !== selected.length) {
+    return remaining.length
+      ? { ok: true, languages: remaining }
+      : { ok: false, reason: t("languages.002") };
   }
-  const group = groupOf(groups, id);
-  const sibling = group ? selected.find((x) => x !== id && group.variants.some((v) => v.id === x)) : undefined;
-  if (sibling) return { ok: true, languages: selected.map((x) => (x === sibling ? id : x)) };
   if (selected.length >= MAX_LANGUAGES) return { ok: false, reason: t("languages.003", { p0: MAX_LANGUAGES }) };
-  return { ok: true, languages: [...selected, id] };
+  return { ok: true, languages: [...selected, group.variants[0].id] };
 }
 
-/** The setting as the page uses it: a list of ids, never empty. */
+/** A variant can only replace the variant of an already selected transcription language. */
+export function chooseLanguageVariant(groups: LanguageGroup[], selected: string[], id: string): LanguageChange {
+  const group = groupOf(groups, id);
+  if (!group) return { ok: false, reason: t("languages.unavailable") };
+  const current = selected.find((value) => group.variants.some((v) => v.id === value));
+  if (!current) return { ok: false, reason: t("variants.chooseLanguageFirst") };
+  return { ok: true, languages: selected.map((value) => value === current ? id : value) };
+}
+
+/** The setting as the page uses it: a list of variant ids, never empty. */
 export function normalizeLanguages(value: unknown): string[] {
   if (!Array.isArray(value)) return [...DEFAULT_LANGUAGES];
   const ids = value.filter((x): x is string => typeof x === "string" && x.length > 0);
   return ids.length ? ids : [...DEFAULT_LANGUAGES];
 }
 
-/** The inside of the 語言 button: the chosen languages as small chips. */
+function transcriptionNames(groups: LanguageGroup[], selected: string[]): string[] {
+  return selected.map((id) => {
+    const group = groupOf(groups, id);
+    return group ? groupName(group) : id;
+  });
+}
+
+/** The transcription control shows language names, without regional variants. */
 export function languageChipsHTML(groups: LanguageGroup[], selected: string[]): string {
-  return (
-    `<span class="lang-chips">${selected.map((id) => `<span class="lchip">${esc(languageName(groups, id))}</span>`).join("")}</span>` +
-    ico("pencil")
-  );
+  return `<span class="lang-chips">${transcriptionNames(groups, selected)
+    .map((name) => `<span class="lchip">${esc(name)}</span>`).join("")}</span>${ico("pencil")}`;
 }
 
-/** What a screen reader says for the 語言 button. Plain text. */
+export const transcriptionLabel = (groups: LanguageGroup[], selected: string[]): string =>
+  t("transcription.label", { p0: transcriptionNames(groups, selected).join(", ") });
+
 export const languageLabel = (groups: LanguageGroup[], selected: string[]): string =>
-  t("languages.004", { p0: selected.map((id) => languageName(groups, id)).join("、") });
+  t("languages.004", { p0: selected.map((id) => languageName(groups, id)).join(", ") });
 
-/** The button of the 語言 row; `attrs` names it for the page. */
+export function transcriptionButtonHTML(groups: LanguageGroup[], selected: string[], attrs = ""): string {
+  return `<button type="button" class="btn sel lang-sel" aria-haspopup="dialog" aria-expanded="false" ` +
+    `aria-label="${esc(transcriptionLabel(groups, selected))}" title="${esc(t("transcription.choose"))}"${attrs}>` +
+    languageChipsHTML(groups, selected) + `</button>`;
+}
+
+/** The separate variant button includes the current variants in its accessible summary. */
 export function languageButtonHTML(groups: LanguageGroup[], selected: string[], attrs = ""): string {
-  return (
-    `<button type="button" class="btn sel variant-button" aria-haspopup="dialog" aria-expanded="false" ` +
-    t("languages.005", { p0: esc(languageLabel(groups, selected)), p1: attrs })
-  );
+  return `<button type="button" class="btn sel variant-button" aria-haspopup="dialog" aria-expanded="false" ` +
+    t("languages.005", { p0: esc(languageLabel(groups, selected)), p1: attrs });
 }
 
-/** A variant or a single language in the panel: its name, and how it is written on a second line. */
-function itemHTML(v: LanguageVariant, on: boolean, blocked: boolean, mark: string, cls: string): string {
-  const guidance = variantNote(v);
-  return (
-    `<button type="button" class="lang-item ${cls}" data-lang="${esc(v.id)}" aria-pressed="${on}"${blocked ? ' aria-disabled="true"' : ""}>` +
-    mark +
-    (guidance
-      ? `<span class="mtd"><span class="mt">${esc(variantName(v))}</span><span class="mdesc">${esc(guidance)}</span></span>`
-      : `<span class="mt">${esc(variantName(v))}</span>`) +
-    `</button>`
-  );
-}
-
-/**
- * The panel that opens from the 語言 row: first the languages with variants (each folds out to
- * show them, one group at a time: `open`), then the other languages. `groups` null: the list
- * could not be read.
- */
-export function languagePanelHTML(groups: LanguageGroup[] | null, selected: string[], open: string | null): string {
-  const head =
-    t("languages.006") +
+/** The transcription picker selects language groups, with no variant controls. */
+export function transcriptionPanelHTML(groups: LanguageGroup[] | null, selected: string[]): string {
+  const head = `<div class="lang-head"><span class="lang-title">${esc(t("transcription.title"))}</span>` +
     t("languages.007", { p0: selected.length, p1: MAX_LANGUAGES });
-  if (!groups || groups.length === 0) {
-    return head + t("languages.008");
-  }
-  const full = selected.length >= MAX_LANGUAGES;
-  const withVariants = groups.filter((g) => g.variants.length > 1);
-  const singles = groups.filter((g) => g.variants.length === 1);
-  const grouped = withVariants
-    .map((g) => {
-      const chosen = g.variants.find((v) => selected.includes(v.id));
-      const expanded = open === g.id;
-      const variantsId = `language-variants-${encodeURIComponent(g.id)}`;
-      const variants = expanded
-        ? `<div class="lang-variants" id="${variantsId}" role="group" aria-label="${esc(groupName(g))}">` +
-          g.variants
-            .map((v) => {
-              const on = selected.includes(v.id);
-              return itemHTML(v, on, !on && !chosen && full, `<span class="radio" aria-hidden="true"></span>`, "lang-variant");
-            })
-            .join("") +
-          `</div>`
-        : "";
-      return (
-        `<button type="button" class="lang-item lang-group" data-group="${esc(g.id)}" aria-expanded="${expanded}"${expanded ? ` aria-controls="${variantsId}"` : ""}>` +
-        `<span class="ck">${chosen ? CHECK : ""}</span><span class="mt">${esc(groupName(g))}</span>` +
-        `<span class="md">${chosen ? esc(variantName(chosen)) : t("languages.009", { p0: g.variants.length })}</span>${ico("down")}` +
-        `</button>` +
-        variants
-      );
-    })
-    .join("");
-  const others = singles
-    .map((g) => {
-      const v = g.variants[0];
-      const on = selected.includes(v.id);
-      return itemHTML(v, on, !on && full, `<span class="ck">${on ? CHECK : ""}</span>`, "lang-single");
-    })
-    .join("");
-  return (
-    head +
-    `<div class="lang-list">${grouped}` +
-    (others ? t("languages.010", { p0: others }) : "") +
-    `</div><p class="lang-foot">${esc(AUTO_DETECT_HINT())}</p>`
-  );
+  if (!groups?.length) return head + t("languages.008");
+  const chosen = selectedLanguageGroups(groups, selected);
+  const items = groups.filter((g) => g.variants.length).map((group) => {
+    const on = chosen.some((g) => g.id === group.id);
+    const blocked = !on && selected.length >= MAX_LANGUAGES;
+    return `<button type="button" class="lang-item lang-language" data-language="${esc(group.id)}" aria-pressed="${on}"${blocked ? ' aria-disabled="true"' : ""}>` +
+      `<span class="ck">${on ? CHECK : ""}</span><span class="mt">${esc(groupName(group))}</span></button>`;
+  }).join("");
+  return head + `<div class="lang-list">${items}</div><p class="lang-foot">${esc(AUTO_DETECT_HINT())}</p>`;
+}
+
+/** Only selected languages with multiple variants appear, one radio group per language. */
+export function variantPanelHTML(groups: LanguageGroup[] | null, selected: string[]): string {
+  const head = `<div class="lang-head"><span class="lang-title">${esc(t("settings.061"))}</span></div>`;
+  if (!groups?.length) return head + t("languages.008");
+  const withVariants = selectedLanguageGroups(groups, selected).filter((g) => g.variants.length > 1);
+  if (!withVariants.length) return head + `<p class="lang-empty">${esc(t("variants.empty"))}</p>`;
+  const items = withVariants.map((group) => {
+    const variants = group.variants.map((variant) => {
+      const guidance = variantNote(variant);
+      return `<button type="button" role="radio" class="lang-item lang-variant" data-variant="${esc(variant.id)}" aria-checked="${selected.includes(variant.id)}">` +
+        `<span class="radio" aria-hidden="true"></span><span class="mtd"><span class="mt">${esc(variantName(variant))}</span>` +
+        (guidance ? `<span class="mdesc">${esc(guidance)}</span>` : "") + `</span></button>`;
+    }).join("");
+    return `<div class="lang-variant-group" data-variant-group="${esc(group.id)}" role="radiogroup" aria-label="${esc(groupName(group))}">` +
+      `<div class="lang-sub">${esc(groupName(group))}</div>${variants}</div>`;
+  }).join("");
+  return head + `<div class="lang-list">${items}</div><p class="lang-foot">${esc(t("variants.description"))}</p>`;
 }

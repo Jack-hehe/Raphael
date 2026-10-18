@@ -172,6 +172,7 @@ def make_kit(*, script=None, devices=None, engine_gate=None, segmenter_gate=None
         engines=[],
         transcriptions=[],
         devices=[] if devices is None else devices,
+        automatic_device=None,
     )
 
     def make_mic(on_frames, device=None):
@@ -202,6 +203,8 @@ def make_kit(*, script=None, devices=None, engine_gate=None, segmenter_gate=None
     kit.NoMicrophoneError = audio.NoMicrophoneError
     kit.rms_level = audio.rms_level
     kit.list_input_devices = lambda: kit.devices
+    kit.automatic_device_name = lambda: kit.automatic_device
+    kit.current_input_devices = lambda: kit.devices
     kit.Segmenter = make_segmenter
     kit.create_engine = create_engine
     return kit
@@ -994,9 +997,27 @@ async def test_audio_devices_lists_the_microphones_and_the_selected_one(make_app
             {"index": 2, "name": "Array", "is_default": False},
         ],
         "selected": None,
+        "automatic_device": None,
     }
     await app.call("audio.set_device", {"name": "Array"})
     assert (await app.call("audio.devices"))["selected"] == "Array"
+
+
+async def test_audio_devices_can_read_automatic_resolution_without_restarting_meter(make_app):
+    kit = make_kit()
+    kit.automatic_device = "Array Mic"
+    app = make_app(kit)
+    await app.call("audio.monitor", {"on": True})
+    recorder = kit.mics[-1]
+
+    def must_not_refresh():
+        raise AssertionError("A status-only query must not refresh PortAudio")
+
+    kit.list_input_devices = must_not_refresh
+    listing = await app.call("audio.devices", {"refresh": False})
+    assert listing["automatic_device"] == "Array Mic"
+    assert kit.mics[-1] is recorder
+    assert recorder.stopped == 0
 
 
 async def test_audio_devices_reads_with_the_meter_closed_and_gives_the_meter_back(make_app):

@@ -449,6 +449,8 @@ def _import_kit() -> SimpleNamespace:
         NoMicrophoneError=audio.NoMicrophoneError,
         rms_level=audio.rms_level,
         list_input_devices=audio.list_input_devices,
+        current_input_devices=audio.current_input_devices,
+        automatic_device_name=audio.automatic_device_name,
         Segmenter=vad.Segmenter,
         create_engine=stt.create_engine,
     )
@@ -811,20 +813,27 @@ class App(Router):
     # --- the microphone -------------------------------------------------------------------------
 
     async def _audio_devices(self, params: dict) -> dict:
+        refresh = params.get("refresh", True)
+        if type(refresh) is not bool:
+            raise _invalid("refresh must be true or false")
         kit = await self._wait_for(self._kit)
         # Listing reads the devices again, so that a headset plugged in since shows up, and that is
         # not done while a stream is open. The settings meter's stream is the one that usually is:
         # it makes way for the reading and comes back after, as it does for a dictation.
-        await self._meter("make way for reading the devices", lambda m: m.suspend())
-        try:
-            devices = await asyncio.to_thread(kit.list_input_devices)
-        finally:
-            await self._give_meter_back()
+        if refresh:
+            await self._meter("make way for reading the devices", lambda m: m.suspend())
+            try:
+                devices = await asyncio.to_thread(kit.list_input_devices)
+            finally:
+                await self._give_meter_back()
+        else:
+            devices = await asyncio.to_thread(kit.current_input_devices)
         return {
             "devices": [
                 {"index": d.index, "name": d.name, "is_default": d.is_default} for d in devices
             ],
             "selected": self._device_name,
+            "automatic_device": kit.automatic_device_name(),
         }
 
     async def _audio_set_device(self, params: dict) -> dict:

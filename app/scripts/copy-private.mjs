@@ -3,12 +3,12 @@
 
 import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { privateAssetsDirectory } from "./private-assets.mjs";
+import { PRIVATE_FRONTEND_ASSETS, privateAssetsDirectory } from "./private-assets.mjs";
 
 const app = resolve(import.meta.dirname, "..");
 const privateDir = privateAssetsDirectory(app);
 
-for (const name of ["glyph-ring.png", "app-icon.png"]) {
+for (const name of PRIVATE_FRONTEND_ASSETS) {
   const source = join(privateDir, name);
   const target = resolve(app, "public/private", name);
   try {

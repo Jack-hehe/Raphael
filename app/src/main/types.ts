@@ -154,6 +154,8 @@ export type KeyCheck =
 export interface AudioDevices {
   devices: { index: number; name: string; is_default: boolean }[];
   selected: string | null;
+  /** Actual automatic device after signal detection, or the default before detection. */
+  automatic_device?: string | null;
 }
 
 /** `models.status` */
