@@ -315,7 +315,7 @@ test("progress goes to the emblem, without words", () => {
   send({ type: "hide" });
   vi.advanceTimersByTime(60_000);
   expect(emblem.progressLog).toEqual([
-    "clear", // the show starts without the last dictation's arc
+    "clear", // the show starts without the last dictation's progress
     "progress:transcribing:1/3:4.5",
     "progress:cleaning:3/3:4.5",
     "progress:done:0/0:0",
@@ -324,7 +324,7 @@ test("progress goes to the emblem, without words", () => {
   expect(emblem.last).toBe("vanish");
 });
 
-test("a notice after the progress fades the arc out", () => {
+test("a notice after the progress brings the whole ring back", () => {
   emblem.phase = "thinking";
   send({ type: "progress", stage: "done", done: 0, total: 0, audio_seconds: 0 });
   send({ type: "notice", zh: ZH, ja: JA });

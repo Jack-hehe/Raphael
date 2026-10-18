@@ -223,36 +223,35 @@ const progress = (stage: "transcribing" | "cleaning" | "done", done = 0, total =
   audio_seconds: 6,
 });
 
-test("a dictation with progress: the arc fills through the stages, then the emblem vanishes", () => {
+test("a dictation with progress: no glyph ring while listening, it draws in through the stages, then the emblem vanishes", () => {
   const p = page();
   p.send(SETTINGS);
   for (let round = 0; round < 2; round++) {
     p.send({ type: "show", mode: "listening" });
     run(1200);
-    expect(p.emblem.progressShown, `round ${round}: a new dictation has no arc`).toBeNull();
+    expect(p.emblem.revealShown, `round ${round}: a new dictation has no glyph ring`).toEqual({ fraction: 0, rest: 0, flash: 0, echo: 0 });
     p.send({ type: "mode", mode: "thinking" }, progress("transcribing", 1, 3));
     expect(p.drawsNow()).toBe(true);
-    const first = p.emblem.progressShown?.fraction ?? 0;
+    const first = p.emblem.revealShown?.fraction ?? 0;
     expect(first).toBeGreaterThan(0);
     expect(first).toBeLessThanOrEqual(0.2 + 1e-9);
     p.send(progress("transcribing", 3, 3), progress("cleaning", 3, 3));
     run(800);
-    const cleaning = p.emblem.progressShown?.fraction ?? 0;
+    const cleaning = p.emblem.revealShown?.fraction ?? 0;
     expect(cleaning).toBeGreaterThan(0.6);
     expect(cleaning).toBeLessThan(0.95);
     p.send(progress("done"));
     run(50);
-    expect(p.emblem.progressShown?.fraction).toBe(1);
+    expect(p.emblem.revealShown?.fraction).toBe(1);
     p.send({ type: "hide" });
     run(1000);
     expect(p.emblem.phase).toBe("hidden");
-    expect(p.emblem.progressShown).toBeNull();
     expect(p.drawsNow()).toBe(false);
     expect(p.view.lines).toBeNull(); // no words at any point
   }
 });
 
-test("progress then a notice (the text was only copied): the arc fades, the notice shows", () => {
+test("progress then a notice (the text was only copied): the whole ring is back, the notice shows", () => {
   const p = page();
   p.send({ type: "show", mode: "listening" });
   run(1000);
@@ -260,13 +259,13 @@ test("progress then a notice (the text was only copied): the arc fades, the noti
   run(500);
   p.send(progress("done"), NO_SOUND);
   run(400);
-  expect(p.emblem.progressShown).toBeNull();
+  expect(p.emblem.revealShown).toBeNull(); // the whole ring
   expect(p.view.lines).not.toBeNull();
   run(10_000);
   expect(p.emblem.phase).toBe("hidden");
   p.send({ type: "show", mode: "listening" });
   expect(p.drawsNow()).toBe(true);
-  expect(p.emblem.progressShown).toBeNull();
+  expect(p.emblem.revealShown?.fraction).toBe(0);
 });
 
 test("a quick tap: the reply comes during the appear animation, and the ring still closes", () => {
@@ -276,13 +275,13 @@ test("a quick tap: the reply comes during the appear animation, and the ring sti
   p.send({ type: "mode", mode: "thinking" }, progress("transcribing", 0, 1), progress("done"));
   run(50);
   expect(p.emblem.phase).toBe("appear");
-  expect(p.emblem.progressShown?.fraction).toBe(1);
+  expect(p.emblem.revealShown?.fraction).toBe(1);
   p.send({ type: "hide" });
   run(1000);
   expect(p.emblem.phase).toBe("hidden");
   p.send({ type: "show", mode: "listening" });
   expect(p.drawsNow()).toBe(true);
-  expect(p.emblem.progressShown).toBeNull();
+  expect(p.emblem.revealShown?.fraction).toBe(0);
 });
 
 test("progress that comes after the hide changes nothing", () => {

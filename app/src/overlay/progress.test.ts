@@ -178,28 +178,12 @@ test("with reduced motion the arc moves in discrete steps, without easing or fla
   expect(arc.sample(true)?.flash).toBe(0);
 });
 
-test("clear fades the arc out, then a new dictation starts from nothing", () => {
+test("reset removes the arc at once, and a new dictation starts from nothing", () => {
   const arc = new ProgressArc();
   arc.report(DONE, false);
-  arc.clear(false);
-  expect(arc.sample(false)?.alpha).toBe(1);
-  run(arc, 0.1);
-  const mid = arc.sample(false)?.alpha ?? 0;
-  expect(mid).toBeGreaterThan(0);
-  expect(mid).toBeLessThan(1);
-  // a late report for the dictation that is over does not bring the arc back
-  arc.report(DONE, false);
-  expect(arc.sample(false)?.alpha).toBe(mid);
-  run(arc, 0.3);
+  arc.reset();
   expect(arc.active).toBe(false);
   expect(arc.sample(false)).toBeNull();
   arc.report(tr(0, 3), false);
   expect(arc.fraction).toBe(0);
-});
-
-test("with reduced motion clear removes the arc at once", () => {
-  const arc = new ProgressArc();
-  arc.report(tr(1, 3), true);
-  arc.clear(true);
-  expect(arc.active).toBe(false);
 });
