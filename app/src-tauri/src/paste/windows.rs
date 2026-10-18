@@ -33,7 +33,10 @@ use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThre
 use windows::core::{HRESULT, Owned, PWSTR};
 
 use super::clipboard::ClipboardSession;
-use super::{CopyReason, Decision, PasteOutcome, Paster, Shortcut, Target, decide};
+use super::{
+    CopyReason, Decision, PasteDelivery, PasteOutcome, PasteReceipt, Paster, Shortcut, Target,
+    decide,
+};
 
 /// How long the chord's modifiers stay down after the key click. Most programs read them from
 /// the key's message, but some look at the keyboard's state while handling it.
@@ -86,6 +89,10 @@ impl Paster for WindowsPaster {
     }
 
     fn deliver(&self, text: &str, at_stop: Option<&Target>) -> PasteOutcome {
+        self.deliver_with_receipt(text, at_stop).outcome
+    }
+
+    fn deliver_with_receipt(&self, text: &str, at_stop: Option<&Target>) -> PasteDelivery {
         let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
         let (text, target, self_elevated) = (text.to_owned(), at_stop.cloned(), self.self_elevated);
         // The session's window is answered only while its thread waits for it, so it gets a
@@ -99,7 +106,10 @@ impl Paster for WindowsPaster {
             Err(e) => format!("could not start the paste thread: {e}"),
         };
         log::error!("paste: {failure}");
-        outcome_of(decide(at_stop, foreground_target().as_ref(), self_elevated))
+        PasteDelivery {
+            outcome: outcome_of(decide(at_stop, foreground_target().as_ref(), self_elevated)),
+            receipt: None,
+        }
     }
 
     fn copy(&self, text: &str) {
@@ -110,7 +120,7 @@ impl Paster for WindowsPaster {
 }
 
 /// One paste, on the current thread.
-fn paste(text: &str, at_stop: Option<&Target>, self_elevated: bool) -> PasteOutcome {
+fn paste(text: &str, at_stop: Option<&Target>, self_elevated: bool) -> PasteDelivery {
     let session = ClipboardSession::begin()
         .and_then(|mut session| session.publish_text(text).map(|()| session));
     // Decided once the text is on the clipboard: as late as possible before the chord.
@@ -121,23 +131,37 @@ fn paste(text: &str, at_stop: Option<&Target>, self_elevated: bool) -> PasteOutc
             // Nothing was pasted or copied. PasteOutcome has no word for that; the dictation is
             // still in the history, for "paste last".
             log::error!("paste: could not use the clipboard: {e}");
-            return outcome_of(decision);
+            return PasteDelivery {
+                outcome: outcome_of(decision),
+                receipt: None,
+            };
         }
     };
-    match decision {
+    let receipt = match decision {
         Decision::Paste(shortcut) => {
             let program = at_stop.map_or("", |target| target.process_name.as_str());
             log::info!("paste: {shortcut:?} into {program}");
             release_held_modifiers();
+            // The outer delivery lock still holds: sequence follows the actual paste order.
+            let mut receipt = PasteReceipt::new();
+            receipt.input = at_stop.and_then(|target| handy_keys::input_checkpoint(target.hwnd));
+            if let Some(input) = &receipt.input {
+                receipt.started = input.started();
+            }
             let chord_sent = send_chord(shortcut, || session.pump_for(CHORD_HOLD));
             session.wait_and_restore(chord_sent);
+            chord_sent.then_some(receipt)
         }
         Decision::CopyOnly(reason) => {
             log::info!("paste: not pasting ({reason:?}); the text stays on the clipboard");
             session.keep();
+            None
         }
+    };
+    PasteDelivery {
+        outcome: outcome_of(decision),
+        receipt,
     }
-    outcome_of(decision)
 }
 
 fn outcome_of(decision: Decision) -> PasteOutcome {
@@ -155,7 +179,10 @@ fn send_chord(shortcut: Shortcut, hold: impl FnOnce()) -> bool {
         Shortcut::CtrlShiftV => (&[Key::Control, Key::Shift], Key::V),
         Shortcut::ShiftInsert => (&[Key::Shift], Key::Insert),
     };
-    let mut enigo = match Enigo::new(&Settings::default()) {
+    let mut enigo = match Enigo::new(&Settings {
+        windows_dw_extra_info: Some(handy_keys::RAPHAEL_INPUT_MARKER),
+        ..Settings::default()
+    }) {
         Ok(enigo) => enigo,
         Err(e) => {
             log::error!("paste: could not send keys: {e}");
@@ -237,7 +264,7 @@ fn key_event(vk: VIRTUAL_KEY, extended: bool, up: bool) -> INPUT {
                 wScan: scan,
                 dwFlags: flags,
                 time: 0,
-                dwExtraInfo: 0,
+                dwExtraInfo: handy_keys::RAPHAEL_INPUT_MARKER,
             },
         },
     }

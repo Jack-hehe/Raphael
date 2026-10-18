@@ -122,6 +122,7 @@ features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Input_Ime",
     "Win32_System_RemoteDesktop",
     "Win32_Graphics_Gdi",
 ]

@@ -137,12 +137,15 @@
 mod error;
 mod listener;
 mod manager;
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+mod observation;
 mod platform;
 mod types;
 
 pub use error::{Error, Result};
 pub use listener::{BlockingHotkeys, KeyboardListener};
 pub use manager::HotkeyManager;
+pub use observation::{EditEvent, RAPHAEL_INPUT_MARKER};
 pub use types::{Hotkey, HotkeyEvent, HotkeyId, HotkeyState, Key, KeyEvent, Modifiers};
 
 #[cfg(target_os = "macos")]
@@ -151,3 +154,9 @@ pub use platform::macos::{check_accessibility, open_accessibility_settings};
 // Raphael patch: injected keyboard events are ignored unless this is turned on (Windows only).
 #[cfg(target_os = "windows")]
 pub use platform::windows::listener::accept_injected_input;
+
+#[cfg(target_os = "windows")]
+pub use platform::windows::observation::{
+    cancel_edit_observations, input_checkpoint, observe_edits, observe_submissions, EditCancellation,
+    EditObservation, InputCheckpoint,
+};

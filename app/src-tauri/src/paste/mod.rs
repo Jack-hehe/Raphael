@@ -15,6 +15,9 @@ mod windows;
 #[cfg(windows)]
 pub use self::windows::WindowsPaster;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+
 /// A window that can receive the dictated text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Target {
@@ -63,6 +66,33 @@ pub enum PasteOutcome {
     Pasted,
     /// The text is on the clipboard for the user to paste by hand.
     CopiedOnly(CopyReason),
+}
+
+static DELIVERY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Metadata owned by one delivery, passed directly to its after-paste continuation.
+pub struct PasteReceipt {
+    pub(crate) sequence: u64,
+    pub(crate) started: Instant,
+    #[cfg(windows)]
+    pub(crate) input: Option<handy_keys::InputCheckpoint>,
+}
+
+impl PasteReceipt {
+    pub(crate) fn new() -> Self {
+        Self {
+            sequence: DELIVERY_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1,
+            started: Instant::now(),
+            #[cfg(windows)]
+            input: None,
+        }
+    }
+}
+
+/// A paste outcome and its own input evidence; copy-only and failed sends carry no receipt.
+pub struct PasteDelivery {
+    pub outcome: PasteOutcome,
+    pub receipt: Option<PasteReceipt>,
 }
 
 /// Pastes into `at_stop` (the window that had focus when the key was released) only if `now`
@@ -121,6 +151,16 @@ pub trait Paster: Send + Sync + 'static {
     /// be used at all (another program keeps it open), nothing is pasted or copied: that is
     /// logged, and the outcome is still the one [`decide`] chose.
     fn deliver(&self, text: &str, at_stop: Option<&Target>) -> PasteOutcome;
+
+    /// Keeps per-delivery metadata attached while its async continuation waits to resume.
+    fn deliver_with_receipt(&self, text: &str, at_stop: Option<&Target>) -> PasteDelivery {
+        let receipt = PasteReceipt::new();
+        let outcome = self.deliver(text, at_stop);
+        PasteDelivery {
+            outcome,
+            receipt: (outcome == PasteOutcome::Pasted).then_some(receipt),
+        }
+    }
 
     /// Leaves `text` on the clipboard for the user to paste by hand (kept out of clipboard
     /// history like a paste) and does not put the user's clipboard back. If the clipboard cannot

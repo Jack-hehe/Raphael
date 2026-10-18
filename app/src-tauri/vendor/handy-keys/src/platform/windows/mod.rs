@@ -2,3 +2,4 @@
 
 mod keycode;
 pub(crate) mod listener;
+pub(crate) mod observation;

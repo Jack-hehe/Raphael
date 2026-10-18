@@ -37,6 +37,9 @@
 //! for hotkeys or get swallowed, unless the program calls `accept_injected_input(true)` (only
 //! tests that drive the hook with SendInput do). See `passes_untouched`. Mouse events are not
 //! affected.
+//!
+//! Third change: an opt-in edit observer runs beside this hook, with bounded in-memory events,
+//! strict focus/window and deadline gates, and no effect on suppression or hotkey behavior.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -547,6 +550,7 @@ pub(crate) fn spawn(blocking_hotkeys: Option<BlockingHotkeys>) -> Result<Windows
         // Keep the short timeout so shutdown polling behavior remains unchanged.
         let mut msg = MSG::default();
         loop {
+            super::observation::tick();
             // Check if we should stop
             if !thread_running.load(Ordering::SeqCst) {
                 break;
@@ -741,6 +745,12 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
         }
     });
 
+    super::observation::keyboard(
+        &*(lparam.0 as *const KBDLLHOOKSTRUCT),
+        wparam.0 as u32,
+        should_block,
+    );
+
     // Outside the HOOK_CONTEXT borrow: the injected events re-enter this
     // hook (where the dwExtraInfo marker passes them straight through).
     if needs_mask {
@@ -783,6 +793,8 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
 
     let mut should_block = false;
     let mut needs_mask = false;
+
+    super::observation::mouse(&*(lparam.0 as *const MSLLHOOKSTRUCT));
 
     // Process the mouse event
     HOOK_CONTEXT.with(|ctx_cell| {

@@ -33,7 +33,7 @@ use crate::hotkey::{CancelSwitch, HotkeyEvent};
 use crate::learn::AfterPaste;
 use crate::notices::{self, Notice};
 use crate::overlay::{Mode, OverlayApi, Progress, Stage};
-use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
+use crate::paste::{CopyReason, PasteDelivery, PasteOutcome, Paster, Target};
 use crate::rpc::{CORE_EXITED, CoreApi, RpcError, TIMEOUT, lock};
 
 /// `BUSY` in the core's `protocol.py`: a dictation session is already active.
@@ -454,19 +454,14 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 .and_then(Value::as_str)
                 .map(str::to_owned);
 
-            let outcome = this
+            let delivery = this
                 .deliver(text.to_owned(), target.clone(), Some(&id))
                 .await;
             this.finish(&id, |this| {
                 let fallback = this.first_time(notices::notice_for_fallback(reason.as_deref()));
-                this.report(outcome, fallback, true);
+                this.report(delivery.as_ref().map(|item| item.outcome), fallback, true);
+                this.learn_after_paste(text, target.as_ref(), delivery);
             });
-            // Pasted: the field it went into is watched for the user's corrections.
-            if outcome == Some(PasteOutcome::Pasted)
-                && let (Some(hook), Some(target)) = (&this.after_paste, &target)
-            {
-                hook.pasted(text, target);
-            }
         }))
     }
 
@@ -493,6 +488,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// The paste-last hotkey: pastes the latest dictation from the history into the window that
     /// has focus now.
     fn paste_last_at(&self, now_ms: u64) -> JoinHandle<()> {
+        if let Some(hook) = &self.after_paste {
+            hook.paste_started();
+        }
         // Right Alt+V: the Right Alt went down first and started a recording. Drop it quietly.
         let cancelled = {
             let mut state = lock(&self.state);
@@ -529,8 +527,28 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         let Some(text) = self.latest_text().await else {
             return;
         };
-        let outcome = self.deliver(text, target, None).await;
-        self.report(outcome, None, false);
+        let delivery = self.deliver(text.clone(), target.clone(), None).await;
+        let _transition = lock(&self.transitions);
+        self.report(delivery.as_ref().map(|item| item.outcome), None, false);
+        if self.phase() == Phase::Idle {
+            self.learn_after_paste(&text, target.as_ref(), delivery);
+        }
+    }
+
+    fn learn_after_paste(
+        &self,
+        text: &str,
+        target: Option<&Target>,
+        delivery: Option<PasteDelivery>,
+    ) {
+        if let Some(PasteDelivery {
+            outcome: PasteOutcome::Pasted,
+            receipt: Some(receipt),
+        }) = delivery
+            && let (Some(hook), Some(target)) = (&self.after_paste, target)
+        {
+            hook.pasted_with_receipt(text, target, receipt);
+        }
     }
 
     /// The text of the latest dictation in the history, if there is one.
@@ -565,7 +583,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         text: String,
         target: Option<Target>,
         session: Option<&str>,
-    ) -> Option<PasteOutcome> {
+    ) -> Option<PasteDelivery> {
         let this = self.clone();
         let session = session.map(str::to_owned);
         let delivered = tokio::task::spawn_blocking(move || {
@@ -575,7 +593,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 log::info!("the dictation was cancelled before it was pasted; not pasting");
                 return None;
             }
-            Some(this.paster.deliver(&text, target.as_ref()))
+            Some(this.paster.deliver_with_receipt(&text, target.as_ref()))
         })
         .await;
         match delivered {
@@ -823,6 +841,12 @@ mod app {
             match &self.0 {
                 Some(overlay) => overlay.notice(zh, ja),
                 None => log::warn!("notice without an overlay: {zh}"),
+            }
+        }
+        fn learned_notice(&self, zh: &str, ja: &str) {
+            match &self.0 {
+                Some(overlay) => overlay.learned_notice(zh, ja),
+                None => log::warn!("learned notice without an overlay"),
             }
         }
         fn hide(&self) {
@@ -1183,6 +1207,7 @@ mod tests {
         outcome: PasteOutcome,
         delivered: Mutex<Vec<String>>,
         copied: Mutex<Vec<String>>,
+        gate: Option<(Arc<Notify>, Mutex<std::sync::mpsc::Receiver<()>>)>,
     }
 
     impl FakePaster {
@@ -1201,7 +1226,15 @@ mod tests {
                 outcome: PasteOutcome::Pasted,
                 delivered: Mutex::default(),
                 copied: Mutex::default(),
+                gate: None,
             }
+        }
+
+        fn gated(mut self) -> (Self, Arc<Notify>, std::sync::mpsc::Sender<()>) {
+            let entered = Arc::new(Notify::new());
+            let (release, waiting) = std::sync::mpsc::channel();
+            self.gate = Some((entered.clone(), Mutex::new(waiting)));
+            (self, entered, release)
         }
 
         fn copying(process_name: &str, reason: CopyReason) -> Self {
@@ -1232,6 +1265,10 @@ mod tests {
                 "delivered to the target taken at stop"
             );
             self.delivered.lock().unwrap().push(text.to_owned());
+            if let Some((entered, waiting)) = &self.gate {
+                entered.notify_one();
+                waiting.lock().unwrap().recv().unwrap();
+            }
             self.outcome
         }
 
@@ -3126,6 +3163,136 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn paste_last_watches_only_a_successful_paste_without_starting_a_dictation() {
+        for copied in [false, true] {
+            let hook = Arc::new(FakeHook::default());
+            let paster = if copied {
+                FakePaster::copying("notepad.exe", CopyReason::FocusChanged)
+            } else {
+                FakePaster::pasting("notepad.exe")
+            };
+            let c = controller(
+                FakeCore::with("history.latest", json!({"item": {"text": "hello"}})),
+                paster,
+            )
+            .with_after_paste(hook.clone());
+            run(&c, HotkeyEvent::PasteLast, 0).await;
+            let expected = if copied {
+                vec![]
+            } else {
+                vec!["pasted:hello:notepad.exe"]
+            };
+            assert_eq!(*hook.0.lock().unwrap(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_paste_completion_cannot_restart_learning_during_a_new_recording() {
+        let hook = Arc::new(FakeHook::default());
+        let (paster, entered, release) = FakePaster::pasting("notepad.exe").gated();
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("old dictation", None)),
+            paster,
+        )
+        .with_after_paste(hook.clone());
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        let finishing = c.on_hotkey(HotkeyEvent::DictationUp, 900).unwrap();
+        entered.notified().await;
+        run(&c, HotkeyEvent::Cancel, 1000).await;
+        run(&c, HotkeyEvent::DictationDown, 2000).await;
+        assert_eq!(c.phase(), Phase::Recording);
+        release.send(()).unwrap();
+        finishing.await.unwrap();
+        // The already-started OS paste can complete, but its old learning hook cannot restart.
+        assert_eq!(c.paster().delivered(), ["old dictation"]);
+        assert_eq!(*hook.0.lock().unwrap(), ["started", "started"]);
+        assert_eq!(c.phase(), Phase::Recording);
+    }
+
+    #[tokio::test]
+    async fn a_paste_last_completion_cannot_restart_learning_during_a_new_recording() {
+        let hook = Arc::new(FakeHook::default());
+        let (paster, entered, release) = FakePaster::pasting("notepad.exe").gated();
+        let c = controller(
+            FakeCore::with(
+                "history.latest",
+                json!({"item": {"text": "last dictation"}}),
+            ),
+            paster,
+        )
+        .with_after_paste(hook.clone());
+        let finishing = c.on_hotkey(HotkeyEvent::PasteLast, 0).unwrap();
+        entered.notified().await;
+        run(&c, HotkeyEvent::DictationDown, 2000).await;
+        assert_eq!(c.phase(), Phase::Recording);
+        release.send(()).unwrap();
+        finishing.await.unwrap();
+        assert_eq!(c.paster().delivered(), ["last dictation"]);
+        assert_eq!(*hook.0.lock().unwrap(), ["started"]);
+        assert_eq!(c.phase(), Phase::Recording);
+    }
+
+    #[tokio::test]
+    async fn overlapping_identical_pastes_keep_their_own_receipts() {
+        #[derive(Default)]
+        struct ReceiptHook(Mutex<Vec<(u64, std::time::Instant)>>);
+        impl AfterPaste for ReceiptHook {
+            fn pasted(&self, _: &str, _: &Target) {
+                panic!("the controller must retain the delivery receipt");
+            }
+            fn pasted_with_receipt(
+                &self,
+                _: &str,
+                _: &Target,
+                receipt: crate::paste::PasteReceipt,
+            ) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((receipt.sequence, receipt.started));
+            }
+            fn dictation_started(&self) {}
+        }
+        let hook = Arc::new(ReceiptHook::default());
+        let c = controller(FakeCore::default(), FakePaster::pasting("notepad.exe"))
+            .with_after_paste(hook.clone());
+        let target = c.paster.foreground();
+        let first = c
+            .deliver("same dictated text".to_owned(), target.clone(), None)
+            .await
+            .unwrap();
+        let first_receipt = first.receipt.as_ref().unwrap();
+        let first_stamp = (first_receipt.sequence, first_receipt.started);
+        let second = c
+            .deliver("same dictated text".to_owned(), target.clone(), None)
+            .await
+            .unwrap();
+        let second_receipt = second.receipt.as_ref().unwrap();
+        let second_stamp = (second_receipt.sequence, second_receipt.started);
+        assert!(first_stamp.0 < second_stamp.0);
+        // A delayed first continuation must not consume or impersonate the second receipt.
+        c.learn_after_paste("same dictated text", target.as_ref(), Some(second));
+        c.learn_after_paste("same dictated text", target.as_ref(), Some(first));
+        assert_eq!(*hook.0.lock().unwrap(), [second_stamp, first_stamp]);
+    }
+
+    #[test]
+    fn a_failed_send_without_a_receipt_never_starts_learning() {
+        let hook = Arc::new(FakeHook::default());
+        let c = controller(FakeCore::default(), FakePaster::pasting("notepad.exe"))
+            .with_after_paste(hook.clone());
+        c.learn_after_paste(
+            "same dictated text",
+            c.paster.foreground().as_ref(),
+            Some(PasteDelivery {
+                outcome: PasteOutcome::Pasted,
+                receipt: None,
+            }),
+        );
+        assert!(hook.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn a_correction_after_the_paste_is_learned_once_and_reported() {
         use crate::learn::Learner;
         use crate::learn::fake::{FakeProbe, text};
@@ -3161,7 +3328,7 @@ mod tests {
 
         run(&c, HotkeyEvent::DictationDown, 0).await;
         run(&c, HotkeyEvent::DictationUp, 900).await;
-        let learned = notice("《了。已將「手提電話」加入字典。》");
+        let learned = notice("《了。「手提電話」已加入詞典。》");
         for _ in 0..400 {
             if c.overlay().events().contains(&learned) {
                 break;

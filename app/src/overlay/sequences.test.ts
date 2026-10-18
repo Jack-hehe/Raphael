@@ -10,6 +10,7 @@ type OverlayModule = typeof import("./overlay");
 
 class NullView implements OverlayView {
   lines: string | null = null;
+  place(): void {}
   layout(): void {}
   showLines(zh: string | null, ja: string | null): void {
     this.lines = `${zh ?? "-"}|${ja ?? "-"}`;
@@ -115,6 +116,24 @@ function page() {
 
 const SETTINGS: OverlayEvent = { type: "settings", px: 150, subtitles: "both" };
 const NO_SOUND: OverlayEvent = { type: "notice", zh: "《否。沒有收到聲音，請檢查麥克風。》", ja: "《否。音声が届いていません。》" };
+
+test("a delayed corner placement preserves the real dictation progress ring", async () => {
+  const p = page();
+  let placed!: () => void;
+  p.view.place = () => new Promise<void>((resolve) => { placed = resolve; });
+  p.send(
+    { type: "show", mode: "listening" },
+    { type: "mode", mode: "thinking" },
+    { type: "progress", stage: "transcribing", done: 1, total: 3, audio_seconds: 5 },
+  );
+  expect(p.emblem.phase).toBe("hidden");
+  placed();
+  await Promise.resolve();
+  run(1000);
+  expect(p.emblem.phase).toBe("thinking");
+  expect(p.emblem.revealShown).not.toBeNull();
+  expect(p.drawsNow()).toBe(true);
+});
 
 test("a dictation: show, levels, thinking, hide, and the next dictation shows again", () => {
   const p = page();

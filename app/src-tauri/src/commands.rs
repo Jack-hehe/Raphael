@@ -134,6 +134,9 @@ pub async fn core_call(app: AppHandle, method: String, params: Value) -> Result<
         return Err(format!("the main window may not call {method}"));
     }
     validate_core_call(&method, &params)?;
+    if turns_learning_off(&method, &params) {
+        crate::learn::cancel_watches();
+    }
     let core = app
         .try_state::<Arc<CoreProcess>>()
         .ok_or(CORE_NOT_RUNNING)?;
@@ -148,6 +151,12 @@ pub async fn core_call(app: AppHandle, method: String, params: Value) -> Result<
         MONITORING.store(on, Ordering::Relaxed);
     }
     Ok(result)
+}
+
+fn turns_learning_off(method: &str, params: &Value) -> bool {
+    method == "settings.set"
+        && params.get("key").and_then(Value::as_str) == Some("learn_corrections")
+        && params.get("value").and_then(Value::as_bool) == Some(false)
 }
 
 // ---------- events ----------
@@ -667,6 +676,26 @@ async fn restore_core<C: CoreApi>(core: &C, microphone: Option<&str>, monitoring
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_disabling_correction_learning_cancels_a_watch() {
+        assert!(turns_learning_off(
+            "settings.set",
+            &json!({"key": "learn_corrections", "value": false})
+        ));
+        assert!(!turns_learning_off(
+            "settings.set",
+            &json!({"key": "learn_corrections", "value": true})
+        ));
+        assert!(!turns_learning_off(
+            "settings.get",
+            &json!({"key": "learn_corrections", "value": false})
+        ));
+        assert!(!turns_learning_off(
+            "settings.set",
+            &json!({"key": "other", "value": false})
+        ));
+    }
     use serde_json::json;
     use std::sync::Mutex;
 

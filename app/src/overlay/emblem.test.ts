@@ -81,7 +81,7 @@ test("the canvas leaves room for the rays: 1.3 times the diameter", () => {
 
 // A canvas context that records every call, so the port can be exercised without a browser.
 function recordingContext() {
-  const calls: Array<{ name: string; args: unknown[]; alpha?: number; op?: string }> = [];
+  const calls: Array<{ name: string; args: unknown[]; alpha?: number; op?: string; style?: string }> = [];
   const state: Record<string, unknown> = {
     globalAlpha: 1,
     globalCompositeOperation: "source-over",
@@ -97,7 +97,7 @@ function recordingContext() {
         };
       }
       return (...args: unknown[]) => {
-        calls.push({ name: prop, args, alpha: target.globalAlpha as number, op: target.globalCompositeOperation as string });
+        calls.push({ name: prop, args, alpha: target.globalAlpha as number, op: target.globalCompositeOperation as string, style: target.strokeStyle as string });
       };
     },
     set(target, prop: string, value) {
@@ -130,6 +130,59 @@ test("hidden draws nothing at all", () => {
   const { ctx, calls } = recordingContext();
   drawEmblem(ctx, 75, params("hidden", 0, 0), { tq: 0, rot: 0, dim: 1, calm: 1, lvl: 0 });
   expect(calls).toEqual([]);
+});
+
+test("the light-surface inner ring keeps warm gold edges instead of a neutral white outline", () => {
+  const { ctx, calls } = recordingContext();
+  const p = { ...params("steady", 0, 0.05)!, glyphA: 0, rays: 0, coreA: 0 };
+  drawEmblem(ctx, 64, p, { tq: 1, rot: 0, dim: 1, calm: 0.7, lvl: 0.05, surface: "light" });
+  const strokes = calls.filter((call) => call.name === "stroke");
+  expect(strokes).toHaveLength(2);
+  for (const stroke of strokes) {
+    const rgb = stroke.style?.match(/^rgba?\((\d+),(\d+),(\d+)/);
+    expect(rgb, "light ring strokes must carry warm color").not.toBeNull();
+    expect(Number(rgb![1]) - Number(rgb![3])).toBeGreaterThan(40);
+    expect(stroke.op).toBe("source-over");
+  }
+});
+
+test("the dark and transparent-surface inner ring keeps its original white light", () => {
+  const p = { ...params("steady", 0, 0.05)!, glyphA: 0, rays: 0, coreA: 0 };
+  for (const surface of ["dark", undefined] as const) {
+    const { ctx, calls } = recordingContext();
+    drawEmblem(ctx, 64, p, { tq: 1, rot: 0, dim: 1, calm: 0.7, lvl: 0.05, surface });
+    const strokes = calls.filter((call) => call.name === "stroke");
+    expect(strokes[strokes.length - 1].style).toBe("#ffffff");
+  }
+});
+
+test("light-surface rays and core use source-over while transparent overlays retain added light", () => {
+  const p = { ...params("steady", 0, 0.05)!, glyphA: 0, ringA: 0 };
+  for (const surface of ["light", "dark"] as const) {
+    const { ctx, calls } = recordingContext();
+    drawEmblem(ctx, 64, p, { tq: 1, rot: 0, dim: 1, calm: 0.7, lvl: 0.05, surface });
+    const light = calls.filter((call) => call.name === "stroke" || call.name === "fill");
+    expect(light.length).toBeGreaterThan(1);
+    for (const call of light) expect(call.op).toBe(surface === "light" ? "source-over" : "lighter");
+  }
+});
+
+test("an app emblem follows its document theme without changing a transparent overlay's default", () => {
+  const rec = recordingContext();
+  const theme = { theme: "light" };
+  const canvas = {
+    ...fakeCanvas(),
+    getContext: () => rec.ctx,
+    ownerDocument: { documentElement: { dataset: theme } },
+  } as unknown as HTMLCanvasElement;
+  const emblem = new Emblem(canvas, 128, { visible: true });
+  emblem.draw();
+  expect(rec.calls.some((call) => call.name === "stroke" && call.style === "#ffffff")).toBe(false);
+  theme.theme = "dark";
+  rec.calls.length = 0;
+  emblem.draw();
+  expect(rec.calls.some((call) => call.name === "stroke" && call.style === "#ffffff")).toBe(true);
+  emblem.dispose();
 });
 
 // ---- the glyph texture ----
@@ -180,6 +233,82 @@ test("a texture that loads is returned and drawn instead of the vector ring", as
   expect(drawn).toHaveLength(1);
   expect(drawn[0].args[0]).toBe(image);
   expect(calls.some((c) => c.name === "setLineDash")).toBe(false);
+});
+
+test("light glyphs use the texture only as an alpha mask, leaving dark surfaces unchanged", async () => {
+  vi.stubGlobal("Image", FakeImage);
+  FakeImage.outcome = "load";
+  const mask = recordingContext();
+  const tinted = { width: 0, height: 0, getContext: () => mask.ctx };
+  vi.stubGlobal("document", { createElement: () => tinted });
+  const emblem = await import("./emblem");
+  const image = await emblem.loadGlyphTexture("/private/glyph-ring.png");
+  const p = { ...emblem.params("steady", 0, 0.05)!, ringA: 0, rays: 0, coreA: 0 };
+  const options = { tq: 1, rot: 0, dim: 0.8, calm: 0.7, lvl: 0.05 };
+  const light = recordingContext();
+  emblem.drawEmblem(light.ctx, 64, p, { ...options, surface: "light" });
+  expect(light.calls.find((call) => call.name === "drawImage")?.args[0]).toBe(tinted);
+  expect(mask.calls.find((call) => call.name === "drawImage")?.args[0]).toBe(image);
+  expect(mask.calls.find((call) => call.name === "fillRect")?.op).toBe("source-in");
+  expect(light.calls.find((call) => call.name === "drawImage")?.alpha).toBeCloseTo(0.8);
+  const dark = recordingContext();
+  emblem.drawEmblem(dark.ctx, 64, p, { ...options, surface: "dark" });
+  expect(dark.calls.find((call) => call.name === "drawImage")?.args[0]).toBe(image);
+});
+
+test("light glyph appearance and recording boosts do not add washed-out white fringes", async () => {
+  vi.stubGlobal("Image", FakeImage);
+  FakeImage.outcome = "load";
+  const mask = recordingContext();
+  const tinted = { width: 0, height: 0, getContext: () => mask.ctx };
+  vi.stubGlobal("document", { createElement: () => tinted });
+  const emblem = await import("./emblem");
+  await emblem.loadGlyphTexture("/private/glyph-ring.png");
+  for (const reveal of [undefined, { fraction: 1, rest: 0, away: 1, flash: 1, boost: 0.3 }]) {
+    const rec = recordingContext();
+    const p = { ...emblem.params("steady", 0, 0.05)!, glyphGlow: 0.4, glyphMix: 0.5, ringA: 0, rays: 0, coreA: 0 };
+    emblem.drawEmblem(rec.ctx, 64, p, { tq: 1, rot: 0, dim: 1, calm: 0.7, lvl: 0.05, surface: "light", reveal });
+    const images = rec.calls.filter((call) => call.name === "drawImage");
+    expect(images.length).toBeGreaterThan(1);
+    expect(images.every((call) => call.op === "source-over" && call.args[0] === tinted)).toBe(true);
+  }
+});
+
+test("the light vector fallback does not introduce the texture's brown contour", () => {
+  const rec = recordingContext();
+  const p = { ...params("steady", 0, 0.05)!, ringA: 0, rays: 0, coreA: 0 };
+  drawEmblem(rec.ctx, 64, p, { tq: 1, rot: 0, dim: 1, calm: 0.7, lvl: 0.05, surface: "light" });
+  const strokes = rec.calls.filter((call) => call.name === "stroke");
+  expect(strokes.length).toBeGreaterThan(0);
+  expect(strokes.some((call) => call.style === "rgba(38,16,2,0.6)")).toBe(false);
+});
+
+test("the transparent recording overlay removes dark matte colors while retaining white light", async () => {
+  vi.stubGlobal("Image", FakeImage);
+  FakeImage.outcome = "load";
+  const mask = recordingContext();
+  const tinted = { width: 0, height: 0, getContext: () => mask.ctx };
+  vi.stubGlobal("document", { createElement: () => tinted });
+  const renderer = await import("./emblem");
+  const image = await renderer.loadGlyphTexture("/private/glyph-ring.png");
+  const rec = recordingContext();
+  const canvas = { ...fakeCanvas(), getContext: () => rec.ctx } as unknown as HTMLCanvasElement;
+  const options = { surface: "transparent" as const };
+  const emblem = new renderer.Emblem(canvas, 150, options);
+  emblem.appear();
+  emblem.set("listening");
+  emblem.level = 0.7;
+  for (let i = 0; i < 30; i++) emblem.step(1 / 24);
+  emblem.draw();
+  const images = rec.calls.filter((call) => call.name === "drawImage");
+  expect(images.length).toBeGreaterThan(1);
+  expect(images.every((call) => call.args[0] !== image)).toBe(true);
+  expect(mask.calls.some((call) => call.name === "fillRect" && call.op === "source-in")).toBe(true);
+  const strokes = rec.calls.filter((call) => call.name === "stroke");
+  expect(strokes.some((call) => call.style === "rgba(30,14,0,0.2)")).toBe(false);
+  expect(strokes.some((call) => call.style === "#ffffff")).toBe(true);
+  expect(images.some((call) => call.op === "lighter")).toBe(true);
+  emblem.dispose();
 });
 
 // ---- the Emblem class ----

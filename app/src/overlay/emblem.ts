@@ -163,6 +163,7 @@ function mulberry32(seed: number): () => number {
 // Without it a plain vector ring is drawn.
 let glyph: HTMLImageElement | null = null;
 let tintCanvas: HTMLCanvasElement | null = null;
+let cleanTint: { source: HTMLImageElement; mix: number; canvas: HTMLCanvasElement } | null = null;
 /** Redraw requests for the emblems when the texture arrives (set by the emblem loop below). */
 let onTextureLoaded: () => void = () => {};
 
@@ -187,8 +188,29 @@ export function loadGlyphTexture(url: string): Promise<HTMLImageElement | null> 
   });
 }
 
+/** Preserve the texture's alpha while removing matte colors on light or unknown backgrounds. */
+function cleanGlyph(tex: HTMLImageElement, mix: number): CanvasImageSource {
+  const colorMix = Math.round(clamp(mix) * 255) / 255;
+  if (cleanTint?.source === tex && cleanTint.mix === colorMix) return cleanTint.canvas;
+  const canvas = cleanTint?.source === tex ? cleanTint.canvas : document.createElement("canvas");
+  canvas.width = tex.naturalWidth;
+  canvas.height = tex.naturalHeight;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return tex;
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.drawImage(tex, 0, 0);
+  ctx.globalCompositeOperation = "source-in";
+  ctx.fillStyle = `rgb(211,${Math.round(185 - 31 * colorMix)},${Math.round(80 - 29 * colorMix)})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.globalCompositeOperation = "source-over";
+  cleanTint = { source: tex, mix: colorMix, canvas };
+  return canvas;
+}
+
 /** The texture, tinted from yellow (mix 0) to its own orange (mix 1) while it grows. */
-function tinted(tex: HTMLImageElement, mix: number): CanvasImageSource {
+function tinted(tex: HTMLImageElement, mix: number, clean = false): CanvasImageSource {
+  if (clean) return cleanGlyph(tex, mix);
   if (mix >= 0.999) return tex;
   if (!tintCanvas) tintCanvas = document.createElement("canvas");
   if (tintCanvas.width !== tex.naturalWidth) {
@@ -210,23 +232,26 @@ function tinted(tex: HTMLImageElement, mix: number): CanvasImageSource {
  * The glyph ring at the context's current transform: the texture (with the appear animation's
  * glow on top) or plain strokes. `share` scales its alpha (the reveal's feather).
  */
-function glyphRing(ctx: CanvasRenderingContext2D, R: number, p: Params, base: number, dim: number, share: number): void {
+function glyphRing(ctx: CanvasRenderingContext2D, R: number, p: Params, base: number, dim: number, share: number, surface: EmblemSurface = "dark"): void {
+  const light = surface === "light";
+  const clean = surface !== "dark";
+  if (light) ctx.globalCompositeOperation = "source-over";
   ctx.globalAlpha = base * p.glyphA * dim * share;
   if (p.glyphBlur > 0) ctx.filter = "blur(" + (p.glyphBlur * R).toFixed(2) + "px)";
   const tex = glyph;
   if (tex && tex.naturalWidth) {
     const half = TEX_HALF * R * (p.glyphR / 0.86);
-    const img = tinted(tex, p.glyphMix);
+    const img = tinted(tex, p.glyphMix, clean);
     ctx.drawImage(img, -half, -half, half * 2, half * 2);
     ctx.filter = "none";
     if (p.glyphGlow > 0.01) {
-      ctx.globalCompositeOperation = "lighter";
+      ctx.globalCompositeOperation = light ? "source-over" : "lighter";
       ctx.globalAlpha = base * p.glyphGlow * 0.9 * share;
       ctx.filter = "blur(" + (1 + R * 0.025 * (p.glyphR / 0.86)).toFixed(2) + "px)";
       ctx.drawImage(img, -half, -half, half * 2, half * 2);
     }
   } else {
-    plainGlyphs(ctx, R, p);
+    plainGlyphs(ctx, R, p, clean);
   }
 }
 
@@ -320,12 +345,12 @@ export function revealSlices(fraction: number, rest: number, away = 1): Array<[n
 const HEAD_R = 0.855;
 
 /** A thin line of light across the glyph band at `angle`, with a small bright point on it. */
-function headLight(ctx: CanvasRenderingContext2D, R: number, s: number, angle: number, a: number): void {
+function headLight(ctx: CanvasRenderingContext2D, R: number, s: number, angle: number, a: number, light = false): void {
   if (a <= 0.003) return;
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
   ctx.globalAlpha = a * 0.9;
-  ctx.strokeStyle = "rgba(255,236,170,1)";
+  ctx.strokeStyle = light ? "rgb(211,154,51)" : "rgba(255,236,170,1)";
   ctx.lineWidth = Math.max(1, R * 0.016);
   ctx.lineCap = "round";
   ctx.beginPath();
@@ -336,8 +361,8 @@ function headLight(ctx: CanvasRenderingContext2D, R: number, s: number, angle: n
   const hy = sin * R * HEAD_R * s;
   const hr = Math.max(3, R * 0.15 * s);
   const g = ctx.createRadialGradient(hx, hy, 0, hx, hy, hr);
-  g.addColorStop(0, "rgba(255,255,245,1)");
-  g.addColorStop(0.2, "rgba(255,240,190,0.85)");
+  g.addColorStop(0, light ? "rgba(227,170,48,1)" : "rgba(255,255,245,1)");
+  g.addColorStop(0.2, light ? "rgba(241,190,73,0.85)" : "rgba(255,240,190,0.85)");
   g.addColorStop(0.55, "rgba(255,200,90,0.25)");
   g.addColorStop(1, "rgba(255,190,70,0)");
   ctx.globalAlpha = a;
@@ -352,34 +377,35 @@ function headLight(ctx: CanvasRenderingContext2D, R: number, s: number, angle: n
  * the edge where it is going), and the flare when it closes.
  */
 function revealLight(ctx: CanvasRenderingContext2D, R: number, p: Params, o: DrawOptions, rv: RingReveal, base: number): void {
+  const light = o.surface === "light";
   const s = p.glyphR / 0.86;
   const f = clamp(rv.fraction);
   const away = Number.isFinite(rv.away) ? clamp(rv.away) : 1;
   ctx.save();
-  ctx.globalCompositeOperation = "lighter";
+  ctx.globalCompositeOperation = light ? "source-over" : "lighter";
   const a = base * clamp(p.glyphA) * (1 - clamp(rv.rest));
-  if (f > 0 && f < 0.999) headLight(ctx, R, s, TOP + TAU * f, a);
-  else if (f < 0.999 && away > 0.001 && away < 0.999) headLight(ctx, R, s, TOP + TAU * away, a);
+  if (f > 0 && f < 0.999) headLight(ctx, R, s, TOP + TAU * f, a, light);
+  else if (f < 0.999 && away > 0.001 && away < 0.999) headLight(ctx, R, s, TOP + TAU * away, a, light);
   const flash = clamp(rv.flash);
   if (flash > 0.01 && f >= 0.999) {
     // the closed ring lights up once: drawn again, added on top, and softly blurred
     ctx.rotate(o.rot);
-    glyphRing(ctx, R, p, base * 0.55 * flash, o.dim, 1);
+    glyphRing(ctx, R, p, base * 0.55 * flash, o.dim, 1, o.surface);
     if (glyph && glyph.naturalWidth) {
-      ctx.globalCompositeOperation = "lighter";
+      ctx.globalCompositeOperation = light ? "source-over" : "lighter";
       ctx.filter = "blur(" + (1 + R * 0.03 * s).toFixed(2) + "px)";
-      glyphRing(ctx, R, p, base * 0.6 * flash, o.dim, 1);
+      glyphRing(ctx, R, p, base * 0.6 * flash, o.dim, 1, o.surface);
     }
   }
   ctx.restore();
 }
 
 /** The glyph ring drawn with plain strokes, for when there is no texture. */
-function plainGlyphs(ctx: CanvasRenderingContext2D, R: number, p: Params): void {
+function plainGlyphs(ctx: CanvasRenderingContext2D, R: number, p: Params, clean = false): void {
   const s = p.glyphR / 0.86;
   const mix = p.glyphMix;
   ctx.lineWidth = Math.max(0.6, R * 0.012);
-  ctx.strokeStyle = "rgba(38,16,2,0.6)";
+  ctx.strokeStyle = clean ? "rgba(168,105,20,0.3)" : "rgba(38,16,2,0.6)";
   for (const r of [0.73, 1.0]) {
     ctx.beginPath();
     ctx.arc(0, 0, R * r * s, 0, TAU);
@@ -401,8 +427,13 @@ function dot(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, sty
   ctx.fill();
 }
 
+/** Transparent overlays cannot assume that the desktop behind them is dark. */
+export type EmblemSurface = "light" | "dark" | "transparent";
+
 /** What the renderer needs besides the look of the frame. */
 export interface DrawOptions {
+  /** Light surfaces use warm ink; transparent surfaces keep white light with a clean gold texture. */
+  surface?: EmblemSurface;
   /** The effect clock, quantized to 24 fps (seeds the wobble of the ring and the rays). */
   tq: number;
   /** Angle of the glyph ring, radians. */
@@ -426,6 +457,7 @@ export function drawEmblem(
 ): void {
   if (!p) return;
   const base = ctx.globalAlpha;
+  const lightSurface = o.surface === "light";
 
   if (p.glyphA > 0.003) {
     // The whole ring as always, or, during a dictation, the part drawn in so far (in wedges that
@@ -446,17 +478,17 @@ export function drawEmblem(
         ctx.clip();
       }
       ctx.rotate(o.rot);
-      glyphRing(ctx, R, p, base, o.dim, share);
+      glyphRing(ctx, R, p, base, o.dim, share, o.surface);
       if (boost > 0.003) {
         // Added on top at full brightness (not the listening dim), with a soft golden glow when
         // the texture is there.
         ctx.filter = "none";
-        ctx.globalCompositeOperation = "lighter";
-        glyphRing(ctx, R, p, base * boost, 1, share);
+        ctx.globalCompositeOperation = lightSurface ? "source-over" : "lighter";
+        glyphRing(ctx, R, p, base * boost, 1, share, o.surface);
         if (glyph && glyph.naturalWidth) {
-          ctx.globalCompositeOperation = "lighter";
+          ctx.globalCompositeOperation = lightSurface ? "source-over" : "lighter";
           ctx.filter = "blur(" + (1 + R * 0.03 * s).toFixed(2) + "px)";
-          glyphRing(ctx, R, p, base * boost * 0.8, 1, share);
+          glyphRing(ctx, R, p, base * boost * 0.8, 1, share, o.surface);
           ctx.filter = "none";
         }
       }
@@ -467,7 +499,7 @@ export function drawEmblem(
 
   if (p.haloA > 0.01) {
     ctx.save();
-    ctx.globalCompositeOperation = "lighter";
+    ctx.globalCompositeOperation = lightSurface ? "source-over" : "lighter";
     ctx.strokeStyle = "rgba(255,225,90," + (p.haloA * 0.9).toFixed(3) + ")";
     ctx.lineWidth = Math.max(1.5, R * 0.03);
     ctx.shadowColor = "rgba(255,220,80,0.9)";
@@ -496,19 +528,20 @@ export function drawEmblem(
     ctx.closePath();
     ctx.lineJoin = "round";
     const w = Math.max(1, R * p.ringW);
+    if (lightSurface) ctx.globalCompositeOperation = "source-over";
     ctx.lineWidth = w + 1.5;
-    ctx.strokeStyle = "rgba(30,14,0,0.2)";
+    ctx.strokeStyle = lightSurface || o.surface === "transparent" ? "rgba(168,105,20,0.3)" : "rgba(30,14,0,0.2)";
     ctx.stroke();
-    ctx.shadowColor = "rgba(255,255,255,0.75)";
+    ctx.shadowColor = lightSurface ? "rgba(233,175,67,0.4)" : "rgba(255,255,255,0.75)";
     ctx.shadowBlur = R * 0.025;
     ctx.lineWidth = w;
-    ctx.strokeStyle = "#ffffff";
+    ctx.strokeStyle = lightSurface ? "rgb(211,154,51)" : "#ffffff";
     ctx.stroke();
     ctx.restore();
   }
 
   ctx.save();
-  ctx.globalCompositeOperation = "lighter";
+  ctx.globalCompositeOperation = lightSurface ? "source-over" : "lighter";
   if (p.rays > 0.01) {
     const rnd = mulberry32(5000 + Math.round(o.tq * 24));
     const n = Math.round(18 + 14 * o.lvl * o.calm);
@@ -516,7 +549,7 @@ export function drawEmblem(
       const a = rnd() * TAU;
       const len = R * p.raysScale * Math.min(0.95, 0.22 + rnd() * (0.33 + 0.3 * o.lvl * o.calm));
       const al = (0.25 + 0.5 * rnd()) * p.rays * (0.5 + 0.5 * o.calm);
-      ctx.strokeStyle = "rgba(255,240,185," + clamp(al).toFixed(3) + ")";
+      ctx.strokeStyle = (lightSurface ? "rgba(193,132,32," : "rgba(255,240,185,") + clamp(al).toFixed(3) + ")";
       ctx.lineWidth = Math.max(0.8, R * 0.007 * (0.6 + rnd()));
       ctx.beginPath();
       ctx.moveTo(Math.cos(a) * R * 0.02, Math.sin(a) * R * 0.02);
@@ -528,9 +561,9 @@ export function drawEmblem(
     const a = clamp(p.coreA);
     const gr = R * p.coreR * 2.2 * Math.max(1, p.coreA);
     const g = ctx.createRadialGradient(0, 0, 0, 0, 0, gr);
-    g.addColorStop(0, "rgba(255,255,255," + a.toFixed(3) + ")");
-    g.addColorStop(0.22, "rgba(255,244,190," + (0.95 * a).toFixed(3) + ")");
-    g.addColorStop(0.55, "rgba(255,214,100," + (0.35 * a).toFixed(3) + ")");
+    g.addColorStop(0, (lightSurface ? "rgba(227,170,48," : "rgba(255,255,255,") + a.toFixed(3) + ")");
+    g.addColorStop(0.22, (lightSurface ? "rgba(241,190,73," : "rgba(255,244,190,") + (0.95 * a).toFixed(3) + ")");
+    g.addColorStop(0.55, (lightSurface ? "rgba(236,173,50," : "rgba(255,214,100,") + (0.35 * a).toFixed(3) + ")");
     g.addColorStop(1, "rgba(255,200,80,0)");
     ctx.fillStyle = g;
     ctx.beginPath();
@@ -544,7 +577,7 @@ export function drawEmblem(
       const rr = (0.62 + rs() * 0.22) * R;
       const life = clamp((p.sparkT - 0.2 - k * 0.03) / 0.2);
       if (life > 0 && life < 1) {
-        dot(ctx, Math.cos(a) * rr, Math.sin(a) * rr, Math.max(0.8, R * 0.012), "rgba(255,255,240," + (1 - life).toFixed(3) + ")");
+        dot(ctx, Math.cos(a) * rr, Math.sin(a) * rr, Math.max(0.8, R * 0.012), (lightSurface ? "rgba(227,170,48," : "rgba(255,255,240,") + (1 - life).toFixed(3) + ")");
       }
     }
   }
@@ -620,6 +653,8 @@ export const CANVAS_RATIO = 1.3;
 export const canvasSize = (px: number): number => Math.round(px * CANVAS_RATIO);
 
 export interface EmblemOptions {
+  /** Override document theme for an overlay drawn above an unknown desktop background. */
+  surface?: EmblemSurface;
   /** Loudness of the white ring when nothing makes noise (0.05 is about 1 px). */
   base?: number;
   /** Start on screen (steady) instead of hidden. */
@@ -665,6 +700,7 @@ export class Emblem {
   private shownRot: number;
   private _lvl: number;
   private readonly base: number;
+  private readonly surface: EmblemSurface | undefined;
   private external = 0;
   private talkUntil = 0;
   private talkOff = 0;
@@ -693,6 +729,7 @@ export class Emblem {
     this._rot = opts.rot0 ?? 0.4;
     this.shownRot = this._rot;
     this.base = opts.base ?? 0.05;
+    this.surface = opts.surface;
     this._lvl = this.base;
     this.reduce = prefersReducedMotion();
     this.size(sizePx);
@@ -907,6 +944,7 @@ export class Emblem {
       calm: ph === "listening" ? 0.6 : ph === "steady" ? 0.7 : 1,
       lvl: this._lvl,
       reveal: this.shownReveal,
+      surface: this.surface ?? (this.canvas.ownerDocument?.documentElement.dataset.theme === "light" ? "light" : "dark"),
     });
   }
 

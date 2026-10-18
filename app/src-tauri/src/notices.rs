@@ -71,7 +71,7 @@ pub const CORE_DOWN: Notice = Notice {
 };
 
 /// Words learned from the user's corrections after a paste, in one notice:
-/// 《了。已將「手機」、「Typeless」加入字典。》 and its Japanese line.
+/// 《了。「手機」、「Typeless」已加入詞典。》 and its Japanese line.
 pub fn learned(words: &[String]) -> (String, String) {
     let quoted = words
         .iter()
@@ -79,7 +79,7 @@ pub fn learned(words: &[String]) -> (String, String) {
         .collect::<Vec<_>>()
         .join("、");
     (
-        format!("《了。已將{quoted}加入字典。》"),
+        format!("《了。{quoted}已加入詞典。》"),
         format!("《了。{quoted}を辞書に追加しました。》"),
     )
 }
@@ -120,10 +120,10 @@ mod tests {
     #[test]
     fn the_learned_notice_names_every_word_once() {
         let (zh, ja) = learned(&["手機".to_owned()]);
-        assert_eq!(zh, "《了。已將「手機」加入字典。》");
+        assert_eq!(zh, "《了。「手機」已加入詞典。》");
         assert_eq!(ja, "《了。「手機」を辞書に追加しました。》");
         let (zh, _) = learned(&["手機".to_owned(), "Typeless".to_owned()]);
-        assert_eq!(zh, "《了。已將「手機」、「Typeless」加入字典。》");
+        assert_eq!(zh, "《了。「手機」、「Typeless」已加入詞典。》");
     }
 
     #[test]

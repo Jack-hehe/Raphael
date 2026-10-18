@@ -1,4 +1,4 @@
-//! The overlay window: Raphael's emblem in the bottom-right corner of the primary monitor.
+//! The overlay window: Raphael's emblem in the bottom-right corner, or centered for learned words.
 //!
 //! The window is created once, at start-up. It is transparent, never takes focus, lets the mouse
 //! click through, stays on top and stays out of the taskbar and Alt+Tab. It is **never shown or
@@ -17,7 +17,7 @@ use std::{
     },
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, Webview, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, ipc::Channel,
@@ -93,6 +93,8 @@ pub enum OverlayEvent {
     Progress(Progress),
     /// Raphael's report: the emblem appears with subtitles, then vanishes.
     Notice { zh: String, ja: String },
+    /// A learned-word report uses the same lifecycle, centered when its turn begins.
+    Learned { zh: String, ja: String },
     /// The vanish animation.
     Hide,
     /// The emblem's diameter in logical pixels and which subtitle lines to show.
@@ -113,6 +115,10 @@ pub trait OverlayApi: Send + Sync + 'static {
     /// Raphael reports `zh` and `ja` as subtitles for a time that depends on their length, then
     /// the emblem vanishes. Reports that arrive meanwhile wait their turn.
     fn notice(&self, zh: &str, ja: &str);
+    /// The learned words are reported in the center. Fakes can keep the ordinary notice behavior.
+    fn learned_notice(&self, zh: &str, ja: &str) {
+        self.notice(zh, ja);
+    }
     /// The vanish animation plays; the window stays, empty, where it is.
     fn hide(&self);
     /// How far the dictation has come since the key was released.
@@ -120,6 +126,14 @@ pub trait OverlayApi: Send + Sync + 'static {
 }
 
 // ---------- placement (spec §6.1) ----------
+
+/// Only learned-word reports leave the normal bottom-right corner.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OverlayPlacement {
+    Corner,
+    Center,
+}
 
 /// A rectangle in physical pixels: the work area, or the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,6 +193,15 @@ pub fn place(work: Rect, emblem_px: u32, scale: f64) -> Rect {
     }
 }
 
+fn place_at(work: Rect, emblem_px: u32, scale: f64, placement: OverlayPlacement) -> Rect {
+    let mut target = place(work, emblem_px, scale);
+    if placement == OverlayPlacement::Center {
+        target.x = (f64::from(work.x) + f64::from(work.w - target.w) / 2.0).round() as i32;
+        target.y = (f64::from(work.y) + f64::from(work.h - target.h) / 2.0).round() as i32;
+    }
+    target
+}
+
 // ---------- the pages that listen ----------
 
 /// How many events wait for a page that has not subscribed yet.
@@ -209,6 +232,7 @@ impl OverlayEvent {
             OverlayEvent::Level { .. } => "level",
             OverlayEvent::Progress(_) => "progress",
             OverlayEvent::Notice { .. } => "notice",
+            OverlayEvent::Learned { .. } => "learned",
             OverlayEvent::Hide => "hide",
             OverlayEvent::Settings { .. } => "settings",
         }
@@ -299,6 +323,7 @@ pub struct Overlay {
     window: WebviewWindow,
     /// The emblem's diameter in logical pixels, which sets the size of the window.
     emblem_px: AtomicU32,
+    placement: Mutex<OverlayPlacement>,
     bus: Mutex<Bus>,
 }
 
@@ -342,14 +367,14 @@ impl Overlay {
             app: app.clone(),
             window,
             emblem_px: AtomicU32::new(emblem_px),
+            placement: Mutex::new(OverlayPlacement::Corner),
             bus: Mutex::new(Bus::new(emblem_px, subtitles)),
         });
         overlay.place_window();
         Ok(overlay)
     }
 
-    /// A new emblem size or subtitle language, from the settings: puts the window back in its
-    /// corner (it may have a new size) and tells the page.
+    /// A new emblem size or subtitle language preserves the report's current placement.
     pub fn apply_settings(&self, emblem_px: u32, subtitles: &str) {
         self.emblem_px.store(emblem_px, Ordering::Relaxed);
         self.place_window();
@@ -367,25 +392,44 @@ impl Overlay {
         lock(&self.bus).subscribe(label, channel);
     }
 
-    /// Puts the window in the corner of the primary monitor's work area, unless it is there
-    /// already. A failure is logged: the emblem would show in the wrong place, not break.
+    /// Recomputes the current placement when the monitor or the emblem size changes.
     fn place_window(&self) {
-        if let Err(err) = self.try_place_window() {
+        let placement = *lock(&self.placement);
+        self.place_window_at(placement);
+    }
+
+    fn place_window_at(&self, placement: OverlayPlacement) {
+        if let Err(err) = self.try_place_window(placement) {
             log::warn!("could not place the overlay window: {err}");
         }
     }
 
-    fn try_place_window(&self) -> tauri::Result<()> {
-        let monitor = self.app.primary_monitor()?.ok_or_else(|| {
+    fn try_place_window(&self, placement: OverlayPlacement) -> tauri::Result<()> {
+        // Never hold a lock across native window operations, which may wait for the UI thread.
+        *lock(&self.placement) = placement;
+        let current = if placement == OverlayPlacement::Center {
+            self.app
+                .cursor_position()
+                .ok()
+                .and_then(|point| self.app.monitor_from_point(point.x, point.y).ok().flatten())
+        } else {
+            None
+        };
+        let monitor = match current {
+            Some(monitor) => Some(monitor),
+            None => self.app.primary_monitor()?,
+        }
+        .ok_or_else(|| {
             tauri::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "there is no primary monitor",
             ))
         })?;
-        let target = place(
+        let target = place_at(
             Rect::from(monitor.work_area()),
             self.emblem_px.load(Ordering::Relaxed),
             monitor.scale_factor(),
+            placement,
         );
         // Compare with where the window really is: Windows itself moves windows when the
         // screens change.
@@ -408,7 +452,7 @@ impl Overlay {
 
 impl OverlayApi for Overlay {
     fn show(&self, mode: Mode) {
-        self.place_window();
+        self.place_window_at(OverlayPlacement::Corner);
         self.publish(OverlayEvent::Show { mode });
     }
 
@@ -421,9 +465,15 @@ impl OverlayApi for Overlay {
     }
 
     fn notice(&self, zh: &str, ja: &str) {
-        // A report shows the emblem too.
-        self.place_window();
+        // The page places a queued report only when its turn begins.
         self.publish(OverlayEvent::Notice {
+            zh: zh.to_owned(),
+            ja: ja.to_owned(),
+        });
+    }
+
+    fn learned_notice(&self, zh: &str, ja: &str) {
+        self.publish(OverlayEvent::Learned {
             zh: zh.to_owned(),
             ja: ja.to_owned(),
         });
@@ -436,6 +486,30 @@ impl OverlayApi for Overlay {
     fn progress(&self, progress: Progress) {
         self.publish(OverlayEvent::Progress(progress));
     }
+}
+
+fn validate_placement_caller(label: &str) -> Result<(), String> {
+    if label == crate::OVERLAY_WINDOW {
+        Ok(())
+    } else {
+        Err("only the overlay page can place its window".into())
+    }
+}
+
+/// The queued report is ready to appear; the overlay page places its existing window first.
+#[tauri::command]
+pub fn overlay_place(
+    app: AppHandle,
+    webview: Webview,
+    placement: OverlayPlacement,
+) -> Result<(), String> {
+    validate_placement_caller(webview.label())?;
+    let overlay = app
+        .try_state::<Arc<Overlay>>()
+        .ok_or("the overlay is not running")?;
+    overlay
+        .try_place_window(placement)
+        .map_err(|err| err.to_string())
 }
 
 /// The overlay page calls this once and receives all its events on `channel`.
@@ -545,6 +619,41 @@ fn hide_from_alt_tab(_window: &WebviewWindow) {}
 mod tests {
     use super::*;
     use tauri::ipc::InvokeResponseBody;
+
+    #[test]
+    fn learned_report_is_centered_in_the_current_work_area() {
+        let work = Rect {
+            x: -1920,
+            y: -40,
+            w: 1920,
+            h: 1040,
+        };
+        assert_eq!(
+            place_at(work, 194, 1.5, OverlayPlacement::Center),
+            Rect {
+                x: -1365,
+                y: 261,
+                w: 810,
+                h: 438
+            }
+        );
+        assert_eq!(
+            place_at(work, 194, 1.5, OverlayPlacement::Corner),
+            place(work, 194, 1.5)
+        );
+    }
+
+    #[test]
+    fn only_the_overlay_page_can_request_a_placement() {
+        assert!(validate_placement_caller("overlay").is_ok());
+        assert!(validate_placement_caller("main").is_err());
+        assert!(validate_placement_caller("").is_err());
+        assert_eq!(
+            serde_json::from_str::<OverlayPlacement>(r#""center""#).unwrap(),
+            OverlayPlacement::Center
+        );
+        assert!(serde_json::from_str::<OverlayPlacement>(r#""anywhere""#).is_err());
+    }
 
     #[test]
     fn emblem_sits_18px_from_the_right_and_12px_above_the_taskbar() {
@@ -704,6 +813,13 @@ mod tests {
             r#"{"type":"notice","zh":"《了。》","ja":"《了。》"}"#
         );
         assert_eq!(json(OverlayEvent::Hide), r#"{"type":"hide"}"#);
+        assert_eq!(
+            json(OverlayEvent::Learned {
+                zh: "「手機」已加入詞典".into(),
+                ja: String::new()
+            }),
+            r#"{"type":"learned","zh":"「手機」已加入詞典","ja":""}"#
+        );
         assert_eq!(
             json(OverlayEvent::Progress(Progress {
                 stage: Stage::Transcribing,
@@ -940,6 +1056,10 @@ mod tests {
             OverlayEvent::Level { value: 0.0 },
             OverlayEvent::Progress(Progress::DONE),
             notice(0),
+            OverlayEvent::Learned {
+                zh: String::new(),
+                ja: String::new(),
+            },
             OverlayEvent::Hide,
             OverlayEvent::Settings {
                 px: 150,
