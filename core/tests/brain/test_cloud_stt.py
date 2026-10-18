@@ -139,7 +139,7 @@ async def test_the_timeout_grows_with_the_audio_up_to_30_seconds(router, fake_cl
 
 async def test_what_it_cost_is_recorded_in_the_spend(router, conn):
     await transcribe(router)
-    assert spend_rows(conn) == [("stt", "openai/gpt-transcribe", 0.00015, 0, 0)]
+    assert spend_rows(conn) == [("stt", "elevenlabs/scribe-v2", 0.00015, 0, 0)]
     status = await router.call("status.get", {})
     assert status["spend"]["month_usd"] == pytest.approx(0.00015)
 
