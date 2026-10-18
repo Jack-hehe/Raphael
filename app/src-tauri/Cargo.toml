@@ -38,17 +38,20 @@ tauri-plugin-single-instance = "2.5"
 # Pasting (src/paste): the paste key chord.
 enigo = "0.6"
 # 0.62 is the version Tauri 2.12 uses, so the HWND types match. Used by the overlay (Alt+Tab),
-# pasting (clipboard, focus) and the core process (Job Object).
+# pasting (clipboard, focus), the core process (Job Object) and learning from corrections (UI
+# Automation, COM).
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_Security",
+  "Win32_System_Com",
   "Win32_System_DataExchange",
   "Win32_System_JobObjects",
   "Win32_System_LibraryLoader",
   "Win32_System_Memory",
   "Win32_System_Ole",
   "Win32_System_Threading",
+  "Win32_UI_Accessibility",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }

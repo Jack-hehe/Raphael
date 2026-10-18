@@ -1,5 +1,6 @@
 //! Raphael's notices: the short reports the overlay shows as subtitles when a dictation could not
-//! go the usual way. Each one is wrapped in 《》 and starts with 告 or 否.
+//! go the usual way, and the word list after learning from the user's corrections. Each one is
+//! wrapped in 《》 and starts with 告 or 否 (了 for the learned words).
 
 /// One notice, in Traditional Chinese (Taiwan) and Japanese.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +70,20 @@ pub const CORE_DOWN: Notice = Notice {
     ja: "《否。コアが動作していません。ラファエルを再起動してください。》",
 };
 
+/// Words learned from the user's corrections after a paste, in one notice:
+/// 《了。已將「手機」、「Typeless」加入字典。》 and its Japanese line.
+pub fn learned(words: &[String]) -> (String, String) {
+    let quoted = words
+        .iter()
+        .map(|word| format!("「{word}」"))
+        .collect::<Vec<_>>()
+        .join("、");
+    (
+        format!("《了。已將{quoted}加入字典。》"),
+        format!("《了。{quoted}を辞書に追加しました。》"),
+    )
+}
+
 /// The notice for the `fallback_reason` of a `dictation.stop` result, if it gets one. A plain
 /// `"timeout"` (the cleanup took too long) and the other reasons are not worth a notice.
 pub fn notice_for_fallback(reason: Option<&str>) -> Option<Notice> {
@@ -100,6 +115,15 @@ mod tests {
         for reason in ["timeout", "empty", "error:other", ""] {
             assert_eq!(notice_for_fallback(Some(reason)), None, "{reason}");
         }
+    }
+
+    #[test]
+    fn the_learned_notice_names_every_word_once() {
+        let (zh, ja) = learned(&["手機".to_owned()]);
+        assert_eq!(zh, "《了。已將「手機」加入字典。》");
+        assert_eq!(ja, "《了。「手機」を辞書に追加しました。》");
+        let (zh, _) = learned(&["手機".to_owned(), "Typeless".to_owned()]);
+        assert_eq!(zh, "《了。已將「手機」、「Typeless」加入字典。》");
     }
 
     #[test]

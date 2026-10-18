@@ -30,6 +30,7 @@ use tokio::task::JoinHandle;
 use crate::device_settings::DictationMode;
 use crate::holdtap::{Action, HoldTap};
 use crate::hotkey::{CancelSwitch, HotkeyEvent};
+use crate::learn::AfterPaste;
 use crate::notices::{self, Notice};
 use crate::overlay::{Mode, OverlayApi, Progress, Stage};
 use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
@@ -124,6 +125,9 @@ pub struct DictationController<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSw
     cancel: Arc<S>,
     mode: ModeCell,
     state: Arc<Mutex<State>>,
+    /// Told of each dictation that was pasted and each that starts: learns from the user's
+    /// corrections (`learn`).
+    after_paste: Option<Arc<dyn AfterPaste>>,
 }
 
 impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Clone
@@ -137,6 +141,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Clone
             cancel: self.cancel.clone(),
             mode: self.mode.clone(),
             state: self.state.clone(),
+            after_paste: self.after_paste.clone(),
         }
     }
 }
@@ -165,7 +170,14 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 shown: Vec::new(),
                 down_noticed: false,
             })),
+            after_paste: None,
         }
+    }
+
+    /// The controller, telling `hook` of its pastes.
+    pub fn with_after_paste(mut self, hook: Arc<dyn AfterPaste>) -> Self {
+        self.after_paste = Some(hook);
+        self
     }
 
     pub fn phase(&self) -> Phase {
@@ -310,6 +322,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             state.started_ms = now_ms;
             self.cancel.set(true);
         }
+        if let Some(hook) = &self.after_paste {
+            hook.dictation_started();
+        }
         self.overlay.show(Mode::Listening);
 
         let this = self.clone();
@@ -424,11 +439,19 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 .and_then(Value::as_str)
                 .map(str::to_owned);
 
-            let outcome = this.deliver(text.to_owned(), target, Some(&id)).await;
+            let outcome = this
+                .deliver(text.to_owned(), target.clone(), Some(&id))
+                .await;
             this.finish(&id, |this| {
                 let fallback = this.first_time(notices::notice_for_fallback(reason.as_deref()));
                 this.report(outcome, fallback, true);
             });
+            // Pasted: the field it went into is watched for the user's corrections.
+            if outcome == Some(PasteOutcome::Pasted)
+                && let (Some(hook), Some(target)) = (&this.after_paste, &target)
+            {
+                hook.pasted(text, target);
+            }
         }))
     }
 
@@ -755,6 +778,7 @@ mod app {
     use super::{DictationController, ModeCell};
     use crate::core_process::{CORE_DOWN, CORE_RESTARTED, CoreProcess};
     use crate::hotkey::{CancelSwitch, HotkeyEvent, HotkeyService, PauseReason};
+    use crate::learn::{Learner, UiaProbe};
     use crate::notices;
     use crate::overlay::{Mode, Overlay, OverlayApi, Progress};
     use crate::paste::WindowsPaster;
@@ -841,13 +865,20 @@ mod app {
         let notifications = core.as_ref().map(|core| core.subscribe());
         let overlay = Arc::new(MaybeOverlay(overlay));
         let controller = match core {
-            Some(core) => Some(DictationController::new(
-                core,
-                overlay.clone(),
-                Arc::new(WindowsPaster::new()),
-                Arc::new(MaybeHotkeys(hotkeys.clone())),
-                mode,
-            )),
+            Some(core) => {
+                // Learns from the user's corrections after a paste (`learn`).
+                let learner = Learner::new(core.clone(), overlay.clone(), Arc::new(UiaProbe));
+                Some(
+                    DictationController::new(
+                        core,
+                        overlay.clone(),
+                        Arc::new(WindowsPaster::new()),
+                        Arc::new(MaybeHotkeys(hotkeys.clone())),
+                        mode,
+                    )
+                    .with_after_paste(Arc::new(learner)),
+                )
+            }
             None => {
                 log::error!("dictation is off: the Python core is not running");
                 None
@@ -2958,5 +2989,117 @@ mod tests {
         gate.notify_one();
         stop.await.unwrap();
         assert!(c.overlay().progress().is_empty());
+    }
+
+    // ---------- learning from the user's corrections ----------
+
+    /// Records what the controller tells its after-paste hook.
+    #[derive(Default)]
+    struct FakeHook(Mutex<Vec<String>>);
+
+    impl crate::learn::AfterPaste for FakeHook {
+        fn pasted(&self, text: &str, target: &Target) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("pasted:{text}:{}", target.process_name));
+        }
+        fn dictation_started(&self) {
+            self.0.lock().unwrap().push("started".to_owned());
+        }
+    }
+
+    #[tokio::test]
+    async fn the_hook_hears_of_each_start_and_each_paste() {
+        let hook = Arc::new(FakeHook::default());
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        )
+        .with_after_paste(hook.clone());
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        assert_eq!(
+            *hook.0.lock().unwrap(),
+            ["started", "pasted:好:notepad.exe"]
+        );
+    }
+
+    #[tokio::test]
+    async fn text_left_on_the_clipboard_is_not_watched() {
+        let hook = Arc::new(FakeHook::default());
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::copying("notepad.exe", CopyReason::FocusChanged),
+        )
+        .with_after_paste(hook.clone());
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        assert_eq!(*hook.0.lock().unwrap(), ["started"]);
+    }
+
+    #[tokio::test]
+    async fn a_correction_after_the_paste_is_learned_once_and_reported() {
+        use crate::learn::Learner;
+        use crate::learn::fake::{FakeProbe, text};
+
+        let pasted = "我昨天買了一支新的首機，拍照很漂亮，電池也很耐用，整體來說我很滿意";
+        let core = FakeCore::with("dictation.stop", stop_result(pasted, None));
+        core.script(
+            "settings.get",
+            Ok(json!({"settings": {"learn_corrections": true}})),
+        );
+        core.script("dictionary.learn", Ok(json!({"learned": ["手提電話"]})));
+        let core = Arc::new(core);
+        let overlay = Arc::new(FakeOverlay::default());
+        // The field: the pasted text, the user's fix, then the box cleared by sending.
+        let fixed = pasted.replacen("首機", "手提電話", 1);
+        let probe = Arc::new(FakeProbe::reading(vec![
+            text(pasted),
+            text(&fixed),
+            text(""),
+            text("never read"),
+        ]));
+        let learner = Learner::quick(core.clone(), overlay.clone(), probe.clone());
+        let cell = ModeCell::default();
+        cell.set(DictationMode::Hold);
+        let c = DictationController::new(
+            core,
+            overlay,
+            Arc::new(FakePaster::pasting("LINE.exe")),
+            Arc::new(FakeCancel::default()),
+            cell,
+        )
+        .with_after_paste(Arc::new(learner));
+
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        let learned = notice("《了。已將「手提電話」加入字典。》");
+        for _ in 0..400 {
+            if c.overlay().events().contains(&learned) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            c.overlay().events(),
+            vec![
+                "show:listening".to_owned(),
+                "mode:thinking".to_owned(),
+                "hide".to_owned(),
+                learned
+            ]
+        );
+        assert_eq!(c.core().count("dictionary.learn"), 1);
+        assert_eq!(
+            c.core().call_params("dictionary.learn"),
+            json!({"corrections": [{"word": "手提電話", "misheard": "首機"}]})
+        );
+        assert_eq!(
+            probe.reads(),
+            3,
+            "the field is not read after it was cleared"
+        );
+        assert_eq!(probe.asked.lock().unwrap()[0].process_name, "LINE.exe");
     }
 }

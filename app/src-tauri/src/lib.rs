@@ -8,6 +8,7 @@ mod dictation;
 mod first_run;
 pub mod holdtap;
 pub mod hotkey;
+mod learn;
 mod notices;
 mod overlay;
 mod paste;
