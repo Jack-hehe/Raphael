@@ -1,4 +1,4 @@
-"""Client for OpenRouter's chat completions API: asks a model for JSON that fits a schema.
+"""Client for OpenRouter's API: JSON that fits a schema from a chat model, and transcriptions.
 
 A call that fails raises an OpenRouterError that says what kind of failure it was, so callers
 need not know the exceptions of httpx or of the key store: a key provider that fails is an auth
@@ -13,7 +13,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any
@@ -39,6 +39,19 @@ _APP_HEADERS = {"HTTP-Referer": "http://localhost/raphael", "X-OpenRouter-Title"
 # the key, and h11's message for it would contain the key itself.
 _TOKEN = re.compile(r"[\x21-\x7e]+")
 
+# Transcription (POST /audio/transcriptions). Options for a provider go under
+# provider.options.<tag>, where the tag is the one GET /models/{author}/{slug}/endpoints lists, and
+# reach only that provider. gpt-transcribe (tag "openai") takes `keywords`, a free-form `prompt` and
+# `languages`, which replaces the singular `language` (OpenAI's speech-to-text guide); Whisper on
+# Groq takes a `prompt` (OpenRouter's speech-to-text guide). The other models get the language only:
+# their hint fields are not documented, and some providers (Azure) refuse a field they do not know.
+MAX_KEYWORDS = 50
+MAX_KEYWORD_CHARS = 64
+_MAX_WHISPER_PROMPT_CHARS = 200
+_TRANSCRIBE_CONTEXT = "口述聽寫。中文用繁體字（台灣用語），常夾雜英文技術名詞。"
+_WHISPER_PROMPT_PREFIX = "詞彙："
+_KEYWORD_FORBIDDEN = re.compile(r"[<>\r\n]")
+
 
 @dataclass
 class Completion:
@@ -58,6 +71,17 @@ class KeyInfo:
     limit_reset: str | None  # "daily", "weekly", "monthly" or None
     usage_daily: float
     usage_monthly: float
+
+
+@dataclass
+class Transcription:
+    text: str
+    model: str  # the model that was asked (the reply does not name one)
+    cost_usd: float
+    seconds: float  # of audio, as OpenRouter billed it
+    input_tokens: int
+    output_tokens: int
+    latency_ms: int  # of the HTTP call
 
 
 class OpenRouterError(Exception):
@@ -260,6 +284,82 @@ def _to_key_info(reply: _Reply) -> KeyInfo:
     )
 
 
+def _keywords(hints: Sequence[str]) -> list[str]:
+    """The hints as keywords a provider takes: trimmed, on one line, without `<` or `>` (OpenAI
+    refuses the whole request for such a keyword), each at most MAX_KEYWORD_CHARS long, in order,
+    MAX_KEYWORDS at most. A hint that breaks a rule is left out, not cut."""
+    kept: list[str] = []
+    for hint in hints:
+        word = hint.strip()
+        if not word or len(word) > MAX_KEYWORD_CHARS or _KEYWORD_FORBIDDEN.search(word):
+            continue
+        if word not in kept:
+            kept.append(word)
+        if len(kept) == MAX_KEYWORDS:
+            break
+    return kept
+
+
+def _whisper_prompt(keywords: list[str]) -> str:
+    """The keywords as a short Whisper prompt (Whisper reads at most 224 tokens of it)."""
+    prompt = _WHISPER_PROMPT_PREFIX
+    for word in keywords:
+        piece = word if prompt == _WHISPER_PROMPT_PREFIX else f"、{word}"
+        if len(prompt) + len(piece) > _MAX_WHISPER_PROMPT_CHARS:
+            break
+        prompt += piece
+    return prompt
+
+
+def transcription_body(
+    model: str, audio_b64: str, audio_format: str, *, language: str | None, hints: Sequence[str]
+) -> dict[str, Any]:
+    """The JSON body of a transcription of `audio_b64` by `model`.
+
+    `language` is an ISO-639-1 code, or None for automatic. The hints and the language reach the
+    model the way it documents (see MAX_KEYWORDS above). `data_collection: "deny"` keeps the audio
+    away from providers that train on what they are sent.
+    """
+    body: dict[str, Any] = {
+        "model": model,
+        "input_audio": {"data": audio_b64, "format": audio_format},
+    }
+    provider: dict[str, Any] = {"data_collection": "deny"}
+    keywords = _keywords(hints)
+    if model == "openai/gpt-transcribe":
+        options: dict[str, Any] = {"prompt": _TRANSCRIBE_CONTEXT}
+        if keywords:
+            options["keywords"] = keywords
+        if language:
+            options["languages"] = [language]
+        provider["options"] = {"openai": options}
+    else:
+        if language:
+            body["language"] = language
+        if model == "openai/whisper-large-v3-turbo" and keywords:
+            provider["options"] = {"groq": {"prompt": _whisper_prompt(keywords)}}
+    body["provider"] = provider
+    return body
+
+
+def _to_transcription(reply: _Reply, model: str) -> Transcription:
+    body = reply.body
+    text = body.get("text") if isinstance(body, dict) else None
+    if not isinstance(text, str):
+        raise _failure(reply.status, "bad_response", "The reply has no text")
+    raw_usage = body.get("usage")
+    usage = raw_usage if isinstance(raw_usage, dict) else {}
+    return Transcription(
+        text=text,
+        model=model,
+        cost_usd=_usage_amount(usage, "cost"),
+        seconds=_usage_amount(usage, "seconds"),
+        input_tokens=_usage_count(usage, "input_tokens"),
+        output_tokens=_usage_count(usage, "output_tokens"),
+        latency_ms=reply.latency_ms,
+    )
+
+
 class OpenRouterClient:
     """Calls OpenRouter with the key that `key_provider` returns.
 
@@ -319,6 +419,27 @@ class OpenRouterClient:
             "POST", "/chat/completions", self._stored_key(), timeout_s, body
         )
         return _to_completion(reply, model)
+
+    async def transcribe(
+        self,
+        *,
+        model: str,
+        audio_b64: str,
+        language: str | None,
+        hints: Sequence[str],
+        timeout_s: float,
+        audio_format: str = "wav",
+    ) -> Transcription:
+        """The text `model` hears in `audio_b64` (base64 of the file's bytes, not a data URI).
+
+        `language` is an ISO-639-1 code or None for automatic; `hints` are words the model should
+        write as given. `timeout_s` applies to each stage of the request, like complete_json's.
+        """
+        body = transcription_body(model, audio_b64, audio_format, language=language, hints=hints)
+        reply = await self._request(
+            "POST", "/audio/transcriptions", self._stored_key(), timeout_s, body
+        )
+        return _to_transcription(reply, model)
 
     async def key_info(self, key: str | None = None, timeout_s: float = 5.0) -> KeyInfo:
         """What OpenRouter says about `key`, or about the stored key when `key` is None.

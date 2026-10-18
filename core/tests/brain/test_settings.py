@@ -1,6 +1,6 @@
 import pytest
 
-from raphael_core.brain.settings import DEFAULTS, SettingsStore
+from raphael_core.brain.settings import DEFAULTS, STT_CLOUD_MODELS, STT_ENGINES, SettingsStore
 
 
 def test_defaults_and_set(conn):
@@ -24,6 +24,8 @@ def test_the_defaults_are_the_documented_ones():
         "cleanup_model": "google/gemini-3.1-flash-lite",
         "language": "auto",
         "history_retention_days": 30,
+        "stt_engine": "cloud",
+        "stt_cloud_model": "openai/gpt-transcribe",
     }
 
 
@@ -98,3 +100,41 @@ def test_non_finite_numbers_are_rejected_and_not_saved(conn):
     with pytest.raises(ValueError, match="not JSON compliant"):
         s.set("monthly_limit_usd", float("inf"))
     assert s.get("monthly_limit_usd") == 10.0
+
+
+# --- speech-to-text ----------------------------------------------------------------------------
+
+
+def test_speech_to_text_is_in_the_cloud_with_gpt_transcribe_by_default(conn):
+    s = SettingsStore(conn)
+    assert s.get("stt_engine") == "cloud"
+    assert s.get("stt_cloud_model") == "openai/gpt-transcribe"
+    assert STT_ENGINES == ("cloud", "local")
+    assert STT_CLOUD_MODELS[0] == "openai/gpt-transcribe"
+
+
+def test_the_engine_can_be_local_or_cloud_and_nothing_else(conn):
+    s = SettingsStore(conn)
+    s.set("stt_engine", "local")
+    assert s.get("stt_engine") == "local"
+    s.set("stt_engine", "cloud")
+    with pytest.raises(ValueError, match="stt_engine"):
+        s.set("stt_engine", "gpu")
+    with pytest.raises(TypeError):
+        s.set("stt_engine", 1)
+    assert s.get("stt_engine") == "cloud"
+
+
+@pytest.mark.parametrize("model", STT_CLOUD_MODELS)
+def test_every_listed_cloud_model_can_be_chosen(conn, model):
+    s = SettingsStore(conn)
+    s.set("stt_cloud_model", model)
+    assert s.get("stt_cloud_model") == model
+
+
+def test_a_cloud_model_that_is_not_listed_is_refused(conn):
+    s = SettingsStore(conn)
+    for model in ("openai/gpt-6-luna", "", "openai/gpt-transcribe "):
+        with pytest.raises(ValueError, match="stt_cloud_model"):
+            s.set("stt_cloud_model", model)
+    assert s.get("stt_cloud_model") == "openai/gpt-transcribe"
