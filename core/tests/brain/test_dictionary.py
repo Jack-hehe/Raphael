@@ -141,3 +141,82 @@ def test_misheard_must_be_a_list_not_one_string(conn):
     with pytest.raises(TypeError):
         d.add("拉斐爾", "拉菲爾")
     assert d.list() == []
+
+
+# --- words learned from the user's corrections ----------------------------------------------------
+
+
+def test_learn_adds_a_new_word_with_the_misheard_form_as_learned(conn):
+    d = DictionaryStore(conn)
+    assert d.learn("Tailscale", "tail scale") is True
+    [entry] = d.list()
+    assert (entry.word, entry.misheard, entry.source) == ("Tailscale", ["tail scale"], "learned")
+
+
+def test_learn_appends_the_form_to_a_known_word_and_keeps_its_source(conn):
+    d = DictionaryStore(conn)
+    d.add("Tailscale", ["tail scale"])
+    assert d.learn("Tailscale", "tailskill") is True
+    [entry] = d.list()
+    assert (entry.misheard, entry.source) == (["tail scale", "tailskill"], "manual")
+
+
+def test_learning_a_known_pair_again_changes_nothing(conn):
+    d = DictionaryStore(conn)
+    assert d.learn("Tailscale", "tail scale") is True
+    assert d.learn("Tailscale", "tail scale") is False
+    assert [e.misheard for e in d.list()] == [["tail scale"]]
+
+
+def test_learn_skips_a_dismissed_word_in_any_letter_case(conn):
+    d = DictionaryStore(conn)
+    d.dismiss("tailscale")
+    assert d.learn("Tailscale", "tail scale") is False
+    assert d.list() == []
+
+
+@pytest.mark.parametrize(
+    ("word", "misheard"),
+    [("", "tail scale"), ("Tailscale", " "), ("Tailscale", "Tailscale"), ("Tailscale", "tailscale")],
+)
+def test_learn_skips_blank_or_same_pairs(conn, word, misheard):
+    d = DictionaryStore(conn)
+    assert d.learn(word, misheard) is False
+    assert d.list() == []
+
+
+def test_learn_does_not_turn_a_dictionary_word_into_a_misheard_form(conn):
+    # The user changed a word the dictionary knows into another: that is no misheard form, and as
+    # a replacement rule it would undo the dictionary's own word.
+    d = DictionaryStore(conn)
+    d.add("拉斐爾")
+    assert d.learn("拉菲爾", "拉斐爾") is False
+    assert [e.word for e in d.list()] == ["拉斐爾"]
+
+
+def test_learn_does_not_add_a_word_that_is_a_misheard_form_of_another(conn):
+    # 首機 → 手機 is a rule; learning 手機 → 首機 as well would swap them back and forth.
+    d = DictionaryStore(conn)
+    d.learn("手機", "首機")
+    assert d.learn("首機", "手機") is False
+    assert d.replacements() == [("首機", "手機")]
+
+
+def test_deleting_a_learned_word_dismisses_it_so_it_is_not_learned_again(conn):
+    d = DictionaryStore(conn)
+    d.learn("手機", "首機")
+    [entry] = d.list()
+    assert d.delete(entry.id) is True
+    assert d.dismissed() == {"手機"}
+    assert d.learn("手機", "首機") is False
+
+
+def test_deleting_a_manual_word_does_not_dismiss_it(conn):
+    d = DictionaryStore(conn)
+    entry = d.add("手機")
+    d.delete(entry.id)
+    assert d.dismissed() == set()
+
+
+def test_the_learned_source_can_be_given_to_add(conn):
+    assert DictionaryStore(conn).add("手機", source="learned").source == "learned"

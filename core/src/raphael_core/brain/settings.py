@@ -20,6 +20,9 @@ DEFAULTS: dict[str, Any] = {
     # The most accurate on the samples tried live on 2026-10-18 (gpt-transcribe returned nothing
     # for an English clip and garbled Chinese).
     "stt_cloud_model": "elevenlabs/scribe-v2",
+    # After a paste, the app watches the text field for up to 60 s and learns the words the user
+    # corrects by hand (`dictionary.learn`). Off: the app does not read the field at all.
+    "learn_corrections": True,
 }
 
 STT_ENGINES = ("cloud", "local")

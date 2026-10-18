@@ -26,6 +26,7 @@ def test_the_defaults_are_the_documented_ones():
         "history_retention_days": 30,
         "stt_engine": "cloud",
         "stt_cloud_model": "elevenlabs/scribe-v2",
+        "learn_corrections": True,
     }
 
 
@@ -138,3 +139,12 @@ def test_a_cloud_model_that_is_not_listed_is_refused(conn):
         with pytest.raises(ValueError, match="stt_cloud_model"):
             s.set("stt_cloud_model", model)
     assert s.get("stt_cloud_model") == "elevenlabs/scribe-v2"
+
+
+def test_learning_corrections_is_on_by_default_and_takes_a_bool(conn):
+    s = SettingsStore(conn)
+    assert s.get("learn_corrections") is True
+    s.set("learn_corrections", False)
+    assert s.get("learn_corrections") is False
+    with pytest.raises(TypeError):
+        s.set("learn_corrections", 0)

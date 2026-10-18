@@ -10,7 +10,8 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-_SOURCES = ("manual", "suggested")
+# "learned": added by itself, from a correction the user made to a pasted dictation.
+_SOURCES = ("manual", "suggested", "learned")
 
 
 def _wall_clock_ms() -> int:
@@ -22,7 +23,7 @@ class Entry:
     id: int
     word: str
     misheard: list[str]  # spellings speech-to-text tends to produce for the word
-    source: str  # "manual" or "suggested"
+    source: str  # "manual", "suggested" or "learned"
 
 
 def _clean_word(word: str) -> str:
@@ -97,9 +98,44 @@ class DictionaryStore:
         return [_to_entry(row) for row in rows]
 
     def delete(self, id: int) -> bool:
+        """Delete an entry. A learned word that is deleted is dismissed too: the user did not want
+        it, so it is not learned again."""
         with self._conn:
+            row = self._conn.execute(
+                "SELECT word, source FROM dictionary WHERE id = ?", (id,)
+            ).fetchone()
             cursor = self._conn.execute("DELETE FROM dictionary WHERE id = ?", (id,))
+            if row is not None and row["source"] == "learned":
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO dismissed_suggestions (word) VALUES (?)", (row["word"],)
+                )
         return cursor.rowcount > 0
+
+    def learn(self, word: str, misheard: str) -> bool:
+        """Learn from a correction: the user replaced `misheard` with `word` in a pasted dictation.
+
+        A new word is added as "learned" with `misheard` as its form; a known word gets the form
+        appended. Returns whether the dictionary changed. Nothing is learned when either side is
+        blank, the two differ only in letter case, the word was dismissed (in any letter case),
+        `misheard` is itself a word of the dictionary (the user changed a known word into another),
+        or `word` is a misheard form of some entry (the two rules would swap the words back and
+        forth).
+        """
+        word, misheard = word.strip(), misheard.strip()
+        if not word or not misheard or word.casefold() == misheard.casefold():
+            return False
+        if word.casefold() in {w.casefold() for w in self.dismissed()}:
+            return False
+        entries = self.list()
+        if any(entry.word == misheard for entry in entries):
+            return False
+        if any(word in entry.misheard for entry in entries):
+            return False
+        known = next((entry for entry in entries if entry.word == word), None)
+        if known is not None and misheard in known.misheard:
+            return False
+        self.add(word, [misheard], source="learned")
+        return True
 
     def hint_words(self) -> list[str]:
         """The words, newest first."""

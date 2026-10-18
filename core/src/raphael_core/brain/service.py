@@ -48,6 +48,8 @@ logger = logging.getLogger(__name__)
 
 HISTORY_DEFAULT_LIMIT = 50
 HISTORY_MAX_LIMIT = 200
+# The most corrections `dictionary.learn` takes from one dictation.
+LEARN_MAX = 3
 # Dictionary suggestions look at this many days of history.
 SUGGESTION_DAYS = 7
 # How long a key check may take in all. The client's timeout applies to each stage of a request
@@ -227,6 +229,7 @@ class Brain:
             "dictionary.delete": self._dictionary_delete,
             "dictionary.suggestions": self._dictionary_suggestions,
             "dictionary.dismiss": self._dictionary_dismiss,
+            "dictionary.learn": self._dictionary_learn,
             "settings.get": self._settings_get,
             "settings.set": self._settings_set,
             "secrets.status": self._secrets_status,
@@ -365,6 +368,28 @@ class Brain:
         with _store_call():
             self._dictionary.dismiss(word)
         return {}
+
+    async def _dictionary_learn(self, params: dict) -> dict:
+        """`{corrections: [{word, misheard}]}` from the app's correction watch: the user replaced
+        `misheard` with `word` in a dictation it pasted. Learns at most LEARN_MAX of them, none if
+        the setting is off, and returns the words that changed the dictionary. The words are
+        never logged, only how many."""
+        corrections = _required(params, "corrections")
+        if not isinstance(corrections, list):
+            raise _invalid("corrections must be a list")
+        pairs: list[tuple[str, str]] = []
+        for correction in corrections:
+            if not isinstance(correction, dict):
+                raise _invalid("corrections must be a list of objects")
+            pairs.append((_str(correction, "word"), _str(correction, "misheard")))
+        if not self._settings.get("learn_corrections"):
+            return {"learned": []}
+        learned: list[str] = []
+        for word, misheard in pairs[:LEARN_MAX]:
+            if self._dictionary.learn(word, misheard) and word.strip() not in learned:
+                learned.append(word.strip())
+        logger.info("Learned %d of %d corrections", len(learned), len(pairs))
+        return {"learned": learned}
 
     # --- settings -------------------------------------------------------------------------------
 
