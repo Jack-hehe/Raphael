@@ -1244,7 +1244,7 @@ async def test_a_dictation_goes_through_the_whole_app(make_app, notes):
     assert result["text"] == WORDS + WORDS  # joined without a space: CJK on both sides
     assert result["cleaned"] is True and result["fallback_reason"] is None
     assert result["audio_seconds"] == pytest.approx(1.0)
-    assert kit.transcriptions == [{"hints": ["拉斐爾"], "language": "zh"}] * 2
+    assert kit.transcriptions == [{"hints": ["拉斐爾"], "language": "auto"}] * 2
     history = (await app.call("history.list"))["items"]
     assert len(history) == 1
     assert history[0]["text"] == result["text"] and history[0]["target_app"] == "notepad.exe"

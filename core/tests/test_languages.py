@@ -128,30 +128,15 @@ def test_display_names():
 
 
 @pytest.mark.parametrize(
-    ("languages", "code"),
-    [
-        (["zh-TW"], "zh"),
-        (["zh-HK"], "zh"),
-        (["zh-CN"], "zh"),
-        (["yue-HK"], "yue"),
-        (["en-US"], "en"),
-        (["en-IN"], "en"),
-        (["ja-JP"], "ja"),
-        (["ko-KR"], "ko"),
-        (["fr-FR"], "fr"),
-        (["de-DE"], "de"),
-        (["es-MX"], "es"),
-        (["it-IT"], "it"),
-        (["pt-BR"], "pt"),
-        (["vi-VN"], "vi"),
-        (["th-TH"], "th"),
-        (["id-ID"], "id"),
-        (["zh-TW", "en-US"], "auto"),
-        (["zh-TW", "en-US", "ja-JP"], "auto"),
+    "languages",
+    [[language_id] for language_id in LANGUAGE_IDS]
+    + [
+        ["zh-TW", "en-US"],
+        ["zh-TW", "en-US", "ja-JP"],
     ],
 )
-def test_one_language_is_a_hint_and_several_are_automatic(languages, code):
-    assert stt_language(languages) == code
+def test_every_language_selection_uses_automatic_detection(languages):
+    assert stt_language(languages) == "auto"
 
 
 def test_the_codes_of_several_languages_keep_their_order():
