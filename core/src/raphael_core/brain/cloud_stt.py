@@ -25,6 +25,7 @@ import wave
 from collections.abc import Callable
 from typing import Any
 
+from ..languages import STT_CODES, stt_languages
 from ..protocol import BUDGET_EXCEEDED, INTERNAL_ERROR, INVALID_PARAMS, NOT_CONFIGURED, RpcError
 from .openrouter import OpenRouterClient, OpenRouterError
 from .settings import SettingsStore
@@ -34,7 +35,13 @@ logger = logging.getLogger(__name__)
 
 # OpenRouter takes base64 JSON up to 25 MB for most providers.
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
-LANGUAGES = {"auto": None, "zh": "zh", "ja": "ja", "en": "en"}
+# The `language` param: "auto" or a code of raphael_core.languages, and the code sent for it.
+# OpenRouter documents ISO 639-1 codes only, and Cantonese ("yue") has none: it goes as Chinese,
+# and the cleanup writes it as Cantonese.
+LANGUAGES: dict[str, str | None] = {
+    "auto": None,
+    **{code: ("zh" if code == "yue" else code) for code in STT_CODES},
+}
 
 
 def timeout_for(audio_seconds: float) -> float:
@@ -80,7 +87,7 @@ def _hints(params: dict) -> list[str]:
 
 def _language(params: dict) -> str | None:
     language = params.get("language", "auto")
-    if language not in LANGUAGES:
+    if not isinstance(language, str) or language not in LANGUAGES:
         raise _invalid(f"language must be one of {', '.join(LANGUAGES)}")
     return LANGUAGES[language]
 
@@ -89,7 +96,9 @@ class CloudTranscriber:
     """`stt.transcribe {audio, hints, language}` -> `{text, model, cost_usd}`.
 
     `has_key` says whether a key is stored (and raises if the key store fails); the model is the
-    `stt_cloud_model` setting, read for each call.
+    `stt_cloud_model` setting, read for each call. `language` is "auto" or one language's code
+    (the device side sends "auto" when several languages are chosen); with "auto", the codes of
+    the `languages` setting go along for a model that can be told what to detect among.
     """
 
     def __init__(
@@ -123,6 +132,10 @@ class CloudTranscriber:
             raise _refusal(BUDGET_EXCEEDED, "budget", "The monthly limit has been reached")
 
         model = self._settings.get("stt_cloud_model")
+        candidates: list[str] = []
+        if language is None:
+            codes = (LANGUAGES[code] for code in stt_languages(self._settings.get("languages")))
+            candidates = [code for code in dict.fromkeys(codes) if code]
         timeout = timeout_for(seconds)
         try:
             result = await asyncio.wait_for(
@@ -130,6 +143,7 @@ class CloudTranscriber:
                     model=model,
                     audio_b64=audio,
                     language=language,
+                    languages=candidates,
                     hints=hints,
                     timeout_s=timeout,
                 ),

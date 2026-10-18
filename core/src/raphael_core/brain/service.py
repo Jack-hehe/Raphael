@@ -29,6 +29,7 @@ from dataclasses import asdict, dataclass
 from datetime import tzinfo
 from typing import Any
 
+from ..languages import chinese_variant, language_groups
 from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from ..router import Router
 from .cleanup import CleanupService
@@ -229,6 +230,7 @@ class Brain:
             "dictionary.dismiss": self._dictionary_dismiss,
             "settings.get": self._settings_get,
             "settings.set": self._settings_set,
+            "languages.list": self._languages_list,
             "secrets.status": self._secrets_status,
             "secrets.set_openrouter_key": self._secrets_set_openrouter_key,
             "secrets.clear_openrouter_key": self._secrets_clear_openrouter_key,
@@ -251,7 +253,9 @@ class Brain:
         self._prune_history_if_due()
 
         rules = self._dictionary.replacements()
-        normalized = normalize_transcript(raw_text, rules)
+        # The Chinese written form the user chose decides the script of the text (or none).
+        chinese = chinese_variant(self._settings.get("languages"))
+        normalized = normalize_transcript(raw_text, rules, chinese=chinese)
         if not normalized.strip():
             return {
                 "id": None,
@@ -276,7 +280,7 @@ class Brain:
             self._openrouter.latency_ms = result.llm_ms
         if result.cleaned:
             # A fallback is the normalized text already; doing it twice could repeat a replacement.
-            text = finish_cleaned_text(result.text, rules)
+            text = finish_cleaned_text(result.text, rules, chinese=chinese)
         else:
             text = result.text
 
@@ -379,6 +383,10 @@ class Brain:
         if key == "history_retention_days":
             self._prune_history()
         return {"settings": self._settings.all()}
+
+    async def _languages_list(self, params: dict) -> dict:
+        """The languages the `languages` setting can hold, by group, in the order shown."""
+        return language_groups()
 
     # --- the key --------------------------------------------------------------------------------
 

@@ -1,7 +1,9 @@
-"""Text normalization: Taiwan Traditional Chinese that leaves Japanese alone, and dictionary rules.
+"""Text normalization: the Chinese written form the user chose, Japanese left alone, and rules.
 
-Speech-to-text often writes Chinese in Simplified characters, while Raphael's Chinese is always
-Traditional with Taiwan usage. OpenCC's `s2twp` converts it, but OpenCC does no language
+Speech-to-text writes Chinese in whichever script it likes, while Raphael's Chinese follows the
+variant the user chose (raphael_core.languages): Traditional with Taiwan usage for zh-TW (OpenCC
+`s2twp`, the default), Traditional with Hong Kong usage for zh-HK and yue-HK (`s2hk`), Simplified
+for zh-CN (`t2s`), and no conversion when no Chinese is chosen. OpenCC does no language
 detection: it also turns the Japanese kanji that share a code point with Simplified Chinese into
 Traditional forms (学 into 學, 会 into 會, 来 into 來). That is why Japanese is skipped, sentence
 by sentence.
@@ -52,6 +54,23 @@ def _converter() -> opencc.OpenCC:
     return opencc.OpenCC("s2twp.json")
 
 
+# The OpenCC configuration that writes Simplified Chinese as each Traditional variant.
+_TO_TRADITIONAL = {"zh-TW": "s2twp.json", "zh-HK": "s2hk.json", "yue-HK": "s2hk.json"}
+CHINESE_VARIANTS = ("zh-TW", "zh-HK", "zh-CN", "yue-HK")
+
+
+@functools.cache
+def _opencc(config: str) -> opencc.OpenCC:
+    """The OpenCC converter of `config`, made on first use (s2twp is `_converter`)."""
+    return _converter() if config == "s2twp.json" else opencc.OpenCC(config)
+
+
+def _checked_variant(chinese: str | None) -> str | None:
+    if chinese is not None and chinese not in CHINESE_VARIANTS:
+        raise ValueError(f"Unknown Chinese variant {chinese!r}: use {', '.join(CHINESE_VARIANTS)}")
+    return chinese
+
+
 def _is_japanese(sentence: str) -> bool:
     """Whether at least 10 % of the sentence's CJK characters are hiragana.
 
@@ -71,10 +90,27 @@ def to_taiwan_traditional(text: str) -> str:
     its own. A Japanese sentence stays as it is; every other one goes through OpenCC whole, which
     leaves kana and Latin text alone. Spaces and line breaks come back exactly as they were.
     """
+    return _convert_sentences(text, _converter())
+
+
+def _convert_sentences(text: str, converter: opencc.OpenCC) -> str:
+    """`text` with each sentence that is not Japanese run through `converter` whole."""
     return "".join(
-        sentence if _is_japanese(sentence) else _converter().convert(sentence)
+        sentence if _is_japanese(sentence) else converter.convert(sentence)
         for sentence in _SENTENCE.findall(text)
     )
+
+
+def to_chinese_variant(text: str, chinese: str | None) -> str:
+    """`text` in the script of the Chinese variant `chinese`, Japanese sentences left alone: every
+    other sentence goes through OpenCC whole (s2twp, s2hk or t2s). None leaves the text as it is.
+    ValueError for a variant that is not one of CHINESE_VARIANTS."""
+    chinese = _checked_variant(chinese)
+    if chinese is None:
+        return text
+    if chinese == "zh-CN":
+        return _convert_sentences(text, _to_simplified())
+    return _convert_sentences(text, _opencc(_TO_TRADITIONAL[chinese]))
 
 
 # The keys of OpenCC's STCharacters table that are among their own Traditional forms: Simplified
@@ -100,13 +136,14 @@ def _to_simplified() -> opencc.OpenCC:
 
 
 @functools.lru_cache(maxsize=8192)
-def _is_simplified_only(char: str) -> bool:
-    """Whether s2twp changes `char` on its own and it is no Traditional character (软, 发, 开, but
-    not 只 or 后). Non-Taiwan Traditional variants (裏) count too: they are to be converted."""
+def _is_simplified_only(char: str, config: str = "s2twp.json") -> bool:
+    """Whether the converter of `config` changes `char` on its own and it is no Traditional
+    character (软, 发, 开, but not 只 or 后). Traditional forms of another region (裏 for s2twp)
+    count too: they are to be converted."""
     return (
         ord(char) >= _FIRST_CJK
         and char not in _SHARED_CHARACTERS
-        and _converter().convert(char) != char
+        and _opencc(config).convert(char) != char
     )
 
 
@@ -116,7 +153,7 @@ def _is_traditional_only(char: str) -> bool:
     return ord(char) >= _FIRST_CJK and _to_simplified().convert(char) != char
 
 
-def _convert_simplified_words(sentence: str) -> str:
+def _convert_simplified_words(sentence: str, config: str = "s2twp.json") -> str:
     """One sentence that is meant to be Traditional Chinese, with what is still Simplified in it
     converted, and nothing else.
 
@@ -126,9 +163,13 @@ def _convert_simplified_words(sentence: str) -> str:
     Simplified-only character take its result: 「幫我打开」 becomes 「幫我開啟」, but the 只 of
     「就是只要按這個开關」 is not turned into 隻 as s2twp alone would.
     """
-    if not any(map(_is_simplified_only, sentence)):
+
+    def simplified_only(char: str) -> bool:
+        return _is_simplified_only(char, config)
+
+    if not any(map(simplified_only, sentence)):
         return sentence
-    converted = _converter().convert(sentence)
+    converted = _opencc(config).convert(sentence)
     if not any(map(_is_traditional_only, sentence)):
         return converted
     pieces: list[str] = []
@@ -137,7 +178,7 @@ def _convert_simplified_words(sentence: str) -> str:
 
     def take_changes() -> None:
         before = "".join(changed_from)
-        pieces.append("".join(changed_to) if any(map(_is_simplified_only, before)) else before)
+        pieces.append("".join(changed_to) if any(map(simplified_only, before)) else before)
         changed_from.clear()
         changed_to.clear()
 
@@ -153,9 +194,10 @@ def _convert_simplified_words(sentence: str) -> str:
     return "".join(pieces)
 
 
-def convert_leftover_simplified(text: str) -> str:
+def convert_leftover_simplified(text: str, config: str = "s2twp.json") -> str:
     """`text`, written to be Traditional Chinese with Taiwan usage, with what is still Simplified
-    in it converted by s2twp, sentence by sentence (Japanese sentences stay as they are).
+    in it converted by s2twp, sentence by sentence (Japanese sentences stay as they are). With
+    `config` "s2hk.json" the same is done for Hong Kong Traditional.
 
     s2twp takes its input for Simplified Chinese, and it corrupts some Traditional text:
     「就是只要」 becomes 「就是隻要」, 「干擾」 becomes 「幹擾」. This leaves the Traditional
@@ -163,7 +205,19 @@ def convert_leftover_simplified(text: str) -> str:
     they were.
     """
     return "".join(
-        sentence if _is_japanese(sentence) else _convert_simplified_words(sentence)
+        sentence if _is_japanese(sentence) else _convert_simplified_words(sentence, config)
+        for sentence in _SENTENCE.findall(text)
+    )
+
+
+def convert_leftover_traditional(text: str) -> str:
+    """`text`, written to be Simplified Chinese, with each sentence that still has a character
+    only Traditional Chinese has run through t2s (Japanese sentences stay as they are). t2s leaves
+    Simplified characters as they are, so the rest of such a sentence does not change."""
+    return "".join(
+        _to_simplified().convert(sentence)
+        if not _is_japanese(sentence) and any(map(_is_traditional_only, sentence))
+        else sentence
         for sentence in _SENTENCE.findall(text)
     )
 
@@ -260,14 +314,18 @@ def apply_replacements(text: str, rules: Sequence[tuple[str, str]]) -> str:
     return text
 
 
-def normalize_transcript(text: str, rules: Sequence[tuple[str, str]]) -> str:
-    """Speech-to-text output as the rest of the app sees it: Taiwan Traditional Chinese (Japanese
-    sentences left alone), then the dictionary's replacements. This is the text that is cleaned,
-    and the one pasted when the cleanup fails."""
-    return apply_replacements(to_taiwan_traditional(text), rules)
+def normalize_transcript(
+    text: str, rules: Sequence[tuple[str, str]], *, chinese: str | None = "zh-TW"
+) -> str:
+    """Speech-to-text output as the rest of the app sees it: the Chinese of the variant `chinese`
+    (`to_chinese_variant`; Japanese sentences left alone), then the dictionary's replacements.
+    This is the text that is saved, and the one pasted when the cleanup fails."""
+    return apply_replacements(to_chinese_variant(text, chinese), rules)
 
 
-def finish_cleaned_text(text: str, rules: Sequence[tuple[str, str]]) -> str:
+def finish_cleaned_text(
+    text: str, rules: Sequence[tuple[str, str]], *, chinese: str | None = "zh-TW"
+) -> str:
     """The text the user gets from what the cleanup model wrote: its reply, normalized again.
 
     The model is told to write Traditional Chinese with Taiwan usage, so only what it left in
@@ -277,7 +335,15 @@ def finish_cleaned_text(text: str, rules: Sequence[tuple[str, str]]) -> str:
     That gate is on the whole reply, a step beyond the sentence-by-sentence rule of
     `to_taiwan_traditional`. A text that fell back to the raw speech-to-text result is already
     normalized and must not go through this: a second pass could repeat a replacement.
+
+    `chinese` is the variant the model was told to write: zh-TW as above, zh-HK and yue-HK the
+    same with s2hk, zh-CN with what is left in Traditional made Simplified by t2s
+    (`convert_leftover_traditional`), and None for no conversion.
     """
-    if not _HIRAGANA.search(text):
-        text = convert_leftover_simplified(text)
+    chinese = _checked_variant(chinese)
+    if chinese is not None and not _HIRAGANA.search(text):
+        if chinese == "zh-CN":
+            text = convert_leftover_traditional(text)
+        else:
+            text = convert_leftover_simplified(text, _TO_TRADITIONAL[chinese])
     return apply_replacements(text, rules)

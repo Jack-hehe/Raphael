@@ -39,9 +39,9 @@ export interface EmblemControl {
   set(mode: Mode): void;
   speak(seconds: number): void;
   size(px: number): void;
-  /** How far the dictation has come since the key was released (the arc on the glyph ring). */
+  /** How far the dictation has come since the key was released (the glyph ring draws itself in). */
   progress(report: ProgressReport): void;
-  /** The arc fades out. */
+  /** The dictation is over: the whole glyph ring comes back. */
   clearProgress(): void;
 }
 
@@ -93,7 +93,7 @@ export class OverlayController {
         this.emblem.level = event.value;
         break;
       case "progress":
-        // No words: the arc says it (dictation shows no subtitles).
+        // No words: the glyph ring says it (dictation shows no subtitles).
         this.emblem.progress({
           stage: event.stage,
           done: event.done,

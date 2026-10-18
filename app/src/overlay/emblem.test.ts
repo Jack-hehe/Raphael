@@ -1,14 +1,17 @@
 import { afterEach, expect, test, vi } from "vitest";
 import {
   AP,
-  ARC_R,
   Emblem,
+  ECHO_MAX,
+  REVEAL_FEATHER,
   RATE,
   VA,
   canvasSize,
   drawEmblem,
+  echoAlpha,
   kf,
   params,
+  revealSlices,
   tick,
   type Phase,
 } from "./emblem";
@@ -76,7 +79,7 @@ test("the canvas leaves room for the rays: 1.3 times the diameter", () => {
 
 // A canvas context that records every call, so the port can be exercised without a browser.
 function recordingContext() {
-  const calls: Array<{ name: string; args: unknown[] }> = [];
+  const calls: Array<{ name: string; args: unknown[]; alpha?: number }> = [];
   const state: Record<string, unknown> = {
     globalAlpha: 1,
     globalCompositeOperation: "source-over",
@@ -92,7 +95,7 @@ function recordingContext() {
         };
       }
       return (...args: unknown[]) => {
-        calls.push({ name: prop, args });
+        calls.push({ name: prop, args, alpha: target.globalAlpha as number });
       };
     },
     set(target, prop: string, value) {
@@ -427,127 +430,323 @@ test("frames counts the animation steps, so the page can tell a stalled loop", (
   expect(e.frames).toBe(2);
 });
 
-// ---- the progress arc after the key is released ----
+// ---- the glyph ring draws itself in after the key is released ----
 
 const transcribing = (done: number, total: number) => ({ stage: "transcribing" as const, done, total, audioSeconds: 5 });
+const DONE = { stage: "done" as const, done: 0, total: 0, audioSeconds: 0 };
+const TOP = -Math.PI / 2;
 
-test("the progress arc is drawn with finite numbers in every phase, from empty to full", () => {
+test("the reveal runs clockwise from twelve o'clock over its fraction, with a feathered edge", () => {
+  const slices = revealSlices(0.25, 0);
+  expect(slices[0][0]).toBeCloseTo(TOP, 12);
+  expect(slices[0][2]).toBe(1);
+  expect(slices[slices.length - 1][1]).toBeCloseTo(0, 12); // a quarter: up to three o'clock
+  // one after the other, no gaps, fading towards the head
+  for (let k = 1; k < slices.length; k++) {
+    expect(slices[k][0]).toBeCloseTo(slices[k - 1][1], 12);
+    expect(slices[k][2]).toBeLessThan(slices[k - 1][2]);
+  }
+  expect(slices.length).toBeGreaterThan(2);
+  expect(slices[slices.length - 1][2]).toBeLessThan(0.3);
+  // the feather is only the last few degrees
+  expect(slices[0][1] - slices[0][0]).toBeCloseTo(Math.PI / 2 - REVEAL_FEATHER, 12);
+});
+
+test("the reveal maps nothing to nothing, the whole to the whole ring, and never outside the circle", () => {
+  expect(revealSlices(0, 0)).toEqual([]);
+  expect(revealSlices(-1, 0)).toEqual([]);
+  expect(revealSlices(1, 0)).toEqual([[TOP, TOP + Math.PI * 2, 1]]);
+  expect(revealSlices(2, 0)).toEqual([[TOP, TOP + Math.PI * 2, 1]]);
+  expect(revealSlices(0.4, 1)).toEqual([[TOP, TOP + Math.PI * 2, 1]]);
+  for (const f of [0.001, 0.01, 0.2, 0.6, 0.95, 0.998]) {
+    const slices = revealSlices(f, 0);
+    expect(slices[0][0]).toBeCloseTo(TOP, 12);
+    expect(slices[slices.length - 1][1]).toBeCloseTo(TOP + Math.PI * 2 * f, 12);
+    for (const [from, to, alpha] of slices) {
+      expect(to).toBeGreaterThan(from);
+      expect(alpha).toBeGreaterThan(0);
+      expect(alpha).toBeLessThanOrEqual(1);
+    }
+  }
+});
+
+test("the rest of the ring comes back at `rest` (when a notice takes the emblem)", () => {
+  const slices = revealSlices(0.5, 0.4);
+  const last = slices[slices.length - 1];
+  expect(last[0]).toBeCloseTo(TOP + Math.PI, 12);
+  expect(last[1]).toBeCloseTo(TOP + Math.PI * 2, 12);
+  expect(last[2]).toBe(0.4);
+  for (const [, , alpha] of slices) expect(alpha).toBeGreaterThanOrEqual(0.4);
+  expect(revealSlices(0, 0.4)).toEqual([[TOP, TOP + Math.PI * 2, 0.4]]);
+});
+
+/** The calls that draw the glyph ring: the texture, or the plain ring's strokes at 0.73 R and beyond. */
+function glyphCalls(calls: { name: string; args: unknown[] }[], R = 75): number {
+  return calls.filter(
+    (c) =>
+      c.name === "drawImage" ||
+      (c.name === "arc" && c.args[0] === 0 && c.args[1] === 0 && (c.args[2] as number) > R * 0.7 && (c.args[2] as number) <= R * 1.01),
+  ).length;
+}
+
+function frame(phase: Phase, t: number, reveal?: { fraction: number; rest: number; flash: number; echo: number } | null) {
+  const { ctx, calls } = recordingContext();
+  drawEmblem(ctx, 75, params(phase, t, 0.2), { tq: t, rot: 0.4, dim: 1, calm: 1, lvl: 0.2, reveal });
+  return calls;
+}
+
+test("an empty reveal draws no glyph ring at all, but the inner part as usual", () => {
+  const empty = frame("listening", 0, { fraction: 0, rest: 0, flash: 0, echo: 0 });
+  expect(glyphCalls(empty)).toBe(0);
+  expect(empty.some((c) => c.name === "stroke")).toBe(true); // the white ring
+  expect(empty.some((c) => c.name === "fill")).toBe(true); // the light in the middle
+  expect(glyphCalls(frame("listening", 0))).toBeGreaterThan(0); // without a reveal: the whole ring
+});
+
+test("a partial reveal draws the glyph ring clipped to wedges from twelve o'clock, with a head", () => {
+  const calls = frame("thinking", 0, { fraction: 0.25, rest: 0, flash: 0, echo: 0 });
+  expect(glyphCalls(calls)).toBeGreaterThan(0);
+  const wedges = calls.filter((c) => c.name === "arc" && c.args[0] === 0 && c.args[1] === 0 && (c.args[2] as number) > 75 * 1.01);
+  expect(wedges[0].args[3]).toBeCloseTo(TOP, 12);
+  expect(wedges[wedges.length - 1].args[4]).toBeCloseTo(0, 12);
+  expect(calls.filter((c) => c.name === "clip").length).toBe(wedges.length);
+  // the head, at three o'clock on the glyphs
+  expect(calls.some((c) => c.name === "createRadialGradient" && Math.abs((c.args[0] as number) - 75 * 0.855) < 1)).toBe(true);
+});
+
+test("every reveal draws with finite numbers in every phase", () => {
   const phases: Phase[] = ["appear", "vanish", "steady", "listening", "thinking"];
   for (const phase of phases) {
     for (const fraction of [0, 0.001, 0.3, 0.6, 0.95, 1]) {
-      const { ctx, calls } = recordingContext();
-      const arc = { fraction, alpha: 1, flash: fraction === 1 ? 1 : 0 };
-      drawEmblem(ctx, 75, params(phase, 0.3, 0.2), { tq: 0, rot: 0.4, dim: 1, calm: 1, lvl: 0.2, arc });
-      for (const call of calls) {
-        for (const arg of call.args) {
-          if (typeof arg === "number") expect(Number.isFinite(arg), `${phase} ${fraction} ${call.name}`).toBe(true);
+      for (const rest of [0, 0.5]) {
+        const calls = frame(phase, 0.3, { fraction, rest, flash: fraction === 1 ? 1 : 0, echo: rest });
+        for (const call of calls) {
+          for (const arg of call.args) {
+            if (typeof arg === "number") expect(Number.isFinite(arg), `${phase} ${fraction} ${call.name}`).toBe(true);
+          }
         }
       }
     }
   }
 });
 
-/** The arcs drawn on the progress ring's radius (R = 75): [start, end] angles. */
-function progressArcs(calls: { name: string; args: unknown[] }[]): number[][] {
-  return calls
-    .filter((c) => c.name === "arc" && Math.abs((c.args[2] as number) - 75 * ARC_R) < 1e-9)
-    .map((c) => [c.args[3] as number, c.args[4] as number]);
+test("the done flare draws the whole ring once more, added on top", () => {
+  const plain = glyphCalls(frame("thinking", 0, { fraction: 1, rest: 0, flash: 0, echo: 0 }));
+  expect(glyphCalls(frame("thinking", 0, { fraction: 1, rest: 0, flash: 1, echo: 0 }))).toBeGreaterThan(plain);
+});
+
+test("the revealed ring fades with the glyphs when the emblem vanishes", () => {
+  expect(glyphCalls(frame("vanish", 0.167, { fraction: 1, rest: 0, flash: 0, echo: 0 }))).toBeGreaterThan(0);
+  expect(glyphCalls(frame("vanish", 0.367, { fraction: 1, rest: 0, flash: 0, echo: 0 }))).toBe(0);
+});
+
+/** An emblem whose frames are recorded. */
+function recordedEmblem() {
+  const rec = recordingContext();
+  const canvas = { ...fakeCanvas(), getContext: () => rec.ctx } as unknown as HTMLCanvasElement;
+  return { canvas, rec };
 }
 
-test("the arc runs clockwise from twelve o'clock over its fraction of the ring", () => {
-  const { ctx, calls } = recordingContext();
-  drawEmblem(ctx, 75, params("thinking", 0, 0), {
-    tq: 0, rot: 1.2, dim: 1, calm: 1, lvl: 0,
-    arc: { fraction: 0.25, alpha: 1, flash: 0 },
-  });
-  const arcs = progressArcs(calls);
-  expect(arcs).toContainEqual([0, Math.PI * 2]); // the faint track
-  expect(arcs).toContainEqual([-Math.PI / 2, 0]); // a quarter, ending at three o'clock
+test("listening shows only the inner part: no glyph ring, from the appear animation on", () => {
+  const { canvas, rec } = recordedEmblem();
+  const e = new Emblem(canvas, 150);
+  e.appear();
+  e.set("listening");
+  for (let i = 0; i < 48; i++) {
+    e.step(1 / 24);
+    e.draw();
+  }
+  expect(e.phase).toBe("listening");
+  expect(e.revealShown).toEqual({ fraction: 0, rest: 0, flash: 0, echo: 0 });
+  expect(glyphCalls(rec.calls)).toBe(0);
+  expect(rec.calls.some((c) => c.name === "stroke")).toBe(true);
 });
 
-/** How many arcs on the progress ring's radius a frame draws (the plain glyph ring has one too). */
-function arcsAt(phase: Phase, t: number, arc?: { fraction: number; alpha: number; flash: number } | null): number {
-  const { ctx, calls } = recordingContext();
-  drawEmblem(ctx, 75, params(phase, t, 0), { tq: 0, rot: 0, dim: 1, calm: 1, lvl: 0, arc });
-  return progressArcs(calls).length;
-}
-
-test("no arc, no progress ring; a faded arc draws nothing", () => {
-  const without = arcsAt("thinking", 0);
-  expect(arcsAt("thinking", 0, { fraction: 0.5, alpha: 1, flash: 0 })).toBeGreaterThan(without);
-  expect(arcsAt("thinking", 0, null)).toBe(without);
-  expect(arcsAt("thinking", 0, { fraction: 0.5, alpha: 0, flash: 0 })).toBe(without);
-});
-
-test("the arc fades with the glyph ring when the emblem vanishes", () => {
-  const full = { fraction: 1, alpha: 1, flash: 0 };
-  // drawn while the glyphs are there, gone once they have faded (0.367 s)
-  expect(arcsAt("vanish", 0.167, full)).toBeGreaterThan(arcsAt("vanish", 0.167));
-  expect(arcsAt("vanish", 0.367, full)).toBe(arcsAt("vanish", 0.367));
-});
-
-test("the emblem shows the progress on the 24 fps clock", () => {
-  const e = new Emblem(fakeCanvas(), 150, { visible: true });
+test("after the stop the ring draws itself in with the progress, on the 24 fps clock", () => {
+  const e = new Emblem(fakeCanvas(), 150);
+  e.appear();
+  e.set("listening");
+  for (let i = 0; i < 24; i++) e.step(1 / 24);
+  e.step(1 / 48); // half way through a tick
   e.set("thinking");
-  e.step(1 / 24 + 1e-3);
-  expect(e.progressShown).toBeNull();
   e.progress(transcribing(1, 2));
   e.step(0.01);
-  expect(e.progressShown).toBeNull(); // same tick: not drawn yet
+  expect(e.revealShown?.fraction).toBe(0); // same tick: not drawn yet
   e.step(1 / 24);
-  expect(e.progressShown?.fraction).toBeGreaterThan(0);
+  expect(e.revealShown?.fraction).toBeGreaterThan(0);
   for (let i = 0; i < 48; i++) e.step(1 / 24);
-  expect(e.progressShown?.fraction).toBeCloseTo(0.3, 3);
-  // between ticks the drawn arc stands still
-  e.progress({ stage: "done", done: 0, total: 0, audioSeconds: 0 });
-  const before = e.progressShown?.fraction;
+  expect(e.revealShown?.fraction).toBeCloseTo(0.3, 3);
+  e.progress(DONE);
+  const before = e.revealShown?.fraction;
   e.step(0.005);
-  expect(e.progressShown?.fraction).toBe(before);
+  expect(e.revealShown?.fraction).toBe(before);
   e.step(1 / 24);
-  expect(e.progressShown?.fraction).toBe(1);
+  expect(e.revealShown).toMatchObject({ fraction: 1, rest: 0 });
+  expect(e.revealShown?.flash).toBeGreaterThan(0);
 });
 
-test("a hidden emblem ignores progress, and the next appear starts without an arc", () => {
+test("done: the whole ring, then the usual vanish", () => {
+  const e = new Emblem(fakeCanvas(), 150);
+  e.appear();
+  e.set("listening");
+  for (let i = 0; i < 24; i++) e.step(1 / 24);
+  e.set("thinking");
+  e.progress(DONE);
+  for (let i = 0; i < 12; i++) e.step(1 / 24);
+  expect(e.revealShown).toEqual({ fraction: 1, rest: 0, flash: 0, echo: 0 });
+  e.vanish();
+  e.step(1 / 24);
+  expect(e.phase).toBe("vanish");
+  expect(e.revealShown?.fraction).toBe(1);
+  for (let i = 0; i < 12; i++) e.step(1 / 24);
+  expect(e.phase).toBe("hidden");
+});
+
+test("a notice after the recording brings back the whole ring, and late progress is ignored", () => {
+  const e = new Emblem(fakeCanvas(), 150);
+  e.appear();
+  e.set("listening");
+  for (let i = 0; i < 24; i++) e.step(1 / 24);
+  e.set("thinking");
+  e.progress(transcribing(1, 2));
+  for (let i = 0; i < 6; i++) e.step(1 / 24);
+  const f = e.revealShown?.fraction ?? 0;
+  e.clearProgress();
+  e.set("steady");
+  e.step(1 / 24);
+  const mid = e.revealShown?.rest ?? 0;
+  expect(mid).toBeGreaterThan(0);
+  expect(mid).toBeLessThan(1);
+  expect(e.revealShown?.fraction).toBeGreaterThanOrEqual(f); // what was drawn stays
+  e.progress(DONE); // the dictation is over
+  for (let i = 0; i < 12; i++) e.step(1 / 24);
+  expect(e.revealShown).toBeNull(); // the whole ring, as always
+});
+
+test("a notice on its own, and the home page's emblem, show the whole ring", () => {
+  const notice = new Emblem(fakeCanvas(), 150);
+  notice.appear();
+  notice.set("steady");
+  notice.step(1 / 24);
+  expect(notice.revealShown).toBeNull();
+  const home = new Emblem(fakeCanvas(), 110, { visible: true });
+  home.set("steady");
+  home.step(1 / 24);
+  expect(home.revealShown).toBeNull();
+  home.progress(DONE); // not a dictation: ignored
+  home.step(1 / 24);
+  expect(home.revealShown).toBeNull();
+});
+
+test("a hidden emblem ignores progress, and the next dictation starts with no ring", () => {
   const e = new Emblem(fakeCanvas(), 150);
   e.progress(transcribing(1, 2));
   e.step(0.1);
-  expect(e.progressShown).toBeNull();
-  e.set("thinking");
   e.appear();
-  e.progress({ stage: "done", done: 0, total: 0, audioSeconds: 0 });
+  e.set("listening");
+  e.progress(DONE);
   e.step(0.1);
-  expect(e.progressShown?.fraction).toBe(1);
+  expect(e.revealShown?.fraction).toBe(1);
   e.vanish();
   e.progress(transcribing(0, 1)); // too late: ignored
   for (let i = 0; i < 24; i++) e.step(1 / 24);
   expect(e.phase).toBe("hidden");
   e.appear();
+  e.set("listening");
   e.step(0.1);
-  expect(e.progressShown).toBeNull();
+  expect(e.revealShown).toEqual({ fraction: 0, rest: 0, flash: 0, echo: 0 });
 });
 
-test("clearProgress fades the arc out", () => {
-  const e = new Emblem(fakeCanvas(), 150, { visible: true });
-  e.progress({ stage: "done", done: 0, total: 0, audioSeconds: 0 });
-  e.step(1 / 24 + 1e-3);
-  e.clearProgress();
-  e.step(1 / 24);
-  const a = e.progressShown?.alpha ?? 0;
-  expect(a).toBeGreaterThan(0);
-  expect(a).toBeLessThan(1);
-  for (let i = 0; i < 12; i++) e.step(1 / 24);
-  expect(e.progressShown).toBeNull();
-});
-
-test("with reduced motion the arc jumps to each step without easing", () => {
+test("with reduced motion the ring draws in by steps, without easing or flare", () => {
   vi.stubGlobal("window", { matchMedia: () => ({ matches: true }), devicePixelRatio: 1 });
   const e = new Emblem(fakeCanvas(), 150);
-  e.set("thinking");
   e.appear();
-  e.progress(transcribing(1, 2));
+  e.set("listening");
   e.step(1 / 24 + 1e-3);
-  expect(e.progressShown?.fraction).toBeCloseTo(0.3, 10);
-  e.progress({ stage: "done", done: 0, total: 0, audioSeconds: 0 });
+  expect(e.revealShown).toEqual({ fraction: 0, rest: 0, flash: 0, echo: 0 });
+  e.set("thinking");
+  e.progress(transcribing(1, 2));
   e.step(1 / 24);
-  expect(e.progressShown).toEqual({ fraction: 1, alpha: 1, flash: 0 });
+  expect(e.revealShown?.fraction).toBeCloseTo(0.3, 10);
+  e.progress(DONE);
+  e.step(1 / 24);
+  expect(e.revealShown).toEqual({ fraction: 1, rest: 0, flash: 0, echo: 0 });
+  // a notice brings the rest back at once
+  e.clearProgress();
+  e.set("steady");
+  e.step(1 / 24);
+  expect(e.revealShown).toBeNull();
+});
+
+// ---- the voice's echo on the glyph ring while recording ----
+
+test("the echo is not there when quiet and grows with the voice, up to a cap under the drawn-in ring", () => {
+  expect(echoAlpha(0)).toBe(0);
+  expect(echoAlpha(0.05)).toBe(0); // the white ring's rest level
+  expect(echoAlpha(Number.NaN)).toBe(0);
+  let last = 0;
+  for (let l = 0; l <= 1.0001; l += 0.01) {
+    const a = echoAlpha(l);
+    expect(a).toBeGreaterThanOrEqual(last);
+    last = a;
+  }
+  expect(echoAlpha(0.5)).toBeGreaterThanOrEqual(0.35);
+  expect(echoAlpha(0.5)).toBeLessThanOrEqual(0.45);
+  expect(echoAlpha(1)).toBeGreaterThan(echoAlpha(0.5));
+  expect(echoAlpha(1)).toBe(ECHO_MAX);
+  expect(ECHO_MAX).toBeLessThanOrEqual(0.6); // the reveal draws its ring at 1
+});
+
+test("the echo draws the whole ring faintly while recording, nothing when quiet", () => {
+  expect(glyphCalls(frame("listening", 0, { fraction: 0, rest: 0, flash: 0, echo: 0 }))).toBe(0);
+  const calls = frame("listening", 0, { fraction: 0, rest: 0, flash: 0, echo: 0.4 });
+  expect(glyphCalls(calls)).toBeGreaterThan(0);
+  expect(calls.some((c) => c.name === "clip")).toBe(false); // one piece, all around
+  // even an echo out of range stays well under the drawn-in ring (drawn at 1)
+  const loud = frame("listening", 0, { fraction: 0, rest: 0, flash: 0, echo: 5 });
+  const glyphStrokes = loud.filter((c, i) => {
+    const before = loud[i - 1];
+    return c.name === "stroke" && before?.name === "arc" && (before.args[2] as number) > 75 * 0.7;
+  });
+  expect(glyphStrokes.length).toBeGreaterThan(0);
+  for (const c of glyphStrokes) expect(c.alpha).toBeLessThanOrEqual(ECHO_MAX);
+});
+
+test("the echo follows the microphone while recording and fades out over 0.2 s after the stop", () => {
+  const e = new Emblem(fakeCanvas(), 150);
+  e.appear();
+  e.set("listening");
+  e.step(1 / 24 + 1e-3);
+  expect(e.revealShown?.echo).toBe(0); // quiet
+  e.level = 0.5;
+  e.step(1 / 24);
+  const speaking = e.revealShown?.echo ?? 0;
+  expect(speaking).toBeCloseTo(echoAlpha(0.5), 10);
+  e.level = 1;
+  e.step(1 / 24);
+  expect(e.revealShown?.echo).toBeGreaterThan(speaking);
+  e.level = 0.5;
+  e.step(1 / 24);
+  e.set("thinking");
+  e.progress(transcribing(1, 4));
+  e.step(1 / 24);
+  const fading = e.revealShown?.echo ?? 0;
+  expect(fading).toBeGreaterThan(0);
+  expect(fading).toBeLessThan(speaking);
+  for (let i = 0; i < 5; i++) e.step(1 / 24);
+  expect(e.revealShown?.echo).toBe(0);
+  expect(e.revealShown?.fraction).toBeGreaterThan(0); // while the ring draws itself in
+});
+
+test("with reduced motion the echo still follows the voice and goes at once on the stop", () => {
+  vi.stubGlobal("window", { matchMedia: () => ({ matches: true }), devicePixelRatio: 1 });
+  const e = new Emblem(fakeCanvas(), 150);
+  e.appear();
+  e.set("listening");
+  e.level = 0.5;
+  e.step(1 / 24 + 1e-3);
+  expect(e.revealShown?.echo).toBeCloseTo(echoAlpha(0.5), 10);
+  e.set("thinking");
+  e.step(1 / 24);
+  expect(e.revealShown?.echo).toBe(0);
 });

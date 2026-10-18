@@ -31,7 +31,23 @@ logger = logging.getLogger(__name__)
 
 SAMPLE_RATE = 16_000
 
-LANGUAGE_NAMES = {"zh": "Chinese", "ja": "Japanese", "en": "English"}
+# The language Qwen3-ASR is told, by the code of raphael_core.languages (Qwen3-ASR knows all of
+# them, Cantonese included).
+LANGUAGE_NAMES = {
+    "zh": "Chinese",
+    "yue": "Cantonese",
+    "en": "English",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "vi": "Vietnamese",
+    "th": "Thai",
+    "id": "Indonesian",
+}
 
 # Qwen3-ASR fits its prompt, the audio (about 13 tokens a second) and the text it writes into
 # max_total_len tokens, and cuts off the audio that does not fit. The default of 512 is too little

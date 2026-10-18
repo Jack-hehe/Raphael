@@ -477,3 +477,88 @@ def test_the_converter_is_created_once(monkeypatch):
     for _ in range(3):
         to_taiwan_traditional("这个软件很好用。我们开会了！")
     assert len(created) == 1
+
+
+# --- the Chinese variants ---
+# The script and usage follow the Chinese written form the user chose: Taiwan (s2twp, as above),
+# Hong Kong and Cantonese (s2hk), Mainland (t2s), or none at all (no conversion).
+
+
+def test_the_opencc_configurations_the_variants_use_are_installed():
+    for config in ("s2twp.json", "s2hk.json", "t2s.json"):
+        opencc.OpenCC(config)  # raises when the configuration is missing
+
+
+@pytest.mark.parametrize(
+    ("variant", "text", "expected"),
+    [
+        ("zh-TW", "这个软件的数据。", "這個軟體的資料。"),
+        ("zh-HK", "这个软件的数据。", "這個軟件的數據。"),
+        ("yue-HK", "我哋嘅软件。", "我哋嘅軟件。"),
+        ("zh-CN", "這個軟件的數據。", "这个软件的数据。"),
+        ("zh-CN", "这个软件的数据。", "这个软件的数据。"),
+        (None, "这个軟件。", "这个軟件。"),
+    ],
+)
+def test_normalize_transcript_writes_the_chosen_chinese(variant, text, expected):
+    assert textnorm.normalize_transcript(text, [], chinese=variant) == expected
+
+
+@pytest.mark.parametrize("variant", ["zh-TW", "zh-HK", "yue-HK", "zh-CN"])
+def test_every_variant_leaves_japanese_sentences_alone(variant):
+    text = "今日は学校で会います。"
+    assert textnorm.normalize_transcript(text, [], chinese=variant) == text
+    assert textnorm.finish_cleaned_text(text, [], chinese=variant) == text
+
+
+def test_normalize_transcript_is_taiwan_unless_told_otherwise():
+    assert textnorm.normalize_transcript("软件", []) == "軟體"
+    assert textnorm.finish_cleaned_text("软件。", []) == "軟體。"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("这个软件的数据。", "這個軟件的數據。"),
+        ("幫我打开視窗。", "幫我打開視窗。"),
+        ("後面的头发。", "後面的頭髮。"),
+    ],
+)
+def test_finish_cleaned_text_converts_leftover_simplified_to_hong_kong(text, expected):
+    assert textnorm.finish_cleaned_text(text, [], chinese="zh-HK") == expected
+    assert textnorm.finish_cleaned_text(text, [], chinese="yue-HK") == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["就是只要按 Alt 就可以。", "不要干擾他。", "這只是測試。", "我哋聽日去咗。", "裏面有數據。"],
+)
+def test_finish_cleaned_text_leaves_hong_kong_traditional_alone(text):
+    assert textnorm.finish_cleaned_text(text, [], chinese="zh-HK") == text
+
+
+def test_s2hk_alone_would_corrupt_that_traditional_chinese_too():
+    assert opencc.OpenCC("s2hk.json").convert("就是只要按 Alt。") == "就是隻要按 Alt。"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("这个软件很好用。", "这个软件很好用。"),
+        ("這個軟件很好用。", "这个软件很好用。"),
+        ("我们明天開會。", "我们明天开会。"),
+        ("就是只要按 Alt。", "就是只要按 Alt。"),
+    ],
+)
+def test_finish_cleaned_text_converts_leftover_traditional_to_simplified(text, expected):
+    assert textnorm.finish_cleaned_text(text, [], chinese="zh-CN") == expected
+
+
+def test_without_a_chinese_variant_nothing_is_converted():
+    text = "这个軟體。"
+    assert textnorm.finish_cleaned_text(text, [("軟體", "app")], chinese=None) == "这个app。"
+
+
+def test_an_unknown_variant_is_refused():
+    with pytest.raises(ValueError):
+        textnorm.normalize_transcript("x", [], chinese="zh-SG")

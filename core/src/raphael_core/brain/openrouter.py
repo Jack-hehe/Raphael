@@ -312,11 +312,20 @@ def _whisper_prompt(keywords: list[str]) -> str:
 
 
 def transcription_body(
-    model: str, audio_b64: str, audio_format: str, *, language: str | None, hints: Sequence[str]
+    model: str,
+    audio_b64: str,
+    audio_format: str,
+    *,
+    language: str | None,
+    hints: Sequence[str],
+    languages: Sequence[str] = (),
 ) -> dict[str, Any]:
     """The JSON body of a transcription of `audio_b64` by `model`.
 
-    `language` is an ISO-639-1 code, or None for automatic. The hints and the language reach the
+    `language` is an ISO-639-1 code, or None for automatic. `languages` are the codes automatic
+    detection may choose among; only gpt-transcribe takes such a list (as `languages`, which a
+    chosen `language` replaces), the other models detect the language on their own. The hints and
+    the language reach the
     model the way it documents (see MAX_KEYWORDS above). `data_collection: "deny"` keeps the audio
     away from providers that train on what they are sent.
     """
@@ -332,6 +341,8 @@ def transcription_body(
             options["keywords"] = keywords
         if language:
             options["languages"] = [language]
+        elif languages:
+            options["languages"] = list(languages)
         provider["options"] = {"openai": options}
     else:
         if language:
@@ -429,13 +440,17 @@ class OpenRouterClient:
         hints: Sequence[str],
         timeout_s: float,
         audio_format: str = "wav",
+        languages: Sequence[str] = (),
     ) -> Transcription:
         """The text `model` hears in `audio_b64` (base64 of the file's bytes, not a data URI).
 
-        `language` is an ISO-639-1 code or None for automatic; `hints` are words the model should
+        `language` is an ISO-639-1 code or None for automatic, and `languages` the codes automatic
+        detection may choose among (see `transcription_body`); `hints` are words the model should
         write as given. `timeout_s` applies to each stage of the request, like complete_json's.
         """
-        body = transcription_body(model, audio_b64, audio_format, language=language, hints=hints)
+        body = transcription_body(
+            model, audio_b64, audio_format, language=language, hints=hints, languages=languages
+        )
         reply = await self._request(
             "POST", "/audio/transcriptions", self._stored_key(), timeout_s, body
         )

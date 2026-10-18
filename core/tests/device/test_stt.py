@@ -155,7 +155,27 @@ def speech():
 
 
 def test_language_names():
-    assert LANGUAGE_NAMES == {"zh": "Chinese", "ja": "Japanese", "en": "English"}
+    assert LANGUAGE_NAMES == {
+        "zh": "Chinese",
+        "yue": "Cantonese",
+        "en": "English",
+        "ja": "Japanese",
+        "ko": "Korean",
+        "fr": "French",
+        "de": "German",
+        "es": "Spanish",
+        "it": "Italian",
+        "pt": "Portuguese",
+        "vi": "Vietnamese",
+        "th": "Thai",
+        "id": "Indonesian",
+    }
+
+
+def test_qwen3_asr_knows_every_language_that_can_be_chosen():
+    from raphael_core.languages import STT_CODES
+
+    assert set(STT_CODES) == set(LANGUAGE_NAMES)
 
 
 def test_unknown_engine(tmp_path):

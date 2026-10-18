@@ -43,6 +43,7 @@ METHODS = [
     "dictionary.dismiss",
     "settings.get",
     "settings.set",
+    "languages.list",
     "secrets.status",
     "secrets.set_openrouter_key",
     "secrets.clear_openrouter_key",
@@ -659,9 +660,13 @@ async def test_suggestions_skip_known_and_dismissed_words(router, conn):
 
 async def test_settings_get_and_set_round_trip(router):
     assert await router.call("settings.get", {}) == {"settings": DEFAULTS}
-    after = await router.call("settings.set", {"key": "language", "value": "ja"})
-    assert after == {"settings": {**DEFAULTS, "language": "ja"}}
-    assert (await router.call("settings.get", {}))["settings"]["language"] == "ja"
+    after = await router.call("settings.set", {"key": "languages", "value": ["ja-JP", "en-GB"]})
+    expected = {**DEFAULTS, "languages": ["ja-JP", "en-GB"], "language": "auto"}
+    assert after == {"settings": expected}
+    assert (await router.call("settings.get", {}))["settings"] == expected
+    # The old key still works, and sets the new one.
+    old = await router.call("settings.set", {"key": "language", "value": "ja"})
+    assert old["settings"]["languages"] == ["ja-JP"] and old["settings"]["language"] == "ja"
     # A whole number is a valid float setting.
     limit = await router.call("settings.set", {"key": "monthly_limit_usd", "value": 5})
     assert limit["settings"]["monthly_limit_usd"] == 5.0
@@ -671,6 +676,67 @@ async def test_a_rejected_setting_changes_nothing(router):
     with pytest.raises(RpcError):
         await router.call("settings.set", {"key": "monthly_limit_usd", "value": "lots"})
     assert (await router.call("settings.get", {}))["settings"] == DEFAULTS
+
+
+@pytest.mark.parametrize("value", [[], ["zh-TW", "zh-CN"], ["en-US", "en-GB"], "zh-TW", ["auto"]])
+async def test_an_invalid_selection_of_languages_is_invalid_params(router, value):
+    with pytest.raises(RpcError) as raised:
+        await router.call("settings.set", {"key": "languages", "value": value})
+    assert raised.value.code == INVALID_PARAMS
+    assert (await router.call("settings.get", {}))["settings"]["languages"] == ["zh-TW"]
+
+
+async def test_languages_list_gives_the_groups_and_their_variants(router):
+    result = await router.call("languages.list", {})
+    groups = result["groups"]
+    assert [group["id"] for group in groups][:3] == ["zh", "en", "ja"]
+    assert groups[0]["variants"][0] == {
+        "id": "zh-TW",
+        "name": "繁體中文（台灣）",
+        "note": "台灣用語，例如 軟體、視窗",
+    }
+    assert json.loads(json.dumps(result)) == result
+
+
+# --- the Chinese of the chosen variant ------------------------------------------------------------
+
+
+async def test_finalize_writes_mainland_simplified_for_zh_cn(router, fake_client, keys):
+    keys.set(KEY)
+    await router.call("settings.set", {"key": "languages", "value": ["zh-CN", "en-US"]})
+    # The model leaves a Traditional word in its reply: it is made Simplified.
+    fake_client.next_completion = completion({"text": "这个软件很好用，我們明天開會。"})
+    r = await finalize(router, "這個軟件很好用 我们明天开会")
+    assert r["raw_text"] == "这个软件很好用 我们明天开会"
+    assert r["cleaned"] is True and r["text"] == "这个软件很好用，我们明天开会。"
+    assert "Simplified characters with Mainland usage" in fake_client.calls[0]["system"]
+    assert (await router.call("history.latest", {}))["item"]["text"] == r["text"]
+
+
+async def test_a_fallback_for_zh_cn_pastes_simplified(router, fake_client, keys):
+    keys.set(KEY)
+    await router.call("settings.set", {"key": "languages", "value": ["zh-CN"]})
+    fake_client.next_error = OpenRouterError(0, "network", "offline")
+    r = await finalize(router, "這個軟件")
+    assert (r["text"], r["cleaned"]) == ("这个软件", False)
+
+
+async def test_finalize_writes_hong_kong_traditional_for_zh_hk(router, fake_client, keys):
+    keys.set(KEY)
+    await router.call("settings.set", {"key": "languages", "value": ["zh-HK"]})
+    fake_client.next_completion = completion({"text": "就是只要打开這個软件。"})
+    r = await finalize(router, "就是只要打开这个软件")
+    assert r["raw_text"] == "就是隻要打開這個軟件"  # s2hk alone, as for Taiwan
+    assert r["text"] == "就是只要打開這個軟件。"  # 只要 stays: only the Simplified words change
+    assert "Hong Kong usage" in fake_client.calls[0]["system"]
+
+
+async def test_without_chinese_nothing_is_converted(router, fake_client, keys):
+    keys.set(KEY)
+    await router.call("settings.set", {"key": "languages", "value": ["en-GB"]})
+    fake_client.next_completion = completion({"text": "这个 colour."})
+    r = await finalize(router, "这个 colour")
+    assert (r["raw_text"], r["text"]) == ("这个 colour", "这个 colour.")
 
 
 # --- secrets ------------------------------------------------------------------------------------

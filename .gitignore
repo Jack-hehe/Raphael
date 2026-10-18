@@ -34,3 +34,6 @@ __pycache__/
 node_modules/
 target/
 dist/
+
+# Agent worktrees inside the repo (Codex can only write under the repo)
+/.worktrees/
