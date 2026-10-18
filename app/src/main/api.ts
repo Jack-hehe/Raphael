@@ -3,6 +3,7 @@
 // makes it fit to show).
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { LanguageGroup } from "./languages";
 import type {
   AudioDevices,
   BrainSettings,
@@ -32,7 +33,8 @@ export const statusCheckOpenrouter = (): Promise<Status["openrouter"]> => core("
 // ---------- usage and prices ----------
 
 /** The numbers of the home page: words, time, speed, the last 14 days. */
-export const statsSummary = (): Promise<StatsSummary> => core("stats.summary");
+export const statsSummary = (days?: number): Promise<StatsSummary> =>
+  core("stats.summary", days === undefined ? {} : { days });
 /** The prices of the cleanup and speech-to-text models, read from OpenRouter when it can be. */
 export const pricingGet = (): Promise<Pricing> => core("pricing.get");
 
@@ -63,8 +65,10 @@ export const dictionaryDismiss = (word: string): Promise<Record<string, never>> 
 // ---------- the brain's settings and the key ----------
 
 export const settingsGet = (): Promise<{ settings: BrainSettings }> => core("settings.get");
-export const settingsSet = (key: keyof BrainSettings, value: string | number | boolean): Promise<{ settings: BrainSettings }> =>
+export const settingsSet = (key: keyof BrainSettings, value: string | number | boolean | string[]): Promise<{ settings: BrainSettings }> =>
   core("settings.set", { key, value });
+/** The languages the speech recognition can listen for, in groups (中文: 台灣、香港、…). */
+export const languagesList = (): Promise<{ groups: LanguageGroup[] }> => core("languages.list");
 export const secretsStatus = (): Promise<{ has_key: boolean }> => core("secrets.status");
 /** Checks the key with OpenRouter and, if it works, stores it. */
 export const secretsSetOpenrouterKey = (key: string): Promise<KeyCheck> => core("secrets.set_openrouter_key", { key });

@@ -66,9 +66,10 @@ const ALLOWED_PREFIXES: [&str; 5] = [
     "secrets.",
     "status.",
 ];
-const ALLOWED_METHODS: [&str; 6] = [
+const ALLOWED_METHODS: [&str; 7] = [
     "audio.devices",
     "audio.monitor",
+    "languages.list",
     "models.status",
     "models.ensure",
     "pricing.get",
@@ -76,7 +77,8 @@ const ALLOWED_METHODS: [&str; 6] = [
 ];
 
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
-/// settings, the key, the status, the usage numbers, the model prices, and the few device methods
+/// settings (the `languages` setting too), the key, the status, the usage numbers, the model prices,
+/// the list of languages, and the few device methods
 /// the settings page needs. Everything else is refused, the dictation methods above all.
 pub fn is_allowed_method(m: &str) -> bool {
     ALLOWED_METHODS.contains(&m)
@@ -688,6 +690,7 @@ mod tests {
             "models.ensure",
             "pricing.get",
             "stats.summary",
+            "languages.list",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
@@ -714,6 +717,13 @@ mod tests {
 
     fn set(key: &str, value: Value) -> Result<(), String> {
         validate_core_call("settings.set", &json!({"key": key, "value": value}))
+    }
+
+    #[test]
+    fn the_languages_go_to_the_core_which_checks_them() {
+        assert!(set("languages", json!(["zh-TW"])).is_ok());
+        assert!(set("languages", json!(["zh-HK", "en-US", "ja-JP"])).is_ok());
+        assert!(!is_allowed_method("languages.set"));
     }
 
     #[test]

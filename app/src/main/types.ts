@@ -76,8 +76,12 @@ export interface StatsSummary {
   all: Period;
   /** Days in a row, up to today, with at least one dictation. */
   streak_days: number;
-  /** The last 14 days, oldest first. */
+  /** The last 14 days (or as many as asked for), oldest first, today last. */
   by_day: { date: string; dictations: number; words: number }[];
+  /** Days with at least one dictation, in all the history (absent from older cores). */
+  active_days?: number;
+  /** The most days in a row with a dictation, ever (absent from older cores). */
+  longest_streak_days?: number;
   /** Words per minute of speech; null before there is enough to tell. */
   speed_wpm: number | null;
   /** How much longer typing the same words would have taken. */
@@ -110,15 +114,18 @@ export interface DictionaryEntry {
   id: number;
   word: string;
   misheard: string[];
-  /** "learned": added by itself from a correction the user made after a dictation was pasted. */
-  source: "manual" | "suggested" | "learned";
+  /** The core uses "learned" for corrections; "auto" is also accepted. Absent: typed. */
+  source?: "manual" | "suggested" | "learned" | "auto";
 }
 
 /** `settings.get`: the settings of the brain. */
 export interface BrainSettings {
   monthly_limit_usd: number;
   cleanup_model: string;
-  language: string;
+  /** The languages the speech recognition listens for: locale ids such as "zh-TW", one to five. */
+  languages: string[];
+  /** Legacy language setting, derived from `languages` by the core. */
+  language?: string;
   history_retention_days: number;
   /** "cloud" (OpenRouter, the local engine as fallback) or "local". */
   stt_engine: string;
@@ -193,4 +200,6 @@ export interface AppContext {
   onEvent(handler: (event: MainEvent) => void): () => void;
   /** Things that happen only after 10 seconds, with 「復原」. */
   undo: Undoable;
+  /** Closes the settings panel (it opens with `go("settings")`). */
+  closeSettings(): void;
 }

@@ -563,6 +563,8 @@ class Brain:
         return await self._pricing.get()
 
     async def _stats_summary(self, params: dict) -> dict:
+        if "days" in params:
+            return self._stats.summary(days=params["days"])
         return self._stats.summary()
 
     # --- history retention ----------------------------------------------------------------------

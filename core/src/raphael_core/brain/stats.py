@@ -26,8 +26,10 @@ from .spend import _day_start_ms, _month_range
 # 40 characters a minute with an input method editor, and a character is one word here, so the
 # same number serves for them.
 TYPING_WPM = 40
-# `by_day` lists this many days, today last.
+# `by_day` lists this many days, today last, unless asked for another number of them (at least
+# one, at most MAX_BY_DAY_DAYS: a year of weeks for the home page's activity grid, and a day).
 BY_DAY_DAYS = 14
+MAX_BY_DAY_DAYS = 371
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _ONE_DAY = timedelta(days=1)
@@ -113,7 +115,7 @@ class StatsStore:
         self._now_ms = now_ms
         self._tz = tz
 
-    def summary(self) -> dict:
+    def summary(self, days: int = BY_DAY_DAYS) -> dict:
         """The statistics of the dictation history.
 
         Only the dictations the history still keeps are counted: the history retention setting
@@ -122,11 +124,17 @@ class StatsStore:
 
         - today, week, month, all: dictations, words, audio_seconds and cost_usd of each period
         - streak_days: the days in a row, up to today or else up to yesterday, with a dictation
-        - by_day: the last BY_DAY_DAYS days, oldest first, with the dictations and words of each
+        - by_day: the last `days` days (BY_DAY_DAYS unless asked, kept between 1 and
+          MAX_BY_DAY_DAYS), oldest first, with the dictations and words of each
+        - active_days: how many days have at least one dictation
+        - longest_streak_days: the most days in a row with a dictation, ever
         - speed_wpm: all words over all speaking time in minutes, or None without any audio
         - time_saved_seconds: what typing all the words would have taken at TYPING_WPM, less the
           speaking and the processing time (speech-to-text and cleanup); 0 at the least
         """
+        if isinstance(days, bool) or not isinstance(days, int):
+            raise ValueError("days must be a whole number")
+        days = max(1, min(MAX_BY_DAY_DAYS, days))
         zone, today = _zone_and_today(self._now_ms(), self._tz)
         week_first = today - timedelta(days=today.weekday())
         month_first, month_next = _month_range(today)
@@ -141,7 +149,7 @@ class StatsStore:
             for name, (first, after) in ranges.items()
         }
         totals = {name: _Totals() for name in (*bounds, "all")}
-        chart_days = [today - (BY_DAY_DAYS - 1 - i) * _ONE_DAY for i in range(BY_DAY_DAYS)]
+        chart_days = [today - (days - 1 - i) * _ONE_DAY for i in range(days)]
         by_day = {day: [0, 0] for day in chart_days}  # day -> [dictations, words]
         days_with_dictations: set[date] = set()
         processing_ms = 0
@@ -184,6 +192,8 @@ class StatsStore:
             {"date": day.isoformat(), "dictations": by_day[day][0], "words": by_day[day][1]}
             for day in chart_days
         ]
+        summary["active_days"] = len(days_with_dictations)
+        summary["longest_streak_days"] = _longest_streak(days_with_dictations)
         summary["speed_wpm"] = speed_wpm
         summary["time_saved_seconds"] = max(0.0, time_saved)
         return summary
@@ -206,3 +216,16 @@ def _streak(days: set[date], today: date) -> int:
         count += 1
         day -= _ONE_DAY
     return count
+
+
+def _longest_streak(days: set[date]) -> int:
+    """The longest run of consecutive days in `days`."""
+    longest = 0
+    for day in days:
+        if day - _ONE_DAY in days:
+            continue  # not the first day of a run
+        length = 1
+        while day + length * _ONE_DAY in days:
+            length += 1
+        longest = max(longest, length)
+    return longest

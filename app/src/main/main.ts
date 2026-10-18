@@ -1,5 +1,6 @@
-// The main window: a sidebar with home, history and dictionary, settings at the bottom, and the
-// page that is chosen. The pages are in pages/; this file holds what they share (spec §12).
+// The main window: a sidebar with home, history and dictionary, this month's spend and the way to
+// the settings at the bottom, and the page that is chosen. The settings open as a panel over the
+// window. The pages are in pages/; this file holds what they share (spec §12).
 
 import { loadGlyphTexture } from "../overlay/emblem";
 import * as api from "./api";
@@ -11,6 +12,7 @@ import { DeviceState } from "./device";
 import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
 import type { AppContext, DeviceSettings, MainEvent, Page, PageId } from "./types";
+import { spendMini } from "./spend";
 import { Undoable } from "./undo";
 import { type IconName, ico, toaster } from "./ui";
 import "./styles.css";
@@ -34,7 +36,7 @@ const DEFAULT_DEVICE: DeviceSettings = {
 /** A page that comes on screen again within this time of the last time is not loaded again. */
 const RESHOW_MS = 1000;
 
-const NAV: { id: PageId; name: string; icon: IconName }[] = [
+const NAV: { id: Exclude<PageId, "settings">; name: string; icon: IconName }[] = [
   { id: "home", name: "首頁", icon: "home" },
   { id: "history", name: "歷史紀錄", icon: "clock" },
   { id: "dictionary", name: "字典", icon: "book" },
@@ -92,6 +94,7 @@ async function start(): Promise<void> {
       return () => void listeners.delete(handler);
     },
     undo: new Undoable(toaster),
+    closeSettings: () => closeSettings(),
   };
 
   const pages: Record<PageId, Page> = {
@@ -103,36 +106,85 @@ async function start(): Promise<void> {
 
   const nav = document.getElementById("nav")!;
   const main = document.getElementById("main")!;
-  const button = (id: PageId, name: string, icon: IconName, extra = ""): string =>
-    `<button type="button" class="nav${extra}" data-go="${id}" aria-current="false">${ico(icon)}<span>${name}</span></button>`;
+  const button = (id: PageId, name: string, icon: IconName): string =>
+    `<button type="button" class="nav" data-go="${id}" aria-current="false">${ico(icon)}<span>${name}</span></button>`;
   nav.innerHTML =
     BRAND +
     NAV.map((item) => button(item.id, item.name, item.icon)).join("") +
-    button("settings", "設定", "sliders", " nav-bottom");
+    `<div class="side-fill"></div>` +
+    `<button type="button" class="usage-box" data-go="settings" hidden></button>` +
+    `<div class="side-foot"><button type="button" class="nav nav-bottom" data-go="settings" aria-haspopup="dialog">${ico("gear")}<span>設定</span></button></div>`;
+  const usageBox = nav.querySelector<HTMLElement>(".usage-box")!;
   nav.addEventListener("click", (e) => {
     const target = (e.target as Element).closest<HTMLElement>("[data-go]");
     if (target) go(target.dataset.go as PageId);
   });
-  for (const page of Object.values(pages)) main.append(page.el);
+  const settings = pages.settings;
+  for (const page of Object.values(pages)) if (page !== settings) main.append(page.el);
+  document.body.append(settings.el);
 
-  let current: PageId | null = null;
+  let current: Exclude<PageId, "settings"> | null = null;
+  let settingsOpen = false;
+  /** What had the focus before the settings opened: it gets it back when they close. */
+  let opener: HTMLElement | null = null;
   let shownAt = 0;
 
   function go(id: PageId): void {
+    if (id === "settings") {
+      openSettings();
+      return;
+    }
+    if (settingsOpen) closeSettings(false);
     if (current && current !== id) pages[current].hide();
     current = id;
-    for (const page of Object.values(pages)) page.el.hidden = page.id !== id;
-    nav.querySelectorAll<HTMLElement>(".nav").forEach((item) => item.setAttribute("aria-current", item.dataset.go === id ? "page" : "false"));
+    for (const page of Object.values(pages)) if (page !== settings) page.el.hidden = page.id !== id;
+    nav.querySelectorAll<HTMLElement>(".nav[data-go]").forEach((item) =>
+      item.setAttribute("aria-current", item.dataset.go === id ? "page" : "false"),
+    );
     main.scrollTop = 0;
     shownAt = performance.now();
     void pages[id].show();
+    void refreshUsage();
   }
 
-  // Back from the tray: what a page shows may be old. (The settings page keeps what is being typed.)
+  function openSettings(): void {
+    if (settingsOpen) return;
+    settingsOpen = true;
+    opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    settings.el.hidden = false;
+    document.querySelector<HTMLElement>(".wbody")!.inert = true;
+    void settings.show();
+  }
+
+  function closeSettings(restoreFocus = true): void {
+    if (!settingsOpen) return;
+    settingsOpen = false;
+    settings.hide();
+    settings.el.hidden = true;
+    document.querySelector<HTMLElement>(".wbody")!.inert = false;
+    if (restoreFocus) opener?.focus();
+    opener = null;
+    void refreshUsage();
+  }
+
+  /** This month's spend in the sidebar; hidden when the core does not answer. */
+  async function refreshUsage(): Promise<void> {
+    try {
+      const { spend } = await api.statusGet();
+      usageBox.innerHTML = `<span class="usage-t">本月花費</span>${spendMini(spend.month_usd, spend.limit_usd)}`;
+      usageBox.setAttribute("aria-label", `本月花費 ${usageBox.querySelector(".usage-num")?.textContent ?? ""}，打開設定`);
+      usageBox.hidden = false;
+    } catch {
+      usageBox.hidden = true;
+    }
+  }
+
+  // Back from the tray: what a page shows may be old. (The settings keep what is being typed.)
   const comeBack = (): void => {
-    if (!current || current === "settings" || performance.now() - shownAt < RESHOW_MS) return;
+    if (!current || settingsOpen || performance.now() - shownAt < RESHOW_MS) return;
     shownAt = performance.now();
     void pages[current].show();
+    void refreshUsage();
   };
   window.addEventListener("focus", comeBack);
   document.addEventListener("visibilitychange", () => {

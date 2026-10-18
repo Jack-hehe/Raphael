@@ -367,6 +367,62 @@ def test_by_day_with_nothing_said_is_fourteen_zero_days(conn):
     assert all(d["dictations"] == 0 and d["words"] == 0 for d in by_day)
 
 
+def test_by_day_can_be_asked_for_more_days(conn):
+    say(conn, at(2026, 5, 1, 9), "你好")
+    by_day = store_at(conn, NOW).summary(days=182)["by_day"]
+    assert len(by_day) == 182
+    assert by_day[-1]["date"] == "2026-10-14"
+    assert by_day[0]["date"] == "2026-04-16"
+    assert {"date": "2026-05-01", "dictations": 1, "words": 2} in by_day
+
+
+@pytest.mark.parametrize(("asked", "length"), [(0, 1), (-5, 1), (1, 1), (371, 371), (1000, 371)])
+def test_the_days_of_by_day_are_kept_between_one_and_371(conn, asked, length):
+    assert len(store_at(conn, NOW).summary(days=asked)["by_day"]) == length
+
+
+@pytest.mark.parametrize("asked", ["182", 1.5, True, None, [14]])
+def test_days_that_are_not_a_whole_number_are_refused(conn, asked):
+    with pytest.raises(ValueError):
+        store_at(conn, NOW).summary(days=asked)
+
+
+def test_the_other_numbers_do_not_depend_on_the_days_asked_for(conn):
+    say_on(conn, 0, 1, 20)
+    short = store_at(conn, NOW).summary()
+    long = store_at(conn, NOW).summary(days=60)
+    for key in ("today", "week", "month", "all", "streak_days", "active_days", "longest_streak_days"):
+        assert short[key] == long[key]
+
+
+# --- active days and the longest streak -------------------------------------------------------
+
+
+def test_active_days_counts_each_day_with_a_dictation_once(conn):
+    say_on(conn, 0, 0, 1, 5, 40)
+    say(conn, NOW, "其他", kind="something-else")
+    assert store_at(conn, NOW).summary()["active_days"] == 4
+
+
+def test_the_longest_streak_is_the_longest_run_of_days_ever(conn):
+    say_on(conn, 0, 1, 10, 11, 12, 13, 30)
+    summary = store_at(conn, NOW).summary()
+    assert summary["longest_streak_days"] == 4
+    assert summary["streak_days"] == 2
+
+
+def test_with_nothing_said_there_are_no_active_days_and_no_streak(conn):
+    summary = store_at(conn, NOW).summary()
+    assert summary["active_days"] == 0
+    assert summary["longest_streak_days"] == 0
+
+
+async def test_stats_summary_takes_the_days_of_by_day(conn):
+    router = brain_with(conn, NOW, tz=TPE)
+    assert len((await router.call("stats.summary", {"days": 182}))["by_day"]) == 182
+    assert len((await router.call("stats.summary", {}))["by_day"]) == 14
+
+
 # --- speed and time saved -----------------------------------------------------------------------
 
 
@@ -429,6 +485,8 @@ async def test_stats_summary_is_a_method_of_the_brain(conn):
         "by_day",
         "speed_wpm",
         "time_saved_seconds",
+        "active_days",
+        "longest_streak_days",
     }
     assert summary["today"]["dictations"] == 1
     assert summary["today"]["words"] == 4
