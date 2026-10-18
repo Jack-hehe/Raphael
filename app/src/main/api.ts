@@ -76,7 +76,8 @@ export const secretsSetOpenrouterKey = (key: string): Promise<KeyCheck> => core(
 
 // ---------- the device side of the core ----------
 
-export const audioDevices = (): Promise<AudioDevices> => core("audio.devices");
+/** Passive reads keep the settings meter running while automatic detection settles. */
+export const audioDevices = (refresh = true): Promise<AudioDevices> => core("audio.devices", { refresh });
 /** Turns the loudness readings on or off (they arrive as `Level` events). */
 export const audioMonitor = (on: boolean): Promise<Record<string, never>> => core("audio.monitor", { on });
 export const modelsStatus = (): Promise<ModelsStatus> => core("models.status");

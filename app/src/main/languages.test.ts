@@ -2,27 +2,19 @@ import { describe, expect, test } from "vitest";
 import {
   DEFAULT_LANGUAGES,
   type LanguageGroup,
-  MAX_LANGUAGES,
-  groupOf,
+  chooseLanguageVariant,
   languageButtonHTML,
-  languageLabel,
-  languageName,
-  languagePanelHTML,
   normalizeLanguages,
-  toggleLanguage,
+  selectedLanguageGroups,
+  toggleTranscriptionLanguage,
+  transcriptionButtonHTML,
+  transcriptionPanelHTML,
+  variantPanelHTML,
 } from "./languages";
 
-/** What `languages.list` answers (a part of it). */
+/** A representative `languages.list` response, including names that must be escaped. */
 const GROUPS: LanguageGroup[] = [
-  {
-    id: "zh",
-    name: "中文",
-    variants: [
-      { id: "zh-TW", name: "繁體中文（台灣）" },
-      { id: "zh-HK", name: "繁體中文（香港）", note: "粵語" },
-      { id: "zh-CN", name: "簡體中文（中國）" },
-    ],
-  },
+  { id: "zh", name: "中文", variants: [{ id: "zh-TW", name: "繁體中文（台灣）" }, { id: "zh-HK", name: "繁體中文（香港）" }, { id: "zh-CN", name: "簡體中文（中國）" }, { id: "yue-HK", name: "粵語（香港）" }] },
   { id: "en", name: "English", variants: [{ id: "en-US", name: "English (US)" }, { id: "en-GB", name: "English (UK)" }] },
   { id: "ja", name: "日本語", variants: [{ id: "ja-JP", name: "日本語" }] },
   { id: "ko", name: "한국어", variants: [{ id: "ko-KR", name: "한국어" }] },
@@ -31,112 +23,118 @@ const GROUPS: LanguageGroup[] = [
   { id: "x", name: "<b>x</b>", variants: [{ id: "x-1", name: "<i>one</i>" }, { id: "x-2", name: "two" }] },
 ];
 
-describe("toggleLanguage", () => {
-  test("adds a language at the end", () => {
-    expect(toggleLanguage(GROUPS, ["zh-TW"], "ja-JP")).toEqual({ ok: true, languages: ["zh-TW", "ja-JP"] });
+describe("transcription languages mapped to core variant ids", () => {
+  test("reads existing non-default variants in the saved priority order", () => {
+    const selected = ["en-GB", "yue-HK", "ja-JP"];
+    expect(selectedLanguageGroups(GROUPS, selected).map((g) => g.id)).toEqual(["en", "zh", "ja"]);
+    expect(normalizeLanguages(selected)).toEqual(["en-GB", "yue-HK", "ja-JP"]);
   });
 
-  test("another variant of a group takes the place of the one chosen", () => {
-    expect(toggleLanguage(GROUPS, ["en-US", "zh-TW", "ja-JP"], "zh-HK")).toEqual({ ok: true, languages: ["en-US", "zh-HK", "ja-JP"] });
+  test("adding a language appends its first variant without changing existing variants", () => {
+    expect(toggleTranscriptionLanguage(GROUPS, ["zh-HK"], "en")).toEqual({ ok: true, languages: ["zh-HK", "en-US"] });
+    expect(toggleTranscriptionLanguage(GROUPS, ["zh-CN"], "ja")).toEqual({ ok: true, languages: ["zh-CN", "ja-JP"] });
   });
 
-  test("a chosen language is dropped", () => {
-    expect(toggleLanguage(GROUPS, ["zh-TW", "ja-JP"], "zh-TW")).toEqual({ ok: true, languages: ["ja-JP"] });
+  test("removing a language removes its chosen variant and preserves the others", () => {
+    expect(toggleTranscriptionLanguage(GROUPS, ["en-GB", "zh-HK", "ja-JP"], "zh")).toEqual({ ok: true, languages: ["en-GB", "ja-JP"] });
   });
 
-  test("the last language stays", () => {
-    const result = toggleLanguage(GROUPS, ["zh-TW"], "zh-TW");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain("至少");
+  test("keeps at least one transcription language", () => {
+    expect(toggleTranscriptionLanguage(GROUPS, ["yue-HK"], "zh")).toMatchObject({ ok: false });
   });
 
-  test("no sixth language, but a variant can still be swapped at five", () => {
-    const five = ["zh-TW", "en-US", "ja-JP", "ko-KR", "fr-FR"];
-    expect(five).toHaveLength(MAX_LANGUAGES);
-    const sixth = toggleLanguage(GROUPS, five, "de-DE");
-    expect(sixth.ok).toBe(false);
-    if (!sixth.ok) expect(sixth.reason).toContain("5");
-    expect(toggleLanguage(GROUPS, five, "en-GB")).toEqual({ ok: true, languages: ["zh-TW", "en-GB", "ja-JP", "ko-KR", "fr-FR"] });
+  test("rejects a sixth language but permits removing one at the limit", () => {
+    const five = ["zh-HK", "en-GB", "ja-JP", "ko-KR", "fr-FR"];
+    expect(toggleTranscriptionLanguage(GROUPS, five, "de")).toMatchObject({ ok: false });
+    expect(toggleTranscriptionLanguage(GROUPS, five, "en")).toEqual({ ok: true, languages: ["zh-HK", "ja-JP", "ko-KR", "fr-FR"] });
+    expect(five).toEqual(["zh-HK", "en-GB", "ja-JP", "ko-KR", "fr-FR"]);
   });
 
-  test("an id the list does not know is added like a single language", () => {
-    expect(toggleLanguage(GROUPS, ["zh-TW"], "it-IT")).toEqual({ ok: true, languages: ["zh-TW", "it-IT"] });
-    expect(toggleLanguage([], ["zh-TW"], "en-US")).toEqual({ ok: true, languages: ["zh-TW", "en-US"] });
+  test("rejects groups absent from the core list rather than inventing variant ids", () => {
+    expect(toggleTranscriptionLanguage(GROUPS, ["zh-TW"], "unknown")).toMatchObject({ ok: false });
+    expect(toggleTranscriptionLanguage([], ["zh-TW"], "en")).toMatchObject({ ok: false });
   });
 });
 
-describe("names", () => {
-  test("a variant is called by its name; an unknown id by itself", () => {
-    expect(languageName(GROUPS, "zh-HK")).toBe("繁體中文（香港）");
-    expect(languageName(GROUPS, "it-IT")).toBe("it-IT");
-    expect(groupOf(GROUPS, "en-GB")?.id).toBe("en");
-    expect(groupOf(GROUPS, "it-IT")).toBeUndefined();
+describe("language variants", () => {
+  test("replaces one selected language's variant in place", () => {
+    expect(chooseLanguageVariant(GROUPS, ["en-GB", "zh-TW", "ja-JP"], "zh-CN")).toEqual({ ok: true, languages: ["en-GB", "zh-CN", "ja-JP"] });
   });
 
-  test("the setting is a list of ids, never empty", () => {
-    expect(normalizeLanguages(["zh-TW", "ja-JP"])).toEqual(["zh-TW", "ja-JP"]);
+  test("selecting the current variant keeps the language selected", () => {
+    expect(chooseLanguageVariant(GROUPS, ["zh-HK"], "zh-HK")).toEqual({ ok: true, languages: ["zh-HK"] });
+  });
+
+  test("swaps a variant when five languages are selected", () => {
+    expect(chooseLanguageVariant(GROUPS, ["zh-TW", "en-US", "ja-JP", "ko-KR", "fr-FR"], "en-GB")).toEqual({ ok: true, languages: ["zh-TW", "en-GB", "ja-JP", "ko-KR", "fr-FR"] });
+  });
+
+  test("does not add languages from the variant picker", () => {
+    expect(chooseLanguageVariant(GROUPS, ["zh-TW"], "en-GB")).toMatchObject({ ok: false });
+    expect(chooseLanguageVariant(GROUPS, ["zh-TW"], "unknown")).toMatchObject({ ok: false });
+  });
+});
+
+describe("language controls", () => {
+  test("shows language groups as chips and variants on a separate button", () => {
+    const chips = transcriptionButtonHTML(GROUPS, ["zh-HK", "en-GB"], ' data-k="languages"');
+    expect(chips).toContain('class="lchip">中文</span>');
+    expect(chips).toContain('class="lchip">English</span>');
+    expect(chips).not.toContain("香港");
+    expect(chips).not.toContain("English (UK)");
+    expect(chips).toContain('data-k="languages"');
+    const variants = languageButtonHTML(GROUPS, ["zh-HK", "x-1"], ' data-k="variants"');
+    expect(variants).toContain("選擇語言變體");
+    expect(variants).not.toContain('class="lchip"');
+    expect(variants).toContain("&lt;i&gt;one&lt;/i&gt;");
+    expect(variants).not.toContain("<i>one</i>");
+  });
+
+  test("transcription choices show all groups without individual variants", () => {
+    const html = transcriptionPanelHTML(GROUPS, ["zh-HK", "ja-JP"]);
+    expect(html).toContain('data-language="zh" aria-pressed="true"');
+    expect(html).toContain('data-language="ja" aria-pressed="true"');
+    expect(html).toContain('data-language="en" aria-pressed="false"');
+    expect(html).not.toContain('data-variant=');
+    expect(html).not.toContain("English (UK)");
+  });
+
+  test("marks unavailable additions at five while allowing chosen groups", () => {
+    const html = transcriptionPanelHTML(GROUPS, ["zh-TW", "en-US", "ja-JP", "ko-KR", "fr-FR"]);
+    expect(html).toContain('data-language="de" aria-pressed="false" aria-disabled="true"');
+    expect(html).toContain('data-language="en" aria-pressed="true">');
+  });
+
+  test("variants only include selected languages with multiple variants", () => {
+    const html = variantPanelHTML(GROUPS, ["en-GB", "zh-HK", "ja-JP"]);
+    expect(html.indexOf('data-variant-group="en"')).toBeLessThan(html.indexOf('data-variant-group="zh"'));
+    expect(html).toContain('data-variant="zh-HK" aria-checked="true"');
+    expect(html).toContain('data-variant="zh-TW" aria-checked="false"');
+    expect(html).toContain("台灣用語，例如 軟體、視窗");
+    expect(html).not.toContain('data-variant="ja-JP"');
+    expect(html).not.toContain('data-variant="x-1"');
+  });
+
+  test("explains when the selected languages have no variants", () => {
+    expect(variantPanelHTML(GROUPS, ["ja-JP"])).toContain("目前選擇的轉錄語言沒有其他變體");
+  });
+
+  test("escapes names from the core in both pickers", () => {
+    expect(transcriptionPanelHTML(GROUPS, ["zh-TW"])).toContain("&lt;b&gt;x&lt;/b&gt;");
+    expect(variantPanelHTML(GROUPS, ["x-1"])).toContain("&lt;i&gt;one&lt;/i&gt;");
+    expect(variantPanelHTML(GROUPS, ["x-1"])).not.toContain("<b>x</b>");
+  });
+
+  test("reports an unavailable core language list in both pickers", () => {
+    expect(transcriptionPanelHTML(null, ["zh-TW"])).toContain("無法取得語言清單");
+    expect(variantPanelHTML(null, ["zh-TW"])).toContain("無法取得語言清單");
+  });
+
+  test("keeps variant ids accessible before the language list loads", () => {
+    expect(transcriptionButtonHTML([], ["zh-HK", "en-GB"])).toContain("zh-HK");
+  });
+
+  test("the setting remains a non-empty list of variant ids", () => {
     for (const bad of [undefined, null, "zh-TW", [], [1, ""], {}]) expect(normalizeLanguages(bad)).toEqual(DEFAULT_LANGUAGES);
-    expect(DEFAULT_LANGUAGES).toEqual(["zh-TW"]);
-  });
-
-  test("the variant button is separate from UI language, with an escaped accessible summary", () => {
-    const html = languageButtonHTML(GROUPS, ["zh-TW", "x-1"], ' data-k="languages"');
-    expect(html).toContain('data-k="languages"');
-    expect(html).toContain("選擇語言變體");
-    expect(html).not.toContain('class="lchip"');
-    expect(html).toContain("&lt;i&gt;one&lt;/i&gt;");
-    expect(html).not.toContain("<i>one</i>");
-    expect(languageLabel(GROUPS, ["zh-TW", "ja-JP"])).toBe("語言：繁體中文（台灣）、日本語");
-  });
-});
-
-describe("the panel", () => {
-  test("groups with variants fold; the open one lists them with the chosen one pressed", () => {
-    const closed = languagePanelHTML(GROUPS, ["zh-HK", "ja-JP"], null);
-    expect(closed).toContain('data-group="zh" aria-expanded="false"');
-    expect(closed).not.toContain('data-lang="zh-TW"');
-    expect(closed).toContain("已選 2／5");
-    expect(closed).toContain("會自動偵測你說的語言");
-    const open = languagePanelHTML(GROUPS, ["zh-HK", "ja-JP"], "zh");
-    expect(open).toContain('data-group="zh" aria-expanded="true"');
-    expect(open).toContain('data-lang="zh-HK" aria-pressed="true"');
-    expect(open).toContain('data-lang="zh-TW" aria-pressed="false"');
-    expect(open).toContain("香港用語，例如 軟件、數據");
-    expect(open).toContain('data-lang="ja-JP" aria-pressed="true"');
-  });
-
-  test("known variant guidance remains available when the core omits its note", () => {
-    const open = languagePanelHTML(GROUPS, ["zh-TW"], "zh");
-    expect(open).toContain("台灣用語，例如 軟體、視窗");
-    expect(open).toContain('aria-controls="language-variants-zh"');
-    expect(open).toContain('id="language-variants-zh"');
-  });
-
-  test("at five, what cannot be added is marked, and a group with a choice is not", () => {
-    const html = languagePanelHTML(GROUPS, ["zh-TW", "en-US", "ja-JP", "ko-KR", "fr-FR"], "zh");
-    expect(html).toContain('data-lang="de-DE" aria-pressed="false" aria-disabled="true"');
-    expect(html).toContain('data-lang="zh-HK" aria-pressed="false">');
-  });
-
-  test("names from the core are escaped", () => {
-    const html = languagePanelHTML(GROUPS, ["zh-TW"], "x");
-    expect(html).toContain("&lt;b&gt;x&lt;/b&gt;");
-    expect(html).not.toContain("<b>x</b>");
-    expect(html).not.toContain("<i>one</i>");
-  });
-
-  test("languages with variants come first; the single ones follow under 其他語言", () => {
-    const html = languagePanelHTML(GROUPS, ["zh-TW"], null);
-    const zh = html.indexOf('data-group="zh"');
-    const others = html.indexOf("其他語言");
-    const ja = html.indexOf('data-lang="ja-JP"');
-    expect(zh).toBeGreaterThan(-1);
-    expect(others).toBeGreaterThan(zh);
-    expect(ja).toBeGreaterThan(others);
-    expect(html).not.toContain('data-group="ja"');
-  });
-
-  test("without a list it says so", () => {
-    expect(languagePanelHTML(null, ["zh-TW"], null)).toContain("無法取得語言清單");
   });
 });

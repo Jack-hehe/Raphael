@@ -77,31 +77,35 @@ if (args[0] === "icon") {
 }
 
 describe("private frontend assets", () => {
-  it("copies both assets from the original repository when invoked in a worktree", () => {
+  it("copies character art separately from the desktop icon in a worktree", () => {
     const { app, privateDir } = fixture({ worktree: true });
     writeFileSync(join(privateDir, "glyph-ring.png"), "glyph");
     writeFileSync(join(privateDir, "app-icon.png"), "portrait");
+    writeFileSync(join(privateDir, "avatar.png"), "watercolour character");
 
     runScript(app, "copy-private.mjs");
 
     expect(existsSync(join(app, "public/private/glyph-ring.png"))).toBe(true);
     expect(existsSync(join(app, "public/private/app-icon.png"))).toBe(true);
     expect(readFileSync(join(app, "public/private/app-icon.png"), "utf8")).toBe("portrait");
+    expect(readFileSync(join(app, "public/private/avatar.png"), "utf8")).toBe("watercolour character");
   });
 
   it("uses an explicit private directory and removes copies when their sources disappear", () => {
     const { app, root } = fixture();
     const privateDir = join(root, "personal assets");
     mkdirSync(privateDir);
-    for (const name of ["glyph-ring.png", "app-icon.png"]) writeFileSync(join(privateDir, name), name);
+    for (const name of ["glyph-ring.png", "app-icon.png", "avatar.png"]) writeFileSync(join(privateDir, name), name);
     runScript(app, "copy-private.mjs", [], privateDir);
     expect(existsSync(join(app, "public/private/app-icon.png"))).toBe(true);
+    expect(existsSync(join(app, "public/private/avatar.png"))).toBe(true);
 
-    for (const name of ["glyph-ring.png", "app-icon.png"]) rmSync(join(privateDir, name));
+    for (const name of ["glyph-ring.png", "app-icon.png", "avatar.png"]) rmSync(join(privateDir, name));
     runScript(app, "copy-private.mjs", [], privateDir);
 
     expect(existsSync(join(app, "public/private/glyph-ring.png"))).toBe(false);
     expect(existsSync(join(app, "public/private/app-icon.png"))).toBe(false);
+    expect(existsSync(join(app, "public/private/avatar.png"))).toBe(false);
   });
 
   it("keeps optional asset copy failures from failing the frontend build", () => {

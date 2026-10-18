@@ -72,8 +72,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 /* ---------- window: sidebar and content ---------- */
 .wbody { display: grid; grid-template-columns: 208px minmax(0, 1fr); height: 100%; min-height: 0; }
 
-.side { display: flex; flex-direction: column; gap: 3px; padding: 12px 10px; min-height: 0; overflow: auto; }
-.brand { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 10px; margin-bottom: 14px; font: 650 17px/1 var(--display); letter-spacing: -0.01em; color: var(--text); user-select: none; }
+.side { display: flex; flex-direction: column; gap: 3px; padding: 28px 10px 12px; min-height: 0; overflow: auto; }
 .app-icon { display: block; width: 32px; height: 32px; flex: none; object-fit: cover; object-position: center 30%; border-radius: 10px; background: var(--accent-soft); }
 .nav { position: relative; display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 8px 12px; border: 0; border-radius: 9px; background: transparent; text-align: left; font-size: 14px; line-height: 1.4; color: var(--text-2); width: 100%; }
 .nav:hover { background: var(--hover); color: var(--text); }
@@ -174,24 +173,29 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .spend .bar { width: 120px; }
 [data-row="raphael-spend"] .st { white-space: normal; align-items: baseline; }
 
-/* ---------- home: the stage, insights and activity; shortcuts on the right ---------- */
+/* ---------- home: the stage, insights and activity; shortcuts follow below ---------- */
 .page.page-home { max-width: 1160px; }
-.home { display: grid; grid-template-columns: minmax(0, 1fr) 184px; gap: 24px; align-items: start; }
-.home-main { min-width: 0; }
-.home-side { position: sticky; top: 28px; display: grid; gap: 12px; }
-@container main (max-width: 740px) {
-  .home { grid-template-columns: minmax(0, 1fr); }
-  .home-side { position: static; }
-  /* the shortcuts side by side under the rest */
-  .keys-card { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 20px; padding-bottom: 8px; }
-  .keys-card .card-head { grid-column: 1 / -1; }
-  .keys-card .kc-row { border-top: 0; padding-top: 2px; }
+.home { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
+.home-main { min-width: 0; min-height: calc(100dvh - 32px); }
+.home-side { min-width: 0; }
+.keys-card { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 24px; padding-bottom: 8px; }
+.keys-card .card-head { grid-column: 1 / -1; }
+.keys-card .kc-row { border-top: 0; padding-top: 2px; }
+@container main (min-width: 1100px) {
+  .home { grid-template-columns: minmax(0, 1fr) 208px; }
+  .home-main { min-height: 0; }
+  .home-side { position: sticky; top: 28px; }
+  .keys-card { display: block; }
+  .keys-card .kc-row { border-top: 1px solid var(--line); padding-top: 12px; }
+  .keys-card .card-head + .kc-row { border-top: 0; }
 }
 @container main (max-width: 600px) {
   .keys-card { grid-template-columns: minmax(0, 1fr); }
 }
 .stage { position: relative; display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 20px; align-items: center; min-height: 112px; color: var(--text); border-bottom: 1px solid var(--line); padding: 0 0 20px; }
 .stage canvas.emb { position: relative; width: 96px !important; height: 96px !important; }
+.home-stage { grid-template-columns: 110px minmax(0, 1fr); min-height: 156px; }
+.home-stage .character-portrait { width: 110px; height: 136px; }
 .stage .subs { position: relative; min-width: 0; padding: 12px 0; text-align: left; }
 .sub-zh, .sub-ja { text-wrap: pretty; text-shadow: none; }
 .sub-zh { color: var(--text); font-family: var(--zh-sub); font-weight: 650; font-size: 17px; line-height: 1.65; }
@@ -218,6 +222,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .icard .k, .anum .k { margin-top: 6px; font-size: 12px; color: var(--text-3); }
 
 .activity { margin-top: 12px; padding: 18px 18px 14px; }
+.activity > h2 { margin: 0 0 14px 2px; font: 600 13px/1.4 var(--ui); color: var(--text-2); }
 .anums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 0 2px; }
 .heat-wrap { display: flex; align-items: center; gap: 2px; margin-top: 18px; }
 .heat-wrap .icon-btn { flex: none; align-self: flex-start; margin-top: 46px; width: 24px; height: 28px; }
@@ -247,7 +252,6 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .kc-keys { display: flex; flex-wrap: wrap; gap: 6px; }
 .kc-note { margin-top: 6px; font-size: 12px; line-height: 1.45; color: var(--text-3); text-wrap: pretty; }
 .page-home .ver { margin: 18px 0 0; text-align: right; font-size: 11px; color: var(--text-3); }
-.compact-summary { display: none; }
 .page-loading { display: grid; gap: 12px; padding: 24px 0; width: 100%; }
 .loading-line { display: block; height: 64px; border-radius: 12px; background: var(--surface-2); animation: ob-pulse 1.8s ease-in-out infinite; }
 .loading-line:last-child { width: 68%; }
@@ -441,13 +445,15 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .keyline { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 18px; }
 .keyline > div { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 13px; }
 
-/* Short windows show complete overview rows; activity and shortcuts expand on demand. */
+/* Short windows keep every card open and scroll through the same page. */
 @media (max-height: 700px), (max-width: 960px) and (max-height: 820px) {
   .page.page-home { padding-top: 18px; padding-bottom: 18px; }
   .page-home .home { gap: 12px; grid-template-columns: minmax(0, 1fr); }
   .page-home .home-side { position: static; }
+  .page-home .home-main { min-height: 0; }
   .stage { min-height: 80px; grid-template-columns: 64px minmax(0, 1fr); gap: 14px; padding-bottom: 12px; }
   .stage canvas.emb { width: 64px !important; height: 64px !important; }
+  .home-stage .character-portrait { width: 64px; height: 80px; }
   .stage .subs { padding: 4px 0; }
   .sub-zh { font-size: 15px; line-height: 1.5; }
   .sub-ja { font-size: 11px; margin-top: 3px; }
@@ -458,16 +464,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   .icard { padding: 10px 14px; }
   .icard .v, .anum .v { font-size: 22px; }
   .icard .k { margin-top: 4px; }
-  .activity { padding: 0; margin-top: 12px; }
-  .compact-summary { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 14px; list-style: none; font-size: 13px; font-weight: 600; cursor: pointer; }
-  .compact-summary::-webkit-details-marker { display: none; }
-  .compact-summary span { flex: 1; }
-  .compact-summary > .i:last-child { width: 12px; height: 12px; transition: transform 0.15s; }
-  details[open] > .compact-summary > .i:last-child { transform: rotate(180deg); }
-  .compact-summary:hover { background: var(--hover); }
-  .activity-body { padding: 12px 16px 16px; }
-  .keys-disclosure .keys-card { padding: 0 14px 8px; }
-  .keys-disclosure .card-head { display: none; }
+  .activity { padding: 14px 16px; margin-top: 12px; }
+  .activity > h2 { margin-bottom: 12px; }
   .page-home .ver { display: none; }
   .modal-scrim { padding: 12px; }
   .modal-body { padding-top: 20px; padding-bottom: 24px; }
