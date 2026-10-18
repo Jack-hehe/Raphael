@@ -148,7 +148,7 @@ jobs:
         working-directory: app
         env:
           RAPHAEL_PRIVATE_DIR: ${{ runner.temp }}/raphael-ci-no-private-assets
-        run: npm run tauri -- build --debug --no-bundle --ci -- --locked
+        run: node scripts/tauri.mjs build --debug --no-bundle --ci -- --locked
 
       - name: Check Rust targets
         run: cargo check --locked --all-targets
