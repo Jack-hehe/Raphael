@@ -43,10 +43,10 @@ export function row(t: string, d = "", ctl = "", o: { cls?: string; attrs?: stri
 /** A line under a row of a list: a warning about it, or what is wrong with what was typed. */
 export const note = (html: string, attrs = ""): string => `<div class="note"${attrs}>${html}</div>`;
 
-/** A block of rows with a title and a line of small print below. */
-export function group(title: string, rows: string[], foot = ""): string {
+/** A block of rows with a title and a line of small print below. `cls` adds classes to the block. */
+export function group(title: string, rows: string[], foot = "", cls = ""): string {
   return (
-    `<section class="group">${title ? `<h3>${title}</h3>` : ""}` +
+    `<section class="group${cls ? " " + cls : ""}">${title ? `<h3>${title}</h3>` : ""}` +
     `<div class="list">${rows.join("")}</div>${foot ? `<p class="foot">${foot}</p>` : ""}</section>`
   );
 }
@@ -58,6 +58,8 @@ export const tg = (on: boolean, label: string, attrs = ""): string =>
 export interface Choice {
   value: string;
   label: string;
+  /** A second, quieter text after the label in a menu: a price, say. */
+  detail?: string;
 }
 
 /** A row of exclusive buttons. Each button carries its value in `data-v`. */
@@ -184,20 +186,34 @@ function listenForMenuEvents(): void {
 /** Whether a menu is open for `anchor`. */
 export const menuIsOpenFor = (anchor: HTMLElement): boolean => menu?.anchor === anchor;
 
-/** Opens a menu of `options` under `anchor`, with `current` checked. `onPick` gets the value chosen. */
-export function openMenu(anchor: HTMLElement, options: Choice[], current: string, onPick: (value: string) => void): void {
+/**
+ * Opens a menu of `options` under `anchor`, with `current` checked. `onPick` gets the value chosen.
+ * `head` is a line of small print above the choices (what their details mean).
+ */
+export function openMenu(
+  anchor: HTMLElement,
+  options: Choice[],
+  current: string,
+  onPick: (value: string) => void,
+  head?: string,
+): void {
   listenForMenuEvents();
   closeMenu();
   const el = document.createElement("div");
-  el.className = "menu";
+  const detailed = options.some((o) => o.detail);
+  el.className = detailed ? "menu detailed" : "menu";
   el.setAttribute("role", "menu");
-  el.innerHTML = options
-    .map(
-      (o) =>
-        `<button type="button" role="menuitemradio" data-value="${esc(o.value)}" aria-checked="${o.value === current}">` +
-        `<span class="ck">${o.value === current ? "✓" : ""}</span>${esc(o.label)}</button>`,
-    )
-    .join("");
+  el.innerHTML =
+    (head ? `<div class="menu-head" aria-hidden="true">${esc(head)}</div>` : "") +
+    options
+      .map(
+        (o) =>
+          `<button type="button" role="menuitemradio" data-value="${esc(o.value)}" aria-checked="${o.value === current}">` +
+          `<span class="ck">${o.value === current ? "✓" : ""}</span><span class="mt">${esc(o.label)}</span>` +
+          (o.detail ? `<span class="md num">${esc(o.detail)}</span>` : "") +
+          `</button>`,
+      )
+      .join("");
   document.body.append(el);
   const r = anchor.getBoundingClientRect();
   const h = el.offsetHeight;
