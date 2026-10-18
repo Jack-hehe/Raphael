@@ -497,7 +497,12 @@ def test_cases_survive_the_apps_text_processing():
     assert "Alt" in by_id["mishear-alt-key"].must_contain
     assert "隻要" in by_id["opencc-zhi"].must_not_contain
     assert by_id["chat-tone-line"].target_app == "LINE.exe"
-    assert all(case.target_app is None for case in cases if case.id != "chat-tone-line")
+    # The lists: the user's own long dictation into a terminal, and one that is not a list.
+    assert by_id["numbered-list-long-terminal"].target_app == "WindowsTerminal.exe"
+    assert by_id["numbered-list-varied-ordinals"].target_app == "OUTLOOK.EXE"
+    assert "1." in by_id["first-time-not-a-list"].must_not_contain
+    with_app = {"chat-tone-line", "numbered-list-long-terminal", "numbered-list-varied-ordinals"}
+    assert all(case.target_app is None for case in cases if case.id not in with_app)
 
 
 class FakeClient:

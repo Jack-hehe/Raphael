@@ -410,6 +410,13 @@ async def test_a_completion_reports_the_model_that_answered_with_its_tokens_and_
     assert c.cost_usd == 0.00031
 
 
+async def test_the_line_breaks_a_model_writes_as_json_escapes_are_real_line_breaks(client_with):
+    # A list reaches the app as "\n" inside the JSON string the model writes.
+    content = r'{"text": "有兩件事：\n\n1. 甲。\n2. 乙。"}'
+    c = await complete(client_with(lambda r: chat_reply(content)))
+    assert c.data == {"text": "有兩件事：\n\n1. 甲。\n2. 乙。"}
+
+
 def test_completion_fields_are_in_the_documented_order():
     c = Completion({"text": "x"}, "m", 0.5, 11, 22, 33)
     assert c.data == {"text": "x"}

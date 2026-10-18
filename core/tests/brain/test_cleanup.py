@@ -6,6 +6,7 @@ stores are real ones on an in-memory database.
 
 import asyncio
 import inspect
+import json
 import logging
 import sqlite3
 from datetime import UTC, datetime
@@ -653,6 +654,20 @@ def test_the_prompt_is_package_data_with_one_placeholder_at_its_end():
     assert text.startswith("You are a careful editor of dictated text.")
     assert text.count("{dictionary}") == 1 and text.rstrip().endswith("\n{dictionary}")
     assert text.count("{target_app}") == 1
+
+
+def test_the_examples_of_the_prompt_reply_in_valid_json_with_real_line_breaks():
+    # The model copies the form of the examples: each reply must be the JSON the app parses, and
+    # its list must come out as lines once the "\n" escapes are decoded.
+    text = build_system_prompt([], [])
+    assert r"write each as \n inside the string" in text
+    replies = [line.split("→ ", 1)[1] for line in text.splitlines() if line.startswith("  → ")]
+    assert len(replies) >= 2
+    texts = [json.loads(reply)["text"] for reply in replies]
+    lists = [t for t in texts if t.startswith("1. ") or "\n1. " in t]
+    assert len(lists) >= 2 and all("\n2. " in t for t in lists)
+    assert "：\n\n1. " in lists[0], "a lead-in ends with ： and a blank line comes before the list"
+    assert any("1. " not in t for t in texts), "an example that is not a list"
 
 
 def test_an_empty_dictionary_is_written_as_empty():
