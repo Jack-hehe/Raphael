@@ -8,6 +8,7 @@ import {
   noticeDurationMs as exportedFromOverlay,
 } from "./overlay";
 import type { Mode, Phase } from "./emblem";
+import type { ProgressReport } from "./progress";
 
 // ---- the brief's test ----
 
@@ -32,6 +33,8 @@ test("overlay.ts exports the same function and can be imported without a browser
 class FakeEmblem implements EmblemControl {
   level = 0;
   readonly log: string[] = [];
+  /** The progress calls, kept apart from `log`: most tests are not about them. */
+  readonly progressLog: string[] = [];
   get last(): string | undefined {
     return this.log[this.log.length - 1];
   }
@@ -71,6 +74,12 @@ class FakeEmblem implements EmblemControl {
   }
   size(px: number): void {
     this.log.push(`size:${px}`);
+  }
+  progress(r: ProgressReport): void {
+    this.progressLog.push(`progress:${r.stage}:${r.done}/${r.total}:${r.audioSeconds}`);
+  }
+  clearProgress(): void {
+    this.progressLog.push("clear");
   }
 }
 
@@ -293,4 +302,31 @@ test("Japanese only falls back to the Chinese line when there is no Japanese", (
   send({ type: "notice", zh: ZH, ja: "" });
   vi.advanceTimersByTime(833);
   expect(view.log).toEqual([`lines:${ZH}|-`]);
+});
+
+// ---- the progress after the key is released ----
+
+test("progress goes to the emblem, without words", () => {
+  send({ type: "show", mode: "listening" });
+  send({ type: "mode", mode: "thinking" });
+  send({ type: "progress", stage: "transcribing", done: 1, total: 3, audio_seconds: 4.5 });
+  send({ type: "progress", stage: "cleaning", done: 3, total: 3, audio_seconds: 4.5 });
+  send({ type: "progress", stage: "done", done: 0, total: 0, audio_seconds: 0 });
+  send({ type: "hide" });
+  vi.advanceTimersByTime(60_000);
+  expect(emblem.progressLog).toEqual([
+    "clear", // the show starts without the last dictation's arc
+    "progress:transcribing:1/3:4.5",
+    "progress:cleaning:3/3:4.5",
+    "progress:done:0/0:0",
+  ]);
+  expect(view.log.filter((l) => l.startsWith("lines"))).toEqual([]);
+  expect(emblem.last).toBe("vanish");
+});
+
+test("a notice after the progress fades the arc out", () => {
+  emblem.phase = "thinking";
+  send({ type: "progress", stage: "done", done: 0, total: 0, audio_seconds: 0 });
+  send({ type: "notice", zh: ZH, ja: JA });
+  expect(emblem.progressLog).toEqual(["progress:done:0/0:0", "clear"]);
 });

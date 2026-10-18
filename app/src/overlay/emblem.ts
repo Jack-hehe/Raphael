@@ -8,6 +8,8 @@
 // This module must stay importable without a browser (the tests run in Node), so nothing here
 // touches `document`, `window` or `Image` until a function that needs it is called.
 
+import { ProgressArc, type ArcSample, type ProgressReport } from "./progress";
+
 const TAU = Math.PI * 2;
 const clamp = (x: number, a = 0, b = 1): number => Math.max(a, Math.min(b, x));
 
@@ -204,6 +206,104 @@ function tinted(tex: HTMLImageElement, mix: number): CanvasImageSource {
   return tintCanvas;
 }
 
+/** The glyph ring, texture or plain strokes, at the context's current transform and alpha. */
+function glyphLayer(ctx: CanvasRenderingContext2D, R: number, p: Params): void {
+  const tex = glyph;
+  if (tex && tex.naturalWidth) {
+    const half = TEX_HALF * R * (p.glyphR / 0.86);
+    ctx.drawImage(tinted(tex, p.glyphMix), -half, -half, half * 2, half * 2);
+  } else {
+    plainGlyphs(ctx, R, p);
+  }
+}
+
+/** Where the progress arc runs: on the glyph ring's thin outer edge (1.0 R). */
+export const ARC_R = 1.0;
+/** The charged glyphs fade in over this many radians behind the arc's head, in a few steps. */
+const ARC_FEATHER = 0.22;
+const FEATHER_STEPS = 3;
+
+/**
+ * The progress arc (not from the anime: Raphael's own way of showing how far a dictation has
+ * come). From twelve o'clock clockwise over `arc.fraction` of the circle, the glyphs light up as
+ * if charged and a thin line of light runs along the ring's outer edge, brightest at its head.
+ * It stays where it is while the glyphs turn underneath, and fades with them when the emblem
+ * vanishes.
+ */
+function drawArc(ctx: CanvasRenderingContext2D, R: number, p: Params, rot: number, arc: ArcSample): void {
+  const alpha = clamp(arc.alpha) * clamp(p.glyphA);
+  const f = clamp(arc.fraction);
+  if (alpha < 0.003) return;
+  const s = p.glyphR / 0.86;
+  const r = R * ARC_R * s;
+  const a0 = -Math.PI / 2;
+  const a1 = a0 + TAU * f;
+  const glow = 1 + 0.8 * clamp(arc.flash);
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+
+  // The track: the whole edge, barely there, so that the part still to fill can be read.
+  ctx.globalAlpha = alpha;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(255,214,130,0.16)";
+  ctx.lineWidth = Math.max(1, R * 0.012);
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, TAU);
+  ctx.stroke();
+
+  if (f > 0.002) {
+    // The charged glyphs: the ring drawn once more, added on top, inside the filled wedge. The
+    // last few degrees fade in steps, so the light seems to seep in rather than be cut off.
+    const closed = f >= 0.999;
+    const feather = closed ? 0 : Math.min(ARC_FEATHER, TAU * f);
+    const slices: Array<[number, number, number]> = [[a0, a1 - feather, 1]];
+    for (let k = 0; k < FEATHER_STEPS && feather > 0; k++) {
+      const from = a1 - feather + (feather * k) / FEATHER_STEPS;
+      slices.push([from, from + feather / FEATHER_STEPS, 1 - (k + 1) / (FEATHER_STEPS + 1)]);
+    }
+    for (const [from, to, share] of slices) {
+      if (to - from < 1e-4) continue;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, R * 1.1 * s, from, to);
+      ctx.closePath();
+      ctx.clip();
+      ctx.rotate(rot);
+      ctx.globalAlpha = alpha * 0.6 * glow * share;
+      glyphLayer(ctx, R, p);
+      ctx.restore();
+    }
+
+    // The line of light along the edge.
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = "rgba(255,210,110,0.95)";
+    ctx.shadowBlur = R * 0.06 * glow;
+    ctx.strokeStyle = "rgba(255,238,184," + clamp(0.95 * glow).toFixed(3) + ")";
+    ctx.lineWidth = Math.max(1.4, R * 0.022);
+    ctx.beginPath();
+    ctx.arc(0, 0, r, a0, a1);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Its head, where the light is coming in (none once the ring is closed).
+    if (!closed) {
+      const hx = Math.cos(a1) * r;
+      const hy = Math.sin(a1) * r;
+      const hr = Math.max(3, R * 0.075);
+      const g = ctx.createRadialGradient(hx, hy, 0, hx, hy, hr);
+      g.addColorStop(0, "rgba(255,255,245,1)");
+      g.addColorStop(0.25, "rgba(255,240,190,0.8)");
+      g.addColorStop(1, "rgba(255,200,90,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(hx, hy, hr, 0, TAU);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
 /** The glyph ring drawn with plain strokes, for when there is no texture. */
 function plainGlyphs(ctx: CanvasRenderingContext2D, R: number, p: Params): void {
   const s = p.glyphR / 0.86;
@@ -243,6 +343,8 @@ export interface DrawOptions {
   calm: number;
   /** Loudness, 0 to 1. */
   lvl: number;
+  /** The progress arc after the dictation key is released, if there is one. */
+  arc?: ArcSample | null;
 }
 
 /** Draws one frame, centered on the context's origin, `R` pixels in outer radius. */
@@ -277,6 +379,8 @@ export function drawEmblem(
     }
     ctx.restore();
   }
+
+  if (o.arc) drawArc(ctx, R, p, o.rot, o.arc);
 
   if (p.haloA > 0.01) {
     ctx.save();
@@ -444,6 +548,8 @@ const prefersReducedMotion = (): boolean =>
  * - `vanish()` plays the 0.467 s vanish animation and then the emblem is hidden.
  * - `level` (0 to 1) sets the white ring's width while listening or speaking.
  * - `speak(seconds)` moves the ring with a made-up loudness for that long.
+ * - `progress(report)` fills the glyph ring with an arc of light (see progress.ts), on the same
+ *   24 fps clock; `clearProgress()` fades it out.
  *
  * With reduced motion the two animations are skipped and the glyph ring stands still.
  */
@@ -470,6 +576,8 @@ export class Emblem {
   private reduce = false;
   private ctx: CanvasRenderingContext2D | null = null;
   private steps = 0;
+  private readonly arc = new ProgressArc();
+  private shownArc: ArcSample | null = null;
 
   constructor(canvas: HTMLCanvasElement, sizePx: number, opts: EmblemOptions = {}) {
     this.canvas = canvas;
@@ -497,6 +605,11 @@ export class Emblem {
   /** How many times the animation loop has stepped this emblem (the page watches for a stall). */
   get frames(): number {
     return this.steps;
+  }
+
+  /** The progress arc as it is drawn now (null for none). */
+  get progressShown(): ArcSample | null {
+    return this.shownArc;
   }
 
   /** The loudness the white ring shows now, 0 to 1. */
@@ -533,6 +646,8 @@ export class Emblem {
   appear(): void {
     // The screen's scale may have changed since the last time.
     this.reduce = prefersReducedMotion();
+    this.arc.reset();
+    this.shownArc = null;
     if (devicePixelRatioNow() !== this.dpr) this.size(this.diameter);
     this._phase = this.reduce ? this.mode : "appear";
     this.pt = 0;
@@ -561,6 +676,24 @@ export class Emblem {
     }
   }
 
+  /**
+   * How far the dictation has come since the key was released: the arc of light on the glyph
+   * ring. Ignored while the emblem is hidden or vanishing.
+   */
+  progress(report: ProgressReport): void {
+    if (this._phase === "hidden" || this._phase === "vanish") return;
+    this.arc.report(report, this.reduce);
+    this.dirty = true;
+    wake();
+  }
+
+  /** The arc is no longer needed (a notice takes the emblem): it fades out. */
+  clearProgress(): void {
+    this.arc.clear(this.reduce);
+    this.dirty = true;
+    wake();
+  }
+
   /** The white ring moves with a made-up loudness for `seconds`. */
   speak(seconds: number): void {
     this.talkUntil = this.clock + seconds;
@@ -584,6 +717,8 @@ export class Emblem {
       this.pt = 0;
       this.dirty = true;
     }
+    if (this._phase === "hidden") this.arc.reset();
+    else this.arc.advance(dt, this.reduce);
     if (this._phase !== "hidden" && !this.reduce) {
       this._rot += dt * RATE * (this._phase === "thinking" ? 6 : 1);
     }
@@ -591,6 +726,7 @@ export class Emblem {
     if (tk === this.lastTick) return false;
     this.lastTick = tk;
     this.shownRot = this._rot;
+    this.shownArc = this.arc.sample(this.reduce);
 
     let raw = this.base;
     // While the emblem is appearing, what counts is the mode it is appearing into.
@@ -624,6 +760,7 @@ export class Emblem {
       dim: ph === "listening" ? 0.8 : 1,
       calm: ph === "listening" ? 0.6 : ph === "steady" ? 0.7 : 1,
       lvl: this._lvl,
+      arc: this.shownArc,
     });
   }
 

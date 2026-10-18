@@ -10,6 +10,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { Emblem, canvasSize, loadGlyphTexture, type Mode, type Phase } from "./emblem";
 import { noticeDurationMs } from "./notice";
+import type { ProgressReport, Stage } from "./progress";
 import { FrameWatch, describeError, guardHandler, subscribeWithRetry, type LogLevel } from "./diagnostics";
 
 export { noticeDurationMs };
@@ -22,6 +23,7 @@ export type OverlayEvent =
   | { type: "show"; mode: Mode }
   | { type: "mode"; mode: Mode }
   | { type: "level"; value: number }
+  | { type: "progress"; stage: Stage; done: number; total: number; audio_seconds: number }
   | { type: "notice"; zh: string; ja: string }
   | { type: "hide" }
   | { type: "settings"; px: number; subtitles: string };
@@ -37,6 +39,10 @@ export interface EmblemControl {
   set(mode: Mode): void;
   speak(seconds: number): void;
   size(px: number): void;
+  /** How far the dictation has come since the key was released (the arc on the glyph ring). */
+  progress(report: ProgressReport): void;
+  /** The arc fades out. */
+  clearProgress(): void;
 }
 
 /** What the controller needs from the page. */
@@ -73,8 +79,10 @@ export class OverlayController {
   handle(event: OverlayEvent): void {
     switch (event.type) {
       case "show":
-        // Dictation (and anything else that shows the emblem) takes over from a notice.
+        // Dictation (and anything else that shows the emblem) takes over from a notice, and
+        // starts without the last dictation's progress.
         this.cancelNotices();
+        this.emblem.clearProgress();
         this.appearIfHidden();
         this.emblem.set(event.mode);
         break;
@@ -84,7 +92,18 @@ export class OverlayController {
       case "level":
         this.emblem.level = event.value;
         break;
+      case "progress":
+        // No words: the arc says it (dictation shows no subtitles).
+        this.emblem.progress({
+          stage: event.stage,
+          done: event.done,
+          total: event.total,
+          audioSeconds: event.audio_seconds,
+        });
+        break;
       case "notice":
+        // Raphael speaks: the dictation's progress has said what it had to.
+        this.emblem.clearProgress();
         this.queue.push({ zh: event.zh, ja: event.ja });
         if (!this.busy) this.next();
         break;

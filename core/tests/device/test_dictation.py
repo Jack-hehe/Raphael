@@ -910,6 +910,144 @@ def test_the_level_rate_must_be_positive():
             )
 
 
+# --- progress after the stop ---------------------------------------------------------------------
+
+
+def progress(notifications) -> list[tuple[str, int, int]]:
+    """The `dictation.progress` notifications as (stage, done, total), in order."""
+    return [
+        (params["stage"], params["done"], params["total"])
+        for method, params in notifications
+        if method == "dictation.progress"
+    ]
+
+
+async def test_nothing_is_reported_as_progress_while_recording(rig, router, notifications):
+    rig.recorder.chunks = [chunk(1.0)] * 3
+    await start(router)
+    await rig.recorder.fed(3)
+    await wait_until(lambda: len(rig.engine.calls) == 3)
+    await asyncio.sleep(0.02)
+    assert progress(notifications) == []
+    await stop(router)
+
+
+async def test_progress_counts_the_segments_left_after_the_stop_then_the_cleanup(
+    rig, router, brain, notifications
+):
+    # Three segments were transcribed while recording; the segmenter holds back a fourth.
+    rig.recorder.chunks = [chunk(1.0)] * 3
+    rig.segmenter.flush_segments = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(3)
+    await wait_until(lambda: len(rig.engine.calls) == 3)
+    seen_at_finalize: list = []
+    brain.on_finalize = lambda: seen_at_finalize.extend(progress(notifications))
+    await stop(router)
+    # At the stop the last stretch is not cut yet: one more segment is counted for it.
+    assert progress(notifications) == [
+        ("transcribing", 3, 4),
+        ("transcribing", 4, 4),
+        ("cleaning", 4, 4),
+    ]
+    # "cleaning" is sent before the brain is asked, not after.
+    assert seen_at_finalize[-1] == ("cleaning", 4, 4)
+
+
+async def test_progress_jumps_to_cleaning_when_everything_was_transcribed_while_recording(
+    rig, router, notifications
+):
+    rig.recorder.chunks = [chunk(1.0)] * 2
+    await start(router)
+    await rig.recorder.fed(2)
+    await wait_until(lambda: len(rig.engine.calls) == 2)
+    await stop(router)
+    assert progress(notifications) == [
+        ("transcribing", 2, 3),  # the guess for a last stretch, until the segmenter is flushed
+        ("transcribing", 2, 2),
+        ("cleaning", 2, 2),
+    ]
+
+
+async def test_progress_follows_segments_that_are_transcribed_after_the_stop(
+    rig, router, notifications
+):
+    rig.engine.gate = threading.Event()
+    rig.recorder.chunks = [chunk(1.0)] * 3
+    await start(router)
+    await rig.recorder.fed(3)
+    assert await asyncio.to_thread(rig.engine.entered.wait, 5)  # inside the first segment
+    stopping = asyncio.ensure_future(stop(router))
+    await wait_until(lambda: progress(notifications) != [])
+    assert progress(notifications) == [("transcribing", 0, 2)]
+    rig.engine.gate.set()
+    await stopping
+    steps = progress(notifications)
+    assert steps == [
+        ("transcribing", 0, 2),
+        ("transcribing", 1, 2),
+        ("transcribing", 2, 3),
+        ("transcribing", 3, 4),
+        ("transcribing", 3, 3),
+        ("cleaning", 3, 3),
+    ]
+    fractions = [done / total for _, done, total in steps]
+    assert fractions == sorted(fractions)
+
+
+async def test_a_progress_message_has_the_session_the_counts_and_the_audio_length(
+    rig, router, notifications
+):
+    rig.recorder.chunks = [chunk(1.5)]
+    await start(router, "abc")
+    await rig.recorder.fed(1)
+    await wait_until(lambda: len(rig.engine.calls) == 1)
+    await stop(router, "abc")
+    messages = [params for method, params in notifications if method == "dictation.progress"]
+    keys = {"session_id", "stage", "done", "total", "audio_seconds"}
+    assert all(set(m) == keys for m in messages)
+    assert all(m["session_id"] == "abc" for m in messages)
+    assert all(isinstance(m["done"], int) and isinstance(m["total"], int) for m in messages)
+    assert messages[0]["audio_seconds"] == pytest.approx(1.5)  # what was recorded
+    assert messages[-1]["stage"] == "cleaning"
+    assert messages[-1]["audio_seconds"] == pytest.approx(1.5)  # the speech the cleanup gets
+
+
+async def test_a_dictation_with_nothing_to_clean_reports_no_cleaning(
+    rig, router, brain, notifications
+):
+    rig.segmenter.emit_nothing = True
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    r = await stop(router)
+    assert r["text"] == "" and brain.finalize_calls == 0
+    assert progress(notifications) == [("transcribing", 0, 1), ("transcribing", 0, 0)]
+
+
+async def test_a_failed_stop_reports_no_cleaning(rig, router, notifications):
+    rig.provider_error = FileNotFoundError("model.onnx")
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    with pytest.raises(RpcError):
+        await stop(router)
+    assert all(stage == "transcribing" for stage, _, _ in progress(notifications))
+
+
+async def test_a_cancelled_dictation_reports_no_progress(rig, router, brain, notifications):
+    rig.engine.gate = threading.Event()
+    rig.recorder.chunks = [chunk(1.0)] * 3
+    await start(router)
+    await rig.recorder.fed(3)
+    assert await asyncio.to_thread(rig.engine.entered.wait, 5)
+    await router.call("dictation.cancel", {"session_id": "s1"})
+    rig.engine.gate.set()
+    await wait_until(lambda: not our_threads())
+    await asyncio.sleep(0.02)
+    assert progress(notifications) == []
+
+
 # --- cancel --------------------------------------------------------------------------------------
 
 
