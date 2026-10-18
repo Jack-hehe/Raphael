@@ -34,12 +34,8 @@ pub fn build(app: &AppHandle, commands: UnboundedSender<TrayCommand>) -> tauri::
     let quit = MenuItem::with_id(app, "quit", "結束拉斐爾", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &paste_last, &pause, &separator, &quit])?;
 
-    let icon = app.default_window_icon().cloned().ok_or_else(|| {
-        tauri::Error::InvalidIcon(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "the app has no default window icon",
-        ))
-    })?;
+    // Embed the high-contrast mark so the tray stays legible at small sizes.
+    let icon = tauri::include_image!("icons/tray-icon.png");
 
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
