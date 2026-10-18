@@ -1,10 +1,11 @@
-// The progress ring: after the dictation key is released, an arc of light fills the glyph ring
-// clockwise, like the ring charging, while the speech that is left is transcribed (0 to 60 %),
-// while the brain cleans the text (60 to 95 %, an estimate) and when the text is there (100 %).
+// The progress ring: after the dictation key is released, the glyph ring draws itself in
+// clockwise from twelve o'clock, like the ring charging, while the speech that is left is
+// transcribed (0 to 60 %), while the brain cleans the text (60 to 95 %, an estimate) and when the
+// text is there (100 %).
 //
 // The core reports how many segments are transcribed; the cleanup has no such count, so the arc
 // eases towards the end of its range over the time the cleanup is expected to take and stops
-// short of it until the reply comes. The arc never goes back.
+// short of it until the reply comes. The ring never goes back.
 //
 // Pure: no canvas, no clock of its own. `Emblem` advances it with the animation loop and draws
 // what `sample` gives on the 24 fps clock.
@@ -48,17 +49,14 @@ export function cleaningEstimate(t: number, expected: number): number {
 const REDUCED_STEPS = 3;
 /** How quickly the arc catches up with the counts, seconds (the time constant). */
 const FOLLOW = 0.12;
-/** The arc fades out over this long when it is no longer needed (a notice takes over). */
-const FADE = 0.25;
 /** The brief flare when the arc closes. */
 const FLASH = 0.2;
 
 const ORDER: Record<Stage, number> = { transcribing: 0, cleaning: 1, done: 2 };
 
-/** What is drawn: `fraction` of the circle, at `alpha`, with `flash` (0 to 1) extra light. */
+/** What is drawn: `fraction` of the circle, with `flash` (0 to 1) extra light. */
 export interface ArcSample {
   fraction: number;
-  alpha: number;
   flash: number;
 }
 
@@ -69,8 +67,6 @@ export class ProgressArc {
   private expected = expectedCleanupSeconds(0);
   private value = 0;
   private doneFor = Infinity;
-  private fading = false;
-  private alphaNow = 1;
 
   /** Whether there is an arc to draw. */
   get active(): boolean {
@@ -86,10 +82,8 @@ export class ProgressArc {
    * the one shown come late and are ignored. */
   report(r: ProgressReport, reduce: boolean): void {
     if (this.stage !== null && ORDER[r.stage] < ORDER[this.stage]) return;
-    if (this.fading) return; // the dictation is over: a notice has taken the emblem
     const entering = this.stage !== r.stage;
     this.stage = r.stage;
-    this.alphaNow = 1;
     if (r.stage === "transcribing") {
       const total = Number.isFinite(r.total) && r.total > 0 ? r.total : 0;
       const done = Number.isFinite(r.done) && r.done > 0 ? Math.min(r.done, total) : 0;
@@ -107,16 +101,6 @@ export class ProgressArc {
     if (reduce) this.value = Math.max(this.value, this.target(true));
   }
 
-  /** The arc fades out (at once with reduced motion), then the next report starts afresh. */
-  clear(reduce: boolean): void {
-    if (this.stage === null) return;
-    if (reduce) {
-      this.reset();
-      return;
-    }
-    this.fading = true;
-  }
-
   /** No arc, at once. */
   reset(): void {
     this.stage = null;
@@ -124,8 +108,6 @@ export class ProgressArc {
     this.cleaningFor = 0;
     this.value = 0;
     this.doneFor = Infinity;
-    this.fading = false;
-    this.alphaNow = 1;
   }
 
   /** Where the arc is heading now. */
@@ -154,16 +136,12 @@ export class ProgressArc {
     const target = this.target(reduce);
     const next = reduce ? target : this.value + (target - this.value) * (1 - Math.exp(-dt / FOLLOW));
     this.value = Math.min(1, Math.max(this.value, next));
-    if (this.fading) {
-      this.alphaNow -= dt / FADE;
-      if (this.alphaNow <= 0) this.reset();
-    }
   }
 
   /** What to draw now, or null for nothing. */
   sample(reduce: boolean): ArcSample | null {
     if (this.stage === null) return null;
     const flash = !reduce && this.doneFor < FLASH ? 1 - this.doneFor / FLASH : 0;
-    return { fraction: this.value, alpha: Math.max(0, this.alphaNow), flash };
+    return { fraction: this.value, flash };
   }
 }

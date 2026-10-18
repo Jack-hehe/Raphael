@@ -8,7 +8,7 @@
 // This module must stay importable without a browser (the tests run in Node), so nothing here
 // touches `document`, `window` or `Image` until a function that needs it is called.
 
-import { ProgressArc, type ArcSample, type ProgressReport } from "./progress";
+import { ProgressArc, type ProgressReport } from "./progress";
 
 const TAU = Math.PI * 2;
 const clamp = (x: number, a = 0, b = 1): number => Math.max(a, Math.min(b, x));
@@ -206,99 +206,145 @@ function tinted(tex: HTMLImageElement, mix: number): CanvasImageSource {
   return tintCanvas;
 }
 
-/** The glyph ring, texture or plain strokes, at the context's current transform and alpha. */
-function glyphLayer(ctx: CanvasRenderingContext2D, R: number, p: Params): void {
+/**
+ * The glyph ring at the context's current transform: the texture (with the appear animation's
+ * glow on top) or plain strokes. `share` scales its alpha (the reveal's feather).
+ */
+function glyphRing(ctx: CanvasRenderingContext2D, R: number, p: Params, base: number, dim: number, share: number): void {
+  ctx.globalAlpha = base * p.glyphA * dim * share;
+  if (p.glyphBlur > 0) ctx.filter = "blur(" + (p.glyphBlur * R).toFixed(2) + "px)";
   const tex = glyph;
   if (tex && tex.naturalWidth) {
     const half = TEX_HALF * R * (p.glyphR / 0.86);
-    ctx.drawImage(tinted(tex, p.glyphMix), -half, -half, half * 2, half * 2);
+    const img = tinted(tex, p.glyphMix);
+    ctx.drawImage(img, -half, -half, half * 2, half * 2);
+    ctx.filter = "none";
+    if (p.glyphGlow > 0.01) {
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = base * p.glyphGlow * 0.9 * share;
+      ctx.filter = "blur(" + (1 + R * 0.025 * (p.glyphR / 0.86)).toFixed(2) + "px)";
+      ctx.drawImage(img, -half, -half, half * 2, half * 2);
+    }
   } else {
     plainGlyphs(ctx, R, p);
   }
 }
 
-/** Where the progress arc runs: on the glyph ring's thin outer edge (1.0 R). */
-export const ARC_R = 1.0;
-/** The charged glyphs fade in over this many radians behind the arc's head, in a few steps. */
-const ARC_FEATHER = 0.22;
-const FEATHER_STEPS = 3;
+// ---------- the glyph ring drawing itself in (not from the anime) ----------
 
 /**
- * The progress arc (not from the anime: Raphael's own way of showing how far a dictation has
- * come). From twelve o'clock clockwise over `arc.fraction` of the circle, the glyphs light up as
- * if charged and a thin line of light runs along the ring's outer edge, brightest at its head.
- * It stays where it is while the glyphs turn underneath, and fades with them when the emblem
- * vanishes.
+ * How much of the glyph ring a dictation shows (spec §6.5): while listening there is none, after
+ * the key is released it draws itself in, clockwise from twelve o'clock, as far as the
+ * dictation has come. Null means the whole ring, as always.
  */
-function drawArc(ctx: CanvasRenderingContext2D, R: number, p: Params, rot: number, arc: ArcSample): void {
-  const alpha = clamp(arc.alpha) * clamp(p.glyphA);
-  const f = clamp(arc.fraction);
-  if (alpha < 0.003) return;
+export interface RingReveal {
+  /** The part drawn in, 0 to 1 of the circle from twelve o'clock clockwise. */
+  fraction: number;
+  /** The rest of the ring, 0 (not there) to 1: it comes back when a notice takes the emblem. */
+  rest: number;
+  /** The flare when the ring closes, 0 to 1. */
+  flash: number;
+  /** The voice's faint echo on the whole ring while recording, 0 to `ECHO_MAX` (see `echoAlpha`). */
+  echo: number;
+}
+
+/** The echo never gets brighter than this, well under the drawn-in ring (1). */
+export const ECHO_MAX = 0.5;
+
+/**
+ * How brightly the glyph ring echoes the voice while recording, for the loudness `lvl` that sets
+ * the white ring: nothing when quiet (the 0.05 rest level and a little above), about 0.4 at a
+ * normal speaking level (0.5), up to `ECHO_MAX` when loud.
+ */
+export function echoAlpha(lvl: number): number {
+  if (!Number.isFinite(lvl)) return 0;
+  const speech = clamp((lvl - 0.08) / 0.42);
+  const loud = clamp((lvl - 0.5) / 0.5);
+  return 0.4 * speech * speech * (3 - 2 * speech) + (ECHO_MAX - 0.4) * loud;
+}
+
+/** The drawn-in part fades over this many radians behind its head (about 9 degrees). */
+export const REVEAL_FEATHER = 0.16;
+/** The feather is drawn in this many slices (the glyph ring once per slice). */
+const FEATHER_STEPS = 6;
+/** Twelve o'clock. */
+const TOP = -Math.PI / 2;
+/** The whole ring, as one slice. */
+const WHOLE: ReadonlyArray<readonly [number, number, number]> = [[TOP, TOP + TAU, 1]];
+
+/**
+ * The wedges the glyph ring is drawn in for a reveal: `[from, to, alpha]`, angles in radians on
+ * the screen (clockwise, twelve o'clock is -π/2), one after the other. Full strength up to the
+ * last few degrees before the head, which fade in slices; behind the head the rest of the ring
+ * at `rest`.
+ */
+export function revealSlices(fraction: number, rest: number): Array<[number, number, number]> {
+  const f = Number.isFinite(fraction) ? clamp(fraction) : 0;
+  const r = Number.isFinite(rest) ? clamp(rest) : 0;
+  if (f >= 0.999 || r >= 0.999) return WHOLE.map(([a, b, c]) => [a, b, c]);
+  const out: Array<[number, number, number]> = [];
+  const head = TOP + TAU * f;
+  if (f > 0) {
+    const feather = Math.min(REVEAL_FEATHER, TAU * f);
+    if (head - feather > TOP + 1e-9) out.push([TOP, head - feather, 1]);
+    const start = head - feather;
+    for (let k = 0; k < FEATHER_STEPS; k++) {
+      const u = (k + 0.5) / FEATHER_STEPS;
+      const fade = 1 - 0.85 * u * u * (3 - 2 * u);
+      out.push([start + (feather * k) / FEATHER_STEPS, start + (feather * (k + 1)) / FEATHER_STEPS, r + (1 - r) * fade]);
+    }
+  }
+  if (r > 0.003) out.push([head, TOP + TAU, r]);
+  return out;
+}
+
+/** Where the head of the drawn-in part shines: on the glyphs (0.855 R). */
+const HEAD_R = 0.855;
+
+/** The head of the drawn-in part, where the ring is coming in, and the flare when it closes. */
+function revealLight(ctx: CanvasRenderingContext2D, R: number, p: Params, o: DrawOptions, rv: RingReveal, base: number): void {
   const s = p.glyphR / 0.86;
-  const r = R * ARC_R * s;
-  const a0 = -Math.PI / 2;
-  const a1 = a0 + TAU * f;
-  const glow = 1 + 0.8 * clamp(arc.flash);
+  const f = clamp(rv.fraction);
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
-
-  // The track: the whole edge, barely there, so that the part still to fill can be read.
-  ctx.globalAlpha = alpha;
-  ctx.lineCap = "round";
-  ctx.strokeStyle = "rgba(255,214,130,0.16)";
-  ctx.lineWidth = Math.max(1, R * 0.012);
-  ctx.beginPath();
-  ctx.arc(0, 0, r, 0, TAU);
-  ctx.stroke();
-
-  if (f > 0.002) {
-    // The charged glyphs: the ring drawn once more, added on top, inside the filled wedge. The
-    // last few degrees fade in steps, so the light seems to seep in rather than be cut off.
-    const closed = f >= 0.999;
-    const feather = closed ? 0 : Math.min(ARC_FEATHER, TAU * f);
-    const slices: Array<[number, number, number]> = [[a0, a1 - feather, 1]];
-    for (let k = 0; k < FEATHER_STEPS && feather > 0; k++) {
-      const from = a1 - feather + (feather * k) / FEATHER_STEPS;
-      slices.push([from, from + feather / FEATHER_STEPS, 1 - (k + 1) / (FEATHER_STEPS + 1)]);
-    }
-    for (const [from, to, share] of slices) {
-      if (to - from < 1e-4) continue;
-      ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.arc(0, 0, R * 1.1 * s, from, to);
-      ctx.closePath();
-      ctx.clip();
-      ctx.rotate(rot);
-      ctx.globalAlpha = alpha * 0.6 * glow * share;
-      glyphLayer(ctx, R, p);
-      ctx.restore();
-    }
-
-    // The line of light along the edge.
-    ctx.globalAlpha = alpha;
-    ctx.shadowColor = "rgba(255,210,110,0.95)";
-    ctx.shadowBlur = R * 0.06 * glow;
-    ctx.strokeStyle = "rgba(255,238,184," + clamp(0.95 * glow).toFixed(3) + ")";
-    ctx.lineWidth = Math.max(1.4, R * 0.022);
+  if (f > 0 && f < 0.999) {
+    const a = base * clamp(p.glyphA) * (1 - clamp(rv.rest));
+    const angle = TOP + TAU * f;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    // a thin line of light across the glyph band
+    ctx.globalAlpha = a * 0.9;
+    ctx.strokeStyle = "rgba(255,236,170,1)";
+    ctx.lineWidth = Math.max(1, R * 0.016);
+    ctx.lineCap = "round";
     ctx.beginPath();
-    ctx.arc(0, 0, r, a0, a1);
+    ctx.moveTo(cos * R * 0.76 * s, sin * R * 0.76 * s);
+    ctx.lineTo(cos * R * 0.95 * s, sin * R * 0.95 * s);
     ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    // Its head, where the light is coming in (none once the ring is closed).
-    if (!closed) {
-      const hx = Math.cos(a1) * r;
-      const hy = Math.sin(a1) * r;
-      const hr = Math.max(3, R * 0.075);
-      const g = ctx.createRadialGradient(hx, hy, 0, hx, hy, hr);
-      g.addColorStop(0, "rgba(255,255,245,1)");
-      g.addColorStop(0.25, "rgba(255,240,190,0.8)");
-      g.addColorStop(1, "rgba(255,200,90,0)");
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(hx, hy, hr, 0, TAU);
-      ctx.fill();
+    // and a small bright point on it
+    const hx = cos * R * HEAD_R * s;
+    const hy = sin * R * HEAD_R * s;
+    const hr = Math.max(3, R * 0.15 * s);
+    const g = ctx.createRadialGradient(hx, hy, 0, hx, hy, hr);
+    g.addColorStop(0, "rgba(255,255,245,1)");
+    g.addColorStop(0.2, "rgba(255,240,190,0.85)");
+    g.addColorStop(0.55, "rgba(255,200,90,0.25)");
+    g.addColorStop(1, "rgba(255,190,70,0)");
+    ctx.globalAlpha = a;
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(hx, hy, hr, 0, TAU);
+    ctx.fill();
+  }
+  const flash = clamp(rv.flash);
+  if (flash > 0.01 && f >= 0.999) {
+    // the closed ring lights up once: drawn again, added on top, and softly blurred
+    ctx.rotate(o.rot);
+    glyphRing(ctx, R, p, base * 0.55 * flash, o.dim, 1);
+    if (glyph && glyph.naturalWidth) {
+      ctx.globalCompositeOperation = "lighter";
+      ctx.filter = "blur(" + (1 + R * 0.03 * s).toFixed(2) + "px)";
+      glyphRing(ctx, R, p, base * 0.6 * flash, o.dim, 1);
     }
   }
   ctx.restore();
@@ -343,8 +389,8 @@ export interface DrawOptions {
   calm: number;
   /** Loudness, 0 to 1. */
   lvl: number;
-  /** The progress arc after the dictation key is released, if there is one. */
-  arc?: ArcSample | null;
+  /** How much of the glyph ring a dictation shows; null or left out for the whole ring. */
+  reveal?: RingReveal | null;
 }
 
 /** Draws one frame, centered on the context's origin, `R` pixels in outer radius. */
@@ -358,29 +404,40 @@ export function drawEmblem(
   const base = ctx.globalAlpha;
 
   if (p.glyphA > 0.003) {
-    ctx.save();
-    ctx.rotate(o.rot);
-    ctx.globalAlpha = base * p.glyphA * o.dim;
-    if (p.glyphBlur > 0) ctx.filter = "blur(" + (p.glyphBlur * R).toFixed(2) + "px)";
-    const tex = glyph;
-    if (tex && tex.naturalWidth) {
-      const half = TEX_HALF * R * (p.glyphR / 0.86);
-      const img = tinted(tex, p.glyphMix);
-      ctx.drawImage(img, -half, -half, half * 2, half * 2);
-      ctx.filter = "none";
-      if (p.glyphGlow > 0.01) {
-        ctx.globalCompositeOperation = "lighter";
-        ctx.globalAlpha = base * p.glyphGlow * 0.9;
-        ctx.filter = "blur(" + (1 + R * 0.025 * (p.glyphR / 0.86)).toFixed(2) + "px)";
-        ctx.drawImage(img, -half, -half, half * 2, half * 2);
+    // The whole ring as always, or, during a dictation, the part drawn in so far (in wedges that
+    // stay where they are while the glyphs turn underneath).
+    const rv = o.reveal;
+    const slices = rv ? revealSlices(rv.fraction, rv.rest) : WHOLE;
+    const s = p.glyphR / 0.86;
+    for (const [from, to, share] of slices) {
+      if (share < 0.003) continue;
+      ctx.save();
+      if (to - from < TAU - 1e-9) {
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, R * 1.2 * s, from, to);
+        ctx.closePath();
+        ctx.clip();
       }
-    } else {
-      plainGlyphs(ctx, R, p);
+      ctx.rotate(o.rot);
+      glyphRing(ctx, R, p, base, o.dim, share);
+      ctx.restore();
     }
-    ctx.restore();
+    if (rv) {
+      const echo = clamp(rv.echo, 0, ECHO_MAX);
+      if (echo > 0.003) {
+        // The voice's echo: the whole ring, faint, and a little added light so that it reads
+        // golden rather than grey.
+        ctx.save();
+        ctx.rotate(o.rot);
+        glyphRing(ctx, R, p, base * echo * 0.75, o.dim, 1);
+        ctx.globalCompositeOperation = "lighter";
+        glyphRing(ctx, R, p, base * echo * 0.45, o.dim, 1);
+        ctx.restore();
+      }
+      revealLight(ctx, R, p, o, rv, base);
+    }
   }
-
-  if (o.arc) drawArc(ctx, R, p, o.rot, o.arc);
 
   if (p.haloA > 0.01) {
     ctx.save();
@@ -517,6 +574,11 @@ const SPEAK_CYCLE = 36;
 
 // ---------- the emblem on a canvas ----------
 
+/** The rest of the glyph ring fades in (or out) over this long, seconds. */
+const REST_FADE = 0.25;
+/** The voice's echo on the glyph ring fades out over this long after the stop, seconds. */
+const ECHO_FADE = 0.2;
+
 /** The canvas is this much larger than the emblem so that the rays have room. */
 export const CANVAS_RATIO = 1.3;
 
@@ -548,8 +610,9 @@ const prefersReducedMotion = (): boolean =>
  * - `vanish()` plays the 0.467 s vanish animation and then the emblem is hidden.
  * - `level` (0 to 1) sets the white ring's width while listening or speaking.
  * - `speak(seconds)` moves the ring with a made-up loudness for that long.
- * - `progress(report)` fills the glyph ring with an arc of light (see progress.ts), on the same
- *   24 fps clock; `clearProgress()` fades it out.
+ * - While listening the glyph ring is not there; after the key is released `progress(report)`
+ *   draws it in as far as the dictation has come (see progress.ts), on the same 24 fps clock.
+ *   `clearProgress()` (a notice takes the emblem) brings the rest of it back.
  *
  * With reduced motion the two animations are skipped and the glyph ring stands still.
  */
@@ -577,7 +640,15 @@ export class Emblem {
   private ctx: CanvasRenderingContext2D | null = null;
   private steps = 0;
   private readonly arc = new ProgressArc();
-  private shownArc: ArcSample | null = null;
+  /** A dictation has the emblem: the glyph ring shows only what the progress has drawn in. */
+  private charging = false;
+  /** How much of the rest of the glyph ring is there, 0 to 1 (1 outside a dictation). */
+  private rest = 1;
+  private shownReveal: RingReveal | null = null;
+  /** The voice's echo on the glyph ring: 1 while recording, fading to 0 after the stop. */
+  private echoOn = 0;
+  /** The level the echo shows while it fades. */
+  private echoLvl = 0;
 
   constructor(canvas: HTMLCanvasElement, sizePx: number, opts: EmblemOptions = {}) {
     this.canvas = canvas;
@@ -607,9 +678,9 @@ export class Emblem {
     return this.steps;
   }
 
-  /** The progress arc as it is drawn now (null for none). */
-  get progressShown(): ArcSample | null {
-    return this.shownArc;
+  /** How much of the glyph ring is drawn now (null for the whole ring). */
+  get revealShown(): RingReveal | null {
+    return this.shownReveal;
   }
 
   /** The loudness the white ring shows now, 0 to 1. */
@@ -647,7 +718,9 @@ export class Emblem {
     // The screen's scale may have changed since the last time.
     this.reduce = prefersReducedMotion();
     this.arc.reset();
-    this.shownArc = null;
+    this.charging = false;
+    this.rest = 1;
+    this.shownReveal = null;
     if (devicePixelRatioNow() !== this.dpr) this.size(this.diameter);
     this._phase = this.reduce ? this.mode : "appear";
     this.pt = 0;
@@ -668,6 +741,16 @@ export class Emblem {
   /** Sets the mode; while the emblem is appearing, vanishing or hidden it takes effect later. */
   set(mode: Mode): void {
     this.mode = mode;
+    if (mode === "listening") {
+      // A dictation starts with no glyph ring (at once unless one is on screen: then it fades).
+      this.charging = true;
+      this.echoOn = 1;
+      const ph = this._phase;
+      if (this.reduce || ph === "hidden" || ph === "appear" || ph === "vanish") this.rest = 0;
+      this.shownReveal = this.reveal();
+    } else if (mode !== "thinking") {
+      this.charging = false;
+    }
     if (this._phase !== "appear" && this._phase !== "vanish" && this._phase !== "hidden") {
       this._phase = mode;
       this.pt = 0;
@@ -677,19 +760,19 @@ export class Emblem {
   }
 
   /**
-   * How far the dictation has come since the key was released: the arc of light on the glyph
-   * ring. Ignored while the emblem is hidden or vanishing.
+   * How far the dictation has come since the key was released: the glyph ring draws itself in
+   * that far. Ignored outside a dictation and while the emblem is hidden or vanishing.
    */
   progress(report: ProgressReport): void {
-    if (this._phase === "hidden" || this._phase === "vanish") return;
+    if (this._phase === "hidden" || this._phase === "vanish" || !this.charging) return;
     this.arc.report(report, this.reduce);
     this.dirty = true;
     wake();
   }
 
-  /** The arc is no longer needed (a notice takes the emblem): it fades out. */
+  /** The dictation is over (a notice takes the emblem): the rest of the glyph ring fades in. */
   clearProgress(): void {
-    this.arc.clear(this.reduce);
+    this.charging = false;
     this.dirty = true;
     wake();
   }
@@ -719,6 +802,14 @@ export class Emblem {
     }
     if (this._phase === "hidden") this.arc.reset();
     else this.arc.advance(dt, this.reduce);
+    const restTo = this.charging ? 0 : 1;
+    if (this.reduce) this.rest = restTo;
+    else if (this.rest < restTo) this.rest = Math.min(restTo, this.rest + dt / REST_FADE);
+    else this.rest = Math.max(restTo, this.rest - dt / REST_FADE);
+    if (!this.charging && this.rest >= 1) this.arc.reset();
+    // The echo of the voice on the glyph ring: on while recording, fading after the stop.
+    if (this.charging && this.mode === "listening") this.echoOn = 1;
+    else this.echoOn = this.reduce ? 0 : Math.max(0, this.echoOn - dt / ECHO_FADE);
     if (this._phase !== "hidden" && !this.reduce) {
       this._rot += dt * RATE * (this._phase === "thinking" ? 6 : 1);
     }
@@ -726,7 +817,6 @@ export class Emblem {
     if (tk === this.lastTick) return false;
     this.lastTick = tk;
     this.shownRot = this._rot;
-    this.shownArc = this.arc.sample(this.reduce);
 
     let raw = this.base;
     // While the emblem is appearing, what counts is the mode it is appearing into.
@@ -739,7 +829,18 @@ export class Emblem {
       if (this.clock < this.talkUntil) raw = Math.max(raw, envAt(SPEAK, (this.clock + this.talkOff) % SPEAK_CYCLE));
     }
     this._lvl = clamp(raw);
+    // After the stop the echo fades with the last level heard, not the quiet of the thinking ring.
+    if (this.echoOn >= 1) this.echoLvl = this._lvl;
+    this.shownReveal = this.reveal();
     return true;
+  }
+
+  /** How much of the glyph ring to draw now: null for all of it. */
+  private reveal(): RingReveal | null {
+    if (!this.charging && this.rest >= 1) return null;
+    const sample = this.arc.sample(this.reduce);
+    const echo = this.charging ? echoAlpha(this.echoOn >= 1 ? this._lvl : this.echoLvl) * this.echoOn : 0;
+    return { fraction: sample?.fraction ?? 0, rest: this.rest, flash: sample?.flash ?? 0, echo };
   }
 
   /** Draws the current frame. */
@@ -760,7 +861,7 @@ export class Emblem {
       dim: ph === "listening" ? 0.8 : 1,
       calm: ph === "listening" ? 0.6 : ph === "steady" ? 0.7 : 1,
       lvl: this._lvl,
-      arc: this.shownArc,
+      reveal: this.shownReveal,
     });
   }
 
