@@ -595,6 +595,38 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
     if (!destroyed && step === 2) paintMicRow();
   }
 
+  /** Which reading of the microphones is the latest, so that an older, slower one is dropped. */
+  let microphoneReads = 0;
+
+  function openMicrophoneMenu(anchor: HTMLElement): void {
+    const current = app.device().microphone;
+    openMenu(anchor, micChoices(devices, current), current ?? AUTO_MICROPHONE, (value) => void pickMicrophone(value));
+  }
+
+  /**
+   * Reads the microphones again when their menu is opened: a headset may have been plugged in, or
+   * the Windows default changed, since the step was shown. The menu is already open with the list
+   * there was; if the new list differs, the row is drawn again and the menu opened again under it.
+   */
+  async function refreshMicrophones(anchor: HTMLElement): Promise<void> {
+    const mine = ++microphoneReads;
+    let fresh: AudioDevices;
+    try {
+      fresh = await api.audioDevices();
+    } catch {
+      return; // the list there was stays
+    }
+    if (destroyed || step !== 2 || mine !== microphoneReads) return;
+    const saved = app.device().microphone;
+    const before = JSON.stringify(micChoices(devices, saved));
+    devices = fresh;
+    if (JSON.stringify(micChoices(devices, saved)) === before) return;
+    const wasOpen = menuIsOpenFor(anchor);
+    paintMicRow();
+    const redrawn = root.querySelector<HTMLElement>('[data-ob="mic"]');
+    if (wasOpen && redrawn) openMicrophoneMenu(redrawn);
+  }
+
   async function pickMicrophone(value: string): Promise<void> {
     try {
       await app.setDevice({ microphone: value === AUTO_MICROPHONE ? null : value });
@@ -619,8 +651,12 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
 
     const choose = target.closest<HTMLElement>(".sel");
     if (choose) {
-      if (menuIsOpenFor(choose)) closeMenu();
-      else openMenu(choose, micChoices(devices, app.device().microphone), app.device().microphone ?? AUTO_MICROPHONE, (value) => void pickMicrophone(value));
+      if (menuIsOpenFor(choose)) {
+        closeMenu();
+      } else {
+        openMicrophoneMenu(choose);
+        void refreshMicrophones(choose);
+      }
       return;
     }
 

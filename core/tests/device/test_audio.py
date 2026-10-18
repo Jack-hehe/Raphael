@@ -229,6 +229,8 @@ class FakeStream:
         self.stop_error = None
 
     def start(self):
+        if self.fake.before_start is not None:
+            self.fake.before_start()
         if self.fake.start_error is not None:
             raise self.fake.start_error
         self.started += 1
@@ -281,6 +283,7 @@ class FakeSd:
         self.streams: list[FakeStream] = []
         self.checked: list[tuple] = []
         self.start_error = None
+        self.before_start = None  # called as a stream starts, on the thread that starts it
         self.open_error = None
         self.refreshes = 0
         self.after_refresh = None
@@ -511,7 +514,7 @@ def test_mic_recorder_failure_to_start_closes_the_stream(fake_sd):
 
 
 def test_mic_recorder_does_not_look_again_while_another_recorder_records(fake_sd):
-    first = MicRecorder(lambda frames: None)
+    first = MicRecorder(lambda frames: None, device="Array Mic")  # a chosen one reads nothing
     first.start()
     fake_sd.open_error = sounddevice.PortAudioError("busy")
     with pytest.raises(NoMicrophoneError):
@@ -682,3 +685,202 @@ def test_mic_recorder_callback_never_takes_the_recorders_lock(fake_sd):
         fake_sd.streams[0].feed(np.zeros(320, np.float32))
     assert len(got) == 1
     rec.stop()
+
+
+# --- following the default microphone --------------------------------------------------------
+#
+# PortAudio reads the devices once and keeps the answer, the system default included. The fake
+# does the same: `after_refresh` is what Windows had changed to by the time the devices are read
+# again.
+
+
+def default_becomes(index):
+    def read(fake):
+        fake.default_input = index
+
+    return read
+
+
+def plug_in_mic(fake):
+    fake.devices.append(FakeSd.device(5, "Plugged Mic", 1, 48000.0))
+
+
+def test_the_automatic_microphone_follows_the_default_between_two_starts(fake_sd):
+    rec = MicRecorder(lambda frames: None)
+    rec.start()
+    rec.stop()
+    assert fake_sd.streams[0].kwargs["device"] == 1
+    fake_sd.after_refresh = default_becomes(2)  # the user chose the laptop's array in Windows
+    rec.start()
+    rec.stop()
+    assert fake_sd.streams[1].kwargs["device"] == 2
+
+
+def test_the_automatic_microphone_reads_the_devices_again_at_every_start(fake_sd):
+    rec = MicRecorder(lambda frames: None)
+    for starts in (1, 2, 3):
+        rec.start()
+        rec.stop()
+        assert fake_sd.refreshes == starts
+
+
+def test_a_start_with_a_stream_open_uses_the_list_it_has(fake_sd):
+    first = MicRecorder(lambda frames: None)
+    first.start()
+    assert fake_sd.refreshes == 1
+    fake_sd.after_refresh = default_becomes(2)
+    second = MicRecorder(lambda frames: None)  # the settings meter, say, beside a dictation
+    second.start()
+    assert fake_sd.refreshes == 1  # reading again would close the first one's stream
+    assert fake_sd.streams[1].kwargs["device"] == 1
+    first.stop()
+    second.stop()
+
+
+def test_a_chosen_microphone_that_is_there_does_not_read_the_devices_again(fake_sd):
+    fake_sd.after_refresh = default_becomes(2)
+    rec = MicRecorder(lambda frames: None, device="Array Mic")
+    rec.start()
+    assert fake_sd.refreshes == 0
+    assert fake_sd.streams[0].kwargs["device"] == 2
+    rec.stop()
+
+
+def test_a_chosen_microphone_plugged_in_after_the_first_look_is_found(fake_sd, caplog):
+    fake_sd.after_refresh = plug_in_mic
+    rec = MicRecorder(lambda frames: None, device="Plugged Mic")
+    rec.start()
+    assert fake_sd.refreshes == 1
+    assert fake_sd.streams[0].kwargs["device"] == 5
+    assert "not there" not in caplog.text
+    rec.stop()
+
+
+def test_a_chosen_microphone_that_is_still_missing_reads_once_and_uses_the_default(fake_sd, caplog):
+    fake_sd.after_refresh = default_becomes(2)
+    rec = MicRecorder(lambda frames: None, device="Unplugged Mic")
+    rec.start()
+    assert fake_sd.refreshes == 1  # once, not once more for the fallback
+    assert fake_sd.streams[0].kwargs["device"] == 2  # the default as it is now
+    assert "Unplugged Mic" in caplog.text
+    rec.stop()
+
+
+def test_a_chosen_microphone_that_will_not_open_still_gets_one_second_look(fake_sd):
+    fake_sd.open_error = sounddevice.PortAudioError("busy")
+    with pytest.raises(NoMicrophoneError):
+        MicRecorder(lambda frames: None, device="Array Mic").start()
+    assert fake_sd.refreshes == 1
+
+
+def test_an_automatic_start_that_fails_has_read_the_devices_once_not_twice(fake_sd):
+    fake_sd.open_error = sounddevice.PortAudioError("busy")
+    with pytest.raises(NoMicrophoneError):
+        MicRecorder(lambda frames: None).start()
+    assert fake_sd.refreshes == 1
+
+
+def test_list_input_devices_reads_the_devices_again(fake_sd):
+    def plug_in_and_make_default(fake):
+        plug_in_mic(fake)
+        fake.default_input = 5
+
+    fake_sd.after_refresh = plug_in_and_make_default
+    assert list_input_devices() == [
+        InputDevice(index=1, name="Headset Mic", is_default=False),
+        InputDevice(index=2, name="Array Mic", is_default=False),
+        InputDevice(index=5, name="Plugged Mic", is_default=True),
+    ]
+    assert fake_sd.refreshes == 1
+
+
+def test_list_input_devices_leaves_the_devices_alone_while_a_stream_is_open(fake_sd):
+    rec = MicRecorder(lambda frames: None, device="Array Mic")
+    rec.start()
+    fake_sd.after_refresh = plug_in_mic
+    assert [d.name for d in list_input_devices()] == ["Headset Mic", "Array Mic"]
+    assert fake_sd.refreshes == 0
+    rec.stop()
+    assert [d.name for d in list_input_devices()][-1] == "Plugged Mic"  # nothing open: it reads
+
+
+def test_the_devices_are_not_read_again_while_a_stream_is_being_opened(fake_sd):
+    """A recorder that is opening has not counted as recording yet, but a read would still pull
+    the devices from under it."""
+    entered = threading.Event()
+    release = threading.Event()
+    fake_sd.before_start = lambda: (entered.set(), release.wait(5))
+    rec = MicRecorder(lambda frames: None, device="Array Mic")
+    opener = threading.Thread(target=rec.start)
+    opener.start()
+    assert entered.wait(5)
+    listing: list[InputDevice] = []
+    lister = threading.Thread(target=lambda: listing.extend(list_input_devices()))
+    lister.start()
+    time.sleep(0.1)
+    assert fake_sd.refreshes == 0 and not listing  # it waits for the stream to open
+    release.set()
+    opener.join(5)
+    lister.join(5)
+    assert [d.name for d in listing] == ["Headset Mic", "Array Mic"]
+    assert fake_sd.refreshes == 0  # the stream was open by the time it had its turn
+    rec.stop()
+
+
+def microphone_lines(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith("Microphone:")]
+
+
+def test_the_automatic_microphone_that_opened_is_logged_once_per_start(fake_sd, caplog):
+    rec = MicRecorder(lambda frames: None)
+    with caplog.at_level(logging.INFO, logger=audio.logger.name):
+        rec.start()
+        rec.stop()
+        assert microphone_lines(caplog) == ["Microphone: Headset Mic (automatic)"]
+        fake_sd.after_refresh = default_becomes(2)
+        rec.start()
+        rec.stop()
+    assert microphone_lines(caplog) == [
+        "Microphone: Headset Mic (automatic)",
+        "Microphone: Array Mic (automatic)",
+    ]
+    assert all(r.levelno == logging.INFO for r in caplog.records if "Microphone:" in r.message)
+
+
+def test_the_chosen_microphone_that_opened_is_logged(fake_sd, caplog):
+    with caplog.at_level(logging.INFO, logger=audio.logger.name):
+        rec = MicRecorder(lambda frames: None, device="Array Mic")
+        rec.start()
+        rec.stop()
+    assert microphone_lines(caplog) == ["Microphone: Array Mic (chosen)"]
+
+
+def test_a_start_that_looks_twice_still_logs_one_microphone(fake_sd, caplog):
+    fake_sd.devices = [FakeSd.device(0, "Speakers", 0, 44100.0)]
+    fake_sd.default_input = -1
+
+    def plug_in_the_only_mic(fake):
+        fake.devices = [FakeSd.device(0, "New Mic", 1, 44100.0)]
+        fake.default_input = 0
+
+    fake_sd.after_refresh = plug_in_the_only_mic
+    with caplog.at_level(logging.INFO, logger=audio.logger.name):
+        rec = MicRecorder(lambda frames: None)
+        rec.start()
+        rec.stop()
+    assert microphone_lines(caplog) == ["Microphone: New Mic (automatic)"]
+
+
+def test_a_missing_chosen_microphone_logs_the_default_that_was_used(fake_sd, caplog):
+    with caplog.at_level(logging.INFO, logger=audio.logger.name):
+        rec = MicRecorder(lambda frames: None, device="Unplugged Mic")
+        rec.start()
+        rec.stop()
+    assert microphone_lines(caplog) == ["Microphone: Headset Mic (automatic)"]
+
+
+def test_a_start_that_fails_logs_no_microphone(fake_sd, caplog):
+    fake_sd.open_error = sounddevice.PortAudioError("busy")
+    with caplog.at_level(logging.INFO, logger=audio.logger.name), pytest.raises(NoMicrophoneError):
+        MicRecorder(lambda frames: None).start()
+    assert microphone_lines(caplog) == []

@@ -446,6 +446,33 @@ export function createSettings(app: AppContext): Page {
     setMeter(el.querySelector(".meter"), value);
   }
 
+  /** Which reading of the microphones is the latest, so that an older, slower one is dropped. */
+  let microphoneReads = 0;
+
+  /**
+   * Reads the microphones again when their menu is opened: a headset may have been plugged in, or
+   * the Windows default changed, since the page was shown. The menu is already open with the list
+   * there was; if the new list differs, the menu and the button's own label are drawn again.
+   */
+  async function refreshMicrophones(anchor: HTMLElement): Promise<void> {
+    const mine = ++microphoneReads;
+    let fresh: AudioDevices;
+    try {
+      fresh = await api.audioDevices();
+    } catch {
+      return; // the list there was stays
+    }
+    if (mine !== microphoneReads || !visible) return;
+    const before = JSON.stringify(microphoneChoices());
+    devices = fresh;
+    if (JSON.stringify(microphoneChoices()) === before) return;
+    const current = app.device().microphone ?? AUTO_MICROPHONE;
+    const label = anchor.querySelector("span");
+    if (label) label.textContent = microphoneChoices().find((c) => c.value === current)?.label ?? current;
+    const menu = menuFor("mic");
+    if (menu && menuIsOpenFor(anchor)) openMenu(anchor, menu.choices, menu.current, menu.pick);
+  }
+
   // ---------- events ----------
 
   el.addEventListener("click", (e) => {
@@ -459,6 +486,7 @@ export function createSettings(app: AppContext): Page {
       }
       const menu = menuFor(choose.dataset.k ?? "");
       if (menu) openMenu(choose, menu.choices, menu.current, menu.pick);
+      if (choose.dataset.k === "mic") void refreshMicrophones(choose);
       return;
     }
 
