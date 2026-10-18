@@ -9,7 +9,7 @@
     "prebuild": "node scripts/copy-private.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "node scripts/tauri.mjs",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {

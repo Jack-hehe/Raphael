@@ -9,6 +9,8 @@
 /models/
 /assets-private/
 /app/public/private/
+/app/src-tauri/icons-private/
+/app/src-tauri/tauri.private.conf.json
 *.ckpt
 *.pth
 *.onnx
