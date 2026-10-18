@@ -1,6 +1,7 @@
 import { afterEach, expect, test, vi } from "vitest";
 import {
   AP,
+  ARC_R,
   Emblem,
   RATE,
   VA,
@@ -424,4 +425,129 @@ test("frames counts the animation steps, so the page can tell a stalled loop", (
   e.step(1 / 60);
   e.step(1 / 60);
   expect(e.frames).toBe(2);
+});
+
+// ---- the progress arc after the key is released ----
+
+const transcribing = (done: number, total: number) => ({ stage: "transcribing" as const, done, total, audioSeconds: 5 });
+
+test("the progress arc is drawn with finite numbers in every phase, from empty to full", () => {
+  const phases: Phase[] = ["appear", "vanish", "steady", "listening", "thinking"];
+  for (const phase of phases) {
+    for (const fraction of [0, 0.001, 0.3, 0.6, 0.95, 1]) {
+      const { ctx, calls } = recordingContext();
+      const arc = { fraction, alpha: 1, flash: fraction === 1 ? 1 : 0 };
+      drawEmblem(ctx, 75, params(phase, 0.3, 0.2), { tq: 0, rot: 0.4, dim: 1, calm: 1, lvl: 0.2, arc });
+      for (const call of calls) {
+        for (const arg of call.args) {
+          if (typeof arg === "number") expect(Number.isFinite(arg), `${phase} ${fraction} ${call.name}`).toBe(true);
+        }
+      }
+    }
+  }
+});
+
+/** The arcs drawn on the progress ring's radius (R = 75): [start, end] angles. */
+function progressArcs(calls: { name: string; args: unknown[] }[]): number[][] {
+  return calls
+    .filter((c) => c.name === "arc" && Math.abs((c.args[2] as number) - 75 * ARC_R) < 1e-9)
+    .map((c) => [c.args[3] as number, c.args[4] as number]);
+}
+
+test("the arc runs clockwise from twelve o'clock over its fraction of the ring", () => {
+  const { ctx, calls } = recordingContext();
+  drawEmblem(ctx, 75, params("thinking", 0, 0), {
+    tq: 0, rot: 1.2, dim: 1, calm: 1, lvl: 0,
+    arc: { fraction: 0.25, alpha: 1, flash: 0 },
+  });
+  const arcs = progressArcs(calls);
+  expect(arcs).toContainEqual([0, Math.PI * 2]); // the faint track
+  expect(arcs).toContainEqual([-Math.PI / 2, 0]); // a quarter, ending at three o'clock
+});
+
+/** How many arcs on the progress ring's radius a frame draws (the plain glyph ring has one too). */
+function arcsAt(phase: Phase, t: number, arc?: { fraction: number; alpha: number; flash: number } | null): number {
+  const { ctx, calls } = recordingContext();
+  drawEmblem(ctx, 75, params(phase, t, 0), { tq: 0, rot: 0, dim: 1, calm: 1, lvl: 0, arc });
+  return progressArcs(calls).length;
+}
+
+test("no arc, no progress ring; a faded arc draws nothing", () => {
+  const without = arcsAt("thinking", 0);
+  expect(arcsAt("thinking", 0, { fraction: 0.5, alpha: 1, flash: 0 })).toBeGreaterThan(without);
+  expect(arcsAt("thinking", 0, null)).toBe(without);
+  expect(arcsAt("thinking", 0, { fraction: 0.5, alpha: 0, flash: 0 })).toBe(without);
+});
+
+test("the arc fades with the glyph ring when the emblem vanishes", () => {
+  const full = { fraction: 1, alpha: 1, flash: 0 };
+  // drawn while the glyphs are there, gone once they have faded (0.367 s)
+  expect(arcsAt("vanish", 0.167, full)).toBeGreaterThan(arcsAt("vanish", 0.167));
+  expect(arcsAt("vanish", 0.367, full)).toBe(arcsAt("vanish", 0.367));
+});
+
+test("the emblem shows the progress on the 24 fps clock", () => {
+  const e = new Emblem(fakeCanvas(), 150, { visible: true });
+  e.set("thinking");
+  e.step(1 / 24 + 1e-3);
+  expect(e.progressShown).toBeNull();
+  e.progress(transcribing(1, 2));
+  e.step(0.01);
+  expect(e.progressShown).toBeNull(); // same tick: not drawn yet
+  e.step(1 / 24);
+  expect(e.progressShown?.fraction).toBeGreaterThan(0);
+  for (let i = 0; i < 48; i++) e.step(1 / 24);
+  expect(e.progressShown?.fraction).toBeCloseTo(0.3, 3);
+  // between ticks the drawn arc stands still
+  e.progress({ stage: "done", done: 0, total: 0, audioSeconds: 0 });
+  const before = e.progressShown?.fraction;
+  e.step(0.005);
+  expect(e.progressShown?.fraction).toBe(before);
+  e.step(1 / 24);
+  expect(e.progressShown?.fraction).toBe(1);
+});
+
+test("a hidden emblem ignores progress, and the next appear starts without an arc", () => {
+  const e = new Emblem(fakeCanvas(), 150);
+  e.progress(transcribing(1, 2));
+  e.step(0.1);
+  expect(e.progressShown).toBeNull();
+  e.set("thinking");
+  e.appear();
+  e.progress({ stage: "done", done: 0, total: 0, audioSeconds: 0 });
+  e.step(0.1);
+  expect(e.progressShown?.fraction).toBe(1);
+  e.vanish();
+  e.progress(transcribing(0, 1)); // too late: ignored
+  for (let i = 0; i < 24; i++) e.step(1 / 24);
+  expect(e.phase).toBe("hidden");
+  e.appear();
+  e.step(0.1);
+  expect(e.progressShown).toBeNull();
+});
+
+test("clearProgress fades the arc out", () => {
+  const e = new Emblem(fakeCanvas(), 150, { visible: true });
+  e.progress({ stage: "done", done: 0, total: 0, audioSeconds: 0 });
+  e.step(1 / 24 + 1e-3);
+  e.clearProgress();
+  e.step(1 / 24);
+  const a = e.progressShown?.alpha ?? 0;
+  expect(a).toBeGreaterThan(0);
+  expect(a).toBeLessThan(1);
+  for (let i = 0; i < 12; i++) e.step(1 / 24);
+  expect(e.progressShown).toBeNull();
+});
+
+test("with reduced motion the arc jumps to each step without easing", () => {
+  vi.stubGlobal("window", { matchMedia: () => ({ matches: true }), devicePixelRatio: 1 });
+  const e = new Emblem(fakeCanvas(), 150);
+  e.set("thinking");
+  e.appear();
+  e.progress(transcribing(1, 2));
+  e.step(1 / 24 + 1e-3);
+  expect(e.progressShown?.fraction).toBeCloseTo(0.3, 10);
+  e.progress({ stage: "done", done: 0, total: 0, audioSeconds: 0 });
+  e.step(1 / 24);
+  expect(e.progressShown).toEqual({ fraction: 1, alpha: 1, flash: 0 });
 });
