@@ -84,7 +84,8 @@ pub fn is_allowed_method(m: &str) -> bool {
 }
 
 /// Checks the values the core would only type-check: a monthly limit of 0 or more, a history
-/// retention of at least one day, a language the speech recognition knows, a model that is named.
+/// retention of at least one day, a language the speech recognition knows, a model that is named,
+/// a speech-to-text engine that exists (the core checks the cloud model against its own list).
 /// `Err` says what is wrong. Calls other than `settings.set` pass.
 pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     if method != "settings.set" {
@@ -103,6 +104,9 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
             .as_str()
             .is_some_and(|language| ["auto", "zh", "ja", "en"].contains(&language)),
         "cleanup_model" => value.as_str().is_some_and(|model| !model.trim().is_empty()),
+        "stt_engine" => value
+            .as_str()
+            .is_some_and(|engine| ["cloud", "local"].contains(&engine)),
         _ => true,
     };
     if fine {
@@ -112,6 +116,7 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
         "monthly_limit_usd" => "每月上限要是 0 以上的數字",
         "history_retention_days" => "歷史紀錄至少要保留 1 天",
         "language" => "語言只能是 auto、zh、ja 或 en",
+        "stt_engine" => "語音轉文字只能選雲端或本機",
         _ => "沒有指定整理用的模型",
     }
     .to_owned())
@@ -740,6 +745,19 @@ mod tests {
         assert!(set("cleanup_model", json!("google/gemini-3.1-flash-lite")).is_ok());
         assert!(set("cleanup_model", json!("")).is_err());
         assert!(set("cleanup_model", json!(3)).is_err());
+    }
+
+    #[test]
+    fn the_speech_to_text_engine_is_cloud_or_local() {
+        assert!(set("stt_engine", json!("cloud")).is_ok());
+        assert!(set("stt_engine", json!("local")).is_ok());
+        assert_eq!(
+            set("stt_engine", json!("gpu")),
+            Err("語音轉文字只能選雲端或本機".to_owned())
+        );
+        assert!(set("stt_engine", json!(null)).is_err());
+        // the core checks the cloud model against the models it knows
+        assert!(set("stt_cloud_model", json!("openai/gpt-transcribe")).is_ok());
     }
 
     #[test]

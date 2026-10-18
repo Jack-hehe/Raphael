@@ -55,6 +55,8 @@ export interface HistoryItem {
   llm_ms: number;
   model: string | null;
   cost_usd: number;
+  /** The speech-to-text that heard it: a cloud model's slug or the local engine's name ("a+b" when the cloud fell back midway). Absent from older cores. */
+  stt?: string | null;
 }
 
 /** An entry of `dictionary.list` */
@@ -71,6 +73,9 @@ export interface BrainSettings {
   cleanup_model: string;
   language: string;
   history_retention_days: number;
+  /** "cloud" (OpenRouter, the local engine as fallback) or "local". */
+  stt_engine: string;
+  stt_cloud_model: string;
 }
 
 /** `secrets.set_openrouter_key` */
