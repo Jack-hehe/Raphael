@@ -213,7 +213,7 @@ class FakeBrain:
         self.finalize_calls = 0
         self.fail_dictionary = False
         self.entries = [{"id": 1, "word": "拉斐爾", "misheard": [], "source": "manual"}]
-        self.settings = {"language": "auto"}
+        self.settings = {"languages": ["zh-TW", "en-US", "ja-JP"], "language": "auto"}
         self.on_finalize = None
         router.register("brain.finalize_dictation", self._finalize)
         router.register("dictionary.list", self._dictionary_list)
@@ -414,13 +414,29 @@ async def test_the_dictionary_words_go_to_the_engine_newest_first(rig, router, b
     assert rig.engine.calls[0]["hints"] == ["新詞", "OpenRouter", "舊詞"]
 
 
-async def test_the_language_setting_goes_to_the_engine(rig, router, brain):
-    brain.settings = {"language": "zh"}
+@pytest.mark.parametrize(
+    ("settings", "language"),
+    [
+        ({"languages": ["zh-HK"], "language": "zh"}, "zh"),
+        ({"languages": ["yue-HK"], "language": "zh"}, "yue"),
+        ({"languages": ["en-GB"], "language": "en"}, "en"),
+        ({"languages": ["ko-KR"], "language": "auto"}, "ko"),
+        ({"languages": ["zh-CN", "en-US"], "language": "auto"}, "auto"),
+        # A brain of an older version has only the old key.
+        ({"language": "ja"}, "ja"),
+        # What is not a valid selection is automatic.
+        ({"languages": ["zh-TW", "zh-CN"]}, "auto"),
+        ({"languages": "zh-TW"}, "auto"),
+        ({}, "auto"),
+    ],
+)
+async def test_the_language_setting_goes_to_the_engine(rig, router, brain, settings, language):
+    brain.settings = settings
     rig.recorder.chunks = [chunk(1.0)]
     await start(router)
     await rig.recorder.fed(1)
     await stop(router)
-    assert rig.engine.calls[0]["language"] == "zh"
+    assert rig.engine.calls[0]["language"] == language
 
 
 async def test_a_broken_dictionary_does_not_stop_dictation(rig, router, brain, caplog):

@@ -118,10 +118,33 @@ async def test_the_audio_the_hints_and_the_model_of_the_settings_go_to_the_clien
     assert call["language"] is None  # automatic
 
 
-@pytest.mark.parametrize("language", ["zh", "ja", "en"])
+@pytest.mark.parametrize(
+    "language", ["zh", "ja", "en", "ko", "fr", "de", "es", "it", "pt", "vi", "th", "id"]
+)
 async def test_a_chosen_language_goes_as_its_iso_code(router, fake_client, language):
     await transcribe(router, language=language)
     assert fake_client.calls[0]["language"] == language
+    assert fake_client.calls[0]["languages"] == []
+
+
+async def test_cantonese_goes_to_the_cloud_as_chinese(router, fake_client):
+    # OpenRouter documents ISO 639-1 codes only, and Cantonese has none.
+    await transcribe(router, language="yue")
+    assert fake_client.calls[0]["language"] == "zh"
+
+
+async def test_automatic_hands_the_codes_of_the_chosen_languages_along(router, fake_client):
+    await router.call("settings.set", {"key": "languages", "value": ["yue-HK", "en-GB", "ja-JP"]})
+    await transcribe(router, language="auto")
+    call = fake_client.calls[0]
+    assert call["language"] is None
+    assert call["languages"] == ["zh", "en", "ja"]
+
+
+async def test_a_single_language_hands_no_list_along(router, fake_client):
+    await router.call("settings.set", {"key": "languages", "value": ["en-GB", "ja-JP"]})
+    await transcribe(router, language="en")
+    assert (fake_client.calls[0]["language"], fake_client.calls[0]["languages"]) == ("en", [])
 
 
 async def test_the_model_follows_the_setting(router, fake_client):
@@ -188,7 +211,9 @@ async def test_no_answer_in_time_is_a_timeout(router, fake_client, monkeypatch):
         {"audio": base64.b64encode(b"not a wav file").decode()},
         {"hints": "拉斐爾"},
         {"hints": [1]},
-        {"language": "de"},
+        {"language": "xx"},
+        {"language": "zh-TW"},
+        {"language": 1},
     ],
 )
 async def test_bad_params_are_invalid_params(router, fake_client, params):
@@ -236,3 +261,33 @@ async def test_end_to_end_on_the_real_client_with_a_mock_transport(conn):
     assert body["provider"]["options"]["openai"]["keywords"] == ["拉斐爾"]
     assert body["provider"]["options"]["openai"]["languages"] == ["zh"]
     assert spend_rows(conn) == [("stt", "openai/gpt-transcribe", 0.0002, 0, 0)]
+
+
+async def test_gpt_transcribe_gets_every_chosen_language_when_automatic(conn):
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"text": "早安", "usage": {"seconds": 2, "cost": 0.0002}})
+
+    keys = MemoryKeyStore()
+    keys.set(KEY)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        router = Router()
+        Brain(conn, OpenRouterClient(keys.get, http=http), keys, now_ms=lambda: NOW_MS).register(
+            router
+        )
+        await router.call(
+            "settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"}
+        )
+        await router.call(
+            "settings.set", {"key": "languages", "value": ["zh-TW", "en-US", "ja-JP"]}
+        )
+        await transcribe(router, language="auto")
+        await router.call(
+            "settings.set", {"key": "stt_cloud_model", "value": "elevenlabs/scribe-v2"}
+        )
+        await transcribe(router, language="auto")
+    assert seen[0]["provider"]["options"]["openai"]["languages"] == ["zh", "en", "ja"]
+    assert "language" not in seen[0]
+    assert "language" not in seen[1]  # the others detect it themselves
