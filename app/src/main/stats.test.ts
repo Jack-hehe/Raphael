@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { MIN_BAR, chartSVG, durationParts, formatCount, formatDuration, layoutBars, longDate, niceMax, shortDate } from "./stats";
+import { MIN_BAR, chartSVG, durationParts, formatCount, formatDuration, layoutBars, longDate, niceMax, periodSpeed, periodTimeSaved, shortDate } from "./stats";
 
 const day = (date: string, words: number, dictations = words > 0 ? 1 : 0) => ({ date, words, dictations });
+
+describe("period numbers", () => {
+  it("time saved is the typing time of the words less the speaking time", () => {
+    expect(periodTimeSaved({ words: 400, audio_seconds: 120 })).toBe(480); // 10 min typing - 2 min speaking
+    expect(periodTimeSaved({ words: 10, audio_seconds: 60 })).toBe(0); // never below zero
+  });
+  it("speed is words per minute of speaking, or null without speech", () => {
+    expect(periodSpeed({ words: 300, audio_seconds: 120 })).toBe(150);
+    expect(periodSpeed({ words: 0, audio_seconds: 0 })).toBeNull();
+  });
+});
 
 describe("formatDuration", () => {
   it("reads seconds, minutes and hours", () => {

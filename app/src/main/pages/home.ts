@@ -9,7 +9,7 @@ import { formatUsd } from "../format";
 import { bindingLabels } from "../keys";
 import { blockingAlert, buildReport, coreDownReport } from "../report";
 import { Stage } from "../stage";
-import { chartSVG, durationParts, formatCount, hasDictations } from "../stats";
+import { chartSVG, durationParts, formatCount, hasDictations, periodSpeed, periodTimeSaved } from "../stats";
 import type { AppContext, Page, Status, StatsSummary } from "../types";
 import { btn, esc, keys, st } from "../ui";
 
@@ -24,10 +24,11 @@ function stat(value: string, label: string): string {
 const unit = (n: string, u: string): string => `${esc(n)}<small>${esc(u)}</small>`;
 
 function dashboardHTML(s: StatsSummary): string {
-  const saved = durationParts(s.time_saved_seconds)
+  const month = s.month;
+  const saved = durationParts(periodTimeSaved(month))
     .map(([n, u]) => unit(n, u))
     .join("");
-  const month = s.month;
+  const speed = periodSpeed(month);
   return (
     `<section class="dash" aria-label="本月用量">` +
     `<div class="dash-head"><h2>本月</h2>` +
@@ -35,9 +36,9 @@ function dashboardHTML(s: StatsSummary): string {
     `<div class="stats">` +
     stat(unit(formatCount(month.words), "字"), "聽寫字數") +
     stat(saved, "省下的打字時間") +
-    (s.speed_wpm === null
+    (speed === null
       ? `<div class="stat"><div class="v none">資料還不夠</div><div class="k">平均速度</div></div>`
-      : stat(unit(formatCount(s.speed_wpm), "字/分鐘"), "平均速度")) +
+      : stat(unit(formatCount(speed), "字/分鐘"), "平均速度")) +
     stat(unit(String(s.streak_days), "天"), "連續使用") +
     `</div></section>` +
     `<section class="trend"><h3>過去 14 天</h3>${chartSVG(s.by_day)}</section>`

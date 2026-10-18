@@ -18,6 +18,18 @@ export function formatDuration(seconds: number): string {
   return rest ? `${hours} 小時 ${rest} 分` : `${hours} 小時`;
 }
 
+/** Typing speed the time saved is measured against, as the core's TYPING_WPM (brain/stats.py). */
+export const TYPING_WPM = 40;
+
+/** The typing time a period's dictations saved: its words typed at TYPING_WPM, less the time spent
+ * speaking them. The core's time_saved_seconds is for all time; the home page shows this month. */
+export const periodTimeSaved = (p: { words: number; audio_seconds: number }): number =>
+  Math.max(0, (p.words / TYPING_WPM) * 60 - p.audio_seconds);
+
+/** Words (CJK characters count one each) per minute of speaking in a period; null without speech. */
+export const periodSpeed = (p: { words: number; audio_seconds: number }): number | null =>
+  p.audio_seconds > 0 ? p.words / (p.audio_seconds / 60) : null;
+
 /** The same, split into number and unit parts so the numbers can be set larger: 3 小時 12 分 -> [["3","小時"],["12","分"]]. */
 export function durationParts(seconds: number): [string, string][] {
   const words = formatDuration(seconds).split(" ");
