@@ -1,0 +1,6 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <title>Raphael - Tray Halo</title>
+  <desc>A high-contrast halo with a midnight silhouette for light and dark Windows trays.</desc>
+  <path d="M 28 13.884 A 12.185 12.185 0 1 1 20.168 4.550" fill="none" stroke="#10192f" stroke-width="6" stroke-linecap="round"/>
+  <path d="M 28 13.884 A 12.185 12.185 0 1 1 20.168 4.550" fill="none" stroke="#ebfcff" stroke-width="3.6" stroke-linecap="round"/>
+</svg>
