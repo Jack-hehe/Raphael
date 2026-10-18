@@ -11,6 +11,8 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { Emblem, canvasSize, loadGlyphTexture, type Mode, type Phase } from "./emblem";
 import { noticeDurationMs } from "./notice";
 import type { ProgressReport, Stage } from "./progress";
+import { ProgressArc } from "./progress";
+import { COMPLETION_MS, formatProgress, progressPercent } from "./progress-caption";
 import { FrameWatch, describeError, guardHandler, subscribeWithRetry, type LogLevel } from "./diagnostics";
 
 export { noticeDurationMs };
@@ -27,6 +29,7 @@ export type OverlayEvent =
   | { type: "progress"; stage: Stage; done: number; total: number; audio_seconds: number }
   | { type: "notice"; zh: string; ja: string }
   | { type: "learned"; zh: string; ja: string }
+  | { type: "complete" }
   | { type: "hide" }
   | { type: "settings"; px: number; subtitles: string };
 
@@ -56,6 +59,8 @@ export interface OverlayView {
   /** Shows the lines; null leaves that line out. */
   showLines(zh: string | null, ja: string | null): void;
   clearLines(): void;
+  /** Processing progress is separate from optional spoken subtitles; null hides it. */
+  showProgress(percent: number | null): void;
 }
 
 interface Notice {
@@ -81,6 +86,10 @@ export class OverlayController {
   private generation = 0;
   private pendingShow: Mode | null = null;
   private pendingEvents: Array<{ mode: Mode } | { progress: ProgressReport }> = [];
+  private readonly progress = new ProgressArc();
+  private progressTimer: ReturnType<typeof setInterval> | undefined;
+  private progressClock = 0;
+  private lastProgress: number | null = null;
 
   constructor(
     private readonly emblem: EmblemControl,
@@ -105,23 +114,23 @@ export class OverlayController {
           const mode = this.pendingShow!;
           this.pendingShow = null;
           this.appearIfHidden();
-          this.emblem.set(mode);
+          this.setMode(mode);
           for (const pending of this.pendingEvents) {
-            if ("mode" in pending) this.emblem.set(pending.mode);
-            else this.emblem.progress(pending.progress);
+            if ("mode" in pending) this.setMode(pending.mode);
+            else this.updateProgress(pending.progress);
           }
           this.pendingEvents = [];
         });
         break;
       case "mode":
         if (this.pendingShow !== null) this.pendingEvents.push({ mode: event.mode });
-        else this.emblem.set(event.mode);
+        else this.setMode(event.mode);
         break;
       case "level":
         this.emblem.level = event.value;
         break;
       case "progress":
-        // No words: the glyph ring says it (dictation shows no subtitles).
+        // A single percentage beside the complete ring replaces the clockwise progress light.
         const progress = {
           stage: event.stage,
           done: event.done,
@@ -129,12 +138,31 @@ export class OverlayController {
           audioSeconds: event.audio_seconds,
         };
         if (this.pendingShow !== null) this.pendingEvents.push({ progress });
-        else this.emblem.progress(progress);
+        else this.updateProgress(progress);
+        break;
+      case "complete":
+        if (!this.activeShow) break;
+        this.activeShow = false;
+        this.cancelNotices();
+        this.emblem.clearProgress();
+        this.busy = true;
+        this.afterPlacement("corner", () => {
+          this.appearIfHidden();
+          this.emblem.set("steady");
+          this.view.showProgress(100);
+          this.lastProgress = 100;
+          this.timer = setTimeout(() => {
+            this.view.showProgress(null);
+            this.lastProgress = null;
+            this.next();
+          }, COMPLETION_MS);
+        });
         break;
       case "notice":
       case "learned":
         // Raphael speaks: the dictation's progress has said what it had to.
         this.activeShow = false;
+        if (this.progress.active) this.stopProgress();
         if (this.pendingShow !== null) {
           this.generation++;
           this.pendingShow = null;
@@ -161,6 +189,51 @@ export class OverlayController {
 
   private appearIfHidden(): void {
     if (this.emblem.phase === "hidden" || this.emblem.phase === "vanish") this.emblem.appear();
+  }
+
+  private setMode(mode: Mode): void {
+    this.emblem.set(mode);
+    if (this.activeShow && mode === "thinking" && !this.progress.active) {
+      this.progress.report({ stage: "transcribing", done: 0, total: 1, audioSeconds: 0 }, false);
+      this.renderProgress();
+      this.startProgressTimer();
+    }
+  }
+
+  private updateProgress(report: ProgressReport): void {
+    if (!this.activeShow) return;
+    this.emblem.progress(report);
+    this.progress.report(report, false);
+    this.renderProgress();
+    this.startProgressTimer();
+  }
+
+  private startProgressTimer(): void {
+    if (this.progressTimer !== undefined) return;
+    this.progressClock = Date.now();
+    this.progressTimer = setInterval(() => {
+      const now = Date.now();
+      this.progress.advance(Math.max(0, now - this.progressClock) / 1000, false);
+      this.progressClock = now;
+      this.renderProgress();
+    }, 100);
+  }
+
+  private renderProgress(): void {
+    const stage = this.progress.currentStage;
+    if (!stage || !this.activeShow || this.pendingShow !== null) return;
+    const percent = progressPercent(stage, this.progress.fraction);
+    if (percent === this.lastProgress) return;
+    this.lastProgress = percent;
+    this.view.showProgress(percent);
+  }
+
+  private stopProgress(): void {
+    clearInterval(this.progressTimer);
+    this.progressTimer = undefined;
+    this.progress.reset();
+    this.lastProgress = null;
+    this.view.showProgress(null);
   }
 
   /** Shows the next notice, or lets the emblem vanish when none is left. */
@@ -208,6 +281,7 @@ export class OverlayController {
   }
 
   private cancelNotices(): void {
+    this.stopProgress();
     this.generation++;
     this.pendingShow = null;
     this.pendingEvents = [];
@@ -228,6 +302,7 @@ class DomView implements OverlayView {
     private readonly box: HTMLElement,
     private readonly zh: HTMLElement,
     private readonly ja: HTMLElement,
+    private readonly progress: HTMLElement,
   ) {}
 
   place(placement: OverlayPlacement): Promise<void> {
@@ -256,6 +331,13 @@ class DomView implements OverlayView {
     this.box.classList.remove("on");
     this.zh.textContent = "";
     this.ja.textContent = "";
+  }
+
+  showProgress(percent: number | null): void {
+    this.progress.hidden = percent === null;
+    this.progress.textContent = percent === null ? "" : formatProgress(percent);
+    if (percent === null) this.progress.removeAttribute("aria-valuenow");
+    else this.progress.setAttribute("aria-valuenow", String(percent));
   }
 }
 
@@ -297,13 +379,14 @@ async function start(): Promise<void> {
   const box = document.getElementById("subtitles");
   const zh = box?.querySelector<HTMLElement>(".sub-zh");
   const ja = box?.querySelector<HTMLElement>(".sub-ja");
-  if (!(canvas instanceof HTMLCanvasElement) || !box || !zh || !ja) {
-    throw new Error("overlay.html is missing the emblem canvas or the subtitles");
+  const progress = document.getElementById("progress");
+  if (!(canvas instanceof HTMLCanvasElement) || !box || !zh || !ja || !progress) {
+    throw new Error("overlay.html is missing the emblem canvas, subtitles, or progress");
   }
 
-  const view = new DomView(document.documentElement, box, zh, ja);
+  const view = new DomView(document.documentElement, box, zh, ja, progress);
   view.layout(DEFAULT_PX);
-  const emblem = new Emblem(canvas, DEFAULT_PX, { surface: "transparent" });
+  const emblem = new Emblem(canvas, DEFAULT_PX, { surface: "transparent", progressStyle: "caption" });
   const controller = new OverlayController(emblem, view);
   const frames = new FrameWatch(() => emblem.frames, () => document.visibilityState, pageLog, {
     canvas,
@@ -321,7 +404,7 @@ async function start(): Promise<void> {
   // side. An event that fails is reported and the channel goes on.
   const handle = guardHandler((event) => {
     controller.handle(event);
-    if (event.type === "show" || event.type === "notice" || event.type === "learned") frames.expectFrames(event.type);
+    if (event.type === "show" || event.type === "notice" || event.type === "learned" || event.type === "complete") frames.expectFrames(event.type);
   }, pageLog);
   await subscribeWithRetry(() => {
     const channel = new Channel<OverlayEvent>(handle);

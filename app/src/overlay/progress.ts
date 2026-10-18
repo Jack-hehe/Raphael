@@ -73,6 +73,11 @@ export class ProgressArc {
     return this.stage !== null;
   }
 
+  /** The latest accepted stage, also used by the overlay's progress caption. */
+  get currentStage(): Stage | null {
+    return this.stage;
+  }
+
   /** The fraction of the circle filled now, 0 to 1 (0 when inactive). */
   get fraction(): number {
     return this.stage === null ? 0 : this.value;

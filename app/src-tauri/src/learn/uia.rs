@@ -144,8 +144,15 @@ impl FieldProbe for UiaProbe {
             handler: subscribed.then_some(handler),
             _com: com,
         };
-        if !field.still_focused() {
-            return probe_step(None, "focus_changed_after_subscription");
+        if let Err(failure) = field.check_focus() {
+            log::info!(
+                "learn: probe stopped (stage: focus_changed_after_subscription, reason: {}, final_recheck: {}, declared_password: {:?}, hresult: {:?})",
+                failure.reason,
+                failure.final_recheck,
+                failure.declared_password,
+                failure.hresult.map(|code| format!("0x{:08X}", code as u32))
+            );
+            return None;
         }
         if kind == AppKind::Terminal {
             // Screen text cannot prove whether a command has already been submitted. Cover the
@@ -451,6 +458,25 @@ struct UiaField {
     _com: Com,
 }
 
+/// Fixed metadata only: no element names, runtime identifiers, or field contents.
+struct FocusFailure {
+    reason: &'static str,
+    final_recheck: bool,
+    declared_password: Option<bool>,
+    hresult: Option<i32>,
+}
+
+impl FocusFailure {
+    fn new(reason: &'static str) -> Self {
+        Self {
+            reason,
+            final_recheck: false,
+            declared_password: None,
+            hresult: None,
+        }
+    }
+}
+
 impl WatchedField for UiaField {
     fn read(&mut self) -> Snapshot {
         if !self.read_allowed() {
@@ -627,25 +653,59 @@ impl UiaField {
     }
 
     fn still_focused(&self) -> bool {
-        if !self.scope.active()
-            || self.focus.left.load(Ordering::SeqCst)
-            || foreground() != self.hwnd
-        {
-            return false;
-        }
-        let focused = unsafe {
-            self.automation.GetFocusedElement().is_ok_and(|now| {
-                safe_password_status(declared_password(&now))
-                    && self
-                        .automation
-                        .CompareElements(&now, &self.focused)
-                        .is_ok_and(|same| same.as_bool())
-            })
+        self.check_focus().is_ok()
+    }
+
+    /// Preserve the original short-circuit order before and after the provider calls.
+    fn focus_guard(&self, final_recheck: bool) -> Result<(), FocusFailure> {
+        let reason = if !self.scope.active() {
+            "scope_cancelled"
+        } else if self.focus.left.load(Ordering::SeqCst) {
+            "focus_event"
+        } else if foreground() != self.hwnd {
+            "foreground_changed"
+        } else {
+            return Ok(());
         };
-        focused
-            && self.scope.active()
-            && !self.focus.left.load(Ordering::SeqCst)
-            && foreground() == self.hwnd
+        Err(FocusFailure {
+            final_recheck,
+            ..FocusFailure::new(reason)
+        })
+    }
+
+    /// Polling stays silent; only the initial probe reports this failure metadata.
+    fn check_focus(&self) -> Result<(), FocusFailure> {
+        self.focus_guard(false)?;
+        let now = unsafe { self.automation.GetFocusedElement() }.map_err(|error| FocusFailure {
+            hresult: Some(error.code().0),
+            ..FocusFailure::new("focused_element_error")
+        })?;
+        let password = declared_password(&now);
+        if !safe_password_status(password) {
+            return Err(FocusFailure {
+                declared_password: password,
+                ..FocusFailure::new("password_unknown_or_true")
+            });
+        }
+        let same =
+            unsafe { self.automation.CompareElements(&now, &self.focused) }.map_err(|error| {
+                FocusFailure {
+                    declared_password: password,
+                    hresult: Some(error.code().0),
+                    ..FocusFailure::new("identity_mismatch_or_error")
+                }
+            })?;
+        if !same.as_bool() {
+            return Err(FocusFailure {
+                declared_password: password,
+                ..FocusFailure::new("identity_mismatch_or_error")
+            });
+        }
+        drop(now);
+        self.focus_guard(true).map_err(|mut failure| {
+            failure.declared_password = password;
+            failure
+        })
     }
 }
 

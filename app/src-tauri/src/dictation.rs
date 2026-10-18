@@ -423,15 +423,6 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                     return;
                 }
             };
-            // The text is there: the emblem's progress ring fills, then the paste, the hide or
-            // the notice follow as before.
-            {
-                let _transition = lock(&this.transitions);
-                if !this.is_current(&id) {
-                    return;
-                }
-                this.overlay.progress(Progress::DONE);
-            }
             let text = reply.get("text").and_then(Value::as_str).unwrap_or("");
             if text.is_empty() {
                 // Nothing to paste. If the microphone also delivered no sound, say so, every
@@ -449,6 +440,14 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 }
                 return;
             }
+            // Text is ready, but the page must wait for confirmed delivery before showing 100%.
+            {
+                let _transition = lock(&this.transitions);
+                if !this.is_current(&id) {
+                    return;
+                }
+                this.overlay.progress(Progress::DONE);
+            }
             let reason = reply
                 .get("fallback_reason")
                 .and_then(Value::as_str)
@@ -459,7 +458,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 .await;
             this.finish(&id, |this| {
                 let fallback = this.first_time(notices::notice_for_fallback(reason.as_deref()));
-                this.report(delivery.as_ref().map(|item| item.outcome), fallback, true);
+                this.report(delivery.as_ref(), fallback, true);
                 this.learn_after_paste(text, target.as_ref(), delivery);
             });
         }))
@@ -529,7 +528,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         };
         let delivery = self.deliver(text.clone(), target.clone(), None).await;
         let _transition = lock(&self.transitions);
-        self.report(delivery.as_ref().map(|item| item.outcome), None, false);
+        self.report(delivery.as_ref(), None, false);
         if self.phase() == Phase::Idle {
             self.learn_after_paste(&text, target.as_ref(), delivery);
         }
@@ -607,7 +606,19 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
 
     /// Shows what became of a delivery: the notice for text that was only copied, then the
     /// fallback notice. With neither, a dictation's emblem is hidden (`hide_if_quiet`).
-    fn report(&self, outcome: Option<PasteOutcome>, fallback: Option<Notice>, hide_if_quiet: bool) {
+    fn report(
+        &self,
+        delivery: Option<&PasteDelivery>,
+        fallback: Option<Notice>,
+        hide_if_quiet: bool,
+    ) {
+        let outcome = delivery.map(|item| item.outcome);
+        let completed = hide_if_quiet
+            && delivery
+                .is_some_and(|item| item.outcome == PasteOutcome::Pasted && item.receipt.is_some());
+        if completed {
+            self.overlay.complete();
+        }
         let copied = match outcome {
             Some(PasteOutcome::CopiedOnly(CopyReason::Elevated)) => Some(notices::ELEVATED),
             Some(PasteOutcome::CopiedOnly(CopyReason::FocusChanged | CopyReason::NoTarget)) => {
@@ -620,7 +631,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             self.show(notice);
             shown = true;
         }
-        if !shown && hide_if_quiet {
+        if !shown && hide_if_quiet && !completed {
             self.overlay.hide();
         }
     }
@@ -852,6 +863,11 @@ mod app {
         fn hide(&self) {
             if let Some(overlay) = &self.0 {
                 overlay.hide();
+            }
+        }
+        fn complete(&self) {
+            if let Some(overlay) = &self.0 {
+                overlay.complete();
             }
         }
         fn progress(&self, progress: Progress) {
@@ -1137,6 +1153,7 @@ mod tests {
     /// not about; `timeline` has everything, in order.
     #[derive(Default)]
     struct FakeOverlay {
+        completions: Mutex<u32>,
         events: Mutex<Vec<String>>,
         timeline: Mutex<Vec<String>>,
         paused_hide: Mutex<
@@ -1192,6 +1209,10 @@ mod tests {
                 resume.recv().unwrap();
             }
             self.push("hide".to_owned());
+        }
+        fn complete(&self) {
+            *self.completions.lock().unwrap() += 1;
+            self.hide();
         }
         fn progress(&self, progress: Progress) {
             let stage = format!("{:?}", progress.stage).to_lowercase();
@@ -2294,12 +2315,13 @@ mod tests {
             .filter(|e| **e == notice(OFFLINE.zh))
             .count();
         assert_eq!(offline, 1);
-        // the first dictation ends with the notice (no hide after it), the second with a hide
+        // Both deliveries complete; the first then queues the once-per-session notice.
         assert_eq!(
             c.overlay().events(),
             vec![
                 "show:listening",
                 "mode:thinking",
+                "hide",
                 &notice(OFFLINE.zh),
                 "show:listening",
                 "mode:thinking",
@@ -2950,6 +2972,34 @@ mod tests {
 
     // ---------- progress after the stop ----------
 
+    #[test]
+    fn only_confirmed_successful_delivery_reaches_one_hundred_percent() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("hello", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        let confirmed = PasteDelivery {
+            outcome: PasteOutcome::Pasted,
+            receipt: Some(crate::paste::PasteReceipt::new()),
+        };
+        let failed = PasteDelivery {
+            outcome: PasteOutcome::Pasted,
+            receipt: None,
+        };
+        let copied = PasteDelivery {
+            outcome: PasteOutcome::CopiedOnly(CopyReason::Elevated),
+            receipt: None,
+        };
+        c.report(Some(&confirmed), None, true);
+        assert_eq!(*c.overlay().completions.lock().unwrap(), 1);
+        c.report(Some(&failed), None, true);
+        c.report(Some(&copied), None, true);
+        c.report(None, None, true);
+        assert_eq!(*c.overlay().completions.lock().unwrap(), 1);
+        c.report(Some(&confirmed), Some(NO_SOUND), true);
+        assert_eq!(*c.overlay().completions.lock().unwrap(), 2);
+    }
+
     fn session_of(c: &Ctl) -> String {
         c.core().call_params("dictation.start")["session_id"]
             .as_str()
@@ -3061,7 +3111,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_reply_fills_the_ring_before_the_no_sound_notice() {
+    async fn a_silent_reply_reports_no_sound_without_claiming_completion() {
         let c = controller(
             FakeCore::with("dictation.stop", empty_result(true)),
             FakePaster::pasting("notepad.exe"),
@@ -3069,10 +3119,9 @@ mod tests {
         run(&c, HotkeyEvent::DictationDown, 0).await;
         run(&c, HotkeyEvent::DictationUp, 900).await;
         let timeline = c.overlay().timeline();
-        assert_eq!(
-            timeline[timeline.len() - 2..],
-            ["progress:done:0/0:0".to_owned(), notice(NO_SOUND.zh)]
-        );
+        assert_eq!(timeline.last(), Some(&notice(NO_SOUND.zh)));
+        assert!(c.overlay().progress().is_empty());
+        assert_eq!(*c.overlay().completions.lock().unwrap(), 0);
     }
 
     #[tokio::test]

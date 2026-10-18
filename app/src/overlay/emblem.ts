@@ -164,6 +164,7 @@ function mulberry32(seed: number): () => number {
 let glyph: HTMLImageElement | null = null;
 let tintCanvas: HTMLCanvasElement | null = null;
 let cleanTint: { source: HTMLImageElement; mix: number; canvas: HTMLCanvasElement } | null = null;
+let completedGlyph: { source: HTMLImageElement; canvas: HTMLCanvasElement } | null = null;
 /** Redraw requests for the emblems when the texture arrives (set by the emblem loop below). */
 let onTextureLoaded: () => void = () => {};
 
@@ -188,7 +189,34 @@ export function loadGlyphTexture(url: string): Promise<HTMLImageElement | null> 
   });
 }
 
-/** Preserve the texture's alpha while removing matte colors on light or unknown backgrounds. */
+/** Repair the sampled texture's narrow missing sector using its adjacent glyph ink. */
+function completeGlyph(tex: HTMLImageElement): CanvasImageSource {
+  if (completedGlyph?.source === tex) return completedGlyph.canvas;
+  if (typeof document === "undefined") return tex;
+  const canvas = document.createElement("canvas");
+  canvas.width = tex.naturalWidth;
+  canvas.height = tex.naturalHeight;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return tex;
+  ctx.drawImage(tex, 0, 0);
+  ctx.save();
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  const from = 297.5 * Math.PI / 180;
+  const to = 301.25 * Math.PI / 180;
+  const half = canvas.width / 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, half, from, to);
+  ctx.arc(0, 0, half * 0.67, to, from, true);
+  ctx.closePath();
+  ctx.clip();
+  ctx.rotate(-4 * Math.PI / 180);
+  ctx.drawImage(tex, -canvas.width / 2, -canvas.height / 2);
+  ctx.restore();
+  completedGlyph = { source: tex, canvas };
+  return canvas;
+}
+
+/** Preserve the repaired texture's alpha while removing matte colors on light or unknown backgrounds. */
 function cleanGlyph(tex: HTMLImageElement, mix: number): CanvasImageSource {
   const colorMix = Math.round(clamp(mix) * 255) / 255;
   if (cleanTint?.source === tex && cleanTint.mix === colorMix) return cleanTint.canvas;
@@ -199,7 +227,7 @@ function cleanGlyph(tex: HTMLImageElement, mix: number): CanvasImageSource {
   if (!ctx) return tex;
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = "source-over";
-  ctx.drawImage(tex, 0, 0);
+  ctx.drawImage(completeGlyph(tex), 0, 0);
   ctx.globalCompositeOperation = "source-in";
   ctx.fillStyle = `rgb(211,${Math.round(185 - 31 * colorMix)},${Math.round(80 - 29 * colorMix)})`;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -211,7 +239,7 @@ function cleanGlyph(tex: HTMLImageElement, mix: number): CanvasImageSource {
 /** The texture, tinted from yellow (mix 0) to its own orange (mix 1) while it grows. */
 function tinted(tex: HTMLImageElement, mix: number, clean = false): CanvasImageSource {
   if (clean) return cleanGlyph(tex, mix);
-  if (mix >= 0.999) return tex;
+  if (mix >= 0.999) return completeGlyph(tex);
   if (!tintCanvas) tintCanvas = document.createElement("canvas");
   if (tintCanvas.width !== tex.naturalWidth) {
     tintCanvas.width = tex.naturalWidth;
@@ -221,7 +249,7 @@ function tinted(tex: HTMLImageElement, mix: number, clean = false): CanvasImageS
   if (!g) return tex;
   g.globalCompositeOperation = "source-over";
   g.clearRect(0, 0, tintCanvas.width, tintCanvas.height);
-  g.drawImage(tex, 0, 0);
+  g.drawImage(completeGlyph(tex), 0, 0);
   g.globalCompositeOperation = "source-atop";
   g.fillStyle = "rgba(255,240,90," + ((1 - mix) * 0.85).toFixed(3) + ")";
   g.fillRect(0, 0, tintCanvas.width, tintCanvas.height);
@@ -653,6 +681,8 @@ export const CANVAS_RATIO = 1.3;
 export const canvasSize = (px: number): number => Math.round(px * CANVAS_RATIO);
 
 export interface EmblemOptions {
+  /** Caption-based progress keeps the entire ring visible without a sweep or closing flare. */
+  progressStyle?: "ring" | "caption";
   /** Override document theme for an overlay drawn above an unknown desktop background. */
   surface?: EmblemSurface;
   /** Loudness of the white ring when nothing makes noise (0.05 is about 1 px). */
@@ -701,6 +731,7 @@ export class Emblem {
   private _lvl: number;
   private readonly base: number;
   private readonly surface: EmblemSurface | undefined;
+  private readonly progressStyle: "ring" | "caption";
   private external = 0;
   private talkUntil = 0;
   private talkOff = 0;
@@ -730,6 +761,7 @@ export class Emblem {
     this.shownRot = this._rot;
     this.base = opts.base ?? 0.05;
     this.surface = opts.surface;
+    this.progressStyle = opts.progressStyle ?? "ring";
     this._lvl = this.base;
     this.reduce = prefersReducedMotion();
     this.size(sizePx);
@@ -893,7 +925,7 @@ export class Emblem {
     if (this.charging && this.mode === "listening") this.boostOn = 1;
     else this.boostOn = this.reduce || !this.charging ? 0 : Math.max(0, this.boostOn - dt / SWEEP);
     if (this._phase !== "hidden" && !this.reduce) {
-      this._rot += dt * RATE * (this._phase === "thinking" ? 6 : 1);
+      this._rot += dt * RATE * (this._phase === "thinking" && this.progressStyle === "ring" ? 6 : 1);
     }
     const tk = Math.floor(this.clock * 24);
     if (tk === this.lastTick) return false;
@@ -919,6 +951,9 @@ export class Emblem {
 
   /** How much of the glyph ring to draw now: null for all of it. */
   private reveal(): RingReveal | null {
+    if (this.progressStyle === "caption") {
+      return this.charging ? { fraction: 1, rest: 1, flash: 0, away: 1, boost: this.boostOn * boostAmount(this._lvl) } : null;
+    }
     if (!this.charging && this.rest >= 1) return null;
     const sample = this.arc.sample(this.reduce);
     const boost = this.boostOn > 0 ? boostAmount(this.boostOn >= 1 ? this._lvl : this.boostLvl) * this.boostOn : 0;

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { noticeDurationMs } from "./notice";
+import { COMPLETION_MS, formatProgress } from "./progress-caption";
 import {
   OverlayController,
   type EmblemControl,
@@ -84,6 +85,12 @@ class FakeEmblem implements EmblemControl {
 }
 
 class FakeView implements OverlayView {
+  percent: number | null = null;
+  readonly percentages: Array<number | null> = [];
+  showProgress(percent: number | null): void {
+    this.percent = percent;
+    this.percentages.push(percent);
+  }
   readonly log: string[] = [];
   readonly placements: string[] = [];
   place(placement: "corner" | "center"): void | Promise<void> {
@@ -251,6 +258,76 @@ test("dictation never shows subtitles", () => {
   send({ type: "hide" });
   vi.advanceTimersByTime(60_000);
   expect(view.log.filter((l) => l.startsWith("lines"))).toEqual([]);
+});
+
+test("processing reports its percentage beside the emblem", () => {
+  send({ type: "show", mode: "listening" });
+  send({ type: "mode", mode: "thinking" });
+  send({ type: "progress", stage: "transcribing", done: 1, total: 3, audio_seconds: 5 });
+  vi.advanceTimersByTime(1500);
+  expect(view.percent).toBe(20);
+  expect(formatProgress(view.percent!)).toBe("《 20 % 》");
+  send({ type: "progress", stage: "cleaning", done: 3, total: 3, audio_seconds: 5 });
+  vi.advanceTimersByTime(1000);
+  expect(view.percent).toBeGreaterThanOrEqual(60);
+  expect(view.percent).toBeLessThan(100);
+  expect(view.log.filter((line) => line.startsWith("lines:"))).toEqual([]);
+});
+
+test("text readiness waits for delivery before announcing completion", () => {
+  send({ type: "show", mode: "listening" });
+  send({ type: "mode", mode: "thinking" });
+  send({ type: "progress", stage: "done", done: 0, total: 0, audio_seconds: 0 });
+  expect(view.percent).toBe(99);
+  send({ type: "complete" });
+  expect(view.percent).toBe(100);
+  expect(formatProgress(view.percent!)).toBe("《 100 % 》");
+  vi.advanceTimersByTime(COMPLETION_MS - 1);
+  expect(emblem.last).not.toBe("vanish");
+  vi.advanceTimersByTime(1);
+  expect(emblem.last).toBe("vanish");
+});
+
+test("a completion timer cannot erase a new recording or its progress", () => {
+  send({ type: "show", mode: "listening" });
+  send({ type: "complete" });
+  vi.advanceTimersByTime(100);
+  send({ type: "show", mode: "listening" });
+  send({ type: "mode", mode: "thinking" });
+  send({ type: "progress", stage: "cleaning", done: 0, total: 0, audio_seconds: 8 });
+  vi.advanceTimersByTime(3000);
+  expect(view.percent).toBeGreaterThanOrEqual(60);
+  expect(view.percent).toBeLessThan(100);
+  expect(emblem.last).not.toBe("vanish");
+});
+
+test("cancel stops processing captions and ignores late reports and completion", () => {
+  send({ type: "show", mode: "listening" });
+  send({ type: "mode", mode: "thinking" });
+  send({ type: "progress", stage: "cleaning", done: 0, total: 0, audio_seconds: 5 });
+  send({ type: "hide" });
+  const afterHide = view.log.length;
+  send({ type: "progress", stage: "done", done: 0, total: 0, audio_seconds: 0 });
+  send({ type: "complete" });
+  vi.advanceTimersByTime(60_000);
+  expect(view.log).toHaveLength(afterHide);
+  expect(emblem.last).toBe("vanish");
+  expect(controller.expectsPaint).toBe(false);
+});
+
+test("numeric progress stays visible with subtitles off and a notice takes over cleanly", () => {
+  send({ type: "settings", px: 150, subtitles: "off" });
+  send({ type: "show", mode: "listening" });
+  send({ type: "mode", mode: "thinking" });
+  send({ type: "progress", stage: "cleaning", done: 0, total: 0, audio_seconds: 5 });
+  vi.advanceTimersByTime(1000);
+  expect(view.log.filter((line) => line.startsWith("lines:"))).toEqual([]);
+  expect(view.percent).toBeGreaterThanOrEqual(60);
+  send({ type: "settings", px: 150, subtitles: "zh" });
+  send({ type: "notice", zh: ZH, ja: JA });
+  vi.advanceTimersByTime(1);
+  expect(view.last).toBe(`lines:${ZH}|-`);
+  expect(view.percent).toBeNull();
 });
 
 test("a notice on a hidden emblem: appear, the words after the animation, vanish after the duration", () => {
@@ -421,9 +498,9 @@ test("progress goes to the emblem, without words", () => {
   expect(emblem.last).toBe("vanish");
 });
 
-test("a notice after the progress brings the whole ring back", () => {
+test("progress without an active dictation is ignored before a notice", () => {
   emblem.phase = "thinking";
   send({ type: "progress", stage: "done", done: 0, total: 0, audio_seconds: 0 });
   send({ type: "notice", zh: ZH, ja: JA });
-  expect(emblem.progressLog).toEqual(["progress:done:0/0:0", "clear"]);
+  expect(emblem.progressLog).toEqual(["clear"]);
 });

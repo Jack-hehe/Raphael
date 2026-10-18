@@ -235,25 +235,35 @@ test("a texture that loads is returned and drawn instead of the vector ring", as
   expect(calls.some((c) => c.name === "setLineDash")).toBe(false);
 });
 
-test("light glyphs use the texture only as an alpha mask, leaving dark surfaces unchanged", async () => {
+test("light glyphs use the repaired texture as an alpha mask while dark glyphs keep their color", async () => {
   vi.stubGlobal("Image", FakeImage);
   FakeImage.outcome = "load";
-  const mask = recordingContext();
-  const tinted = { width: 0, height: 0, getContext: () => mask.ctx };
-  vi.stubGlobal("document", { createElement: () => tinted });
+  const buffers: Array<{ canvas: object; rec: ReturnType<typeof recordingContext> }> = [];
+  vi.stubGlobal("document", { createElement: () => {
+    const rec = recordingContext();
+    const canvas = { width: 0, height: 0, getContext: () => rec.ctx };
+    buffers.push({ canvas, rec });
+    return canvas;
+  } });
   const emblem = await import("./emblem");
   const image = await emblem.loadGlyphTexture("/private/glyph-ring.png");
   const p = { ...emblem.params("steady", 0, 0.05)!, ringA: 0, rays: 0, coreA: 0 };
   const options = { tq: 1, rot: 0, dim: 0.8, calm: 0.7, lvl: 0.05 };
   const light = recordingContext();
   emblem.drawEmblem(light.ctx, 64, p, { ...options, surface: "light" });
-  expect(light.calls.find((call) => call.name === "drawImage")?.args[0]).toBe(tinted);
-  expect(mask.calls.find((call) => call.name === "drawImage")?.args[0]).toBe(image);
-  expect(mask.calls.find((call) => call.name === "fillRect")?.op).toBe("source-in");
+  const tinted = buffers[0]!;
+  const repaired = buffers[1]!;
+  expect(light.calls.find((call) => call.name === "drawImage")?.args[0]).toBe(tinted.canvas);
+  expect(tinted.rec.calls.find((call) => call.name === "drawImage")?.args[0]).toBe(repaired.canvas);
+  expect(repaired.rec.calls.find((call) => call.name === "drawImage")?.args[0]).toBe(image);
+  expect(tinted.rec.calls.find((call) => call.name === "fillRect")?.op).toBe("source-in");
   expect(light.calls.find((call) => call.name === "drawImage")?.alpha).toBeCloseTo(0.8);
   const dark = recordingContext();
   emblem.drawEmblem(dark.ctx, 64, p, { ...options, surface: "dark" });
-  expect(dark.calls.find((call) => call.name === "drawImage")?.args[0]).toBe(image);
+  expect(dark.calls.find((call) => call.name === "drawImage")?.args[0]).toBe(repaired.canvas);
+  emblem.drawEmblem(dark.ctx, 64, p, { ...options, surface: "dark", rot: 1.4 });
+  expect(buffers).toHaveLength(2);
+  expect(repaired.rec.calls.filter((call) => call.name === "clip")).toHaveLength(1);
 });
 
 test("light glyph appearance and recording boosts do not add washed-out white fringes", async () => {
@@ -753,6 +763,25 @@ function recordedEmblem() {
   const canvas = { ...fakeCanvas(), getContext: () => rec.ctx } as unknown as HTMLCanvasElement;
   return { canvas, rec };
 }
+
+test("caption progress keeps a complete ring without a sweep or completion flare", () => {
+  const { canvas, rec } = recordedEmblem();
+  const options = { progressStyle: "caption" as const };
+  const e = new Emblem(canvas, 150, options);
+  e.appear();
+  e.set("listening");
+  for (let i = 0; i < 30; i++) e.step(1 / 24);
+  e.set("thinking");
+  for (const report of [transcribing(1, 3), DONE]) {
+    e.progress(report);
+    for (let i = 0; i < 12; i++) e.step(1 / 24);
+    expect(e.revealShown).toMatchObject({ fraction: 1, rest: 1, away: 1, flash: 0 });
+    rec.calls.length = 0;
+    e.draw();
+    expect(rec.calls.some((call) => call.name === "clip")).toBe(false);
+  }
+  e.dispose();
+});
 
 test("recording shows the whole emblem, never hides the ring, and the boost follows the voice", () => {
   const { canvas, rec } = recordedEmblem();

@@ -9,6 +9,8 @@ type EmblemModule = typeof import("./emblem");
 type OverlayModule = typeof import("./overlay");
 
 class NullView implements OverlayView {
+  percent: number | null = null;
+  showProgress(percent: number | null): void { this.percent = percent; }
   lines: string | null = null;
   place(): void {}
   layout(): void {}

@@ -29,7 +29,7 @@ use tauri::{
 pub enum Mode {
     /// The white ring follows the user's microphone.
     Listening,
-    /// The glyph ring turns six times faster.
+    /// Processing continues while its numeric percentage is shown.
     Thinking,
     /// The white ring follows Raphael's voice.
     #[cfg_attr(
@@ -68,7 +68,7 @@ pub struct Progress {
 }
 
 impl Progress {
-    /// The text is there: the ring is full.
+    /// The text is ready; delivery must still succeed before the UI reports 100%.
     pub const DONE: Progress = Progress {
         stage: Stage::Done,
         done: 0,
@@ -88,13 +88,14 @@ pub enum OverlayEvent {
     Mode { mode: Mode },
     /// Loudness from 0 to 1: the white ring's width while listening or speaking.
     Level { value: f32 },
-    /// How far the dictation has come since the key was released: an arc of light fills the
-    /// glyph ring.
+    /// How far the dictation has come since the key was released, shown beside the glyph ring.
     Progress(Progress),
     /// Raphael's report: the emblem appears with subtitles, then vanishes.
     Notice { zh: String, ja: String },
     /// A learned-word report uses the same lifecycle, centered when its turn begins.
     Learned { zh: String, ja: String },
+    /// Delivery succeeded: show 100% briefly before the normal vanish animation.
+    Complete,
     /// The vanish animation.
     Hide,
     /// The emblem's diameter in logical pixels and which subtitle lines to show.
@@ -121,6 +122,10 @@ pub trait OverlayApi: Send + Sync + 'static {
     }
     /// The vanish animation plays; the window stays, empty, where it is.
     fn hide(&self);
+    /// Finish successfully; simple implementations may retain their ordinary hide behavior.
+    fn complete(&self) {
+        self.hide();
+    }
     /// How far the dictation has come since the key was released.
     fn progress(&self, progress: Progress);
 }
@@ -233,6 +238,7 @@ impl OverlayEvent {
             OverlayEvent::Progress(_) => "progress",
             OverlayEvent::Notice { .. } => "notice",
             OverlayEvent::Learned { .. } => "learned",
+            OverlayEvent::Complete => "complete",
             OverlayEvent::Hide => "hide",
             OverlayEvent::Settings { .. } => "settings",
         }
@@ -481,6 +487,10 @@ impl OverlayApi for Overlay {
 
     fn hide(&self) {
         self.publish(OverlayEvent::Hide);
+    }
+
+    fn complete(&self) {
+        self.publish(OverlayEvent::Complete);
     }
 
     fn progress(&self, progress: Progress) {
@@ -813,6 +823,7 @@ mod tests {
             r#"{"type":"notice","zh":"《了。》","ja":"《了。》"}"#
         );
         assert_eq!(json(OverlayEvent::Hide), r#"{"type":"hide"}"#);
+        assert_eq!(json(OverlayEvent::Complete), r#"{"type":"complete"}"#);
         assert_eq!(
             json(OverlayEvent::Learned {
                 zh: "「手機」已加入詞典".into(),
