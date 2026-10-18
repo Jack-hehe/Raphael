@@ -263,6 +263,29 @@ async def test_end_to_end_on_the_real_client_with_a_mock_transport(conn):
     assert spend_rows(conn) == [("stt", "openai/gpt-transcribe", 0.0002, 0, 0)]
 
 
+async def test_gpt_transcribe_gets_a_single_selected_code_when_automatic(conn):
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"text": "早安", "usage": {"seconds": 2, "cost": 0.0002}})
+
+    keys = MemoryKeyStore()
+    keys.set(KEY)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        router = Router()
+        Brain(conn, OpenRouterClient(keys.get, http=http), keys, now_ms=lambda: NOW_MS).register(
+            router
+        )
+        await router.call(
+            "settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"}
+        )
+        await router.call("settings.set", {"key": "languages", "value": ["zh-TW"]})
+        await transcribe(router, language="auto")
+    assert seen[0]["provider"]["options"]["openai"]["languages"] == ["zh"]
+    assert "language" not in seen[0]
+
+
 async def test_gpt_transcribe_gets_every_chosen_language_when_automatic(conn):
     seen = []
 

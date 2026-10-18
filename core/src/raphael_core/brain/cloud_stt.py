@@ -96,9 +96,9 @@ class CloudTranscriber:
     """`stt.transcribe {audio, hints, language}` -> `{text, model, cost_usd}`.
 
     `has_key` says whether a key is stored (and raises if the key store fails); the model is the
-    `stt_cloud_model` setting, read for each call. `language` is "auto" or one language's code
-    (the device side sends "auto" when several languages are chosen); with "auto", the codes of
-    the `languages` setting go along for a model that can be told what to detect among.
+    `stt_cloud_model` setting, read for each call. `language` is "auto" or one language's code;
+    the device side always sends "auto", regardless of the selected variants. With "auto", all
+    codes of the `languages` setting still go along for models that accept multiple language hints.
     """
 
     def __init__(

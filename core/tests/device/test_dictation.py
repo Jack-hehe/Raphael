@@ -415,28 +415,28 @@ async def test_the_dictionary_words_go_to_the_engine_newest_first(rig, router, b
 
 
 @pytest.mark.parametrize(
-    ("settings", "language"),
+    "settings",
     [
-        ({"languages": ["zh-HK"], "language": "zh"}, "zh"),
-        ({"languages": ["yue-HK"], "language": "zh"}, "yue"),
-        ({"languages": ["en-GB"], "language": "en"}, "en"),
-        ({"languages": ["ko-KR"], "language": "auto"}, "ko"),
-        ({"languages": ["zh-CN", "en-US"], "language": "auto"}, "auto"),
+        {"languages": ["zh-HK"], "language": "zh"},
+        {"languages": ["yue-HK"], "language": "zh"},
+        {"languages": ["en-GB"], "language": "en"},
+        {"languages": ["ko-KR"], "language": "auto"},
+        {"languages": ["zh-CN", "en-US"], "language": "auto"},
         # A brain of an older version has only the old key.
-        ({"language": "ja"}, "ja"),
+        {"language": "ja"},
         # What is not a valid selection is automatic.
-        ({"languages": ["zh-TW", "zh-CN"]}, "auto"),
-        ({"languages": "zh-TW"}, "auto"),
-        ({}, "auto"),
+        {"languages": ["zh-TW", "zh-CN"]},
+        {"languages": "zh-TW"},
+        {},
     ],
 )
-async def test_the_language_setting_goes_to_the_engine(rig, router, brain, settings, language):
+async def test_the_language_setting_goes_to_the_engine(rig, router, brain, settings):
     brain.settings = settings
     rig.recorder.chunks = [chunk(1.0)]
     await start(router)
     await rig.recorder.fed(1)
     await stop(router)
-    assert rig.engine.calls[0]["language"] == language
+    assert rig.engine.calls[0]["language"] == "auto"
 
 
 async def test_a_broken_dictionary_does_not_stop_dictation(rig, router, brain, caplog):

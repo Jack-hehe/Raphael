@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 
-from raphael_core.languages import LEGACY_LANGUAGES, checked_languages, stt_language
+from raphael_core.languages import checked_languages, stt_language
 from raphael_core.protocol import (
     BUSY,
     INTERNAL_ERROR,
@@ -353,10 +353,11 @@ class DictationService:
             raise RpcError(NOT_FOUND, "The dictation was cancelled before it started")
 
     async def _context(self) -> tuple[list[str], str]:
-        """The user's dictionary words (newest first, as the brain lists them) and the language
-        hint: the code of the one language chosen, or "auto" when several are (`stt_language`).
-        The old `language` setting is used when the brain has no `languages`; anything that is not
-        a valid selection is "auto"."""
+        """The user's dictionary words (newest first, as the brain lists them) and "auto".
+
+        The selection chooses written variants, never limits recognition (`stt_language`). Older
+        settings with only `language`, or anything that is not a valid selection, are also "auto".
+        """
         hints: list[str] = []
         language = "auto"
         try:
@@ -375,8 +376,6 @@ class DictationService:
                     language = stt_language(checked_languages("languages", settings["languages"]))
                 except (TypeError, ValueError):
                     logger.warning("The languages setting is not valid; using automatic")
-            elif settings.get("language") in LEGACY_LANGUAGES:
-                language = settings["language"]
         except Exception as exc:
             logger.warning("Could not read the language setting; using automatic: %s", exc)
         return hints, language

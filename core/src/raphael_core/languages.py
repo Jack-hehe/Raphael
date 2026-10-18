@@ -1,7 +1,7 @@
 """The dictation languages the user can choose, with their regional variants.
 
-The `languages` setting is a list of the ids below, in the user's order of priority. One language
-means speech-to-text is told which it is; several mean it detects the language itself. Each group
+The `languages` setting is a list of the ids below, in the user's order of priority. Speech-to-text
+always detects the spoken languages; the selection only chooses their written variants. Each group
 holds variants of one language (its Chinese written forms, its kinds of English); at most one
 variant of a group may be chosen, since they would contradict each other in how the text is
 written.
@@ -132,9 +132,12 @@ def iso_code(language_id: str) -> str:
 
 
 def stt_language(languages: Sequence[str]) -> str:
-    """The language hint for speech-to-text: the code of the one language chosen, or "auto"
-    when there are several (speech-to-text then detects it)."""
-    return iso_code(languages[0]) if len(languages) == 1 else "auto"
+    """Always detect the spoken languages, even when only one variant is selected.
+
+    A single-language hint garbles Chinese, English and Japanese mixed in one dictation. The
+    selection only chooses script and spelling for cleanup and OpenCC, never limits recognition.
+    """
+    return "auto"
 
 
 def stt_languages(languages: Sequence[str]) -> list[str]:
