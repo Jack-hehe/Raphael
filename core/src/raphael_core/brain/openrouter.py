@@ -69,8 +69,10 @@ class KeyInfo:
     limit: float | None  # None: the key has no spending limit
     limit_remaining: float | None
     limit_reset: str | None  # "daily", "weekly", "monthly" or None
-    usage_daily: float
-    usage_monthly: float
+    usage_daily: float | None
+    usage_monthly: float | None
+    usage_weekly: float | None = None
+    usage_total: float | None = None
 
 
 @dataclass
@@ -198,10 +200,6 @@ def _is_number(value: object) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
-def _amount(value: object) -> float:
-    return value if _is_number(value) else 0.0
-
-
 def _amount_or_none(value: object) -> float | None:
     return value if _is_number(value) else None
 
@@ -279,8 +277,10 @@ def _to_key_info(reply: _Reply) -> KeyInfo:
         limit=_amount_or_none(data.get("limit")),
         limit_remaining=_amount_or_none(data.get("limit_remaining")),
         limit_reset=limit_reset if isinstance(limit_reset, str) else None,
-        usage_daily=_amount(data.get("usage_daily")),
-        usage_monthly=_amount(data.get("usage_monthly")),
+        usage_daily=_amount_or_none(data.get("usage_daily")),
+        usage_monthly=_amount_or_none(data.get("usage_monthly")),
+        usage_weekly=_amount_or_none(data.get("usage_weekly")),
+        usage_total=_amount_or_none(data.get("usage")),
     )
 
 

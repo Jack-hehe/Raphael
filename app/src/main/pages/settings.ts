@@ -362,7 +362,8 @@ export function createSettings(app: AppContext): Page {
 
   /** This month's spend against the limit, and when it will run out at this pace. */
   function spendRow(): string[] {
-    if (!spend) return [];
+    const attrs = ' data-row="raphael-spend"';
+    if (!spend) return [row(t("settings.050"), "", esc(t("settings.usageUnavailable")), { attrs })];
     const { month_usd: month, limit_usd: limit } = spend;
     const used = spentShare(month, limit);
     let forecast = "";
@@ -371,7 +372,31 @@ export function createSettings(app: AppContext): Page {
       const { m, d } = runOutDay(month, limit, Date.now());
       forecast = t("settings.048", { p0: m, p1: d });
     } else if (spend.forecast_usd > 0) forecast = t("settings.049", { p0: formatUsd(spend.forecast_usd) });
-    return [row(t("settings.050"), month >= limit ? st("warn", forecast) : esc(forecast), spendVisual(month, limit))];
+    return [row(t("settings.050"), month >= limit ? st("warn", forecast) : esc(forecast), spendVisual(month, limit), { attrs })];
+  }
+
+  /** Key-wide usage is separate from Raphael's local spending and its editable limit. */
+  function usageRow(): string {
+    const usage = hasKey ? openrouter?.usage : null;
+    const monthly = usage?.monthly;
+    const available = monthly != null && Number.isFinite(monthly);
+    const state = !hasKey ? "no-key" : available ? (openrouter?.state === "error" ? "stale" : "ready") : checkingOpenrouter ? "loading" : "unavailable";
+    const details: string[] = [];
+    if (usage?.limit != null && Number.isFinite(usage.limit)) {
+      details.push(`<span data-usage="limit">${esc(t("settings.usageLimit", { p0: formatUsd(usage.limit) }))}</span>`);
+    }
+    if (usage?.limit_remaining != null && Number.isFinite(usage.limit_remaining)) {
+      details.push(`<span data-usage="remaining">${esc(t("settings.usageRemaining", { p0: formatUsd(usage.limit_remaining) }))}</span>`);
+    }
+    if (state === "stale") details.push(esc(t("settings.usageCached")));
+    const value = available ? formatUsd(monthly) : !hasKey ? t("settings.usageNoKey") : checkingOpenrouter ? t("common.loading") :
+      openrouter?.state === "unknown" ? t("settings.usageUnchecked") : t("settings.usageUnavailable");
+    return row(
+      t("settings.usageMonthly"),
+      details.join(" · "),
+      `<span class="${available ? "val num" : "val"}" data-usage="monthly">${esc(value)}</span>`,
+      { attrs: ` data-row="openrouter-usage" data-usage-state="${state}"` },
+    );
   }
 
   /** A section of the settings: an icon and a title, then its rows. */
@@ -422,13 +447,14 @@ export function createSettings(app: AppContext): Page {
         ...(keyError ? [note(st("err", keyError()), ' role="alert"')] : []),
         ...connectionRow(),
         ...spendRow(),
+        usageRow(),
         row(
           t("onboarding.032"),
           t("onboarding.033"),
           fieldHTML("", limitShown, { w: 96, pre: "US$", get label() { return t("onboarding.032"); }, num: true, id: "limit-input", invalid: limitError !== null, disabled: brain === null }),
         ),
         ...(limitError ? [note(st("err", limitError()), ' role="alert"')] : []),
-      ]) +
+      ], esc(t("settings.usageDifference"))) +
       section("laptop", t("settings.066"), [
         row(t("settings.067"), t("settings.068"), sel(APPEARANCES, d.appearance, t("settings.067"), ' data-k="appearance"')),
         row(t("settings.069"), t("settings.070"), sel(SIZES, String(d.emblem_size), t("settings.069"), ' data-k="size"')),

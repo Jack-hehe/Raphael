@@ -149,13 +149,18 @@ def clock():
 
 
 @pytest.fixture
-def make_brain(conn, fake_client, keys, clock):
+async def make_brain(conn, fake_client, keys, clock):
     """`make_brain(**overrides)` is a Brain on the fakes and the database above."""
+    brains = []
 
     def make(**overrides):
-        return Brain(conn, fake_client, keys, now_ms=clock, **overrides)
+        brain = Brain(conn, fake_client, keys, now_ms=clock, **overrides)
+        brains.append(brain)
+        return brain
 
-    return make
+    yield make
+    for brain in brains:
+        await brain.aclose()
 
 
 def routed(brain):
@@ -945,6 +950,7 @@ async def test_status_without_a_key_or_history(router):
             "checked_at_ms": None,
             "error": None,
             "key": None,
+            "usage": None,
         },
         "spend": {
             "month_usd": 0.0,
@@ -966,8 +972,10 @@ async def test_status_is_unknown_until_openrouter_has_been_in_touch(router, fake
         "checked_at_ms": None,
         "error": None,
         "key": None,
+        "usage": None,
     }
-    assert fake_client.calls == [] and fake_client.key_info_calls == []  # asking costs nothing
+    # The first read returns immediately, before the background key check runs.
+    assert fake_client.calls == [] and fake_client.key_info_calls == []
 
 
 async def test_status_after_a_cleanup(router, fake_client, keys):
@@ -981,6 +989,7 @@ async def test_status_after_a_cleanup(router, fake_client, keys):
         "checked_at_ms": NOW_MS,
         "error": None,
         "key": None,
+        "usage": None,
     }
     spend = status["spend"]
     assert spend["month_usd"] == pytest.approx(0.0003)
@@ -1067,6 +1076,8 @@ async def test_check_asks_openrouter_about_the_stored_key(router, fake_client, k
         "limit_reset": "monthly",
         "usage_daily": 0.1,
         "usage_monthly": 2.5,
+        "usage_weekly": None,
+        "usage_total": None,
     }
     assert (await router.call("status.get", {}))["openrouter"] == r
 
@@ -1182,11 +1193,13 @@ async def real_router(conn, keys, clock):
 
     def make(handler):
         http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        opened.append(http)
-        return routed(Brain(conn, OpenRouterClient(keys.get, http=http), keys, now_ms=clock))
+        brain = Brain(conn, OpenRouterClient(keys.get, http=http), keys, now_ms=clock)
+        opened.append((brain, http))
+        return routed(brain)
 
     yield make
-    for http in opened:
+    for brain, http in opened:
+        await brain.aclose()
         await http.aclose()
 
 

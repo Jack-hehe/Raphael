@@ -172,6 +172,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .meter i.on { background: var(--accent); }
 .spend { display: flex; align-items: center; gap: 14px; }
 .spend .bar { width: 120px; }
+[data-row="raphael-spend"] .st { white-space: normal; align-items: baseline; }
 
 /* ---------- home: the stage, insights and activity; shortcuts on the right ---------- */
 .page.page-home { max-width: 1160px; }
@@ -190,8 +191,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   .keys-card { grid-template-columns: minmax(0, 1fr); }
 }
 .stage { position: relative; display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 20px; align-items: center; min-height: 112px; color: var(--text); border-bottom: 1px solid var(--line); padding: 0 0 20px; }
-.stage canvas.emb { position: relative; width: 96px !important; height: 96px !important; filter: sepia(1) saturate(1.6) hue-rotate(174deg) brightness(0.55); }
-:root[data-theme="dark"] .stage canvas.emb { filter: sepia(1) saturate(0.6) hue-rotate(174deg) brightness(1.05); }
+.stage canvas.emb { position: relative; width: 96px !important; height: 96px !important; }
 .stage .subs { position: relative; min-width: 0; padding: 12px 0; text-align: left; }
 .sub-zh, .sub-ja { text-wrap: pretty; text-shadow: none; }
 .sub-zh { color: var(--text); font-family: var(--zh-sub); font-weight: 650; font-size: 17px; line-height: 1.65; }
@@ -280,9 +280,10 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .hrow:hover { background: var(--hover); }
 .hrow .time { flex: none; width: 46px; padding-top: 1px; font-size: 12px; color: var(--text-3); }
 .hrow .txt { font-size: 14px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.hrow[aria-expanded="true"] .txt { display: block; -webkit-line-clamp: unset; }
 .hrow .meta { font-size: 12px; color: var(--text-3); margin-top: 3px; }
-/* copy and delete float over the end of the row, so the text keeps the whole width */
-.hrow .acts { position: absolute; top: 6px; right: 6px; display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--panel); box-shadow: 0 0 0 1px var(--edge); visibility: hidden; }
+/* Reserve a stable action column so hover and expanded controls never cover the transcript. */
+.hrow .acts { display: flex; gap: 2px; padding: 2px; margin-top: -3px; visibility: hidden; }
 .hrow:hover .acts, .hrow:focus-within .acts, .hrow[aria-expanded="true"] .acts { visibility: visible; }
 .hdetail { padding: 0 8px 14px 68px; display: grid; gap: 4px; }
 .hdetail h4 { margin: 6px 0 0; font-size: 12px; font-weight: 600; color: var(--text-3); }
@@ -320,8 +321,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .wchip .wtext { flex: 1; min-width: 0; display: grid; }
 .word { font-weight: 600; overflow-wrap: anywhere; }
 .mis { color: var(--text-3); font-size: 12px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wrow .acts { opacity: 0.35; }
-.wrow:hover .acts, .wrow:focus-within .acts { opacity: 1; }
+.wrow .acts { color: var(--text-3); }
 
 /* ---------- settings: a panel over the window ---------- */
 .modal-scrim { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: var(--scrim); }
@@ -349,6 +349,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   .modal { grid-template-columns: 136px minmax(0, 1fr); }
   .modal-body { padding: 22px 22px 32px; }
   .modal-nav { padding: 20px 10px; }
+  .modal-nav .nav { padding-inline: 8px; gap: 8px; }
+  .modal-nav .nav span { white-space: nowrap; }
   .slist > .row > .lbl { min-width: min(12em, 100%); }
 }
 
@@ -457,7 +459,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   .icard .v, .anum .v { font-size: 22px; }
   .icard .k { margin-top: 4px; }
   .activity { padding: 0; margin-top: 12px; }
-  .compact-summary { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 14px; list-style: none; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .compact-summary { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 14px; list-style: none; font-size: 13px; font-weight: 600; cursor: pointer; }
   .compact-summary::-webkit-details-marker { display: none; }
   .compact-summary span { flex: 1; }
   .compact-summary > .i:last-child { width: 12px; height: 12px; transition: transform 0.15s; }
