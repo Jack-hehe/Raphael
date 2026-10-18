@@ -298,7 +298,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
       case 1:
         return (
           `<h2 tabindex="-1">連上 OpenRouter</h2>` +
-          `<p>拉斐爾用 OpenRouter 整理聽寫。金鑰只存在這台電腦的 Windows 認證管理員。</p>` +
+          `<p>Raphael 用 OpenRouter 整理聽寫。金鑰只存在這台電腦的 Windows 認證管理員。</p>` +
           `<div id="ob-keygroup">${keyGroup()}</div>`
         );
       case 2:

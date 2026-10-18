@@ -56,8 +56,8 @@ export function formatRetention(days: number): string {
 export function describeError(err: unknown): string {
   const text = err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
   // CORE_EXITED and TIMEOUT of rpc.rs, and the message of core_call for a core that is missing.
-  if (text.includes("core is not running") || text.startsWith("[-32000]")) return "拉斐爾的核心沒有在執行";
-  if (text.startsWith("[-32001]")) return "拉斐爾的核心沒有及時回應";
+  if (text.includes("core is not running") || text.startsWith("[-32000]")) return "Raphael 的核心沒有在執行";
+  if (text.startsWith("[-32001]")) return "Raphael 的核心沒有及時回應";
   return text.replace(/^\[-?\d+\] /, "");
 }
 
