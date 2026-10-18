@@ -92,6 +92,11 @@ export interface ModelsStatus {
 /** The settings in `device.json` (device_settings.rs). */
 export interface DeviceSettings {
   dictation_keys: string[];
+  /**
+   * How the dictation key works: `toggle` (press to start, press again to stop and transcribe)
+   * or `hold` (hold while talking, release to stop and transcribe).
+   */
+  dictation_mode: "toggle" | "hold";
   paste_last_keys: string[];
   /** The name of the microphone; null is the system's default one. */
   microphone: string | null;

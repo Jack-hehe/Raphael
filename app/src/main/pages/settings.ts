@@ -5,6 +5,7 @@
 
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
+import { DICTATION_MODES, isDictationMode, modeDescription } from "../dictation";
 import { KEEP_FOREVER_DAYS, describeError, formatRetention, keyReasonText, parseLimit } from "../format";
 import { wireKeyField } from "../keyfield";
 import { KeyRecorder, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "../keys";
@@ -189,12 +190,13 @@ export function createSettings(app: AppContext): Page {
       group("聽寫", [
         row(
           "快捷鍵",
-          "按住說話，放開貼上；也可以輕按開始、再按一下結束",
+          "聽寫到一半按 Esc 可以取消",
           d.dictation_keys.map((binding) => keys(bindingLabels(binding))).join('<span class="val">或</span>') +
             btn("變更", "quiet", ' data-act="rec"'),
           { attrs: ' data-row="hotkey"' },
         ),
         ...(altgr && usesAltRight ? [note(st("warn", "你的鍵盤配置把右 Alt 當 AltGr 用，建議換一個快捷鍵。"))] : []),
+        row("聽寫方式", esc(modeDescription(d.dictation_mode)), seg(DICTATION_MODES, d.dictation_mode, "聽寫方式", ' data-k="mode"')),
         row("麥克風", "", meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, "麥克風", ' data-k="mic"')),
         row("語言", "中文一律輸出繁體（台灣用語）", sel(LANGUAGES, brain?.language ?? "auto", "語言", ' data-k="language"')),
       ]) +
@@ -424,6 +426,14 @@ export function createSettings(app: AppContext): Page {
     const size = target.closest<HTMLElement>('.seg[data-k="size"] button');
     if (size) {
       void changeDevice({ emblem_size: Number(size.dataset.v) as DeviceSettings["emblem_size"] });
+      return;
+    }
+
+    const mode = target.closest<HTMLElement>('.seg[data-k="mode"] button');
+    if (mode) {
+      if (isDictationMode(mode.dataset.v) && mode.dataset.v !== app.device().dictation_mode) {
+        void changeDevice({ dictation_mode: mode.dataset.v });
+      }
       return;
     }
 

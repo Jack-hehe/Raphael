@@ -21,6 +21,7 @@ const GLYPH_URL = "/private/glyph-ring.png";
 /** What the window uses until the real settings arrive (the same as device_settings.rs). */
 const DEFAULT_DEVICE: DeviceSettings = {
   dictation_keys: ["AltRight"],
+  dictation_mode: "toggle",
   paste_last_keys: ["AltRight+V"],
   microphone: null,
   emblem_size: 150,

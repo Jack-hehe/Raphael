@@ -6,6 +6,7 @@
 // 「完成」 saves `onboarded: true`. The pure rules are exported and tested; the window code is below.
 
 import * as api from "./api";
+import { type DictationMode, keylineAction, tryBoxText } from "./dictation";
 import { describeError, formatSeconds, keyReasonText, parseLimit } from "./format";
 import { wireKeyField } from "./keyfield";
 import { bindingLabels } from "./keys";
@@ -145,8 +146,8 @@ const TRY_TIMING_DELAY_MS = 300;
 /** ...and the model bar is drawn at most this often. */
 const MODEL_PAINT_MS = 120;
 
-const keyline = (bindings: string[]): string =>
-  `<div class="keyline"><div>${bindings.map((binding) => keys(bindingLabels(binding))).join('<span class="val">或</span>')}聽寫</div>` +
+const keyline = (bindings: string[], mode: DictationMode): string =>
+  `<div class="keyline"><div>${bindings.map((binding) => keys(bindingLabels(binding))).join('<span class="val">或</span>')}${esc(keylineAction(mode))}</div>` +
   `<div>${keys(["Esc"])}取消</div></div>`;
 
 /** The model row's control: a bar while fetching, a pulsing dot while unpacking. */
@@ -312,11 +313,11 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
       case 3:
         return (
           `<h2 tabindex="-1">試一次聽寫</h2>` +
-          `<p>把游標放在下面的框裡，按住${esc(dictationKeysText(dictationBindings()))} 說話，放開就會貼上整理好的文字。之後在任何程式裡都一樣。</p>` +
+          `<p>${esc(tryBoxText(app.device().dictation_mode, dictationKeysText(dictationBindings())))}</p>` +
           `<textarea class="trybox" id="ob-try" rows="4" placeholder="在這裡試試看。" aria-label="試用聽寫的框" spellcheck="false"></textarea>` +
           `<div class="ob-tryline"><span class="val" id="ob-try-t" role="status"></span></div>` +
           `<div class="ob-modelline" data-model="line" hidden></div>` +
-          keyline(dictationBindings())
+          keyline(dictationBindings(), app.device().dictation_mode)
         );
     }
   }

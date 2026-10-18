@@ -2,6 +2,7 @@
 // dictation (spec §12.3). Loads `status.get` when shown and every 30 seconds while it is.
 
 import * as api from "../api";
+import { homeHint } from "../dictation";
 import { formatClock, formatLimit, formatSeconds, formatUsd } from "../format";
 import { bindingLabels } from "../keys";
 import { buildReport, coreDownReport, runOutDay } from "../report";
@@ -94,7 +95,7 @@ export function createHome(app: AppContext): Page {
 
   function paintHint(): void {
     const parts = app.device().dictation_keys.map((binding) => keys(bindingLabels(binding)));
-    hint.innerHTML = `${parts.join("<span>或</span>")}<span>按住說話，放開就貼上</span>`;
+    hint.innerHTML = `${parts.join("<span>或</span>")}<span>${esc(homeHint(app.device().dictation_mode))}</span>`;
   }
 
   function paint(status: Status | null): void {

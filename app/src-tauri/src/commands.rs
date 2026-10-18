@@ -4,7 +4,8 @@
 //!   dictation methods are the controller's alone.
 //! - `device_settings_get` and `device_settings_set` read and change `device.json`
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
-//!   autostart, the overlay and the window's theme are updated, and only then is the file written.
+//!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
+//!   is the file written. (A dictation that is under way finishes in the mode it began in.)
 //! - `keyboard_has_altgr`, `hotkeys_pause` and `main_events` are small helpers of the settings
 //!   page.
 //!
@@ -28,7 +29,10 @@ use tauri_plugin_autostart::ManagerExt;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::core_process::{CORE_RESTARTED, CoreApi, CoreProcess};
-use crate::device_settings::{self, Appearance, DeviceSettings, DeviceStore, FILE_NAME, Subtitles};
+use crate::device_settings::{
+    self, Appearance, DeviceSettings, DeviceStore, DictationMode, FILE_NAME, Subtitles,
+};
+use crate::dictation::ModeCell;
 use crate::hotkey::{Bindings, HotkeyService, PauseReason};
 use crate::overlay::Overlay;
 use crate::rpc::{CORE_EXITED, Notification, RpcError, TIMEOUT};
@@ -224,6 +228,9 @@ pub trait Effects: Send + Sync {
     fn overlay(&self, emblem_px: u32, subtitles: Subtitles);
     /// Changes the theme of the main window's frame.
     fn theme(&self, appearance: Appearance);
+    /// Hands the dictation mode to the controller. A dictation that is under way is not touched:
+    /// the new mode applies from the next one.
+    fn dictation_mode(&self, mode: DictationMode);
 }
 
 fn bindings_of(settings: &DeviceSettings) -> Bindings {
@@ -272,6 +279,9 @@ pub async fn apply_changes<E: Effects>(
     }
     if old.appearance != new.appearance {
         effects.theme(new.appearance);
+    }
+    if old.dictation_mode != new.dictation_mode {
+        effects.dictation_mode(new.dictation_mode);
     }
     Ok(())
 }
@@ -386,6 +396,13 @@ impl Effects for AppEffects {
         };
         if let Err(err) = window.set_theme(theme) {
             log::warn!("could not set the theme of the main window: {err}");
+        }
+    }
+
+    fn dictation_mode(&self, mode: DictationMode) {
+        match self.app.try_state::<ModeCell>() {
+            Some(cell) => cell.set(mode),
+            None => log::warn!("there is no dictation controller to hand the mode to"),
         }
     }
 }
@@ -547,6 +564,9 @@ fn apply_saved(app: &AppHandle, settings: &DeviceSettings) {
     }
     if settings.appearance != fresh.appearance {
         effects.theme(settings.appearance);
+    }
+    if settings.dictation_mode != fresh.dictation_mode {
+        effects.dictation_mode(settings.dictation_mode);
     }
     // A debug build runs from the target folder; it must not put itself in the registry.
     if !cfg!(debug_assertions)
@@ -969,6 +989,10 @@ mod tests {
         fn theme(&self, appearance: Appearance) {
             let _ = self.record("theme", format!("{appearance:?}"));
         }
+
+        fn dictation_mode(&self, mode: DictationMode) {
+            let _ = self.record("dictation_mode", mode.as_str().to_owned());
+        }
     }
 
     // ---- the core's answer to audio.set_device ----
@@ -1069,6 +1093,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_new_dictation_mode_is_handed_to_the_controller() {
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"dictation_mode": "hold"}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(fake.done(), ["dictation_mode hold"]);
+
+        // and back: from Hold to Toggle
+        let fake = Fake::default();
+        apply_changes(&fake, &new, &old).await.unwrap();
+        assert_eq!(fake.done(), ["dictation_mode toggle"]);
+
+        // the same mode again, with something else changed: the controller is left alone
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"dictation_mode": "toggle", "emblem_size": 194}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(fake.done(), ["overlay 194 both"]);
+    }
+
+    #[tokio::test]
+    async fn a_refused_change_does_not_switch_the_dictation_mode() {
+        let fake = Fake::failing("autostart");
+        let (old, new) = changed(json!({"dictation_mode": "hold", "autostart": false}));
+        assert!(apply_changes(&fake, &old, &new).await.is_err());
+        assert_eq!(fake.done(), ["autostart false"]);
+    }
+
+    #[tokio::test]
     async fn a_refused_binding_changes_nothing_else() {
         let fake = Fake::failing("bindings");
         let (old, new) = changed(json!({"dictation_keys": ["F9"], "emblem_size": 194}));
@@ -1125,6 +1176,34 @@ mod tests {
         assert_eq!(store.get().await, saved);
         assert_eq!(DeviceSettings::load(&path), saved);
         assert_eq!(fake.done(), ["overlay 120 both"]);
+    }
+
+    #[tokio::test]
+    async fn the_dictation_mode_is_applied_and_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("device.json");
+        let store = DeviceStore::new(path.clone(), DeviceSettings::default());
+        let fake = Fake::default();
+
+        let saved = set_device_settings(&store, &fake, &json!({"dictation_mode": "hold"}))
+            .await
+            .unwrap();
+        assert_eq!(saved.dictation_mode, DictationMode::Hold);
+        assert_eq!(store.get().await.dictation_mode, DictationMode::Hold);
+        assert_eq!(
+            DeviceSettings::load(&path).dictation_mode,
+            DictationMode::Hold
+        );
+        assert_eq!(fake.done(), ["dictation_mode hold"]);
+
+        // a mode that does not exist is refused and changes nothing
+        assert!(
+            set_device_settings(&store, &fake, &json!({"dictation_mode": "tap"}))
+                .await
+                .is_err()
+        );
+        assert_eq!(store.get().await.dictation_mode, DictationMode::Hold);
+        assert_eq!(fake.done(), ["dictation_mode hold"]);
     }
 
     #[tokio::test]

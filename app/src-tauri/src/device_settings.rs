@@ -1,4 +1,5 @@
-//! Settings that belong to this computer: the hotkeys, the microphone, how the emblem looks, the
+//! Settings that belong to this computer: the hotkeys and how the dictation key works (press to
+//! start and again to stop, or hold while talking), the microphone, how the emblem looks, the
 //! theme, autostart, and whether the first-run guide has been done.
 //!
 //! They live in `device.json` in Raphael's data folder (`%APPDATA%\Raphael`, or the folder named
@@ -58,12 +59,37 @@ pub enum Appearance {
     Dark,
 }
 
+/// How the dictation key works. The person chooses; the app does not guess from how long the key
+/// is held.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DictationMode {
+    /// Press once to start listening, press again to stop and transcribe. Holding the key longer
+    /// changes nothing.
+    #[default]
+    Toggle,
+    /// Hold the key while talking, release it to stop and transcribe.
+    Hold,
+}
+
+impl DictationMode {
+    /// The spelling in `device.json` and on the settings page (`"toggle"`, `"hold"`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DictationMode::Toggle => "toggle",
+            DictationMode::Hold => "hold",
+        }
+    }
+}
+
 /// The settings in `device.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DeviceSettings {
     /// Key combinations that dictate, in the spelling of `hotkey::parse_binding`.
     pub dictation_keys: Vec<String>,
+    /// What the dictation key does: press to start and press again to stop, or hold while talking.
+    pub dictation_mode: DictationMode,
     /// Key combinations that paste the latest dictation again.
     pub paste_last_keys: Vec<String>,
     /// The name of the microphone; `None` is the system's default one.
@@ -83,6 +109,7 @@ impl Default for DeviceSettings {
         let keys = Bindings::default();
         Self {
             dictation_keys: keys.dictation,
+            dictation_mode: DictationMode::default(),
             paste_last_keys: keys.paste_last,
             microphone: None,
             emblem_size: 150,
@@ -98,7 +125,8 @@ impl DeviceSettings {
     /// Reads `path`. A missing file gives the defaults. A file that cannot be understood is
     /// renamed to `device.json.bad` (so that it is not lost) and the defaults are used. A file
     /// that is understood but holds a value that could not be set (an emblem size that does not
-    /// exist, a key combination that is no good) gets the default for that one value.
+    /// exist, a key combination that is no good, a dictation mode that is not one of the two)
+    /// gets the default for that one value.
     pub fn load(path: &Path) -> DeviceSettings {
         let text = match fs::read_to_string(path) {
             Ok(text) => text,
@@ -114,7 +142,7 @@ impl DeviceSettings {
                 return Self::default();
             }
         };
-        match serde_json::from_str::<DeviceSettings>(&text) {
+        match parse_settings(&text) {
             Ok(mut settings) => {
                 settings.repair();
                 settings
@@ -139,6 +167,7 @@ impl DeviceSettings {
         for (name, value) in fields {
             match name.as_str() {
                 "dictation_keys" => next.dictation_keys = parse_value(name, value)?,
+                "dictation_mode" => next.dictation_mode = parse_value(name, value)?,
                 "paste_last_keys" => next.paste_last_keys = parse_value(name, value)?,
                 "microphone" => next.microphone = parse_value(name, value)?,
                 "emblem_size" => next.emblem_size = parse_value(name, value)?,
@@ -222,6 +251,23 @@ impl DeviceSettings {
             self.paste_last_keys = default.paste_last_keys;
         }
     }
+}
+
+/// The settings in `text`. A `dictation_mode` that is not `"toggle"` or `"hold"` (a mode that a
+/// newer version of the app wrote, a typo, a value of the wrong type) is left out first, so that
+/// the default takes its place and the rest of the file is kept. (The other enums are strict: an
+/// unknown value there makes the whole file unreadable.)
+fn parse_settings(text: &str) -> Result<DeviceSettings, serde_json::Error> {
+    let mut value: Value = serde_json::from_str(text)?;
+    if let Some(mode) = value.get("dictation_mode")
+        && serde_json::from_value::<DictationMode>(mode.clone()).is_err()
+    {
+        log::warn!("device settings: dictation mode {mode} is not offered");
+        if let Some(fields) = value.as_object_mut() {
+            fields.remove("dictation_mode");
+        }
+    }
+    serde_json::from_value(value)
 }
 
 /// One field of a patch as the type it is stored as.
@@ -425,6 +471,7 @@ mod tests {
     fn defaults_are_the_documented_ones() {
         let s = DeviceSettings::default();
         assert_eq!(s.dictation_keys, ["AltRight"]);
+        assert_eq!(s.dictation_mode, DictationMode::Toggle);
         assert_eq!(s.paste_last_keys, ["AltRight+V"]);
         assert_eq!(s.microphone, None);
         assert_eq!(s.emblem_size, 150);
@@ -446,6 +493,7 @@ mod tests {
             serde_json::to_value(&s).unwrap(),
             json!({
                 "dictation_keys": ["AltRight"],
+                "dictation_mode": "toggle",
                 "paste_last_keys": ["AltRight+V"],
                 "microphone": "耳機麥克風",
                 "emblem_size": 150,
@@ -464,6 +512,109 @@ mod tests {
             assert_eq!(serde_json::to_value(value).unwrap(), json!(text));
             assert_eq!(value.as_str(), text);
         }
+        for (value, text) in [
+            (DictationMode::Toggle, "toggle"),
+            (DictationMode::Hold, "hold"),
+        ] {
+            assert_eq!(serde_json::to_value(value).unwrap(), json!(text));
+            assert_eq!(
+                serde_json::from_value::<DictationMode>(json!(text)).unwrap(),
+                value
+            );
+            assert_eq!(value.as_str(), text);
+        }
+    }
+
+    #[test]
+    fn a_patch_sets_the_dictation_mode() {
+        let mut s = DeviceSettings::default();
+        s.apply_patch(&json!({"dictation_mode": "hold"})).unwrap();
+        assert_eq!(s.dictation_mode, DictationMode::Hold);
+        s.apply_patch(&json!({"dictation_mode": "toggle"})).unwrap();
+        assert_eq!(s.dictation_mode, DictationMode::Toggle);
+    }
+
+    #[test]
+    fn a_patch_refuses_a_dictation_mode_that_does_not_exist() {
+        let mut s = DeviceSettings::default();
+        s.apply_patch(&json!({"dictation_mode": "hold"})).unwrap();
+        for bad in [
+            json!({"dictation_mode": "tap"}),
+            json!({"dictation_mode": "auto"}),
+            json!({"dictation_mode": "Hold"}),
+            json!({"dictation_mode": ""}),
+            json!({"dictation_mode": 1}),
+            json!({"dictation_mode": true}),
+            json!({"dictation_mode": null}),
+            // all or nothing: the good field next to it is not applied either
+            json!({"dictation_mode": "tap", "autostart": false}),
+        ] {
+            assert!(s.apply_patch(&bad).is_err(), "{bad}");
+        }
+        assert_eq!(s.dictation_mode, DictationMode::Hold, "nothing changed");
+        assert!(s.autostart);
+    }
+
+    #[test]
+    fn a_saved_dictation_mode_is_kept_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(&path, r#"{"dictation_mode": "hold", "emblem_size": 120}"#).unwrap();
+        let s = DeviceSettings::load(&path);
+        assert_eq!(s.dictation_mode, DictationMode::Hold);
+        assert_eq!(s.emblem_size, 120);
+    }
+
+    #[test]
+    fn a_file_from_before_the_dictation_mode_gets_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(&path, r#"{"emblem_size": 120, "onboarded": true}"#).unwrap();
+        assert_eq!(
+            DeviceSettings::load(&path).dictation_mode,
+            DictationMode::Toggle
+        );
+    }
+
+    #[test]
+    fn an_unknown_dictation_mode_in_the_file_gets_the_default() {
+        for text in [
+            r#""tap""#,
+            r#""auto""#,
+            r#""HOLD""#,
+            r#""""#,
+            "7",
+            "true",
+            "null",
+            r#"["hold"]"#,
+            r#"{"mode": "hold"}"#,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(FILE_NAME);
+            std::fs::write(
+                &path,
+                format!(r#"{{"dictation_mode": {text}, "emblem_size": 120, "subtitles": "ja"}}"#),
+            )
+            .unwrap();
+            let s = DeviceSettings::load(&path);
+            assert_eq!(s.dictation_mode, DictationMode::Toggle, "{text}");
+            assert_eq!(
+                (s.emblem_size, s.subtitles),
+                (120, Subtitles::Ja),
+                "{text}: what was fine stays"
+            );
+            assert!(path.exists(), "{text}: the file is not set aside");
+            assert!(!dir.path().join("device.json.bad").exists(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_file_that_is_not_an_object_is_still_set_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(&path, r#"["dictation_mode", "hold"]"#).unwrap();
+        assert_eq!(DeviceSettings::load(&path), DeviceSettings::default());
+        assert!(dir.path().join("device.json.bad").exists());
     }
 
     #[test]
@@ -519,6 +670,7 @@ mod tests {
         let mut s = DeviceSettings::default();
         s.apply_patch(&json!({
             "dictation_keys": ["F9"],
+            "dictation_mode": "hold",
             "microphone": "麥克風陣列",
             "emblem_size": 120,
             "subtitles": "off",
@@ -570,6 +722,7 @@ mod tests {
             json!({"microphone": ""}),
             json!({"subtitles": "loud"}),
             json!({"appearance": 1}),
+            json!({"dictation_mode": "tap"}),
             json!({"dictation_keys": "AltRight"}),
             json!({"dictation_keys": [1]}),
         ] {

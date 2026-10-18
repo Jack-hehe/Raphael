@@ -1,6 +1,7 @@
 //! The dictation controller: hotkey → recording → processing → paste.
 //!
-//! [`DictationController`] turns the dictation key's events (through [`HoldTap`]) into calls to
+//! [`DictationController`] turns the dictation key's events (through [`HoldTap`], in the mode the
+//! person chose: press to start and again to stop, or hold while talking) into calls to
 //! the core (`dictation.start`, `dictation.stop`, `dictation.cancel`), drives the overlay, and
 //! hands the finished text to the [`Paster`]. It updates its state at once and runs the core calls
 //! in tasks of their own, so Esc is handled while a stop call is still in flight. Each recording
@@ -26,6 +27,7 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+use crate::device_settings::DictationMode;
 use crate::holdtap::{Action, HoldTap};
 use crate::hotkey::{CancelSwitch, HotkeyEvent};
 use crate::notices::{self, Notice};
@@ -42,6 +44,23 @@ const NOT_CONFIGURED: i64 = 1001;
 /// A paste-last press this soon after a recording started cancels that recording: Right Alt+V
 /// pressed the dictation key first.
 const PASTE_LAST_CANCELS_WITHIN_MS: u64 = 1000;
+
+/// The dictation mode that is in force: written by the device settings (at start, and when the
+/// person changes it), read by the controller each time a dictation begins. Clones share the
+/// value. A change while a dictation is under way does not touch that dictation ([`HoldTap`] keeps
+/// the mode it started with).
+#[derive(Clone, Debug, Default)]
+pub struct ModeCell(Arc<Mutex<DictationMode>>);
+
+impl ModeCell {
+    pub fn get(&self) -> DictationMode {
+        *lock(&self.0)
+    }
+
+    pub fn set(&self, mode: DictationMode) {
+        *lock(&self.0) = mode;
+    }
+}
 
 /// Where the dictation is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +122,7 @@ pub struct DictationController<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSw
     overlay: Arc<O>,
     paster: Arc<P>,
     cancel: Arc<S>,
+    mode: ModeCell,
     state: Arc<Mutex<State>>,
 }
 
@@ -115,18 +135,28 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Clone
             overlay: self.overlay.clone(),
             paster: self.paster.clone(),
             cancel: self.cancel.clone(),
+            mode: self.mode.clone(),
             state: self.state.clone(),
         }
     }
 }
 
 impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<C, O, P, S> {
-    pub fn new(core: Arc<C>, overlay: Arc<O>, paster: Arc<P>, cancel: Arc<S>) -> Self {
+    /// A controller that takes the dictation mode from `mode`, which the device settings keep up
+    /// to date.
+    pub fn new(
+        core: Arc<C>,
+        overlay: Arc<O>,
+        paster: Arc<P>,
+        cancel: Arc<S>,
+        mode: ModeCell,
+    ) -> Self {
         Self {
             core,
             overlay,
             paster,
             cancel,
+            mode,
             state: Arc::new(Mutex::new(State {
                 phase: Phase::Idle,
                 holdtap: HoldTap::new(),
@@ -148,18 +178,21 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     pub fn on_hotkey(&self, ev: HotkeyEvent, now_ms: u64) -> Option<JoinHandle<()>> {
         match ev {
             HotkeyEvent::DictationDown => {
+                // Only a press that begins a dictation looks at the mode; one that is under way
+                // keeps the mode it began with.
+                let mode = self.mode.get();
                 let action = {
                     let mut state = lock(&self.state);
                     if state.phase == Phase::Processing {
                         log::debug!("dictation key ignored: still processing the last one");
                         return None;
                     }
-                    state.holdtap.on_down(now_ms)
+                    state.holdtap.on_down(mode)
                 };
                 self.act(action, now_ms)
             }
             HotkeyEvent::DictationUp => {
-                let action = lock(&self.state).holdtap.on_up(now_ms);
+                let action = lock(&self.state).holdtap.on_up();
                 self.act(action, now_ms)
             }
             HotkeyEvent::Cancel => self.cancel_current(),
@@ -230,7 +263,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     fn act(&self, action: Action, now_ms: u64) -> Option<JoinHandle<()>> {
         match action {
             Action::StartRecording => {
-                log::info!("dictation: recording");
+                log::info!("dictation: recording ({} mode)", self.mode.get().as_str());
                 self.start(now_ms)
             }
             Action::StopRecording => {
@@ -630,6 +663,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     fn cancel(&self) -> &S {
         &self.cancel
     }
+    fn mode(&self) -> ModeCell {
+        self.mode.clone()
+    }
 }
 
 // ---------- in the app ----------
@@ -649,7 +685,7 @@ mod app {
     use tokio::sync::mpsc::UnboundedReceiver;
     use tokio::task::JoinHandle;
 
-    use super::DictationController;
+    use super::{DictationController, ModeCell};
     use crate::core_process::{CORE_DOWN, CORE_RESTARTED, CoreProcess};
     use crate::hotkey::{CancelSwitch, HotkeyEvent, HotkeyService, PauseReason};
     use crate::notices;
@@ -725,6 +761,11 @@ mod app {
             .try_state::<Arc<HotkeyService>>()
             .map(|hotkeys| hotkeys.inner().clone());
 
+        // The device settings (`commands::start`, which runs after this) put the saved dictation
+        // mode in this cell and change it when the person does, found through the app state.
+        let mode = ModeCell::default();
+        app.manage(mode.clone());
+
         let notifications = core.as_ref().map(|core| core.subscribe());
         let overlay = Arc::new(MaybeOverlay(overlay));
         let controller = match core {
@@ -733,6 +774,7 @@ mod app {
                 overlay.clone(),
                 Arc::new(WindowsPaster::new()),
                 Arc::new(MaybeHotkeys(hotkeys.clone())),
+                mode,
             )),
             None => {
                 log::error!("dictation is off: the Python core is not running");
@@ -859,6 +901,7 @@ mod app {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device_settings::DeviceSettings;
     use crate::hotkey::{CancelSwitch, HotkeyEvent};
     use crate::notices::{
         CORE_DOWN, ELEVATED, FOCUS_CHANGED, LAST_COPIED, NO_MIC, NOT_READY, OFFLINE,
@@ -1080,14 +1123,26 @@ mod tests {
 
     type Ctl = DictationController<FakeCore, FakeOverlay, FakePaster, FakeCancel>;
 
-    fn controller(core: FakeCore, paster: FakePaster) -> Ctl {
+    fn controller_in(mode: DictationMode, core: FakeCore, paster: FakePaster) -> Ctl {
+        let cell = ModeCell::default();
+        cell.set(mode);
         DictationController::new(
             Arc::new(core),
             Arc::new(FakeOverlay::default()),
             Arc::new(paster),
             Arc::new(FakeCancel::default()),
+            cell,
         )
     }
+
+    /// A controller in hold mode: the shortest key sequence for a whole dictation is down, up.
+    /// Most tests are about what happens after the key (the core, the overlay, pasting) and use
+    /// it; the ones about the modes themselves say which mode they use.
+    fn controller(core: FakeCore, paster: FakePaster) -> Ctl {
+        controller_in(DictationMode::Hold, core, paster)
+    }
+
+    const BOTH_MODES: [DictationMode; 2] = [DictationMode::Toggle, DictationMode::Hold];
 
     fn stop_result(text: &str, fallback_reason: Option<&str>) -> Value {
         json!({"id": 1, "text": text, "fallback_reason": fallback_reason})
@@ -1152,23 +1207,347 @@ mod tests {
         );
     }
 
+    // ---------- toggle mode: press to start, press again to stop ----------
+
+    fn toggle_controller(core: FakeCore, paster: FakePaster) -> Ctl {
+        controller_in(DictationMode::Toggle, core, paster)
+    }
+
+    #[test]
+    fn the_mode_cell_starts_in_toggle_mode_like_the_settings() {
+        assert_eq!(ModeCell::default().get(), DictationMode::Toggle);
+        assert_eq!(
+            ModeCell::default().get(),
+            DeviceSettings::default().dictation_mode
+        );
+    }
+
     #[tokio::test]
-    async fn tap_starts_and_second_press_stops() {
-        let c = controller(
+    async fn toggle_a_press_starts_its_release_does_nothing_the_next_press_stops() {
+        let c = toggle_controller(
             FakeCore::with("dictation.stop", stop_result("好", None)),
             FakePaster::pasting("notepad.exe"),
         );
         run(&c, HotkeyEvent::DictationDown, 0).await;
-        run(&c, HotkeyEvent::DictationUp, 120).await;
         assert_eq!(c.phase(), Phase::Recording);
+        assert_eq!(c.cancel().last(), Some(true));
+        run(&c, HotkeyEvent::DictationUp, 120).await;
+        assert_eq!(c.phase(), Phase::Recording, "the release does not stop it");
         assert_eq!(c.core().count("dictation.stop"), 0);
         run(&c, HotkeyEvent::DictationDown, 2000).await;
         assert_eq!(c.paster().delivered(), vec!["好"]);
         assert_eq!(c.phase(), Phase::Idle);
         run(&c, HotkeyEvent::DictationUp, 2100).await;
-        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(
+            c.phase(),
+            Phase::Idle,
+            "the release of the stopping press does nothing"
+        );
         assert_eq!(c.core().count("dictation.start"), 1);
         assert_eq!(c.core().count("dictation.stop"), 1);
+        assert_eq!(
+            c.overlay().events(),
+            vec!["show:listening", "mode:thinking", "hide"]
+        );
+        assert_eq!(c.cancel().last(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn toggle_holding_the_key_long_changes_nothing() {
+        let c = toggle_controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        // ten seconds with the key down, then let go: still just a start
+        run(&c, HotkeyEvent::DictationUp, 10_000).await;
+        assert_eq!(c.phase(), Phase::Recording);
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        // a stopping press held long is a stop too, and its release changes nothing
+        run(&c, HotkeyEvent::DictationDown, 30_000).await;
+        assert_eq!(c.paster().delivered(), vec!["好"]);
+        run(&c, HotkeyEvent::DictationUp, 40_000).await;
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.core().count("dictation.start"), 1);
+    }
+
+    #[tokio::test]
+    async fn toggle_each_dictation_starts_afresh() {
+        let c = toggle_controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        for start in [0, 10_000] {
+            run(&c, HotkeyEvent::DictationDown, start).await;
+            run(&c, HotkeyEvent::DictationUp, start + 100).await;
+            run(&c, HotkeyEvent::DictationDown, start + 3000).await;
+            run(&c, HotkeyEvent::DictationUp, start + 3100).await;
+        }
+        assert_eq!(c.core().count("dictation.start"), 2);
+        assert_eq!(c.core().count("dictation.stop"), 2);
+        assert_eq!(c.paster().delivered(), vec!["好", "好"]);
+    }
+
+    #[tokio::test]
+    async fn toggle_escape_after_the_release_cancels() {
+        let c = toggle_controller(FakeCore::default(), FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 100).await;
+        run(&c, HotkeyEvent::Cancel, 2000).await;
+        assert_eq!(c.core().count("dictation.cancel"), 1);
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.cancel().last(), Some(false));
+        assert_eq!(c.overlay().events().last().unwrap(), "hide");
+        // the next press starts a new recording; it is not taken for the stop of the old one
+        run(&c, HotkeyEvent::DictationDown, 4000).await;
+        assert_eq!(c.core().count("dictation.start"), 2);
+        assert_eq!(c.phase(), Phase::Recording);
+    }
+
+    #[tokio::test]
+    async fn toggle_escape_with_the_key_still_down_cancels_and_its_release_is_ignored() {
+        let c = toggle_controller(FakeCore::default(), FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::Cancel, 500).await;
+        assert_eq!(c.core().count("dictation.cancel"), 1);
+        assert_eq!(c.phase(), Phase::Idle);
+        run(&c, HotkeyEvent::DictationUp, 700).await;
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        run(&c, HotkeyEvent::DictationDown, 3000).await;
+        assert_eq!(c.core().count("dictation.start"), 2);
+        assert_eq!(c.phase(), Phase::Recording);
+    }
+
+    #[tokio::test]
+    async fn toggle_escape_while_processing_drops_the_late_result() {
+        let (core, gate) =
+            FakeCore::with("dictation.stop", stop_result("太晚了", None)).gated("dictation.stop");
+        let c = toggle_controller(core, FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 100).await;
+        let stop = c
+            .on_hotkey(HotkeyEvent::DictationDown, 3000)
+            .expect("the stop runs in a task");
+        tokio::task::yield_now().await;
+        assert_eq!(c.phase(), Phase::Processing);
+        run(&c, HotkeyEvent::Cancel, 3200).await;
+        assert_eq!(c.core().count("dictation.cancel"), 1);
+        assert_eq!(c.phase(), Phase::Idle);
+        gate.notify_one();
+        stop.await.unwrap();
+        assert!(c.paster().delivered().is_empty());
+        assert_eq!(c.phase(), Phase::Idle);
+    }
+
+    #[tokio::test]
+    async fn toggle_a_press_while_processing_is_ignored() {
+        let (core, gate) =
+            FakeCore::with("dictation.stop", stop_result("好", None)).gated("dictation.stop");
+        let c = toggle_controller(core, FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 100).await;
+        let stop = c
+            .on_hotkey(HotkeyEvent::DictationDown, 3000)
+            .expect("the stop runs in a task");
+        tokio::task::yield_now().await;
+        run(&c, HotkeyEvent::DictationUp, 3100).await;
+        // impatient: two more presses while the core is still working
+        run(&c, HotkeyEvent::DictationDown, 3500).await;
+        run(&c, HotkeyEvent::DictationUp, 3600).await;
+        run(&c, HotkeyEvent::DictationDown, 3800).await;
+        run(&c, HotkeyEvent::DictationUp, 3900).await;
+        assert_eq!(c.core().count("dictation.start"), 1);
+        assert_eq!(c.core().count("dictation.cancel"), 0);
+        assert_eq!(c.phase(), Phase::Processing);
+        gate.notify_one();
+        stop.await.unwrap();
+        assert_eq!(c.paster().delivered(), vec!["好"]);
+        assert_eq!(c.phase(), Phase::Idle);
+        // and afterwards the key is a fresh start
+        run(&c, HotkeyEvent::DictationDown, 9000).await;
+        assert_eq!(c.core().count("dictation.start"), 2);
+    }
+
+    #[tokio::test]
+    async fn toggle_a_stray_release_does_nothing() {
+        let c = toggle_controller(FakeCore::default(), FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationUp, 0).await;
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.core().count("dictation.start"), 0);
+        assert!(c.overlay().events().is_empty());
+        run(&c, HotkeyEvent::DictationDown, 500).await;
+        assert_eq!(c.phase(), Phase::Recording, "the key still works");
+    }
+
+    #[tokio::test]
+    async fn toggle_a_second_down_without_a_release_is_auto_repeat() {
+        let c = toggle_controller(FakeCore::default(), FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationDown, 100).await;
+        run(&c, HotkeyEvent::DictationDown, 200).await;
+        assert_eq!(c.core().count("dictation.start"), 1);
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        assert_eq!(c.phase(), Phase::Recording);
+    }
+
+    #[tokio::test]
+    async fn toggle_the_stop_is_sent_even_before_the_start_was_answered() {
+        // press, release, press again quickly: the stop waits for the start's reply
+        let (c, gate) = with_gated_start_in(
+            DictationMode::Toggle,
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+        );
+        let down = c
+            .on_hotkey(HotkeyEvent::DictationDown, 0)
+            .expect("the start runs in a task");
+        tokio::task::yield_now().await;
+        run(&c, HotkeyEvent::DictationUp, 80).await;
+        let stop = c
+            .on_hotkey(HotkeyEvent::DictationDown, 300)
+            .expect("the stop runs in a task");
+        settle().await;
+        assert_eq!(c.phase(), Phase::Processing);
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        gate.notify_one();
+        down.await.unwrap();
+        stop.await.unwrap();
+        assert_eq!(
+            c.core().order(),
+            vec!["dictation.start", "dictation.start:reply", "dictation.stop"]
+        );
+        assert_eq!(c.paster().delivered(), vec!["好"]);
+    }
+
+    #[tokio::test]
+    async fn toggle_a_failed_start_leaves_the_next_press_a_start() {
+        let c = toggle_controller(
+            FakeCore::failing("dictation.start", RpcError::new(1004, "no microphone")),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        assert_eq!(c.phase(), Phase::Idle);
+        run(&c, HotkeyEvent::DictationUp, 100).await;
+        run(&c, HotkeyEvent::DictationDown, 5000).await;
+        assert_eq!(c.core().count("dictation.start"), 2, "not a stop");
+        assert_eq!(c.core().count("dictation.stop"), 0);
+    }
+
+    // ---------- hold mode: hold to talk, release to stop ----------
+
+    #[tokio::test]
+    async fn hold_a_quick_press_stops_too_however_short() {
+        // The old auto-detection took a press under 350 ms for a tap and left the recording on.
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 60).await;
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        assert_eq!(c.paster().delivered(), vec!["好"]);
+        assert_eq!(c.phase(), Phase::Idle);
+    }
+
+    #[tokio::test]
+    async fn hold_a_long_press_stops_on_release() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationDown, 500).await; // auto-repeat
+        assert_eq!(c.phase(), Phase::Recording);
+        assert_eq!(
+            c.core().count("dictation.stop"),
+            0,
+            "nothing stops it while the key is down"
+        );
+        run(&c, HotkeyEvent::DictationUp, 60_000).await;
+        assert_eq!(c.core().count("dictation.start"), 1);
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        assert_eq!(c.paster().delivered(), vec!["好"]);
+    }
+
+    #[tokio::test]
+    async fn hold_a_stray_release_does_nothing() {
+        let c = controller(FakeCore::default(), FakePaster::pasting("notepad.exe"));
+        run(&c, HotkeyEvent::DictationUp, 0).await;
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        assert!(c.overlay().events().is_empty());
+    }
+
+    #[tokio::test]
+    async fn hold_the_release_after_a_stop_does_not_stop_again() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        run(&c, HotkeyEvent::DictationUp, 1000).await;
+        assert_eq!(c.core().count("dictation.stop"), 1);
+    }
+
+    // ---------- the mode can change; it takes effect from the next dictation ----------
+
+    #[tokio::test]
+    async fn changing_the_mode_during_a_toggle_dictation_takes_effect_from_the_next_one() {
+        let c = toggle_controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        c.mode().set(DictationMode::Hold);
+        // this dictation is still a toggle one: the release does not stop it
+        run(&c, HotkeyEvent::DictationUp, 200).await;
+        assert_eq!(c.phase(), Phase::Recording);
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        run(&c, HotkeyEvent::DictationDown, 3000).await;
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        run(&c, HotkeyEvent::DictationUp, 3100).await;
+        assert_eq!(c.phase(), Phase::Idle);
+
+        // the next one is a hold dictation
+        run(&c, HotkeyEvent::DictationDown, 6000).await;
+        run(&c, HotkeyEvent::DictationUp, 6100).await;
+        assert_eq!(c.core().count("dictation.start"), 2);
+        assert_eq!(c.core().count("dictation.stop"), 2);
+        assert_eq!(c.phase(), Phase::Idle);
+    }
+
+    #[tokio::test]
+    async fn changing_the_mode_during_a_hold_dictation_takes_effect_from_the_next_one() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        c.mode().set(DictationMode::Toggle);
+        // this dictation is still a hold one: the release stops it
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        assert_eq!(c.phase(), Phase::Idle);
+
+        // the next one is a toggle dictation
+        run(&c, HotkeyEvent::DictationDown, 5000).await;
+        run(&c, HotkeyEvent::DictationUp, 5100).await;
+        assert_eq!(c.phase(), Phase::Recording);
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        run(&c, HotkeyEvent::DictationDown, 8000).await;
+        assert_eq!(c.core().count("dictation.stop"), 2);
+    }
+
+    #[test]
+    fn the_mode_cell_is_shared_between_clones() {
+        let cell = ModeCell::default();
+        let other = cell.clone();
+        other.set(DictationMode::Hold);
+        assert_eq!(cell.get(), DictationMode::Hold);
+        cell.set(DictationMode::Toggle);
+        assert_eq!(other.get(), DictationMode::Toggle);
     }
 
     #[tokio::test]
@@ -1554,7 +1933,63 @@ mod tests {
 
     #[tokio::test]
     async fn paste_last_hotkey_cancels_a_fresh_recording() {
-        let c = controller(
+        // Right Alt+V: the Right Alt went down first (a start in either mode), then V
+        for mode in BOTH_MODES {
+            let c = controller_in(
+                mode,
+                FakeCore::with(
+                    "history.latest",
+                    json!({"item": {"id": 3, "text": "上一次"}}),
+                ),
+                FakePaster::pasting("notepad.exe"),
+            );
+            run(&c, HotkeyEvent::DictationDown, 0).await;
+            assert_eq!(c.phase(), Phase::Recording, "{mode:?}");
+            run(&c, HotkeyEvent::PasteLast, 200).await;
+            assert_eq!(c.core().count("dictation.cancel"), 1, "{mode:?}");
+            assert_eq!(c.paster().delivered(), vec!["上一次"], "{mode:?}");
+            assert_eq!(c.phase(), Phase::Idle, "{mode:?}");
+            assert_eq!(c.cancel().last(), Some(false), "{mode:?}");
+            assert_eq!(
+                c.overlay().events(),
+                vec!["show:listening", "hide"],
+                "{mode:?}: dropped quietly"
+            );
+            // the release of the Right Alt does nothing
+            run(&c, HotkeyEvent::DictationUp, 300).await;
+            assert_eq!(c.core().count("dictation.stop"), 0, "{mode:?}");
+            assert_eq!(c.phase(), Phase::Idle, "{mode:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn paste_last_leaves_the_next_press_a_start_in_both_modes() {
+        // In toggle mode a detector that still thought it was listening would take the next
+        // press for a stop of the recording that Right Alt+V dropped.
+        for mode in BOTH_MODES {
+            let c = controller_in(
+                mode,
+                FakeCore::with(
+                    "history.latest",
+                    json!({"item": {"id": 3, "text": "上一次"}}),
+                ),
+                FakePaster::pasting("notepad.exe"),
+            );
+            run(&c, HotkeyEvent::DictationDown, 0).await;
+            run(&c, HotkeyEvent::PasteLast, 200).await;
+            run(&c, HotkeyEvent::DictationUp, 300).await;
+            run(&c, HotkeyEvent::DictationDown, 5000).await;
+            assert_eq!(c.core().count("dictation.start"), 2, "{mode:?}");
+            assert_eq!(c.core().count("dictation.stop"), 0, "{mode:?}");
+            assert_eq!(c.phase(), Phase::Recording, "{mode:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn paste_last_after_the_dictation_key_was_let_go_in_toggle_mode_still_cancels() {
+        // Toggle mode, a quick tap on Right Alt then a V within the second (the key is up and
+        // the recording runs): the same fresh recording, dropped the same way.
+        let c = toggle_controller(
             FakeCore::with(
                 "history.latest",
                 json!({"item": {"id": 3, "text": "上一次"}}),
@@ -1562,14 +1997,12 @@ mod tests {
             FakePaster::pasting("notepad.exe"),
         );
         run(&c, HotkeyEvent::DictationDown, 0).await;
-        assert_eq!(c.phase(), Phase::Recording);
-        run(&c, HotkeyEvent::PasteLast, 200).await;
+        run(&c, HotkeyEvent::DictationUp, 90).await;
+        run(&c, HotkeyEvent::PasteLast, 400).await;
         assert_eq!(c.core().count("dictation.cancel"), 1);
-        assert_eq!(c.paster().delivered(), vec!["上一次"]);
         assert_eq!(c.phase(), Phase::Idle);
-        run(&c, HotkeyEvent::DictationUp, 300).await;
-        assert_eq!(c.core().count("dictation.stop"), 0);
-        assert_eq!(c.phase(), Phase::Idle);
+        run(&c, HotkeyEvent::DictationDown, 3000).await;
+        assert_eq!(c.core().count("dictation.start"), 2, "a start, not a stop");
     }
 
     #[tokio::test]
@@ -1649,17 +2082,20 @@ mod tests {
 
     #[tokio::test]
     async fn paste_last_during_a_longer_recording_keeps_it() {
-        let c = controller(
-            FakeCore::with(
-                "history.latest",
-                json!({"item": {"id": 3, "text": "上一次"}}),
-            ),
-            FakePaster::pasting("notepad.exe"),
-        );
-        run(&c, HotkeyEvent::DictationDown, 0).await;
-        run(&c, HotkeyEvent::PasteLast, 1500).await;
-        assert_eq!(c.core().count("dictation.cancel"), 0);
-        assert_eq!(c.phase(), Phase::Recording);
+        for mode in BOTH_MODES {
+            let c = controller_in(
+                mode,
+                FakeCore::with(
+                    "history.latest",
+                    json!({"item": {"id": 3, "text": "上一次"}}),
+                ),
+                FakePaster::pasting("notepad.exe"),
+            );
+            run(&c, HotkeyEvent::DictationDown, 0).await;
+            run(&c, HotkeyEvent::PasteLast, 1500).await;
+            assert_eq!(c.core().count("dictation.cancel"), 0, "{mode:?}");
+            assert_eq!(c.phase(), Phase::Recording, "{mode:?}");
+        }
     }
 
     #[tokio::test]
@@ -1711,8 +2147,15 @@ mod tests {
 
     /// A controller whose `dictation.start` reply is held back until the returned gate is opened.
     fn with_gated_start(core: FakeCore) -> (Ctl, Arc<Notify>) {
+        with_gated_start_in(DictationMode::Hold, core)
+    }
+
+    fn with_gated_start_in(mode: DictationMode, core: FakeCore) -> (Ctl, Arc<Notify>) {
         let (core, gate) = core.gated("dictation.start");
-        (controller(core, FakePaster::pasting("notepad.exe")), gate)
+        (
+            controller_in(mode, core, FakePaster::pasting("notepad.exe")),
+            gate,
+        )
     }
 
     #[tokio::test]
@@ -1722,7 +2165,7 @@ mod tests {
             .on_hotkey(HotkeyEvent::DictationDown, 0)
             .expect("the start runs in a task");
         tokio::task::yield_now().await;
-        // a hold just over the tap threshold: released while the core is still starting
+        // released while the core is still starting
         let up = c
             .on_hotkey(HotkeyEvent::DictationUp, 400)
             .expect("the stop runs in a task");
@@ -2081,33 +2524,39 @@ mod tests {
 
     #[tokio::test]
     async fn paste_last_just_under_a_second_after_the_start_cancels_the_recording() {
-        let c = controller(
-            FakeCore::with(
-                "history.latest",
-                json!({"item": {"id": 3, "text": "上一次"}}),
-            ),
-            FakePaster::pasting("notepad.exe"),
-        );
-        run(&c, HotkeyEvent::DictationDown, 0).await;
-        run(&c, HotkeyEvent::PasteLast, 999).await;
-        assert_eq!(c.core().count("dictation.cancel"), 1);
-        assert_eq!(c.phase(), Phase::Idle);
-        assert_eq!(c.paster().delivered(), vec!["上一次"]);
+        for mode in BOTH_MODES {
+            let c = controller_in(
+                mode,
+                FakeCore::with(
+                    "history.latest",
+                    json!({"item": {"id": 3, "text": "上一次"}}),
+                ),
+                FakePaster::pasting("notepad.exe"),
+            );
+            run(&c, HotkeyEvent::DictationDown, 0).await;
+            run(&c, HotkeyEvent::PasteLast, 999).await;
+            assert_eq!(c.core().count("dictation.cancel"), 1, "{mode:?}");
+            assert_eq!(c.phase(), Phase::Idle, "{mode:?}");
+            assert_eq!(c.paster().delivered(), vec!["上一次"], "{mode:?}");
+        }
     }
 
     #[tokio::test]
     async fn paste_last_a_full_second_after_the_start_keeps_the_recording() {
-        let c = controller(
-            FakeCore::with(
-                "history.latest",
-                json!({"item": {"id": 3, "text": "上一次"}}),
-            ),
-            FakePaster::pasting("notepad.exe"),
-        );
-        run(&c, HotkeyEvent::DictationDown, 0).await;
-        run(&c, HotkeyEvent::PasteLast, 1000).await;
-        assert_eq!(c.core().count("dictation.cancel"), 0);
-        assert_eq!(c.phase(), Phase::Recording);
-        assert_eq!(c.paster().delivered(), vec!["上一次"]);
+        for mode in BOTH_MODES {
+            let c = controller_in(
+                mode,
+                FakeCore::with(
+                    "history.latest",
+                    json!({"item": {"id": 3, "text": "上一次"}}),
+                ),
+                FakePaster::pasting("notepad.exe"),
+            );
+            run(&c, HotkeyEvent::DictationDown, 0).await;
+            run(&c, HotkeyEvent::PasteLast, 1000).await;
+            assert_eq!(c.core().count("dictation.cancel"), 0, "{mode:?}");
+            assert_eq!(c.phase(), Phase::Recording, "{mode:?}");
+            assert_eq!(c.paster().delivered(), vec!["上一次"], "{mode:?}");
+        }
     }
 }

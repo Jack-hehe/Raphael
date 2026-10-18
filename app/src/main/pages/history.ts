@@ -2,6 +2,7 @@
 // Hover for copy and delete; a click shows what the speech recognition heard (spec §12.3).
 
 import * as api from "../api";
+import { historyEmptyHint } from "../dictation";
 import { dayLabel, describeError, formatClock, formatRetention, KEEP_FOREVER_DAYS } from "../format";
 import { bindingLabels } from "../keys";
 import type { AppContext, HistoryItem, Page } from "../types";
@@ -89,7 +90,7 @@ export function createHistory(app: AppContext): Page {
       } else {
         const dictate = app.device().dictation_keys[0];
         const key = dictate ? bindingLabels(dictate).join(" + ") : "快捷鍵";
-        empty.innerHTML = `<div class="say">《告。尚無紀錄。》</div>按住${esc(key)}說話，結果會出現在這裡。`;
+        empty.innerHTML = `<div class="say">《告。尚無紀錄。》</div>${esc(historyEmptyHint(app.device().dictation_mode, key))}`;
       }
     }
 

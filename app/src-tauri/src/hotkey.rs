@@ -206,7 +206,8 @@ impl HotkeyService {
 
     /// Turns the cancel keys on or off. They are registered only while a dictation is active,
     /// because while registered they are swallowed: Esc does nothing else. Esc works with the
-    /// dictation modifiers still held (hold mode) and without them (tap mode).
+    /// dictation modifiers still held (hold mode, or toggle mode before the key is let go) and
+    /// without them (toggle mode after it).
     ///
     /// Takes effect within a few milliseconds, in order with the other calls on this service.
     pub fn set_cancel_enabled(&self, on: bool) {
@@ -329,8 +330,9 @@ fn parse_all(bindings: &[String]) -> Result<Vec<Hotkey>, String> {
     bindings.iter().map(|text| parse_binding(text)).collect()
 }
 
-/// The keys that cancel a dictation: Esc alone (tap mode, nothing held) and Esc with the
-/// modifiers of each dictation key (hold mode). A bare Esc does not fire while Right Alt is held,
+/// The keys that cancel a dictation: Esc alone (nothing held: toggle mode after the key is let go)
+/// and Esc with the modifiers of each dictation key (still held: hold mode, or toggle mode before
+/// the key is let go). A bare Esc does not fire while Right Alt is held,
 /// because handy-keys matches the modifiers exactly.
 fn cancel_hotkeys(dictation: &[Hotkey]) -> Vec<Hotkey> {
     let escape = |modifiers| Hotkey {

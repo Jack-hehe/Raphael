@@ -4,6 +4,7 @@ import type { DeviceSettings } from "./types";
 
 const base: DeviceSettings = {
   dictation_keys: ["AltRight"],
+  dictation_mode: "toggle",
   paste_last_keys: ["AltRight+V"],
   microphone: null,
   emblem_size: 150,
