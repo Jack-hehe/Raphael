@@ -469,6 +469,7 @@ export class Emblem {
   private dpr = 1;
   private reduce = false;
   private ctx: CanvasRenderingContext2D | null = null;
+  private steps = 0;
 
   constructor(canvas: HTMLCanvasElement, sizePx: number, opts: EmblemOptions = {}) {
     this.canvas = canvas;
@@ -491,6 +492,11 @@ export class Emblem {
   /** The angle of the glyph ring, radians. */
   get rot(): number {
     return this._rot;
+  }
+
+  /** How many times the animation loop has stepped this emblem (the page watches for a stall). */
+  get frames(): number {
+    return this.steps;
   }
 
   /** The loudness the white ring shows now, 0 to 1. */
@@ -567,6 +573,7 @@ export class Emblem {
    * when the picture changed and should be drawn.
    */
   step(dt: number): boolean {
+    this.steps++;
     this.clock += dt;
     this.pt += dt;
     if (this._phase === "appear" && this.pt >= AP.dur) {

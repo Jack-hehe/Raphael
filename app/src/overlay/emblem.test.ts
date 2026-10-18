@@ -417,3 +417,11 @@ test("a new size resizes the canvas", () => {
   expect(canvas.style.width).toBe("252px");
   expect(canvas.width).toBe(252);
 });
+
+test("frames counts the animation steps, so the page can tell a stalled loop", () => {
+  const e = new Emblem(fakeCanvas(), 150);
+  expect(e.frames).toBe(0);
+  e.step(1 / 60);
+  e.step(1 / 60);
+  expect(e.frames).toBe(2);
+});
