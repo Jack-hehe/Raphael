@@ -21,6 +21,7 @@ from raphael_core.device.stt import SAMPLE_RATE, read_wav
 from raphael_core.evaluate import cleanup as eval_cleanup
 from raphael_core.evaluate import record as eval_record
 from raphael_core.evaluate import stt as eval_stt
+from raphael_core.languages import chinese_variant
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -420,7 +421,45 @@ def make_case(**fields):
         must_contain=fields.pop("must_contain", []),
         must_not_contain=fields.pop("must_not_contain", []),
         target_app=fields.pop("target_app", None),
+        **fields,
     )
+
+
+def test_a_case_is_for_the_users_three_languages_unless_it_says_otherwise(tmp_path):
+    path = case_file(
+        tmp_path,
+        '{"id": "a", "input": "x", "must_contain": ["x"]}',
+        '{"id": "b", "input": "x", "must_contain": ["x"], "languages": ["zh-CN", "en-GB"]}',
+    )
+    first, second = eval_cleanup.load_cases(path)
+    assert first.languages == ["zh-TW", "en-US", "ja-JP"] == list(eval_cleanup.DEFAULT_LANGUAGES)
+    assert second.languages == ["zh-CN", "en-GB"]
+    assert make_case().languages == ["zh-TW", "en-US", "ja-JP"]
+
+
+@pytest.mark.parametrize("languages", ['"zh-TW"', "[]", '["zh-TW", "zh-CN"]', '["xx"]', "[1]"])
+def test_a_case_with_languages_that_are_no_valid_selection_is_refused(tmp_path, languages):
+    line = f'{{"id": "a", "input": "x", "languages": {languages}}}'
+    with pytest.raises(ValueError, match="第 1 行.*languages"):
+        eval_cleanup.load_cases(case_file(tmp_path, line))
+
+
+async def test_run_case_sends_the_prompt_of_the_cases_languages():
+    case = make_case(languages=["zh-CN", "en-GB"], must_contain=["软件"])
+    client = FakeClient(["这个軟件。"])
+    outcome = await eval_cleanup.run_case(client, "m", case)
+    system = client.calls[0]["system"]
+    assert "The speaker's languages: 簡體中文（中國）, English (United Kingdom)." in system
+    assert "Simplified characters with Mainland usage" in system
+    # What the app does with the reply for zh-CN: what is left in Traditional is made Simplified.
+    assert outcome.text == "这个软件。" and outcome.failures == []
+
+
+def test_failed_checks_follow_the_cases_chinese_variant():
+    hong_kong = make_case(languages=["zh-HK"], must_contain=["軟件"], must_not_contain=["軟體"])
+    assert eval_cleanup.failed_checks(hong_kong, "这个软件。") == []
+    mainland = make_case(languages=["zh-CN"], must_contain=["这个"])
+    assert eval_cleanup.failed_checks(mainland, "這個。") == []
 
 
 def test_failed_checks_pass_for_a_good_output():
@@ -483,11 +522,13 @@ def test_cases_survive_the_apps_text_processing():
     """A text to look for that the app's conversion would change (打開 into 開啟) is never found."""
     cases = eval_cleanup.load_cases(REPO / "eval" / "cleanup_cases.jsonl")
     for case in cases:
+        chinese = chinese_variant(case.languages)
         for needle in case.must_contain:
-            assert finish_cleaned_text(needle, []) == needle, f"{case.id}: {needle}"
+            kept = finish_cleaned_text(needle, [], chinese=chinese)
+            assert kept == needle, f"{case.id}: {needle}"
         for needle in case.must_not_contain:
             # It may change when the changed form is a text to avoid as well (台北 and 臺北).
-            converted = finish_cleaned_text(needle, [])
+            converted = finish_cleaned_text(needle, [], chinese=chinese)
             assert converted in (needle, *case.must_not_contain), f"{case.id}: {needle}"
     by_id = {case.id: case for case in cases}
     assert by_id["command-stays-text"].must_contain == ["YouTube"]
@@ -503,6 +544,16 @@ def test_cases_survive_the_apps_text_processing():
     assert "1." in by_id["first-time-not-a-list"].must_not_contain
     with_app = {"chat-tone-line", "numbered-list-long-terminal", "numbered-list-varied-ordinals"}
     assert all(case.target_app is None for case in cases if case.id not in with_app)
+    # The variants: Mainland Simplified, Hong Kong usage and British spelling.
+    assert by_id["variant-zh-cn-simplified"].languages[0] == "zh-CN"
+    assert "软件" in by_id["variant-zh-cn-simplified"].must_contain
+    assert by_id["variant-zh-hk-usage"].languages[0] == "zh-HK"
+    assert "軟件" in by_id["variant-zh-hk-usage"].must_contain
+    assert by_id["variant-en-gb-spelling"].languages == ["en-GB"]
+    assert "colour" in by_id["variant-en-gb-spelling"].must_contain
+    variants = {"variant-zh-cn-simplified", "variant-zh-hk-usage", "variant-en-gb-spelling"}
+    others = [case for case in cases if case.id not in variants]
+    assert all(case.languages == ["zh-TW", "en-US", "ja-JP"] for case in others)
 
 
 class FakeClient:

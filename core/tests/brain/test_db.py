@@ -123,11 +123,11 @@ def test_a_file_database_uses_wal_and_keeps_its_data_when_reopened(tmp_path):
     path = tmp_path / "raphael.db"
     first = db.connect(path)
     assert first.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-    SettingsStore(first).set("language", "ja")
+    SettingsStore(first).set("languages", ["ja-JP"])
     first.close()
 
     second = db.connect(str(path))  # must not try to create the tables again
-    assert SettingsStore(second).get("language") == "ja"
+    assert SettingsStore(second).get("languages") == ["ja-JP"]
     assert second.execute("PRAGMA user_version").fetchone()[0] == LATEST
     second.close()
 
@@ -169,8 +169,8 @@ def test_every_write_the_stores_make_is_committed(tmp_path):
     dictionary.dismiss("Tailscale")
     assert DictionaryStore(reader).dismissed() == {"Tailscale"}
 
-    settings.set("language", "ja")
-    assert SettingsStore(reader).get("language") == "ja"
+    settings.set("languages", ["ja-JP"])
+    assert SettingsStore(reader).get("languages") == ["ja-JP"]
 
     writer.close()
     reader.close()

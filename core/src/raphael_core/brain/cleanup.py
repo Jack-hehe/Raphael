@@ -21,6 +21,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from importlib import resources
 
+from ..languages import DEFAULT_LANGUAGES, display_name
 from .dictionary import DictionaryStore
 from .openrouter import CLEANUP_FALLBACKS, Completion, OpenRouterClient, OpenRouterError
 from .settings import SettingsStore
@@ -146,15 +147,64 @@ def describe_target_app(target_app: str | None) -> str:
     return f"{name} ({kind})" if kind else name
 
 
-_PLACEHOLDER = re.compile(r"\{(dictionary|target_app)\}")
+# How each language's text is written, for the languages whose variants differ in script, usage or
+# spelling. One sentence each, put into rule 6 of the prompt in the order of the user's languages.
+_SCRIPT_RULES = {
+    "zh-TW": (
+        "Write Chinese in Traditional characters with Taiwan usage (軟體, 程式, 資料, 視窗),"
+        " also when the transcript is in Simplified characters: 设定听写 → 設定聽寫."
+    ),
+    "zh-HK": (
+        "Write Chinese in Traditional characters with Hong Kong usage (軟件, 程式, 數據),"
+        " also when the transcript is in Simplified characters: 设定软件 → 設定軟件;"
+        " use 「」 for quotation marks."
+    ),
+    "zh-CN": (
+        "Write Chinese in Simplified characters with Mainland usage (软件, 程序, 数据),"
+        " also when the transcript is in Traditional characters: 設定軟體 → 设定软件;"
+        " use “” for quotation marks. The examples below are in Traditional characters: write"
+        " your Chinese in Simplified characters all the same."
+    ),
+    "yue-HK": (
+        "Write Chinese as written Cantonese in Traditional characters with Hong Kong usage"
+        " (軟件, 數據), also when the transcript is in Simplified characters; keep the Cantonese"
+        " words and particles as spoken (嘅、咗、唔、喺、哋) and never rewrite them as Standard"
+        " Chinese."
+    ),
+    "en-US": "Write English with American spelling (color, center, organize).",
+    "en-GB": "Write English with British spelling (colour, centre, organise).",
+    "en-AU": "Write English with Australian spelling (colour, centre, organise).",
+    "en-IN": "Write English with Indian English spelling (colour, centre, organise).",
+}
+
+
+def describe_languages(languages: Sequence[str]) -> str:
+    """The user's languages as the prompt names them, in their order:
+    "繁體中文（台灣）, English (United States)"."""
+    return ", ".join(display_name(language) for language in languages)
+
+
+def script_rules(languages: Sequence[str]) -> str:
+    """The sentences of rule 6 that say how the chosen variants are written, each after a space;
+    empty when no chosen language has such a rule."""
+    return "".join(f" {_SCRIPT_RULES[item]}" for item in languages if item in _SCRIPT_RULES)
+
+
+_PLACEHOLDER = re.compile(r"\{(dictionary|target_app|languages|script_rules)\}")
 
 
 def build_system_prompt(
     words: Sequence[str],
     replacements: Sequence[tuple[str, str]],
     target_app: str | None = None,
+    *,
+    languages: Sequence[str] = DEFAULT_LANGUAGES,
 ) -> str:
-    """The system prompt with the user's dictionary and the target app filled in.
+    """The system prompt with the user's languages, dictionary and the target app filled in.
+
+    `languages` is the `languages` setting: the prompt names them in that order and says how the
+    chosen Chinese and English variants are written (`script_rules`). The same arguments always
+    give the same prompt.
 
     `target_app` is the process name of the window the text goes to, written as
     `describe_target_app` does. It is in the system prompt, never inside the transcript, so it
@@ -180,6 +230,8 @@ def build_system_prompt(
     values = {
         "dictionary": "\n".join(lines) or "（空）",
         "target_app": describe_target_app(target_app),
+        "languages": describe_languages(languages),
+        "script_rules": script_rules(languages),
     }
     # One pass of re.sub, not str.format or one str.replace after another: the prompt has braces
     # of its own (the JSON of the reply), and a word or an app name may look like a placeholder.
@@ -299,7 +351,10 @@ class CleanupService:
             return _fallback(raw, "budget")
 
         system = build_system_prompt(
-            self._dictionary.hint_words(), self._dictionary.replacements(), target_app
+            self._dictionary.hint_words(),
+            self._dictionary.replacements(),
+            target_app,
+            languages=self._settings.get("languages"),
         )
         timeout = self._timeout_fn(audio_seconds)
         started = time.perf_counter()

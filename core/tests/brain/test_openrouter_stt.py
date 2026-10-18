@@ -106,6 +106,25 @@ def test_gpt_transcribe_with_automatic_language_sends_no_language_at_all():
     assert "language" not in body
 
 
+def test_gpt_transcribe_gets_the_languages_to_detect_among():
+    body = transcription_body(
+        "openai/gpt-transcribe", AUDIO, "wav", language=None, languages=["zh", "en"], hints=[]
+    )
+    assert body["provider"]["options"]["openai"]["languages"] == ["zh", "en"]
+    assert "language" not in body
+    # One chosen language wins over the list.
+    one = transcription_body(
+        "openai/gpt-transcribe", AUDIO, "wav", language="ja", languages=["zh", "en"], hints=[]
+    )
+    assert one["provider"]["options"]["openai"]["languages"] == ["ja"]
+
+
+@pytest.mark.parametrize("model", [m for m in STT_CLOUD_MODELS if m != "openai/gpt-transcribe"])
+def test_the_other_models_ignore_the_list_of_languages(model):
+    body = transcription_body(model, AUDIO, "wav", language=None, languages=["zh", "en"], hints=[])
+    assert "language" not in body and "languages" not in json.dumps(body)
+
+
 def test_keywords_a_provider_would_refuse_are_dropped_and_the_list_is_bounded():
     hints = ["  ok  ", "", "a<b", "line\nbreak", "c>d", "car\rriage", "x" * 200]
     hints += [f"w{i}" for i in range(200)]

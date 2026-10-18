@@ -21,10 +21,12 @@ to a file.
 
 Cases file: one JSON object per line with `id`, `input`, and optionally `dictionary` (a list of
 words), `must_contain` and `must_not_contain` (lists of text) and `target_app` (the process name
-of the window the text goes to, such as LINE.exe). Spaces are ignored when a text is looked for,
-so 打開 YouTube and 打開YouTube are the same. What the model leaves in Simplified Chinese is
-converted to Taiwan Traditional Chinese (打开 into 開啟), so a text to look for must be one that
-conversion leaves alone: Traditional Chinese is.
+of the window the text goes to, such as LINE.exe) and `languages` (the `languages` setting the
+case is cleaned for; DEFAULT_LANGUAGES, the user's own three, when it is left out). Spaces are
+ignored when a text is looked for, so 打開 YouTube and 打開YouTube are the same. What the model
+leaves in the wrong Chinese script is converted as the app does for the case's Chinese variant
+(for Taiwan, 打开 into 開啟), so a text to look for must be one that conversion leaves alone:
+Chinese in the variant's own script is.
 """
 
 import argparse
@@ -35,7 +37,7 @@ import logging
 import re
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -56,6 +58,10 @@ from raphael_core.brain.openrouter import (
 from raphael_core.brain.secrets import CredentialKeyStore
 from raphael_core.brain.textnorm import apply_replacements, finish_cleaned_text
 from raphael_core.evaluate import use_utf8_output
+from raphael_core.languages import checked_languages, chinese_variant
+
+# The languages of a case that names none: the user speaks these three, often mixed.
+DEFAULT_LANGUAGES = ("zh-TW", "en-US", "ja-JP")
 
 # Generous: this measures the models, and the app's own timeout (3 to 15 s) is not what is tested.
 CALL_TIMEOUT_S = 30.0
@@ -78,6 +84,13 @@ class Case:
     must_contain: list[str]
     must_not_contain: list[str]
     target_app: str | None = None  # the process name of the window the text goes to
+    # The `languages` setting the case is cleaned for.
+    languages: list[str] = field(default_factory=lambda: list(DEFAULT_LANGUAGES))
+
+    @property
+    def chinese(self) -> str | None:
+        """The Chinese variant of the case's languages, as the app converts for it."""
+        return chinese_variant(self.languages)
 
 
 @dataclass(frozen=True)
@@ -140,6 +153,11 @@ def load_cases(path: Path) -> list[Case]:
         target_app = entry.get("target_app")
         if target_app is not None and not isinstance(target_app, str):
             raise ValueError(f"{where}：target_app 必須是文字")
+        languages = entry.get("languages", list(DEFAULT_LANGUAGES))
+        try:
+            languages = checked_languages("languages", languages)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{where}：languages 不是有效的語言選擇（{exc}）") from exc
         cases.append(
             Case(
                 id=case_id,
@@ -148,6 +166,7 @@ def load_cases(path: Path) -> list[Case]:
                 must_contain=_string_list(entry, "must_contain", where),
                 must_not_contain=_string_list(entry, "must_not_contain", where),
                 target_app=target_app,
+                languages=languages,
             )
         )
     return cases
@@ -190,7 +209,7 @@ def failed_checks(case: Case, reply: str) -> list[str]:
             f"輸出過長（{reply_length(reply)} 字，不算換行，上限 {limit:g} 字）："
             "app 會當成可疑而改貼原文"
         )
-    final = _squash(finish_cleaned_text(reply, _NO_RULES))
+    final = _squash(finish_cleaned_text(reply, _NO_RULES, chinese=case.chinese))
     for needle in case.must_contain:
         if _squash(needle) not in final:
             failures.append(f"缺少「{needle}」")
@@ -213,7 +232,9 @@ async def run_case(
         completion = await client.complete_json(
             model=model,
             fallbacks=[],
-            system=build_system_prompt(case.dictionary, [], case.target_app),
+            system=build_system_prompt(
+                case.dictionary, [], case.target_app, languages=case.languages
+            ),
             user=build_user_message(sent),
             schema=CLEANUP_SCHEMA,
             schema_name="cleaned_dictation",
@@ -230,7 +251,7 @@ async def run_case(
     return Outcome(
         case_id=case.id,
         model=model,
-        text=finish_cleaned_text(reply, _NO_RULES),
+        text=finish_cleaned_text(reply, _NO_RULES, chinese=case.chinese),
         error=None,
         latency_ms=completion.latency_ms,
         cost_usd=completion.cost_usd,

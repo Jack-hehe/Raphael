@@ -1732,6 +1732,21 @@ async def test_speech_to_text_is_in_the_cloud_by_default(make_app, openrouter_mo
     assert spend["month_usd"] == pytest.approx(0.0002)  # both segments were paid for
 
 
+async def test_several_languages_go_to_gpt_transcribe_as_the_ones_to_detect_among(
+    make_app, openrouter_mock
+):
+    kit = make_kit()
+    app = make_app(kit, fake_llm=False)
+    requests = openrouter_mock(app, cloud_says())
+    languages = ["zh-HK", "en-GB", "ja-JP"]
+    await app.call("settings.set", {"key": "languages", "value": languages})
+    await app.call("settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"})
+    await dictate(app)
+    body = requests["transcriptions"][0]
+    assert body["provider"]["options"]["openai"]["languages"] == ["zh", "en", "ja"]
+    assert "language" not in body
+
+
 async def test_the_chosen_cloud_model_is_the_one_asked(make_app, openrouter_mock):
     app = make_app(make_kit(), fake_llm=False)
     requests = openrouter_mock(app, cloud_says())
