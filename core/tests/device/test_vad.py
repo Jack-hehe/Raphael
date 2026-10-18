@@ -331,3 +331,44 @@ def test_a_segmenter_can_be_used_again_after_flush():
     assert first and second
     assert [p.size for p in second] == [p.size for p in first]
     assert seg.speech_seconds == pytest.approx(first_seconds)  # not the sum of the two
+
+
+# --- a limit that changes between recordings (cloud and local speech-to-text) ------------------
+
+
+def test_a_new_limit_applies_from_the_next_recording(fake_detector, model_file):
+    seg = Segmenter(model_file, max_segment_s=3.0)
+    seg.accept(np.zeros(WINDOW, np.float32))  # a recording is under way
+    seg.set_max_segment_s(10.0)
+    fake_detector.plan = {2: [[0.5] * (7 * 16000)]}
+    assert len(seg.accept(np.zeros(WINDOW, np.float32))) == 3  # still 3 s within this recording
+    seg.flush()
+
+    fake_detector.plan = {1: [[0.5] * (7 * 16000)]}
+    assert [p.size for p in seg.accept(np.zeros(WINDOW, np.float32))] == [7 * 16000]
+    # A fresh detector, built with the new limit, took over at the start of the recording.
+    assert len(fake_detector.instances) == 2
+    assert fake_detector.instances[-1].config.silero_vad.max_speech_duration == 10.0
+
+
+def test_a_new_limit_on_a_fresh_segmenter_applies_at_once(fake_detector, model_file):
+    seg = Segmenter(model_file, max_segment_s=10.0)
+    seg.set_max_segment_s(30.0)
+    fake_detector.plan = {1: [[0.5] * (25 * 16000)]}
+    assert [p.size for p in seg.accept(np.zeros(WINDOW, np.float32))] == [25 * 16000]
+
+
+def test_the_same_limit_again_builds_nothing(fake_detector, model_file):
+    seg = Segmenter(model_file, max_segment_s=10.0)
+    seg.set_max_segment_s(10.0)
+    seg.accept(np.zeros(WINDOW, np.float32))
+    seg.flush()
+    seg.set_max_segment_s(10.0)
+    seg.accept(np.zeros(WINDOW, np.float32))
+    assert len(fake_detector.instances) == 1
+
+
+def test_a_limit_must_be_more_than_zero(fake_detector, model_file):
+    seg = Segmenter(model_file)
+    with pytest.raises(ValueError):
+        seg.set_max_segment_s(0)

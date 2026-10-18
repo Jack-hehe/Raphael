@@ -111,8 +111,12 @@ class CloudTranscriber:
         try:
             has_key = self._has_key()
         except Exception as exc:
-            logger.warning("The key store failed to read the OpenRouter key: %s", type(exc).__name__)
-            raise _refusal(INTERNAL_ERROR, "key_store", "Could not read the OpenRouter key") from None
+            logger.warning(
+                "The key store failed to read the OpenRouter key: %s", type(exc).__name__
+            )
+            raise _refusal(
+                INTERNAL_ERROR, "key_store", "Could not read the OpenRouter key"
+            ) from None
         if not has_key:
             raise _refusal(NOT_CONFIGURED, "no_key", "No OpenRouter key is stored")
         if self._spend.is_over(self._settings.get("monthly_limit_usd")):

@@ -1679,3 +1679,30 @@ async def test_a_cancel_that_is_itself_cancelled_still_ends_the_session(rig, rou
     with pytest.raises(RpcError) as e:
         await stop(router, "s1")
     assert e.value.code == NOT_FOUND
+
+
+# --- which speech-to-text heard it ---------------------------------------------------------------
+
+
+async def test_the_brain_is_told_which_speech_to_text_heard_the_dictation(rig, router, brain):
+    rig.recorder.chunks = [chunk(1.0)] * 2
+    await start(router)
+    await rig.recorder.fed(2)
+    await stop(router)
+    assert brain.finalize_params[-1]["stt"] == "fake"  # the engine's name
+
+
+async def test_an_engine_that_changes_model_per_segment_is_reported_in_order(rig, router, brain):
+    used = iter(["openai/gpt-transcribe", "qwen3-asr", "qwen3-asr"])
+    transcribe = rig.engine.transcribe
+
+    def cloud_then_local(samples, **kwargs):
+        rig.engine.last_used = next(used)
+        return transcribe(samples, **kwargs)
+
+    rig.engine.transcribe = cloud_then_local
+    rig.recorder.chunks = [chunk(1.0)] * 3
+    await start(router)
+    await rig.recorder.fed(3)
+    await stop(router)
+    assert brain.finalize_params[-1]["stt"] == "openai/gpt-transcribe+qwen3-asr"
