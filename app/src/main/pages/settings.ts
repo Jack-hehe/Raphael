@@ -39,9 +39,9 @@ const LANGUAGES: Choice[] = [
   { value: "en", label: "英文" },
 ];
 const MODELS: Choice[] = [
-  { value: "google/gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite" },
-  { value: "openai/gpt-6-luna", label: "GPT-6 Luna" },
+  { value: "openai/gpt-6-luna", label: "GPT-6 Luna（預設）" },
   { value: "anthropic/claude-haiku-5.5", label: "Claude Haiku 5.5" },
+  { value: "google/gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite（最快）" },
 ];
 const STT_ENGINES: Choice[] = [
   { value: "cloud", label: "雲端（較準，需要網路）" },

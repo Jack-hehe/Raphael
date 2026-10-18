@@ -10,7 +10,8 @@ from typing import Any
 
 DEFAULTS: dict[str, Any] = {
     "monthly_limit_usd": 10.0,
-    "cleanup_model": "google/gemini-3.1-flash-lite",
+    # The best of the cleanup eval on 2026-10-18 (33/34 cases, cheapest, ~1.25 s on average).
+    "cleanup_model": "openai/gpt-6-luna",
     "language": "auto",
     "history_retention_days": 30,
     # Speech-to-text: "cloud" (OpenRouter, with the local engine as the fallback) or "local" (the

@@ -21,7 +21,7 @@ def test_rejects_unknown_key_and_wrong_type(conn):
 def test_the_defaults_are_the_documented_ones():
     assert DEFAULTS == {
         "monthly_limit_usd": 10.0,
-        "cleanup_model": "google/gemini-3.1-flash-lite",
+        "cleanup_model": "openai/gpt-6-luna",
         "language": "auto",
         "history_retention_days": 30,
         "stt_engine": "cloud",

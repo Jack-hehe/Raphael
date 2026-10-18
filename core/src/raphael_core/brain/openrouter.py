@@ -29,7 +29,7 @@ BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_CLEANUP_MODEL: str = DEFAULTS["cleanup_model"]
 # Tried in this order when the chosen model fails. All three models can run with reasoning off,
 # which google/gemini-3.8-flash cannot.
-CLEANUP_FALLBACKS = ["openai/gpt-6-luna", "anthropic/claude-haiku-5.5"]
+CLEANUP_FALLBACKS = ["anthropic/claude-haiku-5.5", "google/gemini-3.1-flash-lite"]
 CLEANUP_MODEL_CHOICES = [DEFAULT_CLEANUP_MODEL, *CLEANUP_FALLBACKS]
 
 # Sent with every request: OpenRouter lists them as the name of the app that made the call.

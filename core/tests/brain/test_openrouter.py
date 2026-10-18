@@ -86,7 +86,7 @@ def answering(reply, seen):
 async def complete(client, **overrides):
     """`client.complete_json` with typical arguments; override any of them by keyword."""
     args = {
-        "model": "google/gemini-3.1-flash-lite",
+        "model": "openai/gpt-6-luna",
         "fallbacks": CLEANUP_FALLBACKS,
         "system": "s",
         "user": "u",
@@ -952,9 +952,9 @@ async def test_warm_up_leaves_a_client_it_was_given_alone():
 
 def test_the_model_choices_are_the_default_then_its_fallbacks():
     assert DEFAULTS["cleanup_model"] == DEFAULT_CLEANUP_MODEL
-    assert CLEANUP_FALLBACKS == ["openai/gpt-6-luna", "anthropic/claude-haiku-5.5"]
+    assert CLEANUP_FALLBACKS == ["anthropic/claude-haiku-5.5", "google/gemini-3.1-flash-lite"]
     assert CLEANUP_MODEL_CHOICES == [
-        "google/gemini-3.1-flash-lite",
         "openai/gpt-6-luna",
         "anthropic/claude-haiku-5.5",
+        "google/gemini-3.1-flash-lite",
     ]
