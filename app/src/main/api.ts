@@ -63,7 +63,7 @@ export const dictionaryDismiss = (word: string): Promise<Record<string, never>> 
 // ---------- the brain's settings and the key ----------
 
 export const settingsGet = (): Promise<{ settings: BrainSettings }> => core("settings.get");
-export const settingsSet = (key: keyof BrainSettings, value: string | number): Promise<{ settings: BrainSettings }> =>
+export const settingsSet = (key: keyof BrainSettings, value: string | number | boolean): Promise<{ settings: BrainSettings }> =>
   core("settings.set", { key, value });
 export const secretsStatus = (): Promise<{ has_key: boolean }> => core("secrets.status");
 /** Checks the key with OpenRouter and, if it works, stores it. */

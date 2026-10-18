@@ -356,6 +356,11 @@ export function createSettings(app: AppContext): Page {
           row("聽寫方式", esc(modeDescription(d.dictation_mode)), seg(DICTATION_MODES, d.dictation_mode, "聽寫方式", ' data-k="mode"')),
           row("麥克風", "", meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, "麥克風", ' data-k="mic"')),
           row("語言", "中文一律輸出繁體（台灣用語）", sel(LANGUAGES, brain?.language ?? "auto", "語言", ' data-k="language"')),
+          row(
+            "自動學習你的修正",
+            "聽寫貼上後，你手動改掉的詞會自動加入字典",
+            tg(brain?.learn_corrections ?? true, "自動學習你的修正", ` data-k="learn"${brain ? "" : " disabled"}`),
+          ),
         ],
         "",
         "panel",
@@ -413,7 +418,7 @@ export function createSettings(app: AppContext): Page {
 
   // ---------- changes ----------
 
-  async function changeBrain(key: keyof BrainSettings, value: string | number): Promise<void> {
+  async function changeBrain(key: keyof BrainSettings, value: string | number | boolean): Promise<void> {
     try {
       brain = (await api.settingsSet(key, value)).settings;
       if (spend) spend = { ...spend, limit_usd: brain.monthly_limit_usd };
@@ -693,6 +698,11 @@ export function createSettings(app: AppContext): Page {
 
     if (target.closest('.tg[data-k="autostart"]')) {
       void changeDevice({ autostart: !app.device().autostart });
+      return;
+    }
+
+    if (target.closest('.tg[data-k="learn"]')) {
+      if (brain) void changeBrain("learn_corrections", !(brain.learn_corrections ?? true));
       return;
     }
 

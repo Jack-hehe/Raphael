@@ -110,7 +110,8 @@ export interface DictionaryEntry {
   id: number;
   word: string;
   misheard: string[];
-  source: "manual" | "suggested";
+  /** "learned": added by itself from a correction the user made after a dictation was pasted. */
+  source: "manual" | "suggested" | "learned";
 }
 
 /** `settings.get`: the settings of the brain. */
@@ -122,6 +123,8 @@ export interface BrainSettings {
   /** "cloud" (OpenRouter, the local engine as fallback) or "local". */
   stt_engine: string;
   stt_cloud_model: string;
+  /** Learn the words the user corrects by hand after a paste (default on). Absent from older cores. */
+  learn_corrections?: boolean;
 }
 
 /** `secrets.set_openrouter_key` */
