@@ -10,6 +10,7 @@ const base: DeviceSettings = {
   emblem_size: 150,
   subtitles: "both",
   appearance: "system",
+  ui_language: "zh-TW",
   autostart: true,
   onboarded: false,
 };
@@ -36,6 +37,19 @@ function state(source: Partial<DeviceSource>, initial = base) {
 }
 
 describe("DeviceState", () => {
+  test("persists the UI language and restores it in a newly opened window", async () => {
+    let saved = { ...base };
+    const source: DeviceSource = {
+      get: async () => ({ ...saved }),
+      set: async (patch) => (saved = { ...saved, ...patch }),
+    };
+    const first = state(source);
+    await first.s.set({ ui_language: "ja" });
+    const restarted = state(source);
+    await restarted.s.refresh();
+    expect(restarted.s.get().ui_language).toBe("ja");
+    expect(restarted.changed).toHaveBeenCalledOnce();
+  });
   test("starts with what it is given", () => {
     const { s } = state({});
     expect(s.get()).toEqual(base);

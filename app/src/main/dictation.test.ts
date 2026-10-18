@@ -66,7 +66,7 @@ describe("the copy that explains the key", () => {
 
   test("the home hint follows the mode", () => {
     for (const mode of MODES) explainsOnlyItsMode(mode, homeHint(mode));
-    expect(homeHint("toggle")).toBe("按一下開始說話，再按一下就貼上");
+    expect(homeHint("toggle")).toBe("按一下開始，再按一下貼上");
     expect(homeHint("hold")).toBe("按住說話，放開就貼上");
   });
 

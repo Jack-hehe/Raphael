@@ -1,6 +1,8 @@
 // The usage numbers of the home page (`stats.summary`), and the ways they are written.
 // Everything here is local: the numbers come from this computer's history.
 
+import { t } from "./i18n";
+
 import type { StatsSummary } from "./types";
 
 /** `12340` -> `12,340` */
@@ -9,12 +11,12 @@ export const formatCount = (n: number): string => Math.round(n).toLocaleString("
 /** How long, in words: `45 秒`, `12 分`, `3 小時 12 分`, `5 小時`. */
 export function formatDuration(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
-  if (s < 60) return `${s} 秒`;
+  if (s < 60) return t("format.005", { p0: s });
   const minutes = Math.floor(s / 60);
-  if (minutes < 60) return `${minutes} 分`;
+  if (minutes < 60) return t("stats.001", { p0: minutes });
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
-  return rest ? `${hours} 小時 ${rest} 分` : `${hours} 小時`;
+  return rest ? t("stats.002", { p0: hours, p1: rest }) : t("stats.003", { p0: hours });
 }
 
 /** Typing speed the time saved is measured against, as the core's TYPING_WPM (brain/stats.py). */
@@ -31,16 +33,19 @@ export const periodSpeed = (p: { words: number; audio_seconds: number }): number
 
 /** The same, split into number and unit parts so the numbers can be set larger: 3 小時 12 分 -> [["3","小時"],["12","分"]]. */
 export function durationParts(seconds: number): [string, string][] {
-  const words = formatDuration(seconds).split(" ");
-  const parts: [string, string][] = [];
-  for (let k = 0; k < words.length; k += 2) parts.push([words[k], words[k + 1]]);
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return [[String(s), t("unit.seconds")]];
+  const minutes = Math.floor(s / 60);
+  if (minutes < 60) return [[String(minutes), t("unit.minutes")]];
+  const parts: [string, string][] = [[String(Math.floor(minutes / 60)), t("unit.hours")]];
+  if (minutes % 60) parts.push([String(minutes % 60), t("unit.minutes")]);
   return parts;
 }
 
 /** `2026-10-05` -> `10 月 5 日` */
 export function longDate(date: string): string {
   const [, m, d] = date.split("-").map(Number);
-  return `${m} 月 ${d} 日`;
+  return t("format.003", { p0: m, p1: d });
 }
 
 /** Whether there is anything to show yet. */

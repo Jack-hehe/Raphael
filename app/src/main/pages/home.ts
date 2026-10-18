@@ -1,8 +1,10 @@
-// Home: a headline, Raphael's report on the stage, then what the history says: four insight cards
+// Home: Raphael's report on the stage, then what the history says: four insight cards
 // (words, time saved, speed, time spoken), and the activity card with the active days, the streaks
 // and a grid of the days (`stats.summary`, all from this computer's history). A column on the
 // right lists the shortcuts. The key, the connection and the spend are in the settings; home only
 // says so when one of them keeps dictation from working fully. Loads when shown and every 30 seconds.
+
+import { onLocaleChange, t } from "../i18n";
 
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
@@ -21,7 +23,6 @@ const REFRESH_MS = 30_000;
 /** The days the activity grid asks for first (26 weeks), and when paging back (the most there is). */
 const DAYS_FIRST = 182;
 const DAYS_ALL = 371;
-const HEADLINE = "開口，就成文。";
 
 const unit = (n: string, u: string): string => `${esc(n)}<small>${esc(u)}</small>`;
 const duration = (seconds: number): string =>
@@ -38,13 +39,13 @@ function insightsHTML(s: StatsSummary): string {
   const speed = s.speed_wpm ?? periodSpeed(all);
   return (
     `<section class="insights" aria-labelledby="ins-h">` +
-    `<div class="sec-head"><h2 id="ins-h">洞察</h2>` +
-    `<span class="sum num">${esc(`本月 ${formatCount(s.month.dictations)} 次聽寫，花費 ${formatUsd(s.month.cost_usd)}`)}</span></div>` +
+    t("home.001") +
+    `<span class="sum num">${esc(t("home.002", { p0: formatCount(s.month.dictations), p1: formatUsd(s.month.cost_usd) }))}</span></div>` +
     `<div class="icards">` +
-    card(unit(formatCount(all.words), "字"), "聽寫字數") +
-    card(duration(s.time_saved_seconds), "節省時間") +
-    (speed === null ? card("資料還不夠", "平均速度", true) : card(unit(formatCount(speed), "字/分鐘"), "平均速度")) +
-    card(duration(all.audio_seconds), "總聽寫時間") +
+    card(unit(formatCount(all.words), t("home.003")), t("home.004")) +
+    card(duration(s.time_saved_seconds), t("home.005")) +
+    (speed === null ? card(t("home.006"), t("home.007"), true) : card(unit(formatCount(speed), t("home.008")), t("home.007"))) +
+    card(duration(all.audio_seconds), t("home.009")) +
     `</div></section>`
   );
 }
@@ -54,14 +55,14 @@ function activityHead(s: StatsSummary): string {
   const active = s.active_days ?? s.by_day.filter((d) => d.dictations > 0).length;
   const longest = s.longest_streak_days ?? s.streak_days;
   const n = (v: number, label: string): string =>
-    `<div class="anum"><div class="v">${unit(formatCount(v), "天")}</div><div class="k">${esc(label)}</div></div>`;
-  return `<div class="anums">${n(active, "活躍天數")}${n(s.streak_days, "目前連續天數")}${n(longest, "最長連續天數")}</div>`;
+    `<div class="anum"><div class="v">${unit(formatCount(v), t("home.010"))}</div><div class="k">${esc(label)}</div></div>`;
+  return `<div class="anums">${n(active, t("home.011"))}${n(s.streak_days, t("home.012"))}${n(longest, t("home.013"))}</div>`;
 }
 
 const LEGEND =
-  `<div class="legend" aria-hidden="true"><span>較少</span>` +
+  () => t("home.014") +
   [1, 2, 3, 4].map((k) => `<i class="h${k}"></i>`).join("") +
-  `<span>較多</span></div>`;
+  t("home.015");
 
 export function createHome(app: AppContext): Page {
   const el = document.createElement("div");
@@ -71,11 +72,10 @@ export function createHome(app: AppContext): Page {
   el.innerHTML =
     `<div class="home">` +
     `<div class="home-main">` +
-    `<h1 class="headline">${esc(HEADLINE)}</h1>` +
-    `<div class="stage"><canvas class="emb" aria-hidden="true"></canvas><div class="subs" aria-live="polite"></div></div>` +
+    `<div class="stage" role="region" aria-label="Raphael"><canvas class="emb" aria-hidden="true"></canvas><div class="subs" aria-live="polite"></div></div>` +
     `<div class="alert-slot"></div><div class="usage"></div>` +
     `</div>` +
-    `<aside class="home-side" aria-label="快捷鍵"><section class="card keys-card"></section></aside>` +
+    t("home.016") +
     `</div>` +
     `<p class="ver num"></p>`;
   const alertSlot = el.querySelector<HTMLElement>(".alert-slot")!;
@@ -94,13 +94,15 @@ export function createHome(app: AppContext): Page {
   /** Counts the loads, so that an answer that comes after a newer load started is dropped. */
   let loads = 0;
   let stats: StatsSummary | null = null;
+  let lastStatus: Status | null = null;
+  let version = "";
   /** How many days the grid asks for, and how many weeks back from this one it shows. */
   let daysWanted = DAYS_FIRST;
   let back = 0;
 
   function hintHTML(): string {
     const parts = app.device().dictation_keys.map((binding) => keys(bindingLabels(binding)));
-    return `${parts.join("<span>或</span>")}<span>${esc(homeHint(app.device().dictation_mode))}</span>`;
+    return `${parts.join(t("home.017"))}<span>${esc(homeHint(app.device().dictation_mode))}</span>`;
   }
 
   function keysCardHTML(): string {
@@ -111,10 +113,10 @@ export function createHome(app: AppContext): Page {
       (note ? `<div class="kc-note">${esc(note)}</div>` : "") +
       `</div>`;
     return (
-      `<div class="card-head"><h2>快捷鍵</h2>${btn("變更", "quiet sm", ' data-go="settings"')}</div>` +
-      shortcut("聽寫", d.dictation_keys, homeHint(d.dictation_mode)) +
-      (d.paste_last_keys.length ? shortcut("貼上上一次", d.paste_last_keys) : "") +
-      shortcut("取消", ["Escape"])
+      t("home.019", { p0: btn(t("home.018"), "quiet sm", ' data-go="settings"') }) +
+      shortcut(t("home.020"), d.dictation_keys, homeHint(d.dictation_mode)) +
+      (d.paste_last_keys.length ? shortcut(t("home.021"), d.paste_last_keys) : "") +
+      shortcut(t("onboarding.031"), ["Escape"])
     );
   }
 
@@ -130,15 +132,16 @@ export function createHome(app: AppContext): Page {
 
   function activityHTML(s: StatsSummary): string {
     return (
-      `<section class="card activity" aria-label="活躍">` +
+      t("home.022") +
       activityHead(s) +
-      `<div class="heat-wrap">${iconBtn("left", "較早", ' data-act="older"')}<div class="heat-box"></div>${iconBtn("right", "較近", ' data-act="newer"')}</div>` +
-      LEGEND +
+      `<div class="heat-wrap">${iconBtn("left", t("home.023"), ' data-act="older"')}<div class="heat-box"></div>${iconBtn("right", t("home.024"), ' data-act="newer"')}</div>` +
+      LEGEND() +
       `</section>`
     );
   }
 
   function paint(status: Status | null, s: StatsSummary | null): void {
+    lastStatus = status;
     const now = Date.now();
     const alert = status ? blockingAlert(status) : null;
     const report = status ? buildReport(status, now) : coreDownReport();
@@ -155,8 +158,8 @@ export function createHome(app: AppContext): Page {
       paintGrid();
     } else if (s) {
       usage.innerHTML =
-        `<section class="dash-empty"><h2>還沒有聽寫紀錄</h2>` +
-        `<p>在任何可以打字的地方說話，文字會直接貼到游標的位置。用過之後，這裡會顯示你說了多少字、省下多少打字時間，以及每天用了多少。</p>` +
+        t("home.025") +
+        t("home.026") +
         `<p class="hint">${hintHTML()}</p></section>`;
     } else {
       // no numbers from the core (it is down, or older than this page)
@@ -237,8 +240,17 @@ export function createHome(app: AppContext): Page {
   }).observe(usage);
 
   getVersion()
-    .then((v) => (ver.textContent = `版本 ${v}`))
+    .then((v) => {
+      version = v;
+      ver.textContent = t("home.027", { p0: v });
+    })
     .catch(() => undefined);
+
+  onLocaleChange(() => {
+    el.querySelector("aside")!.setAttribute("aria-label", t("history.012"));
+    if (version) ver.textContent = t("home.027", { p0: version });
+    paint(lastStatus, stats);
+  });
 
   return {
     id: "home",

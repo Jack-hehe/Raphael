@@ -2,6 +2,8 @@
 // the settings at the bottom, and the page that is chosen. The settings open as a panel over the
 // window. The pages are in pages/; this file holds what they share (spec §12).
 
+import { onLocaleChange, setLocale, t } from "./i18n";
+
 import { loadGlyphTexture } from "../overlay/emblem";
 import * as api from "./api";
 import { createDictionary } from "./pages/dictionary";
@@ -29,6 +31,7 @@ const DEFAULT_DEVICE: DeviceSettings = {
   emblem_size: 150,
   subtitles: "both",
   appearance: "system",
+  ui_language: "zh-TW",
   autostart: true,
   onboarded: false,
 };
@@ -37,9 +40,9 @@ const DEFAULT_DEVICE: DeviceSettings = {
 const RESHOW_MS = 1000;
 
 const NAV: { id: Exclude<PageId, "settings">; name: string; icon: IconName }[] = [
-  { id: "home", name: "首頁", icon: "home" },
-  { id: "history", name: "歷史紀錄", icon: "clock" },
-  { id: "dictionary", name: "字典", icon: "book" },
+  { id: "home", get name() { return t("main.001"); }, icon: "home" },
+  { id: "history", get name() { return t("main.002"); }, icon: "clock" },
+  { id: "dictionary", get name() { return t("main.003"); }, icon: "book" },
 ];
 
 /** The app's name at the top of the sidebar, with a small ring like the emblem's. */
@@ -55,7 +58,10 @@ const prefersDark = matchMedia("(prefers-color-scheme: dark)");
 const device = new DeviceState(
   DEFAULT_DEVICE,
   { get: api.deviceSettingsGet, set: api.deviceSettingsSet },
-  () => applyTheme(),
+  () => {
+    applyTheme();
+    setLocale(device.get().ui_language);
+  },
 );
 
 /** Light or dark, as `appearance` says; `system` follows the system. */
@@ -113,8 +119,18 @@ async function start(): Promise<void> {
     NAV.map((item) => button(item.id, item.name, item.icon)).join("") +
     `<div class="side-fill"></div>` +
     `<button type="button" class="usage-box" data-go="settings" hidden></button>` +
-    `<div class="side-foot"><button type="button" class="nav nav-bottom" data-go="settings" aria-haspopup="dialog">${ico("gear")}<span>設定</span></button></div>`;
+    t("main.004", { p0: ico("gear") });
   const usageBox = nav.querySelector<HTMLElement>(".usage-box")!;
+  function translateNavigation(): void {
+    nav.setAttribute("aria-label", t("nav.pages"));
+    for (const item of NAV) nav.querySelector<HTMLElement>(`[data-go="${item.id}"] span`)!.textContent = item.name;
+    nav.querySelector<HTMLElement>(".nav-bottom span")!.textContent = t("nav.settings");
+  }
+  translateNavigation();
+  onLocaleChange(() => {
+    translateNavigation();
+    void refreshUsage();
+  });
   nav.addEventListener("click", (e) => {
     const target = (e.target as Element).closest<HTMLElement>("[data-go]");
     if (target) go(target.dataset.go as PageId);
@@ -171,8 +187,8 @@ async function start(): Promise<void> {
   async function refreshUsage(): Promise<void> {
     try {
       const { spend } = await api.statusGet();
-      usageBox.innerHTML = `<span class="usage-t">本月花費</span>${spendMini(spend.month_usd, spend.limit_usd)}`;
-      usageBox.setAttribute("aria-label", `本月花費 ${usageBox.querySelector(".usage-num")?.textContent ?? ""}，打開設定`);
+      usageBox.innerHTML = t("main.005", { p0: spendMini(spend.month_usd, spend.limit_usd) });
+      usageBox.setAttribute("aria-label", t("main.006", { p0: usageBox.querySelector(".usage-num")?.textContent ?? "" }));
       usageBox.hidden = false;
     } catch {
       usageBox.hidden = true;

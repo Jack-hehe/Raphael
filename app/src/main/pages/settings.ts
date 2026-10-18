@@ -3,6 +3,8 @@
 // the core with `settings.set`; the settings of this computer (hotkeys, microphone, emblem, theme,
 // autostart) go to the Rust side with `device_settings_set`.
 
+import { isUiLocale, onLocaleChange, t } from "../i18n";
+
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
 import { DICTATION_MODES, isDictationMode, modeDescription } from "../dictation";
@@ -19,8 +21,8 @@ import {
   type LanguageGroup,
   groupOf,
   languageButtonHTML,
-  languageChipsHTML,
   languageLabel,
+  languageName,
   languagePanelHTML,
   normalizeLanguages,
   toggleLanguage,
@@ -56,45 +58,50 @@ import {
 } from "../ui";
 
 const MODELS: Choice[] = [
-  { value: "openai/gpt-6-luna", label: "GPT-6 Luna（預設）" },
-  { value: "anthropic/claude-haiku-5.5", label: "Claude Haiku 5.5" },
-  { value: "google/gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite（最快）" },
+  { value: "openai/gpt-6-luna", get label() { return t("settings.001"); } },
+  { value: "anthropic/claude-haiku-5.5", get label() { return t("model.haiku"); } },
+  { value: "google/gemini-3.1-flash-lite", get label() { return t("settings.002"); } },
 ];
 const STT_ENGINES: Choice[] = [
-  { value: "cloud", label: "雲端", desc: "較準，需要網路" },
-  { value: "local", label: "本機", desc: "離線辨識，聲音不會上傳" },
+  { value: "cloud", get label() { return t("settings.003"); }, get desc() { return t("settings.004"); } },
+  { value: "local", get label() { return t("settings.005"); }, get desc() { return t("settings.006"); } },
 ];
 /** The cloud models the core accepts (brain/settings.py STT_CLOUD_MODELS), the default first. */
 const STT_MODELS: Choice[] = [
-  { value: "elevenlabs/scribe-v2", label: "ElevenLabs Scribe v2（預設）" },
-  { value: "openai/gpt-transcribe", label: "OpenAI GPT Transcribe" },
-  { value: "microsoft/mai-transcribe-2", label: "Microsoft MAI Transcribe 2" },
-  { value: "assemblyai/universal-3-6-pro", label: "AssemblyAI Universal 3.6 Pro" },
-  { value: "qwen/qwen3-asr-1.7b", label: "Qwen3 ASR 1.7B" },
-  { value: "google/gemini-3.5-transcribe", label: "Gemini 3.5 Transcribe" },
-  { value: "openai/whisper-large-v3-turbo", label: "Whisper Large v3 Turbo（便宜）" },
+  { value: "elevenlabs/scribe-v2", get label() { return t("settings.007"); } },
+  { value: "openai/gpt-transcribe", get label() { return t("model.gptTranscribe"); } },
+  { value: "microsoft/mai-transcribe-2", get label() { return t("model.mai"); } },
+  { value: "assemblyai/universal-3-6-pro", get label() { return t("model.assembly"); } },
+  { value: "qwen/qwen3-asr-1.7b", get label() { return t("model.qwen"); } },
+  { value: "google/gemini-3.5-transcribe", get label() { return t("model.geminiTranscribe"); } },
+  { value: "openai/whisper-large-v3-turbo", get label() { return t("settings.008"); } },
 ];
 const SUBTITLES: Choice[] = [
-  { value: "both", label: "中文＋日文" },
-  { value: "zh", label: "只有中文" },
-  { value: "ja", label: "只有日文" },
-  { value: "off", label: "關閉" },
+  { value: "both", get label() { return t("settings.009"); } },
+  { value: "zh", get label() { return t("settings.010"); } },
+  { value: "ja", get label() { return t("settings.011"); } },
+  { value: "off", get label() { return t("settings.012"); } },
 ];
 const APPEARANCES: Choice[] = [
-  { value: "system", label: "跟系統", desc: "隨 Windows 的淺色或深色模式切換" },
-  { value: "light", label: "淺色" },
-  { value: "dark", label: "深色" },
+  { value: "system", get label() { return t("settings.013"); }, get desc() { return t("settings.014"); } },
+  { value: "light", get label() { return t("settings.015"); } },
+  { value: "dark", get label() { return t("settings.016"); } },
 ];
 const SIZES: Choice[] = [
-  { value: "120", label: "小", desc: "120 px，最不擋畫面" },
-  { value: "150", label: "中", desc: "150 px，預設大小" },
-  { value: "194", label: "跟動畫一樣大", desc: "194 px，看得到最多細節" },
+  { value: "120", get label() { return t("settings.017"); }, get desc() { return t("settings.018"); } },
+  { value: "150", get label() { return t("settings.019"); }, get desc() { return t("settings.020"); } },
+  { value: "194", get label() { return t("settings.021"); }, get desc() { return t("settings.022"); } },
 ];
 const AUTO_MICROPHONE = "";
+const UI_LANGUAGES: Choice[] = [
+  { value: "zh-TW", get label() { return t("settings.023"); } },
+  { value: "en", get label() { return t("locale.english"); } },
+  { value: "ja", get label() { return t("settings.024"); } },
+];
 
 /** What the prices in the cleanup model's menu are. */
-const CLEANUP_PRICE_HEAD = "每百萬 token 的價格：輸入 / 輸出";
-const PRICES_LOADING = "價格載入中…";
+const CLEANUP_PRICE_HEAD = () => t("settings.025");
+const PRICES_LOADING = () => t("settings.026");
 
 interface Recording {
   recorder: KeyRecorder;
@@ -116,12 +123,12 @@ export function createSettings(app: AppContext): Page {
   el.hidden = true;
   el.innerHTML =
     `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="set-title">` +
-    `<nav class="modal-nav" aria-label="設定的分頁">` +
-    `<button type="button" class="nav" data-pane="settings" aria-current="page">${ico("gear")}<span>設定</span></button>` +
-    `<button type="button" class="nav" data-pane="about" aria-current="false">${ico("info")}<span>關於</span></button>` +
+    t("settings.027") +
+    t("settings.028", { p0: ico("gear") }) +
+    t("settings.029", { p0: ico("info") }) +
     `</nav>` +
     `<div class="modal-body"></div>` +
-    `${iconBtn("x", "關閉", ' data-act="close"').replace('class="icon-btn"', 'class="icon-btn modal-x"')}` +
+    `${iconBtn("x", t("common.close"), ' data-act="close"').replace('class="icon-btn"', 'class="icon-btn modal-x"')}` +
     `</div>`;
   const body = el.querySelector<HTMLElement>(".modal-body")!;
   let pane: "settings" | "about" = "settings";
@@ -139,10 +146,10 @@ export function createSettings(app: AppContext): Page {
   /** The key field is shown although there is a key (「更換」). */
   let replacingKey = false;
   let keyBusy = false;
-  let keyError: string | null = null;
+  let keyError: (() => string) | null = null;
   /** What was typed in the limit field while it is not a limit, and what is wrong with it. */
   let limitDraft: string | null = null;
-  let limitError: string | null = null;
+  let limitError: (() => string) | null = null;
   let recording: Recording | null = null;
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
   let languageGroups: LanguageGroup[] | null = null;
@@ -157,11 +164,11 @@ export function createSettings(app: AppContext): Page {
   function microphoneChoices(): Choice[] {
     const found = devices?.devices ?? [];
     const choices: Choice[] = [
-      { value: AUTO_MICROPHONE, label: "自動偵測" },
+      { value: AUTO_MICROPHONE, get label() { return t("onboarding.005"); } },
       ...found.map((d) => ({ value: d.name, label: d.name })),
     ];
     const saved = app.device().microphone;
-    return saved === null ? choices : withCurrent(choices, saved, (name) => `${name}（未連接）`);
+    return saved === null ? choices : withCurrent(choices, saved, (name) => t("onboarding.006", { p0: name }));
   }
 
   /** The menu of each `sel` (by its `data-k`): what it offers, what is chosen and what choosing does. */
@@ -173,6 +180,12 @@ export function createSettings(app: AppContext): Page {
           choices: microphoneChoices(),
           current: d.microphone ?? AUTO_MICROPHONE,
           pick: (v) => void changeDevice({ microphone: v === AUTO_MICROPHONE ? null : v }),
+        };
+      case "ui-language":
+        return {
+          choices: UI_LANGUAGES,
+          current: d.ui_language,
+          pick: (v) => { if (isUiLocale(v)) void changeDevice({ ui_language: v }); },
         };
       case "mode":
         return {
@@ -217,7 +230,7 @@ export function createSettings(app: AppContext): Page {
           choices: withPrices(withCurrent(MODELS, current), (id) => cleanupPriceShort(priceOf(prices()?.cleanup, id))),
           current,
           pick: (v) => void changeBrain("cleanup_model", v),
-          head: prices() ? CLEANUP_PRICE_HEAD : undefined,
+          head: prices() ? CLEANUP_PRICE_HEAD() : undefined,
         };
       }
       case "subtitles":
@@ -243,14 +256,14 @@ export function createSettings(app: AppContext): Page {
   /** The choices with their prices as details, while there are prices to show. */
   function withPrices(choices: Choice[], price: (id: string) => string): Choice[] {
     if (pricing === "failed") return choices;
-    return choices.map((c) => ({ ...c, detail: pricing === "loading" ? PRICES_LOADING : price(c.value) }));
+    return choices.map((c) => ({ ...c, detail: pricing === "loading" ? PRICES_LOADING() : price(c.value) }));
   }
 
   /** The texts that depend on the prices, by the `data-price` of the element that shows them. */
   function priceTexts(): Record<string, string> {
     const p = prices();
-    if (pricing === "loading") return { model: PRICES_LOADING, "stt-model": PRICES_LOADING, note: "" };
-    if (!p) return { model: "", "stt-model": "", note: "目前無法取得模型價格。" };
+    if (pricing === "loading") return { model: PRICES_LOADING(), "stt-model": PRICES_LOADING(), note: "" };
+    if (!p) return { model: "", "stt-model": "", note: t("settings.030") };
     return {
       model: cleanupPriceText(priceOf(p.cleanup, cleanupModel())),
       "stt-model": sttPriceText(priceOf(p.stt, sttModel())),
@@ -272,25 +285,25 @@ export function createSettings(app: AppContext): Page {
   function modelRows(): string[] {
     const rows = [
       row(
-        "語音轉文字",
-        sttEngine() === "cloud" ? "連不上或沒有金鑰時，自動改用本機" : "在這台電腦上辨識，聲音不會上傳",
-        sel(STT_ENGINES, sttEngine(), "語音轉文字", ' data-k="stt"'),
+        t("settings.031"),
+        sttEngine() === "cloud" ? t("settings.032") : t("settings.033"),
+        sel(STT_ENGINES, sttEngine(), t("settings.031"), ' data-k="stt"'),
       ),
     ];
     if (sttEngine() === "cloud") {
       rows.push(
         row(
-          "雲端模型",
+          t("settings.034"),
           priceSpan("stt-model"),
-          sel(withCurrent(STT_MODELS, sttModel()), sttModel(), "雲端模型", ' data-k="stt-model"'),
+          sel(withCurrent(STT_MODELS, sttModel()), sttModel(), t("settings.034"), ' data-k="stt-model"'),
         ),
       );
     }
     rows.push(
       row(
-        "整理用的模型",
+        t("settings.035"),
         priceSpan("model"),
-        sel(withCurrent(MODELS, cleanupModel()), cleanupModel(), "整理用的模型", ' data-k="model"'),
+        sel(withCurrent(MODELS, cleanupModel()), cleanupModel(), t("settings.035"), ' data-k="model"'),
       ),
     );
     return rows;
@@ -300,20 +313,20 @@ export function createSettings(app: AppContext): Page {
     if (hasKey && !replacingKey) {
       const detail =
         openrouter?.state === "error"
-          ? st("err", openrouter.error === "auth" ? "金鑰無效，請更換" : "目前連不上 OpenRouter")
-          : "存在 Windows 認證管理員";
+          ? st("err", openrouter.error === "auth" ? t("settings.036") : t("settings.037"))
+          : t("settings.038");
       return row(
-        "OpenRouter 金鑰",
+        t("onboarding.029"),
         detail,
-        `<span class="val num">••••••••</span>${btn("更換", "sm", ' data-act="key-replace" data-k="key"')}`,
+        `<span class="val num">••••••••</span>${btn(t("onboarding.027"), "sm", ' data-act="key-replace" data-k="key"')}`,
       );
     }
     return row(
-      "OpenRouter 金鑰",
-      "到 openrouter.ai 建立一把，貼在這裡後按 Enter 測試",
-      fieldHTML("sk-or-v1-…", "", { w: 200, label: "OpenRouter 金鑰", id: "key-input", type: "password", invalid: keyError !== null }) +
-        btn(keyBusy ? "檢查中…" : "貼上", "pri sm", ` data-act="key-paste"${keyBusy ? " disabled" : ""}`) +
-        (hasKey ? btn("取消", "sm", ` data-act="key-cancel"${keyBusy ? " disabled" : ""}`) : ""),
+      t("onboarding.029"),
+      t("settings.039"),
+      fieldHTML("sk-or-v1-…", "", { w: 200, get label() { return t("onboarding.029"); }, id: "key-input", type: "password", invalid: keyError !== null }) +
+        btn(keyBusy ? t("onboarding.011") : t("onboarding.030"), "pri sm", ` data-act="key-paste"${keyBusy ? " disabled" : ""}`) +
+        (hasKey ? btn(t("onboarding.031"), "sm", ` data-act="key-cancel"${keyBusy ? " disabled" : ""}`) : ""),
     );
   }
 
@@ -324,21 +337,21 @@ export function createSettings(app: AppContext): Page {
     let detail = "";
     switch (openrouter.state) {
       case "ok":
-        status = st("ok", "已連線");
-        if (openrouter.latency_ms !== null) detail = `延遲 ${openrouter.latency_ms} ms`;
+        status = st("ok", t("settings.040"));
+        if (openrouter.latency_ms !== null) detail = t("settings.041", { p0: openrouter.latency_ms });
         break;
       case "error":
-        status = st("err", openrouter.error === "auth" ? "金鑰無效" : "無法連線");
-        if (openrouter.checked_at_ms !== null) detail = `最後檢查 ${formatClock(openrouter.checked_at_ms)}`;
+        status = st("err", openrouter.error === "auth" ? t("format.012") : t("settings.042"));
+        if (openrouter.checked_at_ms !== null) detail = t("settings.043", { p0: formatClock(openrouter.checked_at_ms) });
         break;
       default:
-        status = st("idle", "尚未檢查");
+        status = st("idle", t("settings.044"));
     }
     return [
       row(
-        "連線狀態",
+        t("settings.045"),
         esc(detail),
-        status + btn(checkingOpenrouter ? "檢查中…" : "重新檢查", "quiet", ` data-act="or-check"${checkingOpenrouter ? " disabled" : ""}`),
+        status + btn(checkingOpenrouter ? t("onboarding.011") : t("settings.046"), "quiet", ` data-act="or-check"${checkingOpenrouter ? " disabled" : ""}`),
       ),
     ];
   }
@@ -349,12 +362,12 @@ export function createSettings(app: AppContext): Page {
     const { month_usd: month, limit_usd: limit } = spend;
     const used = spentShare(month, limit);
     let forecast = "";
-    if (month >= limit) forecast = "本月額度已用完，聽寫先不整理";
+    if (month >= limit) forecast = t("settings.047");
     else if (used >= WARN_FROM) {
       const { m, d } = runOutDay(month, limit, Date.now());
-      forecast = `照目前的速度，${m} 月 ${d} 日會用完`;
-    } else if (spend.forecast_usd > 0) forecast = `照目前的速度，月底約 ${formatUsd(spend.forecast_usd)}`;
-    return [row("本月花費", month >= limit ? st("warn", forecast) : esc(forecast), spendVisual(month, limit))];
+      forecast = t("settings.048", { p0: m, p1: d });
+    } else if (spend.forecast_usd > 0) forecast = t("settings.049", { p0: formatUsd(spend.forecast_usd) });
+    return [row(t("settings.050"), month >= limit ? st("warn", forecast) : esc(forecast), spendVisual(month, limit))];
   }
 
   /** A section of the settings: an icon and a title, then its rows. */
@@ -375,54 +388,52 @@ export function createSettings(app: AppContext): Page {
     const limit = brain?.monthly_limit_usd ?? 10;
     const limitShown = limitDraft ?? String(limit);
     return (
-      `<h1 id="set-title" tabindex="-1">設定</h1>` +
-      (brain === null ? `<p class="lede">${st("err", "Raphael 的核心沒有回應，有些設定暫時無法使用")}</p>` : "") +
-      section("keyboard", "快捷鍵", [
+      t("settings.051") +
+      (brain === null ? `<p class="lede">${st("err", t("settings.052"))}</p>` : "") +
+      section("keyboard", t("history.012"), [
         row(
-          "聽寫",
-          "按下開始或停止聽寫",
-          d.dictation_keys.map((binding) => keys(bindingLabels(binding))).join('<span class="val">或</span>') +
-            btn("變更", "sm", ' data-act="rec"'),
+          t("home.020"),
+          t("settings.053"),
+          d.dictation_keys.map((binding) => keys(bindingLabels(binding))).join(t("onboarding.009")) +
+            btn(t("home.018"), "sm", ' data-act="rec"'),
           { attrs: ' data-row="hotkey"' },
         ),
-        ...(altgr && usesAltRight ? [note(st("warn", "你的鍵盤配置把右 Alt 當 AltGr 用，建議換一個快捷鍵。"))] : []),
-        row("聽寫方式", esc(modeDescription(d.dictation_mode)), sel(DICTATION_MODES, d.dictation_mode, "聽寫方式", ' data-k="mode"')),
+        ...(altgr && usesAltRight ? [note(st("warn", t("settings.054")))] : []),
+        row(t("settings.055"), esc(modeDescription(d.dictation_mode)), sel(DICTATION_MODES, d.dictation_mode, t("settings.055"), ' data-k="mode"')),
         ...(d.paste_last_keys.length
-          ? [row("貼上上一次", "再貼一次最近一次聽寫的結果", d.paste_last_keys.map((b) => keys(bindingLabels(b))).join('<span class="val">或</span>'))]
+          ? [row(t("home.021"), t("settings.056"), d.paste_last_keys.map((b) => keys(bindingLabels(b))).join(t("onboarding.009")))]
           : []),
-        row("取消", "聽寫到一半按下，這次就不貼上", keys(["Esc"])),
+        row(t("onboarding.031"), t("settings.057"), keys(["Esc"])),
       ]) +
-      section("globe", "語言", [
-        row("語言", esc(AUTO_DETECT_HINT), languageButtonHTML(languageGroups ?? [], languages(), ' data-k="languages"'), {
-          cls: "row-lang",
-        }),
-        row("語言變體", "每種語言用哪種寫法，例如繁體或簡體、美式或英式拼法", btn("選擇語言變體", "", ' data-act="variants" aria-haspopup="dialog" aria-expanded="false"')),
+      section("globe", t("settings.058"), [
+        row(t("settings.059"), t("settings.060"), sel(UI_LANGUAGES, d.ui_language, t("settings.059"), ' data-k="ui-language"'), { cls: "row-ui-language" }),
+        row(t("settings.061"), `<span class="variant-summary">${esc(AUTO_DETECT_HINT())}</span>`, languageButtonHTML(languageGroups ?? [], languages(), ' data-k="languages" data-act="variants"'), { cls: "row-lang" }),
       ]) +
-      section("mic", "音訊", [
-        row("麥克風", "Raphael 用哪一支麥克風聽你說話", meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, "麥克風", ' data-k="mic"')),
+      section("mic", t("settings.062"), [
+        row(t("onboarding.021"), t("settings.063"), meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, t("onboarding.021"), ' data-k="mic"') + iconBtn("refresh", t("action.refreshMicrophones"), ' data-act="mic-refresh"')),
       ]) +
-      section("wave", "語音轉文字與整理", modelRows(), priceSpan("note")) +
-      section("wallet", "帳號與花費", [
+      section("wave", t("settings.064"), modelRows(), priceSpan("note")) +
+      section("wallet", t("settings.065"), [
         keyRow(),
-        ...(keyError ? [note(st("err", keyError))] : []),
+        ...(keyError ? [note(st("err", keyError()))] : []),
         ...connectionRow(),
         ...spendRow(),
         row(
-          "每月上限",
-          "到了就只聽寫、不整理",
-          fieldHTML("", limitShown, { w: 96, pre: "US$", label: "每月上限", num: true, id: "limit-input", invalid: limitError !== null }),
+          t("onboarding.032"),
+          t("onboarding.033"),
+          fieldHTML("", limitShown, { w: 96, pre: "US$", get label() { return t("onboarding.032"); }, num: true, id: "limit-input", invalid: limitError !== null }),
         ),
-        ...(limitError ? [note(st("err", limitError))] : []),
+        ...(limitError ? [note(st("err", limitError()))] : []),
       ]) +
-      section("laptop", "一般", [
-        row("主題", "淺色、深色，或跟著 Windows", sel(APPEARANCES, d.appearance, "主題", ' data-k="appearance"')),
-        row("桌面圖案大小", "聽寫時出現在右下角的圖案", sel(SIZES, String(d.emblem_size), "桌面圖案大小", ' data-k="size"')),
-        row("字幕", "圖案旁邊的報告文字", sel(SUBTITLES, d.subtitles, "字幕", ' data-k="subtitles"')),
-        row("開機時自動啟動", "電腦開機後 Raphael 就在背景待命", tg(d.autostart, "開機時自動啟動", ' data-k="autostart"')),
+      section("laptop", t("settings.066"), [
+        row(t("settings.067"), t("settings.068"), sel(APPEARANCES, d.appearance, t("settings.067"), ' data-k="appearance"')),
+        row(t("settings.069"), t("settings.070"), sel(SIZES, String(d.emblem_size), t("settings.069"), ' data-k="size"')),
+        row(t("settings.071"), t("settings.072"), sel(SUBTITLES, d.subtitles, t("settings.071"), ' data-k="subtitles"')),
+        row(t("settings.073"), t("settings.074"), tg(d.autostart, t("settings.073"), ' data-k="autostart"')),
         row(
-          "自動學習你的修正",
-          "聽寫貼上後，你手動改掉的詞會自動加入字典",
-          tg(brain?.learn_corrections ?? true, "自動學習你的修正", ` data-k="learn"${brain ? "" : " disabled"}`),
+          t("settings.075"),
+          t("settings.076"),
+          tg(brain?.learn_corrections ?? true, t("settings.075"), ` data-k="learn"${brain ? "" : " disabled"}`),
         ),
       ])
     );
@@ -430,25 +441,34 @@ export function createSettings(app: AppContext): Page {
 
   function aboutHTML(): string {
     return (
-      `<h1 id="set-title" tabindex="-1">關於</h1>` +
+      t("settings.077") +
       `<div class="slist about">` +
-      row("版本", esc(version || "0.1.0"), "") +
-      row("開源授權", "這個專案使用的授權", `<a href="#" class="link" data-act="license">查看</a>`) +
+      row(t("settings.078"), esc(version || "0.1.0"), "") +
+      row(t("settings.079"), t("settings.080"), t("settings.081")) +
       `</div>` +
-      `<p class="foot">粉絲自製，跟《關於我轉生變成史萊姆這檔事》的原作與動畫製作方無關；聲音模型和從動畫取樣的素材只限個人使用。</p>`
+      t("settings.082")
     );
   }
 
   function render(): void {
-    const focused = (document.activeElement as HTMLElement | null)?.dataset?.k;
+    const active = document.activeElement as HTMLElement | null;
+    const focused = active?.dataset?.k;
+    const focusedId = active?.id;
+    const keyDraft = el.querySelector<HTMLInputElement>("#key-input")?.value;
+    const activeLimit = focusedId === "limit-input" ? el.querySelector<HTMLInputElement>("#limit-input")?.value : undefined;
     // A menu that is open stays open when the page is drawn again (a status that came in, say).
     const openK = openAnchorKey();
     const scroll = body.scrollTop;
     body.innerHTML = pane === "settings" ? settingsHTML() : aboutHTML();
+    const keyInput = el.querySelector<HTMLInputElement>("#key-input");
+    if (keyInput && keyDraft !== undefined) keyInput.value = keyDraft;
+    const limitInput = el.querySelector<HTMLInputElement>("#limit-input");
+    if (limitInput && activeLimit !== undefined) limitInput.value = activeLimit;
     body.scrollTop = scroll;
     el.querySelectorAll<HTMLElement>("[data-pane]").forEach((b) => b.setAttribute("aria-current", b.dataset.pane === pane ? "page" : "false"));
 
     if (focused) el.querySelector<HTMLElement>(`[data-k="${focused}"]`)?.focus();
+    else if (focusedId) el.querySelector<HTMLElement>(`#${CSS.escape(focusedId)}`)?.focus();
     if (openK) {
       const anchor = el.querySelector<HTMLElement>(openK === "variants" ? "[data-act='variants']" : `.sel[data-k="${openK}"]`);
       const menu = menuFor(openK);
@@ -456,6 +476,16 @@ export function createSettings(app: AppContext): Page {
       else if (anchor && menu) openMenu(anchor, menu.choices, menu.current, menu.pick, menu.head);
     }
   }
+
+  onLocaleChange(() => {
+    el.querySelector(".modal-nav")!.setAttribute("aria-label", t("nav.settings"));
+    el.querySelector('[data-pane="settings"] span')!.textContent = t("nav.settings");
+    el.querySelector('[data-pane="about"] span')!.textContent = t("common.about");
+    const close = el.querySelector('[data-act="close"]')!;
+    close.setAttribute("aria-label", t("common.close"));
+    close.setAttribute("title", t("common.close"));
+    if (visible) render();
+  });
 
   // ---------- the languages ----------
 
@@ -468,7 +498,7 @@ export function createSettings(app: AppContext): Page {
     const panel = openPopover(anchor, languagePanelHTML(languageGroups, languages(), openGroup), {
       className: "menu lang-panel",
       role: "dialog",
-      label: "語言",
+      get label() { return t("settings.058"); },
       onKey: languageKey,
     });
     languagePanel = panel;
@@ -517,12 +547,12 @@ export function createSettings(app: AppContext): Page {
 
   /** Shows the chosen languages on the button, and in the panel if it is open (keeping the focus). */
   function paintLanguages(): void {
-    const chips = el.querySelector<HTMLElement>('.sel[data-k="languages"]');
-    if (!chips) return;
+    const button = el.querySelector<HTMLElement>('[data-k="languages"]');
+    if (!button) return;
     const groups = languageGroups ?? [];
-    chips.innerHTML = languageChipsHTML(groups, languages());
-    chips.setAttribute("aria-label", languageLabel(groups, languages()));
-    const anchor = [chips, el.querySelector<HTMLElement>("[data-act='variants']")].find((a) => a && menuIsOpenFor(a));
+    button.setAttribute("aria-label", languageLabel(groups, languages()));
+    button.title = languages().map((id) => languageName(groups, id)).join(", ");
+    const anchor = menuIsOpenFor(button) ? button : null;
     if (!languagePanel || !anchor) return;
     const active = document.activeElement as HTMLElement | null;
     let again: string | null = null;
@@ -642,13 +672,13 @@ export function createSettings(app: AppContext): Page {
       if (result.valid) {
         hasKey = true;
         replacingKey = false;
-        toaster.info("金鑰有效，已存進 Windows 認證管理員");
+        toaster.info(t("onboarding.046"));
         await readStatus();
       } else {
-        keyError = keyReasonText(result.reason);
+        keyError = () => keyReasonText(result.reason);
       }
     } catch (err) {
-      keyError = describeError(err);
+      keyError = () => describeError(err);
     }
     keyBusy = false;
     render();
@@ -666,7 +696,7 @@ export function createSettings(app: AppContext): Page {
     } catch {
       // the webview does not let the page read the clipboard: the field takes Ctrl+V
       input?.focus();
-      toaster.info("請在欄位裡按 Ctrl+V 貼上金鑰");
+      toaster.info(t("onboarding.047"));
     }
   }
 
@@ -674,7 +704,7 @@ export function createSettings(app: AppContext): Page {
     const limit = parseLimit(input.value);
     if (limit === null) {
       limitDraft = input.value;
-      limitError = "請輸入 0 以上的數字";
+      limitError = () => t("onboarding.049");
       render();
       return;
     }
@@ -738,7 +768,7 @@ export function createSettings(app: AppContext): Page {
       try {
         const binding = bindingFromCodes(codes);
         await app.setDevice({ dictation_keys: [binding] });
-        toaster.info(`快捷鍵改成 ${bindingLabels(binding).join(" + ")}`);
+        toaster.info(t("settings.083", { p0: () => bindingLabels(binding).join(" + ") }));
       } catch (err) {
         toaster.info(describeError(err));
       }
@@ -757,7 +787,7 @@ export function createSettings(app: AppContext): Page {
       return;
     }
     recording = { recorder: new KeyRecorder(), cell, finishing: false };
-    cell.innerHTML = `<span class="rec-hint">按下新的按鍵（Esc 取消）</span>`;
+    cell.innerHTML = t("settings.084");
     document.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("keyup", onKeyUp, true);
     window.addEventListener("blur", cancelRecording);
@@ -879,9 +909,14 @@ export function createSettings(app: AppContext): Page {
       case "or-check":
         void checkOpenrouter();
         break;
+      case "mic-refresh": {
+        const anchor = el.querySelector<HTMLElement>('[data-k="mic"]');
+        if (anchor) void refreshMicrophones(anchor);
+        break;
+      }
       case "license":
         e.preventDefault();
-        toaster.info("專案的開源授權還沒有決定。");
+        toaster.info(t("settings.085"));
         break;
     }
   });
@@ -892,6 +927,10 @@ export function createSettings(app: AppContext): Page {
   el.addEventListener("change", (e) => {
     const input = e.target as HTMLInputElement;
     if (input.id === "limit-input") commitLimit(input);
+  });
+  el.addEventListener("input", (e) => {
+    const input = e.target as HTMLInputElement;
+    if (input.id === "limit-input") limitDraft = input.value;
   });
   // Esc closes the panel (a menu that is open takes its Esc itself: its keys do not reach here), and
   // Tab stays inside it.

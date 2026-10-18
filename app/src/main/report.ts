@@ -2,6 +2,8 @@
 // that nothing is (spec §12.1, point 3). When something is wrong, the sentence says what happens
 // and a button next to it fixes it.
 
+import { t } from "./i18n";
+
 import type { Status } from "./types";
 
 export interface Report {
@@ -11,9 +13,9 @@ export interface Report {
   action?: { label: string; target: "settings" | "retry" };
 }
 
-const SET_KEY = { label: "設定金鑰", target: "settings" } as const;
-const RETRY = { label: "重新連線", target: "retry" } as const;
-const ADJUST_LIMIT = { label: "調整上限", target: "settings" } as const;
+const SET_KEY = { get label() { return t("report.001"); }, target: "settings" } as const;
+const RETRY = { get label() { return t("report.002"); }, target: "retry" } as const;
+const ADJUST_LIMIT = { get label() { return t("report.003"); }, target: "settings" } as const;
 
 /** From this share of the monthly limit on, the report warns. */
 const WARN_FROM = 0.8;
@@ -87,12 +89,12 @@ export function runOutDay(month: number, limit: number, nowMs: number): { m: num
  */
 export function blockingAlert(s: Status): { text: string; action: string } | null {
   const { openrouter, spend } = s;
-  if (openrouter.state === "no_key") return { text: "還沒設定 OpenRouter 金鑰，聽寫只會貼上未整理的文字。", action: "設定金鑰" };
+  if (openrouter.state === "no_key") return { text: t("report.004"), action: t("report.001") };
   if (openrouter.state === "error") {
-    if (openrouter.error === "auth") return { text: "OpenRouter 金鑰無效，聽寫只會貼上未整理的文字。", action: "更換金鑰" };
-    return { text: "連不上 OpenRouter，聽寫先貼上未整理的文字。", action: "查看設定" };
+    if (openrouter.error === "auth") return { text: t("report.005"), action: t("report.006") };
+    return { text: t("report.007"), action: t("report.008") };
   }
-  if (spend.month_usd >= spend.limit_usd) return { text: "本月額度已用完，聽寫先不整理。", action: "調整上限" };
+  if (spend.month_usd >= spend.limit_usd) return { text: t("report.009"), action: t("report.003") };
   return null;
 }
 

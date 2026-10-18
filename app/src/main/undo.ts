@@ -1,5 +1,7 @@
 // Things that wait before they happen, and the little timing helper the pages use.
 
+import { t } from "./i18n";
+
 import { describeError } from "./format";
 
 /** How long a deleted item can be got back (spec §12.1, point 4). */
@@ -58,7 +60,7 @@ export class Undoable {
     this.notifier.hide();
     const fail = (err: unknown): void => {
       current.action.restore();
-      this.notifier.show(current.action.failure?.(err) ?? `操作失敗：${describeError(err)}`);
+      this.notifier.show(current.action.failure?.(err) ?? t("undo.001", { p0: () => describeError(err) }));
     };
     try {
       const result = current.action.commit();

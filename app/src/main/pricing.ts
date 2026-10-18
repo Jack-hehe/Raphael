@@ -2,6 +2,8 @@
 // Prices are US$ per million tokens (cleanup models, and speech models priced by token) or per
 // minute of audio (most speech models).
 
+import { t } from "./i18n";
+
 import { dayLabel } from "./format";
 import type { CleanupPrice, Pricing, SttPrice } from "./types";
 
@@ -29,7 +31,7 @@ export function formatPerMinute(n: number): string {
   return formatPerMtok(n);
 }
 
-const UNKNOWN = "價格未知";
+const UNKNOWN = () => t("pricing.001");
 
 const hasTokens = (p: CleanupPrice): boolean => p.input_per_mtok !== null || p.output_per_mtok !== null;
 const tokenPair = (p: CleanupPrice): string =>
@@ -37,48 +39,48 @@ const tokenPair = (p: CleanupPrice): string =>
 
 /** The full price of a cleanup model, for the line under the setting: 「輸入 $0.10 / 輸出 $0.50 每百萬 token」. */
 export function cleanupPriceText(p: CleanupPrice | undefined): string {
-  if (!p || !hasTokens(p)) return UNKNOWN;
+  if (!p || !hasTokens(p)) return UNKNOWN();
   const input = p.input_per_mtok === null ? "?" : formatPerMtok(p.input_per_mtok);
   const output = p.output_per_mtok === null ? "?" : formatPerMtok(p.output_per_mtok);
-  return `輸入 ${input} / 輸出 ${output} 每百萬 token`;
+  return t("pricing.002", { p0: input, p1: output });
 }
 
 /** The short price of a cleanup model, for its menu item: 「$0.10 / $0.50」 (the menu's heading says what they are). */
 export function cleanupPriceShort(p: CleanupPrice | undefined): string {
-  return p && hasTokens(p) ? tokenPair(p) : UNKNOWN;
+  return p && hasTokens(p) ? tokenPair(p) : UNKNOWN();
 }
 
 /** The price of a speech model: 「每分鐘 $0.0019」, or per token for the ones priced that way. */
 export function sttPriceText(p: SttPrice | undefined): string {
-  if (!p) return UNKNOWN;
-  if (p.per_minute !== null) return `每分鐘 ${formatPerMinute(p.per_minute)}`;
+  if (!p) return UNKNOWN();
+  if (p.per_minute !== null) return t("pricing.003", { p0: formatPerMinute(p.per_minute) });
   if (hasTokens(p)) return cleanupPriceText(p);
-  return UNKNOWN;
+  return UNKNOWN();
 }
 
 /** The same, short enough for a menu item. */
 export function sttPriceShort(p: SttPrice | undefined): string {
-  if (!p) return UNKNOWN;
-  if (p.per_minute !== null) return `每分鐘 ${formatPerMinute(p.per_minute)}`;
-  if (hasTokens(p)) return `${tokenPair(p)} 每百萬 token`;
-  return UNKNOWN;
+  if (!p) return UNKNOWN();
+  if (p.per_minute !== null) return t("pricing.003", { p0: formatPerMinute(p.per_minute) });
+  if (hasTokens(p)) return t("pricing.004", { p0: tokenPair(p) });
+  return UNKNOWN();
 }
 
 /** The prices are each model's headline price; what a call costs depends on the provider OpenRouter routes it to. */
-const PROVIDER_NOTE = "實際花費依 OpenRouter 選用的供應商而定。";
+const PROVIDER_NOTE = () => t("pricing.005");
 
 /** Where the prices come from, for the small print under them. */
 export function pricingNote(pricing: Pricing, nowMs: number): string {
   const day = pricing.fetched_at_ms === null ? null : dayLabel(pricing.fetched_at_ms, nowMs);
   switch (pricing.source) {
     case "live":
-      return `價格來自 OpenRouter，${day ?? "今天"}更新。${PROVIDER_NOTE}`;
+      return t("pricing.006", { p0: day ?? t("format.001"), p1: PROVIDER_NOTE() });
     case "cached":
       return day
-        ? `價格是${/^\d/.test(day) ? " " : ""}${day}從 OpenRouter 取得的，現在連不上，先顯示這份。${PROVIDER_NOTE}`
-        : `價格是之前從 OpenRouter 取得的，現在連不上，先顯示這份。${PROVIDER_NOTE}`;
+        ? t("pricing.007", { p0: /^\d/.test(day) ? " " : "", p1: day, p2: PROVIDER_NOTE() })
+        : t("pricing.008", { p0: PROVIDER_NOTE() });
     default:
-      return `這是 App 內建的參考價格，可能不是最新的。${PROVIDER_NOTE}`;
+      return t("pricing.009", { p0: PROVIDER_NOTE() });
   }
 }
 

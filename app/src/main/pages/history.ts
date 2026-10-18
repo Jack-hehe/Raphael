@@ -2,6 +2,8 @@
 // the dictations grouped by day, each row its time, the cleaned text and the target program.
 // Hover for copy and delete; a click shows what the speech recognition heard (spec §12.3).
 
+import { onLocaleChange, t } from "../i18n";
+
 import * as api from "../api";
 import { historyEmptyHint } from "../dictation";
 import { dayLabel, describeError, formatClock, formatRetention, KEEP_FOREVER_DAYS } from "../format";
@@ -21,18 +23,18 @@ const programName = (app: string): string => app.replace(/\.exe$/i, "");
 /** At least a day (the core only checks that it is a number); "keep" is a hundred years. */
 export const RETENTIONS: Choice[] = [1, 7, 30, 365, KEEP_FOREVER_DAYS].map((days) => ({
   value: String(days),
-  label: formatRetention(days),
+  get label() { return formatRetention(days); },
 }));
 
 type Filter = "all" | "cleaned" | "raw";
 const FILTERS: { id: Filter; name: string }[] = [
-  { id: "all", name: "所有" },
-  { id: "cleaned", name: "已整理" },
-  { id: "raw", name: "未整理" },
+  { id: "all", get name() { return t("dictionary.001"); } },
+  { id: "cleaned", get name() { return t("history.001"); } },
+  { id: "raw", get name() { return t("history.002"); } },
 ];
 
 function itemHTML(item: HistoryItem, expanded: boolean): string {
-  const meta = [item.target_app ? programName(item.target_app) : "", item.cleaned ? "" : "未整理"]
+  const meta = [item.target_app ? programName(item.target_app) : "", item.cleaned ? "" : t("history.002")]
     .filter(Boolean)
     .map(esc)
     .join("　");
@@ -40,8 +42,8 @@ function itemHTML(item: HistoryItem, expanded: boolean): string {
     `<div class="row hrow" data-id="${item.id}" tabindex="0" aria-expanded="${expanded}">` +
     `<div class="time num">${esc(formatClock(item.created_at_ms))}</div>` +
     `<div class="lbl"><div class="txt">${esc(item.text)}</div>${meta ? `<div class="meta">${meta}</div>` : ""}</div>` +
-    `<div class="ctl acts">${iconBtn("copy", "複製", ' data-act="copy"')}${iconBtn("trash", "刪除", ' data-act="delete"')}</div></div>` +
-    `<div class="hdetail"${expanded ? "" : " hidden"}><h4>原始辨識</h4><div class="raw">${esc(item.raw_text)}</div></div>`
+    `<div class="ctl acts">${iconBtn("copy", t("history.003"), ' data-act="copy"')}${iconBtn("trash", t("history.004"), ' data-act="delete"')}</div></div>` +
+    t("history.005", { p0: expanded ? "" : " hidden", p1: esc(item.raw_text) })
   );
 }
 
@@ -51,13 +53,13 @@ export function createHistory(app: AppContext): Page {
   el.dataset.page = "history";
   el.hidden = true;
   el.innerHTML =
-    `<div class="page-head"><h1>歷史紀錄</h1></div>` +
+    t("history.006") +
     `<section class="card hist-top"></section>` +
-    `<div class="tools"><div class="tabs" role="group" aria-label="篩選">` +
+    t("dictionary.015") +
     FILTERS.map((f) => `<button type="button" data-filter="${f.id}" aria-pressed="${f.id === "all"}">${f.name}</button>`).join("") +
-    `</div>${fieldHTML("搜尋", "", { icon: "search", label: "搜尋歷史紀錄", id: "hist-q" })}</div>` +
+    `</div>${fieldHTML(t("history.007"), "", { icon: "search", get label() { return t("history.008"); }, id: "hist-q" })}</div>` +
     `<div class="days"></div>` +
-    `<div class="more" hidden>${btn("顯示更多", "", ' data-act="more"')}</div>` +
+    `<div class="more" hidden>${btn(t("history.009"), "", ' data-act="more"')}</div>` +
     `<div class="empty" hidden></div>`;
   const search = el.querySelector<HTMLInputElement>("#hist-q")!;
   const top = el.querySelector<HTMLElement>(".hist-top")!;
@@ -74,7 +76,7 @@ export function createHistory(app: AppContext): Page {
   const expanded = new Set<number>();
   let query = "";
   let canLoadMore = false;
-  let failure: string | null = null;
+  let failure: (() => string) | null = null;
   let loads = 0;
   let retentionDays: number | null = null;
   let filter: Filter = "all";
@@ -104,13 +106,13 @@ export function createHistory(app: AppContext): Page {
     empty.hidden = shown.length > 0;
     if (shown.length === 0) {
       if (failure) {
-        empty.innerHTML = `<div class="say">《告。無法讀取歷史紀錄。》</div>${esc(failure)}`;
+        empty.innerHTML = t("history.010", { p0: esc(failure()) });
       } else if (query || filter !== "all") {
-        empty.innerHTML = `<div class="say">《告。沒有符合的紀錄。》</div>換個關鍵字試試。`;
+        empty.innerHTML = t("history.011");
       } else {
         const dictate = app.device().dictation_keys[0];
-        const key = dictate ? bindingLabels(dictate).join(" + ") : "快捷鍵";
-        empty.innerHTML = `<div class="say">《告。尚無紀錄。》</div>${esc(historyEmptyHint(app.device().dictation_mode, key))}`;
+        const key = dictate ? bindingLabels(dictate).join(" + ") : t("history.012");
+        empty.innerHTML = t("history.013", { p0: esc(historyEmptyHint(app.device().dictation_mode, key)) });
       }
     }
 
@@ -122,10 +124,10 @@ export function createHistory(app: AppContext): Page {
     const current = String(retentionDays ?? 30);
     top.innerHTML =
       row(
-        `${ico("clock")}保留歷史紀錄`,
-        retentionDays !== null && retentionDays >= KEEP_FOREVER_DAYS ? "紀錄會一直保留" : "超過的紀錄會自動刪除",
-        retentionDays === null ? "" : sel(retentionChoices(), current, "保留歷史紀錄", ' data-k="retention"'),
-      ) + row(`${ico("lock")}你的資料保持私密`, "歷史紀錄只存在這台電腦上，其他地方都看不到。");
+        t("history.014", { p0: ico("clock") }),
+        retentionDays !== null && retentionDays >= KEEP_FOREVER_DAYS ? t("history.015") : t("history.016"),
+        retentionDays === null ? "" : sel(retentionChoices(), current, t("history.017"), ' data-k="retention"'),
+      ) + row(t("history.018", { p0: ico("lock") }), t("history.019"));
   }
 
   /** The choices, with the one in force too if it is none of them. */
@@ -154,7 +156,7 @@ export function createHistory(app: AppContext): Page {
       if (mine !== loads) return;
       if (!append) items = [];
       canLoadMore = false;
-      failure = describeError(err);
+      failure = () => describeError(err);
     }
     render();
   }
@@ -182,7 +184,7 @@ export function createHistory(app: AppContext): Page {
     deleting.add(id);
     render();
     app.undo.begin({
-      message: "已刪除 1 筆紀錄",
+      message: t("history.020"),
       commit: async () => {
         await api.historyDelete(id);
         deletions.confirm(id);
@@ -193,7 +195,7 @@ export function createHistory(app: AppContext): Page {
         deleting.delete(id);
         render();
       },
-      failure: (err) => `無法刪除：${describeError(err)}`,
+      failure: (err) => t("dictionary.024", { p0: () => describeError(err) }),
     });
   }
 
@@ -202,7 +204,7 @@ export function createHistory(app: AppContext): Page {
     if (!item) return;
     try {
       await copyText(item.text);
-      toaster.info("已複製");
+      toaster.info(t("history.021"));
     } catch (err) {
       toaster.info(describeError(err));
     }
@@ -225,6 +227,16 @@ export function createHistory(app: AppContext): Page {
   }, SEARCH_DELAY_MS);
 
   search.addEventListener("input", runSearch);
+
+  onLocaleChange(() => {
+    el.querySelector("h1")!.textContent = t("main.002");
+    el.querySelector(".tabs")!.setAttribute("aria-label", t("common.filter"));
+    for (const f of FILTERS) el.querySelector<HTMLElement>(`[data-filter="${f.id}"]`)!.textContent = f.name;
+    search.placeholder = t("history.007");
+    search.setAttribute("aria-label", t("history.008"));
+    more.querySelector("button")!.textContent = t("history.009");
+    render();
+  });
 
   el.addEventListener("click", (e) => {
     const target = e.target as Element;

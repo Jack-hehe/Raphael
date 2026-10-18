@@ -5,6 +5,8 @@
 //   3  A box to try a real dictation in. The main window is the app in front, so the paste lands in it.
 // 「完成」 saves `onboarded: true`. The pure rules are exported and tested; the window code is below.
 
+import { onLocaleChange, t, translatedMessage } from "./i18n";
+
 import * as api from "./api";
 import { type DictationMode, keylineAction, tryBoxText } from "./dictation";
 import { describeError, formatSeconds, keyReasonText, parseLimit } from "./format";
@@ -46,12 +48,12 @@ export function canAdvance(step: Step, opts: KeyProgress): boolean {
 }
 
 /** 「第 1 步，共 4 步」 */
-export const stepCaption = (step: Step): string => `第 ${step + 1} 步，共 ${STEP_COUNT} 步`;
+export const stepCaption = (step: Step): string => t("onboarding.001", { p0: step + 1, p1: STEP_COUNT });
 
-const PRIMARY_LABELS = ["開始", "下一步", "下一步", "完成"] as const;
+const PRIMARY_LABELS = () => [t("onboarding.002"), t("onboarding.003"), t("onboarding.003"), t("onboarding.004")] as const;
 
 /** What the main button says. */
-export const primaryLabel = (step: Step): string => PRIMARY_LABELS[step];
+export const primaryLabel = (step: Step): string => PRIMARY_LABELS()[step];
 
 export type LimitAction = { kind: "keep" } | { kind: "save"; value: number } | { kind: "invalid" };
 
@@ -67,17 +69,17 @@ const AUTO_MICROPHONE = "";
 /** The microphones to choose from: the automatic choice, those found, and the saved one even if it is gone. */
 export function micChoices(devices: AudioDevices | null, saved: string | null): Choice[] {
   const choices: Choice[] = [
-    { value: AUTO_MICROPHONE, label: "自動偵測" },
+    { value: AUTO_MICROPHONE, get label() { return t("onboarding.005"); } },
     ...(devices?.devices ?? []).map((d) => ({ value: d.name, label: d.name })),
   ];
-  if (saved !== null && !choices.some((c) => c.value === saved)) choices.push({ value: saved, label: `${saved}（未連接）` });
+  if (saved !== null && !choices.some((c) => c.value === saved)) choices.push({ value: saved, get label() { return t("onboarding.006", { p0: saved }); } });
   return choices;
 }
 
 /** How long the last dictation took, if it was made at or after `sinceMs` (that is, in the try box). */
 export function tryTiming(last: Status["last"], sinceMs: number): string | null {
   if (!last || last.created_at_ms < sinceMs) return null;
-  return `辨識與整理花了 ${formatSeconds(last.stt_ms + last.llm_ms)}`;
+  return t("onboarding.007", { p0: () => formatSeconds(last.stt_ms + last.llm_ms) });
 }
 
 /** How soon after a dictation the history is looked at again, if it was not in it yet. */
@@ -131,7 +133,7 @@ export async function advanceFrom(
 
 /** The dictation keys in words: 「右 Alt」, or 「右 Alt 或 F9」 with two. */
 export function dictationKeysText(bindings: string[]): string {
-  return bindings.map((binding) => bindingLabels(binding).join(" + ")).join(" 或 ");
+  return bindings.map((binding) => bindingLabels(binding).join(" + ")).join(t("onboarding.008"));
 }
 
 // ---------- the pieces of the steps ----------
@@ -147,30 +149,30 @@ const TRY_TIMING_DELAY_MS = 300;
 const MODEL_PAINT_MS = 120;
 
 const keyline = (bindings: string[], mode: DictationMode): string =>
-  `<div class="keyline"><div>${bindings.map((binding) => keys(bindingLabels(binding))).join('<span class="val">或</span>')}${esc(keylineAction(mode))}</div>` +
-  `<div>${keys(["Esc"])}取消</div></div>`;
+  `<div class="keyline"><div>${bindings.map((binding) => keys(bindingLabels(binding))).join(t("onboarding.009"))}${esc(keylineAction(mode))}</div>` +
+  t("onboarding.010", { p0: keys(["Esc"]) });
 
 /** The model row's control: a bar while fetching, a pulsing dot while unpacking. */
 function modelControl(phase: ModelPhase): string {
   switch (phase.kind) {
     case "idle":
     case "checking":
-      return st("idle", "檢查中…");
+      return st("idle", t("onboarding.011"));
     case "downloading": {
-      if (phase.total <= 0) return st("idle", "準備下載…");
+      if (phase.total <= 0) return st("idle", t("onboarding.012"));
       const percent = Math.min(100, Math.round((phase.done / phase.total) * 100));
       return (
-        `<span class="bar ob-bar" role="progressbar" aria-label="語音辨識模型下載進度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}">` +
+        t("onboarding.013", { p0: percent }) +
         `<i style="width:${((phase.done / phase.total) * 100).toFixed(1)}%"></i></span>` +
         `<span class="val num">${esc(formatProgress(phase.done, phase.total))}</span>`
       );
     }
     case "installing":
-      return `<span class="st"><span class="dot busy"></span>安裝中…</span>`;
+      return t("onboarding.014");
     case "ready":
-      return st("ok", "完成");
+      return st("ok", t("onboarding.004"));
     case "failed":
-      return st("err", "下載失敗") + btn("重試", "sm", ' data-ob="model-retry"');
+      return st("err", t("onboarding.015")) + btn(t("onboarding.016"), "sm", ' data-ob="model-retry"');
   }
 }
 
@@ -179,17 +181,17 @@ function modelLine(phase: ModelPhase): string {
   switch (phase.kind) {
     case "idle":
     case "checking":
-      return st("idle", "正在檢查語音辨識模型…");
+      return st("idle", t("onboarding.017"));
     case "downloading": {
       const percent = phase.total > 0 ? `（${Math.min(100, Math.round((phase.done / phase.total) * 100))}%）` : "";
-      return st("idle", `語音辨識模型還在下載${percent}，好了才能試`);
+      return st("idle", t("onboarding.018", { p0: percent }));
     }
     case "installing":
-      return `<span class="st"><span class="dot busy"></span>語音辨識模型安裝中…，好了才能試</span>`;
+      return t("onboarding.019");
     case "ready":
       return "";
     case "failed":
-      return st("err", `語音辨識模型沒有裝好：${phase.reason}`) + btn("重試", "sm", ' data-ob="model-retry"');
+      return st("err", t("onboarding.020", { p0: () => phase.reason })) + btn(t("onboarding.016"), "sm", ' data-ob="model-retry"');
   }
 }
 
@@ -216,12 +218,12 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
   let keyName: string | null = null;
   let replacingKey = false;
   let keyBusy = false;
-  let keyError: string | null = null;
+  let keyError: (() => string) | null = null;
   let keyLoaded = false;
   let limitCurrent = 10;
   let limitText = "10";
   let limitEdited = false;
-  let limitError: string | null = null;
+  let limitError: (() => string) | null = null;
   let limitJob: Promise<boolean> = Promise.resolve(true);
   let devices: AudioDevices | null = null;
   let stage: Stage | null = null;
@@ -229,6 +231,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
   let finishing = false;
   let destroyed = false;
   let tryOpenedAt = 0;
+  let timingMessage: (() => string) | null = null;
   let tryTimer: ReturnType<typeof setTimeout> | undefined;
   let modelTimer: ReturnType<typeof setTimeout> | undefined;
   let windowFocused = true;
@@ -243,9 +246,9 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
   function micRow(): string {
     const saved = app.device().microphone;
     return row(
-      "麥克風",
+      t("onboarding.021"),
       "",
-      meter() + sel(micChoices(devices, saved), saved ?? AUTO_MICROPHONE, "麥克風", ' data-ob="mic"'),
+      meter() + sel(micChoices(devices, saved), saved ?? AUTO_MICROPHONE, t("onboarding.021"), ' data-ob="mic"'),
       { attrs: ' id="ob-mic-row"' },
     );
   }
@@ -253,17 +256,17 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
   function keyRow(): string {
     if (keySaved && !replacingKey) {
       return row(
-        "金鑰",
-        keyName === null ? "已存在 Windows 認證管理員" : `名稱「${esc(keyName)}」`,
-        `<span class="val num">••••••••</span>${st("ok", keyName === null ? "已設定" : "有效")}${btn("更換", "sm", ' data-ob="key-replace"')}`,
+        t("onboarding.022"),
+        keyName === null ? t("onboarding.023") : t("onboarding.024", { p0: esc(keyName) }),
+        `<span class="val num">••••••••</span>${st("ok", keyName === null ? t("onboarding.025") : t("onboarding.026"))}${btn(t("onboarding.027"), "sm", ' data-ob="key-replace"')}`,
       );
     }
     return row(
-      "金鑰",
-      "貼上後按 Enter 或「貼上」，馬上測試",
-      fieldHTML("sk-or-v1-…", "", { w: 220, label: "OpenRouter 金鑰", id: "ob-key-input", type: "password", invalid: keyError !== null }) +
-        btn(keyBusy ? "檢查中…" : "貼上", "pri", ` data-ob="key-paste"${keyBusy ? " disabled" : ""}`) +
-        (keySaved ? btn("取消", "", ` data-ob="key-cancel"${keyBusy ? " disabled" : ""}`) : ""),
+      t("onboarding.022"),
+      t("onboarding.028"),
+      fieldHTML("sk-or-v1-…", "", { w: 220, get label() { return t("onboarding.029"); }, id: "ob-key-input", type: "password", invalid: keyError !== null }) +
+        btn(keyBusy ? t("onboarding.011") : t("onboarding.030"), "pri", ` data-ob="key-paste"${keyBusy ? " disabled" : ""}`) +
+        (keySaved ? btn(t("onboarding.031"), "", ` data-ob="key-cancel"${keyBusy ? " disabled" : ""}`) : ""),
     );
   }
 
@@ -273,17 +276,17 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
         "",
         [
           keyRow(),
-          ...(keyError ? [note(st("err", keyError), ' role="alert"')] : []),
+          ...(keyError ? [note(st("err", keyError()), ' role="alert"')] : []),
           row(
-            "每月上限",
-            "到了就只聽寫、不整理",
-            fieldHTML("", limitText, { w: 96, pre: "US$", label: "每月上限", num: true, id: "ob-limit", invalid: limitError !== null }),
+            t("onboarding.032"),
+            t("onboarding.033"),
+            fieldHTML("", limitText, { w: 96, pre: "US$", get label() { return t("onboarding.032"); }, num: true, id: "ob-limit", invalid: limitError !== null }),
           ),
-          ...(limitError ? [note(st("err", limitError), ' role="alert"')] : []),
+          ...(limitError ? [note(st("err", limitError()), ' role="alert"')] : []),
         ],
-        "還沒有金鑰？到 openrouter.ai 建立一把。建議也在 OpenRouter 替金鑰設上限，當作最後一道防線。",
+        t("onboarding.034"),
       ) +
-      (keySaved ? "" : `<p class="ob-skip"><button type="button" class="link" data-ob="skip">先跳過，聽寫只貼上未整理的文字</button></p>`)
+      (keySaved ? "" : t("onboarding.035"))
     );
   }
 
@@ -292,29 +295,29 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
       case 0:
         return (
           `<div class="stage"><canvas class="emb" aria-hidden="true"></canvas><div class="subs" aria-live="polite"></div></div>` +
-          `<h2 tabindex="-1">開始設定</h2>` +
-          `<p>大約 2 分鐘：連上 OpenRouter、選麥克風，再試一次聽寫。選麥克風的時候，語音辨識模型會同時在背景下載。</p>`
+          t("onboarding.036") +
+          t("onboarding.037")
         );
       case 1:
         return (
-          `<h2 tabindex="-1">連上 OpenRouter</h2>` +
-          `<p>Raphael 用 OpenRouter 整理聽寫。金鑰只存在這台電腦的 Windows 認證管理員。</p>` +
+          t("onboarding.038") +
+          t("onboarding.039") +
           `<div id="ob-keygroup">${keyGroup()}</div>`
         );
       case 2:
         return (
-          `<h2 tabindex="-1">選擇麥克風</h2><p>對著麥克風說幾句話，音量條會跟著跳。</p>` +
+          t("onboarding.040") +
           group("", [
             micRow(),
-            row("語音辨識模型", "只下載一次，之後完全在這台電腦上執行", `<span class="ctl-model" data-model="ctl"></span>`),
+            row(t("onboarding.041"), t("onboarding.042"), `<span class="ctl-model" data-model="ctl"></span>`),
             `<div class="note" data-model="note" hidden></div>`,
           ])
         );
       case 3:
         return (
-          `<h2 tabindex="-1">試一次聽寫</h2>` +
+          t("onboarding.043") +
           `<p>${esc(tryBoxText(app.device().dictation_mode, dictationKeysText(dictationBindings())))}</p>` +
-          `<textarea class="trybox" id="ob-try" rows="4" placeholder="在這裡試試看。" aria-label="試用聽寫的框" spellcheck="false"></textarea>` +
+          t("onboarding.044") +
           `<div class="ob-tryline"><span class="val" id="ob-try-t" role="status"></span></div>` +
           `<div class="ob-modelline" data-model="line" hidden></div>` +
           keyline(dictationBindings(), app.device().dictation_mode)
@@ -328,7 +331,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
     const opts = { keySaved, skipKey };
     foot.innerHTML =
       `<span class="ob-count">${stepCaption(step)}</span>` +
-      (step > 0 ? btn("上一步", "", ' data-ob="back"') : "") +
+      (step > 0 ? btn(t("onboarding.045"), "", ' data-ob="back"') : "") +
       btn(primaryLabel(step), "pri", ` data-ob="next"${canAdvance(step, opts) && !finishing ? "" : " disabled"}`);
   }
 
@@ -487,6 +490,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
     clearTimeout(tryTimer);
     clearTimeout(modelTimer);
     stopEvents();
+    stopLocale();
     window.removeEventListener("focus", onFocus);
     window.removeEventListener("blur", onBlur);
     document.removeEventListener("visibilitychange", syncMonitor);
@@ -522,12 +526,12 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
         keySaved = true;
         keyName = result.label;
         replacingKey = false;
-        toaster.info("金鑰有效，已存進 Windows 認證管理員");
+        toaster.info(t("onboarding.046"));
       } else {
-        keyError = keyReasonText(result.reason);
+        keyError = () => keyReasonText(result.reason);
       }
     } catch (err) {
-      keyError = describeError(err);
+      keyError = () => describeError(err);
     }
     keyBusy = false;
     paintKeyGroup();
@@ -547,14 +551,14 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
     } catch {
       // the webview does not let the page read the clipboard: the field takes Ctrl+V
       input?.focus();
-      toaster.info("請在欄位裡按 Ctrl+V 貼上金鑰");
+      toaster.info(t("onboarding.047"));
       return;
     }
     if (copied.trim()) {
       void submitKey(copied);
     } else {
       input?.focus();
-      toaster.info("剪貼簿裡沒有文字，請先複製金鑰");
+      toaster.info(t("onboarding.048"));
     }
   }
 
@@ -568,7 +572,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
     const input = root.querySelector<HTMLInputElement>("#ob-limit");
     const action = limitAction(input ? input.value : limitText, limitCurrent);
     if (action.kind === "invalid") {
-      limitError = "請輸入 0 以上的數字";
+      limitError = () => t("onboarding.049");
     } else {
       limitError = null;
       if (action.kind === "save") {
@@ -576,7 +580,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
           limitCurrent = (await api.settingsSet("monthly_limit_usd", action.value)).settings.monthly_limit_usd;
           limitText = String(limitCurrent);
         } catch (err) {
-          limitError = describeError(err);
+          limitError = () => describeError(err);
         }
       }
     }
@@ -641,7 +645,10 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
   async function showTiming(): Promise<void> {
     const text = await timingWithRetry(async () => (await api.statusGet()).last, tryOpenedAt);
     const line = root.querySelector<HTMLElement>("#ob-try-t");
-    if (line && text && !destroyed) line.textContent = text;
+    if (line && text && !destroyed) {
+      timingMessage = translatedMessage(text);
+      line.textContent = timingMessage();
+    }
   }
 
   // ---------- events ----------
@@ -727,6 +734,23 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
   window.addEventListener("focus", onFocus);
   window.addEventListener("blur", onBlur);
   document.addEventListener("visibilitychange", syncMonitor);
+
+  const stopLocale = onLocaleChange(() => {
+    if (destroyed) return;
+    const focus = focusSelector(root);
+    const typed = Array.from(root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"))
+      .map((input) => [input.id, input.value] as const);
+    const since = tryOpenedAt;
+    render();
+    tryOpenedAt = since;
+    for (const [id, value] of typed) {
+      const input = root.querySelector<HTMLInputElement | HTMLTextAreaElement>(`#${CSS.escape(id)}`);
+      if (input) input.value = value;
+    }
+    const timing = root.querySelector<HTMLElement>("#ob-try-t");
+    if (timing && timingMessage) timing.textContent = timingMessage();
+    if (focus) root.querySelector<HTMLElement>(focus)?.focus({ preventScroll: true });
+  });
 
   render();
 }

@@ -3,6 +3,8 @@
 // archives; once every byte is there the core unpacks them, which takes a while without any
 // report, so that is a state of its own ("installing") and not a bar stuck at 100%.
 
+import { t } from "./i18n";
+
 import { describeError } from "./format";
 import type { MainEvent, ModelsStatus } from "./types";
 
@@ -128,9 +130,9 @@ export class ModelDownload {
       this.names = missing;
       this.set(downloadPhase(missing, this.seen));
       const { ok } = await this.api.ensure(missing);
-      this.set(ok ? { kind: "ready" } : { kind: "failed", reason: "語音辨識模型沒有下載完成" });
+      this.set(ok ? { kind: "ready" } : { kind: "failed", get reason() { return t("models.001"); } });
     } catch (err) {
-      this.set({ kind: "failed", reason: describeError(err) });
+      this.set({ kind: "failed", get reason() { return describeError(err); } });
     }
   }
 
