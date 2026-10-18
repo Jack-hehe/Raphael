@@ -28,9 +28,10 @@
 
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use handy_keys::{Hotkey, HotkeyId, HotkeyManager, HotkeyState, Key, Modifiers};
+use serde::Deserialize;
 use tokio::sync::mpsc::UnboundedSender;
 
 /// How often the hotkey thread looks for key events while it waits for commands.
@@ -52,6 +53,52 @@ pub enum HotkeyEvent {
     /// A paste-last key went down. Right Alt+V reports `DictationDown` first, because Right Alt
     /// went down first.
     PasteLast,
+}
+
+/// The main webview's fallback input, mapped to exactly the same controller events as the hook.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowHotkey {
+    DictationDown,
+    DictationUp,
+    PasteLast,
+    Cancel,
+}
+
+impl From<WindowHotkey> for HotkeyEvent {
+    fn from(kind: WindowHotkey) -> Self {
+        match kind {
+            WindowHotkey::DictationDown => Self::DictationDown,
+            WindowHotkey::DictationUp => Self::DictationUp,
+            WindowHotkey::PasteLast => Self::PasteLast,
+            WindowHotkey::Cancel => Self::Cancel,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum EventSource {
+    Hook,
+    Window,
+}
+
+/// Cross-source duplicates only: quick taps from a single source remain separate presses.
+#[derive(Default)]
+struct DuplicateGate(Vec<(HotkeyEvent, EventSource, Instant)>);
+
+impl DuplicateGate {
+    fn accept(&mut self, event: HotkeyEvent, source: EventSource, now: Instant) -> bool {
+        if self.0.iter().any(|(previous, origin, at)| {
+            *previous == event
+                && *origin != source
+                && now.saturating_duration_since(*at) <= Duration::from_millis(100)
+        }) {
+            return false;
+        }
+        self.0.retain(|(previous, _, _)| *previous != event);
+        self.0.push((event, source, now));
+        true
+    }
 }
 
 /// The keys for each action. An entry is one key combination: see [`parse_binding`]. An action may
@@ -227,6 +274,14 @@ impl HotkeyService {
         self.send(Command::SetPaused { reason, paused });
     }
 
+    /// Routes focused-window input through the worker's pauses and duplicate gate, then through
+    /// the same event channel as the global keyboard hook. The overlay never calls this.
+    pub fn window_hotkey(&self, kind: WindowHotkey) -> Result<(), String> {
+        self.commands
+            .send(Command::WindowHotkey(kind))
+            .map_err(|_| NOT_RUNNING.to_string())
+    }
+
     fn send(&self, command: Command) {
         if self.commands.send(command).is_err() {
             log::warn!("hotkey command dropped: {NOT_RUNNING}");
@@ -260,6 +315,7 @@ impl Drop for HotkeyService {
 }
 
 enum Command {
+    WindowHotkey(WindowHotkey),
     Update {
         wanted: Wanted,
         reply: Sender<Result<(), String>>,
@@ -390,6 +446,7 @@ struct Worker<B: Backend> {
     /// The reasons the dictation and paste-last keys are paused for; empty when they are not.
     pauses: Vec<PauseReason>,
     registered: Vec<Registration<B::Id>>,
+    duplicates: DuplicateGate,
 }
 
 impl<B: Backend> Worker<B> {
@@ -402,6 +459,7 @@ impl<B: Backend> Worker<B> {
             cancel_enabled: false,
             pauses: Vec::new(),
             registered: Vec::new(),
+            duplicates: DuplicateGate::default(),
         }
     }
 
@@ -425,6 +483,18 @@ impl<B: Backend> Worker<B> {
         // happened with. Otherwise a pause could swallow the release of a key that was held.
         self.pump();
         match command {
+            Command::WindowHotkey(kind) => {
+                let event = HotkeyEvent::from(kind);
+                // Recording a binding must receive every key, including Escape. Tray pause
+                // leaves cancel available during an active dictation, just like the hook.
+                if self.pauses.contains(&PauseReason::KeyRecorder)
+                    || (event != HotkeyEvent::Cancel && !self.pauses.is_empty())
+                    || (event == HotkeyEvent::Cancel && !self.cancel_enabled)
+                {
+                    return;
+                }
+                self.forward(event, EventSource::Window);
+            }
             Command::Update { wanted, reply } => {
                 let previous = std::mem::replace(&mut self.wanted, wanted);
                 let result = self.sync();
@@ -453,17 +523,25 @@ impl<B: Backend> Worker<B> {
     }
 
     /// Forwards the key events the backend has queued.
-    fn pump(&self) {
+    fn pump(&mut self) {
         while let Some((id, state)) = self.backend.try_recv() {
             // An event can outlive its key: one queued just before the key was unregistered.
             let Some(role) = self.registered.iter().find(|r| r.id == id).map(|r| r.role) else {
                 continue;
             };
             if let Some(event) = translate(role, state) {
-                log::debug!("hotkey event: {event:?}");
-                // A closed channel is noticed by `run`.
-                let _ = self.events.send(event);
+                self.forward(event, EventSource::Hook);
             }
+        }
+    }
+
+    fn forward(&mut self, event: HotkeyEvent, source: EventSource) {
+        if self.duplicates.accept(event, source, Instant::now()) {
+            log::debug!("hotkey event: {event:?} source={source:?}");
+            // A closed channel is noticed by `run`.
+            let _ = self.events.send(event);
+        } else {
+            log::debug!("hotkey duplicate ignored: {event:?} source={source:?}");
         }
     }
 
@@ -883,6 +961,114 @@ mod tests {
     }
 
     #[test]
+    fn window_command_kinds_deserialize_and_reach_the_controller_channel_without_a_hook() {
+        let fake = FakeBackend::default();
+        let (mut w, mut rx) = worker(&fake, &Bindings::default());
+        w.sync().unwrap();
+        w.handle(Command::SetCancel(true));
+        for (name, event) in [
+            ("dictation_down", HotkeyEvent::DictationDown),
+            ("dictation_up", HotkeyEvent::DictationUp),
+            ("paste_last", HotkeyEvent::PasteLast),
+            ("cancel", HotkeyEvent::Cancel),
+        ] {
+            let kind = serde_json::from_value::<WindowHotkey>(serde_json::json!(name)).unwrap();
+            w.handle(Command::WindowHotkey(kind));
+            assert_eq!(drain(&mut rx), vec![event]);
+        }
+        assert!(serde_json::from_str::<WindowHotkey>("\"unknown\"").is_err());
+    }
+
+    #[test]
+    fn window_keys_respect_independent_pauses_and_the_cancel_switch() {
+        let fake = FakeBackend::default();
+        let (mut w, mut rx) = worker(&fake, &Bindings::default());
+        w.sync().unwrap();
+        w.handle(Command::WindowHotkey(WindowHotkey::Cancel));
+        assert!(drain(&mut rx).is_empty(), "idle Esc belongs to the UI");
+        w.handle(Command::SetCancel(true));
+        pause(&mut w, PauseReason::Tray, true);
+        pause(&mut w, PauseReason::KeyRecorder, true);
+        for kind in [
+            WindowHotkey::DictationDown,
+            WindowHotkey::DictationUp,
+            WindowHotkey::PasteLast,
+            WindowHotkey::Cancel,
+        ] {
+            w.handle(Command::WindowHotkey(kind));
+        }
+        assert!(
+            drain(&mut rx).is_empty(),
+            "the recorder must receive every key"
+        );
+        pause(&mut w, PauseReason::KeyRecorder, false);
+        w.handle(Command::WindowHotkey(WindowHotkey::DictationDown));
+        w.handle(Command::WindowHotkey(WindowHotkey::PasteLast));
+        assert!(drain(&mut rx).is_empty(), "tray pause remains in force");
+        w.handle(Command::WindowHotkey(WindowHotkey::Cancel));
+        assert_eq!(drain(&mut rx), vec![HotkeyEvent::Cancel]);
+        pause(&mut w, PauseReason::Tray, false);
+        w.handle(Command::WindowHotkey(WindowHotkey::DictationDown));
+        assert_eq!(drain(&mut rx), vec![HotkeyEvent::DictationDown]);
+    }
+
+    #[test]
+    fn window_keys_are_deduplicated_against_queued_hook_events() {
+        let fake = FakeBackend::default();
+        let (mut w, mut rx) = worker(&fake, &Bindings::default());
+        w.sync().unwrap();
+        w.handle(Command::SetCancel(true));
+        for (binding, kind) in [
+            ("AltRight", WindowHotkey::DictationDown),
+            ("AltRight+V", WindowHotkey::PasteLast),
+            ("Escape", WindowHotkey::Cancel),
+        ] {
+            fake.press(binding);
+            w.handle(Command::WindowHotkey(kind));
+            assert_eq!(drain(&mut rx).len(), 1, "duplicate {kind:?}");
+        }
+        fake.release("AltRight");
+        w.handle(Command::WindowHotkey(WindowHotkey::DictationUp));
+        assert_eq!(drain(&mut rx), vec![HotkeyEvent::DictationUp]);
+    }
+
+    #[test]
+    fn duplicate_gate_handles_both_arrival_orders_and_allows_later_presses() {
+        let now = Instant::now();
+        for event in [
+            HotkeyEvent::DictationDown,
+            HotkeyEvent::DictationUp,
+            HotkeyEvent::PasteLast,
+            HotkeyEvent::Cancel,
+        ] {
+            for (first, second) in [
+                (EventSource::Hook, EventSource::Window),
+                (EventSource::Window, EventSource::Hook),
+            ] {
+                let mut gate = DuplicateGate::default();
+                assert!(gate.accept(event, first, now));
+                assert!(!gate.accept(event, second, now + Duration::from_millis(100)));
+                assert!(gate.accept(event, second, now + Duration::from_millis(101)));
+            }
+        }
+        let mut gate = DuplicateGate::default();
+        assert!(gate.accept(HotkeyEvent::DictationDown, EventSource::Window, now));
+        assert!(gate.accept(HotkeyEvent::DictationUp, EventSource::Window, now));
+        assert!(gate.accept(HotkeyEvent::DictationDown, EventSource::Window, now));
+    }
+
+    #[test]
+    fn a_late_hook_duplicate_of_a_window_press_is_not_forwarded() {
+        let fake = FakeBackend::default();
+        let (mut w, mut rx) = worker(&fake, &Bindings::default());
+        w.sync().unwrap();
+        w.handle(Command::WindowHotkey(WindowHotkey::DictationDown));
+        fake.press("AltRight");
+        w.pump();
+        assert_eq!(drain(&mut rx), vec![HotkeyEvent::DictationDown]);
+    }
+
+    #[test]
     fn nothing_is_registered_before_the_first_sync() {
         let fake = FakeBackend::default();
         let (_worker, _rx) = worker(&fake, &Bindings::default());
@@ -1170,6 +1356,28 @@ mod tests {
         fake.release("AltRight");
         assert_eq!(next_event(&mut rx), HotkeyEvent::DictationUp);
         drop(svc);
+    }
+
+    #[test]
+    fn the_window_command_uses_the_service_channel_and_obeys_recorder_pause() {
+        let fake = FakeBackend::default();
+        let b = Bindings::default();
+        let (svc, mut rx) = service(&fake, &b);
+        svc.window_hotkey(WindowHotkey::DictationDown).unwrap();
+        svc.window_hotkey(WindowHotkey::DictationUp).unwrap();
+        settle(&svc, &b);
+        assert_eq!(
+            drain(&mut rx),
+            vec![HotkeyEvent::DictationDown, HotkeyEvent::DictationUp]
+        );
+        svc.set_paused(PauseReason::KeyRecorder, true);
+        svc.window_hotkey(WindowHotkey::DictationDown).unwrap();
+        settle(&svc, &b);
+        assert!(drain(&mut rx).is_empty());
+        svc.set_paused(PauseReason::KeyRecorder, false);
+        svc.window_hotkey(WindowHotkey::DictationDown).unwrap();
+        settle(&svc, &b);
+        assert_eq!(drain(&mut rx), vec![HotkeyEvent::DictationDown]);
     }
 
     #[test]

@@ -85,6 +85,7 @@ pub fn run() {
             commands::device_settings_set,
             commands::keyboard_has_altgr,
             commands::hotkeys_pause,
+            commands::window_hotkey,
             commands::main_events,
         ])
         .setup(|app| {
