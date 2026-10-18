@@ -7,6 +7,7 @@ Traditional forms (学 into 學, 会 into 會, 来 into 來). That is why Japane
 by sentence.
 """
 
+import difflib
 import functools
 import re
 import string
@@ -72,6 +73,97 @@ def to_taiwan_traditional(text: str) -> str:
     """
     return "".join(
         sentence if _is_japanese(sentence) else _converter().convert(sentence)
+        for sentence in _SENTENCE.findall(text)
+    )
+
+
+# The keys of OpenCC's STCharacters table that are among their own Traditional forms: Simplified
+# and Traditional Chinese share them (只 is 只 or 隻, 后 is 后 or 後, 台 is 台 or 臺, 干 is 干,
+# 乾 or 幹). Generated from OpenCC 1.4.2; a test regenerates it from the installed dictionary.
+_SHARED_CHARACTERS = frozenset(
+    "㐹万丑丰了于云亘仆仇价仿伙余佛佣俊修借僵克党具冢冬准凌几凶出划刮制千升卜占卷厂厘"
+    "只台叶吁吃合吊同后向吣呆周咨咸咽哄唇喂噪回困坐坯堤夫夸奸姜娘它家尸局岩岳巨布帘席"
+    "干幸广庵弦彩征御志念恤愈愿戚扇才扎托扣折抵拐拿挂挨挽捆捍据搜斗斤斫旋昆暗曲札朱朴"
+    "杆杠杯杰松板极果柜栗核梁棱檗欲沈沾泛注浚涂涌淀游溪漓澄焰熏狸玩琅璇症皂矩确硷私秋"
+    "种穗筑筱糊系累耇胄背胜胡腊腌膻致舍芸苔苹范荐蒙蔑藤虫蚝蜡蝎表谷豆象跖辟适郁酸采里"
+    "雇雕面"
+)
+
+# Characters below this code point are never Chinese: OpenCC leaves them alone.
+_FIRST_CJK = 0x2E80
+
+
+@functools.cache
+def _to_simplified() -> opencc.OpenCC:
+    """OpenCC's Traditional-to-Simplified converter, made on first use."""
+    return opencc.OpenCC("t2s.json")
+
+
+@functools.lru_cache(maxsize=8192)
+def _is_simplified_only(char: str) -> bool:
+    """Whether s2twp changes `char` on its own and it is no Traditional character (软, 发, 开, but
+    not 只 or 后). Non-Taiwan Traditional variants (裏) count too: they are to be converted."""
+    return (
+        ord(char) >= _FIRST_CJK
+        and char not in _SHARED_CHARACTERS
+        and _converter().convert(char) != char
+    )
+
+
+@functools.lru_cache(maxsize=8192)
+def _is_traditional_only(char: str) -> bool:
+    """Whether `char` is written differently in Simplified Chinese (軟, 髮, 後, 隻)."""
+    return ord(char) >= _FIRST_CJK and _to_simplified().convert(char) != char
+
+
+def _convert_simplified_words(sentence: str) -> str:
+    """One sentence that is meant to be Traditional Chinese, with what is still Simplified in it
+    converted, and nothing else.
+
+    A sentence without a Simplified-only character stays as it is. One with no character that only
+    Traditional Chinese has is Simplified Chinese and goes through s2twp whole, as speech-to-text
+    output does. In a sentence that has both, only the words that s2twp changes and that hold a
+    Simplified-only character take its result: 「幫我打开」 becomes 「幫我開啟」, but the 只 of
+    「就是只要按這個开關」 is not turned into 隻 as s2twp alone would.
+    """
+    if not any(map(_is_simplified_only, sentence)):
+        return sentence
+    converted = _converter().convert(sentence)
+    if not any(map(_is_traditional_only, sentence)):
+        return converted
+    pieces: list[str] = []
+    changed_from: list[str] = []  # a run of changes, as it was and as s2twp wrote it
+    changed_to: list[str] = []
+
+    def take_changes() -> None:
+        before = "".join(changed_from)
+        pieces.append("".join(changed_to) if any(map(_is_simplified_only, before)) else before)
+        changed_from.clear()
+        changed_to.clear()
+
+    matcher = difflib.SequenceMatcher(None, sentence, converted, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            take_changes()
+            pieces.append(sentence[i1:i2])
+        else:
+            changed_from.append(sentence[i1:i2])
+            changed_to.append(converted[j1:j2])
+    take_changes()
+    return "".join(pieces)
+
+
+def convert_leftover_simplified(text: str) -> str:
+    """`text`, written to be Traditional Chinese with Taiwan usage, with what is still Simplified
+    in it converted by s2twp, sentence by sentence (Japanese sentences stay as they are).
+
+    s2twp takes its input for Simplified Chinese, and it corrupts some Traditional text:
+    「就是只要」 becomes 「就是隻要」, 「干擾」 becomes 「幹擾」. This leaves the Traditional
+    parts alone (see `_convert_simplified_words`). Spaces and line breaks come back exactly as
+    they were.
+    """
+    return "".join(
+        sentence if _is_japanese(sentence) else _convert_simplified_words(sentence)
         for sentence in _SENTENCE.findall(text)
     )
 
@@ -178,12 +270,14 @@ def normalize_transcript(text: str, rules: Sequence[tuple[str, str]]) -> str:
 def finish_cleaned_text(text: str, rules: Sequence[tuple[str, str]]) -> str:
     """The text the user gets from what the cleanup model wrote: its reply, normalized again.
 
-    The model is told to write Traditional Chinese, and OpenCC would corrupt the kanji of a
-    Japanese text (学校 into 學校), so a reply with any hiragana is not converted, only given the
-    replacements. The gate is on the whole reply, a step beyond the sentence-by-sentence rule of
+    The model is told to write Traditional Chinese with Taiwan usage, so only what it left in
+    Simplified Chinese is converted (`convert_leftover_simplified`): s2twp over the whole reply
+    would turn its 只要 into 隻要. OpenCC would also corrupt the kanji of a Japanese text (学校
+    into 學校), so a reply with any hiragana is not converted at all, only given the replacements.
+    That gate is on the whole reply, a step beyond the sentence-by-sentence rule of
     `to_taiwan_traditional`. A text that fell back to the raw speech-to-text result is already
     normalized and must not go through this: a second pass could repeat a replacement.
     """
     if not _HIRAGANA.search(text):
-        text = to_taiwan_traditional(text)
+        text = convert_leftover_simplified(text)
     return apply_replacements(text, rules)

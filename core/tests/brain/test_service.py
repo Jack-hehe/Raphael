@@ -314,15 +314,53 @@ async def test_finalize_without_key_saves_the_raw_text(router, fake_client):
     )
 
 
-async def test_finalize_converts_and_replaces_before_the_model_sees_the_text(
+async def test_finalize_gives_the_model_the_text_as_heard_with_the_replacements(
     router, fake_client, keys
 ):
+    # The model reads the speech-to-text result without OpenCC's conversion, so that it is not
+    # fed conversion errors; the dictionary's replacements are applied all the same. The raw text
+    # that is saved and pasted on a fallback is converted as before.
     keys.set(KEY)
     await router.call("dictionary.add", {"word": "拉斐爾", "misheard": ["拉菲爾"]})
     fake_client.next_completion = completion({"text": "拉斐爾你好，這是測試。"})
     r = await finalize(router, "拉菲爾你好，这是测试")
     assert r["raw_text"] == "拉斐爾你好，這是測試"
-    assert "拉斐爾你好，這是測試" in fake_client.calls[0]["user"]
+    assert fake_client.calls[0]["user"] == "<transcript>\n拉斐爾你好，这是测试\n</transcript>"
+
+
+async def test_finalize_does_not_feed_the_model_opencc_errors(router, fake_client, keys):
+    # s2twp turns 就是只要 into 就是隻要: that is what the raw text says, not what the model reads,
+    # and the model's Traditional Chinese is not run through s2twp again.
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "只要按 Alt 就可以觸發。"})
+    r = await finalize(router, "就是只要按O S就可以触发")
+    assert r["raw_text"] == "就是隻要按O S就可以觸發"
+    assert fake_client.calls[0]["user"] == "<transcript>\n就是只要按O S就可以触发\n</transcript>"
+    assert r["text"] == "只要按 Alt 就可以觸發。"
+    assert (await router.call("history.latest", {}))["item"]["text"] == "只要按 Alt 就可以觸發。"
+
+
+async def test_finalize_passes_the_target_app_to_the_prompt(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "好。"})
+    await finalize(router, "好", target_app="LINE.exe")
+    call = fake_client.calls[0]
+    assert "Target app: LINE.exe (chat)" in call["system"]
+    assert "LINE" not in call["user"]
+
+
+async def test_finalize_without_a_target_app_says_unknown(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "好。"})
+    await finalize(router, "好", target_app=None)
+    assert "Target app: unknown" in fake_client.calls[0]["system"]
+
+
+async def test_a_fallback_after_the_call_pastes_the_converted_raw_text(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": ""})
+    r = await finalize(router, "这是测试")
+    assert (r["text"], r["fallback_reason"]) == ("這是測試", "suspicious")
 
 
 async def test_finalize_failure_falls_back_to_the_raw_text(router, fake_client, keys):

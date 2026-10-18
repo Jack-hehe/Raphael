@@ -1,8 +1,9 @@
 """Dictation cleanup: a language model tidies what speech-to-text heard.
 
-The model only cleans. It removes fillers, keeps the final version of a self-correction and adds
-punctuation, paragraphs and numbering. Whatever goes wrong while it runs, the user gets the raw
-text: `clean` lets nothing out but a cancellation.
+The model only cleans. It fixes words that speech-to-text misheard, removes fillers, keeps the
+final version of a self-correction, adds punctuation, paragraphs and numbered lists, and sets the
+tone for the app the text goes to. Whatever goes wrong while it runs, the user gets the raw text:
+`clean` lets nothing out but a cancellation.
 
 Nothing here logs the dictated text, the model's reply, the dictionary or a key. A failure is
 logged by its kind and status (an OpenRouterError) or by the name of its type (anything else),
@@ -14,6 +15,7 @@ import asyncio
 import functools
 import logging
 import math
+import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -58,13 +60,19 @@ def reply_length_limit(raw: str) -> float:
     return 1.5 * len(raw) + 20
 
 
+def reply_length(text: str) -> int:
+    """The length of a reply as the length rule counts it: the characters of `text` without the
+    spaces around it and without line breaks. A list or paragraphs put things on lines of their
+    own, and those breaks are structure, not words of the model's own."""
+    return len(text.strip().replace("\r", "").replace("\n", ""))
+
+
 def is_suspicious_reply(raw: str, text: str) -> bool:
     """Whether `text`, the model's reply to the cleanup of `raw`, is no cleanup: nothing at all,
-    or longer than `reply_length_limit(raw)`, which means the model wrote something of its own,
-    most likely an answer. Spaces around `text` do not count. The reply is judged as the model
-    wrote it, before the normalization that follows."""
-    text = text.strip()
-    return not text or len(text) > reply_length_limit(raw)
+    or longer than `reply_length_limit(raw)` as `reply_length` counts it, which means the model
+    wrote something of its own, most likely an answer. The reply is judged as the model wrote it,
+    before the normalization that follows."""
+    return not text.strip() or reply_length(text) > reply_length_limit(raw)
 
 
 @functools.cache
@@ -81,8 +89,76 @@ def _one_line(text: str) -> str:
     return " ".join(text.splitlines()).strip()
 
 
-def build_system_prompt(words: Sequence[str], replacements: Sequence[tuple[str, str]]) -> str:
-    """The system prompt with the user's dictionary filled in.
+# The kind of app each process is, by its name in lower case, so that the model can set the tone.
+_APP_KINDS = {
+    "chat": (
+        "line.exe",
+        "discord.exe",
+        "messenger.exe",
+        "telegram.exe",
+        "whatsapp.exe",
+        "slack.exe",
+        "teams.exe",
+        "ms-teams.exe",
+        "signal.exe",
+        "wechat.exe",
+        "weixin.exe",
+    ),
+    "email or document": (
+        "outlook.exe",
+        "olk.exe",  # the new Outlook
+        "winword.exe",
+        "thunderbird.exe",
+        "onenote.exe",
+        "notion.exe",
+        "obsidian.exe",
+    ),
+    "code editor or terminal": (
+        "code.exe",
+        "code - insiders.exe",
+        "cursor.exe",
+        "windsurf.exe",
+        "zed.exe",
+        "devenv.exe",
+        "idea64.exe",
+        "pycharm64.exe",
+        "sublime_text.exe",
+        "windowsterminal.exe",
+        "wt.exe",
+        "cmd.exe",
+        "powershell.exe",
+        "pwsh.exe",
+        "conhost.exe",
+    ),
+}
+_KIND_OF_APP = {name: kind for kind, names in _APP_KINDS.items() for name in names}
+# A process name is short; anything longer is cut, so that it stays a label.
+_TARGET_APP_MAX = 80
+
+
+def describe_target_app(target_app: str | None) -> str:
+    """The target app as the prompt names it: the process name on one line, at most 80
+    characters, and its kind when it is a known one ("LINE.exe (chat)"); "unknown" without one."""
+    name = _one_line(target_app or "")[:_TARGET_APP_MAX].strip()
+    if not name:
+        return "unknown"
+    kind = _KIND_OF_APP.get(name.lower())
+    return f"{name} ({kind})" if kind else name
+
+
+_PLACEHOLDER = re.compile(r"\{(dictionary|target_app)\}")
+
+
+def build_system_prompt(
+    words: Sequence[str],
+    replacements: Sequence[tuple[str, str]],
+    target_app: str | None = None,
+) -> str:
+    """The system prompt with the user's dictionary and the target app filled in.
+
+    `target_app` is the process name of the window the text goes to, written as
+    `describe_target_app` does. It is in the system prompt, never inside the transcript, so it
+    cannot pass for something the speaker said.
 
     `words` are the dictionary's words and `replacements` its `(misheard, word)` pairs, as
     `DictionaryStore.hint_words()` and `replacements()` return them. There is one line per word, in
@@ -101,9 +177,13 @@ def build_system_prompt(words: Sequence[str], replacements: Sequence[tuple[str, 
             continue
         forms = misheard_forms.get(word)
         lines.append(f"- {word}（常被聽成：{'、'.join(forms)}）" if forms else f"- {word}")
-    # str.replace, not str.format: the prompt has braces of its own (the JSON of the reply), and
-    # the words may have some too.
-    return _prompt_template().replace("{dictionary}", "\n".join(lines) or "（空）")
+    values = {
+        "dictionary": "\n".join(lines) or "（空）",
+        "target_app": describe_target_app(target_app),
+    }
+    # One pass of re.sub, not str.format or one str.replace after another: the prompt has braces
+    # of its own (the JSON of the reply), and a word or an app name may look like a placeholder.
+    return _PLACEHOLDER.sub(lambda match: values[match.group(1)], _prompt_template())
 
 
 @dataclass
@@ -175,15 +255,27 @@ class CleanupService:
         self._timeout_fn = timeout_fn
         self._on_result = on_result
 
-    async def clean(self, raw: str, *, audio_seconds: float) -> CleanupResult:
+    async def clean(
+        self,
+        raw: str,
+        *,
+        audio_seconds: float,
+        heard: str | None = None,
+        target_app: str | None = None,
+    ) -> CleanupResult:
         """The cleaned text, or the raw text with the reason why it is all there is.
+
+        `raw` is what is pasted when there is no cleanup. `heard` is what the model reads: the
+        speech-to-text result before OpenCC, so that the model is not fed conversion errors such
+        as 隻要 for 只要; it is `raw` unless given. `target_app` is the process name of the window
+        the text goes to, named in the system prompt so that the tone can follow it.
 
         The first of these that applies decides the reason: blank text is "empty", no key is
         "no_key", the monthly limit reached is "budget". Then the model is asked, and the raw text
         stays when it does not answer in time ("timeout"), when the call fails (f"error:{kind}"),
-        or when its answer is no cleanup of the text: nothing, or longer than 1.5 times what was
-        said plus 20 characters ("suspicious"). Anything else that goes wrong is
-        "error:unexpected".
+        or when its answer is no cleanup of the text: nothing, or longer than 1.5 times what it
+        read plus 20 characters, line breaks not counted ("suspicious"). Anything else that goes
+        wrong is "error:unexpected".
 
         An answer is paid for, so it is recorded in the spend whatever it holds. A cancellation
         passes through.
@@ -191,18 +283,24 @@ class CleanupService:
         if not raw.strip():
             return _fallback(raw, "empty")
         try:
-            return await self._clean(raw, audio_seconds)
+            return await self._clean(
+                raw, raw if heard is None else heard, audio_seconds, target_app
+            )
         except Exception as exc:
             # Whatever broke, speech was understood: it is better pasted as it is than lost.
             return _unexpected(raw, exc)
 
-    async def _clean(self, raw: str, audio_seconds: float) -> CleanupResult:
+    async def _clean(
+        self, raw: str, heard: str, audio_seconds: float, target_app: str | None
+    ) -> CleanupResult:
         if not self._has_key():
             return _fallback(raw, "no_key")
         if self._spend.is_over(self._settings.get("monthly_limit_usd")):
             return _fallback(raw, "budget")
 
-        system = build_system_prompt(self._dictionary.hint_words(), self._dictionary.replacements())
+        system = build_system_prompt(
+            self._dictionary.hint_words(), self._dictionary.replacements(), target_app
+        )
         timeout = self._timeout_fn(audio_seconds)
         started = time.perf_counter()
         try:
@@ -211,11 +309,11 @@ class CleanupService:
                     model=self._settings.get("cleanup_model"),
                     fallbacks=CLEANUP_FALLBACKS,
                     system=system,
-                    user=build_user_message(raw),
+                    user=build_user_message(heard),
                     schema=CLEANUP_SCHEMA,
                     schema_name="cleaned_dictation",
                     timeout_s=timeout,
-                    max_tokens=max_tokens_for(raw),
+                    max_tokens=max_tokens_for(heard),
                 ),
                 timeout,
             )
@@ -240,12 +338,12 @@ class CleanupService:
         cost_usd = _usable_cost(completion.cost_usd)
         text = completion.data.get("text")
         text = text.strip() if isinstance(text, str) else ""
-        if is_suspicious_reply(raw, text):
+        if is_suspicious_reply(heard, text):
             logger.warning(
                 "Cleanup reply is empty or too long, using the raw text: reply %d characters,"
                 " dictation %d",
                 len(text),
-                len(raw),
+                len(heard),
             )
             return _fallback(
                 raw, "suspicious", model=completion.model, cost_usd=cost_usd, llm_ms=llm_ms

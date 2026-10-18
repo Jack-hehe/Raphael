@@ -37,7 +37,7 @@ from .secrets import KeyStore
 from .settings import SettingsStore
 from .spend import SpendTracker
 from .suggest import suggest_words
-from .textnorm import finish_cleaned_text, normalize_transcript
+from .textnorm import apply_replacements, finish_cleaned_text, normalize_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +248,15 @@ class Brain:
                 "llm_ms": 0,
             }
 
-        result = await self._cleanup.clean(normalized, audio_seconds=audio_seconds)
+        # The model reads the text as speech-to-text heard it, with the replacements but without
+        # OpenCC: s2twp would hand it errors such as 隻要 for 只要, which it then keeps. The
+        # normalized text is what is saved, and what is pasted when there is no cleanup.
+        result = await self._cleanup.clean(
+            normalized,
+            audio_seconds=audio_seconds,
+            heard=apply_replacements(raw_text, rules),
+            target_app=target_app,
+        )
         if result.model is not None and self._openrouter.state == "ok":
             # The model answered, so the time it took is a round trip to OpenRouter.
             self._openrouter.latency_ms = result.llm_ms

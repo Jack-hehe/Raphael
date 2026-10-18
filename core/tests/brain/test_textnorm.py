@@ -1,6 +1,7 @@
 import itertools
 import subprocess
 import sys
+from pathlib import Path
 
 import opencc
 import pytest
@@ -331,17 +332,18 @@ def test_a_rule_applied_to_its_own_result_changes_nothing_for_every_short_text()
 # --- the converter ---
 
 
-def test_importing_the_module_does_not_load_the_converter():
+def test_importing_the_module_does_not_load_the_converters():
     # Loading the dictionaries takes about 100 ms; that waits until the first conversion.
     code = (
         "from raphael_core.brain import textnorm\n"
-        "print(textnorm._converter.cache_info().currsize)"
+        "print(textnorm._converter.cache_info().currsize,"
+        " textnorm._to_simplified.cache_info().currsize)"
     )
     result = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "0"
+    assert result.stdout.strip() == "0 0"
 
 
 # --- normalize_transcript and finish_cleaned_text ---
@@ -370,6 +372,96 @@ def test_finish_cleaned_text_gates_on_hiragana_in_the_whole_text():
     text = "这个软件很好用。今日は学校に行きます。"
     assert textnorm.finish_cleaned_text(text, []) == text
     assert textnorm.normalize_transcript(text, []) == "這個軟體很好用。今日は学校に行きます。"
+
+
+# OpenCC s2twp reads its input as Simplified Chinese. Run over text that is Traditional already, it
+# gets some characters wrong: 就是只要 becomes 就是隻要, 干擾 becomes 幹擾. The cleanup model writes
+# Traditional Chinese, so its reply is only converted where it still has Simplified characters.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "就是只要按 Alt 就可以。",
+        "他就是只會說好。",
+        "這只是測試，只要一下。",
+        "一隻貓。",
+        "乾淨的房間。",
+        "頭髮很長，我發現了。",
+        "後面是皇后。",
+        "裡面有一公里。",
+        "台灣和臺灣。",
+        "不要干擾他，我了解。",
+        "舞台上的天干。",
+    ],
+)
+def test_finish_cleaned_text_leaves_traditional_chinese_alone(text):
+    assert textnorm.finish_cleaned_text(text, []) == text
+
+
+def test_opencc_alone_would_corrupt_that_traditional_chinese():
+    # Why the test above matters: these are the errors it guards against.
+    assert to_taiwan_traditional("就是只要按 Alt 就可以。") == "就是隻要按 Alt 就可以。"
+    assert to_taiwan_traditional("不要干擾他。") == "不要幹擾他。"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("明天下午三点开会。", "明天下午三點開會。"),
+        ("后面的头发。", "後面的頭髮。"),
+        ("这个软件很好用。", "這個軟體很好用。"),
+    ],
+)
+def test_finish_cleaned_text_converts_a_sentence_written_in_simplified_chinese(text, expected):
+    assert textnorm.finish_cleaned_text(text, []) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("幫我打开 YouTube。", "幫我開啟 YouTube。"),
+        ("就是只要按這個开關。", "就是只要按這個開關。"),
+        ("資料我後面再发給你。", "資料我後面再發給你。"),
+    ],
+)
+def test_finish_cleaned_text_converts_only_the_simplified_words_of_a_traditional_sentence(
+    text, expected
+):
+    assert textnorm.finish_cleaned_text(text, []) == expected
+
+
+def test_finish_cleaned_text_judges_each_sentence_on_its_own():
+    text = "就是只要按 Alt。明天开会\n後面是皇后。"
+    assert textnorm.finish_cleaned_text(text, []) == "就是只要按 Alt。明天開會\n後面是皇后。"
+
+
+def test_a_conversion_that_changes_the_length_is_taken_whole():
+    # s2twp writes some words with more or fewer characters; the whole word is taken.
+    assert textnorm.finish_cleaned_text("這個U盘給你。", []) == "這個隨身碟給你。"
+
+
+def test_the_shared_characters_are_those_of_the_installed_opencc(tmp_path):
+    """_SHARED_CHARACTERS lists the keys of OpenCC's STCharacters that are among their own
+    Traditional forms (只 is 只 or 隻). It was generated from OpenCC 1.4.2; this regenerates it."""
+    tool = Path(opencc.__file__).parent / "clib" / "bin" / "opencc_dict.exe"
+    table = Path(opencc.__file__).parent / "clib" / "share" / "opencc" / "STCharacters.ocd2"
+    if not tool.exists() or not table.exists():
+        pytest.skip("this OpenCC has no opencc_dict tool")
+    out = tmp_path / "st.txt"
+    subprocess.run(
+        [str(tool), "-i", str(table), "-o", str(out), "-f", "ocd2", "-t", "text"],
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+    shared = set()
+    for line in out.read_text(encoding="utf-8").splitlines():
+        key, values = line.split("\t")
+        if key in values.split(" "):
+            shared.add(key)
+    assert shared == set(textnorm._SHARED_CHARACTERS)
+    assert {"只", "后", "台", "干", "里"} <= shared and "发" not in shared
 
 
 def test_the_converter_is_created_once(monkeypatch):

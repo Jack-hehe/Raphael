@@ -378,12 +378,14 @@ def test_load_cases_reads_optional_fields(tmp_path):
         tmp_path,
         '{"id": "a", "input": "你好", "must_contain": ["你"]}',
         "",
-        '{"id": "b", "input": "x", "dictionary": ["W"], "must_not_contain": ["y"]}',
+        '{"id": "b", "input": "x", "dictionary": ["W"], "must_not_contain": ["y"],'
+        ' "target_app": "LINE.exe"}',
     )
     first, second = eval_cleanup.load_cases(path)
     assert (first.id, first.input, first.dictionary) == ("a", "你好", [])
-    assert (first.must_contain, first.must_not_contain) == (["你"], [])
+    assert (first.must_contain, first.must_not_contain, first.target_app) == (["你"], [], None)
     assert (second.dictionary, second.must_not_contain) == (["W"], ["y"])
+    assert second.target_app == "LINE.exe"
 
 
 @pytest.mark.parametrize(
@@ -395,6 +397,8 @@ def test_load_cases_reads_optional_fields(tmp_path):
         ('{"id": "a"}', "input"),
         ('{"id": "a", "input": "x", "must_contain": "y"}', "must_contain"),
         ('{"id": "a", "input": "x", "dictionary": [1]}', "dictionary"),
+        ('{"id": "a", "input": "x", "target_app": 1}', "target_app"),
+        ('{"id": "a", "input": "x", "target_app": ["LINE.exe"]}', "target_app"),
     ],
 )
 def test_load_cases_names_the_problem(tmp_path, line, fragment):
@@ -415,6 +419,7 @@ def make_case(**fields):
         dictionary=fields.pop("dictionary", []),
         must_contain=fields.pop("must_contain", []),
         must_not_contain=fields.pop("must_not_contain", []),
+        target_app=fields.pop("target_app", None),
     )
 
 
@@ -432,18 +437,24 @@ def test_failed_checks_name_what_is_missing_and_what_must_not_be_there():
 
 
 def test_failed_checks_ignore_spacing_between_scripts():
-    case = make_case(must_contain=["開啟 YouTube", "race condition"], must_not_contain=["了。"])
+    case = make_case(must_contain=["打開 YouTube", "race condition"], must_not_contain=["了。"])
     assert eval_cleanup.failed_checks(case, "打開YouTube，race  condition。") == []
 
 
 def test_failed_checks_judge_the_text_the_user_gets_after_the_apps_processing():
-    # The app turns 打開 into 開啟 (OpenCC s2twp) and Simplified into Traditional Chinese after
-    # the cleanup, so that is the text the checks look at.
-    reply = "幫我打開 YouTube。"
+    # After the cleanup the app converts what the model left in Simplified Chinese (打开 into
+    # 開啟 with OpenCC s2twp), so that is the text the checks look at.
+    reply = "幫我打开 YouTube。"
     assert eval_cleanup.failed_checks(make_case(must_contain=["開啟 YouTube"]), reply) == []
-    assert eval_cleanup.failed_checks(make_case(must_contain=["打開"]), reply) != []
-    assert eval_cleanup.failed_checks(make_case(must_not_contain=["打開"]), reply) == []
+    assert eval_cleanup.failed_checks(make_case(must_contain=["打开"]), reply) != []
+    assert eval_cleanup.failed_checks(make_case(must_not_contain=["打开"]), reply) == []
     assert eval_cleanup.failed_checks(make_case(must_contain=["今天天氣"]), "今天天气很好。") == []
+
+
+def test_failed_checks_see_the_traditional_chinese_of_the_model_as_it_wrote_it():
+    # s2twp alone would turn this 只要 into 隻要 and 打開 into 開啟; the app leaves both alone.
+    case = make_case(must_contain=["只要", "打開"], must_not_contain=["隻要", "開啟"])
+    assert eval_cleanup.failed_checks(case, "就是只要打開就好。") == []
 
 
 def test_failed_checks_leave_the_kanji_of_a_text_with_hiragana_alone():
@@ -454,6 +465,7 @@ def test_failed_checks_leave_the_kanji_of_a_text_with_hiragana_alone():
 def test_failed_checks_apply_the_length_rule_to_the_reply_as_it_came():
     case = make_case(input="你好嗎")  # 3 characters: the limit is 1.5 * 3 + 20 = 24.5
     assert eval_cleanup.failed_checks(case, "你" * 24) == []
+    assert eval_cleanup.failed_checks(case, "你" * 12 + "\n\n" + "你" * 12) == []
     assert any("過長" in f for f in eval_cleanup.failed_checks(case, "你" * 25))
     assert any("空" in f for f in eval_cleanup.failed_checks(case, "  "))
     # Converting 开 into 開 does not change the length, but the rule is on the reply in any case.
@@ -481,6 +493,11 @@ def test_cases_survive_the_apps_text_processing():
     assert by_id["command-stays-text"].must_contain == ["YouTube"]
     assert by_id["command-stays-text"].must_not_contain == ["了。"]
     assert by_id["question-capital"].must_contain == ["首都是哪裡", "？"]
+    # The cases built from the user's own dictations, and the tone of a chat app.
+    assert "Alt" in by_id["mishear-alt-key"].must_contain
+    assert "隻要" in by_id["opencc-zhi"].must_not_contain
+    assert by_id["chat-tone-line"].target_app == "LINE.exe"
+    assert all(case.target_app is None for case in cases if case.id != "chat-tone-line")
 
 
 class FakeClient:
@@ -527,12 +544,28 @@ async def test_run_case_sends_the_real_prompt_and_checks_the_reply():
     assert call["max_tokens"] == brain_cleanup.max_tokens_for("拉菲爾老師你好")
 
 
-async def test_run_case_sends_the_transcript_normalized_like_the_app_does():
-    # The app converts speech-to-text output to Traditional Chinese before it asks the model.
-    case = make_case(input="我们用这个软件")
-    client = FakeClient(["我們用這個軟體。"])
+async def test_run_case_sends_the_transcript_as_heard_like_the_app_does():
+    # The app gives the model the speech-to-text result without OpenCC's conversion.
+    case = make_case(input="我们用这个软件 就是只要")
+    client = FakeClient(["我們用這個軟體，只要。"])
     await eval_cleanup.run_case(client, "m", case)
-    assert client.calls[0]["user"] == "<transcript>\n我們用這個軟體\n</transcript>"
+    assert client.calls[0]["user"] == "<transcript>\n我们用这个软件 就是只要\n</transcript>"
+    assert eval_cleanup.transcript_for(case) == case.input
+
+
+async def test_run_case_names_the_target_app_of_the_case():
+    client = FakeClient(["好。", "好。"])
+    await eval_cleanup.run_case(client, "m", make_case(target_app="LINE.exe"))
+    await eval_cleanup.run_case(client, "m", make_case())
+    assert "Target app: LINE.exe (chat)" in client.calls[0]["system"]
+    assert "Target app: unknown" in client.calls[1]["system"]
+    assert "LINE" not in client.calls[0]["user"]
+
+
+def test_render_report_names_the_target_app_of_a_case():
+    case = make_case(id="c", target_app="LINE.exe")
+    outcome = eval_cleanup.Outcome("c", "m", "好。", None, 1, 0.0, [], reply="好。")
+    assert "LINE.exe" in eval_cleanup.render_report([case], ["m"], [outcome], "now")
 
 
 async def test_run_case_keeps_the_reply_and_the_final_text_apart():
