@@ -220,3 +220,34 @@ def test_deleting_a_manual_word_does_not_dismiss_it(conn):
 
 def test_the_learned_source_can_be_given_to_add(conn):
     assert DictionaryStore(conn).add("手機", source="learned").source == "learned"
+
+
+def test_learning_protects_known_words_in_ascii_letter_case(conn):
+    d = DictionaryStore(conn)
+    d.add("Claude")
+    assert d.learn("Cloud", "claude") is False
+    assert d.hint_words() == ["Claude"]
+
+
+def test_learning_deduplicates_ascii_case_and_preserves_canonical_spelling(conn):
+    d = DictionaryStore(conn)
+    d.add("Alice", ["Allice"])
+    assert d.learn("alice", "ALLICE") is False
+    assert d.learn("ALICE", "Alyce") is True
+    [entry] = d.list()
+    assert (entry.word, entry.misheard, entry.source) == ("Alice", ["Allice", "Alyce"], "manual")
+
+
+def test_learning_cannot_reassign_an_existing_alias_or_reverse_it_in_other_case(conn):
+    d = DictionaryStore(conn)
+    d.learn("Alice", "Allice")
+    assert d.learn("Alicia", "ALLICE") is False
+    assert d.learn("ALLICE", "Alicia") is False
+    assert d.replacements() == [("Allice", "Alice")]
+
+
+def test_learning_keeps_non_ascii_case_distinct_like_replacement_matching(conn):
+    d = DictionaryStore(conn)
+    d.add("Éclair")
+    assert d.learn("Patisserie", "éclair") is True
+    assert ("éclair", "Patisserie") in d.replacements()

@@ -12,6 +12,12 @@ from dataclasses import dataclass
 
 # "learned": added by itself, from a correction the user made to a pasted dictation.
 _SOURCES = ("manual", "suggested", "learned")
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+def _replacement_key(text: str) -> str:
+    """Match the ASCII-only case equivalence used by textnorm's replacement rules."""
+    return text.translate(_ASCII_LOWER)
 
 
 def _wall_clock_ms() -> int:
@@ -127,14 +133,15 @@ class DictionaryStore:
         if word.casefold() in {w.casefold() for w in self.dismissed()}:
             return False
         entries = self.list()
-        if any(entry.word == misheard for entry in entries):
+        word_key, misheard_key = _replacement_key(word), _replacement_key(misheard)
+        if any(_replacement_key(entry.word) == misheard_key for entry in entries):
             return False
-        if any(word in entry.misheard for entry in entries):
+        aliases = {_replacement_key(form) for entry in entries for form in entry.misheard}
+        # An automatic correction cannot reverse or reassign an existing replacement rule.
+        if word_key in aliases or misheard_key in aliases:
             return False
-        known = next((entry for entry in entries if entry.word == word), None)
-        if known is not None and misheard in known.misheard:
-            return False
-        self.add(word, [misheard], source="learned")
+        known = next((entry for entry in entries if _replacement_key(entry.word) == word_key), None)
+        self.add(known.word if known is not None else word, [misheard], source="learned")
         return True
 
     def hint_words(self) -> list[str]:
