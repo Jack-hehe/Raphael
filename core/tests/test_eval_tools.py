@@ -542,7 +542,15 @@ def test_cases_survive_the_apps_text_processing():
     assert by_id["numbered-list-long-terminal"].target_app == "WindowsTerminal.exe"
     assert by_id["numbered-list-varied-ordinals"].target_app == "OUTLOOK.EXE"
     assert "1." in by_id["first-time-not-a-list"].must_not_contain
-    with_app = {"chat-tone-line", "numbered-list-long-terminal", "numbered-list-varied-ordinals"}
+    terminal_cases = {
+        "real-hermes-personal-agent", "real-claude-pretraining", "mishear-ai-product-names",
+        "mishear-dev-product-names", "literal-common-words-stay",
+    }
+    assert all(by_id[case_id].target_app == "WindowsTerminal.exe" for case_id in terminal_cases)
+    with_app = {
+        "chat-tone-line", "numbered-list-long-terminal", "numbered-list-varied-ordinals",
+        *terminal_cases,
+    }
     assert all(case.target_app is None for case in cases if case.id not in with_app)
     # The variants: Mainland Simplified, Hong Kong usage and British spelling.
     assert by_id["variant-zh-cn-simplified"].languages[0] == "zh-CN"
@@ -552,8 +560,120 @@ def test_cases_survive_the_apps_text_processing():
     assert by_id["variant-en-gb-spelling"].languages == ["en-GB"]
     assert "colour" in by_id["variant-en-gb-spelling"].must_contain
     variants = {"variant-zh-cn-simplified", "variant-zh-hk-usage", "variant-en-gb-spelling"}
-    others = [case for case in cases if case.id not in variants]
+    language_overrides = {
+        "false-start-en-fuller-phrase": ["en-US"],
+        "false-start-ja-fuller-phrase": ["ja-JP"],
+        "literal-common-words-stay": ["en-US"],
+        "variant-zh-cn-documents": ["zh-CN", "en-US"],
+        "variant-zh-hk-documents": ["zh-HK", "en-GB"],
+    }
+    assert all(by_id[case_id].languages == value for case_id, value in language_overrides.items())
+    others = [case for case in cases if case.id not in variants | language_overrides.keys()]
     assert all(case.languages == ["zh-TW", "en-US", "ja-JP"] for case in others)
+
+
+@pytest.mark.parametrize(
+    "case_id, cleaned",
+    [
+        (
+            "real-hermes-personal-agent",
+            "之後會有 Hermes Agent 可以幫我看 Gmail，處理 GitHub 的東西，"
+            "基本上任何事情它都可以做，它就是一個 personal agent。",
+        ),
+        (
+            "real-claude-pretraining",
+            "理論上 Claude 的 pre-training 的資料應該有辦法知道 Hermes Agent 是什麼。",
+        ),
+        ("false-start-zh-fuller-phrase", "我想先把這個功能做完，明天再測試。"),
+        (
+            "false-start-en-fuller-phrase",
+            "Please update the config file before we restart the server.",
+        ),
+        ("false-start-ja-fuller-phrase", "明日の会議は三時からです。資料を先に送ってください。"),
+        (
+            "mishear-ai-product-names",
+            "我用 Claude 和 ChatGPT 比較模型，再用 Gemini 跑一次，結果放在 GitHub。",
+        ),
+        (
+            "mishear-dev-product-names",
+            "我用 OpenRouter 呼叫模型，在 Cursor 裡寫 Python，再用 Tauri 做桌面介面。",
+        ),
+        ("opencc-zhi-only", "只有這個版本可以用，只要按一下就好。"),
+    ],
+)
+def test_new_cleanup_cases_reject_the_reported_errors_and_accept_corrected_text(case_id, cleaned):
+    cases = eval_cleanup.load_cases(REPO / "eval" / "cleanup_cases.jsonl")
+    case = next(case for case in cases if case.id == case_id)
+    assert eval_cleanup.failed_checks(case, case.input)
+    assert eval_cleanup.failed_checks(case, cleaned) == []
+
+
+@pytest.mark.parametrize(
+    "case_id, cleaned, wrong_variant",
+    [
+        (
+            "variant-zh-cn-simplified",
+            "这个软件的资料我明天再发给你。",
+            "这个软体的资料我明天再发给你。",
+        ),
+        (
+            "variant-zh-hk-usage",
+            "這個軟件的資料我明天再發給你，你先看一下那個影片。",
+            "這個軟體的資料我明天再發給你，你先看一下那個影片。",
+        ),
+    ],
+)
+def test_variant_cases_accept_information_without_forcing_it_into_data(
+    case_id, cleaned, wrong_variant
+):
+    cases = eval_cleanup.load_cases(REPO / "eval" / "cleanup_cases.jsonl")
+    case = next(case for case in cases if case.id == case_id)
+    assert eval_cleanup.failed_checks(case, cleaned) == []
+    assert eval_cleanup.failed_checks(case, wrong_variant)
+
+
+@pytest.mark.parametrize(
+    "case_id, cleaned, changed_meaning",
+    [
+        (
+            "variant-zh-cn-documents",
+            "这份申请资料包含推荐信，我明天再发给你。",
+            "这份申请数据包含推荐信，我明天再发给你。",
+        ),
+        (
+            "variant-zh-hk-documents",
+            "這份申請資料包含推薦信，我明天再發給你。",
+            "這份申請數據包含推薦信，我明天再發給你。",
+        ),
+        (
+            "mishear-related-book-names",
+            "我在做魔戒裡的甘道夫這個角色，作者是托爾金。",
+            "我在做魔界裡的甘道夫這個角色，作者是托耳金。",
+        ),
+        (
+            "literal-distance-stays",
+            "這段影片裡我轉身走了十來米，再坐在地上。",
+            "這段影片裡我轉生走了史萊姆，再坐在地上。",
+        ),
+    ],
+)
+def test_context_cases_distinguish_corrections_from_changes_of_meaning(
+    case_id, cleaned, changed_meaning
+):
+    cases = eval_cleanup.load_cases(REPO / "eval" / "cleanup_cases.jsonl")
+    case = next(case for case in cases if case.id == case_id)
+    assert eval_cleanup.failed_checks(case, cleaned) == []
+    assert eval_cleanup.failed_checks(case, changed_meaning)
+
+
+def test_literal_common_words_case_rejects_overcorrection():
+    cases = eval_cleanup.load_cases(REPO / "eval" / "cleanup_cases.jsonl")
+    case = next(case for case in cases if case.id == "literal-common-words-stay")
+    assert eval_cleanup.failed_checks(case, case.input) == []
+    overcorrected = case.input.replace("cloud", "Claude").replace("cursor", "Cursor")
+    overcorrected = overcorrected.replace("permission agent", "personal agent")
+    overcorrected = overcorrected.replace("python", "Python")
+    assert len(eval_cleanup.failed_checks(case, overcorrected)) == 8
 
 
 class FakeClient:
