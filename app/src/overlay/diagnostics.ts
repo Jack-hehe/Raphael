@@ -88,6 +88,14 @@ export async function subscribeWithRetry(
 
 /** How long the emblem may go without an animation frame while it should be on screen. */
 const FRAME_WAIT_MS = 1500;
+/** Pixel readback is deliberately much slower than the animation loop. */
+const PAINT_CHECK_MS = 500;
+
+interface PaintSource {
+  canvas: HTMLCanvasElement;
+  /** False for an intentional hide or vanish, including when a notice expires. */
+  expected: () => boolean;
+}
 
 /**
  * Notices when the webview gives the page no animation frames while the emblem should be
@@ -97,6 +105,9 @@ const FRAME_WAIT_MS = 1500;
 export class FrameWatch {
   private stalled = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private paintTimer: ReturnType<typeof setTimeout> | undefined;
+  private blankSince: number | undefined;
+  private blankWarned = false;
 
   constructor(
     /** How many frames the emblem has stepped so far. */
@@ -104,10 +115,15 @@ export class FrameWatch {
     /** `document.visibilityState`. */
     private readonly visibility: () => string,
     private readonly log: PageLog,
+    private readonly paint?: PaintSource,
   ) {}
 
   /** The emblem should be animating now, because of `why` (an event type). */
   expectFrames(why: string): void {
+    if (this.paint && this.paintTimer === undefined) {
+      this.blankSince = performance.now();
+      this.paintTimer = setTimeout(() => this.checkPaint(), PAINT_CHECK_MS);
+    }
     clearTimeout(this.timer);
     const before = this.frames();
     this.timer = setTimeout(() => {
@@ -124,5 +140,44 @@ export class FrameWatch {
         this.log("info", `animation frames run again (document ${this.visibility()})`);
       }
     }, FRAME_WAIT_MS);
+  }
+
+  /** Frames can run and still clear the canvas to transparency; inspect actual alpha too. */
+  private checkPaint(): void {
+    this.paintTimer = undefined;
+    if (!this.paint || !this.paint.expected()) {
+      this.blankSince = undefined;
+      this.blankWarned = false;
+      return;
+    }
+    const { canvas } = this.paint;
+    let ink = false;
+    try {
+      const ctx = canvas.getContext("2d");
+      if (ctx && canvas.width > 0 && canvas.height > 0) {
+        const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        for (let i = 3; i < data.length; i += 4) {
+          if (data[i] !== 0) {
+            ink = true;
+            break;
+          }
+        }
+      }
+    } catch (err) {
+      this.log("warn", `could not check emblem pixels: ${describeError(err)}`);
+      return; // Do not repeat a failing readback every half second.
+    }
+    if (ink) {
+      if (this.blankWarned) this.log("info", "the emblem has visible pixels again");
+      this.blankSince = undefined;
+      this.blankWarned = false;
+    } else {
+      this.blankSince ??= performance.now();
+      if (!this.blankWarned && performance.now() - this.blankSince >= FRAME_WAIT_MS) {
+        this.blankWarned = true;
+        this.log("warn", `the emblem canvas is all-transparent for at least ${FRAME_WAIT_MS} ms while it should be visible (document ${this.visibility()})`);
+      }
+    }
+    this.paintTimer = setTimeout(() => this.checkPaint(), PAINT_CHECK_MS);
   }
 }

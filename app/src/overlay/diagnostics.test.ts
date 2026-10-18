@@ -128,3 +128,67 @@ test("frames that come say nothing", () => {
   vi.advanceTimersByTime(2000);
   expect(logged).toEqual([]);
 });
+
+function paintWatch() {
+  const pixels = new Uint8ClampedArray(16);
+  let expected = true;
+  let frames = 0;
+  let reads = 0;
+  const canvas = {
+    width: 2,
+    height: 2,
+    getContext: () => ({
+      getImageData: () => {
+        reads++;
+        return { data: pixels };
+      },
+    }),
+  } as unknown as HTMLCanvasElement;
+  const watch = new FrameWatch(() => frames++, () => "visible", log, {
+    canvas,
+    expected: () => expected,
+  });
+  return { watch, pixels, hide: () => { expected = false; }, reads: () => reads };
+}
+
+test("running frames with an all-transparent emblem warn after 1.5 seconds, once per blank spell", () => {
+  const p = paintWatch();
+  p.watch.expectFrames("show");
+  vi.advanceTimersByTime(1499);
+  expect(logged).toEqual([]);
+  vi.advanceTimersByTime(501);
+  expect(logged).toEqual([["warn", expect.stringContaining("all-transparent")]]);
+  vi.advanceTimersByTime(3000);
+  expect(logged).toHaveLength(1);
+  expect(p.reads()).toBeLessThanOrEqual(11); // at most two pixel readbacks per second
+  p.pixels[7] = 255;
+  vi.advanceTimersByTime(500);
+  expect(logged[logged.length - 1]).toEqual(["info", expect.stringContaining("visible pixels again")]);
+  p.pixels[7] = 0;
+  vi.advanceTimersByTime(2500);
+  expect(logged.filter(([level]) => level === "warn")).toHaveLength(2);
+});
+
+test("repeated shows cannot postpone the all-transparent warning", () => {
+  const p = paintWatch();
+  p.watch.expectFrames("show");
+  for (let i = 0; i < 8; i++) {
+    vi.advanceTimersByTime(250);
+    p.watch.expectFrames("show");
+  }
+  expect(logged).toEqual([["warn", expect.stringContaining("all-transparent")]]);
+});
+
+test("a painted emblem stays quiet and an intentional hide stops pixel readbacks", () => {
+  const p = paintWatch();
+  p.pixels[15] = 1; // even a faint pixel anywhere on the canvas counts
+  p.watch.expectFrames("notice");
+  vi.advanceTimersByTime(3000);
+  expect(logged).toEqual([]);
+  p.hide();
+  vi.advanceTimersByTime(500);
+  const reads = p.reads();
+  vi.advanceTimersByTime(5000);
+  expect(p.reads()).toBe(reads);
+  expect(logged).toEqual([]);
+});

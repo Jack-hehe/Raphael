@@ -207,6 +207,8 @@ fn log_plugin<R: Runtime>() -> TauriPlugin<R> {
         // log modifier keys only (Alt, Ctrl, Shift, Win), never what is typed.
         .level_for("handy_keys", log::LevelFilter::Debug)
         .level_for("app_lib::hotkey", log::LevelFilter::Debug)
+        // Keep overlay event delivery and page diagnostics visible during normal dictations.
+        .level_for("app_lib::overlay", log::LevelFilter::Debug)
         .max_file_size(1_000_000)
         .rotation_strategy(RotationStrategy::KeepSome(3))
         .timezone_strategy(TimezoneStrategy::UseLocal)
