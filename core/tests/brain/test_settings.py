@@ -25,7 +25,7 @@ def test_the_defaults_are_the_documented_ones():
         "language": "auto",
         "history_retention_days": 30,
         "stt_engine": "cloud",
-        "stt_cloud_model": "openai/gpt-transcribe",
+        "stt_cloud_model": "elevenlabs/scribe-v2",
     }
 
 
@@ -105,12 +105,12 @@ def test_non_finite_numbers_are_rejected_and_not_saved(conn):
 # --- speech-to-text ----------------------------------------------------------------------------
 
 
-def test_speech_to_text_is_in_the_cloud_with_gpt_transcribe_by_default(conn):
+def test_speech_to_text_is_in_the_cloud_with_scribe_by_default(conn):
     s = SettingsStore(conn)
     assert s.get("stt_engine") == "cloud"
-    assert s.get("stt_cloud_model") == "openai/gpt-transcribe"
+    assert s.get("stt_cloud_model") == "elevenlabs/scribe-v2"
     assert STT_ENGINES == ("cloud", "local")
-    assert STT_CLOUD_MODELS[0] == "openai/gpt-transcribe"
+    assert STT_CLOUD_MODELS[0] == "elevenlabs/scribe-v2"
 
 
 def test_the_engine_can_be_local_or_cloud_and_nothing_else(conn):
@@ -137,4 +137,4 @@ def test_a_cloud_model_that_is_not_listed_is_refused(conn):
     for model in ("openai/gpt-6-luna", "", "openai/gpt-transcribe "):
         with pytest.raises(ValueError, match="stt_cloud_model"):
             s.set("stt_cloud_model", model)
-    assert s.get("stt_cloud_model") == "openai/gpt-transcribe"
+    assert s.get("stt_cloud_model") == "elevenlabs/scribe-v2"

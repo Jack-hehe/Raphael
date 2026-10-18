@@ -17,15 +17,17 @@ DEFAULTS: dict[str, Any] = {
     # Speech-to-text: "cloud" (OpenRouter, with the local engine as the fallback) or "local" (the
     # engine on this computer only; no audio leaves it). Read at the start of each dictation.
     "stt_engine": "cloud",
-    "stt_cloud_model": "openai/gpt-transcribe",
+    # The most accurate on the samples tried live on 2026-10-18 (gpt-transcribe returned nothing
+    # for an English clip and garbled Chinese).
+    "stt_cloud_model": "elevenlabs/scribe-v2",
 }
 
 STT_ENGINES = ("cloud", "local")
 # The OpenRouter transcription models that can be chosen, the default first. All are listed in
 # OpenRouter's speech-to-text collection, each with an endpoint (checked 2026-10-18).
 STT_CLOUD_MODELS = (
-    "openai/gpt-transcribe",
     "elevenlabs/scribe-v2",
+    "openai/gpt-transcribe",
     "microsoft/mai-transcribe-2",
     "assemblyai/universal-3-6-pro",
     "qwen/qwen3-asr-1.7b",

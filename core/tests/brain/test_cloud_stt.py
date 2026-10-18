@@ -52,7 +52,7 @@ class FakeClient:
         self.delay = 0.0
         self.result = Transcription(
             text="你好世界",
-            model="openai/gpt-transcribe",
+            model="elevenlabs/scribe-v2",
             cost_usd=0.00015,
             seconds=2.0,
             input_tokens=0,
@@ -110,9 +110,9 @@ async def test_the_audio_the_hints_and_the_model_of_the_settings_go_to_the_clien
 ):
     audio = wav_b64(3.0)
     result = await transcribe(router, audio=audio, hints=["拉斐爾", "Tauri"])
-    assert result == {"text": "你好世界", "model": "openai/gpt-transcribe", "cost_usd": 0.00015}
+    assert result == {"text": "你好世界", "model": "elevenlabs/scribe-v2", "cost_usd": 0.00015}
     (call,) = fake_client.calls
-    assert call["model"] == "openai/gpt-transcribe"
+    assert call["model"] == "elevenlabs/scribe-v2"
     assert call["audio_b64"] == audio
     assert call["hints"] == ["拉斐爾", "Tauri"]
     assert call["language"] is None  # automatic
@@ -225,6 +225,9 @@ async def test_end_to_end_on_the_real_client_with_a_mock_transport(conn):
         router = Router()
         Brain(conn, OpenRouterClient(keys.get, http=http), keys, now_ms=lambda: NOW_MS).register(
             router
+        )
+        await router.call(
+            "settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"}
         )
         result = await transcribe(router, language="zh", hints=["拉斐爾"])
     assert result == {"text": "早安", "model": "openai/gpt-transcribe", "cost_usd": 0.0002}

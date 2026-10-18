@@ -49,8 +49,8 @@ const STT_ENGINES: Choice[] = [
 ];
 /** The cloud models the core accepts (brain/settings.py STT_CLOUD_MODELS), the default first. */
 const STT_MODELS: Choice[] = [
-  { value: "openai/gpt-transcribe", label: "OpenAI GPT Transcribe（預設）" },
-  { value: "elevenlabs/scribe-v2", label: "ElevenLabs Scribe v2" },
+  { value: "elevenlabs/scribe-v2", label: "ElevenLabs Scribe v2（預設）" },
+  { value: "openai/gpt-transcribe", label: "OpenAI GPT Transcribe" },
   { value: "microsoft/mai-transcribe-2", label: "Microsoft MAI Transcribe 2" },
   { value: "assemblyai/universal-3-6-pro", label: "AssemblyAI Universal 3.6 Pro" },
   { value: "qwen/qwen3-asr-1.7b", label: "Qwen3 ASR 1.7B" },

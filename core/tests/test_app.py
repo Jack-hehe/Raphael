@@ -1658,6 +1658,7 @@ async def test_speech_to_text_is_in_the_cloud_by_default(make_app, openrouter_mo
     app = make_app(kit, fake_llm=False)
     requests = openrouter_mock(app, cloud_says())
     await app.call("settings.set", {"key": "language", "value": "zh"})
+    await app.call("settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"})
     result = await dictate(app)
     assert result["text"] == "cloud words cloud words"
     assert kit.transcriptions == []  # the local engine heard nothing
