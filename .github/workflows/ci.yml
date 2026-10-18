@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend tests and build
+    runs-on: windows-2025
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: app
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install locked frontend dependencies
+        run: npm ci
+
+      - name: Run frontend and build-script tests
+        run: npm test
+
+      - name: Type-check and build public frontend
+        env:
+          RAPHAEL_PRIVATE_DIR: ${{ runner.temp }}/raphael-ci-no-private-assets
+        run: npm run build
+
+  python:
+    name: Python tests
+    runs-on: windows-2025
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: core
+    env:
+      RAPHAEL_TEST_MODELS: "0"
+      # Subprocesses also fail closed; conftest installs a fresh memory keyring per test.
+      PYTHON_KEYRING_BACKEND: keyring.backends.fail.Keyring
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.11"
+          working-directory: core
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+            .python-version
+
+      - name: Install pinned Python
+        run: uv python install
+
+      - name: Install locked Python dependencies
+        run: uv sync --locked --dev
+
+      - name: Run Python tests with warnings denied
+        run: uv run --locked --no-sync pytest -q -ra -W error
+
+  windows-shell:
+    name: Windows Rust and Tauri shell
+    runs-on: windows-2025
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: app/src-tauri
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      RUSTUP_TOOLCHAIN: "1.98.0"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check public checkout
+        working-directory: .
+        run: |
+          $privatePaths = @(
+            "assets-private", "models", "voice", "raphael_ref", "eval/data",
+            "app/public/private", "app/src-tauri/icons-private",
+            "app/src-tauri/tauri.private.conf.json"
+          )
+          foreach ($path in $privatePaths) {
+            if (Test-Path -LiteralPath $path) {
+              throw "The public build requires a checkout without private files: $path"
+            }
+          }
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install $env:RUSTUP_TOOLCHAIN --profile minimal --component rustfmt --component clippy
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        with:
+          workspaces: |
+            app/src-tauri -> target
+            app/src-tauri/vendor/handy-keys -> target
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install locked frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      # This runs beforeBuildCommand, embeds the real frontend, and links the Windows executable.
+      - name: Build public Tauri debug application
+        working-directory: app
+        env:
+          RAPHAEL_PRIVATE_DIR: ${{ runner.temp }}/raphael-ci-no-private-assets
+        run: npm run tauri -- build --debug --no-bundle --ci -- --locked
+
+      - name: Check Rust targets
+        run: cargo check --locked --all-targets
+
+      - name: Run Rust tests
+        run: cargo test --locked
+
+      # The patched keyboard listener is a path dependency, so its tests need a separate run.
+      - name: Run vendored keyboard listener unit tests
+        run: cargo test --locked --lib --manifest-path vendor/handy-keys/Cargo.toml
+
+      - name: Run Clippy with warnings denied
+        run: cargo clippy --locked --all-targets -- -D warnings
