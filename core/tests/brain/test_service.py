@@ -400,6 +400,22 @@ async def test_cleaned_chinese_is_converted_to_taiwan_traditional(router, fake_c
     assert (await router.call("history.latest", {}))["item"]["text"] == "明天下午三點開會。"
 
 
+async def test_a_cleaned_list_keeps_its_line_breaks_in_the_text_and_the_history(
+    router, fake_client, keys
+):
+    # The conversion of leftover Simplified Chinese and the replacements work line by line;
+    # the lead-in, the blank line and the items reach the paste and the history as written.
+    keys.set(KEY)
+    await router.call("dictionary.add", {"word": "拉斐爾", "misheard": ["拉菲爾"]})
+    fake_client.next_completion = completion(
+        {"text": "有兩件事：\n\n1. 我们开会。\n2. 拉菲爾說好。"}
+    )
+    r = await finalize(router, "有兩件事 第一個是我们开会 第二個是拉菲爾說好")
+    expected = "有兩件事：\n\n1. 我們開會。\n2. 拉斐爾說好。"
+    assert r["cleaned"] is True and r["text"] == expected
+    assert (await router.call("history.latest", {}))["item"]["text"] == expected
+
+
 async def test_cleaned_text_with_hiragana_is_not_converted(router, fake_client, keys):
     keys.set(KEY)
     fake_client.next_completion = completion({"text": "今日は学校です。\n学校"})
