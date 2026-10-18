@@ -56,6 +56,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    GetForegroundWindow, GetWindowThreadProcessId,
     MsgWaitForMultipleObjects, PeekMessageW, RegisterClassW, SetWindowsHookExW, TranslateMessage,
     UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED,
     LLKHF_LOWER_IL_INJECTED, MSG, MSLLHOOKSTRUCT, PM_REMOVE, QS_ALLINPUT, WH_KEYBOARD_LL,
@@ -633,6 +634,20 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
             let is_extended = (kb_struct.flags.0 & LLKHF_EXTENDED.0) != 0;
 
             let is_key_down = matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
+
+            // Raphael patch: the raw Alt events, before any filtering, for tracking down a hotkey
+            // that does not fire (which window is in front, and the flags Windows set).
+            if matches!(vk_code, 0xA4 | 0xA5) {
+                let mut pid = 0u32;
+                let foreground = GetForegroundWindow();
+                GetWindowThreadProcessId(foreground, Some(&mut pid));
+                log::debug!(
+                    "hook: raw vk=0x{vk_code:02X} down={is_key_down} flags=0x{:02X} extra={:#x} foreground_pid={pid} own={}",
+                    kb_struct.flags.0,
+                    kb_struct.dwExtraInfo,
+                    pid == std::process::id()
+                );
+            }
 
             // Our own injected menu mask: pass it through untouched. It
             // exists solely for the shell's benefit and must not update
