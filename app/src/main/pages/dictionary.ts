@@ -7,6 +7,7 @@ import { onLocaleChange, t } from "../i18n";
 
 import * as api from "../api";
 import { describeError, parseMisheard } from "../format";
+import { loadingHTML } from "../loading";
 import type { AppContext, DictionaryEntry, Page } from "../types";
 import { dismissMessage, suggestionsHTML, visibleSuggestions } from "../suggest";
 import { Deletions } from "../undo";
@@ -47,7 +48,7 @@ export function createDictionary(app: AppContext): Page {
     t("dictionary.009") +
     `<div class="addword card" hidden>${fieldHTML(t("dictionary.010"), "", { id: "nw-word", get label() { return t("dictionary.011"); } })}` +
     `${fieldHTML(t("dictionary.012"), "", { id: "nw-mis", get label() { return t("dictionary.013"); } })}` +
-    `${btn(t("dictionary.014"), "pri", ' data-act="add"')}${btn(t("onboarding.031"), "", ' data-act="new-cancel"')}</div>` +
+    `<div class="addword-actions">${btn(t("dictionary.014"), "pri", ' data-act="add"')}${btn(t("onboarding.031"), "", ' data-act="new-cancel"')}</div></div>` +
     t("dictionary.015") +
     FILTERS.map((f) => `<button type="button" data-filter="${f.id}" aria-pressed="${f.id === "all"}">${f.name}</button>`).join("") +
     `</div><span class="count num"></span>` +
@@ -75,8 +76,15 @@ export function createDictionary(app: AppContext): Page {
   /** Suggestions dismissed, but not yet for the core (the toast is still there): left out. */
   const dismissing = new Set<string>();
   let loads = 0;
+  let pending = false;
 
   function render(): void {
+    grid.setAttribute("aria-busy", String(pending));
+    if (pending && entries.length === 0) {
+      grid.innerHTML = loadingHTML();
+      empty.hidden = true;
+      return;
+    }
     const kept = entries.filter((entry) => !deleting.has(entry.id));
     const shown = kept.filter((entry) => matches(entry, filter, query));
     count.textContent = t("dictionary.017", { p0: shown.length });
@@ -93,12 +101,15 @@ export function createDictionary(app: AppContext): Page {
 
   async function load(): Promise<void> {
     const mine = ++loads;
+    pending = true;
+    render();
     const read = deletions.startRead();
     const [listed, found] = await Promise.allSettled([api.dictionaryList(), api.dictionarySuggestions()]);
     if (mine !== loads) return;
     if (listed.status === "fulfilled") entries = deletions.filter(read, listed.value.entries);
     else toaster.info(t("dictionary.020", { p0: () => describeError(listed.reason) }));
     suggested = found.status === "fulfilled" ? found.value.words.map((w) => w.word) : [];
+    pending = false;
     render();
   }
 

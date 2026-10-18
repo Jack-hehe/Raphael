@@ -105,6 +105,13 @@ describe("the panel", () => {
     expect(open).toContain('data-lang="ja-JP" aria-pressed="true"');
   });
 
+  test("known variant guidance remains available when the core omits its note", () => {
+    const open = languagePanelHTML(GROUPS, ["zh-TW"], "zh");
+    expect(open).toContain("台灣用語，例如 軟體、視窗");
+    expect(open).toContain('aria-controls="language-variants-zh"');
+    expect(open).toContain('id="language-variants-zh"');
+  });
+
   test("at five, what cannot be added is marked, and a group with a choice is not", () => {
     const html = languagePanelHTML(GROUPS, ["zh-TW", "en-US", "ja-JP", "ko-KR", "fr-FR"], "zh");
     expect(html).toContain('data-lang="de-DE" aria-pressed="false" aria-disabled="true"');

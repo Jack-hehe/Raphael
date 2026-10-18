@@ -7,6 +7,7 @@ import {
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { privateAssetsDirectory } from "./private-assets.mjs";
 
 const script = fileURLToPath(import.meta.url);
 const appDir = resolve(dirname(script), "..");
@@ -39,16 +40,16 @@ function writeIfChanged(path, content) {
   if (!existsSync(path) || readFileSync(path, "utf8") !== content) writeFileSync(path, content);
 }
 
-function preparePrivateIcons() {
-  const privateDir = resolve(process.env.RAPHAEL_PRIVATE_DIR || join(appDir, "..", "assets-private"));
+export function preparePrivateIcons() {
+  const privateDir = privateAssetsDirectory(appDir);
   const source = join(privateDir, "app-icon.png");
   const output = join(appDir, "src-tauri", "icons-private");
   const config = join(appDir, configArg);
   const tray = join(output, "tray-icon.png");
   if (!existsSync(source)) {
-    // A removed source must not leave a private tray icon active in later public dev runs.
+    // A removed source must not leave private tray or Windows executable icons active.
     rmSync(config, { force: true });
-    rmSync(tray, { force: true });
+    rmSync(output, { recursive: true, force: true });
     return null;
   }
 

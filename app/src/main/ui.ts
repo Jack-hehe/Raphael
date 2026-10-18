@@ -24,7 +24,7 @@ const ICON = {
   trash: "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.3a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8.3",
   search: "M7 2.6a4.4 4.4 0 1 1 0 8.8 4.4 4.4 0 0 1 0-8.8zM10.2 10.2l3.2 3.2",
   x: "M4.8 4.8l6.4 6.4M11.2 4.8l-6.4 6.4",
-  gear: "M8 5.6a2.4 2.4 0 1 1 0 4.8 2.4 2.4 0 0 1 0-4.8zM8 1.8v1.6M8 12.6v1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M1.8 8h1.6M12.6 8h1.6M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1",
+  gear: "M6.8 1.8h2.4l.2 1.6.7.3 1.3-.9 1.8 1.8-.9 1.3.3.7 1.6.2v2.4l-1.6.2-.3.7.9 1.3-1.8 1.8-1.3-.9-.7.3-.2 1.6H6.8l-.2-1.6-.7-.3-1.3.9-1.8-1.8.9-1.3-.3-.7-1.6-.2V6.8l1.6-.2.3-.7-.9-1.3 1.8-1.8 1.3.9.7-.3zM8 5.8a2.2 2.2 0 1 1 0 4.4 2.2 2.2 0 0 1 0-4.4z",
   keyboard: "M2.2 4.2h11.6a.8.8 0 0 1 .8.8v6a.8.8 0 0 1-.8.8H2.2a.8.8 0 0 1-.8-.8V5a.8.8 0 0 1 .8-.8zM4 6.6h.01M6.3 6.6h.01M8.6 6.6h.01M10.9 6.6h.01M5 9.4h6",
   globe: "M8 2.2a5.8 5.8 0 1 1 0 11.6A5.8 5.8 0 0 1 8 2.2zM2.2 8h11.6M8 2.2c1.6 1.6 2.4 3.5 2.4 5.8S9.6 12.2 8 13.8C6.4 12.2 5.6 10.3 5.6 8S6.4 3.8 8 2.2z",
   mic: "M8 2.2a2 2 0 0 1 2 2v3.6a2 2 0 0 1-4 0V4.2a2 2 0 0 1 2-2zM4 7.6a4 4 0 0 0 8 0M8 11.6v2.2",
@@ -85,7 +85,7 @@ export interface Choice {
 export function sel(options: Choice[], current: string, label: string, attrs = ""): string {
   const shown = options.find((o) => o.value === current)?.label ?? current;
   return (
-    `<button type="button" class="sel" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(label)}"${attrs}>` +
+    `<button type="button" class="sel" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(label)}" title="${esc(shown)}"${attrs}>` +
     `<span>${esc(shown)}</span>${ico("down")}</button>`
   );
 }
@@ -129,6 +129,7 @@ export interface FieldOptions {
   num?: boolean;
   type?: "text" | "password";
   invalid?: boolean;
+  disabled?: boolean;
 }
 
 export function fieldHTML(placeholder: string, value = "", o: FieldOptions = {}): string {
@@ -138,7 +139,7 @@ export function fieldHTML(placeholder: string, value = "", o: FieldOptions = {})
     (o.pre ? `<span class="pre">${esc(o.pre)}</span>` : "") +
     `<input ${o.id ? `id="${o.id}" ` : ""}type="${o.type ?? "text"}" value="${esc(value)}" placeholder="${esc(placeholder)}" ` +
     `aria-label="${esc(o.label ?? placeholder)}"${o.num ? ' inputmode="decimal"' : ""}${o.invalid ? ' aria-invalid="true"' : ""} ` +
-    `autocomplete="off" spellcheck="false"></label>`
+    `autocomplete="off" spellcheck="false"${o.disabled ? " disabled" : ""}></label>`
   );
 }
 
@@ -155,6 +156,7 @@ let menuListening = false;
 export function closeMenu(): void {
   if (!menu) return;
   menu.anchor.setAttribute("aria-expanded", "false");
+  menu.anchor.removeAttribute("aria-controls");
   menu.el.remove();
   menu = null;
 }
@@ -180,6 +182,13 @@ function listenForMenuEvents(): void {
       e.preventDefault();
       return;
     }
+    if (e.key === "Escape" || e.key === "Tab") {
+      if (e.key === "Escape") e.preventDefault();
+      const anchor = menu.anchor;
+      closeMenu();
+      anchor.focus({ preventScroll: true });
+      return;
+    }
     const items = menuItems(menu.el);
     if (items.length === 0) return;
     const i = items.indexOf(document.activeElement as HTMLButtonElement);
@@ -188,20 +197,13 @@ function listenForMenuEvents(): void {
       items[(i + 1) % items.length].focus();
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      items[(i - 1 + items.length) % items.length].focus();
+      items[i < 0 ? items.length - 1 : (i - 1 + items.length) % items.length].focus();
     } else if (e.key === "Home") {
       e.preventDefault();
       items[0].focus();
     } else if (e.key === "End") {
       e.preventDefault();
       items[items.length - 1].focus();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      const anchor = menu.anchor;
-      closeMenu();
-      anchor.focus();
-    } else if (e.key === "Tab") {
-      closeMenu();
     }
   });
   window.addEventListener("blur", closeMenu);
@@ -222,6 +224,21 @@ function listenForMenuEvents(): void {
 
 /** Whether a menu is open for `anchor`. */
 export const menuIsOpenFor = (anchor: HTMLElement): boolean => menu?.anchor === anchor;
+
+/** Opens a selector from the keyboard without changing its page's click behavior. */
+export function openMenuOnArrow(e: KeyboardEvent): boolean {
+  if (e.defaultPrevented || (e.key !== "ArrowDown" && e.key !== "ArrowUp") || !(e.target instanceof Element)) return false;
+  const anchor = e.target.closest<HTMLButtonElement>(".sel");
+  if (!anchor || anchor.disabled || menuIsOpenFor(anchor)) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  anchor.click();
+  if (menu?.anchor === anchor) {
+    const items = menuItems(menu.el);
+    (e.key === "ArrowUp" ? items[items.length - 1] : items[0])?.focus();
+  }
+  return true;
+}
 
 /** Puts the open menu under its button (above it when there is no room below), right-aligned with it. */
 export function placeMenu(): void {
@@ -252,12 +269,15 @@ export function openPopover(anchor: HTMLElement, html: string, o: PopoverOptions
   closeMenu();
   const el = document.createElement("div");
   el.className = o.className;
+  el.id = "app-popover";
+  el.tabIndex = -1;
   el.setAttribute("role", o.role);
   if (o.label) el.setAttribute("aria-label", o.label);
   el.innerHTML = html;
   document.body.append(el);
   menu = { el, anchor, onKey: o.onKey };
   anchor.setAttribute("aria-expanded", "true");
+  anchor.setAttribute("aria-controls", el.id);
   placeMenu();
   return el;
 }
@@ -273,6 +293,9 @@ export function openMenu(
   onPick: (value: string) => void,
   head?: string,
 ): void {
+  const active = document.activeElement as HTMLElement | null;
+  const previous = menu && (menu.anchor === anchor || (!menu.anchor.isConnected && menu.anchor.dataset.k === anchor.dataset.k)) &&
+    active && menu.el.contains(active) ? active.dataset.value : undefined;
   const detailed = options.some((o) => o.detail);
   const described = options.some((o) => o.desc);
   const html =
@@ -280,7 +303,7 @@ export function openMenu(
     options
       .map(
         (o) =>
-          `<button type="button" role="menuitemradio" data-value="${esc(o.value)}" aria-checked="${o.value === current}">` +
+          `<button type="button" role="menuitemradio" tabindex="-1" data-value="${esc(o.value)}" aria-checked="${o.value === current}">` +
           `<span class="ck">${o.value === current ? CHECK : ""}</span>` +
           (o.desc
             ? `<span class="mtd"><span class="mt">${esc(o.label)}</span><span class="mdesc">${esc(o.desc)}</span></span>`
@@ -301,7 +324,8 @@ export function openMenu(
     anchor.focus();
     onPick(pick.dataset.value ?? "");
   });
-  (el.querySelector<HTMLElement>('[aria-checked="true"]') ?? el.querySelector<HTMLElement>("button"))?.focus();
+  const remembered = previous === undefined ? null : Array.from(el.querySelectorAll<HTMLElement>("button")).find((button) => button.dataset.value === previous);
+  (remembered ?? el.querySelector<HTMLElement>('[aria-checked="true"]') ?? el.querySelector<HTMLElement>("button") ?? el).focus();
 }
 
 /** The check mark of a chosen item: drawn, so that it is the same in every font. */
@@ -330,7 +354,7 @@ class Toaster implements Notifier {
   }
 
   private container(): HTMLElement {
-    if (!this.host) {
+    if (!this.host?.isConnected) {
       this.host = document.createElement("div");
       this.host.className = "toasts";
       document.body.append(this.host);
@@ -343,11 +367,13 @@ class Toaster implements Notifier {
     const toast = document.createElement("div");
     toast.className = "toast";
     toast.setAttribute("role", "status");
+    toast.setAttribute("aria-atomic", "true");
     const text = document.createElement("span");
     this.messages.set(toast, translatedMessage(message));
     text.textContent = message;
     toast.append(text);
     if (undo) {
+      if (this.undoToast) this.messages.delete(this.undoToast);
       this.undoToast?.remove();
       this.undoToast = toast;
       toast.insertAdjacentHTML("beforeend", btn(t("ui.001"), "quiet"));

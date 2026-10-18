@@ -100,11 +100,12 @@ export function languageButtonHTML(groups: LanguageGroup[], selected: string[], 
 
 /** A variant or a single language in the panel: its name, and how it is written on a second line. */
 function itemHTML(v: LanguageVariant, on: boolean, blocked: boolean, mark: string, cls: string): string {
+  const guidance = variantNote(v);
   return (
     `<button type="button" class="lang-item ${cls}" data-lang="${esc(v.id)}" aria-pressed="${on}"${blocked ? ' aria-disabled="true"' : ""}>` +
     mark +
-    (v.note
-      ? `<span class="mtd"><span class="mt">${esc(variantName(v))}</span><span class="mdesc">${esc(variantNote(v))}</span></span>`
+    (guidance
+      ? `<span class="mtd"><span class="mt">${esc(variantName(v))}</span><span class="mdesc">${esc(guidance)}</span></span>`
       : `<span class="mt">${esc(variantName(v))}</span>`) +
     `</button>`
   );
@@ -129,8 +130,9 @@ export function languagePanelHTML(groups: LanguageGroup[] | null, selected: stri
     .map((g) => {
       const chosen = g.variants.find((v) => selected.includes(v.id));
       const expanded = open === g.id;
+      const variantsId = `language-variants-${encodeURIComponent(g.id)}`;
       const variants = expanded
-        ? `<div class="lang-variants" role="group" aria-label="${esc(groupName(g))}">` +
+        ? `<div class="lang-variants" id="${variantsId}" role="group" aria-label="${esc(groupName(g))}">` +
           g.variants
             .map((v) => {
               const on = selected.includes(v.id);
@@ -140,7 +142,7 @@ export function languagePanelHTML(groups: LanguageGroup[] | null, selected: stri
           `</div>`
         : "";
       return (
-        `<button type="button" class="lang-item lang-group" data-group="${esc(g.id)}" aria-expanded="${expanded}">` +
+        `<button type="button" class="lang-item lang-group" data-group="${esc(g.id)}" aria-expanded="${expanded}"${expanded ? ` aria-controls="${variantsId}"` : ""}>` +
         `<span class="ck">${chosen ? CHECK : ""}</span><span class="mt">${esc(groupName(g))}</span>` +
         `<span class="md">${chosen ? esc(variantName(chosen)) : t("languages.009", { p0: g.variants.length })}</span>${ico("down")}` +
         `</button>` +
