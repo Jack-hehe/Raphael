@@ -3,6 +3,7 @@
 
 /* ---------- tokens ---------- */
 :root {
+  --sidebar-width: 208px; --window-controls-height: 32px;
   --ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", system-ui, sans-serif;
   --display: "Segoe UI Variable Display", "Segoe UI", "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif;
   --ja: "Yu Gothic UI", "Yu Gothic", "Meiryo UI", "Meiryo", "Hiragino Sans", "Noto Sans JP", sans-serif;
@@ -70,10 +71,35 @@ input::placeholder { color: var(--text-3); opacity: 1; }
 svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ---------- window: sidebar and content ---------- */
-.wbody { display: grid; grid-template-columns: 208px minmax(0, 1fr); height: 100%; min-height: 0; }
+.window-chrome { position: fixed; inset: 0 0 auto; z-index: 90; display: flex; height: var(--window-controls-height); background: var(--content); user-select: none; }
+:root[data-window-layout="main"] .window-chrome { left: var(--sidebar-width); border-top-left-radius: 14px; border-top: 1px solid var(--edge); border-left: 1px solid var(--edge); }
+:root[data-window-modal="true"] .window-chrome { background: transparent; border-color: transparent; }
+.window-drag { flex: 1; min-width: 0; }
+.window-controls { display: flex; flex: none; }
+.window-button { display: grid; place-items: center; width: 46px; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text); cursor: default; }
+.window-button svg { grid-area: 1 / 1; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1; }
+.window-button:hover { background: var(--hover); }
+.window-button:focus-visible { outline-offset: -3px; }
+.window-close:hover { background: #c42b1c; color: #ffffff; }
+.window-restore-glyph { display: none; }
+:root[data-window-maximized="true"] .window-maximize-glyph { display: none; }
+:root[data-window-maximized="true"] .window-restore-glyph { display: block; }
+.window-resize { position: fixed; z-index: 100; }
+.resize-n, .resize-s { left: 8px; right: 8px; height: 4px; cursor: ns-resize; }
+.resize-n { top: 0; } .resize-s { bottom: 0; }
+.resize-e, .resize-w { top: 8px; bottom: 8px; width: 4px; cursor: ew-resize; }
+.resize-e { right: 0; } .resize-w { left: 0; }
+.resize-ne, .resize-nw, .resize-se, .resize-sw { width: 8px; height: 8px; }
+.resize-ne { top: 0; right: 0; cursor: nesw-resize; }
+.resize-nw { top: 0; left: 0; cursor: nwse-resize; }
+.resize-se { bottom: 0; right: 0; cursor: nwse-resize; }
+.resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+:root[data-window-maximized="true"] .window-resize { display: none; }
+.wbody { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); height: 100%; min-height: 0; }
 
-.side { display: flex; flex-direction: column; gap: 3px; padding: 28px 10px 12px; min-height: 0; overflow: auto; }
-.app-icon { display: block; width: 32px; height: 32px; flex: none; object-fit: cover; object-position: center 30%; border-radius: 10px; background: var(--accent-soft); }
+.side { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 12px; min-height: 0; overflow: auto; }
+.brand { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 10px; margin-bottom: 14px; font: 650 17px/1 var(--display); letter-spacing: -0.01em; color: var(--text); user-select: none; }
+.app-icon { display: block; width: 40px; height: 40px; flex: none; object-fit: contain; object-position: center; border-radius: 0; background: transparent; }
 .nav { position: relative; display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 8px 12px; border: 0; border-radius: 9px; background: transparent; text-align: left; font-size: 14px; line-height: 1.4; color: var(--text-2); width: 100%; }
 .nav:hover { background: var(--hover); color: var(--text); }
 .nav[aria-current="page"] { background: var(--selected); color: var(--text); font-weight: 600; }
@@ -87,13 +113,13 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .side-foot { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 .main { position: relative; overflow: auto; background: var(--content); border-top-left-radius: 14px; border-left: 1px solid var(--edge); border-top: 1px solid var(--edge); min-height: 0; container: main / inline-size; scrollbar-gutter: stable; }
 /* Each page is a column centred in the window: wide windows get margins, nothing stretches edge to edge. */
-.page { max-width: 1160px; margin: 0 auto; padding: 32px 32px 40px; }
+.page { max-width: 1160px; margin: 0 auto; padding: calc(var(--window-controls-height) + 8px) 32px 40px; }
 .page h1 { font: 650 28px/1.3 var(--display); margin: 0; letter-spacing: -0.015em; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; }
 .lede { margin: 8px 0 0; color: var(--text-2); font-size: 13px; max-width: 64ch; text-wrap: pretty; }
 @media (max-width: 880px) {
-  .wbody { grid-template-columns: 176px minmax(0, 1fr); }
-  .page { padding: 28px 24px 48px; }
+  :root { --sidebar-width: 176px; }
+  .page { padding: calc(var(--window-controls-height) + 8px) 24px 48px; }
 }
 .group { margin-top: 28px; }
 .group > h3 { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 0 0 4px; }
@@ -184,7 +210,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 @container main (min-width: 1100px) {
   .home { grid-template-columns: minmax(0, 1fr) 208px; }
   .home-main { min-height: 0; }
-  .home-side { position: sticky; top: 28px; }
+  .home-side { position: sticky; top: calc(var(--window-controls-height) + 8px); }
   .keys-card { display: block; }
   .keys-card .kc-row { border-top: 1px solid var(--line); padding-top: 12px; }
   .keys-card .card-head + .kc-row { border-top: 0; }
@@ -192,10 +218,9 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 @container main (max-width: 600px) {
   .keys-card { grid-template-columns: minmax(0, 1fr); }
 }
-.stage { position: relative; display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 20px; align-items: center; min-height: 112px; color: var(--text); border-bottom: 1px solid var(--line); padding: 0 0 20px; }
-.stage canvas.emb { position: relative; width: 96px !important; height: 96px !important; }
-.home-stage { grid-template-columns: 110px minmax(0, 1fr); min-height: 156px; }
-.home-stage .character-portrait { width: 110px; height: 136px; }
+.stage { position: relative; display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 20px; align-items: center; min-height: 132px; color: var(--text); border-bottom: 1px solid var(--line); padding: 0 0 20px; }
+.stage canvas.emb { position: relative; width: 112px !important; height: 112px !important; }
+.home-stage { grid-template-columns: 128px minmax(0, 1fr); min-height: 156px; }
 .stage .subs { position: relative; min-width: 0; padding: 12px 0; text-align: left; }
 .sub-zh, .sub-ja { text-wrap: pretty; text-shadow: none; }
 .sub-zh { color: var(--text); font-family: var(--zh-sub); font-weight: 650; font-size: 17px; line-height: 1.65; }
@@ -251,7 +276,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .kc-name { font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
 .kc-keys { display: flex; flex-wrap: wrap; gap: 6px; }
 .kc-note { margin-top: 6px; font-size: 12px; line-height: 1.45; color: var(--text-3); text-wrap: pretty; }
-.page-home .ver { margin: 18px 0 0; text-align: right; font-size: 11px; color: var(--text-3); }
+.home-version { position: fixed; right: 20px; bottom: 12px; z-index: 1; margin: 0; text-align: right; font-size: 11px; color: var(--text-3); pointer-events: none; }
 .page-loading { display: grid; gap: 12px; padding: 24px 0; width: 100%; }
 .loading-line { display: block; height: 64px; border-radius: 12px; background: var(--surface-2); animation: ob-pulse 1.8s ease-in-out infinite; }
 .loading-line:last-child { width: 68%; }
@@ -328,7 +353,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .wrow .acts { color: var(--text-3); }
 
 /* ---------- settings: a panel over the window ---------- */
-.modal-scrim { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: var(--scrim); }
+.modal-scrim { --modal-gap: 24px; position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: calc(var(--window-controls-height) + var(--modal-gap)) var(--modal-gap) var(--modal-gap); background: var(--scrim); }
 .modal { position: relative; display: grid; grid-template-columns: 196px minmax(0, 1fr); width: min(1000px, 100%); height: min(760px, 100%); border-radius: 18px; overflow: hidden; background: var(--content); border: 1px solid var(--edge); box-shadow: var(--pop); }
 .modal-nav { display: flex; flex-direction: column; gap: 4px; padding: 24px 12px; background: var(--side); border-right: 1px solid var(--edge); overflow: auto; min-height: 0; }
 .modal-body { overflow: auto; padding: 30px 40px 44px; min-width: 0; min-height: 0; scrollbar-gutter: stable; }
@@ -349,7 +374,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .slist.about { margin-top: 18px; }
 .sgroup > .foot { max-width: none; }
 @media (max-width: 820px) {
-  .modal-scrim { padding: 16px; }
+  .modal-scrim { --modal-gap: 16px; }
   .modal { grid-template-columns: 136px minmax(0, 1fr); }
   .modal-body { padding: 22px 22px 32px; }
   .modal-nav { padding: 20px 10px; }
@@ -420,7 +445,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .main, .modal-body, .menu, .lang-list, .ob-body { scroll-padding-block: 16px; }
 
 /* ---------- first run ---------- */
-.ob { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; min-height: 0; background: var(--content); border-top: 1px solid var(--edge); }
+.ob { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; min-height: 0; padding-top: var(--window-controls-height); background: var(--content); border-top: 1px solid var(--edge); }
 .ob-steps { display: flex; justify-content: center; gap: 6px; padding: 18px 0 0; }
 .ob-steps i { width: 28px; height: 4px; border-radius: 2px; background: var(--track); }
 .ob-steps i.done { background: var(--accent); }
@@ -445,15 +470,60 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .keyline { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 18px; }
 .keyline > div { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 13px; }
 
+/* Wide, tall windows give the same focused pages more readable space. */
+@media (min-width: 1440px) and (min-height: 800px) {
+  :root { --sidebar-width: 232px; }
+  .side { padding: 10px 14px 16px; }
+  .side .nav { min-height: 44px; padding: 10px 14px; font-size: 15px; }
+  .brand { min-height: 52px; margin-bottom: 18px; font-size: 18px; }
+  .page, .page.page-home, .page.page-dict { max-width: 1480px; padding: calc(var(--window-controls-height) + 24px) 40px 48px; font-size: 15px; }
+  .page h1 { font-size: 32px; }
+  .page .lede { font-size: 15px; }
+  .home { grid-template-columns: minmax(0, 1fr) 240px; gap: 32px; }
+  .home-stage { grid-template-columns: 160px minmax(0, 1fr); min-height: 180px; gap: 24px; padding-bottom: 24px; }
+  .home-stage canvas.emb { width: 140px !important; height: 140px !important; }
+  .home-stage .sub-zh { font-size: 21px; }
+  .home-stage .sub-ja { font-size: 14px; margin-top: 6px; }
+  .insights { margin-top: 28px; }
+  .sec-head { margin-bottom: 16px; }
+  .sec-head h2 { font-size: 21px; }
+  .sec-head .sum { font-size: 14px; }
+  .icards { gap: 16px; }
+  .icard { padding: 20px 24px; }
+  .icard .v, .anum .v { font-size: 32px; }
+  .icard .v small, .anum .v small { font-size: 14px; }
+  .icard .k, .anum .k { font-size: 15px; }
+  .activity { margin-top: 16px; padding: 22px 24px 18px; }
+  .activity > h2 { font-size: 15px; margin-bottom: 18px; }
+  .keys-card { padding: 20px 20px 10px; }
+  .card-head h2 { font-size: 15px; }
+  .kc-row { padding: 16px 0; }
+  .kc-name, .kc-note { font-size: 14px; }
+  .keys-card .keys { font-size: 14px; }
+  .page kbd { height: 28px; font-size: 14px; }
+  .page .btn { min-height: 38px; font-size: 14px; }
+  .page .field { height: 38px; font-size: 14px; }
+  .page .field input { font-size: 14px; }
+  .page .row .t { font-size: 15px; }
+  .page .row .d, .page .row .ctl, .page .row .val { font-size: 14px; }
+  .hist-top .row { min-height: 76px; padding-block: 16px; }
+  .hrow .txt { font-size: 16px; line-height: 1.65; }
+  .hrow .time, .hrow .meta { font-size: 13px; }
+  .hdetail .raw { font-size: 15px; }
+  .wgrid { gap: 14px; }
+  .wchip { min-height: 56px; padding: 12px 8px 12px 18px; }
+  .word { font-size: 16px; }
+  .mis { font-size: 14px; }
+}
+
 /* Short windows keep every card open and scroll through the same page. */
 @media (max-height: 700px), (max-width: 960px) and (max-height: 820px) {
-  .page.page-home { padding-top: 18px; padding-bottom: 18px; }
+  .page.page-home { padding-top: calc(var(--window-controls-height) + 8px); padding-bottom: 18px; }
   .page-home .home { gap: 12px; grid-template-columns: minmax(0, 1fr); }
   .page-home .home-side { position: static; }
   .page-home .home-main { min-height: 0; }
-  .stage { min-height: 80px; grid-template-columns: 64px minmax(0, 1fr); gap: 14px; padding-bottom: 12px; }
-  .stage canvas.emb { width: 64px !important; height: 64px !important; }
-  .home-stage .character-portrait { width: 64px; height: 80px; }
+  .stage { min-height: 100px; grid-template-columns: 84px minmax(0, 1fr); gap: 14px; padding-bottom: 12px; }
+  .stage canvas.emb { width: 84px !important; height: 84px !important; }
   .stage .subs { padding: 4px 0; }
   .sub-zh { font-size: 15px; line-height: 1.5; }
   .sub-ja { font-size: 11px; margin-top: 3px; }
@@ -466,8 +536,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   .icard .k { margin-top: 4px; }
   .activity { padding: 14px 16px; margin-top: 12px; }
   .activity > h2 { margin-bottom: 12px; }
-  .page-home .ver { display: none; }
-  .modal-scrim { padding: 12px; }
+  .home-version { display: none; }
+  .modal-scrim { --modal-gap: 12px; }
   .modal-body { padding-top: 20px; padding-bottom: 24px; }
   .sgroup { margin-top: 24px; }
 }

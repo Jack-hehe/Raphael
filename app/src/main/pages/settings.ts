@@ -7,7 +7,7 @@ import { isUiLocale, onLocaleChange, t } from "../i18n";
 
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
-import { characterPortrait, hydrateBrandIcons } from "../brand";
+import { brandIcon, hydrateBrandIcons } from "../brand";
 import "../settings-polish.css";
 import { DICTATION_MODES, isDictationMode, modeDescription } from "../dictation";
 import {
@@ -64,6 +64,26 @@ import {
   tg,
   toaster,
 } from "../ui";
+
+interface FocusStop { focus(): void }
+
+/** Keep settings and the window controls in one loop without entering the inert main page. */
+export function trapSettingsFocus(
+  event: Pick<KeyboardEvent, "shiftKey" | "preventDefault">,
+  items: readonly FocusStop[],
+  focused: FocusStop | null,
+): void {
+  if (items.length === 0) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (event.shiftKey && focused === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && focused === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
 
 const MODELS: Choice[] = [
   { value: "openai/gpt-6-luna", get label() { return t("settings.001"); } },
@@ -477,7 +497,7 @@ export function createSettings(app: AppContext): Page {
   function aboutHTML(): string {
     return (
       t("settings.077") +
-      `<div class="about-brand">${characterPortrait()}<span class="about-name">Raphael</span></div>` +
+      `<div class="about-brand">${brandIcon("about-icon")}<span class="about-name">Raphael</span></div>` +
       `<div class="slist about">` +
       row(t("settings.078"), esc(version || "0.1.0"), "") +
       row(t("settings.079"), t("settings.080"), t("settings.081")) +
@@ -978,29 +998,23 @@ export function createSettings(app: AppContext): Page {
     const input = e.target as HTMLInputElement;
     if (input.id === "limit-input") limitDraft = input.value;
   });
-  // Esc closes the panel (a menu that is open takes its Esc itself: its keys do not reach here), and
-  // Tab stays inside it.
-  el.addEventListener("keydown", (e) => {
+  // Menus consume their own Escape; the panel and native window controls share one Tab loop.
+  const settingsKey = (e: KeyboardEvent): void => {
+    const chrome = document.getElementById("window-chrome");
+    if (!visible || !(e.target instanceof Node) || (!el.contains(e.target) && !chrome?.contains(e.target))) return;
     if (openMenuOnArrow(e)) return;
     if (e.key === "Escape" && !recording && !e.defaultPrevented) {
       e.preventDefault();
       app.closeSettings();
     } else if (e.key === "Tab") {
-      const items = Array.from(
-        el.querySelectorAll<HTMLElement>("button:not([disabled]), input, a[href], [tabindex='0']"),
-      ).filter((x) => x.offsetParent !== null);
-      if (items.length === 0) return;
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
+      const selector = "button:not([disabled]), input:not([disabled]), a[href], [tabindex='0']";
+      const items = [
+        ...Array.from(chrome?.querySelectorAll<HTMLElement>(selector) ?? []),
+        ...Array.from(el.querySelectorAll<HTMLElement>(selector)),
+      ].filter((item) => item.offsetParent !== null);
+      trapSettingsFocus(e, items, document.activeElement as HTMLElement | null);
     }
-  });
+  };
   wireKeyField(el, { inputId: "key-input", pasteSelector: '[data-act="key-paste"]', submit: (value) => void submitKey(value) });
 
   const onFocus = (): void => {
@@ -1019,6 +1033,7 @@ export function createSettings(app: AppContext): Page {
     el,
     async show() {
       visible = true;
+      document.addEventListener("keydown", settingsKey);
       const mine = ++loads;
       loading = true;
       pane = "settings";
@@ -1072,6 +1087,7 @@ export function createSettings(app: AppContext): Page {
     },
     hide() {
       visible = false;
+      document.removeEventListener("keydown", settingsKey);
       loading = false;
       loads++;
       closeMenu();

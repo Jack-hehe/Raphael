@@ -77,17 +77,19 @@ if (args[0] === "icon") {
 }
 
 describe("private frontend assets", () => {
-  it("copies character art separately from the desktop icon in a worktree", () => {
+  it("copies distinct in-app artwork and desktop sources from the original checkout", () => {
     const { app, privateDir } = fixture({ worktree: true });
     writeFileSync(join(privateDir, "glyph-ring.png"), "glyph");
-    writeFileSync(join(privateDir, "app-icon.png"), "portrait");
+    writeFileSync(join(privateDir, "app-icon.png"), "desktop icon");
+    writeFileSync(join(privateDir, "in-app-icon.png"), "watercolour in-app icon");
     writeFileSync(join(privateDir, "avatar.png"), "watercolour character");
 
     runScript(app, "copy-private.mjs");
 
     expect(existsSync(join(app, "public/private/glyph-ring.png"))).toBe(true);
     expect(existsSync(join(app, "public/private/app-icon.png"))).toBe(true);
-    expect(readFileSync(join(app, "public/private/app-icon.png"), "utf8")).toBe("portrait");
+    expect(readFileSync(join(app, "public/private/app-icon.png"), "utf8")).toBe("desktop icon");
+    expect(readFileSync(join(app, "public/private/in-app-icon.png"), "utf8")).toBe("watercolour in-app icon");
     expect(readFileSync(join(app, "public/private/avatar.png"), "utf8")).toBe("watercolour character");
   });
 
@@ -95,16 +97,18 @@ describe("private frontend assets", () => {
     const { app, root } = fixture();
     const privateDir = join(root, "personal assets");
     mkdirSync(privateDir);
-    for (const name of ["glyph-ring.png", "app-icon.png", "avatar.png"]) writeFileSync(join(privateDir, name), name);
+    for (const name of ["glyph-ring.png", "app-icon.png", "in-app-icon.png", "avatar.png"]) writeFileSync(join(privateDir, name), name);
     runScript(app, "copy-private.mjs", [], privateDir);
     expect(existsSync(join(app, "public/private/app-icon.png"))).toBe(true);
+    expect(existsSync(join(app, "public/private/in-app-icon.png"))).toBe(true);
     expect(existsSync(join(app, "public/private/avatar.png"))).toBe(true);
 
-    for (const name of ["glyph-ring.png", "app-icon.png", "avatar.png"]) rmSync(join(privateDir, name));
+    for (const name of ["glyph-ring.png", "app-icon.png", "in-app-icon.png", "avatar.png"]) rmSync(join(privateDir, name));
     runScript(app, "copy-private.mjs", [], privateDir);
 
     expect(existsSync(join(app, "public/private/glyph-ring.png"))).toBe(false);
     expect(existsSync(join(app, "public/private/app-icon.png"))).toBe(false);
+    expect(existsSync(join(app, "public/private/in-app-icon.png"))).toBe(false);
     expect(existsSync(join(app, "public/private/avatar.png"))).toBe(false);
   });
 
@@ -121,6 +125,25 @@ describe("private frontend assets", () => {
 });
 
 describe("private desktop icon cache", () => {
+  it("keeps cached desktop icons unchanged when only the in-app artwork changes", () => {
+    const { app, privateDir } = fixture({ worktree: true });
+    installIconCli(app);
+    writeFileSync(join(privateDir, "app-icon.png"), "desktop icon");
+    const inAppSource = join(privateDir, "in-app-icon.png");
+    writeFileSync(inAppSource, "first in-app icon");
+    runScript(app, "tauri.mjs", ["build"]);
+    const cachePath = join(app, "src-tauri/icons-private/.cache.json");
+    const cache = readFileSync(cachePath, "utf8");
+
+    writeFileSync(inAppSource, "new in-app icon");
+    runScript(app, "copy-private.mjs");
+
+    expect(runScript(app, "tauri.mjs", ["build"])).toContain("using cached private icons");
+    expect(readFileSync(join(app, "public/private/in-app-icon.png"), "utf8")).toBe("new in-app icon");
+    expect(readFileSync(join(app, "src-tauri/icons-private/icon.ico"), "utf8")).toBe("generated:desktop icon");
+    expect(readFileSync(cachePath, "utf8")).toBe(cache);
+  });
+
   it("invalidates by file content even when a replacement preserves size and mtime", () => {
     const { app, privateDir } = fixture({ worktree: true });
     installIconCli(app);
@@ -150,6 +173,7 @@ describe("private desktop icon cache", () => {
     installIconCli(app);
     const source = join(privateDir, "app-icon.png");
     writeFileSync(source, "portrait");
+    writeFileSync(join(privateDir, "in-app-icon.png"), "watercolour in-app icon");
     runScript(app, "tauri.mjs", ["build"], privateDir);
     expect(existsSync(join(app, "src-tauri/icons-private/icon.ico"))).toBe(true);
     rmSync(source);

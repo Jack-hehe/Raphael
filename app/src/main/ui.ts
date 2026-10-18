@@ -240,15 +240,41 @@ export function openMenuOnArrow(e: KeyboardEvent): boolean {
   return true;
 }
 
-/** Puts the open menu under its button (above it when there is no room below), right-aligned with it. */
+/** Keep anchored menus inside the usable viewport, below any custom window controls. */
+export function menuPlacement(
+  anchor: Pick<DOMRect, "top" | "bottom" | "right">,
+  size: { width: number; height: number },
+  viewport: { width: number; height: number; headerBottom: number },
+): { left: number; top: number; maxHeight: number } {
+  const upper = viewport.headerBottom + 8;
+  const lower = Math.max(upper, viewport.height - 8);
+  const belowTop = Math.max(upper, Math.min(anchor.bottom + 4, lower));
+  const aboveBottom = Math.min(lower, Math.max(upper, anchor.top - 4));
+  const below = lower - belowTop;
+  const above = aboveBottom - upper;
+  const useBelow = size.height <= below || (size.height > above && below >= above);
+  const maxHeight = useBelow ? below : above;
+  return {
+    left: Math.max(8, Math.min(anchor.right - size.width, viewport.width - size.width - 8)),
+    top: useBelow ? belowTop : aboveBottom - Math.min(size.height, maxHeight),
+    maxHeight,
+  };
+}
+
+/** Prefer below the trigger, then above it; long lists scroll on the roomier side. */
 export function placeMenu(): void {
   if (!menu) return;
   const { el, anchor } = menu;
   const r = anchor.getBoundingClientRect();
-  const h = el.offsetHeight;
-  const w = el.offsetWidth;
-  el.style.left = `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8))}px`;
-  el.style.top = `${r.bottom + 4 + h > innerHeight - 8 ? Math.max(8, r.top - 4 - h) : r.bottom + 4}px`;
+  const headerBottom = document.getElementById("window-chrome")?.getBoundingClientRect().bottom ?? 0;
+  // Release the previous side's height limit before measuring a menu after scrolling or redraw.
+  el.style.maxHeight = `${Math.max(0, innerHeight - headerBottom - 16)}px`;
+  const placement = menuPlacement(r, { width: el.offsetWidth, height: el.offsetHeight }, {
+    width: innerWidth, height: innerHeight, headerBottom,
+  });
+  el.style.maxHeight = `${placement.maxHeight}px`;
+  el.style.left = `${placement.left}px`;
+  el.style.top = `${placement.top}px`;
 }
 
 export interface PopoverOptions {

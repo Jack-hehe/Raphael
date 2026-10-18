@@ -8,7 +8,6 @@
 import { onLocaleChange, t, translatedMessage } from "./i18n";
 
 import * as api from "./api";
-import { characterPortrait, hydrateBrandIcons } from "./brand";
 import { type DictationMode, keylineAction, tryBoxText } from "./dictation";
 import { describeError, formatSeconds, keyReasonText, parseLimit } from "./format";
 import { wireKeyField } from "./keyfield";
@@ -298,7 +297,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
       case 0:
         return (
           `<div class="onboarding-brand"><span>Raphael</span></div>` +
-          `<div class="stage onboarding-stage">${characterPortrait()}<canvas class="emb" aria-hidden="true" hidden></canvas><div class="subs" aria-live="polite"></div></div>` +
+          `<div class="stage onboarding-stage"><canvas class="emb" aria-hidden="true"></canvas><div class="subs" aria-live="polite"></div></div>` +
           t("onboarding.036") +
           t("onboarding.037")
         );
@@ -350,7 +349,6 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
       `<div class="ob-steps" aria-hidden="true">${dots}</div>` +
       `<div class="ob-body"><div class="ob-col">${bodyHTML()}</div></div>` +
       `<div class="ob-foot"></div>`;
-    hydrateBrandIcons(root);
     paintFoot();
     enterStep();
   }

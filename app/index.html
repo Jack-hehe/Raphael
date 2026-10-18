@@ -8,6 +8,22 @@
   </head>
 
   <body>
+    <div class="window-chrome" id="window-chrome">
+      <div class="window-drag" data-window-drag></div>
+      <div class="window-controls" role="group">
+        <button class="window-button" type="button" data-window-action="minimize"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6.5h10"/></svg></button>
+        <button class="window-button" type="button" data-window-action="maximize"><svg class="window-maximize-glyph" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.5" y="1.5" width="9" height="9"/></svg><svg class="window-restore-glyph" viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 3.5V1.5h7v7h-2M1.5 3.5h7v7h-7z"/></svg></button>
+        <button class="window-button window-close" type="button" data-window-action="close"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="m1.5 1.5 9 9m0-9-9 9"/></svg></button>
+      </div>
+    </div>
+    <div class="window-resize resize-n" data-window-resize="North" aria-hidden="true"></div>
+    <div class="window-resize resize-ne" data-window-resize="NorthEast" aria-hidden="true"></div>
+    <div class="window-resize resize-e" data-window-resize="East" aria-hidden="true"></div>
+    <div class="window-resize resize-se" data-window-resize="SouthEast" aria-hidden="true"></div>
+    <div class="window-resize resize-s" data-window-resize="South" aria-hidden="true"></div>
+    <div class="window-resize resize-sw" data-window-resize="SouthWest" aria-hidden="true"></div>
+    <div class="window-resize resize-w" data-window-resize="West" aria-hidden="true"></div>
+    <div class="window-resize resize-nw" data-window-resize="NorthWest" aria-hidden="true"></div>
     <!-- Hidden until main.ts knows whether this is a first run (then the guide below is shown instead). -->
     <div class="wbody" hidden>
       <nav class="side" id="nav"></nav>

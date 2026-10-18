@@ -6,7 +6,7 @@ import { esc, line } from "./ui";
 import type { Report } from "./report";
 
 /** The emblem's diameter on the stage, in px. */
-const EMBLEM_PX = 110;
+const EMBLEM_PX = 128;
 /** The report comes this long after the emblem started to appear (the animation takes 0.833 s). */
 const REPORT_DELAY_MS = 900;
 /** The white ring moves for this long while the report is read. */

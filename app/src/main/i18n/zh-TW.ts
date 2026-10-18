@@ -1,5 +1,10 @@
 // Traditional Chinese is the source catalogue. Placeholders are interpolated by t().
 export const zhTW = {
+  "window.controls": "視窗控制",
+  "window.minimize": "最小化",
+  "window.maximize": "最大化",
+  "window.restore": "還原視窗",
+  "window.close": "關閉視窗",
   "settings.loading": "正在載入設定…",
   "settings.usageMonthly": "OpenRouter 帳號本月用量",
   "settings.usageDifference": "Raphael 僅計算本機花費；OpenRouter 包含共用此金鑰的其他程式。",

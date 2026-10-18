@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-/** Character art is independent of the desktop application's icon. */
-export const PRIVATE_FRONTEND_ASSETS = ["glyph-ring.png", "app-icon.png", "avatar.png"];
+/** In-app and character art are independent of the desktop application's icon. */
+export const PRIVATE_FRONTEND_ASSETS = ["glyph-ring.png", "app-icon.png", "in-app-icon.png", "avatar.png"];
 
 export function privateAssetsDirectory(appDirectory) {
   if (process.env.RAPHAEL_PRIVATE_DIR) return resolve(process.env.RAPHAEL_PRIVATE_DIR);

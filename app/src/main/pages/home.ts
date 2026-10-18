@@ -8,7 +8,6 @@ import { onLocaleChange, t } from "../i18n";
 
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
-import { characterPortrait, hydrateBrandIcons } from "../brand";
 import { homeHint } from "../dictation";
 import { loadingHTML } from "../loading";
 import { formatUsd } from "../format";
@@ -74,13 +73,12 @@ export function createHome(app: AppContext): Page {
   el.innerHTML =
     `<div class="home">` +
     `<div class="home-main">` +
-    `<div class="stage home-stage" role="region" aria-label="Raphael">${characterPortrait()}<canvas class="emb" aria-hidden="true" hidden></canvas><div class="subs" aria-live="polite"></div></div>` +
+    `<div class="stage home-stage" role="region" aria-label="Raphael"><canvas class="emb" aria-hidden="true"></canvas><div class="subs" aria-live="polite"></div></div>` +
     `<div class="alert-slot"></div><div class="usage"></div>` +
     `</div>` +
     `<aside class="home-side" aria-label="${esc(t("home.shortcuts"))}"><section class="card keys-card"></section></aside>` +
     `</div>` +
-    `<p class="ver num"></p>`;
-  hydrateBrandIcons(el);
+    `<p class="ver num home-version" hidden></p>`;
   const alertSlot = el.querySelector<HTMLElement>(".alert-slot")!;
   const usage = el.querySelector<HTMLElement>(".usage")!;
   const keysCard = el.querySelector<HTMLElement>(".keys-card")!;
@@ -264,6 +262,7 @@ export function createHome(app: AppContext): Page {
     el,
     show() {
       visible = true;
+      ver.hidden = false;
       void load(true);
       clearInterval(timer);
       timer = setInterval(() => {
@@ -272,6 +271,7 @@ export function createHome(app: AppContext): Page {
     },
     hide() {
       visible = false;
+      ver.hidden = true;
       loads++;
       clearInterval(timer);
     },

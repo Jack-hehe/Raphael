@@ -25,6 +25,11 @@ const MAIN_WINDOW: &str = "main";
 /// Label of the overlay window. It is created in Rust, never by the config.
 const OVERLAY_WINDOW: &str = "overlay";
 
+/// Persist geometry without allowing saved state to choose the application's frame policy.
+fn main_window_state_flags() -> StateFlags {
+    StateFlags::all() & !(StateFlags::VISIBLE | StateFlags::DECORATIONS)
+}
+
 /// Writes a panic to the log before the default hook runs. The release build aborts on a panic
 /// (`panic = "abort"`) and has no console, so without this a crash would leave no trace.
 fn log_panics() {
@@ -58,8 +63,7 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_denylist(&[OVERLAY_WINDOW])
-                // With VISIBLE the plugin would show and focus windows when it restores them.
-                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
+                .with_state_flags(main_window_state_flags())
                 .build(),
         )
         .plugin(log_plugin())
@@ -93,6 +97,13 @@ pub fn run() {
             // Tauri keeps only the last `setup` call, so each part of the app starts in its own
             // section of this one closure, in dependency order: a part that needs another part's
             // handle comes after it.
+
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+                match window.is_decorated() {
+                    Ok(decorated) => log::info!("Main window native decorations: {decorated}"),
+                    Err(error) => log::warn!("could not inspect the main window frame: {error}"),
+                }
+            }
 
             // ---- Tray ----
             // The tray reports its menu actions on this channel; the dictation controller (below)
@@ -215,4 +226,21 @@ fn log_plugin<R: Runtime>() -> TauriPlugin<R> {
         .rotation_strategy(RotationStrategy::KeepSome(3))
         .timezone_strategy(TimezoneStrategy::UseLocal)
         .build()
+}
+
+#[cfg(test)]
+mod window_state_tests {
+    use super::*;
+
+    #[test]
+    fn restoring_saved_geometry_cannot_restore_a_native_titlebar_or_show_the_window() {
+        let flags = main_window_state_flags();
+        assert!(!flags.intersects(StateFlags::VISIBLE | StateFlags::DECORATIONS));
+        assert!(flags.contains(
+            StateFlags::SIZE
+                | StateFlags::POSITION
+                | StateFlags::MAXIMIZED
+                | StateFlags::FULLSCREEN
+        ));
+    }
 }

@@ -1,6 +1,11 @@
 import type { Messages } from './zh-TW';
 
 export const ja = {
+  "window.controls": "ウィンドウ操作",
+  "window.minimize": "最小化",
+  "window.maximize": "最大化",
+  "window.restore": "元に戻す",
+  "window.close": "ウィンドウを閉じる",
   "settings.loading": "設定を読み込んでいます…",
   "settings.usageMonthly": "OpenRouter アカウントの今月の利用額",
   "settings.usageDifference": "Raphael はこの端末の利用額を記録し、OpenRouter は同じキーを使う他のアプリも含みます。",

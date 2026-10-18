@@ -3,6 +3,7 @@
 // window. The pages are in pages/; this file holds what they share (spec §12).
 
 import { onLocaleChange, setLocale, t } from "./i18n";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { loadGlyphTexture } from "../overlay/emblem";
 import * as api from "./api";
@@ -13,7 +14,9 @@ import { createSettings } from "./pages/settings";
 import { DeviceState } from "./device";
 import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
+import { brandIcon, hydrateBrandIcons } from "./brand";
 import { installWindowHotkeys } from "./window-hotkeys";
+import { installWindowChrome } from "./window-chrome";
 import type { AppContext, DeviceSettings, MainEvent, Page, PageId } from "./types";
 import { spendMini } from "./spend";
 import { Undoable } from "./undo";
@@ -68,6 +71,36 @@ prefersDark.addEventListener("change", applyTheme);
 
 // ---------- start ----------
 
+function mountWindowChrome(): void {
+  const chrome = document.getElementById("window-chrome")!;
+  const maximize = chrome.querySelector<HTMLButtonElement>('[data-window-action="maximize"]')!;
+  let maximized = false;
+  const translate = (): void => {
+    chrome.querySelector(".window-controls")!.setAttribute("aria-label", t("window.controls"));
+    for (const [action, label] of [
+      ["minimize", t("window.minimize")],
+      ["maximize", t(maximized ? "window.restore" : "window.maximize")],
+      ["close", t("window.close")],
+    ]) {
+      const button = chrome.querySelector<HTMLButtonElement>(`[data-window-action="${action}"]`)!;
+      button.setAttribute("aria-label", label);
+      button.title = label;
+    }
+    maximize.setAttribute("aria-pressed", String(maximized));
+  };
+  translate();
+  onLocaleChange(translate);
+  try {
+    installWindowChrome(document, getCurrentWindow(), (state) => {
+      maximized = state;
+      document.documentElement.dataset.windowMaximized = String(state);
+      translate();
+    });
+  } catch (error) {
+    console.warn("main: window controls are unavailable outside Tauri", error);
+  }
+}
+
 async function start(): Promise<void> {
   applyTheme();
   let deviceRead = false;
@@ -111,11 +144,13 @@ async function start(): Promise<void> {
   const button = (id: PageId, name: string, icon: IconName): string =>
     `<button type="button" class="nav" data-go="${id}" aria-current="false">${ico(icon)}<span>${name}</span></button>`;
   nav.innerHTML =
+    `<div class="brand" data-window-drag>${brandIcon()}<span>Raphael</span></div>` +
     NAV.map((item) => button(item.id, item.name, item.icon)).join("") +
     `<div class="side-fill"></div>` +
     `<button type="button" class="usage-box" data-go="settings" hidden></button>` +
     t("main.004", { p0: ico("gear") });
   const usageBox = nav.querySelector<HTMLElement>(".usage-box")!;
+  hydrateBrandIcons(nav);
   function translateNavigation(): void {
     nav.setAttribute("aria-label", t("nav.pages"));
     for (const item of NAV) nav.querySelector<HTMLElement>(`[data-go="${item.id}"] span`)!.textContent = item.name;
@@ -133,6 +168,8 @@ async function start(): Promise<void> {
   const settings = pages.settings;
   for (const page of Object.values(pages)) if (page !== settings) main.append(page.el);
   document.body.append(settings.el);
+  // Keep the version outside the scroll container's containing block.
+  document.querySelector(".wbody")!.append(pages.home.el.querySelector(".home-version")!);
 
   let current: Exclude<PageId, "settings"> | null = null;
   let settingsOpen = false;
@@ -161,6 +198,7 @@ async function start(): Promise<void> {
   function openSettings(): void {
     if (settingsOpen) return;
     settingsOpen = true;
+    document.documentElement.dataset.windowModal = "true";
     opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     settings.el.hidden = false;
     document.querySelector<HTMLElement>(".wbody")!.inert = true;
@@ -170,6 +208,7 @@ async function start(): Promise<void> {
   function closeSettings(restoreFocus = true): void {
     if (!settingsOpen) return;
     settingsOpen = false;
+    delete document.documentElement.dataset.windowModal;
     settings.hide();
     settings.el.hidden = true;
     document.querySelector<HTMLElement>(".wbody")!.inert = false;
@@ -210,6 +249,7 @@ async function start(): Promise<void> {
   // read are no reason to start a guide for someone who has been through it.)
   if (deviceRead && !device.get().onboarded) {
     const guide = document.getElementById("ob")!;
+    document.documentElement.dataset.windowLayout = "onboarding";
     guide.hidden = false;
     mountOnboarding(
       guide,
@@ -233,9 +273,11 @@ async function start(): Promise<void> {
  * a first run opens while the page is still being built, and would show an empty sidebar.
  */
 function showPages(): void {
+  document.documentElement.dataset.windowLayout = "main";
   document.querySelector<HTMLElement>(".wbody")!.hidden = false;
 }
 
+mountWindowChrome();
 start().catch((err) => {
   console.error("main: could not start", err);
   // Whatever went wrong, the window must not stay blank.
