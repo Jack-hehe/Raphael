@@ -128,10 +128,10 @@ afterEach(() => {
 const ZH = "《告。這個視窗不接受貼上。》";
 const JA = "《告。このウィンドウには貼り付けできません。》";
 
-test("learned words use the notice lifecycle in the center", () => {
+test("learned words use the usual corner and notice lifecycle", () => {
   const zh = "《了。「Typeless」已加入詞典。》";
   send({ type: "learned", zh, ja: "" });
-  expect(view.placements).toEqual(["center"]);
+  expect(view.placements).toEqual(["corner"]);
   expect(emblem.log).toEqual(["appear", "set:steady"]);
   vi.advanceTimersByTime(833);
   expect(view.last).toBe(`lines:${zh}|-`);
@@ -147,9 +147,9 @@ test("mixed notices keep their placement until each notice takes its turn", () =
   send({ type: "notice", zh: "ordinary", ja: "" });
   expect(view.placements).toEqual(["corner"]);
   vi.advanceTimersByTime(833 + noticeDurationMs(ZH));
-  expect(view.placements).toEqual(["corner", "center"]);
+  expect(view.placements).toEqual(["corner", "corner"]);
   vi.advanceTimersByTime(1 + noticeDurationMs("learned"));
-  expect(view.placements).toEqual(["corner", "center", "corner"]);
+  expect(view.placements).toEqual(["corner", "corner", "corner"]);
   vi.advanceTimersByTime(1);
   expect(view.last).toBe("lines:ordinary|-");
 });
@@ -161,7 +161,7 @@ test("a learned notice waits for placement before appearing", async () => {
     return new Promise<void>((resolve) => { finish = resolve; });
   };
   send({ type: "learned", zh: "learned", ja: "" });
-  expect(view.placements).toEqual(["center"]);
+  expect(view.placements).toEqual(["corner"]);
   vi.advanceTimersByTime(60_000);
   expect(emblem.log).toEqual([]);
   expect(view.log).toEqual([]);
@@ -174,15 +174,15 @@ test("a new show cancels a notice waiting for placement and resets the corner", 
   let finish!: () => void;
   view.place = (placement) => {
     view.placements.push(placement);
-    if (placement === "center") return new Promise<void>((resolve) => { finish = resolve; });
+    if (view.placements.length === 1) return new Promise<void>((resolve) => { finish = resolve; });
   };
   send({ type: "learned", zh: "learned", ja: "" });
   send({ type: "show", mode: "listening" });
-  expect(view.placements).toEqual(["center", "corner"]);
+  expect(view.placements).toEqual(["corner", "corner"]);
   finish();
   await Promise.resolve();
   vi.advanceTimersByTime(60_000);
-  expect(view.placements).toEqual(["center", "corner"]);
+  expect(view.placements).toEqual(["corner", "corner"]);
   expect(emblem.log).toEqual(["appear", "set:listening"]);
   expect(view.log.filter((line) => line.startsWith("lines:"))).toEqual([]);
 });

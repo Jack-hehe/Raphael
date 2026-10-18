@@ -57,7 +57,7 @@ body {
   right: var(--subs-right);
   bottom: calc(var(--margin) + var(--e) * 0.35);
   color: #fff;
-  font: 650 clamp(20px, calc(var(--e) * 0.18), 32px)/1.4 var(--zh-sub);
+  font: 600 14px/1.45 var(--zh-sub);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;

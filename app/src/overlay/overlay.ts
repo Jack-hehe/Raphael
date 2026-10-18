@@ -169,7 +169,7 @@ export class OverlayController {
           this.pendingEvents = [];
         }
         this.emblem.clearProgress();
-        this.queue.push({ zh: event.zh, ja: event.ja, placement: event.type === "learned" ? "center" : "corner" });
+        this.queue.push({ zh: event.zh, ja: event.ja, placement: "corner" });
         if (!this.busy) this.next();
         break;
       case "hide":
@@ -306,7 +306,7 @@ class DomView implements OverlayView {
   ) {}
 
   place(placement: OverlayPlacement): Promise<void> {
-    // Serialize native moves so a late center request cannot undo a newer recording's corner.
+    // Serialize native moves so a late request cannot undo a newer recording's placement.
     this.placing = this.placing.then(() => invoke<void>("overlay_place", { placement })).catch((error) => {
       pageLog("warn", `could not place the overlay: ${describeError(error)}`);
     });

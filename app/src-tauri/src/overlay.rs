@@ -1,4 +1,4 @@
-//! The overlay window: Raphael's emblem in the bottom-right corner, or centered for learned words.
+//! The overlay window: Raphael's emblem and reports in the bottom-right corner.
 //!
 //! The window is created once, at start-up. It is transparent, never takes focus, lets the mouse
 //! click through, stays on top and stays out of the taskbar and Alt+Tab. It is **never shown or
@@ -92,7 +92,7 @@ pub enum OverlayEvent {
     Progress(Progress),
     /// Raphael's report: the emblem appears with subtitles, then vanishes.
     Notice { zh: String, ja: String },
-    /// A learned-word report uses the same lifecycle, centered when its turn begins.
+    /// A learned-word report uses the ordinary notice lifecycle and corner placement.
     Learned { zh: String, ja: String },
     /// Delivery succeeded: show 100% briefly before the normal vanish animation.
     Complete,
@@ -116,7 +116,7 @@ pub trait OverlayApi: Send + Sync + 'static {
     /// Raphael reports `zh` and `ja` as subtitles for a time that depends on their length, then
     /// the emblem vanishes. Reports that arrive meanwhile wait their turn.
     fn notice(&self, zh: &str, ja: &str);
-    /// The learned words are reported in the center. Fakes can keep the ordinary notice behavior.
+    /// Report learned words in the usual corner. Fakes can keep the ordinary notice behavior.
     fn learned_notice(&self, zh: &str, ja: &str) {
         self.notice(zh, ja);
     }
@@ -132,7 +132,7 @@ pub trait OverlayApi: Send + Sync + 'static {
 
 // ---------- placement (spec §6.1) ----------
 
-/// Only learned-word reports leave the normal bottom-right corner.
+/// Placement requests supported by the overlay window; current reports use the corner.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum OverlayPlacement {
@@ -631,7 +631,7 @@ mod tests {
     use tauri::ipc::InvokeResponseBody;
 
     #[test]
-    fn learned_report_is_centered_in_the_current_work_area() {
+    fn explicit_center_placement_uses_the_current_work_area() {
         let work = Rect {
             x: -1920,
             y: -40,
