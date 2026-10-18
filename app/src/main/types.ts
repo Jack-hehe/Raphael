@@ -38,6 +38,52 @@ export interface KeyInfo {
   usage_monthly: number;
 }
 
+/** One price of `pricing.get`: US$ per million tokens or per minute of audio; null when unknown. */
+export interface CleanupPrice {
+  id: string;
+  name: string;
+  input_per_mtok: number | null;
+  output_per_mtok: number | null;
+}
+
+export interface SttPrice extends CleanupPrice {
+  per_minute: number | null;
+}
+
+/** `pricing.get`: the prices of the models the settings page offers. */
+export interface Pricing {
+  cleanup: CleanupPrice[];
+  stt: SttPrice[];
+  /** When the prices were read from OpenRouter; null for the built-in ones. */
+  fetched_at_ms: number | null;
+  /** `live`: read just now; `cached`: read earlier and kept; `builtin`: shipped with the app. */
+  source: "live" | "cached" | "builtin";
+}
+
+/** What was dictated in a stretch of time (`stats.summary`). */
+export interface Period {
+  dictations: number;
+  words: number;
+  audio_seconds: number;
+  cost_usd: number;
+}
+
+/** `stats.summary`: the numbers of the home page, all from this computer's history. */
+export interface StatsSummary {
+  today: Period;
+  week: Period;
+  month: Period;
+  all: Period;
+  /** Days in a row, up to today, with at least one dictation. */
+  streak_days: number;
+  /** The last 14 days, oldest first. */
+  by_day: { date: string; dictations: number; words: number }[];
+  /** Words per minute of speech; null before there is enough to tell. */
+  speed_wpm: number | null;
+  /** How much longer typing the same words would have taken. */
+  time_saved_seconds: number;
+}
+
 /** A row of `history.list` */
 export interface HistoryItem {
   id: number;

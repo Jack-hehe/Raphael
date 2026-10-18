@@ -66,16 +66,18 @@ const ALLOWED_PREFIXES: [&str; 5] = [
     "secrets.",
     "status.",
 ];
-const ALLOWED_METHODS: [&str; 4] = [
+const ALLOWED_METHODS: [&str; 6] = [
     "audio.devices",
     "audio.monitor",
     "models.status",
     "models.ensure",
+    "pricing.get",
+    "stats.summary",
 ];
 
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
-/// settings, the key, the status, and the few device methods the settings page needs. Everything
-/// else is refused, the dictation methods above all.
+/// settings, the key, the status, the usage numbers, the model prices, and the few device methods
+/// the settings page needs. Everything else is refused, the dictation methods above all.
 pub fn is_allowed_method(m: &str) -> bool {
     ALLOWED_METHODS.contains(&m)
         || ALLOWED_PREFIXES
@@ -684,6 +686,8 @@ mod tests {
             "audio.monitor",
             "models.status",
             "models.ensure",
+            "pricing.get",
+            "stats.summary",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
