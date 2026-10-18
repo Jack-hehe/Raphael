@@ -74,6 +74,9 @@ MIC_STALL_SECONDS = 2.0
 LOST_SESSION_SECONDS = MAX_RECORDING_SECONDS + 60
 
 _LEVEL_METHOD = "audio.level"
+# After the stop: how far the transcription of what is left has come, then that the brain is
+# cleaning the text. The app draws it on the emblem. The stop's reply is the end of it.
+_PROGRESS_METHOD = "dictation.progress"
 
 # What goes on a session's queue besides frames.
 _FLUSH = object()  # the recording is over: finish and transcribe what is left
@@ -162,6 +165,15 @@ class _Session:
         self.capped = False
         self.last_frame_at = now
         self.last_level_at = -float("inf")
+        # The segments the segmenter has cut and how many of them have been transcribed (or given
+        # up on), and whether the last stretch has been cut (the segmenter was flushed). Written
+        # by the worker, read by the loop for `dictation.progress`, which goes out once the stop
+        # has asked for it (`reporting`).
+        self.found = 0
+        self.finished = 0
+        self.flushed = False
+        self.reporting = False
+        self.last_progress: tuple[str, int, int] | None = None  # the loop's
 
         # The worker's; the loop reads them once `done` is set.
         self.engine: SttEngine | None = None
@@ -203,11 +215,14 @@ class DictationService:
     """Dictation behind `dictation.start`, `dictation.stop` and `dictation.cancel`.
 
     `router` is how the service reaches the brain (`dictionary.list`, `settings.get`,
-    `brain.finalize_dictation`) and where it sends `audio.level` notifications. `recorder_factory`
-    makes a recorder that delivers its frames to the function it is given. `segmenter_factory` and
-    `engine_provider` are called off the loop; `engine_provider` may block until the engine has
-    loaded, and is first called when the first stretch of speech has been heard, so a recording
-    does not wait for it. `level_hz` is the most `audio.level` notifications a second.
+    `brain.finalize_dictation`) and where it sends its notifications: `audio.level` while
+    recording, `dictation.progress` after the stop (`stage` "transcribing" with the segments `done`
+    of `total`, then "cleaning" right before the brain is asked; the reply means done).
+    `recorder_factory` makes a recorder that delivers its frames to the function it is given.
+    `segmenter_factory` and `engine_provider` are called off the loop; `engine_provider` may block
+    until the engine has loaded, and is first called when the first stretch of speech has been
+    heard, so a recording does not wait for it. `level_hz` is the most `audio.level` notifications
+    a second.
 
     `stall_seconds` and `clock` (the time, in seconds) belong to the microphone watchdog and the
     level throttle; tests set them.
@@ -452,8 +467,11 @@ class DictationService:
             logger.exception("The voice activity detector failed")
             session.fail(exc, fatal=True)
             return
+        with session.lock:
+            session.found += len(segments)
         for segment in segments:
             self._transcribe(session, segment)
+            self._segment_done(session)
 
     def _finish(self, session: _Session, *, transcribe: bool) -> None:
         """The end of the recording: the speech that was still going on, and a segmenter that is
@@ -466,8 +484,53 @@ class DictationService:
             session.fail(exc, fatal=True)
             return
         if transcribe:
+            with session.lock:
+                session.found += len(rest)
+                session.flushed = True
+            self._report_from_worker(session)
             for segment in rest:
                 self._transcribe(session, segment)
+                self._segment_done(session)
+
+    def _segment_done(self, session: _Session) -> None:
+        with session.lock:
+            session.finished += 1
+        self._report_from_worker(session)
+
+    def _report_from_worker(self, session: _Session) -> None:
+        """Send the transcription's progress, if the stop has asked for it. The counts are taken
+        here, under the lock, so the messages go out in the order the work was done."""
+        with session.lock:
+            if not session.reporting:
+                return
+            counts = self._counts(session)
+        self._call_on_loop(session, self._send_progress, session, "transcribing", *counts)
+
+    @staticmethod
+    def _counts(session: _Session) -> tuple[int, int, float]:
+        """(done, total, seconds recorded), under the session's lock. Until the segmenter has been
+        flushed, one more segment is counted for the stretch it may still hold."""
+        total = session.found + (0 if session.flushed else 1)
+        return session.finished, total, session.received / SAMPLE_RATE
+
+    def _send_progress(
+        self, session: _Session, stage: str, done: int, total: int, audio_seconds: float
+    ) -> None:
+        """On the loop: one `dictation.progress`, unless the session was cancelled or the same
+        thing was said last."""
+        if session.cancelled or session.last_progress == (stage, done, total):
+            return
+        session.last_progress = (stage, done, total)
+        self._router.notify(
+            _PROGRESS_METHOD,
+            {
+                "session_id": session.id,
+                "stage": stage,
+                "done": done,
+                "total": total,
+                "audio_seconds": audio_seconds,
+            },
+        )
 
     def _transcribe(self, session: _Session, segment: np.ndarray) -> None:
         if session.cancelled or session.fatal:
@@ -565,6 +628,9 @@ class DictationService:
             await self._stop_watchdog(session)
             with session.lock:
                 session.levels_on = False
+                session.reporting = True
+                counts = self._counts(session)
+            self._send_progress(session, "transcribing", *counts)
             await self._close_recorder(session)  # the last frames arrive before it returns
             with session.lock:
                 session.closed = True
@@ -613,6 +679,9 @@ class DictationService:
             }
         if mic_failed:
             logger.warning("The microphone stopped during the recording; using what was captured")
+        with session.lock:
+            done, total = session.finished, session.found
+        self._send_progress(session, "cleaning", done, total, speech)
         result = await self._router.call(
             "brain.finalize_dictation",
             {
