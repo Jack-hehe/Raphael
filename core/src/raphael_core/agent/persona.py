@@ -88,6 +88,7 @@ class Phrases:
     copy_last: str  # asks whether to copy Raphael's last answer to the clipboard
     copy_quote: str  # ... or a text the user quoted
     copied: str
+    sources: str  # the heading of the pages an answer drew on, in the history
     yes: str
     no: str
 
@@ -111,6 +112,7 @@ PHRASES: dict[str, Phrases] = {
         copy_last="要把上一則回答複製到剪貼簿嗎？",
         copy_quote="要把你說的那段文字複製到剪貼簿嗎？",
         copied="已複製。",
+        sources="來源",
         yes="是",
         no="否",
     ),
@@ -132,6 +134,7 @@ PHRASES: dict[str, Phrases] = {
         copy_last="Copy my last answer to the clipboard?",
         copy_quote="Copy the text you quoted to the clipboard?",
         copied="Copied.",
+        sources="Sources",
         yes="Yes",
         no="No",
     ),
@@ -153,6 +156,7 @@ PHRASES: dict[str, Phrases] = {
         copy_last="直前の回答をクリップボードにコピーしますか？",
         copy_quote="引用した文章をクリップボードにコピーしますか？",
         copied="コピーしました。",
+        sources="出典",
         yes="はい",
         no="いいえ",
     ),
