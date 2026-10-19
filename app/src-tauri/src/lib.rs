@@ -30,17 +30,42 @@ fn main_window_state_flags() -> StateFlags {
     StateFlags::all() & !(StateFlags::VISIBLE | StateFlags::DECORATIONS)
 }
 
-/// Writes a panic to the log before the default hook runs. The release build aborts on a panic
-/// (`panic = "abort"`) and has no console, so without this a crash would leave no trace.
+/// Writes a panic to the log. The release build aborts on a panic (`panic = "abort"`) and has no
+/// console, so without this a crash would leave no trace.
+///
+/// Only the thread and the place are logged, never the message: it can quote the text being
+/// handled (a string-slice panic embeds up to 256 characters of its string), and that may be a
+/// field the user was dictating into. For the same reason the release build does not hand the
+/// panic to the default hook, which would print the message to stderr.
 fn log_panics() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let thread = std::thread::current();
-        let name = thread.name().unwrap_or("unnamed");
-        log::error!("panic in thread {name}: {info}");
+        log::error!("{}", report_panic(info));
         log::logger().flush();
-        default_hook(info);
+        if cfg!(debug_assertions) {
+            default_hook(info);
+        }
     }));
+}
+
+/// What the log says about the panic that `info` describes.
+fn report_panic(info: &std::panic::PanicHookInfo<'_>) -> String {
+    let thread = std::thread::current();
+    panic_report(thread.name(), info.location())
+}
+
+/// What the log says about a panic: where it happened, and nothing it carried.
+fn panic_report(thread: Option<&str>, location: Option<&std::panic::Location<'_>>) -> String {
+    let thread = thread.unwrap_or("unnamed");
+    match location {
+        Some(at) => format!(
+            "panic in thread {thread} at {}:{}:{}",
+            at.file(),
+            at.line(),
+            at.column()
+        ),
+        None => format!("panic in thread {thread} at an unknown location"),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -228,6 +253,61 @@ fn log_plugin<R: Runtime>() -> TauriPlugin<R> {
         .rotation_strategy(RotationStrategy::KeepSome(3))
         .timezone_strategy(TimezoneStrategy::UseLocal)
         .build()
+}
+
+#[cfg(test)]
+mod panic_report_tests {
+    use super::*;
+
+    #[test]
+    fn a_panic_is_reported_by_thread_and_place_only() {
+        let here = std::panic::Location::caller();
+        let report = panic_report(Some("raphael-learn"), Some(here));
+        assert_eq!(
+            report,
+            format!(
+                "panic in thread raphael-learn at {}:{}:{}",
+                here.file(),
+                here.line(),
+                here.column()
+            )
+        );
+        assert!(report.contains("lib.rs"));
+    }
+
+    #[test]
+    fn an_unnamed_thread_or_unknown_place_is_still_reported() {
+        assert_eq!(
+            panic_report(None, None),
+            "panic in thread unnamed at an unknown location"
+        );
+    }
+
+    #[test]
+    fn a_hook_built_from_the_report_never_sees_the_message() {
+        // The report is built from the thread name and the location alone: whatever the panic
+        // carried, including a quoted slice of dictated text, has no way in.
+        let secret = "text the user dictated";
+        let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = reports.clone();
+        let previous = std::panic::take_hook();
+        // The report is built by the same function the real hook logs.
+        std::panic::set_hook(Box::new(move |info| {
+            seen.lock().unwrap().push(report_panic(info));
+        }));
+        let outcome = std::panic::catch_unwind(|| {
+            let text = String::from(secret);
+            // A slice error quotes the string it sliced in its message.
+            let _ = &text[..1_000];
+        });
+        std::panic::set_hook(previous);
+        assert!(outcome.is_err());
+        let thread = std::thread::current();
+        let mine = format!("panic in thread {} at ", thread.name().unwrap_or("unnamed"));
+        let reports = reports.lock().unwrap();
+        assert!(reports.iter().any(|report| report.starts_with(&mine)));
+        assert!(reports.iter().all(|report| !report.contains(secret)));
+    }
 }
 
 #[cfg(test)]
