@@ -40,6 +40,8 @@ pub use corrections::{Correction, MIN_KEPT_SHARE, Tracker};
 #[cfg(windows)]
 pub use uia::UiaProbe;
 
+#[cfg(windows)]
+use crate::commands::MainEvent;
 use crate::notices;
 use crate::overlay::OverlayApi;
 use crate::paste::{PasteReceipt, Target};
@@ -110,6 +112,77 @@ pub fn cancel_watches() {
     CANCELLATION.fetch_add(1, Ordering::SeqCst);
     #[cfg(windows)]
     handy_keys::cancel_edit_observations();
+}
+
+/// Why learning is limited in an app, for the main window (see [`MainEvent::LearnLimited`]).
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LimitReason {
+    /// A code editor whose accessibility support is off keeps its text out of reach of other
+    /// programs: the text box UI Automation sees is empty.
+    AccessibilityOff,
+}
+
+#[cfg(windows)]
+impl LimitReason {
+    /// The identifier the main window knows it by. It must not change.
+    const fn id(self) -> &'static str {
+        match self {
+            LimitReason::AccessibilityOff => "accessibility_off",
+        }
+    }
+}
+
+/// What has been reported, so that each thing is said once while Raphael runs.
+#[cfg(windows)]
+#[derive(Default)]
+struct Told(Vec<(&'static str, &'static str)>);
+
+#[cfg(windows)]
+impl Told {
+    /// Whether this is the first report of `reason` for `app`; remembers it.
+    fn first(&mut self, app: &'static str, reason: LimitReason) -> bool {
+        let key = (app, reason.id());
+        if self.0.contains(&key) {
+            return false;
+        }
+        self.0.push(key);
+        true
+    }
+}
+
+#[cfg(windows)]
+static TOLD: Mutex<Told> = Mutex::new(Told(Vec::new()));
+
+/// Tells the main window that learning is limited in `app`, the first time this session.
+#[cfg(windows)]
+fn report_limited(app: &'static str, reason: LimitReason) {
+    report_once(&TOLD, app, reason, crate::commands::tell_main_window);
+}
+
+#[cfg(windows)]
+fn report_once(
+    told: &Mutex<Told>,
+    app: &'static str,
+    reason: LimitReason,
+    send: impl FnOnce(MainEvent),
+) {
+    if !told
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .first(app, reason)
+    {
+        return;
+    }
+    // Metadata only: which editor, and why.
+    log::info!(
+        "learn: learning is limited (app: {app}, reason: {})",
+        reason.id()
+    );
+    send(MainEvent::LearnLimited {
+        app: app.to_owned(),
+        reason: reason.id().to_owned(),
+    });
 }
 
 /// What the dictation controller tells about its pastes.
@@ -453,6 +526,43 @@ impl<C: CoreApi, O: OverlayApi, P: FieldProbe> Learner<C, O, P> {
 
     pub fn generation(&self) -> Arc<AtomicU64> {
         self.generation.clone()
+    }
+}
+
+#[cfg(all(test, windows))]
+mod limited_tests {
+    use std::cell::RefCell;
+
+    use super::*;
+
+    fn limited(app: &str) -> MainEvent {
+        MainEvent::LearnLimited {
+            app: app.to_owned(),
+            reason: "accessibility_off".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_identifiers_the_main_window_knows_do_not_change() {
+        assert_eq!(LimitReason::AccessibilityOff.id(), "accessibility_off");
+    }
+
+    #[test]
+    fn each_limit_is_reported_once_per_session() {
+        let told = Mutex::new(Told::default());
+        let sent = RefCell::new(Vec::new());
+        for _ in 0..3 {
+            report_once(&told, "vscode", LimitReason::AccessibilityOff, |event| {
+                sent.borrow_mut().push(event);
+            });
+        }
+        report_once(&told, "cursor", LimitReason::AccessibilityOff, |event| {
+            sent.borrow_mut().push(event);
+        });
+        report_once(&told, "vscode", LimitReason::AccessibilityOff, |event| {
+            sent.borrow_mut().push(event);
+        });
+        assert_eq!(*sent.borrow(), [limited("vscode"), limited("cursor")]);
     }
 }
 

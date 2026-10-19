@@ -50,7 +50,7 @@ static MONITORING: AtomicBool = AtomicBool::new(false);
 /// The task that passes the core's notifications on to the page that last called `main_events`.
 static FORWARDER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
-/// What the main window is told about the core.
+/// What the main window is told about the core, and about the app's own side of learning.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type")]
 pub enum MainEvent {
@@ -58,6 +58,65 @@ pub enum MainEvent {
     Level { value: f32 },
     /// A speech model is being downloaded.
     ModelProgress { name: String, done: u64, total: u64 },
+    /// Learning from corrections cannot read what the user types in `app`, so it learns less
+    /// there. Sent at most once per `app` and `reason` while the app runs, whenever the main
+    /// window is listening (a window that subscribes later is told then). The identifiers are
+    /// stable: `app` is `vscode`, `cursor`, `vscodium`, `windsurf`, `trae` or `positron`;
+    /// `reason` is `accessibility_off` (the editor's `editor.accessibilitySupport` is off, so
+    /// its text box is empty to other programs, and only ASCII typed on the US layout can be
+    /// followed; setting it to `"on"` fixes that).
+    LearnLimited { app: String, reason: String },
+}
+
+/// The most events kept for a main window that has not subscribed yet.
+const WAITING_MAX: usize = 8;
+
+/// The page that last called `main_events`, and the events the app itself had for the main
+/// window before there was one (they do not come from the core, so no notification waits for it).
+struct Page {
+    channel: Option<Channel<MainEvent>>,
+    waiting: Vec<MainEvent>,
+}
+
+impl Page {
+    const fn new() -> Self {
+        Self {
+            channel: None,
+            waiting: Vec::new(),
+        }
+    }
+
+    /// Sends the event, or keeps it for the next page when there is none or it is gone.
+    fn deliver(&mut self, event: MainEvent) {
+        if let Some(channel) = &self.channel {
+            if channel.send(event.clone()).is_ok() {
+                return;
+            }
+            self.channel = None;
+        }
+        if self.waiting.len() < WAITING_MAX {
+            self.waiting.push(event);
+        }
+    }
+
+    /// A page subscribed: it gets what was waiting, and what comes from now on.
+    fn subscribe(&mut self, channel: Channel<MainEvent>) {
+        for event in std::mem::take(&mut self.waiting) {
+            if channel.send(event.clone()).is_err() {
+                self.waiting.push(event);
+            }
+        }
+        self.channel = Some(channel);
+    }
+}
+
+static PAGE: Mutex<Page> = Mutex::new(Page::new());
+
+/// Tells the main window something that did not come from the core (see [`MainEvent`]).
+pub fn tell_main_window(event: MainEvent) {
+    PAGE.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .deliver(event);
 }
 
 // ---------- who may call ----------
@@ -234,6 +293,9 @@ pub async fn main_events(
         .try_state::<Arc<CoreProcess>>()
         .ok_or(CORE_NOT_RUNNING)?;
     let mut notifications = core.subscribe();
+    PAGE.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .subscribe(channel.clone());
     let forwarder = tauri::async_runtime::spawn(async move {
         loop {
             match notifications.recv().await {
@@ -1002,6 +1064,87 @@ mod tests {
             .unwrap(),
             r#"{"type":"ModelProgress","name":"silero-vad","done":1,"total":2}"#
         );
+        assert_eq!(
+            serde_json::to_string(&MainEvent::LearnLimited {
+                app: "vscode".to_owned(),
+                reason: "accessibility_off".to_owned()
+            })
+            .unwrap(),
+            r#"{"type":"LearnLimited","app":"vscode","reason":"accessibility_off"}"#
+        );
+    }
+
+    // ---- events of the app itself ----
+
+    fn limited(app: &str) -> MainEvent {
+        MainEvent::LearnLimited {
+            app: app.to_owned(),
+            reason: "accessibility_off".to_owned(),
+        }
+    }
+
+    /// A page that records the JSON of what it is sent, or refuses everything.
+    fn page_channel(refuses: bool) -> (Channel<MainEvent>, Arc<Mutex<Vec<String>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let channel = Channel::new(move |body| {
+            if refuses {
+                return Err(tauri::Error::Io(std::io::Error::other("the page is gone")));
+            }
+            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+                sink.lock().unwrap().push(json);
+            }
+            Ok(())
+        });
+        (channel, seen)
+    }
+
+    #[test]
+    fn an_event_waits_for_the_page_and_reaches_it_when_it_subscribes() {
+        let mut page = Page::new();
+        page.deliver(limited("vscode"));
+        let (channel, seen) = page_channel(false);
+        assert!(seen.lock().unwrap().is_empty());
+        page.subscribe(channel);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [r#"{"type":"LearnLimited","app":"vscode","reason":"accessibility_off"}"#]
+        );
+        // It is not delivered twice.
+        let (second, seen_again) = page_channel(false);
+        page.subscribe(second);
+        assert!(seen_again.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_event_goes_straight_to_a_page_that_is_listening() {
+        let mut page = Page::new();
+        let (channel, seen) = page_channel(false);
+        page.subscribe(channel);
+        page.deliver(limited("cursor"));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert!(page.waiting.is_empty());
+    }
+
+    #[test]
+    fn a_page_that_went_away_leaves_the_event_for_the_next_one() {
+        let mut page = Page::new();
+        let (gone, _) = page_channel(true);
+        page.subscribe(gone);
+        page.deliver(limited("vscode"));
+        assert!(page.channel.is_none());
+        let (next, seen) = page_channel(false);
+        page.subscribe(next);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn only_a_few_events_wait_for_a_page() {
+        let mut page = Page::new();
+        for n in 0..WAITING_MAX + 5 {
+            page.deliver(limited(&format!("editor{n}")));
+        }
+        assert_eq!(page.waiting.len(), WAITING_MAX);
     }
 
     // ---- after the core (re)starts ----

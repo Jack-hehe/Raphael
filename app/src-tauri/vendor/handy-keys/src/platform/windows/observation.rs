@@ -7,22 +7,22 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Input::Ime::{
-    ImmGetCompositionStringW, ImmGetContext, ImmGetOpenStatus, ImmReleaseContext, GCS_COMPSTR,
-};
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::UI::Input::Ime::ImmGetDefaultIMEWnd;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyState, GetKeyboardLayout,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetGUIThreadInfo, GetWindowLongW, GetWindowThreadProcessId, ES_PASSWORD,
-    GUITHREADINFO, GUI_INMENUMODE, GUI_INMOVESIZE, GUI_POPUPMENUMODE, GWL_STYLE, KBDLLHOOKSTRUCT,
-    MSLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN,
+    GetForegroundWindow, GetGUIThreadInfo, GetWindowLongW, GetWindowThreadProcessId,
+    SendMessageTimeoutW, ES_PASSWORD, GUITHREADINFO, GUI_INMENUMODE, GUI_INMOVESIZE,
+    GUI_POPUPMENUMODE, GWL_STYLE, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT, SMTO_ABORTIFHUNG,
+    WM_IME_CONTROL, WM_KEYDOWN, WM_SYSKEYDOWN,
 };
 
 use crate::observation::{
-    deadline_after, edit_key, keyboard_origin, mouse_origin, permitted, submission_key, EditBuffer,
-    EditEvent, InputOrigin, InputStamp,
+    ascii_capture_allowed, composition_state, deadline_after, edit_key, keyboard_origin,
+    monotonic_ms, mouse_origin, permitted, submission_key, EditBuffer, EditEvent, HookHeartbeat,
+    ImeAnswer, InputOrigin, InputStamp,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -46,6 +46,20 @@ static ACTIVE: AtomicBool = AtomicBool::new(false);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 static INPUT_SERIAL: AtomicU64 = AtomicU64::new(0);
 static SESSION: OnceLock<Mutex<Option<Arc<Session>>>> = OnceLock::new();
+/// Stamped by the hook thread; read to tell a quiet keyboard from hooks that are not running.
+static HEARTBEAT: HookHeartbeat = HookHeartbeat::new();
+
+/// The plain US keyboard layout: the only one whose keys map to ASCII one to one, and which has
+/// no IME.
+const US_LAYOUT: u32 = 0x0409_0409;
+/// `IMC_GETOPENSTATUS` of `WM_IME_CONTROL` (the windows crate has no constant for it).
+const IMC_GETOPENSTATUS: usize = 0x0005;
+/// How long a question to another process's IME window may take when it is asked from inside the
+/// keyboard hook (for an Enter key), whose own budget is a few hundred milliseconds.
+const IME_QUERY_IN_HOOK_MS: u32 = 30;
+/// ... and when the learning thread asks while arming an observer, where the app that has just
+/// been pasted into may take longer to answer than a hook may wait.
+const IME_QUERY_WHILE_ARMING_MS: u32 = 150;
 
 fn registry() -> &'static Mutex<Option<Arc<Session>>> {
     SESSION.get_or_init(|| Mutex::new(None))
@@ -58,8 +72,10 @@ pub struct InputCheckpoint {
 }
 
 impl InputCheckpoint {
-    /// True only while no physical or unknown injected input has occurred, native focus is
-    /// unchanged, and fewer than 60 seconds have elapsed. Recheck after arming an observer.
+    /// True only while the hooks have proven themselves alive since the paste (the hook thread's
+    /// loop runs and the paste's own keys reached the hook), no physical or unknown injected
+    /// input has occurred, native focus is unchanged, and fewer than 60 seconds have elapsed.
+    /// Recheck after arming an observer.
     pub fn is_current(&self) -> bool {
         let before = INPUT_SERIAL.load(Ordering::Acquire);
         let Some(scope) = input_scope(Mode::Submissions) else {
@@ -67,9 +83,14 @@ impl InputCheckpoint {
         };
         let after = INPUT_SERIAL.load(Ordering::Acquire);
         before == after
-            && self
-                .stamp
-                .is_current(scope.hwnd, scope.focus, after, Instant::now())
+            && self.stamp.is_current(
+                scope.hwnd,
+                scope.focus,
+                after,
+                Instant::now(),
+                &HEARTBEAT,
+                monotonic_ms(),
+            )
     }
 
     pub fn started(&self) -> Instant {
@@ -78,11 +99,14 @@ impl InputCheckpoint {
 }
 
 /// Captures only counter/focus metadata. No text observer or polling thread is started.
-/// Requires the existing keyboard listener; a missed OS hook event cannot advance the counter.
+/// Requires the existing keyboard listener to be running: a hook that never started or died
+/// cannot advance the counter, and a counter that stands still would then look like a quiet
+/// keyboard. Without a recent heartbeat there is no checkpoint, so the caller learns nothing.
 pub fn input_checkpoint(hwnd: isize) -> Option<InputCheckpoint> {
-    if hwnd == 0 {
+    if hwnd == 0 || !HEARTBEAT.loop_alive(monotonic_ms()) {
         return None;
     }
+    let hook_mark = HEARTBEAT.mark();
     let serial = INPUT_SERIAL.load(Ordering::Acquire);
     let started = Instant::now();
     let scope = input_scope(Mode::Submissions)?;
@@ -95,6 +119,7 @@ pub fn input_checkpoint(hwnd: isize) -> Option<InputCheckpoint> {
             focus: scope.focus,
             serial,
             started,
+            hook_mark,
         },
     })
 }
@@ -139,12 +164,23 @@ impl EditObservation {
     }
 
     /// The caller must revalidate UIA identity/password before using these events.
-    /// Cancellation, an expired deadline, or any unsafe input yields only `Invalidated`.
+    /// Cancellation, an expired deadline, a stopped hook, or any unsafe input yields only
+    /// `Invalidated`.
     pub fn drain(&mut self) -> Vec<EditEvent> {
+        self.drain_at(monotonic_ms())
+    }
+
+    /// [`Self::drain`] at a given reading of the heartbeat clock.
+    fn drain_at(&mut self, now_ms: u64) -> Vec<EditEvent> {
         let session = &self.session;
         if session.generation != GENERATION.load(Ordering::Acquire)
             || Instant::now() >= session.deadline
         {
+            session.invalid.store(true, Ordering::Release);
+        }
+        // With the hook thread gone nothing more can be seen: a keyboard that looks quiet may be
+        // one whose Enter was missed. What was captured up to a submission stays valid.
+        if !session.complete.load(Ordering::Acquire) && !HEARTBEAT.loop_alive(now_ms) {
             session.invalid.store(true, Ordering::Release);
         }
         // Before submit, also check native focus when no hook event happened since the last poll.
@@ -177,7 +213,8 @@ impl Drop for EditObservation {
 }
 
 /// Watches at most one vetted native focus/window for at most 60 seconds.
-/// Unsupported layouts, an open IME, held chords, or unknown native focus fail closed.
+/// Unsupported layouts, an open or unreachable IME, held chords, a stopped keyboard hook, or
+/// unknown native focus fail closed.
 /// UIA-unavailable applications cannot be vetted by this API alone.
 pub fn observe_edits(hwnd: isize, duration: Duration) -> Option<EditObservation> {
     observe(hwnd, duration, Mode::Edits)
@@ -186,17 +223,25 @@ pub fn observe_edits(hwnd: isize, duration: Duration) -> Option<EditObservation>
 /// Observes only an unmodified, non-composing Enter in a vetted readable UIA field.
 /// It never buffers text and supports non-US layouts and an open IME. An unknown composition
 /// state at Enter invalidates the observation rather than treating a candidate commit as submit.
+/// Without a running keyboard hook there is nothing to observe with, and no observation starts.
 pub fn observe_submissions(hwnd: isize, duration: Duration) -> Option<EditObservation> {
     observe(hwnd, duration, Mode::Submissions)
 }
 
 fn observe(hwnd: isize, duration: Duration, mode: Mode) -> Option<EditObservation> {
-    if hwnd == 0 {
+    if hwnd == 0 || !HEARTBEAT.loop_alive(monotonic_ms()) {
         return None;
     }
     cancel_edit_observations();
     let scope = input_scope(mode)?;
     if scope.hwnd != hwnd || (mode == Mode::Edits && (unsafe_modifiers() || held(0x10))) {
+        return None;
+    }
+    // The US layout rules out an IME, but ask anyway: an IME that is open, or cannot be asked,
+    // is not an ASCII keyboard. (Once here; the layout is rechecked on every hook event.)
+    if mode == Mode::Edits
+        && !ascii_capture_allowed(ime_answer(scope.focus, IME_QUERY_WHILE_ARMING_MS))
+    {
         return None;
     }
     let mut current = registry().lock().ok()?;
@@ -267,18 +312,8 @@ fn input_scope(mode: Mode) -> Option<Scope> {
         }
         // A VK-only reconstruction is exact only on the plain US keyboard layout.
         // Reject international/dead-key variants and CJK layouts even in Latin mode.
-        if mode == Mode::Edits {
-            if GetKeyboardLayout(thread).0 as usize as u32 != 0x0409_0409 {
-                return None;
-            }
-            let ime = ImmGetContext(info.hwndFocus);
-            if !ime.0.is_null() {
-                let open = ImmGetOpenStatus(ime).as_bool();
-                let _ = ImmReleaseContext(info.hwndFocus, ime);
-                if open {
-                    return None;
-                }
-            }
+        if mode == Mode::Edits && GetKeyboardLayout(thread).0 as usize as u32 != US_LAYOUT {
+            return None;
         }
         Some(Scope {
             hwnd: hwnd.0 as isize,
@@ -301,28 +336,55 @@ fn in_scope(session: &Session) -> bool {
     })
 }
 
-fn composing(focus: isize) -> Option<bool> {
+/// Asks the IME of the thread that owns `focus` whether it is open. `ImmGetContext` cannot be
+/// used for that: it returns NULL for any window the calling thread does not own, which is every
+/// window this hook looks at. The thread's default IME window answers `WM_IME_CONTROL` from
+/// anywhere. A busy, hung or out-of-reach window ends in [`ImeAnswer::Unknown`].
+fn ime_answer(focus: isize, timeout_ms: u32) -> ImeAnswer {
+    // SAFETY: plain queries on a window handle; a stale handle only makes them fail.
     unsafe {
-        let hwnd = HWND(focus as *mut _);
-        let ime = ImmGetContext(hwnd);
+        let ime = ImmGetDefaultIMEWnd(HWND(focus as *mut _));
         if ime.0.is_null() {
-            let thread = GetWindowThreadProcessId(hwnd, None);
-            // No IME context is expected on the plain US layout. Other layouts remain unknown.
-            return (thread != 0 && GetKeyboardLayout(thread).0 as usize as u32 == 0x0409_0409)
-                .then_some(false);
+            return ImeAnswer::NoImeWindow;
         }
-        // Only request the byte count. No composition text is ever copied into this process.
-        let bytes = ImmGetCompositionStringW(ime, GCS_COMPSTR, None, 0);
-        let open = ImmGetOpenStatus(ime).as_bool();
-        let _ = ImmReleaseContext(hwnd, ime);
-        if bytes > 0 {
-            Some(true)
-        } else if bytes == 0 || !open {
-            Some(false)
-        } else {
-            None
+        let mut status = 0usize;
+        let sent = SendMessageTimeoutW(
+            ime,
+            WM_IME_CONTROL,
+            WPARAM(IMC_GETOPENSTATUS),
+            LPARAM(0),
+            SMTO_ABORTIFHUNG,
+            timeout_ms,
+            Some(&mut status as *mut usize),
+        );
+        match (sent.0, status) {
+            (0, _) => ImeAnswer::Unknown,
+            (_, 0) => ImeAnswer::Closed,
+            _ => ImeAnswer::Open,
         }
     }
+}
+
+/// Whether the window `focus` is on the plain US layout, which has no IME.
+fn us_layout(focus: isize) -> bool {
+    // SAFETY: plain queries on a window handle.
+    unsafe {
+        let thread = GetWindowThreadProcessId(HWND(focus as *mut _), None);
+        thread != 0 && GetKeyboardLayout(thread).0 as usize as u32 == US_LAYOUT
+    }
+}
+
+/// Whether an IME could be composing in `focus` as Enter goes down: `Some(false)` only when it
+/// cannot (see [`composition_state`]). No composition text is ever read.
+fn composing(focus: isize) -> Option<bool> {
+    let us = us_layout(focus);
+    // Only another layout can have an IME, and only then is the slower question worth asking.
+    let ime = if us {
+        ImeAnswer::NoImeWindow
+    } else {
+        ime_answer(focus, IME_QUERY_IN_HOOK_MS)
+    };
+    composition_state(us, ime)
 }
 
 /// Returns without waiting if a consumer owns either mutex. Any contention invalidates capture.
@@ -367,6 +429,8 @@ fn retire(session: &Arc<Session>) {
 
 /// Called beside the hotkey hook, after its existing suppression decision.
 pub(super) fn keyboard(kb: &KBDLLHOOKSTRUCT, message: u32, blocked: bool) {
+    // Every event counts as proof the procedure is installed, Raphael's own paste keys included.
+    HEARTBEAT.key_event();
     match keyboard_origin(kb.flags.0, kb.dwExtraInfo) {
         InputOrigin::OwnInjected => return,
         InputOrigin::Physical => {
@@ -463,8 +527,10 @@ pub(super) fn mouse(mouse: &MSLLHOOKSTRUCT) {
     });
 }
 
-/// The existing hook loop calls this every 10 ms to expire even an idle observation.
+/// The existing hook loop calls this every 10 ms to expire even an idle observation. It is also
+/// the heartbeat: it runs only while the thread that owns the hooks is pumping messages.
 pub(super) fn tick() {
+    HEARTBEAT.beat(monotonic_ms());
     with_session(|session| {
         if !session.complete.load(Ordering::Acquire) && !in_scope(session) {
             session.invalid.store(true, Ordering::Release);
@@ -478,13 +544,24 @@ pub(super) fn tick() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::observation::RAPHAEL_INPUT_MARKER;
+    use crate::observation::{HOOK_HEARTBEAT_MAX_AGE_MS, RAPHAEL_INPUT_MARKER};
     use windows::Win32::UI::WindowsAndMessaging::{KBDLLHOOKSTRUCT_FLAGS, LLKHF_INJECTED};
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    /// A reading of the heartbeat clock long after any beat these tests make.
+    fn much_later() -> u64 {
+        monotonic_ms() + 10 * 3_600_000
+    }
+
+    /// Pretends the hook thread is running, whatever the scheduler does to the test meanwhile.
+    fn hooks_running() {
+        HEARTBEAT.beat(monotonic_ms() + 3_600_000);
+    }
+
     fn observation(duration: Duration, complete: bool) -> EditObservation {
         cancel_edit_observations();
+        hooks_running();
         let mut buffer = EditBuffer::new();
         buffer.push(EditEvent::Ascii(b'x'));
         if complete {
@@ -661,5 +738,77 @@ mod tests {
         record(&observed.session, EditEvent::Ascii(b'z'));
         drop(locked);
         assert_eq!(observed.drain(), [EditEvent::Invalidated]);
+    }
+
+    #[test]
+    fn every_hook_loop_pass_beats_the_heart() {
+        let _serial = TEST_LOCK.lock().unwrap();
+        cancel_edit_observations();
+        HEARTBEAT.beat(0);
+        assert!(!HEARTBEAT.loop_alive(monotonic_ms()));
+        tick();
+        assert!(HEARTBEAT.loop_alive(monotonic_ms()));
+    }
+
+    #[test]
+    fn every_keyboard_event_reaches_the_heartbeat_even_the_pastes_own() {
+        let _serial = TEST_LOCK.lock().unwrap();
+        cancel_edit_observations();
+        let own = KBDLLHOOKSTRUCT {
+            vkCode: 0x56,
+            flags: LLKHF_INJECTED,
+            dwExtraInfo: RAPHAEL_INPUT_MARKER,
+            ..Default::default()
+        };
+        let other = KBDLLHOOKSTRUCT {
+            dwExtraInfo: 0,
+            ..own
+        };
+        let physical = KBDLLHOOKSTRUCT {
+            flags: KBDLLHOOKSTRUCT_FLAGS(0),
+            ..own
+        };
+        for event in [own, other, physical] {
+            let mark = HEARTBEAT.mark();
+            keyboard(&event, WM_KEYDOWN, false);
+            assert!(HEARTBEAT.saw_events_since(mark));
+        }
+        // The mouse hook does not stand in for the keyboard one.
+        let mark = HEARTBEAT.mark();
+        mouse(&MSLLHOOKSTRUCT::default());
+        assert!(!HEARTBEAT.saw_events_since(mark));
+    }
+
+    #[test]
+    fn a_stopped_hook_loop_invalidates_an_open_observation() {
+        let _serial = TEST_LOCK.lock().unwrap();
+        let mut observed = observation(Duration::from_secs(20), false);
+        let stopped = much_later() + HOOK_HEARTBEAT_MAX_AGE_MS;
+        assert_eq!(observed.drain_at(stopped), [EditEvent::Invalidated]);
+        // Terminal: even a loop that comes back cannot revive it.
+        hooks_running();
+        assert_eq!(observed.drain(), [EditEvent::Invalidated]);
+    }
+
+    #[test]
+    fn what_a_submitted_observation_captured_survives_a_hook_that_stops_afterwards() {
+        let _serial = TEST_LOCK.lock().unwrap();
+        let mut observed = observation(Duration::from_secs(20), true);
+        assert_eq!(
+            observed.drain_at(much_later()),
+            [EditEvent::Ascii(b'x'), EditEvent::Enter]
+        );
+    }
+
+    #[test]
+    fn nothing_is_checkpointed_or_observed_while_the_hook_is_not_running() {
+        let _serial = TEST_LOCK.lock().unwrap();
+        cancel_edit_observations();
+        HEARTBEAT.beat(0);
+        // Refused before any window is looked at: a standing-still counter would prove nothing.
+        assert!(input_checkpoint(1).is_none());
+        assert!(observe_submissions(1, Duration::from_secs(1)).is_none());
+        assert!(observe_edits(1, Duration::from_secs(1)).is_none());
+        assert!(!ACTIVE.load(Ordering::Acquire));
     }
 }
