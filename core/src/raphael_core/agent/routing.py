@@ -76,11 +76,14 @@ _FLAGS = {
         "The weather is not needed.",
     ),
     "needs_search": (
-        "Does answering the request need facts that must be looked up on the web? " + _REQUEST,
-        "Answering needs current or specific facts from the web: news, prices, scores, "
-        "schedules, what happened, or who or what a particular thing is.",
-        "No lookup is needed: a greeting, an opinion, a plan, simple arithmetic, timeless "
-        "general knowledge, or a computer command.",
+        "Does answering the request need facts that must be looked up on the web? Raphael has "
+        "its own weather service and clock, so the weather and the time are not looked up on "
+        "the web. " + _REQUEST,
+        "Answering needs current or specific facts from the web other than the weather and the "
+        "time: news, prices, scores, schedules, what happened, or who or what a particular "
+        "thing is.",
+        "No lookup is needed: the weather or the time alone, a greeting, an opinion, a plan, "
+        "simple arithmetic, timeless general knowledge, or a computer command.",
     ),
     "needs_time": (
         "Does answering the request need the current date or time? " + _REQUEST,
@@ -229,9 +232,10 @@ def _classify_system_prompt() -> str:
         f"One of\n{commands}\n  {NONE}: {_NONE_GUIDANCE}\n"
         "- needs_weather: true when answering needs the current weather or the forecast.\n"
         "- needs_search: true when answering needs current or specific facts that must be looked "
-        "up on the web (news, prices, scores, schedules, what happened, who or what a particular "
-        "thing is); false for greetings, opinions, plans, simple arithmetic, timeless general "
-        "knowledge and computer commands.\n"
+        "up on the web other than the weather and the time, which Raphael has its own service "
+        "and clock for (news, prices, scores, schedules, what happened, who or what a particular "
+        "thing is); false for the weather or the time alone, greetings, opinions, plans, simple "
+        "arithmetic, timeless general knowledge and computer commands.\n"
         "- needs_time: true when the request asks for the current date or time, the day of the "
         "week or the time zone.\n"
         "- app: when the command is open_app, the name of the application to open, as the "
