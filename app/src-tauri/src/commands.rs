@@ -1,7 +1,9 @@
 //! The commands the main window calls, and the device settings behind some of them.
 //!
 //! - `core_call` passes a call on to the core, but only the methods the main window needs; the
-//!   dictation methods are the controller's alone.
+//!   dictation methods and the ones that ask Raphael something (`agent.ask`, `agent.confirm`,
+//!   `agent.cancel`) are the controller's alone. The main window may read and clear the record of
+//!   the conversations (`agent.history.`).
 //! - `device_settings_get` and `device_settings_set` read and change `device.json`
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
 //!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
@@ -139,12 +141,13 @@ fn require_main(webview: &Webview) -> Result<(), String> {
 
 // ---------- calls to the core ----------
 
-const ALLOWED_PREFIXES: [&str; 5] = [
+const ALLOWED_PREFIXES: [&str; 6] = [
     "history.",
     "dictionary.",
     "settings.",
     "secrets.",
     "status.",
+    "agent.history.",
 ];
 const ALLOWED_METHODS: [&str; 7] = [
     "audio.devices",
@@ -158,8 +161,9 @@ const ALLOWED_METHODS: [&str; 7] = [
 
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
 /// settings (the `languages` setting too), the key, the status, the usage numbers, the model prices,
-/// the list of languages, and the few device methods
-/// the settings page needs. Everything else is refused, the dictation methods above all.
+/// the list of languages, the record of the conversations with Raphael, and the few device methods
+/// the settings page needs. Everything else is refused, the dictation methods and the ones that
+/// ask Raphael something above all.
 pub fn is_allowed_method(m: &str) -> bool {
     ALLOWED_METHODS.contains(&m)
         || ALLOWED_PREFIXES
@@ -896,6 +900,32 @@ mod tests {
     }
 
     #[test]
+    fn the_main_window_reads_the_conversations_but_never_asks_raphael() {
+        // The record of the conversations is the main window's to read and clear...
+        for method in ["agent.history.list", "agent.history.clear"] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        // ...and the questions are the controller's alone: the main window cannot ask, approve
+        // or cancel anything on Raphael's behalf.
+        for method in [
+            "agent.ask",
+            "agent.confirm",
+            "agent.cancel",
+            "agent.",
+            "agent",
+            "agent.history",
+            "agent.history.",
+            "agent.historyx",
+            "agent.historyx.list",
+            "xagent.history.list",
+            "Agent.history.list",
+            " agent.history.list",
+        ] {
+            assert!(!is_allowed_method(method), "{method:?}");
+        }
+    }
+
+    #[test]
     fn the_whole_list_of_allowed_methods() {
         for method in [
             "history.list",
@@ -920,6 +950,8 @@ mod tests {
             "pricing.get",
             "stats.summary",
             "languages.list",
+            "agent.history.list",
+            "agent.history.clear",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
@@ -930,6 +962,9 @@ mod tests {
             "dictation.start",
             "dictation.stop",
             "dictation.cancel",
+            "agent.ask",
+            "agent.confirm",
+            "agent.cancel",
             "brain.finalize_dictation",
             "audio.set_device", // goes through device_settings_set
             "audio.start",
