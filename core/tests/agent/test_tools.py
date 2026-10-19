@@ -472,3 +472,17 @@ def test_the_weekday_is_english_whatever_the_locale_of_the_machine(client):
 def test_the_default_clock_is_the_local_time(client):
     data = Tools(client).local_time().data
     assert datetime.fromisoformat(data["iso"]).tzinfo is not None
+
+
+# --- the log -----------------------------------------------------------------------------------------
+
+
+def test_the_address_of_an_open_meteo_request_is_kept_out_of_the_log_and_others_are_not(caplog):
+    httpx_log = logging.getLogger("httpx")
+    with caplog.at_level(logging.INFO, logger="httpx"):
+        httpx_log.info(
+            'HTTP Request: GET https://geocoding-api.open-meteo.com/v1/search?name=%E5%8F%B0 "200 OK"'
+        )
+        httpx_log.info('HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "200 OK"')
+    assert "open-meteo" not in caplog.text
+    assert "openrouter.ai" in caplog.text

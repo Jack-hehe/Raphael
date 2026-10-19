@@ -87,6 +87,7 @@ class Phrases:
     nothing_to_copy: str
     copy_last: str  # asks whether to copy Raphael's last answer to the clipboard
     copy_quote: str  # ... or a text the user quoted
+    confirm_action: str  # asks whether to do an action that has no question of its own
     copied: str
     sources: str  # the heading of the pages an answer drew on, in the history
     yes: str
@@ -111,6 +112,7 @@ PHRASES: dict[str, Phrases] = {
         nothing_to_copy="沒有可以複製的內容。",
         copy_last="要把上一則回答複製到剪貼簿嗎？",
         copy_quote="要把你說的那段文字複製到剪貼簿嗎？",
+        confirm_action="要執行這個動作嗎？",
         copied="已複製。",
         sources="來源",
         yes="是",
@@ -133,6 +135,7 @@ PHRASES: dict[str, Phrases] = {
         nothing_to_copy="There is nothing to copy.",
         copy_last="Copy my last answer to the clipboard?",
         copy_quote="Copy the text you quoted to the clipboard?",
+        confirm_action="Do this?",
         copied="Copied.",
         sources="Sources",
         yes="Yes",
@@ -155,6 +158,7 @@ PHRASES: dict[str, Phrases] = {
         nothing_to_copy="コピーできる内容がありません。",
         copy_last="直前の回答をクリップボードにコピーしますか？",
         copy_quote="引用した文章をクリップボードにコピーしますか？",
+        confirm_action="これを実行しますか？",
         copied="コピーしました。",
         sources="出典",
         yes="はい",

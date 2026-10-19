@@ -28,6 +28,17 @@ from .ledger import Ledger
 
 logger = logging.getLogger(__name__)
 
+
+class _KeepPlacesOutOfTheLog(logging.Filter):
+    """httpx logs the address of each request it makes, at INFO; the one to Open-Meteo holds the
+    city. Those lines are dropped (the others are left alone)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "open-meteo.com" not in record.getMessage()
+
+
+logging.getLogger("httpx").addFilter(_KeepPlacesOutOfTheLog())
+
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 # The language Open-Meteo names the place in, for each language Raphael speaks.
