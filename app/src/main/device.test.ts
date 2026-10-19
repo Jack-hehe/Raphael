@@ -6,9 +6,10 @@ const base: DeviceSettings = {
   dictation_keys: ["AltRight"],
   dictation_mode: "toggle",
   paste_last_keys: ["AltRight+V"],
+  agent_keys: ["AltRight+Space"],
   microphone: null,
   emblem_size: 150,
-  subtitles: "both",
+  subtitles: "on",
   appearance: "system",
   ui_language: "zh-TW",
   autostart: true,
@@ -111,11 +112,11 @@ describe("DeviceState", () => {
   });
 
   test("a write returns and keeps what the app answers", async () => {
-    const saved = { ...base, subtitles: "zh" as const };
+    const saved = { ...base, subtitles: "off" as const };
     const set = vi.fn(() => Promise.resolve(saved));
     const { s, changed } = state({ set });
-    await expect(s.set({ subtitles: "zh" })).resolves.toEqual(saved);
-    expect(set).toHaveBeenCalledWith({ subtitles: "zh" });
+    await expect(s.set({ subtitles: "off" })).resolves.toEqual(saved);
+    expect(set).toHaveBeenCalledWith({ subtitles: "off" });
     expect(s.get()).toEqual(saved);
     expect(changed).toHaveBeenCalledTimes(1);
   });

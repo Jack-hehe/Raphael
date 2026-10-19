@@ -79,7 +79,7 @@ export class Stage {
     if (!report) return;
     this.shown = JSON.stringify(report);
     this.subtitles.innerHTML =
-      line(report.zh, report.ja) +
+      line(report.text) +
       (report.action
         ? `<div class="act"><button type="button" class="btn pri" data-target="${report.action.target}">${esc(report.action.label)}</button></div>`
         : "");

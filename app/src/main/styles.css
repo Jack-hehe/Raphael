@@ -48,6 +48,11 @@
   color-scheme: dark;
 }
 
+/* Raphael's words and the person's: the face of the language of the window. */
+:root { --voice: var(--zh-sub); }
+:root[lang="ja"] { --voice: var(--ja); }
+:root[lang="en"] { --voice: var(--ui); }
+
 /* ---------- base ---------- */
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
@@ -203,84 +208,20 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .spend .bar { width: 120px; }
 [data-row="raphael-spend"] .st { white-space: normal; align-items: baseline; }
 
-/* ---------- home: the stage, insights and activity; shortcuts follow below ---------- */
-.page.page-home { max-width: 1160px; }
-.home { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
-.home-main { min-width: 0; min-height: calc(100dvh - 32px); }
-.home-side { min-width: 0; }
-.keys-card { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 24px; padding-bottom: 8px; }
-.keys-card .card-head { grid-column: 1 / -1; }
-.keys-card .kc-row { border-top: 0; padding-top: 2px; }
-@container main (min-width: 1100px) {
-  .home { grid-template-columns: minmax(0, 1fr) 208px; }
-  .home-main { min-height: 0; }
-  .home-side { position: sticky; top: calc(var(--window-controls-height) + 8px); }
-  .keys-card { display: block; }
-  .keys-card .kc-row { border-top: 1px solid var(--line); padding-top: 12px; }
-  .keys-card .card-head + .kc-row { border-top: 0; }
-}
-@container main (max-width: 600px) {
-  .keys-card { grid-template-columns: minmax(0, 1fr); }
-}
+/* ---------- the stage: the emblem and Raphael's words (home, first run) ---------- */
 .stage { position: relative; display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 20px; align-items: center; min-height: 132px; color: var(--text); border-bottom: 1px solid var(--line); padding: 0 0 20px; }
 .stage canvas.emb { position: relative; width: 112px !important; height: 112px !important; }
-.home-stage { grid-template-columns: 128px minmax(0, 1fr); min-height: 156px; }
 .stage .subs { position: relative; min-width: 0; padding: 12px 0; text-align: left; }
-.sub-zh, .sub-ja { text-wrap: pretty; text-shadow: none; }
-.sub-zh { color: var(--text); font-family: var(--zh-sub); font-weight: 650; font-size: 17px; line-height: 1.65; }
-.sub-ja { color: var(--text-3); font-family: var(--ja); font-size: 12px; line-height: 1.65; margin-top: 5px; }
+.sub-line { color: var(--text); font-family: var(--voice); font-weight: 650; font-size: 17px; line-height: 1.65; text-wrap: pretty; text-shadow: none; }
 .subs .line { opacity: 0; transition: opacity 0.18s ease; }
 .subs .line.on { opacity: 1; }
 .stage .act { display: flex; justify-content: flex-start; gap: 8px; margin-top: 10px; }
 .stage .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 
-/* What keeps dictation from working fully, with the way to fix it. */
+/* What keeps dictation from working fully, with the way to fix it (the dictionary page's editor hints). */
 .alert { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 8px 8px 8px 14px; border-radius: 10px; background: var(--warn-soft); border: 1px solid var(--warn-edge); }
 .alert .st { white-space: normal; flex: 1; min-width: 0; }
 
-.insights { margin-top: 22px; }
-.sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 12px; flex-wrap: wrap; margin-bottom: 12px; }
-.sec-head h2 { margin: 0; font: 650 18px/1.3 var(--display); }
-.sec-head .sum { font-size: 13px; color: var(--text-2); }
-.icards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.icard { padding: 14px 18px; background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; min-width: 0; }
-.icard .v, .anum .v { font: 650 26px/1.2 var(--display); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; overflow-wrap: anywhere; }
-.icard .v small, .anum .v small { font: 500 13px/1 var(--ui); color: var(--text-2); margin: 0 6px 0 3px; letter-spacing: 0; }
-.icard .v small:last-child, .anum .v small:last-child { margin-right: 0; }
-.icard .v.none { font: 400 15px/30px var(--ui); color: var(--text-3); }
-.icard .k, .anum .k { margin-top: 6px; font-size: 12px; color: var(--text-3); }
-
-.activity { margin-top: 12px; padding: 18px 18px 14px; }
-.activity > h2 { margin: 0 0 14px 2px; font: 600 13px/1.4 var(--ui); color: var(--text-2); }
-.anums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 0 2px; }
-.heat-wrap { display: flex; align-items: center; gap: 2px; margin-top: 18px; }
-.heat-wrap .icon-btn { flex: none; align-self: flex-start; margin-top: 46px; width: 24px; height: 28px; }
-.heat-wrap .icon-btn:disabled { opacity: 0.35; cursor: default; background: transparent; }
-.heat-box { flex: 1; min-width: 0; overflow: auto; display: flex; justify-content: center; }
-.heat { max-width: 100%; height: auto; }
-.heat { display: block; flex: none; }
-.heat .h0 { fill: var(--heat-0); }
-.heat .h1 { fill: var(--heat-1); } .heat .h2 { fill: var(--heat-2); } .heat .h3 { fill: var(--heat-3); } .heat .h4 { fill: var(--heat-4); }
-.heat .nodata { fill: url(#hatch); }
-.heat .hatch-bg { fill: transparent; }
-.heat .hatch-line { stroke: var(--hatch); stroke-width: 1.6; }
-.heat .future { fill: none; stroke: var(--line); stroke-width: 1; }
-.heat rect:hover { stroke: var(--text-2); stroke-width: 1; }
-.heat .ax { font: 10px var(--ui); fill: var(--text-3); }
-.legend { display: flex; align-items: center; gap: 4px; margin: 10px 0 0 28px; font-size: 11px; color: var(--text-3); }
-.legend span:first-child { margin-right: 2px; } .legend span:last-child { margin-left: 2px; }
-.legend i { width: 11px; height: 11px; border-radius: 3px; }
-.legend i.h1 { background: var(--heat-1); } .legend i.h2 { background: var(--heat-2); } .legend i.h3 { background: var(--heat-3); } .legend i.h4 { background: var(--heat-4); }
-
-.keys-card { padding: 16px 16px 8px; }
-.card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-.card-head h2 { margin: 0; font: 600 13px/1.3 var(--ui); color: var(--text-2); }
-.kc-row { padding: 12px 0; border-top: 1px solid var(--line); }
-.card-head + .kc-row { border-top: 0; }
-.kc-name { font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
-.kc-keys { display: flex; flex-wrap: wrap; gap: 6px; }
-.kc-note { margin-top: 6px; font-size: 12px; line-height: 1.45; color: var(--text-3); text-wrap: pretty; }
-.home-version { position: fixed; right: 20px; bottom: 12px; z-index: 1; margin: 0; text-align: right; font-size: 11px; color: var(--text-3); pointer-events: none; }
 .page-loading { display: grid; gap: 12px; padding: 24px 0; width: 100%; }
 .loading-line { display: block; height: 64px; border-radius: 12px; background: var(--surface-2); animation: ob-pulse 1.8s ease-in-out infinite; }
 .loading-line:last-child { width: 68%; }
@@ -322,7 +263,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .hdetail h4 { margin: 6px 0 0; font-size: 12px; font-weight: 600; color: var(--text-3); }
 .hdetail .raw { font-size: 13px; line-height: 1.6; color: var(--text-2); overflow-wrap: anywhere; user-select: text; }
 .empty { padding: 36px 0; text-align: center; color: var(--text-3); font-size: 13px; }
-.empty .say { font-family: var(--zh-sub); font-weight: 700; color: var(--text); font-size: 15px; margin-bottom: 4px; }
+.empty .say { font-family: var(--voice); font-weight: 700; color: var(--text); font-size: 15px; margin-bottom: 4px; }
 .more { display: flex; justify-content: center; margin-top: 14px; }
 
 /* ---------- dictionary ---------- */
@@ -485,27 +426,6 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   .page, .page.page-home, .page.page-dict { max-width: 1480px; padding: calc(var(--window-controls-height) + 24px) 40px 48px; font-size: 15px; }
   .page h1 { font-size: 32px; }
   .page .lede { font-size: 15px; }
-  .home { grid-template-columns: minmax(0, 1fr) 240px; gap: 32px; }
-  .home-stage { grid-template-columns: 160px minmax(0, 1fr); min-height: 180px; gap: 24px; padding-bottom: 24px; }
-  .home-stage canvas.emb { width: 140px !important; height: 140px !important; }
-  .home-stage .sub-zh { font-size: 21px; }
-  .home-stage .sub-ja { font-size: 14px; margin-top: 6px; }
-  .insights { margin-top: 28px; }
-  .sec-head { margin-bottom: 16px; }
-  .sec-head h2 { font-size: 21px; }
-  .sec-head .sum { font-size: 14px; }
-  .icards { gap: 16px; }
-  .icard { padding: 20px 24px; }
-  .icard .v, .anum .v { font-size: 32px; }
-  .icard .v small, .anum .v small { font-size: 14px; }
-  .icard .k, .anum .k { font-size: 15px; }
-  .activity { margin-top: 16px; padding: 22px 24px 18px; }
-  .activity > h2 { font-size: 15px; margin-bottom: 18px; }
-  .keys-card { padding: 20px 20px 10px; }
-  .card-head h2 { font-size: 15px; }
-  .kc-row { padding: 16px 0; }
-  .kc-name, .kc-note { font-size: 14px; }
-  .keys-card .keys { font-size: 14px; }
   .page kbd { height: 28px; font-size: 14px; }
   .page .btn { min-height: 38px; font-size: 14px; }
   .page .field { height: 38px; font-size: 14px; }
@@ -525,24 +445,10 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 /* Short windows keep every card open and scroll through the same page. */
 @media (max-height: 700px), (max-width: 960px) and (max-height: 820px) {
   .page.page-home { padding-top: calc(var(--window-controls-height) + 8px); padding-bottom: 18px; }
-  .page-home .home { gap: 12px; grid-template-columns: minmax(0, 1fr); }
-  .page-home .home-side { position: static; }
-  .page-home .home-main { min-height: 0; }
   .stage { min-height: 100px; grid-template-columns: 84px minmax(0, 1fr); gap: 14px; padding-bottom: 12px; }
   .stage canvas.emb { width: 84px !important; height: 84px !important; }
   .stage .subs { padding: 4px 0; }
-  .sub-zh { font-size: 15px; line-height: 1.5; }
-  .sub-ja { font-size: 11px; margin-top: 3px; }
-  .insights { margin-top: 14px; }
-  .sec-head { margin-bottom: 8px; }
-  .sec-head h2 { font-size: 16px; }
-  .icards { gap: 8px; }
-  .icard { padding: 10px 14px; }
-  .icard .v, .anum .v { font-size: 22px; }
-  .icard .k { margin-top: 4px; }
-  .activity { padding: 14px 16px; margin-top: 12px; }
-  .activity > h2 { margin-bottom: 12px; }
-  .home-version { display: none; }
+  .sub-line { font-size: 15px; line-height: 1.5; }
   .modal-scrim { --modal-gap: 12px; }
   .modal-body { padding-top: 20px; padding-bottom: 24px; }
   .sgroup { margin-top: 24px; }

@@ -52,35 +52,47 @@ test("an event that throws is reported and the next events are still handled", (
 test("event diagnostics log only approved metadata and omit loudness and text", () => {
   const handler = guardHandler(() => {}, log);
   const show = { type: "show", mode: "listening", future_text: "private future field" } as const;
-  const notice = { type: "notice", zh: "Private notice text", ja: "Private notice translation", future_text: "private notice field" } as const;
-  const learned = { type: "learned", zh: "Private learned word", ja: "Private learned translation", future_text: "private learned field" } as const;
+  const notice = { type: "notice", text: "Private notice text", future_text: "private notice field" } as const;
+  const learned = { type: "learned", text: "Private learned word", future_text: "private learned field" } as const;
+  const say = { type: "say", prefix: "Private prefix", text: "Private answer text", future_text: "private say field" } as const;
+  const ask = {
+    type: "ask", id: "private-id", tier: "T3", prefix: "Private prefix", text: "Private question", yes: "Private yes",
+    no: "Private no", timeout_ms: 30_000, future_text: "private ask field",
+  } as const;
   const progress = { type: "progress", stage: "transcribing", done: 2, total: 3, audio_seconds: 4.5, future_text: "private progress field" } as const;
-  const settings = { type: "settings", px: 150, subtitles: "private settings field" } as const;
+  const settings = { type: "settings", px: 150, subtitles: "private settings field", language: "private language field" } as const;
   handler(show);
   handler({ type: "level", value: 0.5 });
   handler(notice);
   handler(learned);
+  handler(say);
+  handler(ask);
   handler(progress);
   handler(settings);
   expect(logged).toEqual([
     ["debug", 'event {"type":"show","mode":"listening"}'],
     ["debug", 'event {"type":"notice"}'],
     ["debug", 'event {"type":"learned"}'],
+    ["debug", 'event {"type":"say"}'],
+    ["debug", 'event {"type":"ask","tier":"T3"}'],
     ["debug", 'event {"type":"progress","stage":"transcribing","done":2,"total":3,"audio_seconds":4.5}'],
     ["debug", 'event {"type":"settings","px":150}'],
   ]);
 });
 
-test.each(["notice", "learned"] as const)("%s handler failures omit error details that may contain private text", (type) => {
+test.each([
+  { type: "notice", text: "Private text" },
+  { type: "learned", text: "Private text" },
+  { type: "say", prefix: "Private", text: "Private text" },
+  { type: "ask", id: "private-id", tier: "T2", prefix: "Private", text: "Private text", yes: "Yes", no: "No", timeout_ms: 1000 },
+] as const)("$type handler failures omit error details that may contain private text", (event) => {
   const error = new Error("Private learned word in error message");
   error.name = "Private error name";
   error.stack = "Private stack with learned text";
   const handler = guardHandler(() => { throw error; }, log);
-  handler({ type, zh: "Private text", ja: "Private translation" });
-  expect(logged).toEqual([
-    ["debug", `event {"type":"${type}"}`],
-    ["error", `the "${type}" event failed: details omitted for text-bearing events`],
-  ]);
+  handler(event);
+  expect(logged).toHaveLength(2);
+  expect(logged[1]).toEqual(["error", `the "${event.type}" event failed: details omitted for text-bearing events`]);
 });
 
 // ---- subscribing ----

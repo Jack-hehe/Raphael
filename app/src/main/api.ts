@@ -6,6 +6,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { withWindowHotkeyPause } from "./window-hotkeys";
 import type { LanguageGroup } from "./languages";
 import type {
+  AgentTurn,
   AudioDevices,
   BrainSettings,
   DeviceSettings,
@@ -51,6 +52,19 @@ export interface HistoryQuery {
 
 export const historyList = (q: HistoryQuery): Promise<{ items: HistoryItem[] }> => core("history.list", q);
 export const historyDelete = (id: number): Promise<{ deleted: boolean }> => core("history.delete", { id });
+
+// ---------- conversations with Raphael ----------
+
+export interface AgentHistoryQuery {
+  limit?: number;
+  /** Only turns older than this id: the cursor of the next page. */
+  before_id?: number;
+}
+
+/** The turns of the conversations, newest first. */
+export const agentHistoryList = (q: AgentHistoryQuery = {}): Promise<{ turns: AgentTurn[] }> => core("agent.history.list", q);
+/** Forgets every turn; says how many there were. */
+export const agentHistoryClear = (): Promise<{ deleted: number }> => core("agent.history.clear");
 
 // ---------- dictionary ----------
 

@@ -139,11 +139,6 @@ export function dictationKeysText(bindings: string[]): string {
 
 // ---------- the pieces of the steps ----------
 
-const REPORT = {
-  zh: "《告。初次啟動。開始初始設定。》",
-  ja: "《告。初回起動を確認。初期設定を開始します。》",
-} as const;
-
 /** The try box asks how long the dictation took this long after the last change in the box... */
 const TRY_TIMING_DELAY_MS = 300;
 /** ...and the model bar is drawn at most this often. */
@@ -435,7 +430,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
         if (canvas && subs) {
           stage = new Stage(canvas, subs, () => {});
           stage.play();
-          stage.show({ zh: REPORT.zh, ja: REPORT.ja });
+          stage.show({ text: t("report.firstRun") });
         }
         break;
       }

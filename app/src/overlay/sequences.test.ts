@@ -12,12 +12,22 @@ class NullView implements OverlayView {
   percent: number | null = null;
   showProgress(percent: number | null): void { this.percent = percent; }
   lines: string | null = null;
+  /** The buttons of a question that is on screen: "yes|no", or null. */
+  buttons: string | null = null;
   layout(): void {}
-  showLines(zh: string | null, ja: string | null): void {
-    this.lines = `${zh ?? "-"}|${ja ?? "-"}`;
+  showLine(text: string): void {
+    this.lines = text;
   }
-  clearLines(): void {
+  clearLine(): void {
     this.lines = null;
+  }
+  showAsk({ yes, no }: { yes: string; no: string }): void {
+    this.buttons = `${yes}|${no}`;
+  }
+  setHold(): void {}
+  setChoice(): void {}
+  hideAsk(): void {
+    this.buttons = null;
   }
 }
 
@@ -115,14 +125,14 @@ function page() {
   return { emblem, view, send, drawsNow, stats, canvas, controller };
 }
 
-const SETTINGS: OverlayEvent = { type: "settings", px: 150, subtitles: "both" };
-const NO_SOUND: OverlayEvent = { type: "notice", zh: "《否。沒有收到聲音，請檢查麥克風。》", ja: "《否。音声が届いていません。》" };
+const SETTINGS: OverlayEvent = { type: "settings", px: 150, subtitles: "on", language: "zh-TW" };
+const NO_SOUND: OverlayEvent = { type: "notice", text: "《否。沒有收到聲音，請檢查麥克風。》" };
 
 test("learned words wait through live dictation and completion before appearing", () => {
   const p = page();
   p.send({ type: "show", mode: "listening" });
   run(1000);
-  p.send({ type: "learned", zh: "learned", ja: "" });
+  p.send({ type: "learned", text: "learned" });
   run(1000);
   expect(p.emblem.phase).toBe("listening");
   expect(p.view.lines).toBeNull();
@@ -140,7 +150,7 @@ test("learned words wait through live dictation and completion before appearing"
   expect(p.view.lines).toBeNull();
   run(1000);
   expect(p.view.percent).toBeNull();
-  expect(p.view.lines).toBe("learned|-");
+  expect(p.view.lines).toBe("learned");
   expect(p.drawsNow()).toBe(true);
   run(10_000);
   expect(p.emblem.phase).toBe("hidden");
@@ -438,4 +448,80 @@ test("an expired notice stops paint monitoring without an all-transparent warnin
   run(3000);
   expect(p.stats.reads).toBe(reads);
   expect(logged).toEqual([]);
+});
+
+// ---- Raphael answers and asks ----
+
+const ANSWER: OverlayEvent = { type: "say", prefix: "答", text: "台北現在 24 度，多雲。" };
+const QUESTION: OverlayEvent = {
+  type: "ask", id: "c1", tier: "T2", prefix: "問", text: "要複製到剪貼簿嗎？", yes: "是", no: "否", timeout_ms: 30_000,
+};
+
+test("an agent turn: listening, thinking, the answer in words, and the emblem goes after them", () => {
+  const p = page();
+  p.send(SETTINGS, { type: "show", mode: "listening" });
+  run(1000);
+  p.send({ type: "mode", mode: "thinking" });
+  run(1500);
+  expect(p.view.percent).not.toBeNull();
+  p.send(ANSWER);
+  expect(p.view.percent).toBeNull();
+  expect(p.drawsNow()).toBe(true);
+  run(1000);
+  expect(p.view.lines).toBe("《答。台北現在 24 度，多雲。》");
+  run(10_000);
+  expect(p.emblem.phase).toBe("hidden");
+  expect(p.view.lines).toBeNull();
+  expect(p.drawsNow()).toBe(false);
+});
+
+test("a question keeps the emblem drawn while it waits; the answer to it replaces it and the emblem goes", () => {
+  const p = page();
+  p.send(SETTINGS, { type: "show", mode: "listening" });
+  run(1000);
+  p.send({ type: "mode", mode: "thinking" });
+  run(500);
+  p.send(QUESTION);
+  run(1500);
+  expect(p.view.buttons).toBe("是|否");
+  expect(p.view.lines).toBe("《問。要複製到剪貼簿嗎？》");
+  expect(p.view.percent).toBeNull();
+  run(20_000);
+  expect(p.view.buttons).toBe("是|否");
+  expect(p.emblem.phase).not.toBe("hidden");
+  expect(p.drawsNow()).toBe(true);
+  p.controller.clickAsk("yes");
+  p.send({ type: "say", prefix: "了", text: "已複製。" });
+  expect(p.view.buttons).toBeNull();
+  run(1000);
+  expect(p.view.lines).toBe("《了。已複製。》");
+  run(10_000);
+  expect(p.emblem.phase).toBe("hidden");
+  expect(p.view.lines).toBeNull();
+});
+
+test("a question nobody answered is let go, and the next dictation starts clean", () => {
+  const p = page();
+  p.send(SETTINGS, { ...QUESTION, timeout_ms: 5000 });
+  run(5000);
+  expect(p.view.buttons).toBe("是|否");
+  run(3000);
+  expect(p.view.buttons).toBeNull();
+  expect(p.view.lines).toBeNull();
+  run(1000);
+  expect(p.emblem.phase).toBe("hidden");
+  p.send({ type: "show", mode: "listening" });
+  expect(p.drawsNow()).toBe(true);
+  expect(p.view.buttons).toBeNull();
+});
+
+test("Esc during a question (the app hides the emblem) takes the buttons away at once", () => {
+  const p = page();
+  p.send(SETTINGS, QUESTION);
+  run(1500);
+  p.send({ type: "hide" });
+  expect(p.view.buttons).toBeNull();
+  expect(p.view.lines).toBeNull();
+  run(1000);
+  expect(p.emblem.phase).toBe("hidden");
 });

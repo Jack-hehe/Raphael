@@ -1,7 +1,8 @@
-// Settings: a panel over the main window with two parts, 設定 and 關於 (spec §12.3). A change
-// takes effect at once; there is no save button. The settings of the brain (limit, model, language, speech-to-text, retention) go to
-// the core with `settings.set`; the settings of this computer (hotkeys, microphone, emblem, theme,
-// autostart) go to the Rust side with `device_settings_set`.
+// Settings: a panel over the main window with five tabs: 一般, 聽寫, 拉斐爾, 用量 and 關於 (spec
+// §12.3). A change takes effect at once; there is no save button. The settings of the brain (limit,
+// models, language, speech-to-text, retention, how Raphael answers) go to the core with
+// `settings.set`; the settings of this computer (hotkeys, microphone, emblem, theme, autostart) go
+// to the Rust side with `device_settings_set`.
 
 import { isUiLocale, onLocaleChange, t } from "../i18n";
 
@@ -33,13 +34,13 @@ import {
   transcriptionPanelHTML,
   variantPanelHTML,
 } from "../languages";
-import { KeyRecorder, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "../keys";
+import { KeyRecorder, bindingClash, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "../keys";
 import { MonitorSwitch } from "../monitor";
 import { automaticMicrophoneLabel } from "../microphone";
 import { cleanupPriceShort, cleanupPriceText, priceOf, pricingNote, sttPriceShort, sttPriceText } from "../pricing";
 import { runOutDay } from "../report";
 import { WARN_FROM, spendVisual, spentShare } from "../spend";
-import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, Page, Pricing, Status } from "../types";
+import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, Page, Pricing, SettingsPane, Status } from "../types";
 import {
   type Choice,
   type IconName,
@@ -109,12 +110,12 @@ const STT_MODELS: Choice[] = [
   { value: "google/gemini-3.5-transcribe", get label() { return t("model.geminiTranscribe"); } },
   { value: "openai/whisper-large-v3-turbo", get label() { return t("settings.008"); } },
 ];
-const SUBTITLES: Choice[] = [
-  { value: "both", get label() { return t("settings.009"); } },
-  { value: "zh", get label() { return t("settings.010"); } },
-  { value: "ja", get label() { return t("settings.011"); } },
-  { value: "off", get label() { return t("settings.012"); } },
+/** Who works out what an utterance to Raphael asks for (core setting `agent_router`), the default first. */
+const AGENT_ROUTERS: Choice[] = [
+  { value: "jev", get label() { return t("settings.routerJev"); }, get desc() { return t("settings.agentRouterJev"); } },
+  { value: "luna", get label() { return t("settings.routerLuna"); }, get desc() { return t("settings.agentRouterLuna"); } },
 ];
+const DEFAULT_ROUTER = AGENT_ROUTERS[0].value;
 const APPEARANCES: Choice[] = [
   { value: "system", get label() { return t("settings.013"); }, get desc() { return t("settings.014"); } },
   { value: "light", get label() { return t("settings.015"); } },
@@ -136,8 +137,26 @@ const UI_LANGUAGES: Choice[] = [
 const CLEANUP_PRICE_HEAD = () => t("settings.025");
 const PRICES_LOADING = () => t("settings.026");
 
+/** The tabs on the left of the panel, in order. */
+const PANES: { id: SettingsPane; icon: IconName; title: () => string }[] = [
+  { id: "general", icon: "gear", title: () => t("settings.paneGeneral") },
+  { id: "dictation", icon: "mic", title: () => t("settings.paneDictation") },
+  { id: "agent", icon: "sparkle", title: () => t("settings.paneAgent") },
+  { id: "usage", icon: "wallet", title: () => t("settings.paneUsage") },
+  { id: "about", icon: "info", title: () => t("common.about") },
+];
+
+/** The name of a tab, in the language of the window. */
+const paneTitle = (id: SettingsPane): string => PANES.find((p) => p.id === id)!.title();
+
+/** The shortcuts that can be recorded here, and the row of each. */
+type HotkeyField = "dictation_keys" | "agent_keys";
+const HOTKEY_ROWS: Record<HotkeyField, string> = { dictation_keys: "hotkey", agent_keys: "agent-hotkey" };
+
 interface Recording {
   recorder: KeyRecorder;
+  /** Which shortcut is being recorded. */
+  field: HotkeyField;
   /** The cell with the keys, which shows the keys while they are held. */
   cell: HTMLElement;
   /** The combination is complete and being saved: further keys are not part of it. */
@@ -156,15 +175,14 @@ export function createSettings(app: AppContext): Page {
   el.hidden = true;
   el.innerHTML =
     `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="set-title">` +
-    t("settings.027") +
-    t("settings.028", { p0: ico("gear") }) +
-    t("settings.029", { p0: ico("info") }) +
+    `<nav class="modal-nav" aria-label="${esc(t("nav.settings"))}">` +
+    PANES.map((p) => `<button type="button" class="nav" data-pane="${p.id}" aria-current="false">${ico(p.icon)}<span>${esc(p.title())}</span></button>`).join("") +
     `</nav>` +
     `<div class="modal-body"></div>` +
     `${iconBtn("x", t("common.close"), ' data-act="close"').replace('class="icon-btn"', 'class="icon-btn modal-x"')}` +
     `</div>`;
   const body = el.querySelector<HTMLElement>(".modal-body")!;
-  let pane: "settings" | "about" = "settings";
+  let pane: SettingsPane = "general";
 
   let brain: BrainSettings | null = null;
   let hasKey = false;
@@ -183,6 +201,9 @@ export function createSettings(app: AppContext): Page {
   /** What was typed in the limit field while it is not a limit, and what is wrong with it. */
   let limitDraft: string | null = null;
   let limitError: (() => string) | null = null;
+  /** The same for the weather city. */
+  let cityDraft: string | null = null;
+  let cityError: (() => string) | null = null;
   let recording: Recording | null = null;
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
   let languageGroups: LanguageGroup[] | null = null;
@@ -266,12 +287,25 @@ export function createSettings(app: AppContext): Page {
           head: prices() ? CLEANUP_PRICE_HEAD() : undefined,
         };
       }
-      case "subtitles":
+      case "agent-router": {
+        const current = agentRouter();
         return {
-          choices: SUBTITLES,
-          current: d.subtitles,
-          pick: (v) => void changeDevice({ subtitles: v as DeviceSettings["subtitles"] }),
+          choices: withCurrent(AGENT_ROUTERS, current),
+          current,
+          pick: (v) => {
+            if (AGENT_ROUTERS.some((c) => c.value === v) && v !== agentRouter()) void changeBrain("agent_router", v);
+          },
         };
+      }
+      case "agent-model": {
+        const current = agentModel();
+        return {
+          choices: withPrices(withCurrent(MODELS, current), (id) => cleanupPriceShort(priceOf(prices()?.cleanup, id))),
+          current,
+          pick: (v) => void changeBrain("agent_model", v),
+          head: prices() ? CLEANUP_PRICE_HEAD() : undefined,
+        };
+      }
       default:
         return null;
     }
@@ -283,6 +317,9 @@ export function createSettings(app: AppContext): Page {
   const sttEngine = (): string => brain?.stt_engine ?? "cloud";
   const sttModel = (): string => brain?.stt_cloud_model ?? STT_MODELS[0].value;
   const cleanupModel = (): string => brain?.cleanup_model ?? MODELS[0].value;
+  const agentRouter = (): string => brain?.agent_router ?? DEFAULT_ROUTER;
+  const agentModel = (): string => brain?.agent_model ?? MODELS[0].value;
+  const agentCity = (): string => brain?.agent_city ?? "";
   /** The prices once they are read. */
   const prices = (): Pricing | null => (typeof pricing === "object" ? pricing : null);
 
@@ -295,10 +332,11 @@ export function createSettings(app: AppContext): Page {
   /** The texts that depend on the prices, by the `data-price` of the element that shows them. */
   function priceTexts(): Record<string, string> {
     const p = prices();
-    if (pricing === "loading") return { model: PRICES_LOADING(), "stt-model": PRICES_LOADING(), note: "" };
-    if (!p) return { model: "", "stt-model": "", note: t("settings.030") };
+    if (pricing === "loading") return { model: PRICES_LOADING(), "agent-model": PRICES_LOADING(), "stt-model": PRICES_LOADING(), note: "" };
+    if (!p) return { model: "", "agent-model": "", "stt-model": "", note: t("settings.030") };
     return {
       model: cleanupPriceText(priceOf(p.cleanup, cleanupModel())),
+      "agent-model": cleanupPriceText(priceOf(p.cleanup, agentModel())),
       "stt-model": sttPriceText(priceOf(p.stt, sttModel())),
       note: pricingNote(p, Date.now()),
     };
@@ -440,21 +478,42 @@ export function createSettings(app: AppContext): Page {
     return anchor ? (anchor.dataset.k ?? "variants") : undefined;
   }
 
-  function settingsHTML(): string {
+  /** The first line of every tab: its name, which has the focus when the panel opens. */
+  const heading = (): string => `<h1 id="set-title" tabindex="-1">${esc(paneTitle(pane))}</h1>`;
+  /** What the tabs that need the core say when it does not answer. */
+  const coreNote = (): string => (brain === null ? `<p class="lede">${st("err", t("settings.052"))}</p>` : "");
+
+  /** 一般: the language of the window, and how Raphael looks and starts on this computer. */
+  function generalHTML(): string {
+    const d = app.device();
+    return (
+      heading() +
+      section("globe", t("settings.058"), [
+        row(t("settings.059"), t("settings.060"), sel(UI_LANGUAGES, d.ui_language, t("settings.059"), ' data-k="ui-language"'), { cls: "row-ui-language" }),
+      ]) +
+      section("laptop", t("settings.sectionAppearance"), [
+        row(t("settings.067"), t("settings.068"), sel(APPEARANCES, d.appearance, t("settings.067"), ' data-k="appearance"')),
+        row(t("settings.069"), t("settings.070"), sel(SIZES, String(d.emblem_size), t("settings.069"), ' data-k="size"')),
+        row(t("settings.071"), t("settings.072"), tg(d.subtitles !== "off", t("settings.071"), ' data-k="subtitles"')),
+        row(t("settings.073"), t("settings.074"), tg(d.autostart, t("settings.073"), ' data-k="autostart"')),
+      ])
+    );
+  }
+
+  /** 聽寫: the keys, the languages, the microphone and the models that turn speech into text. */
+  function dictationHTML(): string {
     const d = app.device();
     const usesAltRight = d.dictation_keys.some((binding) => binding.split("+").includes("AltRight"));
-    const limit = brain?.monthly_limit_usd ?? 10;
-    const limitShown = limitDraft ?? String(limit);
     return (
-      t("settings.051") +
-      (brain === null ? `<p class="lede">${st("err", t("settings.052"))}</p>` : "") +
+      heading() +
+      coreNote() +
       section("keyboard", t("history.012"), [
         row(
           t("home.020"),
           t("settings.053"),
           d.dictation_keys.map((binding) => keys(bindingLabels(binding))).join(t("onboarding.009")) +
             btn(t("home.018"), "sm", ' data-act="rec"'),
-          { attrs: ' data-row="hotkey"' },
+          { attrs: ` data-row="${HOTKEY_ROWS.dictation_keys}"` },
         ),
         ...(altgr && usesAltRight ? [note(st("warn", t("settings.054")))] : []),
         row(t("settings.055"), esc(modeDescription(d.dictation_mode)), sel(DICTATION_MODES, d.dictation_mode, t("settings.055"), ' data-k="mode"')),
@@ -464,7 +523,6 @@ export function createSettings(app: AppContext): Page {
         row(t("onboarding.031"), t("settings.057"), keys(["Esc"])),
       ]) +
       section("globe", t("settings.058"), [
-        row(t("settings.059"), t("settings.060"), sel(UI_LANGUAGES, d.ui_language, t("settings.059"), ' data-k="ui-language"'), { cls: "row-ui-language" }),
         row(t("transcription.title"), esc(AUTO_DETECT_HINT()), transcriptionButtonHTML(languageGroups ?? [], languages(), ` data-k="languages" data-act="transcription-languages"${brain ? "" : " disabled"}`), { cls: "row-lang row-transcription" }),
         row(t("settings.061"), esc(t("variants.description")), languageButtonHTML(languageGroups ?? [], languages(), ` data-k="variants" data-act="variants"${brain ? "" : " disabled"}`), { cls: "row-lang row-variants" }),
       ]) +
@@ -472,6 +530,61 @@ export function createSettings(app: AppContext): Page {
         row(t("onboarding.021"), t("settings.063"), meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, t("onboarding.021"), ' data-k="mic"') + iconBtn("refresh", t("action.refreshMicrophones"), ' data-act="mic-refresh"')),
       ]) +
       section("wave", t("settings.064"), modelRows(), priceSpan("note")) +
+      section("book", t("settings.sectionDictionary"), [
+        row(
+          t("settings.075"),
+          t("settings.076"),
+          tg(brain?.learn_corrections ?? true, t("settings.075"), ` data-k="learn"${brain ? "" : " disabled"}`),
+        ),
+      ])
+    );
+  }
+
+  /** 拉斐爾: the key that asks her, who works out the request, the model that answers and the weather city. */
+  function agentHTML(): string {
+    const d = app.device();
+    // an app from before the question key has none yet
+    const agentKeys = d.agent_keys ?? [];
+    const router = AGENT_ROUTERS.find((c) => c.value === agentRouter());
+    const cityShown = cityDraft ?? agentCity();
+    return (
+      heading() +
+      coreNote() +
+      section("sparkle", t("settings.sectionAsk"), [
+        row(
+          t("settings.agentKeys"),
+          t("settings.agentKeysDesc"),
+          (agentKeys.length > 0 ? agentKeys.map((binding) => keys(bindingLabels(binding))).join(t("onboarding.009")) : `<span class="val">${esc(t("home.noKeys"))}</span>`) +
+            btn(t("home.018"), "sm", ' data-act="rec-agent"'),
+          { attrs: ` data-row="${HOTKEY_ROWS.agent_keys}"` },
+        ),
+        row(
+          t("settings.agentRouter"),
+          esc(router?.desc ?? ""),
+          sel(withCurrent(AGENT_ROUTERS, agentRouter()), agentRouter(), t("settings.agentRouter"), ` data-k="agent-router"${brain ? "" : " disabled"}`),
+        ),
+        row(
+          t("settings.agentModel"),
+          priceSpan("agent-model"),
+          sel(withCurrent(MODELS, agentModel()), agentModel(), t("settings.agentModel"), ` data-k="agent-model"${brain ? "" : " disabled"}`),
+        ),
+        row(
+          t("settings.agentCity"),
+          t("settings.agentCityDesc"),
+          fieldHTML(t("settings.agentCityHint"), cityShown, { w: 170, get label() { return t("settings.agentCity"); }, id: "agent-city", invalid: cityError !== null, disabled: brain === null }),
+        ),
+        ...(cityError ? [note(st("err", cityError()), ' role="alert"')] : []),
+      ])
+    );
+  }
+
+  /** 用量: the key, the connection, and what this month has cost against the limit. */
+  function usageHTML(): string {
+    const limit = brain?.monthly_limit_usd ?? 10;
+    const limitShown = limitDraft ?? String(limit);
+    return (
+      heading() +
+      coreNote() +
       section("wallet", t("settings.065"), [
         keyRow(),
         ...(keyError ? [note(st("err", keyError()), ' role="alert"')] : []),
@@ -484,24 +597,29 @@ export function createSettings(app: AppContext): Page {
           fieldHTML("", limitShown, { w: 96, pre: "US$", get label() { return t("onboarding.032"); }, num: true, id: "limit-input", invalid: limitError !== null, disabled: brain === null }),
         ),
         ...(limitError ? [note(st("err", limitError()), ' role="alert"')] : []),
-      ], esc(t("settings.usageDifference"))) +
-      section("laptop", t("settings.066"), [
-        row(t("settings.067"), t("settings.068"), sel(APPEARANCES, d.appearance, t("settings.067"), ' data-k="appearance"')),
-        row(t("settings.069"), t("settings.070"), sel(SIZES, String(d.emblem_size), t("settings.069"), ' data-k="size"')),
-        row(t("settings.071"), t("settings.072"), sel(SUBTITLES, d.subtitles, t("settings.071"), ' data-k="subtitles"')),
-        row(t("settings.073"), t("settings.074"), tg(d.autostart, t("settings.073"), ' data-k="autostart"')),
-        row(
-          t("settings.075"),
-          t("settings.076"),
-          tg(brain?.learn_corrections ?? true, t("settings.075"), ` data-k="learn"${brain ? "" : " disabled"}`),
-        ),
-      ])
+      ], esc(t("settings.usageDifference")))
     );
+  }
+
+  /** The tab that is open, as HTML. */
+  function paneHTML(): string {
+    switch (pane) {
+      case "general":
+        return generalHTML();
+      case "dictation":
+        return dictationHTML();
+      case "agent":
+        return agentHTML();
+      case "usage":
+        return usageHTML();
+      case "about":
+        return aboutHTML();
+    }
   }
 
   function aboutHTML(): string {
     return (
-      t("settings.077") +
+      heading() +
       `<div class="about-brand">${brandIcon("about-icon")}<span class="about-name">Raphael</span></div>` +
       `<div class="slist about">` +
       row(t("settings.078"), esc(version || "0.1.0"), "") +
@@ -512,7 +630,7 @@ export function createSettings(app: AppContext): Page {
   }
 
   function loadingHTML(): string {
-    return t("settings.051") +
+    return heading() +
       `<p class="settings-loading" role="status">${esc(t("settings.loading"))}</p>` +
       `<div class="settings-skeleton" aria-hidden="true">${Array.from({ length: 3 }, () =>
         `<div class="skeleton-section"><i class="skeleton-heading"></i><div class="skeleton-row"><i></i><i></i></div><div class="skeleton-row"><i></i><i></i></div></div>`).join("")}</div>`;
@@ -524,16 +642,19 @@ export function createSettings(app: AppContext): Page {
     const focusedId = active?.id;
     const keyDraft = el.querySelector<HTMLInputElement>("#key-input")?.value;
     const activeLimit = focusedId === "limit-input" ? el.querySelector<HTMLInputElement>("#limit-input")?.value : undefined;
+    const activeCity = focusedId === "agent-city" ? el.querySelector<HTMLInputElement>("#agent-city")?.value : undefined;
     // A menu that is open stays open when the page is drawn again (a status that came in, say).
     const openK = openAnchorKey();
     const scroll = body.scrollTop;
-    body.setAttribute("aria-busy", String(loading && pane === "settings"));
-    body.innerHTML = pane === "settings" ? (loading ? loadingHTML() : settingsHTML()) : aboutHTML();
+    body.setAttribute("aria-busy", String(loading && pane !== "about"));
+    body.innerHTML = pane !== "about" && loading ? loadingHTML() : paneHTML();
     hydrateBrandIcons(body);
     const keyInput = el.querySelector<HTMLInputElement>("#key-input");
     if (keyInput && keyDraft !== undefined) keyInput.value = keyDraft;
     const limitInput = el.querySelector<HTMLInputElement>("#limit-input");
     if (limitInput && activeLimit !== undefined) limitInput.value = activeLimit;
+    const cityInput = el.querySelector<HTMLInputElement>("#agent-city");
+    if (cityInput && activeCity !== undefined) cityInput.value = activeCity;
     body.scrollTop = scroll;
     el.querySelectorAll<HTMLElement>("[data-pane]").forEach((b) => b.setAttribute("aria-current", b.dataset.pane === pane ? "page" : "false"));
 
@@ -549,8 +670,7 @@ export function createSettings(app: AppContext): Page {
 
   onLocaleChange(() => {
     el.querySelector(".modal-nav")!.setAttribute("aria-label", t("nav.settings"));
-    el.querySelector('[data-pane="settings"] span')!.textContent = t("nav.settings");
-    el.querySelector('[data-pane="about"] span')!.textContent = t("common.about");
+    for (const p of PANES) el.querySelector(`[data-pane="${p.id}"] span`)!.textContent = p.title();
     const close = el.querySelector('[data-act="close"]')!;
     close.setAttribute("aria-label", t("common.close"));
     close.setAttribute("title", t("common.close"));
@@ -701,7 +821,7 @@ export function createSettings(app: AppContext): Page {
     pricing = next;
     paintPrices();
     // a price menu that is open shows the prices too
-    for (const k of ["model", "stt-model"]) {
+    for (const k of ["model", "agent-model", "stt-model"]) {
       const anchor = el.querySelector<HTMLElement>(`.sel[data-k="${k}"]`);
       const menu = menuFor(k);
       if (anchor && menu && menuIsOpenFor(anchor)) openMenu(anchor, menu.choices, menu.current, menu.pick, menu.head);
@@ -773,6 +893,23 @@ export function createSettings(app: AppContext): Page {
     void changeBrain("monthly_limit_usd", limit);
   }
 
+  function commitCity(input: HTMLInputElement): void {
+    const city = input.value.trim();
+    if (city === "") {
+      cityDraft = input.value;
+      cityError = () => t("settings.agentCityEmpty");
+      render();
+      return;
+    }
+    cityDraft = null;
+    cityError = null;
+    if (city === agentCity()) {
+      render();
+      return;
+    }
+    void changeBrain("agent_city", city);
+  }
+
   // ---------- recording a hotkey ----------
 
   function onKeyDown(e: KeyboardEvent): void {
@@ -818,13 +955,19 @@ export function createSettings(app: AppContext): Page {
     if (!recording || recording.finishing) return;
     recording.finishing = true;
     const problem = validateCodes(codes);
+    const field = recording.field;
     if (problem) {
       toaster.info(problem);
     } else {
       try {
         const binding = bindingFromCodes(codes);
-        await app.setDevice({ dictation_keys: [binding] });
-        toaster.info(t("settings.083", { p0: () => bindingLabels(binding).join(" + ") }));
+        const taken = shortcutTakenBy(field, binding);
+        if (taken) {
+          toaster.info(t("settings.keyTaken", { p0: taken }));
+        } else {
+          await app.setDevice({ [field]: [binding] });
+          toaster.info(t("settings.083", { p0: () => bindingLabels(binding).join(" + ") }));
+        }
       } catch (err) {
         toaster.info(describeError(err));
       }
@@ -832,9 +975,19 @@ export function createSettings(app: AppContext): Page {
     await endRecording();
   }
 
-  async function startRecording(): Promise<void> {
+  /** The name of the other shortcut that already has `binding`, if one has: no two actions share their keys. */
+  function shortcutTakenBy(field: HotkeyField, binding: string): string | null {
+    const d = app.device();
+    const others: Array<readonly [string, readonly string[]]> = [];
+    if (field !== "dictation_keys") others.push([t("home.020"), d.dictation_keys]);
+    if (field !== "agent_keys") others.push([t("settings.agentKeys"), d.agent_keys ?? []]);
+    others.push([t("home.021"), d.paste_last_keys]);
+    return bindingClash(binding, others);
+  }
+
+  async function startRecording(field: HotkeyField): Promise<void> {
     if (recording) return;
-    const cell = el.querySelector<HTMLElement>('[data-row="hotkey"] .ctl');
+    const cell = el.querySelector<HTMLElement>(`[data-row="${HOTKEY_ROWS[field]}"] .ctl`);
     if (!cell) return;
     try {
       await api.hotkeysPause(true);
@@ -842,7 +995,7 @@ export function createSettings(app: AppContext): Page {
       toaster.info(describeError(err));
       return;
     }
-    recording = { recorder: new KeyRecorder(), cell, finishing: false };
+    recording = { recorder: new KeyRecorder(), field, cell, finishing: false };
     cell.innerHTML = t("settings.084");
     document.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("keyup", onKeyUp, true);
@@ -859,7 +1012,7 @@ export function createSettings(app: AppContext): Page {
 
   /** The microphone is listened to while the page is on screen and the window is in use. */
   function syncMonitor(): void {
-    const want = visible && pane === "settings" && !document.hidden && windowFocused;
+    const want = visible && pane === "dictation" && !document.hidden && windowFocused;
     monitor.set(want);
     if (want && microphoneTimer === undefined) {
       microphoneTimer = setInterval(() => {
@@ -917,7 +1070,7 @@ export function createSettings(app: AppContext): Page {
     const paneButton = target.closest<HTMLElement>("[data-pane]");
     if (paneButton) {
       closeMenu();
-      pane = paneButton.dataset.pane as "settings" | "about";
+      pane = paneButton.dataset.pane as SettingsPane;
       syncMonitor();
       body.scrollTop = 0;
       render();
@@ -951,6 +1104,11 @@ export function createSettings(app: AppContext): Page {
       return;
     }
 
+    if (target.closest('.tg[data-k="subtitles"]')) {
+      void changeDevice({ subtitles: app.device().subtitles === "off" ? "on" : "off" });
+      return;
+    }
+
     if (target.closest('.tg[data-k="learn"]')) {
       if (brain) void changeBrain("learn_corrections", !(brain.learn_corrections ?? true));
       return;
@@ -961,7 +1119,10 @@ export function createSettings(app: AppContext): Page {
         app.closeSettings();
         break;
       case "rec":
-        void startRecording();
+        void startRecording("dictation_keys");
+        break;
+      case "rec-agent":
+        void startRecording("agent_keys");
         break;
       case "key-replace":
         replacingKey = true;
@@ -998,10 +1159,12 @@ export function createSettings(app: AppContext): Page {
   el.addEventListener("change", (e) => {
     const input = e.target as HTMLInputElement;
     if (input.id === "limit-input") commitLimit(input);
+    else if (input.id === "agent-city") commitCity(input);
   });
   el.addEventListener("input", (e) => {
     const input = e.target as HTMLInputElement;
     if (input.id === "limit-input") limitDraft = input.value;
+    else if (input.id === "agent-city") cityDraft = input.value;
   });
   // Menus consume their own Escape; the panel and native window controls share one Tab loop.
   const settingsKey = (e: KeyboardEvent): void => {
@@ -1036,12 +1199,13 @@ export function createSettings(app: AppContext): Page {
   return {
     id: "settings",
     el,
-    async show() {
+    async show(open?: SettingsPane) {
       visible = true;
       document.addEventListener("keydown", settingsKey);
       const mine = ++loads;
       loading = true;
-      pane = "settings";
+      // the first tab, unless the way in knows better (the report that says there is no key goes to the key)
+      pane = PANES.some((p) => p.id === open) ? open! : "general";
       body.scrollTop = 0;
       closeMenu();
       render();
@@ -1071,6 +1235,8 @@ export function createSettings(app: AppContext): Page {
       keyError = null;
       limitDraft = null;
       limitError = null;
+      cityDraft = null;
+      cityError = null;
       loading = false;
       render();
       if (!el.contains(document.activeElement)) el.querySelector<HTMLElement>("#set-title")?.focus();

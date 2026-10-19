@@ -1,12 +1,14 @@
-// The main window: a sidebar with home, history and dictionary, this month's spend and the way to
-// the settings at the bottom, and the page that is chosen. The settings open as a panel over the
-// window. The pages are in pages/; this file holds what they share (spec §12).
+// The main window: a sidebar with home, Raphael's conversations, history and dictionary, this
+// month's spend and the way to the settings at the bottom, and the page that is chosen. The
+// settings open as a panel over the window. The pages are in pages/; this file holds what they
+// share (spec §12).
 
 import { onLocaleChange, setLocale, t } from "./i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { loadGlyphTexture } from "../overlay/emblem";
 import * as api from "./api";
+import { createAgent } from "./pages/agent";
 import { createDictionary } from "./pages/dictionary";
 import { createHistory } from "./pages/history";
 import { createHome } from "./pages/home";
@@ -17,7 +19,7 @@ import { mountOnboarding } from "./onboarding";
 import { brandIcon, hydrateBrandIcons } from "./brand";
 import { installWindowHotkeys } from "./window-hotkeys";
 import { installWindowChrome, labelWindowControls, showMaximized } from "./window-chrome";
-import type { AppContext, DeviceSettings, MainEvent, Page, PageId } from "./types";
+import type { AppContext, DeviceSettings, MainEvent, Page, PageId, SettingsPane } from "./types";
 import { spendMini } from "./spend";
 import { Undoable } from "./undo";
 import { type IconName, ico, toaster } from "./ui";
@@ -31,9 +33,10 @@ const DEFAULT_DEVICE: DeviceSettings = {
   dictation_keys: ["AltRight"],
   dictation_mode: "toggle",
   paste_last_keys: ["AltRight+V"],
+  agent_keys: ["AltRight+Space"],
   microphone: null,
   emblem_size: 150,
-  subtitles: "both",
+  subtitles: "on",
   appearance: "system",
   ui_language: "zh-TW",
   autostart: true,
@@ -45,6 +48,7 @@ const RESHOW_MS = 1000;
 
 const NAV: { id: Exclude<PageId, "settings">; name: string; icon: IconName }[] = [
   { id: "home", get name() { return t("main.001"); }, icon: "home" },
+  { id: "agent", get name() { return t("nav.agent"); }, icon: "chat" },
   { id: "history", get name() { return t("main.002"); }, icon: "clock" },
   { id: "dictionary", get name() { return t("main.003"); }, icon: "book" },
 ];
@@ -125,6 +129,7 @@ async function start(): Promise<void> {
 
   const pages: Record<PageId, Page> = {
     home: createHome(ctx),
+    agent: createAgent(ctx),
     history: createHistory(ctx),
     dictionary: createDictionary(ctx),
     settings: createSettings(ctx),
@@ -138,7 +143,7 @@ async function start(): Promise<void> {
     `<div class="brand" data-window-drag>${brandIcon()}<span>Raphael</span></div>` +
     NAV.map((item) => button(item.id, item.name, item.icon)).join("") +
     `<div class="side-fill"></div>` +
-    `<button type="button" class="usage-box" data-go="settings" hidden></button>` +
+    `<button type="button" class="usage-box" data-go="settings" data-pane="usage" hidden></button>` +
     t("main.004", { p0: ico("gear") });
   const usageBox = nav.querySelector<HTMLElement>(".usage-box")!;
   hydrateBrandIcons(nav);
@@ -154,7 +159,7 @@ async function start(): Promise<void> {
   });
   nav.addEventListener("click", (e) => {
     const target = (e.target as Element).closest<HTMLElement>("[data-go]");
-    if (target) go(target.dataset.go as PageId);
+    if (target) go(target.dataset.go as PageId, target.dataset.pane as SettingsPane | undefined);
   });
   const settings = pages.settings;
   for (const page of Object.values(pages)) if (page !== settings) main.append(page.el);
@@ -169,9 +174,9 @@ async function start(): Promise<void> {
   let opener: HTMLElement | null = null;
   let shownAt = 0;
 
-  function go(id: PageId): void {
+  function go(id: PageId, pane?: SettingsPane): void {
     if (id === "settings") {
-      openSettings();
+      openSettings(pane);
       return;
     }
     if (settingsOpen) closeSettings(false);
@@ -187,14 +192,14 @@ async function start(): Promise<void> {
     void refreshUsage();
   }
 
-  function openSettings(): void {
+  function openSettings(pane?: SettingsPane): void {
     if (settingsOpen) return;
     settingsOpen = true;
     document.documentElement.dataset.windowModal = "true";
     opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     settings.el.hidden = false;
     document.querySelector<HTMLElement>(".wbody")!.inert = true;
-    void settings.show();
+    void settings.show(pane);
   }
 
   function closeSettings(restoreFocus = true): void {

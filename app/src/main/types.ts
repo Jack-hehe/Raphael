@@ -79,6 +79,14 @@ export interface Period {
   cost_usd: number;
 }
 
+/** A row of `stats.summary`'s `by_app`: what was dictated into one program (its process name) in the last 30 days. */
+export interface AppUsage {
+  /** The process name, such as "Code.exe"; "unknown" when the history did not know. */
+  app: string;
+  dictations: number;
+  words: number;
+}
+
 /** `stats.summary`: the numbers of the home page, all from this computer's history. */
 export interface StatsSummary {
   today: Period;
@@ -93,6 +101,8 @@ export interface StatsSummary {
   active_days?: number;
   /** The most days in a row with a dictation, ever (absent from older cores). */
   longest_streak_days?: number;
+  /** The last 30 days by program, busiest first (absent from older cores). */
+  by_app?: AppUsage[];
   /** Words per minute of speech; null before there is enough to tell. */
   speed_wpm: number | null;
   /** How much longer typing the same words would have taken. */
@@ -120,6 +130,23 @@ export interface HistoryItem {
   stt?: string | null;
 }
 
+/** A turn of the conversation with Raphael (`agent.history.list`, newest first). */
+export interface AgentTurn {
+  id: number;
+  created_at_ms: number;
+  /** What the person said, as the speech recognition heard it. */
+  question: string;
+  /** How the question was routed: a command, a question, a chat... (the core's word). */
+  route: string;
+  /** The word before Raphael's reply: 答, 告, 否, 了 or 問 (Answer, Notice, ... in English). */
+  prefix: string;
+  /** Raphael's reply, the line of the overlay. */
+  text: string;
+  /** The longer version of the reply, when there is one. */
+  detail: string | null;
+  status: string;
+}
+
 /** An entry of `dictionary.list` */
 export interface DictionaryEntry {
   id: number;
@@ -143,6 +170,12 @@ export interface BrainSettings {
   stt_cloud_model: string;
   /** Learn the words the user corrects by hand after a paste (default on). Absent from older cores. */
   learn_corrections?: boolean;
+  /** Who works out what an utterance to Raphael asks for: "jev" (a fast, cheap router) or "luna" (the answer model). */
+  agent_router?: string;
+  /** The model that writes Raphael's answers. */
+  agent_model?: string;
+  /** The city Raphael looks the weather up for. */
+  agent_city?: string;
 }
 
 /** `secrets.set_openrouter_key` */
@@ -172,10 +205,13 @@ export interface DeviceSettings {
    */
   dictation_mode: "toggle" | "hold";
   paste_last_keys: string[];
+  /** The shortcut that asks Raphael (Right Alt+Space by default); never the same as another one. */
+  agent_keys: string[];
   /** The name of the microphone; null is the system's default one. */
   microphone: string | null;
   emblem_size: 120 | 150 | 194;
-  subtitles: "both" | "zh" | "ja" | "off";
+  /** Reports beside the emblem, on or off. (Files from before had "both", "zh" and "ja": they mean on.) */
+  subtitles: "on" | "off";
   appearance: "system" | "light" | "dark";
   ui_language: "zh-TW" | "en" | "ja";
   autostart: boolean;
@@ -191,21 +227,25 @@ export type MainEvent =
 
 // ---------- what the pages share with main.ts ----------
 
-export type PageId = "home" | "history" | "dictionary" | "settings";
+export type PageId = "home" | "agent" | "history" | "dictionary" | "settings";
 
-/** One of the four pages of the main window. */
+/** The tabs of the settings panel. */
+export type SettingsPane = "general" | "dictation" | "agent" | "usage" | "about";
+
+/** One of the five pages of the main window. */
 export interface Page {
   readonly id: PageId;
   readonly el: HTMLElement;
-  /** The page comes on screen (or the window comes back): load what it shows. */
-  show(): void | Promise<void>;
+  /** The page comes on screen (or the window comes back): load what it shows. The settings open at the tab given. */
+  show(pane?: SettingsPane): void | Promise<void>;
   /** The page goes off screen (or the window goes away): stop what runs for it. */
   hide(): void;
 }
 
 /** What main.ts gives the pages. */
 export interface AppContext {
-  go(page: PageId): void;
+  /** Goes to a page. The settings panel opens at `pane` if one is given (the key and the limit are in "usage"). */
+  go(page: PageId, pane?: SettingsPane): void;
   /** The device settings as they are now. */
   device(): DeviceSettings;
   /** Reads the device settings from the app again; rejects if they cannot be read. */

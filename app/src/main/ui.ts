@@ -39,6 +39,7 @@ const ICON = {
   right: "M6 3.8 10.2 8 6 12.2",
   user: "M8 2.6a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2zM3 13.4c.6-2.4 2.6-3.8 5-3.8s4.4 1.4 5 3.8",
   refresh: "M13 6.5A5.2 5.2 0 0 0 3.4 4.3L2 6M2 2.8V6h3.2M3 9.5a5.2 5.2 0 0 0 9.6 2.2L14 10M10.8 10H14v3.2",
+  chat: "M3.2 3.2h9.6a.8.8 0 0 1 .8.8v5.6a.8.8 0 0 1-.8.8H8.4L5.4 13v-2.6H3.2a.8.8 0 0 1-.8-.8V4a.8.8 0 0 1 .8-.8zM5.6 6.2h4.8M5.6 8h3",
 } as const;
 
 export type IconName = keyof typeof ICON;
@@ -143,9 +144,8 @@ export function fieldHTML(placeholder: string, value = "", o: FieldOptions = {})
   );
 }
 
-/** Raphael's words, as the subtitles on the desktop have them: Chinese in bold, Japanese in italics. */
-export const line = (zh: string, ja: string): string =>
-  `<div class="line"><div class="sub-zh">${esc(zh)}</div><div class="sub-ja" lang="ja">${esc(ja)}</div></div>`;
+/** Raphael's words, as the subtitles on the desktop have them: one line, in the language of the window. */
+export const line = (text: string): string => `<div class="line"><div class="sub-line">${esc(text)}</div></div>`;
 
 // ---------- menu ----------
 
