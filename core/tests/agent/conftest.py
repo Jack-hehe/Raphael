@@ -1,5 +1,6 @@
 """Fixtures and helpers shared by the voice assistant's tests."""
 
+import asyncio
 import sqlite3
 import threading
 from collections.abc import Iterator
@@ -61,3 +62,53 @@ class FakeActions:
 @pytest.fixture
 def actions():
     return FakeActions()
+
+
+class FakeOpenRouter:
+    """Stands in for the OpenRouter client, which the assistant uses three ways.
+
+    The answers are queued by kind (`decisions`, `replies` for complete_json, `texts` for
+    chat_text); each call takes the first of its queue. An answer that is an exception is raised,
+    and one that is a function is called with the keyword arguments of the call. A call with
+    nothing queued fails the test. `delay` is how long each call takes, in seconds, and the
+    arguments of every call are kept in `decide_calls`, `json_calls` and `text_calls`.
+    """
+
+    def __init__(self):
+        self.decisions = []
+        self.replies = []
+        self.texts = []
+        self.decide_calls = []
+        self.json_calls = []
+        self.text_calls = []
+        self.delay = 0.0
+
+    async def _answer(self, queue, calls, kwargs, kind):
+        calls.append(kwargs)
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        assert queue, f"an unexpected {kind} call"
+        answer = queue.pop(0)
+        if callable(answer):
+            answer = answer(**kwargs)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    async def decide(self, **kwargs):
+        return await self._answer(self.decisions, self.decide_calls, kwargs, "decide")
+
+    async def complete_json(self, **kwargs):
+        return await self._answer(self.replies, self.json_calls, kwargs, "complete_json")
+
+    async def chat_text(self, **kwargs):
+        return await self._answer(self.texts, self.text_calls, kwargs, "chat_text")
+
+    @property
+    def calls(self):
+        return len(self.decide_calls) + len(self.json_calls) + len(self.text_calls)
+
+
+@pytest.fixture
+def client():
+    return FakeOpenRouter()
