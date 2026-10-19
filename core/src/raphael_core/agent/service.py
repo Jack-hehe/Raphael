@@ -45,6 +45,7 @@ from ..brain.spend import SpendTracker
 from ..protocol import INVALID_PARAMS, RpcError
 from ..router import Router as RpcRouter
 from .answers import Voice
+from .cities import city_in
 from .commands import COMMANDS, AppCatalog, run_command
 from .device import DeviceActions, StartApp
 from .failure import AgentFailure
@@ -325,7 +326,9 @@ class AgentService:
     ) -> dict:
         jobs = []
         if decision.needs_weather:
-            jobs.append(self._tool(self._tools.weather(settings.city, ask.language), "weather"))
+            # The city the question names, else the one in the settings.
+            city = city_in(ask.text) or settings.city
+            jobs.append(self._tool(self._tools.weather(city, ask.language), "weather"))
         if decision.needs_search:
             jobs.append(
                 self._tool(

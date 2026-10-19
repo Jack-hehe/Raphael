@@ -438,6 +438,24 @@ async def test_an_answer_that_needs_nothing_looked_up_goes_straight_to_the_model
     assert rig.meteo.requests == [] and client.text_calls == []
 
 
+async def test_the_weather_is_looked_up_for_the_city_the_question_names(rig, client):
+    client.decisions.append(decision("answer", weather=0.9))
+    client.replies.append(spoken("解", "東京は曇りです。"))
+    await rig.ask("東京の天気は？", language="ja")
+    geocoding, _ = rig.meteo.requests
+    assert geocoding.url.params["name"] == "Tokyo"
+    assert '"asked_for": "東京"' in client.json_calls[0]["user"]
+
+
+async def test_a_question_that_names_no_city_gets_the_weather_of_the_settings(rig, client):
+    rig.settings.set("agent_city", "高雄")
+    client.decisions.append(decision("answer", weather=0.9))
+    client.replies.append(spoken("答", "要帶傘。"))
+    await rig.ask("明天要帶傘嗎")
+    geocoding, _ = rig.meteo.requests
+    assert geocoding.url.params["name"] == "Kaohsiung"
+
+
 async def test_the_tools_an_answer_needs_run_together_not_one_after_another(rig, client):
     # Each waits for the other to have started: run one after the other, the first would wait
     # for ever (and give up after two seconds, with its data missing).

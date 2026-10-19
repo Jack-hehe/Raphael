@@ -2,7 +2,7 @@
 
 import pytest
 
-from raphael_core.agent.cities import ALIASES, city_key, geocoding_queries
+from raphael_core.agent.cities import ALIASES, city_in, city_key, geocoding_queries
 
 
 def test_a_city_key_ignores_case_width_and_spaces():
@@ -56,3 +56,27 @@ def test_the_geocoder_is_asked_in_order(city, queries):
 def test_the_language_asked_in_is_the_one_given_except_for_a_city_of_the_table():
     assert geocoding_queries("Reykjavik", "ja") == [("Reykjavik", "ja")]
     assert geocoding_queries("台北", "ja") == [("Taipei", "en")]
+
+
+@pytest.mark.parametrize(
+    ("question", "city"),
+    [
+        ("今天台北天氣如何？", "台北"),
+        ("臺北明天會下雨嗎", "臺北"),
+        ("新北市明天下雨嗎", "新北市"),
+        ("東京の天気は？", "東京"),
+        ("ソウルの天気", "ソウル"),
+        ("What's the weather in Taipei tomorrow?", "Taipei"),
+        ("Will it rain in New York?", "New York"),
+        ("weather in ROME", "Rome"),
+    ],
+)
+def test_the_city_a_question_names_is_found(question, city):
+    assert city_in(question) == city
+
+
+@pytest.mark.parametrize(
+    "question", ["明天要帶傘嗎", "今天天氣如何", "open chrome", "a comparison of prices", ""]
+)
+def test_a_question_that_names_no_city_of_the_table_has_none(question):
+    assert city_in(question) is None

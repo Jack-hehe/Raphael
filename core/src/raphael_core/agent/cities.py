@@ -9,6 +9,7 @@ other Chinese or Japanese name is tried as it is and then with 市 (city) added,
 written in the geocoder's data.
 """
 
+import re
 import unicodedata
 
 # The English names of the cities that are written in Chinese or Japanese: the keys are the
@@ -93,6 +94,25 @@ def _has_cjk(text: str) -> bool:
         "぀" <= char <= "ヿ" or "㐀" <= char <= "鿿" or "가" <= char <= "힯"
         for char in text
     )
+
+
+# A city's English name counts only as a word of its own: "Rome" is not the end of "Chrome".
+_ENGLISH_NAMES = sorted(set(ALIASES.values()), key=len, reverse=True)
+
+
+def city_in(text: str) -> str | None:
+    """The city of the table that `text` names, written as it is there, or None when it names
+    none. The longest name wins (新北市 over 新北); of two as long, the one the table lists
+    first (台北 in 台北京站)."""
+    key = city_key(text)
+    spelled = [spelling for spelling in ALIASES if spelling in key]
+    if spelled:
+        return max(spelled, key=len)
+    folded = unicodedata.normalize("NFKC", text).casefold()
+    for english in _ENGLISH_NAMES:
+        if re.search(rf"(?<![a-z]){re.escape(english.casefold())}(?![a-z])", folded):
+            return english
+    return None
 
 
 def geocoding_queries(city: str, language_code: str) -> list[tuple[str, str]]:
