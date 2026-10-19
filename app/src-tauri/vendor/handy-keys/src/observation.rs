@@ -1,5 +1,7 @@
 //! Transient, opt-in edit observations. No event is logged or persisted.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// An edit in a field explicitly approved by the caller.
@@ -51,6 +53,75 @@ fn input_origin(physical: bool, extra: usize) -> InputOrigin {
     }
 }
 
+/// The hook thread's message loop must have run this recently for the hooks to count as alive.
+/// The loop wakes every 10 ms, so this is far above a healthy gap and well under the 500 ms
+/// between two reads of a watched field: a dead hook cannot stay unnoticed through a read.
+pub(crate) const HOOK_HEARTBEAT_MAX_AGE_MS: u64 = 250;
+
+/// Milliseconds on a monotonic clock that starts at 1, so that 0 can mean "never".
+pub(crate) fn monotonic_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    let start = *START.get_or_init(Instant::now);
+    u64::try_from(start.elapsed().as_millis())
+        .unwrap_or(u64::MAX - 1)
+        .saturating_add(1)
+}
+
+/// Shows that the low-level hooks are being serviced. The input counter alone cannot: when the
+/// hook never started or died it stands still, which looks exactly like a quiet keyboard, and
+/// every guard built on "no input happened" would be blind without saying so.
+///
+/// Two independent signals, both written only by the hook thread:
+/// - `loop_ms`: when its message loop last ran (every 10 ms). Without that loop no hook callback
+///   can run at all. It is checked every time the hooks are relied on, so a hook thread that
+///   stops during a watch ends the watch.
+/// - `key_events`: how many keyboard events reached the hook procedure. Windows silently removes
+///   a low-level hook that is too slow, and the loop runs on regardless; only an event that
+///   arrives proves the procedure is still installed. Raphael's own paste keys count: they pass
+///   the hook like any other input. It is checked against the position taken before a paste, so
+///   it vouches for the hook at the time of the paste (and later checks of the checkpoint), but a
+///   hook removed afterwards, while the loop still runs, is not noticed until the next paste.
+pub(crate) struct HookHeartbeat {
+    loop_ms: AtomicU64,
+    key_events: AtomicU64,
+}
+
+impl HookHeartbeat {
+    pub(crate) const fn new() -> Self {
+        Self {
+            loop_ms: AtomicU64::new(0),
+            key_events: AtomicU64::new(0),
+        }
+    }
+
+    /// The hook thread's message loop ran at `now_ms`.
+    pub(crate) fn beat(&self, now_ms: u64) {
+        self.loop_ms.store(now_ms, Ordering::Release);
+    }
+
+    /// A keyboard event reached the hook procedure, whatever its origin.
+    pub(crate) fn key_event(&self) {
+        self.key_events.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// A position in the stream of keyboard events, to ask later whether more arrived.
+    pub(crate) fn mark(&self) -> u64 {
+        self.key_events.load(Ordering::Acquire)
+    }
+
+    /// Whether the message loop ran within [`HOOK_HEARTBEAT_MAX_AGE_MS`] of `now_ms`. False before
+    /// its first run. A reading taken a moment before the beat it races with counts as fresh.
+    pub(crate) fn loop_alive(&self, now_ms: u64) -> bool {
+        let last = self.loop_ms.load(Ordering::Acquire);
+        last != 0 && now_ms.saturating_sub(last) <= HOOK_HEARTBEAT_MAX_AGE_MS
+    }
+
+    /// Whether a keyboard event reached the hook procedure after `mark` was taken.
+    pub(crate) fn saw_events_since(&self, mark: u64) -> bool {
+        self.key_events.load(Ordering::Acquire) > mark
+    }
+}
+
 /// Non-text evidence that no input or native focus change occurred since a paste began.
 #[derive(Clone)]
 pub(crate) struct InputStamp {
@@ -58,11 +129,27 @@ pub(crate) struct InputStamp {
     pub(crate) focus: isize,
     pub(crate) serial: u64,
     pub(crate) started: Instant,
+    /// [`HookHeartbeat::mark`] when the stamp was taken.
+    pub(crate) hook_mark: u64,
 }
 
 impl InputStamp {
-    pub(crate) fn is_current(&self, hwnd: isize, focus: isize, serial: u64, now: Instant) -> bool {
-        serial == self.serial
+    /// True only while the hooks have proven themselves alive since the stamp (the loop runs, and
+    /// the paste's own keys reached the procedure), no physical or unknown input was counted,
+    /// native focus is unchanged, and the watch limit has not passed. A counter that stands
+    /// still proves nothing unless the hook that moves it is known to work.
+    pub(crate) fn is_current(
+        &self,
+        hwnd: isize,
+        focus: isize,
+        serial: u64,
+        now: Instant,
+        hooks: &HookHeartbeat,
+        now_ms: u64,
+    ) -> bool {
+        hooks.loop_alive(now_ms)
+            && hooks.saw_events_since(self.hook_mark)
+            && serial == self.serial
             && now >= self.started
             && permitted(
                 self.hwnd,
@@ -230,8 +317,37 @@ pub(crate) fn submission_key(
         0x09 => Some(EditEvent::Invalidated),
         0x0D if !shift && !chord && composing == Some(false) => Some(EditEvent::Enter),
         0x0D => Some(EditEvent::Invalidated),
+        // Ctrl+M and Ctrl+J are an Enter to a shell, too.
+        0x4D | 0x4A if chord => Some(EditEvent::Invalidated),
         _ => None,
     }
+}
+
+/// What the focused window's IME says when asked from outside its process. `ImmGetContext`
+/// cannot do that (it only answers for the calling thread's own windows), so the question goes
+/// to the thread's default IME window as `WM_IME_CONTROL` / `IMC_GETOPENSTATUS`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ImeAnswer {
+    /// The thread has no IME window: nothing there can compose.
+    NoImeWindow,
+    Closed,
+    Open,
+    /// The IME window did not answer in time (busy, hung, or out of reach).
+    Unknown,
+}
+
+/// Whether Enter may be a plain submission, as [`submission_key`] wants it: `Some(false)` only
+/// when nothing can be composing. The plain US layout has no IME. For any other layout only a
+/// closed IME proves it; an open one may be composing, and its composition string cannot be
+/// read from here, so that and every other answer stays unknown and Enter invalidates.
+pub(crate) fn composition_state(us_layout: bool, ime: ImeAnswer) -> Option<bool> {
+    (us_layout || ime == ImeAnswer::Closed).then_some(false)
+}
+
+/// Whether keys can be rebuilt into ASCII text: no IME may sit between the keyboard and the
+/// field. An IME that cannot be asked counts as in the way.
+pub(crate) fn ascii_capture_allowed(ime: ImeAnswer) -> bool {
+    matches!(ime, ImeAnswer::NoImeWindow | ImeAnswer::Closed)
 }
 
 #[cfg(test)]
@@ -375,6 +491,19 @@ mod tests {
     }
 
     #[test]
+    fn control_m_and_control_j_are_enter_to_a_shell_and_end_the_observation() {
+        for vk in [0x4D, 0x4A] {
+            assert_eq!(
+                submission_key(vk, true, false, true, Some(false)),
+                Some(EditEvent::Invalidated)
+            );
+            // The letters alone are typing, which a submission observer never buffers.
+            assert_eq!(submission_key(vk, true, false, false, Some(false)), None);
+            assert_eq!(submission_key(vk, false, false, true, Some(false)), None);
+        }
+    }
+
+    #[test]
     fn composition_or_unknown_composition_or_modified_enter_is_not_submission() {
         for composing in [Some(true), None] {
             assert_eq!(
@@ -412,26 +541,141 @@ mod tests {
         assert_eq!(mouse_origin(2, 0), InputOrigin::OtherInjected);
     }
 
-    #[test]
-    fn checkpoint_rejects_input_window_focus_and_deadline_changes() {
+    /// A heartbeat whose loop ran at 1000 ms, and a stamp taken before one keyboard event.
+    fn live_hooks() -> (HookHeartbeat, InputStamp, Instant) {
         let now = Instant::now();
+        let hooks = HookHeartbeat::new();
+        hooks.beat(1_000);
         let stamp = InputStamp {
             hwnd: 7,
             focus: 8,
             serial: 12,
             started: now,
+            hook_mark: hooks.mark(),
         };
-        assert!(stamp.is_current(7, 8, 12, now + Duration::from_secs(1)));
-        assert!(!stamp.is_current(7, 8, 13, now));
-        assert!(!stamp.is_current(9, 8, 12, now));
-        assert!(!stamp.is_current(7, 9, 12, now));
-        assert!(!stamp.is_current(7, 8, 12, now + Duration::from_secs(60)));
-        assert!(!stamp.is_current(7, 8, 12, now - Duration::from_secs(1)));
+        // The paste's own keys reach the hook procedure after the stamp.
+        hooks.key_event();
+        (hooks, stamp, now)
+    }
+
+    #[test]
+    fn checkpoint_rejects_input_window_focus_and_deadline_changes() {
+        let (hooks, stamp, now) = live_hooks();
+        let current =
+            |hwnd, focus, serial, at| stamp.is_current(hwnd, focus, serial, at, &hooks, 1_000);
+        assert!(current(7, 8, 12, now + Duration::from_secs(1)));
+        assert!(!current(7, 8, 13, now));
+        assert!(!current(9, 8, 12, now));
+        assert!(!current(7, 9, 12, now));
+        assert!(!current(7, 8, 12, now + Duration::from_secs(60)));
+        assert!(!current(7, 8, 12, now - Duration::from_secs(1)));
         let unknown = InputStamp {
             hwnd: 0,
             focus: 0,
+            ..stamp.clone()
+        };
+        assert!(!unknown.is_current(0, 0, 12, now, &hooks, 1_000));
+    }
+
+    #[test]
+    fn a_hook_that_never_ran_is_not_alive() {
+        let hooks = HookHeartbeat::new();
+        assert!(!hooks.loop_alive(0));
+        assert!(!hooks.loop_alive(1));
+        assert!(!hooks.loop_alive(1_000_000));
+        assert!(monotonic_ms() > 0, "0 is reserved for 'never'");
+    }
+
+    #[test]
+    fn the_hook_loop_is_alive_only_shortly_after_its_last_beat() {
+        let hooks = HookHeartbeat::new();
+        hooks.beat(1_000);
+        assert!(hooks.loop_alive(1_000));
+        assert!(hooks.loop_alive(1_000 + HOOK_HEARTBEAT_MAX_AGE_MS));
+        assert!(!hooks.loop_alive(1_000 + HOOK_HEARTBEAT_MAX_AGE_MS + 1));
+        // A reader that took its clock just before the beat it races with is not punished.
+        assert!(hooks.loop_alive(999));
+        hooks.beat(2_000);
+        assert!(hooks.loop_alive(2_100));
+    }
+
+    #[test]
+    fn keyboard_events_count_only_after_the_mark() {
+        let hooks = HookHeartbeat::new();
+        hooks.key_event();
+        let mark = hooks.mark();
+        assert!(!hooks.saw_events_since(mark));
+        hooks.key_event();
+        assert!(hooks.saw_events_since(mark));
+        assert!(!hooks.saw_events_since(hooks.mark()));
+    }
+
+    #[test]
+    fn a_stamp_needs_a_live_loop_and_an_event_since_it_was_taken() {
+        let (hooks, stamp, now) = live_hooks();
+        assert!(stamp.is_current(7, 8, 12, now, &hooks, 1_000));
+
+        // The hook thread stopped: the counter stands still, but that proves nothing.
+        assert!(!stamp.is_current(7, 8, 12, now, &hooks, 1_000 + HOOK_HEARTBEAT_MAX_AGE_MS + 1));
+
+        // The loop runs but no key, not even the paste's own, reached the procedure since.
+        let silent = HookHeartbeat::new();
+        silent.beat(1_000);
+        let stamp = InputStamp {
+            hook_mark: silent.mark(),
             ..stamp
         };
-        assert!(!unknown.is_current(0, 0, 12, now));
+        assert!(!stamp.is_current(7, 8, 12, now, &silent, 1_000));
+        silent.key_event();
+        assert!(stamp.is_current(7, 8, 12, now, &silent, 1_000));
+
+        // The hook never started at all.
+        let never = HookHeartbeat::new();
+        never.key_event();
+        assert!(!stamp.is_current(7, 8, 12, now, &never, 1_000));
+    }
+
+    #[test]
+    fn an_ime_that_is_closed_cannot_be_composing_and_no_other_answer_proves_it() {
+        for answer in [ImeAnswer::Open, ImeAnswer::Unknown, ImeAnswer::NoImeWindow] {
+            let composing = composition_state(false, answer);
+            assert_ne!(composing, Some(false), "{answer:?}");
+            assert_eq!(
+                submission_key(0x0D, true, false, false, composing),
+                Some(EditEvent::Invalidated),
+                "{answer:?}"
+            );
+        }
+        assert_eq!(composition_state(false, ImeAnswer::Closed), Some(false));
+        assert_eq!(
+            submission_key(
+                0x0D,
+                true,
+                false,
+                false,
+                composition_state(false, ImeAnswer::Closed)
+            ),
+            Some(EditEvent::Enter)
+        );
+    }
+
+    #[test]
+    fn the_us_layout_has_no_ime_whatever_the_ime_window_says() {
+        for answer in [
+            ImeAnswer::NoImeWindow,
+            ImeAnswer::Closed,
+            ImeAnswer::Open,
+            ImeAnswer::Unknown,
+        ] {
+            assert_eq!(composition_state(true, answer), Some(false), "{answer:?}");
+        }
+    }
+
+    #[test]
+    fn ascii_capture_needs_proof_that_no_ime_is_in_the_way() {
+        assert!(ascii_capture_allowed(ImeAnswer::NoImeWindow));
+        assert!(ascii_capture_allowed(ImeAnswer::Closed));
+        assert!(!ascii_capture_allowed(ImeAnswer::Open));
+        assert!(!ascii_capture_allowed(ImeAnswer::Unknown));
     }
 }

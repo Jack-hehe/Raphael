@@ -40,6 +40,9 @@
 //!
 //! Third change: an opt-in edit observer runs beside this hook, with bounded in-memory events,
 //! strict focus/window and deadline gates, and no effect on suppression or hotkey behavior.
+//! The observer also keeps a heartbeat (`HookHeartbeat`): each pass of the message loop below and
+//! each keyboard event the hook receives is stamped, so that an input checkpoint can tell a quiet
+//! keyboard from hooks that never started or stopped.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
