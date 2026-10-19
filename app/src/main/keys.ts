@@ -62,6 +62,32 @@ export function bindingLabels(binding: string): string[] {
   return binding.split("+").map((part) => keyLabel(part.trim()));
 }
 
+/**
+ * The name two spellings of a key share: the settings file writes the paste key `AltRight+V`, the
+ * recorder `AltRight+KeyV`, and the core's `Ctrl` is `Control`.
+ */
+export function canonicalKey(part: string): string {
+  const name = part.trim().toLowerCase();
+  if (/^[a-z]$/.test(name)) return `key${name}`;
+  if (/^\d$/.test(name)) return `digit${name}`;
+  return name.replace(/^ctrl(left|right)$/, "control$1").replace(/^cmd(left|right)$/, "meta$1");
+}
+
+/** Whether two bindings are the same keys, in whatever order and spelling. */
+export function sameBinding(a: string, b: string): boolean {
+  const canonical = (binding: string): string => binding.split("+").map(canonicalKey).sort().join("+");
+  return canonical(a) === canonical(b);
+}
+
+/**
+ * The name of the first action in `taken` that already uses `binding`, or null. Each action has the
+ * name to tell the person and the bindings it uses.
+ */
+export function bindingClash(binding: string, taken: ReadonlyArray<readonly [name: string, bindings: readonly string[]]>): string | null {
+  for (const [name, bindings] of taken) if (bindings.some((other) => sameBinding(binding, other))) return name;
+  return null;
+}
+
 // ---------- which combinations are offered ----------
 
 const MODIFIERS = new Set([

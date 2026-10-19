@@ -170,6 +170,12 @@ export interface BrainSettings {
   stt_cloud_model: string;
   /** Learn the words the user corrects by hand after a paste (default on). Absent from older cores. */
   learn_corrections?: boolean;
+  /** Who works out what an utterance to Raphael asks for: "jev" (a fast, cheap router) or "luna" (the answer model). */
+  agent_router?: string;
+  /** The model that writes Raphael's answers. */
+  agent_model?: string;
+  /** The city Raphael looks the weather up for. */
+  agent_city?: string;
 }
 
 /** `secrets.set_openrouter_key` */
@@ -199,10 +205,13 @@ export interface DeviceSettings {
    */
   dictation_mode: "toggle" | "hold";
   paste_last_keys: string[];
+  /** The shortcut that asks Raphael (Right Alt+Space by default); never the same as another one. */
+  agent_keys: string[];
   /** The name of the microphone; null is the system's default one. */
   microphone: string | null;
   emblem_size: 120 | 150 | 194;
-  subtitles: "both" | "zh" | "ja" | "off";
+  /** Reports beside the emblem, on or off. (Files from before had "both", "zh" and "ja": they mean on.) */
+  subtitles: "on" | "off";
   appearance: "system" | "light" | "dark";
   ui_language: "zh-TW" | "en" | "ja";
   autostart: boolean;
@@ -220,19 +229,23 @@ export type MainEvent =
 
 export type PageId = "home" | "agent" | "history" | "dictionary" | "settings";
 
+/** The tabs of the settings panel. */
+export type SettingsPane = "general" | "dictation" | "agent" | "usage" | "about";
+
 /** One of the five pages of the main window. */
 export interface Page {
   readonly id: PageId;
   readonly el: HTMLElement;
-  /** The page comes on screen (or the window comes back): load what it shows. */
-  show(): void | Promise<void>;
+  /** The page comes on screen (or the window comes back): load what it shows. The settings open at the tab given. */
+  show(pane?: SettingsPane): void | Promise<void>;
   /** The page goes off screen (or the window goes away): stop what runs for it. */
   hide(): void;
 }
 
 /** What main.ts gives the pages. */
 export interface AppContext {
-  go(page: PageId): void;
+  /** Goes to a page. The settings panel opens at `pane` if one is given (the key and the limit are in "usage"). */
+  go(page: PageId, pane?: SettingsPane): void;
   /** The device settings as they are now. */
   device(): DeviceSettings;
   /** Reads the device settings from the app again; rejects if they cannot be read. */
