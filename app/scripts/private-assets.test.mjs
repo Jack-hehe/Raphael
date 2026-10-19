@@ -203,7 +203,8 @@ describe("private desktop icon cache", () => {
   });
 });
 
-describe("public builds", () => {
+// Each case starts several Node processes (the wrapper, the fake CLI and the frontend step).
+describe("public builds", { timeout: 30_000 }, () => {
   // A checkout whose original directory holds every private source, like the maintainer's.
   function checkoutWithPrivateArtwork() {
     const test = fixture({ worktree: true });

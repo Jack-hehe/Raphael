@@ -14,6 +14,8 @@ const env = {
   GITHUB_REPOSITORY: "owner/Raphael", GITHUB_WORKFLOW: "Build Windows release", GITHUB_RUN_ID: "4242",
   GITHUB_RUN_ATTEMPT: "2", GITHUB_SERVER_URL: "https://github.com", ImageOS: "win25", ImageVersion: "20260901.1",
 };
+// Reading the tool versions starts npm, rustc, cargo and uv, which a busy runner can take seconds to do.
+const slowTools = 30_000;
 const tools = { node: "v22.17.0", npm: "10.9.2", "tauri cli": "2.12.3", nsis: "v3.13" };
 
 afterEach(() => {
@@ -110,7 +112,7 @@ tools:
     expect(found.node).toBe(process.version);
     expect(Object.keys(found)).toEqual(["node", "npm", "rustc", "cargo", "uv", "python in the frozen core", "pyinstaller", "tauri cli", "nsis"]);
     expect(found.nsis).toBe("unavailable");
-  });
+  }, slowTools);
 
   it("works from the command line and rejects unknown or missing arguments", () => {
     const { installer, notices, output } = inputs();
@@ -126,5 +128,5 @@ tools:
     expect(good.status, good.stderr).toBe(0);
     expect(good.stdout.split("\n").filter(Boolean)).toEqual(["BUILD-INFO.txt", "Raphael-0.1.0-windows-x64-setup.exe", "SHA256SUMS.txt", "THIRD_PARTY_NOTICES.txt"]);
     expect(readFileSync(join(output, "BUILD-INFO.txt"), "utf8")).toContain("commit: 0123456789abcdef0123456789abcdef01234567");
-  });
+  }, slowTools);
 });
