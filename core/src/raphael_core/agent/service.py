@@ -73,8 +73,8 @@ MAX_QUESTION_CHARS = 1000
 # How many turns of the conversation each route is shown.
 CONTEXT_TURNS = {"discuss": 10, "answer": 3, "chat": 3}
 _DAY_MS = 86_400_000
-# The routes that give an answer a later "copy that" can copy.
-_ANSWER_ROUTES = ("answer", "discuss", "chat")
+# The routes that give an answer a later "copy that" can copy. Small talk ("不客氣。") is none.
+_ANSWER_ROUTES = ("answer", "discuss")
 # What Raphael says (a phrase of persona.Phrases) after a confirmed action; none says only 了.
 _DONE_PHRASE = {"copy_text": "copied"}
 _QUOTES = (

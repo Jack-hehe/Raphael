@@ -383,7 +383,7 @@ async def test_an_answer_with_the_weather_looks_it_up_for_the_city_and_asks_the_
     assert forecast.url.host == "api.open-meteo.com"
     assert len(client.json_calls) == 1
     call = client.json_calls[0]
-    assert call["reasoning_effort"] == "low" and call["schema_name"] == "raphael_reply"
+    assert call["reasoning_effort"] == "none" and call["schema_name"] == "raphael_reply"
     assert 'weather: {"city": "Taipei", "asked_for": "台北"' in call["user"]
     assert "<question>\n台北天氣如何\n</question>" in call["user"]
     assert actions.calls == []
@@ -900,6 +900,14 @@ async def test_nothing_to_copy_is_said_and_nothing_is_asked(rig, client, actions
     assert result["status"] == "done"
     assert (result["prefix"], result["text"]) == ("否", "沒有可以複製的內容。")
     assert rig.service._confirmations.waiting == 0 and actions.calls == []
+
+
+async def test_small_talk_is_not_what_copy_copies(rig, client, actions):
+    rig.seed("台北天氣？", "台北晴，25 度。")
+    rig.seed("謝謝", "不客氣。", route="chat", prefix="了")
+    asked = await ask_to_copy(rig, client)
+    await rig.confirm(asked["confirm"]["id"], True)
+    assert actions.calls == [("copy_to_clipboard", "台北晴，25 度。")]
 
 
 async def test_a_copy_that_fails_after_the_yes_is_said_to_have_failed(rig, client, actions):

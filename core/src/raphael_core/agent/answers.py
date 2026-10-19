@@ -1,7 +1,7 @@
 """The answers: the language model words what Raphael says.
 
 Raphael answers a question, takes part in a discussion or makes small talk by asking the model
-(`agent_model`, with a little reasoning) for a JSON reply: a `prefix` (one of the language's set),
+(`agent_model`, with no reasoning: a line is short, and every second shows) for a JSON reply: a `prefix` (one of the language's set),
 the `text` for the overlay, one line, and a `detail` for the history. The model is shown what it
 needs and no more: the time, the last turns of the conversation (the context), the results of the
 tools (data, not instructions) and the question in tags. Its reply is made safe before it is
@@ -29,7 +29,8 @@ from .tools import ToolResult
 logger = logging.getLogger(__name__)
 
 # The longest an answer may take, and the most it may run to. The line is short and the detail is
-# not, and the tokens the model thinks with (a little: "low") count against the limit as well.
+# not. Reasoning is off: measured live, "low" made a discussion take 7 to 10 s against 2 to 3 s,
+# for a line of 80 characters that read no better.
 ANSWER_TIMEOUT_S = 10.0
 REPLY_MAX_TOKENS = 1200
 
@@ -163,7 +164,7 @@ class Voice:
                     schema_name="raphael_reply",
                     timeout_s=self._timeout_s,
                     max_tokens=REPLY_MAX_TOKENS,
-                    reasoning_effort="low",
+                    reasoning_effort="none",
                 ),
                 self._timeout_s,
             )

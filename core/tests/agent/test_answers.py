@@ -84,7 +84,7 @@ async def test_the_model_is_asked_for_json_with_a_little_reasoning(voice, client
     assert call["fallbacks"] == CLEANUP_FALLBACKS
     assert call["system"] == persona.system_prompt("zh-TW", "answer")
     assert call["schema_name"] == "raphael_reply"
-    assert call["reasoning_effort"] == "low"
+    assert call["reasoning_effort"] == "none"
     assert call["max_tokens"] == REPLY_MAX_TOKENS
     assert call["timeout_s"] > 0
 
