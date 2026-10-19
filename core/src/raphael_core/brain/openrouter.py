@@ -405,8 +405,11 @@ class OpenRouterClient:
         Only the parameters OpenRouter documents for structured output are sent. In particular
         there is no temperature or top_p: with require_parameters, a model that cannot take one
         (gpt-6-luna has no temperature; claude-haiku-5.5 rejects any value but its default) would
-        be left out. Reasoning is off. `timeout_s` applies to each stage of the request (connect,
-        send, wait, read), so the caller still needs a deadline of its own for the whole call.
+        be left out. Reasoning is off. `data_collection: "deny"` keeps the dictated text away from
+        providers that may store or train on what they are sent, as it does for the audio of a
+        transcription (`transcription_body`). `timeout_s` applies to each stage of the request
+        (connect, send, wait, read), so the caller still needs a deadline of its own for the whole
+        call.
         """
         body: dict[str, Any] = {
             "model": model,
@@ -418,7 +421,7 @@ class OpenRouterClient:
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
-            "provider": {"require_parameters": True, "sort": "latency"},
+            "provider": {"require_parameters": True, "sort": "latency", "data_collection": "deny"},
             "reasoning": {"effort": "none"},
             "max_tokens": max_tokens,
         }
