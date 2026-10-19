@@ -224,6 +224,8 @@ export const en = {
   "dictionary.018": "<div class=\"say\">《Report. Your dictionary is empty.》</div>Choose “Add word” to add common terms and improve future dictation.",
   "dictionary.019": "<div class=\"say\">《Report. No matching terms.》</div>Try a different filter or search term.",
   "dictionary.020": "Could not load dictionary: {p0}",
+  "learnHint.body": "{p0} hides its text from accessibility tools, so Raphael can't learn the corrections you make there. Add \"editor.accessibilitySupport\": \"on\" to the {p0} settings and reload it. Raphael never changes this setting for you.",
+  "learnHint.dismiss": "Got it",
   "dictionary.021": "Could not add: {p0}",
   "dictionary.022": "Added “{p0}”",
   "dictionary.023": "Deleted",

@@ -223,6 +223,8 @@ export const zhTW = {
   "dictionary.018": "<div class=\"say\">《告。字典還是空的。》</div>按「新增單字」加入常用詞，讓下次聽寫更準確。",
   "dictionary.019": "<div class=\"say\">《告。沒有符合的詞。》</div>換個篩選或關鍵字試試。",
   "dictionary.020": "無法讀取字典：{p0}",
+  "learnHint.body": "{p0} 沒有開啟協助工具支援，拉斐爾學不到你在那裡做的修正。在 {p0} 的設定加入 \"editor.accessibilitySupport\": \"on\" 並重新載入即可；拉斐爾不會替你更改這個設定。",
+  "learnHint.dismiss": "知道了",
   "dictionary.021": "無法加入：{p0}",
   "dictionary.022": "已加入「{p0}」",
   "dictionary.023": "已刪除",

@@ -185,7 +185,9 @@ export interface DeviceSettings {
 /** What commands.rs sends on the `main_events` channel (`MainEvent`). */
 export type MainEvent =
   | { type: "Level"; value: number }
-  | { type: "ModelProgress"; name: string; done: number; total: number };
+  | { type: "ModelProgress"; name: string; done: number; total: number }
+  /** An editor hides its text from UI Automation, so corrections in it cannot be learned. */
+  | { type: "LearnLimited"; app: string; reason: string };
 
 // ---------- what the pages share with main.ts ----------
 
