@@ -16,6 +16,7 @@ use super::corrections::{Correction, Tracker};
 pub struct Keystrokes {
     state: Option<State>,
     complete: bool,
+    enter: EnterKey,
 }
 
 struct State {
@@ -23,6 +24,16 @@ struct State {
     caret: usize,
     anchor: usize,
     tracker: Tracker,
+}
+
+/// What Enter means in the field being followed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnterKey {
+    /// It sends the field: a chat box, a single-line input. What is there is final.
+    Submit,
+    /// It may accept a suggestion or add a line, and the keys alone cannot show which (a code
+    /// editor: IntelliSense turns the typed word into another one). Nothing can be learned.
+    Invalidate,
 }
 
 /// What one event did to the reconstruction.
@@ -86,7 +97,7 @@ fn replace(text: &mut String, range: Range<usize>, with: &str) -> bool {
 }
 
 impl State {
-    fn apply(&mut self, event: EditEvent) -> Step {
+    fn apply(&mut self, event: EditEvent, enter: EnterKey) -> Step {
         let start = self.caret.min(self.anchor);
         let end = self.caret.max(self.anchor);
         let selected = start != end;
@@ -138,7 +149,12 @@ impl State {
                 }
                 return Step::Moved;
             }
-            EditEvent::Enter => return Step::Submitted,
+            EditEvent::Enter => {
+                return match enter {
+                    EnterKey::Submit => Step::Submitted,
+                    EnterKey::Invalidate => Step::Lost,
+                };
+            }
             _ => return Step::Lost,
         }
         self.tracker = self.tracker.advanced(&self.text);
@@ -147,7 +163,14 @@ impl State {
 }
 
 impl Keystrokes {
+    /// For a field where Enter sends.
+    #[cfg(test)]
     pub fn new(pasted: &str) -> Option<Self> {
+        Self::with_enter(pasted, EnterKey::Submit)
+    }
+
+    /// Like [`Keystrokes::new`], for a field where Enter means `enter`.
+    pub fn with_enter(pasted: &str, enter: EnterKey) -> Option<Self> {
         if pasted.is_empty() || pasted.len() > MAX_TEXT || !pasted.chars().all(known_character) {
             return None;
         }
@@ -159,6 +182,7 @@ impl Keystrokes {
                 tracker: Tracker::new(pasted, pasted)?,
             }),
             complete: false,
+            enter,
         })
     }
 
@@ -174,7 +198,7 @@ impl Keystrokes {
         let Some(state) = self.state.as_mut() else {
             return;
         };
-        match state.apply(event) {
+        match state.apply(event, self.enter) {
             Step::Edited | Step::Moved => {}
             Step::Submitted => self.complete = true,
             Step::Lost => self.state = None,
@@ -297,6 +321,54 @@ mod tests {
             keys.text(),
             Some("Please ask Alice about the release plan today.")
         );
+    }
+
+    #[test]
+    fn enter_in_a_code_editor_may_accept_a_suggestion_so_nothing_is_learned() {
+        let mut keys = Keystrokes::with_enter(PASTED, EnterKey::Invalidate).unwrap();
+        for _ in 0..30 {
+            keys.apply(EditEvent::Left { shift: false });
+        }
+        for _ in 0..6 {
+            keys.apply(EditEvent::Left { shift: true });
+        }
+        // The user typed "Ali" and IntelliSense completed it on Enter into something else.
+        typed(&mut keys, "Ali");
+        keys.apply(EditEvent::Enter);
+        assert_eq!(keys.text(), None);
+        assert!(keys.corrections().is_empty());
+        assert!(!keys.is_complete());
+    }
+
+    #[test]
+    fn a_correction_that_is_not_followed_by_enter_still_counts_in_an_editor() {
+        let mut keys = Keystrokes::with_enter(PASTED, EnterKey::Invalidate).unwrap();
+        for _ in 0..30 {
+            keys.apply(EditEvent::Left { shift: false });
+        }
+        for _ in 0..6 {
+            keys.apply(EditEvent::Left { shift: true });
+        }
+        typed(&mut keys, "Alice");
+        assert_eq!(
+            keys.corrections(),
+            [Correction {
+                word: "Alice".into(),
+                misheard: "Allice".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn enter_in_a_single_line_field_submits() {
+        let mut keys = Keystrokes::with_enter(PASTED, EnterKey::Submit).unwrap();
+        keys.apply(EditEvent::Enter);
+        assert!(keys.is_complete());
+        assert_eq!(keys.text(), Some(PASTED));
+        // The default is the same.
+        let mut keys = Keystrokes::new(PASTED).unwrap();
+        keys.apply(EditEvent::Enter);
+        assert!(keys.is_complete());
     }
 
     #[test]

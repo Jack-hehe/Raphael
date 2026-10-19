@@ -26,11 +26,13 @@ use windows::Win32::UI::Accessibility::{
     TextUnit_Character, UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_IsPasswordPropertyId,
     UIA_TextControlTypeId, UIA_TextPatternId, UIA_ValuePatternId,
 };
-use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+use windows::Win32::UI::WindowsAndMessaging::{
+    ES_MULTILINE, GWL_STYLE, GetClassNameW, GetForegroundWindow, GetWindowLongW,
+};
 use windows::core::{Interface, Ref, implement};
 
 use super::apps::{AppKind, classify, needs_accessibility_hint};
-use super::keystrokes::Keystrokes;
+use super::keystrokes::{EnterKey, Keystrokes};
 use super::terminal::{TerminalDecision, TerminalTracker};
 use super::{Correction, FieldProbe, Snapshot, Tracker, WatchScope, WatchedField};
 use crate::paste::Target;
@@ -420,6 +422,7 @@ fn discover(
             .err()
             .map(|error| format!("0x{:08X}", error.code().0 as u32))
     );
+    let enter = enter_key(kind, single_line_edit_box(&focused));
     let com = Com::join().ok_or_else(|| Failure::stop("com_apartment"))?;
     let focus = Arc::new(FocusWatch::new(identity.ok(), target.pid, target.hwnd));
     let handler: IUIAutomationFocusChangedEventHandler = FocusChanged(focus.clone()).into();
@@ -440,7 +443,7 @@ fn discover(
         mode: ReadMode::Pending,
         ended: false,
         initial: None,
-        keys: Keystrokes::new(pasted),
+        keys: Keystrokes::with_enter(pasted, enter),
         observation: None,
         focus,
         handler: subscribed.then_some(handler),
@@ -483,6 +486,49 @@ fn safe_password_status(password: Option<bool>) -> bool {
 
 fn keyboard_field_role(role: i32) -> bool {
     role == UIA_EditControlTypeId.0
+}
+
+/// What Enter means to the keystroke fallback. In a code editor it may accept an IntelliSense
+/// suggestion instead of sending, and the keys cannot tell which, so it cannot end an edit that
+/// can be learned from. Only a one-line edit box is sent by it.
+fn enter_key(kind: AppKind, single_line: bool) -> EnterKey {
+    if kind == AppKind::CodeEditor && !single_line {
+        EnterKey::Invalidate
+    } else {
+        EnterKey::Submit
+    }
+}
+
+/// Whether a window of this class and style is a classic one-line edit box.
+fn is_single_line_edit(class: &str, style: u32) -> bool {
+    class.eq_ignore_ascii_case("Edit") && style & ES_MULTILINE as u32 == 0
+}
+
+/// Whether the focused element is a classic one-line Win32 edit box, such as the file name of a
+/// dialog an editor opened. Nothing else says "one line" from outside the process: a web input
+/// in an Electron editor looks like the editor surface, so those count as multi-line.
+fn single_line_edit_box(element: &IUIAutomationElement) -> bool {
+    // SAFETY: plain queries on a window handle that may already be gone.
+    unsafe {
+        let Ok(hwnd) = element.CurrentNativeWindowHandle() else {
+            return false;
+        };
+        if hwnd.0.is_null() {
+            return false;
+        }
+        let mut class = [0u16; 32];
+        let length = GetClassNameW(hwnd, &mut class);
+        let Some(class) = usize::try_from(length)
+            .ok()
+            .and_then(|length| class.get(..length))
+        else {
+            return false;
+        };
+        is_single_line_edit(
+            &String::from_utf16_lossy(class),
+            GetWindowLongW(hwnd, GWL_STYLE) as u32,
+        )
+    }
 }
 
 fn declared_password(element: &IUIAutomationElement) -> Option<bool> {
@@ -1590,6 +1636,28 @@ mod tests {
         assert!(safe_password_status(Some(false)));
         assert!(!safe_password_status(Some(true)));
         assert!(!safe_password_status(None));
+    }
+
+    #[test]
+    fn enter_cancels_the_key_fallback_in_code_editors_unless_the_field_is_one_line() {
+        assert_eq!(enter_key(AppKind::CodeEditor, false), EnterKey::Invalidate);
+        assert_eq!(enter_key(AppKind::CodeEditor, true), EnterKey::Submit);
+        for kind in [AppKind::Chromium, AppKind::Terminal, AppKind::Other] {
+            assert_eq!(enter_key(kind, false), EnterKey::Submit);
+            assert_eq!(enter_key(kind, true), EnterKey::Submit);
+        }
+    }
+
+    #[test]
+    fn only_a_win32_edit_box_without_the_multiline_style_is_one_line() {
+        const WS_CHILD_VISIBLE: u32 = 0x5000_0000;
+        assert!(is_single_line_edit("Edit", WS_CHILD_VISIBLE));
+        assert!(is_single_line_edit("edit", WS_CHILD_VISIBLE | 0x80));
+        assert!(!is_single_line_edit("Edit", WS_CHILD_VISIBLE | 0x0004));
+        // Other classes say nothing about lines, a rich edit control included.
+        assert!(!is_single_line_edit("RICHEDIT50W", WS_CHILD_VISIBLE));
+        assert!(!is_single_line_edit("Chrome_RenderWidgetHostHWND", 0));
+        assert!(!is_single_line_edit("", 0));
     }
 
     #[test]
