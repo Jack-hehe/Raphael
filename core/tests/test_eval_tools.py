@@ -440,6 +440,24 @@ def test_load_cases_names_the_problem(tmp_path, line, fragment):
         eval_cleanup.load_cases(case_file(tmp_path, line))
 
 
+def test_load_cases_reads_misheard_hints_for_the_prompt_only(tmp_path):
+    line = '{"id": "a", "input": "試床", "dictionary": ["Alt"], "misheard": {"視窗": ["試床", "視床"], "Alt": ["O S"]}}'
+    (case,) = eval_cleanup.load_cases(case_file(tmp_path, line))
+    assert case.prompt_words == ["Alt", "視窗"]
+    assert case.prompt_hints == [("試床", "視窗"), ("視床", "視窗"), ("O S", "Alt")]
+    prompt = brain_cleanup.build_system_prompt(case.prompt_words, case.prompt_hints)
+    assert "視窗（常被聽成：試床、視床）" in prompt
+    # A hint is not a replacement rule: what the model is sent is the transcript as heard.
+    assert eval_cleanup.transcript_for(case) == "試床"
+
+
+@pytest.mark.parametrize("value", ['["視窗"]', '{"視窗": "試床"}', '{"視窗": [1]}'])
+def test_load_cases_validates_misheard(tmp_path, value):
+    line = f'{{"id": "a", "input": "x", "misheard": {value}}}'
+    with pytest.raises(ValueError, match="misheard"):
+        eval_cleanup.load_cases(case_file(tmp_path, line))
+
+
 def test_load_cases_refuses_a_repeated_id(tmp_path):
     line = '{"id": "a", "input": "x"}'
     with pytest.raises(ValueError, match="重複"):

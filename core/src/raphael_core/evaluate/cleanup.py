@@ -23,7 +23,10 @@ to a file.
 Cases file: one JSON object per line with `id`, `input`, and optionally `dictionary` (a list of
 words), `must_contain` and `must_not_contain` (lists of text), `must_contain_ci` (like
 `must_contain`, in any letter case: for a name whose capitalisation is not the point) and
-`must_contain_any` (alternatives: at least one of them must be there, in any letter case), and
+`must_contain_any` (alternatives: at least one of them must be there, in any letter case),
+`misheard` (an object from a dictionary word to the forms speech-to-text gives for it: the prompt
+lists them as 常被聽成 hints, as the app does for corrections it has seen, and they are never applied
+as replacement rules), and
 `target_app` (the process name of the window the text goes to, such as LINE.exe) and `languages`
 (the `languages` setting the case is cleaned for; DEFAULT_LANGUAGES, the user's own three, when it
 is left out). Spaces are ignored when a text is looked for, so 打開 YouTube and 打開YouTube are the
@@ -99,11 +102,23 @@ class Case:
     languages: list[str] = field(default_factory=lambda: list(DEFAULT_LANGUAGES))
     must_contain_ci: list[str] = field(default_factory=list)  # must_contain, in any letter case
     must_contain_any: list[str] = field(default_factory=list)  # at least one, in any letter case
+    # word -> the forms speech-to-text gives for it: hints in the prompt, never replacement rules
+    misheard: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def chinese(self) -> str | None:
         """The Chinese variant of the case's languages, as the app converts for it."""
         return chinese_variant(self.languages)
+
+    @property
+    def prompt_words(self) -> list[str]:
+        """The dictionary words the prompt lists: the case's words, then its misheard words."""
+        return self.dictionary + [word for word in self.misheard if word not in self.dictionary]
+
+    @property
+    def prompt_hints(self) -> list[tuple[str, str]]:
+        """The (misheard, word) pairs the prompt lists as 常被聽成."""
+        return [(form, word) for word, forms in self.misheard.items() for form in forms]
 
 
 @dataclass(frozen=True)
@@ -138,6 +153,16 @@ def _string_list(entry: dict, field: str, where: str) -> list[str]:
     value = entry.get(field, [])
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValueError(f"{where}：{field} 必須是文字清單")
+    return value
+
+
+def _misheard(entry: dict, where: str) -> dict[str, list[str]]:
+    value = entry.get("misheard", {})
+    if not isinstance(value, dict) or not all(
+        isinstance(word, str) and isinstance(forms, list) and all(isinstance(form, str) for form in forms)
+        for word, forms in value.items()
+    ):
+        raise ValueError(f"{where}：misheard 必須是「詞 → 文字清單」的物件")
     return value
 
 
@@ -182,6 +207,7 @@ def load_cases(path: Path) -> list[Case]:
                 languages=languages,
                 must_contain_ci=_string_list(entry, "must_contain_ci", where),
                 must_contain_any=_string_list(entry, "must_contain_any", where),
+                misheard=_misheard(entry, where),
             )
         )
     return cases
@@ -273,7 +299,7 @@ async def run_case(
             model=model,
             fallbacks=[],
             system=build_system_prompt(
-                case.dictionary, [], case.target_app, languages=case.languages
+                case.prompt_words, case.prompt_hints, case.target_app, languages=case.languages
             ),
             user=build_user_message(sent),
             schema=CLEANUP_SCHEMA,
@@ -386,6 +412,8 @@ def render_report(
             lines.append(f"- 目標 App：`{case.target_app}`")
         if case.dictionary:
             lines.append(f"- 字典：{'、'.join(case.dictionary)}")
+        for word, forms in case.misheard.items():
+            lines.append(f"- 字典提示：{word}（常被聽成：{'、'.join(forms)}）")
         if case.must_contain:
             lines.append(f"- 必須出現：{_quoted(case.must_contain)}")
         if case.must_contain_ci:
