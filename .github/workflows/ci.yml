@@ -1,7 +1,10 @@
 name: CI
 
+# The repository is private, so Actions minutes are limited (Windows runners count extra).
+# A branch is checked through its pull request, and main again after each merge.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
