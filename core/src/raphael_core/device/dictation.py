@@ -705,9 +705,10 @@ class DictationService:
     # --- dictation.cancel -----------------------------------------------------------------------
 
     async def _cancel(self, params: dict) -> dict:
-        """A recovery call: it cancels whatever session is active, whatever id it was given."""
+        """Cancel the named session, or whichever is active when no id is given for recovery."""
+        session_id = None if params.get("session_id") is None else _session_id(params)
         session = self._session
-        if session is not None:
+        if session is not None and (session_id is None or session.id == session_id):
             await self._cancel_session(session)
         return {}
 

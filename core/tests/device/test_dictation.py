@@ -215,6 +215,8 @@ class FakeBrain:
         self.entries = [{"id": 1, "word": "拉斐爾", "misheard": [], "source": "manual"}]
         self.settings = {"languages": ["zh-TW", "en-US", "ja-JP"], "language": "auto"}
         self.on_finalize = None
+        self.finalize_gate: asyncio.Event | None = None
+        self.finalize_entered = asyncio.Event()
         router.register("brain.finalize_dictation", self._finalize)
         router.register("dictionary.list", self._dictionary_list)
         router.register("settings.get", self._settings_get)
@@ -224,6 +226,9 @@ class FakeBrain:
         self.finalize_params.append(params)
         if self.on_finalize is not None:
             self.on_finalize()
+        if self.finalize_gate is not None:
+            self.finalize_entered.set()
+            await self.finalize_gate.wait()
         return {
             "id": 7,
             "text": params["raw_text"],
@@ -1096,10 +1101,33 @@ async def test_cancel_throws_away_pending_transcriptions(rig, router, brain):
     assert r["text"] == "新的" and r["audio_seconds"] == pytest.approx(1.0)
 
 
-async def test_cancel_with_another_id_cancels_the_active_session(rig, router):
+async def test_cancel_with_another_id_leaves_the_active_session_alone(rig, router):
     await start(router, "s1")
     assert await router.call("dictation.cancel", {"session_id": "other"}) == {}
-    assert not rig.service.active and rig.recorder.stop_count == 1
+    assert await router.call("dictation.cancel", {"session_id": "other"}) == {}
+    assert rig.service.active and rig.recorder.stop_count == 0
+
+
+async def test_a_late_cancel_during_cleanup_preserves_the_new_session(rig, router, brain):
+    rig.engine.texts = ["first", "second"]
+    rig.recorder.chunks = [chunk(1.0)]
+    gate = brain.finalize_gate = asyncio.Event()
+    await start(router, "s1")
+    await rig.recorder.fed(1)
+    first_stop = asyncio.create_task(stop(router, "s1"))
+    try:
+        await asyncio.wait_for(brain.finalize_entered.wait(), 5)
+        brain.finalize_gate = None
+        await start(router, "s2")
+        await rig.recorder.fed(1)
+        assert await router.call("dictation.cancel", {"session_id": "s1"}) == {}
+        assert rig.recorder.running
+        assert (await stop(router, "s2"))["text"] == "second"
+        assert not first_stop.done()
+    finally:
+        gate.set()
+        first = await first_stop
+    assert first["text"] == "first"
 
 
 async def test_cancel_without_an_id_cancels_the_active_session(rig, router):
@@ -1115,6 +1143,20 @@ async def test_cancel_with_nothing_active_is_fine(rig, router):
     assert await router.call("dictation.cancel", {"session_id": "s1"}) == {}
     assert await router.call("dictation.cancel", {}) == {}
     assert rig.recorders_made == 0
+
+
+@pytest.mark.parametrize("session_id", ["", 5, False, [], {}])
+async def test_cancel_rejects_invalid_ids_without_ending_the_session(rig, router, session_id):
+    params = {"session_id": session_id}
+    with pytest.raises(RpcError) as error:
+        await router.call("dictation.cancel", params)
+    assert error.value.code == INVALID_PARAMS
+    assert rig.recorders_made == 0
+    await start(router)
+    with pytest.raises(RpcError) as error:
+        await router.call("dictation.cancel", params)
+    assert error.value.code == INVALID_PARAMS
+    assert rig.service.active and rig.recorder.stop_count == 0
 
 
 async def test_cancel_while_start_is_setting_up_the_microphone(rig, router):
