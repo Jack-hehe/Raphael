@@ -268,42 +268,39 @@ const progress = (stage: "transcribing" | "cleaning" | "done", done = 0, total =
   audio_seconds: 6,
 });
 
-test("a dictation with progress: the whole ring while listening, swept away at the stop, drawn in through the stages, then the emblem vanishes", () => {
+test("a dictation with progress: the whole ring all the way through, the percentage beside it, then the emblem vanishes", () => {
   const p = page();
   p.send(SETTINGS);
   for (let round = 0; round < 2; round++) {
     p.send({ type: "show", mode: "listening" });
     run(1200);
-    expect(p.emblem.revealShown, `round ${round}: a new dictation shows the whole ring`).toEqual({ fraction: 0, rest: 0, flash: 0, away: 0, boost: 0 });
+    expect(p.emblem.boost, `round ${round}: a new dictation starts quiet`).toBe(0);
     p.send({ type: "level", value: 0.6 });
     run(100);
-    expect(p.emblem.revealShown?.boost).toBeGreaterThan(0);
+    expect(p.emblem.boost).toBeGreaterThan(0);
     p.send({ type: "level", value: 0 }); // the speech ends
     p.send({ type: "mode", mode: "thinking" }, progress("transcribing", 1, 3));
-    expect(p.drawsNow()).toBe(true); // 100 ms
-    expect(p.emblem.revealShown?.away).toBeGreaterThan(0); // the ring is swept away first
-    expect(p.emblem.revealShown?.fraction).toBe(0);
-    run(220);
-    const first = p.emblem.revealShown?.fraction ?? 0;
-    expect(first).toBeGreaterThan(0);
-    expect(first).toBeLessThanOrEqual(0.2 + 1e-9);
+    expect(p.emblem.boost).toBe(0);
+    expect(p.drawsNow()).toBe(true); // 100 ms: the ring is still there
+    run(1500);
+    expect(p.view.percent).toBe(20);
     p.send(progress("transcribing", 3, 3), progress("cleaning", 3, 3));
     run(800);
-    const cleaning = p.emblem.revealShown?.fraction ?? 0;
-    expect(cleaning).toBeGreaterThan(0.6);
-    expect(cleaning).toBeLessThan(0.95);
+    expect(p.view.percent).toBeGreaterThan(60);
+    expect(p.view.percent).toBeLessThan(95);
     p.send(progress("done"));
-    run(50);
-    expect(p.emblem.revealShown?.fraction).toBe(1);
+    expect(p.view.percent).toBe(99);
+    expect(p.drawsNow()).toBe(true);
     p.send({ type: "hide" });
     run(1000);
+    expect(p.view.percent).toBeNull();
     expect(p.emblem.phase).toBe("hidden");
     expect(p.drawsNow()).toBe(false);
     expect(p.view.lines).toBeNull(); // no words at any point
   }
 });
 
-test("progress then a notice (the text was only copied): the whole ring is back, the notice shows", () => {
+test("progress then a notice (the text was only copied): the percentage goes, the notice shows", () => {
   const p = page();
   p.send({ type: "show", mode: "listening" });
   run(1000);
@@ -311,29 +308,29 @@ test("progress then a notice (the text was only copied): the whole ring is back,
   run(500);
   p.send(progress("done"), NO_SOUND);
   run(400);
-  expect(p.emblem.revealShown).toBeNull(); // the whole ring
+  expect(p.view.percent).toBeNull();
   expect(p.view.lines).not.toBeNull();
   run(10_000);
   expect(p.emblem.phase).toBe("hidden");
   p.send({ type: "show", mode: "listening" });
   expect(p.drawsNow()).toBe(true);
-  expect(p.emblem.revealShown?.fraction).toBe(0);
+  expect(p.emblem.boost).toBe(0);
 });
 
-test("a quick tap: the reply comes during the appear animation, and the ring still closes", () => {
+test("a quick tap: the reply comes during the appear animation", () => {
   const p = page();
   p.send({ type: "show", mode: "listening" });
   run(200);
   p.send({ type: "mode", mode: "thinking" }, progress("transcribing", 0, 1), progress("done"));
   run(50);
   expect(p.emblem.phase).toBe("appear");
-  expect(p.emblem.revealShown?.fraction).toBe(1);
+  expect(p.view.percent).toBe(99);
   p.send({ type: "hide" });
   run(1000);
   expect(p.emblem.phase).toBe("hidden");
   p.send({ type: "show", mode: "listening" });
   expect(p.drawsNow()).toBe(true);
-  expect(p.emblem.revealShown?.fraction).toBe(0);
+  expect(p.view.percent).toBeNull();
 });
 
 test("progress that comes after the hide changes nothing", () => {
@@ -349,17 +346,17 @@ test("progress that comes after the hide changes nothing", () => {
   expect(frames).toHaveLength(0);
 });
 
-test("two shows without a hide reset a swept ring and keep the real emblem drawing", () => {
+test("two shows without a hide start over and keep the real emblem drawing", () => {
   const p = page();
   p.send({ type: "show", mode: "listening" });
   run(1200);
   p.send({ type: "level", value: 0.7 }, { type: "mode", mode: "thinking" }, progress("transcribing", 1, 3));
   run(500);
-  expect(p.emblem.revealShown?.away).toBe(1);
+  expect(p.view.percent).not.toBeNull();
   p.send({ type: "show", mode: "listening" }, { type: "show", mode: "listening" });
   run(2000);
   expect(p.emblem.phase).toBe("listening");
-  expect(p.emblem.revealShown).toMatchObject({ fraction: 0, away: 0, rest: 0 });
+  expect(p.view.percent).toBeNull();
   expect(p.stats.ink).toBe(true);
 });
 
@@ -370,7 +367,7 @@ test("a notice timer cannot hide the next recording after show takes over", () =
   p.send({ type: "show", mode: "listening" });
   run(10_000);
   expect(p.emblem.phase).toBe("listening");
-  expect(p.emblem.revealShown).toMatchObject({ away: 0, fraction: 0 });
+  expect(p.emblem.boost).toBe(0);
   expect(p.stats.ink).toBe(true);
   expect(p.view.lines).toBeNull();
 });

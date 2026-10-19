@@ -43,10 +43,6 @@ export interface EmblemControl {
   set(mode: Mode): void;
   speak(seconds: number): void;
   size(px: number): void;
-  /** How far the dictation has come since the key was released (the glyph ring draws itself in). */
-  progress(report: ProgressReport): void;
-  /** The dictation is over: the whole glyph ring comes back. */
-  clearProgress(): void;
 }
 
 /** What the controller needs from the page. */
@@ -102,7 +98,6 @@ export class OverlayController {
         // starts without the last dictation's progress.
         this.cancelNotices();
         this.activeShow = true;
-        this.emblem.clearProgress();
         this.appearIfHidden();
         this.setMode(event.mode);
         break;
@@ -125,7 +120,6 @@ export class OverlayController {
         if (!this.activeShow) break;
         this.activeShow = false;
         this.cancelNotices();
-        this.emblem.clearProgress();
         this.busy = true;
         this.appearIfHidden();
         this.emblem.set("steady");
@@ -146,7 +140,6 @@ export class OverlayController {
         // Raphael speaks: the dictation's progress has said what it had to.
         this.activeShow = false;
         if (this.progress.active) this.stopProgress();
-        this.emblem.clearProgress();
         this.queue.push({ zh: event.zh, ja: event.ja, learned: false });
         if (!this.busy) this.next();
         break;
@@ -182,7 +175,6 @@ export class OverlayController {
 
   private updateProgress(report: ProgressReport): void {
     if (!this.activeShow) return;
-    this.emblem.progress(report);
     this.progress.report(report, false);
     this.renderProgress();
     this.startProgressTimer();
@@ -345,7 +337,7 @@ async function start(): Promise<void> {
 
   const view = new DomView(document.documentElement, box, zh, ja, progress);
   view.layout(DEFAULT_PX);
-  const emblem = new Emblem(canvas, DEFAULT_PX, { surface: "transparent", progressStyle: "caption" });
+  const emblem = new Emblem(canvas, DEFAULT_PX, { surface: "transparent" });
   const controller = new OverlayController(emblem, view);
   const frames = new FrameWatch(() => emblem.frames, () => document.visibilityState, pageLog, {
     canvas,
