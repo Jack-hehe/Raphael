@@ -428,6 +428,45 @@ async def test_the_dictionary_words_go_to_the_engine_newest_first(rig, router, b
     assert rig.engine.calls[0]["hints"] == ["新詞", "OpenRouter", "舊詞"]
 
 
+async def test_the_words_the_user_chose_come_before_the_learned_ones_in_the_hints(
+    rig, router, brain
+):
+    # An engine takes the first of the hints (20 locally, 50 in the cloud), so the learned words,
+    # up to three a dictation, must not push the user's own out of the list.
+    brain.entries = [
+        {"id": 5, "word": "新學的", "misheard": [], "source": "learned"},
+        {"id": 4, "word": "新詞", "misheard": [], "source": "manual"},
+        {"id": 3, "word": "舊學的", "misheard": [], "source": "learned"},
+        {"id": 2, "word": "OpenRouter", "misheard": [], "source": "suggested"},
+        {"id": 1, "word": "舊詞", "misheard": [], "source": "manual"},
+    ]
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    await stop(router)
+    assert rig.engine.calls[0]["hints"] == ["新詞", "OpenRouter", "舊詞", "新學的", "舊學的"]
+
+
+async def test_many_learned_words_do_not_push_the_users_names_out_of_the_local_hints(
+    rig, router, brain
+):
+    from raphael_core.device.stt import _hotwords
+
+    names = ["拉斐爾", "OpenRouter", "Tailscale"]
+    learned = [{"id": 100 + n, "word": f"學到{n}", "misheard": [], "source": "learned"}
+               for n in range(40, 0, -1)]
+    chosen = [{"id": n, "word": name, "misheard": [], "source": "manual"}
+              for n, name in enumerate(names, 1)]
+    brain.entries = [*learned, *chosen]  # the learned are newer: newest first, they come first
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    await stop(router)
+    hints = rig.engine.calls[0]["hints"]
+    assert hints[:3] == names and len(hints) == 43
+    assert set(names) <= set(_hotwords(hints).split(","))
+
+
 @pytest.mark.parametrize(
     "settings",
     [

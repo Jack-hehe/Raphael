@@ -261,6 +261,16 @@ def script_rules(languages: Sequence[str]) -> str:
 
 _PLACEHOLDER = re.compile(r"\{(dictionary|target_app|languages|script_rules)\}")
 
+# The dictionary in the prompt is cut off, so that a dictionary of hundreds of words (learned ones
+# pile up, up to three a dictation) cannot make each cleanup slower and dearer, or bury the rules
+# of the prompt. It is cut off at the end of the order the caller gives, which puts the words the
+# user chose first (`DictionaryStore.hint_words`): at most this many words, each with at most this
+# many of the forms it is heard as, and at most this many characters in all. A word that would
+# take the block past the characters is left out, and the later ones are still tried.
+PROMPT_MAX_WORDS = 100
+PROMPT_MAX_FORMS = 5
+PROMPT_MAX_CHARS = 4_000
+
 
 def build_system_prompt(
     words: Sequence[str],
@@ -285,19 +295,27 @@ def build_system_prompt(
     is one line per word, in the order of `words`, and a word that speech-to-text tends to get
     wrong also lists how it comes out, in the order of `replacements`. An empty dictionary is
     written as （空）. A line break inside a word becomes a space, and a blank word or form is left
-    out.
+    out. The block is cut off at the end of `words` (PROMPT_MAX_WORDS, PROMPT_MAX_FORMS and
+    PROMPT_MAX_CHARS above).
     """
     misheard_forms: dict[str, list[str]] = {}
     for misheard, word in replacements:
         form = _one_line(misheard)
         if form:
             misheard_forms.setdefault(_one_line(word), []).append(form)
-    lines = []
+    lines: list[str] = []
+    size = 0  # the characters of the lines, a line break after each
     for word in map(_one_line, words):
         if not word:
             continue
+        if len(lines) == PROMPT_MAX_WORDS:
+            break
         forms = misheard_forms.get(word)
-        lines.append(f"- {word}（常被聽成：{'、'.join(forms)}）" if forms else f"- {word}")
+        line = f"- {word}（常被聽成：{'、'.join(forms[:PROMPT_MAX_FORMS])}）" if forms else f"- {word}"
+        if size + len(line) + 1 > PROMPT_MAX_CHARS:
+            continue
+        lines.append(line)
+        size += len(line) + 1
     values = {
         "dictionary": "\n".join(lines) or "（空）",
         "target_app": describe_target_app(target_app),

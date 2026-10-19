@@ -359,7 +359,11 @@ class DictationService:
             raise RpcError(NOT_FOUND, "The dictation was cancelled before it started")
 
     async def _context(self) -> tuple[list[str], str]:
-        """The user's dictionary words (newest first, as the brain lists them) and "auto".
+        """The user's dictionary words and "auto". The words are in order of priority, because an
+        engine takes the first of them only (20 locally, 50 in the cloud): the ones the user chose
+        come first and the ones learned from corrections after, each newest first as the brain
+        lists them. The learned ones, up to three a dictation, would otherwise push the user's own
+        names out.
 
         The selection chooses written variants, never limits recognition (`stt_language`). Older
         settings with only `language`, or anything that is not a valid selection, are also "auto".
@@ -368,10 +372,13 @@ class DictationService:
         language = "auto"
         try:
             result = await self._router.call("dictionary.list", {})
+            chosen: list[str] = []
+            learned: list[str] = []
             for entry in result["entries"]:
                 word = entry.get("word")
                 if isinstance(word, str) and word.strip():
-                    hints.append(word)
+                    (learned if entry.get("source") == "learned" else chosen).append(word)
+            hints = chosen + learned
         except Exception as exc:
             logger.warning("Could not read the dictionary; dictating without hints: %s", exc)
         try:

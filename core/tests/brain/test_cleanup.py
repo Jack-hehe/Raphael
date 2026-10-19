@@ -699,6 +699,51 @@ def test_a_replacement_for_a_word_that_is_not_listed_is_ignored():
     assert dictionary_lines(prompt) == ["- 拉斐爾"]
 
 
+def test_the_dictionary_block_is_cut_off_at_a_hundred_words_in_the_order_given():
+    words = [f"Word{n}" for n in range(150)]
+    lines = dictionary_lines(build_system_prompt(words, []))
+    assert lines == [f"- Word{n}" for n in range(cleanup.PROMPT_MAX_WORDS)]
+    assert cleanup.PROMPT_MAX_WORDS == 100
+
+
+def test_a_word_is_listed_with_at_most_five_of_its_forms():
+    forms = [(f"form{n}", "Raphael") for n in range(9)]
+    (line,) = dictionary_lines(build_system_prompt(["Raphael"], forms))
+    assert line == "- Raphael（常被聽成：form0、form1、form2、form3、form4）"
+    assert cleanup.PROMPT_MAX_FORMS == 5
+
+
+def test_the_dictionary_block_is_cut_off_at_four_thousand_characters():
+    words = ["字" * 98 + f"{n:02d}" for n in range(60)]  # 100 characters, a line of 102 each
+    lines = dictionary_lines(build_system_prompt(words, []))
+    assert lines == [f"- {word}" for word in words[: len(lines)]]
+    assert 0 < len(lines) < 60 and sum(len(line) + 1 for line in lines) <= cleanup.PROMPT_MAX_CHARS
+    assert cleanup.PROMPT_MAX_CHARS == 4_000
+
+
+def test_a_word_that_would_not_fit_is_skipped_and_the_later_ones_are_still_listed():
+    words = ["甲", "字" * 5_000, "乙"]
+    assert dictionary_lines(build_system_prompt(words, [])) == ["- 甲", "- 乙"]
+
+
+async def test_the_words_the_user_chose_survive_a_dictionary_full_of_learned_ones(
+    svc, fake_client, dictionary
+):
+    # The oldest entries are the user's own: the newest-first order the store lists would drop
+    # them first. The prompt gets the user's words before the learned ones.
+    for name in ("拉斐爾", "OpenRouter", "Tailscale"):
+        dictionary.add(name)
+    for n in range(130):
+        dictionary.add(f"Learned{n:03d}", source="learned")
+    fake_client.reply = completion({"text": "你好。"})
+    await svc.clean("你好", audio_seconds=1)
+    lines = dictionary_lines(fake_client.calls[0]["system"])
+    assert len(lines) == cleanup.PROMPT_MAX_WORDS
+    assert set(lines[:3]) == {"- 拉斐爾", "- OpenRouter", "- Tailscale"}
+    assert lines[3] == "- Learned129", "then the newest of the learned"
+    assert "- Learned033" in lines and "- Learned032" not in lines, "97 of the learned fit"
+
+
 @pytest.mark.parametrize("word", ["{dictionary}", "{0}", "{", "}{", "{text}"])
 def test_braces_in_the_dictionary_are_text(word):
     prompt = build_system_prompt([word], [("x{y}", word)])
