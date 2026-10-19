@@ -9,7 +9,8 @@ Traditional forms (学 into 學, 会 into 會, 来 into 來). That is why Japane
 by sentence. And OpenCC takes its input for Simplified Chinese: over text that is Traditional
 already it corrupts some characters (只要 into 隻要, 干擾 into 幹擾). So the Traditional variants
 convert only what is still Simplified (`convert_leftover_simplified`), for the cleaned text and for
-the raw text alike.
+the raw text alike. A text pasted without cleanup also loses its most obvious stutters
+(`remove_stutters`).
 """
 
 import difflib
@@ -393,3 +394,52 @@ def finish_cleaned_text(
         else:
             text = convert_leftover_simplified(text, _TO_TRADITIONAL[chinese])
     return apply_replacements(text, rules)
+
+
+# What may stand around the comma of a stutter: spaces and tabs, not a line break.
+_AROUND_COMMA = r"[ \t\u3000]*[,\uff0c\u3001][ \t\u3000]*"
+# A Latin word, a comma (",", "，" or "、"), and the same word again. Neither is part of a longer
+# word ("the, theory" is no stutter), and the apostrophe belongs to a word.
+_LATIN_STUTTER = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z']*)" + _AROUND_COMMA + r"(\1)(?![A-Za-z0-9'])",
+    re.IGNORECASE | re.ASCII,
+)
+# Two to four CJK characters, a comma, and the same characters again.
+_CJK_STUTTER = re.compile(rf"({_CJK.pattern}{{2,4}})" + _AROUND_COMMA + r"(\1)")
+# Words that are said twice on purpose ("very, very good", "no, no"). A single letter is a word
+# only as "I" or "a", and a list ("C, C++") is not a stutter.
+_SAID_TWICE = frozenset(
+    "very so really no yes bye ha oh ok okay hey sorry please well more much".split()
+)
+_ONE_LETTER_WORDS = frozenset("ia")
+# A chain of three ("the, the, the") needs a second pass; this many is more than any speech has.
+_STUTTER_PASSES = 4
+
+
+def _latin_stutter(match: re.Match[str]) -> str:
+    word = match.group(1).lower()
+    if (len(word) == 1 and word not in _ONE_LETTER_WORDS) or word in _SAID_TWICE:
+        return match.group(0)
+    return match.group(2)
+
+
+def remove_stutters(text: str) -> str:
+    """`text` without its obvious stutters: a word or a short run that is said again right after a
+    comma, where the speaker started over. The first is dropped with the comma and the second
+    stays (as it was spelled): "Hermes，Hermes agent" is "Hermes agent", "the, the config" is "the
+    config", "任何，任何事情" is "任何事情".
+
+    This is for the text that is pasted without cleanup, which is speech-to-text as it came, and it
+    is conservative on purpose. A Latin word of two letters or more (or "I", "a") counts; a run of
+    two to four CJK characters (Han and kana) counts. The comma may be "," or "，" or "、", with
+    spaces around it but not a line break. Nothing is touched that has no comma between the
+    repeats (很好很好, 謝謝謝謝), that restarts only in part (我想要，我想先; "the, theory"), that
+    repeats five characters or more, that is a list ("C, C++"), or that is said twice on purpose
+    ("very, very good", "no, no").
+    """
+    for _ in range(_STUTTER_PASSES):
+        fixed = _CJK_STUTTER.sub(r"\2", _LATIN_STUTTER.sub(_latin_stutter, text))
+        if fixed == text:
+            break
+        text = fixed
+    return text

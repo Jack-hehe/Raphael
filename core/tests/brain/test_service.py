@@ -397,6 +397,34 @@ async def test_a_fallback_pastes_and_saves_traditional_speech_as_it_is(router, s
     assert (row["text"], row["raw_text"]) == (spoken, spoken)
 
 
+async def test_a_fallback_drops_the_obvious_stutters_but_the_history_keeps_the_raw_text(router):
+    r = await finalize(router, "之後會有 Hermes，Hermes agents 可以做任何，任何事情")
+    assert r["fallback_reason"] == "no_key"
+    assert r["text"] == "之後會有 Hermes agents 可以做任何事情"
+    assert r["raw_text"] == "之後會有 Hermes，Hermes agents 可以做任何，任何事情"
+    row = (await router.call("history.latest", {}))["item"]
+    assert row["text"] == r["text"] and row["raw_text"] == r["raw_text"]
+
+
+async def test_every_kind_of_fallback_drops_the_stutters(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "台北。"})  # an answer: suspicious
+    r = await finalize(router, "台灣的首都，首都是哪裡")
+    assert (r["fallback_reason"], r["text"]) == ("suspicious", "台灣的首都是哪裡")
+    fake_client.next_error = OpenRouterError(0, "network", "offline")
+    r = await finalize(router, "please update the, the config file")
+    assert (r["fallback_reason"], r["text"]) == ("error:network", "please update the config file")
+
+
+async def test_a_cleaned_text_is_the_models_to_write_and_its_repeats_stay(
+    router, fake_client, keys
+):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "Hermes, Hermes agent 好用。"})
+    r = await finalize(router, "Hermes Hermes agent 好用")
+    assert (r["cleaned"], r["text"]) == (True, "Hermes, Hermes agent 好用。")
+
+
 async def test_a_fallback_converts_only_the_simplified_words_of_mixed_speech(router):
     r = await finalize(router, "就是只要按這個开關，资料我後面再发給你。")
     assert r["text"] == r["raw_text"] == "就是只要按這個開關，資料我後面再發給你。"

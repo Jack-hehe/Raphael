@@ -46,7 +46,12 @@ from .settings import SettingsStore
 from .spend import SpendTracker
 from .stats import StatsStore
 from .suggest import suggest_words
-from .textnorm import apply_replacements, finish_cleaned_text, normalize_transcript
+from .textnorm import (
+    apply_replacements,
+    finish_cleaned_text,
+    normalize_transcript,
+    remove_stutters,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -302,10 +307,11 @@ class Brain:
             # The model answered, so the time it took is a round trip to OpenRouter.
             self._openrouter.latency_ms = result.llm_ms
         if result.cleaned:
-            # A fallback is the normalized text already; doing it twice could repeat a replacement.
             text = finish_cleaned_text(result.text, rules, chinese=chinese)
         else:
-            text = result.text
+            # A fallback is the normalized text already; doing it twice could repeat a replacement.
+            # Nobody has tidied it, so its obvious stutters go; the history keeps it as it was.
+            text = remove_stutters(result.text)
 
         entry_id = self._save(
             HistoryItem(
