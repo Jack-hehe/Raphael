@@ -143,7 +143,9 @@ def _is_number(value: Any) -> bool:
 
 
 def _choice(answer: Any, options: tuple[str, ...]) -> tuple[str, float] | None:
-    if not isinstance(answer, Mapping) or answer.get("type") != "choice":
+    """`(option, confidence)` of a `choice` answer. The answer's `type` is checked when it has one,
+    but not required: the keys say what it is."""
+    if not isinstance(answer, Mapping) or answer.get("type", "choice") != "choice":
         return None
     picked, confidence = answer.get("choice"), answer.get("confidence")
     if not isinstance(picked, str) or picked not in options or not _is_number(confidence):
@@ -152,9 +154,13 @@ def _choice(answer: Any, options: tuple[str, ...]) -> tuple[str, float] | None:
 
 
 def _flag(answer: Any) -> bool | None:
-    if not isinstance(answer, Mapping) or answer.get("type") != "noul":
+    """Whether a `noul` answer is true: its number is from one half up (a plain true or false is
+    taken as it is). The answer's `type` is checked when it has one."""
+    if not isinstance(answer, Mapping) or answer.get("type", "noul") != "noul":
         return None
     value = answer.get("noul")
+    if isinstance(value, bool):
+        return value
     return value >= _NOUL_TRUE if _is_number(value) else None
 
 

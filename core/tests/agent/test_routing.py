@@ -147,6 +147,22 @@ def test_a_command_jev_is_not_sure_of_is_no_decision_but_none_is_always_fine():
     assert parse_answers(answers("chat", "volume_up", command_confidence=0.1), 0.55) is not None
 
 
+def test_an_answer_without_its_type_is_read_by_its_keys():
+    given = answers("command", "open_youtube")
+    for answer in given.values():
+        del answer["type"]
+    result = parse_answers(given, 0.55)
+    assert (result.route, result.command) == ("command", "open_youtube")
+
+
+def test_a_plain_true_or_false_is_a_noul_answer_too():
+    given = answers("answer")
+    given["needs_weather"] = {"type": "noul", "noul": True}
+    given["needs_time"] = {"noul": False}
+    result = parse_answers(given, 0.55)
+    assert (result.needs_weather, result.needs_time) == (True, False)
+
+
 @pytest.mark.parametrize(
     "mangle",
     [

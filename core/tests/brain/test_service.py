@@ -980,6 +980,36 @@ async def test_an_invalid_selection_of_languages_is_invalid_params(router, value
     assert (await router.call("settings.get", {}))["settings"]["languages"] == ["zh-TW"]
 
 
+async def test_the_assistants_settings_are_in_settings_get_and_can_be_set(router):
+    settings = (await router.call("settings.get", {}))["settings"]
+    assert (settings["agent_router"], settings["agent_model"], settings["agent_city"]) == (
+        "jev",
+        "openai/gpt-6-luna",
+        "台北",
+    )
+    for key, value in [("agent_router", "luna"), ("agent_model", "x/y"), ("agent_city", "東京")]:
+        settings = (await router.call("settings.set", {"key": key, "value": value}))["settings"]
+        assert settings[key] == value
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("agent_router", "keywords"),
+        ("agent_router", 1),
+        ("agent_model", " "),
+        ("agent_model", "two words"),
+        ("agent_city", ""),
+        ("agent_city", None),
+    ],
+)
+async def test_a_bad_value_for_the_assistants_settings_is_invalid_params(router, key, value):
+    with pytest.raises(RpcError) as raised:
+        await router.call("settings.set", {"key": key, "value": value})
+    assert raised.value.code == INVALID_PARAMS
+    assert (await router.call("settings.get", {}))["settings"][key] == DEFAULTS[key]
+
+
 async def test_languages_list_gives_the_groups_and_their_variants(router):
     result = await router.call("languages.list", {})
     groups = result["groups"]
