@@ -127,7 +127,9 @@ pub fn run() {
             // Started in the background and kept in Tauri state for the dictation controller. The
             // app does not need it to run (tray, settings), so a core that cannot be started is
             // logged and the app carries on without dictation.
-            match core_process::resolve_core_command().and_then(core_process::CoreProcess::start) {
+            match core_process::resolve_app_core_command(app.handle())
+                .and_then(core_process::CoreProcess::start)
+            {
                 Ok(core) => {
                     app.manage(core);
                 }

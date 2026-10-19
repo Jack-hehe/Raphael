@@ -1,7 +1,8 @@
 //! The Python core as a child process: starting it, keeping it running, and tying its life to the
 //! app's.
 //!
-//! [`CoreProcess::start`] runs `python -m raphael_core` with stdin, stdout and stderr piped, inside
+//! [`CoreProcess::start`] runs the packaged core (or `python -m raphael_core` in development)
+//! with stdin, stdout and stderr piped, inside
 //! a Windows Job Object that kills it when the last handle to the job closes. The OS closes that
 //! handle when the app exits, even by crashing, so the core cannot outlive the app (spec §11.1).
 //! (The core also exits by itself when its stdin closes, which happens at the same moment.)
@@ -16,6 +17,7 @@
 //! `core.down`.
 
 use std::collections::VecDeque;
+#[cfg(any(debug_assertions, test))]
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -66,15 +68,38 @@ pub struct CoreCommand {
 }
 
 /// The environment variable that replaces the interpreter that runs the core.
+#[cfg(any(debug_assertions, test))]
 const PYTHON_OVERRIDE: &str = "RAPHAEL_CORE_PYTHON";
 
-/// The command that starts the core from this checkout: `core/.venv/Scripts/python.exe -m
-/// raphael_core`, run in `core/`. `RAPHAEL_CORE_PYTHON` names another interpreter instead.
+/// Release builds run the packaged core from Tauri's resources. Development builds run
+/// `core/.venv/Scripts/python.exe -m raphael_core` from this checkout; `RAPHAEL_CORE_PYTHON`
+/// can replace that development interpreter.
+pub fn resolve_app_core_command(app: &tauri::AppHandle) -> Result<CoreCommand, String> {
+    #[cfg(debug_assertions)]
+    {
+        let _ = app;
+        resolve_core_command()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        use tauri::Manager;
+
+        let resources = app
+            .path()
+            .resource_dir()
+            .map_err(|err| format!("could not locate the packaged core's resources: {err}"))?;
+        packaged_command_in(&resources)
+    }
+}
+
+/// Resolves a development checkout's core command. This entry point is absent from release apps.
+#[cfg(any(debug_assertions, test))]
 pub fn resolve_core_command() -> Result<CoreCommand, String> {
     command_in(&repo_root()?, std::env::var_os(PYTHON_OVERRIDE))
 }
 
 /// The repo root: two levels above this crate's `Cargo.toml`, which is in `app/src-tauri`.
+#[cfg(any(debug_assertions, test))]
 fn repo_root() -> Result<PathBuf, String> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     Path::new(manifest_dir)
@@ -84,6 +109,7 @@ fn repo_root() -> Result<PathBuf, String> {
         .ok_or_else(|| format!("{manifest_dir} is not two levels below the repo root"))
 }
 
+#[cfg(any(debug_assertions, test))]
 fn command_in(repo: &Path, python: Option<OsString>) -> Result<CoreCommand, String> {
     let core_dir = repo.join("core");
     if !core_dir.is_dir() {
@@ -113,6 +139,31 @@ fn command_in(repo: &Path, python: Option<OsString>) -> Result<CoreCommand, Stri
         cwd: core_dir,
         // Python encodes what it writes to a pipe in the machine's code page (cp950 on a Taiwan
         // Windows) unless told otherwise; its log is read here as UTF-8.
+        env: vec![("PYTHONIOENCODING".to_owned(), "utf-8".to_owned())],
+    })
+}
+
+#[cfg(any(not(debug_assertions), test))]
+fn packaged_command_in(resources: &Path) -> Result<CoreCommand, String> {
+    let core_dir = resources.join("core");
+    let program = core_dir.join("raphael-core.exe");
+    if !program.is_file() {
+        return Err(format!(
+            "the packaged core executable {} does not exist: reinstall Raphael",
+            program.display()
+        ));
+    }
+    let runtime_dir = core_dir.join("_internal");
+    if !runtime_dir.is_dir() {
+        return Err(format!(
+            "the packaged core runtime directory {} does not exist: reinstall Raphael",
+            runtime_dir.display()
+        ));
+    }
+    Ok(CoreCommand {
+        program,
+        args: Vec::new(),
+        cwd: core_dir,
         env: vec![("PYTHONIOENCODING".to_owned(), "utf-8".to_owned())],
     })
 }
@@ -682,6 +733,58 @@ mod tests {
         let repo = tempfile::tempdir().unwrap(); // no core/ at all
         let err = command_in(repo.path(), Some(OsString::from("python"))).unwrap_err();
         assert!(err.contains("core"), "{err}");
+    }
+
+    #[test]
+    fn packaged_core_runs_from_a_resource_directory_with_spaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let resources = dir.path().join("Raphael install resources");
+        let core_dir = resources.join("core");
+        std::fs::create_dir_all(core_dir.join("_internal")).unwrap();
+        std::fs::write(core_dir.join("raphael-core.exe"), b"").unwrap();
+
+        let command = packaged_command_in(&resources).unwrap();
+        assert_eq!(command.program, core_dir.join("raphael-core.exe"));
+        assert_eq!(command.cwd, core_dir);
+        assert!(command.args.is_empty());
+        assert!(
+            command
+                .env
+                .contains(&("PYTHONIOENCODING".to_owned(), "utf-8".to_owned()))
+        );
+    }
+
+    #[test]
+    fn packaged_core_missing_executable_cannot_fall_back_to_a_development_venv() {
+        let resources = fake_repo(true);
+        let err = packaged_command_in(resources.path()).unwrap_err();
+        assert!(
+            err.contains(
+                &resources
+                    .path()
+                    .join("core")
+                    .join("raphael-core.exe")
+                    .display()
+                    .to_string()
+            ),
+            "{err}"
+        );
+        assert!(!err.contains("uv sync"), "{err}");
+        assert!(!err.contains(PYTHON_OVERRIDE), "{err}");
+    }
+
+    #[test]
+    fn packaged_core_requires_the_adjacent_runtime_directory() {
+        let resources = tempfile::tempdir().unwrap();
+        let core_dir = resources.path().join("core");
+        std::fs::create_dir_all(&core_dir).unwrap();
+        std::fs::write(core_dir.join("raphael-core.exe"), b"").unwrap();
+
+        let err = packaged_command_in(resources.path()).unwrap_err();
+        assert!(
+            err.contains(&core_dir.join("_internal").display().to_string()),
+            "{err}"
+        );
     }
 
     // ---- timeouts ----
