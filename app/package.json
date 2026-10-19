@@ -10,7 +10,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "node scripts/tauri.mjs",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "check:contrast": "node scripts/check-palette.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.0"

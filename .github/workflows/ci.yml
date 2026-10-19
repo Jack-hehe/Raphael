@@ -40,6 +40,9 @@ jobs:
       - name: Run frontend and build-script tests
         run: npm test
 
+      - name: Check text color contrast
+        run: npm run check:contrast
+
       - name: Type-check and build public frontend
         env:
           RAPHAEL_PRIVATE_DIR: ${{ runner.temp }}/raphael-ci-no-private-assets
