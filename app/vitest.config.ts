@@ -8,5 +8,8 @@ process.env.TZ = "Asia/Taipei";
 export default defineConfig({
   test: {
     include: ["src/**/*.test.ts", "scripts/**/*.test.mjs"],
+    // Bound process startup and native locale initialization on shared CI runners.
+    // Keep per-file isolation and the default test deadline intact.
+    maxWorkers: process.env.CI ? 2 : undefined,
   },
 });
