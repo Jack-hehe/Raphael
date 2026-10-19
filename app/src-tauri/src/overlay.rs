@@ -127,8 +127,13 @@ pub struct AskPrompt {
 pub enum OverlayEvent {
     /// The emblem appears (the appear animation) and shows `mode`.
     Show { mode: Mode },
-    /// The emblem shows another mode.
-    Mode { mode: Mode },
+    /// The emblem shows another mode. A `quiet` one (sent only when it is) shows no progress
+    /// caption beside it: Raphael is thinking about a question, not working through a dictation.
+    Mode {
+        mode: Mode,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        quiet: bool,
+    },
     /// Loudness from 0 to 1: the white ring's width while listening or speaking.
     Level { value: f32 },
     /// How far the dictation has come since the key was released, shown beside the glyph ring.
@@ -165,6 +170,11 @@ pub trait OverlayApi: Send + Sync + 'static {
     fn show(&self, mode: Mode);
     /// Changes what the visible emblem shows.
     fn set_mode(&self, mode: Mode);
+    /// The emblem thinks about a question: [`Mode::Thinking`] without the progress caption of a
+    /// dictation. Fakes can keep the ordinary mode change.
+    fn think_quietly(&self) {
+        self.set_mode(Mode::Thinking);
+    }
     /// Loudness from 0 to 1.
     fn level(&self, value: f32);
     /// Raphael reports `text` (in the interface language) as a subtitle for a time that depends on
@@ -552,7 +562,14 @@ impl OverlayApi for Overlay {
     }
 
     fn set_mode(&self, mode: Mode) {
-        self.publish(OverlayEvent::Mode { mode });
+        self.publish(OverlayEvent::Mode { mode, quiet: false });
+    }
+
+    fn think_quietly(&self) {
+        self.publish(OverlayEvent::Mode {
+            mode: Mode::Thinking,
+            quiet: true,
+        });
     }
 
     fn level(&self, value: f32) {
@@ -937,19 +954,32 @@ mod tests {
         );
         assert_eq!(
             json(OverlayEvent::Mode {
-                mode: Mode::Thinking
+                mode: Mode::Thinking,
+                quiet: false
             }),
             r#"{"type":"mode","mode":"thinking"}"#
         );
         assert_eq!(
             json(OverlayEvent::Mode {
-                mode: Mode::Speaking
+                mode: Mode::Speaking,
+                quiet: false
             }),
             r#"{"type":"mode","mode":"speaking"}"#
         );
         assert_eq!(
-            json(OverlayEvent::Mode { mode: Mode::Steady }),
+            json(OverlayEvent::Mode {
+                mode: Mode::Steady,
+                quiet: false
+            }),
             r#"{"type":"mode","mode":"steady"}"#
+        );
+        // a question being thought about: no progress caption
+        assert_eq!(
+            json(OverlayEvent::Mode {
+                mode: Mode::Thinking,
+                quiet: true
+            }),
+            r#"{"type":"mode","mode":"thinking","quiet":true}"#
         );
         assert_eq!(
             json(OverlayEvent::Level { value: 0.5 }),
@@ -1068,6 +1098,7 @@ mod tests {
         for neutral in [
             OverlayEvent::Mode {
                 mode: Mode::Thinking,
+                quiet: false,
             },
             OverlayEvent::Level { value: 0.5 },
             OverlayEvent::Progress(Progress::DONE),
@@ -1104,6 +1135,7 @@ mod tests {
         };
         let thinking = OverlayEvent::Mode {
             mode: Mode::Thinking,
+            quiet: false,
         };
         let ask = OverlayEvent::Ask(prompt(Tier::T3));
         let say = OverlayEvent::Say {
@@ -1369,7 +1401,10 @@ mod tests {
     fn every_event_has_its_kind_for_the_log() {
         let events = [
             OverlayEvent::Show { mode: Mode::Steady },
-            OverlayEvent::Mode { mode: Mode::Steady },
+            OverlayEvent::Mode {
+                mode: Mode::Steady,
+                quiet: false,
+            },
             OverlayEvent::Level { value: 0.0 },
             OverlayEvent::Progress(Progress::DONE),
             notice(0),

@@ -287,6 +287,16 @@ test("dictation never shows subtitles", () => {
   expect(view.log.filter((l) => l.startsWith("line"))).toEqual([]);
 });
 
+test("a question being thought about shows no percentage, and its answer is spoken", () => {
+  send({ type: "show", mode: "listening" });
+  send({ type: "mode", mode: "thinking", quiet: true });
+  vi.advanceTimersByTime(3000);
+  expect(view.percentages.filter((percent) => percent !== null)).toEqual([]);
+  send({ type: "say", prefix: "答", text: "好。" });
+  vi.advanceTimersByTime(10);
+  expect(view.percentages.filter((percent) => percent !== null)).toEqual([]);
+});
+
 test("processing reports its percentage beside the emblem", () => {
   send({ type: "show", mode: "listening" });
   send({ type: "mode", mode: "thinking" });

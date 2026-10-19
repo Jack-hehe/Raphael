@@ -947,7 +947,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         };
         // The app the person was in when the key was released is the one the question is about.
         let target = self.paster.foreground();
-        self.overlay.set_mode(Mode::Thinking);
+        // No percentage: nothing reports how far an answer has come.
+        self.overlay.think_quietly();
 
         let this = self.clone();
         Some(tokio::spawn(async move {
@@ -1797,6 +1798,8 @@ mod tests {
     #[derive(Default)]
     struct FakeOverlay {
         completions: Mutex<u32>,
+        /// How many times the emblem thought without a progress caption.
+        quiet_thoughts: Mutex<u32>,
         events: Mutex<Vec<String>>,
         timeline: Mutex<Vec<String>>,
         /// Whether the real overlay window would take the mouse now: the rule of
@@ -1854,8 +1857,17 @@ mod tests {
             self.push(format!("show:{}", mode_name(mode)));
         }
         fn set_mode(&self, mode: Mode) {
-            self.track(OverlayEvent::Mode { mode });
+            self.track(OverlayEvent::Mode { mode, quiet: false });
             self.push(format!("mode:{}", mode_name(mode)));
+        }
+        fn think_quietly(&self) {
+            self.track(OverlayEvent::Mode {
+                mode: Mode::Thinking,
+                quiet: true,
+            });
+            // The same stage for the controller's tests; the page tells the two apart.
+            *self.quiet_thoughts.lock().unwrap() += 1;
+            self.push("mode:thinking".to_owned());
         }
         fn level(&self, value: f32) {
             self.track(OverlayEvent::Level { value });
@@ -4385,6 +4397,21 @@ mod tests {
         assert_eq!(c.core().count("dictation.start"), 2);
         assert_eq!(c.core().count("dictation.stop"), 1);
         assert_eq!(c.phase(), Phase::Recording);
+    }
+
+    #[tokio::test]
+    async fn a_question_is_thought_about_without_a_percentage_and_a_dictation_with_one() {
+        let c = agent(answer("答", "好"));
+        ask_aloud(&c).await;
+        assert_eq!(*c.overlay().quiet_thoughts.lock().unwrap(), 1);
+        assert!(c.overlay().events().contains(&"mode:thinking".to_owned()));
+
+        let c = controller(FakeCore::default(), FakePaster::pasting("notepad.exe"));
+        run(&c, DictationDown, 0).await;
+        run(&c, DictationUp, 900).await;
+        settle().await;
+        assert_eq!(*c.overlay().quiet_thoughts.lock().unwrap(), 0);
+        assert!(c.overlay().events().contains(&"mode:thinking".to_owned()));
     }
 
     #[tokio::test]

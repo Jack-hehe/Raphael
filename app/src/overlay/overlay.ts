@@ -36,7 +36,8 @@ export type AskTier = "T2" | "T3";
 /** The events overlay.rs sends (`OverlayEvent`). */
 export type OverlayEvent =
   | { type: "show"; mode: Mode }
-  | { type: "mode"; mode: Mode }
+  /** `quiet`: thinking about a question, which has no progress to show. */
+  | { type: "mode"; mode: Mode; quiet?: boolean }
   | { type: "level"; value: number }
   | { type: "progress"; stage: Stage; done: number; total: number; audio_seconds: number }
   | { type: "notice"; text: string }
@@ -170,7 +171,7 @@ export class OverlayController {
         this.setMode(event.mode);
         break;
       case "mode":
-        this.setMode(event.mode);
+        this.setMode(event.mode, event.quiet === true);
         break;
       case "level":
         this.emblem.level = event.value;
@@ -383,9 +384,9 @@ export class OverlayController {
     if (this.emblem.phase === "hidden" || this.emblem.phase === "vanish") this.emblem.appear();
   }
 
-  private setMode(mode: Mode): void {
+  private setMode(mode: Mode, quiet = false): void {
     this.emblem.set(mode);
-    if (this.activeShow && mode === "thinking" && !this.progress.active) {
+    if (this.activeShow && mode === "thinking" && !quiet && !this.progress.active) {
       this.progress.report({ stage: "transcribing", done: 0, total: 1, audioSeconds: 0 }, false);
       this.renderProgress();
       this.startProgressTimer();
