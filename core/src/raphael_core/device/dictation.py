@@ -221,7 +221,8 @@ class DictationService:
     """Dictation behind `dictation.start`, `dictation.stop` and `dictation.cancel`.
 
     `router` is how the service reaches the brain (`dictionary.list`, `settings.get`,
-    `brain.finalize_dictation`) and where it sends its notifications: `audio.level` while
+    `brain.finalize_dictation`, and `brain.cancel_dictation` for a cancel that comes while the
+    text is being cleaned) and where it sends its notifications: `audio.level` while
     recording, `dictation.progress` after the stop (`stage` "transcribing" with the segments `done`
     of `total`, then "cleaning" right before the brain is asked; the reply means done).
     `recorder_factory` makes a recorder that delivers its frames to the function it is given.
