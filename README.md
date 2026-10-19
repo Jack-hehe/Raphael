@@ -12,7 +12,7 @@ Dictation is the first milestone. Assistant features come next: carrying out tas
 - **Works where you type.** Press Right Alt to start and stop dictating, or switch to hold-to-talk. Esc cancels. The text is pasted into the app you were using.
 - **Keeps what you meant.** Raphael removes filler words, adds punctuation and applies the corrections you make while speaking. A question you dictate stays a question; Raphael doesn't answer it.
 - **Learns your vocabulary.** Add names and jargon to a personal dictionary, and Raphael learns new terms from the corrections you make after a paste.
-- **On-device or cloud recognition.** Transcribe with a downloadable on-device model, or with cloud speech recognition through OpenRouter.
+- **Cloud or on-device recognition.** Use cloud speech recognition through OpenRouter (the default), or a downloadable on-device model that keeps audio on your computer.
 - **Multilingual.** Choose up to five dictation languages, including Chinese (Taiwan, Hong Kong and Mainland usage), Cantonese, English, Japanese and Korean. The interface is available in English, Traditional Chinese and Japanese.
 - **Clear costs.** Review past dictations, track usage and set a monthly spending limit.
 
@@ -31,8 +31,9 @@ Raphael then runs from the system tray.
 
 - **Your API key** is kept in Windows Credential Manager, never in files, logs or the database.
 - **Your data** (settings, history and dictionary) stays on your computer, in `%APPDATA%\Raphael`.
-- **What goes to the cloud:** with an API key set and budget remaining, Raphael sends the transcript to OpenRouter for cleanup, together with dictionary hints and replacement rules, your language settings and the name of the app you are dictating into. On-device recognition therefore does not make Raphael fully offline. Cloud recognition also sends the recording.
-- **Correction learning** watches only the field Raphael just pasted into, for up to 60 seconds, and skips password fields.
+- **Speech recognition** runs in the cloud by default: the recording and dictionary hints are sent to OpenRouter. Choose on-device recognition in Settings to keep audio on your computer.
+- **Cleanup:** with an API key set and budget remaining, Raphael sends the transcript to OpenRouter, together with dictionary hints and replacement rules, your language settings and the name of the app you are dictating into. This also happens with on-device recognition, so Raphael is not fully offline.
+- **Correction learning** looks only at the field Raphael just pasted into, for up to 60 seconds. It reads the field's text or, where an app does not expose it, the edits you type there. Password fields are skipped, and you can turn learning off in Settings.
 - **No telemetry.** Besides OpenRouter, Raphael connects only to Hugging Face and GitHub to download speech models.
 
 ## Architecture
@@ -91,7 +92,7 @@ CI runs these checks on Windows for every push and pull request ([docs/ci.md](do
 
 ## Contributing
 
-Bug reports and pull requests are welcome. For larger changes, please open an issue first to discuss the approach. Never commit API keys, recordings, models or other personal data.
+Bug reports and suggestions are welcome in [GitHub Issues](https://github.com/Jack-hehe/Raphael/issues).
 
 ## License
 
@@ -99,6 +100,6 @@ A license has not been chosen yet. Until one is added, default copyright applies
 
 ## Acknowledgements
 
-Raphael builds on [Tauri](https://tauri.app), [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [OpenCC](https://github.com/BYVoid/OpenCC) and [handy-keys](https://github.com/handy-computer/handy-keys). Each release includes the third-party licenses in `THIRD_PARTY_NOTICES.txt`.
+Raphael builds on [Tauri](https://tauri.app), [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [OpenCC](https://github.com/BYVoid/OpenCC) and [handy-keys](https://github.com/handy-computer/handy-keys), and its paste code is adapted from [Handy](https://github.com/cjpais/Handy). Each release includes the third-party licenses in `THIRD_PARTY_NOTICES.txt`.
 
 Raphael is an unofficial fan project inspired by Raphael, the skill from *That Time I Got Reincarnated as a Slime*. It is not affiliated with the rights holders, and this repository contains no artwork, audio or voice models from the series.
