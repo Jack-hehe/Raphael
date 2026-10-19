@@ -92,10 +92,6 @@ class FakeView implements OverlayView {
     this.percentages.push(percent);
   }
   readonly log: string[] = [];
-  readonly placements: string[] = [];
-  place(placement: "corner" | "center"): void | Promise<void> {
-    this.placements.push(placement);
-  }
   get last(): string | undefined {
     return this.log[this.log.length - 1];
   }
@@ -128,10 +124,9 @@ afterEach(() => {
 const ZH = "《告。這個視窗不接受貼上。》";
 const JA = "《告。このウィンドウには貼り付けできません。》";
 
-test("learned words use the usual corner and notice lifecycle", () => {
+test("learned words use the notice lifecycle", () => {
   const zh = "《了。「Typeless」已加入詞典。》";
   send({ type: "learned", zh, ja: "" });
-  expect(view.placements).toEqual(["corner"]);
   expect(emblem.log).toEqual(["appear", "set:steady"]);
   vi.advanceTimersByTime(833);
   expect(view.last).toBe(`lines:${zh}|-`);
@@ -204,84 +199,31 @@ test("a notice ends the dictation it interrupts, and the learned words that wait
   expect(emblem.last).toBe("vanish");
 });
 
-test("mixed notices keep their placement until each notice takes its turn", () => {
+test("notices and learned words are told one after the other, in the order they came", () => {
   send({ type: "notice", zh: ZH, ja: JA });
   send({ type: "learned", zh: "learned", ja: "" });
   send({ type: "notice", zh: "ordinary", ja: "" });
-  expect(view.placements).toEqual(["corner"]);
-  vi.advanceTimersByTime(833 + noticeDurationMs(ZH));
-  expect(view.placements).toEqual(["corner", "corner"]);
-  vi.advanceTimersByTime(1 + noticeDurationMs("learned"));
-  expect(view.placements).toEqual(["corner", "corner", "corner"]);
-  vi.advanceTimersByTime(1);
-  expect(view.last).toBe("lines:ordinary|-");
-});
-
-test("a learned notice waits for placement before appearing", async () => {
-  let finish!: () => void;
-  view.place = (placement) => {
-    view.placements.push(placement);
-    return new Promise<void>((resolve) => { finish = resolve; });
-  };
-  send({ type: "learned", zh: "learned", ja: "" });
-  expect(view.placements).toEqual(["corner"]);
   vi.advanceTimersByTime(60_000);
-  expect(emblem.log).toEqual([]);
-  expect(view.log).toEqual([]);
-  finish();
-  await Promise.resolve();
-  expect(emblem.log).toEqual(["appear", "set:steady"]);
+  expect(lines()).toEqual([`lines:${ZH}|${JA}`, "lines:learned|-", "lines:ordinary|-"]);
+  expect(emblem.log.filter((entry) => entry === "appear")).toHaveLength(1);
+  expect(emblem.last).toBe("vanish");
 });
 
-test("a new show cancels a notice waiting for placement and resets the corner", async () => {
-  let finish!: () => void;
-  view.place = (placement) => {
-    view.placements.push(placement);
-    if (view.placements.length === 1) return new Promise<void>((resolve) => { finish = resolve; });
-  };
+test("a new show cancels learned words that wait for the appear animation", () => {
   send({ type: "learned", zh: "learned", ja: "" });
   send({ type: "show", mode: "listening" });
-  expect(view.placements).toEqual(["corner", "corner"]);
-  finish();
-  await Promise.resolve();
   vi.advanceTimersByTime(60_000);
-  expect(view.placements).toEqual(["corner", "corner"]);
-  expect(emblem.log).toEqual(["appear", "set:listening"]);
-  expect(view.log.filter((line) => line.startsWith("lines:"))).toEqual([]);
+  expect(emblem.log).toEqual(["appear", "set:steady", "set:listening"]);
+  expect(lines()).toEqual([]);
 });
 
-test("show keeps the newest mode and progress while waiting for its corner", async () => {
-  let finish!: () => void;
-  view.place = () => new Promise<void>((resolve) => { finish = resolve; });
-  send({ type: "show", mode: "listening" });
-  send({ type: "mode", mode: "thinking" });
-  send({ type: "progress", stage: "cleaning", done: 2, total: 2, audio_seconds: 3 });
-  expect(emblem.log).toEqual([]);
-  finish();
-  await Promise.resolve();
-  expect(emblem.log).toEqual(["appear", "set:listening", "set:thinking"]);
-  expect(emblem.progressLog).toEqual(["clear", "progress:cleaning:2/2:3"]);
-});
-
-test("hide cancels a learned notice whose placement is still pending", async () => {
-  let finish!: () => void;
-  view.place = () => new Promise<void>((resolve) => { finish = resolve; });
+test("hide cancels learned words that wait for the appear animation", () => {
   send({ type: "learned", zh: "learned", ja: "" });
   send({ type: "hide" });
-  finish();
-  await Promise.resolve();
   vi.advanceTimersByTime(60_000);
-  expect(emblem.log).toEqual(["vanish"]);
+  expect(emblem.log).toEqual(["appear", "set:steady", "vanish"]);
   expect(controller.expectsPaint).toBe(false);
-  expect(view.log.filter((line) => line.startsWith("lines:"))).toEqual([]);
-});
-
-test("a failed placement still lets the learned words be reported", async () => {
-  view.place = () => Promise.reject(new Error("monitor unavailable"));
-  send({ type: "learned", zh: "learned", ja: "" });
-  await Promise.resolve();
-  vi.advanceTimersByTime(833);
-  expect(view.last).toBe("lines:learned|-");
+  expect(lines()).toEqual([]);
 });
 
 test("show makes the emblem appear and then sets the mode", () => {

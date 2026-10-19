@@ -12,7 +12,6 @@ class NullView implements OverlayView {
   percent: number | null = null;
   showProgress(percent: number | null): void { this.percent = percent; }
   lines: string | null = null;
-  place(): void {}
   layout(): void {}
   showLines(zh: string | null, ja: string | null): void {
     this.lines = `${zh ?? "-"}|${ja ?? "-"}`;
@@ -145,24 +144,6 @@ test("learned words wait through live dictation and completion before appearing"
   expect(p.drawsNow()).toBe(true);
   run(10_000);
   expect(p.emblem.phase).toBe("hidden");
-});
-
-test("a delayed corner placement preserves the real dictation progress ring", async () => {
-  const p = page();
-  let placed!: () => void;
-  p.view.place = () => new Promise<void>((resolve) => { placed = resolve; });
-  p.send(
-    { type: "show", mode: "listening" },
-    { type: "mode", mode: "thinking" },
-    { type: "progress", stage: "transcribing", done: 1, total: 3, audio_seconds: 5 },
-  );
-  expect(p.emblem.phase).toBe("hidden");
-  placed();
-  await Promise.resolve();
-  run(1000);
-  expect(p.emblem.phase).toBe("thinking");
-  expect(p.emblem.revealShown).not.toBeNull();
-  expect(p.drawsNow()).toBe(true);
 });
 
 test("a dictation: show, levels, thinking, hide, and the next dictation shows again", () => {
