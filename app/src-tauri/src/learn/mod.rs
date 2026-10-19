@@ -897,6 +897,9 @@ mod tests {
             self.1.fetch_add(1, Ordering::SeqCst);
             self.notice(text);
         }
+        fn say(&self, _: &str, _: &str) {}
+        fn ask(&self, _: &crate::overlay::AskPrompt) {}
+        fn end_ask(&self) {}
         fn hide(&self) {}
         fn progress(&self, _: Progress) {}
     }

@@ -8,7 +8,8 @@
 //! - **Hold**: a press starts the recording, the release stops it.
 //!
 //! The controller feeds the key's down and up events to [`HoldTap`] and does what the returned
-//! [`Action`] says. The type has no clock and no threads, so it is plain to test.
+//! [`Action`] says. The type has no clock and no threads, so it is plain to test. The agent key
+//! (the one that asks Raphael something) follows the same two modes, with a detector of its own.
 //!
 //! The mode is read when a dictation begins (the press that leaves the idle state) and kept until
 //! that dictation is over, so changing the setting during a dictation takes effect from the next

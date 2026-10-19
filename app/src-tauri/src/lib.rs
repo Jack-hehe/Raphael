@@ -1,6 +1,7 @@
 //! Raphael's desktop shell: a tray app with a hidden main window that starts with Windows and
 //! allows only one running copy.
 
+mod agent;
 pub mod commands;
 pub mod core_process;
 pub mod device_settings;
@@ -109,6 +110,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             overlay::overlay_subscribe,
             overlay::overlay_log,
+            overlay::overlay_confirm,
             commands::core_call,
             commands::device_settings_get,
             commands::device_settings_set,

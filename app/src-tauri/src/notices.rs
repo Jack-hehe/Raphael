@@ -126,6 +126,14 @@ pub const CORE_DOWN: Notice = Notice {
     ja: "《否。コアが動作していません。ラファエルを再起動してください。》",
 };
 
+/// The agent could not answer a question (it did not reply in time, or its reply cannot be shown).
+/// The core's own refusals (no key, over budget, offline) arrive as answers and are shown as such.
+pub const ASK_FAILED: Notice = Notice {
+    zh: "《否。目前無法回答。》",
+    en: "《Negative. Unable to answer at this time.》",
+    ja: "《否。現在は回答できません。》",
+};
+
 /// Words learned from the user's corrections after a paste, in one notice, in `language`:
 /// 《了。「手機」、「Typeless」已加入詞典。》, `《Understood. “Typeless” added to the dictionary.》`
 /// or 《了。「手機」を辞書に追加しました。》.
@@ -162,7 +170,7 @@ pub fn notice_for_fallback(reason: Option<&str>) -> Option<Notice> {
 mod tests {
     use super::*;
 
-    const ALL: [Notice; 10] = [
+    const ALL: [Notice; 11] = [
         ELEVATED,
         FOCUS_CHANGED,
         BUDGET,
@@ -173,6 +181,7 @@ mod tests {
         LAST_COPIED,
         NOT_READY,
         CORE_DOWN,
+        ASK_FAILED,
     ];
 
     #[test]

@@ -1,4 +1,5 @@
-//! The overlay window: Raphael's emblem and reports in the bottom-right corner.
+//! The overlay window: Raphael's emblem, reports, answers and questions in the bottom-right
+//! corner.
 //!
 //! The window is created once, at start-up. It is transparent, never takes focus, lets the mouse
 //! click through, stays on top and stays out of the taskbar and Alt+Tab. It is **never shown or
@@ -6,8 +7,16 @@
 //! the next paste would go to the wrong place. "Hidden" means that the page (`overlay.html`)
 //! draws nothing and stops its animation loop; the empty window stays where it is.
 //!
+//! The one time the window takes the mouse is while Raphael asks a YES/NO question
+//! ([`OverlayApi::ask`]): its buttons must be clickable. Clicking is not activating: the window has
+//! `WS_EX_NOACTIVATE` (tao gives it to a window that is not `focusable`, and
+//! [`apply_passive_style`] makes sure of it), so a click on a button reaches the page without the
+//! window becoming the foreground window, and the app the person was typing into keeps its focus.
+//! [`takes_clicks`] says which events open and close that time.
+//!
 //! The page learns what to do from [`OverlayEvent`]s on a channel that it opens once with the
-//! `overlay_subscribe` command. The rest of the app drives the overlay through [`OverlayApi`].
+//! `overlay_subscribe` command, and answers a question with `overlay_confirm`. The rest of the app
+//! drives the overlay through [`OverlayApi`].
 
 use std::{
     collections::VecDeque,
@@ -22,6 +31,7 @@ use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, Webview, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, ipc::Channel,
 };
+use tokio::sync::mpsc::UnboundedSender;
 
 /// What the emblem shows while it is on screen (spec §6.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -77,6 +87,39 @@ impl Progress {
     };
 }
 
+/// How much a question matters (`tier` of the core's confirmations): `T2` changes something that
+/// can be undone, `T3` something that cannot. The page makes the YES of a `T3` question wait for a
+/// long press.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum Tier {
+    T2,
+    T3,
+}
+
+impl Tier {
+    /// The tier the core named. Anything else is taken for the more careful one.
+    pub fn parse(tier: &str) -> Self {
+        match tier {
+            "T2" => Tier::T2,
+            _ => Tier::T3,
+        }
+    }
+}
+
+/// A question for the person to answer YES or NO, with the words on its buttons, from the core's
+/// confirmation. `id` comes back with the answer (`overlay_confirm`); `timeout_ms` is how long the
+/// question stays open before it counts as a NO.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AskPrompt {
+    pub id: String,
+    pub tier: Tier,
+    pub prefix: String,
+    pub text: String,
+    pub yes: String,
+    pub no: String,
+    pub timeout_ms: u64,
+}
+
 /// What the overlay page is told. Every text in it is in the interface language and in that one
 /// alone, never a pair.
 #[derive(Clone, Debug, Serialize)]
@@ -95,6 +138,11 @@ pub enum OverlayEvent {
     /// Learned words are reported like a notice, but they never take the emblem from a dictation
     /// that is showing: the page tells them when it is over.
     Learned { text: String },
+    /// Raphael answers: the emblem and one subtitle line, 《`prefix`。`text`》.
+    Say { prefix: String, text: String },
+    /// Raphael asks a question: the subtitle line 《`prefix`。`text`》 and two buttons under it.
+    /// The window takes the mouse until the question is over.
+    Ask(AskPrompt),
     /// Delivery succeeded: show 100% briefly before the normal vanish animation.
     Complete,
     /// The vanish animation.
@@ -126,6 +174,16 @@ pub trait OverlayApi: Send + Sync + 'static {
     fn learned_notice(&self, text: &str) {
         self.notice(text);
     }
+    /// Raphael answers: the emblem appears with 《`prefix`。`text`》 as one subtitle line, then
+    /// vanishes after a time that depends on the length of `text`.
+    fn say(&self, prefix: &str, text: &str);
+    /// Raphael asks a YES/NO question: the subtitle line and two buttons. From now on the window
+    /// takes the mouse, without ever being activated, until [`end_ask`](Self::end_ask) or another
+    /// call puts something else on the stage.
+    fn ask(&self, prompt: &AskPrompt);
+    /// The question was answered, denied with Esc or timed out: the window lets the mouse through
+    /// again. (The next call is usually `say`, with what became of the answer.)
+    fn end_ask(&self);
     /// The vanish animation plays; the window stays, empty, where it is.
     fn hide(&self);
     /// Finish successfully; simple implementations may retain their ordinary hide behavior.
@@ -196,6 +254,30 @@ pub fn place(work: Rect, emblem_px: u32, scale: f64) -> Rect {
     }
 }
 
+// ---------- the mouse ----------
+
+/// What an event does to whether the window takes the mouse: `Some(true)` for the question that
+/// needs its buttons clicked, `Some(false)` for everything that puts something else on the stage
+/// (so a question that nobody answered does not keep the corner of the screen), `None` for what
+/// changes nothing on the stage.
+fn takes_clicks(event: &OverlayEvent) -> Option<bool> {
+    match event {
+        OverlayEvent::Ask(_) => Some(true),
+        OverlayEvent::Show { .. }
+        | OverlayEvent::Say { .. }
+        | OverlayEvent::Notice { .. }
+        | OverlayEvent::Complete
+        | OverlayEvent::Hide => Some(false),
+        // The loudness and progress are about the emblem, learned words wait behind whatever is
+        // on the stage, and the settings are no scene.
+        OverlayEvent::Mode { .. }
+        | OverlayEvent::Level { .. }
+        | OverlayEvent::Progress(_)
+        | OverlayEvent::Learned { .. }
+        | OverlayEvent::Settings { .. } => None,
+    }
+}
+
 // ---------- the pages that listen ----------
 
 /// How many events wait for a page that has not subscribed yet.
@@ -227,6 +309,8 @@ impl OverlayEvent {
             OverlayEvent::Progress(_) => "progress",
             OverlayEvent::Notice { .. } => "notice",
             OverlayEvent::Learned { .. } => "learned",
+            OverlayEvent::Say { .. } => "say",
+            OverlayEvent::Ask(_) => "ask",
             OverlayEvent::Complete => "complete",
             OverlayEvent::Hide => "hide",
             OverlayEvent::Settings { .. } => "settings",
@@ -320,6 +404,9 @@ pub struct Overlay {
     /// The emblem's diameter in logical pixels, which sets the size of the window.
     emblem_px: AtomicU32,
     bus: Mutex<Bus>,
+    /// Whether the window takes the mouse now (see [`takes_clicks`]); the window starts out
+    /// letting it through. Held while the window is changed, so that two changes cannot cross.
+    clicks: Mutex<bool>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -362,13 +449,14 @@ impl Overlay {
             }
             return Err(err);
         }
-        hide_from_alt_tab(&window);
+        apply_passive_style(&window);
 
         let overlay = Arc::new(Overlay {
             app: app.clone(),
             window,
             emblem_px: AtomicU32::new(emblem_px),
             bus: Mutex::new(Bus::new(emblem_px, subtitles, language)),
+            clicks: Mutex::new(false),
         });
         overlay.place_window();
         Ok(overlay)
@@ -386,7 +474,33 @@ impl Overlay {
     }
 
     fn publish(&self, event: OverlayEvent) {
+        // The window takes the mouse before the buttons appear, and lets it go as the page moves
+        // on to something else.
+        if let Some(on) = takes_clicks(&event) {
+            self.set_clicks(on);
+        }
         lock(&self.bus).publish(event);
+    }
+
+    /// Makes the window take the mouse (`true`) or let it through (`false`). It never takes focus
+    /// either way: `WS_EX_NOACTIVATE` is part of the style that [`apply_passive_style`] puts
+    /// back after tao rebuilt it for this change.
+    fn set_clicks(&self, on: bool) {
+        let mut current = lock(&self.clicks);
+        if *current == on {
+            return;
+        }
+        match self.window.set_ignore_cursor_events(!on) {
+            Ok(()) => {
+                *current = on;
+                apply_passive_style(&self.window);
+                log::debug!(
+                    "overlay: the window {} the mouse",
+                    if on { "takes" } else { "lets through" }
+                );
+            }
+            Err(err) => log::warn!("could not change whether the overlay takes the mouse: {err}"),
+        }
     }
 
     fn subscribe(&self, label: &str, channel: Channel<OverlayEvent>) {
@@ -427,7 +541,7 @@ impl Overlay {
         self.window
             .set_position(PhysicalPosition::new(target.x, target.y))?;
         // tao rebuilds the extended window style whenever it changes flags or the size.
-        hide_from_alt_tab(&self.window);
+        apply_passive_style(&self.window);
         Ok(())
     }
 }
@@ -456,6 +570,21 @@ impl OverlayApi for Overlay {
         self.publish(OverlayEvent::Learned {
             text: text.to_owned(),
         });
+    }
+
+    fn say(&self, prefix: &str, text: &str) {
+        self.publish(OverlayEvent::Say {
+            prefix: prefix.to_owned(),
+            text: text.to_owned(),
+        });
+    }
+
+    fn ask(&self, prompt: &AskPrompt) {
+        self.publish(OverlayEvent::Ask(prompt.clone()));
+    }
+
+    fn end_ask(&self) {
+        self.set_clicks(false);
     }
 
     fn hide(&self) {
@@ -487,6 +616,41 @@ pub fn overlay_subscribe(
     };
     overlay.subscribe(webview.label(), channel);
     Ok(())
+}
+
+/// The page's answer to the question on screen: whether the YES button (`approved`) or the NO
+/// button was clicked, for the question `id`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Confirmation {
+    pub id: String,
+    pub approved: bool,
+}
+
+/// Where the page's answers go: the dictation controller's task takes them from the other end.
+/// Kept in the app state.
+pub struct ConfirmSender(pub UnboundedSender<Confirmation>);
+
+/// The overlay page answers the question on screen: `approved` is true for its YES button. The
+/// answer goes to the controller, which takes it only for the question that is open (`id`). Only
+/// the overlay page may call it: nothing else may approve what Raphael was about to do.
+///
+/// It needs no capability: the commands of the app itself are not behind the capabilities (the
+/// build declares no app manifest), and the window is checked here, like `overlay_log` does.
+#[tauri::command]
+pub fn overlay_confirm(
+    app: AppHandle,
+    webview: Webview,
+    id: String,
+    approved: bool,
+) -> Result<(), String> {
+    crate::commands::ensure_caller(webview.label(), crate::OVERLAY_WINDOW)?;
+    let Some(answers) = app.try_state::<ConfirmSender>() else {
+        return Err("nothing is listening to the overlay's answers".into());
+    };
+    answers
+        .0
+        .send(Confirmation { id, approved })
+        .map_err(|_| "nothing is listening to the overlay's answers".to_owned())
 }
 
 /// The longest page message that is logged, in characters.
@@ -533,21 +697,34 @@ fn page_message(message: &str) -> String {
     out
 }
 
-// ---------- keeping the window out of Alt+Tab ----------
+// ---------- a window that is only ever there ----------
 
-/// Adds `WS_EX_TOOLWINDOW` and removes `WS_EX_APPWINDOW`, which keeps the window out of Alt+Tab
-/// (`skip_taskbar` only keeps it off the taskbar). tao rebuilds the whole extended style from
-/// its own flags whenever one of them changes, so this must be done again after such a change.
+/// The extended style the overlay window must have, from the `style` it has: out of Alt+Tab
+/// (`WS_EX_TOOLWINDOW` added and `WS_EX_APPWINDOW` removed, because `skip_taskbar` only keeps it off
+/// the taskbar) and never activated, not even by a click (`WS_EX_NOACTIVATE`). The rest, the
+/// mouse flags above all, is left as it is.
+#[cfg(windows)]
+fn passive_ex_style(style: isize) -> isize {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    };
+
+    (style | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize)
+        & !(WS_EX_APPWINDOW.0 as isize)
+}
+
+/// Gives the window [`passive_ex_style`]. tao already makes a window that is not `focusable`
+/// `WS_EX_NOACTIVATE`, but it rebuilds the whole extended style from its own flags whenever one
+/// of them changes (and when the size does), which drops the tool window style, so this is done
+/// again after every such change, and it makes sure of `WS_EX_NOACTIVATE` once more.
 ///
 /// The change is made on the main thread, which owns the window: from any other thread
 /// `SetWindowLongPtrW` would wait for the main thread, and that is a deadlock waiting to happen.
 #[cfg(windows)]
-fn hide_from_alt_tab(window: &WebviewWindow) {
+fn apply_passive_style(window: &WebviewWindow) {
     use windows::Win32::{
         Foundation::HWND,
-        UI::WindowsAndMessaging::{
-            GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
-        },
+        UI::WindowsAndMessaging::{GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW},
     };
 
     let hwnd = match window.hwnd() {
@@ -563,19 +740,19 @@ fn hide_from_alt_tab(window: &WebviewWindow) {
         // the thread that owns it.
         unsafe {
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            let wanted = (style | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
+            let wanted = passive_ex_style(style);
             if wanted != style {
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
             }
         }
     });
     if let Err(err) = change {
-        log::warn!("could not keep the overlay out of Alt+Tab: {err}");
+        log::warn!("could not keep the overlay out of Alt+Tab and out of focus: {err}");
     }
 }
 
 #[cfg(not(windows))]
-fn hide_from_alt_tab(_window: &WebviewWindow) {}
+fn apply_passive_style(_window: &WebviewWindow) {}
 
 #[cfg(test)]
 mod tests {
@@ -583,16 +760,54 @@ mod tests {
     use tauri::ipc::InvokeResponseBody;
 
     #[test]
-    fn only_the_overlay_page_writes_to_the_log() {
-        // The command cannot be called here without a running app, so read its source.
+    fn only_the_overlay_page_writes_to_the_log_and_answers_the_questions() {
+        // The commands cannot be called here without a running app, so read their source.
         let source = include_str!("overlay.rs").replace("\r\n", "\n");
         let production = source.split("#[cfg(test)]").next().unwrap();
-        let command = production
+        for name in ["overlay_log", "overlay_confirm"] {
+            let command = production
+                .split("#[tauri::command]")
+                .find(|command| command.contains(&format!("pub fn {name}(")))
+                .unwrap();
+            let body = command.split("\n}\n").next().unwrap();
+            assert!(
+                body.contains("ensure_caller(webview.label(), crate::OVERLAY_WINDOW)"),
+                "{name} does not check who calls it"
+            );
+            // the check comes before anything is done
+            let first = body
+                .split("-> Result<(), String> {")
+                .nth(1)
+                .unwrap()
+                .trim_start();
+            assert!(
+                first.starts_with("crate::commands::ensure_caller("),
+                "{name}: the check must come first"
+            );
+        }
+    }
+
+    #[test]
+    fn every_command_of_the_overlay_is_known_to_this_list() {
+        // A new command of the overlay has to decide who may call it, so it has to be added here.
+        let source = include_str!("overlay.rs").replace("\r\n", "\n");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let mut commands: Vec<&str> = production
             .split("#[tauri::command]")
-            .find(|command| command.contains("pub fn overlay_log("))
-            .unwrap();
-        let body = command.split("\n}\n").next().unwrap();
-        assert!(body.contains("ensure_caller(webview.label(), crate::OVERLAY_WINDOW)"));
+            .skip(1)
+            .map(|command| {
+                command
+                    .split("pub fn ")
+                    .nth(1)
+                    .and_then(|rest| rest.split('(').next())
+                    .unwrap()
+            })
+            .collect();
+        commands.sort_unstable();
+        assert_eq!(
+            commands,
+            ["overlay_confirm", "overlay_log", "overlay_subscribe"]
+        );
     }
 
     #[test]
@@ -787,6 +1002,177 @@ mod tests {
             }),
             r#"{"type":"settings","px":150,"subtitles":"on","language":"zh-TW"}"#
         );
+    }
+
+    fn prompt(tier: Tier) -> AskPrompt {
+        AskPrompt {
+            id: "c-7".into(),
+            tier,
+            prefix: "問".into(),
+            text: "要把這段話複製到剪貼簿嗎？".into(),
+            yes: "是".into(),
+            no: "否".into(),
+            timeout_ms: 30_000,
+        }
+    }
+
+    #[test]
+    fn say_and_ask_have_the_shape_the_page_expects() {
+        let json = |e: OverlayEvent| serde_json::to_string(&e).unwrap();
+        assert_eq!(
+            json(OverlayEvent::Say {
+                prefix: "答".into(),
+                text: "台北現在二十四度，多雲。".into()
+            }),
+            r#"{"type":"say","prefix":"答","text":"台北現在二十四度，多雲。"}"#
+        );
+        assert_eq!(
+            json(OverlayEvent::Ask(prompt(Tier::T2))),
+            concat!(
+                r#"{"type":"ask","id":"c-7","tier":"T2","prefix":"問","#,
+                r#""text":"要把這段話複製到剪貼簿嗎？","yes":"是","no":"否","timeout_ms":30000}"#
+            )
+        );
+        assert_eq!(
+            serde_json::to_value(OverlayEvent::Ask(prompt(Tier::T3))).unwrap()["tier"],
+            "T3"
+        );
+    }
+
+    #[test]
+    fn the_tier_the_core_names_is_kept_and_anything_else_is_the_careful_one() {
+        assert_eq!(Tier::parse("T2"), Tier::T2);
+        assert_eq!(Tier::parse("T3"), Tier::T3);
+        for odd in ["", "T1", "T4", "t2", "T2 ", "high"] {
+            assert_eq!(Tier::parse(odd), Tier::T3, "{odd:?}");
+        }
+    }
+
+    // ---- the mouse ----
+
+    #[test]
+    fn only_a_question_makes_the_window_take_the_mouse() {
+        let ask = OverlayEvent::Ask(prompt(Tier::T2));
+        assert_eq!(takes_clicks(&ask), Some(true));
+        // everything that puts something else on the stage lets the mouse through again
+        for ends in [
+            OverlayEvent::Show {
+                mode: Mode::Listening,
+            },
+            OverlayEvent::Say {
+                prefix: "答".into(),
+                text: String::new(),
+            },
+            notice(1),
+            OverlayEvent::Complete,
+            OverlayEvent::Hide,
+        ] {
+            assert_eq!(takes_clicks(&ends), Some(false), "{ends:?}");
+        }
+        // and what is not about the stage changes nothing
+        for neutral in [
+            OverlayEvent::Mode {
+                mode: Mode::Thinking,
+            },
+            OverlayEvent::Level { value: 0.5 },
+            OverlayEvent::Progress(Progress::DONE),
+            OverlayEvent::Learned {
+                text: String::new(),
+            },
+            OverlayEvent::Settings {
+                px: 150,
+                subtitles: "on".into(),
+                language: "zh-TW".into(),
+            },
+        ] {
+            assert_eq!(takes_clicks(&neutral), None, "{neutral:?}");
+        }
+    }
+
+    #[test]
+    fn a_question_that_nobody_answers_is_over_with_the_next_thing_shown() {
+        // The window takes the mouse from the question until an event that ends it: replay the
+        // events of a few scenes the way `Overlay::publish` applies them.
+        let replay = |events: &[OverlayEvent]| {
+            let mut takes = false;
+            let mut seen = Vec::new();
+            for event in events {
+                if let Some(on) = takes_clicks(event) {
+                    takes = on;
+                }
+                seen.push(takes);
+            }
+            seen
+        };
+        let listening = OverlayEvent::Show {
+            mode: Mode::Listening,
+        };
+        let thinking = OverlayEvent::Mode {
+            mode: Mode::Thinking,
+        };
+        let ask = OverlayEvent::Ask(prompt(Tier::T3));
+        let say = OverlayEvent::Say {
+            prefix: "了".into(),
+            text: "好了".into(),
+        };
+        let level = OverlayEvent::Level { value: 0.2 };
+        assert_eq!(
+            replay(&[listening, thinking, ask.clone(), level.clone(), say.clone()]),
+            [false, false, true, true, false]
+        );
+        // the loudness of the room does not close the question; a hide does
+        assert_eq!(
+            replay(&[ask, level, OverlayEvent::Hide]),
+            [true, true, false]
+        );
+    }
+
+    #[test]
+    fn the_overlay_window_is_built_to_never_take_focus() {
+        // The window cannot be built here without a running app, so read its source: tao gives a
+        // window that is not focusable `WS_EX_NOACTIVATE`, and `focused(false)` keeps its first
+        // show from activating it.
+        let source = include_str!("overlay.rs").replace("\r\n", "\n");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let build = production
+            .split("WebviewWindowBuilder::new(")
+            .nth(1)
+            .and_then(|rest| rest.split(".build()").next())
+            .unwrap();
+        assert!(build.contains(".focusable(false)"));
+        assert!(build.contains(".focused(false)"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_style_of_the_window_is_never_activated_and_out_of_alt_tab() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            WS_EX_ACCEPTFILES, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE,
+        };
+
+        let has = |style: isize, flag: windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE| {
+            style & flag.0 as isize != 0
+        };
+        let base = (WS_EX_WINDOWEDGE.0 | WS_EX_ACCEPTFILES.0 | WS_EX_TOPMOST.0) as isize;
+        // what tao builds, with the mouse going through, and with the mouse taken
+        for mouse in [(WS_EX_TRANSPARENT.0 | WS_EX_LAYERED.0) as isize, 0] {
+            for tao in [
+                base | mouse | WS_EX_APPWINDOW.0 as isize,
+                base | mouse | WS_EX_NOACTIVATE.0 as isize,
+                base | mouse,
+            ] {
+                let fixed = passive_ex_style(tao);
+                assert!(has(fixed, WS_EX_NOACTIVATE), "{tao:#x}");
+                assert!(has(fixed, WS_EX_TOOLWINDOW), "{tao:#x}");
+                assert!(!has(fixed, WS_EX_APPWINDOW), "{tao:#x}");
+                // the rest is what it was, the mouse flags above all
+                let touched =
+                    (WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0 | WS_EX_APPWINDOW.0) as isize;
+                assert_eq!(fixed & !touched, tao & !touched, "{tao:#x}");
+                assert_eq!(passive_ex_style(fixed), fixed, "it is done once");
+            }
+        }
     }
 
     /// A page that records what it receives, as JSON text.
@@ -995,6 +1381,12 @@ mod tests {
             OverlayEvent::Learned {
                 text: String::new(),
             },
+            OverlayEvent::Say {
+                prefix: "答".into(),
+                text: String::new(),
+            },
+            OverlayEvent::Ask(prompt(Tier::T2)),
+            OverlayEvent::Complete,
             OverlayEvent::Hide,
             OverlayEvent::Settings {
                 px: 150,
@@ -1006,6 +1398,27 @@ mod tests {
             let json = serde_json::to_value(&event).unwrap();
             assert_eq!(json["type"], event.kind());
         }
+    }
+
+    #[test]
+    fn an_answer_and_a_question_from_before_the_page_loaded_wait_for_it() {
+        let mut bus = Bus::new(150, "on", "zh-TW");
+        bus.publish(OverlayEvent::Say {
+            prefix: "答".into(),
+            text: "好".into(),
+        });
+        bus.publish(OverlayEvent::Ask(prompt(Tier::T2)));
+        let (channel, got) = page();
+        bus.subscribe("overlay", channel);
+        let got = received(&got);
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0], SETTINGS_150_ON);
+        assert_eq!(got[1], r#"{"type":"say","prefix":"答","text":"好"}"#);
+        assert!(
+            got[2].starts_with(r#"{"type":"ask","id":"c-7""#),
+            "{}",
+            got[2]
+        );
     }
 
     #[test]

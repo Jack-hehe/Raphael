@@ -142,6 +142,10 @@ impl OverlayApi for AuditOverlay {
         self.ordinary_count.fetch_add(1, Ordering::SeqCst);
     }
 
+    fn say(&self, _prefix: &str, _text: &str) {}
+    fn ask(&self, _prompt: &crate::overlay::AskPrompt) {}
+    fn end_ask(&self) {}
+
     fn learned_notice(&self, text: &str) {
         let expected = crate::notices::learned(&[WORD.to_owned()], "zh-TW");
         self.expected_notice
