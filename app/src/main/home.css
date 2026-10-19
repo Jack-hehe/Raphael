@@ -17,9 +17,14 @@
 .page-home .home-main { min-width: 0; container: homemain / inline-size; }
 .page-home .home-main > .usage { display: grid; gap: 14px; }
 .page-home .home-side { min-width: 0; display: grid; gap: 14px; }
-@container main (min-width: 760px) {
-  .page-home .home { grid-template-columns: minmax(0, 1fr) 252px; gap: 20px; }
+/* The shortcuts stay on the right in a window of middling size too, as the owner asked: narrower
+   there, at full width from 860 px. */
+@container main (min-width: 640px) {
+  .page-home .home { grid-template-columns: minmax(0, 1fr) 220px; gap: 16px; }
   .page-home .home-side { position: sticky; top: calc(var(--window-controls-height) + 8px); }
+}
+@container main (min-width: 860px) {
+  .page-home .home { grid-template-columns: minmax(0, 1fr) 252px; gap: 20px; }
 }
 
 .page-home .card { padding: 16px 18px 18px; }
