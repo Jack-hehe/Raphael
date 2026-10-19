@@ -37,7 +37,7 @@ from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from ..router import Router
 from .cleanup import CleanupService
 from .cloud_stt import CloudTranscriber
-from .dictionary import DictionaryStore
+from .dictionary import DictionaryStore, Learned
 from .history import HistoryItem, HistoryStore
 from .openrouter import KeyInfo, OpenRouterClient, OpenRouterError
 from .pricing import PricingService
@@ -395,9 +395,17 @@ class Brain:
 
     async def _dictionary_learn(self, params: dict) -> dict:
         """`{corrections: [{word, misheard}]}` from the app's correction watch: the user replaced
-        `misheard` with `word` in a dictation it pasted. Learns at most LEARN_MAX of them, none if
-        the setting is off, and returns the words that changed the dictionary. The words are
-        never logged, only how many."""
+        `misheard` with `word` in a dictation it pasted. Learns at most LEARN_MAX different ones,
+        none if the setting is off, and returns `{learned: [word]}`: the words that changed the
+        dictionary.
+
+        The core decides what a correction becomes (`DictionaryStore.learn_pair`): the word is a
+        term of the dictionary, and the pair a hint for the models until it has been seen again
+        and is fit for a replacement rule. So a word in `learned` need not have a rule. Two
+        optional fields are left out when empty: `rules`, the words of `learned` that gained a
+        replacement rule, and `reverted`, the words of which a learned rule was withdrawn
+        because the user changed the text back (those are not in `learned`). The words are never
+        logged, only how many."""
         corrections = _required(params, "corrections")
         if not isinstance(corrections, list):
             raise _invalid("corrections must be a list")
@@ -405,15 +413,31 @@ class Brain:
         for correction in corrections:
             if not isinstance(correction, dict):
                 raise _invalid("corrections must be a list of objects")
-            pairs.append((_str(correction, "word"), _str(correction, "misheard")))
+            pairs.append((_str(correction, "word").strip(), _str(correction, "misheard").strip()))
         if not self._settings.get("learn_corrections"):
             return {"learned": []}
         learned: list[str] = []
-        for word, misheard in pairs[:LEARN_MAX]:
-            if self._dictionary.learn(word, misheard) and word.strip() not in learned:
-                learned.append(word.strip())
-        logger.info("Learned %d of %d corrections", len(learned), len(pairs))
-        return {"learned": learned}
+        rules: list[str] = []
+        reverted: list[str] = []
+        # The same pair twice in one dictation is one sighting, not two.
+        for word, misheard in list(dict.fromkeys(pairs))[:LEARN_MAX]:
+            outcome = self._dictionary.learn_pair(word, misheard)
+            if outcome is Learned.REVERTED:
+                if misheard not in reverted:
+                    reverted.append(misheard)  # the word whose rule was withdrawn
+            elif outcome is not Learned.NOTHING and word not in learned:
+                learned.append(word)
+            if outcome is Learned.RULE and word not in rules:
+                rules.append(word)
+        logger.info(
+            "Learned %d of %d corrections, withdrew %d", len(learned), len(pairs), len(reverted)
+        )
+        result: dict = {"learned": learned}
+        if rules:
+            result["rules"] = rules
+        if reverted:
+            result["reverted"] = reverted
+        return result
 
     # --- settings -------------------------------------------------------------------------------
 

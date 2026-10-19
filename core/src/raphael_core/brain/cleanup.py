@@ -211,10 +211,12 @@ def build_system_prompt(
     cannot pass for something the speaker said.
 
     `words` are the dictionary's words and `replacements` its `(misheard, word)` pairs, as
-    `DictionaryStore.hint_words()` and `replacements()` return them. There is one line per word, in
-    the order of `words`, and a word that speech-to-text tends to get wrong also lists how it comes
-    out, in the order of `replacements`. An empty dictionary is written as （空）. A line break
-    inside a word becomes a space, and a blank word or form is left out.
+    `DictionaryStore.hint_words()` and `hint_forms()` return them: the replacement rules, and the
+    forms the brain has only seen in corrections so far, which the model reads in context. There
+    is one line per word, in the order of `words`, and a word that speech-to-text tends to get
+    wrong also lists how it comes out, in the order of `replacements`. An empty dictionary is
+    written as （空）. A line break inside a word becomes a space, and a blank word or form is left
+    out.
     """
     misheard_forms: dict[str, list[str]] = {}
     for misheard, word in replacements:
@@ -352,7 +354,7 @@ class CleanupService:
 
         system = build_system_prompt(
             self._dictionary.hint_words(),
-            self._dictionary.replacements(),
+            self._dictionary.hint_forms(),
             target_app,
             languages=self._settings.get("languages"),
         )

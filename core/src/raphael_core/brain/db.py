@@ -4,11 +4,17 @@ One connection is shared by all the stores. sqlite3 lets only the thread that op
 use it, so open it on the thread that runs the brain's handlers.
 """
 
+import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
+from .mishearing import may_become_rule
+from .textnorm import replacement_key
+
 # A migration is one transaction that also sets user_version, so a failure cannot leave half a
-# schema behind with the version still saying "empty".
+# schema behind with the version still saying "empty". One that has to look at the data is a
+# function (v3) instead of a script.
 _MIGRATION_V1 = """
 BEGIN;
 CREATE TABLE history (id INTEGER PRIMARY KEY, created_at_ms INTEGER NOT NULL, kind TEXT NOT NULL,
@@ -37,7 +43,67 @@ PRAGMA user_version = 2;
 COMMIT;
 """
 
-_MIGRATIONS = {1: _MIGRATION_V1, 2: _MIGRATION_V2}
+
+def _migrate_v3(conn: sqlite3.Connection) -> None:
+    """v3: the evidence behind the pairs the brain learns from corrections.
+
+    A pair learned from a correction used to become a replacement rule at once. Now it is a rule
+    only when its form is distinctive, the two sound alike (`mishearing.may_become_rule`) and the
+    pair has been seen twice; until then the form is a hint. So here the forms of the learned
+    entries (source "learned") that fail that test stop being rules and become hints, pending
+    evidence: they are not deleted, and the word stays. The forms that pass stay rules, and are
+    recorded as learned (status "rule") so that a correction by the user can still undo them. What
+    the user typed (the manual and suggested entries, forms included) is left alone.
+
+    Like the scripts above, one transaction with the version.
+    """
+    conn.execute("BEGIN")
+    conn.execute(
+        "CREATE TABLE dictionary_evidence (word_key TEXT NOT NULL, form_key TEXT NOT NULL,"
+        " form TEXT NOT NULL, count INTEGER NOT NULL, status TEXT NOT NULL,"
+        " updated_at_ms INTEGER NOT NULL, PRIMARY KEY (word_key, form_key))"
+    )
+    entries = conn.execute(
+        "SELECT id, word, misheard, created_at_ms FROM dictionary WHERE source = 'learned'"
+    ).fetchall()
+    for entry_id, word, misheard, created_at_ms in entries:
+        try:
+            forms = json.loads(misheard)
+        except ValueError:
+            continue
+        if not isinstance(forms, list) or not all(isinstance(form, str) for form in forms):
+            continue
+        kept: list[str] = []
+        for form in forms:
+            is_rule = may_become_rule(word, form)
+            if is_rule:
+                kept.append(form)
+            conn.execute(
+                "INSERT OR IGNORE INTO dictionary_evidence"
+                " (word_key, form_key, form, count, status, updated_at_ms)"
+                " VALUES (?, ?, ?, 1, ?, ?)",
+                (
+                    replacement_key(word),
+                    replacement_key(form),
+                    form,
+                    "rule" if is_rule else "pending",
+                    created_at_ms,
+                ),
+            )
+        if kept != forms:
+            conn.execute(
+                "UPDATE dictionary SET misheard = ? WHERE id = ?",
+                (json.dumps(kept, ensure_ascii=False), entry_id),
+            )
+    conn.execute("PRAGMA user_version = 3")
+    conn.execute("COMMIT")
+
+
+_MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
+    1: _MIGRATION_V1,
+    2: _MIGRATION_V2,
+    3: _migrate_v3,
+}
 LATEST_VERSION = max(_MIGRATIONS)
 
 
@@ -65,8 +131,12 @@ def migrate(conn: sqlite3.Connection) -> None:
     """
     (version,) = conn.execute("PRAGMA user_version").fetchone()
     for target in range(version + 1, LATEST_VERSION + 1):
+        step = _MIGRATIONS[target]
         try:
-            conn.executescript(_MIGRATIONS[target])
+            if callable(step):
+                step(conn)
+            else:
+                conn.executescript(step)
         except BaseException:
             conn.rollback()  # a failed statement leaves the script's transaction open
             raise

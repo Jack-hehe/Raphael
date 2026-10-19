@@ -667,10 +667,11 @@ async def test_dictionary_learn_adds_the_corrected_words(router):
         },
     )
     assert learned == {"learned": ["手機", "Typeless"]}
+    # The words are terms now; the forms are only hints until the pairs are seen again.
     entries = (await router.call("dictionary.list", {}))["entries"]
     assert {(e["word"], tuple(e["misheard"]), e["source"]) for e in entries} == {
-        ("手機", ("首機",), "learned"),
-        ("Typeless", ("type less",), "learned"),
+        ("手機", (), "learned"),
+        ("Typeless", (), "learned"),
     }
 
 
@@ -694,6 +695,70 @@ async def test_dictionary_learn_takes_at_most_three(router):
     corrections = [{"word": f"Word{i}", "misheard": f"ward{i}"} for i in range(5)]
     learned = await router.call("dictionary.learn", {"corrections": corrections})
     assert learned == {"learned": ["Word0", "Word1", "Word2"]}
+
+
+async def learn(router, word, misheard, *more):
+    corrections = [{"word": word, "misheard": misheard}] + [
+        {"word": w, "misheard": m} for w, m in more
+    ]
+    return await router.call("dictionary.learn", {"corrections": corrections})
+
+
+async def test_dictionary_learn_makes_a_rule_only_when_a_pair_is_seen_again(router):
+    first = await learn(router, "Claude", "cloud")
+    assert first == {"learned": ["Claude"]}, "a term and a hint: no rule, so no extra field"
+    assert (await router.call("dictionary.list", {}))["entries"][0]["misheard"] == []
+    second = await learn(router, "Claude", "cloud")
+    assert second == {"learned": ["Claude"], "rules": ["Claude"]}
+    assert (await router.call("dictionary.list", {}))["entries"][0]["misheard"] == ["cloud"]
+    assert await learn(router, "Claude", "cloud") == {"learned": []}
+
+
+async def test_dictionary_learn_counts_the_same_pair_once_in_a_dictation(router):
+    result = await learn(router, "Claude", "cloud", ("Claude", "cloud"), ("Claude", " cloud "))
+    assert result == {"learned": ["Claude"]}
+    entries = (await router.call("dictionary.list", {}))["entries"]
+    assert entries[0]["misheard"] == [], "three of the same are one sighting"
+
+
+async def test_dictionary_learn_withdraws_a_rule_the_user_changes_back(router):
+    await learn(router, "Claude", "cloud")
+    await learn(router, "Claude", "cloud")
+    reverted = await learn(router, "cloud", "Claude")
+    assert reverted == {"learned": [], "reverted": ["Claude"]}
+    entries = (await router.call("dictionary.list", {}))["entries"]
+    assert [(e["word"], e["misheard"], e["source"]) for e in entries] == [("Claude", [], "learned")]
+    assert await learn(router, "Claude", "cloud") == {"learned": []}, "not learned again"
+
+
+async def test_a_pair_that_is_no_rule_does_not_rewrite_what_is_dictated(
+    router, fake_client, keys
+):
+    # Learning the correction 轉錄 for 轉入 must not turn a right 轉入 into 轉錄, however often
+    # it is seen, and "cloud" is Claude's only when the same correction comes twice.
+    for _ in range(3):
+        assert await learn(router, "轉錄", "轉入") == {"learned": ["轉錄"]}
+    await learn(router, "Claude", "cloud")
+    r = await finalize(router, "我想把錢轉入帳戶 upload it to the cloud")
+    assert r["text"] == "我想把錢轉入帳戶 upload it to the cloud"
+    await learn(router, "Claude", "cloud")
+    r = await finalize(router, "我想把錢轉入帳戶 upload it to the cloud")
+    assert r["text"] == "我想把錢轉入帳戶 upload it to the Claude"
+
+
+async def test_the_hints_of_the_dictionary_reach_the_cleanup_prompt(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "好。"})
+    await router.call("dictionary.add", {"word": "拉斐爾", "misheard": ["拉菲爾"]})
+    await learn(router, "Claude", "cloud")
+    await learn(router, "手機", "首機")
+    await finalize(router, "好")
+    system = fake_client.calls[0]["system"]
+    assert "- 拉斐爾（常被聽成：拉菲爾）" in system
+    assert "- Claude（常被聽成：cloud）" in system, "a hint is told to the model like a rule"
+    assert "- 手機（常被聽成：首機）" in system
+    # The words the user chose come before the ones learned.
+    assert system.index("- 拉斐爾") < system.index("- 手機") < system.index("- Claude")
 
 
 async def test_dictionary_learn_does_nothing_when_the_setting_is_off(router):

@@ -511,7 +511,7 @@ def sabotage_store(request, monkeypatch, fixture, method):
         ("spend", "is_over"),
         ("settings", "get"),
         ("dictionary", "hint_words"),
-        ("dictionary", "replacements"),
+        ("dictionary", "hint_forms"),
     ],
 )
 async def test_a_store_that_fails_falls_back_to_raw(
