@@ -141,6 +141,12 @@ export function createHome(app: AppContext): Page {
     );
   }
 
+  /** Raphael's latest words in their card, which is not there when the core does not keep conversations. */
+  function paintTurns(): void {
+    turnsCard.hidden = latest === null;
+    turnsCard.innerHTML = turnsCardHTML();
+  }
+
   /** The activity grid alone, drawn again when the page changes width or pages back. */
   function paintGrid(): void {
     const box = el.querySelector<HTMLElement>(".heat-box");
@@ -166,8 +172,7 @@ export function createHome(app: AppContext): Page {
     lastStatus = status;
     stage.show(status ? buildReport(status, Date.now()) : coreDownReport());
     keysCard.innerHTML = keysCardHTML();
-    turnsCard.hidden = latest === null;
-    turnsCard.innerHTML = turnsCardHTML();
+    paintTurns();
 
     stats = s;
     if (s && hasDictations(s)) {
@@ -189,18 +194,23 @@ export function createHome(app: AppContext): Page {
     if (!stats) usage.innerHTML = loadingHTML();
     usage.setAttribute("aria-busy", "true");
     if (replay) stage.play();
-    const [statusResult, statsResult, turnsResult] = await Promise.allSettled([
-      api.statusGet(),
-      api.statsSummary(daysWanted),
-      api.agentHistoryList({ limit: LATEST_TURNS }),
-    ]);
+    // Raphael's latest words are not worth waiting for: the rest is drawn when it is there, they when they are
+    const turnsRequest = api.agentHistoryList({ limit: LATEST_TURNS }).then(
+      ({ turns }) => turns.slice(0, LATEST_TURNS),
+      () => null,
+    );
+    const [statusResult, statsResult] = await Promise.allSettled([api.statusGet(), api.statsSummary(daysWanted)]);
     if (mine !== loads || !visible) return;
     // a core that does not answer: the report says so
     const status = statusResult.status === "fulfilled" ? statusResult.value : null;
     const s = statsResult.status === "fulfilled" ? statsResult.value : null;
-    latest = turnsResult.status === "fulfilled" ? turnsResult.value.turns.slice(0, LATEST_TURNS) : null;
     paint(status, s);
     usage.setAttribute("aria-busy", "false");
+    void turnsRequest.then((turns) => {
+      if (mine !== loads || !visible) return;
+      latest = turns;
+      paintTurns();
+    });
     if (replay && status?.openrouter.state === "unknown") void checkOpenrouter();
   }
 
