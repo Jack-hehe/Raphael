@@ -168,6 +168,13 @@ pub fn run() {
             // the controller can hold it too. If the keyboard hook cannot start, the app runs on
             // without hotkeys.
             let (hotkey_events, hotkey_event_rx) = tokio::sync::mpsc::unbounded_channel();
+            // End-to-end runs press the keys with SendInput, which the hook ignores otherwise.
+            // Development builds only.
+            #[cfg(debug_assertions)]
+            if std::env::var_os("RAPHAEL_TEST_INJECTED_KEYS").is_some_and(|value| value == "1") {
+                log::warn!("hotkeys: injected key presses count (RAPHAEL_TEST_INJECTED_KEYS=1)");
+                handy_keys::accept_injected_input(true);
+            }
             let hotkey_event_rx =
                 match hotkey::HotkeyService::start(&hotkey::Bindings::default(), hotkey_events) {
                     Ok(service) => {
