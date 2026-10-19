@@ -289,6 +289,13 @@ export class OverlayController {
 
   /** Sends the answer. The buttons stay (pressed, and dead) until the app replaces the question. */
   private choose(ask: Ask, approved: boolean): void {
+    // A hold that was still going (NO was clicked meanwhile) must not arm a button that is dead now.
+    clearTimeout(this.holdTimer);
+    this.holdTimer = undefined;
+    if (!approved && ask.hold !== "idle") {
+      ask.hold = "idle";
+      this.view.setHold("idle");
+    }
     ask.chosen = approved ? "yes" : "no";
     this.view.setChoice(ask.chosen);
     let sent: Promise<unknown>;

@@ -764,6 +764,19 @@ test("T3: pressing again starts the hold again", () => {
   expect(confirm).not.toHaveBeenCalled();
 });
 
+test("T3: NO clicked while YES is being held ends the hold and the YES stays dead", () => {
+  asked({ tier: "T3" });
+  controller.holdStart();
+  vi.advanceTimersByTime(300);
+  controller.clickAsk("no");
+  expect(confirm).toHaveBeenCalledExactlyOnceWith("c1", false);
+  expect(view.log).toEqual(["hold:holding", "hold:idle", "choice:no"]);
+  vi.advanceTimersByTime(HOLD_MS);
+  expect(view.log).toEqual(["hold:holding", "hold:idle", "choice:no"]); // nothing arms later
+  controller.holdEnd(true);
+  expect(confirm).toHaveBeenCalledTimes(1);
+});
+
 test("a question whose tier is not plainly T2 is asked the strict way", () => {
   asked({ tier: "T9" as Ask["tier"] });
   controller.clickAsk("yes");
