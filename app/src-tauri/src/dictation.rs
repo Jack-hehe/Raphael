@@ -224,6 +224,12 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 let action = lock(&self.state).holdtap.on_up();
                 self.act(action, now_ms)
             }
+            // The agent keys are swallowed like the others, but the controller has no agent
+            // session yet, so they do nothing for now.
+            HotkeyEvent::AgentDown | HotkeyEvent::AgentUp => {
+                log::info!("agent key ignored: there is no agent session yet");
+                None
+            }
             HotkeyEvent::Cancel => self.cancel_current(),
             HotkeyEvent::PasteLast => Some(self.paste_last_at(now_ms)),
         }

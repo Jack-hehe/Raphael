@@ -352,6 +352,7 @@ fn bindings_of(settings: &DeviceSettings) -> Bindings {
     Bindings {
         dictation: settings.dictation_keys.clone(),
         paste_last: settings.paste_last_keys.clone(),
+        agent: settings.agent_keys.clone(),
     }
 }
 
@@ -363,8 +364,9 @@ pub async fn apply_changes<E: Effects>(
     old: &DeviceSettings,
     new: &DeviceSettings,
 ) -> Result<(), String> {
-    let bindings_changed =
-        old.dictation_keys != new.dictation_keys || old.paste_last_keys != new.paste_last_keys;
+    let bindings_changed = old.dictation_keys != new.dictation_keys
+        || old.paste_last_keys != new.paste_last_keys
+        || old.agent_keys != new.agent_keys;
     let microphone_changed = old.microphone != new.microphone;
 
     if bindings_changed {
@@ -698,8 +700,15 @@ fn apply_saved(app: &AppHandle, settings: &DeviceSettings) {
     let effects = AppEffects { app: app.clone() };
     let fresh = DeviceSettings::default();
 
-    if (&settings.dictation_keys, &settings.paste_last_keys)
-        != (&fresh.dictation_keys, &fresh.paste_last_keys)
+    if (
+        &settings.dictation_keys,
+        &settings.paste_last_keys,
+        &settings.agent_keys,
+    ) != (
+        &fresh.dictation_keys,
+        &fresh.paste_last_keys,
+        &fresh.agent_keys,
+    )
         // Startup is not an async context and nothing else is waiting yet, so this blocks.
         && let Err(err) = effects
             .hotkeys()
@@ -1279,6 +1288,8 @@ mod tests {
     struct Fake {
         log: Mutex<Vec<String>>,
         fail: Option<&'static str>,
+        /// The bindings of the last `bindings` step.
+        bound: Mutex<Option<Bindings>>,
     }
 
     impl Fake {
@@ -1304,6 +1315,7 @@ mod tests {
 
     impl Effects for Fake {
         async fn bindings(&self, bindings: &Bindings) -> Result<(), String> {
+            *self.bound.lock().unwrap() = Some(bindings.clone());
             self.record("bindings", bindings.dictation.join(","))
         }
 
@@ -1433,6 +1445,29 @@ mod tests {
         let (old, new) = changed(json!({"onboarded": true}));
         apply_changes(&fake, &old, &new).await.unwrap();
         assert_eq!(fake.done(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn the_bindings_are_made_of_all_three_actions() {
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"agent_keys": ["F8"]}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(fake.done(), ["bindings AltRight"]);
+        assert_eq!(
+            fake.bound.lock().unwrap().clone().unwrap(),
+            Bindings {
+                dictation: vec!["AltRight".to_owned()],
+                paste_last: vec!["AltRight+V".to_owned()],
+                agent: vec!["F8".to_owned()],
+            }
+        );
+        assert_eq!(bindings_of(&DeviceSettings::default()), Bindings::default());
+
+        // a refused agent key changes nothing else
+        let fake = Fake::failing("bindings");
+        let (old, new) = changed(json!({"agent_keys": ["F8"], "emblem_size": 194}));
+        assert!(apply_changes(&fake, &old, &new).await.is_err());
+        assert_eq!(fake.done(), ["bindings AltRight"]);
     }
 
     #[tokio::test]
