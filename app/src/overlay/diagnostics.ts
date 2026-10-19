@@ -42,6 +42,8 @@ function eventMetadata(event: OverlayEvent): object {
       return { type: event.type, stage: event.stage, done: event.done, total: event.total, audio_seconds: event.audio_seconds };
     case "settings":
       return { type: event.type, px: event.px };
+    case "ask":
+      return { type: event.type, tier: event.tier };
     default:
       return { type: event.type };
   }
@@ -60,7 +62,7 @@ export function guardHandler(
     try {
       handle(event);
     } catch (err) {
-      const details = event.type === "notice" || event.type === "learned"
+      const details = event.type === "notice" || event.type === "learned" || event.type === "say" || event.type === "ask"
         ? "details omitted for text-bearing events"
         : describeError(err);
       log("error", `the "${event.type}" event failed: ${details}`);
