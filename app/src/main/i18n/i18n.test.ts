@@ -11,6 +11,26 @@ import { describeError } from "../format";
 
 afterEach(() => setLocale("zh-TW"));
 
+const CJK = /[\u3400-\u9fff\u3040-\u30ff]/;
+
+/** The string literals in `files` (TypeScript sources) that hold Chinese or Japanese text, except 《…》 notices. */
+function cjkLiterals(files: string[]): string[] {
+  const found: string[] = [];
+  for (const file of files) {
+    const source = readFileSync(file, "utf8");
+    const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+    function scan(node: ts.Node): void {
+      if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node)) {
+        const text = ts.isTemplateExpression(node) ? node.head.text + node.templateSpans.map((s) => s.literal.text).join("") : node.text;
+        if (CJK.test(text) && !(text.startsWith("《") && text.endsWith("》"))) found.push(`${path.basename(file)}: ${text}`);
+      }
+      ts.forEachChild(node, scan);
+    }
+    scan(ast);
+  }
+  return found;
+}
+
 describe("main window translations", () => {
   test("all locales have exactly the same keys and interpolation parameters", () => {
     const keys = Object.keys(catalogs["zh-TW"]).sort();
@@ -98,19 +118,17 @@ describe("main window translations", () => {
     const files = [root, path.join(root, "pages")].flatMap((dir) =>
       readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts")).map((f) => path.join(dir, f)),
     );
-    const found: string[] = [];
-    for (const file of files) {
-      const source = readFileSync(file, "utf8");
-      const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
-      function scan(node: ts.Node): void {
-        if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node)) {
-          const text = ts.isTemplateExpression(node) ? node.head.text + node.templateSpans.map((s) => s.literal.text).join("") : node.text;
-          if (/[\u3400-\u9fff\u3040-\u30ff]/.test(text) && !(text.startsWith("《") && text.endsWith("》"))) found.push(`${path.basename(file)}: ${text}`);
-        }
-        ts.forEachChild(node, scan);
-      }
-      scan(ast);
-    }
-    expect(found).toEqual([]);
+    expect(cjkLiterals(files)).toEqual([]);
+  });
+
+  test("overlay source and page have no hard-coded CJK UI text either: Rust sends the words", () => {
+    const overlay = path.resolve(import.meta.dirname, "..", "..", "overlay");
+    const files = readdirSync(overlay, { recursive: true, encoding: "utf8" })
+      .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+      .map((f) => path.join(overlay, f));
+    expect(files.length).toBeGreaterThan(0);
+    expect(cjkLiterals(files)).toEqual([]);
+    const page = readFileSync(path.resolve(overlay, "..", "..", "overlay.html"), "utf8").replace(/<!--[\s\S]*?-->/g, "");
+    expect(page.split("\n").filter((line) => CJK.test(line))).toEqual([]);
   });
 });

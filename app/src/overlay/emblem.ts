@@ -8,8 +8,6 @@
 // This module must stay importable without a browser (the tests run in Node), so nothing here
 // touches `document`, `window` or `Image` until a function that needs it is called.
 
-import { ProgressArc, type ProgressReport } from "./progress";
-
 const TAU = Math.PI * 2;
 const clamp = (x: number, a = 0, b = 1): number => Math.max(a, Math.min(b, x));
 
@@ -258,13 +256,13 @@ function tinted(tex: HTMLImageElement, mix: number, clean = false): CanvasImageS
 
 /**
  * The glyph ring at the context's current transform: the texture (with the appear animation's
- * glow on top) or plain strokes. `share` scales its alpha (the reveal's feather).
+ * glow on top) or plain strokes.
  */
-function glyphRing(ctx: CanvasRenderingContext2D, R: number, p: Params, base: number, dim: number, share: number, surface: EmblemSurface = "dark"): void {
+function glyphRing(ctx: CanvasRenderingContext2D, R: number, p: Params, base: number, dim: number, surface: EmblemSurface = "dark"): void {
   const light = surface === "light";
   const clean = surface !== "dark";
   if (light) ctx.globalCompositeOperation = "source-over";
-  ctx.globalAlpha = base * p.glyphA * dim * share;
+  ctx.globalAlpha = base * p.glyphA * dim;
   if (p.glyphBlur > 0) ctx.filter = "blur(" + (p.glyphBlur * R).toFixed(2) + "px)";
   const tex = glyph;
   if (tex && tex.naturalWidth) {
@@ -274,7 +272,7 @@ function glyphRing(ctx: CanvasRenderingContext2D, R: number, p: Params, base: nu
     ctx.filter = "none";
     if (p.glyphGlow > 0.01) {
       ctx.globalCompositeOperation = light ? "source-over" : "lighter";
-      ctx.globalAlpha = base * p.glyphGlow * 0.9 * share;
+      ctx.globalAlpha = base * p.glyphGlow * 0.9;
       ctx.filter = "blur(" + (1 + R * 0.025 * (p.glyphR / 0.86)).toFixed(2) + "px)";
       ctx.drawImage(img, -half, -half, half * 2, half * 2);
     }
@@ -283,27 +281,11 @@ function glyphRing(ctx: CanvasRenderingContext2D, R: number, p: Params, base: nu
   }
 }
 
-// ---------- the glyph ring during a dictation (not from the anime) ----------
+// ---------- the glyph ring while recording (not from the anime) ----------
 
-/**
- * How the glyph ring looks during a dictation (spec §6.5). While recording it is the whole ring
- * as always, a little brighter while the user speaks (`boost`). At the stop it is swept away
- * clockwise from twelve o'clock (`away`), and then it draws itself in again, clockwise from
- * twelve o'clock, as far as the dictation has come (`fraction`). Null means the whole ring, as
- * always.
- */
-export interface RingReveal {
-  /** The part drawn in, 0 to 1 of the circle from twelve o'clock clockwise. */
-  fraction: number;
-  /** The rest of the ring, 0 (not there) to 1: it comes back when a notice takes the emblem. */
-  rest: number;
-  /** The flare when the ring closes, 0 to 1. */
-  flash: number;
-  /** How much of the recording's whole ring the stop has swept away: 0 (the whole ring) to 1. */
-  away: number;
-  /** Extra light on the ring while the user speaks, 0 to `BOOST_MAX` (see `boostAmount`). */
-  boost: number;
-}
+// While the user speaks the whole glyph ring gets a little brighter: it is drawn once more on top.
+// After the key is released the ring stays whole; how far the dictation has come is the
+// percentage that the overlay page writes beside the emblem (overlay.ts).
 
 /** The speaking boost never adds more than this: the ring drawn once more on top, at this alpha. */
 export const BOOST_MAX = 0.3;
@@ -318,114 +300,6 @@ export function boostAmount(lvl: number): number {
   const speech = clamp((lvl - 0.08) / 0.42);
   const loud = clamp((lvl - 0.5) / 0.5);
   return 0.2 * speech * speech * (3 - 2 * speech) + (BOOST_MAX - 0.2) * loud;
-}
-
-/** The drawn-in part fades over this many radians behind its head (about 9 degrees). */
-export const REVEAL_FEATHER = 0.16;
-/** The feather is drawn in this many slices (the glyph ring once per slice). */
-const FEATHER_STEPS = 6;
-/** Twelve o'clock. */
-const TOP = -Math.PI / 2;
-/** The whole ring, as one slice. */
-const WHOLE: ReadonlyArray<readonly [number, number, number]> = [[TOP, TOP + TAU, 1]];
-
-/**
- * The wedges the glyph ring is drawn in: `[from, to, alpha]`, angles in radians on the screen
- * (clockwise, twelve o'clock is -π/2), one after the other. The drawn-in part at full strength up
- * to the last few degrees before its head, which fade in slices; behind the head the rest of the
- * ring at `rest`. While the stop's sweep runs (`away` under 1), what is left of the whole ring
- * after the cut is drawn too, fading in over the same few degrees after the cut.
- */
-export function revealSlices(fraction: number, rest: number, away = 1): Array<[number, number, number]> {
-  const f = Number.isFinite(fraction) ? clamp(fraction) : 0;
-  const r = Number.isFinite(rest) ? clamp(rest) : 0;
-  const a = Number.isFinite(away) ? clamp(away) : 1;
-  if (f >= 0.999 || r >= 0.999 || a <= f + 1e-9) return WHOLE.map(([x, y, z]) => [x, y, z]);
-  const out: Array<[number, number, number]> = [];
-  const head = TOP + TAU * f;
-  if (f > 0) {
-    const feather = Math.min(REVEAL_FEATHER, TAU * f);
-    if (head - feather > TOP + 1e-9) out.push([TOP, head - feather, 1]);
-    const start = head - feather;
-    for (let k = 0; k < FEATHER_STEPS; k++) {
-      const u = (k + 0.5) / FEATHER_STEPS;
-      const fade = 1 - 0.85 * u * u * (3 - 2 * u);
-      out.push([start + (feather * k) / FEATHER_STEPS, start + (feather * (k + 1)) / FEATHER_STEPS, r + (1 - r) * fade]);
-    }
-  }
-  if (a >= 0.999) {
-    if (r > 0.003) out.push([head, TOP + TAU, r]);
-    return out;
-  }
-  const cut = TOP + TAU * a;
-  if (r > 0.003 && cut > head + 1e-9) out.push([head, cut, r]);
-  const feather = Math.min(REVEAL_FEATHER, TAU * (1 - a));
-  for (let k = 0; k < FEATHER_STEPS; k++) {
-    const u = (k + 0.5) / FEATHER_STEPS;
-    const fade = 0.15 + 0.85 * u * u * (3 - 2 * u);
-    out.push([cut + (feather * k) / FEATHER_STEPS, cut + (feather * (k + 1)) / FEATHER_STEPS, r + (1 - r) * fade]);
-  }
-  if (cut + feather < TOP + TAU - 1e-9) out.push([cut + feather, TOP + TAU, 1]);
-  return out;
-}
-
-/** Where the head of the drawn-in part shines: on the glyphs (0.855 R). */
-const HEAD_R = 0.855;
-
-/** A thin line of light across the glyph band at `angle`, with a small bright point on it. */
-function headLight(ctx: CanvasRenderingContext2D, R: number, s: number, angle: number, a: number, light = false): void {
-  if (a <= 0.003) return;
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-  ctx.globalAlpha = a * 0.9;
-  ctx.strokeStyle = light ? "rgb(211,154,51)" : "rgba(255,236,170,1)";
-  ctx.lineWidth = Math.max(1, R * 0.016);
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.moveTo(cos * R * 0.76 * s, sin * R * 0.76 * s);
-  ctx.lineTo(cos * R * 0.95 * s, sin * R * 0.95 * s);
-  ctx.stroke();
-  const hx = cos * R * HEAD_R * s;
-  const hy = sin * R * HEAD_R * s;
-  const hr = Math.max(3, R * 0.15 * s);
-  const g = ctx.createRadialGradient(hx, hy, 0, hx, hy, hr);
-  g.addColorStop(0, light ? "rgba(227,170,48,1)" : "rgba(255,255,245,1)");
-  g.addColorStop(0.2, light ? "rgba(241,190,73,0.85)" : "rgba(255,240,190,0.85)");
-  g.addColorStop(0.55, "rgba(255,200,90,0.25)");
-  g.addColorStop(1, "rgba(255,190,70,0)");
-  ctx.globalAlpha = a;
-  ctx.fillStyle = g;
-  ctx.beginPath();
-  ctx.arc(hx, hy, hr, 0, TAU);
-  ctx.fill();
-}
-
-/**
- * The head of the drawn-in part, where the ring is coming in (or, while the stop's sweep runs,
- * the edge where it is going), and the flare when it closes.
- */
-function revealLight(ctx: CanvasRenderingContext2D, R: number, p: Params, o: DrawOptions, rv: RingReveal, base: number): void {
-  const light = o.surface === "light";
-  const s = p.glyphR / 0.86;
-  const f = clamp(rv.fraction);
-  const away = Number.isFinite(rv.away) ? clamp(rv.away) : 1;
-  ctx.save();
-  ctx.globalCompositeOperation = light ? "source-over" : "lighter";
-  const a = base * clamp(p.glyphA) * (1 - clamp(rv.rest));
-  if (f > 0 && f < 0.999) headLight(ctx, R, s, TOP + TAU * f, a, light);
-  else if (f < 0.999 && away > 0.001 && away < 0.999) headLight(ctx, R, s, TOP + TAU * away, a, light);
-  const flash = clamp(rv.flash);
-  if (flash > 0.01 && f >= 0.999) {
-    // the closed ring lights up once: drawn again, added on top, and softly blurred
-    ctx.rotate(o.rot);
-    glyphRing(ctx, R, p, base * 0.55 * flash, o.dim, 1, o.surface);
-    if (glyph && glyph.naturalWidth) {
-      ctx.globalCompositeOperation = light ? "source-over" : "lighter";
-      ctx.filter = "blur(" + (1 + R * 0.03 * s).toFixed(2) + "px)";
-      glyphRing(ctx, R, p, base * 0.6 * flash, o.dim, 1, o.surface);
-    }
-  }
-  ctx.restore();
 }
 
 /** The glyph ring drawn with plain strokes, for when there is no texture. */
@@ -472,8 +346,8 @@ export interface DrawOptions {
   calm: number;
   /** Loudness, 0 to 1. */
   lvl: number;
-  /** How much of the glyph ring a dictation shows; null or left out for the whole ring. */
-  reveal?: RingReveal | null;
+  /** Extra light on the glyph ring while the user speaks, 0 to `BOOST_MAX` (see `boostAmount`). */
+  boost?: number;
 }
 
 /** Draws one frame, centered on the context's origin, `R` pixels in outer radius. */
@@ -488,41 +362,26 @@ export function drawEmblem(
   const lightSurface = o.surface === "light";
 
   if (p.glyphA > 0.003) {
-    // The whole ring as always, or, during a dictation, the part drawn in so far (in wedges that
-    // stay where they are while the glyphs turn underneath).
-    const rv = o.reveal;
-    const slices = rv ? revealSlices(rv.fraction, rv.rest, rv.away) : WHOLE;
     // While the user speaks the ring gets a little brighter: drawn once more, added on top.
-    const boost = rv && Number.isFinite(rv.boost) ? clamp(rv.boost, 0, BOOST_MAX) : 0;
+    const boost = typeof o.boost === "number" && Number.isFinite(o.boost) ? clamp(o.boost, 0, BOOST_MAX) : 0;
     const s = p.glyphR / 0.86;
-    for (const [from, to, share] of slices) {
-      if (share < 0.003) continue;
-      ctx.save();
-      if (to - from < TAU - 1e-9) {
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.arc(0, 0, R * 1.2 * s, from, to);
-        ctx.closePath();
-        ctx.clip();
-      }
-      ctx.rotate(o.rot);
-      glyphRing(ctx, R, p, base, o.dim, share, o.surface);
-      if (boost > 0.003) {
-        // Added on top at full brightness (not the listening dim), with a soft golden glow when
-        // the texture is there.
-        ctx.filter = "none";
+    ctx.save();
+    ctx.rotate(o.rot);
+    glyphRing(ctx, R, p, base, o.dim, o.surface);
+    if (boost > 0.003) {
+      // Added on top at full brightness (not the listening dim), with a soft golden glow when
+      // the texture is there.
+      ctx.filter = "none";
+      ctx.globalCompositeOperation = lightSurface ? "source-over" : "lighter";
+      glyphRing(ctx, R, p, base * boost, 1, o.surface);
+      if (glyph && glyph.naturalWidth) {
         ctx.globalCompositeOperation = lightSurface ? "source-over" : "lighter";
-        glyphRing(ctx, R, p, base * boost, 1, share, o.surface);
-        if (glyph && glyph.naturalWidth) {
-          ctx.globalCompositeOperation = lightSurface ? "source-over" : "lighter";
-          ctx.filter = "blur(" + (1 + R * 0.03 * s).toFixed(2) + "px)";
-          glyphRing(ctx, R, p, base * boost * 0.8, 1, share, o.surface);
-          ctx.filter = "none";
-        }
+        ctx.filter = "blur(" + (1 + R * 0.03 * s).toFixed(2) + "px)";
+        glyphRing(ctx, R, p, base * boost * 0.8, 1, o.surface);
+        ctx.filter = "none";
       }
-      ctx.restore();
     }
-    if (rv) revealLight(ctx, R, p, o, rv, base);
+    ctx.restore();
   }
 
   if (p.haloA > 0.01) {
@@ -661,19 +520,6 @@ const SPEAK_CYCLE = 36;
 
 // ---------- the emblem on a canvas ----------
 
-/** The rest of the glyph ring fades in (or out) over this long, seconds. */
-const REST_FADE = 0.25;
-/**
- * At the stop the whole ring is swept away (and the speaking boost fades) over this long,
- * seconds, before it starts to draw itself in.
- */
-export const SWEEP = 0.22;
-/** The sweep speeds up and slows down: how far it has gone, 0 to 1, for its linear clock `u`. */
-const sweepEase = (u: number): number => {
-  const x = clamp(u);
-  return x * x * (3 - 2 * x);
-};
-
 /** The canvas is this much larger than the emblem so that the rays have room. */
 export const CANVAS_RATIO = 1.3;
 
@@ -681,8 +527,6 @@ export const CANVAS_RATIO = 1.3;
 export const canvasSize = (px: number): number => Math.round(px * CANVAS_RATIO);
 
 export interface EmblemOptions {
-  /** Caption-based progress keeps the entire ring visible without a sweep or closing flare. */
-  progressStyle?: "ring" | "caption";
   /** Override document theme for an overlay drawn above an unknown desktop background. */
   surface?: EmblemSurface;
   /** Loudness of the white ring when nothing makes noise (0.05 is about 1 px). */
@@ -710,9 +554,7 @@ const prefersReducedMotion = (): boolean =>
  * - `level` (0 to 1) sets the white ring's width while listening or speaking.
  * - `speak(seconds)` moves the ring with a made-up loudness for that long.
  * - While listening (recording) the emblem looks as always and the glyph ring gets a little
- *   brighter with the voice. After the key is released the ring is swept away and
- *   `progress(report)` draws it in again as far as the dictation has come (see progress.ts), on
- *   the same 24 fps clock. `clearProgress()` (a notice takes the emblem) brings the rest back.
+ *   brighter with the voice (`boost`). The ring stays whole after the key is released.
  *
  * With reduced motion the two animations are skipped and the glyph ring stands still.
  */
@@ -731,7 +573,6 @@ export class Emblem {
   private _lvl: number;
   private readonly base: number;
   private readonly surface: EmblemSurface | undefined;
-  private readonly progressStyle: "ring" | "caption";
   private external = 0;
   private talkUntil = 0;
   private talkOff = 0;
@@ -741,18 +582,8 @@ export class Emblem {
   private reduce = false;
   private ctx: CanvasRenderingContext2D | null = null;
   private steps = 0;
-  private readonly arc = new ProgressArc();
-  /** A dictation has the emblem: after the stop the glyph ring shows what the progress has drawn in. */
-  private charging = false;
-  /** How much of the rest of the glyph ring is there, 0 to 1 (1 outside a dictation). */
-  private rest = 1;
-  private shownReveal: RingReveal | null = null;
-  /** The stop's sweep, 0 (the whole ring, while recording) to 1 (swept away), linear in time. */
-  private sweep = 1;
-  /** The speaking boost on the glyph ring: 1 while recording, fading to 0 over the sweep. */
-  private boostOn = 0;
-  /** The level the boost shows while it fades. */
-  private boostLvl = 0;
+  /** The extra light on the glyph ring at the last tick: only a recording has any. */
+  private shownBoost = 0;
 
   constructor(canvas: HTMLCanvasElement, sizePx: number, opts: EmblemOptions = {}) {
     this.canvas = canvas;
@@ -761,7 +592,6 @@ export class Emblem {
     this.shownRot = this._rot;
     this.base = opts.base ?? 0.05;
     this.surface = opts.surface;
-    this.progressStyle = opts.progressStyle ?? "ring";
     this._lvl = this.base;
     this.reduce = prefersReducedMotion();
     this.size(sizePx);
@@ -784,9 +614,9 @@ export class Emblem {
     return this.steps;
   }
 
-  /** How much of the glyph ring is drawn now (null for the whole ring). */
-  get revealShown(): RingReveal | null {
-    return this.shownReveal;
+  /** The extra light on the glyph ring now, 0 to `BOOST_MAX` (0 outside a recording). */
+  get boost(): number {
+    return this.shownBoost;
   }
 
   /** The loudness the white ring shows now, 0 to 1. */
@@ -823,10 +653,7 @@ export class Emblem {
   appear(): void {
     // The screen's scale may have changed since the last time.
     this.reduce = prefersReducedMotion();
-    this.arc.reset();
-    this.charging = false;
-    this.rest = 1;
-    this.shownReveal = null;
+    this.shownBoost = 0;
     if (devicePixelRatioNow() !== this.dpr) this.size(this.diameter);
     this._phase = this.reduce ? this.mode : "appear";
     this.pt = 0;
@@ -847,41 +674,14 @@ export class Emblem {
   /** Sets the mode; while the emblem is appearing, vanishing or hidden it takes effect later. */
   set(mode: Mode): void {
     this.mode = mode;
-    if (mode === "listening") {
-      // A dictation records with the whole ring, as always; the stop will sweep it away.
-      this.charging = true;
-      this.sweep = 0;
-      this.rest = 0;
-      this.boostOn = 1;
-      this.arc.reset();
-      this.shownReveal = this.reveal();
-    } else if (mode !== "thinking") {
-      this.charging = false;
-    }
+    // Only a recording is brightened by the voice: the next tick brings it in, this ends it.
+    if (mode !== "listening") this.shownBoost = 0;
     if (this._phase !== "appear" && this._phase !== "vanish" && this._phase !== "hidden") {
       this._phase = mode;
       this.pt = 0;
       this.dirty = true;
       wake();
     }
-  }
-
-  /**
-   * How far the dictation has come since the key was released: the glyph ring draws itself in
-   * that far. Ignored outside a dictation and while the emblem is hidden or vanishing.
-   */
-  progress(report: ProgressReport): void {
-    if (this._phase === "hidden" || this._phase === "vanish" || !this.charging) return;
-    this.arc.report(report, this.reduce);
-    this.dirty = true;
-    wake();
-  }
-
-  /** The dictation is over (a notice takes the emblem): the rest of the glyph ring fades in. */
-  clearProgress(): void {
-    this.charging = false;
-    this.dirty = true;
-    wake();
   }
 
   /** The white ring moves with a made-up loudness for `seconds`. */
@@ -907,26 +707,7 @@ export class Emblem {
       this.pt = 0;
       this.dirty = true;
     }
-    // The stop sweeps the ring away (only while the dictation has the emblem: a notice stops it
-    // where it is). The reply may come before it ends: the ring is whole then, no need to wait.
-    if (this.charging && this.mode !== "listening") {
-      this.sweep = this.reduce || this.arc.fraction >= 1 ? 1 : Math.min(1, this.sweep + dt / SWEEP);
-    } else if (this.charging && this.arc.fraction >= 1) {
-      this.sweep = 1;
-    }
-    if (this._phase === "hidden") this.arc.reset();
-    else if (!this.charging || this.sweep >= 1) this.arc.advance(dt, this.reduce);
-    const restTo = this.charging ? 0 : 1;
-    if (this.reduce) this.rest = restTo;
-    else if (this.rest < restTo) this.rest = Math.min(restTo, this.rest + dt / REST_FADE);
-    else this.rest = Math.max(restTo, this.rest - dt / REST_FADE);
-    if (!this.charging && this.rest >= 1) this.arc.reset();
-    // The speaking boost: on while recording, fading with the sweep after the stop.
-    if (this.charging && this.mode === "listening") this.boostOn = 1;
-    else this.boostOn = this.reduce || !this.charging ? 0 : Math.max(0, this.boostOn - dt / SWEEP);
-    if (this._phase !== "hidden" && !this.reduce) {
-      this._rot += dt * RATE * (this._phase === "thinking" && this.progressStyle === "ring" ? 6 : 1);
-    }
+    if (this._phase !== "hidden" && !this.reduce) this._rot += dt * RATE;
     const tk = Math.floor(this.clock * 24);
     if (tk === this.lastTick) return false;
     this.lastTick = tk;
@@ -943,21 +724,8 @@ export class Emblem {
       if (this.clock < this.talkUntil) raw = Math.max(raw, envAt(SPEAK, (this.clock + this.talkOff) % SPEAK_CYCLE));
     }
     this._lvl = clamp(raw);
-    // After the stop the boost fades from the last level heard, not the quiet of the thinking ring.
-    if (this.boostOn >= 1) this.boostLvl = this._lvl;
-    this.shownReveal = this.reveal();
+    this.shownBoost = this.mode === "listening" ? boostAmount(this._lvl) : 0;
     return true;
-  }
-
-  /** How much of the glyph ring to draw now: null for all of it. */
-  private reveal(): RingReveal | null {
-    if (this.progressStyle === "caption") {
-      return this.charging ? { fraction: 1, rest: 1, flash: 0, away: 1, boost: this.boostOn * boostAmount(this._lvl) } : null;
-    }
-    if (!this.charging && this.rest >= 1) return null;
-    const sample = this.arc.sample(this.reduce);
-    const boost = this.boostOn > 0 ? boostAmount(this.boostOn >= 1 ? this._lvl : this.boostLvl) * this.boostOn : 0;
-    return { fraction: sample?.fraction ?? 0, rest: this.rest, flash: sample?.flash ?? 0, away: sweepEase(this.sweep), boost };
   }
 
   /** Draws the current frame. */
@@ -978,7 +746,7 @@ export class Emblem {
       dim: ph === "listening" ? 0.8 : 1,
       calm: ph === "listening" ? 0.6 : ph === "steady" ? 0.7 : 1,
       lvl: this._lvl,
-      reveal: this.shownReveal,
+      boost: this.shownBoost,
       surface: this.surface ?? (this.canvas.ownerDocument?.documentElement.dataset.theme === "light" ? "light" : "dark"),
     });
   }

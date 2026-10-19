@@ -4,7 +4,6 @@ export const en = {
   "window.controls": "Window controls",
   "window.minimize": "Minimize",
   "window.maximize": "Maximize",
-  "window.restore": "Restore window",
   "window.close": "Close window",
   "settings.loading": "Loading settings…",
   "settings.usageMonthly": "OpenRouter account usage this month",

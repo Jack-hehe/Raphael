@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { brandIcon, characterEmblem, hydrateBrandIcons } from "./brand";
+import { brandIcon, hydrateBrandIcons } from "./brand";
 
 describe("brand icon", () => {
   it("uses private in-app artwork and falls back once when it is unavailable", () => {
@@ -14,15 +14,5 @@ describe("brand icon", () => {
     fail!();
     expect(img.src).toContain("128x128.png");
     expect(img.addEventListener).toHaveBeenCalledWith("error", expect.any(Function), { once: true });
-  });
-});
-
-describe("character emblem", () => {
-  it("renders a vector ring without an image asset", () => {
-    const html = characterEmblem();
-    expect(html).toContain("<svg");
-    expect(html).toContain("<circle");
-    expect(html).not.toContain("<img");
-    expect(html).not.toContain("/private/");
   });
 });

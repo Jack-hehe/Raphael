@@ -17,7 +17,7 @@ use std::{
     },
 };
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, Webview, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, ipc::Channel,
@@ -56,9 +56,9 @@ pub enum Stage {
     Done,
 }
 
-/// What the emblem's progress ring shows: `done` of `total` segments transcribed (while
-/// transcribing), and the length of the speech, which sets how long the cleanup is expected to
-/// take.
+/// What the percentage beside the emblem is made from: `done` of `total` segments transcribed
+/// (while transcribing), and the length of the speech, which sets how long the cleanup is expected
+/// to take.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Progress {
     pub stage: Stage,
@@ -92,7 +92,8 @@ pub enum OverlayEvent {
     Progress(Progress),
     /// Raphael's report: the emblem appears with subtitles, then vanishes.
     Notice { zh: String, ja: String },
-    /// A learned-word report uses the ordinary notice lifecycle and corner placement.
+    /// Learned words are reported like a notice, but they never take the emblem from a dictation
+    /// that is showing: the page tells them when it is over.
     Learned { zh: String, ja: String },
     /// Delivery succeeded: show 100% briefly before the normal vanish animation.
     Complete,
@@ -131,14 +132,6 @@ pub trait OverlayApi: Send + Sync + 'static {
 }
 
 // ---------- placement (spec §6.1) ----------
-
-/// Placement requests supported by the overlay window; current reports use the corner.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum OverlayPlacement {
-    Corner,
-    Center,
-}
 
 /// A rectangle in physical pixels: the work area, or the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,15 +189,6 @@ pub fn place(work: Rect, emblem_px: u32, scale: f64) -> Rect {
         w,
         h,
     }
-}
-
-fn place_at(work: Rect, emblem_px: u32, scale: f64, placement: OverlayPlacement) -> Rect {
-    let mut target = place(work, emblem_px, scale);
-    if placement == OverlayPlacement::Center {
-        target.x = (f64::from(work.x) + f64::from(work.w - target.w) / 2.0).round() as i32;
-        target.y = (f64::from(work.y) + f64::from(work.h - target.h) / 2.0).round() as i32;
-    }
-    target
 }
 
 // ---------- the pages that listen ----------
@@ -329,7 +313,6 @@ pub struct Overlay {
     window: WebviewWindow,
     /// The emblem's diameter in logical pixels, which sets the size of the window.
     emblem_px: AtomicU32,
-    placement: Mutex<OverlayPlacement>,
     bus: Mutex<Bus>,
 }
 
@@ -373,14 +356,13 @@ impl Overlay {
             app: app.clone(),
             window,
             emblem_px: AtomicU32::new(emblem_px),
-            placement: Mutex::new(OverlayPlacement::Corner),
             bus: Mutex::new(Bus::new(emblem_px, subtitles)),
         });
         overlay.place_window();
         Ok(overlay)
     }
 
-    /// A new emblem size or subtitle language preserves the report's current placement.
+    /// A new emblem size changes the window's size, so it is put in its corner again.
     pub fn apply_settings(&self, emblem_px: u32, subtitles: &str) {
         self.emblem_px.store(emblem_px, Ordering::Relaxed);
         self.place_window();
@@ -398,44 +380,25 @@ impl Overlay {
         lock(&self.bus).subscribe(label, channel);
     }
 
-    /// Recomputes the current placement when the monitor or the emblem size changes.
+    /// Puts the window in its corner of the primary monitor's work area, where the taskbar or the
+    /// screen's scale may have moved it since the last time.
     fn place_window(&self) {
-        let placement = *lock(&self.placement);
-        self.place_window_at(placement);
-    }
-
-    fn place_window_at(&self, placement: OverlayPlacement) {
-        if let Err(err) = self.try_place_window(placement) {
+        if let Err(err) = self.try_place_window() {
             log::warn!("could not place the overlay window: {err}");
         }
     }
 
-    fn try_place_window(&self, placement: OverlayPlacement) -> tauri::Result<()> {
-        // Never hold a lock across native window operations, which may wait for the UI thread.
-        *lock(&self.placement) = placement;
-        let current = if placement == OverlayPlacement::Center {
-            self.app
-                .cursor_position()
-                .ok()
-                .and_then(|point| self.app.monitor_from_point(point.x, point.y).ok().flatten())
-        } else {
-            None
-        };
-        let monitor = match current {
-            Some(monitor) => Some(monitor),
-            None => self.app.primary_monitor()?,
-        }
-        .ok_or_else(|| {
+    fn try_place_window(&self) -> tauri::Result<()> {
+        let monitor = self.app.primary_monitor()?.ok_or_else(|| {
             tauri::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "there is no primary monitor",
             ))
         })?;
-        let target = place_at(
+        let target = place(
             Rect::from(monitor.work_area()),
             self.emblem_px.load(Ordering::Relaxed),
             monitor.scale_factor(),
-            placement,
         );
         // Compare with where the window really is: Windows itself moves windows when the
         // screens change.
@@ -458,7 +421,7 @@ impl Overlay {
 
 impl OverlayApi for Overlay {
     fn show(&self, mode: Mode) {
-        self.place_window_at(OverlayPlacement::Corner);
+        self.place_window();
         self.publish(OverlayEvent::Show { mode });
     }
 
@@ -471,7 +434,6 @@ impl OverlayApi for Overlay {
     }
 
     fn notice(&self, zh: &str, ja: &str) {
-        // The page places a queued report only when its turn begins.
         self.publish(OverlayEvent::Notice {
             zh: zh.to_owned(),
             ja: ja.to_owned(),
@@ -496,30 +458,6 @@ impl OverlayApi for Overlay {
     fn progress(&self, progress: Progress) {
         self.publish(OverlayEvent::Progress(progress));
     }
-}
-
-fn validate_placement_caller(label: &str) -> Result<(), String> {
-    if label == crate::OVERLAY_WINDOW {
-        Ok(())
-    } else {
-        Err("only the overlay page can place its window".into())
-    }
-}
-
-/// The queued report is ready to appear; the overlay page places its existing window first.
-#[tauri::command]
-pub fn overlay_place(
-    app: AppHandle,
-    webview: Webview,
-    placement: OverlayPlacement,
-) -> Result<(), String> {
-    validate_placement_caller(webview.label())?;
-    let overlay = app
-        .try_state::<Arc<Overlay>>()
-        .ok_or("the overlay is not running")?;
-    overlay
-        .try_place_window(placement)
-        .map_err(|err| err.to_string())
 }
 
 /// The overlay page calls this once and receives all its events on `channel`.
@@ -547,9 +485,11 @@ const PAGE_LOG_MAX: usize = 2000;
 /// subscription that failed, animation frames that stopped) or, at `info` and `debug`, what it
 /// is doing. It has no console anyone can see, so this is the only trace. `level` is `"error"`,
 /// `"warn"`, `"info"` or `"debug"`; errors are logged as warnings, because the overlay never
-/// stops dictation.
+/// stops dictation. Only the overlay page may call it, and what it sends is event kinds and
+/// metadata, never the words of a report (see diagnostics.ts): the log is not a place for them.
 #[tauri::command]
-pub fn overlay_log(webview: Webview, level: String, message: String) {
+pub fn overlay_log(webview: Webview, level: String, message: String) -> Result<(), String> {
+    crate::commands::ensure_caller(webview.label(), crate::OVERLAY_WINDOW)?;
     let label = webview.label();
     let message = page_message(&message);
     match page_log_level(&level) {
@@ -557,6 +497,7 @@ pub fn overlay_log(webview: Webview, level: String, message: String) {
         log::Level::Debug => log::debug!("overlay page \"{label}\": {message}"),
         _ => log::warn!("overlay page \"{label}\": {message}"),
     }
+    Ok(())
 }
 
 /// How a page message of `level` is logged: unknown levels count as warnings.
@@ -631,38 +572,16 @@ mod tests {
     use tauri::ipc::InvokeResponseBody;
 
     #[test]
-    fn explicit_center_placement_uses_the_current_work_area() {
-        let work = Rect {
-            x: -1920,
-            y: -40,
-            w: 1920,
-            h: 1040,
-        };
-        assert_eq!(
-            place_at(work, 194, 1.5, OverlayPlacement::Center),
-            Rect {
-                x: -1365,
-                y: 261,
-                w: 810,
-                h: 438
-            }
-        );
-        assert_eq!(
-            place_at(work, 194, 1.5, OverlayPlacement::Corner),
-            place(work, 194, 1.5)
-        );
-    }
-
-    #[test]
-    fn only_the_overlay_page_can_request_a_placement() {
-        assert!(validate_placement_caller("overlay").is_ok());
-        assert!(validate_placement_caller("main").is_err());
-        assert!(validate_placement_caller("").is_err());
-        assert_eq!(
-            serde_json::from_str::<OverlayPlacement>(r#""center""#).unwrap(),
-            OverlayPlacement::Center
-        );
-        assert!(serde_json::from_str::<OverlayPlacement>(r#""anywhere""#).is_err());
+    fn only_the_overlay_page_writes_to_the_log() {
+        // The command cannot be called here without a running app, so read its source.
+        let source = include_str!("overlay.rs").replace("\r\n", "\n");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let command = production
+            .split("#[tauri::command]")
+            .find(|command| command.contains("pub fn overlay_log("))
+            .unwrap();
+        let body = command.split("\n}\n").next().unwrap();
+        assert!(body.contains("ensure_caller(webview.label(), crate::OVERLAY_WINDOW)"));
     }
 
     #[test]

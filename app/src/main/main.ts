@@ -16,7 +16,7 @@ import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
 import { brandIcon, hydrateBrandIcons } from "./brand";
 import { installWindowHotkeys } from "./window-hotkeys";
-import { installWindowChrome } from "./window-chrome";
+import { installWindowChrome, labelWindowControls, showMaximized } from "./window-chrome";
 import type { AppContext, DeviceSettings, MainEvent, Page, PageId } from "./types";
 import { spendMini } from "./spend";
 import { Undoable } from "./undo";
@@ -73,28 +73,19 @@ prefersDark.addEventListener("change", applyTheme);
 
 function mountWindowChrome(): void {
   const chrome = document.getElementById("window-chrome")!;
-  const maximize = chrome.querySelector<HTMLButtonElement>('[data-window-action="maximize"]')!;
-  let maximized = false;
-  const translate = (): void => {
-    chrome.querySelector(".window-controls")!.setAttribute("aria-label", t("window.controls"));
-    for (const [action, label] of [
-      ["minimize", t("window.minimize")],
-      ["maximize", t(maximized ? "window.restore" : "window.maximize")],
-      ["close", t("window.close")],
-    ]) {
-      const button = chrome.querySelector<HTMLButtonElement>(`[data-window-action="${action}"]`)!;
-      button.setAttribute("aria-label", label);
-      button.title = label;
-    }
-    maximize.setAttribute("aria-pressed", String(maximized));
-  };
+  const translate = (): void =>
+    labelWindowControls(chrome, {
+      controls: t("window.controls"),
+      minimize: t("window.minimize"),
+      maximize: t("window.maximize"),
+      close: t("window.close"),
+    });
   translate();
   onLocaleChange(translate);
   try {
-    installWindowChrome(document, getCurrentWindow(), (state) => {
-      maximized = state;
-      document.documentElement.dataset.windowMaximized = String(state);
-      translate();
+    installWindowChrome(document, getCurrentWindow(), (maximized) => {
+      document.documentElement.dataset.windowMaximized = String(maximized);
+      showMaximized(chrome, maximized);
     });
   } catch (error) {
     console.warn("main: window controls are unavailable outside Tauri", error);
@@ -167,7 +158,8 @@ async function start(): Promise<void> {
   });
   const settings = pages.settings;
   for (const page of Object.values(pages)) if (page !== settings) main.append(page.el);
-  document.body.append(settings.el);
+  // The panel goes before the window controls, which come last in the document.
+  document.getElementById("window-chrome")!.before(settings.el);
   // Keep the version outside the scroll container's containing block.
   document.querySelector(".wbody")!.append(pages.home.el.querySelector(".home-version")!);
 

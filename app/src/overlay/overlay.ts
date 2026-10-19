@@ -19,7 +19,6 @@ export { noticeDurationMs };
 
 /** Which subtitle lines are shown: both, only Chinese, only Japanese, or none. */
 type SubtitleMode = "both" | "zh" | "ja" | "off";
-export type OverlayPlacement = "corner" | "center";
 
 /** The events overlay.rs sends (`OverlayEvent`). */
 export type OverlayEvent =
@@ -44,16 +43,10 @@ export interface EmblemControl {
   set(mode: Mode): void;
   speak(seconds: number): void;
   size(px: number): void;
-  /** How far the dictation has come since the key was released (the glyph ring draws itself in). */
-  progress(report: ProgressReport): void;
-  /** The dictation is over: the whole glyph ring comes back. */
-  clearProgress(): void;
 }
 
 /** What the controller needs from the page. */
 export interface OverlayView {
-  /** Move the existing click-through window before its next appearance. */
-  place(placement: OverlayPlacement): void | Promise<void>;
   /** The emblem is `px` wide now: move the subtitles to match. */
   layout(px: number): void;
   /** Shows the lines; null leaves that line out. */
@@ -66,7 +59,8 @@ export interface OverlayView {
 interface Notice {
   zh: string;
   ja: string;
-  placement: OverlayPlacement;
+  /** Learned words never interrupt a dictation, and a later show, complete or hide keeps them. */
+  learned: boolean;
 }
 
 function parseSubtitles(value: string): SubtitleMode {
@@ -82,10 +76,6 @@ export class OverlayController {
   /** A show owns the emblem until a hide or notice takes over, regardless of renderer state. */
   private activeShow = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
-  /** Invalidates a placement that finishes after a newer show, hide or notice. */
-  private generation = 0;
-  private pendingShow: Mode | null = null;
-  private pendingEvents: Array<{ mode: Mode } | { progress: ProgressReport }> = [];
   private readonly progress = new ProgressArc();
   private progressTimer: ReturnType<typeof setInterval> | undefined;
   private progressClock = 0;
@@ -108,74 +98,57 @@ export class OverlayController {
         // starts without the last dictation's progress.
         this.cancelNotices();
         this.activeShow = true;
-        this.emblem.clearProgress();
-        this.pendingShow = event.mode;
-        this.afterPlacement("corner", () => {
-          const mode = this.pendingShow!;
-          this.pendingShow = null;
-          this.appearIfHidden();
-          this.setMode(mode);
-          for (const pending of this.pendingEvents) {
-            if ("mode" in pending) this.setMode(pending.mode);
-            else this.updateProgress(pending.progress);
-          }
-          this.pendingEvents = [];
-        });
+        this.appearIfHidden();
+        this.setMode(event.mode);
         break;
       case "mode":
-        if (this.pendingShow !== null) this.pendingEvents.push({ mode: event.mode });
-        else this.setMode(event.mode);
+        this.setMode(event.mode);
         break;
       case "level":
         this.emblem.level = event.value;
         break;
       case "progress":
-        // A single percentage beside the complete ring replaces the clockwise progress light.
-        const progress = {
+        // How far the dictation has come is a percentage beside the whole ring.
+        this.updateProgress({
           stage: event.stage,
           done: event.done,
           total: event.total,
           audioSeconds: event.audio_seconds,
-        };
-        if (this.pendingShow !== null) this.pendingEvents.push({ progress });
-        else this.updateProgress(progress);
+        });
         break;
       case "complete":
         if (!this.activeShow) break;
         this.activeShow = false;
         this.cancelNotices();
-        this.emblem.clearProgress();
         this.busy = true;
-        this.afterPlacement("corner", () => {
-          this.appearIfHidden();
-          this.emblem.set("steady");
-          this.view.showProgress(100);
-          this.lastProgress = 100;
-          this.timer = setTimeout(() => {
-            this.view.showProgress(null);
-            this.lastProgress = null;
-            this.next();
-          }, COMPLETION_MS);
-        });
+        this.appearIfHidden();
+        this.emblem.set("steady");
+        this.view.showProgress(100);
+        this.lastProgress = 100;
+        this.timer = setTimeout(() => {
+          this.view.showProgress(null);
+          this.lastProgress = null;
+          this.next();
+        }, COMPLETION_MS);
+        break;
+      case "learned":
+        // A dictation on screen owns the emblem: the words wait for its complete, hide or notice.
+        this.queue.push({ zh: event.zh, ja: event.ja, learned: true });
+        if (!this.activeShow && !this.busy) this.next();
         break;
       case "notice":
-      case "learned":
         // Raphael speaks: the dictation's progress has said what it had to.
         this.activeShow = false;
         if (this.progress.active) this.stopProgress();
-        if (this.pendingShow !== null) {
-          this.generation++;
-          this.pendingShow = null;
-          this.pendingEvents = [];
-        }
-        this.emblem.clearProgress();
-        this.queue.push({ zh: event.zh, ja: event.ja, placement: "corner" });
+        this.queue.push({ zh: event.zh, ja: event.ja, learned: false });
         if (!this.busy) this.next();
         break;
       case "hide":
         this.activeShow = false;
         this.cancelNotices();
-        this.emblem.vanish();
+        // Learned words that waited for the dictation take the emblem as it is, instead of a vanish.
+        if (this.queue.length > 0) this.next();
+        else this.emblem.vanish();
         break;
       case "settings":
         this.subtitles = parseSubtitles(event.subtitles);
@@ -202,7 +175,6 @@ export class OverlayController {
 
   private updateProgress(report: ProgressReport): void {
     if (!this.activeShow) return;
-    this.emblem.progress(report);
     this.progress.report(report, false);
     this.renderProgress();
     this.startProgressTimer();
@@ -221,7 +193,7 @@ export class OverlayController {
 
   private renderProgress(): void {
     const stage = this.progress.currentStage;
-    if (!stage || !this.activeShow || this.pendingShow !== null) return;
+    if (!stage || !this.activeShow) return;
     const percent = progressPercent(stage, this.progress.fraction);
     if (percent === this.lastProgress) return;
     this.lastProgress = percent;
@@ -245,31 +217,19 @@ export class OverlayController {
       return;
     }
     this.busy = true;
-    this.generation++;
-    this.afterPlacement(notice.placement, () => {
-      this.appearIfHidden();
-      this.emblem.set("steady");
-      // The words come when the appear animation has played (at once if already visible).
-      const lead = this.emblem.appearLeft * 1000;
-      const duration = noticeDurationMs(notice.zh);
+    this.appearIfHidden();
+    this.emblem.set("steady");
+    // The words come when the appear animation has played (at once if already visible).
+    const lead = this.emblem.appearLeft * 1000;
+    const duration = noticeDurationMs(notice.zh);
+    this.timer = setTimeout(() => {
+      this.showLines(notice);
+      this.emblem.speak(duration / 1000);
       this.timer = setTimeout(() => {
-        this.showLines(notice);
-        this.emblem.speak(duration / 1000);
-        this.timer = setTimeout(() => {
-          this.view.clearLines();
-          this.next();
-        }, duration);
-      }, lead);
-    });
-  }
-
-  private afterPlacement(placement: OverlayPlacement, render: () => void): void {
-    const generation = this.generation;
-    const ready = (): void => { if (generation === this.generation) render(); };
-    const pending = this.view.place(placement);
-    // A placement failure must not swallow a report; DomView logs the native failure.
-    if (pending) void pending.then(ready, ready);
-    else ready();
+        this.view.clearLines();
+        this.next();
+      }, duration);
+    }, lead);
   }
 
   private showLines({ zh, ja }: Notice): void {
@@ -280,14 +240,14 @@ export class OverlayController {
     this.view.showLines(wantZh ? zh : null, wantJa ? ja : null);
   }
 
+  /** Stops what is on screen and drops the reports that wait; learned words stay queued. */
   private cancelNotices(): void {
     this.stopProgress();
-    this.generation++;
-    this.pendingShow = null;
-    this.pendingEvents = [];
     clearTimeout(this.timer);
     this.timer = undefined;
-    this.queue.length = 0;
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      if (!this.queue[i].learned) this.queue.splice(i, 1);
+    }
     this.busy = false;
     this.view.clearLines();
   }
@@ -295,7 +255,6 @@ export class OverlayController {
 
 /** The page's elements. */
 class DomView implements OverlayView {
-  private placing: Promise<void> = Promise.resolve();
   constructor(
     /** Carries the emblem size for the style sheet (`--e`, `--c`). */
     private readonly root: HTMLElement,
@@ -304,14 +263,6 @@ class DomView implements OverlayView {
     private readonly ja: HTMLElement,
     private readonly progress: HTMLElement,
   ) {}
-
-  place(placement: OverlayPlacement): Promise<void> {
-    // Serialize native moves so a late request cannot undo a newer recording's placement.
-    this.placing = this.placing.then(() => invoke<void>("overlay_place", { placement })).catch((error) => {
-      pageLog("warn", `could not place the overlay: ${describeError(error)}`);
-    });
-    return this.placing;
-  }
 
   layout(px: number): void {
     this.root.style.setProperty("--e", `${px}px`);
@@ -336,8 +287,6 @@ class DomView implements OverlayView {
   showProgress(percent: number | null): void {
     this.progress.hidden = percent === null;
     this.progress.textContent = percent === null ? "" : formatProgress(percent);
-    if (percent === null) this.progress.removeAttribute("aria-valuenow");
-    else this.progress.setAttribute("aria-valuenow", String(percent));
   }
 }
 
@@ -386,7 +335,7 @@ async function start(): Promise<void> {
 
   const view = new DomView(document.documentElement, box, zh, ja, progress);
   view.layout(DEFAULT_PX);
-  const emblem = new Emblem(canvas, DEFAULT_PX, { surface: "transparent", progressStyle: "caption" });
+  const emblem = new Emblem(canvas, DEFAULT_PX, { surface: "transparent" });
   const controller = new OverlayController(emblem, view);
   const frames = new FrameWatch(() => emblem.frames, () => document.visibilityState, pageLog, {
     canvas,

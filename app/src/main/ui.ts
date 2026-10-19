@@ -231,7 +231,10 @@ export function openMenuOnArrow(e: KeyboardEvent): boolean {
   const anchor = e.target.closest<HTMLButtonElement>(".sel");
   if (!anchor || anchor.disabled || menuIsOpenFor(anchor)) return false;
   e.preventDefault();
-  e.stopPropagation();
+  // The Settings listens on `document`, like the menu: stopping only the propagation would still
+  // let a menu listener added after the page's (the first Settings after launch) see this key and
+  // move on from the item just focused.
+  e.stopImmediatePropagation();
   anchor.click();
   if (menu?.anchor === anchor) {
     const items = menuItems(menu.el);

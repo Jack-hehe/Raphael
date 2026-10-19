@@ -9,6 +9,9 @@
 //! - `keyboard_has_altgr`, `hotkeys_pause` and `main_events` are small helpers of the settings
 //!   page.
 //!
+//! Every command here belongs to the main window and refuses a call from any other webview
+//! (`require_main`); the overlay page only loads its own files, but it is a webview too.
+//!
 //! [`start`] is called once from `setup` in `lib.rs`. Like the other parts of the app it takes
 //! what it needs from the app state with `try_state`: after a failure to start, the core, the
 //! hotkeys or the overlay may not be there, and the settings page still has to work.
@@ -24,7 +27,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tauri::async_runtime::JoinHandle;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State, Webview};
 use tauri_plugin_autostart::ManagerExt;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -55,6 +58,23 @@ pub enum MainEvent {
     Level { value: f32 },
     /// A speech model is being downloaded.
     ModelProgress { name: String, done: u64, total: u64 },
+}
+
+// ---------- who may call ----------
+
+/// `Ok` when a webview labelled `label` may call the commands of the window `window`.
+pub(crate) fn ensure_caller(label: &str, window: &str) -> Result<(), String> {
+    if label == window {
+        Ok(())
+    } else {
+        Err(format!(
+            "the \"{label}\" webview may not call the commands of the \"{window}\" window"
+        ))
+    }
+}
+
+fn require_main(webview: &Webview) -> Result<(), String> {
+    ensure_caller(webview.label(), crate::MAIN_WINDOW)
 }
 
 // ---------- calls to the core ----------
@@ -129,7 +149,13 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
 /// Passes `method` on to the core and returns its answer. Fails with the core's own error (code
 /// and message), or with `Raphael's core is not running`.
 #[tauri::command]
-pub async fn core_call(app: AppHandle, method: String, params: Value) -> Result<Value, String> {
+pub async fn core_call(
+    app: AppHandle,
+    webview: Webview,
+    method: String,
+    params: Value,
+) -> Result<Value, String> {
+    require_main(&webview)?;
     if !is_allowed_method(&method) {
         return Err(format!("the main window may not call {method}"));
     }
@@ -198,7 +224,12 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
 /// The page calls this once and receives the events on `channel`. A page that calls it again (it
 /// was reloaded) replaces the one before.
 #[tauri::command]
-pub async fn main_events(app: AppHandle, channel: Channel<MainEvent>) -> Result<(), String> {
+pub async fn main_events(
+    app: AppHandle,
+    webview: Webview,
+    channel: Channel<MainEvent>,
+) -> Result<(), String> {
+    require_main(&webview)?;
     let core = app
         .try_state::<Arc<CoreProcess>>()
         .ok_or(CORE_NOT_RUNNING)?;
@@ -331,7 +362,11 @@ pub async fn set_device_settings<E: Effects>(
 
 /// The device settings as they are now.
 #[tauri::command]
-pub async fn device_settings_get(store: State<'_, DeviceStore>) -> Result<DeviceSettings, String> {
+pub async fn device_settings_get(
+    webview: Webview,
+    store: State<'_, DeviceStore>,
+) -> Result<DeviceSettings, String> {
+    require_main(&webview)?;
     Ok(store.get().await)
 }
 
@@ -340,9 +375,11 @@ pub async fn device_settings_get(store: State<'_, DeviceStore>) -> Result<Device
 #[tauri::command]
 pub async fn device_settings_set(
     app: AppHandle,
+    webview: Webview,
     store: State<'_, DeviceStore>,
     patch: Value,
 ) -> Result<DeviceSettings, String> {
+    require_main(&webview)?;
     set_device_settings(&store, &AppEffects { app }, &patch).await
 }
 
@@ -462,13 +499,11 @@ where
 /// A key-up synthesized on blur is allowed so hold mode cannot get stuck after focus moves.
 #[tauri::command]
 pub fn window_hotkey(
-    window: tauri::WebviewWindow,
+    webview: Webview,
     hotkeys: State<'_, Arc<HotkeyService>>,
     kind: WindowHotkey,
 ) -> Result<(), String> {
-    if window.label() != "main" {
-        return Err("window hotkeys are only available to the main webview".to_string());
-    }
+    require_main(&webview)?;
     hotkeys.window_hotkey(kind)
 }
 
@@ -476,7 +511,8 @@ pub fn window_hotkey(
 /// record a new one. It uses its own pause reason ([`PauseReason::KeyRecorder`]), so resuming
 /// never ends the tray's 「暫停 1 小時」.
 #[tauri::command]
-pub fn hotkeys_pause(app: AppHandle, paused: bool) -> Result<(), String> {
+pub fn hotkeys_pause(app: AppHandle, webview: Webview, paused: bool) -> Result<(), String> {
+    require_main(&webview)?;
     let hotkeys = app
         .try_state::<Arc<HotkeyService>>()
         .ok_or("全域快捷鍵沒有啟動")?;
@@ -487,14 +523,15 @@ pub fn hotkeys_pause(app: AppHandle, paused: bool) -> Result<(), String> {
 /// Whether the keyboard layout in use has an AltGr key, which is the Right Alt key. A hotkey on
 /// Right Alt then gets in the way of typing some characters (spec §4). Always false off Windows.
 #[tauri::command]
-pub fn keyboard_has_altgr() -> bool {
+pub fn keyboard_has_altgr(webview: Webview) -> Result<bool, String> {
+    require_main(&webview)?;
     #[cfg(windows)]
     {
-        layout_has_altgr(foreground_layout())
+        Ok(layout_has_altgr(foreground_layout()))
     }
     #[cfg(not(windows))]
     {
-        false
+        Ok(false)
     }
 }
 
@@ -698,6 +735,55 @@ mod tests {
     }
     use serde_json::json;
     use std::sync::Mutex;
+
+    // ---- which window may call a command ----
+
+    #[test]
+    fn a_command_answers_only_to_the_window_it_belongs_to() {
+        assert!(ensure_caller("main", "main").is_ok());
+        assert!(ensure_caller("overlay", "overlay").is_ok());
+        for label in ["overlay", "", "Main", "main ", "main2"] {
+            assert!(ensure_caller(label, "main").is_err(), "{label:?}");
+        }
+        assert!(ensure_caller("main", "overlay").is_err());
+        let refused = ensure_caller("overlay", "main").unwrap_err();
+        assert!(refused.contains("overlay"), "{refused}");
+    }
+
+    #[test]
+    fn every_command_of_the_main_window_checks_who_calls_it() {
+        // The commands cannot be called here without a running app, so read their source: each
+        // `#[tauri::command]` in this file must begin with the check.
+        let source = include_str!("commands.rs").replace("\r\n", "\n");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let mut checked = Vec::new();
+        for command in production.split("#[tauri::command]").skip(1) {
+            let body = command.split("\n}\n").next().unwrap();
+            let name = body
+                .split("fn ")
+                .nth(1)
+                .and_then(|rest| rest.split('(').next())
+                .unwrap();
+            assert!(
+                body.contains("require_main("),
+                "`{name}` is a command of the main window and does not check its caller"
+            );
+            checked.push(name.to_owned());
+        }
+        checked.sort();
+        assert_eq!(
+            checked,
+            [
+                "core_call",
+                "device_settings_get",
+                "device_settings_set",
+                "hotkeys_pause",
+                "keyboard_has_altgr",
+                "main_events",
+                "window_hotkey",
+            ]
+        );
+    }
 
     // ---- which methods the window may call ----
 
@@ -1365,7 +1451,7 @@ mod tests {
         #[test]
         fn the_command_answers_for_the_current_layout() {
             // Whatever the answer is on this machine, asking must not fail.
-            let _ = keyboard_has_altgr();
+            let _ = layout_has_altgr(foreground_layout());
         }
     }
 }

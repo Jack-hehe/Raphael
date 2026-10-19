@@ -80,6 +80,10 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .window-button svg { grid-area: 1 / 1; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1; }
 .window-button:hover { background: var(--hover); }
 .window-button:focus-visible { outline-offset: -3px; }
+/* The focus colour is lost on the close button's red, and on the dimmed page behind the controls
+   while the settings are open: white on the red, and a surface of its own over the dimmed page. */
+.window-close:hover:focus-visible { outline-color: #ffffff; }
+:root[data-window-modal="true"] .window-button:focus-visible:not(:hover) { background: var(--content); }
 .window-close:hover { background: #c42b1c; color: #ffffff; }
 .window-restore-glyph { display: none; }
 :root[data-window-maximized="true"] .window-maximize-glyph { display: none; }
@@ -443,6 +447,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .toast > span { min-width: 0; overflow-wrap: anywhere; }
 .toast .btn { flex: none; }
 .main, .modal-body, .menu, .lang-list, .ob-body { scroll-padding-block: 16px; }
+/* The window controls are opaque and fixed over the top of the page: focus scrolls to below them. */
+.main { scroll-padding-top: calc(var(--window-controls-height) + 16px); }
 
 /* ---------- first run ---------- */
 .ob { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; min-height: 0; padding-top: var(--window-controls-height); background: var(--content); border-top: 1px solid var(--edge); }

@@ -18,7 +18,6 @@ test("the stages fill their own part of the ring", () => {
 test("transcribing fills 0 to 60 % by the segments done", () => {
   const arc = new ProgressArc();
   expect(arc.active).toBe(false);
-  expect(arc.sample(false)).toBeNull();
   arc.report(tr(1, 4), false);
   expect(arc.active).toBe(true);
   run(arc, 2);
@@ -122,17 +121,13 @@ test("transcription that ended while recording goes straight to the cleaning par
   expect(arc.fraction).toBeGreaterThan(0.6);
 });
 
-test("done fills the ring at once and flares briefly", () => {
+test("done fills the arc at once", () => {
   const arc = new ProgressArc();
   arc.report(cleaning(), false);
   run(arc, 0.5);
   arc.report(DONE, false);
   expect(arc.fraction).toBe(1);
-  expect(arc.sample(false)?.flash).toBe(1);
-  run(arc, 0.1);
-  expect(arc.sample(false)?.flash).toBeGreaterThan(0);
-  run(arc, 0.2);
-  expect(arc.sample(false)?.flash).toBe(0);
+  run(arc, 0.3);
   expect(arc.fraction).toBe(1);
 });
 
@@ -159,7 +154,7 @@ test("a report from an earlier stage that comes late is ignored", () => {
   expect(c.fraction).toBeGreaterThanOrEqual(f);
 });
 
-test("with reduced motion the arc moves in discrete steps, without easing or flare", () => {
+test("with reduced motion the arc moves in discrete steps, without easing", () => {
   const arc = new ProgressArc();
   arc.report(tr(1, 2), true);
   expect(arc.fraction).toBeCloseTo(0.3, 10); // at once
@@ -175,7 +170,6 @@ test("with reduced motion the arc moves in discrete steps, without easing or fla
   expect([...seen].map(Number)).toEqual([0.6, 0.6 + 0.35 / 3, 0.6 + (0.35 * 2) / 3].map((v) => Number(v.toFixed(6))));
   arc.report(DONE, true);
   expect(arc.fraction).toBe(1);
-  expect(arc.sample(true)?.flash).toBe(0);
 });
 
 test("reset removes the arc at once, and a new dictation starts from nothing", () => {
@@ -183,7 +177,6 @@ test("reset removes the arc at once, and a new dictation starts from nothing", (
   arc.report(DONE, false);
   arc.reset();
   expect(arc.active).toBe(false);
-  expect(arc.sample(false)).toBeNull();
   arc.report(tr(0, 3), false);
   expect(arc.fraction).toBe(0);
 });
