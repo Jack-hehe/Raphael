@@ -111,8 +111,23 @@ async def test_the_question_goes_in_tags_after_the_time(voice, client, ledger):
     await reply(voice, ledger, question="台北天氣如何")
     message = client.json_calls[0]["user"]
     assert message.startswith("Current date and time: 2026-10-20 14:05, Tuesday (UTC+08:00)")
-    assert message.endswith("<question>\n台北天氣如何\n</question>")
+    assert "<question>\n台北天氣如何\n</question>\n\nReply in " in message
     assert "Conversation so far" not in message and "Tool results" not in message
+
+
+@pytest.mark.parametrize(
+    ("language", "named"),
+    [("en", "English"), ("ja", "Japanese"), ("zh-TW", "Traditional Chinese")],
+)
+async def test_the_last_thing_the_model_reads_is_the_language_to_reply_in(
+    voice, client, ledger, language, named
+):
+    # A Chinese question in the English interface was answered in Chinese until this was said
+    # last.
+    client.replies.append(completion(spoken()))
+    await reply(voice, ledger, question="台北天氣如何", language=language)
+    last_line = client.json_calls[0]["user"].rsplit("\n\n", 1)[1]
+    assert last_line.startswith(f"Reply in {named}") and last_line.endswith(" only.")
 
 
 async def test_the_conversation_so_far_is_given_oldest_first(voice, client, ledger):

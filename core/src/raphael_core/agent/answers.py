@@ -23,7 +23,14 @@ from ..brain.textnorm import convert_leftover_simplified
 from .failure import AgentFailure, failure_kind
 from .history import Turn
 from .ledger import Ledger
-from .persona import PREFIXES, canonical_prefix, fit_text, phrase, system_prompt
+from .persona import (
+    PREFIXES,
+    canonical_prefix,
+    fit_text,
+    language_reminder,
+    phrase,
+    system_prompt,
+)
 from .tools import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -67,9 +74,11 @@ def build_user_message(
     moment: Mapping[str, str],
     context: Sequence[Turn],
     tools: Sequence[ToolResult],
+    language: str,
 ) -> str:
     """What the model is shown: the date and time, the conversation so far (oldest first), the
-    results of the tools, and the question in tags, which mark it as the user's words."""
+    results of the tools, the question in tags, which mark it as the user's words, and last the
+    language to reply in."""
     parts = [
         f"Current date and time: {moment['date']} {moment['time']}, {moment['weekday']} "
         f"({moment['utc_offset']})"
@@ -82,6 +91,7 @@ def build_user_message(
     if tools:
         parts.append("Tool results:\n" + "\n".join(_tool_line(result) for result in tools))
     parts.append(f"<question>\n{question}\n</question>")
+    parts.append(language_reminder(language))
     return "\n\n".join(parts)
 
 
@@ -159,7 +169,7 @@ class Voice:
                     model=model,
                     fallbacks=CLEANUP_FALLBACKS,
                     system=system_prompt(language, route),
-                    user=build_user_message(question, moment, context, tools),
+                    user=build_user_message(question, moment, context, tools, language),
                     schema=reply_schema(language),
                     schema_name="raphael_reply",
                     timeout_s=self._timeout_s,

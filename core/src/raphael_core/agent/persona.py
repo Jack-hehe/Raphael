@@ -285,6 +285,14 @@ _ROUTE_RULES = {
 }
 
 
+def language_reminder(language: str) -> str:
+    """The last line the answering model reads. With reasoning off, a model answers in the
+    language of the question and of the conversation shown to it, whatever the system prompt said
+    (seen live: a Chinese question in the English interface got a Chinese answer), unless this is
+    the last thing it is told."""
+    return f"Reply in {_LANGUAGE_NAMES[language]} only."
+
+
 def system_prompt(language: str, route: str) -> str:
     """The system prompt for the model that words an answer on `route` ("answer", "discuss" or
     "chat") in `language`. The same arguments always give the same prompt."""
