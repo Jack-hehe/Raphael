@@ -8,17 +8,22 @@ import platform
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from notices import write_notices
+from notices import load_source_manifest, write_notices
 
 
 CORE = Path(__file__).resolve().parent.parent
 BUNDLE = CORE / "dist" / "raphael-core"
 
+# Build and development leftovers the core never loads: C++ headers, import and static libraries,
+# CMake and pkg-config files, and executables other than the core itself (the OpenCC wheel ships
+# its command-line tools, headers and opencc.lib / marisa.lib, about 8 MB).
+DEVELOPMENT_SUFFIXES = {".lib", ".exp", ".pdb", ".h", ".hpp", ".cmake", ".pc"}
 
-def audit_bundle(bundle: Path) -> dict:
-    required = [
+
+def required_files() -> list[str]:
+    return [
         "raphael-core.exe", "_internal/python312.dll",
         "_internal/sherpa_onnx/lib/onnxruntime.dll",
         "_internal/sherpa_onnx/lib/sherpa-onnx-c-api.dll",
@@ -28,8 +33,22 @@ def audit_bundle(bundle: Path) -> dict:
         "_internal/licenses/python/LICENSE.txt",
         "_internal/licenses/pyinstaller/pyinstaller-6.22.3.dist-info/licenses/COPYING.txt",
         "_internal/opencc/clib/share/opencc/s2twp.json",
+        *(f"_internal/licenses/upstream/{item['file']}" for item in load_source_manifest()["licenses"]),
     ]
-    missing = [name for name in required if not (bundle / name).is_file()]
+
+
+def development_file(relative: PurePosixPath) -> bool:
+    suffix = relative.suffix.lower()
+    return (
+        suffix in DEVELOPMENT_SUFFIXES
+        or (suffix == ".exe" and relative != PurePosixPath("raphael-core.exe"))
+        # NumPy's C test helpers (_multiarray_tests.pyd, ...) are imported only by its own tests.
+        or (suffix in {".pyd", ".dll"} and relative.name.split(".")[0].endswith(("_test", "_tests")))
+    )
+
+
+def audit_bundle(bundle: Path) -> dict:
+    missing = [name for name in required_files() if not (bundle / name).is_file()]
     if missing:
         raise RuntimeError(f"Required bundled files are missing: {missing}")
     forbidden_parts = {"tests", "test", "fixtures", "models", "assets-private", "icons-private", "raphael_ref", ".venv"}
@@ -41,6 +60,8 @@ def audit_bundle(bundle: Path) -> dict:
         relative = path.relative_to(bundle)
         if any(part.lower() in forbidden_parts for part in relative.parts) or path.suffix.lower() in forbidden_suffixes or path.name.startswith(".env"):
             raise RuntimeError(f"Private or development data in bundle: {relative}")
+        if development_file(PurePosixPath(relative.as_posix())):
+            raise RuntimeError(f"Build tooling or test helper in bundle: {relative}")
         files.append({"path": relative.as_posix(), "bytes": path.stat().st_size,
                       "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
     return {"format": 1, "python": platform.python_version(), "architecture": platform.machine(),

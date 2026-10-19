@@ -96,3 +96,71 @@ def test_the_notice_text_says_where_the_lgpl_source_is(notices, manifest):
         for source in item["sources"]:
             assert source["url"].startswith("https://")
             assert re.fullmatch(r"[0-9a-f]{64}", source.get("sha256", "0" * 64))
+
+
+@pytest.fixture(scope="module")
+def build():
+    with pytest.MonkeyPatch.context() as patch:
+        patch.syspath_prepend(str(PACKAGING))  # build.py imports its sibling notices.py by name
+        return load_script("build")
+
+
+@pytest.fixture
+def bundle(build, tmp_path):
+    """A frozen core that has every required file and nothing else."""
+    for name in build.required_files():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(name.encode())
+    return tmp_path
+
+
+def test_a_bundle_with_the_required_files_passes_the_audit(build, bundle):
+    manifest = build.audit_bundle(bundle)
+
+    assert {item["path"] for item in manifest["files"]} == set(build.required_files())
+
+
+def test_the_audit_requires_every_pinned_license_text(build, bundle):
+    (bundle / "_internal/licenses/upstream/libffi-3.4.2-LICENSE.txt").unlink()
+
+    with pytest.raises(RuntimeError, match="libffi-3.4.2-LICENSE.txt"):
+        build.audit_bundle(bundle)
+
+
+@pytest.mark.parametrize("name", [
+    "_internal/opencc/clib/bin/opencc.exe",
+    "_internal/opencc/clib/bin/opencc_dict.exe",
+    "_internal/opencc/clib/include/opencc/opencc.h",
+    "_internal/opencc/clib/include/opencc/Common.hpp",
+    "_internal/opencc/clib/lib/opencc.lib",
+    "_internal/opencc/clib/lib/marisa.lib",
+    "_internal/opencc/clib/lib/cmake/opencc/OpenCCConfig.cmake",
+    "_internal/opencc/clib/lib/pkgconfig/opencc.pc",
+    "_internal/numpy/_core/_multiarray_tests.cp312-win_amd64.pyd",
+    "_internal/numpy/_core/_umath_tests.cp312-win_amd64.pyd",
+    "_internal/other/tool.exe",
+])
+def test_the_audit_refuses_build_tooling_and_test_helpers(build, bundle, name):
+    path = bundle / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"x")
+
+    with pytest.raises(RuntimeError, match="Build tooling or test helper in bundle"):
+        build.audit_bundle(bundle)
+
+
+@pytest.mark.parametrize("name", [
+    "_internal/opencc/clib/opencc_clib.cp312-win_amd64.pyd",
+    "_internal/opencc/clib/share/opencc/s2twp.json",
+    "_internal/opencc/clib/share/opencc/STPhrases.ocd2",
+    "_internal/numpy/_core/_multiarray_umath.cp312-win_amd64.pyd",
+    "_internal/soxr/soxr_ext.pyd",
+    "_internal/python312.dll",
+])
+def test_the_audit_keeps_what_the_core_loads_at_run_time(build, bundle, name):
+    path = bundle / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"x")
+
+    assert any(item["path"] == name for item in build.audit_bundle(bundle)["files"])
