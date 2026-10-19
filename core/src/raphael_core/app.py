@@ -103,7 +103,9 @@ SHUTDOWN_PATIENCE_S = 3.0
 # The key the fake LLM's in-memory key store holds: any key makes the cleanup run.
 _FAKE_KEY = "fake-llm-key"
 _TRANSCRIPT_OPEN, _TRANSCRIPT_CLOSE = "<transcript>\n", "\n</transcript>"
-_QUESTION = re.compile(r"<question>\n(.*)\n</question>\Z", re.DOTALL)
+# The question in what the assistant's answering model is shown; a line naming the language to
+# reply in follows it.
+_QUESTION = re.compile(r"<question>\n(.*?)\n</question>", re.DOTALL)
 
 
 # --- the fake LLM -----------------------------------------------------------------------------
