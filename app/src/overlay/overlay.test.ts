@@ -141,6 +141,69 @@ test("learned words use the usual corner and notice lifecycle", () => {
   expect(emblem.last).toBe("vanish");
 });
 
+const lines = (): string[] => view.log.filter((line) => line.startsWith("lines:"));
+
+test("learned words that arrive during a dictation leave it alone and appear after its completion", () => {
+  send({ type: "show", mode: "listening" });
+  vi.advanceTimersByTime(1000);
+  send({ type: "learned", zh: "learned", ja: "" });
+  send({ type: "mode", mode: "thinking" });
+  send({ type: "progress", stage: "transcribing", done: 1, total: 3, audio_seconds: 5 });
+  vi.advanceTimersByTime(1500);
+  expect(emblem.log).toEqual(["appear", "set:listening", "set:thinking"]);
+  expect(view.percent).toBe(20);
+  expect(lines()).toEqual([]);
+  expect(controller.expectsPaint).toBe(true);
+  send({ type: "complete" });
+  expect(view.percent).toBe(100);
+  expect(lines()).toEqual([]);
+  vi.advanceTimersByTime(COMPLETION_MS);
+  expect(view.percent).toBeNull();
+  vi.advanceTimersByTime(1); // the words follow in a timer of their own
+  expect(lines()).toEqual(["lines:learned|-"]);
+  expect(emblem.log).not.toContain("vanish");
+  vi.advanceTimersByTime(noticeDurationMs("learned"));
+  expect(emblem.last).toBe("vanish");
+});
+
+test("learned words that waited for a cancelled dictation take over the emblem instead of a vanish", () => {
+  send({ type: "show", mode: "listening" });
+  vi.advanceTimersByTime(1000);
+  send({ type: "learned", zh: "learned", ja: "" });
+  send({ type: "hide" });
+  expect(emblem.log).toEqual(["appear", "set:listening", "set:steady"]);
+  vi.advanceTimersByTime(0);
+  expect(lines()).toEqual(["lines:learned|-"]);
+  vi.advanceTimersByTime(noticeDurationMs("learned"));
+  expect(emblem.log.filter((entry) => entry === "vanish")).toHaveLength(1);
+  expect(emblem.last).toBe("vanish");
+});
+
+test("a dictation that starts while learned words wait does not drop them", () => {
+  send({ type: "show", mode: "listening" });
+  send({ type: "learned", zh: "learned", ja: "" });
+  send({ type: "complete" });
+  vi.advanceTimersByTime(100);
+  send({ type: "show", mode: "listening" }); // the next dictation takes the emblem back
+  vi.advanceTimersByTime(COMPLETION_MS * 3);
+  expect(lines()).toEqual([]);
+  send({ type: "complete" });
+  vi.advanceTimersByTime(COMPLETION_MS + 1);
+  expect(lines()).toEqual(["lines:learned|-"]);
+});
+
+test("a notice ends the dictation it interrupts, and the learned words that waited are still told", () => {
+  send({ type: "show", mode: "listening" });
+  vi.advanceTimersByTime(1000);
+  send({ type: "learned", zh: "learned", ja: "" });
+  send({ type: "notice", zh: ZH, ja: "" });
+  vi.advanceTimersByTime(60_000);
+  expect(lines()).toHaveLength(2);
+  expect(lines()).toContain("lines:learned|-");
+  expect(lines()).toContain(`lines:${ZH}|-`);
+  expect(emblem.last).toBe("vanish");
+});
+
 test("mixed notices keep their placement until each notice takes its turn", () => {
   send({ type: "notice", zh: ZH, ja: JA });
   send({ type: "learned", zh: "learned", ja: "" });

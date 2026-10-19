@@ -119,6 +119,34 @@ function page() {
 const SETTINGS: OverlayEvent = { type: "settings", px: 150, subtitles: "both" };
 const NO_SOUND: OverlayEvent = { type: "notice", zh: "《否。沒有收到聲音，請檢查麥克風。》", ja: "《否。音声が届いていません。》" };
 
+test("learned words wait through live dictation and completion before appearing", () => {
+  const p = page();
+  p.send({ type: "show", mode: "listening" });
+  run(1000);
+  p.send({ type: "learned", zh: "learned", ja: "" });
+  run(1000);
+  expect(p.emblem.phase).toBe("listening");
+  expect(p.view.lines).toBeNull();
+  p.send(
+    { type: "mode", mode: "thinking" },
+    { type: "progress", stage: "transcribing", done: 1, total: 3, audio_seconds: 5 },
+  );
+  run(1500);
+  expect(p.emblem.phase).toBe("thinking");
+  expect(p.view.percent).toBe(20);
+  expect(p.view.lines).toBeNull();
+  expect(p.drawsNow()).toBe(true);
+  p.send({ type: "complete" });
+  expect(p.view.percent).toBe(100);
+  expect(p.view.lines).toBeNull();
+  run(1000);
+  expect(p.view.percent).toBeNull();
+  expect(p.view.lines).toBe("learned|-");
+  expect(p.drawsNow()).toBe(true);
+  run(10_000);
+  expect(p.emblem.phase).toBe("hidden");
+});
+
 test("a delayed corner placement preserves the real dictation progress ring", async () => {
   const p = page();
   let placed!: () => void;

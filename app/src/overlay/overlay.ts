@@ -67,6 +67,8 @@ interface Notice {
   zh: string;
   ja: string;
   placement: OverlayPlacement;
+  /** Learned words never interrupt a dictation, and a later show, complete or hide keeps them. */
+  learned: boolean;
 }
 
 function parseSubtitles(value: string): SubtitleMode {
@@ -158,8 +160,12 @@ export class OverlayController {
           }, COMPLETION_MS);
         });
         break;
-      case "notice":
       case "learned":
+        // A dictation on screen owns the emblem: the words wait for its complete, hide or notice.
+        this.queue.push({ zh: event.zh, ja: event.ja, placement: "corner", learned: true });
+        if (!this.activeShow && !this.busy) this.next();
+        break;
+      case "notice":
         // Raphael speaks: the dictation's progress has said what it had to.
         this.activeShow = false;
         if (this.progress.active) this.stopProgress();
@@ -169,13 +175,15 @@ export class OverlayController {
           this.pendingEvents = [];
         }
         this.emblem.clearProgress();
-        this.queue.push({ zh: event.zh, ja: event.ja, placement: "corner" });
+        this.queue.push({ zh: event.zh, ja: event.ja, placement: "corner", learned: false });
         if (!this.busy) this.next();
         break;
       case "hide":
         this.activeShow = false;
         this.cancelNotices();
-        this.emblem.vanish();
+        // Learned words that waited for the dictation take the emblem as it is, instead of a vanish.
+        if (this.queue.length > 0) this.next();
+        else this.emblem.vanish();
         break;
       case "settings":
         this.subtitles = parseSubtitles(event.subtitles);
@@ -280,6 +288,7 @@ export class OverlayController {
     this.view.showLines(wantZh ? zh : null, wantJa ? ja : null);
   }
 
+  /** Stops what is on screen and drops the reports that wait; learned words stay queued. */
   private cancelNotices(): void {
     this.stopProgress();
     this.generation++;
@@ -287,7 +296,9 @@ export class OverlayController {
     this.pendingEvents = [];
     clearTimeout(this.timer);
     this.timer = undefined;
-    this.queue.length = 0;
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      if (!this.queue[i].learned) this.queue.splice(i, 1);
+    }
     this.busy = false;
     this.view.clearLines();
   }
