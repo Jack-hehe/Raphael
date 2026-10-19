@@ -11,6 +11,12 @@ import {
 const scripts = dirname(fileURLToPath(import.meta.url));
 const fixtureDirectory = join(scripts, "..", "node_modules", ".cache", "release-notices-tests");
 const temporaryRoots = [];
+// `rustc --print cfg --target x86_64-pc-windows-msvc`, kept here so the tests need no Rust toolchain.
+const windowsX64Cfg = [
+  'debug_assertions', 'panic="unwind"', 'target_abi=""', 'target_arch="x86_64"', 'target_endian="little"',
+  'target_env="msvc"', 'target_family="windows"', 'target_feature="sse2"', 'target_has_atomic="64"',
+  'target_os="windows"', 'target_pointer_width="64"', 'target_vendor="pc"', 'windows',
+];
 const mit = `Copyright (c) 2026 Fixture contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -55,12 +61,12 @@ function fixture() {
     resolve: { root: "root", nodes: [{ id: "root", deps: [] }] },
   };
   const lock = { lockfileVersion: 3, packages: { "": { name: "app", version: "0.1.0" } } };
-  const options = { appDirectory, pythonNotices, metadata };
+  const options = { appDirectory, pythonNotices, metadata, rustTargetCfg: windowsX64Cfg };
   const saveLock = () => write(join(appDirectory, "package-lock.json"), JSON.stringify(lock));
   saveLock();
   return {
     root, ...options, lock, options, saveLock,
-    rust(name, version, files = { LICENSE: mit }, { connected = true, vendored = false, licenseFile } = {}) {
+    rust(name, version, files = { LICENSE: mit }, { connected = true, vendored = false, licenseFile, depKinds = [{ kind: null, target: null }] } = {}) {
       const directory = vendored ? join(appDirectory, "src-tauri", "vendor", name) : join(root, "crates", `${name}-${version}`);
       const pkg = {
         id: `${name}@${version}`, name, version, manifest_path: join(directory, "Cargo.toml"),
@@ -71,14 +77,14 @@ function fixture() {
       for (const [file, text] of Object.entries(files)) write(join(directory, file), text);
       metadata.packages.push(pkg);
       metadata.resolve.nodes.push({ id: pkg.id, deps: [] });
-      if (connected) metadata.resolve.nodes[0].deps.push({ pkg: pkg.id });
+      if (connected) metadata.resolve.nodes[0].deps.push({ pkg: pkg.id, dep_kinds: depKinds });
       return { pkg, directory };
     },
     node(name, version, files = { LICENSE: mit }, { location = `node_modules/${name}`, ...entry } = {}) {
       const directory = join(appDirectory, location);
       write(join(directory, "package.json"), JSON.stringify({ name, version, license: "MIT", repository: { url: `git+https://github.com/fixture/${name}.git` } }));
       for (const [file, text] of Object.entries(files)) write(join(directory, file), text);
-      lock.packages[location] = { version, dev: true, ...entry };
+      lock.packages[location] = { version, dev: false, ...entry };
       saveLock();
       return directory;
     },
@@ -86,7 +92,7 @@ function fixture() {
 }
 
 describe("release notice collection", () => {
-  it("collects only reachable Rust dependencies, vendored source, installed frontend tools and Python notices", () => {
+  it("collects reachable Rust dependencies, vendored source, shipped frontend packages and Python notices", () => {
     const test = fixture();
     test.rust("serde", "1.0.0", { "LICENSE-MIT": mit, NOTICE: "Additional attribution", AUTHORS: "Fixture authors" });
     test.rust("handy-keys", "0.3.4", undefined, { vendored: true });
@@ -111,6 +117,99 @@ describe("release notice collection", () => {
     for (const excluded of [test.root, "unreachable-platform", "Rust: app", "DO_NOT_DISTRIBUTE", ".env", "assets-private", "\r"]) {
       expect(result.text).not.toContain(excluded);
     }
+  });
+
+  it("neither requires nor lists dev-only npm packages, whatever their license files or repository URL", () => {
+    const test = fixture();
+    // The jsdom case that blocked a release: a test-only package with no license file and an ssh repository.
+    const directory = test.node("dev-only", "1.0.0", {}, { dev: true });
+    write(join(directory, "package.json"), JSON.stringify({ name: "dev-only", version: "1.0.0", repository: "ssh://git@github.com/fixture/dev-only.git" }));
+    test.node("dev-optional", "1.0.0", {}, { devOptional: true });
+    test.lock.packages["node_modules/absent-dev"] = { version: "1", dev: true };
+    test.saveLock();
+
+    const result = collectReleaseNotices(test.options);
+
+    expect(result.gaps).toEqual([]);
+    expect(result.records).toEqual([]);
+    expect(result.text).not.toContain("dev-only");
+
+    // The same package fails closed as soon as it is no longer a dev-only dependency.
+    test.lock.packages["node_modules/dev-only"].dev = false;
+    test.saveLock();
+    expect(() => collectReleaseNotices(test.options)).toThrow("Frontend dev-only@1.0.0");
+  });
+
+  it("includes Vite, a dev dependency whose modulepreload polyfill is emitted into the shipped bundle", () => {
+    const test = fixture();
+    const vite = test.node("vite", "8.3.4", undefined, { dev: true });
+    test.node("rolldown", "1.0.0", {}, { dev: true });
+    expect(collectReleaseNotices(test.options).records.map((record) => record.name)).toEqual(["vite"]);
+
+    // The allowlist does not weaken the shipped-package checks: Vite must be installed and licensed.
+    rmSync(join(vite, "LICENSE"));
+    expect(() => collectReleaseNotices(test.options)).toThrow("Frontend vite@8.3.4: no license text");
+    rmSync(vite, { recursive: true });
+    expect(() => collectReleaseNotices(test.options)).toThrow("Frontend vite@8.3.4: locked Windows x64 package is not installed");
+  });
+
+  it("follows only normal Rust edges that apply to Windows x64, judging each edge kind on its own", () => {
+    const test = fixture();
+    const normal = { kind: null, target: null };
+    test.rust("always", "1", undefined, { depKinds: [normal] });
+    test.rust("build-only", "1", {}, { depKinds: [{ kind: "build", target: null }] });
+    test.rust("dev-only", "1", {}, { depKinds: [{ kind: "dev", target: null }] });
+    test.rust("build-and-normal", "1", undefined, { depKinds: [{ kind: "build", target: null }, normal] });
+    // cargo --filter-platform keeps an edge when ANY kind matches: here only the build edge does.
+    test.rust("linux-normal-windows-build", "1", {}, { depKinds: [{ kind: null, target: 'cfg(target_os = "linux")' }, { kind: "build", target: "cfg(windows)" }] });
+    test.rust("other-triple", "1", {}, { depKinds: [{ kind: null, target: "aarch64-pc-windows-msvc" }] });
+    test.rust("this-triple", "1", undefined, { depKinds: [{ kind: null, target: "x86_64-pc-windows-msvc" }] });
+    // A build tool's own normal dependencies are build tools too.
+    test.rust("build-tool-child", "1", {}, { connected: false });
+    test.metadata.resolve.nodes.find((node) => node.id === "build-only@1").deps.push({ pkg: "build-tool-child@1", dep_kinds: [normal] });
+
+    expect(collectReleaseNotices(test.options).records.map((record) => record.name)).toEqual(["always", "build-and-normal", "this-triple"]);
+  });
+
+  it.each([
+    ["cfg(windows)", true],
+    ['cfg(target_os = "windows")', true],
+    ['cfg(all(target_os = "windows", target_env = "msvc"))', true],
+    ['cfg(all(any(target_arch = "x86_64", target_arch = "arm64ec"), target_env = "msvc", not(windows_raw_dylib)))', true],
+    ['cfg(any(target_os = "macos", windows, target_os = "linux"))', true],
+    ['cfg(any(not(target_family = "wasm"), all(target_os = "wasi", not(target_env = "p1"))))', true],
+    ['cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))', true],
+    ['cfg(any(unix, windows, target_os = "wasi"))', true],
+    ['cfg( all( target_os = "windows" , target_pointer_width = "64" , ) )', true],
+    ["cfg(all())", true],
+    ["cfg(any())", false],
+    ['cfg(target_os = "macos")', false],
+    ["cfg(unix)", false],
+    ['cfg(all(tokio_unstable, target_os = "linux"))', false],
+    ['cfg(any(target_os = "linux", target_os = "freebsd"))', false],
+    ['cfg(target_feature = "crt-static")', false],
+    ['cfg(not(target_env = "msvc"))', false],
+    ["i686-pc-windows-msvc", false],
+  ])("evaluates the Cargo target condition %s as %s", (target, applies) => {
+    const test = fixture();
+    test.rust("conditional", "1", applies ? undefined : {}, { depKinds: [{ kind: null, target }] });
+    expect(collectReleaseNotices(test.options).records.map((record) => record.name)).toEqual(applies ? ["conditional"] : []);
+  });
+
+  it.each([
+    "cfg(target_os = windows)", 'cfg(all(target_os = "windows"', 'cfg(foo(bar))', 'cfg(not(windows, unix))',
+    'cfg(target_os "windows")', "cfg()", "cfg(windows) extra", "cfg(windows",
+  ])("refuses the Cargo target condition %s instead of guessing", (target) => {
+    const test = fixture();
+    test.rust("odd", "1", undefined, { depKinds: [{ kind: null, target }] });
+    expect(() => collectReleaseNotices(test.options)).toThrow("Unsupported Cargo target condition");
+  });
+
+  it("refuses Cargo metadata without dependency kinds", () => {
+    const test = fixture();
+    test.rust("legacy", "1");
+    delete test.metadata.resolve.nodes[0].deps[0].dep_kinds;
+    expect(() => collectReleaseNotices(test.options)).toThrow("must include dependency kinds");
   });
 
   it("is byte-stable across input ordering, line endings and duplicate frontend locations", () => {
@@ -268,7 +367,7 @@ describe("version-pinned upstream license supplements", () => {
     const directory = join(scripts, "release-licenses");
     const manifest = JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8"));
     expect(manifest.packages.map((entry) => `${entry.name}@${entry.version}`)).toEqual([
-      "alloc-stdlib@0.3.0", "selectors@0.38.0", "tauri-plugin@2.7.2", "webview2-com@0.39.1", "webview2-com-macros@0.8.1", "webview2-com-sys@0.39.1",
+      "alloc-stdlib@0.3.0", "selectors@0.38.0", "webview2-com@0.39.1", "webview2-com-macros@0.8.1", "webview2-com-sys@0.39.1",
     ]);
     for (const entry of manifest.packages) {
       expect(entry.gitCommit).toMatch(/^[a-f0-9]{40}$/);
