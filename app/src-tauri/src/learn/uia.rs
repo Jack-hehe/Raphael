@@ -31,10 +31,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Interface, Ref, implement};
 
-use super::apps::{AppKind, classify, needs_accessibility_hint};
+use super::apps::{AppKind, classify, editor_id, needs_accessibility_hint};
 use super::keystrokes::{EnterKey, Keystrokes};
 use super::terminal::{TerminalDecision, TerminalTracker};
-use super::{Correction, FieldProbe, Snapshot, Tracker, WatchScope, WatchedField};
+use super::{
+    Correction, FieldProbe, LimitReason, Snapshot, Tracker, WatchScope, WatchedField,
+    report_limited,
+};
 use crate::paste::Target;
 
 const MAX_CHARS: usize = 20_000;
@@ -189,6 +192,12 @@ impl FieldProbe for UiaProbe {
             }
         }
         field.initial = field.select_source();
+        if field.initial.is_none()
+            && field.hides_editor_text()
+            && let Some(app) = editor_id(&target.process_name)
+        {
+            report_limited(app, LimitReason::AccessibilityOff);
+        }
         if subscribed && !pasted.is_empty() && field.scope.active() {
             let remaining = expires.saturating_duration_since(Instant::now());
             if kind != AppKind::Terminal
@@ -436,6 +445,7 @@ fn discover(
         focused,
         readers,
         keyboard_field,
+        hidden_input: false,
         hwnd: target.hwnd,
         kind,
         scope: scope.clone(),
@@ -486,6 +496,24 @@ fn safe_password_status(password: Option<bool>) -> bool {
 
 fn keyboard_field_role(role: i32) -> bool {
     role == UIA_EditControlTypeId.0
+}
+
+/// Whether every source that could be read held nothing at all (and at least one was read).
+fn all_sources_empty(empty: usize, filled: usize) -> bool {
+    empty > 0 && filled == 0
+}
+
+/// Whether a failed search for the pasted words points to a code editor that keeps its text from
+/// other programs. With accessibility support off, the input box such an editor types into is
+/// empty to UI Automation (it only holds a selection); with it on, it holds the text around the
+/// caret. A paste that was not in a box of that kind, or that is blank, says nothing.
+fn editor_hides_text(
+    kind: AppKind,
+    keyboard_field: bool,
+    all_sources_empty: bool,
+    pasted: &str,
+) -> bool {
+    kind == AppKind::CodeEditor && keyboard_field && all_sources_empty && !pasted.trim().is_empty()
 }
 
 /// What Enter means to the keystroke fallback. In a code editor it may accept an IntelliSense
@@ -709,6 +737,9 @@ struct UiaField {
     readers: Vec<Reader>,
     /// Whether the focused element is an edit control, the only kind the key fallback may follow.
     keyboard_field: bool,
+    /// Whether every source that was read came back empty: a code editor's input box while its
+    /// accessibility support is off, as opposed to one that holds other text than the paste.
+    hidden_input: bool,
     hwnd: isize,
     kind: AppKind,
     scope: WatchScope,
@@ -843,6 +874,7 @@ impl UiaField {
     /// [`Self::select_source`] without the checks, for a caller that makes them.
     fn pick_source(&mut self) -> Option<String> {
         let terminal = self.kind == AppKind::Terminal;
+        let (mut empty, mut filled) = (0, 0);
         for index in 0..self.readers.len() {
             let Some(text) = self
                 .readers
@@ -851,6 +883,11 @@ impl UiaField {
             else {
                 continue;
             };
+            if text.trim().is_empty() {
+                empty += 1;
+            } else {
+                filled += 1;
+            }
             if terminal {
                 if let Some(tracker) = TerminalTracker::new(&text, &self.pasted) {
                     let region = tracker.region().to_owned();
@@ -867,12 +904,26 @@ impl UiaField {
                 return Some(text);
             }
         }
+        self.hidden_input = all_sources_empty(empty, filled);
         if needs_accessibility_hint(self.kind) && !CODE_HINT_LOGGED.swap(true, Ordering::Relaxed) {
             log::info!(
                 "learn: editor text unavailable; editor.accessibilitySupport=on may expose it; settings unchanged"
             );
         }
         None
+    }
+
+    /// Whether this looks like a code editor that keeps its text from other programs: the
+    /// pasted words are in no source, the focused element is an edit control (the input box the
+    /// editor types into), and everything the sources hold is empty. With the editor's
+    /// accessibility support on, that box holds the text around the caret instead.
+    fn hides_editor_text(&self) -> bool {
+        editor_hides_text(
+            self.kind,
+            self.keyboard_field,
+            self.hidden_input,
+            &self.pasted,
+        )
     }
 
     /// The pasted text has not shown up in any source yet. Looks again, in the sources the
@@ -1636,6 +1687,33 @@ mod tests {
         assert!(safe_password_status(Some(false)));
         assert!(!safe_password_status(Some(true)));
         assert!(!safe_password_status(None));
+    }
+
+    #[test]
+    fn an_editor_whose_input_box_is_empty_is_hiding_its_text() {
+        let hides = |kind, keyboard_field, empty, pasted| {
+            editor_hides_text(kind, keyboard_field, empty, pasted)
+        };
+        assert!(hides(AppKind::CodeEditor, true, true, "pasted words"));
+        // The box holds other text than the paste: accessibility support is on, or it is not the
+        // editor's own input.
+        assert!(!hides(AppKind::CodeEditor, true, false, "pasted words"));
+        // Not an edit control, not an editor, or nothing was pasted.
+        assert!(!hides(AppKind::CodeEditor, false, true, "pasted words"));
+        for kind in [AppKind::Chromium, AppKind::Terminal, AppKind::Other] {
+            assert!(!hides(kind, true, true, "pasted words"));
+        }
+        assert!(!hides(AppKind::CodeEditor, true, true, " \n"));
+        assert!(!hides(AppKind::CodeEditor, true, true, ""));
+    }
+
+    #[test]
+    fn empty_means_something_was_read_and_all_of_it_was_blank() {
+        assert!(all_sources_empty(1, 0));
+        assert!(all_sources_empty(3, 0));
+        assert!(!all_sources_empty(0, 0), "nothing could be read");
+        assert!(!all_sources_empty(1, 1));
+        assert!(!all_sources_empty(0, 2));
     }
 
     #[test]
