@@ -12,6 +12,9 @@ does not say is here:
   int and a bool is no number.
 - A dictation is not lost to bookkeeping. If the history cannot be written, the text still comes
   back (with id None); if the key store fails, it comes back as spoken, without cleanup.
+- What the voice assistant is asked (`brain.normalize_transcript`) is a transcript with the
+  dictionary's replacements and the Chinese script of the chosen variant, as a dictation is
+  normalized before its cleanup. No model is asked, nothing is written and nothing is paid for.
 - A dictation that is cancelled while its text is being cleaned (`brain.cancel_dictation`, for the
   `session_id` that `brain.finalize_dictation` was given) is paid for, because the request to the
   model is made, but it is not saved: it would be the latest dictation, which "paste last" pastes,
@@ -252,6 +255,7 @@ class Brain:
         """Put every method of the brain on `router`."""
         methods = {
             "brain.finalize_dictation": self._finalize_dictation,
+            "brain.normalize_transcript": self._normalize_transcript,
             "brain.cancel_dictation": self._cancel_dictation,
             "stt.transcribe": self._stt.transcribe,
             "history.list": self._history_list,
@@ -356,6 +360,14 @@ class Brain:
             "fallback_reason": result.fallback_reason,
             "llm_ms": result.llm_ms,
         }
+
+    async def _normalize_transcript(self, params: dict) -> dict:
+        """`{raw_text}` -> `{text}`: what speech-to-text heard, with the dictionary's replacements
+        and the Chinese written form the user chose, as `brain.finalize_dictation` starts with.
+        This is the whole of it: for the voice assistant, whose requests are not cleaned."""
+        raw_text = _str(params, "raw_text")
+        chinese = chinese_variant(self._settings.get("languages"))
+        return {"text": normalize_transcript(raw_text, self._dictionary.replacements(), chinese=chinese)}
 
     async def _cancel_dictation(self, params: dict) -> dict:
         """`{session_id}`: the app cancelled that dictation. If its text is being cleaned, the

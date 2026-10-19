@@ -6,6 +6,12 @@ into stretches of speech as it comes in, and each stretch is transcribed at once
 dictation is mostly done by the time the key is released and only the last stretch is left to wait
 for (spec section 5).
 
+A session has a purpose, given to `dictation.start`: "dictation" (the default) or "agent", the voice
+assistant's question. It records and transcribes in the same way, but what its stop returns is not
+text to paste: `{"purpose": "agent", "text", "stt", "audio_seconds", "silent"}`, the transcript with
+the dictionary's replacements and the Chinese script applied (`brain.normalize_transcript`). There
+is no cleanup, no history row and no cost, and no "cleaning" stage in the progress.
+
 A cancel that comes while the brain is cleaning the text (the service is idle by then, and the
 cancel names the session) reaches the brain too, with `brain.cancel_dictation`. The brain finishes
 the request, which is paid for, but does not keep the text, and the stop is answered NOT_FOUND, as
@@ -79,6 +85,10 @@ MIC_STALL_SECONDS = 2.0
 # open, for good.
 LOST_SESSION_SECONDS = MAX_RECORDING_SECONDS + 60
 
+# What a session can be for (the `purpose` of `dictation.start`).
+PURPOSE_DICTATION, PURPOSE_AGENT = "dictation", "agent"
+_PURPOSES = (PURPOSE_DICTATION, PURPOSE_AGENT)
+
 _LEVEL_METHOD = "audio.level"
 # After the stop: how far the transcription of what is left has come, then that the brain is
 # cleaning the text. The app draws it on the emblem. The stop's reply is the end of it.
@@ -136,9 +146,15 @@ class _Session:
     """One dictation, from `dictation.start` to the end of `dictation.stop` or `.cancel`."""
 
     def __init__(
-        self, session_id: str, loop: asyncio.AbstractEventLoop, now: float, max_samples: int
+        self,
+        session_id: str,
+        loop: asyncio.AbstractEventLoop,
+        now: float,
+        max_samples: int,
+        purpose: str = PURPOSE_DICTATION,
     ) -> None:
         self.id = session_id
+        self.purpose = purpose
         self.loop = loop
         # "starting" (being set up), "recording", "stopping" (the last words are transcribed), or
         # "ended". Only the loop reads and writes it.
@@ -199,6 +215,16 @@ def _session_id(params: dict) -> str:
     value = params.get("session_id")
     if not isinstance(value, str) or not value:
         raise RpcError(INVALID_PARAMS, "session_id must be a non-empty string")
+    return value
+
+
+def _purpose(params: dict) -> str:
+    """What the session is for: "dictation" when the param is left out or null."""
+    value = params.get("purpose")
+    if value is None:
+        return PURPOSE_DICTATION
+    if not isinstance(value, str) or value not in _PURPOSES:
+        raise RpcError(INVALID_PARAMS, f"purpose must be one of {', '.join(_PURPOSES)}")
     return value
 
 
@@ -301,6 +327,7 @@ class DictationService:
 
     async def _start(self, params: dict) -> dict:
         session_id = _session_id(params)
+        purpose = _purpose(params)
         if self._session is not None:
             raise RpcError(BUSY, "A dictation is already in progress")
         session = _Session(
@@ -308,6 +335,7 @@ class DictationService:
             asyncio.get_running_loop(),
             self._clock(),
             int(MAX_RECORDING_SECONDS * SAMPLE_RATE),
+            purpose,
         )
         self._session = session
         try:
@@ -690,6 +718,8 @@ class DictationService:
                 logger.info(
                     "The microphone picked up no sound: the loudest block was %.1e (RMS)", peak
                 )
+            if session.purpose == PURPOSE_AGENT:
+                return self._agent_result("", session, speech, silent=silent)
             return {
                 "id": None,
                 "text": "",
@@ -703,6 +733,8 @@ class DictationService:
             }
         if mic_failed:
             logger.warning("The microphone stopped during the recording; using what was captured")
+        if session.purpose == PURPOSE_AGENT:
+            return await self._agent_transcript(session, text, speech)
         with session.lock:
             done, total = session.finished, session.found
         self._send_progress(session, "cleaning", done, total, speech)
@@ -724,6 +756,35 @@ class DictationService:
         if session.cancelled:  # while the brain cleaned the text: it has not kept it
             raise RpcError(NOT_FOUND, f"The dictation session {session_id!r} was cancelled")
         return {**result, "audio_seconds": speech, "stt_ms": stt_ms, "silent": False}
+
+    async def _agent_transcript(self, session: _Session, text: str, speech: float) -> dict:
+        """The stop of an agent session: the transcript, normalized by the brain. Nothing is asked
+        of a language model, written to the history or paid for."""
+        try:
+            result = await self._router.call("brain.normalize_transcript", {"raw_text": text})
+            normalized = result["text"]
+            if not isinstance(normalized, str):
+                raise TypeError("the normalized transcript is not text")
+        except Exception as exc:
+            # Speech that was understood is better asked as it was heard than lost.
+            logger.warning(
+                "Could not normalize the assistant's transcript; using it as heard: %s",
+                type(exc).__name__,
+            )
+            normalized = text
+        if session.cancelled:  # while the brain worked
+            raise RpcError(NOT_FOUND, f"The dictation session {session.id!r} was cancelled")
+        return self._agent_result(normalized, session, speech, silent=False)
+
+    @staticmethod
+    def _agent_result(text: str, session: _Session, speech: float, *, silent: bool) -> dict:
+        return {
+            "purpose": PURPOSE_AGENT,
+            "text": text,
+            "stt": "+".join(session.stt_used),
+            "audio_seconds": speech,
+            "silent": silent,
+        }
 
     # --- dictation.cancel -----------------------------------------------------------------------
 

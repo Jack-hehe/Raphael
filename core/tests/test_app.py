@@ -1276,6 +1276,36 @@ async def test_a_dictation_goes_through_the_whole_app(make_app, notes):
     assert {level["session_id"] for level in notes.methods("audio.level")} == {"s1"}
 
 
+async def test_an_agent_dictation_goes_through_the_whole_app_without_cleanup_or_history(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("dictionary.add", {"word": "哈囉", "misheard": ["你好"]})
+    asked = []
+    echo = app.client.complete_json
+
+    async def spy(**kwargs):
+        asked.append(kwargs)
+        return await echo(**kwargs)
+
+    app.client.complete_json = spy
+    assert await app.call("dictation.start", {"session_id": "a1", "purpose": "agent"}) == {}
+    result = await app.call("dictation.stop", {"session_id": "a1", "target_app": "notepad.exe"})
+    assert result == {
+        "purpose": "agent",
+        "text": "哈囉世界哈囉世界",  # the dictionary's replacement, joined as a dictation is
+        "stt": "qwen3-asr",
+        "audio_seconds": pytest.approx(1.0),
+        "silent": False,
+    }
+    assert asked == []  # no cleanup
+    assert (await app.call("history.list"))["items"] == []  # no history row
+    assert (await app.call("history.latest"))["item"] is None  # nothing for "paste last"
+    assert (await app.call("status.get"))["spend"]["month_usd"] == 0
+    # The next one is a dictation as ever.
+    again = await dictate(app, "d1")
+    assert again["cleaned"] is True and len(asked) == 1
+
+
 async def test_one_segmenter_and_one_engine_serve_every_dictation(make_app):
     kit = make_kit()
     app = make_app(kit)

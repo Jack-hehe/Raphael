@@ -32,6 +32,7 @@ SECRET = "sk-or-v1-TOPSECRET"
 
 METHODS = [
     "brain.finalize_dictation",
+    "brain.normalize_transcript",
     "brain.cancel_dictation",
     "stt.transcribe",
     "history.list",
@@ -655,6 +656,9 @@ BAD_PARAMS = [
     (FIN, {**GOOD, "target_app": 5}, "finalize: target_app number"),
     (FIN, {**GOOD, "stt": 5}, "finalize: stt number"),
     (FIN, {**GOOD, "session_id": 5}, "finalize: session_id number"),
+    ("brain.normalize_transcript", {}, "normalize_transcript: nothing"),
+    ("brain.normalize_transcript", {"raw_text": 5}, "normalize_transcript: raw_text number"),
+    ("brain.normalize_transcript", {"raw_text": None}, "normalize_transcript: raw_text null"),
     ("brain.cancel_dictation", {}, "cancel_dictation: no session_id"),
     ("brain.cancel_dictation", {"session_id": None}, "cancel_dictation: session_id null"),
     ("brain.cancel_dictation", {"session_id": 5}, "cancel_dictation: session_id number"),
@@ -1027,6 +1031,71 @@ async def test_without_chinese_nothing_is_converted(router, fake_client, keys):
     fake_client.next_completion = completion({"text": "这个 colour."})
     r = await finalize(router, "这个 colour")
     assert (r["raw_text"], r["text"]) == ("这个 colour", "这个 colour.")
+
+
+# --- brain.normalize_transcript -----------------------------------------------------------------
+#
+# What the voice assistant is asked: the transcript with the dictionary's replacements and the
+# Chinese of the chosen variant, and nothing else.
+
+
+async def normalize(router, raw_text):
+    return await router.call("brain.normalize_transcript", {"raw_text": raw_text})
+
+
+async def test_normalize_applies_the_replacements_and_the_chinese_script(router):
+    await router.call("dictionary.add", {"word": "拉斐爾", "misheard": ["拉菲爾"]})
+    assert await normalize(router, "拉菲爾 打开软件") == {"text": "拉斐爾 開啟軟體"}  # Taiwan usage
+
+
+async def test_normalize_leaves_traditional_chinese_alone(router):
+    # s2twp over a Traditional sentence would turn 只要 into 隻要.
+    assert await normalize(router, "只要你打開這個軟體") == {"text": "只要你打開這個軟體"}
+
+
+@pytest.mark.parametrize(
+    ("languages", "expected"),
+    [
+        (["zh-CN"], "这个软件"),
+        (["zh-HK"], "這個軟件"),
+        (["en-GB"], "這個软件"),  # no Chinese chosen: nothing is converted
+        (["ja-JP"], "這個软件"),
+    ],
+)
+async def test_normalize_follows_the_chinese_variant_of_the_languages_setting(
+    router, languages, expected
+):
+    await router.call("settings.set", {"key": "languages", "value": languages})
+    assert await normalize(router, "這個软件") == {"text": expected}
+
+
+async def test_normalize_of_nothing_is_nothing(router):
+    assert await normalize(router, "") == {"text": ""}
+    assert await normalize(router, "  ") == {"text": "  "}  # the words are not trimmed here
+
+
+async def test_normalize_asks_no_model_writes_no_history_and_costs_nothing(
+    router, fake_client, keys, conn
+):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "不該被問到"})
+    await normalize(router, "你好")
+    assert fake_client.calls == []
+    assert (await router.call("history.list", {}))["items"] == []
+    assert conn.execute("SELECT count(*) FROM spend").fetchone()[0] == 0
+
+
+async def test_normalize_works_without_a_key_and_over_the_monthly_limit(router, conn, keys):
+    assert keys.get() is None
+    assert await normalize(router, "你好") == {"text": "你好"}
+    keys.set(KEY)
+    await router.call("settings.set", {"key": "monthly_limit_usd", "value": 1})
+    conn.execute(
+        "INSERT INTO spend (created_at_ms, purpose, model, cost_usd, prompt_tokens,"
+        " completion_tokens) VALUES (?, 'cleanup', 'm', 5.0, 1, 1)",
+        (NOW_MS,),
+    )
+    assert await normalize(router, "你好") == {"text": "你好"}
 
 
 # --- secrets ------------------------------------------------------------------------------------
