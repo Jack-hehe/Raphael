@@ -19,11 +19,11 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::System::Variant::VT_I4;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationCacheRequest, IUIAutomationElement,
-    IUIAutomationFocusChangedEventHandler, IUIAutomationFocusChangedEventHandler_Impl,
-    IUIAutomationTextPattern, IUIAutomationTextRange, IUIAutomationValuePattern,
-    TextPatternRangeEndpoint_End, TextPatternRangeEndpoint_Start, TextUnit_Character,
-    UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_IsPasswordPropertyId,
+    CUIAutomation, CUIAutomation8, IUIAutomation, IUIAutomation2, IUIAutomationCacheRequest,
+    IUIAutomationElement, IUIAutomationFocusChangedEventHandler,
+    IUIAutomationFocusChangedEventHandler_Impl, IUIAutomationTextPattern, IUIAutomationTextRange,
+    IUIAutomationValuePattern, TextPatternRangeEndpoint_End, TextPatternRangeEndpoint_Start,
+    TextUnit_Character, UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_IsPasswordPropertyId,
     UIA_TextControlTypeId, UIA_TextPatternId, UIA_ValuePatternId, UiaRootObjectId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -39,8 +39,98 @@ use super::{Correction, FieldProbe, Snapshot, Tracker, WatchScope, WatchedField}
 use crate::paste::Target;
 
 const MAX_CHARS: usize = 20_000;
+/// UI Automation waits 2 s to connect and 20 s per call unless told otherwise, and the watch
+/// thread would stand still that long on a busy app.
 const CALL_TIMEOUT_MS: u32 = 500;
 static CODE_HINT_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// Which UI Automation class a client was made from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClientClass {
+    /// `CUIAutomation8`: offers `IUIAutomation2`, whose timeouts can be set.
+    Modern,
+    /// `CUIAutomation`: the original class. On some systems (Windows 11 build 26300 among them)
+    /// it answers E_NOINTERFACE for `IUIAutomation2`, so its calls keep the default timeouts.
+    Original,
+}
+
+/// Makes the client with the first creator that works. The modern class comes first, because
+/// only it can be given timeouts; `original` runs only when `modern` fails.
+fn create_in_order<T, E>(
+    modern: impl FnOnce() -> Result<T, E>,
+    original: impl FnOnce() -> Result<T, E>,
+) -> Result<(T, ClientClass), E> {
+    match modern() {
+        Ok(client) => Ok((client, ClientClass::Modern)),
+        Err(_) => original().map(|client| (client, ClientClass::Original)),
+    }
+}
+
+fn hresult<T>(result: &windows::core::Result<T>) -> String {
+    match result {
+        Ok(_) => "ok".to_owned(),
+        Err(error) => format!("0x{:08X}", error.code().0 as u32),
+    }
+}
+
+/// A UI Automation client with its call timeouts set where the system allows it. Only metadata
+/// is logged: classes, timeouts and HRESULTs.
+fn create_client() -> Option<IUIAutomation> {
+    // SAFETY: the caller joined a COM apartment, which the client does not outlive.
+    let modern = || {
+        unsafe { CoCreateInstance::<_, IUIAutomation>(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }
+            .inspect_err(|error| {
+                log::info!(
+                    "learn: CUIAutomation8 unavailable (hresult: 0x{:08X})",
+                    error.code().0 as u32
+                );
+            })
+    };
+    let original = || unsafe {
+        CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+    };
+    let (automation, class) = create_in_order(modern, original)
+        .inspect_err(|error| {
+            log::info!(
+                "learn: UI Automation client unavailable (hresult: 0x{:08X})",
+                error.code().0 as u32
+            );
+        })
+        .ok()?;
+    apply_timeouts(&automation, class);
+    Some(automation)
+}
+
+/// Bounds how long one call into an unresponsive app may take. A client that cannot be bounded
+/// is still used, and says so.
+fn apply_timeouts(automation: &IUIAutomation, class: ClientClass) {
+    let client = match automation.cast::<IUIAutomation2>() {
+        Ok(client) => client,
+        Err(error) => {
+            log::info!(
+                "learn: UI Automation timeouts unavailable (client: {class:?}, hresult: 0x{:08X})",
+                error.code().0 as u32
+            );
+            return;
+        }
+    };
+    // SAFETY: plain property setters on a client owned by this thread.
+    let (connection, transaction) = unsafe {
+        (
+            client.SetConnectionTimeout(CALL_TIMEOUT_MS),
+            client.SetTransactionTimeout(CALL_TIMEOUT_MS),
+        )
+    };
+    if connection.is_ok() && transaction.is_ok() {
+        log::debug!("learn: UI Automation timeouts set ({CALL_TIMEOUT_MS} ms, client: {class:?})");
+    } else {
+        log::info!(
+            "learn: UI Automation timeouts not set (client: {class:?}, connection: {}, transaction: {})",
+            hresult(&connection),
+            hresult(&transaction)
+        );
+    }
+}
 
 pub struct UiaProbe;
 
@@ -70,17 +160,9 @@ impl FieldProbe for UiaProbe {
         }
         let expires = scope.deadline;
         let com = probe_step(Com::join(), "com_apartment")?;
-        // SAFETY: all COM objects stay on this watch thread and drop before its apartment.
-        let automation: IUIAutomation = probe_step(
-            unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.ok(),
-            "automation_client",
-        )?;
-        if let Ok(client) = automation.cast::<IUIAutomation2>() {
-            unsafe {
-                drop(client.SetConnectionTimeout(CALL_TIMEOUT_MS));
-                drop(client.SetTransactionTimeout(CALL_TIMEOUT_MS));
-            }
-        }
+        // All COM objects stay on this watch thread and must be released before its apartment
+        // ends, which the guard in `UiaField` does last.
+        let automation = probe_step(create_client(), "automation_client")?;
         if foreground() != target.hwnd || !scope.active() {
             return probe_step(None, "target_changed_before_discovery");
         }
@@ -126,6 +208,9 @@ impl FieldProbe for UiaProbe {
         if foreground() != target.hwnd || !scope.active() {
             return probe_step(None, "target_changed_after_discovery");
         }
+        // The root is declared before the field, so it would outlive the field (and the COM
+        // apartment its guard ends) on every return below.
+        drop(root);
         let metadata = focus_element_metadata(&focused, target.pid);
         log::info!(
             "learn: initial focus metadata (role: {:?}, has_keyboard_focus: {:?}, target_process: {:?})",
@@ -1236,6 +1321,38 @@ mod tests {
         }
         drop(field);
         eprintln!("native learn probe: result=passed");
+    }
+
+    #[test]
+    fn the_modern_client_class_is_tried_first_and_the_original_only_when_it_fails() {
+        use std::cell::Cell;
+
+        let originals = Cell::new(0);
+        let made = create_in_order(
+            || Ok::<_, i32>("modern"),
+            || {
+                originals.set(originals.get() + 1);
+                Ok("original")
+            },
+        );
+        assert_eq!(made, Ok(("modern", ClientClass::Modern)));
+        assert_eq!(originals.get(), 0);
+
+        let made = create_in_order(
+            || Err(-2147467262),
+            || {
+                originals.set(originals.get() + 1);
+                Ok("original")
+            },
+        );
+        assert_eq!(made, Ok(("original", ClientClass::Original)));
+        assert_eq!(originals.get(), 1);
+    }
+
+    #[test]
+    fn when_no_client_class_can_be_made_the_original_error_is_reported() {
+        let made: Result<(&str, ClientClass), i32> = create_in_order(|| Err(1), || Err(2));
+        assert_eq!(made, Err(2));
     }
 
     #[test]
