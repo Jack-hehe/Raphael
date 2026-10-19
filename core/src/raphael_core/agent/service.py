@@ -218,8 +218,9 @@ class AgentService:
         if target_app is not None and not isinstance(target_app, str):
             raise _invalid("target_app must be a string or null")
         self._last_language = ask.language
-        self._deny(self._confirmations.cancel_all())  # a new request replaces the questions
+        # The questions that ran out are expired, and a new request replaces those that still wait.
         self._expire(self._confirmations.sweep())
+        self._deny(self._confirmations.cancel_all())
         self._prune_if_due()
         earlier = self._inflight.pop(ask.session_id, None)
         if earlier is not None:

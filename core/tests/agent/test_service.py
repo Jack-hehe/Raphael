@@ -867,6 +867,21 @@ async def test_a_new_request_replaces_a_question_that_waits(rig, client, actions
     assert any(t["status"] == "denied" for t in await rig.turns())
 
 
+async def test_a_question_that_ran_out_before_a_new_request_is_expired_not_denied(
+    rig, client, actions
+):
+    rig.seed("q", "a")
+    asked = await ask_to_copy(rig, client)
+    rig.clock.now += 31
+    client.decisions.append(decision("chat"))
+    client.replies.append(spoken("答", "好。"))
+    await rig.ask("你好", session="s2")
+    row = next(t for t in await rig.turns() if t["id"] == asked["turn_id"])
+    assert row["status"] == "expired" and row["prefix"] == "否"
+    assert (await rig.confirm(asked["confirm"]["id"], True))["text"] == "已逾時，未執行。"
+    assert actions.calls == []
+
+
 async def test_nothing_to_copy_is_said_and_nothing_is_asked(rig, client, actions):
     result = await ask_to_copy(rig, client)
     assert result["status"] == "done"
