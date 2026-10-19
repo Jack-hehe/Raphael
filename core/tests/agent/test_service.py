@@ -6,7 +6,6 @@ No test spends money, presses a key, opens a page or touches the network.
 
 import asyncio
 import logging
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -79,14 +78,14 @@ class Meteo:
 
     def __init__(self):
         self.requests: list[httpx.Request] = []
-        self.delay = 0.0
+        self.on_request = None  # an async function a request waits for before it is answered
         self.down = False
         self.http = httpx.AsyncClient(transport=httpx.MockTransport(self._handle))
 
     async def _handle(self, request):
         self.requests.append(request)
-        if self.delay:
-            await asyncio.sleep(self.delay)
+        if self.on_request is not None:
+            await self.on_request(request)
         if self.down:
             raise httpx.ConnectError("no route")
         body = GEOCODING if request.url.host.startswith("geocoding") else FORECAST
@@ -432,21 +431,27 @@ async def test_an_answer_that_needs_nothing_looked_up_goes_straight_to_the_model
 
 
 async def test_the_tools_an_answer_needs_run_together_not_one_after_another(rig, client):
-    rig.meteo.delay = 0.3
+    # Each waits for the other to have started: run one after the other, the first would wait
+    # for ever (and give up after two seconds, with its data missing).
+    weather_started, search_started = asyncio.Event(), asyncio.Event()
 
-    async def slow_search(**kwargs):
-        await asyncio.sleep(0.3)
+    async def weather_waits_for_the_search(request):
+        weather_started.set()
+        await asyncio.wait_for(search_started.wait(), 2)
+
+    async def search_waits_for_the_weather(**kwargs):
+        search_started.set()
+        await asyncio.wait_for(weather_started.wait(), 2)
         return found()
 
+    rig.meteo.on_request = weather_waits_for_the_search
     client.decisions.append(decision("answer", weather=0.9, search=0.9, time=0.9))
-    client.texts.append(slow_search)
+    client.texts.append(search_waits_for_the_weather)
     client.replies.append(spoken())
-    began = time.perf_counter()
     await rig.ask("台北天氣怎樣，順便查一下明天的新聞")
-    # The weather is two requests of 0.3 s, the search 0.3 s: together, 0.6 s, not 0.9.
-    assert time.perf_counter() - began < 0.85
     user = client.json_calls[0]["user"]
-    assert "weather:" in user and "web_search:" in user and "local_time:" in user
+    assert 'weather: {"city"' in user and 'web_search: {"answer"' in user
+    assert "local_time:" in user and "unavailable" not in user
 
 
 async def test_a_tool_that_fails_does_not_stop_the_answer_which_is_told_it_is_missing(
