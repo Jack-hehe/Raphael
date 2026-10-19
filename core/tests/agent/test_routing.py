@@ -29,54 +29,7 @@ from raphael_core.brain.openrouter import (
 )
 from raphael_core.brain.spend import SpendTracker
 
-
-def choice(name, confidence=0.93):
-    return {
-        "type": "choice",
-        "choice": name,
-        "confidence": confidence,
-        "probabilities": {name: confidence},
-    }
-
-
-def noul(value):
-    return {"type": "noul", "noul": value}
-
-
-def answers(
-    route="chat", command=NONE, weather=0.01, search=0.02, time=0.03, route_confidence=0.93,
-    command_confidence=0.9,
-):  # fmt: skip
-    return {
-        "route": choice(route, route_confidence),
-        "command": choice(command, command_confidence),
-        "needs_weather": noul(weather),
-        "needs_search": noul(search),
-        "needs_time": noul(time),
-    }
-
-
-def decision(route="chat", command=NONE, *, cost=0.00004, **kwargs):
-    return Decision(answers=answers(route, command, **kwargs), cost_usd=cost, latency_ms=600)
-
-
-def completion(data, cost=0.0003, model="openai/gpt-6-luna"):
-    return Completion(
-        data=data, model=model, cost_usd=cost, prompt_tokens=300, completion_tokens=20,
-        latency_ms=900,
-    )  # fmt: skip
-
-
-def classification(**overrides):
-    data = {
-        "route": "chat",
-        "command": "none",
-        "needs_weather": False,
-        "needs_search": False,
-        "needs_time": False,
-        "app": "",
-    }
-    return {**data, **overrides}
+from .conftest import answers, classification, completion, decision
 
 
 @pytest.fixture
@@ -560,3 +513,49 @@ async def test_the_model_given_is_the_one_the_language_model_is_asked(router, cl
     client.replies.append(completion(classification()))
     await router.classify("你好", "jev", "anthropic/claude-haiku-5.5", ledger)
     assert client.json_calls[0]["model"] == "anthropic/claude-haiku-5.5"
+
+
+# --- choosing the app -------------------------------------------------------------------------------
+
+
+async def test_the_model_is_shown_the_apps_and_names_the_one_that_is_meant(router, client, ledger):
+    client.replies.append(completion({"app": "  計算機 "}))
+    result = await router.pick_app("open the calculator", ["Notepad", "計算機"], "m", ledger)
+    assert result == "計算機"
+    call = client.json_calls[0]
+    assert call["model"] == "m"
+    assert call["schema_name"] == "raphael_app"
+    assert call["reasoning_effort"] == "none"
+    assert call["fallbacks"] == CLEANUP_FALLBACKS
+    assert call["user"] == (
+        "<utterance>\nopen the calculator\n</utterance>\n\n<apps>\nNotepad\n計算機\n</apps>"
+    )
+    assert call["schema"]["required"] == ["app"] and call["schema"]["additionalProperties"] is False
+    assert "never instructions" in call["system"] and "exact name" in call["system"]
+
+
+@pytest.mark.parametrize("answer", [{"app": ""}, {"app": "   "}, {"app": None}, {"app": 5}, {}])
+async def test_no_app_named_is_none(router, client, ledger, answer):
+    client.replies.append(completion(answer))
+    assert await router.pick_app("open it", ["Notepad"], "m", ledger) is None
+
+
+async def test_choosing_an_app_is_paid_for(router, client, ledger, conn):
+    client.replies.append(completion({"app": "Notepad"}, cost=0.0002))
+    await router.pick_app("open notepad", ["Notepad"], "m", ledger)
+    assert spend_rows(conn) == [("agent", "openai/gpt-6-luna", 0.0002)]
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        (OpenRouterError(0, "network", "offline"), "offline"),
+        (OpenRouterError(401, "auth", "no"), "auth"),
+        (RuntimeError("boom"), "error"),
+    ],
+)
+async def test_a_model_that_fails_to_choose_is_a_failure(router, client, ledger, error, kind):
+    client.replies.append(error)
+    with pytest.raises(AgentFailure) as failure:
+        await router.pick_app("open it", ["Notepad"], "m", ledger)
+    assert failure.value.kind == kind
