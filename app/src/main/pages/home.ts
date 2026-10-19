@@ -26,6 +26,8 @@ import "../home.css";
 
 /** How often the page is read again while it is on screen. */
 const REFRESH_MS = 30_000;
+/** How long after a first OpenRouter check that timed out it is made again. */
+const RECHECK_MS = 6_000;
 /** The days the activity grid asks for first (26 weeks), and when paging back (the most there is). */
 const DAYS_FIRST = 182;
 const DAYS_ALL = 371;
@@ -214,14 +216,22 @@ export function createHome(app: AppContext): Page {
     if (replay && status?.openrouter.state === "unknown") void checkOpenrouter();
   }
 
-  /** Nothing has been sent to OpenRouter yet since the core started: ask once. */
-  async function checkOpenrouter(): Promise<void> {
+  /** Nothing has been sent to OpenRouter yet since the core started: ask once, and once more a
+   * little later if the network was too slow. The core's first seconds go to loading its speech
+   * models, and a check then can time out on a connection that works. */
+  async function checkOpenrouter(again = true): Promise<void> {
+    let checked: Awaited<ReturnType<typeof api.statusCheckOpenrouter>>;
     try {
-      await api.statusCheckOpenrouter();
+      checked = await api.statusCheckOpenrouter();
     } catch {
       return;
     }
     if (visible) void load(false);
+    if (again && checked.state === "error" && (checked.error === "timeout" || checked.error === "network")) {
+      setTimeout(() => {
+        if (visible) void checkOpenrouter(false);
+      }, RECHECK_MS);
+    }
   }
 
   async function retry(): Promise<void> {
