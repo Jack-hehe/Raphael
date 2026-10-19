@@ -54,6 +54,14 @@ FORECAST = {
 }
 
 
+async def until(predicate, timeout=5.0):
+    """Wait until `predicate()` is true; a test that waits for ever is a failed test."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        assert asyncio.get_running_loop().time() < deadline, "timed out waiting for a condition"
+        await asyncio.sleep(0.005)
+
+
 class Clock:
     def __init__(self, now=1000.0):
         self.now = now
@@ -940,8 +948,7 @@ async def test_cancelling_a_request_that_is_still_thinking_ends_it_and_nothing_i
 
     client.decisions.append(hang)
     asking = asyncio.ensure_future(rig.ask("打開 YouTube"))
-    while not client.decide_calls:
-        await asyncio.sleep(0.01)
+    await until(lambda: client.decide_calls)
     assert await rig.call("agent.cancel", {"session_id": "s1"}) == {}
     result = await asyncio.wait_for(asking, 2)
     assert result == {"status": "done", "turn_id": 0, "prefix": "了", "text": "已取消。"}
@@ -958,8 +965,7 @@ async def test_cancelling_another_session_does_not_end_a_request(make_rig, clien
 
     client.decisions.append(slow)
     asking = asyncio.ensure_future(rig.ask("鎖定螢幕"))
-    while not client.decide_calls:
-        await asyncio.sleep(0.01)
+    await until(lambda: client.decide_calls)
     await rig.call("agent.cancel", {"session_id": "other"})
     gate.set()
     assert (await asyncio.wait_for(asking, 2))["prefix"] == "了"
@@ -976,8 +982,7 @@ async def test_cancelling_the_handler_itself_is_not_mistaken_for_a_cancel_reques
 
     client.decisions.append(hang)
     asking = asyncio.ensure_future(rig.ask("你好"))
-    while not client.decide_calls:
-        await asyncio.sleep(0.01)
+    await until(lambda: client.decide_calls)
     asking.cancel()
     with pytest.raises(asyncio.CancelledError):
         await asking
@@ -993,8 +998,7 @@ async def test_a_second_request_of_a_session_replaces_the_first_that_is_still_go
 
     client.decisions.extend([hang, decision("command", "lock_screen")])
     first = asyncio.ensure_future(rig.ask("鎖定螢幕"))
-    while not client.decide_calls:
-        await asyncio.sleep(0.01)
+    await until(lambda: client.decide_calls)
     second = await rig.ask("鎖定螢幕")
     assert second["prefix"] == "了"
     assert (await asyncio.wait_for(first, 2))["turn_id"] == 0
