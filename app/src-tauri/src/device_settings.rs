@@ -29,24 +29,23 @@ pub const EMBLEM_SIZES: [u32; 3] = [120, 150, 194];
 /// The interface languages offered by the main window.
 const UI_LANGUAGES: [&str; 3] = ["zh-TW", "en", "ja"];
 
-/// Which subtitle lines the overlay shows.
+/// Whether the overlay shows Raphael's words as subtitles, in the interface language.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Subtitles {
+    /// Older files chose which of two lines to show with `"both"`, `"zh"` or `"ja"`. There is one
+    /// line now, in the interface language, so those values are read as `"on"`.
     #[default]
-    Both,
-    Zh,
-    Ja,
+    #[serde(alias = "both", alias = "zh", alias = "ja")]
+    On,
     Off,
 }
 
 impl Subtitles {
-    /// The spelling the overlay page takes (`"both"`, `"zh"`, `"ja"`, `"off"`).
+    /// The spelling the overlay page takes (`"on"`, `"off"`).
     pub fn as_str(self) -> &'static str {
         match self {
-            Subtitles::Both => "both",
-            Subtitles::Zh => "zh",
-            Subtitles::Ja => "ja",
+            Subtitles::On => "on",
             Subtitles::Off => "off",
         }
     }
@@ -504,7 +503,7 @@ mod tests {
         assert_eq!(s.paste_last_keys, ["AltRight+V"]);
         assert_eq!(s.microphone, None);
         assert_eq!(s.emblem_size, 150);
-        assert_eq!(s.subtitles, Subtitles::Both);
+        assert_eq!(s.subtitles, Subtitles::On);
         assert_eq!(s.appearance, Appearance::System);
         assert_eq!(s.ui_language, "zh-TW");
         assert!(s.autostart);
@@ -514,7 +513,7 @@ mod tests {
     #[test]
     fn json_uses_snake_case_names() {
         let s = DeviceSettings {
-            subtitles: Subtitles::Zh,
+            subtitles: Subtitles::Off,
             appearance: Appearance::Light,
             microphone: Some("耳機麥克風".to_owned()),
             ..DeviceSettings::default()
@@ -527,20 +526,19 @@ mod tests {
                 "paste_last_keys": ["AltRight+V"],
                 "microphone": "耳機麥克風",
                 "emblem_size": 150,
-                "subtitles": "zh",
+                "subtitles": "off",
                 "appearance": "light",
                 "ui_language": "zh-TW",
                 "autostart": true,
                 "onboarded": false,
             })
         );
-        for (value, text) in [
-            (Subtitles::Both, "both"),
-            (Subtitles::Zh, "zh"),
-            (Subtitles::Ja, "ja"),
-            (Subtitles::Off, "off"),
-        ] {
+        for (value, text) in [(Subtitles::On, "on"), (Subtitles::Off, "off")] {
             assert_eq!(serde_json::to_value(value).unwrap(), json!(text));
+            assert_eq!(
+                serde_json::from_value::<Subtitles>(json!(text)).unwrap(),
+                value
+            );
             assert_eq!(value.as_str(), text);
         }
         for (value, text) in [
@@ -554,6 +552,31 @@ mod tests {
             );
             assert_eq!(value.as_str(), text);
         }
+    }
+
+    #[test]
+    fn the_subtitle_values_of_two_lines_are_read_as_on() {
+        for legacy in ["both", "zh", "ja"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(FILE_NAME);
+            std::fs::write(
+                &path,
+                format!(r#"{{"subtitles": "{legacy}", "emblem_size": 120}}"#),
+            )
+            .unwrap();
+            let loaded = DeviceSettings::load(&path);
+            assert_eq!(loaded.subtitles, Subtitles::On, "{legacy}");
+            assert_eq!(loaded.emblem_size, 120, "{legacy}: the rest is kept");
+            assert!(path.exists(), "{legacy}: the file is not set aside");
+            // the main window is given the spelling of today
+            assert_eq!(serde_json::to_value(&loaded).unwrap()["subtitles"], "on");
+        }
+        let mut s = DeviceSettings::default();
+        s.apply_patch(&json!({"subtitles": "off"})).unwrap();
+        assert_eq!(s.subtitles, Subtitles::Off);
+        s.apply_patch(&json!({"subtitles": "both"})).unwrap();
+        assert_eq!(s.subtitles, Subtitles::On);
+        assert!(s.apply_patch(&json!({"subtitles": "loud"})).is_err());
     }
 
     #[test]
@@ -669,7 +692,7 @@ mod tests {
             );
             assert_eq!(loaded.dictation_mode, DictationMode::Hold, "{bad}");
             assert_eq!(loaded.emblem_size, 120, "{bad}");
-            assert_eq!(loaded.subtitles, Subtitles::Ja, "{bad}");
+            assert_eq!(loaded.subtitles, Subtitles::On, "{bad}");
             assert_eq!(loaded.appearance, Appearance::Dark, "{bad}");
             assert!(loaded.onboarded, "{bad}");
             assert!(path.exists(), "{bad}: the file is not set aside");
@@ -748,7 +771,7 @@ mod tests {
             assert_eq!(s.dictation_mode, DictationMode::Toggle, "{text}");
             assert_eq!(
                 (s.emblem_size, s.subtitles),
-                (120, Subtitles::Ja),
+                (120, Subtitles::On),
                 "{text}: what was fine stays"
             );
             assert!(path.exists(), "{text}: the file is not set aside");
@@ -799,7 +822,7 @@ mod tests {
         assert_eq!(s.emblem_size, 150);
         assert_eq!(s.dictation_keys, ["AltRight"]);
         assert_eq!(s.paste_last_keys, ["AltRight+V"]);
-        assert_eq!(s.subtitles, Subtitles::Ja, "what was fine stays");
+        assert_eq!(s.subtitles, Subtitles::On, "what was fine stays");
     }
 
     #[test]

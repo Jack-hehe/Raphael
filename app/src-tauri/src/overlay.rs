@@ -77,8 +77,8 @@ impl Progress {
     };
 }
 
-/// What the overlay page is told. `subtitles` in [`OverlayEvent::Settings`] is `"both"`, `"zh"`,
-/// `"ja"` or `"off"`.
+/// What the overlay page is told. Every text in it is in the interface language and in that one
+/// alone, never a pair.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum OverlayEvent {
@@ -90,17 +90,22 @@ pub enum OverlayEvent {
     Level { value: f32 },
     /// How far the dictation has come since the key was released, shown beside the glyph ring.
     Progress(Progress),
-    /// Raphael's report: the emblem appears with subtitles, then vanishes.
-    Notice { zh: String, ja: String },
+    /// Raphael's report: the emblem appears with `text` as its subtitle, then vanishes.
+    Notice { text: String },
     /// Learned words are reported like a notice, but they never take the emblem from a dictation
     /// that is showing: the page tells them when it is over.
-    Learned { zh: String, ja: String },
+    Learned { text: String },
     /// Delivery succeeded: show 100% briefly before the normal vanish animation.
     Complete,
     /// The vanish animation.
     Hide,
-    /// The emblem's diameter in logical pixels and which subtitle lines to show.
-    Settings { px: u32, subtitles: String },
+    /// The emblem's diameter in logical pixels, whether the subtitles show (`"on"` or `"off"`)
+    /// and the interface language (`"zh-TW"`, `"en"` or `"ja"`).
+    Settings {
+        px: u32,
+        subtitles: String,
+        language: String,
+    },
 }
 
 /// How the rest of the app drives the overlay. Calls do not wait for the page and none of them
@@ -114,12 +119,12 @@ pub trait OverlayApi: Send + Sync + 'static {
     fn set_mode(&self, mode: Mode);
     /// Loudness from 0 to 1.
     fn level(&self, value: f32);
-    /// Raphael reports `zh` and `ja` as subtitles for a time that depends on their length, then
-    /// the emblem vanishes. Reports that arrive meanwhile wait their turn.
-    fn notice(&self, zh: &str, ja: &str);
+    /// Raphael reports `text` (in the interface language) as a subtitle for a time that depends on
+    /// its length, then the emblem vanishes. Reports that arrive meanwhile wait their turn.
+    fn notice(&self, text: &str);
     /// Report learned words in the usual corner. Fakes can keep the ordinary notice behavior.
-    fn learned_notice(&self, zh: &str, ja: &str) {
-        self.notice(zh, ja);
+    fn learned_notice(&self, text: &str) {
+        self.notice(text);
     }
     /// The vanish animation plays; the window stays, empty, where it is.
     fn hide(&self);
@@ -230,12 +235,13 @@ impl OverlayEvent {
 }
 
 impl Bus {
-    fn new(emblem_px: u32, subtitles: &str) -> Self {
+    fn new(emblem_px: u32, subtitles: &str, language: &str) -> Self {
         Bus {
             subscribers: Vec::new(),
             settings: OverlayEvent::Settings {
                 px: emblem_px,
                 subtitles: subtitles.to_owned(),
+                language: language.to_owned(),
             },
             backlog: VecDeque::new(),
             backlog_warned: false,
@@ -321,9 +327,15 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Overlay {
-    /// Creates the overlay window, with an emblem `emblem_px` logical pixels wide and the given
-    /// subtitle lines (`"both"`, `"zh"`, `"ja"` or `"off"`). Call it once, from `setup`.
-    pub fn create(app: &AppHandle, emblem_px: u32, subtitles: &str) -> tauri::Result<Arc<Self>> {
+    /// Creates the overlay window, with an emblem `emblem_px` logical pixels wide, the subtitles
+    /// `"on"` or `"off"` and the interface language (`"zh-TW"`, `"en"` or `"ja"`). Call it once,
+    /// from `setup`.
+    pub fn create(
+        app: &AppHandle,
+        emblem_px: u32,
+        subtitles: &str,
+        language: &str,
+    ) -> tauri::Result<Arc<Self>> {
         // Visible from the start: see the module documentation for why it is never shown later.
         let window = WebviewWindowBuilder::new(
             app,
@@ -356,19 +368,20 @@ impl Overlay {
             app: app.clone(),
             window,
             emblem_px: AtomicU32::new(emblem_px),
-            bus: Mutex::new(Bus::new(emblem_px, subtitles)),
+            bus: Mutex::new(Bus::new(emblem_px, subtitles, language)),
         });
         overlay.place_window();
         Ok(overlay)
     }
 
     /// A new emblem size changes the window's size, so it is put in its corner again.
-    pub fn apply_settings(&self, emblem_px: u32, subtitles: &str) {
+    pub fn apply_settings(&self, emblem_px: u32, subtitles: &str, language: &str) {
         self.emblem_px.store(emblem_px, Ordering::Relaxed);
         self.place_window();
         self.publish(OverlayEvent::Settings {
             px: emblem_px,
             subtitles: subtitles.to_owned(),
+            language: language.to_owned(),
         });
     }
 
@@ -433,17 +446,15 @@ impl OverlayApi for Overlay {
         self.publish(OverlayEvent::Level { value });
     }
 
-    fn notice(&self, zh: &str, ja: &str) {
+    fn notice(&self, text: &str) {
         self.publish(OverlayEvent::Notice {
-            zh: zh.to_owned(),
-            ja: ja.to_owned(),
+            text: text.to_owned(),
         });
     }
 
-    fn learned_notice(&self, zh: &str, ja: &str) {
+    fn learned_notice(&self, text: &str) {
         self.publish(OverlayEvent::Learned {
-            zh: zh.to_owned(),
-            ja: ja.to_owned(),
+            text: text.to_owned(),
         });
     }
 
@@ -736,19 +747,17 @@ mod tests {
         );
         assert_eq!(
             json(OverlayEvent::Notice {
-                zh: "《了。》".into(),
-                ja: "《了。》".into()
+                text: "《了。》".into()
             }),
-            r#"{"type":"notice","zh":"《了。》","ja":"《了。》"}"#
+            r#"{"type":"notice","text":"《了。》"}"#
         );
         assert_eq!(json(OverlayEvent::Hide), r#"{"type":"hide"}"#);
         assert_eq!(json(OverlayEvent::Complete), r#"{"type":"complete"}"#);
         assert_eq!(
             json(OverlayEvent::Learned {
-                zh: "「手機」已加入詞典".into(),
-                ja: String::new()
+                text: "《了。「手機」已加入詞典。》".into()
             }),
-            r#"{"type":"learned","zh":"「手機」已加入詞典","ja":""}"#
+            r#"{"type":"learned","text":"《了。「手機」已加入詞典。》"}"#
         );
         assert_eq!(
             json(OverlayEvent::Progress(Progress {
@@ -773,9 +782,10 @@ mod tests {
         assert_eq!(
             json(OverlayEvent::Settings {
                 px: 150,
-                subtitles: "both".into()
+                subtitles: "on".into(),
+                language: "zh-TW".into()
             }),
-            r#"{"type":"settings","px":150,"subtitles":"both"}"#
+            r#"{"type":"settings","px":150,"subtitles":"on","language":"zh-TW"}"#
         );
     }
 
@@ -798,78 +808,76 @@ mod tests {
 
     fn notice(n: usize) -> OverlayEvent {
         OverlayEvent::Notice {
-            zh: n.to_string(),
-            ja: String::new(),
+            text: n.to_string(),
         }
     }
 
-    const SETTINGS_150_BOTH: &str = r#"{"type":"settings","px":150,"subtitles":"both"}"#;
+    const SETTINGS_150_ON: &str =
+        r#"{"type":"settings","px":150,"subtitles":"on","language":"zh-TW"}"#;
 
     #[test]
     fn a_new_page_gets_the_settings_first() {
-        let mut bus = Bus::new(150, "zh");
+        let mut bus = Bus::new(150, "off", "ja");
         let (channel, got) = page();
         bus.subscribe("overlay", channel);
         assert_eq!(
             received(&got),
-            [r#"{"type":"settings","px":150,"subtitles":"zh"}"#]
+            [r#"{"type":"settings","px":150,"subtitles":"off","language":"ja"}"#]
         );
     }
 
     #[test]
     fn only_the_latest_settings_reach_a_page_that_loads_late() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         bus.publish(OverlayEvent::Settings {
             px: 194,
             subtitles: "off".into(),
+            language: "en".into(),
         });
         let (channel, got) = page();
         bus.subscribe("overlay", channel);
         assert_eq!(
             received(&got),
-            [r#"{"type":"settings","px":194,"subtitles":"off"}"#]
+            [r#"{"type":"settings","px":194,"subtitles":"off","language":"en"}"#]
         );
     }
 
     #[test]
     fn events_from_before_the_page_loaded_arrive_in_order_after_the_settings() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         bus.publish(OverlayEvent::Show {
             mode: Mode::Listening,
         });
         bus.publish(OverlayEvent::Level { value: 0.3 }); // a loudness reading is stale by then
         bus.publish(OverlayEvent::Progress(Progress::DONE)); // and so is a progress report
-        bus.publish(OverlayEvent::Notice {
-            zh: "了".into(),
-            ja: "了".into(),
-        });
+        bus.publish(OverlayEvent::Notice { text: "了".into() });
         let (channel, got) = page();
         bus.subscribe("overlay", channel);
         assert_eq!(
             received(&got),
             [
-                SETTINGS_150_BOTH,
+                SETTINGS_150_ON,
                 r#"{"type":"show","mode":"listening"}"#,
-                r#"{"type":"notice","zh":"了","ja":"了"}"#,
+                r#"{"type":"notice","text":"了"}"#,
             ]
         );
     }
 
     #[test]
     fn the_backlog_is_delivered_once() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         bus.publish(notice(1));
         let (first, got_first) = page();
         bus.subscribe("overlay", first);
         let (second, got_second) = page();
         bus.subscribe("other", second);
         assert_eq!(received(&got_first).len(), 2); // settings and the notice
-        assert_eq!(received(&got_second), [SETTINGS_150_BOTH]);
+        assert_eq!(received(&got_second), [SETTINGS_150_ON]);
     }
 
     #[test]
     fn the_backlog_keeps_the_newest_events() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         for n in 0..BACKLOG_MAX + 5 {
             bus.publish(notice(n));
         }
@@ -877,16 +885,16 @@ mod tests {
         bus.subscribe("overlay", channel);
         let got = received(&got);
         assert_eq!(got.len(), 1 + BACKLOG_MAX);
-        assert_eq!(got[1], r#"{"type":"notice","zh":"5","ja":""}"#);
+        assert_eq!(got[1], r#"{"type":"notice","text":"5"}"#);
         assert_eq!(
             got.last().unwrap(),
-            &format!(r#"{{"type":"notice","zh":"{}","ja":""}}"#, BACKLOG_MAX + 4)
+            &format!(r#"{{"type":"notice","text":"{}"}}"#, BACKLOG_MAX + 4)
         );
     }
 
     #[test]
     fn events_reach_every_page_in_order() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         let (a, got_a) = page();
         let (b, got_b) = page();
         bus.subscribe("a", a);
@@ -895,7 +903,7 @@ mod tests {
         bus.publish(OverlayEvent::Level { value: 1.0 });
         bus.publish(OverlayEvent::Hide);
         let expected = [
-            SETTINGS_150_BOTH,
+            SETTINGS_150_ON,
             r#"{"type":"show","mode":"steady"}"#,
             r#"{"type":"level","value":1.0}"#,
             r#"{"type":"hide"}"#,
@@ -906,23 +914,20 @@ mod tests {
 
     #[test]
     fn a_page_that_subscribes_again_replaces_its_old_channel() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         let (old, got_old) = page();
         bus.subscribe("overlay", old);
         let (new, got_new) = page();
         bus.subscribe("overlay", new); // the page was reloaded
         bus.publish(OverlayEvent::Hide);
         assert_eq!(bus.subscribers.len(), 1);
-        assert_eq!(received(&got_old), [SETTINGS_150_BOTH]);
-        assert_eq!(
-            received(&got_new),
-            [SETTINGS_150_BOTH, r#"{"type":"hide"}"#]
-        );
+        assert_eq!(received(&got_old), [SETTINGS_150_ON]);
+        assert_eq!(received(&got_new), [SETTINGS_150_ON, r#"{"type":"hide"}"#]);
     }
 
     #[test]
     fn a_page_that_is_gone_is_dropped_and_the_others_still_hear() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         let gone = Channel::new(|_| Err(tauri::Error::WebviewNotFound));
         let (alive, got) = page();
         bus.subscribers.push(("gone".into(), gone));
@@ -930,7 +935,7 @@ mod tests {
         bus.publish(OverlayEvent::Hide);
         assert_eq!(bus.subscribers.len(), 1);
         assert_eq!(bus.subscribers[0].0, "alive");
-        assert_eq!(received(&got), [SETTINGS_150_BOTH, r#"{"type":"hide"}"#]);
+        assert_eq!(received(&got), [SETTINGS_150_ON, r#"{"type":"hide"}"#]);
     }
 
     #[test]
@@ -957,11 +962,12 @@ mod tests {
 
     #[test]
     fn waiting_without_a_page_is_warned_about_once_until_a_page_subscribes() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         bus.publish(OverlayEvent::Level { value: 0.2 }); // dropped, not worth a warning
         bus.publish(OverlayEvent::Settings {
             px: 150,
-            subtitles: "both".into(),
+            subtitles: "on".into(),
+            language: "zh-TW".into(),
         });
         assert!(!bus.backlog_warned);
         bus.publish(OverlayEvent::Show {
@@ -987,13 +993,13 @@ mod tests {
             OverlayEvent::Progress(Progress::DONE),
             notice(0),
             OverlayEvent::Learned {
-                zh: String::new(),
-                ja: String::new(),
+                text: String::new(),
             },
             OverlayEvent::Hide,
             OverlayEvent::Settings {
                 px: 150,
-                subtitles: "both".into(),
+                subtitles: "on".into(),
+                language: "zh-TW".into(),
             },
         ];
         for event in events {
@@ -1025,7 +1031,7 @@ mod tests {
 
     #[test]
     fn events_after_the_last_page_is_gone_wait_for_the_next_one() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         let gone = Channel::new(|_| Err(tauri::Error::WebviewNotFound));
         bus.subscribers.push(("gone".into(), gone));
         bus.publish(OverlayEvent::Hide); // dropped with the page that failed to take it
@@ -1034,7 +1040,7 @@ mod tests {
         bus.subscribe("overlay", channel);
         assert_eq!(
             received(&got),
-            [SETTINGS_150_BOTH, r#"{"type":"notice","zh":"7","ja":""}"#]
+            [SETTINGS_150_ON, r#"{"type":"notice","text":"7"}"#]
         );
     }
 }

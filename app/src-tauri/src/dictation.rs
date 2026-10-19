@@ -31,7 +31,7 @@ use crate::device_settings::DictationMode;
 use crate::holdtap::{Action, HoldTap};
 use crate::hotkey::{CancelSwitch, HotkeyEvent};
 use crate::learn::AfterPaste;
-use crate::notices::{self, Notice};
+use crate::notices::{self, LanguageCell, Notice};
 use crate::overlay::{Mode, OverlayApi, Progress, Stage};
 use crate::paste::{CopyReason, PasteDelivery, PasteOutcome, Paster, Target};
 use crate::rpc::{CORE_EXITED, CoreApi, RpcError, TIMEOUT, lock};
@@ -124,6 +124,8 @@ pub struct DictationController<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSw
     paster: Arc<P>,
     cancel: Arc<S>,
     mode: ModeCell,
+    /// The language of every notice the controller shows.
+    language: LanguageCell,
     state: Arc<Mutex<State>>,
     /// Serializes state transitions with their overlay calls. Only background controller work
     /// takes this lock; UI-thread readers use `state`, which is never held across an overlay call.
@@ -143,6 +145,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Clone
             paster: self.paster.clone(),
             cancel: self.cancel.clone(),
             mode: self.mode.clone(),
+            language: self.language.clone(),
             state: self.state.clone(),
             transitions: self.transitions.clone(),
             after_paste: self.after_paste.clone(),
@@ -166,6 +169,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             paster,
             cancel,
             mode,
+            language: LanguageCell::default(),
             state: Arc::new(Mutex::new(State {
                 phase: Phase::Idle,
                 holdtap: HoldTap::new(),
@@ -182,6 +186,13 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// The controller, telling `hook` of its pastes.
     pub fn with_after_paste(mut self, hook: Arc<dyn AfterPaste>) -> Self {
         self.after_paste = Some(hook);
+        self
+    }
+
+    /// The controller, showing its notices in the language `language` holds, which the device
+    /// settings keep up to date.
+    pub fn with_language(mut self, language: LanguageCell) -> Self {
+        self.language = language;
         self
     }
 
@@ -636,8 +647,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
     }
 
+    /// Shows `notice` in the interface language, and only in that one.
     fn show(&self, notice: Notice) {
-        self.overlay.notice(notice.zh, notice.ja);
+        self.overlay.notice(notice.text(&self.language.get()));
     }
 
     /// The end of a dictation whose `dictation.start` or `dictation.stop` failed: Raphael's
@@ -797,6 +809,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     fn mode(&self) -> ModeCell {
         self.mode.clone()
     }
+    fn language(&self) -> LanguageCell {
+        self.language.clone()
+    }
 }
 
 // ---------- in the app ----------
@@ -820,7 +835,7 @@ mod app {
     use crate::core_process::{CORE_DOWN, CORE_RESTARTED, CoreProcess};
     use crate::hotkey::{CancelSwitch, HotkeyEvent, HotkeyService, PauseReason};
     use crate::learn::{Learner, UiaProbe};
-    use crate::notices;
+    use crate::notices::{self, LanguageCell};
     use crate::overlay::{Mode, Overlay, OverlayApi, Progress};
     use crate::paste::WindowsPaster;
     use crate::rpc::Notification;
@@ -848,15 +863,15 @@ mod app {
                 overlay.level(value);
             }
         }
-        fn notice(&self, zh: &str, ja: &str) {
+        fn notice(&self, text: &str) {
             match &self.0 {
-                Some(overlay) => overlay.notice(zh, ja),
-                None => log::warn!("notice without an overlay: {zh}"),
+                Some(overlay) => overlay.notice(text),
+                None => log::warn!("notice without an overlay: {text}"),
             }
         }
-        fn learned_notice(&self, zh: &str, ja: &str) {
+        fn learned_notice(&self, text: &str) {
             match &self.0 {
-                Some(overlay) => overlay.learned_notice(zh, ja),
+                Some(overlay) => overlay.learned_notice(text),
                 None => log::warn!("learned notice without an overlay"),
             }
         }
@@ -913,13 +928,17 @@ mod app {
         // mode in this cell and change it when the person does, found through the app state.
         let mode = ModeCell::default();
         app.manage(mode.clone());
+        // The same for the interface language, which Raphael's notices follow.
+        let language = LanguageCell::default();
+        app.manage(language.clone());
 
         let notifications = core.as_ref().map(|core| core.subscribe());
         let overlay = Arc::new(MaybeOverlay(overlay));
         let controller = match core {
             Some(core) => {
                 // Learns from the user's corrections after a paste (`learn`).
-                let learner = Learner::new(core.clone(), overlay.clone(), Arc::new(UiaProbe));
+                let learner = Learner::new(core.clone(), overlay.clone(), Arc::new(UiaProbe))
+                    .with_language(language.clone());
                 Some(
                     DictationController::new(
                         core,
@@ -928,6 +947,7 @@ mod app {
                         Arc::new(MaybeHotkeys(hotkeys.clone())),
                         mode,
                     )
+                    .with_language(language.clone())
                     .with_after_paste(Arc::new(learner)),
                 )
             }
@@ -939,6 +959,7 @@ mod app {
         tauri::async_runtime::spawn(run(
             controller,
             overlay,
+            language,
             hotkeys,
             hotkey_events,
             notifications,
@@ -949,6 +970,7 @@ mod app {
     async fn run(
         controller: Option<Controller>,
         overlay: Arc<MaybeOverlay>,
+        language: LanguageCell,
         hotkeys: Option<Arc<HotkeyService>>,
         mut hotkey_events: Option<UnboundedReceiver<HotkeyEvent>>,
         mut notifications: Option<broadcast::Receiver<Notification>>,
@@ -971,7 +993,7 @@ mod app {
                             log::info!("hotkey {event:?} ignored: the core is not running");
                             if event == HotkeyEvent::DictationDown && !told_no_core {
                                 told_no_core = true;
-                                overlay.notice(notices::CORE_DOWN.zh, notices::CORE_DOWN.ja);
+                                overlay.notice(notices::CORE_DOWN.text(&language.get()));
                             }
                         }
                     },
@@ -1060,7 +1082,8 @@ mod tests {
     use crate::device_settings::DeviceSettings;
     use crate::hotkey::{CancelSwitch, HotkeyEvent};
     use crate::notices::{
-        CORE_DOWN, ELEVATED, FOCUS_CHANGED, LAST_COPIED, NO_MIC, NO_SOUND, NOT_READY, OFFLINE,
+        BUDGET, CORE_DOWN, ELEVATED, FOCUS_CHANGED, LAST_COPIED, NO_MIC, NO_SOUND, NOT_READY,
+        OFFLINE,
     };
     use crate::overlay::{Mode, OverlayApi, Progress};
     use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
@@ -1200,8 +1223,8 @@ mod tests {
         fn level(&self, value: f32) {
             self.push(format!("level:{value}"));
         }
-        fn notice(&self, zh: &str, _ja: &str) {
-            self.push(format!("notice:{zh}"));
+        fn notice(&self, text: &str) {
+            self.push(format!("notice:{text}"));
         }
         fn hide(&self) {
             if let Some((entered, resume)) = self.paused_hide.lock().unwrap().take() {
@@ -2144,6 +2167,55 @@ mod tests {
     fn ends_with_notice(c: &Ctl, expected: &str) {
         let events = c.overlay().events();
         assert_eq!(events.last().unwrap(), &notice(expected), "{events:?}");
+    }
+
+    #[tokio::test]
+    async fn a_notice_is_shown_in_the_interface_language_and_in_that_one_only() {
+        for (language, expected) in [
+            ("zh-TW", NO_MIC.zh),
+            ("en", NO_MIC.en),
+            ("ja", NO_MIC.ja),
+            // a language nobody offers is the default one, never a pair
+            ("fr", NO_MIC.zh),
+        ] {
+            let c = controller(
+                FakeCore::failing("dictation.start", RpcError::new(1004, "no microphone")),
+                FakePaster::pasting("notepad.exe"),
+            );
+            c.language().set(language);
+            run(&c, HotkeyEvent::DictationDown, 0).await;
+            assert_eq!(
+                c.overlay().events(),
+                vec!["show:listening".to_owned(), notice(expected)],
+                "{language}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_language_change_reaches_the_next_notice() {
+        let c = controller(
+            FakeCore::failing("dictation.start", RpcError::new(1004, "no microphone")),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        ends_with_notice(&c, NO_MIC.zh);
+        run(&c, HotkeyEvent::DictationUp, 300).await;
+        c.language().set("en");
+        run(&c, HotkeyEvent::DictationDown, 5000).await;
+        ends_with_notice(&c, NO_MIC.en);
+    }
+
+    #[tokio::test]
+    async fn the_fallback_notices_follow_the_language_too() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("原文", Some("budget"))),
+            FakePaster::pasting("notepad.exe"),
+        );
+        c.language().set("ja");
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        ends_with_notice(&c, BUDGET.ja);
     }
 
     #[tokio::test]

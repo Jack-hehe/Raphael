@@ -136,11 +136,11 @@ pub fn run() {
             tray::build(app.handle(), tray_commands)?;
 
             // ---- Overlay ----
-            // Raphael's emblem in the bottom-right corner, 150 px with both subtitle lines until
-            // the settings say otherwise (`Overlay::apply_settings`). The dictation controller
-            // takes it from the app state as `Arc<Overlay>`. Without the overlay the app still
-            // works, so a failure is only logged.
-            match overlay::Overlay::create(app.handle(), 150, "both") {
+            // Raphael's emblem in the bottom-right corner, 150 px with subtitles in Traditional
+            // Chinese until the settings say otherwise (`Overlay::apply_settings`). The dictation
+            // controller takes it from the app state as `Arc<Overlay>`. Without the overlay the
+            // app still works, so a failure is only logged.
+            match overlay::Overlay::create(app.handle(), 150, "on", "zh-TW") {
                 Ok(overlay) => {
                     app.manage(overlay);
                 }
