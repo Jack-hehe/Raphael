@@ -591,46 +591,20 @@ impl FocusFailure {
 
 impl WatchedField for UiaField {
     fn read(&mut self) -> Snapshot {
-        if !self.read_allowed() {
-            return Snapshot::Left;
-        }
+        // The text found during discovery was read under the same guard (`select_source`), and
+        // the last check of the discovery ran just before this call.
         if let Some(initial) = self.initial.take() {
-            return Snapshot::Text(initial);
+            return if self.scope.active() {
+                Snapshot::Text(initial)
+            } else {
+                Snapshot::Left
+            };
         }
-        let mut submitted = false;
-        let mut invalidated = false;
-        if let Some(observation) = &mut self.observation {
-            for event in observation.drain() {
-                submitted |= event == EditEvent::Enter;
-                invalidated |= event == EditEvent::Invalidated;
-                if let Some(keys) = &mut self.keys {
-                    keys.apply(event);
-                }
-            }
-        }
-        if matches!(self.mode, ReadMode::Pending) {
-            if submitted || invalidated {
-                return Snapshot::Left;
-            }
-            // Retry patterns after accessibility activation without searching other fields.
-            if let Ok(root) =
-                unsafe { self.automation.ElementFromHandle(HWND(self.hwnd as *mut _)) }
-                && let Some(readers) = find_readers(
-                    &self.automation,
-                    &root,
-                    &self.focused,
-                    &self.scope,
-                    self.kind == AppKind::Terminal,
-                )
-            {
-                self.readers = readers;
-            }
-            if let Some(text) = self.select_source() {
-                return Snapshot::Text(text);
-            }
-            return Snapshot::Text(String::new());
-        }
+        // Every poll checks focus and password status once before and once after the provider
+        // reads text (`checked_read`), or once if it reads none (`read_keys`). Nothing else
+        // repeats those checks: each one is three calls into another process.
         match &mut self.mode {
+            ReadMode::Pending => self.read_pending(),
             ReadMode::Field(index) => {
                 let index = *index;
                 self.read_source(index)
@@ -638,40 +612,10 @@ impl WatchedField for UiaField {
                     .unwrap_or(Snapshot::Left)
             }
             ReadMode::Terminal { reader, .. } => {
-                if terminal_ended(submitted, invalidated) {
-                    self.ended = true;
-                    self.observation.take();
-                    return Snapshot::Left;
-                }
                 let reader = *reader;
-                let Some(text) = self.read_source(reader) else {
-                    return Snapshot::Left;
-                };
-                let ReadMode::Terminal { tracker, .. } = &mut self.mode else {
-                    unreachable!("reading a source does not change its mode");
-                };
-                if tracker.observe(&text) == TerminalDecision::Continue {
-                    Snapshot::Text(tracker.region().to_owned())
-                } else {
-                    self.observation.take();
-                    Snapshot::Left
-                }
+                self.read_terminal(reader)
             }
-            ReadMode::Keys => {
-                let Some(keys) = &self.keys else {
-                    return Snapshot::Left;
-                };
-                let Some(text) = keys.text().map(str::to_owned) else {
-                    self.observation.take();
-                    return Snapshot::Left;
-                };
-                if keys.is_complete() {
-                    self.ended = true;
-                    self.observation.take();
-                }
-                Snapshot::Text(text)
-            }
-            ReadMode::Pending => Snapshot::Left,
+            ReadMode::Keys => self.read_keys(),
         }
     }
 
@@ -702,6 +646,9 @@ impl UiaField {
             .is_some_and(|input| input.is_current())
     }
 
+    /// Whether the watch may go on, checked before and after every provider call: still the
+    /// same focused field and not a password, and for a terminal no Enter or unknown input
+    /// since the last look (what was typed or printed after it must never be read).
     fn read_allowed(&mut self) -> bool {
         if self.ended || !self.still_focused() {
             self.ended = true;
@@ -709,12 +656,10 @@ impl UiaField {
             return false;
         }
         if self.kind == AppKind::Terminal {
-            let stopped = self.observation.as_mut().is_none_or(|observation| {
-                observation
-                    .drain()
-                    .into_iter()
-                    .any(|event| matches!(event, EditEvent::Enter | EditEvent::Invalidated))
-            });
+            let stopped = self
+                .observation
+                .as_mut()
+                .is_none_or(|observation| ends_terminal(&observation.drain()));
             if stopped {
                 if let ReadMode::Terminal { tracker, .. } = &mut self.mode {
                     tracker.submitted();
@@ -727,18 +672,33 @@ impl UiaField {
         true
     }
 
+    /// The text of one source, with a check on each side of the provider call.
     fn read_source(&mut self, index: usize) -> Option<String> {
         checked_read(self, Self::read_allowed, |field| {
-            field.readers[index].read(field.kind == AppKind::Terminal, &field.scope)
+            field
+                .readers
+                .get(index)?
+                .read(field.kind == AppKind::Terminal, &field.scope)
         })
     }
 
+    /// Finds the source that shows the pasted text, with one check on each side of all the reads.
     fn select_source(&mut self) -> Option<String> {
+        checked_read(self, Self::read_allowed, |field| Some(field.pick_source())).flatten()
+    }
+
+    /// [`Self::select_source`] without the checks, for a caller that makes them.
+    fn pick_source(&mut self) -> Option<String> {
+        let terminal = self.kind == AppKind::Terminal;
         for index in 0..self.readers.len() {
-            let Some(text) = self.read_source(index) else {
+            let Some(text) = self
+                .readers
+                .get(index)
+                .and_then(|reader| reader.read(terminal, &self.scope))
+            else {
                 continue;
             };
-            if self.kind == AppKind::Terminal {
+            if terminal {
                 if let Some(tracker) = TerminalTracker::new(&text, &self.pasted) {
                     let region = tracker.region().to_owned();
                     self.mode = ReadMode::Terminal {
@@ -760,6 +720,77 @@ impl UiaField {
             );
         }
         None
+    }
+
+    /// The pasted text has not shown up in any source yet. Looks again, in the sources the
+    /// focused field offers now: a Chromium tree or a terminal may need a moment.
+    fn read_pending(&mut self) -> Snapshot {
+        let found = checked_read(self, Self::read_allowed, |field| {
+            // Retry patterns after accessibility activation without searching other fields.
+            if let Ok(root) = unsafe {
+                field
+                    .automation
+                    .ElementFromHandle(HWND(field.hwnd as *mut _))
+            } && let Some(readers) = find_readers(
+                &field.automation,
+                &root,
+                &field.focused,
+                &field.scope,
+                field.kind == AppKind::Terminal,
+            ) {
+                field.readers = readers;
+            }
+            Some(field.pick_source())
+        });
+        match found {
+            Some(Some(text)) => Snapshot::Text(text),
+            Some(None) => Snapshot::Text(String::new()),
+            None => Snapshot::Left,
+        }
+    }
+
+    /// Follows the pasted rows of a terminal. The checks around the read also drain the keyboard
+    /// observer, so an Enter ends the watch before any later screen is read.
+    fn read_terminal(&mut self, reader: usize) -> Snapshot {
+        let Some(text) = self.read_source(reader) else {
+            return Snapshot::Left;
+        };
+        let ReadMode::Terminal { tracker, .. } = &mut self.mode else {
+            return Snapshot::Left;
+        };
+        if tracker.observe(&text) == TerminalDecision::Continue {
+            Snapshot::Text(tracker.region().to_owned())
+        } else {
+            self.observation.take();
+            Snapshot::Left
+        }
+    }
+
+    /// The text rebuilt from the keys since the last poll. The provider is not asked, so this
+    /// is the one poll with a single check.
+    fn read_keys(&mut self) -> Snapshot {
+        if !self.read_allowed() {
+            return Snapshot::Left;
+        }
+        if let Some(observation) = &mut self.observation {
+            for event in observation.drain() {
+                if let Some(keys) = &mut self.keys {
+                    keys.apply(event);
+                }
+            }
+        }
+        let Some(keys) = &self.keys else {
+            return Snapshot::Left;
+        };
+        let Some(text) = keys.text().map(str::to_owned) else {
+            self.observation.take();
+            return Snapshot::Left;
+        };
+        if keys.is_complete() {
+            self.ended = true;
+            self.observation.take();
+        }
+        Snapshot::Text(text)
     }
 
     fn still_focused(&self) -> bool {
@@ -1089,8 +1120,12 @@ fn foreground() -> isize {
     unsafe { GetForegroundWindow() }.0 as isize
 }
 
-fn terminal_ended(submitted: bool, invalidated: bool) -> bool {
-    submitted || invalidated
+/// Whether any of these keyboard events ends the watch of a terminal: Enter, or input that
+/// cannot be followed.
+fn ends_terminal(events: &[EditEvent]) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, EditEvent::Enter | EditEvent::Invalidated))
 }
 
 /// A provider call may outlive the focused field, the watch, or a terminal submission.
@@ -1398,10 +1433,53 @@ mod tests {
 
     #[test]
     fn unknown_or_submitted_terminal_input_never_reads_a_later_screen() {
-        assert!(!terminal_ended(false, false));
-        assert!(terminal_ended(true, false));
-        assert!(terminal_ended(false, true));
-        assert!(terminal_ended(true, true));
+        assert!(!ends_terminal(&[]));
+        assert!(ends_terminal(&[EditEvent::Enter]));
+        assert!(ends_terminal(&[EditEvent::Invalidated]));
+        assert!(ends_terminal(&[EditEvent::Ascii(b'a'), EditEvent::Enter]));
+        // Typing is not buffered for a terminal, so nothing else can be in the list.
+        assert!(!ends_terminal(&[
+            EditEvent::Backspace,
+            EditEvent::Left { shift: false }
+        ]));
+    }
+
+    #[test]
+    fn a_poll_checks_before_and_after_the_provider_and_nowhere_else() {
+        // The guard is the three-call focus and password check of `check_focus`.
+        let mut checks = 0;
+        let text = checked_read(
+            &mut checks,
+            |checks| {
+                *checks += 1;
+                true
+            },
+            |checks| {
+                assert_eq!(*checks, 1, "one check before the read");
+                Some("field text")
+            },
+        );
+        assert_eq!(text, Some("field text"));
+        assert_eq!(checks, 2, "and one after it");
+    }
+
+    #[test]
+    fn a_failed_check_before_the_read_costs_one_check_and_no_read() {
+        let mut checks = 0;
+        let mut reads = 0;
+        let text = checked_read(
+            &mut (&mut checks, &mut reads),
+            |(checks, _)| {
+                **checks += 1;
+                false
+            },
+            |(_, reads)| {
+                **reads += 1;
+                Some("never")
+            },
+        );
+        assert_eq!(text, None);
+        assert_eq!((checks, reads), (1, 0));
     }
 
     #[test]
