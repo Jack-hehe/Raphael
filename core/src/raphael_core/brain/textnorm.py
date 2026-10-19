@@ -6,7 +6,11 @@ variant the user chose (raphael_core.languages): Traditional with Taiwan usage f
 for zh-CN (`t2s`), and no conversion when no Chinese is chosen. OpenCC does no language
 detection: it also turns the Japanese kanji that share a code point with Simplified Chinese into
 Traditional forms (学 into 學, 会 into 會, 来 into 來). That is why Japanese is skipped, sentence
-by sentence.
+by sentence. And OpenCC takes its input for Simplified Chinese: over text that is Traditional
+already it corrupts some characters (只要 into 隻要, 干擾 into 幹擾). So the Traditional variants
+convert only what is still Simplified (`convert_leftover_simplified`), for the cleaned text and for
+the raw text alike. A text pasted without cleanup also loses its most obvious stutters
+(`remove_stutters`).
 """
 
 import difflib
@@ -135,6 +139,26 @@ def _to_simplified() -> opencc.OpenCC:
     return opencc.OpenCC("t2s.json")
 
 
+def to_simplified(text: str) -> str:
+    """`text` with its Traditional Chinese made Simplified, character by character (OpenCC t2s),
+    to compare texts whichever script they are in. Not for writing: Japanese is not spared."""
+    return _to_simplified().convert(text)
+
+
+@functools.cache
+def _to_mainland() -> opencc.OpenCC:
+    """OpenCC's Taiwan-to-Simplified converter with Mainland phrases, made on first use."""
+    return opencc.OpenCC("tw2sp.json")
+
+
+def to_mainland(text: str) -> str:
+    """`text` with its Traditional Chinese made Simplified, words as well as characters (OpenCC
+    tw2sp: 軟體 into 软件, 影片 into 视频), to compare texts whichever script and regional wording
+    they use. Not for writing. Taiwan 資料 becomes 数据, which is not always the Mainland word, so
+    `to_simplified` is the better comparison for that one."""
+    return _to_mainland().convert(text)
+
+
 @functools.lru_cache(maxsize=8192)
 def _is_simplified_only(char: str, config: str = "s2twp.json") -> bool:
     """Whether the converter of `config` changes `char` on its own and it is no Traditional
@@ -220,6 +244,15 @@ def convert_leftover_traditional(text: str) -> str:
         else sentence
         for sentence in _SENTENCE.findall(text)
     )
+
+
+_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+
+
+def replacement_key(text: str) -> str:
+    """`text` as the replacement rules compare it: ASCII letters in lower case, the rest as it is.
+    Two texts with the same key are the same text to `apply_replacements`."""
+    return text.translate(_ASCII_LOWER)
 
 
 def _misheard_pattern(misheard: str) -> re.Pattern[str]:
@@ -318,9 +351,23 @@ def normalize_transcript(
     text: str, rules: Sequence[tuple[str, str]], *, chinese: str | None = "zh-TW"
 ) -> str:
     """Speech-to-text output as the rest of the app sees it: the Chinese of the variant `chinese`
-    (`to_chinese_variant`; Japanese sentences left alone), then the dictionary's replacements.
-    This is the text that is saved, and the one pasted when the cleanup fails."""
-    return apply_replacements(to_chinese_variant(text, chinese), rules)
+    (Japanese sentences left alone), then the dictionary's replacements. This is the text that is
+    saved, and the one pasted when the cleanup fails.
+
+    The speech-to-text engines often write Traditional Chinese already, and OpenCC over a whole
+    Traditional sentence corrupts it (只要 into 隻要, 干擾 into 幹擾, and with s2hk 系統 into 係統).
+    So for the Traditional variants (zh-TW, zh-HK, yue-HK) only what is still Simplified is
+    converted (`convert_leftover_simplified`), as it is for a cleaned text: Traditional text comes
+    through as it is, and a sentence that is Simplified Chinese through and through is converted
+    whole, as `to_chinese_variant` does. zh-CN goes through `to_chinese_variant` (t2s, which leaves
+    Simplified characters alone), and None leaves the text as it is.
+    """
+    chinese = _checked_variant(chinese)
+    if chinese in _TO_TRADITIONAL:
+        text = convert_leftover_simplified(text, _TO_TRADITIONAL[chinese])
+    else:
+        text = to_chinese_variant(text, chinese)
+    return apply_replacements(text, rules)
 
 
 def finish_cleaned_text(
@@ -347,3 +394,52 @@ def finish_cleaned_text(
         else:
             text = convert_leftover_simplified(text, _TO_TRADITIONAL[chinese])
     return apply_replacements(text, rules)
+
+
+# What may stand around the comma of a stutter: spaces and tabs, not a line break.
+_AROUND_COMMA = r"[ \t\u3000]*[,\uff0c\u3001][ \t\u3000]*"
+# A Latin word, a comma (",", "，" or "、"), and the same word again. Neither is part of a longer
+# word ("the, theory" is no stutter), and the apostrophe belongs to a word.
+_LATIN_STUTTER = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z']*)" + _AROUND_COMMA + r"(\1)(?![A-Za-z0-9'])",
+    re.IGNORECASE | re.ASCII,
+)
+# Two to four CJK characters, a comma, and the same characters again.
+_CJK_STUTTER = re.compile(rf"({_CJK.pattern}{{2,4}})" + _AROUND_COMMA + r"(\1)")
+# Words that are said twice on purpose ("very, very good", "no, no"). A single letter is a word
+# only as "I" or "a", and a list ("C, C++") is not a stutter.
+_SAID_TWICE = frozenset(
+    "very so really no yes bye ha oh ok okay hey sorry please well more much".split()
+)
+_ONE_LETTER_WORDS = frozenset("ia")
+# A chain of three ("the, the, the") needs a second pass; this many is more than any speech has.
+_STUTTER_PASSES = 4
+
+
+def _latin_stutter(match: re.Match[str]) -> str:
+    word = match.group(1).lower()
+    if (len(word) == 1 and word not in _ONE_LETTER_WORDS) or word in _SAID_TWICE:
+        return match.group(0)
+    return match.group(2)
+
+
+def remove_stutters(text: str) -> str:
+    """`text` without its obvious stutters: a word or a short run that is said again right after a
+    comma, where the speaker started over. The first is dropped with the comma and the second
+    stays (as it was spelled): "Hermes，Hermes agent" is "Hermes agent", "the, the config" is "the
+    config", "任何，任何事情" is "任何事情".
+
+    This is for the text that is pasted without cleanup, which is speech-to-text as it came, and it
+    is conservative on purpose. A Latin word of two letters or more (or "I", "a") counts; a run of
+    two to four CJK characters (Han and kana) counts. The comma may be "," or "，" or "、", with
+    spaces around it but not a line break. Nothing is touched that has no comma between the
+    repeats (很好很好, 謝謝謝謝), that restarts only in part (我想要，我想先; "the, theory"), that
+    repeats five characters or more, that is a list ("C, C++"), or that is said twice on purpose
+    ("very, very good", "no, no").
+    """
+    for _ in range(_STUTTER_PASSES):
+        fixed = _CJK_STUTTER.sub(r"\2", _LATIN_STUTTER.sub(_latin_stutter, text))
+        if fixed == text:
+            break
+        text = fixed
+    return text

@@ -182,10 +182,30 @@ async def test_the_request_body_is_exactly_the_documented_one(client_with):
             "type": "json_schema",
             "json_schema": {"name": "cleaned_dictation", "strict": True, "schema": SCHEMA},
         },
-        "provider": {"require_parameters": True, "sort": "latency"},
+        "provider": {"require_parameters": True, "sort": "latency", "data_collection": "deny"},
         "reasoning": {"effort": "none"},
         "max_tokens": 256,
     }
+
+
+async def test_the_cleanup_request_denies_data_collection_beside_its_routing_options(client_with):
+    # The dictated text goes only to providers that do not keep it, as the audio of a
+    # transcription does; the routing options the request already had stay.
+    seen = {}
+
+    def handler(req):
+        seen.update(json.loads(req.content))
+        return ok_reply({"text": "x"})
+
+    await complete(client_with(handler))
+    assert seen["provider"] == {
+        "require_parameters": True,
+        "sort": "latency",
+        "data_collection": "deny",
+    }
+    seen.clear()
+    await complete(client_with(handler), fallbacks=[])
+    assert seen["provider"]["data_collection"] == "deny" and "models" not in seen
 
 
 async def test_a_completion_is_posted_to_chat_completions_with_the_app_headers(client_with):

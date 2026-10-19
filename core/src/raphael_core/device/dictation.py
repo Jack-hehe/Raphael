@@ -6,6 +6,11 @@ into stretches of speech as it comes in, and each stretch is transcribed at once
 dictation is mostly done by the time the key is released and only the last stretch is left to wait
 for (spec section 5).
 
+A cancel that comes while the brain is cleaning the text (the service is idle by then, and the
+cancel names the session) reaches the brain too, with `brain.cancel_dictation`. The brain finishes
+the request, which is paid for, but does not keep the text, and the stop is answered NOT_FOUND, as
+for any cancelled session.
+
 Threads. The recorder calls `_on_frames` on the audio thread (and once more, from the thread that
 calls `stop()`, with the last few milliseconds): it only counts the frames, puts them on a
 `queue.SimpleQueue` and, now and then, reports the level. One worker thread per session takes the
@@ -216,7 +221,8 @@ class DictationService:
     """Dictation behind `dictation.start`, `dictation.stop` and `dictation.cancel`.
 
     `router` is how the service reaches the brain (`dictionary.list`, `settings.get`,
-    `brain.finalize_dictation`) and where it sends its notifications: `audio.level` while
+    `brain.finalize_dictation`, and `brain.cancel_dictation` for a cancel that comes while the
+    text is being cleaned) and where it sends its notifications: `audio.level` while
     recording, `dictation.progress` after the stop (`stage` "transcribing" with the segments `done`
     of `total`, then "cleaning" right before the brain is asked; the reply means done).
     `recorder_factory` makes a recorder that delivers its frames to the function it is given.
@@ -267,6 +273,9 @@ class DictationService:
         self._session: _Session | None = None
         # Cancelled sessions whose worker has not exited yet (it may be inside the engine).
         self._retiring: list[_Session] = []
+        # Sessions that were stopped and whose text the brain is cleaning, by id. The service is
+        # idle by then, but a cancel for one of them still has something to cancel.
+        self._cleaning: dict[str, _Session] = {}
 
     @property
     def active(self) -> bool:
@@ -353,7 +362,11 @@ class DictationService:
             raise RpcError(NOT_FOUND, "The dictation was cancelled before it started")
 
     async def _context(self) -> tuple[list[str], str]:
-        """The user's dictionary words (newest first, as the brain lists them) and "auto".
+        """The user's dictionary words and "auto". The words are in order of priority, because an
+        engine takes the first of them only (20 locally, 50 in the cloud): the ones the user chose
+        come first and the ones learned from corrections after, each newest first as the brain
+        lists them. The learned ones, up to three a dictation, would otherwise push the user's own
+        names out.
 
         The selection chooses written variants, never limits recognition (`stt_language`). Older
         settings with only `language`, or anything that is not a valid selection, are also "auto".
@@ -362,10 +375,13 @@ class DictationService:
         language = "auto"
         try:
             result = await self._router.call("dictionary.list", {})
+            chosen: list[str] = []
+            learned: list[str] = []
             for entry in result["entries"]:
                 word = entry.get("word")
                 if isinstance(word, str) and word.strip():
-                    hints.append(word)
+                    (learned if entry.get("source") == "learned" else chosen).append(word)
+            hints = chosen + learned
         except Exception as exc:
             logger.warning("Could not read the dictionary; dictating without hints: %s", exc)
         try:
@@ -690,16 +706,23 @@ class DictationService:
         with session.lock:
             done, total = session.finished, session.found
         self._send_progress(session, "cleaning", done, total, speech)
-        result = await self._router.call(
-            "brain.finalize_dictation",
-            {
-                "raw_text": text,
-                "audio_seconds": speech,
-                "stt_ms": stt_ms,
-                "target_app": target_app,
-                "stt": "+".join(session.stt_used) or None,
-            },
-        )
+        self._cleaning[session.id] = session
+        try:
+            result = await self._router.call(
+                "brain.finalize_dictation",
+                {
+                    "raw_text": text,
+                    "audio_seconds": speech,
+                    "stt_ms": stt_ms,
+                    "target_app": target_app,
+                    "stt": "+".join(session.stt_used) or None,
+                    "session_id": session.id,
+                },
+            )
+        finally:
+            self._cleaning.pop(session.id, None)
+        if session.cancelled:  # while the brain cleaned the text: it has not kept it
+            raise RpcError(NOT_FOUND, f"The dictation session {session_id!r} was cancelled")
         return {**result, "audio_seconds": speech, "stt_ms": stt_ms, "silent": False}
 
     # --- dictation.cancel -----------------------------------------------------------------------
@@ -710,7 +733,18 @@ class DictationService:
         session = self._session
         if session is not None and (session_id is None or session.id == session_id):
             await self._cancel_session(session)
+        elif session_id is not None and session_id in self._cleaning:
+            await self._cancel_cleaning(self._cleaning[session_id])
         return {}
+
+    async def _cancel_cleaning(self, session: _Session) -> None:
+        """Cancel a session that was stopped and whose text the brain is cleaning: the brain is told
+        not to keep the text. If it cannot be told, the result is dropped here all the same."""
+        session.cancelled = True
+        try:
+            await self._router.call("brain.cancel_dictation", {"session_id": session.id})
+        except RpcError as exc:
+            logger.warning("Could not tell the brain that a dictation was cancelled: %s", exc)
 
     async def _cancel_session(self, session: _Session) -> None:
         session.cancelled = True

@@ -567,11 +567,14 @@ class App(Router):
         return any(thread.is_alive() for thread in self._threads)
 
     def _prewarm(self) -> None:
-        """Build the things the first dictation would build: the OpenCC converter (about 100 ms)
-        and the HTTP client of OpenRouter (over a second)."""
+        """Build the things the first dictation would build: the OpenCC converters (about 100 ms
+        each) and the HTTP client of OpenRouter (over a second)."""
         began = time.perf_counter()
         try:
-            textnorm.to_taiwan_traditional("软件")  # simplified: goes through OpenCC
+            textnorm.to_taiwan_traditional("软件")  # simplified: goes through OpenCC (s2twp)
+            # The cleanup is compared with the dictation in Simplified Chinese, by two conversions.
+            textnorm.to_simplified("軟體")
+            textnorm.to_mainland("軟體")
         except Exception:
             logger.exception("Could not warm up OpenCC")
         try:

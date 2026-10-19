@@ -32,6 +32,7 @@ SECRET = "sk-or-v1-TOPSECRET"
 
 METHODS = [
     "brain.finalize_dictation",
+    "brain.cancel_dictation",
     "stt.transcribe",
     "history.list",
     "history.latest",
@@ -380,6 +381,56 @@ async def test_a_fallback_after_the_call_pastes_the_converted_raw_text(router, f
     assert (r["text"], r["fallback_reason"]) == ("這是測試", "suspicious")
 
 
+@pytest.mark.parametrize(
+    "spoken",
+    [
+        "只要這個系統發佈，周末就不會干擾你。",
+        "我們只要有一個干擾，就會停下來。",
+    ],
+)
+async def test_a_fallback_pastes_and_saves_traditional_speech_as_it_is(router, spoken):
+    # No key: the text that is pasted is the speech-to-text result. It is Traditional Chinese
+    # already, and OpenCC over the whole sentence would write 隻要, 幹擾 and 釋出 into it.
+    r = await finalize(router, spoken)
+    assert (r["cleaned"], r["fallback_reason"]) == (False, "no_key")
+    assert r["text"] == r["raw_text"] == spoken
+    row = (await router.call("history.latest", {}))["item"]
+    assert (row["text"], row["raw_text"]) == (spoken, spoken)
+
+
+async def test_a_fallback_drops_the_obvious_stutters_but_the_history_keeps_the_raw_text(router):
+    r = await finalize(router, "之後會有 Hermes，Hermes agents 可以做任何，任何事情")
+    assert r["fallback_reason"] == "no_key"
+    assert r["text"] == "之後會有 Hermes agents 可以做任何事情"
+    assert r["raw_text"] == "之後會有 Hermes，Hermes agents 可以做任何，任何事情"
+    row = (await router.call("history.latest", {}))["item"]
+    assert row["text"] == r["text"] and row["raw_text"] == r["raw_text"]
+
+
+async def test_every_kind_of_fallback_drops_the_stutters(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "台北。"})  # an answer: suspicious
+    r = await finalize(router, "台灣的首都，首都是哪裡")
+    assert (r["fallback_reason"], r["text"]) == ("suspicious", "台灣的首都是哪裡")
+    fake_client.next_error = OpenRouterError(0, "network", "offline")
+    r = await finalize(router, "please update the, the config file")
+    assert (r["fallback_reason"], r["text"]) == ("error:network", "please update the config file")
+
+
+async def test_a_cleaned_text_is_the_models_to_write_and_its_repeats_stay(
+    router, fake_client, keys
+):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "Hermes, Hermes agent 好用。"})
+    r = await finalize(router, "Hermes Hermes agent 好用")
+    assert (r["cleaned"], r["text"]) == (True, "Hermes, Hermes agent 好用。")
+
+
+async def test_a_fallback_converts_only_the_simplified_words_of_mixed_speech(router):
+    r = await finalize(router, "就是只要按這個开關，资料我後面再发給你。")
+    assert r["text"] == r["raw_text"] == "就是只要按這個開關，資料我後面再發給你。"
+
+
 async def test_finalize_failure_falls_back_to_the_raw_text(router, fake_client, keys):
     keys.set(KEY)
     fake_client.next_error = OpenRouterError(0, "network", "offline")
@@ -470,6 +521,110 @@ async def test_finalize_still_answers_when_the_history_cannot_be_written(
     assert "你好" not in caplog.text
 
 
+# --- a dictation that is cancelled while its text is cleaned ------------------------------------
+# The request to the model is made, so it is paid for; the text is not kept, or it would be the
+# latest dictation, which "paste last" pastes, and it would be counted in the statistics.
+
+
+def gated(fake_client):
+    """Make the fake model wait until the test lets it answer; returns (entered, open_gate)."""
+    entered, gate = asyncio.Event(), asyncio.Event()
+    answer = fake_client.complete_json
+
+    async def wait_then_answer(**kwargs):
+        entered.set()
+        await gate.wait()
+        return await answer(**kwargs)
+
+    fake_client.complete_json = wait_then_answer
+    return entered, gate.set
+
+
+async def test_a_dictation_cancelled_while_it_is_cleaned_is_paid_for_and_not_kept(
+    router, fake_client, keys
+):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "早安，你好嗎。"}, cost=0.0004)
+    await finalize(router, "早安你好嗎", session_id="s0")  # the dictation "paste last" should find
+    fake_client.next_completion = completion({"text": "你好嗎我很好。"}, cost=0.0004)
+    entered, open_gate = gated(fake_client)
+    pending = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="s1"))
+    await entered.wait()
+    assert await router.call("brain.cancel_dictation", {"session_id": "s1"}) == {}
+    open_gate()
+    r = await pending
+    assert (r["id"], r["text"], r["cleaned"]) == (None, "你好嗎我很好。", True)
+    latest = (await router.call("history.latest", {}))["item"]
+    assert (latest["raw_text"], latest["text"]) == ("早安你好嗎", "早安，你好嗎。")
+    assert len((await router.call("history.list", {}))["items"]) == 1
+    status = await router.call("status.get", {})
+    assert status["spend"]["month_usd"] == pytest.approx(0.0008), "both requests were made"
+    assert status["last"]["text"] == latest["text"]
+    assert (await router.call("stats.summary", {}))["all"]["dictations"] == 1
+
+
+async def test_the_other_dictations_are_kept_while_one_is_cancelled(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "你好嗎我很好。"})
+    entered, open_gate = gated(fake_client)
+    first = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="s1"))
+    await entered.wait()
+    second = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="s2"))
+    await asyncio.sleep(0)
+    await router.call("brain.cancel_dictation", {"session_id": "s1"})
+    open_gate()
+    r1, r2 = await first, await second
+    assert r1["id"] is None and isinstance(r2["id"], int)
+    assert len((await router.call("history.list", {}))["items"]) == 1
+
+
+@pytest.mark.parametrize("other", ["s2", "S1", " s1"])
+async def test_cancelling_another_session_keeps_the_text(router, fake_client, keys, other):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "你好嗎我很好。"})
+    entered, open_gate = gated(fake_client)
+    pending = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="s1"))
+    await entered.wait()
+    await router.call("brain.cancel_dictation", {"session_id": other})
+    open_gate()
+    assert isinstance((await pending)["id"], int)
+
+
+async def test_a_cancel_that_comes_too_late_or_never_matched_keeps_nothing_back(
+    router, fake_client, keys
+):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "你好嗎我很好。"})
+    done = await finalize(router, "你好嗎我很好", session_id="s1")
+    assert isinstance(done["id"], int)
+    assert await router.call("brain.cancel_dictation", {"session_id": "s1"}) == {}
+    assert await router.call("brain.cancel_dictation", {"session_id": "never-seen"}) == {}
+    # The late cancel is forgotten: the same id, used again, is kept.
+    again = await finalize(router, "你好嗎我很好", session_id="s1")
+    assert isinstance(again["id"], int)
+    assert len((await router.call("history.list", {}))["items"]) == 2
+
+
+async def test_a_dictation_without_a_session_is_kept_as_before(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "你好嗎我很好。"})
+    assert isinstance((await finalize(router, "你好嗎我很好"))["id"], int)
+
+
+async def test_a_cancelled_dictation_logs_how_many_not_what(router, fake_client, keys, caplog):
+    caplog.set_level(logging.DEBUG)
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "你好嗎我很好。"})
+    entered, open_gate = gated(fake_client)
+    pending = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="sess-9f3a"))
+    await entered.wait()
+    await router.call("brain.cancel_dictation", {"session_id": "sess-9f3a"})
+    open_gate()
+    await pending
+    assert "你好嗎我很好" not in caplog.text and "sess-9f3a" not in caplog.text
+    assert any("cancelled" in record.getMessage() for record in caplog.records)
+
+
 # --- parameters ---------------------------------------------------------------------------------
 
 FIN = "brain.finalize_dictation"
@@ -499,6 +654,10 @@ BAD_PARAMS = [
     (FIN, without(GOOD, "stt_ms"), "finalize: no stt_ms"),
     (FIN, {**GOOD, "target_app": 5}, "finalize: target_app number"),
     (FIN, {**GOOD, "stt": 5}, "finalize: stt number"),
+    (FIN, {**GOOD, "session_id": 5}, "finalize: session_id number"),
+    ("brain.cancel_dictation", {}, "cancel_dictation: no session_id"),
+    ("brain.cancel_dictation", {"session_id": None}, "cancel_dictation: session_id null"),
+    ("brain.cancel_dictation", {"session_id": 5}, "cancel_dictation: session_id number"),
     ("history.list", {"query": 5}, "history.list: query number"),
     ("history.list", {"limit": "5"}, "history.list: limit str"),
     ("history.list", {"limit": 2.5}, "history.list: limit float"),
@@ -645,10 +804,11 @@ async def test_dictionary_learn_adds_the_corrected_words(router):
         },
     )
     assert learned == {"learned": ["手機", "Typeless"]}
+    # The words are terms now; the forms are only hints until the pairs are seen again.
     entries = (await router.call("dictionary.list", {}))["entries"]
     assert {(e["word"], tuple(e["misheard"]), e["source"]) for e in entries} == {
-        ("手機", ("首機",), "learned"),
-        ("Typeless", ("type less",), "learned"),
+        ("手機", (), "learned"),
+        ("Typeless", (), "learned"),
     }
 
 
@@ -672,6 +832,70 @@ async def test_dictionary_learn_takes_at_most_three(router):
     corrections = [{"word": f"Word{i}", "misheard": f"ward{i}"} for i in range(5)]
     learned = await router.call("dictionary.learn", {"corrections": corrections})
     assert learned == {"learned": ["Word0", "Word1", "Word2"]}
+
+
+async def learn(router, word, misheard, *more):
+    corrections = [{"word": word, "misheard": misheard}] + [
+        {"word": w, "misheard": m} for w, m in more
+    ]
+    return await router.call("dictionary.learn", {"corrections": corrections})
+
+
+async def test_dictionary_learn_makes_a_rule_only_when_a_pair_is_seen_again(router):
+    first = await learn(router, "Claude", "cloud")
+    assert first == {"learned": ["Claude"]}, "a term and a hint: no rule, so no extra field"
+    assert (await router.call("dictionary.list", {}))["entries"][0]["misheard"] == []
+    second = await learn(router, "Claude", "cloud")
+    assert second == {"learned": ["Claude"], "rules": ["Claude"]}
+    assert (await router.call("dictionary.list", {}))["entries"][0]["misheard"] == ["cloud"]
+    assert await learn(router, "Claude", "cloud") == {"learned": []}
+
+
+async def test_dictionary_learn_counts_the_same_pair_once_in_a_dictation(router):
+    result = await learn(router, "Claude", "cloud", ("Claude", "cloud"), ("Claude", " cloud "))
+    assert result == {"learned": ["Claude"]}
+    entries = (await router.call("dictionary.list", {}))["entries"]
+    assert entries[0]["misheard"] == [], "three of the same are one sighting"
+
+
+async def test_dictionary_learn_withdraws_a_rule_the_user_changes_back(router):
+    await learn(router, "Claude", "cloud")
+    await learn(router, "Claude", "cloud")
+    reverted = await learn(router, "cloud", "Claude")
+    assert reverted == {"learned": [], "reverted": ["Claude"]}
+    entries = (await router.call("dictionary.list", {}))["entries"]
+    assert [(e["word"], e["misheard"], e["source"]) for e in entries] == [("Claude", [], "learned")]
+    assert await learn(router, "Claude", "cloud") == {"learned": []}, "not learned again"
+
+
+async def test_a_pair_that_is_no_rule_does_not_rewrite_what_is_dictated(
+    router, fake_client, keys
+):
+    # Learning the correction 轉錄 for 轉入 must not turn a right 轉入 into 轉錄, however often
+    # it is seen, and "cloud" is Claude's only when the same correction comes twice.
+    for _ in range(3):
+        assert await learn(router, "轉錄", "轉入") == {"learned": ["轉錄"]}
+    await learn(router, "Claude", "cloud")
+    r = await finalize(router, "我想把錢轉入帳戶 upload it to the cloud")
+    assert r["text"] == "我想把錢轉入帳戶 upload it to the cloud"
+    await learn(router, "Claude", "cloud")
+    r = await finalize(router, "我想把錢轉入帳戶 upload it to the cloud")
+    assert r["text"] == "我想把錢轉入帳戶 upload it to the Claude"
+
+
+async def test_the_hints_of_the_dictionary_reach_the_cleanup_prompt(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "好。"})
+    await router.call("dictionary.add", {"word": "拉斐爾", "misheard": ["拉菲爾"]})
+    await learn(router, "Claude", "cloud")
+    await learn(router, "手機", "首機")
+    await finalize(router, "好")
+    system = fake_client.calls[0]["system"]
+    assert "- 拉斐爾（常被聽成：拉菲爾）" in system
+    assert "- Claude（常被聽成：cloud）" in system, "a hint is told to the model like a rule"
+    assert "- 手機（常被聽成：首機）" in system
+    # The words the user chose come before the ones learned.
+    assert system.index("- 拉斐爾") < system.index("- 手機") < system.index("- Claude")
 
 
 async def test_dictionary_learn_does_nothing_when_the_setting_is_off(router):

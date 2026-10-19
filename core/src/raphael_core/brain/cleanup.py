@@ -26,6 +26,7 @@ from .dictionary import DictionaryStore
 from .openrouter import CLEANUP_FALLBACKS, Completion, OpenRouterClient, OpenRouterError
 from .settings import SettingsStore
 from .spend import SpendTracker
+from .textnorm import to_mainland, to_simplified
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +69,79 @@ def reply_length(text: str) -> int:
     return len(text.strip().replace("\r", "").replace("\n", ""))
 
 
+# The length rule cannot catch a short answer to a short question ("Paris." for "what is the
+# capital of France"), so a reply is also compared with the dictation for what they have in common.
+# A cleanup keeps the words that were said: it drops fillers and restarts, adds punctuation and
+# numbers, and fixes some spellings, so most of its character pairs (two letters side by side) were
+# in the dictation. An answer, a translation or a refusal has hardly any. Only letters count: both
+# texts are made Simplified Chinese in lower case, without punctuation, digits, spaces or list
+# markers, and no pair runs across a line break of the reply. The dictation is often Mainland
+# wording in Simplified characters and the cleanup Taiwan wording in Traditional ones (the prompt
+# asks for it: 软件 and 内存 become 軟體 and 記憶體), so the share is the better of two conversions
+# to Simplified, one by characters (資料 is 资料) and one by words (軟體 is 软件). A dictation of
+# fewer than OVERLAP_MIN_LETTERS letters has too few pairs to say anything, and is not compared. The
+# letters of a number written in Chinese do not count for that: the model may write 零九一二三 as
+# digits, and a reply without letters would then look unrelated.
+OVERLAP_MIN_LETTERS = 8
+# A reply must have at least this share of its pairs in the dictation. Set from the cleanups the
+# eval cases ask for and the answers they are meant to catch (tests/brain/test_cleanup_overlap.py):
+# a good cleanup shares 0.44 at the least, for a dictation of three product names that all had to
+# be fixed, and 0.59 for one full of mishearings; the answers share 0.36 at the most, and the short
+# ones the length rule misses, 0.33.
+MIN_OVERLAP = 0.4
+_CHINESE_NUMERALS = frozenset("〇零一二三四五六七八九十百千萬万億亿兩两")
+
+
+def _letters(text: str, convert: Callable[[str], str]) -> str:
+    """The letters of `text`, converted by `convert` and in lower case."""
+    return "".join(char for char in convert(text).casefold() if char.isalpha())
+
+
+def _pairs(letters: str) -> list[str]:
+    return [letters[i : i + 2] for i in range(len(letters) - 1)]
+
+
+def _share(heard: str, reply: str, convert: Callable[[str], str]) -> float:
+    """The share of the pairs of `reply`, line by line, that `heard` has too, both converted by
+    `convert`; 0 for a reply without a pair."""
+    heard_pairs = set(_pairs(_letters(heard, convert)))
+    reply_pairs = [pair for line in reply.splitlines() for pair in _pairs(_letters(line, convert))]
+    if not reply_pairs:
+        return 0.0
+    return sum(pair in heard_pairs for pair in reply_pairs) / len(reply_pairs)
+
+
+def content_overlap(heard: str, reply: str) -> float | None:
+    """The share of the character pairs of `reply` that `heard` has too, from 0 to 1, by the
+    better of the two conversions to Simplified; None when `heard` has fewer than
+    OVERLAP_MIN_LETTERS letters that are no Chinese numerals, so that there is nothing to compare.
+    A reply without a pair has no share: 0."""
+    dictated = _letters(heard, to_simplified)
+    if sum(char not in _CHINESE_NUMERALS for char in dictated) < OVERLAP_MIN_LETTERS:
+        return None
+    return max(_share(heard, reply, convert) for convert in (to_simplified, to_mainland))
+
+
+def suspicion(raw: str, text: str) -> str | None:
+    """Why `text`, the model's reply to the cleanup of `raw`, is no cleanup; None if it passes.
+
+    "empty": nothing at all. "too_long": longer than `reply_length_limit(raw)` as `reply_length`
+    counts it, which means the model wrote something of its own. "unrelated": with a share of
+    character pairs in `raw` under MIN_OVERLAP (`content_overlap`), which means the reply says
+    something else than the dictation did, most likely an answer to it. The reply is judged as the
+    model wrote it, before the normalization that follows.
+    """
+    if not text.strip():
+        return "empty"
+    if reply_length(text) > reply_length_limit(raw):
+        return "too_long"
+    overlap = content_overlap(raw, text)
+    return "unrelated" if overlap is not None and overlap < MIN_OVERLAP else None
+
+
 def is_suspicious_reply(raw: str, text: str) -> bool:
-    """Whether `text`, the model's reply to the cleanup of `raw`, is no cleanup: nothing at all,
-    or longer than `reply_length_limit(raw)` as `reply_length` counts it, which means the model
-    wrote something of its own, most likely an answer. The reply is judged as the model wrote it,
-    before the normalization that follows."""
-    return not text.strip() or reply_length(text) > reply_length_limit(raw)
+    """Whether `text`, the model's reply to the cleanup of `raw`, is no cleanup (`suspicion`)."""
+    return suspicion(raw, text) is not None
 
 
 @functools.cache
@@ -192,6 +260,16 @@ def script_rules(languages: Sequence[str]) -> str:
 
 _PLACEHOLDER = re.compile(r"\{(dictionary|target_app|languages|script_rules)\}")
 
+# The dictionary in the prompt is cut off, so that a dictionary of hundreds of words (learned ones
+# pile up, up to three a dictation) cannot make each cleanup slower and dearer, or bury the rules
+# of the prompt. It is cut off at the end of the order the caller gives, which puts the words the
+# user chose first (`DictionaryStore.hint_words`): at most this many words, each with at most this
+# many of the forms it is heard as, and at most this many characters in all. A word that would
+# take the block past the characters is left out, and the later ones are still tried.
+PROMPT_MAX_WORDS = 100
+PROMPT_MAX_FORMS = 5
+PROMPT_MAX_CHARS = 4_000
+
 
 def build_system_prompt(
     words: Sequence[str],
@@ -211,22 +289,32 @@ def build_system_prompt(
     cannot pass for something the speaker said.
 
     `words` are the dictionary's words and `replacements` its `(misheard, word)` pairs, as
-    `DictionaryStore.hint_words()` and `replacements()` return them. There is one line per word, in
-    the order of `words`, and a word that speech-to-text tends to get wrong also lists how it comes
-    out, in the order of `replacements`. An empty dictionary is written as （空）. A line break
-    inside a word becomes a space, and a blank word or form is left out.
+    `DictionaryStore.hint_words()` and `hint_forms()` return them: the replacement rules, and the
+    forms the brain has only seen in corrections so far, which the model reads in context. There
+    is one line per word, in the order of `words`, and a word that speech-to-text tends to get
+    wrong also lists how it comes out, in the order of `replacements`. An empty dictionary is
+    written as （空）. A line break inside a word becomes a space, and a blank word or form is left
+    out. The block is cut off at the end of `words` (PROMPT_MAX_WORDS, PROMPT_MAX_FORMS and
+    PROMPT_MAX_CHARS above).
     """
     misheard_forms: dict[str, list[str]] = {}
     for misheard, word in replacements:
         form = _one_line(misheard)
         if form:
             misheard_forms.setdefault(_one_line(word), []).append(form)
-    lines = []
+    lines: list[str] = []
+    size = 0  # the characters of the lines, a line break after each
     for word in map(_one_line, words):
         if not word:
             continue
+        if len(lines) == PROMPT_MAX_WORDS:
+            break
         forms = misheard_forms.get(word)
-        lines.append(f"- {word}（常被聽成：{'、'.join(forms)}）" if forms else f"- {word}")
+        line = f"- {word}（常被聽成：{'、'.join(forms[:PROMPT_MAX_FORMS])}）" if forms else f"- {word}"
+        if size + len(line) + 1 > PROMPT_MAX_CHARS:
+            continue
+        lines.append(line)
+        size += len(line) + 1
     values = {
         "dictionary": "\n".join(lines) or "（空）",
         "target_app": describe_target_app(target_app),
@@ -325,9 +413,10 @@ class CleanupService:
         The first of these that applies decides the reason: blank text is "empty", no key is
         "no_key", the monthly limit reached is "budget". Then the model is asked, and the raw text
         stays when it does not answer in time ("timeout"), when the call fails (f"error:{kind}"),
-        or when its answer is no cleanup of the text: nothing, or longer than 1.5 times what it
-        read plus 20 characters, line breaks not counted ("suspicious"). Anything else that goes
-        wrong is "error:unexpected".
+        or when its answer is no cleanup of the text: nothing, longer than 1.5 times what it read
+        plus 20 characters (line breaks not counted), or with too few character pairs in common
+        with it (`suspicion`); that is "suspicious". Anything else that goes wrong is
+        "error:unexpected".
 
         An answer is paid for, so it is recorded in the spend whatever it holds. A cancellation
         passes through.
@@ -352,7 +441,7 @@ class CleanupService:
 
         system = build_system_prompt(
             self._dictionary.hint_words(),
-            self._dictionary.replacements(),
+            self._dictionary.hint_forms(),
             target_app,
             languages=self._settings.get("languages"),
         )
@@ -395,8 +484,8 @@ class CleanupService:
         text = text.strip() if isinstance(text, str) else ""
         if is_suspicious_reply(heard, text):
             logger.warning(
-                "Cleanup reply is empty or too long, using the raw text: reply %d characters,"
-                " dictation %d",
+                "Cleanup reply is no cleanup (empty, too long or unrelated), using the raw text:"
+                " reply %d characters, dictation %d",
                 len(text),
                 len(heard),
             )

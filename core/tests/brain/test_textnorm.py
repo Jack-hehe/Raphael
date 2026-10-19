@@ -119,6 +119,17 @@ def test_a_sentence_without_hiragana_is_never_japanese():
     assert to_taiwan_traditional("\U0002003e") == "\U0002005e"
 
 
+# --- replacement_key ---
+
+
+def test_replacement_key_lowercases_ascii_letters_only():
+    # The same equivalence as the rules' matching: é does not match É, nor the Kelvin sign k.
+    assert textnorm.replacement_key("OpenRouter GPT-4") == "openrouter gpt-4"
+    assert textnorm.replacement_key("Éclair") == "Éclair"
+    assert textnorm.replacement_key("K") == "K"
+    assert textnorm.replacement_key("拉斐爾") == "拉斐爾"
+
+
 # --- apply_replacements ---
 
 
@@ -354,6 +365,26 @@ def test_normalize_transcript_converts_then_applies_the_replacements():
     assert textnorm.normalize_transcript("拉菲爾说这个软件", rules) == "拉斐爾說這個軟體"
 
 
+@pytest.mark.parametrize("chinese", ["zh-TW", "zh-HK", "yue-HK"])
+@pytest.mark.parametrize("text", ["只要", "干擾", "系統", "發佈", "周末"])
+def test_normalize_transcript_preserves_traditional_forms(chinese, text):
+    assert textnorm.normalize_transcript(text, [], chinese=chinese) == text
+
+
+@pytest.mark.parametrize(
+    ("chinese", "expected"),
+    [
+        ("zh-TW", "這個軟體會干擾系統，後面的頭髮。"),
+        ("zh-HK", "這個軟件會干擾系統，後面的頭髮。"),
+        ("yue-HK", "這個軟件會干擾系統，後面的頭髮。"),
+    ],
+)
+def test_normalize_transcript_still_converts_pure_simplified(chinese, expected):
+    assert textnorm.normalize_transcript(
+        "这个软件会干扰系统，后面的头发。", [], chinese=chinese
+    ) == expected
+
+
 def test_finish_cleaned_text_converts_and_applies_the_replacements():
     rules = [("拉菲爾", "拉斐爾")]
     assert textnorm.finish_cleaned_text("拉菲爾说：打开软件。", rules) == "拉斐爾說：開啟軟體。"
@@ -485,8 +516,17 @@ def test_the_converter_is_created_once(monkeypatch):
 
 
 def test_the_opencc_configurations_the_variants_use_are_installed():
-    for config in ("s2twp.json", "s2hk.json", "t2s.json"):
+    for config in ("s2twp.json", "s2hk.json", "t2s.json", "tw2sp.json"):
         opencc.OpenCC(config)  # raises when the configuration is missing
+
+
+def test_to_simplified_converts_characters_and_to_mainland_converts_words_too():
+    # Two ways to one script, to compare texts: by characters (資料 is 资料, the documents) and by
+    # Mainland wording (軟體 is 软件, but 資料 is 数据).
+    assert textnorm.to_simplified("這個軟體的資料") == "这个软体的资料"
+    assert textnorm.to_mainland("這個軟體的資料") == "这个软件的数据"
+    assert textnorm.to_simplified("这个软件") == textnorm.to_mainland("这个软件") == "这个软件"
+    assert textnorm.to_simplified("OpenRouter, 好!") == "OpenRouter, 好!"
 
 
 @pytest.mark.parametrize(
@@ -562,3 +602,91 @@ def test_without_a_chinese_variant_nothing_is_converted():
 def test_an_unknown_variant_is_refused():
     with pytest.raises(ValueError):
         textnorm.normalize_transcript("x", [], chinese="zh-SG")
+
+
+# --- remove_stutters ---
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # A Latin word repeated after a comma.
+        ("Hermes，Hermes agent", "Hermes agent"),
+        ("之後會有 Hermes，Hermes agents 可以幫我", "之後會有 Hermes agents 可以幫我"),
+        ("Hermes, Hermes agent can help", "Hermes agent can help"),
+        ("用Hermes、Hermes agent", "用Hermes agent"),
+        ("please update the, the config file", "please update the config file"),
+        ("I, I think so", "I think so"),
+        ("add a, a retry", "add a retry"),
+        ("the API, API key", "the API key"),
+        ("Hermes, hermes agent", "hermes agent"),  # the later spelling stays
+        ("the, the, the config", "the config"),  # a chain
+        ("don't, don't do it", "don't do it"),
+        # A CJK run of two to four characters repeated after a comma.
+        ("任何，任何事情", "任何事情"),
+        ("基本上是任何，任何事情它都可以做", "基本上是任何事情它都可以做"),
+        ("我覺得這個，這個方案需要再改一下", "我覺得這個方案需要再改一下"),
+        ("我想先把，我想先把這個做完", "我想先把這個做完"),  # four characters
+        ("我們現在開始，現在開始吧", "我們現在開始吧"),
+        ("任何、任何事情", "任何事情"),
+        ("任何, 任何事情", "任何事情"),
+        ("任何 ， 任何事情", "任何事情"),
+        ("任何，任何，任何事情", "任何事情"),
+        ("明日の、明日の会議は三時から", "明日の会議は三時から"),
+        # The text around it is not touched, line breaks included.
+        ("第一行\nHermes，Hermes agent\n第三行", "第一行\nHermes agent\n第三行"),
+        ("任何，任何事情。另外，另外一件事。", "任何事情。另外一件事。"),
+    ],
+)
+def test_remove_stutters_drops_the_first_of_an_immediate_repeat_after_a_comma(text, expected):
+    assert textnorm.remove_stutters(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "你好。",
+        # A repeat with no comma between is no stutter to this rule.
+        "很好很好",
+        "謝謝謝謝",
+        "Hermes Hermes agent",
+        "任何任何事情",
+        # A comma that is part of a list, not of a stutter.
+        "red, green, blue",
+        "蘋果、橘子、香蕉",
+        "C, C++, Rust",
+        "1, 1, 2",
+        "x, x",
+        # A partial restart: the second part is not the first part again.
+        "我想要，我想先把這個功能做完",
+        "the, theory is right",
+        "Hermes, Hermesian",
+        "Hermes agent, Hermes agents",
+        "他說要，他說先付訂金",
+        # A single character is no run, and five or more are not touched.
+        "好，好",
+        "我，我想",
+        "我們現在開始，我們現在開始吧",
+        # The words that are said twice on purpose.
+        "very, very good",
+        "no, no, no",
+        "Yes, yes, I know",
+        "bye, bye",
+        # Not at the same place of the line: another line is another sentence.
+        "Hermes,\nHermes agent",
+        "任何，\n任何事情",
+    ],
+)
+def test_remove_stutters_leaves_everything_else_alone(text):
+    assert textnorm.remove_stutters(text) == text
+
+
+def test_remove_stutters_leaves_a_text_that_has_none_exactly_as_it_is():
+    text = "  這是一段  很長的話\r\n  with  spaces, and \t tabs。 "
+    assert textnorm.remove_stutters(text) == text
+
+
+def test_remove_stutters_is_idempotent():
+    once = textnorm.remove_stutters("the, the, the config，任何，任何事情")
+    assert textnorm.remove_stutters(once) == once

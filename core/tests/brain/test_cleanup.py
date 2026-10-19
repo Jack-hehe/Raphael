@@ -376,10 +376,10 @@ async def test_a_reply_may_be_one_and_a_half_times_the_text_plus_twenty_characte
 ):
     # The limit is 1.5 * length + 20 characters: 33.5, 35 and 170 for these three lengths.
     raw = "字" * length
-    fake_client.reply = completion({"text": "好" * longest_ok})
+    fake_client.reply = completion({"text": "字" * longest_ok})
     r = await svc.clean(raw, audio_seconds=1)
     assert (r.cleaned, r.fallback_reason) == (True, None)
-    fake_client.reply = completion({"text": "好" * (longest_ok + 1)})
+    fake_client.reply = completion({"text": "字" * (longest_ok + 1)})
     r = await svc.clean(raw, audio_seconds=1)
     assert (r.text, r.cleaned, r.fallback_reason) == (raw, False, "suspicious")
     assert len(spend_rows(conn)) == 2  # the rejected reply cost money too
@@ -511,7 +511,7 @@ def sabotage_store(request, monkeypatch, fixture, method):
         ("spend", "is_over"),
         ("settings", "get"),
         ("dictionary", "hint_words"),
-        ("dictionary", "replacements"),
+        ("dictionary", "hint_forms"),
     ],
 )
 async def test_a_store_that_fails_falls_back_to_raw(
@@ -699,6 +699,51 @@ def test_a_replacement_for_a_word_that_is_not_listed_is_ignored():
     assert dictionary_lines(prompt) == ["- 拉斐爾"]
 
 
+def test_the_dictionary_block_is_cut_off_at_a_hundred_words_in_the_order_given():
+    words = [f"Word{n}" for n in range(150)]
+    lines = dictionary_lines(build_system_prompt(words, []))
+    assert lines == [f"- Word{n}" for n in range(cleanup.PROMPT_MAX_WORDS)]
+    assert cleanup.PROMPT_MAX_WORDS == 100
+
+
+def test_a_word_is_listed_with_at_most_five_of_its_forms():
+    forms = [(f"form{n}", "Raphael") for n in range(9)]
+    (line,) = dictionary_lines(build_system_prompt(["Raphael"], forms))
+    assert line == "- Raphael（常被聽成：form0、form1、form2、form3、form4）"
+    assert cleanup.PROMPT_MAX_FORMS == 5
+
+
+def test_the_dictionary_block_is_cut_off_at_four_thousand_characters():
+    words = ["字" * 98 + f"{n:02d}" for n in range(60)]  # 100 characters, a line of 102 each
+    lines = dictionary_lines(build_system_prompt(words, []))
+    assert lines == [f"- {word}" for word in words[: len(lines)]]
+    assert 0 < len(lines) < 60 and sum(len(line) + 1 for line in lines) <= cleanup.PROMPT_MAX_CHARS
+    assert cleanup.PROMPT_MAX_CHARS == 4_000
+
+
+def test_a_word_that_would_not_fit_is_skipped_and_the_later_ones_are_still_listed():
+    words = ["甲", "字" * 5_000, "乙"]
+    assert dictionary_lines(build_system_prompt(words, [])) == ["- 甲", "- 乙"]
+
+
+async def test_the_words_the_user_chose_survive_a_dictionary_full_of_learned_ones(
+    svc, fake_client, dictionary
+):
+    # The oldest entries are the user's own: the newest-first order the store lists would drop
+    # them first. The prompt gets the user's words before the learned ones.
+    for name in ("拉斐爾", "OpenRouter", "Tailscale"):
+        dictionary.add(name)
+    for n in range(130):
+        dictionary.add(f"Learned{n:03d}", source="learned")
+    fake_client.reply = completion({"text": "你好。"})
+    await svc.clean("你好", audio_seconds=1)
+    lines = dictionary_lines(fake_client.calls[0]["system"])
+    assert len(lines) == cleanup.PROMPT_MAX_WORDS
+    assert set(lines[:3]) == {"- 拉斐爾", "- OpenRouter", "- Tailscale"}
+    assert lines[3] == "- Learned129", "then the newest of the learned"
+    assert "- Learned033" in lines and "- Learned032" not in lines, "97 of the learned fit"
+
+
 @pytest.mark.parametrize("word", ["{dictionary}", "{0}", "{", "}{", "{text}"])
 def test_braces_in_the_dictionary_are_text(word):
     prompt = build_system_prompt([word], [("x{y}", word)])
@@ -805,10 +850,43 @@ async def test_what_was_heard_is_the_raw_text_unless_given(svc, fake_client):
 
 async def test_the_length_rule_and_max_tokens_follow_what_the_model_read(svc, fake_client):
     heard = "字" * 100
-    fake_client.reply = completion({"text": "好" * 170})
+    fake_client.reply = completion({"text": "字" * 170})
     r = await svc.clean("字", audio_seconds=1, heard=heard)
     assert r.cleaned is True
     assert fake_client.calls[0]["max_tokens"] == cleanup.max_tokens_for(heard)
+
+
+# --- the content-overlap rule -------------------------------------------------------------------
+# What it lets through and rejects is in test_cleanup_overlap.py; this is what the service does.
+
+
+async def test_a_reply_that_shares_nothing_with_the_dictation_falls_back_and_was_paid_for(
+    svc, fake_client, spend
+):
+    fake_client.reply = completion({"text": "台北。"}, cost=0.0003)
+    r = await svc.clean("台灣的首都是哪裡", audio_seconds=2)
+    assert (r.text, r.cleaned, r.fallback_reason) == ("台灣的首都是哪裡", False, "suspicious")
+    assert r.cost_usd == 0.0003 and spend.month_total() == pytest.approx(0.0003)
+
+
+async def test_an_answer_in_another_script_falls_back_too(svc, fake_client):
+    fake_client.reply = completion({"text": "Paris."})
+    r = await svc.clean("what is the capital of France", audio_seconds=2)
+    assert (r.text, r.fallback_reason) == ("what is the capital of France", "suspicious")
+
+
+async def test_a_good_cleanup_of_the_same_dictation_goes_through(svc, fake_client):
+    fake_client.reply = completion({"text": "台灣的首都是哪裡？"})
+    r = await svc.clean("台灣的首都是哪裡", audio_seconds=2)
+    assert (r.text, r.cleaned, r.fallback_reason) == ("台灣的首都是哪裡？", True, None)
+
+
+async def test_the_overlap_is_judged_against_what_the_model_read(svc, fake_client):
+    # The model read the speech-to-text result as heard, in Simplified Chinese; the raw text that
+    # is pasted on a fallback was converted. A cleanup in Traditional characters is still one.
+    fake_client.reply = completion({"text": "這個軟體的資料我明天再發給你。"})
+    r = await svc.clean("這個軟體的資料我明天再發給你", audio_seconds=2, heard="这个软件的资料我明天再发给你")
+    assert (r.cleaned, r.fallback_reason) == (True, None)
 
 
 # --- the length rule and lists ------------------------------------------------------------------
@@ -823,7 +901,7 @@ def test_line_breaks_do_not_count_toward_the_length():
 
 
 def test_a_long_list_from_short_speech_gets_the_room_of_its_line_breaks():
-    raw = "一" * 30  # the limit is 65
+    raw = "字" * 30  # the limit is 65
     reply = "\n".join(f"{n}. {'字' * 4}" for n in range(1, 10))  # 9 items of 7, 8 line breaks
     assert len(reply) == 71 and cleanup.reply_length(reply) == 63
     assert not cleanup.is_suspicious_reply(raw, reply)

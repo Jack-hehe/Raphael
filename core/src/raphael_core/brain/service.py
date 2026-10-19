@@ -12,6 +12,10 @@ does not say is here:
   int and a bool is no number.
 - A dictation is not lost to bookkeeping. If the history cannot be written, the text still comes
   back (with id None); if the key store fails, it comes back as spoken, without cleanup.
+- A dictation that is cancelled while its text is being cleaned (`brain.cancel_dictation`, for the
+  `session_id` that `brain.finalize_dictation` was given) is paid for, because the request to the
+  model is made, but it is not saved: it would be the latest dictation, which "paste last" pastes,
+  and it would be counted in the statistics. The answer still carries its text, with id None.
 - The status of OpenRouter is the latest contact: a key check or a cleanup call. It starts as
   "unknown" and it is "no_key" for as long as no key is stored, whatever happened before.
 - Account usage is from the last successful key check. Status reads refresh it in the background
@@ -37,7 +41,7 @@ from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from ..router import Router
 from .cleanup import CleanupService
 from .cloud_stt import CloudTranscriber
-from .dictionary import DictionaryStore
+from .dictionary import DictionaryStore, Learned
 from .history import HistoryItem, HistoryStore
 from .openrouter import KeyInfo, OpenRouterClient, OpenRouterError
 from .pricing import PricingService
@@ -46,7 +50,12 @@ from .settings import SettingsStore
 from .spend import SpendTracker
 from .stats import StatsStore
 from .suggest import suggest_words
-from .textnorm import apply_replacements, finish_cleaned_text, normalize_transcript
+from .textnorm import (
+    apply_replacements,
+    finish_cleaned_text,
+    normalize_transcript,
+    remove_stutters,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +219,8 @@ class Brain:
         self._key_checked_at_ms: int | None = None
         self._key_refresh_task: asyncio.Task[None] | None = None
         self._closed = False
+        # The dictations whose text is being cleaned, by session; True once one was cancelled.
+        self._cleaning: dict[str, bool] = {}
         self._pruned_at_ms: int | None = None
         self._history = HistoryStore(conn)
         self._dictionary = DictionaryStore(conn, now_ms)
@@ -241,6 +252,7 @@ class Brain:
         """Put every method of the brain on `router`."""
         methods = {
             "brain.finalize_dictation": self._finalize_dictation,
+            "brain.cancel_dictation": self._cancel_dictation,
             "stt.transcribe": self._stt.transcribe,
             "history.list": self._history_list,
             "history.latest": self._history_latest,
@@ -273,6 +285,7 @@ class Brain:
         stt_ms = _milliseconds(params, "stt_ms")
         target_app = _opt_str(params, "target_app")
         stt = _opt_str(params, "stt")
+        session_id = _opt_str(params, "session_id")
         self._prune_history_if_due()
 
         rules = self._dictionary.replacements()
@@ -292,39 +305,49 @@ class Brain:
         # The model reads the text as speech-to-text heard it, with the replacements but without
         # OpenCC: s2twp would hand it errors such as 隻要 for 只要, which it then keeps. The
         # normalized text is what is saved, and what is pasted when there is no cleanup.
-        result = await self._cleanup.clean(
-            normalized,
-            audio_seconds=audio_seconds,
-            heard=apply_replacements(raw_text, rules),
-            target_app=target_app,
-        )
+        if session_id is not None:
+            self._cleaning[session_id] = False
+        try:
+            result = await self._cleanup.clean(
+                normalized,
+                audio_seconds=audio_seconds,
+                heard=apply_replacements(raw_text, rules),
+                target_app=target_app,
+            )
+        finally:
+            # Taken in the same breath as the text is saved, so that no cancel comes in between.
+            cancelled = self._cleaning.pop(session_id, False)
         if result.model is not None and self._openrouter.state == "ok":
             # The model answered, so the time it took is a round trip to OpenRouter.
             self._openrouter.latency_ms = result.llm_ms
         if result.cleaned:
-            # A fallback is the normalized text already; doing it twice could repeat a replacement.
             text = finish_cleaned_text(result.text, rules, chinese=chinese)
         else:
-            text = result.text
+            # A fallback is the normalized text already; doing it twice could repeat a replacement.
+            # Nobody has tidied it, so its obvious stutters go; the history keeps it as it was.
+            text = remove_stutters(result.text)
 
-        entry_id = self._save(
-            HistoryItem(
-                id=None,
-                created_at_ms=self._now_ms(),
-                kind="dictation",
-                raw_text=normalized,
-                text=text,
-                cleaned=result.cleaned,
-                fallback_reason=result.fallback_reason,
-                target_app=target_app,
-                audio_seconds=float(audio_seconds),
-                stt_ms=stt_ms,
-                llm_ms=result.llm_ms,
-                model=result.model,
-                cost_usd=result.cost_usd,
-                stt=stt,
-            )
+        item = HistoryItem(
+            id=None,
+            created_at_ms=self._now_ms(),
+            kind="dictation",
+            raw_text=normalized,
+            text=text,
+            cleaned=result.cleaned,
+            fallback_reason=result.fallback_reason,
+            target_app=target_app,
+            audio_seconds=float(audio_seconds),
+            stt_ms=stt_ms,
+            llm_ms=result.llm_ms,
+            model=result.model,
+            cost_usd=result.cost_usd,
+            stt=stt,
         )
+        if cancelled:
+            logger.info("A dictation was cancelled while its text was cleaned; not keeping it")
+            entry_id = None
+        else:
+            entry_id = self._save(item)
         return {
             "id": entry_id,
             "text": text,
@@ -333,6 +356,15 @@ class Brain:
             "fallback_reason": result.fallback_reason,
             "llm_ms": result.llm_ms,
         }
+
+    async def _cancel_dictation(self, params: dict) -> dict:
+        """`{session_id}`: the app cancelled that dictation. If its text is being cleaned, the
+        cleanup goes on (it is paid for) but the text is not saved. A session that is not being
+        cleaned, or no longer is, is no matter."""
+        session_id = _str(params, "session_id")
+        if session_id in self._cleaning:
+            self._cleaning[session_id] = True
+        return {}
 
     def _save(self, item: HistoryItem) -> int | None:
         """Write the history row, or return None if that fails: the text matters more."""
@@ -395,9 +427,17 @@ class Brain:
 
     async def _dictionary_learn(self, params: dict) -> dict:
         """`{corrections: [{word, misheard}]}` from the app's correction watch: the user replaced
-        `misheard` with `word` in a dictation it pasted. Learns at most LEARN_MAX of them, none if
-        the setting is off, and returns the words that changed the dictionary. The words are
-        never logged, only how many."""
+        `misheard` with `word` in a dictation it pasted. Learns at most LEARN_MAX different ones,
+        none if the setting is off, and returns `{learned: [word]}`: the words that changed the
+        dictionary.
+
+        The core decides what a correction becomes (`DictionaryStore.learn_pair`): the word is a
+        term of the dictionary, and the pair a hint for the models until it has been seen again
+        and is fit for a replacement rule. So a word in `learned` need not have a rule. Two
+        optional fields are left out when empty: `rules`, the words of `learned` that gained a
+        replacement rule, and `reverted`, the words of which a learned rule was withdrawn
+        because the user changed the text back (those are not in `learned`). The words are never
+        logged, only how many."""
         corrections = _required(params, "corrections")
         if not isinstance(corrections, list):
             raise _invalid("corrections must be a list")
@@ -405,15 +445,31 @@ class Brain:
         for correction in corrections:
             if not isinstance(correction, dict):
                 raise _invalid("corrections must be a list of objects")
-            pairs.append((_str(correction, "word"), _str(correction, "misheard")))
+            pairs.append((_str(correction, "word").strip(), _str(correction, "misheard").strip()))
         if not self._settings.get("learn_corrections"):
             return {"learned": []}
         learned: list[str] = []
-        for word, misheard in pairs[:LEARN_MAX]:
-            if self._dictionary.learn(word, misheard) and word.strip() not in learned:
-                learned.append(word.strip())
-        logger.info("Learned %d of %d corrections", len(learned), len(pairs))
-        return {"learned": learned}
+        rules: list[str] = []
+        reverted: list[str] = []
+        # The same pair twice in one dictation is one sighting, not two.
+        for word, misheard in list(dict.fromkeys(pairs))[:LEARN_MAX]:
+            outcome = self._dictionary.learn_pair(word, misheard)
+            if outcome is Learned.REVERTED:
+                if misheard not in reverted:
+                    reverted.append(misheard)  # the word whose rule was withdrawn
+            elif outcome is not Learned.NOTHING and word not in learned:
+                learned.append(word)
+            if outcome is Learned.RULE and word not in rules:
+                rules.append(word)
+        logger.info(
+            "Learned %d of %d corrections, withdrew %d", len(learned), len(pairs), len(reverted)
+        )
+        result: dict = {"learned": learned}
+        if rules:
+            result["rules"] = rules
+        if reverted:
+            result["reverted"] = reverted
+        return result
 
     # --- settings -------------------------------------------------------------------------------
 
