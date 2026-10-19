@@ -20,13 +20,20 @@ read from Windows Credential Manager, where `--set-key` stores it; it is never p
 to a file.
 
 Cases file: one JSON object per line with `id`, `input`, and optionally `dictionary` (a list of
-words), `must_contain` and `must_not_contain` (lists of text) and `target_app` (the process name
-of the window the text goes to, such as LINE.exe) and `languages` (the `languages` setting the
-case is cleaned for; DEFAULT_LANGUAGES, the user's own three, when it is left out). Spaces are
-ignored when a text is looked for, so 打開 YouTube and 打開YouTube are the same. What the model
-leaves in the wrong Chinese script is converted as the app does for the case's Chinese variant
-(for Taiwan, 打开 into 開啟), so a text to look for must be one that conversion leaves alone:
-Chinese in the variant's own script is.
+words), `must_contain` and `must_not_contain` (lists of text), `must_contain_ci` (like
+`must_contain`, in any letter case: for a name whose capitalisation is not the point) and
+`must_contain_any` (alternatives: at least one of them must be there, in any letter case), and
+`target_app` (the process name of the window the text goes to, such as LINE.exe) and `languages`
+(the `languages` setting the case is cleaned for; DEFAULT_LANGUAGES, the user's own three, when it
+is left out). Spaces are ignored when a text is looked for, so 打開 YouTube and 打開YouTube are the
+same. What the model leaves in the wrong Chinese script is converted as the app does for the
+case's Chinese variant (for Taiwan, 打开 into 開啟), so a text to look for must be one that
+conversion leaves alone: Chinese in the variant's own script is.
+
+There are two cases files. `cleanup_cases.jsonl` holds the held-out cases: none of them, nor
+anything like its wording, is in the prompt, so that what is measured is the model's judgment, not
+its memory of the examples. `regression_cases.jsonl` holds the owner's own dictations that went
+wrong once, and is run the same way (`--cases ../eval/regression_cases.jsonl`).
 """
 
 import argparse
@@ -86,6 +93,8 @@ class Case:
     target_app: str | None = None  # the process name of the window the text goes to
     # The `languages` setting the case is cleaned for.
     languages: list[str] = field(default_factory=lambda: list(DEFAULT_LANGUAGES))
+    must_contain_ci: list[str] = field(default_factory=list)  # must_contain, in any letter case
+    must_contain_any: list[str] = field(default_factory=list)  # at least one, in any letter case
 
     @property
     def chinese(self) -> str | None:
@@ -167,6 +176,8 @@ def load_cases(path: Path) -> list[Case]:
                 must_not_contain=_string_list(entry, "must_not_contain", where),
                 target_app=target_app,
                 languages=languages,
+                must_contain_ci=_string_list(entry, "must_contain_ci", where),
+                must_contain_any=_string_list(entry, "must_contain_any", where),
             )
         )
     return cases
@@ -185,6 +196,11 @@ def transcript_for(case: Case) -> str:
 
 def _squash(text: str) -> str:
     return "".join(text.split())
+
+
+def _quoted(texts: list[str]) -> str:
+    """The texts as 「a」、「b」."""
+    return "、".join(f"「{text}」" for text in texts)
 
 
 def failed_checks(case: Case, reply: str) -> list[str]:
@@ -210,9 +226,17 @@ def failed_checks(case: Case, reply: str) -> list[str]:
             "app 會當成可疑而改貼原文"
         )
     final = _squash(finish_cleaned_text(reply, _NO_RULES, chinese=case.chinese))
+    folded = final.casefold()
     for needle in case.must_contain:
         if _squash(needle) not in final:
             failures.append(f"缺少「{needle}」")
+    for needle in case.must_contain_ci:
+        if _squash(needle).casefold() not in folded:
+            failures.append(f"缺少「{needle}」（不分大小寫）")
+    if case.must_contain_any and not any(
+        _squash(needle).casefold() in folded for needle in case.must_contain_any
+    ):
+        failures.append(f"一個都沒有：{_quoted(case.must_contain_any)}")
     for needle in case.must_not_contain:
         if _squash(needle) in final:
             failures.append(f"不該出現「{needle}」")
@@ -347,9 +371,13 @@ def render_report(
         if case.dictionary:
             lines.append(f"- 字典：{'、'.join(case.dictionary)}")
         if case.must_contain:
-            lines.append(f"- 必須出現：{'、'.join(f'「{t}」' for t in case.must_contain)}")
+            lines.append(f"- 必須出現：{_quoted(case.must_contain)}")
+        if case.must_contain_ci:
+            lines.append(f"- 必須出現（不分大小寫）：{_quoted(case.must_contain_ci)}")
+        if case.must_contain_any:
+            lines.append(f"- 至少出現一個（不分大小寫）：{_quoted(case.must_contain_any)}")
         if case.must_not_contain:
-            lines.append(f"- 不可出現：{'、'.join(f'「{t}」' for t in case.must_not_contain)}")
+            lines.append(f"- 不可出現：{_quoted(case.must_not_contain)}")
         for model in models:
             outcome = by_key.get((model, case.id))
             if outcome is None:
