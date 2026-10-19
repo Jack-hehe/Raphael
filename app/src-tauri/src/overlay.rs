@@ -485,9 +485,11 @@ const PAGE_LOG_MAX: usize = 2000;
 /// subscription that failed, animation frames that stopped) or, at `info` and `debug`, what it
 /// is doing. It has no console anyone can see, so this is the only trace. `level` is `"error"`,
 /// `"warn"`, `"info"` or `"debug"`; errors are logged as warnings, because the overlay never
-/// stops dictation.
+/// stops dictation. Only the overlay page may call it, and what it sends is event kinds and
+/// metadata, never the words of a report (see diagnostics.ts): the log is not a place for them.
 #[tauri::command]
-pub fn overlay_log(webview: Webview, level: String, message: String) {
+pub fn overlay_log(webview: Webview, level: String, message: String) -> Result<(), String> {
+    crate::commands::ensure_caller(webview.label(), crate::OVERLAY_WINDOW)?;
     let label = webview.label();
     let message = page_message(&message);
     match page_log_level(&level) {
@@ -495,6 +497,7 @@ pub fn overlay_log(webview: Webview, level: String, message: String) {
         log::Level::Debug => log::debug!("overlay page \"{label}\": {message}"),
         _ => log::warn!("overlay page \"{label}\": {message}"),
     }
+    Ok(())
 }
 
 /// How a page message of `level` is logged: unknown levels count as warnings.
@@ -567,6 +570,19 @@ fn hide_from_alt_tab(_window: &WebviewWindow) {}
 mod tests {
     use super::*;
     use tauri::ipc::InvokeResponseBody;
+
+    #[test]
+    fn only_the_overlay_page_writes_to_the_log() {
+        // The command cannot be called here without a running app, so read its source.
+        let source = include_str!("overlay.rs").replace("\r\n", "\n");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let command = production
+            .split("#[tauri::command]")
+            .find(|command| command.contains("pub fn overlay_log("))
+            .unwrap();
+        let body = command.split("\n}\n").next().unwrap();
+        assert!(body.contains("ensure_caller(webview.label(), crate::OVERLAY_WINDOW)"));
+    }
 
     #[test]
     fn emblem_sits_18px_from_the_right_and_12px_above_the_taskbar() {
