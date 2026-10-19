@@ -108,7 +108,7 @@ export class OverlayController {
         this.emblem.level = event.value;
         break;
       case "progress":
-        // A single percentage beside the complete ring replaces the clockwise progress light.
+        // How far the dictation has come is a percentage beside the whole ring.
         this.updateProgress({
           stage: event.stage,
           done: event.done,

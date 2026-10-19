@@ -56,9 +56,9 @@ pub enum Stage {
     Done,
 }
 
-/// What the emblem's progress ring shows: `done` of `total` segments transcribed (while
-/// transcribing), and the length of the speech, which sets how long the cleanup is expected to
-/// take.
+/// What the percentage beside the emblem is made from: `done` of `total` segments transcribed
+/// (while transcribing), and the length of the speech, which sets how long the cleanup is expected
+/// to take.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Progress {
     pub stage: Stage,
