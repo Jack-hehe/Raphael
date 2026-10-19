@@ -203,6 +203,7 @@ impl FieldProbe for UiaProbe {
             if kind != AppKind::Terminal
                 && matches!(field.mode, ReadMode::Pending)
                 && field.keyboard_field
+                && !field.retried
                 && field.keys.is_some()
                 && field.focus.input_observation_allowed()
                 && field.paste_input_is_current()
@@ -340,7 +341,10 @@ fn discover_with_retries(
     let mut attempt = 1;
     loop {
         let failure = match discover(automation, target, pasted, scope, kind) {
-            Ok(field) => return Some(field),
+            Ok(mut field) => {
+                field.retried = attempt > 1;
+                return Some(field);
+            }
             Err(failure) => failure,
         };
         let pause = (failure.retry && tree_is_built_on_demand(kind))
@@ -432,6 +436,8 @@ fn discover(
             .map(|error| format!("0x{:08X}", error.code().0 as u32))
     );
     let enter = enter_key(kind, single_line_edit_box(&focused));
+    let terminal_panel = kind == AppKind::CodeEditor
+        && class_name(&focused).is_some_and(|class| is_terminal_panel_class(&class));
     let com = Com::join().ok_or_else(|| Failure::stop("com_apartment"))?;
     let focus = Arc::new(FocusWatch::new(identity.ok(), target.pid, target.hwnd));
     let handler: IUIAutomationFocusChangedEventHandler = FocusChanged(focus.clone()).into();
@@ -446,6 +452,8 @@ fn discover(
         readers,
         keyboard_field,
         hidden_input: false,
+        terminal_panel,
+        retried: false,
         hwnd: target.hwnd,
         kind,
         scope: scope.clone(),
@@ -511,9 +519,32 @@ fn editor_hides_text(
     kind: AppKind,
     keyboard_field: bool,
     all_sources_empty: bool,
+    terminal_panel: bool,
     pasted: &str,
 ) -> bool {
-    kind == AppKind::CodeEditor && keyboard_field && all_sources_empty && !pasted.trim().is_empty()
+    kind == AppKind::CodeEditor
+        && keyboard_field
+        && all_sources_empty
+        && !terminal_panel
+        && !pasted.trim().is_empty()
+}
+
+/// The HTML class a page element reports, for telling the editor's own input box from a terminal
+/// panel's. Markup of the app, never text of the user; not logged.
+fn class_name(element: &IUIAutomationElement) -> Option<String> {
+    // SAFETY: a plain property read on an element owned by this thread.
+    unsafe { element.CurrentClassName() }
+        .ok()
+        .map(|name| name.to_string())
+}
+
+/// Whether the class is that of the hidden input of an xterm.js terminal, such as the integrated
+/// terminal of VS Code. It is empty whatever the editor's accessibility setting is, so it says
+/// nothing about that setting.
+fn is_terminal_panel_class(class: &str) -> bool {
+    class
+        .split_whitespace()
+        .any(|name| name.starts_with("xterm"))
 }
 
 /// What Enter means to the keystroke fallback. In a code editor it may accept an IntelliSense
@@ -740,6 +771,12 @@ struct UiaField {
     /// Whether every source that was read came back empty: a code editor's input box while its
     /// accessibility support is off, as opposed to one that holds other text than the paste.
     hidden_input: bool,
+    /// Whether the focused element is the hidden input of an editor's terminal panel (xterm.js).
+    terminal_panel: bool,
+    /// Whether discovery took more than one attempt. A retry may have adopted another element
+    /// than the one the paste went to; a source that shows the pasted text proves the field, but
+    /// the key fallback has only the assumption, so it is not started after one.
+    retried: bool,
     hwnd: isize,
     kind: AppKind,
     scope: WatchScope,
@@ -922,6 +959,7 @@ impl UiaField {
             self.kind,
             self.keyboard_field,
             self.hidden_input,
+            self.terminal_panel,
             &self.pasted,
         )
     }
@@ -1691,20 +1729,57 @@ mod tests {
 
     #[test]
     fn an_editor_whose_input_box_is_empty_is_hiding_its_text() {
-        let hides = |kind, keyboard_field, empty, pasted| {
-            editor_hides_text(kind, keyboard_field, empty, pasted)
+        let hides = |kind, keyboard_field, empty, panel, pasted| {
+            editor_hides_text(kind, keyboard_field, empty, panel, pasted)
         };
-        assert!(hides(AppKind::CodeEditor, true, true, "pasted words"));
+        assert!(hides(
+            AppKind::CodeEditor,
+            true,
+            true,
+            false,
+            "pasted words"
+        ));
         // The box holds other text than the paste: accessibility support is on, or it is not the
         // editor's own input.
-        assert!(!hides(AppKind::CodeEditor, true, false, "pasted words"));
+        assert!(!hides(
+            AppKind::CodeEditor,
+            true,
+            false,
+            false,
+            "pasted words"
+        ));
         // Not an edit control, not an editor, or nothing was pasted.
-        assert!(!hides(AppKind::CodeEditor, false, true, "pasted words"));
+        assert!(!hides(
+            AppKind::CodeEditor,
+            false,
+            true,
+            false,
+            "pasted words"
+        ));
         for kind in [AppKind::Chromium, AppKind::Terminal, AppKind::Other] {
-            assert!(!hides(kind, true, true, "pasted words"));
+            assert!(!hides(kind, true, true, false, "pasted words"));
         }
-        assert!(!hides(AppKind::CodeEditor, true, true, " \n"));
-        assert!(!hides(AppKind::CodeEditor, true, true, ""));
+        assert!(!hides(AppKind::CodeEditor, true, true, false, " \n"));
+        assert!(!hides(AppKind::CodeEditor, true, true, false, ""));
+        // The terminal panel's input is empty whatever the setting is.
+        assert!(!hides(
+            AppKind::CodeEditor,
+            true,
+            true,
+            true,
+            "pasted words"
+        ));
+    }
+
+    #[test]
+    fn the_hidden_input_of_a_terminal_panel_is_told_from_the_editors_own() {
+        assert!(is_terminal_panel_class("xterm-helper-textarea"));
+        assert!(is_terminal_panel_class("input xterm-helper-textarea"));
+        assert!(!is_terminal_panel_class(
+            "inputarea monaco-mouse-cursor-text"
+        ));
+        assert!(!is_terminal_panel_class(""));
+        assert!(!is_terminal_panel_class("not-xterm"));
     }
 
     #[test]
@@ -1786,8 +1861,9 @@ mod tests {
     }
 
     #[test]
-    fn a_poll_checks_before_and_after_the_provider_and_nowhere_else() {
-        // The guard is the three-call focus and password check of `check_focus`.
+    fn a_guarded_read_checks_once_before_and_once_after_the_provider() {
+        // The guard is the three-call focus and password check of `check_focus`. A poll reads
+        // through this and nothing else makes the check (see `UiaField::read`).
         let mut checks = 0;
         let text = checked_read(
             &mut checks,
