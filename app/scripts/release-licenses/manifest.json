@@ -72,5 +72,43 @@
         }
       ]
     }
+  ],
+  "components": [
+    {
+      "name": "Handy",
+      "version": "9e57a0d",
+      "license": "MIT",
+      "repository": "https://github.com/cjpais/Handy",
+      "source": "https://github.com/cjpais/Handy/tree/9e57a0d7929fcc6417ea0d6e54c1b57f62635edd",
+      "usage": "Raphael's paste module (src/paste/clipboard.rs and windows.rs) is ported from Handy's src-tauri/src/paste_tx/windows.rs, paste_tx/mod.rs and input.rs",
+      "files": [
+        {
+          "file": "handy-9e57a0d-LICENSE.txt",
+          "sourceUrl": "https://raw.githubusercontent.com/cjpais/Handy/9e57a0d7929fcc6417ea0d6e54c1b57f62635edd/LICENSE",
+          "sha256": "3564e8ec14055ed54f896e8660a62627ea4fc3a1b64f72b798593df00e1f4edc"
+        }
+      ]
+    },
+    {
+      "name": "Microsoft Edge WebView2 SDK loader",
+      "version": "1.0.3800.47",
+      "license": "BSD-3-Clause",
+      "repository": "https://aka.ms/webview",
+      "source": "https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.3800.47",
+      "usage": "webview2-com-sys links x64/WebView2LoaderStatic.lib into the desktop executable; that file (SHA-256 89c6b872783b8f6c3cedbff618adb42082d455c615453ae10cfc753f1e8f25d8) is build/native/x64/WebView2LoaderStatic.lib of this SDK",
+      "requiresCrate": {
+        "name": "webview2-com-sys",
+        "version": "0.39.1"
+      },
+      "files": [
+        {
+          "file": "webview2-sdk-1.0.3800.47-LICENSE.txt",
+          "sourceUrl": "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.3800.47/microsoft.web.webview2.1.0.3800.47.nupkg",
+          "archiveSha256": "56c9f26bdd07916a2d1949fb58a5c7e434dfa1173577dca879206050c4e718db",
+          "archiveMember": "LICENSE.txt",
+          "sha256": "0af8f1b807512aae39c2ac1aa4d0cae65cabecb6fd554b8439a5162a0d6eca55"
+        }
+      ]
+    }
   ]
 }

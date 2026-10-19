@@ -144,7 +144,12 @@ function supplementalTexts(pkg, directory) {
   if (!/^[a-f0-9]{40}$/.test(entry.gitCommit) || !Array.isArray(entry.files) || !entry.files.length) {
     throw new Error("supplemental license provenance is incomplete");
   }
-  return entry.files.map((file) => {
+  return pinnedTexts(directory, entry.files);
+}
+
+// License texts the manifest pins by SHA-256 and by the https URL they were taken from.
+function pinnedTexts(directory, files) {
+  return files.map((file) => {
     const path = resolve(directory, file.file);
     if (!inside(directory, path) || !regularFile(path) || !/^https:\/\//.test(file.sourceUrl)) {
       throw new Error("supplemental license file or source URL is invalid");
@@ -157,6 +162,41 @@ function supplementalTexts(pkg, directory) {
     if (!text) throw new Error("supplemental license is not UTF-8 text");
     return text;
   });
+}
+
+// Shipped code that is neither a crate nor an npm package: binary libraries a crate links in, and
+// source adapted into this repository. A component bound to a crate is listed only while that crate
+// ships and fails closed if the crate's version moved, because the pinned text describes one version.
+function componentRecords(directory, crates, gaps) {
+  const indexPath = join(directory, "manifest.json");
+  if (!existsSync(indexPath)) return [];
+  const index = readJson(indexPath);
+  if (index.schemaVersion !== 1) throw new Error("invalid supplemental license manifest");
+  const records = [];
+  for (const component of index.components ?? []) {
+    const label = `Component ${component.name}@${component.version}`;
+    try {
+      const required = component.requiresCrate;
+      if (required) {
+        const versions = crates.filter((crate) => crate.name === required.name).map((crate) => crate.version);
+        if (!versions.length) continue;
+        if (!versions.includes(required.version)) {
+          throw new Error(`pinned for ${required.name} ${required.version}, but the build has ${versions.join(", ")}`);
+        }
+      }
+      if (!component.usage || !/^https:\/\//.test(component.source) || !Array.isArray(component.files) || !component.files.length) {
+        throw new Error("component provenance is incomplete");
+      }
+      records.push({
+        ecosystem: "Component", name: component.name, version: component.version, spdx: component.license,
+        repository: repositoryUrl(component.repository), source: component.source, note: component.usage,
+        texts: [...new Set(pinnedTexts(directory, component.files))].sort(compare),
+      });
+    } catch (error) {
+      gaps.push(`${label}: ${error.message}`);
+    }
+  }
+  return records;
 }
 
 export function readCargoMetadata(appDirectory) {
@@ -353,6 +393,7 @@ export function collectDependencyNotices({
     const spdx = nodeLicense(pkg, entry);
     collect({ ecosystem: "Frontend", name: pkg.name, version: pkg.version, spdx, repository: pkg.repository }, directory, undefined, () => companionLicenseTexts(pkg, spdx, nodeCandidates));
   }
+  records.push(...componentRecords(supplementalDirectory, shippedCrates, gaps));
   const unique = new Map();
   for (const record of records) {
     const key = `${record.ecosystem} ${record.name}@${record.version}`;
@@ -370,6 +411,7 @@ export function renderDependencyNotices({ records, gaps }) {
   return records.map((record) => [
     "=".repeat(78), `${record.ecosystem}: ${record.name} ${record.version}`, `SPDX: ${record.spdx}`,
     `Repository: ${record.repository}`, ...(record.source ? [`Source: ${record.source}`] : []),
+    ...(record.note ? [`Used for: ${record.note}`] : []),
     "-".repeat(78), record.texts.join(`\n\n${"-".repeat(78)}\n\n`),
   ].join("\n")).join("\n\n");
 }

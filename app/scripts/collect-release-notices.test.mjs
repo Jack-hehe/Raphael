@@ -381,6 +381,84 @@ describe("version-pinned upstream license supplements", () => {
   });
 });
 
+describe("pinned binary and ported components", () => {
+  function componentFixture() {
+    const test = fixture();
+    const directory = join(test.appDirectory, "scripts", "release-licenses");
+    const component = {
+      name: "Static loader", version: "2.0.0", license: "BSD-3-Clause", repository: "https://example.com/loader",
+      source: "https://example.com/loader/2.0.0", usage: "linked into the desktop executable by the loader crate",
+      requiresCrate: { name: "loader-sys", version: "1.0.0" },
+      files: [{ file: "loader-LICENSE.txt", sourceUrl: "https://example.com/loader/2.0.0/LICENSE", sha256: createHash("sha256").update(mit).digest("hex") }],
+    };
+    const save = () => write(join(directory, "manifest.json"), JSON.stringify({ schemaVersion: 1, packages: [], components: [component] }));
+    write(join(directory, "loader-LICENSE.txt"), mit);
+    save();
+    return { ...test, directory, component, save };
+  }
+
+  it("lists a component with its provenance and license text while the crate that links it ships", () => {
+    const test = componentFixture();
+    test.rust("loader-sys", "1.0.0");
+
+    const result = collectReleaseNotices(test.options);
+
+    expect(result.records.map((record) => `${record.ecosystem} ${record.name} ${record.version}`)).toEqual([
+      "Component Static loader 2.0.0", "Rust loader-sys 1.0.0",
+    ]);
+    expect(result.text).toContain("Component: Static loader 2.0.0\nSPDX: BSD-3-Clause\nRepository: https://example.com/loader\nSource: https://example.com/loader/2.0.0\nUsed for: linked into the desktop executable");
+  });
+
+  it("omits a component whose crate does not ship and refuses one pinned for another crate version", () => {
+    const test = componentFixture();
+    expect(collectReleaseNotices(test.options).records).toEqual([]);
+
+    test.rust("loader-sys", "1.1.0");
+    expect(() => collectReleaseNotices(test.options)).toThrow("Component Static loader@2.0.0: pinned for loader-sys 1.0.0, but the build has 1.1.0");
+  });
+
+  it("lists a component with no crate requirement unconditionally and rejects modified or unsourced texts", () => {
+    const test = componentFixture();
+    delete test.component.requiresCrate;
+    test.save();
+    expect(collectReleaseNotices(test.options).records.map((record) => record.name)).toEqual(["Static loader"]);
+
+    write(join(test.directory, "loader-LICENSE.txt"), `${mit}\nChanged copyright`);
+    expect(() => collectReleaseNotices(test.options)).toThrow("Component Static loader@2.0.0: supplemental license SHA-256 mismatch");
+
+    write(join(test.directory, "loader-LICENSE.txt"), mit);
+    test.component.source = "http://example.com/loader";
+    test.save();
+    expect(() => collectReleaseNotices(test.options)).toThrow("component provenance is incomplete");
+  });
+
+  it("checks in a pinned license text for every component the release binaries carry", () => {
+    const directory = join(scripts, "release-licenses");
+    const manifest = JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8"));
+    expect(manifest.components.map((entry) => `${entry.name} ${entry.version}`)).toEqual([
+      "Handy 9e57a0d", "Microsoft Edge WebView2 SDK loader 1.0.3800.47",
+    ]);
+    for (const entry of manifest.components) {
+      expect(entry.source).toMatch(/^https:\/\//);
+      for (const file of entry.files) {
+        expect(createHash("sha256").update(readFileSync(join(directory, file.file))).digest("hex")).toBe(file.sha256);
+        expect(file.sourceUrl).toMatch(/^https:\/\//);
+      }
+    }
+    // The ported code is pinned to the commit named in the headers of the files that contain it.
+    const handy = manifest.components[0];
+    expect(handy.files[0].sourceUrl).toContain("/9e57a0d7929fcc6417ea0d6e54c1b57f62635edd/");
+    for (const source of ["clipboard.rs", "windows.rs"]) {
+      expect(readFileSync(join(scripts, "..", "src-tauri", "src", "paste", source), "utf8")).toContain("Handy");
+    }
+    // webview2-com-sys ships the static loader; the pinned SDK is the one its library file comes from.
+    const webview = manifest.components[1];
+    expect(webview.requiresCrate).toEqual({ name: "webview2-com-sys", version: "0.39.1" });
+    expect(webview.files[0].archiveSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(webview.usage).toContain("89c6b872783b8f6c3cedbff618adb42082d455c615453ae10cfc753f1e8f25d8");
+  });
+});
+
 describe("notice collector CLI", () => {
   it("shows invocation help without running Cargo or requiring the Python bundle", () => {
     const result = spawnSync(process.execPath, [join(scripts, "collect-release-notices.mjs"), "--help"], { encoding: "utf8" });
