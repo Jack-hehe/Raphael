@@ -40,6 +40,9 @@ target/
 dist/
 .pytest_cache/
 coverage/
+*.log
+/core/build/
+/app/src-tauri/release-notices/
 
 # Local agent worktrees
 /.worktrees/

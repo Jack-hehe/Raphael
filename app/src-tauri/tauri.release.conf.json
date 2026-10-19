@@ -1,0 +1,18 @@
+{
+  "bundle": {
+    "targets": ["nsis"],
+    "resources": {
+      "../../core/dist/raphael-core/": "core/",
+      "release-notices/": "licenses/"
+    },
+    "windows": {
+      "allowDowngrades": false,
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English", "TradChinese", "Japanese"],
+        "displayLanguageSelector": true
+      }
+    }
+  }
+}

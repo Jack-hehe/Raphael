@@ -1,0 +1,159 @@
+name: Build Windows release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-release:
+    name: Build and verify Windows installer
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      RUSTUP_TOOLCHAIN: "1.98.0"
+      RAPHAEL_TEST_MODELS: "0"
+      PYTHON_KEYRING_BACKEND: keyring.backends.fail.Keyring
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check release inputs
+        run: |
+          $privateDirectory = Join-Path $env:RUNNER_TEMP 'raphael-release-no-private-assets'
+          if (Test-Path -LiteralPath $privateDirectory) { throw 'Expected an absent private-assets override.' }
+          "RAPHAEL_PRIVATE_DIR=$privateDirectory" >> $env:GITHUB_ENV
+          $privatePaths = @(
+            'assets-private', 'models', 'voice', 'raphael_ref', 'eval/data',
+            'app/public/private', 'app/src-tauri/icons-private',
+            'app/src-tauri/tauri.private.conf.json'
+          )
+          foreach ($path in $privatePaths) {
+            if (Test-Path -LiteralPath $path) { throw "Unexpected private release input: $path" }
+          }
+          $version = (Get-Content app/package.json -Raw | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$' -or $version -ne $tauriVersion) {
+            throw 'Release versions must match and use a numeric major.minor.patch.'
+          }
+          "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.11"
+          working-directory: core
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+            .python-version
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install $env:RUSTUP_TOOLCHAIN --profile minimal --component rustfmt --component clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        with:
+          workspaces: |
+            app/src-tauri -> target
+            app/src-tauri/vendor/handy-keys -> target
+          key: windows-release
+          cache-bin: false
+
+      - name: Install locked frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Check frontend
+        working-directory: app
+        run: |
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run check:contrast
+
+      - name: Install locked Python build dependencies
+        working-directory: core
+        run: |
+          uv python install
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv sync --locked --group packaging
+
+      - name: Check Python
+        working-directory: core
+        run: uv run --locked --no-sync pytest -q -ra -W error
+
+      - name: Freeze Python core
+        working-directory: core
+        run: uv run --locked --no-sync python packaging/build.py
+
+      - name: Verify frozen core
+        working-directory: core
+        run: uv run --locked --no-sync python packaging/smoke.py --core dist/raphael-core/raphael-core.exe
+
+      - name: Collect dependency notices
+        working-directory: app
+        run: node scripts/collect-release-notices.mjs
+
+      - name: Check Rust formatting
+        working-directory: app/src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: Build public Windows installer
+        working-directory: app
+        run: node scripts/tauri.mjs build --config src-tauri/tauri.release.conf.json --bundles nsis --ci -- --locked
+
+      - name: Check Rust and keyboard listener
+        working-directory: app/src-tauri
+        run: |
+          cargo test --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --lib --manifest-path vendor/handy-keys/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --release --all-targets -- -D warnings
+
+      - name: Verify installed application
+        run: |
+          $installers = @(Get-ChildItem app/src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' -File)
+          if ($installers.Count -ne 1) { throw 'Expected one Windows installer.' }
+          ./app/scripts/verify-windows-install.ps1 -Installer $installers[0].FullName -Python "$pwd/core/.venv/Scripts/python.exe"
+
+      - name: Prepare release assets and checksums
+        run: |
+          New-Item -ItemType Directory -Path release-assets | Out-Null
+          $installer = Get-ChildItem app/src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' -File
+          Copy-Item -LiteralPath $installer.FullName -Destination "release-assets/Raphael-$env:RELEASE_VERSION-windows-x64-setup.exe"
+          Copy-Item -LiteralPath app/src-tauri/release-notices/THIRD_PARTY_NOTICES.txt -Destination release-assets
+          $checksums = Get-ChildItem release-assets -File | Sort-Object Name | ForEach-Object {
+            "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"
+          }
+          $checksums | Set-Content -LiteralPath release-assets/SHA256SUMS.txt -Encoding ascii
+
+      - name: Upload verified release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Raphael-windows-x64
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14

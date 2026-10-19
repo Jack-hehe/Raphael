@@ -14,6 +14,12 @@ Raphael 是以 Windows 為起點的個人語音助理，靈感來自「智慧之
 
 這是非官方的粉絲個人專案，與原作權利人無關。儲存庫不提供動畫素材、私人圖案、原始錄音或個人語音模型。
 
+## 下載安裝
+
+Windows 10／11 x64 使用者可到 [GitHub Releases](https://github.com/Jack-hehe/Raphael/releases/latest) 下載 `Raphael-版本-windows-x64-setup.exe`。安裝檔已包含 Python 核心與執行所需函式庫，不需要安裝 Python、Node.js 或 Rust。
+
+首次啟動依照引導設定金鑰、麥克風與語音模型；模型另外下載，需要網路與磁碟空間。若電腦尚未安裝 WebView2，安裝程式會下載其 runtime。公開版使用公開備用圖案。首版未經程式碼簽章，Windows 可能顯示未知發行者提示；可對照 Release 附的 SHA-256 校驗檔確認下載內容。
+
 ## 目前可以做什麼
 
 目前的里程碑是 Windows 上的第一階段聽寫流程：
@@ -83,7 +89,7 @@ npm run tauri -- dev
 node scripts/tauri.mjs build --debug --no-bundle -- --locked
 ```
 
-目前 Python 核心仍從原始碼 checkout 啟動，此指令不會產生可獨立安裝的完整安裝程式。私人圖案設定請參考[本機素材說明](docs/private-icons.md)。
+這個 debug 執行檔仍從原始碼 checkout 啟動 Python 核心，不是安裝程式。正式版會使用安裝目錄內的獨立核心；製作方式見 [Windows Release 流程](docs/windows-release.md)。私人圖案設定請參考[本機素材說明](docs/private-icons.md)。
 
 ## 品質檢查
 
