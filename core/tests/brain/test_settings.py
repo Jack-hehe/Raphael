@@ -1,6 +1,12 @@
 import pytest
 
-from raphael_core.brain.settings import DEFAULTS, STT_CLOUD_MODELS, STT_ENGINES, SettingsStore
+from raphael_core.brain.settings import (
+    AGENT_ROUTERS,
+    DEFAULTS,
+    STT_CLOUD_MODELS,
+    STT_ENGINES,
+    SettingsStore,
+)
 
 
 def test_defaults_and_set(conn):
@@ -28,6 +34,9 @@ def test_the_defaults_are_the_documented_ones():
         "stt_engine": "cloud",
         "stt_cloud_model": "elevenlabs/scribe-v2",
         "learn_corrections": True,
+        "agent_router": "jev",
+        "agent_model": "openai/gpt-6-luna",
+        "agent_city": "台北",
     }
 
 
@@ -224,3 +233,61 @@ def test_learning_corrections_is_on_by_default_and_takes_a_bool(conn):
     assert s.get("learn_corrections") is False
     with pytest.raises(TypeError):
         s.set("learn_corrections", 0)
+
+
+# --- the voice assistant -----------------------------------------------------------------------
+
+
+def test_the_assistant_routes_with_jev_and_answers_with_luna_in_taipei_by_default(conn):
+    s = SettingsStore(conn)
+    assert s.get("agent_router") == "jev"
+    assert s.get("agent_model") == "openai/gpt-6-luna"
+    assert s.get("agent_city") == "台北"
+    assert AGENT_ROUTERS == ("jev", "luna")
+
+
+def test_the_router_can_be_jev_or_luna_and_nothing_else(conn):
+    s = SettingsStore(conn)
+    s.set("agent_router", "luna")
+    assert s.get("agent_router") == "luna"
+    for value in ("JEV", "", "keywords"):
+        with pytest.raises(ValueError, match="agent_router"):
+            s.set("agent_router", value)
+    with pytest.raises(TypeError):
+        s.set("agent_router", 1)
+    assert s.get("agent_router") == "luna"
+
+
+def test_the_answer_model_and_the_city_are_saved_without_the_spaces_around_them(conn):
+    s = SettingsStore(conn)
+    s.set("agent_model", " anthropic/claude-haiku-5.5 ")
+    s.set("agent_city", "  New York ")
+    assert s.get("agent_model") == "anthropic/claude-haiku-5.5"
+    assert s.get("agent_city") == "New York"
+    stored = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM settings")}
+    assert stored == {"agent_model": '"anthropic/claude-haiku-5.5"', "agent_city": '"New York"'}
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("agent_model", ""),
+        ("agent_model", "   "),
+        ("agent_model", "openai/gpt 6"),  # a model id has no spaces
+        ("agent_model", "m" * 101),
+        ("agent_city", ""),
+        ("agent_city", " \t\n"),
+        ("agent_city", "c" * 101),
+    ],
+)
+def test_a_blank_or_absurd_model_or_city_is_refused_and_not_saved(conn, key, value):
+    s = SettingsStore(conn)
+    with pytest.raises(ValueError, match=key):
+        s.set(key, value)
+    assert s.get(key) == DEFAULTS[key]
+
+
+@pytest.mark.parametrize("key", ["agent_model", "agent_city"])
+def test_a_model_or_city_that_is_not_text_is_a_type_error(conn, key):
+    with pytest.raises(TypeError):
+        SettingsStore(conn).set(key, None)

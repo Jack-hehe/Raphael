@@ -30,6 +30,10 @@ TYPING_WPM = 40
 # one, at most MAX_BY_DAY_DAYS: a year of weeks for the home page's activity grid, and a day).
 BY_DAY_DAYS = 14
 MAX_BY_DAY_DAYS = 371
+# `by_app` covers this many days, today the last: the same for every call, whatever `days` is.
+BY_APP_DAYS = 30
+# What a dictation without a target app is filed under in `by_app`.
+UNKNOWN_APP = "unknown"
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _ONE_DAY = timedelta(days=1)
@@ -126,6 +130,10 @@ class StatsStore:
         - streak_days: the days in a row, up to today or else up to yesterday, with a dictation
         - by_day: the last `days` days (BY_DAY_DAYS unless asked, kept between 1 and
           MAX_BY_DAY_DAYS), oldest first, with the dictations and words of each
+        - by_app: the last BY_APP_DAYS days (today the last), the dictations and words of each
+          target app by the name of its process, the app with the most words first (ties by
+          name); a dictation without a target app is filed under "unknown". Names are kept as
+          they were saved, so "Code.exe" and "code.exe" are two apps.
         - active_days: how many days have at least one dictation
         - longest_streak_days: the most days in a row with a dictation, ever
         - speed_wpm: all words over all speaking time in minutes, or None without any audio
@@ -153,13 +161,19 @@ class StatsStore:
         by_day = {day: [0, 0] for day in chart_days}  # day -> [dictations, words]
         days_with_dictations: set[date] = set()
         processing_ms = 0
+        apps_since = _day_start_ms(today - (BY_APP_DAYS - 1) * _ONE_DAY, zone)
+        by_app: dict[str, list[int]] = {}  # process name -> [dictations, words]
 
         rows = self._conn.execute(
-            "SELECT created_at_ms, text, audio_seconds, stt_ms, llm_ms FROM history"
+            "SELECT created_at_ms, text, audio_seconds, stt_ms, llm_ms, target_app FROM history"
             " WHERE kind = 'dictation'"
         )
-        for created_at_ms, text, audio_seconds, stt_ms, llm_ms in rows:
+        for created_at_ms, text, audio_seconds, stt_ms, llm_ms, target_app in rows:
             words = count_words(text)
+            if created_at_ms >= apps_since:
+                app_totals = by_app.setdefault((target_app or "").strip() or UNKNOWN_APP, [0, 0])
+                app_totals[0] += 1
+                app_totals[1] += words
             totals["all"].add(words, audio_seconds)
             processing_ms += stt_ms + llm_ms
             for name, (start, end) in bounds.items():
@@ -191,6 +205,10 @@ class StatsStore:
         summary["by_day"] = [
             {"date": day.isoformat(), "dictations": by_day[day][0], "words": by_day[day][1]}
             for day in chart_days
+        ]
+        summary["by_app"] = [
+            {"app": app, "dictations": counts[0], "words": counts[1]}
+            for app, counts in sorted(by_app.items(), key=lambda entry: (-entry[1][1], entry[0]))
         ]
         summary["active_days"] = len(days_with_dictations)
         summary["longest_streak_days"] = _longest_streak(days_with_dictations)

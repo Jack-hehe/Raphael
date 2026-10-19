@@ -1,8 +1,9 @@
 """Settings shared by the whole brain, kept in the database as JSON text.
 
 Only keys in DEFAULTS exist. A key nobody has set reads as its default. Most keys are only
-type-checked; the speech-to-text ones must also be one of their listed values, and `languages` a
-valid selection (see raphael_core.languages).
+type-checked; the speech-to-text ones and the voice assistant's router must also be one of their
+listed values, `languages` a valid selection (see raphael_core.languages), and the assistant's
+model and city a text of some substance (saved without the spaces around it).
 
 `language` is the setting `languages` replaced, kept for one release: it reads as what the
 selection amounts to ("zh", "ja", "en" or "auto"), and setting it sets `languages`. A saved
@@ -41,8 +42,19 @@ DEFAULTS: dict[str, Any] = {
     # After a paste, the app watches the text field for up to 60 s and learns the words the user
     # corrects by hand (`dictionary.learn`). Off: the app does not read the field at all.
     "learn_corrections": True,
+    # The voice assistant (raphael_core.agent). The router decides what a request is: "jev" asks
+    # OpenRouter's Jev model and falls back to the language model when Jev fails or is unsure;
+    # "luna" asks the language model only.
+    "agent_router": "jev",
+    # The model that words the assistant's answers (and routes, for "luna" and as the fallback).
+    "agent_model": "openai/gpt-6-luna",
+    # Where the weather is looked up when the user does not say.
+    "agent_city": "台北",
 }
 
+AGENT_ROUTERS = ("jev", "luna")
+# The longest model id or city name taken: far more than any real one, short of an accident.
+AGENT_TEXT_MAX_CHARS = 100
 STT_ENGINES = ("cloud", "local")
 # The OpenRouter transcription models that can be chosen, the default first. All are listed in
 # OpenRouter's speech-to-text collection, each with an endpoint (checked 2026-10-18).
@@ -59,7 +71,9 @@ _CHOICES: dict[str, tuple[str, ...]] = {
     "stt_engine": STT_ENGINES,
     "stt_cloud_model": STT_CLOUD_MODELS,
     "language": LEGACY_LANGUAGES,
+    "agent_router": AGENT_ROUTERS,
 }
+_TRIMMED = ("agent_model", "agent_city")
 
 
 def _checked(key: str, value: Any) -> Any:
@@ -82,6 +96,21 @@ def _allowed(key: str, value: Any) -> Any:
     if choices is not None and value not in choices:
         raise ValueError(f"Setting {key!r} must be one of {', '.join(choices)}")
     return value
+
+
+def _trimmed(key: str, value: str) -> str:
+    """`value` without the spaces around it, or ValueError if that leaves nothing or too much.
+
+    A model id also has no space inside it. A city may: "New York".
+    """
+    text = value.strip()
+    if not text:
+        raise ValueError(f"Setting {key!r} must not be blank")
+    if len(text) > AGENT_TEXT_MAX_CHARS:
+        raise ValueError(f"Setting {key!r} must be at most {AGENT_TEXT_MAX_CHARS} characters")
+    if key == "agent_model" and any(char.isspace() for char in text):
+        raise ValueError(f"Setting {key!r} must not contain spaces")
+    return text
 
 
 class SettingsStore:
@@ -126,6 +155,8 @@ class SettingsStore:
             value = checked_languages(key, value)
         else:
             value = _allowed(key, _checked(key, value))
+            if key in _TRIMMED:
+                value = _trimmed(key, value)
         if key == "language":
             key, value = "languages", from_legacy(value)
         encoded = json.dumps(value, allow_nan=False)

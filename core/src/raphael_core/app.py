@@ -1,8 +1,8 @@
 """The core's entry point: the device side and the brain wired to one router.
 
 `build_app` makes an `App`, a Router with every method of the plan on it: the brain's (Task 8), the
-dictation service's (Task 12) and the few that belong to neither (`core.*`, `models.*`, `audio.*`).
-`__main__` serves it on stdio.
+dictation service's (Task 12), the voice assistant's (`agent.*`, raphael_core.agent) and the few
+that belong to none of them (`core.*`, `models.*`, `audio.*`). `__main__` serves it on stdio.
 
 Start-up. The app's first calls come within seconds of the process starting (`core.hello`, the
 saved microphone, the settings page's questions), so the models, which take tens of seconds to
@@ -41,6 +41,7 @@ import asyncio
 import concurrent.futures
 import functools
 import logging
+import re
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -51,9 +52,18 @@ from typing import Any
 import keyring
 
 from . import __version__, paths
+from .agent.device import DeviceActions, NullActions, WindowsActions
+from .agent.service import AgentService
 from .brain import textnorm
 from .brain.db import connect
-from .brain.openrouter import Completion, KeyInfo, OpenRouterClient, OpenRouterError
+from .brain.openrouter import (
+    Completion,
+    Decision,
+    KeyInfo,
+    OpenRouterClient,
+    OpenRouterError,
+    TextCompletion,
+)
 from .brain.secrets import CredentialKeyStore, KeyStore, MemoryKeyStore
 from .brain.service import Brain
 from .device.models import REGISTRY, ModelManager
@@ -93,6 +103,7 @@ SHUTDOWN_PATIENCE_S = 3.0
 # The key the fake LLM's in-memory key store holds: any key makes the cleanup run.
 _FAKE_KEY = "fake-llm-key"
 _TRANSCRIPT_OPEN, _TRANSCRIPT_CLOSE = "<transcript>\n", "\n</transcript>"
+_QUESTION = re.compile(r"<question>\n(.*)\n</question>\Z", re.DOTALL)
 
 
 # --- the fake LLM -----------------------------------------------------------------------------
@@ -100,7 +111,10 @@ _TRANSCRIPT_OPEN, _TRANSCRIPT_CLOSE = "<transcript>\n", "\n</transcript>"
 
 class EchoClient:
     """Stands in for the OpenRouter client when RAPHAEL_FAKE_LLM=1: the "cleaned" text is the
-    transcript as it was said, at no cost, with no network. The end-to-end runs use it."""
+    transcript as it was said, at no cost, with no network. The end-to-end runs use it.
+
+    The voice assistant gets small talk from it: every request is "chat", and the reply is the
+    question as it was asked."""
 
     def __init__(self) -> None:
         self.warmed_up = False
@@ -117,17 +131,57 @@ class EchoClient:
         schema_name: str,
         timeout_s: float,
         max_tokens: int,
+        reasoning_effort: str = "none",
     ) -> Completion:
-        text = user
-        if text.startswith(_TRANSCRIPT_OPEN) and text.endswith(_TRANSCRIPT_CLOSE):
-            text = text[len(_TRANSCRIPT_OPEN) : len(text) - len(_TRANSCRIPT_CLOSE)]
+        data: dict
+        if schema_name == "raphael_route":  # the assistant's router
+            data = {
+                "route": "chat",
+                "command": "none",
+                "needs_weather": False,
+                "needs_search": False,
+                "needs_time": False,
+                "app": "",
+            }
+        elif schema_name == "raphael_reply":  # the assistant's answer: the question, echoed
+            question = _QUESTION.search(user)
+            data = {"prefix": "", "text": question.group(1) if question else "", "detail": ""}
+        elif schema_name == "raphael_app":
+            data = {"app": ""}
+        else:  # the cleanup
+            text = user
+            if text.startswith(_TRANSCRIPT_OPEN) and text.endswith(_TRANSCRIPT_CLOSE):
+                text = text[len(_TRANSCRIPT_OPEN) : len(text) - len(_TRANSCRIPT_CLOSE)]
+            data = {"text": text}
         return Completion(
-            data={"text": text},
+            data=data,
             model="fake/echo",
             cost_usd=0.0,
             prompt_tokens=0,
             completion_tokens=0,
             latency_ms=0,
+        )
+
+    async def decide(self, **kwargs: Any) -> Decision:
+        # Jev, sure that every request is small talk.
+        answers = {
+            "route": {"type": "choice", "choice": "chat", "confidence": 0.99},
+            "command": {"type": "choice", "choice": "none", "confidence": 0.99},
+            "needs_weather": {"type": "noul", "noul": 0.0},
+            "needs_search": {"type": "noul", "noul": 0.0},
+            "needs_time": {"type": "noul", "noul": 0.0},
+        }
+        return Decision(answers=answers, cost_usd=0.0, latency_ms=0)
+
+    async def chat_text(self, **kwargs: Any) -> TextCompletion:
+        return TextCompletion(
+            text="(the fake LLM does not search the web)",
+            model="fake/echo",
+            cost_usd=0.0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=0,
+            sources=[],
         )
 
     async def transcribe(self, **kwargs: Any) -> Any:
@@ -467,7 +521,8 @@ class App(Router):
     `data_dir` holds the database, and the models unless `manager` says otherwise (or
     RAPHAEL_MODELS_DIR does). With `fake_audio`, a WAV file plays in real time in place of the
     microphone; with `fake_llm`, an in-process client returns the transcript unchanged and there is
-    an in-memory key. `load_kit` is for tests.
+    an in-memory key, and the voice assistant does nothing to this computer. `agent_actions` is
+    what the assistant does to it otherwise (Windows, by default). `load_kit` is for tests.
     """
 
     def __init__(
@@ -478,6 +533,7 @@ class App(Router):
         fake_llm: bool = False,
         manager: ModelManager | None = None,
         load_kit: Callable[[], Any] | None = None,
+        agent_actions: DeviceActions | None = None,
     ) -> None:
         super().__init__()
         self._fake_audio = fake_audio
@@ -502,6 +558,10 @@ class App(Router):
             self._conn.close()
             raise
         self.brain.register(self)
+        if agent_actions is None:
+            agent_actions = NullActions() if fake_llm else WindowsActions()
+        self.agent = AgentService(self._conn, self.client, self.keys, actions=agent_actions)
+        self.agent.register(self)
 
         self._speech = SpeechModels(
             self.manager, make_segmenter=self._make_segmenter, make_engine=self._make_engine
@@ -668,6 +728,7 @@ class App(Router):
             ("cancel the dictation", close_dictation),
             ("close the level meter", close_meter),
             ("stop the account usage refresh", self.brain.aclose),
+            ("end the assistant's requests", self.agent.aclose),
             ("close the HTTP client", self.client.aclose),
             ("wait for the start-up threads", join_threads),
             ("let go of the speech models", close_speech),

@@ -1,0 +1,151 @@
+"""Tests for the voice assistant's history: the turns, newest first, and what a turn becomes."""
+
+import pytest
+
+from raphael_core.agent.history import AgentHistory, Turn
+
+
+class Clock:
+    def __init__(self, now_ms=1_000):
+        self.now_ms = now_ms
+
+    def __call__(self):
+        return self.now_ms
+
+
+@pytest.fixture
+def clock():
+    return Clock()
+
+
+@pytest.fixture
+def history(conn, clock):
+    return AgentHistory(conn, clock)
+
+
+def add(history, clock, question="q", *, advance=1, **overrides):
+    clock.now_ms += advance
+    fields = {
+        "session_id": "s1",
+        "question": question,
+        "route": "chat",
+        "prefix": "答",
+        "text": "好。",
+        "status": "done",
+    }
+    return history.add(**{**fields, **overrides})
+
+
+def test_a_turn_is_stored_as_given_and_stamped_with_the_time(history, clock):
+    turn_id = add(
+        history, clock, "台北天氣如何", route="answer", detail="長一點的答案", cost_usd=0.0004
+    )
+    assert history.get(turn_id) == Turn(
+        id=turn_id,
+        created_at_ms=1_001,
+        session_id="s1",
+        question="台北天氣如何",
+        route="answer",
+        prefix="答",
+        text="好。",
+        detail="長一點的答案",
+        status="done",
+        cost_usd=0.0004,
+    )
+
+
+def test_a_turn_needs_no_detail_and_costs_nothing_by_default(history, clock):
+    turn = history.get(add(history, clock))
+    assert turn.detail is None and turn.cost_usd == 0.0
+
+
+def test_an_unknown_turn_is_none(history):
+    assert history.get(99) is None
+
+
+def test_list_is_newest_first(history, clock):
+    ids = [add(history, clock, f"q{i}") for i in range(3)]
+    assert [t.id for t in history.list()] == ids[::-1]
+    assert [t.question for t in history.list()] == ["q2", "q1", "q0"]
+
+
+def test_turns_made_in_the_same_millisecond_keep_their_order(history, clock):
+    ids = [add(history, clock, f"q{i}", advance=0) for i in range(3)]
+    assert [t.id for t in history.list()] == ids[::-1]
+
+
+def test_list_pages_by_the_id_of_the_last_turn_seen(history, clock):
+    ids = [add(history, clock, f"q{i}") for i in range(5)]
+    first = history.list(limit=2)
+    assert [t.id for t in first] == [ids[4], ids[3]]
+    second = history.list(limit=2, before_id=first[-1].id)
+    assert [t.id for t in second] == [ids[2], ids[1]]
+    last = history.list(limit=2, before_id=second[-1].id)
+    assert [t.id for t in last] == [ids[0]]
+    assert history.list(limit=2, before_id=ids[0]) == []
+
+
+def test_resolve_sets_the_outcome_of_a_turn_and_adds_its_cost(history, clock):
+    turn_id = add(history, clock, route="command", prefix="問", text="複製嗎？", status="confirm",
+                  cost_usd=0.001)  # fmt: skip
+    assert history.resolve(turn_id, prefix="了", text="已複製。", status="done", cost_usd=0.002)
+    turn = history.get(turn_id)
+    assert (turn.prefix, turn.text, turn.status, turn.detail) == ("了", "已複製。", "done", None)
+    assert turn.cost_usd == pytest.approx(0.003)
+    assert turn.question == "q" and turn.created_at_ms == 1_001  # the rest stays
+
+
+def test_resolving_a_turn_that_is_gone_says_so(history):
+    assert history.resolve(7, prefix="了", text="x", status="done") is False
+
+
+def test_recent_is_the_last_answered_turns_oldest_first(history, clock):
+    for i in range(6):
+        add(history, clock, f"q{i}")
+    add(history, clock, "pending", status="confirm")
+    add(history, clock, "refused", status="denied")
+    add(history, clock, "failed", status="error")
+    assert [t.question for t in history.recent(4)] == ["q2", "q3", "q4", "q5"]
+    assert [t.question for t in history.recent(100)] == [f"q{i}" for i in range(6)]
+    assert history.recent(0) == []
+
+
+def test_clear_deletes_every_turn_and_counts_them(history, clock):
+    for i in range(3):
+        add(history, clock, f"q{i}")
+    assert history.clear() == 3
+    assert history.list() == []
+    assert history.clear() == 0
+
+
+def test_prune_deletes_the_turns_before_a_time(history, clock):
+    for i in range(4):
+        add(history, clock, f"q{i}", advance=10)  # at 1010, 1020, 1030, 1040
+    assert history.prune(1_030) == 2
+    assert [t.question for t in history.list()] == ["q3", "q2"]
+
+
+def test_a_confirmation_that_died_with_the_process_is_expired(history, clock):
+    waiting = add(history, clock, "a", status="confirm", prefix="問")
+    done = add(history, clock, "b")
+    assert history.expire_pending() == 1
+    assert history.get(waiting).status == "expired"
+    assert history.get(done).status == "done"
+    assert history.expire_pending() == 0
+
+
+def test_every_write_is_committed(tmp_path):
+    from raphael_core.brain import db
+
+    path = tmp_path / "raphael.db"
+    writer, reader = db.connect(path), db.connect(path)
+    clock = Clock()
+    mine, theirs = AgentHistory(writer, clock), AgentHistory(reader, clock)
+    turn_id = add(mine, clock, "q")
+    assert [t.id for t in theirs.list()] == [turn_id]
+    mine.resolve(turn_id, prefix="否", text="x", status="error")
+    assert theirs.get(turn_id).status == "error"
+    mine.clear()
+    assert theirs.list() == []
+    writer.close()
+    reader.close()

@@ -216,7 +216,15 @@ async def make_app(tmp_path):
     """`make_app(kit, ...)` is a started App on a data directory of its own."""
     apps: list[App] = []
 
-    def make(kit=None, *, ready=APP_MODELS, fake_llm=True, fake_audio=None, manager=None):
+    def make(
+        kit=None,
+        *,
+        ready=APP_MODELS,
+        fake_llm=True,
+        fake_audio=None,
+        manager=None,
+        agent_actions=None,
+    ):
         data = tmp_path / "data"
         make_models(data / "models", ready)
         app = App(
@@ -225,6 +233,7 @@ async def make_app(tmp_path):
             fake_llm=fake_llm,
             manager=manager,
             load_kit=lambda: make_kit() if kit is None else kit,
+            agent_actions=agent_actions,
         )
         apps.append(app)
         app.start()
@@ -1276,6 +1285,36 @@ async def test_a_dictation_goes_through_the_whole_app(make_app, notes):
     assert {level["session_id"] for level in notes.methods("audio.level")} == {"s1"}
 
 
+async def test_an_agent_dictation_goes_through_the_whole_app_without_cleanup_or_history(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("dictionary.add", {"word": "哈囉", "misheard": ["你好"]})
+    asked = []
+    echo = app.client.complete_json
+
+    async def spy(**kwargs):
+        asked.append(kwargs)
+        return await echo(**kwargs)
+
+    app.client.complete_json = spy
+    assert await app.call("dictation.start", {"session_id": "a1", "purpose": "agent"}) == {}
+    result = await app.call("dictation.stop", {"session_id": "a1", "target_app": "notepad.exe"})
+    assert result == {
+        "purpose": "agent",
+        "text": "哈囉世界哈囉世界",  # the dictionary's replacement, joined as a dictation is
+        "stt": "qwen3-asr",
+        "audio_seconds": pytest.approx(1.0),
+        "silent": False,
+    }
+    assert asked == []  # no cleanup
+    assert (await app.call("history.list"))["items"] == []  # no history row
+    assert (await app.call("history.latest"))["item"] is None  # nothing for "paste last"
+    assert (await app.call("status.get"))["spend"]["month_usd"] == 0
+    # The next one is a dictation as ever.
+    again = await dictate(app, "d1")
+    assert again["cleaned"] is True and len(asked) == 1
+
+
 async def test_one_segmenter_and_one_engine_serve_every_dictation(make_app):
     kit = make_kit()
     app = make_app(kit)
@@ -1399,6 +1438,127 @@ async def test_a_dictation_cancelled_while_its_text_is_cleaned_is_not_the_latest
     app.client.complete_json = echo
     again = await dictate(app, "s2")
     assert (await app.call("history.latest"))["item"]["id"] == again["id"]
+
+
+# --- the voice assistant ----------------------------------------------------------------------
+
+ASSISTANT_METHODS = {
+    "agent.ask",
+    "agent.confirm",
+    "agent.cancel",
+    "agent.history.list",
+    "agent.history.clear",
+}
+
+
+class RecordingActions:
+    """What the assistant does to the computer, written down instead of done."""
+
+    def __init__(self):
+        self.calls = []
+
+    def open_url(self, url):
+        self.calls.append(("open_url", url))
+
+    def press_key(self, name, times=1):
+        self.calls.append(("press_key", name, times))
+
+    def lock_screen(self):
+        self.calls.append(("lock_screen",))
+
+    def list_start_apps(self):
+        return []
+
+    def launch_app(self, app_id):
+        self.calls.append(("launch_app", app_id))
+
+    def copy_to_clipboard(self, text):
+        self.calls.append(("copy_to_clipboard", text))
+
+
+def ask_params(text, language="zh-TW", session="a1"):
+    return {"session_id": session, "text": text, "ui_language": language, "target_app": None}
+
+
+async def test_the_assistants_methods_are_on_the_app_from_the_start(tmp_path):
+    release = threading.Event()
+    app = App(data_dir=tmp_path, fake_llm=True, load_kit=lambda: release.wait(30) and make_kit())
+    app.start()
+    try:
+        assert ASSISTANT_METHODS <= set(app.methods())
+        # The assistant does not wait for the speech side: it needs no microphone.
+        result = await asyncio.wait_for(app.call("agent.ask", ask_params("你好")), 5)
+        assert result["status"] == "done"
+    finally:
+        release.set()
+        await app.aclose()
+
+
+async def test_the_assistant_answers_through_the_whole_app_with_the_fake_llm(make_app):
+    app = make_app()
+    result = await app.call("agent.ask", ask_params("你好"))
+    assert result == {"status": "done", "turn_id": 1, "prefix": "答", "text": "你好"}
+    en = await app.call("agent.ask", ask_params("hello", language="en", session="a2"))
+    assert (en["prefix"], en["text"]) == ("Answer", "hello")
+    turns = (await app.call("agent.history.list", {}))["turns"]
+    assert [(t["question"], t["route"], t["status"]) for t in turns] == [
+        ("hello", "chat", "done"),
+        ("你好", "chat", "done"),
+    ]
+    assert (await app.call("status.get"))["spend"]["month_usd"] == 0  # the fake LLM is free
+    assert await app.call("agent.history.clear", {}) == {"deleted": 2}
+
+
+async def test_the_fake_llm_does_nothing_to_the_computer(make_app):
+    from raphael_core.agent.device import NullActions
+
+    assert isinstance(make_app().agent._actions, NullActions)
+
+
+async def test_the_real_core_gets_windows_actions_unless_it_is_given_others(make_app):
+    from raphael_core.agent.device import WindowsActions
+
+    assert isinstance(make_app(fake_llm=False).agent._actions, WindowsActions)
+    actions = RecordingActions()
+    assert make_app(fake_llm=False, agent_actions=actions).agent._actions is actions
+
+
+async def test_without_a_key_the_assistant_still_runs_commands_and_says_why_it_cannot_do_more(
+    make_app,
+):
+    actions = RecordingActions()
+    app = make_app(fake_llm=False, agent_actions=actions)
+    assert await app.call("secrets.status") == {"has_key": False}
+    done = await app.call("agent.ask", ask_params("靜音"))
+    assert (done["prefix"], done["text"]) == ("了", "")
+    assert actions.calls == [("press_key", "volume_mute", 1)]
+    refused = await app.call("agent.ask", ask_params("what is the weather", "en", "a2"))
+    assert (refused["prefix"], refused["text"]) == ("Negative", "No OpenRouter key is set.")
+
+
+async def test_a_dictation_for_the_assistant_and_its_question_go_together(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("dictation.start", {"session_id": "a1", "purpose": "agent"})
+    heard = await app.call("dictation.stop", {"session_id": "a1", "target_app": None})
+    result = await app.call("agent.ask", ask_params(heard["text"]))
+    assert result == {"status": "done", "turn_id": 1, "prefix": "答", "text": WORDS + WORDS}
+    assert (await app.call("history.list"))["items"] == []  # the dictation history is not touched
+
+
+async def test_closing_the_app_ends_the_assistants_requests_before_closing_the_client(make_app):
+    app = make_app()
+    order = []
+    closing = app.agent.aclose
+
+    async def agent_aclose():
+        order.append(("agent", app.client.closed))
+        await closing()
+
+    app.agent.aclose = agent_aclose
+    await app.aclose()
+    assert order == [("agent", False)]
+    assert app.client.closed
 
 
 # --- shutting down ----------------------------------------------------------------------------

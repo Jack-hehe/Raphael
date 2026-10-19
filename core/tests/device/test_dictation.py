@@ -211,6 +211,8 @@ class FakeBrain:
         self.router = router
         self.finalize_params: list[dict] = []
         self.finalize_calls = 0
+        self.normalize_params: list[dict] = []
+        self.normalize_error: RpcError | None = None
         self.fail_dictionary = False
         self.entries = [{"id": 1, "word": "拉斐爾", "misheard": [], "source": "manual"}]
         self.settings = {"languages": ["zh-TW", "en-US", "ja-JP"], "language": "auto"}
@@ -220,6 +222,7 @@ class FakeBrain:
         self.cancelled: list[str] = []  # the sessions the service told the brain to forget
         self.cancel_error: RpcError | None = None
         router.register("brain.finalize_dictation", self._finalize)
+        router.register("brain.normalize_transcript", self._normalize)
         router.register("brain.cancel_dictation", self._cancel_dictation)
         router.register("dictionary.list", self._dictionary_list)
         router.register("settings.get", self._settings_get)
@@ -240,6 +243,12 @@ class FakeBrain:
             "fallback_reason": None,
             "llm_ms": 5,
         }
+
+    async def _normalize(self, params: dict) -> dict:
+        self.normalize_params.append(params)
+        if self.normalize_error is not None:
+            raise self.normalize_error
+        return {"text": params["raw_text"] + "（正規化）"}
 
     async def _cancel_dictation(self, params: dict) -> dict:
         if self.cancel_error is not None:
@@ -2203,3 +2212,139 @@ async def test_an_engine_that_changes_model_per_segment_is_reported_in_order(rig
     await rig.recorder.fed(3)
     await stop(router)
     assert brain.finalize_params[-1]["stt"] == "openai/gpt-transcribe+qwen3-asr"
+
+
+# --- the voice assistant's speech ----------------------------------------------------------------
+#
+# A session started with purpose "agent" records and transcribes like any other, but what comes
+# back is the transcript to ask the assistant, not text to paste: the brain only normalizes it (the
+# dictionary's replacements and the Chinese script), without cleanup, history or cost.
+
+
+async def start_agent(router, session_id="s1"):
+    return await router.call("dictation.start", {"session_id": session_id, "purpose": "agent"})
+
+
+async def test_an_agent_session_answers_with_the_normalized_transcript_and_nothing_to_paste(
+    rig, router, brain
+):
+    rig.engine.texts = ["打開", "YouTube"]
+    rig.recorder.chunks = [chunk(1.0)] * 2
+    assert await start_agent(router) == {}
+    await rig.recorder.fed(2)
+    r = await stop(router, target_app="notepad.exe")
+    assert r == {
+        "purpose": "agent",
+        "text": "打開 YouTube（正規化）",
+        "stt": "fake",
+        "audio_seconds": pytest.approx(2.0),
+        "silent": False,
+    }
+    assert brain.normalize_params == [{"raw_text": "打開 YouTube"}]
+    assert brain.finalize_calls == 0  # no cleanup, no history row, no paste
+    assert not rig.service.active
+
+
+async def test_an_agent_session_is_not_cleaned_so_its_progress_has_no_cleaning_stage(
+    rig, router, notifications
+):
+    rig.recorder.chunks = [chunk(1.0)] * 2
+    await start_agent(router)
+    await rig.recorder.fed(2)
+    await stop(router)
+    steps = progress(notifications)
+    assert steps and all(stage == "transcribing" for stage, _, _ in steps)
+
+
+async def test_an_agent_session_says_which_speech_to_text_heard_it(rig, router):
+    used = iter(["openai/gpt-transcribe", "qwen3-asr"])
+    transcribe = rig.engine.transcribe
+
+    def cloud_then_local(samples, **kwargs):
+        rig.engine.last_used = next(used)
+        return transcribe(samples, **kwargs)
+
+    rig.engine.transcribe = cloud_then_local
+    rig.recorder.chunks = [chunk(1.0)] * 2
+    await start_agent(router)
+    await rig.recorder.fed(2)
+    assert (await stop(router))["stt"] == "openai/gpt-transcribe+qwen3-asr"
+
+
+async def test_an_agent_session_that_heard_nothing_asks_nobody(rig, router, brain):
+    rig.segmenter.emit_nothing = True
+    await start_agent(router)
+    r = await stop(router)
+    assert r == {
+        "purpose": "agent",
+        "text": "",
+        "stt": "",
+        "audio_seconds": 0,
+        "silent": False,
+    }
+    assert brain.normalize_params == [] and brain.finalize_calls == 0
+
+
+async def test_an_agent_session_on_a_dead_microphone_is_reported_silent(rig, router, brain):
+    rig.segmenter.emit_nothing = True
+    rig.recorder.chunks = [chunk(1.0, DEAD_MIC)] * 3
+    await start_agent(router)
+    await rig.recorder.fed(3)
+    r = await stop(router)
+    assert r["purpose"] == "agent" and r["text"] == "" and r["silent"] is True
+
+
+async def test_an_agent_session_whose_normalizing_fails_keeps_the_words_as_heard(
+    rig, router, brain, caplog
+):
+    brain.normalize_error = RpcError(INTERNAL_ERROR, "the brain is broken: 秘密")
+    rig.engine.texts = ["打開 YouTube"]
+    rig.recorder.chunks = [chunk(1.0)]
+    await start_agent(router)
+    await rig.recorder.fed(1)
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        r = await stop(router)
+    assert r["text"] == "打開 YouTube" and r["purpose"] == "agent"
+    assert "秘密" not in caplog.text and "打開 YouTube" not in caplog.text  # type of error only
+
+
+async def test_an_agent_session_that_is_cancelled_while_recording_is_gone(rig, router, brain):
+    rig.recorder.chunks = [chunk(1.0)]
+    await start_agent(router)
+    await rig.recorder.fed(1)
+    assert await router.call("dictation.cancel", {"session_id": "s1"}) == {}
+    assert not rig.service.active
+    with pytest.raises(RpcError) as e:
+        await stop(router)
+    assert e.value.code == NOT_FOUND
+    assert brain.normalize_params == [] and brain.finalize_calls == 0
+
+
+async def test_an_agent_session_without_a_microphone_is_no_microphone(rig, router):
+    rig.recorder.fail_on_start = True
+    with pytest.raises(RpcError) as e:
+        await start_agent(router)
+    assert e.value.code == NO_MICROPHONE
+    assert not rig.service.active
+
+
+@pytest.mark.parametrize("params", [{}, {"purpose": None}, {"purpose": "dictation"}])
+async def test_a_session_without_a_purpose_or_for_dictation_is_cleaned_and_saved(
+    rig, router, brain, params
+):
+    rig.recorder.chunks = [chunk(1.0)]
+    await router.call("dictation.start", {"session_id": "s1", **params})
+    await rig.recorder.fed(1)
+    r = await stop(router)
+    assert r["id"] == 7 and r["text"] == "text0" and "purpose" not in r
+    assert brain.finalize_calls == 1 and brain.normalize_params == []
+
+
+@pytest.mark.parametrize("purpose", ["", "AGENT", "assistant", 1, True, ["agent"], {}])
+async def test_any_other_purpose_is_invalid_params_and_starts_nothing(rig, router, purpose):
+    with pytest.raises(RpcError) as e:
+        await router.call("dictation.start", {"session_id": "s1", "purpose": purpose})
+    assert e.value.code == INVALID_PARAMS
+    assert not rig.service.active and rig.recorders_made == 0
+    await start(router)  # the service is free for the next one
+    assert rig.service.active

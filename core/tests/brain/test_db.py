@@ -60,7 +60,24 @@ SCHEMA_V3 = {
         "updated_at_ms INTEGER NOT NULL",
     ],
 }
-LATEST = 4
+# Schema v4 adds no table: it makes sure v3's evidence exists.
+# Schema v5 adds the voice assistant's turns.
+SCHEMA_V5 = {
+    **SCHEMA_V3,
+    "agent_turns": [
+        "id INTEGER PK",
+        "created_at_ms INTEGER NOT NULL",
+        "session_id TEXT NOT NULL",
+        "question TEXT NOT NULL",
+        "route TEXT NOT NULL",
+        "prefix TEXT NOT NULL",
+        "text TEXT NOT NULL",
+        "detail TEXT",
+        "status TEXT NOT NULL",
+        "cost_usd REAL NOT NULL DEFAULT 0",
+    ],
+}
+LATEST = 5
 
 
 def schema_names(conn, kind):
@@ -84,10 +101,10 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V3)
-    assert "history_created" in schema_names(conn, "index")
+    assert schema_names(conn, "table") == set(SCHEMA_V5)
+    assert {"history_created", "agent_turns_created"} <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V3.items():
+    for table, columns in SCHEMA_V5.items():
         assert describe_columns(conn, table) == columns
 
 
@@ -261,6 +278,64 @@ def test_the_v4_migration_leaves_a_v3_evidence_table_alone(tmp_path):
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert [tuple(row) for row in conn.execute("SELECT count FROM dictionary_evidence")] == [(2,)]
     conn.close()
+
+
+def v4_database(path):
+    """A database as the version before the voice assistant left it, with a dictation and a word."""
+    raw = sqlite3.connect(path)
+    raw.executescript(db._MIGRATION_V1)
+    raw.executescript(db._MIGRATION_V2)
+    db._migrate_v3(raw)
+    db._migrate_v4(raw)
+    raw.execute(
+        "INSERT INTO history (created_at_ms, kind, raw_text, text, cleaned, audio_seconds,"
+        " stt_ms, llm_ms) VALUES (5, 'dictation', 'a', 'A', 1, 1.0, 10, 20)"
+    )
+    raw.execute("INSERT INTO dictionary (word, created_at_ms) VALUES ('拉斐爾', 1)")
+    raw.commit()
+    raw.close()
+
+
+def test_a_v4_database_gets_the_turns_table_at_v5_and_keeps_its_rows(tmp_path):
+    path = tmp_path / "v4.db"
+    v4_database(path)
+
+    conn = db.connect(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
+    assert describe_columns(conn, "agent_turns") == SCHEMA_V5["agent_turns"]
+    assert conn.execute("SELECT count(*) FROM agent_turns").fetchone()[0] == 0
+    assert HistoryStore(conn).latest().text == "A"
+    assert [e.word for e in DictionaryStore(conn).list()] == ["拉斐爾"]
+    conn.close()
+
+
+def test_a_database_that_is_at_v5_is_left_alone(tmp_path):
+    path = tmp_path / "v5.db"
+    first = db.connect(path)
+    first.execute(
+        "INSERT INTO agent_turns (created_at_ms, session_id, question, route, prefix, text, status)"
+        " VALUES (1, 's', 'q', 'chat', '答', 'a', 'done')"
+    )
+    first.commit()
+    first.close()
+
+    second = db.connect(path)  # must not try to create the table again
+    assert second.execute("SELECT question, cost_usd FROM agent_turns").fetchone()[:] == ("q", 0)
+    second.close()
+
+
+def test_a_failed_v5_migration_leaves_the_database_at_v4(tmp_path):
+    path = tmp_path / "v4.db"
+    v4_database(path)
+    raw = sqlite3.connect(path)
+    raw.execute("CREATE TABLE agent_turns (x)")  # in the way of the v5 migration
+    raw.commit()
+    with pytest.raises(sqlite3.OperationalError):
+        db.migrate(raw)
+    assert not raw.in_transaction
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert "agent_turns_created" not in schema_names(raw, "index")
+    raw.close()
 
 
 def test_dictionary_words_are_unique(conn):

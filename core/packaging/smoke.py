@@ -182,6 +182,16 @@ def smoke_without_a_key(executable: Path) -> dict:
             require(rpc.call("history.latest")["item"] is None, "History delete did not persist")
             require(rpc.call("dictionary.delete", {"id": entry["id"]})["deleted"], "Dictionary delete failed")
             require(rpc.call("dictionary.list")["entries"] == [], "Dictionary delete did not persist")
+            # The voice assistant is part of the bundle. With no key it answers a refusal that says
+            # why; nothing is asked of a model and nothing is done to this computer (a request that
+            # is a command would be: so this one is not).
+            refused = rpc.call("agent.ask", {"session_id": "smoke", "text": "What is the weather?",
+                                             "ui_language": "en", "target_app": None})
+            require(refused["status"] == "done" and refused["prefix"] == "Negative",
+                    "The voice assistant did not refuse a request it cannot answer without a key")
+            turns = rpc.call("agent.history.list")["turns"]
+            require(len(turns) == 1 and turns[0]["status"] == "error", "The assistant's turn was not recorded")
+            require(rpc.call("agent.history.clear") == {"deleted": 1}, "The assistant's history was not cleared")
             returncode = shut_down(rpc, root)
             return {"passed": True, "core": str(executable), "version": hello["version"],
                     "elapsed_seconds": round(time.monotonic() - began, 2), "requests": len(rpc.calls),
@@ -223,6 +233,13 @@ def smoke_with_the_fake_llm(executable: Path) -> dict:
                 require(latest["id"] == finalized["id"] and latest["cleaned"] is True
                         and latest["model"] == "fake/echo" and latest["cost_usd"] == 0,
                         f"{languages[0]}: the cleaned dictation was not saved as cleaned at no cost")
+            # The voice assistant answers small talk with the fake LLM, in the language asked for.
+            spoken = rpc.call("agent.ask", {"session_id": "smoke", "text": "hello",
+                                            "ui_language": "en", "target_app": None})
+            require(spoken == {"status": "done", "turn_id": 1, "prefix": "Answer", "text": "hello"},
+                    "The voice assistant did not answer with the fake LLM")
+            require([turn["question"] for turn in rpc.call("agent.history.list")["turns"]] == ["hello"],
+                    "The assistant's turn was not recorded")
             returncode = shut_down(rpc, root)
             return {"passed": True, "fake_llm": True, "cleaned": True,
                     "languages": [languages[0] for languages, _, _ in CLEANED_VARIANTS],

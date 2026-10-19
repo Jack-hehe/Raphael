@@ -1,0 +1,300 @@
+"""The tools that fetch what the assistant answers with: the weather, a web search, the time.
+
+All three only read (T0). A tool never raises for a failure of the world: it returns a ToolResult
+whose `error` says which way it failed (a kind, never a message, which could hold anything), and the
+answer then says plainly that the data is missing.
+
+- The weather comes from Open-Meteo, which needs no key: the city (the `agent_city` setting) is
+  looked up for its coordinates (`cities` knows how), then the forecast for them. It costs nothing.
+- A web search is a chat call to OpenRouter with the `web` plugin on, which puts a few search
+  results in front of the model. The call is paid and written to the spend by the ledger.
+- The time is the computer's.
+
+Nothing here logs a city, a question or an answer.
+"""
+
+import asyncio
+import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
+import httpx
+
+from ..brain.openrouter import OpenRouterClient, OpenRouterError
+from .cities import city_key, geocoding_queries
+from .ledger import Ledger
+
+logger = logging.getLogger(__name__)
+
+
+class _KeepPlacesOutOfTheLog(logging.Filter):
+    """httpx logs the address of each request it makes, at INFO; the one to Open-Meteo holds the
+    city. Those lines are dropped (the others are left alone)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "open-meteo.com" not in record.getMessage()
+
+
+logging.getLogger("httpx").addFilter(_KeepPlacesOutOfTheLog())
+
+GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
+FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+# The language Open-Meteo names the place in, for each language Raphael speaks.
+_GEOCODING_LANGUAGE = {"zh-TW": "zh", "en": "en", "ja": "ja"}
+# The weather, both requests together, and each stage of a request.
+WEATHER_TIMEOUT_S = 8.0
+_HTTP_STAGE_TIMEOUT_S = 5.0
+# A search with its model's reading of the results.
+SEARCH_TIMEOUT_S = 12.0
+SEARCH_MAX_TOKENS = 500
+SEARCH_PLUGINS = [{"id": "web", "max_results": 3}]
+_SEARCH_SYSTEM = (
+    "Answer the user's question with facts from the web results. Reply in plain text of at most "
+    "three short sentences, with no markdown, no list and no link. Name the site a fact comes "
+    "from when it matters. If the web results do not answer the question, say so plainly."
+)
+
+# The sky for each WMO weather code Open-Meteo reports, in English; the answer puts it in the
+# user's language.
+SKIES = {
+    0: "clear sky",
+    1: "mainly clear",
+    2: "partly cloudy",
+    3: "overcast",
+    45: "fog",
+    48: "freezing fog",
+    51: "light drizzle",
+    53: "moderate drizzle",
+    55: "dense drizzle",
+    56: "light freezing drizzle",
+    57: "dense freezing drizzle",
+    61: "slight rain",
+    63: "moderate rain",
+    65: "heavy rain",
+    66: "light freezing rain",
+    67: "heavy freezing rain",
+    71: "slight snow",
+    73: "moderate snow",
+    75: "heavy snow",
+    77: "snow grains",
+    80: "slight rain showers",
+    81: "moderate rain showers",
+    82: "violent rain showers",
+    85: "slight snow showers",
+    86: "heavy snow showers",
+    95: "thunderstorm",
+    96: "thunderstorm with slight hail",
+    99: "thunderstorm with heavy hail",
+}
+# Not `calendar`/`strftime`, which follow the language of the machine.
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def sky_of(code: Any) -> str | None:
+    """The sky a WMO weather code stands for, or None for anything that is not one."""
+    if isinstance(code, float) and code.is_integer():
+        code = int(code)
+    if isinstance(code, bool) or not isinstance(code, int):
+        return None
+    return SKIES.get(code)
+
+
+@dataclass
+class ToolResult:
+    name: str
+    ok: bool
+    data: dict | None
+    # Why it failed: "not_found", "http_error", "network", "timeout", "bad_response", or the kind of
+    # an OpenRouterError ("auth", "credits", "server", ...). Never a message.
+    error: str | None = None
+
+
+def _number(value: Any) -> float | int | None:
+    return value if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
+def _at(values: Any, index: int) -> Any:
+    return values[index] if isinstance(values, list) and index < len(values) else None
+
+
+def _compact(entries: dict[str, Any]) -> dict[str, Any]:
+    """`entries` without the ones that have no value."""
+    return {key: value for key, value in entries.items() if value is not None}
+
+
+class Tools:
+    """The tools. `client` is the OpenRouter client (for the search). `http` is the httpx client
+    for Open-Meteo, which the caller then owns; without one the tools make their own on first use
+    and `aclose` closes it. `now` is the clock, a local time with its offset."""
+
+    def __init__(
+        self,
+        client: OpenRouterClient,
+        *,
+        http: httpx.AsyncClient | None = None,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._client = client
+        self._http = http
+        self._own_http: httpx.AsyncClient | None = None
+        self._now = now or (lambda: datetime.now().astimezone())
+
+    def _http_client(self) -> httpx.AsyncClient:
+        if self._http is not None:
+            return self._http
+        if self._own_http is None:
+            self._own_http = httpx.AsyncClient()
+        return self._own_http
+
+    async def aclose(self) -> None:
+        """Close the httpx client the tools made. One they were given stays open."""
+        own, self._own_http = self._own_http, None
+        if own is not None:
+            await own.aclose()
+
+    # --- the weather ----------------------------------------------------------------------------
+
+    async def weather(self, city: str, language: str) -> ToolResult:
+        """The weather in `city` now, today and tomorrow, with the place named in `language`."""
+        try:
+            data = await asyncio.wait_for(self._weather(city, language), WEATHER_TIMEOUT_S)
+        except TimeoutError:
+            return self._failed("weather", "timeout")
+        except httpx.HTTPStatusError:
+            return self._failed("weather", "http_error")
+        except httpx.TimeoutException:
+            return self._failed("weather", "timeout")
+        except httpx.TransportError:
+            return self._failed("weather", "network")
+        except _NotFound:
+            return self._failed("weather", "not_found")
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError):
+            # Not JSON, or JSON that is not what Open-Meteo sends.
+            return self._failed("weather", "bad_response")
+        return ToolResult("weather", True, data)
+
+    @staticmethod
+    def _failed(name: str, kind: str) -> ToolResult:
+        logger.warning("The %s tool failed: %s", name, kind)
+        return ToolResult(name, False, None, kind)
+
+    async def _get_json(self, url: str, params: dict[str, Any]) -> Any:
+        response = await self._http_client().get(url, params=params, timeout=_HTTP_STAGE_TIMEOUT_S)
+        response.raise_for_status()
+        return response.json()
+
+    async def _find_place(self, city: str, language: str) -> Any:
+        """The first place the geocoder finds for `city`, the way `geocoding_queries` asks."""
+        code = _GEOCODING_LANGUAGE.get(language, "en")
+        for name, name_language in geocoding_queries(city, code):
+            places = await self._get_json(
+                GEOCODING_URL, {"name": name, "count": 1, "language": name_language}
+            )
+            results = places.get("results") if isinstance(places, dict) else None
+            if isinstance(results, list) and results:
+                return results[0]
+            if results is not None and not isinstance(results, list):
+                raise ValueError("The places are not a list")
+        raise _NotFound
+
+    async def _weather(self, city: str, language: str) -> dict:
+        place = await self._find_place(city, language)
+        latitude, longitude = place["latitude"], place["longitude"]
+        if _number(latitude) is None or _number(longitude) is None:
+            raise ValueError("The place has no coordinates")
+        forecast = await self._get_json(
+            FORECAST_URL,
+            {
+                "latitude": latitude,
+                "longitude": longitude,
+                "current": "temperature_2m,weather_code",
+                "daily": "temperature_2m_max,temperature_2m_min,"
+                "precipitation_probability_max,weather_code",
+                "timezone": "auto",
+                "forecast_days": 2,
+            },
+        )
+        named = place.get("name")
+        data = _compact({"city": named if isinstance(named, str) else None})
+        if city_key(named if isinstance(named, str) else "") != city_key(city):
+            data["asked_for"] = city.strip()  # what the user called it, which the answer may use
+        current, daily = forecast.get("current"), forecast.get("daily")
+        if isinstance(current, dict):
+            data["now"] = _compact(
+                {
+                    "temperature_c": _number(current.get("temperature_2m")),
+                    "sky": sky_of(current.get("weather_code")),
+                }
+            )
+        if isinstance(daily, dict):
+            for index, day in enumerate(("today", "tomorrow")):
+                data[day] = _compact(
+                    {
+                        "low_c": _number(_at(daily.get("temperature_2m_min"), index)),
+                        "high_c": _number(_at(daily.get("temperature_2m_max"), index)),
+                        "rain_chance_percent": _number(
+                            _at(daily.get("precipitation_probability_max"), index)
+                        ),
+                        "sky": sky_of(_at(daily.get("weather_code"), index)),
+                    }
+                )
+        if not any(data.get(part) for part in ("now", "today", "tomorrow")):
+            raise ValueError("The forecast holds nothing")
+        return data
+
+    # --- the web --------------------------------------------------------------------------------
+
+    async def web_search(self, question: str, model: str, ledger: Ledger) -> ToolResult:
+        """What `model` finds on the web for `question`, in a few sentences, with the pages it
+        drew on. The call is written to the spend through `ledger`."""
+        try:
+            found = await asyncio.wait_for(
+                self._client.chat_text(
+                    model=model,
+                    system=_SEARCH_SYSTEM,
+                    user=question,
+                    plugins=SEARCH_PLUGINS,
+                    reasoning_effort="none",
+                    timeout_s=SEARCH_TIMEOUT_S,
+                    max_tokens=SEARCH_MAX_TOKENS,
+                ),
+                SEARCH_TIMEOUT_S,
+            )
+        except TimeoutError:
+            return self._failed("web_search", "timeout")
+        except OpenRouterError as error:
+            return self._failed("web_search", error.kind)
+        ledger.add(
+            model=found.model,
+            cost_usd=found.cost_usd,
+            prompt_tokens=found.prompt_tokens,
+            completion_tokens=found.completion_tokens,
+        )
+        return ToolResult("web_search", True, {"answer": found.text, "sources": found.sources})
+
+    # --- the time -------------------------------------------------------------------------------
+
+    def local_time(self) -> ToolResult:
+        """The date and the time on this computer, with the weekday in English and the offset."""
+        now = self._now()
+        offset = now.utcoffset()
+        minutes = 0 if offset is None else round(offset.total_seconds() / 60)
+        sign = "-" if minutes < 0 else "+"
+        hours, rest = divmod(abs(minutes), 60)
+        return ToolResult(
+            "local_time",
+            True,
+            {
+                "iso": now.isoformat(timespec="seconds"),
+                "date": now.date().isoformat(),
+                "weekday": _WEEKDAYS[now.weekday()],
+                "time": now.strftime("%H:%M"),
+                "utc_offset": f"UTC{sign}{hours:02d}:{rest:02d}",
+            },
+        )
+
+
+class _NotFound(Exception):
+    """The geocoder knows no such place."""
