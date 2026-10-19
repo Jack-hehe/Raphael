@@ -287,8 +287,6 @@ class DomView implements OverlayView {
   showProgress(percent: number | null): void {
     this.progress.hidden = percent === null;
     this.progress.textContent = percent === null ? "" : formatProgress(percent);
-    if (percent === null) this.progress.removeAttribute("aria-valuenow");
-    else this.progress.setAttribute("aria-valuenow", String(percent));
   }
 }
 
