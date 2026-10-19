@@ -1,5 +1,5 @@
-import { describe, expect, test, vi } from "vitest";
-import { installWindowChrome, type WindowChromeWindow } from "./window-chrome";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { RESIZE_SETTLE_MS, installWindowChrome, type WindowChromeWindow } from "./window-chrome";
 
 function fixture(initiallyMaximized = false) {
   const target = new EventTarget();
@@ -41,6 +41,10 @@ function fixture(initiallyMaximized = false) {
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
 
 describe("main window chrome", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   test("buttons request minimize, maximize and close while a keyboard click remains usable", async () => {
     const app = fixture();
     await settle();
@@ -85,13 +89,14 @@ describe("main window chrome", () => {
   });
 
   test("resize events update restore state and maximized windows reject edge dragging", async () => {
+    vi.useFakeTimers();
     const app = fixture();
     await settle();
     app.dispatch("mousedown", "resize");
     expect(app.calls).toEqual(["resize:SouthEast"]);
     app.setMaximized(true);
     app.resize();
-    await settle();
+    await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_MS);
     app.dispatch("mousedown", "resize");
     expect(app.calls).toEqual(["resize:SouthEast"]);
     expect(app.states).toEqual([false, true]);
@@ -99,6 +104,56 @@ describe("main window chrome", () => {
     expect(app.stop).toHaveBeenCalledOnce();
     app.dispatch("click", "close");
     expect(app.calls).toEqual(["resize:SouthEast"]);
+  });
+
+  test("a burst of resizes asks the window once, after it settles, and redraws the controls only when the state changed", async () => {
+    vi.useFakeTimers();
+    const app = fixture();
+    await settle();
+    const readState = vi.spyOn(app.window, "isMaximized");
+    for (let i = 0; i < 30; i++) {
+      app.resize(); // dragging an edge
+      await vi.advanceTimersByTimeAsync(16);
+    }
+    expect(readState).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_MS);
+    expect(readState).toHaveBeenCalledTimes(1);
+    expect(app.states).toEqual([false]); // the same state: nothing to redraw
+    app.setMaximized(true);
+    app.resize();
+    await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_MS);
+    expect(readState).toHaveBeenCalledTimes(2);
+    expect(app.states).toEqual([false, true]);
+    app.resize();
+    await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_MS);
+    expect(readState).toHaveBeenCalledTimes(3);
+    expect(app.states).toEqual([false, true]); // still maximized: not redrawn
+    expect(app.calls).toEqual([]);
+    app.dispose();
+  });
+
+  test("the button that changes the state redraws the controls at once, and the resizes it causes add nothing", async () => {
+    vi.useFakeTimers();
+    const app = fixture();
+    await settle();
+    app.dispatch("click", "maximize", 0);
+    await settle();
+    expect(app.states).toEqual([false, true]);
+    app.resize(); // the window's own resize after maximizing
+    await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_MS);
+    expect(app.states).toEqual([false, true]);
+    app.dispose();
+  });
+
+  test("a resize that is still settling when the window chrome goes away reads nothing", async () => {
+    vi.useFakeTimers();
+    const app = fixture();
+    await settle();
+    const readState = vi.spyOn(app.window, "isMaximized");
+    app.resize();
+    app.dispose();
+    await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_MS * 2);
+    expect(readState).not.toHaveBeenCalled();
   });
 
   test("failed window requests are reported without leaving an unhandled rejection", async () => {

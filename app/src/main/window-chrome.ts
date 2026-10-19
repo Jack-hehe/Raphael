@@ -17,6 +17,11 @@ const DIRECTIONS = new Set<ResizeDirection>([
   "North", "NorthEast", "East", "SouthEast", "South", "SouthWest", "West", "NorthWest",
 ]);
 const INTERACTIVE = "button, a, input, select, textarea, [contenteditable], [role='button']";
+/**
+ * A drag sends a resize event for every step, but whether the window is maximized only has to be
+ * asked once they have stopped coming for this long.
+ */
+export const RESIZE_SETTLE_MS = 100;
 
 /** Bind real DOM events; native operations and state rendering are the only seams. */
 export function installWindowChrome(
@@ -30,16 +35,25 @@ export function installWindowChrome(
   let generation = 0;
   let handledDoubleClick = false;
   let unlisten: (() => void) | undefined;
+  /** What `render` last drew; undefined until the first answer. */
+  let drawn: boolean | undefined;
+  let settling: ReturnType<typeof setTimeout> | undefined;
   const run = (operation: () => Promise<unknown>): void => {
     void operation().catch((error) => { if (active) report(error); });
   };
   const refresh = async (): Promise<void> => {
     const request = ++generation;
     const state = await window.isMaximized();
-    if (active && request === generation) {
-      maximized = state;
-      render(state);
-    }
+    if (!active || request !== generation) return;
+    maximized = state;
+    // The controls only differ when the state does: a resize that left it alone has nothing to redraw.
+    if (state === drawn) return;
+    drawn = state;
+    render(state);
+  };
+  const resized = (): void => {
+    clearTimeout(settling);
+    settling = setTimeout(() => run(refresh), RESIZE_SETTLE_MS);
   };
   const toggle = async (): Promise<void> => {
     await window.toggleMaximize();
@@ -87,13 +101,14 @@ export function installWindowChrome(
   target.addEventListener("dblclick", doubleClick);
   run(refresh);
   run(async () => {
-    const stop = await window.onResized(() => run(refresh));
+    const stop = await window.onResized(resized);
     if (active) unlisten = stop;
     else stop();
   });
   return () => {
     active = false;
     generation++;
+    clearTimeout(settling);
     target.removeEventListener("click", click);
     target.removeEventListener("mousedown", press);
     target.removeEventListener("dblclick", doubleClick);
