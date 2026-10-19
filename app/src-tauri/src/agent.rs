@@ -14,6 +14,11 @@ pub const ASK_TIMEOUT_DEFAULT_MS: u64 = 30_000;
 /// The longest a question may wait, whatever the core says: Esc is held for as long as one is open.
 pub const ASK_TIMEOUT_MAX_MS: u64 = 120_000;
 
+/// The YES to a `T3` question (one that cannot be undone) is armed by a long press on the page
+/// (600 ms). The controller does not take one sooner than this after the question was shown, so a
+/// page that arms it too early, or by mistake, cannot approve by itself.
+pub const T3_ARMS_AFTER_MS: u64 = 600;
+
 /// An answer stays on screen for this long, and for [`SAY_PER_CHAR_MS`] more for every character
 /// of its text, but never longer than [`SAY_MAX_MS`].
 pub const SAY_BASE_MS: u64 = 1_500;

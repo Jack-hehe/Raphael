@@ -51,7 +51,7 @@ use crate::holdtap::{Action, HoldTap};
 use crate::hotkey::{CancelSwitch, HotkeyEvent};
 use crate::learn::AfterPaste;
 use crate::notices::{self, LanguageCell, Notice};
-use crate::overlay::{AskPrompt, Mode, OverlayApi, Progress, Stage};
+use crate::overlay::{AskPrompt, Mode, OverlayApi, Progress, Stage, Tier};
 use crate::paste::{CopyReason, PasteDelivery, PasteOutcome, Paster, Target};
 use crate::rpc::{CORE_EXITED, CoreApi, RpcError, TIMEOUT, lock};
 
@@ -156,6 +156,10 @@ impl Session {
 /// nothing to answer.
 struct PendingAsk {
     id: String,
+    /// How much the question matters: the YES to a `T3` one waits for the long press.
+    tier: Tier,
+    /// When the question was put on screen.
+    shown: tokio::time::Instant,
     answer: oneshot::Sender<bool>,
 }
 
@@ -284,6 +288,13 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         lock(&self.state).phase
     }
 
+    /// Whether the overlay is nobody's: nothing is going on, or only an answer is on screen,
+    /// which whatever comes next replaces.
+    fn is_quiet(&self) -> bool {
+        let state = lock(&self.state);
+        state.phase == Phase::Idle || state.agent == Some(AgentStage::Speaking)
+    }
+
     /// Handles a key event that happened at `now_ms` (any millisecond clock that only goes
     /// forward). Returns the task that makes the core calls, if any. Must be called from within
     /// a Tokio runtime.
@@ -328,7 +339,15 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 }
             }
             HotkeyEvent::Cancel => self.cancel_current(),
-            HotkeyEvent::PasteLast => Some(self.paste_last_at(now_ms)),
+            HotkeyEvent::PasteLast => {
+                if lock(&self.state).agent == Some(AgentStage::Asking) {
+                    // Like the other keys: while a question waits for its answer, nothing else
+                    // may put a report or a paste in its way.
+                    log::debug!("paste-last key ignored: Raphael is asking");
+                    return None;
+                }
+                Some(self.paste_last_at(now_ms))
+            }
         }
     }
 
@@ -409,7 +428,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 log::error!("copying the last dictation failed: {err}");
                 return;
             }
-            if this.phase() == Phase::Idle {
+            if this.is_quiet() {
                 this.show(notices::LAST_COPIED);
             } else {
                 log::info!("the last dictation is copied; no notice during a dictation");
@@ -474,6 +493,13 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             // be gone first, or the core would answer BUSY.
             if let Some(old) = &replaced {
                 cancel_after_start(this.core.as_ref(), old).await;
+                // Esc may have come meanwhile: nobody wants the question any more, so the core
+                // is not asked to open the microphone for it.
+                if !this.is_current(&id) {
+                    log::info!("the question was cancelled before it started; no dictation.start");
+                    answered.send_replace(Started::Failed);
+                    return;
+                }
             }
             let params = match kind {
                 Kind::Dictation => json!({ "session_id": id }),
@@ -693,7 +719,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         let delivery = self.deliver(text.clone(), target.clone(), None).await;
         let _transition = lock(&self.transitions);
         self.report(delivery.as_ref(), None, false);
-        if self.phase() == Phase::Idle {
+        if self.is_quiet() {
             self.learn_after_paste(&text, target.as_ref(), delivery);
         }
     }
@@ -1045,7 +1071,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         let reply = match reply {
             Ok(reply) => reply,
             Err(err) => {
-                log::warn!("the agent failed: {err}");
+                // Only the code: the core's message may quote what was asked.
+                log::warn!("the agent failed (code {})", err.code);
                 if err.code == TIMEOUT {
                     // The agent may still be at it, and may yet ask a question nobody will see.
                     self.cancel_in_background(id.to_owned());
@@ -1077,6 +1104,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                     state.agent = Some(AgentStage::Asking);
                     state.ask = Some(PendingAsk {
                         id: prompt.id.clone(),
+                        tier: prompt.tier,
+                        shown: tokio::time::Instant::now(),
                         answer,
                     });
                 }
@@ -1104,6 +1133,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         prompt: &AskPrompt,
         wait: oneshot::Receiver<bool>,
     ) -> Option<bool> {
+        // A click must not take the focus from the app the person is typing into. The overlay
+        // cannot be activated, in theory; if it was in practice, the log says so.
+        let before = self.paster.foreground();
         let approved = tokio::select! {
             answer = wait => answer.unwrap_or(false),
             () = tokio::time::sleep(Duration::from_millis(prompt.timeout_ms)) => {
@@ -1111,22 +1143,30 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 false
             }
         };
-        // The answer is in (the buttons are done with, whoever gave it). A session that ended
-        // meanwhile has no more to do: its cancel took care of the overlay.
-        let _transition = lock(&self.transitions);
-        {
-            let mut state = lock(&self.state);
-            if state
-                .session
-                .as_ref()
-                .is_none_or(|current| current.id != id)
-            {
-                return None;
-            }
-            state.ask = None;
-            state.agent = Some(AgentStage::Confirming);
+        if stole_focus(
+            before.as_ref(),
+            self.paster.foreground().as_ref(),
+            std::process::id(),
+        ) {
+            log::warn!(
+                "agent: a window of Raphael's own got the focus while a question was open \
+                 (the overlay may have been activated)"
+            );
         }
-        self.overlay.end_ask();
+        // The answer is in. A session that ended meanwhile has no more to do: its cancel took
+        // care of the overlay. Otherwise the question stays on the screen, and the window keeps
+        // the mouse, until the reply (or whatever else comes) replaces it.
+        let _transition = lock(&self.transitions);
+        let mut state = lock(&self.state);
+        if state
+            .session
+            .as_ref()
+            .is_none_or(|current| current.id != id)
+        {
+            return None;
+        }
+        state.ask = None;
+        state.agent = Some(AgentStage::Confirming);
         Some(approved)
     }
 
@@ -1136,18 +1176,25 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     pub fn on_confirm(&self, id: &str, approved: bool) {
         let pending = {
             let mut state = lock(&self.state);
-            if state.ask.as_ref().is_some_and(|ask| ask.id == id) {
-                state.ask.take()
-            } else {
-                None
+            let Some(ask) = state.ask.as_ref().filter(|ask| ask.id == id) else {
+                drop(state);
+                log::debug!("agent: an answer for no open question is dropped");
+                return;
+            };
+            // The page arms the YES to a question that cannot be undone with a long press. A YES
+            // that comes sooner is not from a person holding the button: the question stays
+            // open for the real one.
+            let armed = ask.shown.elapsed() >= Duration::from_millis(agent::T3_ARMS_AFTER_MS);
+            if approved && ask.tier == Tier::T3 && !armed {
+                drop(state);
+                log::warn!("agent: a YES to a question that cannot be undone came too early");
+                return;
             }
+            state.ask.take()
         };
-        match pending {
-            Some(pending) => {
-                log::info!("agent: the question was answered");
-                let _ = pending.answer.send(approved);
-            }
-            None => log::debug!("agent: an answer for no open question is dropped"),
+        if let Some(pending) = pending {
+            log::info!("agent: the question was answered");
+            let _ = pending.answer.send(approved);
         }
     }
 
@@ -1214,7 +1261,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         tokio::spawn(async move {
             let denied = json!({ "id": confirm, "approved": false });
             if let Err(err) = core.call("agent.confirm", denied).await {
-                log::warn!("denying an unseen confirmation failed: {err}");
+                log::warn!("denying an unseen confirmation failed (code {})", err.code);
             }
         });
     }
@@ -1284,13 +1331,21 @@ async fn cancel_after_start<C: CoreApi>(core: &C, session: &Session) {
     cancel_call(core, &session.id).await;
 }
 
+/// Whether a click on the overlay took the focus: a window of this very process is in front now,
+/// and was not before. (The person may move to Raphael's own window meanwhile, which the log
+/// then reports too; it is a hint for the person who checks that the overlay never activates.)
+fn stole_focus(before: Option<&Target>, after: Option<&Target>, own_pid: u32) -> bool {
+    after.is_some_and(|after| after.pid == own_pid)
+        && !before.is_some_and(|before| before.pid == own_pid)
+}
+
 /// `agent.cancel` for `session`: the agent drops the question and any confirmation it has open.
 async fn agent_cancel<C: CoreApi>(core: &C, session: &str) {
     if let Err(err) = core
         .call("agent.cancel", json!({ "session_id": session }))
         .await
     {
-        log::warn!("agent.cancel failed: {err}");
+        log::warn!("agent.cancel failed (code {})", err.code);
     }
 }
 
@@ -1409,11 +1464,6 @@ mod app {
             match &self.0 {
                 Some(overlay) => overlay.ask(prompt),
                 None => log::warn!("question without an overlay"),
-            }
-        }
-        fn end_ask(&self) {
-            if let Some(overlay) = &self.0 {
-                overlay.end_ask();
             }
         }
         fn hide(&self) {
@@ -1651,7 +1701,7 @@ mod tests {
         ASK_FAILED, BUDGET, CORE_DOWN, ELEVATED, FOCUS_CHANGED, LAST_COPIED, NO_MIC, NO_SOUND,
         NOT_READY, OFFLINE,
     };
-    use crate::overlay::{Mode, OverlayApi, Progress};
+    use crate::overlay::{Mode, OverlayApi, OverlayEvent, Progress, takes_clicks};
     use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
     use crate::rpc::{CORE_EXITED, CoreApi, RpcError, TIMEOUT};
     use serde_json::{Value, json};
@@ -1745,6 +1795,9 @@ mod tests {
         completions: Mutex<u32>,
         events: Mutex<Vec<String>>,
         timeline: Mutex<Vec<String>>,
+        /// Whether the real overlay window would take the mouse now: the rule of
+        /// `Overlay::publish`, applied to every call.
+        mouse: Mutex<bool>,
         paused_hide: Mutex<
             Option<(
                 std::sync::mpsc::SyncSender<()>,
@@ -1773,6 +1826,18 @@ mod tests {
             self.timeline.lock().unwrap().push(event.clone());
             self.events.lock().unwrap().push(event);
         }
+
+        /// Whether the window would take the mouse now.
+        fn mouse(&self) -> bool {
+            *self.mouse.lock().unwrap()
+        }
+
+        /// What the real overlay does with the mouse for `event`.
+        fn track(&self, event: OverlayEvent) {
+            if let Some(on) = takes_clicks(&event) {
+                *self.mouse.lock().unwrap() = on;
+            }
+        }
     }
 
     fn mode_name(mode: Mode) -> String {
@@ -1781,21 +1846,32 @@ mod tests {
 
     impl OverlayApi for FakeOverlay {
         fn show(&self, mode: Mode) {
+            self.track(OverlayEvent::Show { mode });
             self.push(format!("show:{}", mode_name(mode)));
         }
         fn set_mode(&self, mode: Mode) {
+            self.track(OverlayEvent::Mode { mode });
             self.push(format!("mode:{}", mode_name(mode)));
         }
         fn level(&self, value: f32) {
+            self.track(OverlayEvent::Level { value });
             self.push(format!("level:{value}"));
         }
         fn notice(&self, text: &str) {
+            self.track(OverlayEvent::Notice {
+                text: text.to_owned(),
+            });
             self.push(format!("notice:{text}"));
         }
         fn say(&self, prefix: &str, text: &str) {
+            self.track(OverlayEvent::Say {
+                prefix: prefix.to_owned(),
+                text: text.to_owned(),
+            });
             self.push(format!("say:{prefix}|{text}"));
         }
         fn ask(&self, prompt: &AskPrompt) {
+            self.track(OverlayEvent::Ask(prompt.clone()));
             self.push(format!(
                 "ask:{}|{:?}|{}|{}|{}|{}|{}",
                 prompt.id,
@@ -1807,10 +1883,8 @@ mod tests {
                 prompt.timeout_ms
             ));
         }
-        fn end_ask(&self) {
-            self.push("end_ask".to_owned());
-        }
         fn hide(&self) {
+            self.track(OverlayEvent::Hide);
             if let Some((entered, resume)) = self.paused_hide.lock().unwrap().take() {
                 entered.send(()).unwrap();
                 resume.recv().unwrap();
@@ -1822,6 +1896,7 @@ mod tests {
             self.hide();
         }
         fn progress(&self, progress: Progress) {
+            self.track(OverlayEvent::Progress(progress));
             let stage = format!("{:?}", progress.stage).to_lowercase();
             self.timeline.lock().unwrap().push(format!(
                 "progress:{stage}:{}/{}:{}",
@@ -4093,11 +4168,15 @@ mod tests {
 
     /// The agent wants a YES/NO first.
     fn question(id: &str, timeout_ms: u64) -> Value {
+        question_of_tier(id, "T2", timeout_ms)
+    }
+
+    fn question_of_tier(id: &str, tier: &str, timeout_ms: u64) -> Value {
         json!({
             "status": "confirm",
             "turn_id": 2,
             "confirm": {
-                "id": id, "tier": "T2", "prefix": "問", "text": "要複製到剪貼簿嗎？",
+                "id": id, "tier": tier, "prefix": "問", "text": "要複製到剪貼簿嗎？",
                 "yes": "是", "no": "否", "timeout_ms": timeout_ms,
             },
         })
@@ -4154,6 +4233,17 @@ mod tests {
         let turn = start_turn(&c).await;
         until_stage(&c, AgentStage::Asking).await;
         (c, turn)
+    }
+
+    /// Like [`question_on_screen`], but `agent.confirm` waits for the gate that is returned.
+    async fn gated_question_on_screen(timeout_ms: u64) -> (Ctl, JoinHandle<()>, Arc<Notify>) {
+        let core = agent_core(question("c-1", timeout_ms));
+        core.script("agent.confirm", Ok(answer("了", "已複製到剪貼簿。")));
+        let (core, gate) = core.gated("agent.confirm");
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Asking).await;
+        (c, turn, gate)
     }
 
     // ---------- the whole way ----------
@@ -4893,11 +4983,8 @@ mod tests {
             c.core().call_params("agent.confirm"),
             json!({"id": "c-1", "approved": true})
         );
-        // the window lets the mouse through as soon as the answer is in, and then the reply
-        assert_eq!(
-            c.overlay().events()[3..],
-            ["end_ask", "say:了|已複製到剪貼簿。"]
-        );
+        // the question stays until the reply replaces it
+        assert_eq!(c.overlay().events()[3..], ["say:了|已複製到剪貼簿。"]);
         assert_eq!(c.agent_stage(), Some(AgentStage::Speaking));
         assert!(c.paster().delivered().is_empty() && c.paster().copied().is_empty());
     }
@@ -4931,7 +5018,7 @@ mod tests {
         );
         assert_eq!(
             c.overlay().events()[3..],
-            ["end_ask", "say:了|已複製到剪貼簿。"],
+            ["say:了|已複製到剪貼簿。"],
             "no hide: the session goes on to the reply"
         );
         assert_eq!(c.core().count("agent.cancel"), 0);
@@ -4952,10 +5039,7 @@ mod tests {
             c.core().call_params("agent.confirm"),
             json!({"id": "c-1", "approved": false})
         );
-        assert_eq!(
-            c.overlay().events()[3..],
-            ["end_ask", "say:了|已複製到剪貼簿。"]
-        );
+        assert_eq!(c.overlay().events()[3..], ["say:了|已複製到剪貼簿。"]);
         // a click that comes after the time is up is too late
         c.on_confirm("c-1", true);
         settle().await;
@@ -5028,7 +5112,15 @@ mod tests {
 
     #[tokio::test]
     async fn the_keys_do_nothing_while_a_question_is_asked() {
-        let (c, turn) = question_on_screen(30_000).await;
+        let core = agent_core(question("c-1", 30_000));
+        core.script("agent.confirm", Ok(answer("了", "已複製到剪貼簿。")));
+        core.script(
+            "history.latest",
+            Ok(json!({"item": {"id": 3, "text": "上一次"}})),
+        );
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Asking).await;
         run(&c, AgentDown, 6000).await;
         run(&c, AgentUp, 6100).await;
         run(&c, DictationDown, 6200).await;
@@ -5036,6 +5128,8 @@ mod tests {
         run(&c, HotkeyEvent::PasteLast, 6400).await;
         assert_eq!(c.agent_stage(), Some(AgentStage::Asking));
         assert_eq!(c.core().count("dictation.start"), 1);
+        assert_eq!(c.core().count("history.latest"), 0, "paste-last waits too");
+        assert!(c.paster().delivered().is_empty());
         c.on_confirm("c-1", true);
         turn.await.unwrap();
         assert_eq!(c.core().count("agent.confirm"), 1);
@@ -5373,9 +5467,294 @@ mod tests {
                 "show:listening".to_owned(),
                 "mode:thinking".to_owned(),
                 asked("c-1", 30_000),
-                "end_ask".to_owned(),
                 "say:了|已複製到剪貼簿。".to_owned(),
             ]
         );
+    }
+
+    // ---------- the mouse stays with a question until its reply ----------
+
+    #[tokio::test]
+    async fn a_click_leaves_the_mouse_with_the_question_until_the_reply_is_shown() {
+        let (c, turn, gate) = gated_question_on_screen(30_000).await;
+        assert!(c.overlay().mouse(), "the buttons must be clickable");
+        c.on_confirm("c-1", true);
+        until_stage(&c, AgentStage::Confirming).await;
+        assert!(
+            c.overlay().mouse(),
+            "a second click on a button that is still drawn must not land in the app below"
+        );
+        gate.notify_one();
+        turn.await.unwrap();
+        assert!(!c.overlay().mouse(), "the reply gives the corner back");
+    }
+
+    #[tokio::test]
+    async fn escape_leaves_the_mouse_with_the_question_until_the_reply_is_shown() {
+        let (c, turn, gate) = gated_question_on_screen(30_000).await;
+        assert!(c.on_hotkey(Cancel, 5000).is_none());
+        until_stage(&c, AgentStage::Confirming).await;
+        assert!(c.overlay().mouse());
+        gate.notify_one();
+        turn.await.unwrap();
+        assert!(!c.overlay().mouse());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_clock_leaves_the_mouse_with_the_question_until_the_reply_is_shown() {
+        let (c, turn, gate) = gated_question_on_screen(5_000).await;
+        tokio::time::advance(Duration::from_millis(5_000)).await;
+        until_stage(&c, AgentStage::Confirming).await;
+        assert!(c.overlay().mouse());
+        gate.notify_one();
+        turn.await.unwrap();
+        assert!(!c.overlay().mouse());
+    }
+
+    #[tokio::test]
+    async fn whatever_ends_a_question_gives_the_mouse_back() {
+        // Esc once more while the answer is awaited: the session is over and the overlay hidden.
+        let (c, turn, gate) = gated_question_on_screen(30_000).await;
+        c.on_confirm("c-1", true);
+        until_stage(&c, AgentStage::Confirming).await;
+        run(&c, Cancel, 6000).await;
+        assert!(!c.overlay().mouse());
+        gate.notify_one();
+        turn.await.unwrap();
+        assert!(!c.overlay().mouse());
+
+        // the core restarting
+        let (c, turn) = question_on_screen(30_000).await;
+        assert!(c.overlay().mouse());
+        c.on_core_restarted();
+        turn.await.unwrap();
+        assert!(!c.overlay().mouse());
+
+        // a reply that cannot be shown is told as a notice, which is a scene of its own
+        let core = agent_core(question("c-1", 30_000));
+        core.script(
+            "agent.confirm",
+            Err(RpcError::new(-32603, "internal error")),
+        );
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Asking).await;
+        assert!(c.overlay().mouse());
+        c.on_confirm("c-1", false);
+        turn.await.unwrap();
+        ends_with_notice(&c, ASK_FAILED.zh);
+        assert!(!c.overlay().mouse());
+    }
+
+    #[tokio::test]
+    async fn paste_last_does_nothing_while_a_question_is_asked() {
+        // A paste that was only copied would show a notice, which ends the question's scene.
+        let core = agent_core(question("c-1", 30_000));
+        core.script("agent.confirm", Ok(answer("了", "已複製到剪貼簿。")));
+        core.script(
+            "history.latest",
+            Ok(json!({"item": {"id": 3, "text": "上一次"}})),
+        );
+        let c = controller(
+            core,
+            FakePaster::copying("powershell.exe", CopyReason::Elevated),
+        );
+        let turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Asking).await;
+        assert!(c.on_hotkey(HotkeyEvent::PasteLast, 6000).is_none());
+        settle().await;
+        assert!(c.paster().delivered().is_empty());
+        assert!(
+            !c.overlay()
+                .events()
+                .iter()
+                .any(|e| e.starts_with("notice:")),
+            "{:?}",
+            c.overlay().events()
+        );
+        assert!(c.overlay().mouse());
+        c.on_confirm("c-1", true);
+        turn.await.unwrap();
+        assert_eq!(
+            c.overlay().events().last().unwrap(),
+            "say:了|已複製到剪貼簿。"
+        );
+    }
+
+    // ---------- a YES to a question that cannot be undone has to be armed ----------
+
+    #[tokio::test(start_paused = true)]
+    async fn a_yes_to_a_t3_question_waits_for_the_long_press() {
+        let core = agent_core(question_of_tier("c-1", "T3", 30_000));
+        core.script("agent.confirm", Ok(answer("了", "已刪除。")));
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Asking).await;
+        // a YES at once is not a person holding the button: dropped, the question stays open
+        c.on_confirm("c-1", true);
+        settle().await;
+        assert_eq!(c.agent_stage(), Some(AgentStage::Asking));
+        assert_eq!(c.core().count("agent.confirm"), 0);
+        tokio::time::advance(Duration::from_millis(agent::T3_ARMS_AFTER_MS - 1)).await;
+        c.on_confirm("c-1", true);
+        settle().await;
+        assert_eq!(c.agent_stage(), Some(AgentStage::Asking));
+        assert_eq!(c.core().count("agent.confirm"), 0);
+        // armed
+        tokio::time::advance(Duration::from_millis(1)).await;
+        c.on_confirm("c-1", true);
+        turn.await.unwrap();
+        assert_eq!(
+            c.core().call_params("agent.confirm"),
+            json!({"id": "c-1", "approved": true})
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_no_is_never_held_back_and_neither_is_a_yes_to_a_t2_question() {
+        // a NO to a T3 question, at once
+        let core = agent_core(question_of_tier("c-1", "T3", 30_000));
+        core.script("agent.confirm", Ok(answer("了", "好")));
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Asking).await;
+        c.on_confirm("c-1", false);
+        turn.await.unwrap();
+        assert_eq!(
+            c.core().call_params("agent.confirm"),
+            json!({"id": "c-1", "approved": false})
+        );
+        // a YES to a T2 question, at once
+        let (c, turn) = question_on_screen(30_000).await;
+        c.on_confirm("c-1", true);
+        turn.await.unwrap();
+        assert_eq!(
+            c.core().call_params("agent.confirm"),
+            json!({"id": "c-1", "approved": true})
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn escape_and_the_clock_deny_a_t3_question_whenever_they_come() {
+        for escape in [true, false] {
+            let core = agent_core(question_of_tier("c-1", "T3", 5_000));
+            core.script("agent.confirm", Ok(answer("了", "好")));
+            let c = controller(core, FakePaster::pasting("chrome.exe"));
+            let turn = start_turn(&c).await;
+            until_stage(&c, AgentStage::Asking).await;
+            if escape {
+                assert!(c.on_hotkey(Cancel, 5000).is_none());
+            } else {
+                tokio::time::advance(Duration::from_millis(5_000)).await;
+            }
+            turn.await.unwrap();
+            assert_eq!(
+                c.core().call_params("agent.confirm"),
+                json!({"id": "c-1", "approved": false}),
+                "escape: {escape}"
+            );
+        }
+    }
+
+    // ---------- the overlay is nobody's while only an answer is on screen ----------
+
+    #[tokio::test]
+    async fn the_tray_copy_during_an_answer_on_screen_says_so() {
+        let core = agent_core(answer("答", "好"));
+        core.script(
+            "history.latest",
+            Ok(json!({"item": {"id": 3, "text": "上一次"}})),
+        );
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        ask_aloud(&c).await;
+        assert_eq!(c.agent_stage(), Some(AgentStage::Speaking));
+        c.copy_last().await.unwrap();
+        assert_eq!(c.paster().copied(), vec!["上一次"]);
+        ends_with_notice(&c, LAST_COPIED.zh);
+    }
+
+    #[tokio::test]
+    async fn the_tray_copy_during_a_question_leaves_the_overlay_alone() {
+        let core = agent_core(answer("答", "好"));
+        core.script(
+            "history.latest",
+            Ok(json!({"item": {"id": 3, "text": "上一次"}})),
+        );
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        run(&c, AgentDown, 0).await;
+        c.copy_last().await.unwrap();
+        assert_eq!(c.paster().copied(), vec!["上一次"]);
+        assert_eq!(c.overlay().events(), vec!["show:listening"]);
+    }
+
+    #[tokio::test]
+    async fn a_paste_last_during_an_answer_on_screen_is_watched_for_corrections() {
+        let hook = Arc::new(FakeHook::default());
+        let core = agent_core(answer("答", "好"));
+        core.script("history.latest", Ok(json!({"item": {"text": "hello"}})));
+        let c = controller(core, FakePaster::pasting("notepad.exe")).with_after_paste(hook.clone());
+        ask_aloud(&c).await;
+        run(&c, HotkeyEvent::PasteLast, 5000).await;
+        assert_eq!(
+            *hook.0.lock().unwrap(),
+            ["started", "pasted:hello:notepad.exe"]
+        );
+    }
+
+    // ---------- a question that was cancelled before it started ----------
+
+    #[tokio::test]
+    async fn escape_before_the_question_was_started_opens_no_microphone_for_it() {
+        let (core, gate) = FakeCore::default().gated("dictation.start");
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let first = c
+            .on_hotkey(DictationDown, 0)
+            .expect("the start runs in a task");
+        tokio::task::yield_now().await;
+        let second = c
+            .on_hotkey(AgentDown, 100)
+            .expect("the question starts in a task");
+        settle().await;
+        // Esc while the core has not even answered the dictation's start
+        let esc = c.on_hotkey(Cancel, 200).expect("the cancel runs in a task");
+        gate.notify_one();
+        first.await.unwrap();
+        second.await.unwrap();
+        esc.await.unwrap();
+        assert_eq!(
+            c.core().count("dictation.start"),
+            1,
+            "the question never reached the core"
+        );
+        assert_eq!(
+            c.core().count("dictation.cancel"),
+            1,
+            "only the dictation was cancelled"
+        );
+        assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.cancel().last(), Some(false));
+    }
+
+    // ---------- the log tells when a click took the focus ----------
+
+    #[test]
+    fn a_click_took_the_focus_when_a_window_of_ours_is_in_front_and_was_not() {
+        let target = |pid| Target {
+            hwnd: 1,
+            pid,
+            process_name: "x.exe".to_owned(),
+            is_elevated: false,
+        };
+        let (other, ours) = (target(7), target(99));
+        assert!(stole_focus(Some(&other), Some(&ours), 99));
+        assert!(stole_focus(None, Some(&ours), 99));
+        assert!(
+            !stole_focus(Some(&ours), Some(&ours), 99),
+            "it was ours before: nothing was taken"
+        );
+        assert!(!stole_focus(Some(&other), Some(&other), 99));
+        assert!(!stole_focus(Some(&other), None, 99));
+        assert!(!stole_focus(None, None, 99));
     }
 }

@@ -144,7 +144,6 @@ impl OverlayApi for AuditOverlay {
 
     fn say(&self, _prefix: &str, _text: &str) {}
     fn ask(&self, _prompt: &crate::overlay::AskPrompt) {}
-    fn end_ask(&self) {}
 
     fn learned_notice(&self, text: &str) {
         let expected = crate::notices::learned(&[WORD.to_owned()], "zh-TW");

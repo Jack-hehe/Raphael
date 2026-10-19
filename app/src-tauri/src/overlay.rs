@@ -178,12 +178,11 @@ pub trait OverlayApi: Send + Sync + 'static {
     /// vanishes after a time that depends on the length of `text`.
     fn say(&self, prefix: &str, text: &str);
     /// Raphael asks a YES/NO question: the subtitle line and two buttons. From now on the window
-    /// takes the mouse, without ever being activated, until [`end_ask`](Self::end_ask) or another
-    /// call puts something else on the stage.
+    /// takes the mouse, without ever being activated, until another call puts something else on
+    /// the stage (the reply to the answer, a notice, a hide). It keeps the mouse while the answer
+    /// is being dealt with, so that a second click on a button that is still drawn does not land
+    /// in the app below.
     fn ask(&self, prompt: &AskPrompt);
-    /// The question was answered, denied with Esc or timed out: the window lets the mouse through
-    /// again. (The next call is usually `say`, with what became of the answer.)
-    fn end_ask(&self);
     /// The vanish animation plays; the window stays, empty, where it is.
     fn hide(&self);
     /// Finish successfully; simple implementations may retain their ordinary hide behavior.
@@ -258,9 +257,9 @@ pub fn place(work: Rect, emblem_px: u32, scale: f64) -> Rect {
 
 /// What an event does to whether the window takes the mouse: `Some(true)` for the question that
 /// needs its buttons clicked, `Some(false)` for everything that puts something else on the stage
-/// (so a question that nobody answered does not keep the corner of the screen), `None` for what
-/// changes nothing on the stage.
-fn takes_clicks(event: &OverlayEvent) -> Option<bool> {
+/// (the reply to the answer among them, so the corner is the apps' again as soon as the question
+/// is gone from the screen), `None` for what changes nothing on the stage.
+pub(crate) fn takes_clicks(event: &OverlayEvent) -> Option<bool> {
     match event {
         OverlayEvent::Ask(_) => Some(true),
         OverlayEvent::Show { .. }
@@ -581,10 +580,6 @@ impl OverlayApi for Overlay {
 
     fn ask(&self, prompt: &AskPrompt) {
         self.publish(OverlayEvent::Ask(prompt.clone()));
-    }
-
-    fn end_ask(&self) {
-        self.set_clicks(false);
     }
 
     fn hide(&self) {

@@ -899,7 +899,6 @@ mod tests {
         }
         fn say(&self, _: &str, _: &str) {}
         fn ask(&self, _: &crate::overlay::AskPrompt) {}
-        fn end_ask(&self) {}
         fn hide(&self) {}
         fn progress(&self, _: Progress) {}
     }
