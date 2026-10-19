@@ -244,10 +244,10 @@ export class OverlayController {
     this.choose(ask, button === "yes");
   }
 
-  /** The pointer went down on the YES button: for a T3 question the hold begins. */
-  holdStart(): void {
+  /** The pointer went down on the YES button: for a T3 question the hold begins (true). */
+  holdStart(): boolean {
     const ask = this.open();
-    if (!ask || ask.tier !== "T3") return;
+    if (!ask || ask.tier !== "T3") return false;
     this.resetHold(ask);
     ask.hold = "holding";
     this.view.setHold("holding");
@@ -257,6 +257,7 @@ export class OverlayController {
       // A release that never comes must not leave the button armed for good.
       this.holdTimer = setTimeout(() => this.resetHold(ask), ARMED_MAX_MS);
     }, HOLD_MS);
+    return true;
   }
 
   /** The pointer came up. On the button, after a full hold, the answer is YES; otherwise the hold is dropped. */
@@ -582,14 +583,14 @@ function wireQuestion(controller: OverlayController, yes: HTMLButtonElement, no:
   yes.addEventListener("click", () => controller.clickAsk("yes"));
   no.addEventListener("click", () => controller.clickAsk("no"));
   yes.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    // The hold goes on if the pointer strays; where it ends is decided on release.
+    if (event.button !== 0 || !controller.holdStart()) return;
+    // A hold goes on if the pointer strays; where it ends is decided on release. (A click is not
+    // captured: pressing, moving off and letting go is how one changes one's mind.)
     try {
       yes.setPointerCapture(event.pointerId);
     } catch {
       // not capturable: the release still arrives while the pointer is over the button
     }
-    controller.holdStart();
   });
   yes.addEventListener("pointerup", (event) => controller.holdEnd(onButton(yes, event)));
   yes.addEventListener("pointercancel", () => controller.holdCancel());
@@ -612,6 +613,9 @@ async function start(): Promise<void> {
   ) {
     throw new Error("overlay.html is missing the emblem canvas, subtitles, progress, or question");
   }
+
+  // The window takes the mouse while a question is up: no menu of the browser (Back, Refresh...) over it.
+  document.addEventListener("contextmenu", (event) => event.preventDefault());
 
   const view = new DomView(document.documentElement, box, line, progress, question, yes, no);
   view.layout(DEFAULT_PX);

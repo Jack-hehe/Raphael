@@ -216,7 +216,9 @@ body {
   transition: transform var(--hold-ms, 600ms) linear;
 }
 
-.ask-yes[data-hold="armed"] {
+/* The pointer is on the button while it is held, so this has to win over the hover colour. */
+.ask-yes[data-hold="armed"],
+.ask-yes[data-hold="armed"]:hover:not(:disabled) {
   background: #c8e0f8;
   border-color: #c8e0f8;
   box-shadow: 0 0 0 2px rgba(200, 224, 248, 0.6), 0 1px 8px rgba(0, 0, 0, 0.5);

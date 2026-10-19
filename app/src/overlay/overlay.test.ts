@@ -680,6 +680,20 @@ test("a click before the buttons are on screen is not an answer", () => {
   expect(confirm).not.toHaveBeenCalled();
 });
 
+test("only a T3 question begins a hold: the page captures the pointer for that and for nothing else", () => {
+  expect(controller.holdStart()).toBe(false); // no question
+  send(ask({ tier: "T3" }));
+  expect(controller.holdStart()).toBe(false); // its buttons are not there yet: the emblem is still appearing
+  vi.advanceTimersByTime(833);
+  expect(controller.holdStart()).toBe(true);
+  controller.holdCancel();
+  send(ask({ id: "c2" })); // T2
+  vi.advanceTimersByTime(1);
+  expect(controller.holdStart()).toBe(false); // its YES is a click, which one takes back by moving off
+  controller.clickAsk("no");
+  expect(controller.holdStart()).toBe(false); // answered
+});
+
 test("a click without a question does nothing", () => {
   controller.clickAsk("yes");
   controller.holdStart();
