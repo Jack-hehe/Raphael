@@ -1,7 +1,5 @@
 """Tests for how a failure of OpenRouter or the network becomes a reason Raphael can give."""
 
-import asyncio
-
 import pytest
 
 from raphael_core.agent.failure import KINDS, AgentFailure, failure_kind
@@ -29,7 +27,6 @@ def test_every_kind_of_failure_has_a_phrase_in_every_language():
         (OpenRouterError(400, "bad_request", "no"), "error"),
         (OpenRouterError(200, "bad_response", "html"), "error"),
         (TimeoutError(), "offline"),
-        (asyncio.TimeoutError(), "offline"),
         (RuntimeError("boom"), "error"),
         (KeyError("x"), "error"),
     ],

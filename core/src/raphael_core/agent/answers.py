@@ -28,9 +28,10 @@ from .tools import ToolResult
 
 logger = logging.getLogger(__name__)
 
-# The longest an answer may take, and the most it may run to (the line is short; the detail is not).
+# The longest an answer may take, and the most it may run to. The line is short and the detail is
+# not, and the tokens the model thinks with (a little: "low") count against the limit as well.
 ANSWER_TIMEOUT_S = 10.0
-REPLY_MAX_TOKENS = 600
+REPLY_MAX_TOKENS = 1200
 
 
 @dataclass

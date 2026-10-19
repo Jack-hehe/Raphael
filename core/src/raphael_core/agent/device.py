@@ -224,9 +224,11 @@ class WindowsActions:
         for entry in listed:
             name = entry.get("Name") if isinstance(entry, dict) else None
             app_id = entry.get("AppID") if isinstance(entry, dict) else None
-            if isinstance(name, str) and isinstance(app_id, str) and name.strip() and app_id.strip():
-                if not _A_LINK.match(app_id.strip()):
-                    apps.append(StartApp(name.strip(), app_id.strip()))
+            if not isinstance(name, str) or not isinstance(app_id, str):
+                continue
+            name, app_id = name.strip(), app_id.strip()
+            if name and app_id and not _A_LINK.match(app_id):
+                apps.append(StartApp(name, app_id))
         return apps
 
     def launch_app(self, app_id: str) -> None:
