@@ -1,6 +1,7 @@
 """Fixtures and helpers shared by the voice assistant's tests."""
 
 import asyncio
+import inspect
 import sqlite3
 import threading
 from collections.abc import Iterator
@@ -69,7 +70,8 @@ class FakeOpenRouter:
 
     The answers are queued by kind (`decisions`, `replies` for complete_json, `texts` for
     chat_text); each call takes the first of its queue. An answer that is an exception is raised,
-    and one that is a function is called with the keyword arguments of the call. A call with
+    and one that is a function is called with the keyword arguments of the call (and awaited, if
+    it is a coroutine function: a call that hangs is one that sleeps). A call with
     nothing queued fails the test. `delay` is how long each call takes, in seconds, and the
     arguments of every call are kept in `decide_calls`, `json_calls` and `text_calls`.
     """
@@ -91,6 +93,8 @@ class FakeOpenRouter:
         answer = queue.pop(0)
         if callable(answer):
             answer = answer(**kwargs)
+            if inspect.isawaitable(answer):
+                answer = await answer
         if isinstance(answer, BaseException):
             raise answer
         return answer
