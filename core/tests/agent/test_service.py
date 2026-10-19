@@ -773,13 +773,20 @@ async def test_a_yes_copies_the_last_answer_once(rig, client, actions):
     assert again["prefix"] == "否" and len(actions.calls) == 1
 
 
-async def test_what_is_copied_is_the_longer_detail_of_the_answer_when_there_is_one(
-    rig, client, actions
-):
+async def test_what_is_copied_is_the_answer_and_what_its_detail_adds(rig, client, actions):
     rig.seed("q", "台北現在 24 度。", detail="今天最高 27 度，最低 21 度。\n\n來源:\n- CWA u")
     asked = await ask_to_copy(rig, client)
     await rig.confirm(asked["confirm"]["id"], True)
-    assert actions.calls == [("copy_to_clipboard", "今天最高 27 度，最低 21 度。\n\n來源:\n- CWA u")]
+    assert actions.calls == [
+        ("copy_to_clipboard", "台北現在 24 度。\n今天最高 27 度，最低 21 度。\n\n來源:\n- CWA u")
+    ]
+
+
+async def test_an_answer_whose_line_was_cut_is_copied_whole_once(rig, client, actions):
+    rig.seed("q", "第一句。第二句很長…", detail="第一句。第二句很長很長，到這裡才完。")
+    asked = await ask_to_copy(rig, client)
+    await rig.confirm(asked["confirm"]["id"], True)
+    assert actions.calls == [("copy_to_clipboard", "第一句。第二句很長很長，到這裡才完。")]
 
 
 async def test_the_last_answer_is_the_last_one_that_was_given_not_a_refusal_or_a_command(

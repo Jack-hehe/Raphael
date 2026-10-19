@@ -89,6 +89,17 @@ _QUOTES = (
 )
 
 
+def _copy_text(turn: Turn) -> str:
+    """What "copy that" copies of an answer: its line and its detail, each once. The detail is
+    the whole answer when the line had to be cut, and what the line left out otherwise."""
+    text, detail = turn.text or "", turn.detail or ""
+    if not detail or detail == text:
+        return text
+    if not text or text.rstrip("…") in detail:
+        return detail
+    return f"{text}\n{detail}"
+
+
 def _wall_clock_ms() -> int:
     return time.time_ns() // 1_000_000
 
@@ -422,7 +433,7 @@ class AgentService:
 
     def _what_to_copy(self, text: str) -> tuple[str, str] | None:
         """`(what to copy, the phrase that asks about it)`, or None when there is nothing to copy:
-        a text the speaker quoted, else Raphael's last answer (the longer text, if it had one)."""
+        a text the speaker quoted, else Raphael's last answer, with its detail (`_copy_text`)."""
         for quote in _QUOTES:
             found = quote.search(text)
             if found and found.group(1).strip():
@@ -440,7 +451,7 @@ class AgentService:
             last = None
         if last is None:
             return None
-        return (last.detail or last.text), "copy_last"
+        return _copy_text(last), "copy_last"
 
     # --- confirmations --------------------------------------------------------------------------
 
