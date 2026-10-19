@@ -579,6 +579,27 @@ test("a dictation takes the emblem from an answer", () => {
   expect(emblem.log).not.toContain("vanish");
 });
 
+test("events without words show nothing, and do not wedge the page", () => {
+  send({ type: "notice" } as unknown as OverlayEvent); // the older pair of lines, or nothing
+  send({ type: "notice", zh: ZH, ja: JA } as unknown as OverlayEvent);
+  send({ type: "learned", text: "" });
+  send({ type: "say", prefix: "", text: "" });
+  send({ type: "say" } as unknown as OverlayEvent);
+  vi.advanceTimersByTime(60_000);
+  expect(view.log).toEqual([]);
+  expect(emblem.log).toEqual([]);
+  expect(controller.expectsPaint).toBe(false);
+  send({ type: "notice", text: ZH }); // the next one still shows
+  vi.advanceTimersByTime(833);
+  expect(lines()).toEqual([`line:${ZH}`]);
+});
+
+test("an answer with a prefix and no text is still told: 《了。》 is a whole reply", () => {
+  send({ type: "say", prefix: "了", text: "" });
+  vi.advanceTimersByTime(833);
+  expect(lines()).toEqual(["line:《了。》"]);
+});
+
 // ---- a question ----
 
 const QUESTION = "《問。要把這段文字複製到剪貼簿嗎？》";

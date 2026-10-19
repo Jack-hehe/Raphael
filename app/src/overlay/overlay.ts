@@ -24,6 +24,9 @@ export type UiLanguage = "zh-TW" | "en" | "ja";
 
 const isLanguage = (value: unknown): value is UiLanguage => value === "zh-TW" || value === "en" || value === "ja";
 
+/** The words of an event, which come over the IPC: a field that is not text is no words. */
+const words = (value: unknown): string => (typeof value === "string" ? value : "");
+
 /** Whether reports (notices, learned words) are written next to the emblem. Answers and questions always are. */
 type SubtitleMode = "on" | "off";
 
@@ -198,15 +201,19 @@ export class OverlayController {
         break;
       case "learned":
         // A dictation or a question on screen owns the emblem: the words wait for its end.
-        this.queue.push({ text: event.text, kind: "learned" });
+        if (words(event.text) === "") break;
+        this.queue.push({ text: words(event.text), kind: "learned" });
         if (!this.activeShow && !this.busy) this.next();
         break;
       case "notice":
-        this.speak({ text: event.text, kind: "notice" });
+        // an event without words (an app that speaks the older pair of lines, say) shows nothing
+        if (words(event.text) !== "") this.speak({ text: words(event.text), kind: "notice" });
         break;
       case "say":
         // Raphael's answer comes before the learned words that wait: it is what was asked for.
-        this.speak({ text: replyLine(event.prefix, event.text), kind: "say" }, true);
+        if (words(event.prefix) !== "" || words(event.text) !== "") {
+          this.speak({ text: replyLine(words(event.prefix), words(event.text)), kind: "say" }, true);
+        }
         break;
       case "ask":
         this.startAsk(event);
@@ -328,9 +335,9 @@ export class OverlayController {
       id: event.id,
       // What is not plainly a T2 question is asked the strict way.
       tier: event.tier === "T2" ? "T2" : "T3",
-      line: replyLine(event.prefix, event.text),
-      yes: event.yes || "✓",
-      no: event.no || "✕",
+      line: replyLine(words(event.prefix), words(event.text)),
+      yes: words(event.yes) || "✓",
+      no: words(event.no) || "✕",
       timeoutMs: Number.isFinite(event.timeout_ms) && event.timeout_ms > 0 ? event.timeout_ms : DEFAULT_ASK_TIMEOUT_MS,
       shown: false,
       hold: "idle",
