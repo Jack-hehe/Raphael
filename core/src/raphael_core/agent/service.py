@@ -67,6 +67,9 @@ from .tools import ToolResult, Tools
 logger = logging.getLogger(__name__)
 
 HISTORY_DEFAULT_LIMIT = 50
+# A session agent.cancel named is remembered this long: its request may still be on its way (Esc
+# and the request can cross on the pipe), and it is then answered as cancelled, with nothing run.
+CANCELLED_MEMORY_S = 60.0
 HISTORY_MAX_LIMIT = 200
 # A request is cut to this many characters: a dictation holds a few thousand at the very most.
 MAX_QUESTION_CHARS = 1000
@@ -175,6 +178,9 @@ class AgentService:
         self._voice = Voice(client)
         self._decider = decider if decider is not None else Router(client)
         self._inflight: dict[str, asyncio.Task[dict]] = {}
+        self._clock = clock
+        # session id -> when agent.cancel named it (the monotonic clock).
+        self._cancelled: dict[str, float] = {}
         self._last_language = DEFAULT_LANGUAGE
         self._pruned_at_ms: int | None = None
         self._prune_if_due()
@@ -218,6 +224,9 @@ class AgentService:
         if target_app is not None and not isinstance(target_app, str):
             raise _invalid("target_app must be a string or null")
         self._last_language = ask.language
+        if self._was_cancelled(ask.session_id):
+            # Esc came first: the request is answered as cancelled and nothing runs or is kept.
+            return self._done(0, ask.language, "understood", phrase(ask.language, "denied"))
         # The questions that ran out are expired, and a new request replaces those that still wait.
         self._expire(self._confirmations.sweep())
         self._deny(self._confirmations.cancel_all())
@@ -516,12 +525,24 @@ class AgentService:
 
     async def _cancel(self, params: dict) -> dict:
         session_id = _str(params, "session_id")
+        self._forget_old_cancels()
+        self._cancelled[session_id] = self._clock()
         task = self._inflight.get(session_id)
         if task is not None:
             task.cancel()
         self._expire(self._confirmations.sweep())
         self._deny(self._confirmations.cancel_session(session_id))
         return {}
+
+    def _forget_old_cancels(self) -> None:
+        now = self._clock()
+        for session_id, when in list(self._cancelled.items()):
+            if not 0 <= now - when < CANCELLED_MEMORY_S:
+                del self._cancelled[session_id]
+
+    def _was_cancelled(self, session_id: str) -> bool:
+        self._forget_old_cancels()
+        return session_id in self._cancelled
 
     # --- the history ----------------------------------------------------------------------------
 

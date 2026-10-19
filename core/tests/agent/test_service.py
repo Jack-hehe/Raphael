@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
-from raphael_core.agent import commands
+from raphael_core.agent import commands, service
 from raphael_core.agent.commands import NONE, Command
 from raphael_core.agent.device import StartApp
 from raphael_core.agent.history import AgentHistory
@@ -961,6 +961,27 @@ async def test_cancelling_a_request_that_is_still_thinking_ends_it_and_nothing_i
     result = await asyncio.wait_for(asking, 2)
     assert result == {"status": "done", "turn_id": 0, "prefix": "了", "text": "已取消。"}
     assert actions.calls == [] and await rig.turns() == []
+
+
+async def test_a_request_that_arrives_after_its_cancel_is_cancelled_and_runs_nothing(
+    rig, client, actions
+):
+    # Esc and the request crossed on the pipe: the cancel came first.
+    assert await rig.call("agent.cancel", {"session_id": "s1"}) == {}
+    result = await rig.ask("打開 YouTube")
+    assert result == {"status": "done", "turn_id": 0, "prefix": "了", "text": "已取消。"}
+    assert client.decide_calls == [] and actions.calls == [] and await rig.turns() == []
+
+
+async def test_a_cancel_holds_only_its_own_session_and_only_for_a_while(rig, client, actions):
+    await rig.call("agent.cancel", {"session_id": "s1"})
+    client.decisions.append(decision("command", command="open_youtube"))
+    assert (await rig.ask("打開 YouTube", session="s2"))["prefix"] == "了"
+    assert actions.calls == [("open_url", "https://www.youtube.com/")]
+    rig.clock.now += service.CANCELLED_MEMORY_S
+    client.decisions.append(decision("command", command="open_youtube"))
+    await rig.ask("打開 YouTube", session="s1")
+    assert len(actions.calls) == 2
 
 
 async def test_cancelling_another_session_does_not_end_a_request(make_rig, client, actions):
