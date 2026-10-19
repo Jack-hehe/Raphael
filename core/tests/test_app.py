@@ -42,6 +42,7 @@ from raphael_core.protocol import (
     INVALID_PARAMS,
     NO_MICROPHONE,
     NOT_CONFIGURED,
+    NOT_FOUND,
     PROTOCOL_VERSION,
     RpcError,
 )
@@ -1364,6 +1365,40 @@ async def test_without_a_key_the_text_comes_back_as_spoken(make_app):
 
 async def test_the_fake_llm_has_a_key(make_app):
     assert await make_app().call("secrets.status") == {"has_key": True}
+
+
+async def test_a_dictation_cancelled_while_its_text_is_cleaned_is_not_the_latest(make_app):
+    # Esc during the cleaning: the app drops the result, and "paste last" must not find the text.
+    app = make_app()
+    await dictate(app, "s0")
+    kept = (await app.call("history.latest"))["item"]
+    entered, gate = asyncio.Event(), asyncio.Event()
+    echo = app.client.complete_json
+
+    async def slow(**kwargs):
+        entered.set()
+        await gate.wait()
+        return await echo(**kwargs)
+
+    app.client.complete_json = slow
+    await app.call("dictation.start", {"session_id": "s1"})
+    stopping = asyncio.ensure_future(
+        app.call("dictation.stop", {"session_id": "s1", "target_app": None})
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        assert await app.call("dictation.cancel", {"session_id": "s1"}) == {}
+    finally:
+        gate.set()
+    with pytest.raises(RpcError) as dropped:
+        await stopping
+    assert dropped.value.code == NOT_FOUND
+    assert (await app.call("history.latest"))["item"] == kept
+    assert len((await app.call("history.list"))["items"]) == 1
+    # The next dictation is kept as ever.
+    app.client.complete_json = echo
+    again = await dictate(app, "s2")
+    assert (await app.call("history.latest"))["item"]["id"] == again["id"]
 
 
 # --- shutting down ----------------------------------------------------------------------------

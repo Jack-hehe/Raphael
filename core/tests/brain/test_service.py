@@ -32,6 +32,7 @@ SECRET = "sk-or-v1-TOPSECRET"
 
 METHODS = [
     "brain.finalize_dictation",
+    "brain.cancel_dictation",
     "stt.transcribe",
     "history.list",
     "history.latest",
@@ -520,6 +521,110 @@ async def test_finalize_still_answers_when_the_history_cannot_be_written(
     assert "你好" not in caplog.text
 
 
+# --- a dictation that is cancelled while its text is cleaned ------------------------------------
+# The request to the model is made, so it is paid for; the text is not kept, or it would be the
+# latest dictation, which "paste last" pastes, and it would be counted in the statistics.
+
+
+def gated(fake_client):
+    """Make the fake model wait until the test lets it answer; returns (entered, open_gate)."""
+    entered, gate = asyncio.Event(), asyncio.Event()
+    answer = fake_client.complete_json
+
+    async def wait_then_answer(**kwargs):
+        entered.set()
+        await gate.wait()
+        return await answer(**kwargs)
+
+    fake_client.complete_json = wait_then_answer
+    return entered, gate.set
+
+
+async def test_a_dictation_cancelled_while_it_is_cleaned_is_paid_for_and_not_kept(
+    router, fake_client, keys
+):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "早安，你好嗎。"}, cost=0.0004)
+    await finalize(router, "早安你好嗎", session_id="s0")  # the dictation "paste last" should find
+    fake_client.next_completion = completion({"text": "你好嗎我很好。"}, cost=0.0004)
+    entered, open_gate = gated(fake_client)
+    pending = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="s1"))
+    await entered.wait()
+    assert await router.call("brain.cancel_dictation", {"session_id": "s1"}) == {}
+    open_gate()
+    r = await pending
+    assert (r["id"], r["text"], r["cleaned"]) == (None, "你好嗎我很好。", True)
+    latest = (await router.call("history.latest", {}))["item"]
+    assert (latest["raw_text"], latest["text"]) == ("早安你好嗎", "早安，你好嗎。")
+    assert len((await router.call("history.list", {}))["items"]) == 1
+    status = await router.call("status.get", {})
+    assert status["spend"]["month_usd"] == pytest.approx(0.0008), "both requests were made"
+    assert status["last"]["text"] == latest["text"]
+    assert (await router.call("stats.summary", {}))["all"]["dictations"] == 1
+
+
+async def test_the_other_dictations_are_kept_while_one_is_cancelled(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "你好嗎我很好。"})
+    entered, open_gate = gated(fake_client)
+    first = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="s1"))
+    await entered.wait()
+    second = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="s2"))
+    await asyncio.sleep(0)
+    await router.call("brain.cancel_dictation", {"session_id": "s1"})
+    open_gate()
+    r1, r2 = await first, await second
+    assert r1["id"] is None and isinstance(r2["id"], int)
+    assert len((await router.call("history.list", {}))["items"]) == 1
+
+
+@pytest.mark.parametrize("other", ["s2", "S1", " s1"])
+async def test_cancelling_another_session_keeps_the_text(router, fake_client, keys, other):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "你好嗎我很好。"})
+    entered, open_gate = gated(fake_client)
+    pending = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="s1"))
+    await entered.wait()
+    await router.call("brain.cancel_dictation", {"session_id": other})
+    open_gate()
+    assert isinstance((await pending)["id"], int)
+
+
+async def test_a_cancel_that_comes_too_late_or_never_matched_keeps_nothing_back(
+    router, fake_client, keys
+):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "你好嗎我很好。"})
+    done = await finalize(router, "你好嗎我很好", session_id="s1")
+    assert isinstance(done["id"], int)
+    assert await router.call("brain.cancel_dictation", {"session_id": "s1"}) == {}
+    assert await router.call("brain.cancel_dictation", {"session_id": "never-seen"}) == {}
+    # The late cancel is forgotten: the same id, used again, is kept.
+    again = await finalize(router, "你好嗎我很好", session_id="s1")
+    assert isinstance(again["id"], int)
+    assert len((await router.call("history.list", {}))["items"]) == 2
+
+
+async def test_a_dictation_without_a_session_is_kept_as_before(router, fake_client, keys):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "你好嗎我很好。"})
+    assert isinstance((await finalize(router, "你好嗎我很好"))["id"], int)
+
+
+async def test_a_cancelled_dictation_logs_how_many_not_what(router, fake_client, keys, caplog):
+    caplog.set_level(logging.DEBUG)
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "你好嗎我很好。"})
+    entered, open_gate = gated(fake_client)
+    pending = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="sess-9f3a"))
+    await entered.wait()
+    await router.call("brain.cancel_dictation", {"session_id": "sess-9f3a"})
+    open_gate()
+    await pending
+    assert "你好嗎我很好" not in caplog.text and "sess-9f3a" not in caplog.text
+    assert any("cancelled" in record.getMessage() for record in caplog.records)
+
+
 # --- parameters ---------------------------------------------------------------------------------
 
 FIN = "brain.finalize_dictation"
@@ -549,6 +654,10 @@ BAD_PARAMS = [
     (FIN, without(GOOD, "stt_ms"), "finalize: no stt_ms"),
     (FIN, {**GOOD, "target_app": 5}, "finalize: target_app number"),
     (FIN, {**GOOD, "stt": 5}, "finalize: stt number"),
+    (FIN, {**GOOD, "session_id": 5}, "finalize: session_id number"),
+    ("brain.cancel_dictation", {}, "cancel_dictation: no session_id"),
+    ("brain.cancel_dictation", {"session_id": None}, "cancel_dictation: session_id null"),
+    ("brain.cancel_dictation", {"session_id": 5}, "cancel_dictation: session_id number"),
     ("history.list", {"query": 5}, "history.list: query number"),
     ("history.list", {"limit": "5"}, "history.list: limit str"),
     ("history.list", {"limit": 2.5}, "history.list: limit float"),

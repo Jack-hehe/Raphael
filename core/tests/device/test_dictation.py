@@ -217,7 +217,10 @@ class FakeBrain:
         self.on_finalize = None
         self.finalize_gate: asyncio.Event | None = None
         self.finalize_entered = asyncio.Event()
+        self.cancelled: list[str] = []  # the sessions the service told the brain to forget
+        self.cancel_error: RpcError | None = None
         router.register("brain.finalize_dictation", self._finalize)
+        router.register("brain.cancel_dictation", self._cancel_dictation)
         router.register("dictionary.list", self._dictionary_list)
         router.register("settings.get", self._settings_get)
 
@@ -237,6 +240,12 @@ class FakeBrain:
             "fallback_reason": None,
             "llm_ms": 5,
         }
+
+    async def _cancel_dictation(self, params: dict) -> dict:
+        if self.cancel_error is not None:
+            raise self.cancel_error
+        self.cancelled.append(params["session_id"])
+        return {}
 
     async def _dictionary_list(self, params: dict) -> dict:
         if self.fail_dictionary:
@@ -1126,8 +1135,129 @@ async def test_a_late_cancel_during_cleanup_preserves_the_new_session(rig, route
         assert not first_stop.done()
     finally:
         gate.set()
-        first = await first_stop
-    assert first["text"] == "first"
+    # The cancel was for s1, whose text was being cleaned: that one is dropped, s2 is not.
+    with pytest.raises(RpcError) as dropped:
+        await first_stop
+    assert dropped.value.code == NOT_FOUND
+    assert brain.cancelled == ["s1"]
+
+
+# --- dictation.cancel while the brain cleans the text ------------------------------------------
+# The service is idle by then, but the request to the model is made and paid for. The brain is told,
+# so that it does not keep the text (it would be the latest dictation, the one "paste last" pastes).
+
+
+async def test_the_brain_is_told_which_session_a_text_belongs_to(rig, router, brain):
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router, "s1")
+    await rig.recorder.fed(1)
+    await stop(router, "s1")
+    assert brain.finalize_params[-1]["session_id"] == "s1"
+
+
+async def test_a_cancel_while_the_text_is_cleaned_tells_the_brain_and_drops_the_result(
+    rig, router, brain
+):
+    gate = brain.finalize_gate = asyncio.Event()
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router, "s1")
+    await rig.recorder.fed(1)
+    stopping = asyncio.create_task(stop(router, "s1"))
+    try:
+        await asyncio.wait_for(brain.finalize_entered.wait(), 5)
+        assert not rig.service.active, "idle: a new dictation may start while the text is cleaned"
+        assert await router.call("dictation.cancel", {"session_id": "s1"}) == {}
+        assert brain.cancelled == ["s1"]
+    finally:
+        gate.set()
+    with pytest.raises(RpcError) as dropped:
+        await stopping
+    assert dropped.value.code == NOT_FOUND and "cancelled" in str(dropped.value)
+
+
+async def test_a_cancel_that_comes_twice_tells_the_brain_twice_without_harm(rig, router, brain):
+    gate = brain.finalize_gate = asyncio.Event()
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router, "s1")
+    await rig.recorder.fed(1)
+    stopping = asyncio.create_task(stop(router, "s1"))
+    try:
+        await asyncio.wait_for(brain.finalize_entered.wait(), 5)
+        assert await router.call("dictation.cancel", {"session_id": "s1"}) == {}
+        assert await router.call("dictation.cancel", {"session_id": "s1"}) == {}
+    finally:
+        gate.set()
+    with pytest.raises(RpcError):
+        await stopping
+
+
+async def test_a_cancel_after_the_text_came_back_does_not_trouble_the_brain(rig, router, brain):
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router, "s1")
+    await rig.recorder.fed(1)
+    assert (await stop(router, "s1"))["text"] == "text0"
+    assert await router.call("dictation.cancel", {"session_id": "s1"}) == {}
+    assert brain.cancelled == []
+
+
+async def test_a_recovery_cancel_leaves_the_text_that_is_being_cleaned_alone(rig, router, brain):
+    gate = brain.finalize_gate = asyncio.Event()
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router, "s1")
+    await rig.recorder.fed(1)
+    stopping = asyncio.create_task(stop(router, "s1"))
+    try:
+        await asyncio.wait_for(brain.finalize_entered.wait(), 5)
+        assert await router.call("dictation.cancel", {}) == {}
+    finally:
+        gate.set()
+    assert (await stopping)["text"] == "text0"
+    assert brain.cancelled == []
+
+
+async def test_a_brain_that_cannot_be_told_still_has_the_result_dropped(rig, router, brain, caplog):
+    brain.cancel_error = RpcError(INTERNAL_ERROR, "no")
+    gate = brain.finalize_gate = asyncio.Event()
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router, "s1")
+    await rig.recorder.fed(1)
+    stopping = asyncio.create_task(stop(router, "s1"))
+    try:
+        await asyncio.wait_for(brain.finalize_entered.wait(), 5)
+        with caplog.at_level(logging.WARNING, logger=LOGGER):
+            assert await router.call("dictation.cancel", {"session_id": "s1"}) == {}
+    finally:
+        gate.set()
+    with pytest.raises(RpcError) as dropped:
+        await stopping
+    assert dropped.value.code == NOT_FOUND
+    assert any("brain" in record.getMessage() for record in caplog.records)
+    assert "text0" not in caplog.text
+
+
+async def test_the_session_that_is_being_cleaned_can_be_cancelled_once_a_new_one_has_begun(
+    rig, router, brain
+):
+    rig.engine.texts = ["first", "second"]
+    rig.recorder.chunks = [chunk(1.0)]
+    gate = brain.finalize_gate = asyncio.Event()
+    await start(router, "s1")
+    await rig.recorder.fed(1)
+    first_stop = asyncio.create_task(stop(router, "s1"))
+    try:
+        await asyncio.wait_for(brain.finalize_entered.wait(), 5)
+        brain.finalize_gate = None
+        await start(router, "s2")
+        await rig.recorder.fed(1)
+        # s2 is the active one: a cancel naming s1 reaches s1 only, one naming s2 reaches s2 only.
+        assert await router.call("dictation.cancel", {"session_id": "s1"}) == {}
+        assert rig.service.active and brain.cancelled == ["s1"]
+        assert await router.call("dictation.cancel", {"session_id": "s2"}) == {}
+        assert not rig.service.active and brain.cancelled == ["s1"]
+    finally:
+        gate.set()
+    with pytest.raises(RpcError):
+        await first_stop
 
 
 async def test_cancel_without_an_id_cancels_the_active_session(rig, router):

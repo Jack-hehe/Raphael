@@ -1,7 +1,10 @@
 """The dictation service: the microphone and the speech-to-text engine behind three RPC methods.
 
 `dictation.start` opens the microphone, `dictation.stop` turns what was said into text and has the
-brain clean it, `dictation.cancel` throws everything away. While the key is held the audio is cut
+brain clean it, `dictation.cancel` throws everything away. A cancel that comes while the brain is
+cleaning the text reaches the brain too (`brain.cancel_dictation`), which finishes the request, as
+it is paid for, but does not keep the text; the stop is answered NOT_FOUND, as for any cancelled
+session. While the key is held the audio is cut
 into stretches of speech as it comes in, and each stretch is transcribed at once, so a long
 dictation is mostly done by the time the key is released and only the last stretch is left to wait
 for (spec section 5).
@@ -267,6 +270,9 @@ class DictationService:
         self._session: _Session | None = None
         # Cancelled sessions whose worker has not exited yet (it may be inside the engine).
         self._retiring: list[_Session] = []
+        # Sessions that were stopped and whose text the brain is cleaning, by id. The service is
+        # idle by then, but a cancel for one of them still has something to cancel.
+        self._cleaning: dict[str, _Session] = {}
 
     @property
     def active(self) -> bool:
@@ -690,16 +696,23 @@ class DictationService:
         with session.lock:
             done, total = session.finished, session.found
         self._send_progress(session, "cleaning", done, total, speech)
-        result = await self._router.call(
-            "brain.finalize_dictation",
-            {
-                "raw_text": text,
-                "audio_seconds": speech,
-                "stt_ms": stt_ms,
-                "target_app": target_app,
-                "stt": "+".join(session.stt_used) or None,
-            },
-        )
+        self._cleaning[session.id] = session
+        try:
+            result = await self._router.call(
+                "brain.finalize_dictation",
+                {
+                    "raw_text": text,
+                    "audio_seconds": speech,
+                    "stt_ms": stt_ms,
+                    "target_app": target_app,
+                    "stt": "+".join(session.stt_used) or None,
+                    "session_id": session.id,
+                },
+            )
+        finally:
+            self._cleaning.pop(session.id, None)
+        if session.cancelled:  # while the brain cleaned the text: it has not kept it
+            raise RpcError(NOT_FOUND, f"The dictation session {session_id!r} was cancelled")
         return {**result, "audio_seconds": speech, "stt_ms": stt_ms, "silent": False}
 
     # --- dictation.cancel -----------------------------------------------------------------------
@@ -710,7 +723,18 @@ class DictationService:
         session = self._session
         if session is not None and (session_id is None or session.id == session_id):
             await self._cancel_session(session)
+        elif session_id is not None and session_id in self._cleaning:
+            await self._cancel_cleaning(self._cleaning[session_id])
         return {}
+
+    async def _cancel_cleaning(self, session: _Session) -> None:
+        """Cancel a session that was stopped and whose text the brain is cleaning: the brain is told
+        not to keep the text. If it cannot be told, the result is dropped here all the same."""
+        session.cancelled = True
+        try:
+            await self._router.call("brain.cancel_dictation", {"session_id": session.id})
+        except RpcError as exc:
+            logger.warning("Could not tell the brain that a dictation was cancelled: %s", exc)
 
     async def _cancel_session(self, session: _Session) -> None:
         session.cancelled = True
