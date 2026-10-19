@@ -1,11 +1,22 @@
 // Private media and its public/private/ copies are gitignored. Missing assets use UI fallbacks;
-// the optional media must never prevent a frontend build.
+// the optional media must never prevent a frontend build. A public build (release config or CI)
+// copies nothing, and refuses to continue when a development build left private copies behind.
 
 import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { PRIVATE_FRONTEND_ASSETS, privateAssetsDirectory } from "./private-assets.mjs";
+import { PRIVATE_FRONTEND_ASSETS, assertPublicAssets, isPublicBuild, privateAssetsDirectory } from "./private-assets.mjs";
 
 const app = resolve(import.meta.dirname, "..");
+if (isPublicBuild()) {
+  try {
+    assertPublicAssets(app);
+  } catch (error) {
+    console.error(`copy-private: ${error.message}`);
+    process.exit(1);
+  }
+  console.log("copy-private: public build, private artwork is ignored");
+  process.exit(0);
+}
 const privateDir = privateAssetsDirectory(app);
 
 for (const name of PRIVATE_FRONTEND_ASSETS) {
