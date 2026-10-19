@@ -119,6 +119,17 @@ def test_a_sentence_without_hiragana_is_never_japanese():
     assert to_taiwan_traditional("\U0002003e") == "\U0002005e"
 
 
+# --- replacement_key ---
+
+
+def test_replacement_key_lowercases_ascii_letters_only():
+    # The same equivalence as the rules' matching: é does not match É, nor the Kelvin sign k.
+    assert textnorm.replacement_key("OpenRouter GPT-4") == "openrouter gpt-4"
+    assert textnorm.replacement_key("Éclair") == "Éclair"
+    assert textnorm.replacement_key("K") == "K"
+    assert textnorm.replacement_key("拉斐爾") == "拉斐爾"
+
+
 # --- apply_replacements ---
 
 

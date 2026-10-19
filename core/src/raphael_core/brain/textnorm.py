@@ -225,6 +225,15 @@ def convert_leftover_traditional(text: str) -> str:
     )
 
 
+_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+
+
+def replacement_key(text: str) -> str:
+    """`text` as the replacement rules compare it: ASCII letters in lower case, the rest as it is.
+    Two texts with the same key are the same text to `apply_replacements`."""
+    return text.translate(_ASCII_LOWER)
+
+
 def _misheard_pattern(misheard: str) -> re.Pattern[str]:
     """The pattern that finds the text of one rule.
 
