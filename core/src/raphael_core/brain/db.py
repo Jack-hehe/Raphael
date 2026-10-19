@@ -14,7 +14,7 @@ from .textnorm import replacement_key
 
 # A migration is one transaction that also sets user_version, so a failure cannot leave half a
 # schema behind with the version still saying "empty". One that has to look at the data is a
-# function (v3) instead of a script.
+# function (v3, v4) instead of a script.
 _MIGRATION_V1 = """
 BEGIN;
 CREATE TABLE history (id INTEGER PRIMARY KEY, created_at_ms INTEGER NOT NULL, kind TEXT NOT NULL,
@@ -44,8 +44,8 @@ COMMIT;
 """
 
 
-def _migrate_v3(conn: sqlite3.Connection) -> None:
-    """v3: the evidence behind the pairs the brain learns from corrections.
+def _adopt_learned_evidence(conn: sqlite3.Connection) -> None:
+    """Create `dictionary_evidence` and sort the learned forms into rules and hints.
 
     A pair learned from a correction used to become a replacement rule at once. Now it is a rule
     only when its form is distinctive, the two sound alike (`mishearing.may_become_rule`) and the
@@ -55,12 +55,11 @@ def _migrate_v3(conn: sqlite3.Connection) -> None:
     recorded as learned (status "rule") so that a correction by the user can still undo them. What
     the user typed (the manual and suggested entries, forms included) is left alone.
 
-    Like the scripts above, one transaction with the version.
+    Runs inside the caller's transaction and is safe to run twice.
     """
-    conn.execute("BEGIN")
     conn.execute(
-        "CREATE TABLE dictionary_evidence (word_key TEXT NOT NULL, form_key TEXT NOT NULL,"
-        " form TEXT NOT NULL, count INTEGER NOT NULL, status TEXT NOT NULL,"
+        "CREATE TABLE IF NOT EXISTS dictionary_evidence (word_key TEXT NOT NULL,"
+        " form_key TEXT NOT NULL, form TEXT NOT NULL, count INTEGER NOT NULL, status TEXT NOT NULL,"
         " updated_at_ms INTEGER NOT NULL, PRIMARY KEY (word_key, form_key))"
     )
     entries = conn.execute(
@@ -95,7 +94,33 @@ def _migrate_v3(conn: sqlite3.Connection) -> None:
                 "UPDATE dictionary SET misheard = ? WHERE id = ?",
                 (json.dumps(kept, ensure_ascii=False), entry_id),
             )
+
+
+def _migrate_v3(conn: sqlite3.Connection) -> None:
+    """v3: the evidence behind the pairs the brain learns from corrections (see above).
+
+    Like the scripts above, one transaction with the version.
+    """
+    conn.execute("BEGIN")
+    _adopt_learned_evidence(conn)
     conn.execute("PRAGMA user_version = 3")
+    conn.execute("COMMIT")
+
+
+def _migrate_v4(conn: sqlite3.Connection) -> None:
+    """v4: make sure the v3 evidence exists, whichever v3 a database went through.
+
+    An unreleased task-runner build also numbered its own schema v3 (`assistant_runs` and
+    `budget_requests`, left in place and unused here). A database that reached v3 that way never
+    got `dictionary_evidence`, so it is made here; for one that did, this changes nothing.
+    """
+    conn.execute("BEGIN")
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dictionary_evidence'"
+    ).fetchone()
+    if not exists:
+        _adopt_learned_evidence(conn)
+    conn.execute("PRAGMA user_version = 4")
     conn.execute("COMMIT")
 
 
@@ -103,6 +128,7 @@ _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_V1,
     2: _MIGRATION_V2,
     3: _migrate_v3,
+    4: _migrate_v4,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

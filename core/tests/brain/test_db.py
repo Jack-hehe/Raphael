@@ -60,7 +60,7 @@ SCHEMA_V3 = {
         "updated_at_ms INTEGER NOT NULL",
     ],
 }
-LATEST = 3
+LATEST = 4
 
 
 def schema_names(conn, kind):
@@ -224,6 +224,43 @@ def test_a_failed_v3_migration_leaves_the_database_at_v2():
     assert raw.execute("PRAGMA user_version").fetchone()[0] == 2
     assert raw.execute("SELECT misheard FROM dictionary").fetchone()[0] == '["首機"]'
     raw.close()
+
+
+def test_a_v3_database_from_the_task_runner_build_gets_the_evidence_at_v4(tmp_path):
+    # An unreleased build numbered its own schema v3 without dictionary_evidence.
+    path = tmp_path / "other-v3.db"
+    v2_database(path, [("手機", ["首機"], "learned"), ("Claude", ["cloud"], "learned")])
+    raw = sqlite3.connect(path)
+    raw.executescript(
+        "BEGIN; CREATE TABLE assistant_runs (id TEXT PRIMARY KEY);"
+        " CREATE TABLE budget_requests (id TEXT PRIMARY KEY); PRAGMA user_version = 3; COMMIT;"
+    )
+    raw.close()
+
+    conn = db.connect(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
+    store = DictionaryStore(conn)
+    assert {entry.word: entry.misheard for entry in store.list()} == {"手機": [], "Claude": ["cloud"]}
+    rows = conn.execute("SELECT word_key, form_key, status FROM dictionary_evidence")
+    assert {tuple(row) for row in rows} == {("手機", "首機", "pending"), ("claude", "cloud", "rule")}
+    # The other build's tables are left as they were.
+    assert {"assistant_runs", "budget_requests"} <= schema_names(conn, "table")
+    conn.close()
+
+
+def test_the_v4_migration_leaves_a_v3_evidence_table_alone(tmp_path):
+    path = tmp_path / "ours-v3.db"
+    v2_database(path, [("手機", ["首機"], "learned")])
+    raw = sqlite3.connect(path)
+    db._migrate_v3(raw)
+    raw.execute("UPDATE dictionary_evidence SET count = 2")  # evidence gathered since v3
+    raw.commit()
+    raw.close()
+
+    conn = db.connect(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
+    assert [tuple(row) for row in conn.execute("SELECT count FROM dictionary_evidence")] == [(2,)]
+    conn.close()
 
 
 def test_dictionary_words_are_unique(conn):
