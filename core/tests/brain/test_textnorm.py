@@ -516,8 +516,17 @@ def test_the_converter_is_created_once(monkeypatch):
 
 
 def test_the_opencc_configurations_the_variants_use_are_installed():
-    for config in ("s2twp.json", "s2hk.json", "t2s.json"):
+    for config in ("s2twp.json", "s2hk.json", "t2s.json", "tw2sp.json"):
         opencc.OpenCC(config)  # raises when the configuration is missing
+
+
+def test_to_simplified_converts_characters_and_to_mainland_converts_words_too():
+    # Two ways to one script, to compare texts: by characters (資料 is 资料, the documents) and by
+    # Mainland wording (軟體 is 软件, but 資料 is 数据).
+    assert textnorm.to_simplified("這個軟體的資料") == "这个软体的资料"
+    assert textnorm.to_mainland("這個軟體的資料") == "这个软件的数据"
+    assert textnorm.to_simplified("这个软件") == textnorm.to_mainland("这个软件") == "这个软件"
+    assert textnorm.to_simplified("OpenRouter, 好!") == "OpenRouter, 好!"
 
 
 @pytest.mark.parametrize(

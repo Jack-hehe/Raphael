@@ -376,10 +376,10 @@ async def test_a_reply_may_be_one_and_a_half_times_the_text_plus_twenty_characte
 ):
     # The limit is 1.5 * length + 20 characters: 33.5, 35 and 170 for these three lengths.
     raw = "字" * length
-    fake_client.reply = completion({"text": "好" * longest_ok})
+    fake_client.reply = completion({"text": "字" * longest_ok})
     r = await svc.clean(raw, audio_seconds=1)
     assert (r.cleaned, r.fallback_reason) == (True, None)
-    fake_client.reply = completion({"text": "好" * (longest_ok + 1)})
+    fake_client.reply = completion({"text": "字" * (longest_ok + 1)})
     r = await svc.clean(raw, audio_seconds=1)
     assert (r.text, r.cleaned, r.fallback_reason) == (raw, False, "suspicious")
     assert len(spend_rows(conn)) == 2  # the rejected reply cost money too
@@ -805,10 +805,43 @@ async def test_what_was_heard_is_the_raw_text_unless_given(svc, fake_client):
 
 async def test_the_length_rule_and_max_tokens_follow_what_the_model_read(svc, fake_client):
     heard = "字" * 100
-    fake_client.reply = completion({"text": "好" * 170})
+    fake_client.reply = completion({"text": "字" * 170})
     r = await svc.clean("字", audio_seconds=1, heard=heard)
     assert r.cleaned is True
     assert fake_client.calls[0]["max_tokens"] == cleanup.max_tokens_for(heard)
+
+
+# --- the content-overlap rule -------------------------------------------------------------------
+# What it lets through and rejects is in test_cleanup_overlap.py; this is what the service does.
+
+
+async def test_a_reply_that_shares_nothing_with_the_dictation_falls_back_and_was_paid_for(
+    svc, fake_client, spend
+):
+    fake_client.reply = completion({"text": "台北。"}, cost=0.0003)
+    r = await svc.clean("台灣的首都是哪裡", audio_seconds=2)
+    assert (r.text, r.cleaned, r.fallback_reason) == ("台灣的首都是哪裡", False, "suspicious")
+    assert r.cost_usd == 0.0003 and spend.month_total() == pytest.approx(0.0003)
+
+
+async def test_an_answer_in_another_script_falls_back_too(svc, fake_client):
+    fake_client.reply = completion({"text": "Paris."})
+    r = await svc.clean("what is the capital of France", audio_seconds=2)
+    assert (r.text, r.fallback_reason) == ("what is the capital of France", "suspicious")
+
+
+async def test_a_good_cleanup_of_the_same_dictation_goes_through(svc, fake_client):
+    fake_client.reply = completion({"text": "台灣的首都是哪裡？"})
+    r = await svc.clean("台灣的首都是哪裡", audio_seconds=2)
+    assert (r.text, r.cleaned, r.fallback_reason) == ("台灣的首都是哪裡？", True, None)
+
+
+async def test_the_overlap_is_judged_against_what_the_model_read(svc, fake_client):
+    # The model read the speech-to-text result as heard, in Simplified Chinese; the raw text that
+    # is pasted on a fallback was converted. A cleanup in Traditional characters is still one.
+    fake_client.reply = completion({"text": "這個軟體的資料我明天再發給你。"})
+    r = await svc.clean("這個軟體的資料我明天再發給你", audio_seconds=2, heard="这个软件的资料我明天再发给你")
+    assert (r.cleaned, r.fallback_reason) == (True, None)
 
 
 # --- the length rule and lists ------------------------------------------------------------------
@@ -823,7 +856,7 @@ def test_line_breaks_do_not_count_toward_the_length():
 
 
 def test_a_long_list_from_short_speech_gets_the_room_of_its_line_breaks():
-    raw = "一" * 30  # the limit is 65
+    raw = "字" * 30  # the limit is 65
     reply = "\n".join(f"{n}. {'字' * 4}" for n in range(1, 10))  # 9 items of 7, 8 line breaks
     assert len(reply) == 71 and cleanup.reply_length(reply) == 63
     assert not cleanup.is_suspicious_reply(raw, reply)

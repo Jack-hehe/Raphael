@@ -138,6 +138,26 @@ def _to_simplified() -> opencc.OpenCC:
     return opencc.OpenCC("t2s.json")
 
 
+def to_simplified(text: str) -> str:
+    """`text` with its Traditional Chinese made Simplified, character by character (OpenCC t2s),
+    to compare texts whichever script they are in. Not for writing: Japanese is not spared."""
+    return _to_simplified().convert(text)
+
+
+@functools.cache
+def _to_mainland() -> opencc.OpenCC:
+    """OpenCC's Taiwan-to-Simplified converter with Mainland phrases, made on first use."""
+    return opencc.OpenCC("tw2sp.json")
+
+
+def to_mainland(text: str) -> str:
+    """`text` with its Traditional Chinese made Simplified, words as well as characters (OpenCC
+    tw2sp: 軟體 into 软件, 影片 into 视频), to compare texts whichever script and regional wording
+    they use. Not for writing. Taiwan 資料 becomes 数据, which is not always the Mainland word, so
+    `to_simplified` is the better comparison for that one."""
+    return _to_mainland().convert(text)
+
+
 @functools.lru_cache(maxsize=8192)
 def _is_simplified_only(char: str, config: str = "s2twp.json") -> bool:
     """Whether the converter of `config` changes `char` on its own and it is no Traditional

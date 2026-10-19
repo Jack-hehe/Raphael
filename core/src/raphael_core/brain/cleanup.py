@@ -26,6 +26,7 @@ from .dictionary import DictionaryStore
 from .openrouter import CLEANUP_FALLBACKS, Completion, OpenRouterClient, OpenRouterError
 from .settings import SettingsStore
 from .spend import SpendTracker
+from .textnorm import to_mainland, to_simplified
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +69,80 @@ def reply_length(text: str) -> int:
     return len(text.strip().replace("\r", "").replace("\n", ""))
 
 
+# The length rule cannot catch a short answer to a short question ("Paris." for "what is the
+# capital of France"), so a reply is also compared with the dictation for the characters they have
+# in common.
+# A cleanup keeps the words that were said: it drops fillers and restarts, adds punctuation and
+# numbers, and fixes some spellings, so most of its character pairs were in the dictation. An
+# answer, a translation or a refusal has hardly any. The pairs are the neighbouring letters of the
+# text, of the letters alone: both texts are in one script (Simplified) and one case, with no
+# punctuation, digits, spaces or list markers, and no pair runs across a line break of the reply.
+# The dictation is often Mainland wording in Simplified characters and the cleanup Taiwan wording
+# in Traditional ones (the prompt asks for it: 软件 and 內存 become 軟體 and 記憶體), so the share is
+# the better of two conversions to Simplified, one by characters (資料 is 资料) and one by words
+# (軟體 is 软件). The texts are not compared for a dictation of fewer than OVERLAP_MIN_LETTERS
+# letters, which has too few pairs to say anything. The letters of a number written in Chinese do
+# not count: the model may write 零九一二三 as digits, and a reply without letters would then look
+# unrelated.
+OVERLAP_MIN_LETTERS = 8
+# A reply must have at least this share of its pairs in the dictation. Set from the cleanups the
+# eval cases ask for and the answers they are meant to catch (tests/brain/test_cleanup_overlap.py):
+# a good cleanup shares 0.44 at the least, for a dictation of three product names that all had to
+# be fixed, and 0.59 for one full of mishearings; the answers share 0.36 at the most, and the short
+# ones the length rule misses, 0.33.
+MIN_OVERLAP = 0.4
+_CHINESE_NUMERALS = frozenset("〇零一二三四五六七八九十百千萬万億亿兩两")
+
+
+def _letters(text: str, convert: Callable[[str], str]) -> str:
+    """The letters of `text` in one script and one case (see OVERLAP_MIN_LETTERS)."""
+    return "".join(char for char in convert(text).casefold() if char.isalpha())
+
+
+def _pairs(letters: str) -> list[str]:
+    return [letters[i : i + 2] for i in range(len(letters) - 1)]
+
+
+def content_overlap(heard: str, reply: str) -> float | None:
+    """The share of the character pairs of `reply` that `heard` has too, from 0 to 1; None when
+    `heard` has fewer than OVERLAP_MIN_LETTERS letters that are no Chinese numerals, so that there
+    is nothing to compare. A reply without a pair has no share: 0."""
+    shares = []
+    for convert in (to_simplified, to_mainland):
+        dictated = _letters(heard, convert)
+        if sum(char not in _CHINESE_NUMERALS for char in dictated) < OVERLAP_MIN_LETTERS:
+            return None
+        heard_pairs = set(_pairs(dictated))
+        reply_pairs = [
+            pair for line in reply.splitlines() for pair in _pairs(_letters(line, convert))
+        ]
+        if reply_pairs:
+            shares.append(sum(pair in heard_pairs for pair in reply_pairs) / len(reply_pairs))
+        else:
+            shares.append(0.0)
+    return max(shares)
+
+
+def suspicion(raw: str, text: str) -> str | None:
+    """Why `text`, the model's reply to the cleanup of `raw`, is no cleanup; None if it passes.
+
+    "empty": nothing at all. "too_long": longer than `reply_length_limit(raw)` as `reply_length`
+    counts it, which means the model wrote something of its own. "unrelated": with a share of
+    character pairs in `raw` under MIN_OVERLAP (`content_overlap`), which means the reply says
+    something else than the dictation did, most likely an answer to it. The reply is judged as the
+    model wrote it, before the normalization that follows.
+    """
+    if not text.strip():
+        return "empty"
+    if reply_length(text) > reply_length_limit(raw):
+        return "too_long"
+    overlap = content_overlap(raw, text)
+    return "unrelated" if overlap is not None and overlap < MIN_OVERLAP else None
+
+
 def is_suspicious_reply(raw: str, text: str) -> bool:
-    """Whether `text`, the model's reply to the cleanup of `raw`, is no cleanup: nothing at all,
-    or longer than `reply_length_limit(raw)` as `reply_length` counts it, which means the model
-    wrote something of its own, most likely an answer. The reply is judged as the model wrote it,
-    before the normalization that follows."""
-    return not text.strip() or reply_length(text) > reply_length_limit(raw)
+    """Whether `text`, the model's reply to the cleanup of `raw`, is no cleanup (`suspicion`)."""
+    return suspicion(raw, text) is not None
 
 
 @functools.cache
@@ -327,9 +396,10 @@ class CleanupService:
         The first of these that applies decides the reason: blank text is "empty", no key is
         "no_key", the monthly limit reached is "budget". Then the model is asked, and the raw text
         stays when it does not answer in time ("timeout"), when the call fails (f"error:{kind}"),
-        or when its answer is no cleanup of the text: nothing, or longer than 1.5 times what it
-        read plus 20 characters, line breaks not counted ("suspicious"). Anything else that goes
-        wrong is "error:unexpected".
+        or when its answer is no cleanup of the text: nothing, longer than 1.5 times what it read
+        plus 20 characters (line breaks not counted), or with too few character pairs in common
+        with it (`suspicion`); that is "suspicious". Anything else that goes wrong is
+        "error:unexpected".
 
         An answer is paid for, so it is recorded in the spend whatever it holds. A cancellation
         passes through.
@@ -397,8 +467,8 @@ class CleanupService:
         text = text.strip() if isinstance(text, str) else ""
         if is_suspicious_reply(heard, text):
             logger.warning(
-                "Cleanup reply is empty or too long, using the raw text: reply %d characters,"
-                " dictation %d",
+                "Cleanup reply is no cleanup (empty, too long or unrelated), using the raw text:"
+                " reply %d characters, dictation %d",
                 len(text),
                 len(heard),
             )

@@ -478,21 +478,26 @@ def test_a_case_with_languages_that_are_no_valid_selection_is_refused(tmp_path, 
 
 
 async def test_run_case_sends_the_prompt_of_the_cases_languages():
-    case = make_case(languages=["zh-CN", "en-GB"], must_contain=["软件"])
-    client = FakeClient(["这个軟件。"])
+    case = make_case(
+        input="這個軟件很好用而且很穩定", languages=["zh-CN", "en-GB"], must_contain=["软件"]
+    )
+    client = FakeClient(["这个軟件很好用而且很稳定。"])
     outcome = await eval_cleanup.run_case(client, "m", case)
     system = client.calls[0]["system"]
     assert "The speaker's languages: 簡體中文（中國）, English (United Kingdom)." in system
     assert "Simplified characters with Mainland usage" in system
     # What the app does with the reply for zh-CN: what is left in Traditional is made Simplified.
-    assert outcome.text == "这个软件。" and outcome.failures == []
+    assert outcome.text == "这个软件很好用而且很稳定。" and outcome.failures == []
 
 
 def test_failed_checks_follow_the_cases_chinese_variant():
-    hong_kong = make_case(languages=["zh-HK"], must_contain=["軟件"], must_not_contain=["軟體"])
-    assert eval_cleanup.failed_checks(hong_kong, "这个软件。") == []
-    mainland = make_case(languages=["zh-CN"], must_contain=["这个"])
-    assert eval_cleanup.failed_checks(mainland, "這個。") == []
+    heard = "這個軟件很好用而且很穩定"
+    hong_kong = make_case(
+        input=heard, languages=["zh-HK"], must_contain=["軟件"], must_not_contain=["軟體"]
+    )
+    assert eval_cleanup.failed_checks(hong_kong, "这个软件很好用而且很稳定。") == []
+    mainland = make_case(input=heard, languages=["zh-CN"], must_contain=["这个"])
+    assert eval_cleanup.failed_checks(mainland, "這個軟件很好用而且很穩定。") == []
 
 
 def test_failed_checks_pass_for_a_good_output():
@@ -509,23 +514,31 @@ def test_failed_checks_name_what_is_missing_and_what_must_not_be_there():
 
 
 def test_failed_checks_ignore_spacing_between_scripts():
-    case = make_case(must_contain=["打開 YouTube", "race condition"], must_not_contain=["了。"])
-    assert eval_cleanup.failed_checks(case, "打開YouTube，race  condition。") == []
+    case = make_case(
+        input="打開 YouTube 然後看 race condition",
+        must_contain=["打開 YouTube", "race condition"],
+        must_not_contain=["了。"],
+    )
+    assert eval_cleanup.failed_checks(case, "打開YouTube，然後看 race  condition。") == []
 
 
 def test_failed_checks_judge_the_text_the_user_gets_after_the_apps_processing():
     # After the cleanup the app converts what the model left in Simplified Chinese (打开 into
     # 開啟 with OpenCC s2twp), so that is the text the checks look at.
-    reply = "幫我打开 YouTube。"
-    assert eval_cleanup.failed_checks(make_case(must_contain=["開啟 YouTube"]), reply) == []
-    assert eval_cleanup.failed_checks(make_case(must_contain=["打开"]), reply) != []
-    assert eval_cleanup.failed_checks(make_case(must_not_contain=["打开"]), reply) == []
-    assert eval_cleanup.failed_checks(make_case(must_contain=["今天天氣"]), "今天天气很好。") == []
+    heard, reply = "幫我打開 YouTube 看影片", "幫我打开 YouTube 看影片。"
+    case = make_case(input=heard, must_contain=["開啟 YouTube"])
+    assert eval_cleanup.failed_checks(case, reply) == []
+    assert eval_cleanup.failed_checks(make_case(input=heard, must_contain=["打开"]), reply) != []
+    assert eval_cleanup.failed_checks(make_case(input=heard, must_not_contain=["打开"]), reply) == []
+    weather = make_case(input="今天天氣很好適合出門", must_contain=["今天天氣"])
+    assert eval_cleanup.failed_checks(weather, "今天天气很好适合出门。") == []
 
 
 def test_failed_checks_see_the_traditional_chinese_of_the_model_as_it_wrote_it():
     # s2twp alone would turn this 只要 into 隻要 and 打開 into 開啟; the app leaves both alone.
-    case = make_case(must_contain=["只要", "打開"], must_not_contain=["隻要", "開啟"])
+    case = make_case(
+        input="就是只要打開就好了啦", must_contain=["只要", "打開"], must_not_contain=["隻要", "開啟"]
+    )
     assert eval_cleanup.failed_checks(case, "就是只要打開就好。") == []
 
 
@@ -542,6 +555,16 @@ def test_failed_checks_apply_the_length_rule_to_the_reply_as_it_came():
     assert any("空" in f for f in eval_cleanup.failed_checks(case, "  "))
     # Converting 开 into 開 does not change the length, but the rule is on the reply in any case.
     assert any("過長" in f for f in eval_cleanup.failed_checks(case, "开" * 25))
+
+
+def test_failed_checks_say_when_the_reply_has_too_little_in_common_with_the_dictation():
+    case = make_case(input="台灣的首都是哪裡", must_not_contain=["台北"])
+    failures = eval_cleanup.failed_checks(case, "台北。")
+    assert any("共同" in f and "重疊 0%" in f and "40%" in f for f in failures)
+    assert any("不該出現" in f for f in failures), "the other checks still look at the reply"
+    assert eval_cleanup.failed_checks(case, "台灣的首都是哪裡？") == []
+    # A reply the app would take for an answer is not told apart from one that is too long.
+    assert not any("過長" in f for f in failures)
 
 
 def test_the_length_rule_and_the_prompt_helpers_are_the_ones_of_the_service():
@@ -959,11 +982,15 @@ def test_render_report_lists_the_case_insensitive_and_alternative_checks():
 
 
 def test_failed_checks_say_which_kind_of_check_failed():
-    case = make_case(must_contain_ci=["Hermes agent"], must_contain_any=["a b", "c d"])
-    failures = eval_cleanup.failed_checks(case, "hello")
+    case = make_case(
+        input="hermes agent and c d tools",
+        must_contain_ci=["Hermes agent"],
+        must_contain_any=["a b", "c d"],
+    )
+    failures = eval_cleanup.failed_checks(case, "hermes tools")
     assert any("Hermes agent" in f and "不分大小寫" in f for f in failures)
     assert any("一個都沒有" in f and "a b" in f and "c d" in f for f in failures)
-    assert eval_cleanup.failed_checks(case, "HERMES AGENT, C D") == []
+    assert eval_cleanup.failed_checks(case, "HERMES AGENT, C D tools") == []
 
 
 class FakeClient:
