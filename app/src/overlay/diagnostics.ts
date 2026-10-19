@@ -32,20 +32,38 @@ export function describeError(err: unknown): string {
   }
 }
 
+/** Keep text and future payload fields out of the ordinary application log. */
+function eventMetadata(event: OverlayEvent): object {
+  switch (event.type) {
+    case "show":
+    case "mode":
+      return { type: event.type, mode: event.mode };
+    case "progress":
+      return { type: event.type, stage: event.stage, done: event.done, total: event.total, audio_seconds: event.audio_seconds };
+    case "settings":
+      return { type: event.type, px: event.px };
+    default:
+      return { type: event.type };
+  }
+}
+
 /**
- * Wraps the page's event handler: every event but the loudness is logged at debug level, and an
- * event that throws is reported instead of being lost in the webview's console.
+ * Wraps the page's event handler: every event but the loudness logs safe metadata at debug level,
+ * and an event that throws is reported instead of being lost in the webview's console.
  */
 export function guardHandler(
   handle: (event: OverlayEvent) => void,
   log: PageLog,
 ): (event: OverlayEvent) => void {
   return (event) => {
-    if (event.type !== "level") log("debug", `event ${JSON.stringify(event)}`);
+    if (event.type !== "level") log("debug", `event ${JSON.stringify(eventMetadata(event))}`);
     try {
       handle(event);
     } catch (err) {
-      log("error", `the "${event.type}" event failed: ${describeError(err)}`);
+      const details = event.type === "notice" || event.type === "learned"
+        ? "details omitted for text-bearing events"
+        : describeError(err);
+      log("error", `the "${event.type}" event failed: ${details}`);
     }
   };
 }
