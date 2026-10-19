@@ -1,13 +1,15 @@
 """The dictation service: the microphone and the speech-to-text engine behind three RPC methods.
 
 `dictation.start` opens the microphone, `dictation.stop` turns what was said into text and has the
-brain clean it, `dictation.cancel` throws everything away. A cancel that comes while the brain is
-cleaning the text reaches the brain too (`brain.cancel_dictation`), which finishes the request, as
-it is paid for, but does not keep the text; the stop is answered NOT_FOUND, as for any cancelled
-session. While the key is held the audio is cut
+brain clean it, `dictation.cancel` throws everything away. While the key is held the audio is cut
 into stretches of speech as it comes in, and each stretch is transcribed at once, so a long
 dictation is mostly done by the time the key is released and only the last stretch is left to wait
 for (spec section 5).
+
+A cancel that comes while the brain is cleaning the text (the service is idle by then, and the
+cancel names the session) reaches the brain too, with `brain.cancel_dictation`. The brain finishes
+the request, which is paid for, but does not keep the text, and the stop is answered NOT_FOUND, as
+for any cancelled session.
 
 Threads. The recorder calls `_on_frames` on the audio thread (and once more, from the thread that
 calls `stop()`, with the last few milliseconds): it only counts the frames, puts them on a

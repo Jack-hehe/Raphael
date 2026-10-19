@@ -70,20 +70,18 @@ def reply_length(text: str) -> int:
 
 
 # The length rule cannot catch a short answer to a short question ("Paris." for "what is the
-# capital of France"), so a reply is also compared with the dictation for the characters they have
-# in common.
+# capital of France"), so a reply is also compared with the dictation for what they have in common.
 # A cleanup keeps the words that were said: it drops fillers and restarts, adds punctuation and
-# numbers, and fixes some spellings, so most of its character pairs were in the dictation. An
-# answer, a translation or a refusal has hardly any. The pairs are the neighbouring letters of the
-# text, of the letters alone: both texts are in one script (Simplified) and one case, with no
-# punctuation, digits, spaces or list markers, and no pair runs across a line break of the reply.
-# The dictation is often Mainland wording in Simplified characters and the cleanup Taiwan wording
-# in Traditional ones (the prompt asks for it: 软件 and 內存 become 軟體 and 記憶體), so the share is
-# the better of two conversions to Simplified, one by characters (資料 is 资料) and one by words
-# (軟體 is 软件). The texts are not compared for a dictation of fewer than OVERLAP_MIN_LETTERS
-# letters, which has too few pairs to say anything. The letters of a number written in Chinese do
-# not count: the model may write 零九一二三 as digits, and a reply without letters would then look
-# unrelated.
+# numbers, and fixes some spellings, so most of its character pairs (two letters side by side) were
+# in the dictation. An answer, a translation or a refusal has hardly any. Only letters count: both
+# texts are made Simplified Chinese in lower case, without punctuation, digits, spaces or list
+# markers, and no pair runs across a line break of the reply. The dictation is often Mainland
+# wording in Simplified characters and the cleanup Taiwan wording in Traditional ones (the prompt
+# asks for it: 软件 and 内存 become 軟體 and 記憶體), so the share is the better of two conversions
+# to Simplified, one by characters (資料 is 资料) and one by words (軟體 is 软件). A dictation of
+# fewer than OVERLAP_MIN_LETTERS letters has too few pairs to say anything, and is not compared. The
+# letters of a number written in Chinese do not count for that: the model may write 零九一二三 as
+# digits, and a reply without letters would then look unrelated.
 OVERLAP_MIN_LETTERS = 8
 # A reply must have at least this share of its pairs in the dictation. Set from the cleanups the
 # eval cases ask for and the answers they are meant to catch (tests/brain/test_cleanup_overlap.py):
@@ -95,7 +93,7 @@ _CHINESE_NUMERALS = frozenset("〇零一二三四五六七八九十百千萬万�
 
 
 def _letters(text: str, convert: Callable[[str], str]) -> str:
-    """The letters of `text` in one script and one case (see OVERLAP_MIN_LETTERS)."""
+    """The letters of `text`, converted by `convert` and in lower case."""
     return "".join(char for char in convert(text).casefold() if char.isalpha())
 
 
@@ -103,24 +101,25 @@ def _pairs(letters: str) -> list[str]:
     return [letters[i : i + 2] for i in range(len(letters) - 1)]
 
 
+def _share(heard: str, reply: str, convert: Callable[[str], str]) -> float:
+    """The share of the pairs of `reply`, line by line, that `heard` has too, both converted by
+    `convert`; 0 for a reply without a pair."""
+    heard_pairs = set(_pairs(_letters(heard, convert)))
+    reply_pairs = [pair for line in reply.splitlines() for pair in _pairs(_letters(line, convert))]
+    if not reply_pairs:
+        return 0.0
+    return sum(pair in heard_pairs for pair in reply_pairs) / len(reply_pairs)
+
+
 def content_overlap(heard: str, reply: str) -> float | None:
-    """The share of the character pairs of `reply` that `heard` has too, from 0 to 1; None when
-    `heard` has fewer than OVERLAP_MIN_LETTERS letters that are no Chinese numerals, so that there
-    is nothing to compare. A reply without a pair has no share: 0."""
-    shares = []
-    for convert in (to_simplified, to_mainland):
-        dictated = _letters(heard, convert)
-        if sum(char not in _CHINESE_NUMERALS for char in dictated) < OVERLAP_MIN_LETTERS:
-            return None
-        heard_pairs = set(_pairs(dictated))
-        reply_pairs = [
-            pair for line in reply.splitlines() for pair in _pairs(_letters(line, convert))
-        ]
-        if reply_pairs:
-            shares.append(sum(pair in heard_pairs for pair in reply_pairs) / len(reply_pairs))
-        else:
-            shares.append(0.0)
-    return max(shares)
+    """The share of the character pairs of `reply` that `heard` has too, from 0 to 1, by the
+    better of the two conversions to Simplified; None when `heard` has fewer than
+    OVERLAP_MIN_LETTERS letters that are no Chinese numerals, so that there is nothing to compare.
+    A reply without a pair has no share: 0."""
+    dictated = _letters(heard, to_simplified)
+    if sum(char not in _CHINESE_NUMERALS for char in dictated) < OVERLAP_MIN_LETTERS:
+        return None
+    return max(_share(heard, reply, convert) for convert in (to_simplified, to_mainland))
 
 
 def suspicion(raw: str, text: str) -> str | None:

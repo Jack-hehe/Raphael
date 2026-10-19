@@ -27,7 +27,8 @@ rule only when both of these hold:
 
 The tests are heuristics with no dictionary behind them (the core has no phonetic library and takes
 no new dependency), so they only decide what may become a rule. A pair also needs a second
-observation, and must not break the replacements the user already has (`DictionaryStore.learn`).
+observation, and must not break the replacements the user already has
+(`DictionaryStore.learn_pair`).
 """
 
 import re
