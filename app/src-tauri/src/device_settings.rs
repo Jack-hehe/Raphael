@@ -1,5 +1,6 @@
-//! Settings that belong to this computer: the hotkeys and how the dictation key works (press to
-//! start and again to stop, or hold while talking), the microphone, how the emblem looks, the
+//! Settings that belong to this computer: the hotkeys (dictation, pasting the last dictation and
+//! asking Raphael) and how the dictation key works (press to start and again to stop, or hold
+//! while talking), the microphone, how the emblem looks, the
 //! theme, interface language, autostart, and whether the first-run guide has been done.
 //!
 //! They live in `device.json` in Raphael's data folder (`%APPDATA%\Raphael`, or the folder named
@@ -29,24 +30,23 @@ pub const EMBLEM_SIZES: [u32; 3] = [120, 150, 194];
 /// The interface languages offered by the main window.
 const UI_LANGUAGES: [&str; 3] = ["zh-TW", "en", "ja"];
 
-/// Which subtitle lines the overlay shows.
+/// Whether the overlay shows Raphael's words as subtitles, in the interface language.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Subtitles {
+    /// Older files chose which of two lines to show with `"both"`, `"zh"` or `"ja"`. There is one
+    /// line now, in the interface language, so those values are read as `"on"`.
     #[default]
-    Both,
-    Zh,
-    Ja,
+    #[serde(alias = "both", alias = "zh", alias = "ja")]
+    On,
     Off,
 }
 
 impl Subtitles {
-    /// The spelling the overlay page takes (`"both"`, `"zh"`, `"ja"`, `"off"`).
+    /// The spelling the overlay page takes (`"on"`, `"off"`).
     pub fn as_str(self) -> &'static str {
         match self {
-            Subtitles::Both => "both",
-            Subtitles::Zh => "zh",
-            Subtitles::Ja => "ja",
+            Subtitles::On => "on",
             Subtitles::Off => "off",
         }
     }
@@ -95,6 +95,9 @@ pub struct DeviceSettings {
     pub dictation_mode: DictationMode,
     /// Key combinations that paste the latest dictation again.
     pub paste_last_keys: Vec<String>,
+    /// Key combinations that ask Raphael something. They follow `dictation_mode` like the
+    /// dictation keys and never share a combination with them or with `paste_last_keys`.
+    pub agent_keys: Vec<String>,
     /// The name of the microphone; `None` is the system's default one.
     pub microphone: Option<String>,
     /// The emblem's diameter, one of [`EMBLEM_SIZES`].
@@ -116,6 +119,7 @@ impl Default for DeviceSettings {
             dictation_keys: keys.dictation,
             dictation_mode: DictationMode::default(),
             paste_last_keys: keys.paste_last,
+            agent_keys: keys.agent,
             microphone: None,
             emblem_size: 150,
             subtitles: Subtitles::default(),
@@ -175,6 +179,7 @@ impl DeviceSettings {
                 "dictation_keys" => next.dictation_keys = parse_value(name, value)?,
                 "dictation_mode" => next.dictation_mode = parse_value(name, value)?,
                 "paste_last_keys" => next.paste_last_keys = parse_value(name, value)?,
+                "agent_keys" => next.agent_keys = parse_value(name, value)?,
                 "microphone" => next.microphone = parse_value(name, value)?,
                 "emblem_size" => next.emblem_size = parse_value(name, value)?,
                 "subtitles" => next.subtitles = parse_value(name, value)?,
@@ -234,7 +239,12 @@ impl DeviceSettings {
         }
         check_keys("快捷鍵", &self.dictation_keys)?;
         check_keys("貼上上一次聽寫的快捷鍵", &self.paste_last_keys)?;
-        check_keys_apart(&self.dictation_keys, &self.paste_last_keys)
+        check_keys("問拉斐爾的快捷鍵", &self.agent_keys)?;
+        check_keys_apart(
+            &self.dictation_keys,
+            &self.paste_last_keys,
+            &self.agent_keys,
+        )
     }
 
     /// Replaces each value that [`validate`](Self::validate) would refuse with its default.
@@ -265,10 +275,21 @@ impl DeviceSettings {
             log::warn!("device settings: {err}");
             self.paste_last_keys = default.paste_last_keys.clone();
         }
-        if let Err(err) = check_keys_apart(&self.dictation_keys, &self.paste_last_keys) {
+        if let Err(err) = check_keys("agent_keys", &self.agent_keys) {
+            log::warn!("device settings: {err}");
+            self.agent_keys = default.agent_keys.clone();
+        }
+        // The defaults never share a combination, so putting all three back always ends it. (A
+        // file from before the agent keys that bound Right Alt+Space to dictation ends up here.)
+        if let Err(err) = check_keys_apart(
+            &self.dictation_keys,
+            &self.paste_last_keys,
+            &self.agent_keys,
+        ) {
             log::warn!("device settings: {err}");
             self.dictation_keys = default.dictation_keys;
             self.paste_last_keys = default.paste_last_keys;
+            self.agent_keys = default.agent_keys;
         }
     }
 }
@@ -331,14 +352,32 @@ fn check_keys(what: &str, keys: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether no key combination is used for both actions. (`AltRight+V` and `AltRight+KeyV` are the
+/// Whether no key combination is used for two actions. (`AltRight+V` and `AltRight+KeyV` are the
 /// same one.)
-fn check_keys_apart(dictation: &[String], paste_last: &[String]) -> Result<(), String> {
-    for text in dictation {
-        let hotkey = parse_binding(text)?;
-        for other in paste_last {
-            if parse_binding(other)? == hotkey {
-                return Err("聽寫和貼上上一次聽寫不能用同一組按鍵".to_owned());
+fn check_keys_apart(
+    dictation: &[String],
+    paste_last: &[String],
+    agent: &[String],
+) -> Result<(), String> {
+    for (first, second, refusal) in [
+        (
+            dictation,
+            paste_last,
+            "聽寫和貼上上一次聽寫不能用同一組按鍵",
+        ),
+        (dictation, agent, "聽寫和問拉斐爾不能用同一組按鍵"),
+        (
+            paste_last,
+            agent,
+            "貼上上一次聽寫和問拉斐爾不能用同一組按鍵",
+        ),
+    ] {
+        for text in first {
+            let hotkey = parse_binding(text)?;
+            for other in second {
+                if parse_binding(other)? == hotkey {
+                    return Err(refusal.to_owned());
+                }
             }
         }
     }
@@ -502,9 +541,10 @@ mod tests {
         assert_eq!(s.dictation_keys, ["AltRight"]);
         assert_eq!(s.dictation_mode, DictationMode::Toggle);
         assert_eq!(s.paste_last_keys, ["AltRight+V"]);
+        assert_eq!(s.agent_keys, ["AltRight+Space"]);
         assert_eq!(s.microphone, None);
         assert_eq!(s.emblem_size, 150);
-        assert_eq!(s.subtitles, Subtitles::Both);
+        assert_eq!(s.subtitles, Subtitles::On);
         assert_eq!(s.appearance, Appearance::System);
         assert_eq!(s.ui_language, "zh-TW");
         assert!(s.autostart);
@@ -514,7 +554,7 @@ mod tests {
     #[test]
     fn json_uses_snake_case_names() {
         let s = DeviceSettings {
-            subtitles: Subtitles::Zh,
+            subtitles: Subtitles::Off,
             appearance: Appearance::Light,
             microphone: Some("耳機麥克風".to_owned()),
             ..DeviceSettings::default()
@@ -525,22 +565,22 @@ mod tests {
                 "dictation_keys": ["AltRight"],
                 "dictation_mode": "toggle",
                 "paste_last_keys": ["AltRight+V"],
+                "agent_keys": ["AltRight+Space"],
                 "microphone": "耳機麥克風",
                 "emblem_size": 150,
-                "subtitles": "zh",
+                "subtitles": "off",
                 "appearance": "light",
                 "ui_language": "zh-TW",
                 "autostart": true,
                 "onboarded": false,
             })
         );
-        for (value, text) in [
-            (Subtitles::Both, "both"),
-            (Subtitles::Zh, "zh"),
-            (Subtitles::Ja, "ja"),
-            (Subtitles::Off, "off"),
-        ] {
+        for (value, text) in [(Subtitles::On, "on"), (Subtitles::Off, "off")] {
             assert_eq!(serde_json::to_value(value).unwrap(), json!(text));
+            assert_eq!(
+                serde_json::from_value::<Subtitles>(json!(text)).unwrap(),
+                value
+            );
             assert_eq!(value.as_str(), text);
         }
         for (value, text) in [
@@ -554,6 +594,31 @@ mod tests {
             );
             assert_eq!(value.as_str(), text);
         }
+    }
+
+    #[test]
+    fn the_subtitle_values_of_two_lines_are_read_as_on() {
+        for legacy in ["both", "zh", "ja"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(FILE_NAME);
+            std::fs::write(
+                &path,
+                format!(r#"{{"subtitles": "{legacy}", "emblem_size": 120}}"#),
+            )
+            .unwrap();
+            let loaded = DeviceSettings::load(&path);
+            assert_eq!(loaded.subtitles, Subtitles::On, "{legacy}");
+            assert_eq!(loaded.emblem_size, 120, "{legacy}: the rest is kept");
+            assert!(path.exists(), "{legacy}: the file is not set aside");
+            // the main window is given the spelling of today
+            assert_eq!(serde_json::to_value(&loaded).unwrap()["subtitles"], "on");
+        }
+        let mut s = DeviceSettings::default();
+        s.apply_patch(&json!({"subtitles": "off"})).unwrap();
+        assert_eq!(s.subtitles, Subtitles::Off);
+        s.apply_patch(&json!({"subtitles": "both"})).unwrap();
+        assert_eq!(s.subtitles, Subtitles::On);
+        assert!(s.apply_patch(&json!({"subtitles": "loud"})).is_err());
     }
 
     #[test]
@@ -669,7 +734,7 @@ mod tests {
             );
             assert_eq!(loaded.dictation_mode, DictationMode::Hold, "{bad}");
             assert_eq!(loaded.emblem_size, 120, "{bad}");
-            assert_eq!(loaded.subtitles, Subtitles::Ja, "{bad}");
+            assert_eq!(loaded.subtitles, Subtitles::On, "{bad}");
             assert_eq!(loaded.appearance, Appearance::Dark, "{bad}");
             assert!(loaded.onboarded, "{bad}");
             assert!(path.exists(), "{bad}: the file is not set aside");
@@ -748,7 +813,7 @@ mod tests {
             assert_eq!(s.dictation_mode, DictationMode::Toggle, "{text}");
             assert_eq!(
                 (s.emblem_size, s.subtitles),
-                (120, Subtitles::Ja),
+                (120, Subtitles::On),
                 "{text}: what was fine stays"
             );
             assert!(path.exists(), "{text}: the file is not set aside");
@@ -799,7 +864,7 @@ mod tests {
         assert_eq!(s.emblem_size, 150);
         assert_eq!(s.dictation_keys, ["AltRight"]);
         assert_eq!(s.paste_last_keys, ["AltRight+V"]);
-        assert_eq!(s.subtitles, Subtitles::Ja, "what was fine stays");
+        assert_eq!(s.subtitles, Subtitles::On, "what was fine stays");
     }
 
     #[test]
@@ -917,6 +982,114 @@ mod tests {
             "AltRight+V already pastes the last dictation"
         );
         assert_eq!(s.dictation_keys, ["F9"]);
+    }
+
+    #[test]
+    fn a_patch_sets_the_agent_keys() {
+        let mut s = DeviceSettings::default();
+        s.apply_patch(&json!({"agent_keys": ["F8", "ControlRight+Space"]}))
+            .unwrap();
+        assert_eq!(s.agent_keys, ["F8", "ControlRight+Space"]);
+        // the same combination in the spelling of the other keys, twice, or none at all
+        for bad in [
+            json!({"agent_keys": []}),
+            json!({"agent_keys": ["F8", "F8"]}),
+            json!({"agent_keys": ["KeyV"]}),
+            json!({"agent_keys": ["AltLeft"]}),
+            json!({"agent_keys": ["AltRight+Escape"]}),
+            json!({"agent_keys": "F8"}),
+            json!({"agent_keys": [1]}),
+            json!({"agent_keys": null}),
+        ] {
+            assert!(s.apply_patch(&bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            s.agent_keys,
+            ["F8", "ControlRight+Space"],
+            "nothing changed"
+        );
+    }
+
+    #[test]
+    fn the_agent_keys_never_share_a_combination_with_the_other_actions() {
+        let mut s = DeviceSettings::default();
+        // Right Alt+Space is the agent's; dictation and paste-last cannot take it
+        let refused = s
+            .apply_patch(&json!({"dictation_keys": ["AltRight+Space"]}))
+            .unwrap_err();
+        assert!(refused.contains("問拉斐爾"), "{refused}");
+        let refused = s
+            .apply_patch(&json!({"paste_last_keys": ["altright+space"]}))
+            .unwrap_err();
+        assert!(refused.contains("問拉斐爾"), "{refused}");
+        // nor can the agent take theirs, in any spelling
+        assert!(s.apply_patch(&json!({"agent_keys": ["AltRight"]})).is_err());
+        assert!(
+            s.apply_patch(&json!({"agent_keys": ["AltRight+KeyV"]}))
+                .is_err()
+        );
+        // giving the combination up in the same patch is fine
+        s.apply_patch(&json!({
+            "dictation_keys": ["AltRight+Space"],
+            "agent_keys": ["F8"],
+        }))
+        .unwrap();
+        assert_eq!(s.dictation_keys, ["AltRight+Space"]);
+        assert_eq!(s.agent_keys, ["F8"]);
+        assert_eq!(DeviceSettings::default().agent_keys, ["AltRight+Space"]);
+    }
+
+    #[test]
+    fn a_file_from_before_the_agent_keys_gets_the_default_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{"dictation_keys": ["F9"], "paste_last_keys": ["F10"], "emblem_size": 120}"#,
+        )
+        .unwrap();
+        let s = DeviceSettings::load(&path);
+        assert_eq!(s.agent_keys, ["AltRight+Space"]);
+        assert_eq!(s.dictation_keys, ["F9"]);
+        assert_eq!(s.paste_last_keys, ["F10"]);
+        assert_eq!(s.emblem_size, 120);
+    }
+
+    #[test]
+    fn agent_keys_that_cannot_be_used_get_the_default_on_load() {
+        for bad in [r#"[]"#, r#"["V"]"#, r#"["F8", "F8"]"#, r#"["Nope"]"#] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(FILE_NAME);
+            std::fs::write(
+                &path,
+                format!(r#"{{"agent_keys": {bad}, "dictation_keys": ["F9"]}}"#),
+            )
+            .unwrap();
+            let s = DeviceSettings::load(&path);
+            assert_eq!(s.agent_keys, ["AltRight+Space"], "{bad}");
+            assert_eq!(s.dictation_keys, ["F9"], "{bad}: what was fine stays");
+        }
+    }
+
+    #[test]
+    fn a_file_that_shares_a_combination_gets_every_key_back_to_its_default() {
+        // Right Alt+Space was a fine dictation key before it became the agent's.
+        for stored in [
+            r#"{"dictation_keys": ["AltRight+Space"]}"#,
+            r#"{"paste_last_keys": ["AltRight+Space"]}"#,
+            r#"{"dictation_keys": ["F9"], "agent_keys": ["F9"]}"#,
+            r#"{"paste_last_keys": ["F9"], "agent_keys": ["altright+f9", "F9"]}"#,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(FILE_NAME);
+            std::fs::write(&path, stored).unwrap();
+            let s = DeviceSettings::load(&path);
+            let defaults = DeviceSettings::default();
+            assert_eq!(s.dictation_keys, defaults.dictation_keys, "{stored}");
+            assert_eq!(s.paste_last_keys, defaults.paste_last_keys, "{stored}");
+            assert_eq!(s.agent_keys, defaults.agent_keys, "{stored}");
+            assert!(path.exists(), "{stored}: the file is not set aside");
+        }
     }
 
     #[test]

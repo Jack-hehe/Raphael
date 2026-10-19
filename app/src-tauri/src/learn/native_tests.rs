@@ -138,14 +138,17 @@ impl OverlayApi for AuditOverlay {
     fn hide(&self) {}
     fn progress(&self, _progress: Progress) {}
 
-    fn notice(&self, _zh: &str, _ja: &str) {
+    fn notice(&self, _text: &str) {
         self.ordinary_count.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn learned_notice(&self, zh: &str, ja: &str) {
-        let (expected_zh, expected_ja) = crate::notices::learned(&[WORD.to_owned()]);
+    fn say(&self, _prefix: &str, _text: &str) {}
+    fn ask(&self, _prompt: &crate::overlay::AskPrompt) {}
+
+    fn learned_notice(&self, text: &str) {
+        let expected = crate::notices::learned(&[WORD.to_owned()], "zh-TW");
         self.expected_notice
-            .store(zh == expected_zh && ja == expected_ja, Ordering::SeqCst);
+            .store(text == expected, Ordering::SeqCst);
         let count = self.learned_count.fetch_add(1, Ordering::SeqCst) + 1;
         eprintln!("native learner roundtrip: learned_notice_count={count}");
     }

@@ -42,7 +42,7 @@ pub use uia::UiaProbe;
 
 #[cfg(windows)]
 use crate::commands::MainEvent;
-use crate::notices;
+use crate::notices::{self, LanguageCell};
 use crate::overlay::OverlayApi;
 use crate::paste::{PasteReceipt, Target};
 use crate::rpc::CoreApi;
@@ -308,6 +308,8 @@ pub struct Learner<C: CoreApi, O: OverlayApi, P: FieldProbe> {
     /// Serializes accepting a delivery with cancellation, so stale continuations cannot cancel newer ones.
     latest_delivery: Mutex<u64>,
     timing: Timing,
+    /// The language of the notice that names the learned words.
+    language: LanguageCell,
 }
 
 impl<C: CoreApi, O: OverlayApi, P: FieldProbe> Learner<C, O, P> {
@@ -319,7 +321,15 @@ impl<C: CoreApi, O: OverlayApi, P: FieldProbe> Learner<C, O, P> {
             generation: Arc::new(AtomicU64::new(0)),
             latest_delivery: Mutex::new(0),
             timing: TIMING,
+            language: LanguageCell::default(),
         }
+    }
+
+    /// The learner, naming the learned words in the language `language` holds, which the device
+    /// settings keep up to date.
+    pub fn with_language(mut self, language: LanguageCell) -> Self {
+        self.language = language;
+        self
     }
 
     /// Starts the watch after `text` was pasted into `target`; `None` if there is nothing to
@@ -366,6 +376,7 @@ impl<C: CoreApi, O: OverlayApi, P: FieldProbe> Learner<C, O, P> {
         };
         drop(latest_delivery);
         let timing = self.timing;
+        let language = self.language.clone();
         let (text, target) = (text.to_owned(), target.clone());
         Some(tokio::spawn(async move {
             if !learning_is_on(core.as_ref()).await {
@@ -421,8 +432,7 @@ impl<C: CoreApi, O: OverlayApi, P: FieldProbe> Learner<C, O, P> {
                 log::info!("learn: a new dictation is under way; no notice");
                 return;
             }
-            let (zh, ja) = notices::learned(&words);
-            overlay.learned_notice(&zh, &ja);
+            overlay.learned_notice(&notices::learned(&words, &language.get()));
         }))
     }
 }
@@ -874,19 +884,21 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct Overlay(Mutex<Vec<(String, String)>>, AtomicU64);
+    struct Overlay(Mutex<Vec<String>>, AtomicU64);
 
     impl OverlayApi for Overlay {
         fn show(&self, _: Mode) {}
         fn set_mode(&self, _: Mode) {}
         fn level(&self, _: f32) {}
-        fn notice(&self, zh: &str, ja: &str) {
-            self.0.lock().unwrap().push((zh.to_owned(), ja.to_owned()));
+        fn notice(&self, text: &str) {
+            self.0.lock().unwrap().push(text.to_owned());
         }
-        fn learned_notice(&self, zh: &str, ja: &str) {
+        fn learned_notice(&self, text: &str) {
             self.1.fetch_add(1, Ordering::SeqCst);
-            self.notice(zh, ja);
+            self.notice(text);
         }
+        fn say(&self, _: &str, _: &str) {}
+        fn ask(&self, _: &crate::overlay::AskPrompt) {}
         fn hide(&self) {}
         fn progress(&self, _: Progress) {}
     }
@@ -939,12 +951,30 @@ mod tests {
         );
         assert_eq!(
             *overlay.0.lock().unwrap(),
-            [(
-                "《了。「手提電話」已加入詞典。》".to_owned(),
-                "《了。「手提電話」を辞書に追加しました。》".to_owned()
-            )]
+            ["《了。「手提電話」已加入詞典。》".to_owned()],
+            "one line, in the default language"
         );
         assert_eq!(probe.asked.lock().unwrap()[0].process_name, "LINE.exe");
+    }
+
+    #[tokio::test]
+    async fn the_learned_words_are_named_in_the_interface_language() {
+        for (language, expected) in [
+            ("ja", "《了。「手提電話」を辞書に追加しました。》"),
+            ("en", "《Understood. “手提電話” added to the dictionary.》"),
+        ] {
+            let core = Core::learning().on("dictionary.learn", json!({"learned": ["手提電話"]}));
+            let (_, overlay, _, learner) = learner(core, sent_field());
+            let cell = LanguageCell::default();
+            cell.set(language);
+            let learner = learner.with_language(cell);
+            run(&learner, &target("LINE.exe")).await;
+            assert_eq!(
+                *overlay.0.lock().unwrap(),
+                [expected.to_owned()],
+                "{language}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1156,7 +1186,7 @@ mod tests {
         let (_, overlay, _, learner) = learner(core, sent_field());
         run(&learner, &target("notepad.exe")).await;
         assert_eq!(
-            overlay.0.lock().unwrap()[0].0,
+            overlay.0.lock().unwrap()[0],
             "《了。「手機」、「Typeless」已加入詞典。》"
         );
     }

@@ -49,6 +49,11 @@ pub fn timeout_for(method: &str) -> Duration {
         // The last chunk of speech-to-text, then the cleanup request to the LLM. The first
         // dictation after launch also waits for the speech engine to load (about 31 s).
         "dictation.stop" => 90,
+        // The router and then the model that words the answer, and perhaps a web search or the
+        // weather in between. Nobody waits for it longer than that: Esc stops it earlier.
+        "agent.ask" => 60,
+        // Does what was approved, then words the reply.
+        "agent.confirm" => 30,
         // Downloads speech models.
         "models.ensure" => 3600,
         "secrets.set_openrouter_key" | "status.check_openrouter" => 15,
@@ -793,11 +798,15 @@ mod tests {
     fn timeouts_follow_the_method() {
         assert_eq!(timeout_for("dictation.stop"), Duration::from_secs(90));
         assert_eq!(timeout_for("models.ensure"), Duration::from_secs(3600));
+        assert_eq!(timeout_for("agent.ask"), Duration::from_secs(60));
+        assert_eq!(timeout_for("agent.confirm"), Duration::from_secs(30));
         for method in [
             "secrets.set_openrouter_key",
             "status.check_openrouter",
             "core.hello",
             "history.list",
+            "agent.cancel",
+            "agent.history.list",
             "anything.else",
         ] {
             assert_eq!(timeout_for(method), Duration::from_secs(15), "{method}");

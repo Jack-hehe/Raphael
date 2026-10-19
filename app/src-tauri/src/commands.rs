@@ -1,7 +1,9 @@
 //! The commands the main window calls, and the device settings behind some of them.
 //!
 //! - `core_call` passes a call on to the core, but only the methods the main window needs; the
-//!   dictation methods are the controller's alone.
+//!   dictation methods and the ones that ask Raphael something (`agent.ask`, `agent.confirm`,
+//!   `agent.cancel`) are the controller's alone. The main window may read and clear the record of
+//!   the conversations (`agent.history.`).
 //! - `device_settings_get` and `device_settings_set` read and change `device.json`
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
 //!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
@@ -37,6 +39,7 @@ use crate::device_settings::{
 };
 use crate::dictation::ModeCell;
 use crate::hotkey::{Bindings, HotkeyService, PauseReason, WindowHotkey};
+use crate::notices::LanguageCell;
 use crate::overlay::Overlay;
 use crate::rpc::{CORE_EXITED, Notification, RpcError, TIMEOUT};
 
@@ -138,12 +141,13 @@ fn require_main(webview: &Webview) -> Result<(), String> {
 
 // ---------- calls to the core ----------
 
-const ALLOWED_PREFIXES: [&str; 5] = [
+const ALLOWED_PREFIXES: [&str; 6] = [
     "history.",
     "dictionary.",
     "settings.",
     "secrets.",
     "status.",
+    "agent.history.",
 ];
 const ALLOWED_METHODS: [&str; 7] = [
     "audio.devices",
@@ -157,8 +161,9 @@ const ALLOWED_METHODS: [&str; 7] = [
 
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
 /// settings (the `languages` setting too), the key, the status, the usage numbers, the model prices,
-/// the list of languages, and the few device methods
-/// the settings page needs. Everything else is refused, the dictation methods above all.
+/// the list of languages, the record of the conversations with Raphael, and the few device methods
+/// the settings page needs. Everything else is refused, the dictation methods and the ones that
+/// ask Raphael something above all.
 pub fn is_allowed_method(m: &str) -> bool {
     ALLOWED_METHODS.contains(&m)
         || ALLOWED_PREFIXES
@@ -335,19 +340,23 @@ pub trait Effects: Send + Sync {
     fn microphone(&self, name: Option<&str>) -> impl Future<Output = Result<(), String>> + Send;
     /// Starts Raphael with Windows, or no longer does.
     fn autostart(&self, on: bool) -> Result<(), String>;
-    /// Resizes the overlay's emblem and changes its subtitles.
-    fn overlay(&self, emblem_px: u32, subtitles: Subtitles);
+    /// Resizes the overlay's emblem and changes its subtitles and the interface language it is
+    /// told.
+    fn overlay(&self, emblem_px: u32, subtitles: Subtitles, language: &str);
     /// Changes the theme of the main window's frame.
     fn theme(&self, appearance: Appearance);
     /// Hands the dictation mode to the controller. A dictation that is under way is not touched:
     /// the new mode applies from the next one.
     fn dictation_mode(&self, mode: DictationMode);
+    /// Hands the interface language to the controller, which shows its notices in it.
+    fn ui_language(&self, language: &str);
 }
 
 fn bindings_of(settings: &DeviceSettings) -> Bindings {
     Bindings {
         dictation: settings.dictation_keys.clone(),
         paste_last: settings.paste_last_keys.clone(),
+        agent: settings.agent_keys.clone(),
     }
 }
 
@@ -359,8 +368,9 @@ pub async fn apply_changes<E: Effects>(
     old: &DeviceSettings,
     new: &DeviceSettings,
 ) -> Result<(), String> {
-    let bindings_changed =
-        old.dictation_keys != new.dictation_keys || old.paste_last_keys != new.paste_last_keys;
+    let bindings_changed = old.dictation_keys != new.dictation_keys
+        || old.paste_last_keys != new.paste_last_keys
+        || old.agent_keys != new.agent_keys;
     let microphone_changed = old.microphone != new.microphone;
 
     if bindings_changed {
@@ -385,14 +395,20 @@ pub async fn apply_changes<E: Effects>(
         put_back_bindings().await;
         return Err(err);
     }
-    if old.emblem_size != new.emblem_size || old.subtitles != new.subtitles {
-        effects.overlay(new.emblem_size, new.subtitles);
+    if old.emblem_size != new.emblem_size
+        || old.subtitles != new.subtitles
+        || old.ui_language != new.ui_language
+    {
+        effects.overlay(new.emblem_size, new.subtitles, &new.ui_language);
     }
     if old.appearance != new.appearance {
         effects.theme(new.appearance);
     }
     if old.dictation_mode != new.dictation_mode {
         effects.dictation_mode(new.dictation_mode);
+    }
+    if old.ui_language != new.ui_language {
+        effects.ui_language(&new.ui_language);
     }
     Ok(())
 }
@@ -495,9 +511,9 @@ impl Effects for AppEffects {
         })
     }
 
-    fn overlay(&self, emblem_px: u32, subtitles: Subtitles) {
+    fn overlay(&self, emblem_px: u32, subtitles: Subtitles, language: &str) {
         match self.app.try_state::<Arc<Overlay>>() {
-            Some(overlay) => overlay.apply_settings(emblem_px, subtitles.as_str()),
+            Some(overlay) => overlay.apply_settings(emblem_px, subtitles.as_str(), language),
             None => log::warn!("there is no overlay to resize"),
         }
     }
@@ -520,6 +536,13 @@ impl Effects for AppEffects {
         match self.app.try_state::<ModeCell>() {
             Some(cell) => cell.set(mode),
             None => log::warn!("there is no dictation controller to hand the mode to"),
+        }
+    }
+
+    fn ui_language(&self, language: &str) {
+        match self.app.try_state::<LanguageCell>() {
+            Some(cell) => cell.set(language),
+            None => log::warn!("there is no dictation controller to hand the language to"),
         }
     }
 }
@@ -681,8 +704,15 @@ fn apply_saved(app: &AppHandle, settings: &DeviceSettings) {
     let effects = AppEffects { app: app.clone() };
     let fresh = DeviceSettings::default();
 
-    if (&settings.dictation_keys, &settings.paste_last_keys)
-        != (&fresh.dictation_keys, &fresh.paste_last_keys)
+    if (
+        &settings.dictation_keys,
+        &settings.paste_last_keys,
+        &settings.agent_keys,
+    ) != (
+        &fresh.dictation_keys,
+        &fresh.paste_last_keys,
+        &fresh.agent_keys,
+    )
         // Startup is not an async context and nothing else is waiting yet, so this blocks.
         && let Err(err) = effects
             .hotkeys()
@@ -690,14 +720,26 @@ fn apply_saved(app: &AppHandle, settings: &DeviceSettings) {
     {
         log::error!("could not use the saved hotkeys: {err}");
     }
-    if (settings.emblem_size, settings.subtitles) != (fresh.emblem_size, fresh.subtitles) {
-        effects.overlay(settings.emblem_size, settings.subtitles);
+    if (
+        settings.emblem_size,
+        settings.subtitles,
+        &settings.ui_language,
+    ) != (fresh.emblem_size, fresh.subtitles, &fresh.ui_language)
+    {
+        effects.overlay(
+            settings.emblem_size,
+            settings.subtitles,
+            &settings.ui_language,
+        );
     }
     if settings.appearance != fresh.appearance {
         effects.theme(settings.appearance);
     }
     if settings.dictation_mode != fresh.dictation_mode {
         effects.dictation_mode(settings.dictation_mode);
+    }
+    if settings.ui_language != fresh.ui_language {
+        effects.ui_language(&settings.ui_language);
     }
     // A debug build runs from the target folder; it must not put itself in the registry.
     if !cfg!(debug_assertions)
@@ -858,6 +900,32 @@ mod tests {
     }
 
     #[test]
+    fn the_main_window_reads_the_conversations_but_never_asks_raphael() {
+        // The record of the conversations is the main window's to read and clear...
+        for method in ["agent.history.list", "agent.history.clear"] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        // ...and the questions are the controller's alone: the main window cannot ask, approve
+        // or cancel anything on Raphael's behalf.
+        for method in [
+            "agent.ask",
+            "agent.confirm",
+            "agent.cancel",
+            "agent.",
+            "agent",
+            "agent.history",
+            "agent.history.",
+            "agent.historyx",
+            "agent.historyx.list",
+            "xagent.history.list",
+            "Agent.history.list",
+            " agent.history.list",
+        ] {
+            assert!(!is_allowed_method(method), "{method:?}");
+        }
+    }
+
+    #[test]
     fn the_whole_list_of_allowed_methods() {
         for method in [
             "history.list",
@@ -882,6 +950,8 @@ mod tests {
             "pricing.get",
             "stats.summary",
             "languages.list",
+            "agent.history.list",
+            "agent.history.clear",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
@@ -892,6 +962,9 @@ mod tests {
             "dictation.start",
             "dictation.stop",
             "dictation.cancel",
+            "agent.ask",
+            "agent.confirm",
+            "agent.cancel",
             "brain.finalize_dictation",
             "audio.set_device", // goes through device_settings_set
             "audio.start",
@@ -1250,6 +1323,8 @@ mod tests {
     struct Fake {
         log: Mutex<Vec<String>>,
         fail: Option<&'static str>,
+        /// The bindings of the last `bindings` step.
+        bound: Mutex<Option<Bindings>>,
     }
 
     impl Fake {
@@ -1275,6 +1350,7 @@ mod tests {
 
     impl Effects for Fake {
         async fn bindings(&self, bindings: &Bindings) -> Result<(), String> {
+            *self.bound.lock().unwrap() = Some(bindings.clone());
             self.record("bindings", bindings.dictation.join(","))
         }
 
@@ -1286,8 +1362,11 @@ mod tests {
             self.record("autostart", on.to_string())
         }
 
-        fn overlay(&self, emblem_px: u32, subtitles: Subtitles) {
-            let _ = self.record("overlay", format!("{emblem_px} {}", subtitles.as_str()));
+        fn overlay(&self, emblem_px: u32, subtitles: Subtitles, language: &str) {
+            let _ = self.record(
+                "overlay",
+                format!("{emblem_px} {} {language}", subtitles.as_str()),
+            );
         }
 
         fn theme(&self, appearance: Appearance) {
@@ -1296,6 +1375,10 @@ mod tests {
 
         fn dictation_mode(&self, mode: DictationMode) {
             let _ = self.record("dictation_mode", mode.as_str().to_owned());
+        }
+
+        fn ui_language(&self, language: &str) {
+            let _ = self.record("ui_language", language.to_owned());
         }
     }
 
@@ -1377,7 +1460,7 @@ mod tests {
         let fake = Fake::default();
         let (old, new) = changed(json!({"emblem_size": 194}));
         apply_changes(&fake, &old, &new).await.unwrap();
-        assert_eq!(fake.done(), ["overlay 194 both"]);
+        assert_eq!(fake.done(), ["overlay 194 on zh-TW"]);
 
         let fake = Fake::default();
         let (old, new) = changed(json!({"appearance": "dark", "autostart": false}));
@@ -1385,15 +1468,41 @@ mod tests {
         assert_eq!(fake.done(), ["autostart false", "theme Dark"]);
 
         let fake = Fake::default();
-        let (old, new) = changed(json!({"microphone": "耳機麥克風", "subtitles": "zh"}));
+        let (old, new) = changed(json!({"microphone": "耳機麥克風", "subtitles": "off"}));
         apply_changes(&fake, &old, &new).await.unwrap();
-        assert_eq!(fake.done(), ["microphone 耳機麥克風", "overlay 150 zh"]);
+        assert_eq!(
+            fake.done(),
+            ["microphone 耳機麥克風", "overlay 150 off zh-TW"]
+        );
 
         // the answer to "onboarded" is the settings file's alone
         let fake = Fake::default();
         let (old, new) = changed(json!({"onboarded": true}));
         apply_changes(&fake, &old, &new).await.unwrap();
         assert_eq!(fake.done(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn the_bindings_are_made_of_all_three_actions() {
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"agent_keys": ["F8"]}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(fake.done(), ["bindings AltRight"]);
+        assert_eq!(
+            fake.bound.lock().unwrap().clone().unwrap(),
+            Bindings {
+                dictation: vec!["AltRight".to_owned()],
+                paste_last: vec!["AltRight+V".to_owned()],
+                agent: vec!["F8".to_owned()],
+            }
+        );
+        assert_eq!(bindings_of(&DeviceSettings::default()), Bindings::default());
+
+        // a refused agent key changes nothing else
+        let fake = Fake::failing("bindings");
+        let (old, new) = changed(json!({"agent_keys": ["F8"], "emblem_size": 194}));
+        assert!(apply_changes(&fake, &old, &new).await.is_err());
+        assert_eq!(fake.done(), ["bindings AltRight"]);
     }
 
     #[tokio::test]
@@ -1412,7 +1521,27 @@ mod tests {
         let fake = Fake::default();
         let (old, new) = changed(json!({"dictation_mode": "toggle", "emblem_size": 194}));
         apply_changes(&fake, &old, &new).await.unwrap();
-        assert_eq!(fake.done(), ["overlay 194 both"]);
+        assert_eq!(fake.done(), ["overlay 194 on zh-TW"]);
+    }
+
+    #[tokio::test]
+    async fn a_new_interface_language_goes_to_the_overlay_and_the_controller() {
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"ui_language": "ja"}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(fake.done(), ["overlay 150 on ja", "ui_language ja"]);
+
+        // the same language again, with something else changed: the controller is left alone
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"ui_language": "zh-TW", "emblem_size": 120}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(fake.done(), ["overlay 120 on zh-TW"]);
+
+        // a refused change does not switch the language
+        let fake = Fake::failing("autostart");
+        let (old, new) = changed(json!({"ui_language": "en", "autostart": false}));
+        assert!(apply_changes(&fake, &old, &new).await.is_err());
+        assert_eq!(fake.done(), ["autostart false"]);
     }
 
     #[tokio::test]
@@ -1479,7 +1608,7 @@ mod tests {
         assert_eq!(saved.emblem_size, 120);
         assert_eq!(store.get().await, saved);
         assert_eq!(DeviceSettings::load(&path), saved);
-        assert_eq!(fake.done(), ["overlay 120 both"]);
+        assert_eq!(fake.done(), ["overlay 120 on zh-TW"]);
     }
 
     #[tokio::test]
