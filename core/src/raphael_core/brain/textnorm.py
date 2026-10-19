@@ -6,7 +6,10 @@ variant the user chose (raphael_core.languages): Traditional with Taiwan usage f
 for zh-CN (`t2s`), and no conversion when no Chinese is chosen. OpenCC does no language
 detection: it also turns the Japanese kanji that share a code point with Simplified Chinese into
 Traditional forms (学 into 學, 会 into 會, 来 into 來). That is why Japanese is skipped, sentence
-by sentence.
+by sentence. And OpenCC takes its input for Simplified Chinese: over text that is Traditional
+already it corrupts some characters (只要 into 隻要, 干擾 into 幹擾). So the Traditional variants
+convert only what is still Simplified (`convert_leftover_simplified`), for the cleaned text and for
+the raw text alike.
 """
 
 import difflib
@@ -318,9 +321,23 @@ def normalize_transcript(
     text: str, rules: Sequence[tuple[str, str]], *, chinese: str | None = "zh-TW"
 ) -> str:
     """Speech-to-text output as the rest of the app sees it: the Chinese of the variant `chinese`
-    (`to_chinese_variant`; Japanese sentences left alone), then the dictionary's replacements.
-    This is the text that is saved, and the one pasted when the cleanup fails."""
-    return apply_replacements(to_chinese_variant(text, chinese), rules)
+    (Japanese sentences left alone), then the dictionary's replacements. This is the text that is
+    saved, and the one pasted when the cleanup fails.
+
+    The speech-to-text engines often write Traditional Chinese already, and OpenCC over a whole
+    Traditional sentence corrupts it (只要 into 隻要, 干擾 into 幹擾, and with s2hk 系統 into 係統).
+    So for the Traditional variants (zh-TW, zh-HK, yue-HK) only what is still Simplified is
+    converted (`convert_leftover_simplified`), as it is for a cleaned text: Traditional text comes
+    through as it is, and a sentence that is Simplified Chinese through and through is converted
+    whole, as `to_chinese_variant` does. zh-CN goes through `to_chinese_variant` (t2s, which leaves
+    Simplified characters alone), and None leaves the text as it is.
+    """
+    chinese = _checked_variant(chinese)
+    if chinese in _TO_TRADITIONAL:
+        text = convert_leftover_simplified(text, _TO_TRADITIONAL[chinese])
+    else:
+        text = to_chinese_variant(text, chinese)
+    return apply_replacements(text, rules)
 
 
 def finish_cleaned_text(

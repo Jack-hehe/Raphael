@@ -380,6 +380,28 @@ async def test_a_fallback_after_the_call_pastes_the_converted_raw_text(router, f
     assert (r["text"], r["fallback_reason"]) == ("這是測試", "suspicious")
 
 
+@pytest.mark.parametrize(
+    "spoken",
+    [
+        "只要這個系統發佈，周末就不會干擾你。",
+        "我們只要有一個干擾，就會停下來。",
+    ],
+)
+async def test_a_fallback_pastes_and_saves_traditional_speech_as_it_is(router, spoken):
+    # No key: the text that is pasted is the speech-to-text result. It is Traditional Chinese
+    # already, and OpenCC over the whole sentence would write 隻要, 幹擾 and 釋出 into it.
+    r = await finalize(router, spoken)
+    assert (r["cleaned"], r["fallback_reason"]) == (False, "no_key")
+    assert r["text"] == r["raw_text"] == spoken
+    row = (await router.call("history.latest", {}))["item"]
+    assert (row["text"], row["raw_text"]) == (spoken, spoken)
+
+
+async def test_a_fallback_converts_only_the_simplified_words_of_mixed_speech(router):
+    r = await finalize(router, "就是只要按這個开關，资料我後面再发給你。")
+    assert r["text"] == r["raw_text"] == "就是只要按這個開關，資料我後面再發給你。"
+
+
 async def test_finalize_failure_falls_back_to_the_raw_text(router, fake_client, keys):
     keys.set(KEY)
     fake_client.next_error = OpenRouterError(0, "network", "offline")

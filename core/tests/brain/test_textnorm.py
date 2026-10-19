@@ -354,6 +354,26 @@ def test_normalize_transcript_converts_then_applies_the_replacements():
     assert textnorm.normalize_transcript("拉菲爾说这个软件", rules) == "拉斐爾說這個軟體"
 
 
+@pytest.mark.parametrize("chinese", ["zh-TW", "zh-HK", "yue-HK"])
+@pytest.mark.parametrize("text", ["只要", "干擾", "系統", "發佈", "周末"])
+def test_normalize_transcript_preserves_traditional_forms(chinese, text):
+    assert textnorm.normalize_transcript(text, [], chinese=chinese) == text
+
+
+@pytest.mark.parametrize(
+    ("chinese", "expected"),
+    [
+        ("zh-TW", "這個軟體會干擾系統，後面的頭髮。"),
+        ("zh-HK", "這個軟件會干擾系統，後面的頭髮。"),
+        ("yue-HK", "這個軟件會干擾系統，後面的頭髮。"),
+    ],
+)
+def test_normalize_transcript_still_converts_pure_simplified(chinese, expected):
+    assert textnorm.normalize_transcript(
+        "这个软件会干扰系统，后面的头发。", [], chinese=chinese
+    ) == expected
+
+
 def test_finish_cleaned_text_converts_and_applies_the_replacements():
     rules = [("拉菲爾", "拉斐爾")]
     assert textnorm.finish_cleaned_text("拉菲爾说：打开软件。", rules) == "拉斐爾說：開啟軟體。"
