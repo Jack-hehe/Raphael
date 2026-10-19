@@ -1,0 +1,32 @@
+/* 拉斐爾: the conversations, a column to read. The days run down the page, today last. The colours are
+   the app's own (styles.css). */
+
+.page.page-agent { max-width: 820px; }
+
+.page-agent .more { display: flex; justify-content: center; margin-top: 18px; }
+.page-agent .group.day { margin-top: 22px; }
+.page-agent .group.day > h3 { margin: 0 0 8px 2px; }
+.page-agent .list.card.turns { padding: 4px 18px; }
+
+.page-agent .turn { display: grid; grid-template-columns: 44px minmax(0, 1fr) 28px; gap: 12px; align-items: start; padding: 13px 0; border-top: 1px solid var(--line); }
+.page-agent .turn:first-child { border-top: 0; }
+.page-agent .turn-time { padding-top: 2px; font-size: 12px; color: var(--text-3); }
+.page-agent .turn-q { font-size: 13px; line-height: 1.6; color: var(--text-2); overflow-wrap: anywhere; }
+.page-agent .turn-a { margin-top: 3px; font: 600 15px/1.65 var(--voice); color: var(--text); overflow-wrap: anywhere; }
+.page-agent .turn-q + .turn-a { margin-top: 2px; }
+.page-agent .turn-detail { margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: 13px; line-height: 1.7; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.page-agent .turn-acts { padding-top: 1px; }
+.page-agent .turn-acts .icon-btn .i { transition: transform 0.15s ease; }
+.page-agent .turn-acts .icon-btn[aria-expanded="true"] .i { transform: rotate(180deg); }
+
+.page-agent .empty { padding: 56px 0; }
+.page-agent .empty p { margin: 6px 0 0; }
+
+@media (min-width: 1440px) and (min-height: 800px) {
+  .page.page-agent { max-width: 920px; }
+  .page-agent .turn { grid-template-columns: 52px minmax(0, 1fr) 32px; }
+  .page-agent .turn-time { font-size: 13px; }
+  .page-agent .turn-q { font-size: 14px; }
+  .page-agent .turn-a { font-size: 16px; }
+  .page-agent .turn-detail { font-size: 14px; }
+}

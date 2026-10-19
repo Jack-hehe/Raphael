@@ -120,6 +120,23 @@ export interface HistoryItem {
   stt?: string | null;
 }
 
+/** A turn of the conversation with Raphael (`agent.history.list`, newest first). */
+export interface AgentTurn {
+  id: number;
+  created_at_ms: number;
+  /** What the person said, as the speech recognition heard it. */
+  question: string;
+  /** How the question was routed: a command, a question, a chat... (the core's word). */
+  route: string;
+  /** The word before Raphael's reply: 答, 告, 否, 了 or 問 (Answer, Notice, ... in English). */
+  prefix: string;
+  /** Raphael's reply, the line of the overlay. */
+  text: string;
+  /** The longer version of the reply, when there is one. */
+  detail: string | null;
+  status: string;
+}
+
 /** An entry of `dictionary.list` */
 export interface DictionaryEntry {
   id: number;
@@ -191,9 +208,9 @@ export type MainEvent =
 
 // ---------- what the pages share with main.ts ----------
 
-export type PageId = "home" | "history" | "dictionary" | "settings";
+export type PageId = "home" | "agent" | "history" | "dictionary" | "settings";
 
-/** One of the four pages of the main window. */
+/** One of the five pages of the main window. */
 export interface Page {
   readonly id: PageId;
   readonly el: HTMLElement;

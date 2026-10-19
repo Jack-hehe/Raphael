@@ -1,12 +1,14 @@
-// The main window: a sidebar with home, history and dictionary, this month's spend and the way to
-// the settings at the bottom, and the page that is chosen. The settings open as a panel over the
-// window. The pages are in pages/; this file holds what they share (spec §12).
+// The main window: a sidebar with home, Raphael's conversations, history and dictionary, this
+// month's spend and the way to the settings at the bottom, and the page that is chosen. The
+// settings open as a panel over the window. The pages are in pages/; this file holds what they
+// share (spec §12).
 
 import { onLocaleChange, setLocale, t } from "./i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { loadGlyphTexture } from "../overlay/emblem";
 import * as api from "./api";
+import { createAgent } from "./pages/agent";
 import { createDictionary } from "./pages/dictionary";
 import { createHistory } from "./pages/history";
 import { createHome } from "./pages/home";
@@ -45,6 +47,7 @@ const RESHOW_MS = 1000;
 
 const NAV: { id: Exclude<PageId, "settings">; name: string; icon: IconName }[] = [
   { id: "home", get name() { return t("main.001"); }, icon: "home" },
+  { id: "agent", get name() { return t("nav.agent"); }, icon: "chat" },
   { id: "history", get name() { return t("main.002"); }, icon: "clock" },
   { id: "dictionary", get name() { return t("main.003"); }, icon: "book" },
 ];
@@ -125,6 +128,7 @@ async function start(): Promise<void> {
 
   const pages: Record<PageId, Page> = {
     home: createHome(ctx),
+    agent: createAgent(ctx),
     history: createHistory(ctx),
     dictionary: createDictionary(ctx),
     settings: createSettings(ctx),

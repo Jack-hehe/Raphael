@@ -362,7 +362,15 @@ export const zhTW = {
   "settings.082": "<p class=\"foot\">粉絲自製，跟《關於我轉生變成史萊姆這檔事》的原作與動畫製作方無關；聲音模型和從動畫取樣的素材只限個人使用。</p>",
   "settings.083": "快捷鍵改成 {p0}",
   "settings.084": "<span class=\"rec-hint\">按下新的按鍵（Esc 取消）</span>",
-  "settings.085": "拉斐爾的程式碼以 MIT 授權釋出。"
+  "settings.085": "拉斐爾的程式碼以 MIT 授權釋出。",
+  "nav.agent": "拉斐爾",
+  "agent.title": "拉斐爾",
+  "agent.clear": "清除對話",
+  "agent.cleared": "已清除所有對話",
+  "agent.empty": "《告。還沒有對話。》",
+  "agent.loadFailed": "《告。無法讀取對話。》",
+  "agent.earlier": "顯示更早的對話",
+  "agent.detail": "詳細"
 } as const;
 export type MessageKey = keyof typeof zhTW;
 export type Messages = Record<MessageKey, string>;

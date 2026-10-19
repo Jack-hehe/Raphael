@@ -363,5 +363,13 @@ export const ja = {
   "settings.082": "<p class=\"foot\">ファンによる非公式アプリです。『転生したらスライムだった件』の原作者・アニメ制作元とは関係ありません。音声モデルとアニメから採取した素材は個人利用に限ります。</p>",
   "settings.083": "ショートカットを{p0}に変更しました",
   "settings.084": "<span class=\"rec-hint\">新しいキーを押してください（Escでキャンセル）</span>",
-  "settings.085": "Raphael のコードは MIT ライセンスで公開されています。"
+  "settings.085": "Raphael のコードは MIT ライセンスで公開されています。",
+  "nav.agent": "ラファエル",
+  "agent.title": "ラファエル",
+  "agent.clear": "会話を消去",
+  "agent.cleared": "会話をすべて消去しました",
+  "agent.empty": "《告。まだ会話はありません。》",
+  "agent.loadFailed": "《告。会話を読み込めません。》",
+  "agent.earlier": "以前の会話を表示",
+  "agent.detail": "詳細"
 } satisfies Messages;

@@ -48,6 +48,11 @@
   color-scheme: dark;
 }
 
+/* Raphael's words and the person's: the face of the language of the window. */
+:root { --voice: var(--zh-sub); }
+:root[lang="ja"] { --voice: var(--ja); }
+:root[lang="en"] { --voice: var(--ui); }
+
 /* ---------- base ---------- */
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
@@ -322,7 +327,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .hdetail h4 { margin: 6px 0 0; font-size: 12px; font-weight: 600; color: var(--text-3); }
 .hdetail .raw { font-size: 13px; line-height: 1.6; color: var(--text-2); overflow-wrap: anywhere; user-select: text; }
 .empty { padding: 36px 0; text-align: center; color: var(--text-3); font-size: 13px; }
-.empty .say { font-family: var(--zh-sub); font-weight: 700; color: var(--text); font-size: 15px; margin-bottom: 4px; }
+.empty .say { font-family: var(--voice); font-weight: 700; color: var(--text); font-size: 15px; margin-bottom: 4px; }
 .more { display: flex; justify-content: center; margin-top: 14px; }
 
 /* ---------- dictionary ---------- */
