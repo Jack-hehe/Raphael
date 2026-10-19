@@ -1,0 +1,3 @@
+# Preserve upstream bytes so the recorded SHA-256 hashes survive every checkout.
+*.txt -text
+manifest.json text eol=lf
