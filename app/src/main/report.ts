@@ -1,14 +1,14 @@
-// Raphael's report on the home page: one sentence, in Chinese and Japanese, about what is wrong or
-// that nothing is (spec §12.1, point 3). When something is wrong, the sentence says what happens
-// and a button next to it fixes it.
+// Raphael's report on the home page: one sentence, in the language of the window, about what is
+// wrong or that nothing is (spec §12.1, point 3). When something is wrong, the sentence says what
+// happens and a button next to it fixes it.
 
 import { t } from "./i18n";
 
 import type { Status } from "./types";
 
 export interface Report {
-  zh: string;
-  ja: string;
+  /** The sentence as it is spoken, 《告。…》, in the interface language. */
+  text: string;
   /** The button next to the report. `settings` goes to the settings page, `retry` asks OpenRouter again. */
   action?: { label: string; target: "settings" | "retry" };
 }
@@ -24,53 +24,24 @@ const WARN_FROM = 0.8;
 export function buildReport(s: Status, nowMs: number): Report {
   const { openrouter, spend } = s;
 
-  if (openrouter.state === "no_key") {
-    return {
-      zh: "《告。尚未設定 OpenRouter 金鑰。設定前，聽寫只會貼上未整理的文字。》",
-      ja: "《告。OpenRouter のキーが未設定です。整形前のテキストのみ貼り付けます。》",
-      action: SET_KEY,
-    };
-  }
+  if (openrouter.state === "no_key") return { text: t("report.noKey"), action: SET_KEY };
 
   if (openrouter.state === "error") {
-    if (openrouter.error === "auth") {
-      return {
-        zh: "《告。OpenRouter 金鑰無效或無法讀取。聽寫會先貼上未整理的文字。》",
-        ja: "《告。OpenRouter のキーが無効です。整形前のテキストを貼り付けます。》",
-        action: SET_KEY,
-      };
-    }
-    return {
-      zh: "《告。無法連線到 OpenRouter。聽寫會先貼上未整理的文字。》",
-      ja: "《告。OpenRouter に接続できません。整形前のテキストを貼り付けます。》",
-      action: RETRY,
-    };
+    if (openrouter.error === "auth") return { text: t("report.badKey"), action: SET_KEY };
+    return { text: t("report.offline"), action: RETRY };
   }
 
   const { month_usd: month, limit_usd: limit } = spend;
   // As in the core: being at the limit is being over it.
-  if (month >= limit) {
-    return {
-      zh: "《告。本月額度已用完，聽寫先不整理。》",
-      ja: "《告。今月の予算を使い切りました。整形せずに貼り付けます。》",
-      action: ADJUST_LIMIT,
-    };
-  }
+  if (month >= limit) return { text: t("report.limitReached"), action: ADJUST_LIMIT };
 
   const p = Math.round((month / limit) * 100);
   if (month / limit >= WARN_FROM) {
     const { m, d } = runOutDay(month, limit, nowMs);
-    return {
-      zh: `《告。本月額度已使用 ${p}%。照目前的速度，${m} 月 ${d} 日會用完。》`,
-      ja: `《告。今月の予算の ${p}% を使用。このペースでは ${m}月${d}日に上限です。》`,
-      action: ADJUST_LIMIT,
-    };
+    return { text: t("report.limitSoon", { p0: p, p1: m, p2: d }), action: ADJUST_LIMIT };
   }
 
-  return {
-    zh: `《告。一切正常。本月額度已使用 ${p}%。》`,
-    ja: `《告。全システム正常。今月の予算は ${p}% 使用済みです。》`,
-  };
+  return { text: t("report.allWell", { p0: p }) };
 }
 
 /** The day the limit is reached if every day costs what the days so far did on average. */
@@ -82,27 +53,7 @@ export function runOutDay(month: number, limit: number, nowMs: number): { m: num
   return { m: day.getMonth() + 1, d: day.getDate() };
 }
 
-/**
- * The line at the top of the home page when something keeps dictation from working fully: no key,
- * a key that does not work, no connection, the monthly limit reached. Null when all is well (the
- * details of the key and the spend are on the settings page). First that applies, as in `buildReport`.
- */
-export function blockingAlert(s: Status): { text: string; action: string } | null {
-  const { openrouter, spend } = s;
-  if (openrouter.state === "no_key") return { text: t("report.004"), action: t("report.001") };
-  if (openrouter.state === "error") {
-    if (openrouter.error === "auth") return { text: t("report.005"), action: t("report.006") };
-    return { text: t("report.007"), action: t("report.008") };
-  }
-  if (spend.month_usd >= spend.limit_usd) return { text: t("report.009"), action: t("report.003") };
-  return null;
-}
-
 /** What Raphael reports when the core does not answer `status.get`. */
 export function coreDownReport(): Report {
-  return {
-    zh: "《告。拉斐爾的核心沒有回應，聽寫暫時無法使用。》",
-    ja: "《告。コアが応答しません。音声入力は今は使えません。》",
-    action: RETRY,
-  };
+  return { text: t("report.coreDown"), action: RETRY };
 }

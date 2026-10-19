@@ -144,9 +144,8 @@ export function fieldHTML(placeholder: string, value = "", o: FieldOptions = {})
   );
 }
 
-/** Raphael's words, as the subtitles on the desktop have them: Chinese in bold, Japanese in italics. */
-export const line = (zh: string, ja: string): string =>
-  `<div class="line"><div class="sub-zh">${esc(zh)}</div><div class="sub-ja" lang="ja">${esc(ja)}</div></div>`;
+/** Raphael's words, as the subtitles on the desktop have them: one line, in the language of the window. */
+export const line = (text: string): string => `<div class="line"><div class="sub-line">${esc(text)}</div></div>`;
 
 // ---------- menu ----------
 
