@@ -371,5 +371,19 @@ export const en = {
   "agent.empty": "《Notice. No conversations yet.》",
   "agent.loadFailed": "《Notice. The conversations could not be read.》",
   "agent.earlier": "Show earlier conversations",
-  "agent.detail": "Details"
+  "agent.detail": "Details",
+  "home.persona": "Personalization",
+  "home.personaRange": "Last 30 days, by kind of app",
+  "home.personaChart": "Share of your dictation by kind of app, last 30 days",
+  "category.ai": "AI assistants",
+  "category.dev": "Development tools",
+  "category.docs": "Documents",
+  "category.chat": "Messaging",
+  "category.web": "Browsers",
+  "category.other": "Other",
+  "persona.prefix": "Answer",
+  "persona.mostIn": "You dictate most in {p0}: {p1}%.",
+  "persona.halfIn": "More than half of your dictation is in {p0}: {p1}%.",
+  "persona.spread": "Your dictation is spread across many kinds of apps.",
+  "home.listSep": ", "
 } satisfies Messages;

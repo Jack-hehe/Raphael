@@ -370,7 +370,21 @@ export const zhTW = {
   "agent.empty": "《告。還沒有對話。》",
   "agent.loadFailed": "《告。無法讀取對話。》",
   "agent.earlier": "顯示更早的對話",
-  "agent.detail": "詳細"
+  "agent.detail": "詳細",
+  "home.persona": "個人化",
+  "home.personaRange": "最近 30 天・依 App 類型",
+  "home.personaChart": "最近 30 天依 App 類型的聽寫比例",
+  "category.ai": "AI 助手",
+  "category.dev": "開發工具",
+  "category.docs": "文件",
+  "category.chat": "通訊",
+  "category.web": "瀏覽器",
+  "category.other": "其他",
+  "persona.prefix": "答",
+  "persona.mostIn": "你最常在「{p0}」聽寫，佔 {p1}%。",
+  "persona.halfIn": "你有一半以上的聽寫都在「{p0}」（{p1}%）。",
+  "persona.spread": "你的聽寫分散在各種 App，沒有特別偏重哪一類。",
+  "home.listSep": "、"
 } as const;
 export type MessageKey = keyof typeof zhTW;
 export type Messages = Record<MessageKey, string>;

@@ -371,5 +371,19 @@ export const ja = {
   "agent.empty": "《告。まだ会話はありません。》",
   "agent.loadFailed": "《告。会話を読み込めません。》",
   "agent.earlier": "以前の会話を表示",
-  "agent.detail": "詳細"
+  "agent.detail": "詳細",
+  "home.persona": "パーソナライズ",
+  "home.personaRange": "直近 30 日・アプリの種類別",
+  "home.personaChart": "直近 30 日のアプリ種類別の音声入力の割合",
+  "category.ai": "AI アシスタント",
+  "category.dev": "開発ツール",
+  "category.docs": "ドキュメント",
+  "category.chat": "メッセージ",
+  "category.web": "ブラウザ",
+  "category.other": "その他",
+  "persona.prefix": "解",
+  "persona.mostIn": "最も多く音声入力しているのは「{p0}」で、{p1}% です。",
+  "persona.halfIn": "音声入力の半分以上が「{p0}」です（{p1}%）。",
+  "persona.spread": "音声入力はさまざまなアプリに分散しています。",
+  "home.listSep": "、"
 } satisfies Messages;

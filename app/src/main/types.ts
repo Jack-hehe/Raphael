@@ -79,6 +79,14 @@ export interface Period {
   cost_usd: number;
 }
 
+/** A row of `stats.summary`'s `by_app`: what was dictated into one program (its process name) in the last 30 days. */
+export interface AppUsage {
+  /** The process name, such as "Code.exe"; "unknown" when the history did not know. */
+  app: string;
+  dictations: number;
+  words: number;
+}
+
 /** `stats.summary`: the numbers of the home page, all from this computer's history. */
 export interface StatsSummary {
   today: Period;
@@ -93,6 +101,8 @@ export interface StatsSummary {
   active_days?: number;
   /** The most days in a row with a dictation, ever (absent from older cores). */
   longest_streak_days?: number;
+  /** The last 30 days by program, busiest first (absent from older cores). */
+  by_app?: AppUsage[];
   /** Words per minute of speech; null before there is enough to tell. */
   speed_wpm: number | null;
   /** How much longer typing the same words would have taken. */
