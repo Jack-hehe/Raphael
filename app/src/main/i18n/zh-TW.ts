@@ -3,7 +3,6 @@ export const zhTW = {
   "window.controls": "視窗控制",
   "window.minimize": "最小化",
   "window.maximize": "最大化",
-  "window.restore": "還原視窗",
   "window.close": "關閉視窗",
   "settings.loading": "正在載入設定…",
   "settings.usageMonthly": "OpenRouter 帳號本月用量",

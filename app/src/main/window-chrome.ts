@@ -23,6 +23,33 @@ const INTERACTIVE = "button, a, input, select, textarea, [contenteditable], [rol
  */
 export const RESIZE_SETTLE_MS = 100;
 
+/** The names of the frame's controls, in the language of the window. */
+export interface WindowControlLabels {
+  controls: string;
+  minimize: string;
+  maximize: string;
+  close: string;
+}
+
+/**
+ * Names the controls, and gives each one the same words as its tooltip. The maximize button keeps
+ * one name whatever the window does: `showMaximized` says whether it is pressed.
+ */
+export function labelWindowControls(chrome: ParentNode, labels: WindowControlLabels): void {
+  chrome.querySelector(".window-controls")?.setAttribute("aria-label", labels.controls);
+  for (const action of ["minimize", "maximize", "close"] as const) {
+    const button = chrome.querySelector<HTMLElement>(`[data-window-action="${action}"]`);
+    if (!button) continue;
+    button.setAttribute("aria-label", labels[action]);
+    button.title = labels[action];
+  }
+}
+
+/** The maximize button is pressed while the window is maximized. */
+export function showMaximized(chrome: ParentNode, maximized: boolean): void {
+  chrome.querySelector('[data-window-action="maximize"]')?.setAttribute("aria-pressed", String(maximized));
+}
+
 /** Bind real DOM events; native operations and state rendering are the only seams. */
 export function installWindowChrome(
   target: EventTarget,

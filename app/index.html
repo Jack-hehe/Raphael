@@ -8,14 +8,6 @@
   </head>
 
   <body>
-    <div class="window-chrome" id="window-chrome">
-      <div class="window-drag" data-window-drag></div>
-      <div class="window-controls" role="group">
-        <button class="window-button" type="button" data-window-action="minimize"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6.5h10"/></svg></button>
-        <button class="window-button" type="button" data-window-action="maximize"><svg class="window-maximize-glyph" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.5" y="1.5" width="9" height="9"/></svg><svg class="window-restore-glyph" viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 3.5V1.5h7v7h-2M1.5 3.5h7v7h-7z"/></svg></button>
-        <button class="window-button window-close" type="button" data-window-action="close"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="m1.5 1.5 9 9m0-9-9 9"/></svg></button>
-      </div>
-    </div>
     <div class="window-resize resize-n" data-window-resize="North" aria-hidden="true"></div>
     <div class="window-resize resize-ne" data-window-resize="NorthEast" aria-hidden="true"></div>
     <div class="window-resize resize-e" data-window-resize="East" aria-hidden="true"></div>
@@ -31,6 +23,16 @@
     </div>
     <!-- The first-run guide (onboarding.ts) takes the place of the window's body until it is done. -->
     <div class="ob" id="ob" hidden></div>
+    <!-- The window controls come last in the document, so that Tab reaches the page first. They are
+         fixed to the top of the window: their place here changes nothing on screen. -->
+    <div class="window-chrome" id="window-chrome">
+      <div class="window-drag" data-window-drag></div>
+      <div class="window-controls" role="group">
+        <button class="window-button" type="button" data-window-action="minimize"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6.5h10"/></svg></button>
+        <button class="window-button" type="button" aria-pressed="false" data-window-action="maximize"><svg class="window-maximize-glyph" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.5" y="1.5" width="9" height="9"/></svg><svg class="window-restore-glyph" viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 3.5V1.5h7v7h-2M1.5 3.5h7v7h-7z"/></svg></button>
+        <button class="window-button window-close" type="button" data-window-action="close"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="m1.5 1.5 9 9m0-9-9 9"/></svg></button>
+      </div>
+    </div>
     <script type="module" src="/src/main/main.ts"></script>
   </body>
 </html>

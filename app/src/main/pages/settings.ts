@@ -67,16 +67,21 @@ import {
 
 interface FocusStop { focus(): void }
 
-/** Keep settings and the window controls in one loop without entering the inert main page. */
+/**
+ * Keep settings and the window controls in one loop without entering the inert main page: the
+ * panel first and the window controls last, as they are in the document. `start` is where the
+ * panel opens with the focus (its heading), which has nothing before it either.
+ */
 export function trapSettingsFocus(
   event: Pick<KeyboardEvent, "shiftKey" | "preventDefault">,
   items: readonly FocusStop[],
   focused: FocusStop | null,
+  start: FocusStop | null = null,
 ): void {
   if (items.length === 0) return;
   const first = items[0];
   const last = items[items.length - 1];
-  if (event.shiftKey && focused === first) {
+  if (event.shiftKey && (focused === first || (start !== null && focused === start))) {
     event.preventDefault();
     last.focus();
   } else if (!event.shiftKey && focused === last) {
@@ -1009,10 +1014,10 @@ export function createSettings(app: AppContext): Page {
     } else if (e.key === "Tab") {
       const selector = "button:not([disabled]), input:not([disabled]), a[href], [tabindex='0']";
       const items = [
-        ...Array.from(chrome?.querySelectorAll<HTMLElement>(selector) ?? []),
         ...Array.from(el.querySelectorAll<HTMLElement>(selector)),
+        ...Array.from(chrome?.querySelectorAll<HTMLElement>(selector) ?? []),
       ].filter((item) => item.offsetParent !== null);
-      trapSettingsFocus(e, items, document.activeElement as HTMLElement | null);
+      trapSettingsFocus(e, items, document.activeElement as HTMLElement | null, el.querySelector<HTMLElement>("#set-title"));
     }
   };
   wireKeyField(el, { inputId: "key-input", pasteSelector: '[data-act="key-paste"]', submit: (value) => void submitKey(value) });

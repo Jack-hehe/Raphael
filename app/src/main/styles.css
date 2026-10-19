@@ -80,6 +80,10 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .window-button svg { grid-area: 1 / 1; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1; }
 .window-button:hover { background: var(--hover); }
 .window-button:focus-visible { outline-offset: -3px; }
+/* The focus colour is lost on the close button's red, and on the dimmed page behind the controls
+   while the settings are open: white on the red, and a surface of its own over the dimmed page. */
+.window-close:hover:focus-visible { outline-color: #ffffff; }
+:root[data-window-modal="true"] .window-button:focus-visible:not(:hover) { background: var(--content); }
 .window-close:hover { background: #c42b1c; color: #ffffff; }
 .window-restore-glyph { display: none; }
 :root[data-window-maximized="true"] .window-maximize-glyph { display: none; }

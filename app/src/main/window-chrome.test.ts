@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { RESIZE_SETTLE_MS, installWindowChrome, type WindowChromeWindow } from "./window-chrome";
+import {
+  RESIZE_SETTLE_MS,
+  installWindowChrome,
+  labelWindowControls,
+  showMaximized,
+  type WindowChromeWindow,
+} from "./window-chrome";
 
 function fixture(initiallyMaximized = false) {
   const target = new EventTarget();
@@ -172,5 +178,57 @@ describe("main window chrome", () => {
     await settle();
     expect(app.stop).toHaveBeenCalledOnce();
     expect(app.states).toEqual([]);
+  });
+});
+
+describe("window control names", () => {
+  const labels = { controls: "Window controls", minimize: "Minimize", maximize: "Maximize", close: "Close window" };
+
+  /** A frame with the four elements that get a name, each remembering what it was given. */
+  function frame() {
+    const make = () => {
+      const attributes: Record<string, string> = {};
+      return { attributes, title: "", setAttribute: (name: string, value: string) => { attributes[name] = value; } };
+    };
+    const nodes = {
+      ".window-controls": make(),
+      '[data-window-action="minimize"]': make(),
+      '[data-window-action="maximize"]': make(),
+      '[data-window-action="close"]': make(),
+    };
+    const chrome = { querySelector: (selector: string) => nodes[selector as keyof typeof nodes] ?? null } as unknown as ParentNode;
+    return { chrome, nodes };
+  }
+
+  test("each control is named, and its tooltip says the same", () => {
+    const { chrome, nodes } = frame();
+    labelWindowControls(chrome, labels);
+    expect(nodes[".window-controls"].attributes["aria-label"]).toBe("Window controls");
+    for (const action of ["minimize", "maximize", "close"] as const) {
+      const button = nodes[`[data-window-action="${action}"]`];
+      expect(button.attributes["aria-label"]).toBe(labels[action]);
+      expect(button.title).toBe(labels[action]);
+    }
+  });
+
+  test("the maximize button keeps its name whatever the window does; aria-pressed carries the state", () => {
+    const { chrome, nodes } = frame();
+    const maximize = nodes['[data-window-action="maximize"]'];
+    labelWindowControls(chrome, labels);
+    for (const maximized of [true, false, true]) {
+      showMaximized(chrome, maximized);
+      expect(maximize.attributes["aria-pressed"]).toBe(String(maximized));
+      labelWindowControls(chrome, labels); // the language changes, or the window is redrawn
+      expect(maximize.attributes["aria-label"]).toBe("Maximize");
+      expect(maximize.title).toBe("Maximize");
+    }
+  });
+
+  test("a frame that lacks a control is left as it is", () => {
+    const chrome = { querySelector: () => null } as unknown as ParentNode;
+    expect(() => {
+      labelWindowControls(chrome, labels);
+      showMaximized(chrome, true);
+    }).not.toThrow();
   });
 });
