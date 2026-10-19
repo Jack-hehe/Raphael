@@ -96,7 +96,7 @@ Bug reports and suggestions are welcome in [GitHub Issues](https://github.com/Ja
 
 ## License
 
-A license has not been chosen yet. Until one is added, default copyright applies and no reuse rights are granted.
+Raphael is released under the [MIT License](LICENSE). The license covers this repository's code and public assets; it grants no rights to the series' characters, names or artwork.
 
 ## Acknowledgements
 

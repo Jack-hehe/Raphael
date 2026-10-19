@@ -363,5 +363,5 @@ export const ja = {
   "settings.082": "<p class=\"foot\">ファンによる非公式アプリです。『転生したらスライムだった件』の原作者・アニメ制作元とは関係ありません。音声モデルとアニメから採取した素材は個人利用に限ります。</p>",
   "settings.083": "ショートカットを{p0}に変更しました",
   "settings.084": "<span class=\"rec-hint\">新しいキーを押してください（Escでキャンセル）</span>",
-  "settings.085": "このプロジェクトのオープンソースライセンスは未定です。"
+  "settings.085": "Raphael のコードは MIT ライセンスで公開されています。"
 } satisfies Messages;

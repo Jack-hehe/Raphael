@@ -363,5 +363,5 @@ export const en = {
   "settings.082": "<p class=\"foot\">Fan-made and unaffiliated with the creators or anime producers of That Time I Got Reincarnated as a Slime. Voice models and assets sampled from the anime are for personal use only.</p>",
   "settings.083": "Shortcut changed to {p0}",
   "settings.084": "<span class=\"rec-hint\">Press new keys (Esc to cancel)</span>",
-  "settings.085": "This project's open-source license has not been decided yet."
+  "settings.085": "Raphael's code is released under the MIT License."
 } satisfies Messages;
