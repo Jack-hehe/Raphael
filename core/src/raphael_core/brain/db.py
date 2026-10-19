@@ -124,11 +124,25 @@ def _migrate_v4(conn: sqlite3.Connection) -> None:
     conn.execute("COMMIT")
 
 
+# v5: what the voice assistant was asked and what it answered, one row for each turn
+# (raphael_core.agent.history). `status` is "done", "confirm" (waiting for a yes or a no),
+# "denied", "expired" or "error"; `detail` is the longer text of an answer, if it had one.
+_MIGRATION_V5 = """
+BEGIN;
+CREATE TABLE agent_turns (id INTEGER PRIMARY KEY, created_at_ms INTEGER NOT NULL,
+  session_id TEXT NOT NULL, question TEXT NOT NULL, route TEXT NOT NULL, prefix TEXT NOT NULL,
+  text TEXT NOT NULL, detail TEXT, status TEXT NOT NULL, cost_usd REAL NOT NULL DEFAULT 0);
+CREATE INDEX agent_turns_created ON agent_turns(created_at_ms);
+PRAGMA user_version = 5;
+COMMIT;
+"""
+
 _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_V1,
     2: _MIGRATION_V2,
     3: _migrate_v3,
     4: _migrate_v4,
+    5: _MIGRATION_V5,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 
