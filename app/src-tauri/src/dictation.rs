@@ -1148,9 +1148,13 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             self.paster.foreground().as_ref(),
             std::process::id(),
         ) {
+            // The click must leave the person where they were: the focus goes back.
+            let refocused = before
+                .as_ref()
+                .is_some_and(|target| self.paster.refocus(target));
             log::warn!(
                 "agent: a window of Raphael's own got the focus while a question was open \
-                 (the overlay may have been activated)"
+                 (the overlay may have been activated); given back: {refocused}"
             );
         }
         // The answer is in. A session that ended meanwhile has no more to do: its cancel took
@@ -1911,6 +1915,10 @@ mod tests {
         delivered: Mutex<Vec<String>>,
         copied: Mutex<Vec<String>>,
         gate: Option<(Arc<Notify>, Mutex<std::sync::mpsc::Receiver<()>>)>,
+        /// While set, the window in front is one of Raphael's own: the overlay took the focus.
+        stolen: Mutex<bool>,
+        /// The windows the focus was given back to.
+        refocused: Mutex<Vec<Target>>,
     }
 
     impl FakePaster {
@@ -1930,6 +1938,8 @@ mod tests {
                 delivered: Mutex::default(),
                 copied: Mutex::default(),
                 gate: None,
+                stolen: Mutex::default(),
+                refocused: Mutex::default(),
             }
         }
 
@@ -1958,7 +1968,21 @@ mod tests {
 
     impl Paster for FakePaster {
         fn foreground(&self) -> Option<Target> {
+            if *self.stolen.lock().unwrap() {
+                return Some(Target {
+                    hwnd: 99,
+                    pid: std::process::id(),
+                    process_name: "app.exe".to_owned(),
+                    is_elevated: false,
+                });
+            }
             self.foreground.clone()
+        }
+
+        fn refocus(&self, target: &Target) -> bool {
+            self.refocused.lock().unwrap().push(target.clone());
+            *self.stolen.lock().unwrap() = false;
+            true
         }
 
         fn deliver(&self, text: &str, at_stop: Option<&Target>) -> PasteOutcome {
@@ -4375,6 +4399,27 @@ mod tests {
                 "{language}"
             );
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_click_that_took_the_focus_gives_it_back_to_the_app_in_front() {
+        let (c, turn) = question_on_screen(30_000).await;
+        // the overlay was activated by the click on its button
+        *c.paster().stolen.lock().unwrap() = true;
+        c.on_confirm("c-1", true);
+        turn.await.unwrap();
+        assert_eq!(
+            *c.paster().refocused.lock().unwrap(),
+            [FakePaster::target("chrome.exe")]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_click_that_left_the_focus_alone_leaves_it_alone() {
+        let (c, turn) = question_on_screen(30_000).await;
+        c.on_confirm("c-1", false);
+        turn.await.unwrap();
+        assert!(c.paster().refocused.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
