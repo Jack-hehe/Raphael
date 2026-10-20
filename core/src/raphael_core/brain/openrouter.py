@@ -91,6 +91,25 @@ class TextCompletion:
 
 
 @dataclass
+class ToolCall:
+    """A call the model asked for: the name it was offered the tool under, and the arguments as the
+    model wrote them (JSON that was parsed; an object, if the model did as asked)."""
+
+    name: str
+    arguments: Any
+
+
+@dataclass
+class ToolPlan:
+    calls: list[ToolCall]  # none when the model asked for no tool
+    model: str  # the model that answered, which can be one of the fallbacks
+    cost_usd: float  # always a number the spend can store: 0 or more, and finite
+    prompt_tokens: int
+    completion_tokens: int
+    latency_ms: int  # of the HTTP call
+
+
+@dataclass
 class KeyInfo:
     label: str
     limit: float | None  # None: the key has no spending limit
@@ -366,6 +385,44 @@ def _to_text_completion(reply: _Reply, requested_model: str) -> TextCompletion:
     )
 
 
+def _to_tool_plan(reply: _Reply, requested_model: str) -> ToolPlan:
+    body = reply.body
+    choices = body.get("choices") if isinstance(body, dict) else None
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    if not isinstance(choice, dict):
+        raise _failure(reply.status, "bad_response", "The reply has no choices")
+    # Checked before the calls: a choice that failed midway holds a part of the reply.
+    if choice.get("finish_reason") == "error":
+        raise _reported_error(
+            _error_object(choice), reply.status, "The model ended its reply with an error"
+        )
+    message = choice.get("message")
+    raw_calls = message.get("tool_calls") if isinstance(message, dict) else None
+    calls: list[ToolCall] = []
+    for raw in raw_calls if isinstance(raw_calls, list) else []:
+        function = raw.get("function") if isinstance(raw, dict) else None
+        name = function.get("name") if isinstance(function, dict) else None
+        if not isinstance(name, str) or not name:
+            continue
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments) if arguments.strip() else {}
+            except ValueError:
+                continue  # a call whose arguments are not JSON cannot be made
+        calls.append(ToolCall(name=name, arguments=arguments))
+    usage = _usage_of(body)
+    answered_by = body.get("model")
+    return ToolPlan(
+        calls=calls,
+        model=answered_by if isinstance(answered_by, str) and answered_by else requested_model,
+        cost_usd=_usage_cost(usage),
+        prompt_tokens=_usage_count(usage, "prompt_tokens"),
+        completion_tokens=_usage_count(usage, "completion_tokens"),
+        latency_ms=reply.latency_ms,
+    )
+
+
 def _to_key_info(reply: _Reply) -> KeyInfo:
     data = reply.body.get("data") if isinstance(reply.body, dict) else None
     if not isinstance(data, dict):
@@ -586,6 +643,46 @@ class OpenRouterClient:
             "POST", "/chat/completions", self._stored_key(), timeout_s, body
         )
         return _to_text_completion(reply, model)
+
+    async def plan_tools(
+        self,
+        *,
+        model: str,
+        fallbacks: list[str],
+        system: str,
+        user: str,
+        tools: Sequence[dict],
+        timeout_s: float,
+        max_tokens: int,
+        reasoning_effort: str = "none",
+    ) -> ToolPlan:
+        """Ask `model` which of `tools` (in the chat format: `{"type": "function", "function":
+        {name, description, parameters}}`) the request needs, if any. The model answers with the
+        calls it wants and nothing else; none of them is made here.
+
+        Like complete_json, this requires every parameter from the provider (a provider that cannot
+        take tools is left out), sends no temperature, denies data collection and tries the
+        `fallbacks` if the model fails.
+        """
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "tools": list(tools),
+            "tool_choice": "auto",
+            "provider": {"require_parameters": True, "sort": "latency", "data_collection": "deny"},
+            "reasoning": {"effort": reasoning_effort},
+            "max_tokens": max_tokens,
+        }
+        models = [m for m in fallbacks if m != model]
+        if models:
+            body["models"] = models
+        reply = await self._request(
+            "POST", "/chat/completions", self._stored_key(), timeout_s, body
+        )
+        return _to_tool_plan(reply, model)
 
     async def transcribe(
         self,
