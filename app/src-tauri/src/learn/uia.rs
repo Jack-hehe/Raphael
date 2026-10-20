@@ -416,6 +416,7 @@ fn discover(
     if foreground() != target.hwnd || !scope.active() {
         return Err(Failure::stop("target_changed_after_discovery"));
     }
+    let containers = container_ids(automation, &root, &focused);
     // The root is not needed any more, and nothing but the field may outlive this function.
     drop(root);
     let metadata = focus_element_metadata(&focused, target.pid);
@@ -438,7 +439,9 @@ fn discover(
     let terminal_panel = kind == AppKind::CodeEditor
         && class_name(&focused).is_some_and(|class| is_terminal_panel_class(&class));
     let com = Com::join().ok_or_else(|| Failure::stop("com_apartment"))?;
-    let focus = Arc::new(FocusWatch::new(identity.ok(), target.pid, target.hwnd));
+    let focus = Arc::new(
+        FocusWatch::new(identity.ok(), target.pid, target.hwnd).with_containers(containers),
+    );
     let handler: IUIAutomationFocusChangedEventHandler = FocusChanged(focus.clone()).into();
     // Plain fields can still be polled without events. Terminals require a submission guard.
     let subscribed = unsafe {
@@ -667,6 +670,40 @@ fn find_readers(
         element = unsafe { walker.GetParentElement(&element) }.ok()?;
     }
     None
+}
+
+/// The runtime ids of the elements that contain `focused`, up to and including the target's root.
+/// A focus event from one of them is not a move to another field: around a contenteditable field,
+/// Chromium raises one for the enclosing document while the field keeps the keyboard focus (in the
+/// owner's log the sender was a Document and GetFocusedElement still returned the field). An
+/// element whose id cannot be read is left out, so an event from it still counts as a move.
+fn container_ids(
+    automation: &IUIAutomation,
+    root: &IUIAutomationElement,
+    focused: &IUIAutomationElement,
+) -> Vec<Vec<i32>> {
+    let Ok(walker) = (unsafe { automation.RawViewWalker() }) else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    let mut element = focused.clone();
+    for _ in 0..32 {
+        let at_root =
+            unsafe { automation.CompareElements(&element, root) }.is_ok_and(|same| same.as_bool());
+        if at_root {
+            break;
+        }
+        let Ok(parent) = (unsafe { walker.GetParentElement(&element) }) else {
+            break;
+        };
+        if let Ok(id) = runtime_id(&parent)
+            && !id.is_empty()
+        {
+            ids.push(id);
+        }
+        element = parent;
+    }
+    ids
 }
 
 struct Reader {
@@ -1221,6 +1258,9 @@ unsafe fn copy_owned_runtime_id(array: *mut SAFEARRAY) -> windows::core::Result<
 #[derive(Default)]
 struct FocusWatch {
     runtime_id: Option<Vec<i32>>,
+    /// The elements that contain the field (see `container_ids`). A focus event from one of them
+    /// leaves the field where it is; whether it still has the focus, check_focus asks the system.
+    containers: Vec<Vec<i32>>,
     target_pid: u32,
     hwnd: isize,
     left: AtomicBool,
@@ -1239,6 +1279,16 @@ impl FocusWatch {
         }
     }
 
+    fn with_containers(mut self, containers: Vec<Vec<i32>>) -> Self {
+        self.containers = containers;
+        self
+    }
+
+    /// Whether `sender` is one of the elements that contain the field.
+    fn is_container(&self, sender: &[i32]) -> bool {
+        !sender.is_empty() && self.containers.iter().any(|id| id.as_slice() == sender)
+    }
+
     fn changed_from(
         &self,
         sender_runtime_id: Option<&[i32]>,
@@ -1250,7 +1300,7 @@ impl FocusWatch {
             .as_deref()
             .filter(|identity| !identity.is_empty())
             .zip(sender_runtime_id.filter(|identity| !identity.is_empty()))
-            .map(|(original, sender)| original == sender);
+            .map(|(original, sender)| original == sender || self.is_container(sender));
         if !foreground_matches || same.is_none() || has_keyboard_focus.is_none() {
             self.changed();
         } else if has_keyboard_focus == Some(false) {
@@ -1315,18 +1365,20 @@ impl IUIAutomationFocusChangedEventHandler_Impl for FocusChanged_Impl {
                 .map_err(|error| error.code().0)
         });
         let foreground_matches = foreground() == self.0.hwnd;
+        let sender_id = identity.as_ref().and_then(|result| result.as_deref().ok());
         let same = self.0.changed_from(
-            identity.as_ref().and_then(|result| result.as_deref().ok()),
+            sender_id,
             has_keyboard_focus.and_then(Result::ok),
             foreground_matches,
         );
+        let container = sender_id.is_some_and(|id| self.0.is_container(id));
         // A small per-watch cap keeps repeated provider notifications from spamming the log.
         if self.0.event_reports.fetch_add(1, Ordering::Relaxed) < 3 {
             let metadata = sender
                 .as_ref()
                 .map(|element| focus_element_metadata(element, self.0.target_pid));
             log::info!(
-                "learn: focus event (sender_present: {}, same_runtime_id: {same:?}, hresult: {:?}, role: {:?}, has_keyboard_focus: {:?}, target_process: {:?}, foreground_matches: {foreground_matches}, input_blocked: {}, field_left: {})",
+                "learn: focus event (sender_present: {}, same_runtime_id: {same:?}, container: {container}, hresult: {:?}, role: {:?}, has_keyboard_focus: {:?}, target_process: {:?}, foreground_matches: {foreground_matches}, input_blocked: {}, field_left: {})",
                 identity.is_some(),
                 identity
                     .as_ref()
@@ -1410,6 +1462,56 @@ mod tests {
             focus.changed_from(sender.as_deref(), Some(true), true);
             assert!(focus.left.load(Ordering::SeqCst));
         }
+    }
+
+    #[test]
+    fn a_focus_event_from_an_element_around_the_field_keeps_the_watch() {
+        // Chromium, around a contenteditable field: the document that holds it raises the focus
+        // event while the field keeps the keyboard focus.
+        let original = vec![42, 7, 19];
+        let document = vec![42, 7, 3];
+        let window = vec![42, 1];
+        let focus = FocusWatch::new(Some(original), 0, 11)
+            .with_containers(vec![document.clone(), window.clone()]);
+        for sender in [&document, &window] {
+            assert_eq!(
+                focus.changed_from(Some(sender), Some(true), true),
+                Some(true)
+            );
+        }
+        assert!(!focus.left.load(Ordering::SeqCst));
+        assert!(focus.input_observation_allowed());
+    }
+
+    #[test]
+    fn an_element_around_the_field_does_not_hide_a_move_to_another_field() {
+        let original = vec![42, 7, 19];
+        let focus = FocusWatch::new(Some(original), 0, 11).with_containers(vec![vec![42, 7, 3]]);
+        focus.changed_from(Some(&[42, 7, 3]), Some(true), true);
+        focus.changed_from(Some(&[42, 7, 20]), Some(true), true);
+        assert!(focus.left.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn the_elements_around_the_field_do_not_loosen_the_other_checks() {
+        let original = vec![42, 7, 19];
+        let document = vec![42, 7, 3];
+        // An unknown field, a foreground that changed, or a sender's focus that cannot be read
+        // still cancel, whatever the sender.
+        for (field, has_keyboard_focus, foreground_matches) in [
+            (None, Some(true), true),
+            (Some(original.clone()), Some(true), false),
+            (Some(original.clone()), None, true),
+        ] {
+            let focus = FocusWatch::new(field, 0, 11).with_containers(vec![document.clone()]);
+            focus.changed_from(Some(&document), has_keyboard_focus, foreground_matches);
+            assert!(focus.left.load(Ordering::SeqCst));
+        }
+        // An empty id never matches a container.
+        let focus = FocusWatch::new(Some(original), 0, 11).with_containers(vec![Vec::new()]);
+        assert!(!focus.is_container(&[]));
+        focus.changed_from(Some(&[]), Some(true), true);
+        assert!(focus.left.load(Ordering::SeqCst));
     }
 
     #[test]
