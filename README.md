@@ -9,7 +9,7 @@ Dictation is the first milestone. Assistant features come next: carrying out tas
 
 ## Features
 
-- **Works where you type.** Press Right Alt to start and stop dictating, or switch to hold-to-talk. Esc cancels. The text is pasted into the app you were using.
+- **Works where you type.** Press Right Alt to start and stop dictating, or switch to hold-to-talk. Esc cancels. The text is pasted into the app you were using, and music or video that was playing pauses while you speak and resumes afterwards.
 - **Keeps what you meant.** Raphael removes filler words, adds punctuation and applies the corrections you make while speaking. A question you dictate stays a question; Raphael doesn't answer it.
 - **Learns your vocabulary.** Add names and jargon to a personal dictionary, and Raphael learns new terms from the corrections you make after a paste.
 - **Cloud or on-device recognition.** Use cloud speech recognition through OpenRouter (the default), or a downloadable on-device model that keeps audio on your computer.
@@ -20,7 +20,7 @@ Dictation is the first milestone. Assistant features come next: carrying out tas
 
 1. Download `Raphael-<version>-windows-x64-setup.exe` from the [latest release](https://github.com/Jack-hehe/Raphael/releases/latest). Raphael supports Windows 10 and 11 on x64.
 2. Run the installer. Everything Raphael needs is included; the installer fetches the WebView2 runtime if your system lacks it.
-3. Follow the first-run guide to choose a microphone, download a speech model and add an [OpenRouter](https://openrouter.ai) API key, which is used for cleanup and cloud recognition.
+3. Follow the first-run guide: add an [OpenRouter](https://openrouter.ai) API key, which is used for cleanup and cloud recognition, then choose a microphone while the on-device speech model downloads.
 
 Raphael then runs from the system tray.
 
@@ -30,11 +30,12 @@ Raphael then runs from the system tray.
 ## Privacy
 
 - **Your API key** is kept in Windows Credential Manager, never in files, logs or the database.
-- **Your data** (settings, history and dictionary) stays on your computer, in `%APPDATA%\Raphael`.
-- **Speech recognition** runs in the cloud by default: the recording and dictionary hints are sent to OpenRouter. Choose on-device recognition in Settings to keep audio on your computer.
+- **Your data** (settings, history, dictionary and conversations) stays on your computer, in `%APPDATA%\Raphael`.
+- **Speech recognition** runs in the cloud by default: the recording is sent to OpenRouter, with your dictionary's words as hints for the models that accept them. Choose on-device recognition in Settings to keep audio on your computer.
 - **Cleanup:** with an API key set and budget remaining, Raphael sends the transcript to OpenRouter, together with dictionary hints and replacement rules, your language settings and the name of the app you are dictating into. This also happens with on-device recognition, so Raphael is not fully offline.
+- **Questions to Raphael** (Right Alt + Space, still in development) go to OpenRouter: to a model that sorts them, to the model that answers, together with the last few turns of the conversation, and to OpenRouter's web search when a question needs the web. When an app you ask for is not found, the names of the apps in your Start menu go along so that the model can pick one. A weather question sends only the city to Open-Meteo.
 - **Correction learning** looks only at the field Raphael just pasted into, for up to 60 seconds. It reads the field's text or, where an app does not expose it, the edits you type there. Password fields are skipped.
-- **No telemetry.** Besides OpenRouter, Raphael connects only to Hugging Face and GitHub to download speech models.
+- **No telemetry.** Besides OpenRouter and Open-Meteo, Raphael connects only to GitHub, to download the speech models.
 
 ## Architecture
 
@@ -43,10 +44,11 @@ Raphael is a [Tauri 2](https://tauri.app) app with a Python core.
 ```text
 UI (TypeScript, WebView2)      main window, settings, overlay
         │  Tauri commands and events
-Desktop shell (Rust)           hotkeys, focus, paste, correction learning, tray
+Desktop shell (Rust)           hotkeys, focus, paste, correction learning,
+                               media pause, tray
         │  JSON-RPC over stdio
 Core (Python 3.12)             audio capture, speech recognition, cleanup,
-                               dictionary, history, spending
+                               dictionary, history, spending, assistant
 ```
 
 | Directory | Contents |
