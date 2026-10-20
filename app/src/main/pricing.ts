@@ -69,8 +69,8 @@ export function sttPriceShort(p: SttPrice | undefined): string {
 /** The prices are each model's headline price; what a call costs depends on the provider OpenRouter routes it to. */
 const PROVIDER_NOTE = () => t("pricing.005");
 
-/** Where the prices come from, for the small print under them. */
-export function pricingNote(pricing: Pricing, nowMs: number): string {
+/** Where the prices come from, for the small print under them (`models.catalog` says it the same way). */
+export function pricingNote(pricing: Pick<Pricing, "source" | "fetched_at_ms">, nowMs: number): string {
   const day = pricing.fetched_at_ms === null ? null : dayLabel(pricing.fetched_at_ms, nowMs);
   switch (pricing.source) {
     case "live":

@@ -14,6 +14,7 @@ import type {
   HistoryItem,
   KeyCheck,
   MainEvent,
+  ModelCatalog,
   ModelsStatus,
   Pricing,
   Status,
@@ -39,6 +40,8 @@ export const statsSummary = (days?: number): Promise<StatsSummary> =>
   core("stats.summary", days === undefined ? {} : { days });
 /** The prices of the cleanup and speech-to-text models, read from OpenRouter when it can be. */
 export const pricingGet = (): Promise<Pricing> => core("pricing.get");
+/** Every OpenRouter model Raphael could use, with its price and what each role can make of it (same fetch as `pricingGet`). */
+export const modelsCatalog = (): Promise<ModelCatalog> => core("models.catalog");
 
 // ---------- history ----------
 

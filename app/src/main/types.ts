@@ -71,6 +71,64 @@ export interface Pricing {
   source: "live" | "cached" | "builtin";
 }
 
+/** What a model is chosen for: the dictation cleanup, Raphael's answers, speech to text (the core's brain/catalog.py). */
+export type ModelRole = "cleanup" | "answer" | "stt";
+
+/** Whether a role can use a model, and if not why: a word of the core such as `no_structured_output`. */
+export interface RoleFit {
+  usable: boolean;
+  reason: string | null;
+}
+
+/** A model of `models.catalog`. Prices are US$; null is unknown or does not apply. */
+export interface CatalogModel {
+  id: string;
+  /** Without its maker: "GPT-6 Luna". */
+  name: string;
+  /** Its maker: "OpenAI". */
+  provider: string;
+  /** Per million tokens: language models, and speech models priced by the token. */
+  input_per_mtok: number | null;
+  output_per_mtok: number | null;
+  /** Per minute of audio: speech models priced by the second. */
+  per_minute: number | null;
+  free: boolean;
+  /** No price of its own: a router, which picks a model for each request. */
+  variable_price: boolean;
+  /** In tokens, for a language model. */
+  context_length: number | null;
+  /** When OpenRouter added it. */
+  created_at_ms: number | null;
+  /** What it can do: `structured_output`, `reasoning`, `reasoning_off`, `max_tokens`, `realtime`; `dictionary_hints` for speech. */
+  capabilities: Record<string, boolean>;
+  /** One of the models the settings offered before they offered them all. */
+  recommended: boolean;
+  /** The roles of its kind. */
+  roles: Partial<Record<ModelRole, RoleFit>>;
+}
+
+/** A chosen model that OpenRouter no longer lists, whose setting went back to its default. */
+export interface ReplacedModel {
+  key: "cleanup_model" | "agent_model" | "stt_cloud_model";
+  role: ModelRole;
+  model: string;
+  default: string;
+}
+
+/** `models.catalog`: every OpenRouter model Raphael could use, by kind. */
+export interface ModelCatalog {
+  /** Text in, text out: the cleanup and the answers. */
+  llm: CatalogModel[];
+  /** Speech to text. */
+  stt: CatalogModel[];
+  /** When the list was read from OpenRouter; null for the built-in one. */
+  fetched_at_ms: number | null;
+  /** `live`: read just now; `cached`: read earlier and kept; `builtin`: Raphael's own models only. */
+  source: "live" | "cached" | "builtin";
+  /** The settings this answer set back to their defaults: tell the user. */
+  replaced: ReplacedModel[];
+}
+
 /** What was dictated in a stretch of time (`stats.summary`). */
 export interface Period {
   dictations: number;
