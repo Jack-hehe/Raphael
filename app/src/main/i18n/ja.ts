@@ -67,6 +67,8 @@ export const ja = {
   "dictation.013": "押している間は音声入力、離すと終了",
   "format.001": "今日",
   "format.002": "昨日",
+  "format.todayInSentence": "今日",
+  "format.yesterdayInSentence": "昨日",
   "format.003": "{p0}月{p1}日",
   "format.004": "{p0}年{p1}",
   "format.005": "{p0}秒",

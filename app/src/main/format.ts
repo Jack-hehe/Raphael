@@ -31,11 +31,14 @@ export function dayBounds(date: string): [number, number] {
   return [new Date(year, month - 1, day).getTime(), new Date(year, month - 1, day + 1).getTime()];
 }
 
-/** `今天`, `昨天`, else `10 月 15 日` (with the year when it is not this year's). */
-export function dayLabel(ms: number, nowMs: number): string {
+/**
+ * `今天`, `昨天`, else `10 月 15 日` (with the year when it is not this year's). `inSentence` gives the
+ * words as they read inside a sentence, where English writes "today", not "Today".
+ */
+export function dayLabel(ms: number, nowMs: number, inSentence = false): string {
   const days = dayNumber(nowMs) - dayNumber(ms);
-  if (days === 0) return t("format.001");
-  if (days === 1) return t("format.002");
+  if (days === 0) return t(inSentence ? "format.todayInSentence" : "format.001");
+  if (days === 1) return t(inSentence ? "format.yesterdayInSentence" : "format.002");
   const d = new Date(ms);
   const date = t("format.003", { p0: d.getMonth() + 1, p1: d.getDate() });
   return d.getFullYear() === new Date(nowMs).getFullYear() ? date : t("format.004", { p0: d.getFullYear(), p1: date });

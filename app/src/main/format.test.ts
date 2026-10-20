@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { setLocale } from "./i18n";
 import {
   dayLabel,
   describeError,
@@ -54,6 +55,18 @@ describe("dayLabel goes by calendar days, not by 24 hours", () => {
   test("the day before yesterday has a date", () => {
     expect(dayLabel(Date.parse("2026-10-15T23:59:00+08:00"), now)).toBe("10 月 15 日");
   });
+});
+
+test("dayLabel has the words of today and yesterday for the middle of a sentence too", () => {
+  const now = Date.parse("2026-10-17T12:00:00+08:00");
+  expect(dayLabel(now - 3_600_000, now, true)).toBe("今天");
+  setLocale("en");
+  try {
+    expect([dayLabel(now - 3_600_000, now), dayLabel(now - 3_600_000, now, true)]).toEqual(["Today", "today"]);
+    expect([dayLabel(now - 86_400_000, now), dayLabel(now - 86_400_000, now, true)]).toEqual(["Yesterday", "yesterday"]);
+  } finally {
+    setLocale("zh-TW");
+  }
 });
 
 test("dayLabel says the year when it is not this one", () => {

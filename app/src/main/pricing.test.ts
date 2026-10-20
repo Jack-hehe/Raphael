@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setLocale } from "./i18n";
 import { formatPerMinute, formatPerMtok, pricingNote } from "./pricing";
 import type { ModelCatalog } from "./types";
 
@@ -55,6 +56,15 @@ describe("pricingNote", () => {
     );
     expect(pricingNote({ ...base, source: "cached", fetched_at_ms: now - 86_400_000 }, now)).toMatch(/^價格是昨天從 OpenRouter/);
     expect(pricingNote({ ...base, source: "cached", fetched_at_ms: null }, now)).toContain("之前");
+  });
+  it("writes today and yesterday in the middle of an English sentence in small letters", () => {
+    setLocale("en");
+    try {
+      expect(pricingNote(base, now)).toBe("Prices from OpenRouter, updated today. Actual cost depends on the provider selected by OpenRouter.");
+      expect(pricingNote({ ...base, source: "cached", fetched_at_ms: now - 86_400_000 }, now)).toMatch(/^Showing OpenRouter prices from yesterday while offline\./);
+    } finally {
+      setLocale("zh-TW");
+    }
   });
   it("warns that built-in prices may be old", () => {
     expect(pricingNote({ ...base, source: "builtin", fetched_at_ms: null }, now)).toContain("內建");

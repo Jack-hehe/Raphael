@@ -67,6 +67,8 @@ export const en = {
   "dictation.013": "Hold to dictate, then release to stop",
   "format.001": "Today",
   "format.002": "Yesterday",
+  "format.todayInSentence": "today",
+  "format.yesterdayInSentence": "yesterday",
   "format.003": "{p0}/{p1}",
   "format.004": "{p1}/{p0}",
   "format.005": "{p0} sec",

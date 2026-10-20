@@ -36,10 +36,10 @@ const PROVIDER_NOTE = () => t("pricing.005");
 
 /** Where the prices of the catalog come from, for the small print under them. */
 export function pricingNote(pricing: Pick<ModelCatalog, "source" | "fetched_at_ms">, nowMs: number): string {
-  const day = pricing.fetched_at_ms === null ? null : dayLabel(pricing.fetched_at_ms, nowMs);
+  const day = pricing.fetched_at_ms === null ? null : dayLabel(pricing.fetched_at_ms, nowMs, true);
   switch (pricing.source) {
     case "live":
-      return t("pricing.006", { p0: day ?? t("format.001"), p1: PROVIDER_NOTE() });
+      return t("pricing.006", { p0: day ?? t("format.todayInSentence"), p1: PROVIDER_NOTE() });
     case "cached":
       return day
         ? t("pricing.007", { p0: /^\d/.test(day) ? " " : "", p1: day, p2: PROVIDER_NOTE() })

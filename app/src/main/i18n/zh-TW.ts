@@ -66,6 +66,8 @@ export const zhTW = {
   "dictation.013": "按住聽寫，放開結束",
   "format.001": "今天",
   "format.002": "昨天",
+  "format.todayInSentence": "今天",
+  "format.yesterdayInSentence": "昨天",
   "format.003": "{p0} 月 {p1} 日",
   "format.004": "{p0} 年 {p1}",
   "format.005": "{p0} 秒",
