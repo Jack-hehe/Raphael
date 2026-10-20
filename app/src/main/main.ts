@@ -16,6 +16,8 @@ import { createSettings } from "./pages/settings";
 import { DeviceState } from "./device";
 import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
+import { Navigation, type Place, samePage } from "./nav-history";
+import { installNavInput } from "./nav-input";
 import { brandIcon, hydrateBrandIcons } from "./brand";
 import { installWindowHotkeys } from "./window-hotkeys";
 import { followTray } from "./tray-open";
@@ -134,13 +136,10 @@ async function start(): Promise<void> {
 
   const history = createHistory(ctx);
   const dictionary = createDictionary(ctx);
-  const pages: Record<PageId, Page> = {
-    home: createHome(ctx),
-    agent: createAgent(ctx),
-    history,
-    dictionary,
-    settings: createSettings(ctx),
-  };
+  const home = createHome(ctx);
+  const agent = createAgent(ctx);
+  const settings = createSettings(ctx);
+  const pages: Record<PageId, Page> = { home, agent, history, dictionary, settings };
 
   const nav = document.getElementById("nav")!;
   const main = document.getElementById("main")!;
@@ -169,7 +168,6 @@ async function start(): Promise<void> {
     const target = (e.target as Element).closest<HTMLElement>("[data-go]");
     if (target) go(target.dataset.go as PageId, target.dataset.pane as SettingsPane | undefined);
   });
-  const settings = pages.settings;
   for (const page of Object.values(pages)) if (page !== settings) main.append(page.el);
   // The panel goes before the window controls, which come last in the document.
   document.getElementById("window-chrome")!.before(settings.el);
@@ -182,11 +180,45 @@ async function start(): Promise<void> {
   let opener: HTMLElement | null = null;
   let shownAt = 0;
 
+  /** Where the window is: the page, the settings panel if it is open over it and the day the history shows. Null before the first page. */
+  function where(): Place | null {
+    if (!current) return null;
+    const place: Place = { page: current };
+    if (settingsOpen) place.pane = settings.pane();
+    const day = current === "history" ? history.day() : null;
+    if (day !== null) place.day = day;
+    return place;
+  }
+
+  /**
+   * What the mouse's side buttons and Alt+Left / Alt+Right walk through. A change the person makes
+   * is a `go`, which records it; a step shows a place again and records nothing.
+   */
+  const navigation = new Navigation({
+    inGuide: () => !guide.hidden,
+    where,
+    show(place) {
+      const here = where();
+      // Back from the settings panel only closes it: the page under it is on screen already.
+      if (!here || !samePage(here, place)) {
+        if (place.page === "history") history.setDay(place.day ?? null);
+        showPage(place.page);
+      }
+      if (place.pane !== undefined) openSettings(place.pane);
+      else closeSettings();
+    },
+  });
+  installNavInput(window, (step) => navigation.step(step));
+
+  /** Goes to a page, or opens the settings panel over the one on screen (at `pane`, if given). */
   function go(id: PageId, pane?: SettingsPane): void {
-    if (id === "settings") {
-      openSettings(pane);
-      return;
-    }
+    navigation.visit(() => {
+      if (id === "settings") openSettings(pane);
+      else showPage(id);
+    });
+  }
+
+  function showPage(id: Exclude<PageId, "settings">): void {
     if (settingsOpen) closeSettings(false);
     if (current && current !== id) pages[current].hide();
     current = id;

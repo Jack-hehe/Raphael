@@ -67,6 +67,8 @@ function itemHTML(item: HistoryItem, expanded: boolean): string {
 export interface HistoryPage extends Page {
   /** Shows only the dictations of the day `2026-10-14` (or all days, with null) from the next time the page is shown. */
   setDay(date: string | null): void;
+  /** The day the page shows, or will show when it is shown next; null for all of them. */
+  day(): string | null;
 }
 
 export function createHistory(app: AppContext): HistoryPage {
@@ -331,6 +333,7 @@ export function createHistory(app: AppContext): HistoryPage {
     setDay(date) {
       day = date;
     },
+    day: () => day,
     show() {
       void load(false);
       void loadRetention();

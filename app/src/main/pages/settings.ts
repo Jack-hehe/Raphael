@@ -103,7 +103,13 @@ interface Recording {
 /** A dropdown's menu: what it offers, what is chosen, what choosing does, small print above the choices and actions below them. */
 interface MenuSpec { choices: Choice[]; current: string; pick: (value: string) => void; head?: string; actions?: MenuAction[] }
 
-export function createSettings(app: AppContext): Page {
+/** The settings panel, which also says which tab is open. */
+export interface SettingsPage extends Page {
+  /** The tab that is open; while the panel is closed, the one it was left at. */
+  pane(): SettingsPane;
+}
+
+export function createSettings(app: AppContext): SettingsPage {
   const el = document.createElement("div");
   el.className = "modal-scrim";
   el.dataset.page = "settings";
@@ -839,6 +845,7 @@ export function createSettings(app: AppContext): Page {
   return {
     id: "settings",
     el,
+    pane: () => pane,
     async show(open?: SettingsPane) {
       visible = true;
       document.addEventListener("keydown", settingsKey);
