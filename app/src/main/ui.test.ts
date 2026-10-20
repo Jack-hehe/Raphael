@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { menuPlacement } from "./ui";
+import { menuPlacement, sel, selText } from "./ui";
 
 describe("popover placement", () => {
   const viewport = { width: 720, height: 480, headerBottom: 32 };
@@ -31,5 +31,20 @@ describe("popover placement", () => {
       .toEqual({ left: 392, top: 136, maxHeight: 336 });
     expect(menuPlacement({ top: 300, bottom: 332, right: 180 }, { width: 320, height: 400 }, { ...viewport, headerBottom: 0 }))
       .toEqual({ left: 8, top: 8, maxHeight: 288 });
+  });
+});
+
+describe("dropdowns", () => {
+  test("a closed dropdown shows a choice's short name and keeps the whole one in its tooltip", () => {
+    const html = sel([{ value: "a", label: "Microphone (Realtek Audio)", short: "Microphone" }], "a", "Mic", ' data-k="mic"');
+    expect(html).toContain("<span>Microphone</span>");
+    expect(html).toContain('title="Microphone (Realtek Audio)"');
+    expect(html).toContain('aria-label="Mic" ');
+    expect(html).toContain('aria-haspopup="menu"');
+  });
+
+  test("without a short name it shows the label, and a value it does not know as it is", () => {
+    expect(selText({ value: "a", label: "Alpha" }, "a")).toEqual({ shown: "Alpha", full: "Alpha" });
+    expect(selText(undefined, "x/old")).toEqual({ shown: "x/old", full: "x/old" });
   });
 });

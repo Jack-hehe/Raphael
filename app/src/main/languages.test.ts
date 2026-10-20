@@ -1,16 +1,18 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
+import { setLocale } from "./i18n";
 import {
   DEFAULT_LANGUAGES,
   type LanguageGroup,
   chooseLanguageVariant,
-  languageButtonHTML,
+  languagePanelHTML,
+  languageSelectHTML,
+  languageSummary,
   normalizeLanguages,
   selectedLanguageGroups,
   toggleTranscriptionLanguage,
-  transcriptionButtonHTML,
-  transcriptionPanelHTML,
-  variantPanelHTML,
 } from "./languages";
+
+afterEach(() => setLocale("zh-TW"));
 
 /** A representative `languages.list` response, including names that must be escaped. */
 const GROUPS: LanguageGroup[] = [
@@ -75,63 +77,83 @@ describe("language variants", () => {
   });
 });
 
-describe("language controls", () => {
-  test("shows language groups as chips and variants on a separate button", () => {
-    const chips = transcriptionButtonHTML(GROUPS, ["zh-HK", "en-GB"], ' data-k="languages"');
-    expect(chips).toContain('class="lchip">中文</span>');
-    expect(chips).toContain('class="lchip">English</span>');
-    expect(chips).not.toContain("香港");
-    expect(chips).not.toContain("English (UK)");
-    expect(chips).toContain('data-k="languages"');
-    const variants = languageButtonHTML(GROUPS, ["zh-HK", "x-1"], ' data-k="variants"');
-    expect(variants).toContain("選擇語言變體");
-    expect(variants).not.toContain('class="lchip"');
-    expect(variants).toContain("&lt;i&gt;one&lt;/i&gt;");
-    expect(variants).not.toContain("<i>one</i>");
+describe("the language row's dropdown", () => {
+  test("is a dropdown that names each chosen language by its variant, or by its own name when it has one", () => {
+    const html = languageSelectHTML(GROUPS, ["zh-HK", "en-GB", "ja-JP"], ' data-k="languages"');
+    expect(html).toContain('class="sel lang-sel"');
+    expect(html).toContain('aria-haspopup="dialog"');
+    expect(html).toContain('data-k="languages"');
+    expect(html).toContain("<span>繁體中文（香港）、English (UK)、日本語</span>");
+    expect(html).toContain('aria-label="你說的語言：繁體中文（香港）、English (UK)、日本語"');
+    expect(html).toContain('title="繁體中文（香港）、English (UK)、日本語"');
+    // a chevron like the other dropdowns: not chips, not a pencil
+    expect(html).toContain('<path d="M3.8 6 8 10.2 12.2 6"/>');
+    expect(html).not.toContain("lchip");
   });
 
-  test("transcription choices show all groups without individual variants", () => {
-    const html = transcriptionPanelHTML(GROUPS, ["zh-HK", "ja-JP"]);
+  test("keeps the saved order and joins the names the way the language of the window does", () => {
+    expect(languageSummary(GROUPS, ["ja-JP", "zh-TW"])).toBe("日本語、繁體中文（台灣）");
+    setLocale("en");
+    expect(languageSummary(GROUPS, ["ja-JP", "zh-TW"])).toBe("日本語, Traditional Chinese (Taiwan)");
+  });
+
+  test("escapes names from the core", () => {
+    const html = languageSelectHTML(GROUPS, ["x-1"]);
+    expect(html).toContain("&lt;i&gt;one&lt;/i&gt;");
+    expect(html).not.toContain("<i>one</i>");
+  });
+
+  test("keeps variant ids readable before the language list loads", () => {
+    expect(languageSelectHTML([], ["zh-HK", "en-GB"])).toContain("zh-HK、en-GB");
+  });
+});
+
+describe("the language picker", () => {
+  test("lists every language, the chosen ones checked", () => {
+    const html = languagePanelHTML(GROUPS, ["zh-HK", "ja-JP"]);
     expect(html).toContain('data-language="zh" aria-pressed="true"');
     expect(html).toContain('data-language="ja" aria-pressed="true"');
     expect(html).toContain('data-language="en" aria-pressed="false"');
-    expect(html).not.toContain('data-variant=');
-    expect(html).not.toContain("English (UK)");
+    expect(html).toContain("已選 2／5");
   });
 
-  test("marks unavailable additions at five while allowing chosen groups", () => {
-    const html = transcriptionPanelHTML(GROUPS, ["zh-TW", "en-US", "ja-JP", "ko-KR", "fr-FR"]);
+  test("puts the variants of a chosen language right under it, as one radio group", () => {
+    const html = languagePanelHTML(GROUPS, ["en-GB", "zh-HK", "ja-JP"]);
+    const zh = html.indexOf('data-language="zh"');
+    const group = html.indexOf('data-variant-group="zh"');
+    expect(zh).toBeLessThan(group);
+    expect(group).toBeLessThan(html.indexOf('data-language="en"'));
+    expect(html).toContain('role="radiogroup" aria-label="中文的寫法"');
+    expect(html).toContain('data-variant="zh-HK" aria-checked="true"');
+    expect(html).toContain('data-variant="zh-TW" aria-checked="false"');
+    expect(html).toContain('data-variant="en-GB" aria-checked="true"');
+    expect(html).toContain("台灣用語，例如 軟體、視窗");
+  });
+
+  test("shows no variants for a language that is not chosen, only how many it has, and none for a language with one", () => {
+    const html = languagePanelHTML(GROUPS, ["ja-JP"]);
+    expect(html).not.toContain("data-variant=");
+    expect(html).toContain('data-language="zh" aria-pressed="false"><span class="ck"></span><span class="mt">中文</span><span class="md">4 種寫法</span>');
+    expect(html).not.toContain('data-variant-group="ja"');
+  });
+
+  test("marks the languages that cannot be added at five, while the chosen ones can still be dropped", () => {
+    const html = languagePanelHTML(GROUPS, ["zh-TW", "en-US", "ja-JP", "ko-KR", "fr-FR"]);
     expect(html).toContain('data-language="de" aria-pressed="false" aria-disabled="true"');
     expect(html).toContain('data-language="en" aria-pressed="true">');
   });
 
-  test("variants only include selected languages with multiple variants", () => {
-    const html = variantPanelHTML(GROUPS, ["en-GB", "zh-HK", "ja-JP"]);
-    expect(html.indexOf('data-variant-group="en"')).toBeLessThan(html.indexOf('data-variant-group="zh"'));
-    expect(html).toContain('data-variant="zh-HK" aria-checked="true"');
-    expect(html).toContain('data-variant="zh-TW" aria-checked="false"');
-    expect(html).toContain("台灣用語，例如 軟體、視窗");
-    expect(html).not.toContain('data-variant="ja-JP"');
-    expect(html).not.toContain('data-variant="x-1"');
+  test("escapes names from the core", () => {
+    const html = languagePanelHTML(GROUPS, ["x-1"]);
+    expect(html).toContain("&lt;b&gt;x&lt;/b&gt;");
+    expect(html).toContain("&lt;i&gt;one&lt;/i&gt;");
+    expect(html).not.toContain("<b>x</b>");
+    expect(html).not.toContain("<i>one</i>");
   });
 
-  test("explains when the selected languages have no variants", () => {
-    expect(variantPanelHTML(GROUPS, ["ja-JP"])).toContain("目前選擇的轉錄語言沒有其他變體");
-  });
-
-  test("escapes names from the core in both pickers", () => {
-    expect(transcriptionPanelHTML(GROUPS, ["zh-TW"])).toContain("&lt;b&gt;x&lt;/b&gt;");
-    expect(variantPanelHTML(GROUPS, ["x-1"])).toContain("&lt;i&gt;one&lt;/i&gt;");
-    expect(variantPanelHTML(GROUPS, ["x-1"])).not.toContain("<b>x</b>");
-  });
-
-  test("reports an unavailable core language list in both pickers", () => {
-    expect(transcriptionPanelHTML(null, ["zh-TW"])).toContain("無法取得語言清單");
-    expect(variantPanelHTML(null, ["zh-TW"])).toContain("無法取得語言清單");
-  });
-
-  test("keeps variant ids accessible before the language list loads", () => {
-    expect(transcriptionButtonHTML([], ["zh-HK", "en-GB"])).toContain("zh-HK");
+  test("says when the core's language list cannot be had", () => {
+    expect(languagePanelHTML(null, ["zh-TW"])).toContain("無法取得語言清單");
+    expect(languagePanelHTML([], ["zh-TW"])).toContain("無法取得語言清單");
   });
 
   test("the setting remains a non-empty list of variant ids", () => {

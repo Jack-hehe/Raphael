@@ -76,17 +76,28 @@ export const tg = (on: boolean, label: string, attrs = ""): string =>
 export interface Choice {
   value: string;
   label: string;
+  /**
+   * What the closed dropdown shows when the label is too long for it (a microphone's driver in
+   * brackets): the menu lists the label, and the dropdown's tooltip has it too.
+   */
+  short?: string;
   /** A second, quieter text after the label in a menu: a price, say. */
   detail?: string;
   /** A line under the label in a menu: what the choice does. */
   desc?: string;
 }
 
+/** The text on a closed dropdown for `choice`, and its tooltip: the whole label. */
+export const selText = (choice: Choice | undefined, current: string): { shown: string; full: string } => ({
+  shown: choice?.short ?? choice?.label ?? current,
+  full: choice?.label ?? current,
+});
+
 /** The button that opens a menu; it shows `current`'s label. `attrs` names it for the page. */
 export function sel(options: Choice[], current: string, label: string, attrs = ""): string {
-  const shown = options.find((o) => o.value === current)?.label ?? current;
+  const { shown, full } = selText(options.find((o) => o.value === current), current);
   return (
-    `<button type="button" class="sel" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(label)}" title="${esc(shown)}"${attrs}>` +
+    `<button type="button" class="sel" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(label)}" title="${esc(full)}"${attrs}>` +
     `<span>${esc(shown)}</span>${ico("down")}</button>`
   );
 }
@@ -116,6 +127,15 @@ export function setMeter(el: Element | null, level: number): void {
   if (!el) return;
   const lit = Math.round(Math.max(0, Math.min(1, level * 1.05)) * METER_SEGMENTS);
   el.querySelectorAll("i").forEach((segment, k) => segment.classList.toggle("on", k < lit));
+}
+
+/** The microphone's loudness as one slim bar, for under its dropdown; `setLevel` moves it. */
+export const levelBar = (): string => `<span class="level" aria-hidden="true"><i></i></span>`;
+
+/** Fills the bar to a loudness of 0 to 1 (a little headroom, as the meter has). */
+export function setLevel(el: Element | null, level: number): void {
+  const fill = el?.querySelector<HTMLElement>("i");
+  if (fill) fill.style.transform = `scaleX(${Math.max(0, Math.min(1, level * 1.05))})`;
 }
 
 export interface FieldOptions {
@@ -311,9 +331,20 @@ export function openPopover(anchor: HTMLElement, html: string, o: PopoverOptions
   return el;
 }
 
+/** An item at the foot of a menu that does something rather than choose (「重新搜尋麥克風」). */
+export interface MenuAction {
+  label: string;
+  icon?: IconName;
+  /** What it does is under way: the item stays where it is but does nothing until it is done. */
+  busy?: boolean;
+  /** Runs when the item is chosen. The menu stays open, so that what the action finds shows in it. */
+  run(): void;
+}
+
 /**
  * Opens a menu of `options` under `anchor`, with `current` checked. `onPick` gets the value chosen.
- * `head` is a line of small print above the choices (what their details mean).
+ * `head` is a line of small print above the choices (what their details mean), and `actions` are
+ * items below them, after a line, that do something instead of choosing.
  */
 export function openMenu(
   anchor: HTMLElement,
@@ -321,10 +352,11 @@ export function openMenu(
   current: string,
   onPick: (value: string) => void,
   head?: string,
+  actions: readonly MenuAction[] = [],
 ): void {
   const active = document.activeElement as HTMLElement | null;
-  const previous = menu && (menu.anchor === anchor || (!menu.anchor.isConnected && menu.anchor.dataset.k === anchor.dataset.k)) &&
-    active && menu.el.contains(active) ? active.dataset.value : undefined;
+  const again = menu && (menu.anchor === anchor || (!menu.anchor.isConnected && menu.anchor.dataset.k === anchor.dataset.k)) &&
+    active && menu.el.contains(active) ? active : null;
   const detailed = options.some((o) => o.detail);
   const described = options.some((o) => o.desc);
   const html =
@@ -340,6 +372,14 @@ export function openMenu(
           (o.detail ? `<span class="md num">${esc(o.detail)}</span>` : "") +
           `</button>`,
       )
+      .join("") +
+    (actions.length ? `<div class="menu-sep" role="separator"></div>` : "") +
+    actions
+      .map(
+        (a, i) =>
+          `<button type="button" role="menuitem" tabindex="-1" class="menu-action" data-action="${i}"${a.busy ? ' aria-disabled="true"' : ""}>` +
+          `<span class="ck">${a.icon ? ico(a.icon) : ""}</span><span class="mt">${esc(a.label)}</span></button>`,
+      )
       .join("");
   const el = openPopover(anchor, html, {
     className: `menu${detailed ? " detailed" : ""}${described ? " described" : ""}`,
@@ -349,11 +389,19 @@ export function openMenu(
   el.addEventListener("click", (e) => {
     const pick = (e.target as Element).closest("button");
     if (!pick) return;
+    if (pick.dataset.action !== undefined) {
+      const action = actions[Number(pick.dataset.action)];
+      if (action && !action.busy) action.run();
+      return;
+    }
     closeMenu();
     anchor.focus();
     onPick(pick.dataset.value ?? "");
   });
-  const remembered = previous === undefined ? null : Array.from(el.querySelectorAll<HTMLElement>("button")).find((button) => button.dataset.value === previous);
+  // The item that had the focus before the menu was drawn again keeps it: a choice by its value, an
+  // action by its place.
+  const remembered = again === null ? null : Array.from(el.querySelectorAll<HTMLElement>("button")).find((button) =>
+    again.dataset.action !== undefined ? button.dataset.action === again.dataset.action : button.dataset.value === again.dataset.value);
   (remembered ?? el.querySelector<HTMLElement>('[aria-checked="true"]') ?? el.querySelector<HTMLElement>("button") ?? el).focus();
 }
 

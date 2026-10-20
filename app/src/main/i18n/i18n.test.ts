@@ -6,7 +6,7 @@ import path from "node:path";
 import ts from "typescript";
 import { durationParts } from "../stats";
 import { DICTATION_MODES } from "../dictation";
-import { transcriptionPanelHTML } from "../languages";
+import { languagePanelHTML } from "../languages";
 import { describeError } from "../format";
 
 afterEach(() => setLocale("zh-TW"));
@@ -64,7 +64,7 @@ describe("main window translations", () => {
     setLocale("en");
     expect(DICTATION_MODES[1].label).toBe("Hold to talk");
     expect(durationParts(3660)).toEqual([["1", t("unit.hours")], ["1", t("unit.minutes")]]);
-    expect(transcriptionPanelHTML(null, ["zh-TW"])).not.toContain("語言");
+    expect(languagePanelHTML(null, ["zh-TW"])).not.toContain("語言");
     setLocale("ja");
     expect(DICTATION_MODES[1].label).not.toBe("Hold to talk");
     expect(durationParts(3660).flat()).not.toContain(undefined);
