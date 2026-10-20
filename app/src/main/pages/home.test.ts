@@ -34,6 +34,16 @@ describe("the main column of the home page", () => {
     expect(html.indexOf('class="home-side"')).toBeGreaterThan(activity);
   });
 
+  test("the first number names what the core counts: a CJK character or a Latin word is one", () => {
+    // 字 is how Chinese counts mixed text already; English and Japanese call them words.
+    const first = (): string => usageHTML(stats).match(/<div class="icard">.*?<\/div><\/div>/)![0];
+    expect(first()).toBe('<div class="icard"><div class="v">1,200<small>字</small></div><div class="k">聽寫字數</div></div>');
+    setLocale("en");
+    expect(first()).toBe('<div class="icard"><div class="v">1,200<small>words</small></div><div class="k">Words dictated</div></div>');
+    setLocale("ja");
+    expect(first()).toBe('<div class="icard"><div class="v">1,200<small>語</small></div><div class="k">音声入力した語数</div></div>');
+  });
+
   test("the numbers are four cards and the activity has its grid and its paging", () => {
     const html = usageHTML(stats);
     expect(html.match(/class="icard"/g)).toHaveLength(4);

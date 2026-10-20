@@ -62,9 +62,9 @@ describe("the days that can be opened", () => {
 
   test("the names follow the language of the window", () => {
     setLocale("en");
-    expect(heatmapSVG(grid())).toContain('aria-label="10/13: 40 characters. Open that day&#39;s history"');
+    expect(heatmapSVG(grid())).toContain('aria-label="10/13: 40 words. Open that day&#39;s history"');
     setLocale("ja");
-    expect(heatmapSVG(grid())).toContain('aria-label="10月13日：40文字。その日の履歴を開く"');
+    expect(heatmapSVG(grid())).toContain('aria-label="10月13日：40語。その日の履歴を開く"');
   });
 
   test("the days come oldest first, the order of the cells", () => {
