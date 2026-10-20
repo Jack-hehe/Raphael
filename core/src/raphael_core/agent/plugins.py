@@ -65,10 +65,6 @@ def tool_key(server_id: str, tool: str) -> str:
     return f"{PLUGIN_PREFIX}{server_id}/{tool}"
 
 
-def is_plugin_key(name: str) -> bool:
-    return name.startswith(PLUGIN_PREFIX)
-
-
 @dataclass(frozen=True)
 class PluginTool:
     """A tool that may be offered to a model."""

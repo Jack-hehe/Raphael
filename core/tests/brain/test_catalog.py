@@ -20,7 +20,6 @@ import pytest
 from raphael_core.brain import catalog, pricing
 from raphael_core.brain.catalog import (
     ROLE_OF_SETTING,
-    ROLES,
     CatalogEntry,
     catalog_view,
     choice_problem,

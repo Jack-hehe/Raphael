@@ -46,7 +46,6 @@ MAX_URL_CHARS = 2048
 MAX_DESCRIPTION_CHARS = 1000
 # A schema longer than this (as JSON) is kept as "an object" only: it would fill a prompt.
 MAX_SCHEMA_CHARS = 16000
-MAX_TOOL_NAME_CHARS = 128
 
 _TOOL_NAME = re.compile(r"[A-Za-z0-9_.\-]{1,128}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
