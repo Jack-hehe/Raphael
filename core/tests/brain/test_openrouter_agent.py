@@ -139,6 +139,8 @@ async def test_a_decision_is_posted_to_the_alpha_decisions_endpoint_as_documente
         "model": "typesafe/jev-1.14",
         "state": {"utterance": "打開 YouTube"},
         "questions": QUESTIONS,
+        # What the user said goes to no provider that keeps or trains on it, as in every call.
+        "provider": {"data_collection": "deny"},
     }
     assert request.headers["authorization"] == "Bearer sk-or-v1-test"
     assert request.headers["http-referer"] == "http://localhost/raphael"

@@ -601,9 +601,17 @@ class OpenRouterClient:
         One request answers every question. A `choice` question has the criteria of each option
         and is answered with the option and a confidence; a `noul` one has a criterion for true
         and one for false and is answered with a number. `timeout_s` applies to each stage of the
-        request, like complete_json's, so the caller still needs a deadline of its own.
+        request, like complete_json's, so the caller still needs a deadline of its own. The state
+        is what the user said, so `data_collection: "deny"` keeps it away from providers that may
+        store or train on it, as every other call does (the decisions API takes the same provider
+        preferences).
         """
-        body = {"model": model, "state": state, "questions": questions}
+        body = {
+            "model": model,
+            "state": state,
+            "questions": questions,
+            "provider": {"data_collection": "deny"},
+        }
         reply = await self._request(
             "POST", "/decisions", self._stored_key(), timeout_s, body, base_url=ALPHA_URL
         )
