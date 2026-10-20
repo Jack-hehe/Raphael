@@ -618,8 +618,11 @@ class MountedPicker implements ModelPicker {
     const { list, panel } = before.picker;
     const caret = before.picker.search()?.selectionStart ?? undefined;
     const scroll = panel?.querySelector(".mp-scroll")?.scrollTop;
+    const highlighted = list?.activeId();
     before.picker.forget();
-    this.show(this.newList(list?.state ?? {}), { caret, scroll });
+    const again = this.newList(list?.state ?? {});
+    if (highlighted) again.point(highlighted);
+    this.show(again, { caret, scroll });
   }
 
   /** Lets go of the panel without touching it: the popover closed, or a new button took the list over. */
