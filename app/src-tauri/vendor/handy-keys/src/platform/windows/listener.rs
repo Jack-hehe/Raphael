@@ -57,7 +57,9 @@
 //! auto-repeats and its key-up are swallowed exactly when that key-down was (`swallowed_keys`).
 //! Upstream asked the hotkey table again for each event, so the Space of a Space-first chord lost
 //! its key-up (the table said Right Alt+Space by then) and stayed down in the app, and a chord's
-//! Space still held after Right Alt came up repeated into the app.
+//! Space still held after Right Alt came up repeated into the app. Presses are told apart by
+//! physical key (`PhysicalKey`: scan code and extended flag), not by what they mean: the main
+//! Insert and numpad 0 with Num Lock off are both `Key::Insert`, and one is no repeat of the other.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -188,14 +190,25 @@ struct HookContext {
     /// per key when it has been silent for `STALE_SWALLOW_MS` as another key goes down.
     swallowed_modifiers: SwallowedModifiers,
     /// The last non-modifier key that went down and has not come up yet. A key-down of the same
-    /// key again is an auto-repeat.
-    last_key_down: Option<Key>,
+    /// physical key again is an auto-repeat.
+    last_key_down: Option<PhysicalKey>,
     /// Clock value of the first key-down of `last_key_down` (not of its repeats).
     last_key_down_ms: u64,
     /// Non-modifier keys whose first key-down a hotkey swallowed and whose key-up has not been
     /// seen yet. Their auto-repeats and their key-up are swallowed too; the other keys' pass.
     /// Cleared by a session change or resume, like `swallowed_modifiers`.
-    swallowed_keys: Vec<Key>,
+    swallowed_keys: Vec<PhysicalKey>,
+}
+
+/// A non-modifier key as the hook sees it: what it means (`key`) and which physical key it is
+/// (its scan code and extended flag). Two physical keys can mean the same `Key` (the main Insert
+/// and numpad 0 with Num Lock off are both `Key::Insert`), and each press is followed on its own:
+/// numpad 0 pressed while the main Insert is held is no repeat of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PhysicalKey {
+    key: Key,
+    scan_code: u32,
+    extended: bool,
 }
 
 thread_local! {
@@ -711,7 +724,11 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                 // Non-modifier key (see `handle_regular_key`).
                 let outcome = handle_regular_key(
                     ctx,
-                    map_key(vk_code, scan_code, is_extended),
+                    map_key(vk_code, scan_code, is_extended).map(|key| PhysicalKey {
+                        key,
+                        scan_code,
+                        extended: is_extended,
+                    }),
                     is_key_down,
                     physical_modifiers(),
                     now_ms(),
@@ -992,8 +1009,8 @@ const SPACE_FIRST_WITHIN_MS: u64 = 1000;
 /// down (it repeats only the most recent key), and the chord would never match. Only Space: a
 /// letter typed just before Right Alt is a typing roll, and Right Alt+V would paste.
 fn space_came_first(ctx: &HookContext, now_ms: u64) -> bool {
-    ctx.last_key_down == Some(Key::Space)
-        && !ctx.swallowed_keys.contains(&Key::Space)
+    ctx.last_key_down
+        .is_some_and(|down| down.key == Key::Space && !ctx.swallowed_keys.contains(&down))
         && now_ms.saturating_sub(ctx.last_key_down_ms) <= SPACE_FIRST_WITHIN_MS
         && should_block_hotkey(
             &ctx.blocking_hotkeys,
@@ -1088,16 +1105,16 @@ fn handle_modifier_key(
 }
 
 /// Handles a key event that is not a modifier key, given the async key state and the clock
-/// (`key` is `None` for a key the crate does not know). Everything the hook does for such a key
-/// except the system calls, so that it can be tested without a keyboard.
+/// (`pressed` is `None` for a key the crate does not know). Everything the hook does for such a
+/// key except the system calls, so that it can be tested without a keyboard.
 fn handle_regular_key(
     ctx: &mut HookContext,
-    key: Option<Key>,
+    pressed: Option<PhysicalKey>,
     is_key_down: bool,
     async_held: Modifiers,
     now_ms: u64,
 ) -> KeyOutcome {
-    let is_repeat = match key {
+    let is_repeat = match pressed {
         Some(key) if is_key_down => {
             let repeat = ctx.last_key_down.replace(key) == Some(key);
             if !repeat {
@@ -1134,7 +1151,8 @@ fn handle_regular_key(
     reconcile_modifiers_from(ctx, async_held);
 
     let mut outcome = KeyOutcome::default();
-    if let Some(key) = key {
+    if let Some(pressed) = pressed {
+        let key = pressed.key;
         // The first key-down decides for the whole press: its auto-repeats and its key-up are
         // swallowed exactly when it was, whatever the hotkey table says by then. The app saw the
         // press or it did not, and must see the rest of it the same way: a Space that reached the
@@ -1142,16 +1160,16 @@ fn handle_regular_key(
         outcome.should_block = if is_key_down && !is_repeat {
             let swallow =
                 should_block_hotkey(&ctx.blocking_hotkeys, ctx.current_modifiers, Some(key));
-            ctx.swallowed_keys.retain(|held| *held != key);
+            ctx.swallowed_keys.retain(|held| *held != pressed);
             if swallow {
-                ctx.swallowed_keys.push(key);
+                ctx.swallowed_keys.push(pressed);
             }
             swallow
         } else if is_key_down {
-            ctx.swallowed_keys.contains(&key)
+            ctx.swallowed_keys.contains(&pressed)
         } else {
-            let swallowed = ctx.swallowed_keys.contains(&key);
-            ctx.swallowed_keys.retain(|held| *held != key);
+            let swallowed = ctx.swallowed_keys.contains(&pressed);
+            ctx.swallowed_keys.retain(|held| *held != pressed);
             swallowed
         };
 
@@ -1794,6 +1812,15 @@ mod tests {
         rx.try_iter().collect()
     }
 
+    /// A key pressed in a test. Every one has scan code 0, so they differ by what they mean.
+    fn typed(key: Key) -> PhysicalKey {
+        PhysicalKey {
+            key,
+            scan_code: 0,
+            extended: false,
+        }
+    }
+
     #[test]
     fn reconcile_keeps_a_modifier_held_swallowed() {
         // Right Alt is held with its key-down swallowed, so GetAsyncKeyState reports it up. The
@@ -1845,7 +1872,13 @@ mod tests {
     fn a_fresh_swallowed_modifier_makes_the_next_key_a_chord() {
         // Right Alt+V: Right Alt repeats until V goes down, so its last event is recent.
         let (mut ctx, rx) = right_alt_held_since(1000);
-        let outcome = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), 1200);
+        let outcome = handle_regular_key(
+            &mut ctx,
+            Some(typed(Key::V)),
+            true,
+            Modifiers::empty(),
+            1200,
+        );
         assert!(outcome.should_block, "Right Alt+V is a hotkey");
         assert_eq!(ctx.current_modifiers, Modifiers::OPT_RIGHT);
         assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::OPT_RIGHT);
@@ -1862,7 +1895,8 @@ mod tests {
         // Right Alt+V (PasteLast) and must not be swallowed.
         let (mut ctx, rx) = right_alt_held_since(1000);
         let now = 1000 + STALE_SWALLOW_MS + 1;
-        let outcome = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), now);
+        let outcome =
+            handle_regular_key(&mut ctx, Some(typed(Key::V)), true, Modifiers::empty(), now);
         assert!(!outcome.should_block);
         assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::empty());
         assert_eq!(ctx.current_modifiers, Modifiers::empty());
@@ -1885,8 +1919,13 @@ mod tests {
             (STALE_SWALLOW_MS + 1, false),
         ] {
             let (mut ctx, _rx) = right_alt_held_since(1000);
-            let outcome =
-                handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), 1000 + age);
+            let outcome = handle_regular_key(
+                &mut ctx,
+                Some(typed(Key::V)),
+                true,
+                Modifiers::empty(),
+                1000 + age,
+            );
             assert_eq!(outcome.should_block, chord, "age {age} ms");
         }
     }
@@ -1895,7 +1934,13 @@ mod tests {
     fn a_stale_swallowed_modifier_the_system_still_reports_held_stays() {
         let (mut ctx, rx) = right_alt_held_since(0);
         let now = STALE_SWALLOW_MS * 4;
-        let outcome = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::OPT_RIGHT, now);
+        let outcome = handle_regular_key(
+            &mut ctx,
+            Some(typed(Key::V)),
+            true,
+            Modifiers::OPT_RIGHT,
+            now,
+        );
         assert!(outcome.should_block);
         assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::OPT_RIGHT);
         assert_eq!(sent(&rx).len(), 1);
@@ -1906,10 +1951,17 @@ mod tests {
         // The release of a chord key arrives long after Right Alt's last event (Right Alt does
         // not repeat while V is down). It must still be part of the chord.
         let (mut ctx, _rx) = right_alt_held_since(0);
-        let outcome = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), 100);
+        let outcome =
+            handle_regular_key(&mut ctx, Some(typed(Key::V)), true, Modifiers::empty(), 100);
         assert!(outcome.should_block);
         let late = STALE_SWALLOW_MS * 3;
-        let outcome = handle_regular_key(&mut ctx, Some(Key::V), false, Modifiers::empty(), late);
+        let outcome = handle_regular_key(
+            &mut ctx,
+            Some(typed(Key::V)),
+            false,
+            Modifiers::empty(),
+            late,
+        );
         assert!(outcome.should_block, "the V release belongs to the chord");
         assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::OPT_RIGHT);
     }
@@ -1919,10 +1971,17 @@ mod tests {
         // V is held for longer than the limit. Windows repeats V, not Right Alt, so Right Alt's
         // last event gets old; the repeats of the V that passed the check must not undo it.
         let (mut ctx, rx) = right_alt_held_since(900);
-        let down = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), 1000);
+        let down = handle_regular_key(
+            &mut ctx,
+            Some(typed(Key::V)),
+            true,
+            Modifiers::empty(),
+            1000,
+        );
         assert!(down.should_block);
         for at in (1500..5000).step_by(30) {
-            let repeat = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), at);
+            let repeat =
+                handle_regular_key(&mut ctx, Some(typed(Key::V)), true, Modifiers::empty(), at);
             assert!(repeat.should_block, "repeat at {at} ms leaked");
         }
         assert_eq!(ctx.current_modifiers, Modifiers::OPT_RIGHT);
@@ -1931,9 +1990,21 @@ mod tests {
             "no synthetic release"
         );
         // After the V is released, the next new key press finds Right Alt silent for too long.
-        let up = handle_regular_key(&mut ctx, Some(Key::V), false, Modifiers::empty(), 5100);
+        let up = handle_regular_key(
+            &mut ctx,
+            Some(typed(Key::V)),
+            false,
+            Modifiers::empty(),
+            5100,
+        );
         assert!(up.should_block);
-        let next = handle_regular_key(&mut ctx, Some(Key::X), true, Modifiers::empty(), 5200);
+        let next = handle_regular_key(
+            &mut ctx,
+            Some(typed(Key::X)),
+            true,
+            Modifiers::empty(),
+            5200,
+        );
         assert!(!next.should_block);
         assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::empty());
     }
@@ -1941,14 +2012,21 @@ mod tests {
     #[test]
     fn a_new_press_of_the_same_key_is_not_a_repeat() {
         let (mut ctx, _rx) = right_alt_held_since(0);
-        let first = handle_regular_key(&mut ctx, Some(Key::V), true, Modifiers::empty(), 100);
+        let first =
+            handle_regular_key(&mut ctx, Some(typed(Key::V)), true, Modifiers::empty(), 100);
         assert!(first.should_block);
-        let up = handle_regular_key(&mut ctx, Some(Key::V), false, Modifiers::empty(), 150);
+        let up = handle_regular_key(
+            &mut ctx,
+            Some(typed(Key::V)),
+            false,
+            Modifiers::empty(),
+            150,
+        );
         assert!(up.should_block);
         // Pressed again after the limit, with Right Alt silent since the first press.
         let again = handle_regular_key(
             &mut ctx,
-            Some(Key::V),
+            Some(typed(Key::V)),
             true,
             Modifiers::empty(),
             STALE_SWALLOW_MS + 200,
@@ -1995,7 +2073,7 @@ mod tests {
     fn space(ctx: &mut HookContext, is_key_down: bool, now_ms: u64) -> KeyOutcome {
         handle_regular_key(
             ctx,
-            Some(Key::Space),
+            Some(typed(Key::Space)),
             is_key_down,
             Modifiers::empty(),
             now_ms,
@@ -2099,7 +2177,13 @@ mod tests {
         // A v typed just before Right Alt is a typing roll, not Right Alt+V, which would paste.
         let (mut ctx, rx) = raphael_idle();
         let v = |ctx: &mut HookContext, is_key_down: bool, now_ms: u64| {
-            handle_regular_key(ctx, Some(Key::V), is_key_down, Modifiers::empty(), now_ms)
+            handle_regular_key(
+                ctx,
+                Some(typed(Key::V)),
+                is_key_down,
+                Modifiers::empty(),
+                now_ms,
+            )
         };
         assert!(!v(&mut ctx, true, 1000).should_block);
         assert!(right_alt(&mut ctx, true, 1040).should_block);
@@ -2164,6 +2248,39 @@ mod tests {
         reconcile_after_session_change(&mut ctx, Modifiers::empty());
         assert!(ctx.swallowed_keys.is_empty());
         assert!(!space(&mut ctx, true, 5000).should_block);
+    }
+
+    #[test]
+    fn two_physical_keys_that_mean_the_same_key_keep_their_own_state() {
+        // A question key on Right Alt+Insert, Num Lock off: numpad 0 means Insert too, but it is
+        // another key. Pressed while the main Insert of the chord is still held, it is a press of
+        // its own and reaches the app (it was taken for a repeat of the main Insert and
+        // swallowed), and the main Insert's key-up stays swallowed as its key-down was (the
+        // numpad 0 key-up used to clear its record and let it through).
+        use crate::types::Hotkey;
+        let (mut ctx, _rx) = idle_with(&[
+            Hotkey::new(Modifiers::OPT_RIGHT, None).unwrap(),
+            Hotkey::new(Modifiers::OPT_RIGHT, Key::Insert).unwrap(),
+        ]);
+        let main = PhysicalKey {
+            key: Key::Insert,
+            scan_code: 0x52,
+            extended: true,
+        };
+        let numpad = PhysicalKey {
+            extended: false,
+            ..main
+        };
+        let insert = |ctx: &mut HookContext, key: PhysicalKey, is_key_down: bool, now_ms: u64| {
+            handle_regular_key(ctx, Some(key), is_key_down, Modifiers::empty(), now_ms)
+        };
+        right_alt(&mut ctx, true, 1000);
+        assert!(insert(&mut ctx, main, true, 1040).should_block);
+        assert!(right_alt(&mut ctx, false, 1100).should_block);
+        assert!(!insert(&mut ctx, numpad, true, 1200).should_block);
+        assert!(!insert(&mut ctx, numpad, false, 1260).should_block);
+        assert!(insert(&mut ctx, main, false, 1300).should_block);
+        assert!(ctx.swallowed_keys.is_empty());
     }
 
     #[test]
