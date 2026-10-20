@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from raphael_core.brain import pricing
+from raphael_core.brain.catalog import parse_catalog
 from raphael_core.brain.openrouter import CLEANUP_MODEL_CHOICES, OpenRouterError
 from raphael_core.brain.pricing import BUILTIN_PRICES, PRICING_TTL_MS, PricingService, parse_models
 from raphael_core.brain.secrets import MemoryKeyStore
@@ -472,3 +473,17 @@ async def test_pricing_get_needs_no_key_and_asks_nothing_of_the_key_store(conn, 
 
 def test_the_module_keeps_its_prices_and_names_for_the_models_it_lists():
     assert set(pricing.MODEL_NAMES) == set(BUILTIN_PRICES)
+    assert set(pricing.BUILTIN_LISTING) == set(BUILTIN_PRICES)
+
+
+def test_the_builtin_catalog_names_the_models_as_the_recorded_list_does():
+    recorded = {entry.id: entry for entry in parse_catalog(RECORDED)}
+    for entry in pricing.builtin_catalog():
+        assert (entry.provider, entry.name, entry.kind, entry.price) == (
+            recorded[entry.id].provider,
+            recorded[entry.id].name,
+            recorded[entry.id].kind,
+            recorded[entry.id].price,
+        )
+        # Raphael's own models were tried live: every role of their kind can use them.
+        assert entry.capabilities == recorded[entry.id].capabilities, entry.id

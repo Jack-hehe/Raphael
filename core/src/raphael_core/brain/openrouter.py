@@ -49,6 +49,8 @@ _TOKEN = re.compile(r"[\x21-\x7e]+")
 # `languages`, which replaces the singular `language` (OpenAI's speech-to-text guide); Whisper on
 # Groq takes a `prompt` (OpenRouter's speech-to-text guide). The other models get the language only:
 # their hint fields are not documented, and some providers (Azure) refuse a field they do not know.
+# The models that are given the dictionary that way, for the settings page to say so.
+STT_MODELS_WITH_HINTS = ("openai/gpt-transcribe", "openai/whisper-large-v3-turbo")
 MAX_KEYWORDS = 50
 MAX_KEYWORD_CHARS = 64
 _MAX_WHISPER_PROMPT_CHARS = 200
