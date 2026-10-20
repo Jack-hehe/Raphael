@@ -17,6 +17,13 @@
 //! The page learns what to do from [`OverlayEvent`]s on a channel that it opens once with the
 //! `overlay_subscribe` command, and answers a question with `overlay_confirm`. The rest of the app
 //! drives the overlay through [`OverlayApi`].
+//!
+//! The page can draw the emblem in a window that nobody sees: something else may have hidden,
+//! minimized or covered the window, or the shell may keep it on another virtual desktop. So each
+//! time the emblem appears, [`sight`] looks at the window from the main thread and writes what it
+//! saw to the log.
+
+mod sight;
 
 use std::{
     collections::VecDeque,
@@ -279,6 +286,25 @@ pub fn place(work: Rect, emblem_px: u32, scale: f64) -> Rect {
     }
 }
 
+/// Where the window was put, for the check that follows: the work area, the window's rectangle
+/// in it ([`place`]) and the side of the emblem's square canvas, all in physical pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Placement {
+    pub work: Rect,
+    pub window: Rect,
+    pub canvas: i32,
+}
+
+/// [`place`], with what the check needs to find the emblem in the window.
+pub(crate) fn placement(work: Rect, emblem_px: u32, scale: f64) -> Placement {
+    let canvas = (CANVAS_RATIO * f64::from(emblem_px)).round();
+    Placement {
+        work,
+        window: place(work, emblem_px, scale),
+        canvas: (canvas * scale).round() as i32,
+    }
+}
+
 // ---------- the mouse ----------
 
 /// What an event does to whether the window takes the mouse: `Some(true)` for the question that
@@ -426,6 +452,9 @@ impl Bus {
 pub struct Overlay {
     app: AppHandle,
     window: WebviewWindow,
+    /// The window's handle, which never changes, for the checks that run on the main thread;
+    /// `None` where there is none.
+    hwnd: Option<isize>,
     /// The emblem's diameter in logical pixels, which sets the size of the window.
     emblem_px: AtomicU32,
     bus: Mutex<Bus>,
@@ -475,10 +504,12 @@ impl Overlay {
             return Err(err);
         }
         apply_passive_style(&window);
+        let hwnd = native_handle(&window);
 
         let overlay = Arc::new(Overlay {
             app: app.clone(),
             window,
+            hwnd,
             emblem_px: AtomicU32::new(emblem_px),
             bus: Mutex::new(Bus::new(emblem_px, subtitles, language)),
             clicks: Mutex::new(false),
@@ -533,25 +564,31 @@ impl Overlay {
     }
 
     /// Puts the window in its corner of the primary monitor's work area, where the taskbar or the
-    /// screen's scale may have moved it since the last time.
-    fn place_window(&self) {
-        if let Err(err) = self.try_place_window() {
-            log::warn!("could not place the overlay window: {err}");
+    /// screen's scale may have moved it since the last time, and says where that is (`None` if it
+    /// could not).
+    fn place_window(&self) -> Option<Placement> {
+        match self.try_place_window() {
+            Ok(placement) => Some(placement),
+            Err(err) => {
+                log::warn!("could not place the overlay window: {err}");
+                None
+            }
         }
     }
 
-    fn try_place_window(&self) -> tauri::Result<()> {
+    fn try_place_window(&self) -> tauri::Result<Placement> {
         let monitor = self.app.primary_monitor()?.ok_or_else(|| {
             tauri::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "there is no primary monitor",
             ))
         })?;
-        let target = place(
+        let placement = placement(
             Rect::from(monitor.work_area()),
             self.emblem_px.load(Ordering::Relaxed),
             monitor.scale_factor(),
         );
+        let target = placement.window;
         // Compare with where the window really is: Windows itself moves windows when the
         // screens change.
         let position = self.window.outer_position()?;
@@ -559,7 +596,7 @@ impl Overlay {
         if (position.x, position.y, size.width, size.height)
             == (target.x, target.y, target.w as u32, target.h as u32)
         {
-            return Ok(());
+            return Ok(placement);
         }
         self.window
             .set_size(PhysicalSize::new(target.w as u32, target.h as u32))?;
@@ -567,18 +604,29 @@ impl Overlay {
             .set_position(PhysicalPosition::new(target.x, target.y))?;
         // tao rebuilds the extended window style whenever it changes flags or the size.
         apply_passive_style(&self.window);
-        Ok(())
+        Ok(placement)
+    }
+
+    /// Checks on the main thread that the person can see the window that the emblem is about to
+    /// appear in (see [`sight`]). It is queued behind the placing that came before it, so it sees
+    /// the window where it was just put; the caller does not wait for it.
+    fn keep_in_sight(&self, placement: Option<Placement>) {
+        if let Some(hwnd) = self.hwnd {
+            sight::check(&self.window, hwnd, placement);
+        }
     }
 }
 
 impl OverlayApi for Overlay {
     fn show(&self, mode: Mode) {
-        self.place_window();
+        let placement = self.place_window();
+        self.keep_in_sight(placement);
         self.publish(OverlayEvent::Show { mode, line: None });
     }
 
     fn greet(&self, line: &str) {
-        self.place_window();
+        let placement = self.place_window();
+        self.keep_in_sight(placement);
         self.publish(OverlayEvent::Show {
             mode: Mode::Listening,
             line: Some(line.to_owned()),
@@ -795,6 +843,26 @@ fn apply_passive_style(window: &WebviewWindow) {
 #[cfg(not(windows))]
 fn apply_passive_style(_window: &WebviewWindow) {}
 
+/// The window's handle as a number that can go to the main thread, or `None` (logged) if there is
+/// none. It never changes: the window lives as long as the app.
+#[cfg(windows)]
+fn native_handle(window: &WebviewWindow) -> Option<isize> {
+    match window.hwnd() {
+        Ok(hwnd) => Some(hwnd.0 as isize),
+        Err(err) => {
+            log::warn!(
+                "no window handle for the overlay, so it is not checked when it shows: {err}"
+            );
+            None
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn native_handle(_window: &WebviewWindow) -> Option<isize> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -942,6 +1010,24 @@ mod tests {
         );
         assert_eq!(thin.y - thick.y, 40);
         assert_eq!(thin.x, thick.x);
+    }
+
+    #[test]
+    fn the_placement_says_where_the_canvas_is_in_the_window() {
+        let work = Rect {
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1032,
+        };
+        for (scale, e, canvas) in [(1.0, 150u32, 195), (1.25, 194, 315), (1.5, 120, 234)] {
+            let placement = placement(work, e, scale);
+            assert_eq!(placement.work, work);
+            assert_eq!(placement.window, place(work, e, scale));
+            assert_eq!(placement.canvas, canvas, "emblem {e} at {scale}");
+            // the canvas and the 40 logical pixels above it make the window's height
+            assert!((placement.window.h - placement.canvas - (40.0 * scale) as i32).abs() <= 1);
+        }
     }
 
     #[test]

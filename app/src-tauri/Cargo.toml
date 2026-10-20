@@ -43,15 +43,20 @@ windows-core = "0.62"
 # The asynchronous operations of the Windows Runtime (`IAsyncOperation`), which the media controls
 # answer with. It is the version the `windows` crate below already uses.
 windows-future = "0.3"
-# 0.62 is the version Tauri 2.12 uses, so the HWND types match. Used by the overlay (Alt+Tab),
-# pasting (clipboard, focus), the core process (Job Object), learning from corrections (UI
-# Automation, COM) and pausing the media that plays during a recording (the media controls).
+# The overlay's webview: whether its WebView2 controller shows it and fills the window. The
+# version Tauri and wry use, so the controller they hand over is this crate's type.
+webview2-com = "0.39"
+# 0.62 is the version Tauri 2.12 uses, so the HWND types match. Used by the overlay (Alt+Tab, and
+# whether the person can see it: cloaking, virtual desktops), pasting (clipboard, focus), the core
+# process (Job Object), learning from corrections (UI Automation, COM) and pausing the media that
+# plays during a recording (the media controls).
 windows = { version = "0.62", features = [
   "Data_Text",
   "Foundation",
   "Foundation_Collections",
   "Media_Control",
   "Win32_Foundation",
+  "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_System_Com",
@@ -65,6 +70,7 @@ windows = { version = "0.62", features = [
   "Win32_System_WinRT",
   "Win32_UI_Accessibility",
   "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
 
