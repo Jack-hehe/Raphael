@@ -2,19 +2,19 @@
 //! allows only one running copy.
 
 mod agent;
-pub mod commands;
-pub mod core_process;
-pub mod device_settings;
+mod commands;
+mod core_process;
+mod device_settings;
 mod dictation;
 mod first_run;
-pub mod holdtap;
-pub mod hotkey;
+mod holdtap;
+mod hotkey;
 mod learn;
 mod media;
 mod notices;
 mod overlay;
 mod paste;
-pub mod rpc;
+mod rpc;
 mod tray;
 
 use tauri::{AppHandle, Manager, Runtime, WindowEvent, plugin::TauriPlugin};
