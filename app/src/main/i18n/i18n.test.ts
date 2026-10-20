@@ -139,6 +139,28 @@ describe("main window translations", () => {
     }
   });
 
+  test("every key of the catalogue is used by the main window's source", () => {
+    // A key built at run time comes from a table of literal keys (VARIANT_NAMES, the `exact` list of
+    // backend.ts, ...), so each key in use is written out as a string somewhere.
+    const root = path.resolve(import.meta.dirname, "..");
+    const catalogues = new Set(["zh-TW.ts", "en.ts", "ja.ts"]);
+    const files = [root, path.join(root, "pages"), path.join(root, "i18n")].flatMap((dir) =>
+      readdirSync(dir)
+        .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && !(dir.endsWith("i18n") && catalogues.has(f)))
+        .map((f) => path.join(dir, f)),
+    );
+    const written = new Set<string>();
+    for (const file of files) {
+      const ast = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+      const scan = (node: ts.Node): void => {
+        if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) written.add(node.text);
+        ts.forEachChild(node, scan);
+      };
+      scan(ast);
+    }
+    expect(Object.keys(catalogs["zh-TW"]).filter((key) => !written.has(key))).toEqual([]);
+  });
+
   test("main-window source has no hard-coded CJK UI literals outside the catalogue", () => {
     const root = path.resolve(import.meta.dirname, "..");
     const files = [root, path.join(root, "pages")].flatMap((dir) =>
