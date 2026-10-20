@@ -442,9 +442,9 @@ class Brain:
 
     async def _dictionary_learn(self, params: dict) -> dict:
         """`{corrections: [{word, misheard}]}` from the app's correction watch: the user replaced
-        `misheard` with `word` in a dictation it pasted. Learns at most LEARN_MAX different ones,
-        none if the setting is off, and returns `{learned: [word]}`: the words that changed the
-        dictionary.
+        `misheard` with `word` in a dictation it pasted. Learns at most LEARN_MAX different ones
+        and returns `{learned: [word]}`: the words that changed the dictionary. Learning is always
+        on: there is no setting to turn it off.
 
         The core decides what a correction becomes (`DictionaryStore.learn_pair`): the word is a
         term of the dictionary, and the pair a hint for the models until it has been seen again
@@ -461,8 +461,6 @@ class Brain:
             if not isinstance(correction, dict):
                 raise _invalid("corrections must be a list of objects")
             pairs.append((_str(correction, "word").strip(), _str(correction, "misheard").strip()))
-        if not self._settings.get("learn_corrections"):
-            return {"learned": []}
         learned: list[str] = []
         rules: list[str] = []
         reverted: list[str] = []

@@ -34,7 +34,6 @@ const DEFAULT_DEVICE: DeviceSettings = {
   dictation_keys: ["AltRight"],
   dictation_mode: "toggle",
   paste_last_keys: ["AltRight+V"],
-  pause_media: true,
   agent_keys: ["AltRight+Space"],
   microphone: null,
   emblem_size: 150,

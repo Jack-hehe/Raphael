@@ -1,8 +1,7 @@
 //! Settings that belong to this computer: the hotkeys (dictation, pasting the last dictation and
 //! asking Raphael) and how the dictation key works (press to start and again to stop, or hold
-//! while talking), whether the music and video that play are paused while Raphael listens, the
-//! microphone, how the emblem looks, the
-//! theme, interface language, autostart, and whether the first-run guide has been done.
+//! while talking), the microphone, how the emblem looks, the theme, interface language,
+//! autostart, and whether the first-run guide has been done.
 //!
 //! They live in `device.json` in Raphael's data folder (`%APPDATA%\Raphael`, or the folder named
 //! by `RAPHAEL_DATA_DIR`, like the core's database). The settings of the brain (monthly limit,
@@ -96,9 +95,6 @@ pub struct DeviceSettings {
     pub dictation_mode: DictationMode,
     /// Key combinations that paste the latest dictation again.
     pub paste_last_keys: Vec<String>,
-    /// Pause the music and video that play while a dictation or a question is recorded, and play
-    /// them again afterwards. A change applies from the next recording.
-    pub pause_media: bool,
     /// Key combinations that ask Raphael something. They follow `dictation_mode` like the
     /// dictation keys and never share a combination with them or with `paste_last_keys`.
     pub agent_keys: Vec<String>,
@@ -123,7 +119,6 @@ impl Default for DeviceSettings {
             dictation_keys: keys.dictation,
             dictation_mode: DictationMode::default(),
             paste_last_keys: keys.paste_last,
-            pause_media: true,
             agent_keys: keys.agent,
             microphone: None,
             emblem_size: 150,
@@ -184,7 +179,6 @@ impl DeviceSettings {
                 "dictation_keys" => next.dictation_keys = parse_value(name, value)?,
                 "dictation_mode" => next.dictation_mode = parse_value(name, value)?,
                 "paste_last_keys" => next.paste_last_keys = parse_value(name, value)?,
-                "pause_media" => next.pause_media = parse_value(name, value)?,
                 "agent_keys" => next.agent_keys = parse_value(name, value)?,
                 "microphone" => next.microphone = parse_value(name, value)?,
                 "emblem_size" => next.emblem_size = parse_value(name, value)?,
@@ -547,7 +541,6 @@ mod tests {
         assert_eq!(s.dictation_keys, ["AltRight"]);
         assert_eq!(s.dictation_mode, DictationMode::Toggle);
         assert_eq!(s.paste_last_keys, ["AltRight+V"]);
-        assert!(s.pause_media);
         assert_eq!(s.agent_keys, ["AltRight+Space"]);
         assert_eq!(s.microphone, None);
         assert_eq!(s.emblem_size, 150);
@@ -572,7 +565,6 @@ mod tests {
                 "dictation_keys": ["AltRight"],
                 "dictation_mode": "toggle",
                 "paste_last_keys": ["AltRight+V"],
-                "pause_media": true,
                 "agent_keys": ["AltRight+Space"],
                 "microphone": "耳機麥克風",
                 "emblem_size": 150,
@@ -630,24 +622,58 @@ mod tests {
     }
 
     #[test]
-    fn pausing_the_media_is_on_for_new_and_older_settings_and_a_patch_changes_it() {
-        assert!(DeviceSettings::default().pause_media);
+    fn a_file_that_still_has_pause_media_is_read_and_saved_without_it() {
+        // The media is always paused now, so what an older file chose is of no use.
+        for chosen in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(FILE_NAME);
+            std::fs::write(
+                &path,
+                json!({
+                    "pause_media": chosen,
+                    "dictation_mode": "hold",
+                    "emblem_size": 120,
+                    "onboarded": true,
+                })
+                .to_string(),
+            )
+            .unwrap();
 
-        // A file from before the setting existed keeps everything else and has it on.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(FILE_NAME);
-        std::fs::write(&path, r#"{"emblem_size": 120, "onboarded": true}"#).unwrap();
-        let mut loaded = DeviceSettings::load(&path);
-        assert!(loaded.pause_media);
-        assert_eq!(loaded.emblem_size, 120);
-        assert!(!dir.path().join("device.json.bad").exists());
+            let loaded = DeviceSettings::load(&path);
+            assert_eq!(loaded.dictation_mode, DictationMode::Hold, "{chosen}");
+            assert_eq!(loaded.emblem_size, 120, "{chosen}");
+            assert!(loaded.onboarded, "{chosen}");
+            assert!(path.exists(), "{chosen}: the file is not set aside");
+            assert!(!dir.path().join("device.json.bad").exists(), "{chosen}");
 
-        loaded.apply_patch(&json!({"pause_media": false})).unwrap();
-        assert!(!loaded.pause_media);
-        loaded.save(&path).unwrap();
-        assert!(!DeviceSettings::load(&path).pause_media);
-        assert!(loaded.apply_patch(&json!({"pause_media": "no"})).is_err());
-        assert!(!loaded.pause_media);
+            // the main window is not given it, and the next save does not write it back
+            let shown = serde_json::to_value(&loaded).unwrap();
+            assert!(shown.get("pause_media").is_none(), "{chosen}");
+            loaded.save(&path).unwrap();
+            let saved: Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert!(saved.get("pause_media").is_none(), "{chosen}");
+            assert_eq!(saved["dictation_mode"], "hold", "{chosen}");
+            assert_eq!(DeviceSettings::load(&path), loaded, "{chosen}");
+        }
+    }
+
+    #[test]
+    fn a_patch_naming_pause_media_is_refused_like_any_unknown_setting() {
+        let mut s = DeviceSettings::default();
+        for patch in [
+            json!({"pause_media": true}),
+            json!({"pause_media": false}),
+            // all or nothing: the good field next to it is not applied either
+            json!({"pause_media": false, "autostart": false}),
+        ] {
+            assert_eq!(
+                s.apply_patch(&patch),
+                Err(r#"unknown setting "pause_media""#.to_owned()),
+                "{patch}"
+            );
+        }
+        assert_eq!(s, DeviceSettings::default(), "nothing changed");
     }
 
     #[test]

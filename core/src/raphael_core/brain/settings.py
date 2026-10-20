@@ -6,9 +6,11 @@ selection (see raphael_core.languages), and the assistant's model and city a tex
 substance (saved without the spaces around it).
 
 A key that an older version saved but that is no longer a setting stays in the table and is never
-read: `all` lists only the keys of DEFAULTS, and `get` and `set` refuse the others. `agent_router`
-(whether Jev or the language model routes the assistant's requests) is one: Jev always routes now,
-so a saved "luna" changes nothing and nothing has to be rewritten at start-up.
+read: `all` lists only the keys of DEFAULTS, and `get` and `set` refuse the others, so nothing has
+to be rewritten at start-up. Two are such keys: `agent_router` (whether Jev or the language model
+routed the assistant's requests; Jev always does now, so a saved "luna" changes nothing) and
+`learn_corrections` (whether the words corrected after a paste were learned; they always are now,
+so a saved false changes nothing).
 
 `language` is the setting `languages` replaced, kept for one release: it reads as what the
 selection amounts to ("zh", "ja", "en" or "auto"), and setting it sets `languages`. A saved
@@ -44,9 +46,6 @@ DEFAULTS: dict[str, Any] = {
     # The most accurate on the samples tried live on 2026-10-18 (gpt-transcribe returned nothing
     # for an English clip and garbled Chinese).
     "stt_cloud_model": "elevenlabs/scribe-v2",
-    # After a paste, the app watches the text field for up to 60 s and learns the words the user
-    # corrects by hand (`dictionary.learn`). Off: the app does not read the field at all.
-    "learn_corrections": True,
     # The voice assistant (raphael_core.agent). The model that words its answers, and that decides
     # what a request is when Jev (agent/routing.py, not a setting) fails or is unsure.
     "agent_model": "openai/gpt-6-luna",

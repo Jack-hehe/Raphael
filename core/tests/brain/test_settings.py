@@ -32,7 +32,6 @@ def test_the_defaults_are_the_documented_ones():
         "history_retention_days": 30,
         "stt_engine": "cloud",
         "stt_cloud_model": "elevenlabs/scribe-v2",
-        "learn_corrections": True,
         "agent_model": "openai/gpt-6-luna",
         "agent_city": "台北",
     }
@@ -224,13 +223,16 @@ def test_setting_the_old_language_sets_languages(conn):
         s.set("language", "de")
     assert s.get("languages") == ["zh-TW", "en-US", "ja-JP"]
 
-def test_learning_corrections_is_on_by_default_and_takes_a_bool(conn):
+def test_learning_corrections_is_no_longer_a_setting_and_a_saved_off_is_ignored(conn):
+    # Learning is always on. A database from a version with the switch may hold it off: it is
+    # neither read nor offered, and it cannot be set again.
+    conn.execute("INSERT INTO settings (key, value) VALUES ('learn_corrections', 'false')")
     s = SettingsStore(conn)
-    assert s.get("learn_corrections") is True
-    s.set("learn_corrections", False)
-    assert s.get("learn_corrections") is False
-    with pytest.raises(TypeError):
-        s.set("learn_corrections", 0)
+    assert "learn_corrections" not in s.all()
+    with pytest.raises(KeyError):
+        s.get("learn_corrections")
+    with pytest.raises(KeyError):
+        s.set("learn_corrections", True)
 
 
 # --- the voice assistant -----------------------------------------------------------------------

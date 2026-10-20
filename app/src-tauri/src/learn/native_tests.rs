@@ -205,14 +205,6 @@ async fn foreground_correction_reaches_real_core_and_isolated_dictionary() {
         hello["protocol"].as_u64() == Some(1),
         "native learner roundtrip: reason=protocol_mismatch"
     );
-    let settings = call(core.as_ref(), "settings.get").await;
-    assert!(
-        settings
-            .pointer("/settings/learn_corrections")
-            .and_then(Value::as_bool)
-            == Some(true),
-        "native learner roundtrip: reason=learning_disabled"
-    );
     let history = call(core.as_ref(), "history.latest").await;
     assert!(
         history.pointer("/item/id").and_then(Value::as_u64) == Some(1)

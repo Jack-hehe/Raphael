@@ -20,7 +20,6 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -37,29 +36,6 @@ pub use self::windows::WindowsMedia;
 /// not wait for this, and a sentence takes longer to begin than a chord to be pressed.
 pub const SETTLE: Duration = Duration::from_millis(250);
 
-/// Whether a recording pauses the media that plays: the device setting 「說話時暫停播放中的音樂和
-/// 影片」. The device settings write it (at start, and when the person changes it) and the
-/// controller reads it each time a recording begins; one that is under way is not touched. Clones
-/// share the value.
-#[derive(Clone, Debug)]
-pub struct PauseMediaCell(Arc<AtomicBool>);
-
-impl Default for PauseMediaCell {
-    fn default() -> Self {
-        Self(Arc::new(AtomicBool::new(true)))
-    }
-}
-
-impl PauseMediaCell {
-    pub fn get(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
-    }
-
-    pub fn set(&self, on: bool) {
-        self.0.store(on, Ordering::Relaxed);
-    }
-}
-
 /// What the dictation controller asks of the system's media. Both calls return at once: the work
 /// is done elsewhere, in order.
 pub trait MediaPauser: Send + Sync + 'static {
@@ -74,42 +50,38 @@ pub trait MediaPauser: Send + Sync + 'static {
 /// like the cancel switch's, so the state lock may be held while they are made.
 #[derive(Default)]
 pub struct MediaHold {
-    media: Option<(Arc<dyn MediaPauser>, PauseMediaCell)>,
+    media: Option<Arc<dyn MediaPauser>>,
     held: bool,
 }
 
 impl MediaHold {
-    /// A hold that pauses with `media` while `enabled` is set.
-    pub fn new(media: Arc<dyn MediaPauser>, enabled: PauseMediaCell) -> Self {
+    /// A hold that pauses with `media`.
+    pub fn new(media: Arc<dyn MediaPauser>) -> Self {
         Self {
-            media: Some((media, enabled)),
+            media: Some(media),
             held: false,
         }
     }
 
-    /// A recording begins. Pauses the media, unless the setting is off or this recording already
-    /// holds it: a question that takes over a dictation is the same recording.
+    /// A recording begins. Pauses the media, unless this recording already holds it: a question
+    /// that takes over a dictation is the same recording.
     pub fn begin(&mut self) {
         if self.held {
             return;
         }
-        let Some((media, enabled)) = &self.media else {
-            return;
-        };
-        if enabled.get() {
+        if let Some(media) = &self.media {
             media.pause();
             self.held = true;
         }
     }
 
     /// The recording is over, however it ended. Resumes what `begin` paused; does nothing if it
-    /// paused nothing, or if this already has. The setting is not looked at again: what Raphael
-    /// paused is his to put back, whatever the setting says by now.
+    /// paused nothing, or if this already has.
     pub fn end(&mut self) {
         if !std::mem::take(&mut self.held) {
             return;
         }
-        if let Some((media, _)) = &self.media {
+        if let Some(media) = &self.media {
             media.resume();
         }
     }
@@ -854,7 +826,7 @@ mod tests {
     #[test]
     fn a_hold_pairs_each_pause_with_one_resume() {
         let calls = Arc::new(Calls::default());
-        let mut hold = MediaHold::new(calls.clone(), PauseMediaCell::default());
+        let mut hold = MediaHold::new(calls.clone());
         hold.begin();
         hold.begin();
         hold.end();
@@ -866,48 +838,10 @@ mod tests {
     }
 
     #[test]
-    fn a_hold_with_the_setting_off_does_nothing() {
-        let calls = Arc::new(Calls::default());
-        let enabled = PauseMediaCell::default();
-        enabled.set(false);
-        let mut hold = MediaHold::new(calls.clone(), enabled);
-        hold.begin();
-        hold.end();
-        assert!(calls.seen().is_empty());
-    }
-
-    #[test]
-    fn a_setting_changed_during_a_recording_applies_from_the_next_one() {
-        let calls = Arc::new(Calls::default());
-        let enabled = PauseMediaCell::default();
-        let mut hold = MediaHold::new(calls.clone(), enabled.clone());
-        hold.begin();
-        enabled.set(false);
-        hold.end();
-        assert_eq!(
-            calls.seen(),
-            ["pause", "resume"],
-            "what was paused is put back"
-        );
-        hold.begin();
-        hold.end();
-        assert_eq!(calls.seen(), ["pause", "resume"]);
-    }
-
-    #[test]
     fn a_hold_without_media_does_nothing() {
         let mut hold = MediaHold::default();
         hold.begin();
         hold.end();
-    }
-
-    #[test]
-    fn the_setting_starts_on_like_the_device_settings() {
-        assert!(PauseMediaCell::default().get());
-        assert_eq!(
-            PauseMediaCell::default().get(),
-            crate::device_settings::DeviceSettings::default().pause_media
-        );
     }
 
     #[test]

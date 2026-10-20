@@ -145,7 +145,6 @@ impl FieldProbe for UiaProbe {
                 deadline: Instant::now() + Duration::from_secs(60),
                 generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 started: 0,
-                cancellation: super::CANCELLATION.load(Ordering::SeqCst),
                 input: None,
             },
         )
@@ -1570,7 +1569,6 @@ mod tests {
             deadline: Instant::now() + Duration::from_secs(60),
             generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             started: 0,
-            cancellation: super::super::CANCELLATION.load(Ordering::SeqCst),
             input: None,
         };
         let mut field = UiaProbe

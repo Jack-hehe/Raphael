@@ -906,13 +906,16 @@ async def test_the_hints_of_the_dictionary_reach_the_cleanup_prompt(router, fake
     assert system.index("- 拉斐爾") < system.index("- 手機") < system.index("- Claude")
 
 
-async def test_dictionary_learn_does_nothing_when_the_setting_is_off(router):
-    await router.call("settings.set", {"key": "learn_corrections", "value": False})
+async def test_dictionary_learn_learns_even_if_an_older_version_saved_learning_off(router, conn):
+    # Learning is always on now. A database from a version with the switch may hold it off: that
+    # must neither be offered again nor stop the learning.
+    conn.execute("INSERT INTO settings (key, value) VALUES ('learn_corrections', 'false')")
+    assert "learn_corrections" not in (await router.call("settings.get", {}))["settings"]
     learned = await router.call(
         "dictionary.learn", {"corrections": [{"word": "手機", "misheard": "首機"}]}
     )
-    assert learned == {"learned": []}
-    assert (await router.call("dictionary.list", {}))["entries"] == []
+    assert learned == {"learned": ["手機"]}
+    assert [e["word"] for e in (await router.call("dictionary.list", {}))["entries"]] == ["手機"]
 
 
 async def test_dictionary_learn_does_not_log_the_words(router, caplog):

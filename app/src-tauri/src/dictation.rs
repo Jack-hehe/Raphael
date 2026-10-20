@@ -36,13 +36,13 @@
 //!   dictation, and the release of Right Alt does nothing. While an agent session is under way the
 //!   dictation key starts no dictation; in toggle mode it ends the question that is listening, as
 //!   it ends a dictation, and the Space of a Right Alt+Space pressed to stop it does nothing more.
-//! - The music and video that play are paused while a recording lasts ([`MediaHold`], if the
-//!   person wants it). The pause begins with the recording and the resume comes when it ends,
-//!   whichever way: the key that stops it, Esc, a failed start, the core going away. The
-//!   recording is over when the key stops it, not when the text is ready. A question that takes
-//!   over a dictation is one recording, so the media is paused once and resumed once. Both are
-//!   only a channel send, made under the state lock with the phase they follow, like the cancel
-//!   switch; the media is dealt with elsewhere (`media`), and never holds a recording up.
+//! - The music and video that play are paused while a recording lasts ([`MediaHold`]). The pause
+//!   begins with the recording and the resume comes when it ends, whichever way: the key that
+//!   stops it, Esc, a failed start, the core going away. The recording is over when the key
+//!   stops it, not when the text is ready. A question that takes over a dictation is one
+//!   recording, so the media is paused once and resumed once. Both are only a channel send, made
+//!   under the state lock with the phase they follow, like the cancel switch; the media is dealt
+//!   with elsewhere (`media`), and never holds a recording up.
 //!
 //! [`spawn`] builds the controller from the app state and runs it in a task that listens to the
 //! hotkeys, the core's notifications and the overlay's buttons.
@@ -59,7 +59,7 @@ use crate::device_settings::DictationMode;
 use crate::holdtap::{Action, HoldTap};
 use crate::hotkey::{CancelSwitch, HotkeyEvent};
 use crate::learn::AfterPaste;
-use crate::media::{MediaHold, MediaPauser, PauseMediaCell};
+use crate::media::{MediaHold, MediaPauser};
 use crate::notices::{self, LanguageCell, Notice};
 use crate::overlay::{AskPrompt, Mode, OverlayApi, Progress, Stage, Tier};
 use crate::paste::{CopyReason, PasteDelivery, PasteOutcome, Paster, Target};
@@ -290,11 +290,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
     }
 
-    /// The controller, pausing the media that plays with `media` while a recording lasts, if
-    /// `enabled` says so at the time the recording begins. The device settings keep `enabled` up
-    /// to date.
-    pub fn with_media(self, media: Arc<dyn MediaPauser>, enabled: PauseMediaCell) -> Self {
-        lock(&self.state).media = MediaHold::new(media, enabled);
+    /// The controller, pausing the media that plays with `media` while a recording lasts.
+    pub fn with_media(self, media: Arc<dyn MediaPauser>) -> Self {
+        lock(&self.state).media = MediaHold::new(media);
         self
     }
 
@@ -1453,7 +1451,7 @@ mod app {
     use crate::core_process::{CORE_DOWN, CORE_RESTARTED, CoreProcess};
     use crate::hotkey::{CancelSwitch, HotkeyEvent, HotkeyService};
     use crate::learn::{Learner, UiaProbe};
-    use crate::media::{PauseMediaCell, WindowsMedia};
+    use crate::media::WindowsMedia;
     use crate::notices::{self, LanguageCell};
     use crate::overlay::{
         AskPrompt, ConfirmSender, Confirmation, Mode, Overlay, OverlayApi, Progress,
@@ -1574,9 +1572,6 @@ mod app {
         // The same for the interface language, which Raphael's notices follow.
         let language = LanguageCell::default();
         app.manage(language.clone());
-        // And for whether the music and video that play are paused while Raphael listens.
-        let pause_media = PauseMediaCell::default();
-        app.manage(pause_media.clone());
         // The overlay page answers its questions with `overlay_confirm`, which sends here.
         let (confirmations, confirmation_rx) = tokio::sync::mpsc::unbounded_channel();
         app.manage(ConfirmSender(confirmations));
@@ -1598,7 +1593,7 @@ mod app {
                     )
                     .with_language(language.clone())
                     .with_after_paste(Arc::new(learner))
-                    .with_media(Arc::new(WindowsMedia::start()), pause_media),
+                    .with_media(Arc::new(WindowsMedia::start())),
                 )
             }
             None => {
@@ -4088,10 +4083,6 @@ mod tests {
 
         let pasted = "我昨天買了一支新的首機，拍照很漂亮，電池也很耐用，整體來說我很滿意";
         let core = FakeCore::with("dictation.stop", stop_result(pasted, None));
-        core.script(
-            "settings.get",
-            Ok(json!({"settings": {"learn_corrections": true}})),
-        );
         core.script("dictionary.learn", Ok(json!({"learned": ["手提電話"]})));
         let core = Arc::new(core);
         let overlay = Arc::new(FakeOverlay::default());
@@ -5958,12 +5949,11 @@ mod tests {
         }
     }
 
-    /// `c`, pausing a fake media while it records; the setting is on.
-    fn pausing(c: Ctl) -> (Ctl, Arc<FakeMedia>, PauseMediaCell) {
+    /// `c`, pausing a fake media while it records.
+    fn pausing(c: Ctl) -> (Ctl, Arc<FakeMedia>) {
         let media = Arc::new(FakeMedia::default());
-        let enabled = PauseMediaCell::default();
-        let c = c.with_media(media.clone(), enabled.clone());
-        (c, media, enabled)
+        let c = c.with_media(media.clone());
+        (c, media)
     }
 
     /// The key press that ends a dictation that is recording: in toggle mode the dictation key
@@ -5991,7 +5981,7 @@ mod tests {
         for mode in BOTH_MODES {
             let (core, gate) =
                 FakeCore::with("dictation.stop", stop_result("好", None)).gated("dictation.stop");
-            let (c, media, _) = pausing(controller_in(
+            let (c, media) = pausing(controller_in(
                 mode,
                 core,
                 FakePaster::pasting("notepad.exe"),
@@ -6018,7 +6008,7 @@ mod tests {
     #[tokio::test]
     async fn a_question_pauses_the_media_when_it_starts_and_resumes_it_when_the_recording_ends() {
         for mode in BOTH_MODES {
-            let (c, media, _) = pausing(controller_in(
+            let (c, media) = pausing(controller_in(
                 mode,
                 agent_core(answer("答", "好")),
                 FakePaster::pasting("chrome.exe"),
@@ -6041,7 +6031,7 @@ mod tests {
     async fn the_media_is_not_held_for_the_thinking_and_the_asking_of_a_question() {
         let core = agent_core(question("c-1", 30_000));
         core.script("agent.confirm", Ok(answer("了", "已複製到剪貼簿。")));
-        let (c, media, _) = pausing(controller(core, FakePaster::pasting("chrome.exe")));
+        let (c, media) = pausing(controller(core, FakePaster::pasting("chrome.exe")));
         let turn = start_turn(&c).await;
         until_stage(&c, AgentStage::Asking).await;
         assert_eq!(media.seen(), ["pause", "resume"]);
@@ -6054,7 +6044,7 @@ mod tests {
     async fn escape_while_recording_resumes_the_media() {
         for mode in BOTH_MODES {
             for ask in [false, true] {
-                let (c, media, _) = pausing(controller_in(
+                let (c, media) = pausing(controller_in(
                     mode,
                     agent_core(answer("答", "好")),
                     FakePaster::pasting("chrome.exe"),
@@ -6076,7 +6066,7 @@ mod tests {
         for ask in [false, true] {
             let (core, gate) = FakeCore::with("dictation.stop", transcript("幫我複製這句話"))
                 .gated("dictation.stop");
-            let (c, media, _) = pausing(controller(core, FakePaster::pasting("chrome.exe")));
+            let (c, media) = pausing(controller(core, FakePaster::pasting("chrome.exe")));
             run(&c, if ask { AgentDown } else { DictationDown }, 0).await;
             let stop = c
                 .on_hotkey(if ask { AgentUp } else { DictationUp }, 900)
@@ -6094,7 +6084,7 @@ mod tests {
     #[tokio::test]
     async fn a_question_that_takes_over_a_dictation_is_one_pause_and_one_resume() {
         for mode in BOTH_MODES {
-            let (c, media, _) = pausing(controller_in(
+            let (c, media) = pausing(controller_in(
                 mode,
                 agent_core(answer("答", "好")),
                 FakePaster::pasting("chrome.exe"),
@@ -6129,7 +6119,7 @@ mod tests {
     #[tokio::test]
     async fn a_takeover_before_the_core_answered_is_still_one_pause_and_one_resume() {
         let (core, gate) = agent_core(answer("答", "好")).gated("dictation.start");
-        let (c, media, _) = pausing(controller(core, FakePaster::pasting("chrome.exe")));
+        let (c, media) = pausing(controller(core, FakePaster::pasting("chrome.exe")));
         let first = c
             .on_hotkey(DictationDown, 0)
             .expect("the start runs in a task");
@@ -6151,7 +6141,7 @@ mod tests {
     #[tokio::test]
     async fn escape_after_a_takeover_resumes_the_media_once() {
         for mode in BOTH_MODES {
-            let (c, media, _) = pausing(controller_in(
+            let (c, media) = pausing(controller_in(
                 mode,
                 FakeCore::default(),
                 FakePaster::pasting("notepad.exe"),
@@ -6168,7 +6158,7 @@ mod tests {
     async fn paste_last_pressed_as_a_chord_resumes_the_media_the_dictation_paused() {
         // Right Alt+V: the Right Alt started a dictation, which the V drops.
         for mode in BOTH_MODES {
-            let (c, media, _) = pausing(controller_in(
+            let (c, media) = pausing(controller_in(
                 mode,
                 FakeCore::with(
                     "history.latest",
@@ -6190,7 +6180,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_start_resumes_the_media() {
-        let (c, media, _) = pausing(controller(
+        let (c, media) = pausing(controller(
             FakeCore::failing("dictation.start", RpcError::new(NO_MICROPHONE, "gone")),
             FakePaster::pasting("notepad.exe"),
         ));
@@ -6204,7 +6194,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_stop_does_not_resume_twice() {
-        let (c, media, _) = pausing(controller(
+        let (c, media) = pausing(controller(
             FakeCore::failing("dictation.stop", RpcError::new(CORE_EXITED, "gone")),
             FakePaster::pasting("notepad.exe"),
         ));
@@ -6217,7 +6207,7 @@ mod tests {
     #[tokio::test]
     async fn the_core_going_away_during_a_recording_resumes_the_media() {
         for restart in [true, false] {
-            let (c, media, _) = pausing(controller(
+            let (c, media) = pausing(controller(
                 FakeCore::default(),
                 FakePaster::pasting("notepad.exe"),
             ));
@@ -6236,7 +6226,7 @@ mod tests {
     async fn a_stop_that_races_the_start_pauses_and_resumes_at_the_keys_not_at_the_core() {
         let (core, gate) =
             FakeCore::with("dictation.stop", stop_result("好", None)).gated("dictation.start");
-        let (c, media, _) = pausing(controller(core, FakePaster::pasting("notepad.exe")));
+        let (c, media) = pausing(controller(core, FakePaster::pasting("notepad.exe")));
         let start = c
             .on_hotkey(DictationDown, 0)
             .expect("the start runs in a task");
@@ -6266,7 +6256,7 @@ mod tests {
     #[tokio::test]
     async fn escape_that_races_the_start_pauses_and_resumes_once_each() {
         let (core, gate) = FakeCore::default().gated("dictation.start");
-        let (c, media, _) = pausing(controller(core, FakePaster::pasting("notepad.exe")));
+        let (c, media) = pausing(controller(core, FakePaster::pasting("notepad.exe")));
         let start = c
             .on_hotkey(DictationDown, 0)
             .expect("the start runs in a task");
@@ -6284,7 +6274,7 @@ mod tests {
     async fn a_key_that_is_ignored_neither_pauses_nor_resumes() {
         let (core, gate) =
             FakeCore::with("dictation.stop", stop_result("好", None)).gated("dictation.stop");
-        let (c, media, _) = pausing(controller(core, FakePaster::pasting("notepad.exe")));
+        let (c, media) = pausing(controller(core, FakePaster::pasting("notepad.exe")));
         run(&c, DictationDown, 0).await;
         let stop = c.on_hotkey(DictationUp, 900).unwrap();
         settle().await;
@@ -6305,7 +6295,7 @@ mod tests {
 
     #[tokio::test]
     async fn every_recording_pauses_and_resumes_on_its_own() {
-        let (c, media, _) = pausing(controller(
+        let (c, media) = pausing(controller(
             agent_core(answer("答", "好")),
             FakePaster::pasting("notepad.exe"),
         ));
@@ -6320,49 +6310,6 @@ mod tests {
             media.seen(),
             ["pause", "resume", "pause", "resume", "pause", "resume"]
         );
-    }
-
-    // ---------- the setting for it ----------
-
-    #[tokio::test]
-    async fn with_the_setting_off_nothing_is_paused_or_resumed() {
-        for mode in BOTH_MODES {
-            let (c, media, enabled) = pausing(controller_in(
-                mode,
-                agent_core(answer("答", "好")),
-                FakePaster::pasting("chrome.exe"),
-            ));
-            enabled.set(false);
-            // a dictation, a question, a takeover, Esc and a failed start
-            run(&c, DictationDown, 0).await;
-            end_dictation(&c, mode, 900).unwrap().await.unwrap();
-            run(&c, DictationDown, 5000).await;
-            run(&c, AgentDown, 5100).await;
-            run(&c, Cancel, 5600).await;
-            run(&c, AgentDown, 9000).await;
-            end_question(&c, mode, 9900).unwrap().await.unwrap();
-            assert!(media.seen().is_empty(), "{mode:?}: {:?}", media.seen());
-        }
-    }
-
-    #[tokio::test]
-    async fn the_setting_is_read_when_a_recording_starts() {
-        let (c, media, enabled) = pausing(controller(
-            FakeCore::default(),
-            FakePaster::pasting("notepad.exe"),
-        ));
-        // Off: this recording leaves the media alone, even if the setting is turned on during it.
-        enabled.set(false);
-        run(&c, DictationDown, 0).await;
-        enabled.set(true);
-        run(&c, DictationUp, 900).await;
-        assert!(media.seen().is_empty());
-        // On: the next recording pauses, and the media is put back whatever the setting says by
-        // then.
-        run(&c, DictationDown, 5000).await;
-        enabled.set(false);
-        run(&c, DictationUp, 5900).await;
-        assert_eq!(media.seen(), ["pause", "resume"]);
     }
 
     // ---------- the log tells when a click took the focus ----------

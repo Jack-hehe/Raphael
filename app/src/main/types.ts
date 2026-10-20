@@ -168,8 +168,6 @@ export interface BrainSettings {
   /** "cloud" (OpenRouter, the local engine as fallback) or "local". */
   stt_engine: string;
   stt_cloud_model: string;
-  /** Learn the words the user corrects by hand after a paste (default on). Absent from older cores. */
-  learn_corrections?: boolean;
   /** The model that writes Raphael's answers. */
   agent_model?: string;
   /** The city Raphael looks the weather up for. */
@@ -203,8 +201,6 @@ export interface DeviceSettings {
    */
   dictation_mode: "toggle" | "hold";
   paste_last_keys: string[];
-  /** Pause the music and video that play while a dictation or a question is recorded, and play them again after it. */
-  pause_media: boolean;
   /** The shortcut that asks Raphael (Right Alt+Space by default); never the same as another one. */
   agent_keys: string[];
   /** The name of the microphone; null is the system's default one. */
