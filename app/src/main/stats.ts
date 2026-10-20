@@ -5,8 +5,12 @@ import { t } from "./i18n";
 
 import type { StatsSummary } from "./types";
 
-/** `12340` -> `12,340` */
-export const formatCount = (n: number): string => Math.round(n).toLocaleString("en-US");
+/**
+ * `12340` -> `12,340`, as en-US groups it. Grouped by hand: the first locale-aware format in a
+ * process loads the locale data, a step tens of times slower than any other in the tests that
+ * draw counts, and long enough on a busy CI runner to time one out.
+ */
+export const formatCount = (n: number): string => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
 /** Words (CJK characters count one each) per minute of speaking in a period; null without speech. */
 export const periodSpeed = (p: { words: number; audio_seconds: number }): number | null =>

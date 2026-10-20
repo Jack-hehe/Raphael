@@ -30,6 +30,13 @@ describe("formatCount", () => {
     expect(formatCount(7)).toBe("7");
     expect(formatCount(999.6)).toBe("1,000");
   });
+  it("writes what en-US writes, at every length", () => {
+    const written: Record<number, string> = {
+      0: "0", 999: "999", 1000: "1,000", 1001: "1,001", 99_999: "99,999", 100_000: "100,000",
+      1_234_567: "1,234,567", 9_876_543_210: "9,876,543,210", [-1234.4]: "-1,234", 12.5: "13",
+    };
+    for (const [n, text] of Object.entries(written)) expect(formatCount(Number(n)), n).toBe(text);
+  });
 });
 
 describe("dates", () => {
