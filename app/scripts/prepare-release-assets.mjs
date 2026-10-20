@@ -11,15 +11,18 @@ const appDirectory = resolve(dirname(script), "..");
 const coreDirectory = resolve(appDirectory, "..", "core");
 const unavailable = "unavailable";
 
-function firstLine(command, args, options = {}) {
-  const result = spawnSync(command, args, { encoding: "utf8", ...options });
+/** Starts a command and waits for it, its output as text. */
+const spawnText = (command, args, options = {}) => spawnSync(command, args, { encoding: "utf8", ...options });
+
+function firstLine(run, command, args) {
+  const result = run(command, args);
   const line = result.status === 0 ? result.stdout.trim().split(/\r?\n/)[0] : "";
   return line || unavailable;
 }
 
 // npm is npm.cmd on Windows, which only a shell can start.
-function npmVersion() {
-  const result = spawnSync("npm --version", { encoding: "utf8", shell: true });
+function npmVersion(run) {
+  const result = run("npm --version", [], { shell: true });
   return (result.status === 0 && result.stdout.trim()) || unavailable;
 }
 
@@ -39,20 +42,23 @@ function readJson(path) {
   }
 }
 
-/** The versions of what built the release, each "unavailable" if it cannot be read. */
-export function collectTools(env = process.env) {
+/**
+ * The versions of what built the release, each "unavailable" if it cannot be read. `run` starts a
+ * tool as spawnSync does; a test gives its own, so that it starts none.
+ */
+export function collectTools(env = process.env, run = spawnText) {
   const nsis = join(env.LOCALAPPDATA ?? "", "tauri", "NSIS", "makensis.exe");
   return {
     node: process.version,
-    npm: npmVersion(),
-    rustc: firstLine("rustc", ["--version"]),
-    cargo: firstLine("cargo", ["--version"]),
-    uv: firstLine("uv", ["--version"]),
+    npm: npmVersion(run),
+    rustc: firstLine(run, "rustc", ["--version"]),
+    cargo: firstLine(run, "cargo", ["--version"]),
+    uv: firstLine(run, "uv", ["--version"]),
     "python in the frozen core": readJson(join(coreDirectory, "dist", "raphael-core", "bundle-manifest.json"))?.python ?? unavailable,
     // `uv sync --locked` installs exactly this version; asking uv to run Python could create an environment.
     pyinstaller: lockedVersion(join(coreDirectory, "uv.lock"), "pyinstaller"),
     "tauri cli": readJson(join(appDirectory, "node_modules", "@tauri-apps", "cli", "package.json"))?.version ?? unavailable,
-    nsis: existsSync(nsis) ? firstLine(nsis, ["/VERSION"]) : unavailable,
+    nsis: existsSync(nsis) ? firstLine(run, nsis, ["/VERSION"]) : unavailable,
   };
 }
 
@@ -97,7 +103,8 @@ export function prepareReleaseAssets({ installer, notices, version, output, env 
   return readdirSync(output).sort();
 }
 
-export function main(args = process.argv.slice(2)) {
+/** Runs the command line `args`. A test gives its own `env` and `tools`, so that no tool is started. */
+export function main(args = process.argv.slice(2), { env = process.env, tools } = {}) {
   const options = {};
   for (let index = 0; index < args.length; index += 2) {
     const name = args[index]?.replace(/^--/, "");
@@ -109,7 +116,7 @@ export function main(args = process.argv.slice(2)) {
   for (const name of ["installer", "notices", "version", "output"]) {
     if (!options[name]) throw new Error(`Missing --${name}`);
   }
-  console.log(prepareReleaseAssets(options).join("\n"));
+  console.log(prepareReleaseAssets({ ...options, env, tools }).join("\n"));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === script) {

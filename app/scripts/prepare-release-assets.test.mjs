@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
-import { buildInfo, checksums, collectTools, prepareReleaseAssets } from "./prepare-release-assets.mjs";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildInfo, checksums, collectTools, main, prepareReleaseAssets } from "./prepare-release-assets.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
 const fixtureDirectory = join(scripts, "..", "node_modules", ".cache", "release-assets-tests");
@@ -14,8 +14,7 @@ const env = {
   GITHUB_REPOSITORY: "owner/Raphael", GITHUB_WORKFLOW: "Build Windows release", GITHUB_RUN_ID: "4242",
   GITHUB_RUN_ATTEMPT: "2", GITHUB_SERVER_URL: "https://github.com", ImageOS: "win25", ImageVersion: "20260901.1",
 };
-// Reading the tool versions starts npm, rustc, cargo and uv, which a busy runner can take seconds to do.
-const slowTools = 30_000;
+// Fixed tools, so that no test starts npm, rustc, cargo or uv: a busy runner took 26 s to start them.
 const tools = { node: "v22.17.0", npm: "10.9.2", "tauri cli": "2.12.3", nsis: "v3.13" };
 
 afterEach(() => {
@@ -108,25 +107,52 @@ tools:
   });
 
   it("collects tool versions without failing when a tool is missing", () => {
-    const found = collectTools({ LOCALAPPDATA: join(fixtureDirectory, "nowhere") });
-    expect(found.node).toBe(process.version);
+    // spawnSync as the tools would answer it: a version on the first line, an exit code, or no such program.
+    const started = [];
+    const run = (command, args, options = {}) => {
+      started.push([command, ...args, ...(options.shell ? ["(in a shell)"] : [])].join(" "));
+      if (command === "npm --version") return { status: 0, stdout: "10.9.2\r\n" };
+      if (command === "rustc") return { status: 0, stdout: "rustc 1.98.0 (88d9e12ae 2026-08-18)\r\nbinary: rustc\r\n" };
+      if (command === "cargo") return { status: 101, stdout: "", stderr: "error: no default toolchain" };
+      if (command.endsWith("makensis.exe")) return { status: 0, stdout: "v3.13\r\n" };
+      return { status: null, stdout: null, error: Object.assign(new Error(`spawnSync ${command} ENOENT`), { code: "ENOENT" }) };
+    };
+
+    const found = collectTools({ LOCALAPPDATA: join(fixtureDirectory, "nowhere") }, run);
+
     expect(Object.keys(found)).toEqual(["node", "npm", "rustc", "cargo", "uv", "python in the frozen core", "pyinstaller", "tauri cli", "nsis"]);
-    expect(found.nsis).toBe("unavailable");
-  }, slowTools);
+    expect(found).toMatchObject({
+      node: process.version, npm: "10.9.2", rustc: "rustc 1.98.0 (88d9e12ae 2026-08-18)", cargo: "unavailable", uv: "unavailable", nsis: "unavailable",
+    });
+    // npm is npm.cmd on Windows, which only a shell starts; NSIS is asked only when Tauri downloaded it.
+    expect(started).toEqual(["npm --version (in a shell)", "rustc --version", "cargo --version", "uv --version"]);
+
+    const { root } = inputs();
+    const makensis = join(root, "tauri", "NSIS", "makensis.exe");
+    mkdirSync(dirname(makensis), { recursive: true });
+    writeFileSync(makensis, "");
+    expect(collectTools({ LOCALAPPDATA: root }, run).nsis).toBe("v3.13");
+    expect(started.at(-1)).toBe(`${makensis} /VERSION`);
+  });
 
   it("works from the command line and rejects unknown or missing arguments", () => {
     const { installer, notices, output } = inputs();
-    const run = (...args) => spawnSync(process.execPath, [join(scripts, "prepare-release-assets.mjs"), ...args], { encoding: "utf8", env: { ...process.env, ...env } });
 
-    const bad = run("--installer", installer, "--bogus", "x");
+    // One real start of the script: a bad argument fails before any tool is asked for its version.
+    const bad = spawnSync(process.execPath, [join(scripts, "prepare-release-assets.mjs"), "--installer", installer, "--bogus", "x"], { encoding: "utf8" });
     expect(bad.status).toBe(1);
     expect(bad.stderr).toContain("Usage:");
-    expect(run("--installer", installer, "--notices", notices, "--version", "0.1.0").stderr).toContain("Missing --output");
+
+    expect(() => main(["--installer", installer, "--notices", notices, "--version", "0.1.0"], { env, tools })).toThrow("Missing --output");
     expect(existsSync(output)).toBe(false);
 
-    const good = run("--installer", installer, "--notices", notices, "--version", "0.1.0", "--output", output);
-    expect(good.status, good.stderr).toBe(0);
-    expect(good.stdout.split("\n").filter(Boolean)).toEqual(["BUILD-INFO.txt", "Raphael-0.1.0-windows-x64-setup.exe", "SHA256SUMS.txt", "THIRD_PARTY_NOTICES.txt"]);
+    const printed = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      main(["--installer", installer, "--notices", notices, "--version", "0.1.0", "--output", output], { env, tools });
+      expect(printed).toHaveBeenCalledWith(["BUILD-INFO.txt", "Raphael-0.1.0-windows-x64-setup.exe", "SHA256SUMS.txt", "THIRD_PARTY_NOTICES.txt"].join("\n"));
+    } finally {
+      printed.mockRestore();
+    }
     expect(readFileSync(join(output, "BUILD-INFO.txt"), "utf8")).toContain("commit: 0123456789abcdef0123456789abcdef01234567");
-  }, slowTools);
+  });
 });
