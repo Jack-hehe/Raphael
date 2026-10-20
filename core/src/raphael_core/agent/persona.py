@@ -93,6 +93,7 @@ class Phrases:
     confirm_action: str  # asks whether to do an action that has no question of its own
     confirm_plugin: str  # asks whether to let a service run a tool: {server} {tool} {what}
     plugin_none: str  # a connected service was needed, and none of them can do this
+    plugin_model: str  # a connected service was needed, and the answer model takes no tools
     plugin_unsure: str  # a service did not answer in time: {server}; whether it was done is unknown
     copied: str
     sources: str  # the heading of the pages an answer drew on, in the history
@@ -125,6 +126,7 @@ PHRASES: dict[str, Phrases] = {
         confirm_action="是否執行此操作？",
         confirm_plugin="是否讓「{server}」執行「{tool}」{what}？",
         plugin_none="已連接的服務均無法執行此項。",
+        plugin_model="目前的模型不支援呼叫工具。無法使用已連接的服務。",
         plugin_unsure="「{server}」逾時未獲回應。無法確認是否已執行。",
         copied="已複製到剪貼簿。",
         sources="來源",
@@ -154,6 +156,7 @@ PHRASES: dict[str, Phrases] = {
         confirm_action="Execute this action?",
         confirm_plugin="Allow {server} to run {tool}{what}?",
         plugin_none="None of the connected services can perform this action.",
+        plugin_model="The current model cannot call tools. Connected services cannot be used.",
         plugin_unsure=(
             "{server} did not respond in time. It is not known whether the action was executed."
         ),
@@ -182,6 +185,7 @@ PHRASES: dict[str, Phrases] = {
         confirm_action="この操作を実行しますか？",
         confirm_plugin="「{server}」で「{tool}」{what}を実行しますか？",
         plugin_none="接続済みのサービスでは実行できません。",
+        plugin_model="現在のモデルはツールを呼び出せません。接続済みのサービスは利用できません。",
         plugin_unsure="「{server}」から時間内に応答がなく、実行されたかどうかは確認できません。",
         copied="クリップボードにコピーしました。",
         sources="出典",

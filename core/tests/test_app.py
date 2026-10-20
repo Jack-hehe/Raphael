@@ -34,7 +34,7 @@ from raphael_core.app import (
     SpeechModels,
     build_app,
 )
-from raphael_core.brain import textnorm
+from raphael_core.brain import catalog, pricing, textnorm
 from raphael_core.brain.cleanup import build_user_message
 from raphael_core.device import audio, dictation, models
 from raphael_core.device.models import REGISTRY, ModelFile, ModelManager, ModelSpec
@@ -866,6 +866,47 @@ async def test_the_plugins_keep_their_secrets_in_the_credential_manager_otherwis
     }
     await app.call("integrations.remove", {"id": server_id})
     assert memory_keyring.credentials == {}
+
+
+async def test_the_assistant_reads_the_brains_catalog_to_tell_whether_a_model_takes_tools(
+    make_app,
+):
+    app = make_app()
+    luna = "openai/gpt-6-luna"
+    entry = catalog.CatalogEntry(
+        id=luna,
+        kind="llm",
+        name="GPT-6 Luna",
+        provider="OpenAI",
+        price=catalog.ModelPrice(input_per_mtok=0.1, output_per_mtok=0.5),
+        variable_price=False,
+        context_length=None,
+        created_at_ms=None,
+        capabilities=frozenset({"structured_output", "reasoning", "reasoning_off", "max_tokens"}),
+    )
+    saved = {
+        "reading": pricing.CACHE_READING,
+        "fetched_at_ms": 1,
+        "models": [catalog.entry_to_json(entry)],
+    }
+    with app._conn:
+        app._conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            (pricing.CACHE_KEY, json.dumps(saved)),
+        )
+    # The list OpenRouter gave last says the model takes no tools: the next request leaves the
+    # plugins out. The assistant and the brain read the same catalog.
+    assert [e.id for e in app.brain.known_models()] == [luna]
+    assert app.agent._tool_support.supports(luna) is False
+
+
+async def test_before_any_list_was_read_the_assistant_takes_raphaels_own_models_to_take_tools(
+    make_app,
+):
+    app = make_app()
+    assert app.brain.known_models() is None
+    assert app.agent._tool_support.supports("openai/gpt-6-luna") is True  # the builtin table
+    assert app.agent._tool_support.supports("some/other-model") is None
 
 
 # --- start-up loads the heavy things, not the first key press ---------------------------------

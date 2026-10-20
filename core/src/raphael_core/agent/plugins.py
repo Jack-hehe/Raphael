@@ -12,6 +12,15 @@ calls it wants (`plan`). It does not see a result: the calls are made by the pro
 tiers, and their results go to the call that words the answer, as data. So nothing a plugin
 returns can make the model call another tool; that takes a new request from the user.
 
+Which model. The one the user chose to word the answers (the `agent_model` setting), whichever it
+is: nothing here assumes one. The picking call asks OpenRouter for `tools` and requires every
+parameter of the request from the provider (`provider.require_parameters`), so a model none of
+whose providers takes tools would be refused. For each request `ToolSupport` reads the catalog of
+models (brain/catalog.py) for the capability `tool_calling` of the model that is set, and a request
+whose model lacks it goes on without the plugins: an answer is worded as before, and a task that
+needed a plugin says that the model cannot call tools. `ToolsNotSupported` is the same thing found
+out by the refusal itself, for a model the catalog said takes tools.
+
 Nothing here logs a request, an argument or a result.
 """
 
@@ -19,11 +28,15 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from http import HTTPStatus
 from typing import Any, Protocol
 
+from ..brain.catalog import LLM, TOOL_CALLING, CatalogEntry, find
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
+from ..brain.pricing import builtin_catalog
 from .failure import AgentFailure, failure_kind
 from .history import Turn
 from .ledger import Ledger
@@ -38,6 +51,9 @@ MAX_CALLS = 3
 MAX_ARGUMENT_CHARS = 16000
 # What of a tool's description a model is shown, in characters.
 DESCRIPTION_CHARS = 400
+# How long a model that refused tools although the catalog said it takes them is remembered as
+# unable to take them.
+TOOL_REFUSAL_TTL_S = 600.0
 # How much of the arguments the user is shown in the question that asks whether to run a call.
 PREVIEW_CHARS = 60
 
@@ -211,6 +227,60 @@ def build_plan_message(question: str, context: Sequence[Turn]) -> str:
     return "\n\n".join(parts)
 
 
+class ToolsNotSupported(Exception):
+    """The model cannot be sent tools: no provider of it takes them."""
+
+
+class ToolSupport:
+    """Whether the answer model can be offered tools, from the catalog of models.
+
+    `models` returns the catalog as OpenRouter's list gave it last (`Brain.known_models`: quick, and
+    never a fetch), or None when it never gave one; without a list the catalog is the builtin table
+    of Raphael's own models, which were all tried live. `clock` is a monotonic clock in seconds.
+
+    The model's entry says whether it has the capability `tool_calling`. A model the catalog does
+    not list is not known either way: the request is tried, and refused if it must be. A model that
+    refused tools in spite of its entry (`refused`: the catalog speaks for the model, and the
+    routing needs a single provider that takes every parameter of the request) counts as taking
+    none for ten minutes, in memory only.
+    """
+
+    def __init__(
+        self,
+        models: Callable[[], Sequence[CatalogEntry] | None] | None = None,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._models = models
+        self._clock = clock
+        self._refused: dict[str, float] = {}  # model id -> until when it counts as refusing tools
+
+    def supports(self, model: str) -> bool | None:
+        """True if the catalog says `model` takes tools, False if it says not (or the model refused
+        them lately), None when the catalog does not list it."""
+        until = self._refused.get(model)
+        if until is not None:
+            if self._clock() < until:
+                return False
+            del self._refused[model]
+        listed = self._catalog()
+        entry = find(listed or builtin_catalog(), LLM, model)
+        return None if entry is None else TOOL_CALLING in entry.capabilities
+
+    def _catalog(self) -> Sequence[CatalogEntry] | None:
+        if self._models is None:
+            return None
+        try:
+            return self._models()
+        except Exception as exc:  # the catalog is a convenience here: the request is tried
+            logger.warning("Could not read the catalog of models: %s", type(exc).__name__)
+            return None
+
+    def refused(self, model: str) -> None:
+        """The model refused tools: no provider of it takes them, whatever the catalog said."""
+        self._refused[model] = self._clock() + TOOL_REFUSAL_TTL_S
+
+
 class Planner:
     """Asks the language model which of the offered tools a request needs. `client` is the
     OpenRouter client."""
@@ -223,8 +293,8 @@ class Planner:
         self, offer: Offer, question: str, context: Sequence[Turn], *, model: str, ledger: Ledger
     ) -> list[PlannedCall]:
         """The calls `model` wants for `question`, as calls of the tools in `offer`: none, if it
-        wants none. AgentFailure (of a kind) if the model fails. The call is paid for and written
-        to the ledger."""
+        wants none. AgentFailure (of a kind) if the model fails; ToolsNotSupported if no provider of
+        it takes tools. The call is paid for and written to the ledger."""
         try:
             plan = await asyncio.wait_for(
                 self._client.plan_tools(
@@ -240,6 +310,9 @@ class Planner:
                 self._timeout_s,
             )
         except OpenRouterError as error:
+            if error.status == HTTPStatus.NOT_FOUND:
+                # With every parameter required, "no endpoint found" is a model that takes no tools.
+                raise ToolsNotSupported from None
             logger.warning("The tool-picking model failed: kind=%s status=%s", error.kind, error.status)
             raise AgentFailure(failure_kind(error)) from None
         except TimeoutError:

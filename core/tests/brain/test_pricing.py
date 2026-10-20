@@ -210,8 +210,10 @@ def test_the_builtin_table_names_each_model_as_the_recorded_list_does():
             recorded[entry.id].kind,
             recorded[entry.id].price,
         )
-        # Raphael's own models were tried live: every role of their kind can use them.
+        # Raphael's own models were tried live: every role of their kind can use them, and the
+        # language models take tools.
         assert entry.capabilities == recorded[entry.id].capabilities, entry.id
+        assert ("tool_calling" in entry.capabilities) == (entry.kind == "llm")
 
 
 # --- the answer ---------------------------------------------------------------------------------

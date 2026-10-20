@@ -23,7 +23,11 @@ The roles (`ROLES`), and what each needs of a model, from the calls it makes:
   parameters, and must be able to answer without reasoning first: not `reasoning.mandatory`, and
   "none" among its efforts when it lists them. Tool calling is not needed: Raphael runs his tools
   himself and hands the model their results, and the web search (`chat_text` with OpenRouter's
-  `web` plugin, which requires no parameter) takes any text model.
+  `web` plugin, which requires no parameter) takes any text model. The one thing that wants it is
+  the call that picks a plugin's tools (agent/plugins.py), which asks for `tools` and `tool_choice`
+  under the same `provider.require_parameters`: the catalog records it as the capability
+  `tool_calling`, so that a request whose answer model lacks it goes on without the plugins. No
+  role needs it to choose a model, and no model is refused for lacking it.
 - `stt` (`stt_cloud_model`) calls `transcribe`, which sends the audio and the language to
   POST /audio/transcriptions: every transcription model takes that. Two of them are also given
   the dictionary (`STT_MODELS_WITH_HINTS`).
@@ -60,6 +64,8 @@ from .settings import AGENT_TEXT_MAX_CHARS, DEFAULTS, STT_CLOUD_MODELS
 LLM = "llm"
 STT = "stt"
 KINDS = (LLM, STT)
+# The capability of a language model that takes `tools` and `tool_choice` (see the docstring).
+TOOL_CALLING = "tool_calling"
 
 # What a minute of speech-to-text can plausibly cost at most, in US dollars. The dearest model
 # (Google Chirp 3) is 1.6 cents.
@@ -119,7 +125,7 @@ ROLE_OF_SETTING = {role.setting: role for role in ROLES}
 
 # What the catalog tells of each kind of model, as the `capabilities` of its entries.
 CAPABILITIES = {
-    LLM: ("structured_output", "reasoning", "reasoning_off", "max_tokens"),
+    LLM: ("structured_output", "reasoning", "reasoning_off", "max_tokens", TOOL_CALLING),
     STT: ("dictionary_hints",),
 }
 
@@ -326,6 +332,9 @@ def _capabilities(model: Mapping, kind: str) -> frozenset[str]:
         found.add("reasoning_off")
     if "max_tokens" in parameters:
         found.add("max_tokens")
+    # The tools, and the choice among them, which the call that picks a plugin's tools sends.
+    if {"tools", "tool_choice"} <= parameters:
+        found.add(TOOL_CALLING)
     return frozenset(found)
 
 

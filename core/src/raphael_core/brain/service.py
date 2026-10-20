@@ -257,6 +257,12 @@ class Brain:
         self._stt = CloudTranscriber(client, self._settings, self._spend, has_key=self._has_key)
         self._prune_history()
 
+    def known_models(self) -> list[CatalogEntry] | None:
+        """The models of OpenRouter's list as it was given last, however old, without fetching it;
+        None if it never gave one. What the assistant asks, request by request, what a model can
+        do (`tool_calling`): quick, and never a wait for the network."""
+        return self._pricing.known()
+
     async def aclose(self) -> None:
         """Stop the status refresh before its HTTP client is closed."""
         self._closed = True

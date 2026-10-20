@@ -77,7 +77,7 @@ export interface CatalogModel {
   context_length: number | null;
   /** When OpenRouter added it. */
   created_at_ms: number | null;
-  /** What it can do: `structured_output`, `reasoning`, `reasoning_off`, `max_tokens`; `dictionary_hints` for speech. */
+  /** What it can do: `structured_output`, `reasoning`, `reasoning_off`, `max_tokens`, `tool_calling` (no role needs it: the plugins do); `dictionary_hints` for speech. */
   capabilities: Record<string, boolean>;
   /** One of the models the settings offered before they offered them all. */
   recommended: boolean;

@@ -271,6 +271,44 @@ def test_tool_calling_is_not_needed(role):
     assert usable("tencent/hunyuan-a13b-instruct", role) is None
 
 
+# --- tool calling, for the plugins --------------------------------------------------------------
+
+
+def test_a_model_that_takes_tools_and_the_choice_among_them_has_tool_calling():
+    listed = entries_by_id()
+    for model_id in CLEANUP_MODEL_CHOICES:
+        assert "tool_calling" in listed[model_id].capabilities
+    for model_id in ("tencent/hunyuan-a13b-instruct", "moondream/moondream3-preview"):
+        assert "tool_calling" not in listed[model_id].capabilities
+    # A speech model has no such capability to tell of.
+    assert all("tool_calling" not in listed[m].capabilities for m in SPEECH_MODELS)
+
+
+@pytest.mark.parametrize("without", [["tools"], ["tool_choice"], ["tools", "tool_choice"]])
+def test_tools_without_the_choice_among_them_are_no_tool_calling(without):
+    # The picking call sends both, under `require_parameters`: a model with one is refused.
+    luna = next(m for m in RECORDED if m["id"] == "openai/gpt-6-luna")
+    parameters = [p for p in luna["supported_parameters"] if p not in without]
+    models = edited("openai/gpt-6-luna", supported_parameters=parameters)
+    assert "tool_calling" not in entries_by_id(models)["openai/gpt-6-luna"].capabilities
+    # No role needs it: the model can be chosen all the same.
+    assert usable("openai/gpt-6-luna", "agent_model", models) is None
+    assert usable("openai/gpt-6-luna", "cleanup_model", models) is None
+
+
+def test_a_model_that_lists_no_parameters_has_no_tool_calling():
+    models = edited("openai/gpt-6-luna", supported_parameters=None)
+    assert "tool_calling" not in entries_by_id(models)["openai/gpt-6-luna"].capabilities
+
+
+def test_the_answer_says_whether_a_model_takes_tools():
+    view = catalog_view(parse_catalog(RECORDED), NOW_MS, "live")
+    models = by_id(view["llm"])
+    assert models["openai/gpt-6-luna"]["capabilities"]["tool_calling"] is True
+    assert models["tencent/hunyuan-a13b-instruct"]["capabilities"]["tool_calling"] is False
+    assert "tool_calling" not in by_id(view["stt"])["elevenlabs/scribe-v2"]["capabilities"]
+
+
 @pytest.mark.parametrize(
     ("model_id", "reason"),
     [
@@ -354,6 +392,7 @@ def test_an_entry_has_what_the_picker_shows():
             "reasoning": True,
             "reasoning_off": True,
             "max_tokens": True,
+            "tool_calling": True,
         },
         "recommended": True,
         "roles": {
@@ -429,6 +468,8 @@ BATCH_ENTRY = {
         {"reading": 2, "prices": {"openai/gpt-6-luna": {"input_per_mtok": 0.1}}},
         # Reading 3 kept every model, the batch variants among them.
         {"reading": 3, "models": [BATCH_ENTRY]},
+        # Reading 4 did not tell whether a model takes tools: every model read as taking none.
+        {"reading": 4, "models": [{**BATCH_ENTRY, "id": "openai/gpt-6-luna", "name": "GPT-6 Luna"}]},
     ],
 )
 async def test_a_cache_of_an_older_reading_is_fetched_again(conn, client, clock, old):

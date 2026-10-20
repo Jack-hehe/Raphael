@@ -10,7 +10,7 @@ import logging
 
 import pytest
 
-from raphael_core.brain.catalog import ROLE_OF_SETTING, ROLES
+from raphael_core.brain.catalog import ROLE_OF_SETTING, ROLES, parse_catalog
 from raphael_core.brain.openrouter import CLEANUP_MODEL_CHOICES
 from raphael_core.brain.pricing import PRICING_TTL_MS, PricingService
 from raphael_core.brain.secrets import MemoryKeyStore
@@ -157,6 +157,21 @@ async def test_blank_or_spaced_model_ids_are_refused_before_the_catalog_is_asked
     with pytest.raises(RpcError) as raised:
         await router.call("settings.set", {"key": "stt_cloud_model", "value": 3})
     assert raised.value.code == INVALID_PARAMS
+
+
+async def test_the_assistant_can_ask_what_the_catalog_says_without_a_fetch(conn, client, clock):
+    brain = Brain(conn, client, MemoryKeyStore(), now_ms=clock)
+    rpc = Router()
+    brain.register(rpc)
+    assert brain.known_models() is None and client.calls == 0  # never read: nothing is known
+    await rpc.call("models.catalog", {})
+    known = brain.known_models()
+    assert [e.id for e in known] == [e.id for e in parse_catalog(RECORDED)]
+    assert client.calls == 1
+    # However old the list is, asking fetches nothing: a request does not wait for the network.
+    clock.now_ms += 3 * PRICING_TTL_MS
+    assert [e.id for e in brain.known_models()] == [e.id for e in known]
+    assert client.calls == 1
 
 
 async def test_before_the_list_is_read_only_raphaels_own_models_can_be_chosen(router, client):

@@ -16,7 +16,8 @@ ui_language, target_app}`. The router (Jev, and the language model when Jev fail
   it needs from those alone (`plugins`), the program makes the calls within their tiers, and the
   results are given to the call that words the answer as data, not instructions. A call at T0 or T1
   is made at once; at T2 or T3 it is a question for a yes or a no like a command at that tier, one
-  to a turn, and the call is made when the yes comes. A tool with no tier is never offered;
+  to a turn, and the call is made when the yes comes. A tool with no tier is never offered, and a
+  model that takes no tools (`plugins.ToolSupport`) leaves the plugins out of the request;
 - a request that is too garbled to act on, or a task for the background (not there yet), gets a
   fixed 否 reply.
 
@@ -38,13 +39,14 @@ import logging
 import re
 import sqlite3
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from typing import Any
 
 import httpx
 
+from ..brain.catalog import CatalogEntry
 from ..brain.openrouter import OpenRouterClient
 from ..brain.secrets import KeyStore
 from ..brain.settings import DEFAULTS, SettingsStore
@@ -67,6 +69,8 @@ from .plugins import (
     Planner,
     PluginHub,
     PluginResult,
+    ToolsNotSupported,
+    ToolSupport,
     make_offer,
     preview,
 )
@@ -212,7 +216,9 @@ class AgentService:
     clock and `tz` the time zone of the months of the spend; `clock` is a monotonic clock in
     seconds (the thirty seconds of a question), `now` the local time. `http` is the httpx client for
     Open-Meteo, which the caller then owns; `decider` is the router of requests; `plugins` is the
-    hub of the tools the user connected (none: the assistant has only its own).
+    hub of the tools the user connected (none: the assistant has only its own); `models` gives the
+    catalog of OpenRouter's models as it was last read (`Brain.known_models`), by which a request
+    is told whether the answer model takes tools.
     """
 
     def __init__(
@@ -229,6 +235,7 @@ class AgentService:
         now: Callable[[], datetime] | None = None,
         decider: Router | None = None,
         plugins: PluginHub | None = None,
+        models: Callable[[], Sequence[CatalogEntry] | None] | None = None,
     ) -> None:
         self._keys = keys
         self._now_ms = now_ms
@@ -243,6 +250,7 @@ class AgentService:
             plugin_tier=None if plugins is None else plugins.tier_of,
         )
         self._planner = Planner(client)
+        self._tool_support = ToolSupport(models, clock=clock)
         # pending id -> what the call of a plugin's tool that waits for that yes needs.
         self._followups: dict[str, _Followup] = {}
         for name in ("weather", "web_search", "local_time"):
@@ -423,7 +431,13 @@ class AgentService:
         if decision.needs_time:
             results.append(self._tools.local_time())
         if offer is not None:
-            if isinstance(picked, AgentFailure):
+            if picked is None:  # the answer model takes no tools: nothing can be asked of a service
+                if decision.route == "delegate":
+                    return self._finish(
+                        ask, "answer", "negative", phrase(ask.language, "plugin_model"), ledger
+                    )
+                picked = []  # an answer goes on without the services
+            elif isinstance(picked, AgentFailure):
                 if decision.route == "delegate":
                     raise picked  # the request was for a service, and nothing could look at it
                 picked = []  # an answer goes on without the services
@@ -479,19 +493,28 @@ class AgentService:
 
     async def _pick_tools(
         self, ask: _Ask, settings: _Settings, ledger: Ledger, offer: Offer | None
-    ) -> list[PlannedCall] | AgentFailure:
-        """The calls a model picks for the request out of the tools in `offer`; the failure itself
-        when it cannot (the answer decides what that means)."""
+    ) -> list[PlannedCall] | AgentFailure | None:
+        """The calls the answer model picks for the request out of the tools in `offer`; the
+        failure itself when it cannot (the answer decides what that means); None when the model
+        takes no tools, in which case the request goes on without the plugins."""
         if offer is None:
             return []
+        model = settings.model
+        if self._tool_support.supports(model) is False:
+            logger.info("Plugin tools left out of a request: the answer model %s takes no tools", model)
+            return None
         try:
             return await self._planner.plan(
                 offer,
                 ask.text,
                 self._context(PLAN_CONTEXT_TURNS),
-                model=settings.model,
+                model=model,
                 ledger=ledger,
             )
+        except ToolsNotSupported:
+            self._tool_support.refused(model)
+            logger.info("Plugin tools left out of a request: the answer model %s refused tools", model)
+            return None
         except AgentFailure as failure:
             return failure
         except Exception as exc:

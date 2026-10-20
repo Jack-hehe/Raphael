@@ -579,7 +579,12 @@ class App(Router):
         self.integrations = IntegrationsService(self._conn, data_dir, self.vault)
         self.integrations.register(self)
         self.agent = AgentService(
-            self._conn, self.client, self.keys, actions=agent_actions, plugins=self.integrations
+            self._conn,
+            self.client,
+            self.keys,
+            actions=agent_actions,
+            plugins=self.integrations,
+            models=self.brain.known_models,
         )
         self.agent.register(self)
 

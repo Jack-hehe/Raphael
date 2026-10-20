@@ -41,8 +41,8 @@ CACHE_KEY = "cache.pricing"
 # How the cached list was read. A cache of another reading is no cache: raise this whenever
 # `parse_catalog` reads a model differently, or the cache holds something else (2: the MAI models
 # per hour, not unknown; 3: every model Raphael could use, not only the prices of his own; 4: the
-# batch variants left out).
-CACHE_READING = 4
+# batch variants left out; 5: whether a language model takes tools, as a capability).
+CACHE_READING = 5
 
 # OpenRouter's model list of 2026-10-18, read the way `parse_catalog` reads it (a test keeps the
 # two alike, with tests/brain/fixtures/openrouter_models.json, a trimmed copy of that list).
