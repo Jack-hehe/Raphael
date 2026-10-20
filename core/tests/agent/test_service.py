@@ -289,7 +289,7 @@ async def test_a_command_that_no_command_covers_is_refused_and_nothing_is_done(
 ):
     client.decisions.append(decision("command", NONE))
     result = await rig.ask("把所有分頁都關掉")
-    assert result["prefix"] == "否" and result["text"] == "這個動作我還辦不到。"
+    assert result["prefix"] == "否" and result["text"] == "目前無法執行此操作。"
     assert actions.calls == []
     assert (await rig.turns())[0]["route"] == "command"
 
@@ -298,7 +298,7 @@ async def test_a_command_whose_action_fails_is_said_to_have_failed(rig, client, 
     actions.fail["open_url"] = OSError("no browser: 秘密")
     client.decisions.append(decision("command", "open_youtube"))
     result = await rig.ask("打開 YouTube")
-    assert (result["prefix"], result["text"]) == ("否", "沒能完成這個動作。")
+    assert (result["prefix"], result["text"]) == ("否", "執行失敗。")
     assert (await rig.turns())[0]["status"] == "error"
 
 
@@ -354,7 +354,7 @@ async def test_an_app_that_is_not_installed_is_said_so_and_nothing_is_started(
     client.decisions.append(decision("command", "open_app"))
     client.replies.append(completion({"app": ""}))
     result = await rig.ask("打開 Photoshop")
-    assert (result["prefix"], result["text"]) == ("否", "找不到這個應用程式。")
+    assert (result["prefix"], result["text"]) == ("否", "找不到符合的應用程式。")
     assert not any(call[0] == "launch_app" for call in actions.calls)
 
 
@@ -365,7 +365,7 @@ async def test_a_model_that_fails_to_choose_the_app_is_a_failure_of_its_kind(
     client.decisions.append(decision("command", "open_app"))
     client.replies.append(OpenRouterError(0, "network", "offline"))
     result = await rig.ask("open the thing", language="en")
-    assert (result["prefix"], result["text"]) == ("Negative", "I cannot reach the network.")
+    assert (result["prefix"], result["text"]) == ("Negative", "The network is unreachable.")
 
 
 # --- answers ---------------------------------------------------------------------------------------
@@ -555,7 +555,7 @@ async def test_the_context_holds_only_what_was_answered(rig, client):
 async def test_a_request_too_garbled_to_act_on_gets_the_fixed_reply_with_no_model(rig, client):
     client.decisions.append(decision("unclear"))
     result = await rig.ask("呃那個")
-    assert (result["prefix"], result["text"]) == ("否", "沒聽清楚，請再說一次。")
+    assert (result["prefix"], result["text"]) == ("否", "無法辨識指示。請再說一次。")
     assert client.json_calls == []
     assert (await rig.turns())[0]["route"] == "unclear"
 
@@ -564,7 +564,7 @@ async def test_a_request_to_do_a_task_in_the_background_is_refused_honestly(rig,
     client.decisions.append(decision("delegate"))
     result = await rig.ask("幫我整理本週的信件並回覆")
     assert result["prefix"] == "否"
-    assert result["text"] == "背景任務與外部服務尚未開放，這件事現在辦不到。"
+    assert result["text"] == "背景任務與外部服務尚未開放。此項目前無法執行。"
     assert client.json_calls == []
     assert (await rig.turns())[0]["route"] == "delegate"
 
@@ -572,8 +572,12 @@ async def test_a_request_to_do_a_task_in_the_background_is_refused_honestly(rig,
 @pytest.mark.parametrize(
     ("language", "text"),
     [
-        ("en", "Background tasks and connected services are not available yet."),
-        ("ja", "バックグラウンドのタスクと外部サービスにはまだ対応していません。"),
+        (
+            "en",
+            "Background tasks and connected services are not yet available. "
+            "This cannot be done now.",
+        ),
+        ("ja", "バックグラウンド処理と外部サービスは未対応です。現時点では実行できません。"),
     ],
 )
 async def test_the_refusal_is_in_the_ui_language(rig, client, language, text):
@@ -585,7 +589,7 @@ async def test_the_refusal_is_in_the_ui_language(rig, client, language, text):
 @pytest.mark.parametrize("text", ["", "   ", "\n"])
 async def test_an_empty_request_is_not_understood_and_costs_nothing(rig, client, text):
     result = await rig.ask(text)
-    assert (result["prefix"], result["text"]) == ("否", "沒聽清楚，請再說一次。")
+    assert (result["prefix"], result["text"]) == ("否", "無法辨識指示。請再說一次。")
     assert client.calls == 0
 
 
@@ -640,7 +644,7 @@ async def test_without_a_key_the_commands_still_work_and_the_rest_is_refused_wit
     assert (await rig.ask("靜音"))["prefix"] == "了"
     assert actions.calls == [("press_key", "volume_mute", 1)]
     result = await rig.ask("台北天氣如何")
-    assert (result["prefix"], result["text"]) == ("否", "尚未設定 OpenRouter 金鑰。")
+    assert (result["prefix"], result["text"]) == ("否", "未設定 OpenRouter 金鑰。")
     assert client.calls == 0 and rig.meteo.requests == []
     assert [t["status"] for t in await rig.turns()] == ["error", "done"]
 
@@ -666,7 +670,7 @@ async def test_offline_the_commands_still_work_and_the_rest_is_refused_with_the_
     assert (await rig.ask("打開 YouTube"))["prefix"] == "了"  # by the list of words
     assert actions.calls == [("open_url", "https://www.youtube.com/")]
     result = await rig.ask("台北天氣如何")
-    assert (result["prefix"], result["text"]) == ("否", "目前連不上網路。")
+    assert (result["prefix"], result["text"]) == ("否", "無法連線至網路。")
 
 
 async def test_a_request_the_list_of_words_cannot_find_is_not_guessed_at(rig, client, actions):
@@ -699,7 +703,7 @@ async def test_a_model_that_fails_after_jev_decided_is_a_failure_but_jev_is_paid
     client.decisions.append(decision("answer", cost=0.00004))
     client.replies.append(OpenRouterError(0, "timeout", "slow"))
     result = await rig.ask("什麼是量子糾纏")
-    assert (result["prefix"], result["text"]) == ("否", "目前連不上網路。")
+    assert (result["prefix"], result["text"]) == ("否", "無法連線至網路。")
     (turn,) = await rig.turns()
     assert turn["status"] == "error" and turn["route"] == "answer"
     assert rig.spent() == [("agent", "typesafe/jev-1.14", 0.00004)]
@@ -730,7 +734,7 @@ async def test_copying_asks_first_and_touches_nothing(rig, client, actions):
         "id": confirm["id"],
         "tier": "T2",
         "prefix": "問",
-        "text": "要把上一則回答複製到剪貼簿嗎？",
+        "text": "是否將上一則回答複製到剪貼簿？",
         "yes": "是",
         "no": "否",
         "timeout_ms": 30000,
@@ -764,10 +768,10 @@ async def test_a_yes_copies_the_last_answer_once(rig, client, actions):
     rig.seed("台北天氣", "台北現在 24 度。")
     asked = await ask_to_copy(rig, client)
     done = await rig.confirm(asked["confirm"]["id"], True)
-    assert done == {"status": "done", "turn_id": 2, "prefix": "了", "text": "已複製。"}
+    assert done == {"status": "done", "turn_id": 2, "prefix": "了", "text": "已複製到剪貼簿。"}
     assert actions.calls == [("copy_to_clipboard", "台北現在 24 度。")]
     turn = (await rig.turns())[0]
-    assert (turn["prefix"], turn["text"], turn["status"]) == ("了", "已複製。", "done")
+    assert (turn["prefix"], turn["text"], turn["status"]) == ("了", "已複製到剪貼簿。", "done")
     # the same id again: nothing more happens
     again = await rig.confirm(asked["confirm"]["id"], True)
     assert again["prefix"] == "否" and len(actions.calls) == 1
@@ -803,7 +807,7 @@ async def test_the_last_answer_is_the_last_one_that_was_given_not_a_refusal_or_a
 async def test_a_text_the_speaker_quotes_is_what_is_copied(rig, client, actions):
     rig.seed("q", "the answer")
     result = await ask_to_copy(rig, client, "把「今天會議在三點」複製起來")
-    assert result["confirm"]["text"] == "要把你說的那段文字複製到剪貼簿嗎？"
+    assert result["confirm"]["text"] == "是否將引號內的文字複製到剪貼簿？"
     await rig.confirm(result["confirm"]["id"], True)
     assert actions.calls == [("copy_to_clipboard", "今天會議在三點")]
 
@@ -838,7 +842,7 @@ async def test_a_yes_that_comes_too_late_does_nothing_and_says_so(rig, client, a
     asked = await ask_to_copy(rig, client)
     rig.clock.now += 30
     done = await rig.confirm(asked["confirm"]["id"], True)
-    assert done == {"status": "done", "turn_id": 2, "prefix": "否", "text": "已逾時，未執行。"}
+    assert done == {"status": "done", "turn_id": 2, "prefix": "否", "text": "逾時未獲回應。未執行。"}
     assert actions.calls == []
     assert (await rig.turns())[0]["status"] == "expired"
 
@@ -873,7 +877,7 @@ async def test_the_refusal_for_an_unknown_id_is_in_the_language_last_spoken(rig,
     client.replies.append(spoken("Answer", "Hello."))
     await rig.ask("hi", language="en")
     done = await rig.confirm("nope", True)
-    assert (done["prefix"], done["text"]) == ("Negative", "Timed out. Nothing was done.")
+    assert (done["prefix"], done["text"]) == ("Negative", "No response in time. Nothing was executed.")
 
 
 async def test_cancelling_the_session_denies_its_question_and_a_late_yes_does_nothing(
@@ -916,14 +920,14 @@ async def test_a_question_that_ran_out_before_a_new_request_is_expired_not_denie
     await rig.ask("你好", session="s2")
     row = next(t for t in await rig.turns() if t["id"] == asked["turn_id"])
     assert row["status"] == "expired" and row["prefix"] == "否"
-    assert (await rig.confirm(asked["confirm"]["id"], True))["text"] == "已逾時，未執行。"
+    assert (await rig.confirm(asked["confirm"]["id"], True))["text"] == "逾時未獲回應。未執行。"
     assert actions.calls == []
 
 
 async def test_nothing_to_copy_is_said_and_nothing_is_asked(rig, client, actions):
     result = await ask_to_copy(rig, client)
     assert result["status"] == "done"
-    assert (result["prefix"], result["text"]) == ("否", "沒有可以複製的內容。")
+    assert (result["prefix"], result["text"]) == ("否", "無可複製的內容。")
     assert rig.service._confirmations.waiting == 0 and actions.calls == []
 
 
@@ -940,7 +944,7 @@ async def test_a_copy_that_fails_after_the_yes_is_said_to_have_failed(rig, clien
     actions.fail["copy_to_clipboard"] = OSError("the clipboard is busy")
     asked = await ask_to_copy(rig, client)
     done = await rig.confirm(asked["confirm"]["id"], True)
-    assert (done["prefix"], done["text"]) == ("否", "沒能完成這個動作。")
+    assert (done["prefix"], done["text"]) == ("否", "執行失敗。")
     assert (await rig.turns())[0]["status"] == "error"
 
 
@@ -1195,7 +1199,7 @@ async def test_a_bug_in_a_route_is_a_refusal_the_shell_can_show_not_an_rpc_error
     assert (result["status"], result["prefix"], result["text"]) == (
         "done",
         "否",
-        "處理時發生問題，請再試一次。",
+        "處理過程中發生異常。請再試一次。",
     )
     assert "ValueError" in caplog.text and "秘密" not in caplog.text
     assert (await rig.turns())[0]["status"] == "error"
