@@ -89,7 +89,8 @@ export function reduceHotkey(previous: HotkeyState, event: KeyInput, bindings: B
           actions.push("dictation_down");
         }
         if (paste) actions.push("paste_last");
-        // Right Alt+Space comes after Right Alt went down, as it does for the hook: the app tells them apart.
+        // Either key of Right Alt+Space may go down first, here as for the hook: agent_down follows the
+        // dictation_down of Right Alt, and the app tells them apart.
         if (agent && state.agent.length === 0) {
           state.agent = agent;
           actions.push("agent_down");

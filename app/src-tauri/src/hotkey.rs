@@ -49,7 +49,8 @@ pub enum HotkeyEvent {
     /// A dictation key came up.
     DictationUp,
     /// An agent key (the one that asks Raphael) went down. One per press. Right Alt+Space reports
-    /// `DictationDown` first, because Right Alt went down first.
+    /// `DictationDown` first, whichever key went down first: a Space pressed just before Right Alt
+    /// is reported again after it (see the hook's patch notes).
     AgentDown,
     /// An agent key came up. Releasing the modifier of the combination first reports it too, and
     /// it may come before or after the `DictationUp` of the same modifier.

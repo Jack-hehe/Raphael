@@ -1,7 +1,7 @@
 //! Windows low-level keyboard hook implementation
 //!
 //! RAPHAEL PATCH (Task 17). This is handy-keys 0.3.4 (crates.io package, upstream commit e7d1b8e)
-//! with two changes in this file, a one-line re-export in `lib.rs` (`accept_injected_input`) and a
+//! with four changes in this file, a one-line re-export in `lib.rs` (`accept_injected_input`) and a
 //! call to it in the Windows tests of `tests/synthetic_input.rs`.
 //!
 //! First change: while a hotkey holds a modifier key swallowed (a modifier-only hotkey such as
@@ -43,6 +43,21 @@
 //! The observer also keeps a heartbeat (`HookHeartbeat`): each pass of the message loop below and
 //! each keyboard event the hook receives is stamped, so that an input checkpoint can tell a quiet
 //! keyboard from hooks that never started or stopped.
+//!
+//! Fourth change: Space may go down before the modifier of its chord. Space and Right Alt sit side
+//! by side under the thumb and are pressed together as one gesture, so either can land first.
+//! Upstream matched a chord only on its key's key-down, and with Space first Windows sends no
+//! further Space key-down once Right Alt is down (it repeats the most recent key only): the chord
+//! never matched, and Raphael heard Right Alt alone, a dictation. Now, when a modifier goes down
+//! while Space is held, went down at most `SPACE_FIRST_WITHIN_MS` ago and reached the app, and a
+//! blocking hotkey is those modifiers plus Space, the hook swallows the modifier and reports a
+//! Space key-down after it, as if Space had come second (`space_came_first`). The Space itself
+//! already reached the app, which typed a space. Only Space: a letter typed just before Right Alt
+//! is a typing roll. With it, a non-modifier key keeps the decision of its first key-down: its
+//! auto-repeats and its key-up are swallowed exactly when that key-down was (`swallowed_keys`).
+//! Upstream asked the hotkey table again for each event, so the Space of a Space-first chord lost
+//! its key-up (the table said Right Alt+Space by then) and stayed down in the app, and a chord's
+//! Space still held after Right Alt came up repeated into the app.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -175,6 +190,12 @@ struct HookContext {
     /// The last non-modifier key that went down and has not come up yet. A key-down of the same
     /// key again is an auto-repeat.
     last_key_down: Option<Key>,
+    /// Clock value of the first key-down of `last_key_down` (not of its repeats).
+    last_key_down_ms: u64,
+    /// Non-modifier keys whose first key-down a hotkey swallowed and whose key-up has not been
+    /// seen yet. Their auto-repeats and their key-up are swallowed too; the other keys' pass.
+    /// Cleared by a session change or resume, like `swallowed_modifiers`.
+    swallowed_keys: Vec<Key>,
 }
 
 thread_local! {
@@ -360,6 +381,7 @@ fn reconcile_modifiers_in_context() {
 fn reconcile_after_session_change(ctx: &mut HookContext, async_held: Modifiers) {
     log::debug!("hook: session change or resume; forgetting swallowed keys");
     ctx.swallowed_modifiers.clear();
+    ctx.swallowed_keys.clear();
     ctx.last_key_down = None;
     reconcile_modifiers_from(ctx, async_held);
 }
@@ -511,6 +533,8 @@ pub(crate) fn spawn(blocking_hotkeys: Option<BlockingHotkeys>) -> Result<Windows
                 menu_mask_sent: false,
                 swallowed_modifiers: SwallowedModifiers::default(),
                 last_key_down: None,
+                last_key_down_ms: 0,
+                swallowed_keys: Vec::new(),
             });
         });
 
@@ -678,60 +702,11 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                 return;
             }
 
-            // Check if this is a modifier key
             if let Some(modifier) = vk_to_modifier(vk_code) {
-                let prev_modifiers = ctx.current_modifiers;
-
-                // Update modifier state
-                if is_key_down {
-                    ctx.current_modifiers |= modifier;
-                } else {
-                    ctx.current_modifiers &= !modifier;
-                }
-
-                // Only emit event if modifiers actually changed
-                if ctx.current_modifiers != prev_modifiers {
-                    // Check if modifier-only combo should be blocked
-                    should_block =
-                        should_block_hotkey(&ctx.blocking_hotkeys, ctx.current_modifiers, None);
-
-                    // A blocked modifier press (the Shift of a Win+Shift
-                    // modifier-only hotkey) is as invisible to the shell as
-                    // a blocked regular key, so it needs the same mask.
-                    if needs_menu_mask(should_block, ctx.current_modifiers, ctx.menu_mask_sent) {
-                        ctx.menu_mask_sent = true;
-                        needs_mask = true;
-                    }
-
-                    let _ = ctx.event_sender.send(KeyEvent {
-                        modifiers: ctx.current_modifiers,
-                        key: None,
-                        is_key_down,
-                        changed_modifier: Some(modifier),
-                    });
-                }
-
-                // The foreground app never saw the first key-down, so it must not see the
-                // auto-repeats (they would look like fresh presses) or the key-up (a lone
-                // Alt/Win release opens a menu) either.
-                should_block = swallow_modifier_event(
-                    &mut ctx.swallowed_modifiers,
-                    modifier,
-                    is_key_down,
-                    should_block,
-                    now_ms(),
-                );
-                log::debug!(
-                    "hook: modifier vk=0x{vk_code:02X} down={is_key_down} {prev_modifiers:?} -> {:?} block={should_block} swallowed={:?}",
-                    ctx.current_modifiers,
-                    ctx.swallowed_modifiers.held()
-                );
-
-                // The hold ends once no Win/Alt modifier remains held; the
-                // next hold gets a fresh mask.
-                if !ctx.current_modifiers.intersects(MENU_MODIFIERS) {
-                    ctx.menu_mask_sent = false;
-                }
+                // Modifier key (see `handle_modifier_key`).
+                let outcome = handle_modifier_key(ctx, vk_code, modifier, is_key_down, now_ms());
+                should_block = outcome.should_block;
+                needs_mask = outcome.needs_mask;
             } else {
                 // Non-modifier key (see `handle_regular_key`).
                 let outcome = handle_regular_key(
@@ -1002,6 +977,116 @@ struct KeyOutcome {
     needs_mask: bool,
 }
 
+/// How long Space may have been down when a modifier joins it for the two to count as a chord
+/// (see `space_came_first`). Pressed together, the keys land within tens of milliseconds of each
+/// other; one second is also how long Raphael lets Space follow Right Alt. A Space held longer
+/// (in a game, for a hand tool) and then Right Alt stay a Space and a plain Right Alt.
+const SPACE_FIRST_WITHIN_MS: u64 = 1000;
+
+/// Whether the modifier key going down now completes a chord that Space began: Space is the last
+/// key that went down and it is still held, its key-down reached the app, it went down at most
+/// `SPACE_FIRST_WITHIN_MS` ago, and a blocking hotkey is the modifiers now held plus Space.
+///
+/// Space and Right Alt sit side by side under the thumb and are pressed as one gesture, so either
+/// may land first. With Space first, Windows sends no further Space key-down once the modifier is
+/// down (it repeats only the most recent key), and the chord would never match. Only Space: a
+/// letter typed just before Right Alt is a typing roll, and Right Alt+V would paste.
+fn space_came_first(ctx: &HookContext, now_ms: u64) -> bool {
+    ctx.last_key_down == Some(Key::Space)
+        && !ctx.swallowed_keys.contains(&Key::Space)
+        && now_ms.saturating_sub(ctx.last_key_down_ms) <= SPACE_FIRST_WITHIN_MS
+        && should_block_hotkey(
+            &ctx.blocking_hotkeys,
+            ctx.current_modifiers,
+            Some(Key::Space),
+        )
+}
+
+/// Handles a key event of a modifier key, given the clock (`vk_code` is for the log). Everything
+/// the hook does for such a key except the system calls, so that it can be tested without a
+/// keyboard.
+fn handle_modifier_key(
+    ctx: &mut HookContext,
+    vk_code: u16,
+    modifier: Modifiers,
+    is_key_down: bool,
+    now_ms: u64,
+) -> KeyOutcome {
+    let prev_modifiers = ctx.current_modifiers;
+
+    // Update modifier state
+    if is_key_down {
+        ctx.current_modifiers |= modifier;
+    } else {
+        ctx.current_modifiers &= !modifier;
+    }
+
+    let mut outcome = KeyOutcome::default();
+    // Only emit event if modifiers actually changed
+    if ctx.current_modifiers != prev_modifiers {
+        // Check if modifier-only combo should be blocked
+        outcome.should_block =
+            should_block_hotkey(&ctx.blocking_hotkeys, ctx.current_modifiers, None);
+        // The press completes a chord that Space began: the modifier belongs to the chord, and
+        // the Space is reported again after it, as if it had come second. The Space itself
+        // already reached the app.
+        let space_first = is_key_down && space_came_first(ctx, now_ms);
+        outcome.should_block |= space_first;
+
+        // A blocked modifier press (the Shift of a Win+Shift
+        // modifier-only hotkey) is as invisible to the shell as
+        // a blocked regular key, so it needs the same mask.
+        if needs_menu_mask(
+            outcome.should_block,
+            ctx.current_modifiers,
+            ctx.menu_mask_sent,
+        ) {
+            ctx.menu_mask_sent = true;
+            outcome.needs_mask = true;
+        }
+
+        let _ = ctx.event_sender.send(KeyEvent {
+            modifiers: ctx.current_modifiers,
+            key: None,
+            is_key_down,
+            changed_modifier: Some(modifier),
+        });
+        if space_first {
+            log::debug!("hook: Space went down first; reporting it again with {modifier:?}");
+            let _ = ctx.event_sender.send(KeyEvent {
+                modifiers: ctx.current_modifiers,
+                key: Some(Key::Space),
+                is_key_down: true,
+                changed_modifier: None,
+            });
+        }
+    }
+
+    // The foreground app never saw the first key-down, so it must not see the
+    // auto-repeats (they would look like fresh presses) or the key-up (a lone
+    // Alt/Win release opens a menu) either.
+    outcome.should_block = swallow_modifier_event(
+        &mut ctx.swallowed_modifiers,
+        modifier,
+        is_key_down,
+        outcome.should_block,
+        now_ms,
+    );
+    log::debug!(
+        "hook: modifier vk=0x{vk_code:02X} down={is_key_down} {prev_modifiers:?} -> {:?} block={} swallowed={:?}",
+        ctx.current_modifiers,
+        outcome.should_block,
+        ctx.swallowed_modifiers.held()
+    );
+
+    // The hold ends once no Win/Alt modifier remains held; the
+    // next hold gets a fresh mask.
+    if !ctx.current_modifiers.intersects(MENU_MODIFIERS) {
+        ctx.menu_mask_sent = false;
+    }
+    outcome
+}
+
 /// Handles a key event that is not a modifier key, given the async key state and the clock
 /// (`key` is `None` for a key the crate does not know). Everything the hook does for such a key
 /// except the system calls, so that it can be tested without a keyboard.
@@ -1013,7 +1098,13 @@ fn handle_regular_key(
     now_ms: u64,
 ) -> KeyOutcome {
     let is_repeat = match key {
-        Some(key) if is_key_down => ctx.last_key_down.replace(key) == Some(key),
+        Some(key) if is_key_down => {
+            let repeat = ctx.last_key_down.replace(key) == Some(key);
+            if !repeat {
+                ctx.last_key_down_ms = now_ms;
+            }
+            repeat
+        }
         Some(key) => {
             if ctx.last_key_down == Some(key) {
                 ctx.last_key_down = None;
@@ -1044,8 +1135,25 @@ fn handle_regular_key(
 
     let mut outcome = KeyOutcome::default();
     if let Some(key) = key {
-        outcome.should_block =
-            should_block_hotkey(&ctx.blocking_hotkeys, ctx.current_modifiers, Some(key));
+        // The first key-down decides for the whole press: its auto-repeats and its key-up are
+        // swallowed exactly when it was, whatever the hotkey table says by then. The app saw the
+        // press or it did not, and must see the rest of it the same way: a Space that reached the
+        // app before Right Alt joined it must reach it as it comes up too, or it stays down there.
+        outcome.should_block = if is_key_down && !is_repeat {
+            let swallow =
+                should_block_hotkey(&ctx.blocking_hotkeys, ctx.current_modifiers, Some(key));
+            ctx.swallowed_keys.retain(|held| *held != key);
+            if swallow {
+                ctx.swallowed_keys.push(key);
+            }
+            swallow
+        } else if is_key_down {
+            ctx.swallowed_keys.contains(&key)
+        } else {
+            let swallowed = ctx.swallowed_keys.contains(&key);
+            ctx.swallowed_keys.retain(|held| *held != key);
+            swallowed
+        };
 
         // The shell can no longer see the key we are about to swallow; without a substitute,
         // releasing Win/Alt would read as a lone tap and open the Start menu (#917).
@@ -1379,6 +1487,8 @@ mod tests {
             menu_mask_sent: true,
             swallowed_modifiers: SwallowedModifiers::default(),
             last_key_down: None,
+            last_key_down_ms: 0,
+            swallowed_keys: Vec::new(),
         };
         reconcile_modifiers_from(&mut ctx, Modifiers::empty());
         assert_eq!(ctx.current_modifiers, Modifiers::empty());
@@ -1673,6 +1783,8 @@ mod tests {
             menu_mask_sent: true,
             swallowed_modifiers: swallowed,
             last_key_down: None,
+            last_key_down_ms: 0,
+            swallowed_keys: Vec::new(),
         };
         (ctx, rx)
     }
@@ -1842,6 +1954,216 @@ mod tests {
             STALE_SWALLOW_MS + 200,
         );
         assert!(!again.should_block);
+    }
+
+    /// A hook context with these blocking hotkeys and no key held. Nothing here reads the real
+    /// keyboard.
+    fn idle_with(hotkeys: &[crate::types::Hotkey]) -> (HookContext, mpsc::Receiver<KeyEvent>) {
+        let (tx, rx) = mpsc::channel();
+        let ctx = HookContext {
+            event_sender: tx,
+            current_modifiers: Modifiers::empty(),
+            blocking_hotkeys: Some(std::sync::Arc::new(std::sync::Mutex::new(
+                hotkeys.iter().copied().collect(),
+            ))),
+            altgr_phantom_ctrl: false,
+            menu_mask_sent: false,
+            swallowed_modifiers: SwallowedModifiers::default(),
+            last_key_down: None,
+            last_key_down_ms: 0,
+            swallowed_keys: Vec::new(),
+        };
+        (ctx, rx)
+    }
+
+    /// Raphael's hotkeys: Right Alt (dictation), Right Alt+V (paste last) and Right Alt+Space
+    /// (ask Raphael), with no key held.
+    fn raphael_idle() -> (HookContext, mpsc::Receiver<KeyEvent>) {
+        use crate::types::Hotkey;
+        idle_with(&[
+            Hotkey::new(Modifiers::OPT_RIGHT, None).unwrap(),
+            Hotkey::new(Modifiers::OPT_RIGHT, Key::V).unwrap(),
+            Hotkey::new(Modifiers::OPT_RIGHT, Key::Space).unwrap(),
+        ])
+    }
+
+    fn right_alt(ctx: &mut HookContext, is_key_down: bool, now_ms: u64) -> KeyOutcome {
+        handle_modifier_key(ctx, 0xA5, Modifiers::OPT_RIGHT, is_key_down, now_ms)
+    }
+
+    /// Space, with the system reporting no modifier held (it never sees a swallowed Right Alt).
+    fn space(ctx: &mut HookContext, is_key_down: bool, now_ms: u64) -> KeyOutcome {
+        handle_regular_key(
+            ctx,
+            Some(Key::Space),
+            is_key_down,
+            Modifiers::empty(),
+            now_ms,
+        )
+    }
+
+    /// Whether these events report a Space key-down with Right Alt held, the key-down that
+    /// matches Right Alt+Space.
+    fn reports_right_alt_and_space(events: &[KeyEvent]) -> bool {
+        events.iter().any(|event| {
+            event.key == Some(Key::Space)
+                && event.is_key_down
+                && event.modifiers == Modifiers::OPT_RIGHT
+        })
+    }
+
+    #[test]
+    fn space_then_right_alt_is_right_alt_and_space() {
+        // Pressed together, Space landed first. No hotkey is Space alone, so it reaches the app.
+        let (mut ctx, rx) = raphael_idle();
+        assert!(!space(&mut ctx, true, 1000).should_block);
+        // Right Alt joins it: swallowed (hidden from the shell too), and the Space is reported
+        // again after it, so that the manager matches Right Alt+Space as when Right Alt is first.
+        let alt = right_alt(&mut ctx, true, 1040);
+        assert!(alt.should_block);
+        assert!(alt.needs_mask);
+        assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::OPT_RIGHT);
+        let events = sent(&rx);
+        assert_eq!(events.len(), 3, "{events:?}");
+        assert_eq!(events[0].key, Some(Key::Space));
+        assert_eq!(events[0].modifiers, Modifiers::empty());
+        assert_eq!(events[1].changed_modifier, Some(Modifiers::OPT_RIGHT));
+        assert!(events[1].is_key_down);
+        assert!(reports_right_alt_and_space(&events[2..]));
+    }
+
+    #[test]
+    fn the_space_of_a_space_first_chord_comes_up_in_the_app() {
+        // The app saw the Space go down, so it must see it come up, though Right Alt+Space is a
+        // blocking hotkey by then; swallowed, the Space would stay down in the app. Right Alt
+        // stays hidden. Either key may be let go first.
+        for space_first_up in [true, false] {
+            let (mut ctx, rx) = raphael_idle();
+            space(&mut ctx, true, 1000);
+            right_alt(&mut ctx, true, 1040);
+            let (space_up, alt_up) = if space_first_up {
+                (
+                    space(&mut ctx, false, 1200),
+                    right_alt(&mut ctx, false, 1250),
+                )
+            } else {
+                let alt_up = right_alt(&mut ctx, false, 1200);
+                (space(&mut ctx, false, 1250), alt_up)
+            };
+            assert!(!space_up.should_block, "Space up first: {space_first_up}");
+            assert!(alt_up.should_block, "Space up first: {space_first_up}");
+            assert_eq!(ctx.swallowed_modifiers.held(), Modifiers::empty());
+            // The manager hears both releases, which end Right Alt+Space.
+            let ups = sent(&rx)
+                .into_iter()
+                .filter(|event| !event.is_key_down)
+                .count();
+            assert_eq!(ups, 2);
+        }
+    }
+
+    #[test]
+    fn a_space_held_for_too_long_leaves_right_alt_alone() {
+        for (held_for, chord) in [
+            (SPACE_FIRST_WITHIN_MS, true),
+            (SPACE_FIRST_WITHIN_MS + 1, false),
+        ] {
+            let (mut ctx, rx) = raphael_idle();
+            space(&mut ctx, true, 1000);
+            // Windows repeats the held Space; the repeats do not make the press any younger.
+            for at in (1500..1000 + held_for).step_by(30) {
+                assert!(!space(&mut ctx, true, at).should_block);
+            }
+            let alt = right_alt(&mut ctx, true, 1000 + held_for);
+            assert!(alt.should_block, "Right Alt alone is a hotkey");
+            assert_eq!(
+                reports_right_alt_and_space(&sent(&rx)),
+                chord,
+                "Space held for {held_for} ms"
+            );
+        }
+    }
+
+    #[test]
+    fn a_space_let_go_before_right_alt_is_no_chord() {
+        // A space typed, then Right Alt to dictate.
+        let (mut ctx, rx) = raphael_idle();
+        space(&mut ctx, true, 1000);
+        space(&mut ctx, false, 1080);
+        right_alt(&mut ctx, true, 1100);
+        assert!(!reports_right_alt_and_space(&sent(&rx)));
+    }
+
+    #[test]
+    fn only_space_may_come_first() {
+        // A v typed just before Right Alt is a typing roll, not Right Alt+V, which would paste.
+        let (mut ctx, rx) = raphael_idle();
+        let v = |ctx: &mut HookContext, is_key_down: bool, now_ms: u64| {
+            handle_regular_key(ctx, Some(Key::V), is_key_down, Modifiers::empty(), now_ms)
+        };
+        assert!(!v(&mut ctx, true, 1000).should_block);
+        assert!(right_alt(&mut ctx, true, 1040).should_block);
+        let events = sent(&rx);
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[1].key, None);
+        // The v went down in the app, so it comes up there too, Right Alt+V or not.
+        assert!(!v(&mut ctx, false, 1100).should_block);
+    }
+
+    #[test]
+    fn space_first_needs_a_hotkey_with_space() {
+        use crate::types::Hotkey;
+        let (mut ctx, rx) = idle_with(&[Hotkey::new(Modifiers::OPT_RIGHT, None).unwrap()]);
+        space(&mut ctx, true, 1000);
+        right_alt(&mut ctx, true, 1040);
+        assert_eq!(sent(&rx).len(), 2);
+    }
+
+    #[test]
+    fn the_modifier_of_a_space_first_chord_is_swallowed_with_its_release() {
+        // Right Alt alone is no hotkey here, but it is half of Right Alt+Space: the app must not
+        // see it, down or up (a lone Alt focuses the menu bar).
+        use crate::types::Hotkey;
+        let (mut ctx, rx) = idle_with(&[Hotkey::new(Modifiers::OPT_RIGHT, Key::Space).unwrap()]);
+        space(&mut ctx, true, 1000);
+        let down = right_alt(&mut ctx, true, 1040);
+        assert!(down.should_block);
+        assert!(down.needs_mask);
+        assert!(reports_right_alt_and_space(&sent(&rx)));
+        assert!(!space(&mut ctx, false, 1200).should_block);
+        assert!(right_alt(&mut ctx, false, 1300).should_block);
+    }
+
+    #[test]
+    fn a_chord_key_stays_swallowed_after_its_modifier_comes_up() {
+        // Right Alt, then Space: the Space is swallowed. Right Alt comes up first; the Space,
+        // still held, repeats and comes up later. The app never saw it go down, so it must see
+        // none of that.
+        let (mut ctx, _rx) = raphael_idle();
+        right_alt(&mut ctx, true, 1000);
+        assert!(space(&mut ctx, true, 1040).should_block);
+        assert!(right_alt(&mut ctx, false, 1100).should_block);
+        for at in (1500..1800).step_by(30) {
+            assert!(
+                space(&mut ctx, true, at).should_block,
+                "repeat at {at} ms leaked"
+            );
+        }
+        assert!(space(&mut ctx, false, 1900).should_block);
+        // The next Space is an ordinary one.
+        assert!(!space(&mut ctx, true, 2500).should_block);
+        assert!(!space(&mut ctx, false, 2600).should_block);
+    }
+
+    #[test]
+    fn a_session_change_forgets_swallowed_keys() {
+        // The key-ups went to the secure desktop.
+        let (mut ctx, _rx) = raphael_idle();
+        right_alt(&mut ctx, true, 1000);
+        assert!(space(&mut ctx, true, 1040).should_block);
+        reconcile_after_session_change(&mut ctx, Modifiers::empty());
+        assert!(ctx.swallowed_keys.is_empty());
+        assert!(!space(&mut ctx, true, 5000).should_block);
     }
 
     #[test]

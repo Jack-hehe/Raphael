@@ -107,6 +107,21 @@ describe("focused-window hotkeys", () => {
     expect(reduceHotkey(altUp.state, key("Space", "keyup"), withAgent).actions).toEqual([]);
   });
 
+  test("Space first, then Right Alt, asks Raphael too, as the hook reports it", () => {
+    const withAgent = { ...defaults, agent_keys: ["AltRight+Space"] };
+    const space = reduceHotkey(emptyHotkeyState(), key("Space"), withAgent);
+    expect(space.actions).toEqual([]);
+    expect(space.preventDefault).toBe(false);
+    const alt = reduceHotkey(space.state, key("AltRight"), withAgent);
+    expect(alt.actions).toEqual(["dictation_down", "agent_down"]);
+    expect(alt.preventDefault).toBe(true);
+    // the page saw the Space go down, so it sees it come up; that release ends the question
+    const spaceUp = reduceHotkey(alt.state, key("Space", "keyup"), withAgent);
+    expect(spaceUp.actions).toEqual(["agent_up"]);
+    expect(spaceUp.preventDefault).toBe(false);
+    expect(reduceHotkey(spaceUp.state, key("AltRight", "keyup"), withAgent).actions).toEqual(["dictation_up"]);
+  });
+
   test("Space alone, and a window without a question key, do not ask Raphael", () => {
     const withAgent = { ...defaults, agent_keys: ["AltRight+Space"] };
     expect(reduceHotkey(emptyHotkeyState(), key("Space"), withAgent).actions).toEqual([]);

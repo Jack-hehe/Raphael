@@ -917,12 +917,12 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// toggle mode, the next one stops it (so does Right Alt alone, see [`Self::on_hotkey`]); in
     /// hold mode its release stops it.
     ///
-    /// Right Alt+Space reports Right Alt first, and that started a dictation. If it did so a
-    /// moment ago, the Space is the second half of the chord and the question takes the recording
-    /// over ([`Self::start`]); a dictation that has been running longer is a real one, and the
-    /// key does nothing. Neither does it while something is being processed, nor a moment after
-    /// Right Alt ended a question: that is the Space of a Right Alt+Space pressed to end it, even
-    /// if the question is over by then (it heard nothing, say).
+    /// Right Alt+Space reports Right Alt first (whichever key went down first), and that started
+    /// a dictation. If it did so a moment ago, the Space is the second half of the chord and the
+    /// question takes the recording over ([`Self::start`]); a dictation that has been running
+    /// longer is a real one, and the key does nothing. Neither does it while something is being
+    /// processed, nor a moment after Right Alt ended a question: that is the Space of a Right
+    /// Alt+Space pressed to end it, even if the question is over by then (it heard nothing, say).
     fn agent_down(&self, now_ms: u64) -> Option<JoinHandle<()>> {
         {
             let state = lock(&self.state);
