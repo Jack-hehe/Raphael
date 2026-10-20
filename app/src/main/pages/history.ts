@@ -1,13 +1,15 @@
 // History: how long it is kept and that it stays on this computer, then a filter and search, and
 // the dictations grouped by day, each row its time, the cleaned text and the target program.
-// Hover for copy and delete; a click shows what the speech recognition heard (spec §12.3).
+// Hover for copy and delete; a click shows what the speech recognition heard (spec §12.3). A day of
+// the activity grid on Home opens the page at that day (`setDay`): a chip says so and takes the
+// filter off, and the page shows all days again the next time it is opened.
 
 import { onLocaleChange, t } from "../i18n";
 
 import * as api from "../api";
 import { historyEmptyHint } from "../dictation";
 import { loadingHTML } from "../loading";
-import { dayLabel, describeError, formatClock, formatRetention, KEEP_FOREVER_DAYS } from "../format";
+import { dayBounds, dayLabel, describeError, formatClock, formatRetention, KEEP_FOREVER_DAYS } from "../format";
 import { bindingLabels } from "../keys";
 import type { AppContext, HistoryItem, Page } from "../types";
 import { Deletions, debounce } from "../undo";
@@ -20,6 +22,19 @@ const PAGE_SIZE = 50;
 
 /** `notepad.exe` is shown as `notepad`. */
 const programName = (app: string): string => app.replace(/\.exe$/i, "");
+
+/**
+ * What a load asks the core for: the search text, the one day if there is one (from its midnight to
+ * the next) and, when more is wanted, the time of the last item shown as the cursor, which lies
+ * inside the day and so takes the place of its end.
+ */
+export function historyQuery(query: string, day: string | null, cursor: number | null): api.HistoryQuery {
+  const params: api.HistoryQuery = { limit: PAGE_SIZE };
+  if (query) params.query = query;
+  if (day !== null) [params.after_ms, params.before_ms] = dayBounds(day);
+  if (cursor !== null) params.before_ms = cursor;
+  return params;
+}
 
 /** At least a day (the core only checks that it is a number); "keep" is a hundred years. */
 export const RETENTIONS: Choice[] = [1, 7, 30, 365, KEEP_FOREVER_DAYS].map((days) => ({
@@ -48,7 +63,13 @@ function itemHTML(item: HistoryItem, expanded: boolean): string {
   );
 }
 
-export function createHistory(app: AppContext): Page {
+/** The history page, which can also be opened at one day. */
+export interface HistoryPage extends Page {
+  /** Shows only the dictations of the day `2026-10-14` (or all days, with null) from the next time the page is shown. */
+  setDay(date: string | null): void;
+}
+
+export function createHistory(app: AppContext): HistoryPage {
   const el = document.createElement("div");
   el.className = "page";
   el.dataset.page = "history";
@@ -59,11 +80,13 @@ export function createHistory(app: AppContext): Page {
     t("dictionary.015") +
     FILTERS.map((f) => `<button type="button" data-filter="${f.id}" aria-pressed="${f.id === "all"}">${f.name}</button>`).join("") +
     `</div>${fieldHTML(t("history.007"), "", { icon: "search", get label() { return t("history.008"); }, id: "hist-q" })}</div>` +
+    `<div class="day-row" hidden></div>` +
     `<div class="days"></div>` +
     `<div class="more" hidden>${btn(t("history.009"), "", ' data-act="more"')}</div>` +
     `<div class="empty" hidden></div>`;
   const search = el.querySelector<HTMLInputElement>("#hist-q")!;
   const top = el.querySelector<HTMLElement>(".hist-top")!;
+  const dayRow = el.querySelector<HTMLElement>(".day-row")!;
   const days = el.querySelector<HTMLElement>(".days")!;
   const more = el.querySelector<HTMLElement>(".more")!;
   const empty = el.querySelector<HTMLElement>(".empty")!;
@@ -82,8 +105,21 @@ export function createHistory(app: AppContext): Page {
   let retentionDays: number | null = null;
   let filter: Filter = "all";
   let pending = false;
+  /** The one day shown, `2026-10-14`; null for all of them. */
+  let day: string | null = null;
+
+  /** The chip that names the day shown and takes the filter off. */
+  function paintDay(): void {
+    dayRow.hidden = day === null;
+    if (day === null) return;
+    const all = esc(t("history.dayAll"));
+    dayRow.innerHTML =
+      `<span class="chip day-chip"><span class="chip-label">${esc(dayLabel(dayBounds(day)[0], Date.now()))}</span>` +
+      `<button type="button" class="chip-x" data-act="all-days" aria-label="${all}" title="${all}">${ico("x")}</button></span>`;
+  }
 
   function render(): void {
+    paintDay();
     days.setAttribute("aria-busy", String(pending));
     if (pending && items.length === 0) {
       days.innerHTML = loadingHTML();
@@ -118,6 +154,8 @@ export function createHistory(app: AppContext): Page {
         empty.innerHTML = t("history.010", { p0: esc(failure()) });
       } else if (query || filter !== "all") {
         empty.innerHTML = t("history.011");
+      } else if (day !== null) {
+        empty.innerHTML = t("history.dayEmpty");
       } else {
         const dictate = app.device().dictation_keys[0];
         const key = dictate ? bindingLabels(dictate).join(" + ") : t("history.012");
@@ -153,9 +191,7 @@ export function createHistory(app: AppContext): Page {
     pending = true;
     render();
     const read = deletions.startRead();
-    const params: api.HistoryQuery = { limit: PAGE_SIZE };
-    if (query) params.query = query;
-    if (append && items.length > 0) params.before_ms = items[items.length - 1].created_at_ms;
+    const params = historyQuery(query, day, append && items.length > 0 ? items[items.length - 1].created_at_ms : null);
     try {
       const { items: got } = await api.historyList(params);
       if (mine !== loads) return;
@@ -267,7 +303,11 @@ export function createHistory(app: AppContext): Page {
     }
     const act = target.closest<HTMLElement>("[data-act]");
     const row = target.closest<HTMLElement>(".hrow");
-    if (act?.dataset.act === "more") {
+    if (act?.dataset.act === "all-days") {
+      day = null;
+      void load(false);
+      el.querySelector<HTMLElement>("#hist-q")?.focus();
+    } else if (act?.dataset.act === "more") {
       void load(true);
     } else if (act && row) {
       const id = Number(row.dataset.id);
@@ -288,6 +328,9 @@ export function createHistory(app: AppContext): Page {
   return {
     id: "history",
     el,
+    setDay(date) {
+      day = date;
+    },
     show() {
       void load(false);
       void loadRetention();
@@ -296,6 +339,7 @@ export function createHistory(app: AppContext): Page {
       closeMenu();
       runSearch.cancel();
       loads++;
+      day = null;
     },
   };
 }

@@ -48,6 +48,8 @@ export interface HistoryQuery {
   limit?: number;
   /** Only items older than this: the cursor of the next page. */
   before_ms?: number;
+  /** Only items from this time on (with `before_ms`, one day: from its midnight to the next). */
+  after_ms?: number;
 }
 
 export const historyList = (q: HistoryQuery): Promise<{ items: HistoryItem[] }> => core("history.list", q);

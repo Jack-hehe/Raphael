@@ -381,7 +381,10 @@ export const zhTW = {
   "report.limitSoon": "《告。本月額度已使用 {p0}%。照目前的速度，{p1} 月 {p2} 日會用完。》",
   "report.allWell": "《告。一切正常。本月額度已使用 {p0}%。》",
   "report.coreDown": "《告。拉斐爾的核心沒有回應，聽寫暫時無法使用。》",
-  "report.firstRun": "《告。初次啟動。開始初始設定。》"
+  "report.firstRun": "《告。初次啟動。開始初始設定。》",
+  "heatmap.openDay": "{p0}：{p1} 字，開啟當天的聽寫紀錄",
+  "history.dayAll": "顯示所有日期",
+  "history.dayEmpty": "<div class=\"say\">《告。這一天沒有聽寫紀錄。》</div>"
 } as const;
 export type MessageKey = keyof typeof zhTW;
 export type Messages = Record<MessageKey, string>;

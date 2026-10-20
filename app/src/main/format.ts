@@ -25,6 +25,12 @@ function dayNumber(ms: number): number {
   return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000);
 }
 
+/** The local midnights that start and end a day written `2026-10-14`, in ms: `[from, to)`. A day can be 23 or 25 hours long. */
+export function dayBounds(date: string): [number, number] {
+  const [year, month, day] = date.split("-").map(Number);
+  return [new Date(year, month - 1, day).getTime(), new Date(year, month - 1, day + 1).getTime()];
+}
+
 /** `今天`, `昨天`, else `10 月 15 日` (with the year when it is not this year's). */
 export function dayLabel(ms: number, nowMs: number): string {
   const days = dayNumber(nowMs) - dayNumber(ms);

@@ -382,5 +382,8 @@ export const en = {
   "report.limitSoon": "《Notice. {p0}% of this month's budget is used. At this pace it runs out on {p1}/{p2}.》",
   "report.allWell": "《Notice. All is well. {p0}% of this month's budget is used.》",
   "report.coreDown": "《Notice. Raphael's core is not responding. Dictation is unavailable for now.》",
-  "report.firstRun": "《Notice. First launch. Starting the initial setup.》"
+  "report.firstRun": "《Notice. First launch. Starting the initial setup.》",
+  "heatmap.openDay": "{p0}: {p1} characters. Open that day's history",
+  "history.dayAll": "Show all days",
+  "history.dayEmpty": "<div class=\"say\">《Notice. No dictation on this day.》</div>"
 } satisfies Messages;
