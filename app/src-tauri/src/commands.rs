@@ -6,8 +6,9 @@
 //!   the conversations (`agent.history.`).
 //! - `device_settings_get` and `device_settings_set` read and change `device.json`
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
-//!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
-//!   is the file written. (A dictation that is under way finishes in the mode it began in.)
+//!   autostart, the overlay, the window's theme, the dictation mode and whether the media is
+//!   paused while Raphael listens are updated, and only then is the file written. (A dictation
+//!   that is under way finishes in the mode it began in, and with the media as it found it.)
 //! - `keyboard_has_altgr`, `hotkeys_pause` and `main_events` are small helpers of the settings
 //!   page.
 //!
@@ -39,6 +40,7 @@ use crate::device_settings::{
 };
 use crate::dictation::ModeCell;
 use crate::hotkey::{Bindings, HotkeyService, PauseReason, WindowHotkey};
+use crate::media::PauseMediaCell;
 use crate::notices::LanguageCell;
 use crate::overlay::Overlay;
 use crate::rpc::{CORE_EXITED, Notification, RpcError, TIMEOUT};
@@ -348,6 +350,9 @@ pub trait Effects: Send + Sync {
     /// Hands the dictation mode to the controller. A dictation that is under way is not touched:
     /// the new mode applies from the next one.
     fn dictation_mode(&self, mode: DictationMode);
+    /// Hands the choice to pause the media while recording to the controller. A recording that is
+    /// under way is not touched: the new choice applies from the next one.
+    fn pause_media(&self, on: bool);
     /// Hands the interface language to the controller, which shows its notices in it.
     fn ui_language(&self, language: &str);
 }
@@ -406,6 +411,9 @@ pub async fn apply_changes<E: Effects>(
     }
     if old.dictation_mode != new.dictation_mode {
         effects.dictation_mode(new.dictation_mode);
+    }
+    if old.pause_media != new.pause_media {
+        effects.pause_media(new.pause_media);
     }
     if old.ui_language != new.ui_language {
         effects.ui_language(&new.ui_language);
@@ -536,6 +544,13 @@ impl Effects for AppEffects {
         match self.app.try_state::<ModeCell>() {
             Some(cell) => cell.set(mode),
             None => log::warn!("there is no dictation controller to hand the mode to"),
+        }
+    }
+
+    fn pause_media(&self, on: bool) {
+        match self.app.try_state::<PauseMediaCell>() {
+            Some(cell) => cell.set(on),
+            None => log::warn!("there is no dictation controller to hand the choice to"),
         }
     }
 
@@ -737,6 +752,9 @@ fn apply_saved(app: &AppHandle, settings: &DeviceSettings) {
     }
     if settings.dictation_mode != fresh.dictation_mode {
         effects.dictation_mode(settings.dictation_mode);
+    }
+    if settings.pause_media != fresh.pause_media {
+        effects.pause_media(settings.pause_media);
     }
     if settings.ui_language != fresh.ui_language {
         effects.ui_language(&settings.ui_language);
@@ -1377,6 +1395,10 @@ mod tests {
             let _ = self.record("dictation_mode", mode.as_str().to_owned());
         }
 
+        fn pause_media(&self, on: bool) {
+            let _ = self.record("pause_media", on.to_string());
+        }
+
         fn ui_language(&self, language: &str) {
             let _ = self.record("ui_language", language.to_owned());
         }
@@ -1522,6 +1544,31 @@ mod tests {
         let (old, new) = changed(json!({"dictation_mode": "toggle", "emblem_size": 194}));
         apply_changes(&fake, &old, &new).await.unwrap();
         assert_eq!(fake.done(), ["overlay 194 on zh-TW"]);
+    }
+
+    #[tokio::test]
+    async fn the_choice_to_pause_the_media_is_handed_to_the_controller() {
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"pause_media": false}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(fake.done(), ["pause_media false"]);
+
+        // and back on
+        let fake = Fake::default();
+        apply_changes(&fake, &new, &old).await.unwrap();
+        assert_eq!(fake.done(), ["pause_media true"]);
+
+        // the same choice again, with something else changed: the controller is left alone
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"pause_media": true, "emblem_size": 194}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(fake.done(), ["overlay 194 on zh-TW"]);
+
+        // a refused change does not switch it
+        let fake = Fake::failing("autostart");
+        let (old, new) = changed(json!({"pause_media": false, "autostart": false}));
+        assert!(apply_changes(&fake, &old, &new).await.is_err());
+        assert_eq!(fake.done(), ["autostart false"]);
     }
 
     #[tokio::test]

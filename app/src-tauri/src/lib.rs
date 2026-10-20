@@ -10,6 +10,7 @@ mod first_run;
 pub mod holdtap;
 pub mod hotkey;
 mod learn;
+mod media;
 mod notices;
 mod overlay;
 mod paste;

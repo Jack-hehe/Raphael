@@ -40,11 +40,17 @@ tauri-plugin-single-instance = "2.5"
 enigo = "0.6"
 # UIA focus events immediately cancel transient keyboard observation.
 windows-core = "0.62"
+# The asynchronous operations of the Windows Runtime (`IAsyncOperation`), which the media controls
+# answer with. It is the version the `windows` crate below already uses.
+windows-future = "0.3"
 # 0.62 is the version Tauri 2.12 uses, so the HWND types match. Used by the overlay (Alt+Tab),
-# pasting (clipboard, focus), the core process (Job Object) and learning from corrections (UI
-# Automation, COM).
+# pasting (clipboard, focus), the core process (Job Object), learning from corrections (UI
+# Automation, COM) and pausing the media that plays during a recording (the media controls).
 windows = { version = "0.62", features = [
   "Data_Text",
+  "Foundation",
+  "Foundation_Collections",
+  "Media_Control",
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_Security",
