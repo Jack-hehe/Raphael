@@ -77,18 +77,19 @@ Development builds run the Python core from the source tree. [docs/windows-relea
 ```powershell
 # Frontend (app/)
 npm test
+npm run check:contrast
 npm run build
 
 # Python core (core/); the fail-closed keyring keeps tests away from your real credentials
 $env:PYTHON_KEYRING_BACKEND = "keyring.backends.fail.Keyring"
-uv run pytest -q -W error
+uv run --locked pytest -q -ra -W error
 
 # Desktop shell (app/src-tauri/); needs the frontend build above
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 ```
 
-CI runs these checks on Windows for every push and pull request ([docs/ci.md](docs/ci.md)). Tests that need the downloaded speech models run only with `RAPHAEL_TEST_MODELS=1`. Behaviour that depends on real microphones, input methods and editors is covered by the [manual checklist](docs/windows-manual-checks.md).
+CI runs these checks on Windows for pull requests and pushes to `main`, together with formatting, the vendored keyboard hook's tests and a debug build of the app; [docs/ci.md](docs/ci.md) lists every command. Tests that need the downloaded speech models run only with `RAPHAEL_TEST_MODELS=1`. Behaviour that depends on real microphones, input methods and editors is covered by the [manual checklist](docs/windows-manual-checks.md).
 
 ## Contributing
 
