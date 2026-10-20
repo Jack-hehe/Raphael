@@ -252,7 +252,8 @@ fn log_plugin<R: Runtime>() -> TauriPlugin<R> {
         .level_for("wry", log::LevelFilter::Info)
         // Until the "hotkey does nothing while Raphael's own window is in front" report is
         // explained, the keyboard hook and the hotkey service always log their decisions. They
-        // log modifier keys only (Alt, Ctrl, Shift, Win), never what is typed.
+        // log modifier keys only (Alt, Ctrl, Shift, Win), and a Space that went down just before
+        // the modifier of its hotkey (Right Alt+Space); never what is typed.
         .level_for("handy_keys", log::LevelFilter::Debug)
         .level_for("app_lib::hotkey", log::LevelFilter::Debug)
         // Keep overlay event delivery and page diagnostics visible during normal dictations.
