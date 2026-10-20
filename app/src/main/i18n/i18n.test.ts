@@ -113,6 +113,32 @@ describe("main window translations", () => {
     }
   });
 
+  test("every refusal the Rust side sends the main window has words in each language", () => {
+    // The shell writes these in Chinese, and device_settings.rs builds the shortcut ones from the
+    // name of each shortcut: backend.ts has to know every one, or an English or Japanese window
+    // shows Chinese. A word or two in quotes is part of a longer message (開啟, 關閉), and the
+    // shortcuts named by their field go to the log only.
+    const shell = (file: string): string =>
+      readFileSync(path.resolve(import.meta.dirname, "..", "..", "..", "src-tauri", "src", file), "utf8")
+        .split("#[cfg(test)]")[0]
+        .replace(/^\s*\/\/.*$/gm, "");
+    const settings = shell("device_settings.rs");
+    const names = [...settings.matchAll(/check_keys\("([^"]+)"/g)].map((m) => m[1]).filter((name) => CJK.test(name));
+    const templates = [...settings.matchAll(/format!\("\{what\}([^"]+)"\)/g)].map((m) => m[1]);
+    const plain = (source: string): string[] =>
+      [...source.matchAll(/"((?:[^"\\\n]|\\.)*)"/g)]
+        .map((m) => m[1])
+        .filter((text) => CJK.test(text) && !text.includes("{") && text.length > 2 && !names.includes(text));
+    const messages = [...names.flatMap((name) => templates.map((rest) => name + rest)), ...plain(settings), ...plain(shell("commands.rs"))];
+    expect(names).toHaveLength(3);
+    expect(templates).toHaveLength(2);
+    expect(messages.length).toBeGreaterThanOrEqual(20);
+    for (const locale of ["en", "ja"] as const) {
+      setLocale(locale);
+      for (const message of messages) expect(describeError(message), message).not.toBe(message);
+    }
+  });
+
   test("main-window source has no hard-coded CJK UI literals outside the catalogue", () => {
     const root = path.resolve(import.meta.dirname, "..");
     const files = [root, path.join(root, "pages")].flatMap((dir) =>

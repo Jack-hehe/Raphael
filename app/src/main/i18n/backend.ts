@@ -5,7 +5,9 @@ import { zhTW } from "./zh-TW";
 const exact = [
   "backend.limit", "backend.retention", "backend.language", "backend.stt", "backend.model",
   "backend.micTimeout", "backend.emptyDictation", "backend.emptyPaste", "backend.duplicateDictation",
-  "backend.duplicatePaste", "backend.conflictingKeys", "backend.invalidKeys", "keys.004", "keys.005", "keys.006",
+  "backend.duplicatePaste", "backend.conflictingKeys", "backend.invalidKeys", "backend.emptyAgent",
+  "backend.duplicateAgent", "backend.conflictingDictationAgent", "backend.conflictingPasteAgent",
+  "backend.hotkeysOff", "backend.hotkeysOffChange", "keys.004", "keys.005", "keys.006",
 ] as const;
 const detailed = ["backend.save", "backend.autostartEnable", "backend.autostartDisable", "backend.microphone"] as const;
 
