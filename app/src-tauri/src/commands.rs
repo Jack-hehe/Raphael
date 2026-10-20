@@ -202,10 +202,11 @@ pub fn is_allowed_method(m: &str) -> bool {
             .any(|prefix| m.strip_prefix(prefix).is_some_and(|rest| !rest.is_empty()))
 }
 
-/// Checks the values the core would only type-check: a monthly limit of 0 or more, a history
-/// retention of at least one day, a language the speech recognition knows, a model that is named,
-/// a speech-to-text engine that exists (the core checks each model against OpenRouter's list).
-/// `Err` says what is wrong. Calls other than `settings.set` pass.
+/// Checks a few values of `settings.set` before the core sees them: a monthly limit of 0 or more
+/// and a history retention of at least one day, which the core only type-checks; and a language,
+/// a cleanup model and a speech-to-text engine, which the core checks as well (each model against
+/// OpenRouter's list), so that the settings page gets these refusals in its own words. `Err` says
+/// what is wrong. Calls other than `settings.set` pass.
 pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     if method != "settings.set" {
         return Ok(());
