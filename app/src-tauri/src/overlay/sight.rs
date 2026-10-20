@@ -521,7 +521,7 @@ mod native {
             let hwnd = HWND(hwnd as *mut c_void);
             // SAFETY: `hwnd` is the overlay window, which lives as long as the app, and this runs
             // on the main thread, which owns it and the controller.
-            let sight = unsafe { look(hwnd, placement, &controller) };
+            let sight = unsafe { look(hwnd, placement, Some(&controller)) };
             let wrong = problems(&sight);
             let remedies = remedies(&sight);
             // SAFETY: as above.
@@ -538,7 +538,7 @@ mod native {
                 state_line(&sight)
             );
             // SAFETY: as above.
-            let after = unsafe { look(hwnd, placement, &controller) };
+            let after = unsafe { look(hwnd, placement, Some(&controller)) };
             log::info!("overlay: after that, it is: {}", state_line(&after));
         });
         if let Err(err) = posted {
@@ -628,7 +628,7 @@ mod native {
         }
     }
 
-    /// What the window looks like now. It only reads.
+    /// What the window looks like now, and its webview if `controller` is given. It only reads.
     ///
     /// # Safety
     ///
@@ -636,7 +636,7 @@ mod native {
     unsafe fn look(
         hwnd: HWND,
         placement: Option<Placement>,
-        controller: &ICoreWebView2Controller,
+        controller: Option<&ICoreWebView2Controller>,
     ) -> Sight {
         // SAFETY: the caller owns `hwnd`; the other windows are only read, and a window that goes
         // away during the walk makes a call fail, which ends the walk.
@@ -663,7 +663,7 @@ mod native {
                 over_emblem: above.covering,
                 see_through: above.see_through,
                 foreground: above.foreground,
-                webview: webview_sight(hwnd, controller),
+                webview: controller.and_then(|controller| webview_sight(hwnd, controller)),
             }
         }
     }
@@ -941,6 +941,64 @@ mod native {
                 visible: visible.as_bool(),
                 fitted,
             })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use windows::{
+            Win32::{
+                System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize},
+                UI::WindowsAndMessaging::{
+                    CreateWindowExW, DestroyWindow, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+                },
+            },
+            core::{PCWSTR, w},
+        };
+
+        use super::*;
+
+        #[test]
+        #[ignore = "needs a Windows desktop session with an app window open; run it by hand"]
+        fn the_check_reads_a_tool_window_that_was_never_shown() {
+            // The real calls, on a window of this test's own that is never shown, so nothing
+            // appears on the screen and no other window is touched.
+            // SAFETY: COM is joined and left on this thread, the window is made and destroyed on
+            // it, and the manager is dropped before COM is left.
+            let (sight, this_desktop) = unsafe {
+                CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap();
+                let hwnd = CreateWindowExW(
+                    WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                    w!("STATIC"),
+                    PCWSTR::null(),
+                    WS_POPUP,
+                    -32000,
+                    -32000,
+                    10,
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+                let sight = look(hwnd, None, None);
+                let this_desktop = current_desktop(&desktops().unwrap(), hwnd);
+                DestroyWindow(hwnd).unwrap();
+                DESKTOPS.set(None);
+                CoUninitialize();
+                (sight, this_desktop)
+            };
+            println!("{}", state_line(&sight));
+            assert!(!sight.visible && !sight.minimized);
+            assert_eq!(sight.cloaked, Some(0));
+            assert!(sight.passive && !sight.topmost);
+            assert_eq!(sight.alpha, None);
+            // the shell does not track a tool window: it is on every desktop
+            assert_eq!(sight.desktop, Desktop::Current { tracked: false });
+            assert_eq!(sight.webview, None);
+            // some window on this desktop says which desktop it is
+            assert!(this_desktop.is_some());
         }
     }
 }
