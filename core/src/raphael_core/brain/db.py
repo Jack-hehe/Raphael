@@ -137,13 +137,19 @@ PRAGMA user_version = 5;
 COMMIT;
 """
 
-# v6: the calendars shown on Home's Today card (raphael_core.calendars). Only the label is here:
-# the address of a calendar is a secret and lives in the Windows Credential Manager.
+# v6: once the table of iCal calendars for a Today card on Home. The feature was removed, and a
+# version number is never reused (a database may already be at 6), so v6 stays and makes nothing.
 _MIGRATION_V6 = """
 BEGIN;
-CREATE TABLE calendars (id INTEGER PRIMARY KEY, label TEXT NOT NULL,
-  created_at_ms INTEGER NOT NULL);
 PRAGMA user_version = 6;
+COMMIT;
+"""
+
+# v7: drops the calendars table that v6 once made. A new database never has it, hence IF EXISTS.
+_MIGRATION_V7 = """
+BEGIN;
+DROP TABLE IF EXISTS calendars;
+PRAGMA user_version = 7;
 COMMIT;
 """
 
@@ -154,6 +160,7 @@ _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     4: _migrate_v4,
     5: _MIGRATION_V5,
     6: _MIGRATION_V6,
+    7: _MIGRATION_V7,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

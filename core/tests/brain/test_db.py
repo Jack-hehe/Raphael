@@ -77,16 +77,8 @@ SCHEMA_V5 = {
         "cost_usd REAL NOT NULL DEFAULT 0",
     ],
 }
-# Schema v6 adds the calendars of the Today card (only their labels: the addresses are secrets).
-SCHEMA_V6 = {
-    **SCHEMA_V5,
-    "calendars": [
-        "id INTEGER PK",
-        "label TEXT NOT NULL",
-        "created_at_ms INTEGER NOT NULL",
-    ],
-}
-LATEST = 6
+# Schemas v6 and v7 add no table: v6 was the removed iCal feature's calendars table, which v7 drops.
+LATEST = 7
 
 
 def schema_names(conn, kind):
@@ -110,10 +102,10 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V6)
+    assert schema_names(conn, "table") == set(SCHEMA_V5)
     assert {"history_created", "agent_turns_created"} <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V6.items():
+    for table, columns in SCHEMA_V5.items():
         assert describe_columns(conn, table) == columns
 
 
@@ -318,8 +310,8 @@ def test_a_v4_database_gets_the_turns_table_at_v5_and_keeps_its_rows(tmp_path):
     conn.close()
 
 
-def test_a_v5_database_gets_the_calendars_table_at_v6_and_keeps_its_rows(tmp_path):
-    path = tmp_path / "v5.db"
+def v5_database(path):
+    """A database as the version before the iCal calendars left it, with a dictation, a word and a turn."""
     v4_database(path)
     raw = sqlite3.connect(path)
     raw.executescript(db._MIGRATION_V5)
@@ -330,17 +322,45 @@ def test_a_v5_database_gets_the_calendars_table_at_v6_and_keeps_its_rows(tmp_pat
     raw.commit()
     raw.close()
 
-    conn = db.connect(path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    assert describe_columns(conn, "calendars") == SCHEMA_V6["calendars"]
-    assert conn.execute("SELECT count(*) FROM calendars").fetchone()[0] == 0
-    assert conn.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
-    assert HistoryStore(conn).latest().text == "A"
-    conn.close()
+
+def assert_has_the_latest_schema(migrated, fresh):
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
+    assert schema_names(migrated, "table") == schema_names(fresh, "table")
+    assert schema_names(migrated, "index") == schema_names(fresh, "index")
+    for table in SCHEMA_V5:
+        assert describe_columns(migrated, table) == describe_columns(fresh, table)
+    assert migrated.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
+    assert HistoryStore(migrated).latest().text == "A"
 
 
-def test_a_database_that_is_at_v6_is_left_alone(tmp_path):
+def test_a_v5_database_ends_with_the_same_schema_as_a_new_one_and_keeps_its_rows(tmp_path, conn):
+    path = tmp_path / "v5.db"
+    v5_database(path)
+
+    migrated = db.connect(path)
+    assert_has_the_latest_schema(migrated, conn)
+    migrated.close()
+
+
+def test_a_v6_database_with_the_removed_calendars_table_loses_it_and_keeps_its_rows(tmp_path, conn):
     path = tmp_path / "v6.db"
+    v5_database(path)
+    raw = sqlite3.connect(path)
+    raw.executescript(  # what the iCal feature's v6 made, before the feature was removed
+        "BEGIN; CREATE TABLE calendars (id INTEGER PRIMARY KEY, label TEXT NOT NULL,"
+        " created_at_ms INTEGER NOT NULL); PRAGMA user_version = 6; COMMIT;"
+    )
+    raw.execute("INSERT INTO calendars (label, created_at_ms) VALUES ('Personal', 1)")
+    raw.commit()
+    raw.close()
+
+    migrated = db.connect(path)
+    assert_has_the_latest_schema(migrated, conn)
+    migrated.close()
+
+
+def test_a_database_that_is_at_the_latest_version_is_left_alone(tmp_path):
+    path = tmp_path / "latest.db"
     first = db.connect(path)
     first.execute(
         "INSERT INTO agent_turns (created_at_ms, session_id, question, route, prefix, text, status)"
@@ -349,14 +369,8 @@ def test_a_database_that_is_at_v6_is_left_alone(tmp_path):
     first.commit()
     first.close()
 
-    first = db.connect(path)
-    first.execute("INSERT INTO calendars (label, created_at_ms) VALUES ('Personal', 1)")
-    first.commit()
-    first.close()
-
-    second = db.connect(path)  # must not try to create the tables again
+    second = db.connect(path)  # must not try to create the table again
     assert second.execute("SELECT question, cost_usd FROM agent_turns").fetchone()[:] == ("q", 0)
-    assert second.execute("SELECT label FROM calendars").fetchone()[0] == "Personal"
     second.close()
 
 
@@ -371,20 +385,6 @@ def test_a_failed_v5_migration_leaves_the_database_at_v4(tmp_path):
     assert not raw.in_transaction
     assert raw.execute("PRAGMA user_version").fetchone()[0] == 4
     assert "agent_turns_created" not in schema_names(raw, "index")
-    raw.close()
-
-
-def test_a_failed_v6_migration_leaves_the_database_at_v5(tmp_path):
-    path = tmp_path / "v5.db"
-    v4_database(path)
-    raw = sqlite3.connect(path)
-    raw.executescript(db._MIGRATION_V5)
-    raw.execute("CREATE TABLE calendars (x)")  # in the way of the v6 migration
-    raw.commit()
-    with pytest.raises(sqlite3.OperationalError):
-        db.migrate(raw)
-    assert not raw.in_transaction
-    assert raw.execute("PRAGMA user_version").fetchone()[0] == 5
     raw.close()
 
 
