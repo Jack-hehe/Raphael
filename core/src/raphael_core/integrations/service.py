@@ -62,6 +62,13 @@ def _invalid(message: str) -> RpcError:
     return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
 
 
+def _not_saved(exc: OSError) -> RpcError:
+    """The error for a change that could not be written to the file. Only the type is logged and
+    nothing of the message goes on: it holds the file's path."""
+    logger.warning("Could not save the plugins: %s", type(exc).__name__)
+    return RpcError(INTERNAL_ERROR, "Could not save the plugins")
+
+
 def _str(params: dict, name: str) -> str:
     value = params.get(name)
     if not isinstance(value, str) or not value:
@@ -171,8 +178,7 @@ class IntegrationsService:
         try:
             self._config.save()
         except OSError as exc:
-            logger.warning("Could not save the plugins: %s", type(exc).__name__)
-            raise RpcError(INTERNAL_ERROR, "Could not save the plugins") from None
+            raise _not_saved(exc) from None
 
     # --- the methods of the window --------------------------------------------------------------
 
@@ -202,8 +208,7 @@ class IntegrationsService:
             raise _invalid(str(exc)) from None
         except OSError as exc:
             self._forget(stored)
-            logger.warning("Could not save the plugins: %s", type(exc).__name__)
-            raise RpcError(INTERNAL_ERROR, "Could not save the plugins") from None
+            raise _not_saved(exc) from None
         except Exception as exc:  # the vault: its message could hold anything
             self._forget(stored)
             logger.warning("Could not store a plugin's secrets: %s", type(exc).__name__)
@@ -229,7 +234,11 @@ class IntegrationsService:
 
     async def _remove(self, params: dict) -> dict:
         server = self._server(params)
-        removed = self._config.remove(server.id)
+        try:
+            removed = self._config.remove(server.id)
+        except OSError as exc:
+            # The file still has the server, so it is still connected and keeps its secrets.
+            raise _not_saved(exc) from None
         if removed is None:
             return {"removed": False}
         self._failure.pop(server.id, None)

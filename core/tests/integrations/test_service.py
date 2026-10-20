@@ -1,6 +1,7 @@
 """Tests for the plugins' RPC methods and the hub the assistant calls tools through."""
 
 import json
+import logging
 
 import pytest
 
@@ -169,6 +170,22 @@ async def test_removing_a_server_forgets_its_secrets(rpc, vault, servers):
     assert [s["name"] for s in (await rpc.call("integrations.list"))["servers"]] == ["Other"]
     with pytest.raises(RpcError):
         await rpc.call("integrations.remove", {"id": server_id})
+
+
+async def test_a_server_that_cannot_be_removed_stays_with_its_secrets(
+    rpc, vault, servers, tmp_path, caplog
+):
+    server_id = await add(rpc, servers)
+    kept = vault.names()
+    (tmp_path / "integrations.json.tmp").mkdir()  # in the way: the file cannot be rewritten
+    with pytest.raises(RpcError) as failed:
+        await rpc.call("integrations.remove", {"id": server_id})
+    # The same answer as any change that could not be saved, without the file's path.
+    assert (failed.value.code, failed.value.message) == (INTERNAL_ERROR, "Could not save the plugins")
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+    # It is still in the file, so it is still connected, and its secrets stay with it.
+    assert vault.names() == kept
+    assert [s["id"] for s in (await rpc.call("integrations.list"))["servers"]] == [server_id]
 
 
 async def test_a_server_can_be_turned_off_and_on(rpc):
