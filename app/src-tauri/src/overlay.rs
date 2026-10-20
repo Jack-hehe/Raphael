@@ -696,13 +696,15 @@ impl OverlayApi for Overlay {
     }
 }
 
-/// The overlay page calls this once and receives all its events on `channel`.
+/// The overlay page calls this once and receives all its events on `channel`. Only the overlay
+/// page may: the events carry Raphael's answers and his questions.
 #[tauri::command]
 pub fn overlay_subscribe(
     app: AppHandle,
     webview: Webview,
     channel: Channel<OverlayEvent>,
 ) -> Result<(), String> {
+    crate::commands::ensure_caller(webview.label(), crate::OVERLAY_WINDOW)?;
     let Some(overlay) = app.try_state::<Arc<Overlay>>() else {
         log::warn!(
             "overlay: the page \"{}\" subscribed before the overlay was running",
@@ -896,11 +898,11 @@ mod tests {
     use tauri::ipc::InvokeResponseBody;
 
     #[test]
-    fn only_the_overlay_page_writes_to_the_log_and_answers_the_questions() {
+    fn only_the_overlay_page_hears_the_overlay_writes_to_its_log_and_answers_its_questions() {
         // The commands cannot be called here without a running app, so read their source.
         let source = include_str!("overlay.rs").replace("\r\n", "\n");
         let production = source.split("#[cfg(test)]").next().unwrap();
-        for name in ["overlay_log", "overlay_confirm"] {
+        for name in ["overlay_subscribe", "overlay_log", "overlay_confirm"] {
             let command = production
                 .split("#[tauri::command]")
                 .find(|command| command.contains(&format!("pub fn {name}(")))
