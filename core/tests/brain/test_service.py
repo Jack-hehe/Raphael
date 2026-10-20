@@ -53,6 +53,7 @@ METHODS = [
     "status.get",
     "status.check_openrouter",
     "pricing.get",
+    "models.catalog",
     "stats.summary",
 ]
 
@@ -991,7 +992,9 @@ async def test_the_assistants_settings_are_in_settings_get_and_can_be_set(router
     settings = (await router.call("settings.get", {}))["settings"]
     assert (settings["agent_model"], settings["agent_city"]) == ("openai/gpt-6-luna", "台北")
     assert "agent_router" not in settings  # Jev always routes: there is no choice to show
-    for key, value in [("agent_model", "x/y"), ("agent_city", "東京")]:
+    # Before OpenRouter's list of models has been read, the model is one of Raphael's own
+    # (test_model_choice.py has the rest).
+    for key, value in [("agent_model", "anthropic/claude-haiku-5.5"), ("agent_city", "東京")]:
         settings = (await router.call("settings.set", {"key": key, "value": value}))["settings"]
         assert settings[key] == value
 

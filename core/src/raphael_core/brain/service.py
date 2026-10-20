@@ -1,5 +1,5 @@
 """The brain as RPC methods: dictation, history, dictionary, settings, the OpenRouter key, status,
-model prices and dictation statistics.
+model prices, OpenRouter's catalog of models and dictation statistics.
 
 `Brain` owns the stores and the cleanup service and registers its methods on a Router. The device
 side and the app reach it only through `router.call`, so every param arrives as JSON and every
@@ -23,6 +23,12 @@ does not say is here:
   "unknown" and it is "no_key" for as long as no key is stored, whatever happened before.
 - Account usage is from the last successful key check. Status reads refresh it in the background
   after a minute, without making a dictation wait for that check.
+- A model is chosen (`settings.set` of `cleanup_model`, `agent_model` or `stt_cloud_model`) from
+  the catalog OpenRouter gave last, as `models.catalog` showed it: any model it lists that the
+  role can use, or, before any list could be had, one of Raphael's own (catalog.choice_problem).
+  Choosing fetches nothing. When `models.catalog` finds a chosen model gone from OpenRouter's
+  list, the setting goes back to its default, and the answer's `replaced` says so for the app to
+  tell the user, as it tells of a setting it could not change.
 - Nothing here logs the dictated text, a key or the message of a failure. A failure of OpenRouter
   is logged by its kind and status, any other by the name of its type: the message, cause or
   traceback of an OpenRouterError can hold the text of the key store.
@@ -42,6 +48,7 @@ from typing import Any
 from ..languages import chinese_variant, language_groups
 from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from ..router import Router
+from .catalog import ROLE_OF_SETTING, ROLES, CatalogEntry, Role, catalog_view, choice_problem, find
 from .cleanup import CleanupService
 from .cloud_stt import CloudTranscriber
 from .dictionary import DictionaryStore, Learned
@@ -49,7 +56,7 @@ from .history import HistoryItem, HistoryStore
 from .openrouter import KeyInfo, OpenRouterClient, OpenRouterError
 from .pricing import PricingService
 from .secrets import KeyStore
-from .settings import SettingsStore
+from .settings import SettingsStore, checked
 from .spend import SpendTracker
 from .stats import StatsStore
 from .suggest import suggest_words
@@ -75,6 +82,14 @@ KEY_CHECK_TIMEOUT_S = 10.0
 KEY_USAGE_REFRESH_INTERVAL_MS = 60_000
 
 _DAY_MS = 86_400_000
+# Why a model cannot be chosen (catalog.choice_problem), as the message of the error; any other
+# problem is a reason the role cannot use the model.
+_MODEL_PROBLEMS = {
+    "not_listed": "Setting {key!r} must be a model that OpenRouter lists",
+    "not_curated": "Setting {key!r} must be one of Raphael's own models until OpenRouter's list"
+    " of models has been read",
+}
+_MODEL_UNUSABLE = "Setting {key!r} must be a model it can use, and this one cannot: {reason}"
 # SQLite stores integers in 64 bits and refuses to bind a larger one.
 _SQLITE_MAX_INT = 2**63 - 1
 _SPEND_DAYS = 30
@@ -276,6 +291,7 @@ class Brain:
             "status.get": self._status_get,
             "status.check_openrouter": self._status_check_openrouter,
             "pricing.get": self._pricing_get,
+            "models.catalog": self._models_catalog,
             "stats.summary": self._stats_summary,
         }
         for method, handler in methods.items():
@@ -493,10 +509,23 @@ class Brain:
         key = _str(params, "key")
         value = _required(params, "value")
         with _store_call():
+            role = ROLE_OF_SETTING.get(key)
+            if role is not None:
+                self._check_model(role, value)
             self._settings.set(key, value)
         if key == "history_retention_days":
             self._prune_history()
         return {"settings": self._settings.all()}
+
+    def _check_model(self, role: Role, value: Any) -> None:
+        """ValueError (or the store's TypeError) if `value` cannot be chosen for `role`, by the
+        catalog OpenRouter gave last (catalog.choice_problem)."""
+        _, model_id = checked(role.setting, value)
+        current = self._settings.get(role.setting)
+        problem = choice_problem(role, model_id, self._pricing.known(), current)
+        if problem is not None:
+            message = _MODEL_PROBLEMS.get(problem, _MODEL_UNUSABLE)
+            raise ValueError(message.format(key=role.setting, reason=problem))
 
     async def _languages_list(self, params: dict) -> dict:
         """The languages the `languages` setting can hold, by group, in the order shown."""
@@ -737,10 +766,48 @@ class Brain:
                     self._note("ok", latency_ms=latency_ms, key=info)
         return self._openrouter_view(has_key)
 
-    # --- pricing and statistics -----------------------------------------------------------------
+    # --- pricing, the catalog and statistics ----------------------------------------------------
 
     async def _pricing_get(self, params: dict) -> dict:
         return await self._pricing.get()
+
+    async def _models_catalog(self, params: dict) -> dict:
+        """Every OpenRouter model Raphael could use (catalog.py). A chosen model that OpenRouter no
+        longer lists goes back to its role's default first, which `replaced` reports."""
+        entries, fetched_at_ms, source = await self._pricing.catalog()
+        replaced = [] if source == "builtin" else self._replace_vanished(entries)
+        return catalog_view(entries, fetched_at_ms, source, replaced)
+
+    def _replace_vanished(self, entries: list[CatalogEntry]) -> list[dict[str, str]]:
+        """Set each chosen model that is not on OpenRouter's list (`entries`) back to its role's
+        default, and say which: `{key, role, model, default}`. Only while the default is on the
+        list: if it went too, it is no better a choice. A value that is no text is no choice and is
+        left alone: the store's readers fall back on their own."""
+        replaced: list[dict[str, str]] = []
+        for role in ROLES:
+            chosen, default = self._settings.get(role.setting), role.default
+            if (
+                not isinstance(chosen, str)
+                or chosen == default
+                or find(entries, role.kind, chosen) is not None
+                or find(entries, role.kind, default) is None
+            ):
+                continue
+            try:
+                self._settings.set(role.setting, default)
+            except sqlite3.Error as exc:
+                logger.warning(
+                    "Could not set %s back to its default: %s", role.setting, type(exc).__name__
+                )
+                continue
+            logger.warning(
+                "The model of %s is no longer on OpenRouter's list: back to the default",
+                role.setting,
+            )
+            replaced.append(
+                {"key": role.setting, "role": role.name, "model": chosen, "default": default}
+            )
+        return replaced
 
     async def _stats_summary(self, params: dict) -> dict:
         if "days" in params:

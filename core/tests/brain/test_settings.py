@@ -142,12 +142,16 @@ def test_every_listed_cloud_model_can_be_chosen(conn, model):
     assert s.get("stt_cloud_model") == model
 
 
-def test_a_cloud_model_that_is_not_listed_is_refused(conn):
+def test_the_store_takes_any_cloud_model_id_and_leaves_the_list_to_the_brain(conn):
+    # Which models OpenRouter lists for speech-to-text is the brain's to check (brain/catalog.py):
+    # the store only keeps an id, without the spaces around it.
     s = SettingsStore(conn)
-    for model in ("openai/gpt-6-luna", "", "openai/gpt-transcribe "):
+    s.set("stt_cloud_model", " deepgram/nova-3 ")
+    assert s.get("stt_cloud_model") == "deepgram/nova-3"
+    for model in ("", "   ", "openai/gpt transcribe", "m" * 101):
         with pytest.raises(ValueError, match="stt_cloud_model"):
             s.set("stt_cloud_model", model)
-    assert s.get("stt_cloud_model") == "elevenlabs/scribe-v2"
+    assert s.get("stt_cloud_model") == "deepgram/nova-3"
 
 
 # --- languages ---------------------------------------------------------------------------------
@@ -274,6 +278,9 @@ def test_the_answer_model_and_the_city_are_saved_without_the_spaces_around_them(
         ("agent_model", "   "),
         ("agent_model", "openai/gpt 6"),  # a model id has no spaces
         ("agent_model", "m" * 101),
+        ("cleanup_model", " "),
+        ("cleanup_model", "openai/gpt 6"),
+        ("cleanup_model", "m" * 101),
         ("agent_city", ""),
         ("agent_city", " \t\n"),
         ("agent_city", "c" * 101),
@@ -286,7 +293,7 @@ def test_a_blank_or_absurd_model_or_city_is_refused_and_not_saved(conn, key, val
     assert s.get(key) == DEFAULTS[key]
 
 
-@pytest.mark.parametrize("key", ["agent_model", "agent_city"])
+@pytest.mark.parametrize("key", ["agent_model", "cleanup_model", "stt_cloud_model", "agent_city"])
 def test_a_model_or_city_that_is_not_text_is_a_type_error(conn, key):
     with pytest.raises(TypeError):
         SettingsStore(conn).set(key, None)
