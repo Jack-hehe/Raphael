@@ -44,7 +44,10 @@ describe("keyboard focus and the window controls", () => {
   });
 
   test("the focus ring of the close button stays visible on its red hover colour", () => {
-    expect(lastOf(".window-close:hover:focus-visible", "outline-color")).toBe("#ffffff");
+    // The ring takes the colour of the glyph on the red, and that is white.
+    expect(lastOf(".window-close:hover:focus-visible", "outline-color")).toBe(lastOf(".window-close:hover", "color"));
+    expect(lastOf(".window-close:hover", "color")).toBe("var(--on-close)");
+    expect(styles.match(/--on-close:\s*([^;]+);/)?.[1]).toBe("#ffffff");
   });
 
   test("a focused window button has a surface of its own while the settings dim the window", () => {

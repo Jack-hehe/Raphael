@@ -22,6 +22,9 @@
   --btn: #ffffff; --btn-edge: #b6c4d8; --key: #f0f4fb; --key-edge: #c3cede;
   --track: #dce4f0; --menu: #ffffff; --scrim: rgba(18, 24, 38, 0.26);
   --pop: 0 20px 64px rgba(27, 49, 84, 0.15), 0 3px 10px rgba(27, 49, 84, 0.08);
+  --tab-shadow: 0 1px 2px rgba(10, 34, 70, 0.12);
+  /* the window's close button under the pointer: Windows' own red, the same in both themes */
+  --close: #c42b1c; --on-close: #ffffff;
   --toast-action: #c8e0f8; --toast-hover: #2e4264;
   --heat-0: #e7eef8; --heat-1: #d0e8f8; --heat-2: #b8d0f8; --heat-3: #90b0e0; --heat-4: #5e86c8; --hatch: #c3cede;
   --scroll-thumb: #bbc8dc; --scroll-hover: #8b9fbe;
@@ -84,9 +87,9 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .window-button:focus-visible { outline-offset: -3px; }
 /* The focus colour is lost on the close button's red, and on the dimmed page behind the controls
    while the settings are open: white on the red, and a surface of its own over the dimmed page. */
-.window-close:hover:focus-visible { outline-color: #ffffff; }
+.window-close:hover:focus-visible { outline-color: var(--on-close); }
 :root[data-window-modal="true"] .window-button:focus-visible:not(:hover) { background: var(--content); }
-.window-close:hover { background: #c42b1c; color: #ffffff; }
+.window-close:hover { background: var(--close); color: var(--on-close); }
 .window-restore-glyph { display: none; }
 :root[data-window-maximized="true"] .window-maximize-glyph { display: none; }
 :root[data-window-maximized="true"] .window-restore-glyph { display: block; }
@@ -226,7 +229,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 18px; background: var(--surface-2); }
 .tabs button { height: 30px; padding: 0 13px; border: 0; border-radius: 15px; background: transparent; font-size: 13px; color: var(--text-2); white-space: nowrap; }
 .tabs button:hover { color: var(--text); }
-.tabs button[aria-pressed="true"] { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(10, 34, 70, 0.12), 0 0 0 1px var(--edge); }
+.tabs button[aria-pressed="true"] { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: var(--tab-shadow), 0 0 0 1px var(--edge); }
 /* The day of the history that Home's activity grid opened it at, with the way back to all of them. */
 .day-row { margin-top: 14px; }
 .chip.day-chip { border-style: solid; border-color: var(--accent); background: var(--accent-soft); }
