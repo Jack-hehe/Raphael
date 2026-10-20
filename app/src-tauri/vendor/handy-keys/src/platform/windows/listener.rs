@@ -1,8 +1,12 @@
 //! Windows low-level keyboard hook implementation
 //!
-//! RAPHAEL PATCH (Task 17). This is handy-keys 0.3.4 (crates.io package, upstream commit e7d1b8e)
-//! with four changes in this file, a one-line re-export in `lib.rs` (`accept_injected_input`) and a
-//! call to it in the Windows tests of `tests/synthetic_input.rs`.
+//! RAPHAEL PATCH. This is handy-keys 0.3.4 (crates.io package, upstream commit e7d1b8e) with the
+//! four changes below. Besides this file they touch `lib.rs` (the re-exports of
+//! `accept_injected_input` and of the edit observer), `platform/windows/mod.rs` and the new
+//! `observation.rs` and `platform/windows/observation.rs` (the edit observer of the third change),
+//! `Cargo.toml` and `Cargo.lock` (the `log` crate, for the hook's decisions at debug level, and the
+//! `Win32_UI_Input_Ime` feature, for the observer; `Cargo.toml.orig` is upstream's, unchanged) and
+//! the Windows tests of `tests/synthetic_input.rs` (a call to `accept_injected_input`).
 //!
 //! First change: while a hotkey holds a modifier key swallowed (a modifier-only hotkey such as
 //! Right Alt), the hook also swallows that key's auto-repeat key-downs and its key-up until the
