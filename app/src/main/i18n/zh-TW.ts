@@ -418,19 +418,7 @@ export const zhTW = {
   "settings.calendarReasonDuplicate": "已經加入過這個網址",
   "settings.calendarReasonLimit": "行事曆的數量已達上限",
   "settings.calendarReasonMissing": "找不到這個行事曆的網址，請移除後重新加入",
-  "settings.calendarReasonOther": "無法讀取這個行事曆",
-  "home.today": "今天",
-  "home.todayAllDay": "全天",
-  "home.todayNoTitle": "（未命名）",
-  "home.todayEmpty": "今天沒有行程。",
-  "home.todayNone": "還沒有連接行事曆。",
-  "home.todayConnect": "連接行事曆",
-  "home.todayManage": "行事曆設定",
-  "home.todayMore": "還有 {p0} 項",
-  "home.listSep": "、",
-  "home.todayFailed": "無法讀取：{p0}",
-  "home.todayFrom": "{p0} 起",
-  "home.todayUntil": "至 {p0}"
+  "settings.calendarReasonOther": "無法讀取這個行事曆"
 } as const;
 export type MessageKey = keyof typeof zhTW;
 export type Messages = Record<MessageKey, string>;

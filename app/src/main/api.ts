@@ -12,7 +12,6 @@ import type {
   CalendarAdded,
   CalendarChecked,
   CalendarInfo,
-  CalendarToday,
   DeviceSettings,
   DictionaryEntry,
   HistoryItem,
@@ -82,8 +81,6 @@ export const calendarAdd = (label: string, url: string): Promise<CalendarAdded> 
 export const calendarRemove = (id: number): Promise<{ removed: boolean }> => core("calendar.remove", { id });
 /** Fetches and reads a stored calendar again. */
 export const calendarTest = (id: number): Promise<CalendarChecked> => core("calendar.test", { id });
-/** Today's events from every calendar. The core keeps a download for a few minutes. */
-export const calendarToday = (): Promise<CalendarToday> => core("calendar.today");
 
 // ---------- dictionary ----------
 

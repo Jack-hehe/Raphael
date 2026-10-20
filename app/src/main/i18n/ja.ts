@@ -419,17 +419,5 @@ export const ja = {
   "settings.calendarReasonDuplicate": "このアドレスはすでに追加されています",
   "settings.calendarReasonLimit": "カレンダーの数が上限に達しました",
   "settings.calendarReasonMissing": "このカレンダーのアドレスが見つかりません。削除してから追加し直してください",
-  "settings.calendarReasonOther": "このカレンダーを読み込めません",
-  "home.today": "今日",
-  "home.todayAllDay": "終日",
-  "home.todayNoTitle": "（無題）",
-  "home.todayEmpty": "今日の予定はありません。",
-  "home.todayNone": "カレンダーはまだ接続されていません。",
-  "home.todayConnect": "カレンダーを接続",
-  "home.todayManage": "カレンダーの設定",
-  "home.todayMore": "ほか {p0} 件",
-  "home.listSep": "、",
-  "home.todayFailed": "読み込めません：{p0}",
-  "home.todayFrom": "{p0} から",
-  "home.todayUntil": "{p0} まで"
+  "settings.calendarReasonOther": "このカレンダーを読み込めません"
 } satisfies Messages;

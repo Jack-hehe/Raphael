@@ -155,25 +155,6 @@ export interface CalendarInfo {
   host: string | null;
 }
 
-/** An event of `calendar.today`; an all-day one runs from midnight to midnight. */
-export interface CalendarEvent {
-  title: string;
-  start_ms: number;
-  end_ms: number;
-  all_day: boolean;
-}
-
-/** `calendar.today`: the events of the day from every calendar, all-day ones first, then by start. */
-export interface CalendarToday {
-  /** The day, `2026-10-20`, in this computer's zone. */
-  date: string;
-  /** How many calendars are connected. */
-  calendars: number;
-  events: CalendarEvent[];
-  /** The calendars that could not be read, and why (a word such as `timeout` or `not_calendar`). */
-  failed: { id: number; label: string; reason: string }[];
-}
-
 /** `calendar.add` fetches and reads the address before it stores it, as `secrets.set_openrouter_key` does. */
 export type CalendarAdded =
   | { ok: true; calendar: CalendarInfo; events_today: number }

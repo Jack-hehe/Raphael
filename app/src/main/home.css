@@ -1,7 +1,7 @@
 /* Home: a strip with the emblem and Raphael's report, then two columns. On the left the four
-   numbers, the activity and today's calendar; on the right the shortcuts and Raphael's latest
-   words. The page scrolls; nothing has to fit one screen. The colours are the app's own
-   (styles.css); this file only lays them out. */
+   numbers and the activity; on the right the shortcuts and Raphael's latest words. The page
+   scrolls; nothing has to fit one screen. The colours are the app's own (styles.css); this file
+   only lays them out. */
 
 .page.page-home { max-width: 1160px; }
 
@@ -15,7 +15,6 @@
 /* ---------- the two columns ---------- */
 .page-home .home { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; margin-top: 18px; }
 .page-home .home-main { min-width: 0; container: homemain / inline-size; }
-.page-home .home-main { display: grid; gap: 14px; }
 .page-home .home-main > .usage { display: grid; gap: 14px; }
 .page-home .home-side { min-width: 0; display: grid; gap: 14px; }
 /* The shortcuts stay on the right in a window of middling size too, as the owner asked: narrower
@@ -71,21 +70,6 @@
 .legend i { width: 11px; height: 11px; border-radius: 3px; background: var(--heat-0); }
 .legend i.h1 { background: var(--heat-1); } .legend i.h2 { background: var(--heat-2); } .legend i.h3 { background: var(--heat-3); } .legend i.h4 { background: var(--heat-4); }
 
-/* ---------- today ---------- */
-.page-home .today-line { margin: 2px 0 0; font-size: 13px; color: var(--text-2); }
-.page-home .today-act { margin-top: 12px; }
-.page-home .today-list { margin: 0; padding: 0; list-style: none; }
-.page-home .today-ev { display: flex; align-items: baseline; gap: 14px; padding: 8px 10px 8px 12px; margin: 0 -10px 0 -12px; border-left: 3px solid transparent; border-radius: 8px; font-size: 14px; }
-.page-home .today-ev + .today-ev { margin-top: 2px; }
-.page-home .today-time { flex: none; min-width: 6.5em; font-size: 13px; color: var(--text-2); }
-.page-home .today-title { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
-/* The event going on now, or else the next: a soft fill and a bar, so that it is not only the colour. */
-.page-home .today-ev.is-current { background: var(--accent-soft); border-left-color: var(--accent-text); }
-.page-home .today-ev.is-current .today-time { color: var(--accent-text); font-weight: 600; }
-.page-home .today-ev.is-over .today-time, .page-home .today-ev.is-over .today-title { color: var(--text-3); }
-.page-home .today-more { padding: 6px 0 0 12px; font-size: 12px; color: var(--text-3); }
-.page-home .today-warn { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 12px; margin-top: 10px; font-size: 12px; color: var(--text-3); }
-
 /* ---------- the shortcuts ---------- */
 .page-home .kc-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; padding: 9px 0; border-top: 1px solid var(--line); }
 .page-home .card-head + .kc-row { border-top: 0; }
@@ -114,7 +98,7 @@
   .page-home .home-stage canvas.emb { width: 140px !important; height: 140px !important; }
   .page-home .home-stage .sub-line { font-size: 20px; }
   .page-home .home { gap: 24px; margin-top: 22px; }
-  .page-home .home-main, .page-home .home-main > .usage, .page-home .home-side { gap: 18px; }
+  .page-home .home-main > .usage, .page-home .home-side { gap: 18px; }
   .page-home .card { padding: 20px 22px 22px; }
   .page-home .card-head h2, .page-home .activity-head h2 { font-size: 16px; }
   .page-home .icards { gap: 14px; }
@@ -126,8 +110,6 @@
   .page-home .kc-name { font-size: 14px; }
   .page-home .mini-a { font-size: 14px; }
   .page-home .mini-q, .page-home .mini-time { font-size: 13px; }
-  .page-home .today-ev { font-size: 15px; }
-  .page-home .today-time, .page-home .today-line { font-size: 14px; }
 }
 
 /* Short windows: the page just scrolls, and the columns stack. */
@@ -137,7 +119,7 @@
   .page-home .home-stage { padding: 8px 18px 8px 10px; }
   .page-home .home-stage canvas.emb { width: 84px !important; height: 84px !important; }
   .page-home .home-stage { grid-template-columns: 84px minmax(0, 1fr); gap: 14px; }
-  .page-home .home-main, .page-home .home-main > .usage { gap: 12px; }
+  .page-home .home-main > .usage { gap: 12px; }
   .page-home .icard { padding: 10px 12px; }
   .home-version { display: none; }
 }
