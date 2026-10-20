@@ -5,6 +5,7 @@ machine's zone or on today. Zone for the dates: Taipei (UTC+8). The stores are r
 in-memory database.
 """
 
+import logging
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
@@ -14,6 +15,7 @@ from raphael_core.brain.secrets import MemoryKeyStore
 from raphael_core.brain.service import Brain
 from raphael_core.brain.spend import SpendTracker
 from raphael_core.brain.stats import TYPING_WPM, StatsStore, count_words
+from raphael_core.protocol import INVALID_PARAMS, RpcError
 from raphael_core.router import Router
 
 from .conftest import item
@@ -483,6 +485,19 @@ async def test_stats_summary_takes_the_days_of_by_day(conn):
     router = brain_with(conn, NOW, tz=TPE)
     assert len((await router.call("stats.summary", {"days": 182}))["by_day"]) == 182
     assert len((await router.call("stats.summary", {}))["by_day"]) == 14
+    # A param that may be left out may also be null.
+    assert len((await router.call("stats.summary", {"days": None}))["by_day"]) == 14
+
+
+@pytest.mark.parametrize("days", ["a week", 7.5, True, [14]])
+async def test_stats_summary_refuses_days_that_are_no_whole_number(conn, days, caplog):
+    router = brain_with(conn, NOW, tz=TPE)
+    with pytest.raises(RpcError) as refused:
+        await router.call("stats.summary", {"days": days})
+    assert refused.value.code == INVALID_PARAMS
+    assert "days" in refused.value.message
+    # Refused before anything ran: no handler failed, so no error was logged.
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
 
 
 # --- speed and time saved -----------------------------------------------------------------------

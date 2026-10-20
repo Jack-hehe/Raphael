@@ -812,9 +812,8 @@ class Brain:
         return replaced
 
     async def _stats_summary(self, params: dict) -> dict:
-        if "days" in params:
-            return self._stats.summary(days=params["days"])
-        return self._stats.summary()
+        days = _opt_int(params, "days")
+        return self._stats.summary() if days is None else self._stats.summary(days=days)
 
     # --- history retention ----------------------------------------------------------------------
 
