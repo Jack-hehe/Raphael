@@ -192,6 +192,18 @@ def smoke_without_a_key(executable: Path) -> dict:
             turns = rpc.call("agent.history.list")["turns"]
             require(len(turns) == 1 and turns[0]["status"] == "error", "The assistant's turn was not recorded")
             require(rpc.call("agent.history.clear") == {"deleted": 1}, "The assistant's history was not cleared")
+            # The plugins are part of the bundle too, with the MCP SDK and what it imports. A server
+            # whose program does not exist makes the SDK load and fail the one way that proves it:
+            # "not_found". A bundle that left a module of the SDK out fails another way ("error").
+            require(rpc.call("integrations.list") == {"servers": []}, "The plugins did not start empty")
+            added = rpc.call("integrations.add", {"name": "Smoke", "transport": "stdio",
+                                                  "command": "raphael-smoke-no-such-program"})["server"]
+            refreshed = rpc.call("integrations.refresh", {"id": added["id"]})["server"]
+            require(refreshed["status"] == "error" and refreshed["error"] == "not_found",
+                    f"The MCP SDK did not load in the bundle (a missing program should be not_found, "
+                    f"was {refreshed['error']})")
+            require(rpc.call("integrations.remove", {"id": added["id"]}) == {"removed": True},
+                    "A plugin was not removed")
             returncode = shut_down(rpc, root)
             return {"passed": True, "core": str(executable), "version": hello["version"],
                     "elapsed_seconds": round(time.monotonic() - began, 2), "requests": len(rpc.calls),

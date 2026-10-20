@@ -378,3 +378,50 @@ async def test_a_job_leaves_no_server_running(vault):
     await McpConnector(vault).list_tools(stdio_server(), timeout_s=30)
     await asyncio.sleep(0.5)
     assert servers_running() == before
+
+
+async def test_a_real_http_server_gets_the_headers_and_its_tools_are_called(vault, free_tcp_port):
+    import uvicorn
+
+    app = fake_server.build().streamable_http_app()
+    seen: list[bytes | None] = []
+
+    async def recording(scope, receive, send):
+        if scope["type"] == "http":
+            seen.append(dict(scope["headers"]).get(b"authorization"))
+        await app(scope, receive, send)
+
+    server = uvicorn.Server(
+        uvicorn.Config(recording, host="127.0.0.1", port=free_tcp_port, log_level="warning")
+    )
+    serving = asyncio.ensure_future(server.serve())
+    try:
+        while not server.started:
+            await asyncio.sleep(0.02)
+        config = ServerConfig(
+            id="abc123",
+            name="Remote",
+            transport="http",
+            url=f"http://127.0.0.1:{free_tcp_port}/mcp",
+            headers=["Authorization"],
+        )
+        vault.set(secret_name("abc123", "header", "Authorization"), f"Bearer {SECRET}")
+        connector = McpConnector(vault)
+        tools = {t.name: t for t in await connector.list_tools(config, timeout_s=20)}
+        outcome = await connector.call_tool(
+            config, "look", {"topic": "tea"}, expected=tools["look"].fingerprint, timeout_s=20
+        )
+    finally:
+        server.should_exit = True
+        await serving
+    assert outcome.text == "found tea"
+    assert seen and all(value == f"Bearer {SECRET}".encode() for value in seen)
+
+
+async def test_an_http_server_that_is_not_there_is_a_network_failure(vault, free_tcp_port):
+    config = ServerConfig(
+        id="abc123", name="Remote", transport="http", url=f"http://127.0.0.1:{free_tcp_port}/mcp"
+    )
+    with pytest.raises(McpFailure) as failure:
+        await McpConnector(vault).list_tools(config, timeout_s=10)
+    assert failure.value.kind == "network"

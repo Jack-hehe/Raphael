@@ -74,18 +74,33 @@ def component_sections(manifest: dict) -> list[str]:
     return lines
 
 
+def needed_requirements(requires: list[str], extras: set[str]) -> list[Requirement]:
+    """The requirements of a distribution that apply on this machine, for the extras that were asked
+    for: `pyjwt[crypto]` asks for pyjwt's `cryptography`, which `pyjwt` alone does not need."""
+    needed = []
+    for raw in requires:
+        requirement = Requirement(raw)
+        if requirement.marker is None or any(
+            requirement.marker.evaluate({"extra": extra}) for extra in ("", *extras)
+        ):
+            needed.append(requirement)
+    return needed
+
+
 def runtime_distributions() -> list[str]:
-    pending = ["raphael-core"]
+    pending: list[tuple[str, frozenset[str]]] = [("raphael-core", frozenset())]
     seen: set[str] = set()
+    expanded: set[tuple[str, frozenset[str]]] = set()
     while pending:
-        name = canonicalize_name(pending.pop())
-        if name in seen:
-            continue
+        raw_name, extras = pending.pop()
+        name = canonicalize_name(raw_name)
         seen.add(name)
-        for raw in distribution(name).requires or []:
-            requirement = Requirement(raw)
-            if requirement.marker is None or requirement.marker.evaluate({"extra": ""}):
-                pending.append(requirement.name)
+        if (name, extras) in expanded:
+            continue
+        expanded.add((name, extras))
+        wanted = {canonicalize_name(extra) for extra in extras}
+        for requirement in needed_requirements(distribution(name).requires or [], wanted):
+            pending.append((requirement.name, frozenset(requirement.extras)))
     return sorted(seen)
 
 

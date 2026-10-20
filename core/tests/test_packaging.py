@@ -164,3 +164,66 @@ def test_the_audit_keeps_what_the_core_loads_at_run_time(build, bundle, name):
     path.write_bytes(b"x")
 
     assert any(item["path"] == name for item in build.audit_bundle(bundle)["files"])
+
+
+class FakeDistribution:
+    def __init__(self, requires):
+        self.requires = requires
+
+
+def fake_distributions(notices, monkeypatch, requires):
+    monkeypatch.setattr(notices, "distribution", lambda name: FakeDistribution(requires[name]))
+
+
+def test_an_extra_that_a_requirement_asks_for_brings_in_what_it_needs(notices, monkeypatch):
+    # mcp asks for "pyjwt[crypto]": pyjwt then needs cryptography, which it does not alone.
+    fake_distributions(
+        notices,
+        monkeypatch,
+        {
+            "raphael-core": ["mcp", "alone"],
+            "mcp": ["pyjwt[crypto]>=2.10", "elsewhere; sys_platform == 'no-such-platform'"],
+            "pyjwt": ['cryptography>=3.4; extra == "crypto"', "typing-extensions"],
+            "cryptography": ["cffi"],
+            "cffi": [],
+            "typing-extensions": [],
+            "alone": ["pyjwt"],
+        },
+    )
+    assert notices.runtime_distributions() == [
+        "alone",
+        "cffi",
+        "cryptography",
+        "mcp",
+        "pyjwt",
+        "raphael-core",
+        "typing-extensions",
+    ]
+
+
+def test_a_distribution_asked_for_without_the_extra_does_not_bring_it_in(notices, monkeypatch):
+    fake_distributions(
+        notices,
+        monkeypatch,
+        {
+            "raphael-core": ["pyjwt"],
+            "pyjwt": ['cryptography>=3.4; extra == "crypto"'],
+            "cryptography": [],
+        },
+    )
+    assert notices.runtime_distributions() == ["pyjwt", "raphael-core"]
+
+
+def test_a_cycle_of_requirements_ends(notices, monkeypatch):
+    fake_distributions(
+        notices,
+        monkeypatch,
+        {"raphael-core": ["a"], "a": ["b[x]"], "b": ['a; extra == "x"', "b"]},
+    )
+    assert notices.runtime_distributions() == ["a", "b", "raphael-core"]
+
+
+def test_the_notices_cover_cryptography_which_the_plugin_sdk_pulls_in(notices):
+    names = notices.runtime_distributions()
+    for name in ("mcp", "mcp-types", "pydantic", "pydantic-core", "pyjwt", "cryptography"):
+        assert name in names
