@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  EntranceTimer,
   FrameWatch,
   SUBSCRIBE_RETRY_MS,
   describeError,
@@ -240,4 +241,57 @@ test("a painted emblem stays quiet and an intentional hide stops pixel readbacks
   vi.advanceTimersByTime(5000);
   expect(p.reads()).toBe(reads);
   expect(logged).toEqual([]);
+});
+
+// ---- the emblem's entrance ----
+
+/** A webview's frames on demand: `frame(ms)` runs the callbacks that wait for the next one. */
+function fakeFrames() {
+  let waiting: Array<(ms: number) => void> = [];
+  return {
+    nextFrame: (callback: (ms: number) => void) => {
+      waiting.push(callback);
+    },
+    frame(ms: number) {
+      const due = waiting;
+      waiting = [];
+      for (const callback of due) callback(ms);
+    },
+    get pending() {
+      return waiting.length;
+    },
+  };
+}
+
+test("a smooth entrance writes nothing and stops asking for frames", () => {
+  const frames = fakeFrames();
+  new EntranceTimer(log, () => "visible", () => 1000, frames.nextFrame).start();
+  for (let ms = 1016; ms <= 2100; ms += 16) frames.frame(ms);
+  expect(logged).toEqual([]);
+  expect(frames.pending).toBe(0);
+});
+
+test("a late first frame and a hitch in the entrance are written down in one line", () => {
+  const frames = fakeFrames();
+  new EntranceTimer(log, () => "visible", () => 1000, frames.nextFrame).start();
+  frames.frame(1120);
+  for (let ms = 1136; ms <= 1500; ms += 16) frames.frame(ms);
+  frames.frame(1580);
+  for (let ms = 1596; ms <= 2100; ms += 16) frames.frame(ms);
+  expect(logged).toEqual([
+    ["info", "emblem entrance: first frame after 120 ms, 1 slow frame(s) [92] ms (document visible)"],
+  ]);
+});
+
+test("an entrance is timed once, and a timing whose frames never came gives way after 3 seconds", () => {
+  const frames = fakeFrames();
+  let now = 1000;
+  const timer = new EntranceTimer(log, () => "hidden", () => now, frames.nextFrame);
+  timer.start();
+  now = 2000;
+  timer.start();
+  expect(frames.pending).toBe(1);
+  now = 4500;
+  timer.start();
+  expect(frames.pending).toBe(2);
 });

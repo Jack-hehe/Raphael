@@ -108,6 +108,65 @@ export async function subscribeWithRetry(
   }
 }
 
+/** A frame of the emblem's entrance that takes longer than this is a visible hitch: two frames at
+ * 60 Hz, and a little more. */
+export const SLOW_FRAME_MS = 40;
+/** How long the entrance is timed: the appear animation lasts 0.833 s. */
+export const ENTRANCE_WATCH_MS = 1000;
+/** A timing that has had no frame for this long is given up, so that the next entrance is timed. */
+const ENTRANCE_GIVE_UP_MS = 3000;
+
+/**
+ * Times the frames of the emblem's entrance, because it sometimes stutters and nothing said why:
+ * how long the first frame took to come after the emblem was asked to appear, and every later
+ * frame that took longer than SLOW_FRAME_MS. Writes one line when something was slow and nothing
+ * otherwise; never anything about what is said. A webview that gives no frames at all is
+ * FrameWatch's to report.
+ */
+export class EntranceTimer {
+  private startedAt: number | undefined;
+
+  constructor(
+    private readonly log: PageLog,
+    /** `document.visibilityState`. */
+    private readonly visibility: () => string,
+    private readonly now: () => number = () => performance.now(),
+    private readonly nextFrame: (callback: (ms: number) => void) => void = (callback) => {
+      requestAnimationFrame(callback);
+    },
+  ) {}
+
+  /** The emblem has just been asked to appear. */
+  start(): void {
+    const askedAt = this.now();
+    // One entrance at a time; a timing whose frames never came does not block the next one.
+    if (this.startedAt !== undefined && askedAt - this.startedAt < ENTRANCE_GIVE_UP_MS) return;
+    this.startedAt = askedAt;
+    let previous: number | undefined;
+    let firstAfter = 0;
+    const slow: number[] = [];
+    const tick = (ms: number): void => {
+      if (previous === undefined) firstAfter = Math.max(0, ms - askedAt);
+      else if (ms - previous > SLOW_FRAME_MS) slow.push(Math.round(ms - previous));
+      previous = ms;
+      if (ms - askedAt < ENTRANCE_WATCH_MS) {
+        this.nextFrame(tick);
+        return;
+      }
+      this.startedAt = undefined;
+      if (firstAfter > SLOW_FRAME_MS || slow.length > 0) {
+        this.log(
+          "info",
+          `emblem entrance: first frame after ${Math.round(firstAfter)} ms, ${slow.length} slow frame(s)` +
+            (slow.length > 0 ? ` [${slow.join(", ")}] ms` : "") +
+            ` (document ${this.visibility()})`,
+        );
+      }
+    };
+    this.nextFrame(tick);
+  }
+}
+
 /** How long the emblem may go without an animation frame while it should be on screen. */
 const FRAME_WAIT_MS = 1500;
 /** Pixel readback is deliberately much slower than the animation loop. */

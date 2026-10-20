@@ -16,7 +16,7 @@ import type { ProgressReport, Stage } from "./progress";
 import { ProgressArc } from "./progress";
 import { COMPLETION_MS, formatProgress, progressPercent } from "./progress-caption";
 import { WAITING_LINE_MS, nextWaitingLine } from "./waiting-lines";
-import { FrameWatch, describeError, guardHandler, subscribeWithRetry, type LogLevel, type PageLog } from "./diagnostics";
+import { EntranceTimer, FrameWatch, describeError, guardHandler, subscribeWithRetry, type LogLevel, type PageLog } from "./diagnostics";
 
 export { noticeDurationMs };
 
@@ -731,6 +731,7 @@ async function start(): Promise<void> {
     canvas,
     expected: () => controller.expectsPaint,
   });
+  const entrance = new EntranceTimer(pageLog, () => document.visibilityState);
 
   // The texture comes first, so that no event meets a half-ready emblem. Without the file the
   // load fails and the plain vector ring is drawn.
@@ -741,8 +742,12 @@ async function start(): Promise<void> {
 
   // Subscribe once (again if that fails). Events that came before this point wait on the Rust
   // side. An event that fails is reported and the channel goes on.
+  // Read afresh each time: the controller changes the phase while it handles an event.
+  const phase = (): string => emblem.phase;
   const handle = guardHandler((event) => {
+    const away = phase() === "hidden" || phase() === "vanish";
     controller.handle(event);
+    if (away && phase() === "appear") entrance.start();
     if (
       event.type === "show" || event.type === "notice" || event.type === "learned" || event.type === "complete" ||
       event.type === "say" || event.type === "ask"
