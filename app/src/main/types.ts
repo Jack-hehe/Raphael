@@ -147,22 +147,6 @@ export interface AgentTurn {
   status: string;
 }
 
-/** A calendar of `calendar.list`. The address is a secret and never leaves the core: the page gets the label and the host. */
-export interface CalendarInfo {
-  id: number;
-  label: string;
-  /** The host of the address (`calendar.google.com`); null when the address is lost. */
-  host: string | null;
-}
-
-/** `calendar.add` fetches and reads the address before it stores it, as `secrets.set_openrouter_key` does. */
-export type CalendarAdded =
-  | { ok: true; calendar: CalendarInfo; events_today: number }
-  | { ok: false; reason: string };
-
-/** `calendar.test` */
-export type CalendarChecked = { ok: true; events_today: number } | { ok: false; reason: string };
-
 /** An entry of `dictionary.list` */
 export interface DictionaryEntry {
   id: number;
@@ -246,7 +230,7 @@ export type MainEvent =
 export type PageId = "home" | "agent" | "history" | "dictionary" | "settings";
 
 /** The tabs of the settings panel. */
-export type SettingsPane = "general" | "dictation" | "agent" | "calendar" | "usage" | "about";
+export type SettingsPane = "general" | "dictation" | "agent" | "usage" | "about";
 
 /** One of the five pages of the main window. */
 export interface Page {

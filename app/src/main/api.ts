@@ -9,9 +9,6 @@ import type {
   AgentTurn,
   AudioDevices,
   BrainSettings,
-  CalendarAdded,
-  CalendarChecked,
-  CalendarInfo,
   DeviceSettings,
   DictionaryEntry,
   HistoryItem,
@@ -70,17 +67,6 @@ export interface AgentHistoryQuery {
 export const agentHistoryList = (q: AgentHistoryQuery = {}): Promise<{ turns: AgentTurn[] }> => core("agent.history.list", q);
 /** Forgets every turn; says how many there were. */
 export const agentHistoryClear = (): Promise<{ deleted: number }> => core("agent.history.clear");
-
-// ---------- calendars ----------
-// The address of a calendar is a secret. It goes to the core once, in `calendarAdd`, and is kept in
-// the Windows Credential Manager; nothing here ever gets it back.
-
-export const calendarList = (): Promise<{ calendars: CalendarInfo[] }> => core("calendar.list");
-/** Fetches and reads the address and, if it is a calendar, stores it. */
-export const calendarAdd = (label: string, url: string): Promise<CalendarAdded> => core("calendar.add", { label, url });
-export const calendarRemove = (id: number): Promise<{ removed: boolean }> => core("calendar.remove", { id });
-/** Fetches and reads a stored calendar again. */
-export const calendarTest = (id: number): Promise<CalendarChecked> => core("calendar.test", { id });
 
 // ---------- dictionary ----------
 

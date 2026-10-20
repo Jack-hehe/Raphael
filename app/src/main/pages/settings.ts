@@ -1,5 +1,5 @@
-// Settings: a panel over the main window with six tabs: 一般, 聽寫, 拉斐爾, 行事曆, 用量 and 關於
-// (spec §12.3). A change takes effect at once; there is no save button. The settings of the brain (limit,
+// Settings: a panel over the main window with five tabs: 一般, 聽寫, 拉斐爾, 用量 and 關於 (spec
+// §12.3). A change takes effect at once; there is no save button. The settings of the brain (limit,
 // models, language, speech-to-text, retention, how Raphael answers) go to the core with
 // `settings.set`; the settings of this computer (hotkeys, microphone, emblem, theme, autostart) go
 // to the Rust side with `device_settings_set`.
@@ -9,7 +9,6 @@ import { isUiLocale, onLocaleChange, t } from "../i18n";
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
 import { brandIcon, hydrateBrandIcons } from "../brand";
-import { CalendarTab, calendarFormRows, calendarListRows } from "../calendars";
 import "../settings-polish.css";
 import { DICTATION_MODES, isDictationMode, modeDescription } from "../dictation";
 import {
@@ -139,11 +138,10 @@ const CLEANUP_PRICE_HEAD = () => t("settings.025");
 const PRICES_LOADING = () => t("settings.026");
 
 /** The tabs on the left of the panel, in order. */
-export const PANES: { id: SettingsPane; icon: IconName; title: () => string }[] = [
+const PANES: { id: SettingsPane; icon: IconName; title: () => string }[] = [
   { id: "general", icon: "gear", title: () => t("settings.paneGeneral") },
   { id: "dictation", icon: "mic", title: () => t("settings.paneDictation") },
   { id: "agent", icon: "sparkle", title: () => t("settings.paneAgent") },
-  { id: "calendar", icon: "calendar", title: () => t("settings.paneCalendar") },
   { id: "usage", icon: "wallet", title: () => t("settings.paneUsage") },
   { id: "about", icon: "info", title: () => t("common.about") },
 ];
@@ -206,8 +204,6 @@ export function createSettings(app: AppContext): Page {
   /** The same for the weather city. */
   let cityDraft: string | null = null;
   let cityError: (() => string) | null = null;
-  /** The calendars and the form that adds one. */
-  const calendars = new CalendarTab({ add: api.calendarAdd, test: api.calendarTest, remove: api.calendarRemove });
   let recording: Recording | null = null;
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
   let languageGroups: LanguageGroup[] | null = null;
@@ -582,16 +578,6 @@ export function createSettings(app: AppContext): Page {
     );
   }
 
-  /** 行事曆: the calendars whose events Home shows today, and the form that adds one. */
-  function calendarHTML(): string {
-    return (
-      heading() +
-      coreNote() +
-      section("calendar", t("settings.sectionCalendars"), calendarListRows(calendars)) +
-      section("plus", t("settings.sectionCalendarAdd"), calendarFormRows(calendars), esc(t("settings.calendarFoot")))
-    );
-  }
-
   /** 用量: the key, the connection, and what this month has cost against the limit. */
   function usageHTML(): string {
     const limit = brain?.monthly_limit_usd ?? 10;
@@ -624,8 +610,6 @@ export function createSettings(app: AppContext): Page {
         return dictationHTML();
       case "agent":
         return agentHTML();
-      case "calendar":
-        return calendarHTML();
       case "usage":
         return usageHTML();
       case "about":
@@ -842,29 +826,6 @@ export function createSettings(app: AppContext): Page {
       const menu = menuFor(k);
       if (anchor && menu && menuIsOpenFor(anchor)) openMenu(anchor, menu.choices, menu.current, menu.pick, menu.head);
     }
-  }
-
-  async function addCalendar(): Promise<void> {
-    const adding = calendars.add();
-    render();
-    const message = await adding;
-    if (message) toaster.info(message);
-    if (!visible) return;
-    render();
-    if (!message) el.querySelector<HTMLElement>(calendars.label.trim() ? "#cal-url" : "#cal-label")?.focus();
-  }
-
-  async function testCalendar(id: number): Promise<void> {
-    if (calendars.testing !== null) return;
-    const testing = calendars.test(id);
-    render();
-    toaster.info(await testing);
-    if (visible) render();
-  }
-
-  function removeCalendar(id: number): void {
-    app.undo.begin(calendars.removal(id, () => visible && render()));
-    render();
   }
 
   async function changeDevice(patch: Partial<DeviceSettings>): Promise<void> {
@@ -1180,17 +1141,6 @@ export function createSettings(app: AppContext): Page {
       case "or-check":
         void checkOpenrouter();
         break;
-      case "cal-add":
-        void addCalendar();
-        break;
-      case "cal-test":
-      case "cal-remove": {
-        const button = target.closest<HTMLElement>("[data-act]")!;
-        const id = Number(button.dataset.id);
-        if (button.dataset.act === "cal-test") void testCalendar(id);
-        else removeCalendar(id);
-        break;
-      }
       case "mic-refresh": {
         const anchor = el.querySelector<HTMLElement>('[data-k="mic"]');
         if (anchor) void refreshMicrophones(anchor);
@@ -1215,16 +1165,6 @@ export function createSettings(app: AppContext): Page {
     const input = e.target as HTMLInputElement;
     if (input.id === "limit-input") limitDraft = input.value;
     else if (input.id === "agent-city") cityDraft = input.value;
-    else if (input.id === "cal-label") calendars.label = input.value;
-    else if (input.id === "cal-url") calendars.url = input.value;
-  });
-  // Enter in either field of the form sends it (not the Enter that ends an IME composition).
-  el.addEventListener("keydown", (e) => {
-    const field = e.target as HTMLElement;
-    if (e.key === "Enter" && !e.isComposing && (field.id === "cal-label" || field.id === "cal-url")) {
-      e.preventDefault();
-      void addCalendar();
-    }
   });
   // Menus consume their own Escape; the panel and native window controls share one Tab loop.
   const settingsKey = (e: KeyboardEvent): void => {
@@ -1270,7 +1210,7 @@ export function createSettings(app: AppContext): Page {
       closeMenu();
       render();
       el.querySelector<HTMLElement>("#set-title")?.focus();
-      const [brainResult, keyResult, statusResult, devicesResult, altgrResult, versionResult, languagesResult, calendarsResult] = await Promise.allSettled([
+      const [brainResult, keyResult, statusResult, devicesResult, altgrResult, versionResult, languagesResult] = await Promise.allSettled([
         api.settingsGet(),
         api.secretsStatus(),
         api.statusGet(),
@@ -1278,7 +1218,6 @@ export function createSettings(app: AppContext): Page {
         api.keyboardHasAltgr(),
         getVersion(),
         api.languagesList(),
-        api.calendarList(),
         // Read again: the settings may have changed since the window started. `refreshDevice` puts
         // the answer in `app.device()` itself, or drops it if a newer read or write overtook it.
         app.refreshDevice(),
@@ -1292,7 +1231,6 @@ export function createSettings(app: AppContext): Page {
       altgr = altgrResult.status === "fulfilled" && altgrResult.value;
       version = versionResult.status === "fulfilled" ? versionResult.value : "0.1.0";
       if (languagesResult.status === "fulfilled") languageGroups = languagesResult.value.groups;
-      calendars.reset(calendarsResult.status === "fulfilled" ? calendarsResult.value.calendars : []);
       replacingKey = false;
       keyError = null;
       limitDraft = null;
