@@ -1,21 +1,16 @@
-/* The model picker (model-picker.ts): a button like the menus' (.sel) that shows the chosen model
-   and its price, and a panel to find any model in: a search, the order and the maker as two small
-   dropdowns, the list, and a line of small print. The colours are the app's own (styles.css); this
-   file only lays them out. A model a role cannot use keeps the muted text colour, never a lower
-   opacity, so that its reason stays readable in both themes. */
+/* The model picker (model-picker.ts): a dropdown that shows the chosen model, and a panel to find
+   any model in: a search, the order and the maker as two small dropdowns, the list, and a line of
+   small print. The colours are the app's own (styles.css); this file only lays them out. A model a
+   role cannot use keeps the muted text colour, never a lower opacity, so that its reason stays
+   readable in both themes. */
 
 /* ---------- the button ---------- */
+/* It is a .sel (styles.css), so it looks and lines up like every dropdown of a card; the name takes
+   the room, and the price, when the button shows one, stays whole beside it. */
 .mp-slot { display: inline-flex; min-width: 0; max-width: 100%; }
-.mp-trigger { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: min(320px, 100%); height: 34px; padding: 0 10px 0 12px; border-radius: 8px; border: 1px solid var(--btn-edge); background: var(--btn); font-size: 13px; color: var(--text); text-align: left; }
-.mp-trigger:hover:not(:disabled) { border-color: var(--text-3); }
-.mp-trigger[aria-expanded="true"] { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-ring); }
-.mp-trigger:disabled { opacity: 0.55; }
-.mp-tname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* On a card of the settings the button lines up with the dropdowns of the card, as wide as a model's. */
-.slist .ctl .mp-trigger { width: 232px; }
-.slist .row-model .ctl .mp-trigger { width: 272px; }
-.mp-tprice { flex: none; font-size: 12px; color: var(--text-3); white-space: nowrap; }
-.mp-trigger .i { width: 12px; height: 12px; color: var(--text-2); }
+.mp-trigger { min-width: 0; max-width: min(320px, 100%); text-align: left; }
+.mp-tname { flex: 1; min-width: 0; }
+.mp-tprice { flex: none; font-size: 12px; color: var(--text-3); }
 
 /* ---------- the panel ---------- */
 /* Visible overflow lets a dropdown of the head hang below a short panel; the list scrolls itself. */

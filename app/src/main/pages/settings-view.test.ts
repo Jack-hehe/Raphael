@@ -1,18 +1,16 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { setLocale } from "../i18n";
 import type { LanguageGroup } from "../languages";
-import type { BrainSettings, DeviceSettings, Pricing, SettingsPane, Status } from "../types";
+import type { BrainSettings, CatalogModel, DeviceSettings, ModelCatalog, SettingsPane, Status } from "../types";
 import {
   APPEARANCES,
   PANES,
   type SettingsView,
-  answerModelChoices,
-  cleanupModelChoices,
   loadingHTML,
   microphoneChoices,
+  modelPickerLook,
   paneHTML,
   priceTexts,
-  sttModelChoices,
 } from "./settings-view";
 
 afterEach(() => setLocale("zh-TW"));
@@ -43,14 +41,22 @@ const brain: BrainSettings = {
   agent_model: "openai/gpt-6-luna",
   agent_city: "台北",
 };
-const pricing: Pricing = {
-  cleanup: [
-    { id: "openai/gpt-6-luna", name: "GPT-6 Luna", input_per_mtok: 0.1, output_per_mtok: 0.4 },
-    { id: "anthropic/claude-haiku-5.5", name: "Claude Haiku 5.5", input_per_mtok: 1, output_per_mtok: 5 },
+/** A model of the catalog that every role of its kind can use. */
+const model = (id: string, name: string, provider: string, price: Partial<CatalogModel>, stt = false): CatalogModel => ({
+  id, name, provider, input_per_mtok: null, output_per_mtok: null, per_minute: null, free: false, variable_price: false,
+  context_length: stt ? null : 1_000_000, created_at_ms: NOW, capabilities: {}, recommended: true,
+  roles: stt ? { stt: { usable: true, reason: null } } : { cleanup: { usable: true, reason: null }, answer: { usable: true, reason: null } },
+  ...price,
+});
+const catalog: ModelCatalog = {
+  llm: [
+    model("openai/gpt-6-luna", "GPT-6 Luna", "OpenAI", { input_per_mtok: 0.1, output_per_mtok: 0.4 }),
+    model("anthropic/claude-haiku-5.5", "Claude Haiku 5.5", "Anthropic", { input_per_mtok: 1, output_per_mtok: 5 }),
   ],
-  stt: [{ id: "elevenlabs/scribe-v2", name: "Scribe v2", per_minute: 0.0067, input_per_mtok: null, output_per_mtok: null }],
+  stt: [model("elevenlabs/scribe-v2", "Scribe v2", "ElevenLabs", { per_minute: 0.0067 }, true)],
   fetched_at_ms: NOW,
   source: "live",
+  replaced: [],
 };
 const openrouter: Status["openrouter"] = {
   state: "ok", latency_ms: 120, checked_at_ms: NOW, error: null, key: null,
@@ -64,7 +70,7 @@ const GROUPS: LanguageGroup[] = [
 ];
 
 const view = (over: Partial<SettingsView> = {}): SettingsView => ({
-  pane: "general", device, brain, hasKey: true, openrouter, spend, pricing, checkingOpenrouter: false,
+  pane: "general", device, brain, hasKey: true, openrouter, spend, catalog, checkingOpenrouter: false,
   devices: { devices: [{ index: 0, name: REALTEK, is_default: true }], selected: null, automatic_device: REALTEK },
   altgr: false, version: "0.1.0", replacingKey: false, keyBusy: false, keyError: null, limitDraft: null, limitError: null,
   cityDraft: null, cityError: null, languageGroups: GROUPS, now: NOW, ...over,
@@ -282,41 +288,52 @@ describe("模型與用量", () => {
     expect(rowOf(tab("usage", { replacingKey: true }), "金鑰")).toContain('data-act="key-cancel"');
   });
 
-  test("puts the price of what is chosen under each model's name, its dropdown beside, one self-contained row each", () => {
+  test("puts the price of what is chosen under each model's name, its picker beside, one self-contained row each", () => {
     const html = tab("usage");
-    for (const [name, k, price] of [
-      ["語音轉文字", "stt-model", "每分鐘 $0.0067"],
-      ["整理文字", "model", "輸入 $0.10 / 輸出 $0.40 每百萬 token"],
-      ["拉斐爾的回答", "agent-model", "輸入 $0.10 / 輸出 $0.40 每百萬 token"],
+    for (const [name, k, role, price, chosen] of [
+      ["語音轉文字", "stt-model", "stt", "每分鐘 $0.0067", "Scribe v2"],
+      ["整理文字", "model", "cleanup", "輸入 $0.10 / 輸出 $0.40 每百萬 token", "GPT-6 Luna"],
+      ["拉斐爾的回答", "agent-model", "answer", "輸入 $0.10 / 輸出 $0.40 每百萬 token", "GPT-6 Luna"],
     ]) {
       const row = rowOf(html, name);
       expect(row).toContain(`data-row="${k}"`);
-      expect(row).toContain(`<div class="d"><span class="price num" data-price="${k}">${price}</span></div></div><div class="ctl"><button type="button" class="sel"`);
+      expect(row).toContain(
+        `<div class="d"><span class="price num" data-price="${k}">${price}</span></div></div>` +
+          `<div class="ctl"><span class="mp-slot" data-model-picker="${role}"><button type="button" class="sel mp-trigger" aria-haspopup="dialog"`,
+      );
+      // The button names what is chosen and leaves its price to the line under the row's name.
+      expect(row).toMatch(new RegExp(`data-k="${k}"><span class="mp-tname">${chosen}</span><svg`));
+      expect(row).not.toContain("mp-tprice");
       expect(buttons(row)).toHaveLength(1);
     }
-    expect(priceTexts(view()).note).toContain("OpenRouter");
+    expect(priceTexts(view()).note).toBe("價格來自 OpenRouter，今天更新。實際花費依 OpenRouter 選用的供應商而定。");
   });
 
-  test("offers this computer as the last choice of speech-to-text, which costs nothing", () => {
-    const choices = sttModelChoices(view());
-    expect(choices[choices.length - 1]).toMatchObject({ value: "local", label: "本機（離線，聲音不上傳）", detail: "免費" });
-    expect(choices[0]).toMatchObject({ value: "elevenlabs/scribe-v2", detail: "每分鐘 $0.0067" });
+  test("offers this computer above the cloud models of speech-to-text, which costs nothing", () => {
+    expect(modelPickerLook(view(), "stt").extras).toEqual([{ id: "local", name: "本機（離線，聲音不上傳）", price: "免費" }]);
+    expect(modelPickerLook(view(), "cleanup").extras).toEqual([]);
     const local = rowOf(tab("usage", { brain: { ...brain, stt_engine: "local" } }), "語音轉文字");
     expect(local).toContain('data-price="stt-model">免費</span>');
-    expect(local).toContain("<span>本機（離線，聲音不上傳）</span>");
+    expect(local).toContain('<span class="mp-tname">本機（離線，聲音不上傳）</span>');
+  });
+
+  test("gives each picker the catalog, what is chosen and the row's name", () => {
+    const look = modelPickerLook(view(), "answer");
+    expect(look).toMatchObject({ role: "answer", key: "agent-model", label: "拉斐爾的回答", current: "openai/gpt-6-luna", catalog, loading: false, showPrice: false, disabled: false });
+    expect(modelPickerLook(view({ brain: { ...brain, stt_cloud_model: "openai/gpt-transcribe" } }), "stt").current).toBe("openai/gpt-transcribe");
   });
 
   test("says the prices are coming, and shows none it could not get", () => {
-    expect(rowOf(tab("usage", { pricing: "loading" }), "整理文字")).toContain(">價格載入中…</span>");
-    expect(cleanupModelChoices(view({ pricing: "loading" })).every((c) => c.detail === "價格載入中…")).toBe(true);
-    expect(answerModelChoices(view({ pricing: "failed" })).some((c) => c.detail)).toBe(false);
-    expect(sttModelChoices(view({ pricing: "failed" })).some((c) => c.detail)).toBe(false);
-    expect(priceTexts(view({ pricing: "failed" })).note).toBe("目前無法取得模型價格。");
+    expect(rowOf(tab("usage", { catalog: "loading" }), "整理文字")).toContain(">價格載入中…</span>");
+    expect(modelPickerLook(view({ catalog: "loading" }), "cleanup")).toMatchObject({ catalog: null, loading: true });
+    expect(modelPickerLook(view({ catalog: "failed" }), "cleanup")).toMatchObject({ catalog: null, loading: false });
+    expect(priceTexts(view({ catalog: "failed" }))).toEqual({ model: "", "agent-model": "", "stt-model": "", note: "目前無法取得模型價格。" });
   });
 
-  test("keeps a saved model that is no longer offered", () => {
-    const kept = cleanupModelChoices(view({ brain: { ...brain, cleanup_model: "x/old" } }));
-    expect(kept[kept.length - 1]).toMatchObject({ value: "x/old", label: "x/old" });
+  test("shows a saved model the catalog does not have by its id, with an unknown price", () => {
+    const row = rowOf(tab("usage", { brain: { ...brain, cleanup_model: "x/old" } }), "整理文字");
+    expect(row).toContain('<span class="mp-tname">old</span>');
+    expect(row).toContain('data-price="model">價格未知</span>');
   });
 });
 

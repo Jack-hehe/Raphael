@@ -23,8 +23,9 @@ import {
   toggleTranscriptionLanguage,
 } from "../languages";
 import { KeyRecorder, bindingClash, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "../keys";
+import { type ModelPicker, mountModelPicker, replacementNotices } from "../model-picker";
 import { MonitorSwitch } from "../monitor";
-import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, Page, Pricing, SettingsPane, Status } from "../types";
+import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, ModelCatalog, ModelRole, Page, SettingsPane, Status } from "../types";
 import {
   type Choice,
   type MenuAction,
@@ -48,25 +49,20 @@ import {
   HOTKEY_ROWS,
   type HotkeyField,
   LOCAL_STT,
+  MODEL_ROWS,
   PANES,
   SIZES,
   type SettingsView,
   UI_LANGUAGES,
   agentCity,
-  answerModelChoices,
-  cleanupModelChoices,
-  cleanupModel,
-  agentModel,
   languagesOf,
   loadingHTML,
   microphoneChoices,
+  modelPickerLook,
   paneHTML,
   priceTexts,
-  sttChoice,
   sttEngine,
   sttModel,
-  sttModelChoices,
-  tokenPriceHead,
 } from "./settings-view";
 
 interface FocusStop { focus(): void }
@@ -127,8 +123,10 @@ export function createSettings(app: AppContext): Page {
   let hasKey = false;
   let openrouter: Status["openrouter"] | null = null;
   let spend: Status["spend"] | null = null;
-  /** The prices of the models: being read (`loading`), read, or not to be had (`failed`). */
-  let pricing: Pricing | "loading" | "failed" = "loading";
+  /** OpenRouter's catalog of models, with their prices: being read (`loading`), read, or not to be had (`failed`). */
+  let catalog: ModelCatalog | "loading" | "failed" = "loading";
+  /** The pickers of the model rows on the tab that is drawn (settings-view.ts draws their buttons). */
+  const pickers = new Map<ModelRole, ModelPicker>();
   let checkingOpenrouter = false;
   let devices: AudioDevices | null = null;
   let altgr = false;
@@ -157,7 +155,7 @@ export function createSettings(app: AppContext): Page {
 
   /** What the tabs are drawn from, as the panel knows it now. */
   const view = (): SettingsView => ({
-    pane, device: app.device(), brain, hasKey, openrouter, spend, pricing, checkingOpenrouter, devices, altgr, version,
+    pane, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
     replacingKey, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
   });
 
@@ -220,13 +218,6 @@ export function createSettings(app: AppContext): Page {
             }
           },
         };
-      // The three models: each row's own menu (settings-view.ts has their rows).
-      case "stt-model":
-        return { choices: sttModelChoices(v), current: sttChoice(v), pick: (value) => void changeStt(value) };
-      case "model":
-        return { choices: cleanupModelChoices(v), current: cleanupModel(v), pick: (value) => void changeBrain("cleanup_model", value), head: tokenPriceHead(v) };
-      case "agent-model":
-        return { choices: answerModelChoices(v), current: agentModel(v), pick: (value) => void changeBrain("agent_model", value), head: tokenPriceHead(v) };
       default:
         return null;
     }
@@ -259,6 +250,8 @@ export function createSettings(app: AppContext): Page {
     body.setAttribute("aria-busy", String(loading && pane !== "about"));
     body.innerHTML = pane !== "about" && loading ? loadingHTML(view()) : paneHTML(view());
     hydrateBrandIcons(body);
+    // Before the focus goes back by `data-k`, which the pickers' buttons have too.
+    mountPickers();
     const keyInput = el.querySelector<HTMLInputElement>("#key-input");
     if (keyInput && keyDraft !== undefined) keyInput.value = keyDraft;
     const limitInput = el.querySelector<HTMLInputElement>("#limit-input");
@@ -427,25 +420,46 @@ export function createSettings(app: AppContext): Page {
     if (visible) render();
   }
 
-  /** Reads the prices. The page is shown at once with 「價格載入中…」; the prices go in when they come. */
-  async function loadPrices(): Promise<void> {
+  /**
+   * Reads OpenRouter's catalog of models. The page is shown at once with 「價格載入中…」; the prices and
+   * the pickers' lists go in when it comes, without drawing the page again (a key being typed stays).
+   * A chosen model that OpenRouter no longer lists went back to its default: that is told, and drawn.
+   */
+  async function loadCatalog(): Promise<void> {
     const mine = loads;
-    let next: Pricing | "failed";
+    let next: ModelCatalog | "failed";
     try {
-      next = await api.pricingGet();
+      next = await api.modelsCatalog();
     } catch {
-      // keep prices read earlier; else say they cannot be had
-      next = typeof pricing === "object" ? pricing : "failed";
+      // keep a catalog read earlier; else say that the prices cannot be had
+      next = typeof catalog === "object" ? catalog : "failed";
     }
     if (mine !== loads || !visible) return;
-    pricing = next;
-    paintPrices();
-    // a price menu that is open shows the prices too
-    for (const k of ["model", "agent-model", "stt-model"]) {
-      const anchor = el.querySelector<HTMLElement>(`.sel[data-k="${k}"]`);
-      const menu = menuFor(k);
-      if (anchor && menu && menuIsOpenFor(anchor)) showMenu(anchor, menu);
+    catalog = next;
+    if (typeof next === "object" && next.replaced.length > 0) {
+      if (brain) for (const r of next.replaced) brain = { ...brain, [r.key]: r.default };
+      for (const message of replacementNotices(next)) toaster.info(message);
+      render();
+      return;
     }
+    paintPrices();
+    for (const [role, picker] of pickers) picker.update(modelPickerLook(view(), role));
+  }
+
+  /** Makes the pickers of the model rows work, on the buttons settings-view.ts drew. */
+  function mountPickers(): void {
+    pickers.clear();
+    const v = view();
+    for (const { role } of MODEL_ROWS) {
+      const slot = body.querySelector<HTMLElement>(`[data-model-picker="${role}"]`);
+      if (slot) pickers.set(role, mountModelPicker(slot, { ...modelPickerLook(v, role), onChoose: (id) => void chooseModel(role, id) }));
+    }
+  }
+
+  /** A model chosen in a picker: the speech-to-text one may be this computer, which is no model. */
+  function chooseModel(role: ModelRole, id: string): Promise<void> {
+    if (role === "stt") return changeStt(id);
+    return changeBrain(role === "cleanup" ? "cleanup_model" : "agent_model", id);
   }
 
   async function changeDevice(patch: Partial<DeviceSettings>): Promise<void> {
@@ -864,7 +878,7 @@ export function createSettings(app: AppContext): Page {
       loading = false;
       render();
       if (!el.contains(document.activeElement)) el.querySelector<HTMLElement>("#set-title")?.focus();
-      void loadPrices();
+      void loadCatalog();
 
       stopEvents?.();
       const stopLevels = app.onEvent((event) => event.type === "Level" && onLevel(event.value));

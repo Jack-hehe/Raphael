@@ -5,15 +5,16 @@
 // Keys: the arrows and Enter in the list, typing searches, Tab goes between the search and the two
 // dropdowns, Esc closes. The panel is the app's popover (ui.ts), so it closes the way menus do.
 //
-// The settings page draws its rows as HTML, and draws them again often: a row holds a slot
-// (`modelPickerSlot`) and the page mounts a picker in it after each drawing. A list that was open
-// stays open on the new button, with what was being searched.
+// The settings page draws its rows as HTML, and draws them again often: a row holds the picker's
+// button (`modelPickerHTML`, a dropdown to the page's rules and styles), and the page mounts the
+// picker on it after each drawing. A list that was open stays open on the new button, with what
+// was being searched.
 
 import "./model-picker.css";
 import { t } from "./i18n";
 import { formatPerMinute, formatPerMtok, pricingNote } from "./pricing";
 import type { CatalogModel, ModelCatalog, ModelRole } from "./types";
-import { CHECK, closeMenu, esc, ico, menuIsOpenFor, openPopover } from "./ui";
+import { CHECK, closeMenu, esc, ico, menuIsOpenFor, openPopover, placeMenu } from "./ui";
 
 // ---------- what the list shows ----------
 
@@ -464,9 +465,12 @@ export interface ModelPickerOptions {
   onChoose: (id: string) => void;
 }
 
+/** What a picker's button is drawn from: all but what choosing does. */
+export type ModelPickerLook = Omit<ModelPickerOptions, "onChoose">;
+
 export interface ModelPicker {
-  /** Shows another model as chosen, a newer catalog, another label or state. An open list follows and keeps its search. */
-  update(changes: Partial<Omit<ModelPickerOptions, "role" | "onChoose">>): void;
+  /** Shows another model as chosen, a newer catalog, another label or state (not another role). An open list follows and keeps its search. */
+  update(changes: Partial<ModelPickerLook>): void;
   /** Opens the list, with `query` in the search if one is given. */
   open(query?: string): void;
   close(): void;
@@ -477,10 +481,40 @@ export interface ModelPicker {
   destroy(): void;
 }
 
-/** The place for a picker in a row of the page; `mountModelPicker` puts the picker in it. */
+/** What the button shows: the chosen model (or choice), and its price unless the page shows that. */
+function buttonFace(o: ModelPickerLook): { inner: string; label: string; title: string } {
+  const extra = o.extras?.find((e) => e.id === o.current);
+  const model = extra ? undefined : (o.catalog ? modelsFor(o.catalog, o.role) : []).find((m) => m.id === o.current);
+  const name = extra?.name ?? model?.name ?? shortName(o.current);
+  const price = extra?.price ?? (model ? priceText(model, o.role) : o.loading ? "…" : "");
+  const said = extra?.price ?? (model ? priceDescription(model, o.role) : "");
+  return {
+    inner:
+      `<span class="mp-tname">${esc(name)}</span>` +
+      (price && o.showPrice !== false ? `<span class="mp-tprice num">${esc(price)}</span>` : "") +
+      ico("down"),
+    label: `${o.label}: ${name}${said ? `, ${said}` : ""}`,
+    title: model ? `${model.provider}: ${model.name}` : (extra?.name ?? o.current),
+  };
+}
+
+/** The button alone. It is a dropdown (`sel`): it looks and lines up like the page's others. */
+function buttonHTML(o: ModelPickerLook): string {
+  const face = buttonFace(o);
+  return (
+    `<button type="button" class="sel mp-trigger" aria-haspopup="dialog" aria-expanded="false" aria-label="${esc(face.label)}" title="${esc(face.title)}"` +
+    `${o.key ? ` data-k="${esc(o.key)}"` : ""}${o.disabled ? " disabled" : ""}>${face.inner}</button>`
+  );
+}
+
+/** A picker's button in its slot, for a page drawn as HTML; `mountModelPicker` on the slot makes it work. */
+export const modelPickerHTML = (o: ModelPickerLook): string =>
+  `<span class="mp-slot" data-model-picker="${o.role}">${buttonHTML(o)}</span>`;
+
+/** An empty place for a picker; `mountModelPicker` puts its button in it. */
 export const modelPickerSlot = (role: ModelRole): string => `<span class="mp-slot" data-model-picker="${role}"></span>`;
 
-/** Puts a picker into `container`, which it fills. */
+/** Makes a picker of `container`: the button drawn in it (`modelPickerHTML`), or a new one in its place. */
 export function mountModelPicker(container: HTMLElement, options: ModelPickerOptions): ModelPicker {
   return new MountedPicker(container, options);
 }
@@ -508,11 +542,15 @@ class MountedPicker implements ModelPicker {
 
   constructor(container: HTMLElement, options: ModelPickerOptions) {
     this.o = { ...options };
-    container.innerHTML = `<button type="button" class="mp-trigger" aria-haspopup="dialog" aria-expanded="false"></button>`;
+    if (!container.querySelector(".mp-trigger")) container.innerHTML = buttonHTML(this.o);
     this.button = container.querySelector<HTMLButtonElement>(".mp-trigger")!;
-    if (options.key) this.button.dataset.k = options.key;
     this.paintButton();
-    this.button.addEventListener("click", () => (this.isOpen ? this.close() : this.open()));
+    this.button.addEventListener("click", (e) => {
+      // The page's own handler of dropdowns (`sel`) would close the list this click opens.
+      e.stopPropagation();
+      if (this.isOpen) this.close();
+      else this.open();
+    });
     this.button.addEventListener("keydown", (e) => this.buttonKey(e));
     this.takeOver();
   }
@@ -521,8 +559,8 @@ class MountedPicker implements ModelPicker {
     return this.panel !== null && menuIsOpenFor(this.button);
   }
 
-  update(changes: Partial<Omit<ModelPickerOptions, "role" | "onChoose">>): void {
-    this.o = { ...this.o, ...changes };
+  update(changes: Partial<ModelPickerLook>): void {
+    this.o = { ...this.o, ...changes, role: this.o.role };
     this.paintButton();
     if (!this.isOpen || !this.list) return;
     if (this.o.disabled) {
@@ -535,6 +573,7 @@ class MountedPicker implements ModelPicker {
     if (highlighted) this.list.point(highlighted);
     this.paintFilters();
     this.paintList(null);
+    placeMenu(); // the small print may have grown
   }
 
   open(query = ""): void {
@@ -565,18 +604,12 @@ class MountedPicker implements ModelPicker {
   }
 
   private paintButton(): void {
-    const extra = this.o.extras?.find((e) => e.id === this.o.current);
-    const model = extra ? undefined : this.models().find((m) => m.id === this.o.current);
-    const name = extra?.name ?? model?.name ?? shortName(this.o.current);
-    const price = extra?.price ?? (model ? priceText(model, this.o.role) : this.o.loading ? "…" : "");
-    const said = extra?.price ?? (model ? priceDescription(model, this.o.role) : "");
-    this.button.innerHTML =
-      `<span class="mp-tname">${esc(name)}</span>` +
-      (price && this.o.showPrice !== false ? `<span class="mp-tprice num">${esc(price)}</span>` : "") +
-      ico("down");
+    const face = buttonFace(this.o);
+    this.button.innerHTML = face.inner;
     this.button.disabled = this.o.disabled === true;
-    this.button.title = model ? `${model.provider}: ${model.name}` : (extra?.name ?? this.o.current);
-    this.button.setAttribute("aria-label", `${this.o.label}: ${name}${said ? `, ${said}` : ""}`);
+    this.button.title = face.title;
+    this.button.setAttribute("aria-label", face.label);
+    if (this.o.key) this.button.dataset.k = this.o.key;
   }
 
   private search(): HTMLInputElement | null {
@@ -605,6 +638,9 @@ class MountedPicker implements ModelPicker {
     input.value = list.state.query;
     this.paintList("center");
     if (restore.scroll !== undefined) panel.querySelector(".mp-scroll")!.scrollTop = restore.scroll;
+    // Placed again now that it is filled in: the popover was placed empty, without its small print,
+    // and above its button it would now cover it.
+    placeMenu();
     input.focus({ preventScroll: true });
     const caret = Math.min(restore.caret ?? input.value.length, input.value.length);
     input.setSelectionRange(caret, caret);

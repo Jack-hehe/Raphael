@@ -16,34 +16,22 @@ import { formatClock, formatUsd } from "../format";
 import { type LanguageGroup, languageSelectHTML, normalizeLanguages } from "../languages";
 import { bindingLabels } from "../keys";
 import { automaticMicrophoneLabel, automaticMicrophoneShort, shortMicrophoneName } from "../microphone";
-import { cleanupPriceShort, cleanupPriceText, priceOf, pricingNote, sttPriceShort, sttPriceText } from "../pricing";
+import { type ModelPickerLook, type PickerExtra, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
+import { pricingNote } from "../pricing";
 import { runOutDay } from "../report";
 import { WARN_FROM, spendVisual, spentShare } from "../spend";
-import type { AudioDevices, BrainSettings, DeviceSettings, Pricing, SettingsPane, Status } from "../types";
+import type { AudioDevices, BrainSettings, DeviceSettings, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
 import { type Choice, type IconName, btn, esc, fieldHTML, keys, levelBar, note, row, sel, st, tg } from "../ui";
 
-export const MODELS: Choice[] = [
-  { value: "openai/gpt-6-luna", get label() { return t("settings.001"); } },
-  { value: "anthropic/claude-haiku-5.5", get label() { return t("model.haiku"); } },
-  { value: "google/gemini-3.1-flash-lite", get label() { return t("settings.002"); } },
-];
-/** The cloud models the core accepts (brain/settings.py STT_CLOUD_MODELS), the default first. */
-export const STT_MODELS: Choice[] = [
-  { value: "elevenlabs/scribe-v2", get label() { return t("settings.007"); } },
-  { value: "openai/gpt-transcribe", get label() { return t("model.gptTranscribe"); } },
-  { value: "microsoft/mai-transcribe-2", get label() { return t("model.mai"); } },
-  { value: "assemblyai/universal-3-6-pro", get label() { return t("model.assembly"); } },
-  { value: "qwen/qwen3-asr-1.7b", get label() { return t("model.qwen"); } },
-  { value: "google/gemini-3.5-transcribe", get label() { return t("model.geminiTranscribe"); } },
-  { value: "openai/whisper-large-v3-turbo", get label() { return t("settings.008"); } },
-];
+/** The models the core reads when none is chosen (brain/settings.py), shown while it does not answer. */
+const DEFAULT_MODELS = { cleanup: "openai/gpt-6-luna", answer: "openai/gpt-6-luna", stt: "elevenlabs/scribe-v2" } as const;
 /**
- * The last choice of the speech-to-text menu: the engine on this computer instead of a cloud model
- * (core setting `stt_engine` "local"). One menu holds both, so that what turns speech into text is
+ * The first choice of the speech-to-text picker, above the cloud models: the engine on this computer
+ * (core setting `stt_engine` "local"). One picker holds both, so that what turns speech into text is
  * one choice with one price.
  */
 export const LOCAL_STT = "local";
-const LOCAL_STT_CHOICE: Choice = { value: LOCAL_STT, get label() { return t("settings.sttLocal"); } };
+const localStt = (): PickerExtra => ({ id: LOCAL_STT, name: t("settings.sttLocal"), price: t("settings.sttLocalPrice") });
 /** In the owner's order: light, dark, or as Windows is. */
 export const APPEARANCES: Choice[] = [
   { value: "light", get label() { return t("settings.015"); } },
@@ -62,8 +50,6 @@ export const UI_LANGUAGES: Choice[] = [
   { value: "ja", get label() { return t("settings.024"); } },
 ];
 
-/** What the prices in the cleanup model's menu are. */
-export const CLEANUP_PRICE_HEAD = () => t("settings.025");
 const PRICES_LOADING = () => t("settings.026");
 
 /**
@@ -104,8 +90,8 @@ export interface SettingsView {
   hasKey: boolean;
   openrouter: Status["openrouter"] | null;
   spend: Status["spend"] | null;
-  /** The prices of the models: being read (`loading`), read, or not to be had (`failed`). */
-  pricing: Pricing | "loading" | "failed";
+  /** OpenRouter's catalog of models (`models.catalog`): being read (`loading`), read, or not to be had (`failed`). */
+  catalog: ModelCatalog | "loading" | "failed";
   checkingOpenrouter: boolean;
   devices: AudioDevices | null;
   /** The keyboard layout makes Right Alt an AltGr. */
@@ -127,24 +113,19 @@ export interface SettingsView {
   now: number;
 }
 
-/** The choices of a menu: those given, and `current` too if it is not one of them. */
-export function withCurrent(choices: Choice[], current: string, label: (value: string) => string = (v) => v): Choice[] {
-  return choices.some((c) => c.value === current) ? choices : [...choices, { value: current, label: label(current) }];
-}
-
 // ---------- what is chosen ----------
 
 /** The chosen languages, never none. */
 export const languagesOf = (v: SettingsView): string[] => normalizeLanguages(v.brain?.languages);
 export const sttEngine = (v: SettingsView): string => v.brain?.stt_engine ?? "cloud";
-export const sttModel = (v: SettingsView): string => v.brain?.stt_cloud_model ?? STT_MODELS[0].value;
+export const sttModel = (v: SettingsView): string => v.brain?.stt_cloud_model ?? DEFAULT_MODELS.stt;
 /** What the speech-to-text menu has chosen: the cloud model, or 本機 when the engine is this computer's. */
 export const sttChoice = (v: SettingsView): string => (sttEngine(v) === LOCAL_STT ? LOCAL_STT : sttModel(v));
-export const cleanupModel = (v: SettingsView): string => v.brain?.cleanup_model ?? MODELS[0].value;
-export const agentModel = (v: SettingsView): string => v.brain?.agent_model ?? MODELS[0].value;
+export const cleanupModel = (v: SettingsView): string => v.brain?.cleanup_model ?? DEFAULT_MODELS.cleanup;
+export const agentModel = (v: SettingsView): string => v.brain?.agent_model ?? DEFAULT_MODELS.answer;
 export const agentCity = (v: SettingsView): string => v.brain?.agent_city ?? "";
-/** The prices once they are read. */
-const prices = (v: SettingsView): Pricing | null => (typeof v.pricing === "object" ? v.pricing : null);
+/** The catalog once it is read. */
+const catalogOf = (v: SettingsView): ModelCatalog | null => (typeof v.catalog === "object" ? v.catalog : null);
 
 /**
  * The microphones: automatic first, then each one found, and the one chosen before if it is not
@@ -163,23 +144,23 @@ export function microphoneChoices(v: SettingsView): Choice[] {
 
 // ---------- prices ----------
 
-/** The choices with their prices as details, while there are prices to show. */
-function withPrices(v: SettingsView, choices: Choice[], price: (id: string) => string): Choice[] {
-  if (v.pricing === "failed") return choices;
-  return choices.map((c) => ({ ...c, detail: v.pricing === "loading" ? PRICES_LOADING() : price(c.value) }));
+/** The full price of the model chosen for `role`, from the catalog: 「輸入 $0.10 / 輸出 $0.50 每百萬 token」. */
+function chosenPrice(catalog: ModelCatalog, role: ModelRole, id: string): string {
+  const model = modelsFor(catalog, role).find((m) => m.id === id);
+  return model ? priceDescription(model, role) : t("pricing.001");
 }
 
 /** The texts that depend on the prices, by the `data-price` of the element that shows them. */
 export function priceTexts(v: SettingsView): Record<string, string> {
-  const p = prices(v);
+  const catalog = catalogOf(v);
   const local = sttChoice(v) === LOCAL_STT ? t("settings.sttLocalPrice") : null;
-  if (v.pricing === "loading") return { model: PRICES_LOADING(), "agent-model": PRICES_LOADING(), "stt-model": local ?? PRICES_LOADING(), note: "" };
-  if (!p) return { model: "", "agent-model": "", "stt-model": local ?? "", note: t("settings.030") };
+  if (v.catalog === "loading") return { model: PRICES_LOADING(), "agent-model": PRICES_LOADING(), "stt-model": local ?? PRICES_LOADING(), note: "" };
+  if (!catalog) return { model: "", "agent-model": "", "stt-model": local ?? "", note: t("settings.030") };
   return {
-    model: cleanupPriceText(priceOf(p.cleanup, cleanupModel(v))),
-    "agent-model": cleanupPriceText(priceOf(p.cleanup, agentModel(v))),
-    "stt-model": local ?? sttPriceText(priceOf(p.stt, sttModel(v))),
-    note: pricingNote(p, v.now),
+    model: chosenPrice(catalog, "cleanup", cleanupModel(v)),
+    "agent-model": chosenPrice(catalog, "answer", agentModel(v)),
+    "stt-model": local ?? chosenPrice(catalog, "stt", sttModel(v)),
+    note: pricingNote(catalog, v.now),
   };
 }
 
@@ -187,53 +168,39 @@ const priceSpan = (v: SettingsView, k: string, cls = ""): string =>
   `<span${cls ? ` class="${cls}"` : ""} data-price="${k}">${esc(priceTexts(v)[k] ?? "")}</span>`;
 
 // ---------- the three model rows ----------
-// Each row stands alone: its name with the price of what is chosen under it, and the control, a
-// dropdown of the models the core accepts. Its menu (the models with each one's price) is the
-// function after it. A picker of every OpenRouter model can take the place of one row's control in
-// those two functions without touching the others. `k` names the control, its price and its menu.
+// Each row stands alone: its name with the price of what is chosen under it, in full words, and the
+// control, the model picker (model-picker.ts) of every OpenRouter model its role can use. The page
+// draws the picker's button here; settings.ts makes it work. `k` names the control and its price.
 
-/** A row of the models: its name and the price of what is chosen, then its control. */
-const modelRow = (v: SettingsView, label: string, k: string, control: string): string =>
-  row(label, priceSpan(v, k, "price num"), control, { cls: "row-model", attrs: ` data-row="${k}"` });
+/** The three model rows, in order: what each is for, the `k` of its control and its price, and its name. */
+export const MODEL_ROWS: readonly { role: ModelRole; k: string; label: () => string }[] = [
+  { role: "stt", k: "stt-model", label: () => t("settings.031") },
+  { role: "cleanup", k: "model", label: () => t("settings.035") },
+  { role: "answer", k: "agent-model", label: () => t("settings.agentModel") },
+];
 
-/** A dropdown of the models, which cannot be changed while the core does not answer. */
-const modelSel = (v: SettingsView, choices: Choice[], current: string, label: string, k: string): string =>
-  sel(choices, current, label, ` data-k="${k}"${v.brain ? "" : " disabled"}`);
-
-/** 語音轉文字: a cloud model, or this computer. */
-export function sttModelRow(v: SettingsView): string {
-  const label = t("settings.031");
-  return modelRow(v, label, "stt-model", modelSel(v, [...withCurrent(STT_MODELS, sttModel(v)), LOCAL_STT_CHOICE], sttChoice(v), label, "stt-model"));
+/**
+ * What the picker of `role` is drawn from. Its button leaves the price out, which the row says
+ * under its name, and it cannot be used while the core does not answer.
+ */
+export function modelPickerLook(v: SettingsView, role: ModelRole): ModelPickerLook {
+  const { k, label } = MODEL_ROWS.find((r) => r.role === role)!;
+  return {
+    role,
+    key: k,
+    label: label(),
+    current: role === "stt" ? sttChoice(v) : role === "cleanup" ? cleanupModel(v) : agentModel(v),
+    catalog: catalogOf(v),
+    loading: v.catalog === "loading",
+    extras: role === "stt" ? [localStt()] : [],
+    showPrice: false,
+    disabled: v.brain === null,
+  };
 }
 
-/** Its menu: the cloud models with their prices, then this computer, which costs nothing whatever the prices say. */
-export function sttModelChoices(v: SettingsView): Choice[] {
-  const cloud = withPrices(v, withCurrent(STT_MODELS, sttModel(v)), (id) => sttPriceShort(priceOf(prices(v)?.stt, id)));
-  return [...cloud, v.pricing === "failed" ? LOCAL_STT_CHOICE : { ...LOCAL_STT_CHOICE, detail: t("settings.sttLocalPrice") }];
-}
-
-/** 整理文字: the model that cleans up what was said. */
-export function cleanupModelRow(v: SettingsView): string {
-  const label = t("settings.035");
-  return modelRow(v, label, "model", modelSel(v, withCurrent(MODELS, cleanupModel(v)), cleanupModel(v), label, "model"));
-}
-
-export function cleanupModelChoices(v: SettingsView): Choice[] {
-  return withPrices(v, withCurrent(MODELS, cleanupModel(v)), (id) => cleanupPriceShort(priceOf(prices(v)?.cleanup, id)));
-}
-
-/** 拉斐爾的回答: the model that words Raphael's answers (and decides what a request is when Jev cannot). */
-export function answerModelRow(v: SettingsView): string {
-  const label = t("settings.agentModel");
-  return modelRow(v, label, "agent-model", modelSel(v, withCurrent(MODELS, agentModel(v)), agentModel(v), label, "agent-model"));
-}
-
-export function answerModelChoices(v: SettingsView): Choice[] {
-  return withPrices(v, withCurrent(MODELS, agentModel(v)), (id) => cleanupPriceShort(priceOf(prices(v)?.cleanup, id)));
-}
-
-/** The small print above the choices of the cleanup and answer menus, once there are prices. */
-export const tokenPriceHead = (v: SettingsView): string | undefined => (prices(v) ? CLEANUP_PRICE_HEAD() : undefined);
+/** A model row: its name and the price of what is chosen, then its picker. */
+const modelRow = (v: SettingsView, { role, k, label }: (typeof MODEL_ROWS)[number]): string =>
+  row(label(), priceSpan(v, k, "price num"), modelPickerHTML(modelPickerLook(v, role)), { cls: "row-model", attrs: ` data-row="${k}"` });
 
 // ---------- the OpenRouter rows ----------
 
@@ -440,7 +407,7 @@ function usageHTML(v: SettingsView): string {
       ...(v.limitError ? [note(st("err", v.limitError()), ' role="alert"')] : []),
       usageRow(v),
     ], esc(t("settings.usageDifference"))) +
-    section(t("settings.groupModels"), [sttModelRow(v), cleanupModelRow(v), answerModelRow(v)], priceSpan(v, "note"))
+    section(t("settings.groupModels"), MODEL_ROWS.map((r) => modelRow(v, r)), priceSpan(v, "note"))
   );
 }
 
