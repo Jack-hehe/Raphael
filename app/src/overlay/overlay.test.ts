@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { noticeDurationMs } from "./notice";
 import { COMPLETION_MS, formatProgress } from "./progress-caption";
+import { WAITING_LINE_MS } from "./waiting-lines";
 import {
   HOLD_MS,
   OverlayController,
@@ -92,6 +93,15 @@ class FakeView implements OverlayView {
   showProgress(percent: number | null): void {
     this.percent = percent;
     this.percentages.push(percent);
+  }
+  /** The quiet line in the caption now, and every change of it (null: hidden), kept apart from `log`. */
+  waiting: string | null = null;
+  readonly waitings: Array<string | null> = [];
+  readonly waitingLanguages: UiLanguage[] = [];
+  showWaiting(text: string | null, language: UiLanguage): void {
+    this.waiting = text;
+    this.waitings.push(text);
+    if (text !== null) this.waitingLanguages.push(language);
   }
   readonly log: string[] = [];
   readonly languages: UiLanguage[] = [];
@@ -1072,4 +1082,218 @@ test("other events leave a question alone", () => {
   expect(view.log).toEqual(["layout:150"]);
   controller.clickAsk("yes");
   expect(confirm).toHaveBeenCalledExactlyOnceWith("c1", true);
+});
+
+// ---- the waiting lines: a question being thought about ----
+
+// The app sends the phrase book of the interface language with the quiet thought; the page only rotates it.
+const BOOKS: Record<UiLanguage, string[]> = {
+  "zh-TW": ["解析中……", "並列演算中……", "檢索最適解……", "思考加速中……", "整理情報中……"],
+  ja: ["解析中……", "並列演算を実行中……", "最適解を検索中……", "思考を加速中……"],
+  en: ["Analyzing…", "Running parallel calculations…", "Searching for the best answer…", "Accelerating thought…"],
+};
+const BOOK = BOOKS["zh-TW"];
+
+/** A question that was heard: greeted, then released into quiet thinking with the phrase book. */
+const thinkQuietly = (...rest: [lines?: unknown]) => {
+  const lines = rest.length > 0 ? rest[0] : BOOK; // `undefined` is a book too: the app sent none
+  send({ type: "show", mode: "listening", line: GREETING });
+  vi.advanceTimersByTime(833);
+  send({ type: "mode", mode: "thinking", quiet: true, lines } as OverlayEvent);
+};
+/** The lines shown so far, hiding included. */
+const shown = (): string[] => view.waitings.filter((text): text is string => text !== null);
+/** A `random` that walks through 0 to 1 by a step that is no divisor of a phrase book. */
+const walking = (): (() => number) => {
+  let n = 0;
+  return () => (n++ * 0.137) % 1;
+};
+
+test("quiet thinking drops the greeting and starts a line at once, in the caption's place", () => {
+  thinkQuietly();
+  expect(view.last).toBe("clear");
+  expect(shown()).toHaveLength(1);
+  expect(BOOK).toContain(view.waiting);
+  expect(view.waitingLanguages).toEqual(["zh-TW"]);
+  // a quiet line is not Raphael speaking: no subtitle, no percentage, no emblem speaking
+  expect(lines()).toEqual([`line:${GREETING}`]);
+  expect(view.percentages.filter((percent) => percent !== null)).toEqual([]);
+  expect(emblem.log).not.toContainEqual(expect.stringMatching(/^speak:/));
+});
+
+test("the line changes every 1.5 s, never to the one it was", () => {
+  controller = new OverlayController(emblem, view, { confirm, random: () => 0 });
+  thinkQuietly();
+  expect(shown()).toHaveLength(1);
+  vi.advanceTimersByTime(WAITING_LINE_MS - 1);
+  expect(shown()).toHaveLength(1);
+  vi.advanceTimersByTime(1);
+  expect(shown()).toHaveLength(2);
+  vi.advanceTimersByTime(WAITING_LINE_MS * 100);
+  const all = shown();
+  expect(all).toHaveLength(102);
+  all.slice(1).forEach((text, i) => expect(text).not.toBe(all[i]));
+  // a `random` that always says the same still never repeats a line
+  expect(new Set(all).size).toBe(2);
+});
+
+test("the lines rotate through the whole phrase book, at random", () => {
+  controller = new OverlayController(emblem, view, { confirm, random: walking() });
+  thinkQuietly();
+  vi.advanceTimersByTime(WAITING_LINE_MS * 300);
+  const all = shown();
+  all.slice(1).forEach((text, i) => expect(text).not.toBe(all[i]));
+  expect(new Set(all)).toEqual(new Set(BOOK));
+});
+
+test("the default source of randomness never repeats a line either", () => {
+  thinkQuietly();
+  vi.advanceTimersByTime(WAITING_LINE_MS * 500);
+  const all = shown();
+  all.slice(1).forEach((text, i) => expect(text).not.toBe(all[i]));
+  expect(new Set(all).size).toBe(BOOK.length);
+});
+
+test.each(["zh-TW", "ja", "en"] as const)("only the lines the app sent are shown, in the language of the settings: %s", (language) => {
+  controller = new OverlayController(emblem, view, { confirm, random: walking() });
+  send(settings("on", language));
+  thinkQuietly(BOOKS[language]);
+  vi.advanceTimersByTime(WAITING_LINE_MS * 100);
+  expect(new Set(shown())).toEqual(new Set(BOOKS[language]));
+  expect(new Set(view.waitingLanguages)).toEqual(new Set([language]));
+});
+
+test("a line is shown whatever the subtitles say, as the percentage is", () => {
+  send(settings("off"));
+  thinkQuietly();
+  vi.advanceTimersByTime(WAITING_LINE_MS * 3);
+  expect(shown()).toHaveLength(4);
+  expect(view.waiting).not.toBeNull();
+});
+
+test("a change of language is followed by the lines that go on", () => {
+  thinkQuietly();
+  vi.advanceTimersByTime(WAITING_LINE_MS);
+  send(settings("on", "ja"));
+  vi.advanceTimersByTime(WAITING_LINE_MS);
+  expect(view.waitingLanguages).toEqual(["zh-TW", "zh-TW", "ja"]);
+});
+
+test("a second quiet thought while the lines go on neither restarts nor doubles them, nor changes the book", () => {
+  thinkQuietly();
+  vi.advanceTimersByTime(700);
+  send({ type: "mode", mode: "thinking", quiet: true, lines: BOOKS.en });
+  expect(shown()).toHaveLength(1);
+  vi.advanceTimersByTime(WAITING_LINE_MS - 700);
+  expect(shown()).toHaveLength(2);
+  vi.advanceTimersByTime(WAITING_LINE_MS * 10);
+  expect(shown()).toHaveLength(12);
+  for (const text of shown()) expect(BOOK).toContain(text);
+});
+
+test.each([
+  ["an app that sends no lines", undefined],
+  ["an empty book", []],
+  ["a book that is no list", "解析中……"],
+  ["a list of nothing that is text", ["", 5, null, {}]],
+])("%s leaves the thinking quiet", (_, lines) => {
+  thinkQuietly(lines);
+  vi.advanceTimersByTime(60_000);
+  expect(view.waitings).toEqual([]);
+  expect(view.percentages.filter((percent) => percent !== null)).toEqual([]);
+  expect(view.last).toBe("clear");
+});
+
+test("what in the book is not a line is left out", () => {
+  thinkQuietly(["", 5, "解析中……", null]);
+  vi.advanceTimersByTime(WAITING_LINE_MS * 5);
+  // a book of one line has no other line to change to
+  expect(shown()).toEqual(Array(6).fill("解析中……"));
+});
+
+test("quiet thinking that no show began has no line", () => {
+  send({ type: "mode", mode: "thinking", quiet: true, lines: BOOK });
+  vi.advanceTimersByTime(60_000);
+  expect(view.waitings).toEqual([]);
+});
+
+test("a dictation shows no waiting line, only its percentage", () => {
+  send({ type: "show", mode: "listening" });
+  vi.advanceTimersByTime(1000);
+  send({ type: "mode", mode: "thinking" });
+  send({ type: "progress", stage: "cleaning", done: 0, total: 0, audio_seconds: 5 });
+  vi.advanceTimersByTime(60_000);
+  expect(view.waitings).toEqual([]);
+  expect(view.percent).not.toBeNull();
+  send({ type: "progress", stage: "done", done: 0, total: 0, audio_seconds: 0 });
+  send({ type: "complete" });
+  vi.advanceTimersByTime(60_000);
+  expect(view.waitings).toEqual([]);
+});
+
+test("a dictation whose thinking brings lines still shows only its percentage", () => {
+  send({ type: "show", mode: "listening" });
+  send({ type: "mode", mode: "thinking", lines: BOOK });
+  vi.advanceTimersByTime(60_000);
+  expect(view.waitings).toEqual([]);
+  expect(view.percent).not.toBeNull();
+});
+
+test("a dictation after a question starts without the lines of the question", () => {
+  thinkQuietly();
+  vi.advanceTimersByTime(WAITING_LINE_MS * 2);
+  send({ type: "hide" });
+  const before = view.waitings.length;
+  send({ type: "show", mode: "listening" });
+  send({ type: "mode", mode: "thinking" });
+  vi.advanceTimersByTime(60_000);
+  expect(view.waitings).toHaveLength(before);
+  expect(view.waiting).toBeNull();
+  expect(view.percent).not.toBeNull();
+});
+
+const ENDS_THE_WAITING: Array<[string, OverlayEvent]> = [
+  ["an answer", { type: "say", prefix: "答", text: "好的" }],
+  ["a question to the person", ask()],
+  ["a notice", { type: "notice", text: ZH }],
+  ["a hide (Esc)", { type: "hide" }],
+  ["a new recording", { type: "show", mode: "listening" }],
+  ["a new question", { type: "show", mode: "listening", line: GREETING }],
+  ["the emblem listening again", { type: "mode", mode: "listening" }],
+  ["a thought that is not quiet", { type: "mode", mode: "thinking" }],
+  ["a percentage", { type: "progress", stage: "cleaning", done: 0, total: 0, audio_seconds: 5 }],
+  ["a completion", { type: "complete" }],
+];
+
+test.each(ENDS_THE_WAITING)("%s ends the waiting lines for good", (_, event) => {
+  thinkQuietly();
+  vi.advanceTimersByTime(WAITING_LINE_MS * 3);
+  expect(view.waiting).not.toBeNull();
+  send(event);
+  expect(view.waiting).toBeNull();
+  const changes = view.waitings.length;
+  vi.advanceTimersByTime(60_000);
+  expect(view.waitings).toHaveLength(changes);
+});
+
+test("learned words wait for the question and do not stop the lines", () => {
+  thinkQuietly();
+  vi.advanceTimersByTime(WAITING_LINE_MS);
+  send({ type: "learned", text: "learned" });
+  vi.advanceTimersByTime(WAITING_LINE_MS * 5);
+  expect(shown()).toHaveLength(7);
+  expect(view.waiting).not.toBeNull();
+  expect(lines()).toEqual([`line:${GREETING}`]);
+  send({ type: "say", prefix: "答", text: "好的" });
+  expect(view.waiting).toBeNull();
+  vi.advanceTimersByTime(60_000);
+  expect(lines()).toEqual([`line:${GREETING}`, "line:《答。好的》", "line:learned"]);
+});
+
+test("levels and settings leave the lines going", () => {
+  thinkQuietly();
+  send({ type: "level", value: 0.5 });
+  send(settings("on", "zh-TW", 194));
+  vi.advanceTimersByTime(WAITING_LINE_MS * 2);
+  expect(shown()).toHaveLength(3);
 });

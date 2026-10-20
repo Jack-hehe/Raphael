@@ -10,7 +10,15 @@ type OverlayModule = typeof import("./overlay");
 
 class NullView implements OverlayView {
   percent: number | null = null;
-  showProgress(percent: number | null): void { this.percent = percent; }
+  showProgress(percent: number | null): void {
+    this.percent = percent;
+    this.caption = percent === null ? null : String(percent);
+  }
+  /** The caption beside the emblem, which the percentage and the waiting line share. */
+  caption: string | null = null;
+  showWaiting(text: string | null): void {
+    this.caption = text;
+  }
   lines: string | null = null;
   /** The buttons of a question that is on screen: "yes|no", or null. */
   buttons: string | null = null;
@@ -523,5 +531,49 @@ test("Esc during a question (the app hides the emblem) takes the buttons away at
   expect(p.view.buttons).toBeNull();
   expect(p.view.lines).toBeNull();
   run(1000);
+  expect(p.emblem.phase).toBe("hidden");
+});
+
+const WAITING = ["解析中……", "並列演算中……", "檢索最適解……"];
+
+test("a question: greeted, thought about with changing lines, and the answer takes them away", () => {
+  const p = page();
+  p.send(SETTINGS, { type: "show", mode: "listening", line: "《告。今天有什麼事可以幫忙嗎？》" });
+  run(1500);
+  expect(p.view.lines).toBe("《告。今天有什麼事可以幫忙嗎？》");
+  expect(p.view.caption).toBeNull();
+  p.send({ type: "mode", mode: "thinking", quiet: true, lines: WAITING });
+  expect(p.view.lines).toBeNull();
+  expect(p.view.caption).not.toBeNull();
+  const seen = new Set<string | null>();
+  for (let i = 0; i < 20; i++) {
+    run(1500);
+    seen.add(p.view.caption);
+    expect(p.drawsNow()).toBe(true);
+  }
+  expect(seen.size).toBeGreaterThan(1);
+  for (const caption of seen) expect(WAITING).toContain(caption);
+  expect(p.view.percent).toBeNull();
+  p.send(ANSWER);
+  expect(p.view.caption).toBeNull();
+  run(1000);
+  expect(p.view.lines).toBe("《答。台北現在 24 度，多雲。》");
+  expect(p.view.caption).toBeNull();
+  run(10_000);
+  expect(p.emblem.phase).toBe("hidden");
+  expect(p.view.caption).toBeNull();
+});
+
+test("Esc while a question is thought about takes the line away with the emblem", () => {
+  const p = page();
+  p.send(SETTINGS, { type: "show", mode: "listening", line: "《告。今天有什麼事可以幫忙嗎？》" });
+  run(1000);
+  p.send({ type: "mode", mode: "thinking", quiet: true, lines: WAITING });
+  run(4000);
+  expect(p.view.caption).not.toBeNull();
+  p.send({ type: "hide" });
+  expect(p.view.caption).toBeNull();
+  run(10_000);
+  expect(p.view.caption).toBeNull();
   expect(p.emblem.phase).toBe("hidden");
 });

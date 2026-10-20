@@ -84,9 +84,11 @@ test("a greeting and a quiet thought are logged as flags, without Raphael's word
   const handler = guardHandler(() => {}, log);
   handler({ type: "show", mode: "listening", line: "《告。今天有什麼事可以幫忙嗎？》" });
   handler({ type: "mode", mode: "thinking", quiet: true });
+  handler({ type: "mode", mode: "thinking", quiet: true, lines: ["Private waiting line", "Another"] });
   handler({ type: "mode", mode: "thinking", quiet: false });
   expect(logged).toEqual([
     ["debug", 'event {"type":"show","mode":"listening","greeting":true}'],
+    ["debug", 'event {"type":"mode","mode":"thinking","quiet":true}'],
     ["debug", 'event {"type":"mode","mode":"thinking","quiet":true}'],
     ["debug", 'event {"type":"mode","mode":"thinking"}'],
   ]);

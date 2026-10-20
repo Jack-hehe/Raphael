@@ -65,7 +65,8 @@ body {
   bottom: calc(var(--ask-bottom) + var(--ask-h) + 10px);
 }
 
-/* A single numeric caption shares the space beside the emblem. */
+/* A single caption shares the space beside the emblem: a dictation's percentage, or the quiet
+   lines that change while Raphael thinks about a question. */
 .progress {
   position: fixed;
   right: var(--subs-right);
@@ -75,6 +76,15 @@ body {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
+}
+
+/* The quiet lines are written in the language of the app. */
+.progress:lang(ja) {
+  font-family: var(--ja);
+}
+
+.progress:lang(en) {
+  font-family: var(--ui);
 }
 
 /* White, outlined in black, no box behind them. One line of one language: the one of the app. */
