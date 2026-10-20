@@ -261,7 +261,7 @@ export class PickerList {
 
   constructor(
     readonly role: ModelRole,
-    private models: CatalogModel[],
+    private readonly models: CatalogModel[],
     /** The model chosen now: checked, and highlighted when the list opens. */
     public current: string,
     state: Partial<PickerState> = {},
@@ -270,12 +270,6 @@ export class PickerList {
   ) {
     this.state = { ...DEFAULT_PICKER_STATE, ...state };
     this.refresh(current);
-  }
-
-  /** Shows these models (a newer catalog), keeping the search and the highlighted model. */
-  setModels(models: CatalogModel[]): void {
-    this.models = models;
-    this.refresh(this.activeId() ?? this.current);
   }
 
   /** A new search highlights the first row; none at all, the chosen model again. */
@@ -477,8 +471,6 @@ export interface ModelPicker {
   readonly isOpen: boolean;
   /** The button that opens the list. */
   readonly button: HTMLButtonElement;
-  /** Takes the picker off the page (its list closes). */
-  destroy(): void;
 }
 
 /** What the button shows: the chosen model (or choice), and its price unless the page shows that. */
@@ -510,9 +502,6 @@ function buttonHTML(o: ModelPickerLook): string {
 /** A picker's button in its slot, for a page drawn as HTML; `mountModelPicker` on the slot makes it work. */
 export const modelPickerHTML = (o: ModelPickerLook): string =>
   `<span class="mp-slot" data-model-picker="${o.role}">${buttonHTML(o)}</span>`;
-
-/** An empty place for a picker; `mountModelPicker` puts its button in it. */
-export const modelPickerSlot = (role: ModelRole): string => `<span class="mp-slot" data-model-picker="${role}"></span>`;
 
 /** Makes a picker of `container`: the button drawn in it (`modelPickerHTML`), or a new one in its place. */
 export function mountModelPicker(container: HTMLElement, options: ModelPickerOptions): ModelPicker {
@@ -585,12 +574,6 @@ class MountedPicker implements ModelPicker {
     this.forget();
     if (menuIsOpenFor(this.button)) closeMenu();
     if (had && this.button.isConnected) this.button.focus();
-  }
-
-  destroy(): void {
-    if (this.isOpen) closeMenu();
-    this.forget();
-    this.button.remove();
   }
 
   // ---------- drawing ----------

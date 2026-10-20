@@ -12,9 +12,6 @@ import type { Choice } from "./ui";
 
 export type DictationMode = DeviceSettings["dictation_mode"];
 
-/** The same as `DictationMode::default()` in device_settings.rs. */
-export const DEFAULT_DICTATION_MODE: DictationMode = "toggle";
-
 /** The menu of the settings page: a short name, and what the mode does under it. */
 export const DICTATION_MODES: Choice[] = [
   { value: "toggle", get label() { return t("dictation.001"); }, get desc() { return modeDescription("toggle"); } },

@@ -293,12 +293,15 @@ describe("the keys", () => {
   });
 
   test("a newer catalog keeps the search and the highlighted model", () => {
-    const list = new PickerList("cleanup", LLMS, "openai/gpt-6-luna", { query: "gpt" });
-    list.point("openai/gpt-10");
-    list.setModels([...LLMS, llm("openai/gpt-11", { name: "GPT-11", provider: "OpenAI" })]);
-    expect(list.state.query).toBe("gpt");
-    expect(list.activeId()).toBe("openai/gpt-10");
-    expect(ids(list.rows)).toContain("openai/gpt-11");
+    // What an open picker does when the catalog changes: a new list in the old one's state, on
+    // the new models, with the model that was highlighted highlighted again.
+    const before = new PickerList("cleanup", LLMS, "openai/gpt-6-luna", { query: "gpt" });
+    before.point("openai/gpt-10");
+    const after = new PickerList("cleanup", [...LLMS, llm("openai/gpt-11", { name: "GPT-11", provider: "OpenAI" })], before.current, before.state);
+    after.point(before.activeId()!);
+    expect(after.state.query).toBe("gpt");
+    expect(after.activeId()).toBe("openai/gpt-10");
+    expect(ids(after.rows)).toContain("openai/gpt-11");
   });
 });
 

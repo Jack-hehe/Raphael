@@ -18,8 +18,6 @@ import { COMPLETION_MS, formatProgress, progressPercent } from "./progress-capti
 import { WAITING_LINE_MS, nextWaitingLine } from "./waiting-lines";
 import { EntranceTimer, FrameWatch, describeError, guardHandler, subscribeWithRetry, type LogLevel, type PageLog } from "./diagnostics";
 
-export { noticeDurationMs };
-
 /** The language of every subtitle: the interface language of the app. */
 export type UiLanguage = "zh-TW" | "en" | "ja";
 

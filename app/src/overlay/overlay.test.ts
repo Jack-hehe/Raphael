@@ -11,7 +11,6 @@ import {
   type OverlayEvent,
   type OverlayView,
   type UiLanguage,
-  noticeDurationMs as exportedFromOverlay,
 } from "./overlay";
 import type { Mode, Phase } from "./emblem";
 
@@ -33,10 +32,6 @@ test("a long line stays 12 s at most", () => {
   expect(noticeDurationMs("字".repeat(71))).toBe(12_000);
   expect(noticeDurationMs("字".repeat(400))).toBe(12_000);
   expect(noticeDurationMs("字".repeat(69))).toBe(1500 + 150 * 69);
-});
-
-test("overlay.ts exports the same function and can be imported without a browser", () => {
-  expect(exportedFromOverlay).toBe(noticeDurationMs);
 });
 
 // ---- the controller: what the page does with each event ----
