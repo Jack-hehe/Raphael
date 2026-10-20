@@ -1,11 +1,22 @@
 name: CI
 
 # The repository is private, so Actions minutes are limited (Windows runners count extra).
-# A branch is checked through its pull request, and main again after each merge.
+# A branch is checked through its pull request, and main again after each merge. A change to
+# the documents below alone starts no run: no test or build reads them.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - "LICENSE"
+      - "eval/README.md"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - "LICENSE"
+      - "eval/README.md"
   workflow_dispatch:
 
 permissions:
