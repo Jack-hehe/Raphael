@@ -29,9 +29,7 @@ def at(y, m, d, h=12, minute=0, second=0):
     return int(datetime(y, m, d, h, minute, second, tzinfo=TPE).timestamp() * 1000)
 
 
-def say(
-    conn, when_ms, text, *, audio=2.0, stt_ms=0, llm_ms=0, kind="dictation", target_app="Code.exe"
-):
+def say(conn, when_ms, text, *, audio=2.0, stt_ms=0, llm_ms=0, kind="dictation"):
     """A dictation of `text` in the history."""
     HistoryStore(conn).add(
         item(
@@ -42,7 +40,6 @@ def say(
             stt_ms=stt_ms,
             llm_ms=llm_ms,
             kind=kind,
-            target_app=target_app,
         )
     )
 
@@ -400,65 +397,6 @@ def test_the_other_numbers_do_not_depend_on_the_days_asked_for(conn):
         assert short[key] == long[key]
 
 
-# --- by app -------------------------------------------------------------------------------------
-
-
-def apps(conn, now=NOW, **kwargs):
-    return store_at(conn, now).summary(**kwargs)["by_app"]
-
-
-def test_by_app_counts_the_dictations_and_words_of_each_target_app(conn):
-    say(conn, at(2026, 10, 14, 9), "你好世界", target_app="Code.exe")
-    say(conn, at(2026, 10, 13, 9), "Hello world", target_app="Code.exe")
-    say(conn, at(2026, 10, 12, 9), "一二三", target_app="LINE.exe")
-    assert apps(conn) == [
-        {"app": "Code.exe", "dictations": 2, "words": 6},
-        {"app": "LINE.exe", "dictations": 1, "words": 3},
-    ]
-
-
-def test_by_app_lists_the_apps_with_the_most_words_first_and_ties_by_name(conn):
-    say(conn, NOW, "一二", target_app="b.exe")
-    say(conn, NOW, "一二", target_app="a.exe")
-    say(conn, NOW, "一二三四五", target_app="z.exe")
-    assert [entry["app"] for entry in apps(conn)] == ["z.exe", "a.exe", "b.exe"]
-
-
-@pytest.mark.parametrize("target_app", [None, "", "   "])
-def test_by_app_calls_a_dictation_without_a_target_app_unknown(conn, target_app):
-    say(conn, NOW, "你好", target_app=target_app)
-    say(conn, NOW, "再見", target_app=None)
-    assert apps(conn) == [{"app": "unknown", "dictations": 2, "words": 4}]
-
-
-def test_by_app_keeps_apps_apart_that_only_differ_in_letter_case(conn):
-    say(conn, NOW, "你好", target_app="Code.exe")
-    say(conn, NOW, "你好", target_app="code.exe")
-    assert sorted(entry["app"] for entry in apps(conn)) == ["Code.exe", "code.exe"]
-
-
-def test_by_app_covers_the_last_thirty_days_and_not_the_one_before(conn):
-    say(conn, at(2026, 9, 15, 0, 0), "first", target_app="old.exe")  # 29 days before the 14th
-    say(conn, at(2026, 9, 14, 23, 59), "too old", target_app="older.exe")
-    assert apps(conn) == [{"app": "old.exe", "dictations": 1, "words": 1}]
-
-
-def test_by_app_does_not_depend_on_the_days_of_by_day(conn):
-    say(conn, at(2026, 9, 20, 9), "你好", target_app="Code.exe")
-    assert apps(conn, days=3) == apps(conn, days=60) == [
-        {"app": "Code.exe", "dictations": 1, "words": 2}
-    ]
-
-
-def test_by_app_only_counts_dictations(conn):
-    say(conn, NOW, "你好", kind="something-else")
-    assert apps(conn) == []
-
-
-def test_by_app_of_an_empty_history_is_empty(conn):
-    assert apps(conn) == []
-
-
 # --- active days and the longest streak -------------------------------------------------------
 
 
@@ -564,9 +502,7 @@ async def test_stats_summary_is_a_method_of_the_brain(conn):
         "time_saved_seconds",
         "active_days",
         "longest_streak_days",
-        "by_app",
     }
-    assert summary["by_app"] == [{"app": "Code.exe", "dictations": 1, "words": 4}]
     assert summary["today"]["dictations"] == 1
     assert summary["today"]["words"] == 4
     assert summary["today"]["cost_usd"] == pytest.approx(0.25)
