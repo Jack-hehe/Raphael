@@ -38,7 +38,7 @@ use crate::device_settings::{
     self, Appearance, DeviceSettings, DeviceStore, DictationMode, FILE_NAME, Subtitles,
 };
 use crate::dictation::ModeCell;
-use crate::hotkey::{Bindings, HotkeyService, PauseReason, WindowHotkey};
+use crate::hotkey::{Bindings, HotkeyService, WindowHotkey};
 use crate::notices::LanguageCell;
 use crate::overlay::Overlay;
 use crate::rpc::{CORE_EXITED, Notification, RpcError, TIMEOUT};
@@ -639,14 +639,14 @@ pub fn window_hotkey(
 }
 
 /// Pauses (`true`) or resumes (`false`) the dictation hotkeys, so that the settings page can
-/// record a new one ([`PauseReason::KeyRecorder`]).
+/// record a new one.
 #[tauri::command]
 pub fn hotkeys_pause(app: AppHandle, webview: Webview, paused: bool) -> Result<(), String> {
     require_main(&webview)?;
     let hotkeys = app
         .try_state::<Arc<HotkeyService>>()
         .ok_or("全域快捷鍵沒有啟動")?;
-    hotkeys.set_paused(PauseReason::KeyRecorder, paused);
+    hotkeys.set_paused(paused);
     Ok(())
 }
 

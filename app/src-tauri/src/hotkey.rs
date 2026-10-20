@@ -276,19 +276,18 @@ impl HotkeyService {
         self.send(Command::SetCancel(on));
     }
 
-    /// Pauses (`true`) or resumes (`false`) the dictation, paste-last and agent keys for `reason`.
-    /// While paused they are not registered, so they reach the foreground app like any other key. Used
-    /// by the hotkey recorder in the settings ([`PauseReason::KeyRecorder`]). The keys are paused
-    /// while any reason is set. Setting a reason that is already set changes nothing, and one
-    /// resume withdraws it. The cancel keys follow
-    /// [`set_cancel_enabled`](Self::set_cancel_enabled) and are not affected.
+    /// Pauses (`true`) or resumes (`false`) the dictation, paste-last and agent keys, while the
+    /// settings page records a new key combination. While paused they are not registered, so they
+    /// reach the foreground app like any other key. Pausing again changes nothing, and one resume
+    /// ends the pause. The cancel keys follow [`set_cancel_enabled`](Self::set_cancel_enabled) and
+    /// are not affected.
     ///
     /// Takes effect within a few milliseconds, in order with the other calls on this service.
-    pub fn set_paused(&self, reason: PauseReason, paused: bool) {
-        self.send(Command::SetPaused { reason, paused });
+    pub fn set_paused(&self, paused: bool) {
+        self.send(Command::SetPaused(paused));
     }
 
-    /// Routes focused-window input through the worker's pauses and duplicate gate, then through
+    /// Routes focused-window input through the worker's pause and duplicate gate, then through
     /// the same event channel as the global keyboard hook. The overlay never calls this.
     pub fn window_hotkey(&self, kind: WindowHotkey) -> Result<(), String> {
         self.commands
@@ -335,19 +334,8 @@ enum Command {
         reply: Sender<Result<(), String>>,
     },
     SetCancel(bool),
-    SetPaused {
-        reason: PauseReason,
-        paused: bool,
-    },
+    SetPaused(bool),
     Shutdown,
-}
-
-/// Why the dictation and paste-last keys are paused. The keys come back only when every reason
-/// has been withdrawn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PauseReason {
-    /// The settings page is recording a new key combination.
-    KeyRecorder,
 }
 
 /// What a registered key does.
@@ -460,8 +448,8 @@ struct Worker<B: Backend> {
     events: UnboundedSender<HotkeyEvent>,
     wanted: Wanted,
     cancel_enabled: bool,
-    /// The reasons the dictation and paste-last keys are paused for; empty when they are not.
-    pauses: Vec<PauseReason>,
+    /// The dictation, paste-last and agent keys are paused: the settings page records a key.
+    paused: bool,
     registered: Vec<Registration<B::Id>>,
     duplicates: DuplicateGate,
 }
@@ -474,7 +462,7 @@ impl<B: Backend> Worker<B> {
             events,
             wanted,
             cancel_enabled: false,
-            pauses: Vec::new(),
+            paused: false,
             registered: Vec::new(),
             duplicates: DuplicateGate::default(),
         }
@@ -503,8 +491,7 @@ impl<B: Backend> Worker<B> {
             Command::WindowHotkey(kind) => {
                 let event = HotkeyEvent::from(kind);
                 // Recording a binding must receive every key, including Escape.
-                if !self.pauses.is_empty() || (event == HotkeyEvent::Cancel && !self.cancel_enabled)
-                {
+                if self.paused || (event == HotkeyEvent::Cancel && !self.cancel_enabled) {
                     return;
                 }
                 self.forward(event, EventSource::Window);
@@ -525,11 +512,8 @@ impl<B: Backend> Worker<B> {
                 self.cancel_enabled = on;
                 self.sync_logged();
             }
-            Command::SetPaused { reason, paused } => {
-                self.pauses.retain(|r| *r != reason);
-                if paused {
-                    self.pauses.push(reason);
-                }
+            Command::SetPaused(paused) => {
+                self.paused = paused;
                 self.sync_logged();
             }
             Command::Shutdown => {}
@@ -562,7 +546,7 @@ impl<B: Backend> Worker<B> {
     /// The keys that should be registered right now.
     fn active(&self) -> Vec<(Hotkey, Role)> {
         let mut active = Vec::new();
-        if self.pauses.is_empty() {
+        if !self.paused {
             active.extend(self.wanted.dictation.iter().map(|k| (*k, Role::Dictation)));
             active.extend(self.wanted.paste_last.iter().map(|k| (*k, Role::PasteLast)));
             active.extend(self.wanted.agent.iter().map(|k| (*k, Role::Agent)));
@@ -1102,8 +1086,8 @@ mod tests {
         (Worker::new(fake.clone(), wanted, events), rx)
     }
 
-    fn pause(w: &mut Worker<FakeBackend>, reason: PauseReason, paused: bool) {
-        w.handle(Command::SetPaused { reason, paused });
+    fn pause(w: &mut Worker<FakeBackend>, paused: bool) {
+        w.handle(Command::SetPaused(paused));
     }
 
     fn drain(rx: &mut UnboundedReceiver<HotkeyEvent>) -> Vec<HotkeyEvent> {
@@ -1139,7 +1123,7 @@ mod tests {
         w.handle(Command::WindowHotkey(WindowHotkey::Cancel));
         assert!(drain(&mut rx).is_empty(), "idle Esc belongs to the UI");
         w.handle(Command::SetCancel(true));
-        pause(&mut w, PauseReason::KeyRecorder, true);
+        pause(&mut w, true);
         for kind in [
             WindowHotkey::DictationDown,
             WindowHotkey::DictationUp,
@@ -1154,7 +1138,7 @@ mod tests {
             drain(&mut rx).is_empty(),
             "the recorder must receive every key"
         );
-        pause(&mut w, PauseReason::KeyRecorder, false);
+        pause(&mut w, false);
         w.handle(Command::WindowHotkey(WindowHotkey::DictationDown));
         assert_eq!(drain(&mut rx), vec![HotkeyEvent::DictationDown]);
         w.handle(Command::WindowHotkey(WindowHotkey::Cancel));
@@ -1295,10 +1279,10 @@ mod tests {
         w.sync().unwrap();
         w.handle(Command::SetCancel(true));
 
-        pause(&mut w, PauseReason::KeyRecorder, true);
+        pause(&mut w, true);
         assert_eq!(fake.registered(), hks(&["Escape", "AltRight+Escape"]));
 
-        pause(&mut w, PauseReason::KeyRecorder, false);
+        pause(&mut w, false);
         assert_eq!(
             fake.registered(),
             hks(&[
@@ -1311,26 +1295,26 @@ mod tests {
         );
 
         w.handle(Command::SetCancel(false));
-        pause(&mut w, PauseReason::KeyRecorder, true);
+        pause(&mut w, true);
         assert!(fake.registered().is_empty());
     }
 
     #[test]
-    fn a_pause_reason_set_twice_is_withdrawn_once() {
+    fn a_pause_set_twice_is_ended_by_one_resume() {
         let fake = FakeBackend::default();
         let (mut w, _rx) = worker(&fake, &Bindings::default());
         w.sync().unwrap();
 
         // Pausing again is not a second pause to undo.
-        pause(&mut w, PauseReason::KeyRecorder, true);
-        pause(&mut w, PauseReason::KeyRecorder, true);
-        pause(&mut w, PauseReason::KeyRecorder, false);
+        pause(&mut w, true);
+        pause(&mut w, true);
+        pause(&mut w, false);
         assert_eq!(
             fake.registered(),
             hks(&["AltRight", "AltRight+V", "AltRight+Space"])
         );
-        // Resuming a reason that is not set changes nothing.
-        pause(&mut w, PauseReason::KeyRecorder, false);
+        // Resuming when nothing is paused changes nothing.
+        pause(&mut w, false);
         assert_eq!(
             fake.registered(),
             hks(&["AltRight", "AltRight+V", "AltRight+Space"])
@@ -1342,7 +1326,7 @@ mod tests {
         let fake = FakeBackend::default();
         let (mut w, _rx) = worker(&fake, &Bindings::default());
         w.sync().unwrap();
-        pause(&mut w, PauseReason::KeyRecorder, true);
+        pause(&mut w, true);
 
         let (reply, answer) = mpsc::channel();
         let wanted = Wanted::from_bindings(&bindings(&["AltRight+Space"], &["F9"])).unwrap();
@@ -1350,7 +1334,7 @@ mod tests {
         assert_eq!(answer.recv().unwrap(), Ok(()));
         assert!(fake.registered().is_empty(), "still paused");
 
-        pause(&mut w, PauseReason::KeyRecorder, false);
+        pause(&mut w, false);
         assert_eq!(fake.registered(), hks(&["AltRight+Space", "F9"]));
     }
 
@@ -1499,7 +1483,7 @@ mod tests {
         // Right Alt went down and came up, then the pause arrived.
         fake.press("AltRight");
         fake.release("AltRight");
-        pause(&mut w, PauseReason::KeyRecorder, true);
+        pause(&mut w, true);
 
         assert_eq!(
             drain(&mut rx),
@@ -1514,7 +1498,7 @@ mod tests {
         let (mut w, mut rx) = worker(&fake, &Bindings::default());
         w.sync().unwrap();
         let right_alt = fake.id_of("AltRight");
-        pause(&mut w, PauseReason::KeyRecorder, true);
+        pause(&mut w, true);
 
         // An event that was produced just before the key was unregistered arrives late.
         fake.queue(right_alt, HotkeyState::Pressed);
@@ -1584,11 +1568,11 @@ mod tests {
             drain(&mut rx),
             vec![HotkeyEvent::DictationDown, HotkeyEvent::DictationUp]
         );
-        svc.set_paused(PauseReason::KeyRecorder, true);
+        svc.set_paused(true);
         svc.window_hotkey(WindowHotkey::DictationDown).unwrap();
         settle(&svc, &b);
         assert!(drain(&mut rx).is_empty());
-        svc.set_paused(PauseReason::KeyRecorder, false);
+        svc.set_paused(false);
         svc.window_hotkey(WindowHotkey::DictationDown).unwrap();
         settle(&svc, &b);
         assert_eq!(drain(&mut rx), vec![HotkeyEvent::DictationDown]);
@@ -1613,11 +1597,11 @@ mod tests {
             ])
         );
 
-        svc.set_paused(PauseReason::KeyRecorder, true);
+        svc.set_paused(true);
         settle(&svc, &b);
         assert_eq!(fake.registered(), hks(&["Escape", "AltRight+Escape"]));
 
-        svc.set_paused(PauseReason::KeyRecorder, false);
+        svc.set_paused(false);
         svc.set_cancel_enabled(false);
         settle(&svc, &b);
         assert_eq!(
