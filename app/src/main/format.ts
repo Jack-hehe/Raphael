@@ -66,11 +66,23 @@ export function formatRetention(days: number): string {
  * `Raphael's core is not running`, or one of the Chinese messages the Rust side writes itself.
  */
 export function describeError(err: unknown): string {
-  const text = err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
+  const text = err instanceof Error ? err.message : typeof err === "string" ? err : asText(err);
   // CORE_EXITED and TIMEOUT of rpc.rs, and the message of core_call for a core that is missing.
   if (text.includes("core is not running") || text.startsWith("[-32000]")) return t("format.010");
   if (text.startsWith("[-32001]")) return t("format.011");
   return backendMessage(text.replace(/^\[-?\d+\] /, ""));
+}
+
+/**
+ * Any other rejection as text. JSON gives nothing for undefined, a function or a symbol, and
+ * throws on a bigint or a loop: those are written as JavaScript writes them.
+ */
+function asText(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 /** The monthly limit as the home page shows it next to the spend: `20`, `7.50`. */

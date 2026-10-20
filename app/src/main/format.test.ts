@@ -112,6 +112,16 @@ describe("describeError says what went wrong in words the page can show", () => 
     expect(describeError(new Error("boom"))).toBe("boom");
     expect(describeError({ code: 3 })).toBe('{"code":3}');
   });
+
+  test("a rejection that JSON cannot write still has words, and never throws", () => {
+    // It runs in catch blocks and while a page draws its error: throwing there would lose the message.
+    const loop: Record<string, unknown> = {};
+    loop.self = loop;
+    expect(describeError(undefined)).toBe("undefined");
+    expect(describeError(Symbol("gone"))).toBe("Symbol(gone)");
+    expect(describeError(10n)).toBe("10");
+    expect(describeError(loop)).toBe("[object Object]");
+  });
 });
 
 test("formatLimit leaves out cents that are not there", () => {
