@@ -5,9 +5,11 @@ license = "MIT"
 requires-python = ">=3.12.11,<3.13"
 dependencies = [
     "httpx>=0.28.1,<1",
+    "icalendar>=7.3.0",
     "keyring==25.7.0",
     "numpy>=2",
     "opencc==1.4.2",
+    "python-dateutil>=2.9.0.post0",
     "sherpa-onnx==1.13.8",
     # The libraries sherpa-onnx loads (onnxruntime.dll among them). Its wheels name this package as a
     # dependency, but uv locks from the metadata of the first wheel listed (linux_armv7l), which
