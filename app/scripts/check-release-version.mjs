@@ -1,5 +1,6 @@
-// A release has one version. It is written in four files, and the installer, the executable and the
-// Python core would each report a different one if they drifted apart.
+// A release has one version. It is written in five files, and the installer, the executable and the
+// Python core would each report a different one if they drifted apart (the core tells the app its
+// `__version__` when they meet).
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,6 +28,7 @@ const versionFiles = [
   ["app/src-tauri/tauri.conf.json", (text) => JSON.parse(text.replace(/^﻿/, "")).version],
   ["app/src-tauri/Cargo.toml", (text) => tableVersion(text, "package")],
   ["core/pyproject.toml", (text) => tableVersion(text, "project")],
+  ["core/src/raphael_core/__init__.py", (text) => /^__version__\s*=\s*["']([^"']*)["']/m.exec(text)?.[1]],
 ];
 
 /** The version of each file that carries one, by repository-relative path. */
