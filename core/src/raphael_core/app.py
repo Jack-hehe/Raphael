@@ -201,6 +201,11 @@ class EchoClient:
         # for a real failure.
         raise OpenRouterError(0, "bad_request", "The fake LLM does not transcribe")
 
+    async def models(self, timeout_s: float = 5.0) -> list[dict]:
+        # No model list without the network either: the catalog is Raphael's own models, as it is
+        # when OpenRouter cannot be reached.
+        raise OpenRouterError(0, "network", "The fake LLM has no model list")
+
     async def key_info(self, key: str | None = None, timeout_s: float = 5.0) -> KeyInfo:
         return KeyInfo(
             label="fake",

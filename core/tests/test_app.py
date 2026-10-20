@@ -36,6 +36,7 @@ from raphael_core.app import (
 )
 from raphael_core.brain import catalog, pricing, textnorm
 from raphael_core.brain.cleanup import build_user_message
+from raphael_core.brain.openrouter import OpenRouterError
 from raphael_core.device import audio, dictation, models
 from raphael_core.device.models import REGISTRY, ModelFile, ModelManager, ModelSpec
 from raphael_core.protocol import (
@@ -285,6 +286,17 @@ async def test_the_fake_llm_gives_the_transcript_back_at_no_cost():
     assert (await client.key_info()).label  # a key check passes
     client.warm_up()
     await client.aclose()
+
+
+async def test_the_fake_llm_has_no_model_list_as_if_there_were_no_network(make_app, caplog):
+    with pytest.raises(OpenRouterError) as failed:
+        await EchoClient().models(timeout_s=1.0)
+    assert failed.value.kind == "network"
+    # So the catalog is Raphael's own models, and nothing went wrong on the way there.
+    with caplog.at_level(logging.WARNING):
+        listed = await make_app().call("models.catalog")
+    assert listed["source"] == "builtin" and listed["llm"] and listed["stt"]
+    assert not [record for record in caplog.records if record.name.startswith("raphael_core")]
 
 
 async def test_the_fake_llm_keeps_a_transcript_with_line_breaks_whole():
