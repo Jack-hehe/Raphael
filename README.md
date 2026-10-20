@@ -29,12 +29,12 @@ Raphael then runs from the system tray.
 
 ## Privacy
 
-- **Your API key** is kept in Windows Credential Manager, never in files, logs or the database.
+- **Your API key and calendar addresses** are kept in Windows Credential Manager, never in files, logs or the database.
 - **Your data** (settings, history and dictionary) stays on your computer, in `%APPDATA%\Raphael`.
 - **Speech recognition** runs in the cloud by default: the recording and dictionary hints are sent to OpenRouter. Choose on-device recognition in Settings to keep audio on your computer.
 - **Cleanup:** with an API key set and budget remaining, Raphael sends the transcript to OpenRouter, together with dictionary hints and replacement rules, your language settings and the name of the app you are dictating into. This also happens with on-device recognition, so Raphael is not fully offline.
 - **Correction learning** looks only at the field Raphael just pasted into, for up to 60 seconds. It reads the field's text or, where an app does not expose it, the edits you type there. Password fields are skipped, and you can turn learning off in Settings.
-- **No telemetry.** Besides OpenRouter, Raphael connects only to Hugging Face and GitHub to download speech models.
+- **No telemetry.** Besides OpenRouter, Raphael connects only to Hugging Face and GitHub to download speech models, and to the calendar addresses you add.
 
 ## Architecture
 
