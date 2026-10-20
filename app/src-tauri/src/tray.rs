@@ -1,8 +1,6 @@
 //! The system tray icon and its menu.
 //!
-//! Left click shows the main window. The right-click menu has the items below. "Open" and
-//! "Quit" act at once; the two dictation items only send a [`TrayCommand`] on the channel given
-//! to [`build`], whose receiving end the dictation controller holds.
+//! Left click shows the main window. The right-click menu has "Open" and "Quit".
 
 use std::path::{Path, PathBuf};
 use tauri::{
@@ -10,7 +8,6 @@ use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
 };
-use tokio::sync::mpsc::UnboundedSender;
 
 fn private_tray_icon_path(crate_dir: &Path, is_dev: bool) -> Option<PathBuf> {
     // Release builds must not read a path into the developer's checkout.
@@ -44,25 +41,12 @@ fn tray_icon() -> tauri::image::Image<'static> {
 /// Id of the tray icon (`AppHandle::tray_by_id` finds it by this).
 pub const TRAY_ID: &str = "raphael";
 
-/// What a tray menu item asks the rest of the app to do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrayCommand {
-    /// 「貼上上一次聽寫」: put the latest dictation on the clipboard again (the menu has taken the
-    /// focus, so it cannot be pasted for the user) and say to press Ctrl+V.
-    PasteLast,
-    /// 「暫停 1 小時」: stop listening to the dictation hotkey for an hour.
-    PauseOneHour,
-}
-
-/// Builds the tray icon. Menu items `paste_last` and `pause` send their [`TrayCommand`] on
-/// `commands`; the icon stays for the life of the app.
-pub fn build(app: &AppHandle, commands: UnboundedSender<TrayCommand>) -> tauri::Result<TrayIcon> {
+/// Builds the tray icon; it stays for the life of the app.
+pub fn build(app: &AppHandle) -> tauri::Result<TrayIcon> {
     let open = MenuItem::with_id(app, "open", "打開 Raphael", true, None::<&str>)?;
-    let paste_last = MenuItem::with_id(app, "paste_last", "貼上上一次聽寫", true, None::<&str>)?;
-    let pause = MenuItem::with_id(app, "pause", "暫停 1 小時", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "結束 Raphael", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &paste_last, &pause, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &separator, &quit])?;
 
     let icon = tray_icon();
 
@@ -73,8 +57,6 @@ pub fn build(app: &AppHandle, commands: UnboundedSender<TrayCommand>) -> tauri::
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "open" => crate::show_main_window(app),
-            "paste_last" => send(&commands, TrayCommand::PasteLast),
-            "pause" => send(&commands, TrayCommand::PauseOneHour),
             "quit" => app.exit(0),
             other => log::warn!("unknown tray menu item: {other}"),
         })
@@ -89,12 +71,6 @@ pub fn build(app: &AppHandle, commands: UnboundedSender<TrayCommand>) -> tauri::
             }
         })
         .build(app)
-}
-
-fn send(commands: &UnboundedSender<TrayCommand>, command: TrayCommand) {
-    if commands.send(command).is_err() {
-        log::warn!("tray command {command:?} dropped: nobody is listening");
-    }
 }
 
 #[cfg(test)]

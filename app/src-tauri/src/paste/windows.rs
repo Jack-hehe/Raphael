@@ -36,8 +36,7 @@ use windows::core::{HRESULT, Owned, PWSTR};
 
 use super::clipboard::ClipboardSession;
 use super::{
-    CopyReason, Decision, PasteDelivery, PasteOutcome, PasteReceipt, Paster, Shortcut, Target,
-    decide,
+    Decision, PasteDelivery, PasteOutcome, PasteReceipt, Paster, Shortcut, Target, decide,
 };
 
 /// How long the chord's modifiers stay down after the key click. Most programs read them from
@@ -112,12 +111,6 @@ impl Paster for WindowsPaster {
             outcome: outcome_of(decide(at_stop, foreground_target().as_ref(), self_elevated)),
             receipt: None,
         }
-    }
-
-    fn copy(&self, text: &str) {
-        // With no target, `decide` always says copy only: the text is published and kept.
-        let outcome = self.deliver(text, None);
-        debug_assert_eq!(outcome, PasteOutcome::CopiedOnly(CopyReason::NoTarget));
     }
 
     fn refocus(&self, target: &Target) -> bool {

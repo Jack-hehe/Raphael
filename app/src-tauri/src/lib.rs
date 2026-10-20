@@ -133,10 +133,7 @@ pub fn run() {
             }
 
             // ---- Tray ----
-            // The tray reports its menu actions on this channel; the dictation controller (below)
-            // takes the receiving end.
-            let (tray_commands, tray_command_rx) = tokio::sync::mpsc::unbounded_channel();
-            tray::build(app.handle(), tray_commands)?;
+            tray::build(app.handle())?;
 
             // ---- Overlay ----
             // Raphael's emblem in the bottom-right corner, 150 px with subtitles in Traditional
@@ -189,14 +186,14 @@ pub fn run() {
                 };
 
             // ---- Dictation controller ----
-            // Ties the hotkeys, the core, the overlay, pasting and the tray's dictation items
-            // together. It takes whatever of them started; without the core, dictation is off.
+            // Ties the hotkeys, the core, the overlay and pasting together. It takes whatever of
+            // them started; without the core, dictation is off.
             #[cfg(windows)]
-            dictation::spawn(app.handle(), hotkey_event_rx, tray_command_rx);
+            dictation::spawn(app.handle(), hotkey_event_rx);
             #[cfg(not(windows))]
             {
                 log::error!("dictation needs Windows");
-                drop((hotkey_event_rx, tray_command_rx));
+                drop(hotkey_event_rx);
             }
 
             // ---- Device settings ----

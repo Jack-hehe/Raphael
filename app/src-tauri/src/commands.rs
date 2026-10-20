@@ -608,8 +608,7 @@ pub fn window_hotkey(
 }
 
 /// Pauses (`true`) or resumes (`false`) the dictation hotkeys, so that the settings page can
-/// record a new one. It uses its own pause reason ([`PauseReason::KeyRecorder`]), so resuming
-/// never ends the tray's 「暫停 1 小時」.
+/// record a new one ([`PauseReason::KeyRecorder`]).
 #[tauri::command]
 pub fn hotkeys_pause(app: AppHandle, webview: Webview, paused: bool) -> Result<(), String> {
     require_main(&webview)?;

@@ -162,11 +162,6 @@ pub trait Paster: Send + Sync + 'static {
         }
     }
 
-    /// Leaves `text` on the clipboard for the user to paste by hand (kept out of clipboard
-    /// history like a paste) and does not put the user's clipboard back. If the clipboard cannot
-    /// be used, that is logged.
-    fn copy(&self, text: &str);
-
     /// Gives the focus back to `target`, the window that had it before one of Raphael's own
     /// took it. Whether Windows let it.
     fn refocus(&self, target: &Target) -> bool {

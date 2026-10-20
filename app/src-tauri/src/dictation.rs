@@ -45,7 +45,7 @@
 //!   switch; the media is dealt with elsewhere (`media`), and never holds a recording up.
 //!
 //! [`spawn`] builds the controller from the app state and runs it in a task that listens to the
-//! hotkeys, the core's notifications and the tray.
+//! hotkeys, the core's notifications and the overlay's buttons.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -445,29 +445,6 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 self.overlay.hide();
             }
         }
-    }
-
-    /// The tray's 「貼上上一次聽寫」: copies the latest dictation from the history and says to
-    /// press Ctrl+V. It is not pasted: the tray menu has taken the focus (its own window, or the
-    /// taskbar), so there is no window to paste into. The clipboard is not put back. During a
-    /// dictation the notice is left out, because the overlay is that dictation's.
-    pub fn copy_last(&self) -> JoinHandle<()> {
-        let this = self.clone();
-        tokio::spawn(async move {
-            let Some(text) = this.latest_text().await else {
-                return;
-            };
-            let paster = this.paster.clone();
-            if let Err(err) = tokio::task::spawn_blocking(move || paster.copy(&text)).await {
-                log::error!("copying the last dictation failed: {err}");
-                return;
-            }
-            if this.is_quiet() {
-                this.show(notices::LAST_COPIED);
-            } else {
-                log::info!("the last dictation is copied; no notice during a dictation");
-            }
-        })
     }
 
     fn act(&self, action: Action, now_ms: u64) -> Option<JoinHandle<()>> {
@@ -1465,17 +1442,16 @@ pub use app::spawn;
 mod app {
     use std::future::pending;
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     use serde_json::Value;
     use tauri::{AppHandle, Manager};
     use tokio::sync::broadcast::{self, error::RecvError};
     use tokio::sync::mpsc::UnboundedReceiver;
-    use tokio::task::JoinHandle;
 
     use super::{DictationController, ModeCell};
     use crate::core_process::{CORE_DOWN, CORE_RESTARTED, CoreProcess};
-    use crate::hotkey::{CancelSwitch, HotkeyEvent, HotkeyService, PauseReason};
+    use crate::hotkey::{CancelSwitch, HotkeyEvent, HotkeyService};
     use crate::learn::{Learner, UiaProbe};
     use crate::media::{PauseMediaCell, WindowsMedia};
     use crate::notices::{self, LanguageCell};
@@ -1484,10 +1460,6 @@ mod app {
     };
     use crate::paste::WindowsPaster;
     use crate::rpc::Notification;
-    use crate::tray::TrayCommand;
-
-    /// How long 「暫停 1 小時」 pauses the hotkeys.
-    const PAUSE: Duration = Duration::from_secs(3600);
 
     /// The overlay, if it could be created. Without it dictation works, unseen.
     struct MaybeOverlay(Option<Arc<Overlay>>);
@@ -1576,20 +1548,15 @@ mod app {
     struct Inputs {
         hotkey_events: Option<UnboundedReceiver<HotkeyEvent>>,
         notifications: Option<broadcast::Receiver<Notification>>,
-        tray_commands: Option<UnboundedReceiver<TrayCommand>>,
         /// The answers to the overlay's questions (`overlay_confirm`).
         confirmations: Option<UnboundedReceiver<Confirmation>>,
     }
 
     /// Builds the controller from what is in the app state (`Arc<CoreProcess>`, `Arc<Overlay>`,
     /// `Arc<HotkeyService>`, each of which may be missing) and runs it in a task that listens to
-    /// the hotkeys, the core's notifications, the tray and the overlay's buttons. Without a core,
-    /// hotkeys are logged and ignored.
-    pub fn spawn(
-        app: &AppHandle,
-        hotkey_events: Option<UnboundedReceiver<HotkeyEvent>>,
-        tray_commands: UnboundedReceiver<TrayCommand>,
-    ) {
+    /// the hotkeys, the core's notifications and the overlay's buttons. Without a core, hotkeys
+    /// are logged and ignored.
+    pub fn spawn(app: &AppHandle, hotkey_events: Option<UnboundedReceiver<HotkeyEvent>>) {
         let core = app
             .try_state::<Arc<CoreProcess>>()
             .map(|core| core.inner().clone());
@@ -1626,7 +1593,7 @@ mod app {
                         core,
                         overlay.clone(),
                         Arc::new(WindowsPaster::new()),
-                        Arc::new(MaybeHotkeys(hotkeys.clone())),
+                        Arc::new(MaybeHotkeys(hotkeys)),
                         mode,
                     )
                     .with_language(language.clone())
@@ -1642,28 +1609,24 @@ mod app {
         let inputs = Inputs {
             hotkey_events,
             notifications,
-            tray_commands: Some(tray_commands),
             confirmations: Some(confirmation_rx),
         };
-        tauri::async_runtime::spawn(run(controller, overlay, language, hotkeys, inputs));
+        tauri::async_runtime::spawn(run(controller, overlay, language, inputs));
     }
 
     async fn run(
         controller: Option<Controller>,
         overlay: Arc<MaybeOverlay>,
         language: LanguageCell,
-        hotkeys: Option<Arc<HotkeyService>>,
         inputs: Inputs,
     ) {
         let Inputs {
             mut hotkey_events,
             mut notifications,
-            mut tray_commands,
             mut confirmations,
         } = inputs;
         let clock = Instant::now();
         let now_ms = || u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let mut resume: Option<JoinHandle<()>> = None;
         // Without a core, the dictation key is still swallowed: the first press says why
         // nothing happens. There is no core to come back, so it is said once.
         let mut told_no_core = false;
@@ -1701,14 +1664,6 @@ mod app {
                         Err(RecvError::Closed) => notifications = None,
                     }
                 }
-                command = next(&mut tray_commands) => match command {
-                    Some(TrayCommand::PasteLast) => match &controller {
-                        Some(controller) => drop(controller.copy_last()),
-                        None => log::info!("paste last ignored: the core is not running"),
-                    },
-                    Some(TrayCommand::PauseOneHour) => pause(hotkeys.as_ref(), &mut resume),
-                    None => tray_commands = None,
-                },
                 answer = next(&mut confirmations) => match answer {
                     Some(Confirmation { id, approved }) => match &controller {
                         Some(controller) => controller.on_confirm(&id, approved),
@@ -1732,26 +1687,6 @@ mod app {
             CORE_DOWN => controller.on_core_down(),
             _ => {}
         }
-    }
-
-    /// Pauses the hotkeys for an hour ([`PauseReason::Tray`], independent of the key recorder in
-    /// the settings). Pausing again starts the hour over.
-    fn pause(hotkeys: Option<&Arc<HotkeyService>>, resume: &mut Option<JoinHandle<()>>) {
-        let Some(hotkeys) = hotkeys else {
-            log::warn!("pause ignored: the hotkeys are off");
-            return;
-        };
-        log::info!("hotkeys paused for {PAUSE:?}");
-        hotkeys.set_paused(PauseReason::Tray, true);
-        if let Some(previous) = resume.take() {
-            previous.abort();
-        }
-        let hotkeys = hotkeys.clone();
-        *resume = Some(tokio::spawn(async move {
-            tokio::time::sleep(PAUSE).await;
-            log::info!("hotkeys resumed");
-            hotkeys.set_paused(PauseReason::Tray, false);
-        }));
     }
 
     /// The next message, or never once the channel is gone.
@@ -1778,8 +1713,8 @@ mod tests {
     use crate::device_settings::DeviceSettings;
     use crate::hotkey::{CancelSwitch, HotkeyEvent};
     use crate::notices::{
-        ASK_FAILED, BUDGET, CORE_DOWN, ELEVATED, FOCUS_CHANGED, GREETING, LAST_COPIED, NO_MIC,
-        NO_SOUND, NOT_READY, OFFLINE, WAITING,
+        ASK_FAILED, BUDGET, CORE_DOWN, ELEVATED, FOCUS_CHANGED, GREETING, NO_MIC, NO_SOUND,
+        NOT_READY, OFFLINE, WAITING,
     };
     use crate::overlay::{Mode, OverlayApi, OverlayEvent, Progress, takes_clicks};
     use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
@@ -2021,7 +1956,6 @@ mod tests {
         foreground: Option<Target>,
         outcome: PasteOutcome,
         delivered: Mutex<Vec<String>>,
-        copied: Mutex<Vec<String>>,
         gate: Option<(Arc<Notify>, Mutex<std::sync::mpsc::Receiver<()>>)>,
         /// While set, the window in front is one of Raphael's own: the overlay took the focus.
         stolen: Mutex<bool>,
@@ -2044,7 +1978,6 @@ mod tests {
                 foreground: Some(Self::target(process_name)),
                 outcome: PasteOutcome::Pasted,
                 delivered: Mutex::default(),
-                copied: Mutex::default(),
                 gate: None,
                 stolen: Mutex::default(),
                 refocused: Mutex::default(),
@@ -2067,10 +2000,6 @@ mod tests {
 
         fn delivered(&self) -> Vec<String> {
             self.delivered.lock().unwrap().clone()
-        }
-
-        fn copied(&self) -> Vec<String> {
-            self.copied.lock().unwrap().clone()
         }
     }
 
@@ -2105,10 +2034,6 @@ mod tests {
                 waiting.lock().unwrap().recv().unwrap();
             }
             self.outcome
-        }
-
-        fn copy(&self, text: &str) {
-            self.copied.lock().unwrap().push(text.to_owned());
         }
     }
 
@@ -3279,53 +3204,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_tray_copies_the_latest_item_and_says_so() {
-        // The tray menu has taken the focus (its own window, or the taskbar): a paste would land
-        // nowhere. The text is left on the clipboard instead, and Raphael says to press Ctrl+V.
-        let c = controller(
-            FakeCore::with(
-                "history.latest",
-                json!({"item": {"id": 3, "text": "上一次"}}),
-            ),
-            FakePaster::pasting("notepad.exe"),
-        );
-        c.copy_last().await.unwrap();
-        assert_eq!(c.paster().copied(), vec!["上一次"]);
-        assert!(c.paster().delivered().is_empty(), "nothing is pasted");
-        assert_eq!(c.core().count("dictation.cancel"), 0);
-        assert_eq!(c.overlay().events(), vec![notice(LAST_COPIED.zh)]);
-    }
-
-    #[tokio::test]
-    async fn the_tray_with_an_empty_history_does_nothing() {
-        let c = controller(
-            FakeCore::with("history.latest", json!({"item": null})),
-            FakePaster::pasting("notepad.exe"),
-        );
-        c.copy_last().await.unwrap();
-        assert!(c.paster().copied().is_empty());
-        assert!(c.paster().delivered().is_empty());
-        assert!(c.overlay().events().is_empty());
-    }
-
-    #[tokio::test]
-    async fn the_tray_during_a_dictation_copies_without_a_notice() {
-        // The overlay belongs to the dictation; a notice would wipe its emblem.
-        let c = controller(
-            FakeCore::with(
-                "history.latest",
-                json!({"item": {"id": 3, "text": "上一次"}}),
-            ),
-            FakePaster::pasting("notepad.exe"),
-        );
-        run(&c, HotkeyEvent::DictationDown, 0).await;
-        c.copy_last().await.unwrap();
-        assert_eq!(c.paster().copied(), vec!["上一次"]);
-        assert_eq!(c.overlay().events(), vec!["show:listening"]);
-        assert_eq!(c.phase(), Phase::Recording);
-    }
-
-    #[tokio::test]
     async fn paste_last_hotkey_pastes_into_the_focused_window() {
         let c = controller(
             FakeCore::with(
@@ -3336,7 +3214,6 @@ mod tests {
         );
         run(&c, HotkeyEvent::PasteLast, 5000).await;
         assert_eq!(c.paster().delivered(), vec!["上一次"]);
-        assert!(c.paster().copied().is_empty());
         assert!(c.overlay().events().is_empty());
     }
 
@@ -4411,7 +4288,6 @@ mod tests {
         );
         // It is nobody's to paste, and the history is not asked either.
         assert!(c.paster().delivered().is_empty());
-        assert!(c.paster().copied().is_empty());
         assert_eq!(c.core().count("history.latest"), 0);
 
         // The answer stays on screen for as long as it takes to read, and Esc can still dismiss
@@ -5340,7 +5216,7 @@ mod tests {
         // the question stays until the reply replaces it
         assert_eq!(c.overlay().events()[3..], ["say:了|已複製到剪貼簿。"]);
         assert_eq!(c.agent_stage(), Some(AgentStage::Speaking));
-        assert!(c.paster().delivered().is_empty() && c.paster().copied().is_empty());
+        assert!(c.paster().delivered().is_empty());
     }
 
     #[tokio::test]
@@ -6007,35 +5883,6 @@ mod tests {
     }
 
     // ---------- the overlay is nobody's while only an answer is on screen ----------
-
-    #[tokio::test]
-    async fn the_tray_copy_during_an_answer_on_screen_says_so() {
-        let core = agent_core(answer("答", "好"));
-        core.script(
-            "history.latest",
-            Ok(json!({"item": {"id": 3, "text": "上一次"}})),
-        );
-        let c = controller(core, FakePaster::pasting("chrome.exe"));
-        ask_aloud(&c).await;
-        assert_eq!(c.agent_stage(), Some(AgentStage::Speaking));
-        c.copy_last().await.unwrap();
-        assert_eq!(c.paster().copied(), vec!["上一次"]);
-        ends_with_notice(&c, LAST_COPIED.zh);
-    }
-
-    #[tokio::test]
-    async fn the_tray_copy_during_a_question_leaves_the_overlay_alone() {
-        let core = agent_core(answer("答", "好"));
-        core.script(
-            "history.latest",
-            Ok(json!({"item": {"id": 3, "text": "上一次"}})),
-        );
-        let c = controller(core, FakePaster::pasting("chrome.exe"));
-        run(&c, AgentDown, 0).await;
-        c.copy_last().await.unwrap();
-        assert_eq!(c.paster().copied(), vec!["上一次"]);
-        assert_eq!(c.overlay().events(), vec!["greet"]);
-    }
 
     #[tokio::test]
     async fn a_paste_last_during_an_answer_on_screen_is_watched_for_corrections() {

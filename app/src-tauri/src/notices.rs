@@ -110,13 +110,6 @@ pub const NO_SOUND: Notice = Notice {
     ja: "《否。音声を検出できませんでした。マイクを確認してください。》",
 };
 
-/// The tray's 「貼上上一次聽寫」: the menu took the focus, so the text is only copied.
-pub const LAST_COPIED: Notice = Notice {
-    zh: "《告。已複製上一次的聽寫。請按 Ctrl+V 貼上。》",
-    en: "《Notice. The last dictation is copied. Press Ctrl+V to paste it.》",
-    ja: "《告。前回の音声入力をコピーしました。Ctrl+V で貼り付けてください。》",
-};
-
 /// The core cannot dictate yet: the speech model is not ready (`NOT_CONFIGURED`).
 pub const NOT_READY: Notice = Notice {
     zh: "《否。語音模型尚未就緒。》",
@@ -268,7 +261,7 @@ pub fn notice_for_fallback(reason: Option<&str>) -> Option<Notice> {
 mod tests {
     use super::*;
 
-    const ALL: [Notice; 12] = [
+    const ALL: [Notice; 11] = [
         ELEVATED,
         FOCUS_CHANGED,
         BUDGET,
@@ -276,7 +269,6 @@ mod tests {
         NO_KEY,
         NO_MIC,
         NO_SOUND,
-        LAST_COPIED,
         NOT_READY,
         CORE_DOWN,
         ASK_FAILED,
