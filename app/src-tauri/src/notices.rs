@@ -143,6 +143,101 @@ pub const GREETING: Notice = Notice {
     ja: "《告。今日は何をお手伝いしましょうか？》",
 };
 
+/// A phrase book in Traditional Chinese (Taiwan), English and Japanese. The overlay is sent the
+/// book of one language, as it is sent one text of a [`Notice`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Phrases {
+    pub zh: &'static [&'static str],
+    pub en: &'static [&'static str],
+    pub ja: &'static [&'static str],
+}
+
+impl Phrases {
+    /// The lines for `language` (`"zh-TW"`, `"en"` or `"ja"`). A language the book does not have
+    /// gets the Traditional Chinese ones, as in [`Notice::text`].
+    pub fn lines(&self, language: &str) -> &'static [&'static str] {
+        match language {
+            "en" => self.en,
+            "ja" => self.ja,
+            _ => self.zh,
+        }
+    }
+}
+
+/// What the overlay writes beside the emblem, one line after another, while Raphael thinks about a
+/// question: like the percentage of a dictation it tells the person that he is at work. These are
+/// no reports of his (no 《》), just quiet words. Mostly the calculation of an analytical skill,
+/// with a few game-tip jokes at the end. Short, because the room beside the emblem is about 300
+/// px wide at 14 px. Generic words only, nothing quoted from anywhere.
+pub const WAITING: Phrases = Phrases {
+    zh: &[
+        "解析中……",
+        "並列演算中……",
+        "檢索最適解……",
+        "思考加速中……",
+        "整理情報中……",
+        "確認可行路徑……",
+        "比對已知條件……",
+        "展開候補方案……",
+        "驗證推論結果……",
+        "統合各項情報……",
+        "重新評估前提……",
+        "計算成功率……",
+        "篩選有效資訊……",
+        "構築回答模型……",
+        "把答案從異空間拉回來……",
+        "替思考迴路上油……",
+        "計算失敗的可能性：0%……",
+        "給演算核心倒杯茶……",
+        "從資料海裡撈答案……",
+        "拉斐爾小知識：Esc 可以中止一切",
+    ],
+    en: &[
+        "Analyzing…",
+        "Running parallel calculations…",
+        "Searching for the best answer…",
+        "Accelerating thought…",
+        "Sorting out the information…",
+        "Checking viable paths…",
+        "Comparing known conditions…",
+        "Expanding candidate plans…",
+        "Verifying the reasoning…",
+        "Integrating the findings…",
+        "Re-evaluating assumptions…",
+        "Estimating the odds…",
+        "Filtering useful information…",
+        "Building an answer model…",
+        "Fetching answers from afar…",
+        "Oiling the thinking circuits…",
+        "Odds of failure: 0%…",
+        "Making the core a cup of tea…",
+        "Fishing answers out of the data…",
+        "Raphael tip: Esc stops everything",
+    ],
+    ja: &[
+        "解析中……",
+        "並列演算を実行中……",
+        "最適解を検索中……",
+        "思考を加速中……",
+        "情報を整理中……",
+        "実行可能な経路を確認中……",
+        "既知の条件を照合中……",
+        "候補案を展開中……",
+        "推論結果を検証中……",
+        "情報を統合中……",
+        "前提を再評価中……",
+        "成功率を算出中……",
+        "有効な情報を選別中……",
+        "回答モデルを構築中……",
+        "答えを異空間から引き戻し中……",
+        "思考回路に油を差し中……",
+        "失敗する確率：0%……",
+        "演算コアにお茶を淹れ中……",
+        "データの海で答えを釣り中……",
+        "ラファエル豆知識：Esc ですべて中止",
+    ],
+};
+
 /// Words learned from the user's corrections after a paste, in one notice, in `language`:
 /// 《了。「手機」、「Typeless」已加入詞典。》, `《Understood. “Typeless” added to the dictionary.》`
 /// or 《了。「手機」を辞書に追加しました。》.
@@ -301,6 +396,80 @@ mod tests {
                 "{}",
                 notice.en
             );
+        }
+    }
+
+    #[test]
+    fn the_waiting_lines_are_a_book_of_about_twenty_in_every_language() {
+        for (language, book) in [
+            ("zh-TW", WAITING.zh),
+            ("en", WAITING.en),
+            ("ja", WAITING.ja),
+        ] {
+            assert!(
+                (18..=24).contains(&book.len()),
+                "{language}: {}",
+                book.len()
+            );
+            let mut seen = std::collections::HashSet::new();
+            for line in book {
+                assert!(seen.insert(line), "{language}: {line} twice");
+                assert!(
+                    !line.is_empty() && line.trim() == *line,
+                    "{language}: {line:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_waiting_lines_are_sent_in_one_language_only() {
+        assert_eq!(WAITING.lines("zh-TW"), WAITING.zh);
+        assert_eq!(WAITING.lines("en"), WAITING.en);
+        assert_eq!(WAITING.lines("ja"), WAITING.ja);
+        // A language nobody chose is the default one, never a mix.
+        for other in ["", "fr", "zh-CN", "EN", "zh"] {
+            assert_eq!(WAITING.lines(other), WAITING.zh, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn the_waiting_lines_are_quiet_ones_and_each_language_stays_in_its_own_script() {
+        for line in WAITING.zh.iter().chain(WAITING.en).chain(WAITING.ja) {
+            // Not Raphael speaking: no 《》, and nobody is quoted either.
+            assert!(!line.contains(['《', '》', '「', '」']), "{line}");
+        }
+        for line in WAITING.zh {
+            assert!(!has_kana(line), "{line}");
+        }
+        // Nearly every Japanese line has kana; "解析中……" reads the same in both.
+        let with_kana = WAITING.ja.iter().filter(|line| has_kana(line)).count();
+        assert!(with_kana >= WAITING.ja.len() - 2, "{with_kana}");
+        for line in WAITING.en {
+            assert!(line.chars().all(|c| c.is_ascii() || c == '…'), "{line}");
+        }
+    }
+
+    #[test]
+    fn the_waiting_lines_fit_beside_the_emblem() {
+        // At 14 px: a Chinese or Japanese character (and the ellipsis) fills a square, the rest
+        // is about half as wide. The window leaves about 300 px beside the largest emblem.
+        for line in WAITING.zh.iter().chain(WAITING.en).chain(WAITING.ja) {
+            let width: usize = line
+                .chars()
+                .map(|c| if c.is_ascii() { 8 } else { 14 })
+                .sum();
+            assert!(width <= 270, "{line}: about {width} px");
+        }
+    }
+
+    #[test]
+    fn every_waiting_book_is_mostly_calculation_and_ends_with_the_esc_tip() {
+        for book in [WAITING.zh, WAITING.en, WAITING.ja] {
+            assert!(book.last().is_some_and(|line| line.contains("Esc")));
+            assert_eq!(book.iter().filter(|line| line.contains("Esc")).count(), 1);
+            // The running tasks trail off; only the tip does not.
+            assert!(book.iter().filter(|line| line.contains('…')).count() >= book.len() - 2);
         }
     }
 

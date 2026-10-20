@@ -890,7 +890,7 @@ mod tests {
         fn show(&self, _: Mode) {}
         fn greet(&self, _: &str) {}
         fn set_mode(&self, _: Mode) {}
-        fn think_quietly(&self) {}
+        fn think_quietly(&self, _: &[&str]) {}
         fn level(&self, _: f32) {}
         fn notice(&self, text: &str) {
             self.0.lock().unwrap().push(text.to_owned());

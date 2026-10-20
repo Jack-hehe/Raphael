@@ -979,8 +979,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         };
         // The app the person was in when the key was released is the one the question is about.
         let target = self.paster.foreground();
-        // No percentage: nothing reports how far an answer has come.
-        self.overlay.think_quietly();
+        // No percentage: nothing reports how far an answer has come. Quiet lines in the
+        // interface language, which change until the answer, take its place.
+        self.overlay
+            .think_quietly(notices::WAITING.lines(&self.language.get()));
 
         let this = self.clone();
         Some(tokio::spawn(async move {
@@ -1479,9 +1481,9 @@ mod app {
                 overlay.set_mode(mode);
             }
         }
-        fn think_quietly(&self) {
+        fn think_quietly(&self, lines: &[&str]) {
             if let Some(overlay) = &self.0 {
-                overlay.think_quietly();
+                overlay.think_quietly(lines);
             }
         }
         fn level(&self, value: f32) {
@@ -1746,7 +1748,7 @@ mod tests {
     use crate::hotkey::{CancelSwitch, HotkeyEvent};
     use crate::notices::{
         ASK_FAILED, BUDGET, CORE_DOWN, ELEVATED, FOCUS_CHANGED, GREETING, LAST_COPIED, NO_MIC,
-        NO_SOUND, NOT_READY, OFFLINE,
+        NO_SOUND, NOT_READY, OFFLINE, WAITING,
     };
     use crate::overlay::{Mode, OverlayApi, OverlayEvent, Progress, takes_clicks};
     use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
@@ -1842,6 +1844,8 @@ mod tests {
         completions: Mutex<u32>,
         /// How many times the emblem thought without a progress caption.
         quiet_thoughts: Mutex<u32>,
+        /// The quiet lines it was given each time, oldest first.
+        quiet_lines: Mutex<Vec<Vec<String>>>,
         /// Raphael's greetings, oldest first; `events` has a `greet` for each.
         greetings: Mutex<Vec<String>>,
         events: Mutex<Vec<String>>,
@@ -1909,16 +1913,25 @@ mod tests {
             self.push("greet".to_owned());
         }
         fn set_mode(&self, mode: Mode) {
-            self.track(OverlayEvent::Mode { mode, quiet: false });
+            self.track(OverlayEvent::Mode {
+                mode,
+                quiet: false,
+                lines: Vec::new(),
+            });
             self.push(format!("mode:{}", mode_name(mode)));
         }
-        fn think_quietly(&self) {
+        fn think_quietly(&self, lines: &[&str]) {
             self.track(OverlayEvent::Mode {
                 mode: Mode::Thinking,
                 quiet: true,
+                lines: lines.iter().map(|&line| line.to_owned()).collect(),
             });
             // The same stage for the controller's tests; the page tells the two apart.
             *self.quiet_thoughts.lock().unwrap() += 1;
+            self.quiet_lines
+                .lock()
+                .unwrap()
+                .push(lines.iter().map(|&line| line.to_owned()).collect());
             self.push("mode:thinking".to_owned());
         }
         fn level(&self, value: f32) {
@@ -4460,6 +4473,43 @@ mod tests {
         settle().await;
         assert_eq!(*c.overlay().quiet_thoughts.lock().unwrap(), 0);
         assert!(c.overlay().events().contains(&"mode:thinking".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn a_question_is_thought_about_with_the_waiting_lines_of_the_interface_language() {
+        for (language, book) in [
+            ("zh-TW", WAITING.zh),
+            ("en", WAITING.en),
+            ("ja", WAITING.ja),
+        ] {
+            let c = agent(answer("答", "好"));
+            c.language().set(language);
+            ask_aloud(&c).await;
+            let lines = c.overlay().quiet_lines.lock().unwrap().clone();
+            assert_eq!(
+                lines,
+                vec![book.to_vec()],
+                "{language}: one book, one language"
+            );
+        }
+
+        // a language the app does not have is the default one, like the greeting
+        let c = agent(answer("答", "好"));
+        c.language().set("fr");
+        ask_aloud(&c).await;
+        assert_eq!(
+            *c.overlay().quiet_lines.lock().unwrap(),
+            vec![WAITING.zh.to_vec()]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dictation_has_no_waiting_lines() {
+        let c = controller(FakeCore::default(), FakePaster::pasting("notepad.exe"));
+        run(&c, DictationDown, 0).await;
+        run(&c, DictationUp, 900).await;
+        settle().await;
+        assert!(c.overlay().quiet_lines.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -135,10 +135,14 @@ pub enum OverlayEvent {
     },
     /// The emblem shows another mode. A `quiet` one (sent only when it is) shows no progress
     /// caption beside it: Raphael is thinking about a question, not working through a dictation.
+    /// It may bring `lines` (sent only when there are some): the quiet words, in the interface
+    /// language, that the page changes in the caption's place until the thinking is over.
     Mode {
         mode: Mode,
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         quiet: bool,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        lines: Vec<String>,
     },
     /// Loudness from 0 to 1: the white ring's width while listening or speaking.
     Level { value: f32 },
@@ -182,8 +186,10 @@ pub trait OverlayApi: Send + Sync + 'static {
     /// Changes what the visible emblem shows.
     fn set_mode(&self, mode: Mode);
     /// The emblem thinks about a question: [`Mode::Thinking`] without the progress caption of a
-    /// dictation. No default, for the same reason as [`Self::greet`].
-    fn think_quietly(&self);
+    /// dictation. In its place the page changes the quiet `lines` (in the interface language) every
+    /// second or so, until the answer or something else replaces them. No default, for the same
+    /// reason as [`Self::greet`].
+    fn think_quietly(&self, lines: &[&str]);
     /// Loudness from 0 to 1.
     fn level(&self, value: f32);
     /// Raphael reports `text` (in the interface language) as a subtitle for a time that depends on
@@ -579,13 +585,18 @@ impl OverlayApi for Overlay {
     }
 
     fn set_mode(&self, mode: Mode) {
-        self.publish(OverlayEvent::Mode { mode, quiet: false });
+        self.publish(OverlayEvent::Mode {
+            mode,
+            quiet: false,
+            lines: Vec::new(),
+        });
     }
 
-    fn think_quietly(&self) {
+    fn think_quietly(&self, lines: &[&str]) {
         self.publish(OverlayEvent::Mode {
             mode: Mode::Thinking,
             quiet: true,
+            lines: lines.iter().map(|&line| line.to_owned()).collect(),
         });
     }
 
@@ -980,31 +991,43 @@ mod tests {
         assert_eq!(
             json(OverlayEvent::Mode {
                 mode: Mode::Thinking,
-                quiet: false
+                quiet: false,
+                lines: Vec::new(),
             }),
             r#"{"type":"mode","mode":"thinking"}"#
         );
         assert_eq!(
             json(OverlayEvent::Mode {
                 mode: Mode::Speaking,
-                quiet: false
+                quiet: false,
+                lines: Vec::new(),
             }),
             r#"{"type":"mode","mode":"speaking"}"#
         );
         assert_eq!(
             json(OverlayEvent::Mode {
                 mode: Mode::Steady,
-                quiet: false
+                quiet: false,
+                lines: Vec::new(),
             }),
             r#"{"type":"mode","mode":"steady"}"#
         );
-        // a question being thought about: no progress caption
+        // a question being thought about: no progress caption, and the quiet lines in its place
         assert_eq!(
             json(OverlayEvent::Mode {
                 mode: Mode::Thinking,
-                quiet: true
+                quiet: true,
+                lines: Vec::new(),
             }),
             r#"{"type":"mode","mode":"thinking","quiet":true}"#
+        );
+        assert_eq!(
+            json(OverlayEvent::Mode {
+                mode: Mode::Thinking,
+                quiet: true,
+                lines: vec!["解析中……".into(), "並列演算中……".into()],
+            }),
+            r#"{"type":"mode","mode":"thinking","quiet":true,"lines":["解析中……","並列演算中……"]}"#
         );
         assert_eq!(
             json(OverlayEvent::Level { value: 0.5 }),
@@ -1125,6 +1148,7 @@ mod tests {
             OverlayEvent::Mode {
                 mode: Mode::Thinking,
                 quiet: false,
+                lines: Vec::new(),
             },
             OverlayEvent::Level { value: 0.5 },
             OverlayEvent::Progress(Progress::DONE),
@@ -1163,6 +1187,7 @@ mod tests {
         let thinking = OverlayEvent::Mode {
             mode: Mode::Thinking,
             quiet: false,
+            lines: Vec::new(),
         };
         let ask = OverlayEvent::Ask(prompt(Tier::T3));
         let say = OverlayEvent::Say {
@@ -1439,6 +1464,7 @@ mod tests {
             OverlayEvent::Mode {
                 mode: Mode::Steady,
                 quiet: false,
+                lines: Vec::new(),
             },
             OverlayEvent::Level { value: 0.0 },
             OverlayEvent::Progress(Progress::DONE),

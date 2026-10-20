@@ -135,7 +135,7 @@ impl OverlayApi for AuditOverlay {
     fn show(&self, _mode: Mode) {}
     fn greet(&self, _line: &str) {}
     fn set_mode(&self, _mode: Mode) {}
-    fn think_quietly(&self) {}
+    fn think_quietly(&self, _lines: &[&str]) {}
     fn level(&self, _value: f32) {}
     fn hide(&self) {}
     fn progress(&self, _progress: Progress) {}
