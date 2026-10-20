@@ -32,17 +32,22 @@ def smoke():
     return module
 
 
-@pytest.fixture
-def launcher(tmp_path):
+@pytest.fixture(scope="module")
+def launcher(tmp_path_factory):
     if not sys.executable.isascii():
         pytest.skip("a batch file cannot name a Python in a non-ASCII path")
-    path = tmp_path / "raphael-core.cmd"
+    path = tmp_path_factory.mktemp("launcher") / "raphael-core.cmd"
     path.write_text(f'@echo off\r\n"{sys.executable}" -m raphael_core\r\n', encoding="ascii")
     return path
 
 
-def test_both_passes_pass_on_the_development_core(smoke, launcher):
-    report = smoke.smoke(launcher)
+@pytest.fixture(scope="module")
+def report(smoke, launcher):
+    """Both passes (a core each), run once for the tests that read what they did."""
+    return smoke.smoke(launcher)
+
+
+def test_both_passes_pass_on_the_development_core(report):
     assert report["passed"] is True and report["paid_api_called"] is False
     assert report["keyring_backend"] == "keyring.backends.fail.Keyring"
     cleanup = report["cleanup_pass"]
@@ -52,8 +57,7 @@ def test_both_passes_pass_on_the_development_core(smoke, launcher):
     assert cleanup["exit_code"] == 0 and report["exit_code"] == 0
 
 
-def test_the_second_pass_dictates_with_cleanup_and_the_first_without(smoke, launcher):
-    report = smoke.smoke(launcher)
+def test_the_second_pass_dictates_with_cleanup_and_the_first_without(smoke, report):
     dictations = [
         call["response"]["result"]
         for call in report["calls"]
