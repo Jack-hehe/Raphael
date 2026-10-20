@@ -3,6 +3,8 @@ two are put together. The OpenRouter client is a fake that answers as told."""
 
 import asyncio
 import logging
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -272,35 +274,66 @@ async def test_any_other_failure_is_not_tried_again(router, client, ledger, erro
     assert len(client.decide_calls) == 1
 
 
+class Hang:
+    """A Jev that never answers, and the router's clock. Each call is given up by the router at its
+    deadline (the hang is cancelled), and the clock then moves on by the whole time the call was
+    given. So what the router leaves for the next try is exact, which timing the hangs is not: the
+    clock of asyncio on Windows ticks every 15.6 ms, and a timer may fire before its time."""
+
+    def __init__(self):
+        self.now = 1_000.0
+        self.given_up = 0
+
+    def clock(self):
+        return self.now
+
+    async def __call__(self, **kwargs):
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            self.given_up += 1
+            self.now += kwargs["timeout_s"]
+            raise
+
+
+@pytest.fixture
+def waits(monkeypatch):
+    """The time limit the router puts on each thing it awaits (asyncio.wait_for), in order."""
+    limits = []
+
+    def wait_for(awaitable, timeout):
+        limits.append(timeout)
+        return asyncio.wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(routing, "asyncio", SimpleNamespace(wait_for=wait_for))
+    return limits
+
+
 async def test_a_jev_that_hangs_is_given_up_at_the_deadline_and_asked_again_in_what_is_left(
-    client, ledger
+    client, ledger, waits
 ):
-    async def hang(**kwargs):
-        await asyncio.sleep(30)
-
-    router = Router(client, jev_total_s=0.6, jev_first_s=0.2)
+    hang = Hang()
+    router = Router(client, jev_total_s=0.6, jev_first_s=0.2, clock=hang.clock)
     client.decisions.extend([hang, decision("chat")])
-    began = asyncio.get_running_loop().time()
     outcome = await router.ask_jev("你好", ledger)
-    elapsed = asyncio.get_running_loop().time() - began
-    assert outcome.decision.route == "chat"
-    first, second = client.decide_calls
-    assert first["timeout_s"] == pytest.approx(0.2)
-    assert 0.05 < second["timeout_s"] <= 0.4 + 0.05  # what is left of 0.6 s
-    assert 0.2 <= elapsed < 5.0
+    assert outcome.decision.route == "chat" and hang.given_up == 1
+    # The first try has its share, the second what is left of 0.6 s; each is waited for as long as
+    # it is told it may take.
+    budgets = [call["timeout_s"] for call in client.decide_calls]
+    assert budgets == pytest.approx([0.2, 0.4]) and waits == budgets
 
 
-async def test_two_hangs_use_up_the_whole_budget_and_no_more(client, ledger):
-    async def hang(**kwargs):
-        await asyncio.sleep(30)
-
-    router = Router(client, jev_total_s=0.5, jev_first_s=0.2)
+async def test_two_hangs_use_up_the_whole_budget_and_no_more(client, ledger, waits):
+    hang = Hang()
+    router = Router(client, jev_total_s=0.5, jev_first_s=0.2, clock=hang.clock)
     client.decisions.extend([hang, hang])
-    began = asyncio.get_running_loop().time()
+    began = time.perf_counter()
     outcome = await router.ask_jev("你好", ledger)
-    elapsed = asyncio.get_running_loop().time() - began
     assert (outcome.decision, outcome.failure) == (None, "timeout")
-    assert 0.45 <= elapsed < 5.0  # about the total (0.5 s), not hanging for the 30 s
+    assert hang.given_up == 2  # each was given up at its deadline
+    budgets = [call["timeout_s"] for call in client.decide_calls]
+    assert budgets == pytest.approx([0.2, 0.3]) and waits == budgets  # 0.5 s in all
+    assert time.perf_counter() - began < 5.0  # not the 30 s of a hang
 
 
 async def test_a_retry_with_too_little_time_left_is_not_made(client, ledger):
