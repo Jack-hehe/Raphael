@@ -140,6 +140,8 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
+      # main's cache is the fallback for every pull request; a pull request also saves its own,
+      # which only its later runs can restore, so they skip the dependencies it changed.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -147,7 +149,7 @@ jobs:
             app/src-tauri -> target
             app/src-tauri/vendor/handy-keys -> target
           cache-bin: false
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
