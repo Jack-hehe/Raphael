@@ -275,6 +275,17 @@ describe("拉斐爾", () => {
     expect(html).toContain('<p class="purpose">設定快捷鍵後，按下就能問拉斐爾</p>');
     expect(rowOf(html, "問拉斐爾")).toContain("尚未設定");
   });
+
+  test("warns about Right Alt under her key, as under the dictation key, only when the keyboard uses it as AltGr", () => {
+    const warning = '<div class="note"><span class="st warn"><span class="dot warn"></span>你的鍵盤配置把右 Alt 當 AltGr 用，建議換一個快捷鍵。</span></div>';
+    const html = tab("agent", { altgr: true });
+    expect(html).toContain(warning);
+    expect(html.indexOf(warning)).toBeGreaterThan(html.indexOf('data-row="agent-hotkey"'));
+    expect(html.indexOf(warning)).toBeLessThan(html.indexOf("天氣的城市"));
+    expect(tab("dictation", { altgr: true })).toContain(warning);
+    expect(tab("agent")).not.toContain("AltGr");
+    expect(tab("agent", { altgr: true, device: { ...device, agent_keys: ["ControlLeft+Space"] } })).not.toContain("AltGr");
+  });
 });
 
 describe("模型與用量", () => {

@@ -327,6 +327,10 @@ function shortcutRow(name: string, bindings: readonly string[], change?: { act: 
   );
 }
 
+/** The warning under a shortcut whose keys hold Right Alt, on a keyboard layout that makes that key AltGr. */
+const altgrNote = (v: SettingsView, bindings: readonly string[]): string[] =>
+  v.altgr && bindings.some((binding) => binding.split("+").includes("AltRight")) ? [note(st("warn", t("settings.054")))] : [];
+
 /** The first lines of every tab: its name, which has the focus when the panel opens, and what the tab is for. */
 export const headingHTML = (v: SettingsView): string =>
   `<h1 id="set-title" tabindex="-1">${esc(paneTitle(v.pane))}</h1>` +
@@ -357,13 +361,12 @@ function generalHTML(v: SettingsView): string {
 /** 聽寫: how a dictation starts (the keys and the mode), and how Raphael listens (the languages and the microphone). */
 function dictationHTML(v: SettingsView): string {
   const d = v.device;
-  const usesAltRight = d.dictation_keys.some((binding) => binding.split("+").includes("AltRight"));
   return (
     headingHTML(v) +
     coreNote(v) +
     section(t("settings.groupStart"), [
       shortcutRow(t("home.020"), d.dictation_keys, { act: "rec", field: "dictation_keys" }),
-      ...(v.altgr && usesAltRight ? [note(st("warn", t("settings.054")))] : []),
+      ...altgrNote(v, d.dictation_keys),
       ...(d.paste_last_keys.length ? [shortcutRow(t("home.021"), d.paste_last_keys)] : []),
       shortcutRow(t("onboarding.031"), ["Escape"]),
       row(t("settings.055"), "", sel(DICTATION_MODES, d.dictation_mode, t("settings.055"), ' data-k="mode"')),
@@ -390,12 +393,14 @@ function dictationHTML(v: SettingsView): string {
 /** 拉斐爾: the key that asks her and the city of the weather. The model that answers is with the other models. */
 function agentHTML(v: SettingsView): string {
   const cityShown = v.cityDraft ?? agentCity(v);
+  // an app from before the question key has none yet
+  const agentKeys = v.device.agent_keys ?? [];
   return (
     headingHTML(v) +
     coreNote(v) +
     section(t("settings.groupStart"), [
-      // an app from before the question key has none yet
-      shortcutRow(t("settings.agentKeys"), v.device.agent_keys ?? [], { act: "rec-agent", field: "agent_keys" }),
+      shortcutRow(t("settings.agentKeys"), agentKeys, { act: "rec-agent", field: "agent_keys" }),
+      ...altgrNote(v, agentKeys),
     ]) +
     section(t("settings.groupAnswers"), [
       row(
