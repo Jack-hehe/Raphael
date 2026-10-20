@@ -39,7 +39,13 @@ const wordChip = (entry: DictionaryEntry): string =>
   (entry.misheard.length > 0 ? t("dictionary.005", { p0: esc(entry.misheard.join("、")) }) : "") +
   `</div><span class="acts">${iconBtn("trash", t("dictionary.006", { p0: entry.word }), ' data-act="delete"')}</span></div>`;
 
-export function createDictionary(app: AppContext): Page {
+/** The dictionary, and the way in that the tray's 「將單字加入字典」 takes. */
+export interface DictionaryPage extends Page {
+  /** Opens the fields for a new word and puts the cursor in the word. */
+  addWord(): void;
+}
+
+export function createDictionary(app: AppContext): DictionaryPage {
   const el = document.createElement("div");
   el.className = "page page-dict";
   el.dataset.page = "dictionary";
@@ -260,6 +266,9 @@ export function createDictionary(app: AppContext): Page {
     },
     hide() {
       loads++;
+    },
+    addWord() {
+      showAdd(true);
     },
   };
 }

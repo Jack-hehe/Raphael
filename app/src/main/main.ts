@@ -18,6 +18,7 @@ import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
 import { brandIcon, hydrateBrandIcons } from "./brand";
 import { installWindowHotkeys } from "./window-hotkeys";
+import { followTray } from "./tray-open";
 import { installWindowChrome, labelWindowControls, showMaximized } from "./window-chrome";
 import type { AppContext, DeviceSettings, MainEvent, Page, PageId, SettingsPane } from "./types";
 import { spendMini } from "./spend";
@@ -133,16 +134,18 @@ async function start(): Promise<void> {
   };
 
   const history = createHistory(ctx);
+  const dictionary = createDictionary(ctx);
   const pages: Record<PageId, Page> = {
     home: createHome(ctx),
     agent: createAgent(ctx),
     history,
-    dictionary: createDictionary(ctx),
+    dictionary,
     settings: createSettings(ctx),
   };
 
   const nav = document.getElementById("nav")!;
   const main = document.getElementById("main")!;
+  const guide = document.getElementById("ob")!;
   const button = (id: PageId, name: string, icon: IconName): string =>
     `<button type="button" class="nav" data-go="${id}" aria-current="false">${ico(icon)}<span>${name}</span></button>`;
   nav.innerHTML =
@@ -244,14 +247,16 @@ async function start(): Promise<void> {
     if (!document.hidden) comeBack();
   });
 
+  // The tray's menu asks for a page. Rust sends this before it shows the window.
+  ctx.onEvent((event) => followTray(event, { inGuide: () => !guide.hidden, go, addWord: () => dictionary.addWord() }));
+
   api.subscribeMainEvents((event) => listeners.forEach((handler) => handler(event))).catch((err) => {
-    console.warn("main: no events from the core", err);
+    console.warn("main: no events from the app", err);
   });
 
   // Until the first-run guide is done it takes the place of the pages. (Settings that could not be
   // read are no reason to start a guide for someone who has been through it.)
   if (deviceRead && !device.get().onboarded) {
-    const guide = document.getElementById("ob")!;
     document.documentElement.dataset.windowLayout = "onboarding";
     guide.hidden = false;
     mountOnboarding(

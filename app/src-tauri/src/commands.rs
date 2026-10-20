@@ -55,7 +55,26 @@ static MONITORING: AtomicBool = AtomicBool::new(false);
 /// The task that passes the core's notifications on to the page that last called `main_events`.
 static FORWARDER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
-/// What the main window is told about the core, and about the app's own side of learning.
+/// A page of the main window that the tray's menu can open (`PageId` in types.ts).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrayPage {
+    Home,
+    History,
+    Dictionary,
+    Settings,
+}
+
+/// The one thing the tray's menu asks the page to do once it is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TrayAction {
+    /// The dictionary's fields for a new word open, with the cursor in the word.
+    AddWord,
+}
+
+/// What the main window is told about the core, and about the app's own side of learning and
+/// of the tray.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type")]
 pub enum MainEvent {
@@ -71,6 +90,13 @@ pub enum MainEvent {
     /// its text box is empty to other programs, and only ASCII typed on the US layout can be
     /// followed; setting it to `"on"` fixes that).
     LearnLimited { app: String, reason: String },
+    /// A tray menu item asks for a page, and perhaps one thing to do there. It is sent before the
+    /// window is shown, so that the window opens on that page. The first-run guide ignores it.
+    TrayOpen {
+        page: TrayPage,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        action: Option<TrayAction>,
+    },
 }
 
 /// The most events kept for a main window that has not subscribed yet.
@@ -288,7 +314,8 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
 }
 
 /// The page calls this once and receives the events on `channel`. A page that calls it again (it
-/// was reloaded) replaces the one before.
+/// was reloaded) replaces the one before. Without a core the page still hears the app's own
+/// events, such as the tray's.
 #[tauri::command]
 pub async fn main_events(
     app: AppHandle,
@@ -296,13 +323,14 @@ pub async fn main_events(
     channel: Channel<MainEvent>,
 ) -> Result<(), String> {
     require_main(&webview)?;
-    let core = app
-        .try_state::<Arc<CoreProcess>>()
-        .ok_or(CORE_NOT_RUNNING)?;
-    let mut notifications = core.subscribe();
     PAGE.lock()
         .unwrap_or_else(PoisonError::into_inner)
         .subscribe(channel.clone());
+    let Some(core) = app.try_state::<Arc<CoreProcess>>() else {
+        log::warn!("main events: the core is not running, so the page hears nothing from it");
+        return Ok(());
+    };
+    let mut notifications = core.subscribe();
     let forwarder = tauri::async_runtime::spawn(async move {
         loop {
             match notifications.recv().await {
@@ -1161,6 +1189,22 @@ mod tests {
             })
             .unwrap(),
             r#"{"type":"LearnLimited","app":"vscode","reason":"accessibility_off"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&MainEvent::TrayOpen {
+                page: TrayPage::Dictionary,
+                action: Some(TrayAction::AddWord)
+            })
+            .unwrap(),
+            r#"{"type":"TrayOpen","page":"dictionary","action":"add-word"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&MainEvent::TrayOpen {
+                page: TrayPage::History,
+                action: None
+            })
+            .unwrap(),
+            r#"{"type":"TrayOpen","page":"history"}"#
         );
     }
 

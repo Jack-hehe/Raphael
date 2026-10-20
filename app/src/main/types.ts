@@ -225,7 +225,15 @@ export type MainEvent =
   | { type: "Level"; value: number }
   | { type: "ModelProgress"; name: string; done: number; total: number }
   /** An editor hides its text from UI Automation, so corrections in it cannot be learned. */
-  | { type: "LearnLimited"; app: string; reason: string };
+  | { type: "LearnLimited"; app: string; reason: string }
+  /** A tray menu item asks for a page, and perhaps one thing to do there (tray-open.ts). */
+  | { type: "TrayOpen"; page: TrayPage; action?: TrayAction };
+
+/** The pages the tray's menu can open. */
+export type TrayPage = "home" | "history" | "dictionary" | "settings";
+
+/** What the tray asks the page to do once it is open: start adding a word to the dictionary. */
+export type TrayAction = "add-word";
 
 // ---------- what the pages share with main.ts ----------
 
