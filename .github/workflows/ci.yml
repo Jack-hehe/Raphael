@@ -124,8 +124,8 @@ jobs:
         working-directory: .
         run: |
           $privatePaths = @(
-            "assets-private", "models", "voice", "raphael_ref", "eval/data",
-            "app/public/private", "app/src-tauri/icons-private",
+            "assets-private", "models", "voice", "raphael_ref", ".superpowers", "ui-shots",
+            "eval/data", "app/public/private", "app/src-tauri/icons-private",
             "app/src-tauri/tauri.private.conf.json"
           )
           foreach ($path in $privatePaths) {
