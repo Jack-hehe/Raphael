@@ -78,7 +78,20 @@ SCHEMA_V5 = {
     ],
 }
 # Schemas v6 and v7 add no table: v6 was the removed iCal feature's calendars table, which v7 drops.
-LATEST = 7
+# Schema v8 adds the audit of the plugins' tool calls.
+SCHEMA_V8 = {
+    **SCHEMA_V5,
+    "tool_audit": [
+        "id INTEGER PK",
+        "at_ms INTEGER NOT NULL",
+        "server TEXT NOT NULL",
+        "tool TEXT NOT NULL",
+        "tier TEXT",
+        "approver TEXT NOT NULL",
+        "outcome TEXT NOT NULL",
+    ],
+}
+LATEST = 8
 
 
 def schema_names(conn, kind):
@@ -102,10 +115,10 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V5)
-    assert {"history_created", "agent_turns_created"} <= schema_names(conn, "index")
+    assert schema_names(conn, "table") == set(SCHEMA_V8)
+    assert {"history_created", "agent_turns_created", "tool_audit_at"} <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V5.items():
+    for table, columns in SCHEMA_V8.items():
         assert describe_columns(conn, table) == columns
 
 
@@ -327,7 +340,7 @@ def assert_has_the_latest_schema(migrated, fresh):
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert schema_names(migrated, "table") == schema_names(fresh, "table")
     assert schema_names(migrated, "index") == schema_names(fresh, "index")
-    for table in SCHEMA_V5:
+    for table in SCHEMA_V8:
         assert describe_columns(migrated, table) == describe_columns(fresh, table)
     assert migrated.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
     assert HistoryStore(migrated).latest().text == "A"
@@ -357,6 +370,41 @@ def test_a_v6_database_with_the_removed_calendars_table_loses_it_and_keeps_its_r
     migrated = db.connect(path)
     assert_has_the_latest_schema(migrated, conn)
     migrated.close()
+
+
+def v7_database(path):
+    """A database as the version before the plugins' audit left it: at v7, with a dictation, a word and
+    a turn."""
+    v5_database(path)
+    raw = sqlite3.connect(path)
+    raw.executescript(db._MIGRATION_V6)
+    raw.executescript(db._MIGRATION_V7)
+    raw.close()
+
+
+def test_a_v7_database_gets_the_audit_table_at_v8_and_keeps_its_rows(tmp_path, conn):
+    path = tmp_path / "v7.db"
+    v7_database(path)
+
+    migrated = db.connect(path)
+    assert_has_the_latest_schema(migrated, conn)
+    assert describe_columns(migrated, "tool_audit") == SCHEMA_V8["tool_audit"]
+    assert migrated.execute("SELECT count(*) FROM tool_audit").fetchone()[0] == 0
+    migrated.close()
+
+
+def test_a_failed_v8_migration_leaves_the_database_at_v7(tmp_path):
+    path = tmp_path / "v7.db"
+    v7_database(path)
+    raw = sqlite3.connect(path)
+    raw.execute("CREATE TABLE tool_audit (x)")  # in the way of the v8 migration
+    raw.commit()
+    with pytest.raises(sqlite3.OperationalError):
+        db.migrate(raw)
+    assert not raw.in_transaction
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert "tool_audit_at" not in schema_names(raw, "index")
+    raw.close()
 
 
 def test_a_database_that_is_at_the_latest_version_is_left_alone(tmp_path):

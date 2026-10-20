@@ -153,6 +153,18 @@ PRAGMA user_version = 7;
 COMMIT;
 """
 
+# v8: what the plugins' tools were asked to do (raphael_core.integrations.audit), one row for
+# each call: when, which server and tool, at which tier, who approved ("auto", "user" or
+# "none") and how it ended. It holds no arguments and no results.
+_MIGRATION_V8 = """
+BEGIN;
+CREATE TABLE tool_audit (id INTEGER PRIMARY KEY, at_ms INTEGER NOT NULL, server TEXT NOT NULL,
+  tool TEXT NOT NULL, tier TEXT, approver TEXT NOT NULL, outcome TEXT NOT NULL);
+CREATE INDEX tool_audit_at ON tool_audit(at_ms);
+PRAGMA user_version = 8;
+COMMIT;
+"""
+
 _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_V1,
     2: _MIGRATION_V2,
@@ -161,6 +173,7 @@ _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     5: _MIGRATION_V5,
     6: _MIGRATION_V6,
     7: _MIGRATION_V7,
+    8: _MIGRATION_V8,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 
