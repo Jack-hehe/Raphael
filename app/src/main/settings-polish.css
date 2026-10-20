@@ -13,8 +13,4 @@
 .lang-panel .lang-head { flex: none; }
 .lang-panel .lang-list { min-height: 0; }
 .lang-panel .lang-foot { flex: none; line-height: 1.55; }
-.menu .lang-language { min-height: 34px; }
-.lang-variant[aria-checked="true"] .radio { border-color: var(--accent-text); background: radial-gradient(circle, var(--accent-text) 0 3.5px, transparent 4px); }
-.menu .lang-item[aria-checked="true"] .mt { font-weight: 600; }
 @keyframes settings-pulse { 50% { opacity: .45; } }
-@media (prefers-reduced-motion: reduce) { .settings-skeleton i { animation: none; } }

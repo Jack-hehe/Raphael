@@ -3,9 +3,7 @@
 
 .page.page-agent { max-width: 820px; }
 
-.page-agent .more { display: flex; justify-content: center; margin-top: 18px; }
-.page-agent .group.day { margin-top: 22px; }
-.page-agent .group.day > h3 { margin: 0 0 8px 2px; }
+.page-agent .more { margin-top: 18px; }
 .page-agent .list.card.turns { padding: 4px 18px; }
 
 .page-agent .turn { display: grid; grid-template-columns: 44px minmax(0, 1fr) 28px; gap: 12px; align-items: start; padding: 13px 0; border-top: 1px solid var(--line); }
