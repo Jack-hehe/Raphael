@@ -202,7 +202,6 @@ export const zhTW = {
   "picker.unusableCleanup": "無法用來整理聽寫",
   "picker.unusableAnswer": "無法用來回答",
   "picker.unusableStt": "無法用來把語音轉成文字",
-  "picker.reasonBatch": "只能批次處理，無法即時回覆",
   "picker.reasonJson": "無法依指定格式（JSON）回覆",
   "picker.reasonReasoning": "一定會先推理，太慢",
   "picker.reasonReasoningSetting": "不接受關閉推理的設定",

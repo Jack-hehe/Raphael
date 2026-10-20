@@ -39,7 +39,7 @@ function llm(id: string, over: Partial<CatalogModel> = {}): CatalogModel {
     variable_price: false,
     context_length: 128_000,
     created_at_ms: OCT_18,
-    capabilities: { structured_output: true, reasoning: true, reasoning_off: true, max_tokens: true, realtime: true },
+    capabilities: { structured_output: true, reasoning: true, reasoning_off: true, max_tokens: true },
     recommended: false,
     roles: { cleanup: { usable: true, reason: null }, answer: { usable: true, reason: null } },
     ...over,
@@ -57,7 +57,7 @@ function stt(id: string, over: Partial<CatalogModel> = {}): CatalogModel {
     output_per_mtok: null,
     per_minute: 0.002,
     context_length: null,
-    capabilities: { dictionary_hints: false, realtime: true },
+    capabilities: { dictionary_hints: false },
     roles: { stt: { usable: true, reason: null } },
     ...over,
   };
@@ -72,11 +72,11 @@ const DEAR = llm("openai/gpt-10", { name: "GPT-10", provider: "OpenAI", input_pe
 const OLD = llm("openai/gpt-5", { name: "GPT-5", provider: "OpenAI", input_per_mtok: 1.25, output_per_mtok: 10, created_at_ms: OCT_18 - 300 * DAY });
 const UNKNOWN = llm("odd/model", { name: "Odd", provider: "Odd", input_per_mtok: null, output_per_mtok: null });
 const FLASH = llm("google/gemini-3.8-flash", { name: "Gemini 3.8 Flash", provider: "Google", input_per_mtok: 0.825, output_per_mtok: 4.125, ...unusable("reasoning_required") });
-const BATCH = llm("anthropic/claude-haiku-5.5:batch", { name: "Claude Haiku 5.5 (batch)", provider: "Anthropic", input_per_mtok: 0.05, output_per_mtok: 0.25, ...unusable("batch_only") });
-const LLMS = [LUNA, HAIKU, ALIAS, FREE, ROUTER, DEAR, OLD, UNKNOWN, FLASH, BATCH];
+const MOON = llm("moondream/moondream3-preview", { name: "Moondream 3 Preview", provider: "Moondream", input_per_mtok: 0.3, output_per_mtok: 2.5, ...unusable("no_structured_output") });
+const LLMS = [LUNA, HAIKU, ALIAS, FREE, ROUTER, DEAR, OLD, UNKNOWN, FLASH, MOON];
 
 const SCRIBE = stt("elevenlabs/scribe-v2", { name: "Scribe v2", provider: "ElevenLabs", per_minute: 0.00366667, recommended: true });
-const WHISPER = stt("openai/whisper-large-v3-turbo", { name: "Whisper Large V3 Turbo", provider: "OpenAI", per_minute: 0.0001998, capabilities: { dictionary_hints: true, realtime: true } });
+const WHISPER = stt("openai/whisper-large-v3-turbo", { name: "Whisper Large V3 Turbo", provider: "OpenAI", per_minute: 0.0001998, capabilities: { dictionary_hints: true } });
 const GEMINI = stt("google/gemini-3.5-transcribe", { name: "Gemini 3.5 Transcribe", provider: "Google", per_minute: null, input_per_mtok: 2, output_per_mtok: 12 });
 const MAI = stt("microsoft/mai-transcribe-2", { name: "MAI-Transcribe 2", provider: "Microsoft AI", per_minute: 0.00166667 });
 const STTS = [SCRIBE, WHISPER, GEMINI, MAI];
@@ -133,14 +133,14 @@ describe("the search", () => {
   test("finds a model by its name, its maker or its id, whatever the case", () => {
     // The two cost the same, so their names decide, and a space comes before a hyphen.
     expect(rows({ query: "LUNA" })).toEqual(["~openai/gpt-luna-latest", "openai/gpt-6-luna"]);
-    expect(rows({ query: "anthropic" })).toEqual(["anthropic/claude-haiku-5.5", "anthropic/claude-haiku-5.5:batch"]);
+    expect(rows({ query: "anthropic" })).toEqual(["anthropic/claude-haiku-5.5"]);
     expect(rows({ query: "luna-latest" })).toEqual(["~openai/gpt-luna-latest"]);
   });
 
   test("needs every word, and looks past spaces and punctuation", () => {
     expect(rows({ query: "gpt6" })).toEqual(["openai/gpt-6-luna"]);
-    expect(rows({ query: "haiku batch" })).toEqual(["anthropic/claude-haiku-5.5:batch"]);
-    expect(rows({ query: "  claude   5.5 " })).toHaveLength(2);
+    expect(rows({ query: "moondream preview" })).toEqual(["moondream/moondream3-preview"]);
+    expect(rows({ query: "  claude   5.5 " })).toEqual(["anthropic/claude-haiku-5.5"]);
     expect(rows({ query: "no such model" })).toEqual([]);
   });
 
@@ -168,7 +168,7 @@ describe("the order", () => {
       "typesafe/jev-router",
       "odd/model",
       // the role cannot use these: after the others, in the same order
-      "anthropic/claude-haiku-5.5:batch",
+      "moondream/moondream3-preview",
       "google/gemini-3.8-flash",
     ]);
   });
@@ -201,15 +201,16 @@ describe("the order", () => {
 
 describe("the maker", () => {
   test("narrows the list to one maker", () => {
-    expect(rows({ provider: "Anthropic" })).toEqual(["anthropic/claude-haiku-5.5", "anthropic/claude-haiku-5.5:batch"]);
-    expect(rows({ provider: "Anthropic", query: "batch" })).toEqual(["anthropic/claude-haiku-5.5:batch"]);
+    expect(rows({ provider: "OpenAI" })).toEqual(["~openai/gpt-luna-latest", "openai/gpt-6-luna", "openai/gpt-5", "openai/gpt-10"]);
+    expect(rows({ provider: "OpenAI", query: "luna" })).toEqual(["~openai/gpt-luna-latest", "openai/gpt-6-luna"]);
   });
 
   test("is chosen among the makers by name, each with its count, after all of them", () => {
     expect(providerChoices(LLMS)).toEqual([
       { value: "", label: "所有供應商", detail: "10" },
-      { value: "Anthropic", label: "Anthropic", detail: "2" },
+      { value: "Anthropic", label: "Anthropic", detail: "1" },
       { value: "Google", label: "Google", detail: "1" },
+      { value: "Moondream", label: "Moondream", detail: "1" },
       { value: "NVIDIA", label: "NVIDIA", detail: "1" },
       { value: "Odd", label: "Odd", detail: "1" },
       { value: "OpenAI", label: "OpenAI", detail: "4" },
@@ -232,7 +233,7 @@ describe("the rows a role cannot use", () => {
     expect(html.slice(heading)).toContain("無法用來整理聽寫");
     expect(html).toMatch(/data-id="google\/gemini-3\.8-flash" aria-selected="false" aria-disabled="true"/);
     expect(html).toContain("一定會先推理，太慢");
-    expect(html).toContain("只能批次處理，無法即時回覆");
+    expect(html).toContain("無法依指定格式（JSON）回覆");
     expect(html.match(/aria-disabled="true"/g)).toHaveLength(2);
   });
 

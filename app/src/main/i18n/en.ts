@@ -203,7 +203,6 @@ export const en = {
   "picker.unusableCleanup": "Can't clean up dictation",
   "picker.unusableAnswer": "Can't word Raphael's answers",
   "picker.unusableStt": "Can't transcribe speech",
-  "picker.reasonBatch": "Batch only: replies come hours later",
   "picker.reasonJson": "Can't reply in the JSON format Raphael needs",
   "picker.reasonReasoning": "Always reasons first, which is too slow",
   "picker.reasonReasoningSetting": "Doesn't accept the setting that turns reasoning off",

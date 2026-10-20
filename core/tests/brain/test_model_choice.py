@@ -136,7 +136,8 @@ async def test_a_listed_model_the_role_cannot_use_is_refused(router):
     assert "no_structured_output" in await refused(
         router, "agent_model", "moondream/moondream3-preview"
     )
-    assert "batch_only" in await refused(router, "agent_model", "anthropic/claude-haiku-5.5:batch")
+    # A batch variant is no model of the catalog: it answers within a day.
+    assert "lists" in await refused(router, "agent_model", "anthropic/claude-haiku-5.5:batch")
     settings = (await router.call("settings.get", {}))["settings"]
     assert (settings["cleanup_model"], settings["agent_model"]) == (
         DEFAULTS["cleanup_model"],

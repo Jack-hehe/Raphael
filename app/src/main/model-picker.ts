@@ -83,7 +83,6 @@ function addedText(ms: number): string {
 
 /** The plain words for each reason the core gives why a role cannot use a model (brain/catalog.py). */
 const REASONS = new Map<string, () => string>([
-  ["batch_only", () => t("picker.reasonBatch")],
   ["no_structured_output", () => t("picker.reasonJson")],
   ["reasoning_required", () => t("picker.reasonReasoning")],
   ["no_reasoning_setting", () => t("picker.reasonReasoningSetting")],

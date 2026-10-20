@@ -9,7 +9,9 @@ module reads it. Two kinds of model are kept:
 - `stt`: speech to text, the models whose output is a transcription.
 
 Every other kind (embeddings, images, speech, video, reranking, decisions) is left out: no role can
-use one. Jev, which sorts the assistant's requests, is a fixed model, not a choice.
+use one. So is a `:batch` variant, which runs on OpenRouter's batch API, whose answers come within a
+day: never in time for anything Raphael does. Jev, which sorts the assistant's requests, is a fixed
+model, not a choice.
 
 The roles (`ROLES`), and what each needs of a model, from the calls it makes:
 
@@ -20,10 +22,9 @@ The roles (`ROLES`), and what each needs of a model, from the calls it makes:
   which leaves out every provider that does not take all of those. So the model must list
   `response_format`, `structured_outputs`, `reasoning` and `max_tokens` among its supported
   parameters, and must be able to answer without reasoning first: not `reasoning.mandatory`, and
-  "none" among its efforts when it lists them. A `:batch` variant runs on OpenRouter's batch API,
-  whose answers come within a day, never in time. Tool calling is not needed: Raphael runs his
-  tools himself and hands the model their results, and the web search (`chat_text` with
-  OpenRouter's `web` plugin, which requires no parameter) takes any text model.
+  "none" among its efforts when it lists them. Tool calling is not needed: Raphael runs his tools
+  himself and hands the model their results, and the web search (`chat_text` with OpenRouter's
+  `web` plugin, which requires no parameter) takes any text model.
 - `stt` (`stt_cloud_model`) calls `transcribe`, which sends the audio and the language to
   POST /audio/transcriptions: every transcription model takes that. Two of them are also given
   the dictionary (`STT_MODELS_WITH_HINTS`).
@@ -68,7 +69,7 @@ _PER_MTOK = 1_000_000
 _SECONDS_PER_MINUTE = 60
 _MINUTES_PER_HOUR = 60
 _MS_PER_SECOND = 1000
-# The end of the id of a model's variant on OpenRouter's batch API.
+# The end of the id of a model's variant on OpenRouter's batch API, which is left out.
 _BATCH = ":batch"
 
 
@@ -104,7 +105,6 @@ class Role:
 
 # What `complete_json` needs (see the module's docstring).
 _JSON_WITHOUT_REASONING = (
-    ("realtime", "batch_only"),
     ("structured_output", "no_structured_output"),
     ("reasoning_off", "reasoning_required"),
     ("reasoning", "no_reasoning_setting"),
@@ -114,14 +114,14 @@ ROLES = (
     Role("cleanup", "cleanup_model", LLM, tuple(CLEANUP_MODEL_CHOICES), _JSON_WITHOUT_REASONING),
     # The settings page offered the cleanup models for the answers too.
     Role("answer", "agent_model", LLM, tuple(CLEANUP_MODEL_CHOICES), _JSON_WITHOUT_REASONING),
-    Role("stt", "stt_cloud_model", STT, STT_CLOUD_MODELS, (("realtime", "batch_only"),)),
+    Role("stt", "stt_cloud_model", STT, STT_CLOUD_MODELS, ()),
 )
 ROLE_OF_SETTING = {role.setting: role for role in ROLES}
 
 # What the catalog tells of each kind of model, as the `capabilities` of its entries.
 CAPABILITIES = {
-    LLM: ("structured_output", "reasoning", "reasoning_off", "max_tokens", "realtime"),
-    STT: ("dictionary_hints", "realtime"),
+    LLM: ("structured_output", "reasoning", "reasoning_off", "max_tokens"),
+    STT: ("dictionary_hints",),
 }
 
 
@@ -311,7 +311,7 @@ def _can_skip_reasoning(reasoning: object) -> bool:
 
 def _capabilities(model: Mapping, kind: str) -> frozenset[str]:
     model_id = model["id"]
-    found = set() if model_id.endswith(_BATCH) else {"realtime"}
+    found = set()
     if kind == STT:
         if model_id in STT_MODELS_WITH_HINTS:
             found.add("dictionary_hints")
@@ -368,11 +368,14 @@ def _is_model_id(value: object) -> bool:
 
 def parse_catalog(models: object) -> list[CatalogEntry]:
     """The models of the list (the `data` of GET /models) that are of a kind Raphael uses, in the
-    list's order. Entries that are no models are skipped, and a model listed twice is kept once."""
+    list's order, the batch variants aside. Entries that are no models are skipped, and a model
+    listed twice is kept once."""
     listed = [
         model
         for model in (models if isinstance(models, list) else [])
-        if isinstance(model, dict) and _is_model_id(model.get("id"))
+        if isinstance(model, dict)
+        and _is_model_id(model.get("id"))
+        and not model["id"].endswith(_BATCH)
     ]
     makers = _makers(listed)
     entries: list[CatalogEntry] = []

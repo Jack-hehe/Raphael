@@ -203,7 +203,6 @@ export const ja = {
   "picker.unusableCleanup": "文章整理には使えません",
   "picker.unusableAnswer": "回答には使えません",
   "picker.unusableStt": "文字起こしには使えません",
-  "picker.reasonBatch": "バッチ専用のため、すぐには返答しません",
   "picker.reasonJson": "指定の形式（JSON）で返答できません",
   "picker.reasonReasoning": "必ず先に推論するため遅すぎます",
   "picker.reasonReasoningSetting": "推論をオフにする設定を受け付けません",

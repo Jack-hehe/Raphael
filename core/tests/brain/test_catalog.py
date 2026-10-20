@@ -5,8 +5,8 @@ No test touches the network: the client is a FakeModelsClient that answers with 
 response in fixtures/openrouter_catalog.json (a trimmed copy of GET /models?output_modalities=all of
 2026-10-20 with a model of each sort the catalog tells apart: language models with and without
 tool calling, one that always reasons, one without the reasoning parameter, one without
-structured output, a batch variant, a router priced at -1, a free model, an alias, a name without
-its maker; speech-to-text priced per second, per hour (Microsoft's MAI) and per token; and an
+structured output, a router priced at -1, a free model, an alias, a name without its maker;
+speech-to-text priced per second, per hour (Microsoft's MAI) and per token; and a batch variant, an
 image, an embedding, a speech, a decision model and the auto router, which are left out), or fails
 as told. The cache lives in an in-memory database.
 """
@@ -45,7 +45,6 @@ LANGUAGE_MODELS = [
     "google/gemini-3.8-flash",
     "openai/gpt-4.1-mini",
     "moondream/moondream3-preview",
-    "anthropic/claude-haiku-5.5:batch",
     "typesafe/jev-router",
     "nvidia/nemotron-3-super-120b-a12b:free",
     "mistralai/mistral-large-4-0",
@@ -65,6 +64,7 @@ SPEECH_MODELS = [
     "deepgram/nova-3",
 ]
 LEFT_OUT = [
+    "anthropic/claude-haiku-5.5:batch",  # answers within a day: never in time
     "google/gemini-3.1-flash-image",  # writes images too
     "openai/text-embedding-3-small",
     "elevenlabs/eleven-v4",  # text to speech
@@ -135,7 +135,7 @@ def test_language_and_speech_models_are_kept_in_the_order_of_the_list():
     assert [e.id for e in entries if e.kind == "stt"] == SPEECH_MODELS
 
 
-def test_images_embeddings_speech_and_decisions_are_left_out():
+def test_batch_variants_images_embeddings_speech_and_decisions_are_left_out():
     listed = entries_by_id()
     for model_id in LEFT_OUT:
         assert model_id in {m["id"] for m in RECORDED}
@@ -277,7 +277,6 @@ def test_tool_calling_is_not_needed(role):
         ("google/gemini-3.8-flash", "reasoning_required"),
         ("openai/gpt-4.1-mini", "no_reasoning_setting"),
         ("moondream/moondream3-preview", "no_structured_output"),
-        ("anthropic/claude-haiku-5.5:batch", "batch_only"),
         ("mistralai/mistral-large-2407", "no_reasoning_setting"),
     ],
 )
@@ -355,7 +354,6 @@ def test_an_entry_has_what_the_picker_shows():
             "reasoning": True,
             "reasoning_off": True,
             "max_tokens": True,
-            "realtime": True,
         },
         "recommended": True,
         "roles": {
@@ -365,7 +363,7 @@ def test_an_entry_has_what_the_picker_shows():
     }
     scribe = by_id(view["stt"])["elevenlabs/scribe-v2"]
     assert scribe["context_length"] is None
-    assert scribe["capabilities"] == {"dictionary_hints": False, "realtime": True}
+    assert scribe["capabilities"] == {"dictionary_hints": False}
     assert scribe["roles"] == {"stt": {"usable": True, "reason": None}}
     flash = by_id(view["llm"])["google/gemini-3.8-flash"]
     assert flash["roles"]["cleanup"] == {"usable": False, "reason": "reasoning_required"}
@@ -409,20 +407,38 @@ async def test_the_catalog_survives_a_restart(conn, client, clock):
     assert [e.id for e in entries] == [e.id for e in parse_catalog(RECORDED)]
 
 
-async def test_a_cache_of_the_prices_only_is_fetched_again(conn, client, clock):
-    # What a core of the previous reading kept: the prices of Raphael's own models.
-    old = json.dumps(
-        {
-            "reading": 2,
-            "fetched_at_ms": NOW_MS - HOUR_MS,
-            "prices": {"openai/gpt-6-luna": {"input_per_mtok": 0.1, "output_per_mtok": 0.5}},
-        }
-    )
+BATCH_ENTRY = {
+    "id": "anthropic/claude-haiku-5.5:batch",
+    "kind": "llm",
+    "name": "Claude Haiku 5.5 (batch)",
+    "provider": "Anthropic",
+    "per_minute": None,
+    "input_per_mtok": 0.05,
+    "output_per_mtok": 0.25,
+    "variable_price": False,
+    "context_length": 1_000_000,
+    "created_at_ms": 1_791_397_883_000,
+    "capabilities": ["max_tokens", "reasoning", "reasoning_off", "structured_output"],
+}
+
+
+@pytest.mark.parametrize(
+    "old",
+    [
+        # Reading 2 kept the prices of Raphael's own models, and nothing else.
+        {"reading": 2, "prices": {"openai/gpt-6-luna": {"input_per_mtok": 0.1}}},
+        # Reading 3 kept every model, the batch variants among them.
+        {"reading": 3, "models": [BATCH_ENTRY]},
+    ],
+)
+async def test_a_cache_of_an_older_reading_is_fetched_again(conn, client, clock, old):
+    assert old["reading"] < pricing.CACHE_READING
+    kept = json.dumps({**old, "fetched_at_ms": NOW_MS - HOUR_MS})
     with conn:
-        conn.execute("INSERT INTO settings (key, value) VALUES ('cache.pricing', ?)", (old,))
-    assert pricing.CACHE_READING == 3
-    _, _, source = await PricingService(conn, client, clock).catalog()
+        conn.execute("INSERT INTO settings (key, value) VALUES ('cache.pricing', ?)", (kept,))
+    entries, _, source = await PricingService(conn, client, clock).catalog()
     assert (source, client.calls) == ("live", 1)
+    assert not any(entry.id.endswith(":batch") for entry in entries)
 
 
 async def test_without_the_list_the_catalog_is_raphaels_own_models(conn, client, clock):
