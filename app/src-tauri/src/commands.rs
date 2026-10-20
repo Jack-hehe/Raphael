@@ -8,8 +8,11 @@
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
 //!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
 //!   is the file written. (A dictation that is under way finishes in the mode it began in.)
-//! - `keyboard_has_altgr`, `hotkeys_pause` and `main_events` are small helpers of the settings
-//!   page.
+//! - `keyboard_has_altgr` and `hotkeys_pause` are small helpers of the settings page.
+//! - `main_events` is the channel on which the main window hears the core and the app (the
+//!   microphone's loudness, a model's download, learning that is limited, the tray's pages).
+//! - `window_hotkey` hands the hotkeys that the main window sees while it has the focus, and the
+//!   keyboard hook may not, to the hotkey service, which treats them as the hook's.
 //!
 //! Every command here belongs to the main window and refuses a call from any other webview
 //! (`require_main`); the overlay page only loads its own files, but it is a webview too.
