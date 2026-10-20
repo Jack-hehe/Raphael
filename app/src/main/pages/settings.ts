@@ -876,7 +876,7 @@ export function createSettings(app: AppContext): SettingsPage {
       spend = statusResult.status === "fulfilled" ? statusResult.value.spend : null;
       devices = devicesResult.status === "fulfilled" ? devicesResult.value : null;
       altgr = altgrResult.status === "fulfilled" && altgrResult.value;
-      version = versionResult.status === "fulfilled" ? versionResult.value : "0.1.0";
+      version = versionResult.status === "fulfilled" ? versionResult.value : "";
       if (languagesResult.status === "fulfilled") languageGroups = languagesResult.value.groups;
       replacingKey = false;
       keyError = null;

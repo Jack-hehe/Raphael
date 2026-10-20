@@ -104,6 +104,7 @@ export interface SettingsView {
   devices: AudioDevices | null;
   /** The keyboard layout makes Right Alt an AltGr. */
   altgr: boolean;
+  /** The app's version, as Tauri gives it; empty while it is not known. */
   version: string;
   /** The key field is shown although there is a key (「變更」). */
   replacingKey: boolean;
@@ -435,7 +436,7 @@ function aboutHTML(v: SettingsView): string {
     headingHTML(v) +
     `<div class="about-brand">${brandIcon("about-icon")}<span class="about-name">Raphael</span></div>` +
     `<div class="slist about">` +
-    row(t("settings.078"), "", `<span class="val num">${esc(v.version || "0.1.0")}</span>`) +
+    row(t("settings.078"), "", `<span class="val num">${esc(v.version)}</span>`) +
     row(t("settings.079"), t("settings.080"), btn(t("settings.081"), "", ' data-act="license"')) +
     `</div>` +
     t("settings.082")

@@ -359,6 +359,10 @@ describe("關於", () => {
     expect(rowOf(html, "版本")).toContain(">0.2.0</span>");
     expect(rowOf(html, "開源授權")).toContain('<button type="button" class="btn" data-act="license">查看</button>');
   });
+
+  test("shows no number while the version is not known, rather than one written in the code", () => {
+    expect(rowOf(tab("about", { version: "" }), "版本")).toContain('<span class="val num"></span>');
+  });
 });
 
 describe("while the core does not answer", () => {
