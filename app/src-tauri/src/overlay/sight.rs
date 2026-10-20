@@ -1379,6 +1379,18 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn the_cloak_flags_are_the_ones_dwm_uses() {
+        use windows::Win32::Graphics::Dwm::{
+            DWM_CLOAKED_APP, DWM_CLOAKED_INHERITED, DWM_CLOAKED_SHELL,
+        };
+
+        assert_eq!(CLOAKED_APP, DWM_CLOAKED_APP);
+        assert_eq!(CLOAKED_SHELL, DWM_CLOAKED_SHELL);
+        assert_eq!(CLOAKED_INHERITED, DWM_CLOAKED_INHERITED);
+    }
+
     #[test]
     fn the_check_never_reads_a_title_or_the_name_of_an_app() {
         // Only numbers and fixed words reach the log (the state has no text in it); this keeps
