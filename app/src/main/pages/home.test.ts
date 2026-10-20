@@ -15,7 +15,6 @@ const stats: StatsSummary = {
   by_day: [{ date: "2026-10-20", dictations: 4, words: 1200 }],
   active_days: 3,
   longest_streak_days: 5,
-  by_app: [{ app: "Code.exe", dictations: 4, words: 1200 }],
   speed_wpm: 80,
   time_saved_seconds: 1800,
 };
@@ -52,9 +51,8 @@ describe("the main column of the home page", () => {
     expect(html).toContain('data-act="newer"');
   });
 
-  test("has no personalization card, though the core still counts the programs", () => {
+  test("has no personalization card", () => {
     const html = page();
-    expect(stats.by_app).toBeDefined();
     for (const gone of ["persona", "rose", "personaChart", "個人化", "App 類型"]) expect(html).not.toContain(gone);
   });
 
