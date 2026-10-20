@@ -21,8 +21,12 @@
 //! The page can draw the emblem in a window that nobody sees: something else may have hidden,
 //! minimized or covered the window, or the shell may keep it on another virtual desktop. So each
 //! time the emblem appears, [`sight`] looks at the window from the main thread, writes what it saw
-//! to the log, and puts right what it can, without ever activating the window.
+//! to the log, and puts right what it can, without ever activating the window. In between,
+//! [`screen`] writes down what happens to the screen (the display turning off and on, the session
+//! locking, sleep, the webview's GPU process exiting), so that an emblem that nobody saw in a
+//! window that was in sight can be put next to it.
 
+mod screen;
 mod sight;
 
 use std::{
@@ -505,6 +509,9 @@ impl Overlay {
         }
         apply_passive_style(&window);
         let hwnd = native_handle(&window);
+        if let Some(hwnd) = hwnd {
+            screen::watch(&window, hwnd);
+        }
 
         let overlay = Arc::new(Overlay {
             app: app.clone(),
