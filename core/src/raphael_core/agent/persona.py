@@ -71,8 +71,8 @@ def canonical_prefix(said: object, language: str, *, default: str) -> str:
 @dataclass(frozen=True)
 class Phrases:
     """Everything Raphael says without asking a model, in one language. Each phrase is the text of
-    a line (the prefix is the caller's): `copy_last` and `copy_quote` are questions for a yes or a
-    no, `yes` and `no` the labels of its buttons."""
+    a line (the prefix is the caller's): `copy_last`, `copy_quote`, `confirm_action` and
+    `confirm_plugin` are questions for a yes or a no, `yes` and `no` the labels of its buttons."""
 
     unclear: str  # the request was too garbled or incomplete to act on
     delegate: str  # a task for the background or a connected service: not there yet
@@ -91,6 +91,9 @@ class Phrases:
     copy_last: str  # asks whether to copy Raphael's last answer to the clipboard
     copy_quote: str  # ... or a text the user quoted
     confirm_action: str  # asks whether to do an action that has no question of its own
+    confirm_plugin: str  # asks whether to let a service run a tool: {server} {tool} {what}
+    plugin_none: str  # a connected service was needed, and none of them can do this
+    plugin_unsure: str  # a service did not answer in time: {server}; whether it was done is unknown
     copied: str
     sources: str  # the heading of the pages an answer drew on, in the history
     yes: str
@@ -120,6 +123,9 @@ PHRASES: dict[str, Phrases] = {
         copy_last="是否將上一則回答複製到剪貼簿？",
         copy_quote="是否將引號內的文字複製到剪貼簿？",
         confirm_action="是否執行此操作？",
+        confirm_plugin="是否讓「{server}」執行「{tool}」{what}？",
+        plugin_none="已連接的服務均無法執行此項。",
+        plugin_unsure="「{server}」逾時未獲回應。無法確認是否已執行。",
         copied="已複製到剪貼簿。",
         sources="來源",
         yes="是",
@@ -146,6 +152,11 @@ PHRASES: dict[str, Phrases] = {
         copy_last="Copy my last answer to the clipboard?",
         copy_quote="Copy the quoted text to the clipboard?",
         confirm_action="Execute this action?",
+        confirm_plugin="Allow {server} to run {tool}{what}?",
+        plugin_none="None of the connected services can perform this action.",
+        plugin_unsure=(
+            "{server} did not respond in time. It is not known whether the action was executed."
+        ),
         copied="Copied to the clipboard.",
         sources="Sources",
         yes="Yes",
@@ -169,6 +180,9 @@ PHRASES: dict[str, Phrases] = {
         copy_last="直前の回答をクリップボードにコピーしますか？",
         copy_quote="引用された文章をクリップボードにコピーしますか？",
         confirm_action="この操作を実行しますか？",
+        confirm_plugin="「{server}」で「{tool}」{what}を実行しますか？",
+        plugin_none="接続済みのサービスでは実行できません。",
+        plugin_unsure="「{server}」から時間内に応答がなく、実行されたかどうかは確認できません。",
         copied="クリップボードにコピーしました。",
         sources="出典",
         yes="はい",
@@ -177,9 +191,20 @@ PHRASES: dict[str, Phrases] = {
 }
 
 
-def phrase(language: str, name: str) -> str:
-    """The fixed phrase `name` in `language`."""
-    return getattr(PHRASES[language], name)
+def phrase(language: str, name: str, **fields: str) -> str:
+    """The fixed phrase `name` in `language`, with its `{fields}` filled in (the ones that have
+    fields; the fields' own text is never read as a template)."""
+    text = getattr(PHRASES[language], name)
+    return text.format(**fields) if fields else text
+
+
+def parenthesized(language: str, text: str) -> str:
+    """`text` in brackets after what it explains, written the way the language writes them (a space
+    and round brackets in English, full-width ones close up in Chinese and Japanese); nothing when
+    there is no text."""
+    if not text:
+        return ""
+    return f" ({text})" if language == "en" else f"（{text}）"
 
 
 # --- how much is said ----------------------------------------------------------------------------

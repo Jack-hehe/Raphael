@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult, PluginTool, tool_key
-from ..agent.policy import Tier
+from ..agent.policy import PLUGIN_PREFIX, Tier
 from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from ..router import Router
 from .audit import LIST_DEFAULT, AuditLog
@@ -71,7 +71,7 @@ def _str(params: dict, name: str) -> str:
 
 def _parse_key(key: str) -> tuple[str, str] | None:
     """`(server id, tool)` of the name a plugin tool has in the policy."""
-    rest = key.removeprefix("mcp:") if key.startswith("mcp:") else None
+    rest = key.removeprefix(PLUGIN_PREFIX) if key.startswith(PLUGIN_PREFIX) else None
     if rest is None or "/" not in rest:
         return None
     server_id, tool = rest.split("/", 1)

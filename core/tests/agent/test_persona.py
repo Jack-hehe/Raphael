@@ -142,7 +142,7 @@ _LINES = [
     for field in dataclasses.fields(persona.Phrases)
     if field.name not in ("sources", "yes", "no")
 ]
-_QUESTIONS = ("copy_last", "copy_quote", "confirm_action")
+_QUESTIONS = ("copy_last", "copy_quote", "confirm_action", "confirm_plugin")
 
 
 def test_raphael_never_exclaims():

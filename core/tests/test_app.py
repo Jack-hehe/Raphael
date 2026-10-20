@@ -702,6 +702,14 @@ EXPECTED_METHODS = {
     "secrets.clear_openrouter_key",
     "status.get",
     "status.check_openrouter",
+    "integrations.list",
+    "integrations.add",
+    "integrations.set_enabled",
+    "integrations.remove",
+    "integrations.refresh",
+    "integrations.tools",
+    "integrations.set_tier",
+    "integrations.audit",
 }
 
 
@@ -816,6 +824,48 @@ async def test_wait_for_libraries_returns_when_the_import_failed(tmp_path):
 async def test_the_version_is_the_packages(make_app):
     hello = await make_app().call("core.hello")
     assert hello == {"protocol": 1, "version": raphael_core.__version__}
+
+
+async def test_the_plugins_are_there_and_keep_their_secrets_in_memory_with_the_fake_llm(
+    make_app, memory_keyring, tmp_path
+):
+    app = make_app()
+    assert await app.call("integrations.list") == {"servers": []}
+    added = await app.call(
+        "integrations.add",
+        {
+            "name": "Notes",
+            "transport": "stdio",
+            "command": "unused",
+            "env": [{"name": "TOKEN", "value": "s3cret-value"}],
+        },
+    )
+    assert added["server"]["env"] == ["TOKEN"]
+    # The run with the fake LLM never touches the user's vault, nor writes a secret to disk.
+    assert memory_keyring.credentials == {}
+    assert "s3cret-value" not in (tmp_path / "data" / "integrations.json").read_text(encoding="utf-8")
+    assert await app.call("integrations.audit") == {"entries": []}
+
+
+async def test_the_plugins_keep_their_secrets_in_the_credential_manager_otherwise(
+    make_app, memory_keyring
+):
+    app = make_app(fake_llm=False)
+    added = await app.call(
+        "integrations.add",
+        {
+            "name": "Notes",
+            "transport": "stdio",
+            "command": "unused",
+            "env": [{"name": "TOKEN", "value": "s3cret-value"}],
+        },
+    )
+    server_id = added["server"]["id"]
+    assert memory_keyring.credentials == {
+        f"Raphael plugin {server_id}:env:TOKEN": ("secret", "s3cret-value")
+    }
+    await app.call("integrations.remove", {"id": server_id})
+    assert memory_keyring.credentials == {}
 
 
 # --- start-up loads the heavy things, not the first key press ---------------------------------

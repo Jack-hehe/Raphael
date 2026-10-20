@@ -10,7 +10,7 @@ import pytest
 
 from raphael_core.agent.commands import NONE
 from raphael_core.brain import db
-from raphael_core.brain.openrouter import Completion, Decision
+from raphael_core.brain.openrouter import Completion, Decision, ToolCall, ToolPlan
 
 
 @pytest.fixture
@@ -68,23 +68,26 @@ def actions():
 
 
 class FakeOpenRouter:
-    """Stands in for the OpenRouter client, which the assistant uses three ways.
+    """Stands in for the OpenRouter client, which the assistant uses four ways.
 
     The answers are queued by kind (`decisions`, `replies` for complete_json, `texts` for
-    chat_text); each call takes the first of its queue. An answer that is an exception is raised,
-    and one that is a function is called with the keyword arguments of the call (and awaited, if
-    it is a coroutine function: a call that hangs is one that sleeps). A call with
-    nothing queued fails the test. `delay` is how long each call takes, in seconds, and the
-    arguments of every call are kept in `decide_calls`, `json_calls` and `text_calls`.
+    chat_text, `plans` for plan_tools); each call takes the first of its queue. An answer that is
+    an exception is raised, and one that is a function is called with the keyword arguments of the
+    call (and awaited, if it is a coroutine function: a call that hangs is one that sleeps). A call
+    with nothing queued fails the test. `delay` is how long each call takes, in seconds, and the
+    arguments of every call are kept in `decide_calls`, `json_calls`, `text_calls` and
+    `plan_calls`.
     """
 
     def __init__(self):
         self.decisions = []
         self.replies = []
         self.texts = []
+        self.plans = []
         self.decide_calls = []
         self.json_calls = []
         self.text_calls = []
+        self.plan_calls = []
         self.delay = 0.0
 
     async def _answer(self, queue, calls, kwargs, kind):
@@ -110,9 +113,17 @@ class FakeOpenRouter:
     async def chat_text(self, **kwargs):
         return await self._answer(self.texts, self.text_calls, kwargs, "chat_text")
 
+    async def plan_tools(self, **kwargs):
+        return await self._answer(self.plans, self.plan_calls, kwargs, "plan_tools")
+
     @property
     def calls(self):
-        return len(self.decide_calls) + len(self.json_calls) + len(self.text_calls)
+        return (
+            len(self.decide_calls)
+            + len(self.json_calls)
+            + len(self.text_calls)
+            + len(self.plan_calls)
+        )
 
 
 @pytest.fixture
@@ -170,3 +181,15 @@ def classification(**overrides):
         "app": "",
     }
     return {**data, **overrides}
+
+
+def tool_plan(*calls, cost=0.0004):
+    """What the model picks when it is offered the plugins' tools: `calls` are `(alias, arguments)`."""
+    return ToolPlan(
+        calls=[ToolCall(name, arguments) for name, arguments in calls],
+        model="openai/gpt-6-luna",
+        cost_usd=cost,
+        prompt_tokens=400,
+        completion_tokens=20,
+        latency_ms=700,
+    )

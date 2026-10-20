@@ -63,10 +63,13 @@ from .brain.openrouter import (
     OpenRouterClient,
     OpenRouterError,
     TextCompletion,
+    ToolPlan,
 )
 from .brain.secrets import CredentialKeyStore, KeyStore, MemoryKeyStore
 from .brain.service import Brain
 from .device.models import REGISTRY, ModelManager
+from .integrations.service import IntegrationsService
+from .integrations.vault import CredentialVault, MemoryVault, SecretVault
 from .protocol import (
     INVALID_PARAMS,
     NO_MICROPHONE,
@@ -174,6 +177,13 @@ class EchoClient:
             "needs_time": {"type": "noul", "noul": 0.0},
         }
         return Decision(answers=answers, cost_usd=0.0, latency_ms=0)
+
+    async def plan_tools(self, **kwargs: Any) -> ToolPlan:
+        # No plugin tool is ever wanted.
+        return ToolPlan(
+            calls=[], model="fake/echo", cost_usd=0.0, prompt_tokens=0, completion_tokens=0,
+            latency_ms=0,
+        )  # fmt: skip
 
     async def chat_text(self, **kwargs: Any) -> TextCompletion:
         return TextCompletion(
@@ -548,13 +558,16 @@ class App(Router):
         try:
             self.keys: KeyStore
             self.client: Any
+            self.vault: SecretVault
             if fake_llm:
                 self.keys = MemoryKeyStore()
                 self.keys.set(_FAKE_KEY)
                 self.client = EchoClient()
+                self.vault = MemoryVault()
             else:
                 self.keys = CredentialKeyStore()
                 self.client = OpenRouterClient(self.keys.get)
+                self.vault = CredentialVault()
             self.brain = Brain(self._conn, self.client, self.keys)  # prunes the history
         except BaseException:
             self._conn.close()
@@ -562,7 +575,12 @@ class App(Router):
         self.brain.register(self)
         if agent_actions is None:
             agent_actions = NullActions() if fake_llm else WindowsActions()
-        self.agent = AgentService(self._conn, self.client, self.keys, actions=agent_actions)
+        # The plugins: servers the user connected, and the hub the assistant reaches their tools by.
+        self.integrations = IntegrationsService(self._conn, data_dir, self.vault)
+        self.integrations.register(self)
+        self.agent = AgentService(
+            self._conn, self.client, self.keys, actions=agent_actions, plugins=self.integrations
+        )
         self.agent.register(self)
 
         self._speech = SpeechModels(

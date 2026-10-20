@@ -23,6 +23,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+# The names of the tools of plugins begin with this (see ToolRegistry).
+PLUGIN_PREFIX = "mcp:"
 # How long a question waits for its answer; after this a yes is too late.
 CONFIRM_TIMEOUT_S = 30.0
 CONFIRM_TIMEOUT_MS = round(CONFIRM_TIMEOUT_S * 1000)
@@ -72,10 +74,23 @@ class Approval:
 
 
 class ToolRegistry:
-    """The tier of each tool, and the check an action passes before it runs."""
+    """The tier of each tool, and the check an action passes before it runs.
 
-    def __init__(self, tiers: Mapping[str, Tier] | None = None) -> None:
+    The tools of the plugins the user connected (names that begin with "mcp:") are not registered:
+    their tier is the user's, can change at any time and can be taken back, so `plugin_tier` is
+    asked each time, and returns None for a tool that has no tier now. Such a tool is unknown, like
+    any other without one. A name that begins with "mcp:" can never be registered here, so no
+    built-in tool can be shadowed by a plugin's, nor the other way round.
+    """
+
+    def __init__(
+        self,
+        tiers: Mapping[str, Tier] | None = None,
+        *,
+        plugin_tier: Callable[[str], Tier | None] | None = None,
+    ) -> None:
         self._tiers: dict[str, Tier] = {}
+        self._plugin_tier = plugin_tier
         for name, tier in (tiers or {}).items():
             self.register(name, tier)
 
@@ -84,9 +99,16 @@ class ToolRegistry:
         only make it safer on paper."""
         if name in self._tiers:
             raise ValueError(f"The tool {name!r} is registered already")
+        if name.startswith(PLUGIN_PREFIX):
+            raise ValueError(f"The name {name!r} is for the tools of plugins")
         self._tiers[name] = Tier(tier)
 
     def tier(self, name: str) -> Tier:
+        if name.startswith(PLUGIN_PREFIX):
+            tier = self._plugin_tier(name) if self._plugin_tier is not None else None
+            if tier is None:
+                raise UnknownTool(name)
+            return Tier(tier)
         try:
             return self._tiers[name]
         except KeyError:

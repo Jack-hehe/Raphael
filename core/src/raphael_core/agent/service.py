@@ -11,8 +11,14 @@ ui_language, target_app}`. The router (Jev, and the language model when Jev fail
 - an answer looks up what it needs, together (`tools`: the weather, a web search, the time), and one
   call to the language model words it (`answers`); a discussion and small talk are worded with the
   last turns of the conversation as context;
-- a request that is too garbled to act on, or a task for the background or a connected service
-  (not there yet), gets a fixed 否 reply.
+- when the user has connected plugins (`integrations`) with tools that have a tier, an answer, and a
+  task for a connected service, may use them too: one call to the language model picks the tools
+  it needs from those alone (`plugins`), the program makes the calls within their tiers, and the
+  results are given to the call that words the answer as data, not instructions. A call at T0 or T1
+  is made at once; at T2 or T3 it is a question for a yes or a no like a command at that tier, one
+  to a turn, and the call is made when the yes comes. A tool with no tier is never offered;
+- a request that is too garbled to act on, or a task for the background (not there yet), gets a
+  fixed 否 reply.
 
 Whatever goes wrong is answered, never raised: no key, the monthly limit reached, no network, a
 model that fails each get a short 否 reason in the user's language, and the commands still work (a
@@ -53,15 +59,28 @@ from .failure import AgentFailure
 from .history import AgentHistory, Turn
 from .ledger import Ledger
 from .local import match_command
-from .persona import DEFAULT_LANGUAGE, PREFIXES, normalize_language, phrase
+from .persona import DEFAULT_LANGUAGE, PREFIXES, normalize_language, parenthesized, phrase
+from .plugins import (
+    PLAN_CONTEXT_TURNS,
+    Offer,
+    PlannedCall,
+    Planner,
+    PluginHub,
+    PluginResult,
+    make_offer,
+    preview,
+)
 from .policy import (
     CONFIRM_TIMEOUT_MS,
     Action,
+    Approval,
     Confirmations,
+    NotApproved,
     Outcome,
     Pending,
     Tier,
     ToolRegistry,
+    UnknownTool,
 )
 from .routing import RouteDecision, Router
 from .tools import ToolResult, Tools
@@ -88,6 +107,29 @@ _QUOTES = (
     re.compile(r"“([^”]+)”"),
     re.compile(r'"([^"]+)"'),
 )
+
+
+def _unmade(call: PlannedCall) -> ToolResult:
+    """The result for a call that was not made because the turn can ask about one only."""
+    return ToolResult(_label(call), False, None, "not_made")
+
+
+def _label(call: PlannedCall) -> str:
+    return f"{call.tool.server}/{call.tool.name}"
+
+
+def _tool_result(call: PlannedCall, outcome: PluginResult) -> ToolResult:
+    """What a plugin's tool answered, as the answer is shown it: data that nobody vetted. A tool
+    that said it failed has its words kept, since they tell what went wrong; the failures of the
+    call itself have a kind only."""
+    if outcome.ok:
+        data = {"content": outcome.text, "cut_short": outcome.truncated}
+        return ToolResult(_label(call), True, data, untrusted=True)
+    if outcome.kind == "tool_error":
+        return ToolResult(
+            _label(call), False, {"content": outcome.text}, "tool_error", untrusted=True
+        )
+    return ToolResult(_label(call), False, None, outcome.kind or "error")
 
 
 def _copy_text(turn: Turn) -> str:
@@ -150,6 +192,17 @@ class _Settings:
     limit_usd: float
 
 
+@dataclass
+class _Followup:
+    """What a call of a plugin's tool that waits for a yes needs to go on once it comes: the
+    request, the call, and what the answer already has (the results of the calls that needed no
+    yes, and of the lookups)."""
+
+    ask: _Ask
+    call: PlannedCall
+    results: list[ToolResult]
+
+
 class AgentService:
     """The voice assistant: it keeps the history, the questions that wait for a yes, and the
     requests that are being thought about.
@@ -158,7 +211,8 @@ class AgentService:
     `keys` where the key lives, and `actions` what is done to this computer. `now_ms` is the wall
     clock and `tz` the time zone of the months of the spend; `clock` is a monotonic clock in
     seconds (the thirty seconds of a question), `now` the local time. `http` is the httpx client for
-    Open-Meteo, which the caller then owns; `decider` is the router of requests.
+    Open-Meteo, which the caller then owns; `decider` is the router of requests; `plugins` is the
+    hub of the tools the user connected (none: the assistant has only its own).
     """
 
     def __init__(
@@ -174,6 +228,7 @@ class AgentService:
         http: httpx.AsyncClient | None = None,
         now: Callable[[], datetime] | None = None,
         decider: Router | None = None,
+        plugins: PluginHub | None = None,
     ) -> None:
         self._keys = keys
         self._now_ms = now_ms
@@ -182,7 +237,14 @@ class AgentService:
         self._spend = SpendTracker(conn, now_ms, tz)
         self._history = AgentHistory(conn, now_ms)
         self._confirmations = Confirmations(clock)
-        self._registry = ToolRegistry({name: command.tier for name, command in COMMANDS.items()})
+        self._plugins = plugins
+        self._registry = ToolRegistry(
+            {name: command.tier for name, command in COMMANDS.items()},
+            plugin_tier=None if plugins is None else plugins.tier_of,
+        )
+        self._planner = Planner(client)
+        # pending id -> what the call of a plugin's tool that waits for that yes needs.
+        self._followups: dict[str, _Followup] = {}
         for name in ("weather", "web_search", "local_time"):
             self._registry.register(name, Tier.T0)
         self._catalog = AppCatalog(actions, clock=clock)
@@ -308,7 +370,13 @@ class AgentService:
         if route == "command":
             return await self._command(ask, decision, settings, ledger)
         if route == "answer":
-            return await self._answer_with_tools(ask, decision, settings, ledger)
+            return await self._answer_with_tools(ask, decision, settings, ledger, self._offer())
+        if route == "delegate":
+            # A task for a connected service has somewhere to go once a tool is allowed.
+            offer = self._offer()
+            if offer is not None:
+                return await self._answer_with_tools(ask, decision, settings, ledger, offer)
+            return self._finish(ask, route, "negative", phrase(ask.language, "delegate"), ledger)
         if route in ("discuss", "chat"):
             reply = await self._voice.reply(
                 model=settings.model,
@@ -321,8 +389,6 @@ class AgentService:
                 ledger=ledger,
             )
             return self._finish(ask, route, reply.prefix, reply.text, ledger, detail=reply.detail)
-        if route == "delegate":
-            return self._finish(ask, route, "negative", phrase(ask.language, "delegate"), ledger)
         return self._finish(ask, "unclear", "negative", phrase(ask.language, "unclear"), ledger)
 
     # --- answers --------------------------------------------------------------------------------
@@ -331,8 +397,15 @@ class AgentService:
         return self._tools.local_time().data or {}
 
     async def _answer_with_tools(
-        self, ask: _Ask, decision: RouteDecision, settings: _Settings, ledger: Ledger
+        self,
+        ask: _Ask,
+        decision: RouteDecision,
+        settings: _Settings,
+        ledger: Ledger,
+        offer: Offer | None = None,
     ) -> dict:
+        """An answer, with what it needs looked up first. With an `offer` (the plugin tools that may
+        be used), a model picks the tools the request needs while the lookups run."""
         jobs = []
         if decision.needs_weather:
             # The city the question names, else the one in the settings.
@@ -344,9 +417,24 @@ class AgentService:
                     self._tools.web_search(ask.text, settings.model, ledger), "web_search"
                 )
             )
-        results: list[ToolResult] = list(await asyncio.gather(*jobs))
+        picking = self._pick_tools(ask, settings, ledger, offer)
+        looked_up, picked = await asyncio.gather(asyncio.gather(*jobs), picking)
+        results: list[ToolResult] = list(looked_up)
         if decision.needs_time:
             results.append(self._tools.local_time())
+        if offer is not None:
+            if isinstance(picked, AgentFailure):
+                if decision.route == "delegate":
+                    raise picked  # the request was for a service, and nothing could look at it
+                picked = []  # an answer goes on without the services
+            if decision.route == "delegate" and not picked:
+                return self._finish(
+                    ask, "answer", "negative", phrase(ask.language, "plugin_none"), ledger
+                )
+            outcome = await self._carry_out(ask, picked, results, ledger)
+            if isinstance(outcome, dict):
+                return outcome  # a question for a yes
+            results = outcome
         reply = await self._voice.reply(
             model=settings.model,
             language=ask.language,
@@ -374,6 +462,156 @@ class AgentService:
         except sqlite3.Error as exc:
             logger.warning("Could not read the conversation so far: %s", type(exc).__name__)
             return []
+
+    # --- the tools of the plugins ---------------------------------------------------------------
+
+    def _offer(self) -> Offer | None:
+        """The plugin tools a model may be offered now, or None when there are none: no plugins,
+        or none of their tools has a tier (a tool with no tier is never offered)."""
+        if self._plugins is None:
+            return None
+        try:
+            tools = self._plugins.offered()
+        except Exception as exc:  # a plugin that breaks must not break the answer
+            logger.warning("Could not list the plugins' tools: %s", type(exc).__name__)
+            return None
+        return make_offer(tools) if tools else None
+
+    async def _pick_tools(
+        self, ask: _Ask, settings: _Settings, ledger: Ledger, offer: Offer | None
+    ) -> list[PlannedCall] | AgentFailure:
+        """The calls a model picks for the request out of the tools in `offer`; the failure itself
+        when it cannot (the answer decides what that means)."""
+        if offer is None:
+            return []
+        try:
+            return await self._planner.plan(
+                offer,
+                ask.text,
+                self._context(PLAN_CONTEXT_TURNS),
+                model=settings.model,
+                ledger=ledger,
+            )
+        except AgentFailure as failure:
+            return failure
+        except Exception as exc:
+            logger.warning("Picking tools failed unexpectedly: %s", type(exc).__name__)
+            return AgentFailure("error")
+
+    def _tier_now(self, call: PlannedCall) -> Tier | None:
+        """The tier the user has given the tool of `call` now; None if it has none any more."""
+        try:
+            return self._registry.tier(call.tool.key)
+        except UnknownTool:
+            return None
+
+    async def _carry_out(
+        self, ask: _Ask, calls: list[PlannedCall], results: list[ToolResult], ledger: Ledger
+    ) -> list[ToolResult] | dict:
+        """Make the picked calls that need no yes, together, and add their results to `results`.
+        If a call needs a yes the answer waits for it: that is the question to return instead, for
+        the first such call; any others are not made (one question to a turn)."""
+        automatic: list[PlannedCall] = []
+        asking: list[PlannedCall] = []
+        for call in calls:
+            tier = self._tier_now(call)
+            (asking if tier is not None and tier >= Tier.T2 else automatic).append(call)
+        results = [*results, *await asyncio.gather(*(self._plugin_call(c, None) for c in automatic))]
+        if not asking:
+            return results
+        first, *rest = asking
+        results += [_unmade(call) for call in rest]
+        return self._ask_plugin(ask, first, results, ledger)
+
+    async def _plugin_call(
+        self, call: PlannedCall, approval: Approval | None, action: Action | None = None
+    ) -> ToolResult:
+        """Make a call of a plugin's tool through the policy's one door, and give its result as
+        the answer is shown it. `approval` is the yes for it, if it had to be asked about; a call
+        that the door refuses is not made, and the hub writes down that it was refused."""
+        action = action or Action(call.tool.key, call.arguments)
+        plugins = self._plugins
+        if plugins is None:
+            return _tool_result(call, PluginResult(False, "blocked"))
+        try:
+            self._registry.check(action, approval)
+            approver = "auto" if approval is None else "user"
+        except (UnknownTool, NotApproved):
+            approver = "none"
+        try:
+            outcome = await plugins.call(call.tool.key, call.arguments, approver=approver)
+        except Exception as exc:  # not the hub's own failures, which it reports in the outcome
+            logger.warning("A plugin call failed unexpectedly: %s", type(exc).__name__)
+            outcome = PluginResult(False, "error")
+        return _tool_result(call, outcome)
+
+    def _ask_plugin(
+        self, ask: _Ask, call: PlannedCall, results: list[ToolResult], ledger: Ledger
+    ) -> dict:
+        """The question for a yes before the call is made: which service, which tool, and the
+        start of what it is given. The call itself waits in `_followups`."""
+        language = ask.language
+        shown = preview(call.arguments)
+        text = phrase(
+            language,
+            "confirm_plugin",
+            server=call.tool.server,
+            tool=call.tool.name,
+            what=parenthesized(language, shown),
+        )
+        action = Action(call.tool.key, dict(call.arguments))
+        reply = self._open_question(ask, action, "answer", text, ledger)
+        self._followups[reply["confirm"]["id"]] = _Followup(ask, call, results)
+        return reply
+
+    def _drop_followup(self, pending: Pending, outcome: str) -> None:
+        """The question of a plugin's call ended without a yes ("denied" or "expired"): its call is
+        forgotten, and the audit says it was asked about and not made."""
+        followup = self._followups.pop(pending.id, None)
+        if followup is not None and self._plugins is not None:
+            try:
+                self._plugins.record_unrun(pending.action.tool, outcome=outcome)
+            except Exception as exc:
+                logger.warning("Could not write down a call that was not made: %s", type(exc).__name__)
+
+    async def _confirm_plugin(
+        self, pending: Pending, approval: Approval | None, followup: _Followup
+    ) -> dict:
+        """The yes came: make the call, then word what came of it."""
+        language = pending.language
+        ledger = Ledger(self._spend)
+        call = followup.call
+        # The yes is for the tier the question was asked at. A tool that has none now, or a higher
+        # one, is not covered by it.
+        now = self._tier_now(call)
+        if now is None or now > pending.tier:
+            approval = None
+        result = await self._plugin_call(call, approval, pending.action)
+        if not result.ok and result.error == "timeout":
+            text = phrase(language, "plugin_unsure", server=call.tool.server)
+            return self._outcome(pending, "negative", text, "error")
+        if not result.ok and result.error != "tool_error":
+            return self._outcome(pending, "negative", phrase(language, "failed"), "error")
+        settings = self._read_settings()
+        try:
+            if self._blocked(settings) is not None:
+                raise AgentFailure("error")
+            reply = await self._voice.reply(
+                model=settings.model,
+                language=language,
+                route="answer",
+                question=followup.ask.text,
+                context=self._context(CONTEXT_TURNS["answer"]),
+                tools=[*followup.results, result],
+                moment=self._moment(),
+                ledger=ledger,
+            )
+        except AgentFailure:
+            # It was done, and Raphael cannot say more than that.
+            return self._outcome(pending, "understood", "", "done", cost_usd=ledger.total)
+        return self._outcome(
+            pending, reply.prefix, reply.text, "done", detail=reply.detail, cost_usd=ledger.total
+        )
 
     # --- commands -------------------------------------------------------------------------------
 
@@ -454,11 +692,18 @@ class AgentService:
     # --- confirmations --------------------------------------------------------------------------
 
     def _ask_to_confirm(self, ask: _Ask, action: Action, question: str, ledger: Ledger) -> dict:
+        text = phrase(ask.language, question or "confirm_action")
+        return self._open_question(ask, action, "command", text, ledger)
+
+    def _open_question(
+        self, ask: _Ask, action: Action, route: str, text: str, ledger: Ledger
+    ) -> dict:
+        """Record the turn as waiting for a yes or a no and open the question for `action`, at the
+        tier it has; the reply is the question as the overlay is given it."""
         language = ask.language
         tier = self._registry.tier(action.tool)
         prefix = PREFIXES[language].question
-        text = phrase(language, question or "confirm_action")
-        turn_id = self._record(ask, "command", prefix, text, "confirm", None, ledger)
+        turn_id = self._record(ask, route, prefix, text, "confirm", None, ledger)
         pending = self._confirmations.open(ask.session_id, turn_id, action, tier, language)
         return {
             "status": "confirm",
@@ -488,9 +733,14 @@ class AgentService:
             )
         language = pending.language
         if resolution.outcome is Outcome.EXPIRED:
+            self._drop_followup(pending, "expired")
             return self._outcome(pending, "negative", phrase(language, "expired"), "expired")
         if resolution.outcome is Outcome.DENIED:
+            self._drop_followup(pending, "denied")
             return self._outcome(pending, "understood", phrase(language, "denied"), "denied")
+        followup = self._followups.pop(pending.id, None)
+        if followup is not None:
+            return await self._confirm_plugin(pending, resolution.approval, followup)
         command = COMMANDS.get(pending.action.tool)
         if command is None:
             return self._outcome(pending, "negative", phrase(language, "failed"), "error")
@@ -503,18 +753,33 @@ class AgentService:
         done = _DONE_PHRASE.get(command.name)
         return self._outcome(pending, "understood", phrase(language, done) if done else "", "done")
 
-    def _outcome(self, pending: Pending, which: str, text: str, status: str) -> dict:
+    def _outcome(
+        self,
+        pending: Pending,
+        which: str,
+        text: str,
+        status: str,
+        *,
+        detail: str | None = None,
+        cost_usd: float = 0.0,
+    ) -> dict:
         """End the turn of a question: what Raphael says now, and how it ended."""
         prefix = _prefix(pending.language, which)
         self._write(
             lambda: self._history.resolve(
-                pending.turn_id, prefix=prefix, text=text, status=status
+                pending.turn_id,
+                prefix=prefix,
+                text=text,
+                status=status,
+                detail=detail,
+                cost_usd=cost_usd,
             )
         )
         return self._done(pending.turn_id, pending.language, which, text)
 
     def _deny(self, pendings: list[Pending]) -> None:
         for pending in pendings:
+            self._drop_followup(pending, "denied")
             prefix = PREFIXES[pending.language].understood
             text = phrase(pending.language, "denied")
             self._write(
@@ -525,6 +790,7 @@ class AgentService:
 
     def _expire(self, pendings: list[Pending]) -> None:
         for pending in pendings:
+            self._drop_followup(pending, "expired")
             prefix = PREFIXES[pending.language].negative
             text = phrase(pending.language, "expired")
             self._write(

@@ -109,6 +109,8 @@ class ToolResult:
     # Why it failed: "not_found", "http_error", "network", "timeout", "bad_response", or the kind of
     # an OpenRouterError ("auth", "credits", "server", ...). Never a message.
     error: str | None = None
+    # What a program the user connected returned: nobody vetted it, and the model is told so.
+    untrusted: bool = False
 
 
 def _number(value: Any) -> float | int | None:
