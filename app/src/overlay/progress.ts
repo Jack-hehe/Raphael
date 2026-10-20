@@ -1,7 +1,7 @@
-// The progress arc: after the dictation key is released, how far the dictation has come while the
-// speech that is left is transcribed (0 to 60 %), while the brain cleans the text (60 to 95 %, an
-// estimate) and when the text is there (100 %). The overlay page writes it as a percentage beside
-// the emblem (overlay.ts).
+// How far a dictation has come once its key is released: while the speech that is left is
+// transcribed (0 to 60 %), while the brain cleans the text (60 to 95 %, an estimate) and when the
+// text is there (100 %). The overlay page writes it as a percentage beside the emblem
+// (overlay.ts). It is called the arc from when it was drawn as one around the emblem.
 //
 // The core reports how many segments are transcribed; the cleanup has no such count, so the arc
 // eases towards the end of its range over the time the cleanup is expected to take and stops
@@ -56,7 +56,7 @@ export class ProgressArc {
   private expected = expectedCleanupSeconds(0);
   private value = 0;
 
-  /** Whether there is an arc to draw. */
+  /** Whether a dictation's progress is being followed. */
   get active(): boolean {
     return this.stage !== null;
   }

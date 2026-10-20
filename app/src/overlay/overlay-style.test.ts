@@ -221,7 +221,7 @@ describe.each(SIZES)("beside an emblem of %i px", (emblem) => {
     expect(at.question.bottom - at.buttons.top).toBeGreaterThanOrEqual(8);
   });
 
-  test("the buttons stand where the app lets the pointer through: inside the window, under the words, beside the emblem", () => {
+  test("the buttons stand inside the window, under the words, beside the emblem", () => {
     expect(at.buttons.right).toBe(at.line.right);
     expect(at.buttons.bottom).toBeGreaterThan(0);
     expect(at.buttons.left).toBeLessThanOrEqual(at.window.width);

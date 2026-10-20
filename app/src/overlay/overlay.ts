@@ -3,7 +3,8 @@
 // Rust (overlay.rs) sends events on a channel that this page opens once. The window itself is
 // transparent, click-through and never hidden: "hidden" here means the page draws nothing and
 // the animation loop (see emblem.ts) is stopped. A question (an `ask` event) is the one thing
-// that takes the pointer: its two buttons can be clicked, and the app lets only them through.
+// that takes the pointer: while it is up the whole window takes the mouse (overlay.rs), so a
+// click anywhere in the overlay's corner lands on the page, where only its two buttons answer it.
 //
 // The controller below holds all the logic and takes the emblem and the DOM through small
 // interfaces, so the tests run it in Node.

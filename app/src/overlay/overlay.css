@@ -1,5 +1,7 @@
-/* The overlay window is transparent and click-through. The canvas sits in its bottom-right
-   corner; every word is right-aligned to the left of the emblem, as in the approved preview.
+/* The overlay window is transparent and click-through, except while a question is up: then the
+   whole window takes the mouse, and only the question's buttons answer it. The canvas sits in
+   its bottom-right corner; every word is right-aligned to the left of the emblem, as in the
+   approved preview.
    --e is the emblem's diameter and --c its square canvas (1.3 times larger, room for the rays);
    overlay.ts sets both from the size in the settings. */
 
@@ -14,10 +16,10 @@
      wraps grows upwards from here. */
   --line-bottom: calc(var(--margin) + var(--e) * 0.35);
 
-  /* The buttons of a question sit at a fixed place, whatever the length of its words, so that the
-     app knows where to let the pointer through: --ask-h tall, their right edge --subs-right from the
-     window's right edge and their bottom edge --ask-bottom above the window's bottom edge. They
-     are two pills, 84 px wide at least and 260 px at most together. */
+  /* The buttons of a question sit at a fixed place inside the window, whatever the length of its
+     words: --ask-h tall, their right edge --subs-right from the window's right edge and their
+     bottom edge --ask-bottom above the window's bottom edge. They are two pills, 84 px wide at
+     least and 260 px at most together. */
   --ask-h: 36px;
   --ask-gap: 10px;
   --ask-bottom: calc(var(--margin) + var(--e) * 0.2 - 6px);
