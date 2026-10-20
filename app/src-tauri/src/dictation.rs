@@ -22,9 +22,10 @@
 //!
 //! Rules that keep it out of trouble with the real core, overlay and paster:
 //!
-//! - Overlay calls are made outside the state lock: they can wait for the main thread, and the
-//!   tray's handlers run on the main thread. The cancel switch is only a flag (a channel send),
-//!   so it is set under the lock, together with the phase it follows.
+//! - Overlay calls are made outside the state lock: they can wait for the main thread (placing
+//!   the window asks it where the window is), and the tasks that make the core calls look at the
+//!   state in the meantime. The cancel switch is only a flag (a channel send), so it is set under
+//!   the lock, together with the phase it follows.
 //! - `hide` never follows a `notice`: a hide cancels the notice and the ones queued after it.
 //! - The core hears of a session's `stop` or `cancel` only after it has answered that session's
 //!   `dictation.start`: the calls are made by separate tasks, and a stop that overtook its start
@@ -229,8 +230,9 @@ pub struct DictationController<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSw
     /// The language of every notice the controller shows.
     language: LanguageCell,
     state: Arc<Mutex<State>>,
-    /// Serializes state transitions with their overlay calls. Only background controller work
-    /// takes this lock; UI-thread readers use `state`, which is never held across an overlay call.
+    /// Serializes state transitions with their overlay calls, so that the calls of one cannot come
+    /// between those of another. A quick look at the state (is this session still the current
+    /// one?) takes only `state`, which is never held across an overlay call.
     transitions: Arc<Mutex<()>>,
     /// Told of each dictation that was pasted and each that starts: learns from the user's
     /// corrections (`learn`).
@@ -1318,7 +1320,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     ///
     /// A new recording must not publish its show between ending this session and publishing its
     /// hide or notice. Serialize that whole transition with the hotkeys, while keeping window
-    /// calls outside the state lock so UI-thread readers can still run.
+    /// calls outside the state lock, so that the tasks that look at the state are not held up.
     fn finish(&self, session: &str, show: impl FnOnce(&Self)) {
         let _transition = lock(&self.transitions);
         if !self.end_session(session) {
