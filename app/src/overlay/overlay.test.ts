@@ -164,9 +164,10 @@ afterEach(() => {
   expect(view.overlaps).toEqual([]);
 });
 
-const ZH = "《告。這個視窗不接受貼上。》";
-const JA = "《告。このウィンドウには貼り付けできません。》";
-const EN = "《Notice. This window does not take a paste.》";
+// The notice for a window that refuses the paste (ELEVATED in notices.rs).
+const ZH = "《告。此視窗權限較高，無法貼上。文字已複製，請按 Ctrl+V。》";
+const JA = "《告。権限の高いウィンドウには貼り付けできません。コピー済みです。Ctrl+V で貼り付けてください。》";
+const EN = "《Notice. This window has higher privileges and refuses the paste. The text is copied. Press Ctrl+V.》";
 const settings = (subtitles: string, language: string = "zh-TW", px = 150): OverlayEvent => ({ type: "settings", px, subtitles, language });
 
 const lines = (): string[] => view.log.filter((line) => line.startsWith("line:"));

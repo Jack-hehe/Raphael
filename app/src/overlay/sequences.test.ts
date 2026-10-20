@@ -152,7 +152,7 @@ function page() {
 }
 
 const SETTINGS: OverlayEvent = { type: "settings", px: 150, subtitles: "on", language: "zh-TW" };
-const NO_SOUND: OverlayEvent = { type: "notice", text: "《否。沒有收到聲音，請檢查麥克風。》" };
+const NO_SOUND: OverlayEvent = { type: "notice", text: "《否。未收到聲音。請確認麥克風。》" };
 
 test("learned words wait through live dictation and completion before appearing", () => {
   const p = page();
