@@ -178,22 +178,21 @@ const ALLOWED_PREFIXES: [&str; 6] = [
 // `models.` is no prefix here: it names the speech models of this computer (`models.status`,
 // `models.ensure`) as well as OpenRouter's catalog (`models.catalog`), and each is let through by
 // name, so that a method added there later is not opened to the page by accident.
-const ALLOWED_METHODS: [&str; 8] = [
+const ALLOWED_METHODS: [&str; 7] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
     "models.status",
     "models.ensure",
     "models.catalog",
-    "pricing.get",
     "stats.summary",
 ];
 
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
-/// settings (the `languages` setting too), the key, the status, the usage numbers, the model prices,
-/// OpenRouter's catalog of models, the list of languages, the record of the conversations with
-/// Raphael, and the few device methods the settings page needs. Everything else is refused, the
-/// dictation methods and the ones that ask Raphael something above all.
+/// settings (the `languages` setting too), the key, the status, the usage numbers, OpenRouter's
+/// catalog of models with their prices, the list of languages, the record of the conversations
+/// with Raphael, and the few device methods the settings page needs. Everything else is refused,
+/// the dictation methods and the ones that ask Raphael something above all.
 pub fn is_allowed_method(m: &str) -> bool {
     ALLOWED_METHODS.contains(&m)
         || ALLOWED_PREFIXES
@@ -977,7 +976,6 @@ mod tests {
             "models.status",
             "models.ensure",
             "models.catalog",
-            "pricing.get",
             "stats.summary",
             "languages.list",
             "agent.history.list",
@@ -998,6 +996,7 @@ mod tests {
             "brain.finalize_dictation",
             "audio.set_device", // goes through device_settings_set
             "audio.start",
+            "pricing.get", // gone: models.catalog has every price
             "core.hello",
             "xhistory.list",
             " history.list",

@@ -77,21 +77,13 @@ def test_each_setting_of_a_model_is_a_role_with_its_default_among_its_own_models
 # --- the method ---------------------------------------------------------------------------------
 
 
-async def test_the_catalog_and_the_prices_share_one_fetch(router, client):
+async def test_the_catalog_is_fetched_once_and_then_kept_for_the_day(router, client, clock):
     view = await router.call("models.catalog", {})
     assert (view["source"], view["fetched_at_ms"]) == ("live", NOW_MS)
-    prices = await router.call("pricing.get", {})
-    assert prices["source"] == "cached"
-    assert by_id(prices["cleanup"])["openai/gpt-6-luna"]["input_per_mtok"] == 0.1
-    assert (await router.call("models.catalog", {}))["source"] == "cached"
-    assert client.calls == 1
-
-
-async def test_the_prices_first_and_then_the_catalog_also_share_one_fetch(router, client):
-    assert (await router.call("pricing.get", {}))["source"] == "live"
-    view = await router.call("models.catalog", {})
-    assert view["source"] == "cached"
     assert [m["id"] for m in view["llm"]] == LANGUAGE_MODELS
+    assert by_id(view["llm"])["openai/gpt-6-luna"]["input_per_mtok"] == 0.1
+    clock.now_ms += PRICING_TTL_MS - 1
+    assert (await router.call("models.catalog", {}))["source"] == "cached"
     assert client.calls == 1
 
 
@@ -295,7 +287,7 @@ async def test_the_lists_models_and_prices_are_not_logged(router, client, clock,
     clock.now_ms += PRICING_TTL_MS
     with caplog.at_level(logging.DEBUG):
         await router.call("models.catalog", {})
-        await router.call("pricing.get", {})
+        await router.call("models.catalog", {})
     assert "cleanup_model" in caplog.text  # the setting that went back is named...
     for model in RECORDED:
         assert model["id"] not in caplog.text  # ...but no model

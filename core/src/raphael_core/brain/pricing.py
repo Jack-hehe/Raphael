@@ -1,15 +1,15 @@
-"""OpenRouter's model list, fetched once for `pricing.get` and `models.catalog`, and kept.
+"""OpenRouter's model list, with what each model costs, fetched for `models.catalog` and kept.
 
 The list is OpenRouter's public one (GET /models, no key needed); brain/catalog.py reads it and
-says what its prices mean. `pricing.get` answers with what the models Raphael offers cost, for the
-settings page to show (`MODEL_NAMES`); `models.catalog` with every model Raphael could use.
+says what its prices mean.
 
 The list is kept for 24 hours, in memory and in the `settings` table under a key that is no
 setting (so it survives a restart and is not offered by `settings.get`). It is fetched only when
-one of the two methods is called, never during a dictation, with a 5 second deadline. If that
-fails, the answer is the latest list kept, however old, else the builtin table below: the prices
-of Raphael's own models as of 2026-10-18, so the page always has something to show. `source` says
-which of the three it was: "live" (just fetched), "cached" or "builtin".
+`models.catalog` is called, never during a dictation, with a 5 second deadline. If that fails, the
+answer is the latest list kept, however old, else the builtin table below: Raphael's own models at
+their prices of 2026-10-18, so the page always has something to show. `source` says which of the
+three it was: "live" (just fetched), "cached" or "builtin". Choosing a model reads what is kept
+(`known`), and never fetches.
 """
 
 import asyncio
@@ -31,7 +31,6 @@ from .catalog import (
     parse_catalog,
 )
 from .openrouter import CLEANUP_MODEL_CHOICES, STT_MODELS_WITH_HINTS, OpenRouterError
-from .settings import STT_CLOUD_MODELS
 
 logger = logging.getLogger(__name__)
 
@@ -44,21 +43,6 @@ CACHE_KEY = "cache.pricing"
 # per hour, not unknown; 3: every model Raphael could use, not only the prices of his own; 4: the
 # batch variants left out).
 CACHE_READING = 4
-
-# Short names for the app to show.
-MODEL_NAMES = {
-    "openai/gpt-6-luna": "GPT-6 Luna",
-    "anthropic/claude-haiku-5.5": "Claude Haiku 5.5",
-    "google/gemini-3.1-flash-lite": "Gemini 3.1 Flash Lite",
-    "elevenlabs/scribe-v2": "ElevenLabs Scribe v2",
-    "openai/gpt-transcribe": "OpenAI GPT Transcribe",
-    "microsoft/mai-transcribe-2": "Microsoft MAI Transcribe 2",
-    "assemblyai/universal-3-6-pro": "AssemblyAI Universal 3.6 Pro",
-    "qwen/qwen3-asr-1.7b": "Qwen3 ASR 1.7B",
-    "google/gemini-3.5-transcribe": "Gemini 3.5 Transcribe",
-    "openai/whisper-large-v3-turbo": "Whisper Large v3 Turbo",
-}
-
 
 # OpenRouter's model list of 2026-10-18, read the way `parse_catalog` reads it (a test keeps the
 # two alike, with tests/brain/fixtures/openrouter_models.json, a trimmed copy of that list).
@@ -116,15 +100,6 @@ def builtin_catalog() -> list[CatalogEntry]:
     return entries
 
 
-def parse_models(models: object) -> dict[str, ModelPrice]:
-    """The prices of the models Raphael offers, from the `data` list of GET /models.
-
-    A model the list does not have is not in the result; entries that are no models are skipped.
-    """
-    offered = {*CLEANUP_MODEL_CHOICES, *STT_CLOUD_MODELS}
-    return {entry.id: entry.price for entry in parse_catalog(models) if entry.id in offered}
-
-
 # --- the cache ----------------------------------------------------------------------------------
 
 
@@ -164,36 +139,9 @@ def _decode(text: str) -> _Snapshot | None:
 # --- the service --------------------------------------------------------------------------------
 
 
-def _view(prices: dict[str, ModelPrice], fetched_at_ms: int | None, source: str) -> dict:
-    """The answer of `pricing.get`. A model without a price in `prices` is unknown."""
-    cleanup, stt = [], []
-    for model_id in CLEANUP_MODEL_CHOICES:
-        price = prices.get(model_id, ModelPrice())
-        cleanup.append(
-            {
-                "id": model_id,
-                "name": MODEL_NAMES.get(model_id, model_id),
-                "input_per_mtok": price.input_per_mtok,
-                "output_per_mtok": price.output_per_mtok,
-            }
-        )
-    for model_id in STT_CLOUD_MODELS:
-        price = prices.get(model_id, ModelPrice())
-        stt.append(
-            {
-                "id": model_id,
-                "name": MODEL_NAMES.get(model_id, model_id),
-                "per_minute": price.per_minute,
-                "input_per_mtok": price.input_per_mtok,
-                "output_per_mtok": price.output_per_mtok,
-            }
-        )
-    return {"cleanup": cleanup, "stt": stt, "fetched_at_ms": fetched_at_ms, "source": source}
-
-
 class PricingService:
-    """OpenRouter's model list, from OpenRouter, a day-long cache or the builtin table: the prices
-    of `pricing.get` and the catalog of `models.catalog` both come from it.
+    """OpenRouter's model list, with the prices, from OpenRouter, a day-long cache or the builtin
+    table: what `models.catalog` answers with.
 
     `conn` is the brain's database (the cache is a row of its settings table), `client` has the
     `models(timeout_s=...)` coroutine of OpenRouterClient and `now_ms` is the clock. The fetch
@@ -215,14 +163,6 @@ class PricingService:
         self._snapshot: _Snapshot | None = None
         self._loaded = False  # whether the database has been read for a snapshot
         self._lock = asyncio.Lock()  # callers at the same time share one fetch
-
-    async def get(self) -> dict:
-        """The answer of `pricing.get`."""
-        snapshot, source = await self._latest()
-        if snapshot is None:
-            return _view(BUILTIN_PRICES, None, "builtin")
-        prices = {entry.id: entry.price for entry in snapshot.entries}
-        return _view(prices, snapshot.fetched_at_ms, source)
 
     async def catalog(self) -> tuple[list[CatalogEntry], int | None, str]:
         """Every model of the list, when the list was fetched (None for the builtin table), and

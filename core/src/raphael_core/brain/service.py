@@ -1,5 +1,5 @@
 """The brain as RPC methods: dictation, history, dictionary, settings, the OpenRouter key, status,
-model prices, OpenRouter's catalog of models and dictation statistics.
+OpenRouter's catalog of models with their prices, and dictation statistics.
 
 `Brain` owns the stores and the cleanup service and registers its methods on a Router. The device
 side and the app reach it only through `router.call`, so every param arrives as JSON and every
@@ -290,7 +290,6 @@ class Brain:
             "secrets.clear_openrouter_key": self._secrets_clear_openrouter_key,
             "status.get": self._status_get,
             "status.check_openrouter": self._status_check_openrouter,
-            "pricing.get": self._pricing_get,
             "models.catalog": self._models_catalog,
             "stats.summary": self._stats_summary,
         }
@@ -766,10 +765,7 @@ class Brain:
                     self._note("ok", latency_ms=latency_ms, key=info)
         return self._openrouter_view(has_key)
 
-    # --- pricing, the catalog and statistics ----------------------------------------------------
-
-    async def _pricing_get(self, params: dict) -> dict:
-        return await self._pricing.get()
+    # --- the catalog and statistics ------------------------------------------------------------
 
     async def _models_catalog(self, params: dict) -> dict:
         """Every OpenRouter model Raphael could use (catalog.py). A chosen model that OpenRouter no

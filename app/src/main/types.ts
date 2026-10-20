@@ -49,28 +49,6 @@ export interface KeyInfo {
   usage_total: number | null;
 }
 
-/** One price of `pricing.get`: US$ per million tokens or per minute of audio; null when unknown. */
-export interface CleanupPrice {
-  id: string;
-  name: string;
-  input_per_mtok: number | null;
-  output_per_mtok: number | null;
-}
-
-export interface SttPrice extends CleanupPrice {
-  per_minute: number | null;
-}
-
-/** `pricing.get`: the prices of the models the settings page offers. */
-export interface Pricing {
-  cleanup: CleanupPrice[];
-  stt: SttPrice[];
-  /** When the prices were read from OpenRouter; null for the built-in ones. */
-  fetched_at_ms: number | null;
-  /** `live`: read just now; `cached`: read earlier and kept; `builtin`: shipped with the app. */
-  source: "live" | "cached" | "builtin";
-}
-
 /** What a model is chosen for: the dictation cleanup, Raphael's answers, speech to text (the core's brain/catalog.py). */
 export type ModelRole = "cleanup" | "answer" | "stt";
 

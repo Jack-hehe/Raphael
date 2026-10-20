@@ -2,8 +2,7 @@
 each of Raphael's roles can make of it.
 
 The list is OpenRouter's public one (GET /models?output_modalities=all), which pricing.py fetches
-and keeps for a day: one fetch and one cache serve `pricing.get` and `models.catalog` alike. This
-module reads it. Two kinds of model are kept:
+and keeps for a day. This module reads it. Two kinds of model are kept:
 
 - `llm`: text in, text out. A model that also writes images or audio is not one.
 - `stt`: speech to text, the models whose output is a transcription.
