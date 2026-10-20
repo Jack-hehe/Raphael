@@ -137,7 +137,12 @@ def cleanup_log(caplog):
 
 
 def test_timeout_scales_with_length():
-    assert timeout_for(0) == 3.0 and timeout_for(60) == 6.0 and timeout_for(600) == 15.0
+    assert timeout_for(0) == 10.0 and timeout_for(60) == 30.0 and timeout_for(600) == 90.0
+
+
+def test_a_long_dictation_is_given_time_to_be_cleaned():
+    # 38 s of speech waited 4.9 s before, and its cleanup was given up; it waits about 23 s now.
+    assert timeout_for(38) > 20
 
 
 async def test_cleans_and_records_spend(svc, fake_client, spend):
@@ -252,7 +257,7 @@ async def test_the_model_comes_from_the_settings(svc, fake_client, settings):
 async def test_the_timeout_is_timeout_for_unless_told_otherwise(svc, fake_client):
     fake_client.reply = completion({"text": "你好。"})
     await svc.clean("你好", audio_seconds=60)
-    assert fake_client.calls[0]["timeout_s"] == timeout_for(60) == 6.0
+    assert fake_client.calls[0]["timeout_s"] == timeout_for(60) == 30.0
 
 
 @pytest.mark.parametrize(("length", "max_tokens"), [(2, 256), (96, 256), (97, 258), (200, 464)])

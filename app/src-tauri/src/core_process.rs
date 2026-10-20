@@ -46,9 +46,10 @@ const PROTOCOL_VERSION: u64 = 1;
 /// How long a call to `method` may take before it fails with `TIMEOUT`.
 pub fn timeout_for(method: &str) -> Duration {
     let seconds = match method {
-        // The last chunk of speech-to-text, then the cleanup request to the LLM. The first
-        // dictation after launch also waits for the speech engine to load (about 31 s).
-        "dictation.stop" => 90,
+        // The last chunk of speech-to-text, then the cleanup request to the LLM, which may take
+        // up to 90 s for a long dictation (cleanup.timeout_for). The first dictation after launch
+        // also waits for the speech engine to load (about 31 s).
+        "dictation.stop" => 150,
         // The router and then the model that words the answer, and perhaps a web search or the
         // weather in between. Nobody waits for it longer than that: Esc stops it earlier.
         "agent.ask" => 60,
@@ -796,7 +797,7 @@ mod tests {
 
     #[test]
     fn timeouts_follow_the_method() {
-        assert_eq!(timeout_for("dictation.stop"), Duration::from_secs(90));
+        assert_eq!(timeout_for("dictation.stop"), Duration::from_secs(150));
         assert_eq!(timeout_for("models.ensure"), Duration::from_secs(3600));
         assert_eq!(timeout_for("agent.ask"), Duration::from_secs(60));
         assert_eq!(timeout_for("agent.confirm"), Duration::from_secs(30));
