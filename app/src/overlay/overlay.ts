@@ -435,7 +435,7 @@ export class OverlayController {
     if (this.activeShow && mode === "thinking" && quiet) this.startWaiting(lines);
     else this.stopWaiting();
     if (this.activeShow && mode === "thinking" && !quiet && !this.progress.active) {
-      this.progress.report({ stage: "transcribing", done: 0, total: 1, audioSeconds: 0 }, false);
+      this.progress.report({ stage: "transcribing", done: 0, total: 1, audioSeconds: 0 });
       this.renderProgress();
       this.startProgressTimer();
     }
@@ -445,7 +445,7 @@ export class OverlayController {
     if (!this.activeShow) return;
     // The percentage takes the caption from the waiting lines.
     this.stopWaiting();
-    this.progress.report(report, false);
+    this.progress.report(report);
     this.renderProgress();
     this.startProgressTimer();
   }
@@ -455,7 +455,7 @@ export class OverlayController {
     this.progressClock = Date.now();
     this.progressTimer = setInterval(() => {
       const now = Date.now();
-      this.progress.advance(Math.max(0, now - this.progressClock) / 1000, false);
+      this.progress.advance(Math.max(0, now - this.progressClock) / 1000);
       this.progressClock = now;
       this.renderProgress();
     }, 100);

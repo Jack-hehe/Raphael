@@ -6,8 +6,8 @@ const cleaning = (audioSeconds = 5): ProgressReport => ({ stage: "cleaning", don
 const DONE: ProgressReport = { stage: "done", done: 0, total: 0, audioSeconds: 0 };
 
 /** Runs the arc for `seconds` at 60 frames a second. */
-function run(arc: ProgressArc, seconds: number, reduce = false): void {
-  for (let t = 0; t < seconds - 1e-9; t += 1 / 60) arc.advance(1 / 60, reduce);
+function run(arc: ProgressArc, seconds: number): void {
+  for (let t = 0; t < seconds - 1e-9; t += 1 / 60) arc.advance(1 / 60);
 }
 
 test("the stages fill their own part of the ring", () => {
@@ -18,20 +18,20 @@ test("the stages fill their own part of the ring", () => {
 test("transcribing fills 0 to 60 % by the segments done", () => {
   const arc = new ProgressArc();
   expect(arc.active).toBe(false);
-  arc.report(tr(1, 4), false);
+  arc.report(tr(1, 4));
   expect(arc.active).toBe(true);
   run(arc, 2);
   expect(arc.fraction).toBeCloseTo(0.15, 3);
-  arc.report(tr(4, 4), false);
+  arc.report(tr(4, 4));
   run(arc, 2);
   expect(arc.fraction).toBeCloseTo(0.6, 3);
 });
 
 test("the arc eases towards a new count instead of jumping", () => {
   const arc = new ProgressArc();
-  arc.report(tr(0, 2), false);
-  arc.report(tr(2, 2), false);
-  arc.advance(1 / 24, false);
+  arc.report(tr(0, 2));
+  arc.report(tr(2, 2));
+  arc.advance(1 / 24);
   expect(arc.fraction).toBeGreaterThan(0);
   expect(arc.fraction).toBeLessThan(0.4);
   run(arc, 1);
@@ -40,17 +40,17 @@ test("the arc eases towards a new count instead of jumping", () => {
 
 test("nothing left to count is all of the transcribing part", () => {
   const arc = new ProgressArc();
-  arc.report(tr(0, 0), false);
+  arc.report(tr(0, 0));
   run(arc, 2);
   expect(arc.fraction).toBeCloseTo(0.6, 3);
 });
 
 test("the arc never goes back, even when the core finds another segment", () => {
   const arc = new ProgressArc();
-  arc.report(tr(3, 4), false);
+  arc.report(tr(3, 4));
   run(arc, 2);
   const before = arc.fraction;
-  arc.report(tr(3, 5), false);
+  arc.report(tr(3, 5));
   run(arc, 2);
   expect(arc.fraction).toBeGreaterThanOrEqual(before);
 });
@@ -58,7 +58,7 @@ test("the arc never goes back, even when the core finds another segment", () => 
 test("counts that make no sense cannot break the arc", () => {
   const arc = new ProgressArc();
   for (const r of [tr(Number.NaN, 3), tr(5, 3), tr(-1, -1), tr(1, Number.POSITIVE_INFINITY)]) {
-    arc.report(r, false);
+    arc.report(r);
     run(arc, 0.5);
     expect(Number.isFinite(arc.fraction)).toBe(true);
     expect(arc.fraction).toBeGreaterThanOrEqual(0);
@@ -87,9 +87,9 @@ test("the cleaning estimate is at 90 % of its range at the expected time and nev
 
 test("cleaning eases from 60 % towards 95 % and never reaches 100 % before the reply", () => {
   const arc = new ProgressArc();
-  arc.report(tr(2, 2), false);
+  arc.report(tr(2, 2));
   run(arc, 1);
-  arc.report(cleaning(25), false); // expected 2 s
+  arc.report(cleaning(25)); // expected 2 s
   run(arc, 0.1);
   expect(arc.fraction).toBeGreaterThanOrEqual(0.6);
   expect(arc.fraction).toBeLessThan(0.65);
@@ -105,8 +105,8 @@ test("cleaning eases from 60 % towards 95 % and never reaches 100 % before the r
 test("a longer dictation is expected to take longer to clean", () => {
   const short = new ProgressArc();
   const long = new ProgressArc();
-  short.report(cleaning(0), false);
-  long.report(cleaning(200), false);
+  short.report(cleaning(0));
+  long.report(cleaning(200));
   run(short, 1);
   run(long, 1);
   expect(long.fraction).toBeLessThan(short.fraction);
@@ -114,18 +114,18 @@ test("a longer dictation is expected to take longer to clean", () => {
 
 test("transcription that ended while recording goes straight to the cleaning part", () => {
   const arc = new ProgressArc();
-  arc.report(tr(2, 3), false);
-  arc.report(tr(2, 2), false);
-  arc.report(cleaning(), false);
+  arc.report(tr(2, 3));
+  arc.report(tr(2, 2));
+  arc.report(cleaning());
   run(arc, 0.5);
   expect(arc.fraction).toBeGreaterThan(0.6);
 });
 
 test("done fills the arc at once", () => {
   const arc = new ProgressArc();
-  arc.report(cleaning(), false);
+  arc.report(cleaning());
   run(arc, 0.5);
-  arc.report(DONE, false);
+  arc.report(DONE);
   expect(arc.fraction).toBe(1);
   run(arc, 0.3);
   expect(arc.fraction).toBe(1);
@@ -133,50 +133,32 @@ test("done fills the arc at once", () => {
 
 test("done without any report before it (cleanup skipped, quick reply) still fills the ring", () => {
   const arc = new ProgressArc();
-  arc.report(DONE, false);
+  arc.report(DONE);
   expect(arc.fraction).toBe(1);
   expect(arc.active).toBe(true);
 });
 
 test("a report from an earlier stage that comes late is ignored", () => {
   const arc = new ProgressArc();
-  arc.report(DONE, false);
-  arc.report(tr(1, 4), false);
-  arc.report(cleaning(), false);
+  arc.report(DONE);
+  arc.report(tr(1, 4));
+  arc.report(cleaning());
   run(arc, 1);
   expect(arc.fraction).toBe(1);
   const c = new ProgressArc();
-  c.report(cleaning(), false);
+  c.report(cleaning());
   run(c, 1);
   const f = c.fraction;
-  c.report(tr(0, 4), false);
+  c.report(tr(0, 4));
   run(c, 0.2);
   expect(c.fraction).toBeGreaterThanOrEqual(f);
 });
 
-test("with reduced motion the arc moves in discrete steps, without easing", () => {
-  const arc = new ProgressArc();
-  arc.report(tr(1, 2), true);
-  expect(arc.fraction).toBeCloseTo(0.3, 10); // at once
-  run(arc, 0.5, true);
-  expect(arc.fraction).toBeCloseTo(0.3, 10);
-  arc.report(cleaning(25), true); // expected 2 s
-  const seen = new Set<string>();
-  for (let i = 0; i < 24 * 20; i++) {
-    arc.advance(1 / 24, true);
-    seen.add(arc.fraction.toFixed(6));
-  }
-  // 60 %, then two steps of a third of the cleaning part each (the third would be 95 %)
-  expect([...seen].map(Number)).toEqual([0.6, 0.6 + 0.35 / 3, 0.6 + (0.35 * 2) / 3].map((v) => Number(v.toFixed(6))));
-  arc.report(DONE, true);
-  expect(arc.fraction).toBe(1);
-});
-
 test("reset removes the arc at once, and a new dictation starts from nothing", () => {
   const arc = new ProgressArc();
-  arc.report(DONE, false);
+  arc.report(DONE);
   arc.reset();
   expect(arc.active).toBe(false);
-  arc.report(tr(0, 3), false);
+  arc.report(tr(0, 3));
   expect(arc.fraction).toBe(0);
 });

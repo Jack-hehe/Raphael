@@ -44,8 +44,6 @@ export function cleaningEstimate(t: number, expected: number): number {
   return 1 - Math.pow(0.1, t / expected);
 }
 
-/** With reduced motion the cleaning estimate moves in this many steps, without easing. */
-const REDUCED_STEPS = 3;
 /** How quickly the arc catches up with the counts, seconds (the time constant). */
 const FOLLOW = 0.12;
 
@@ -75,7 +73,7 @@ export class ProgressArc {
 
   /** A new report from the core (or the stop's reply, `done`). Reports from an earlier stage than
    * the one shown come late and are ignored. */
-  report(r: ProgressReport, reduce: boolean): void {
+  report(r: ProgressReport): void {
     if (this.stage !== null && ORDER[r.stage] < ORDER[this.stage]) return;
     const entering = this.stage !== r.stage;
     this.stage = r.stage;
@@ -92,7 +90,6 @@ export class ProgressArc {
     } else {
       this.value = 1;
     }
-    if (reduce) this.value = Math.max(this.value, this.target(true));
   }
 
   /** No arc, at once. */
@@ -104,15 +101,14 @@ export class ProgressArc {
   }
 
   /** Where the arc is heading now. */
-  private target(reduce: boolean): number {
+  private target(): number {
     switch (this.stage) {
       case null:
         return 0;
       case "transcribing":
         return this.counted;
       case "cleaning": {
-        let share = cleaningEstimate(this.cleaningFor, this.expected);
-        if (reduce) share = Math.floor(share * REDUCED_STEPS) / REDUCED_STEPS;
+        const share = cleaningEstimate(this.cleaningFor, this.expected);
         const [from, to] = ARC.cleaning;
         return Math.max(this.counted, from + (to - from) * share);
       }
@@ -121,12 +117,12 @@ export class ProgressArc {
     }
   }
 
-  /** Moves the arc on by `dt` seconds. With `reduce` it jumps to where it is heading. */
-  advance(dt: number, reduce: boolean): void {
+  /** Moves the arc on by `dt` seconds. */
+  advance(dt: number): void {
     if (this.stage === null || !(dt > 0)) return;
     if (this.stage === "cleaning") this.cleaningFor += dt;
-    const target = this.target(reduce);
-    const next = reduce ? target : this.value + (target - this.value) * (1 - Math.exp(-dt / FOLLOW));
+    const target = this.target();
+    const next = this.value + (target - this.value) * (1 - Math.exp(-dt / FOLLOW));
     this.value = Math.min(1, Math.max(this.value, next));
   }
 }
