@@ -6,15 +6,22 @@ a test's own in-memory keyring, any use of the keyring raises.
 
 Tests marked `models` need the speech models downloaded and take a while to load them, so they are
 skipped unless the environment variable RAPHAEL_TEST_MODELS is 1.
+
+`conn` is a database in memory with the brain's schema, for the tests of what keeps its data there:
+the brain, the assistant and the plugins.
 """
 
 import os
+import sqlite3
+from collections.abc import Iterator
 
 import keyring
 import keyring.backend
 import keyring.backends.fail
 import keyring.errors
 import pytest
+
+from raphael_core.brain import db
 
 
 class MemoryKeyring(keyring.backend.KeyringBackend):
@@ -83,3 +90,10 @@ def memory_keyring():
     keyring.set_keyring(backend)
     yield backend
     keyring.set_keyring(backend.restored_afterwards)
+
+
+@pytest.fixture
+def conn() -> Iterator[sqlite3.Connection]:
+    connection = db.connect(":memory:")
+    yield connection
+    connection.close()

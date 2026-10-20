@@ -1,23 +1,14 @@
-"""Fixtures and helpers shared by the voice assistant's tests."""
+"""Fixtures and helpers shared by the voice assistant's tests (the database fixture `conn` is the
+whole suite's)."""
 
 import asyncio
 import inspect
-import sqlite3
 import threading
-from collections.abc import Iterator
 
 import pytest
 
 from raphael_core.agent.commands import NONE
-from raphael_core.brain import db
 from raphael_core.brain.openrouter import Completion, Decision, ToolCall, ToolPlan
-
-
-@pytest.fixture
-def conn() -> Iterator[sqlite3.Connection]:
-    connection = db.connect(":memory:")
-    yield connection
-    connection.close()
 
 
 class FakeActions:

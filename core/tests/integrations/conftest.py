@@ -1,25 +1,16 @@
-"""Fixtures for the plugins' tests: a vault in memory, and servers that live in the test."""
+"""Fixtures for the plugins' tests: a vault in memory, and servers that live in the test (the
+database fixture `conn` is the whole suite's)."""
 
-import sqlite3
-from collections.abc import Iterator
 from contextlib import asynccontextmanager
 
 import pytest
 from mcp import Client
 
-from raphael_core.brain import db
 from raphael_core.integrations.client import McpConnector, Secrets
 from raphael_core.integrations.config import ServerConfig
 from raphael_core.integrations.vault import MemoryVault
 
 from . import fake_server
-
-
-@pytest.fixture
-def conn() -> Iterator[sqlite3.Connection]:
-    connection = db.connect(":memory:")
-    yield connection
-    connection.close()
 
 
 @pytest.fixture(autouse=True)
