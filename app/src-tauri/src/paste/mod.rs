@@ -197,7 +197,6 @@ mod tests {
 
     #[test]
     fn focus_change_copies_only() {
-        // Review Focus 1
         assert_eq!(
             decide(
                 Some(&t(1, "notepad.exe", false)),

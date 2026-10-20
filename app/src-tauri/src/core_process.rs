@@ -1232,12 +1232,11 @@ mod tests {
         }
     }
 
-    // Needs core/.venv (`uv sync` in core/) and `python -m raphael_core` (Task 13):
+    // Needs core/.venv (`uv sync` in core/), whose Python runs `python -m raphael_core`:
     // `cargo test -- --ignored restarts_after_the_core_dies`
     #[tokio::test]
-    #[ignore = "needs the real core: core/.venv and `python -m raphael_core` (Task 13)"]
+    #[ignore = "needs the real core: core/.venv and `python -m raphael_core`"]
     async fn restarts_after_the_core_dies() {
-        // Review Focus 4
         let data_dir = tempfile::tempdir().unwrap();
         let mut command = resolve_core_command().unwrap();
         command.env.push((

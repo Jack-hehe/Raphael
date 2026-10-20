@@ -732,7 +732,7 @@ mod tests {
         assert!(restore_due(t0 + ms(500), t0, None, false));
     }
 
-    // The real clipboard from here on (Review Focus 3).
+    // The real clipboard from here on.
 
     /// Puts back the clipboard it snapshotted when dropped, so the test leaves the user's
     /// clipboard as it found it even when an assertion fails.
