@@ -50,6 +50,12 @@ describe("dropdowns", () => {
     expect(selText({ value: "a", label: "Alpha" }, "a")).toEqual({ shown: "Alpha", full: "Alpha" });
     expect(selText(undefined, "x/old")).toEqual({ shown: "x/old", full: "x/old" });
   });
+
+  test("a choice whose label is shortened keeps the whole text for the tooltip", () => {
+    const choice = { value: "", label: "Automatic (current: HyperX Cloud II…)", short: "Automatic (HyperX…)", title: "Automatic (current: Microphone (HyperX Cloud II Core Wireless))" };
+    expect(selText(choice, "")).toEqual({ shown: "Automatic (HyperX…)", full: choice.title });
+    expect(sel([choice], "", "Mic")).toContain(`title="${choice.title}"`);
+  });
 });
 
 describe("the main window's actions", () => {

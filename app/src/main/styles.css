@@ -338,8 +338,9 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .row-key .d { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0; }
 .status-more { color: var(--text-3); font-size: 13px; }
 .status-more::before { content: "·"; margin: 0 7px; }
-/* The microphone: its dropdown, and a slim bar under it that moves with its loudness. */
-.mic-ctl { display: inline-grid; gap: 7px; width: 232px; max-width: 100%; }
+/* The microphone: its dropdown, and a slim bar under it that moves with its loudness. The column is
+   the box's width, not the label's, so a long name is cut, not let out. */
+.mic-ctl { display: inline-grid; grid-template-columns: minmax(0, 1fr); gap: 7px; width: 232px; max-width: 100%; }
 .slist .mic-ctl .sel { width: 100%; }
 .level { display: block; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
 .level > i { display: block; height: 100%; border-radius: inherit; background: var(--accent-text); transform: scaleX(0); transform-origin: left; transition: transform 0.08s linear; }

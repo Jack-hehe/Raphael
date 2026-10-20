@@ -15,7 +15,15 @@ import { DICTATION_MODES } from "../dictation";
 import { formatClock, formatUsd } from "../format";
 import { type LanguageGroup, languageSelectHTML, normalizeLanguages } from "../languages";
 import { bindingLabels } from "../keys";
-import { automaticMicrophoneLabel, automaticMicrophoneShort, shortMicrophoneName } from "../microphone";
+import {
+  DROPDOWN_ROOM,
+  MENU_ROOM,
+  automaticMicrophoneLabel,
+  automaticMicrophoneShort,
+  cutToFit,
+  microphoneText,
+  shortMicrophoneName,
+} from "../microphone";
 import { type ModelPickerLook, type PickerExtra, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
 import { pricingNote } from "../pricing";
 import { runOutDay } from "../report";
@@ -129,17 +137,23 @@ const catalogOf = (v: SettingsView): ModelCatalog | null => (typeof v.catalog ==
 
 /**
  * The microphones: automatic first, then each one found, and the one chosen before if it is not
- * plugged in now. The list has their whole names; the closed dropdown, the short ones.
+ * plugged in now. The list has their whole names, and the automatic choice the short name of the
+ * one it uses; the closed dropdown has short names cut to fit it, and the tooltips the whole ones.
  */
 export function microphoneChoices(v: SettingsView): Choice[] {
   const { devices } = v;
   const choices: Choice[] = [
-    { value: AUTO_MICROPHONE, get label() { return automaticMicrophoneLabel(devices); }, get short() { return automaticMicrophoneShort(devices); } },
-    ...(devices?.devices ?? []).map((d) => ({ value: d.name, label: d.name, short: shortMicrophoneName(d.name) })),
+    {
+      value: AUTO_MICROPHONE,
+      get label() { return automaticMicrophoneLabel(devices, MENU_ROOM); },
+      get short() { return automaticMicrophoneShort(devices); },
+      get title() { return automaticMicrophoneLabel(devices); },
+    },
+    ...(devices?.devices ?? []).map((d) => ({ value: d.name, label: d.name, short: cutToFit(shortMicrophoneName(d.name), DROPDOWN_ROOM) })),
   ];
   const saved = v.device.microphone;
   if (saved === null || choices.some((c) => c.value === saved)) return choices;
-  return [...choices, { value: saved, label: t("onboarding.006", { p0: saved }), short: t("onboarding.006", { p0: shortMicrophoneName(saved) }) }];
+  return [...choices, { value: saved, label: t("onboarding.006", { p0: saved }), short: microphoneText("onboarding.006", saved, DROPDOWN_ROOM) }];
 }
 
 // ---------- prices ----------

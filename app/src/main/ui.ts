@@ -81,16 +81,21 @@ export interface Choice {
    * brackets): the menu lists the label, and the dropdown's tooltip has it too.
    */
   short?: string;
+  /**
+   * The whole text, for the tooltip, when the label itself shortens it (the automatic microphone,
+   * by its short name). The label is the tooltip otherwise.
+   */
+  title?: string;
   /** A second, quieter text after the label in a menu: a price, say. */
   detail?: string;
   /** A line under the label in a menu: what the choice does. */
   desc?: string;
 }
 
-/** The text on a closed dropdown for `choice`, and its tooltip: the whole label. */
+/** The text on a closed dropdown for `choice`, and its tooltip: the whole text. */
 export const selText = (choice: Choice | undefined, current: string): { shown: string; full: string } => ({
   shown: choice?.short ?? choice?.label ?? current,
-  full: choice?.label ?? current,
+  full: choice?.title ?? choice?.label ?? current,
 });
 
 /** The button that opens a menu; it shows `current`'s label. `attrs` names it for the page. */

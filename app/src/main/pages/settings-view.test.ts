@@ -222,8 +222,23 @@ describe("聽寫", () => {
     expect(row).toContain('<span class="level" aria-hidden="true"><i></i></span></span>');
     expect(buttons(row)).toHaveLength(1); // the search for microphones is an item of its menu
     const choices = microphoneChoices(view());
-    expect(choices.map((c) => c.label)).toEqual([`自動偵測（目前：${REALTEK}）`, REALTEK]);
+    expect(choices.map((c) => c.label)).toEqual(["自動偵測（目前：麥克風排列）", REALTEK]);
     expect(choices.map((c) => c.short)).toEqual(["自動（麥克風排列）", "麥克風排列"]);
+    expect(choices[0].title).toBe(`自動偵測（目前：${REALTEK}）`);
+  });
+
+  test("fits a long microphone name to the dropdown and the menu, the whole name in the tooltip", () => {
+    const cut = "麥克風 (5- HyperX Cloud II Core Wi"; // as MME gives it: 31 characters at most
+    const devices = { devices: [{ index: 0, name: cut, is_default: true }, { index: 1, name: REALTEK, is_default: false }], selected: null, automatic_device: cut };
+    const row = rowOf(tab("dictation", { devices }), "麥克風");
+    expect(row).toContain("<span>自動（HyperX Cloud II…）</span>");
+    expect(row).toContain(`title="自動偵測（目前：${cut}）"`);
+    const choices = microphoneChoices(view({ devices }));
+    expect(choices.map((c) => c.label)).toEqual(["自動偵測（目前：HyperX Cloud II Core Wi…）", cut, REALTEK]);
+    expect(choices.map((c) => c.short)).toEqual(["自動（HyperX Cloud II…）", "HyperX Cloud II Core Wi…", "麥克風排列"]);
+    const chosen = rowOf(tab("dictation", { devices, device: { ...device, microphone: cut } }), "麥克風");
+    expect(chosen).toContain("<span>HyperX Cloud II Core Wi…</span>");
+    expect(chosen).toContain(`title="${cut}"`);
   });
 
   test("keeps a chosen microphone that is not plugged in, said so", () => {
