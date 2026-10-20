@@ -131,15 +131,6 @@ def iso_code(language_id: str) -> str:
     return _ISO_CODE[language_id]
 
 
-def stt_language(languages: Sequence[str]) -> str:
-    """Always detect the spoken languages, even when only one variant is selected.
-
-    A single-language hint garbles Chinese, English and Japanese mixed in one dictation. The
-    selection only chooses script and spelling for cleanup and OpenCC, never limits recognition.
-    """
-    return "auto"
-
-
 def stt_languages(languages: Sequence[str]) -> list[str]:
     """The codes of all the chosen languages, in order, each once."""
     return list(dict.fromkeys(iso_code(language_id) for language_id in languages))

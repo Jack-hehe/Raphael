@@ -215,7 +215,6 @@ class FakeBrain:
         self.normalize_error: RpcError | None = None
         self.fail_dictionary = False
         self.entries = [{"id": 1, "word": "拉斐爾", "misheard": [], "source": "manual"}]
-        self.settings = {"languages": ["zh-TW", "en-US", "ja-JP"], "language": "auto"}
         self.on_finalize = None
         self.finalize_gate: asyncio.Event | None = None
         self.finalize_entered = asyncio.Event()
@@ -225,7 +224,6 @@ class FakeBrain:
         router.register("brain.normalize_transcript", self._normalize)
         router.register("brain.cancel_dictation", self._cancel_dictation)
         router.register("dictionary.list", self._dictionary_list)
-        router.register("settings.get", self._settings_get)
 
     async def _finalize(self, params: dict) -> dict:
         self.finalize_calls += 1
@@ -260,9 +258,6 @@ class FakeBrain:
         if self.fail_dictionary:
             raise RpcError(INTERNAL_ERROR, "the dictionary is broken")
         return {"entries": self.entries}
-
-    async def _settings_get(self, params: dict) -> dict:
-        return {"settings": self.settings}
 
 
 class Rig:
@@ -476,29 +471,25 @@ async def test_many_learned_words_do_not_push_the_users_names_out_of_the_local_h
     assert set(names) <= set(_hotwords(hints).split(","))
 
 
-@pytest.mark.parametrize(
-    "settings",
-    [
-        {"languages": ["zh-HK"], "language": "zh"},
-        {"languages": ["yue-HK"], "language": "zh"},
-        {"languages": ["en-GB"], "language": "en"},
-        {"languages": ["ko-KR"], "language": "auto"},
-        {"languages": ["zh-CN", "en-US"], "language": "auto"},
-        # A brain of an older version has only the old key.
-        {"language": "ja"},
-        # What is not a valid selection is automatic.
-        {"languages": ["zh-TW", "zh-CN"]},
-        {"languages": "zh-TW"},
-        {},
-    ],
-)
-async def test_the_language_setting_goes_to_the_engine(rig, router, brain, settings):
-    brain.settings = settings
+async def test_the_engine_detects_the_language_and_the_setting_is_not_read(rig, router, brain):
+    # The `languages` setting only chooses how the text is written, which is the brain's work:
+    # recognition is never held to one language, so a dictation asks the brain for its words only.
+    asked = []
+    call = router.call
+
+    async def recording(method, params=None):
+        asked.append(method)
+        return await call(method, params)
+
+    router.call = recording
     rig.recorder.chunks = [chunk(1.0)]
     await start(router)
     await rig.recorder.fed(1)
     await stop(router)
     assert rig.engine.calls[0]["language"] == "auto"
+    assert asked == [
+        "dictation.start", "dictionary.list", "dictation.stop", "brain.finalize_dictation"
+    ]  # fmt: skip
 
 
 async def test_a_broken_dictionary_does_not_stop_dictation(rig, router, brain, caplog):
@@ -514,7 +505,7 @@ async def test_a_broken_dictionary_does_not_stop_dictation(rig, router, brain, c
 
 
 async def test_a_missing_brain_method_falls_back_to_no_hints(make_rig, router, brain):
-    # a router with no dictionary.list and no settings.get
+    # a router with no dictionary.list
     bare = Router()
     bare.register("brain.finalize_dictation", brain._finalize)
     rig = Rig(bare)

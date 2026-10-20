@@ -46,7 +46,6 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 
-from raphael_core.languages import checked_languages, stt_language
 from raphael_core.protocol import (
     BUSY,
     INTERNAL_ERROR,
@@ -174,7 +173,6 @@ class _Session:
         self.stalled = False
         self.close_lock = asyncio.Lock()
         self.hints: list[str] = []
-        self.language = "auto"
 
         # The audio thread's, under `lock`. `queue` is thread-safe by itself.
         self.queue: queue.SimpleQueue[Any] = queue.SimpleQueue()
@@ -246,9 +244,10 @@ def _failure_as_error(error: Exception) -> RpcError:
 class DictationService:
     """Dictation behind `dictation.start`, `dictation.stop` and `dictation.cancel`.
 
-    `router` is how the service reaches the brain (`dictionary.list`, `settings.get`,
-    `brain.finalize_dictation`, and `brain.cancel_dictation` for a cancel that comes while the
-    text is being cleaned) and where it sends its notifications: `audio.level` while
+    `router` is how the service reaches the brain (`dictionary.list`, `brain.finalize_dictation`,
+    `brain.normalize_transcript` for the assistant's question, and `brain.cancel_dictation` for a
+    cancel that comes while the text is being cleaned) and where it sends its notifications:
+    `audio.level` while
     recording, `dictation.progress` after the stop (`stage` "transcribing" with the segments `done`
     of `total`, then "cleaning" right before the brain is asked; the reply means done).
     `recorder_factory` makes a recorder that delivers its frames to the function it is given.
@@ -351,7 +350,7 @@ class DictationService:
         return {}
 
     async def _set_up(self, session: _Session) -> None:
-        session.hints, session.language = await self._context()
+        session.hints = await self._hints()
         self._check_not_cancelled(session)
         segmenter = await asyncio.to_thread(self._segmenter_factory)
         session.segmenter = segmenter
@@ -389,18 +388,16 @@ class DictationService:
         if session.cancelled:
             raise RpcError(NOT_FOUND, "The dictation was cancelled before it started")
 
-    async def _context(self) -> tuple[list[str], str]:
-        """The user's dictionary words and "auto". The words are in order of priority, because an
-        engine takes the first of them only (20 locally, 50 in the cloud): the ones the user chose
-        come first and the ones learned from corrections after, each newest first as the brain
-        lists them. The learned ones, up to three a dictation, would otherwise push the user's own
-        names out.
+    async def _hints(self) -> list[str]:
+        """The user's dictionary words, in order of priority, because an engine takes the first of
+        them only (20 locally, 50 in the cloud): the ones the user chose come first and the ones
+        learned from corrections after, each newest first as the brain lists them. The learned
+        ones, up to three a dictation, would otherwise push the user's own names out.
 
-        The selection chooses written variants, never limits recognition (`stt_language`). Older
-        settings with only `language`, or anything that is not a valid selection, are also "auto".
+        No language goes with them: speech-to-text always detects the spoken languages, and the
+        `languages` setting only chooses how the text is written (raphael_core.languages), which
+        is the brain's work.
         """
-        hints: list[str] = []
-        language = "auto"
         try:
             result = await self._router.call("dictionary.list", {})
             chosen: list[str] = []
@@ -409,20 +406,10 @@ class DictationService:
                 word = entry.get("word")
                 if isinstance(word, str) and word.strip():
                     (learned if entry.get("source") == "learned" else chosen).append(word)
-            hints = chosen + learned
         except Exception as exc:
             logger.warning("Could not read the dictionary; dictating without hints: %s", exc)
-        try:
-            result = await self._router.call("settings.get", {})
-            settings = result["settings"]
-            if "languages" in settings:
-                try:
-                    language = stt_language(checked_languages("languages", settings["languages"]))
-                except (TypeError, ValueError):
-                    logger.warning("The languages setting is not valid; using automatic")
-        except Exception as exc:
-            logger.warning("Could not read the language setting; using automatic: %s", exc)
-        return hints, language
+            return []
+        return chosen + learned
 
     async def _wait_for_retired(self, segmenter: SegmenterLike) -> None:
         """A segmenter is used by one thread at a time: wait for a cancelled session that still has
@@ -595,9 +582,7 @@ class DictationService:
                 session.fail(exc, fatal=True)
                 return
         try:
-            text = session.engine.transcribe(
-                segment, hints=session.hints, language=session.language
-            )
+            text = session.engine.transcribe(segment, hints=session.hints)
         except Exception as exc:
             logger.exception("A stretch of speech could not be transcribed; it is left out")
             session.fail(exc, fatal=False)
