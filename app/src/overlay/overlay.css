@@ -1,5 +1,5 @@
 /* The overlay window is transparent and click-through. The canvas sits in its bottom-right
-   corner; the subtitles are right-aligned to the left of the emblem, as in the approved preview.
+   corner; every word is right-aligned to the left of the emblem, as in the approved preview.
    --e is the emblem's diameter and --c its square canvas (1.3 times larger, room for the rays);
    overlay.ts sets both from the size in the settings. */
 
@@ -8,8 +8,11 @@
   --c: 195px;
   /* The canvas margin around the emblem's circle. */
   --margin: calc((var(--c) - var(--e)) / 2);
-  /* Distance from the window's right edge to the subtitles: the emblem, and 14 px of air. */
+  /* Distance from the window's right edge to the words: the emblem, and 14 px of air. */
   --subs-right: calc(var(--margin) + var(--e) + 14px);
+  /* Where the words stand: a little over a third of the way up the emblem's circle. A line that
+     wraps grows upwards from here. */
+  --line-bottom: calc(var(--margin) + var(--e) * 0.35);
 
   /* The buttons of a question sit at a fixed place, whatever the length of its words, so that the
      app knows where to let the pointer through: --ask-h tall, their right edge --subs-right from the
@@ -44,14 +47,48 @@ body {
   bottom: 0;
 }
 
+/* Everything written beside the emblem is written one way: a dictation's percentage, the lines
+   while Raphael thinks, his greeting, his answers, his reports and his questions. White,
+   semibold, outlined in black, no box behind it, in the font of the language it is written in
+   (the app's interface language, never two side by side). */
+.progress,
+.sub-line {
+  color: #fff;
+  font: 600 14px/1.45 var(--zh-sub);
+  text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
+}
+
+.progress:lang(ja),
+.sub-line:lang(ja) {
+  font-family: var(--ja);
+}
+
+.progress:lang(en),
+.sub-line:lang(en) {
+  font-family: var(--ui);
+}
+
+/* And in one place. The caption and the line are never on screen together (the controller
+   takes one away before it shows the other), so they can share it. */
+.progress,
 .subs {
   position: fixed;
   right: var(--subs-right);
-  /* A fifth of the emblem above its bottom edge, like the subtitles in the anime. */
-  bottom: calc(var(--margin) + var(--e) * 0.2);
+  bottom: var(--line-bottom);
+}
+
+/* The caption is rewritten where it stands (a number that counts, a line every 1.5 s): it never
+   wraps, and its digits keep one width so that the number does not jitter. */
+.progress {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Raphael's lines can be longer than a caption: they wrap, in lines of balanced length, within
+   the room the window leaves beside the emblem. */
+.subs {
   max-width: min(380px, calc(100vw - var(--subs-right) - 8px));
   text-align: right;
-  color: #fff;
   opacity: 0;
   transition: opacity 0.18s ease;
 }
@@ -60,61 +97,13 @@ body {
   opacity: 1;
 }
 
+.sub-line {
+  text-wrap: balance;
+}
+
 /* With a question, the line rises over its buttons. */
 .subs.asking {
   bottom: calc(var(--ask-bottom) + var(--ask-h) + 10px);
-}
-
-/* A single caption shares the space beside the emblem: a dictation's percentage, or the quiet
-   lines that change while Raphael thinks about a question. */
-.progress {
-  position: fixed;
-  right: var(--subs-right);
-  bottom: calc(var(--margin) + var(--e) * 0.35);
-  color: #fff;
-  font: 600 14px/1.45 var(--zh-sub);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
-}
-
-/* The quiet lines are written in the language of the app. */
-.progress:lang(ja) {
-  font-family: var(--ja);
-}
-
-.progress:lang(en) {
-  font-family: var(--ui);
-}
-
-/* White, outlined in black, no box behind them. One line of one language: the one of the app. */
-.sub-line {
-  text-wrap: balance;
-  color: #fff;
-  text-shadow:
-    0 0 2px #000,
-    0 0 2px #000,
-    1px 1px 0 #000,
-    -1px 1px 0 #000,
-    1px -1px 0 #000,
-    -1px -1px 0 #000;
-  font-family: var(--zh-sub);
-  font-weight: 700;
-  font-size: 18px;
-  line-height: 1.45;
-}
-
-.sub-line:lang(ja) {
-  font-family: var(--ja);
-}
-
-.sub-line:lang(en) {
-  font-family: var(--ui);
-}
-
-.subs.asking .sub-line {
-  font-size: 16px;
-  line-height: 1.4;
 }
 
 /* ---------- the buttons of a question ---------- */

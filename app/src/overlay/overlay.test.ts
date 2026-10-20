@@ -93,6 +93,7 @@ class FakeView implements OverlayView {
   showProgress(percent: number | null): void {
     this.percent = percent;
     this.percentages.push(percent);
+    this.checkOnePlace();
   }
   /** The quiet line in the caption now, and every change of it (null: hidden), kept apart from `log`. */
   waiting: string | null = null;
@@ -102,10 +103,22 @@ class FakeView implements OverlayView {
     this.waiting = text;
     this.waitings.push(text);
     if (text !== null) this.waitingLanguages.push(language);
+    this.checkOnePlace();
   }
   readonly log: string[] = [];
   readonly languages: UiLanguage[] = [];
   readonly asked: AskButtons[] = [];
+  /** The subtitle line on screen now, if any. */
+  private line: string | null = null;
+  /**
+   * The caption and the subtitle line stand in one place (overlay.css), so they must never be on
+   * screen together: each time they were, what was on screen.
+   */
+  readonly overlaps: string[] = [];
+  private checkOnePlace(): void {
+    const caption = this.waiting ?? (this.percent === null ? null : String(this.percent));
+    if (caption !== null && this.line !== null) this.overlaps.push(`${caption} / ${this.line}`);
+  }
   get last(): string | undefined {
     return this.log[this.log.length - 1];
   }
@@ -115,9 +128,12 @@ class FakeView implements OverlayView {
   showLine(text: string, language: UiLanguage): void {
     this.log.push(`line:${text}`);
     this.languages.push(language);
+    this.line = text;
+    this.checkOnePlace();
   }
   clearLine(): void {
     this.log.push("clear");
+    this.line = null;
   }
   showAsk(buttons: AskButtons): void {
     this.asked.push(buttons);
@@ -149,6 +165,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+  // Whatever the test did, the caption and a line never stood in their one place together.
+  expect(view.overlaps).toEqual([]);
 });
 
 const ZH = "《告。這個視窗不接受貼上。》";
@@ -157,6 +175,14 @@ const EN = "《Notice. This window does not take a paste.》";
 const settings = (subtitles: string, language: string = "zh-TW", px = 150): OverlayEvent => ({ type: "settings", px, subtitles, language });
 
 const lines = (): string[] => view.log.filter((line) => line.startsWith("line:"));
+
+test("the fake page notices a caption and a line that stand in their one place together", () => {
+  view.showLine("《答。好的》", "zh-TW");
+  view.showProgress(42);
+  view.showWaiting("《告。解析中……》", "zh-TW");
+  expect(view.overlaps).toEqual(["42 / 《答。好的》", "《告。解析中……》 / 《答。好的》"]);
+  view.overlaps.splice(0); // seen; the check after each test is for the controller
+});
 
 test("learned words use the notice lifecycle", () => {
   const text = "《了。「Typeless」已加入詞典。》";

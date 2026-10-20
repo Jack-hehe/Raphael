@@ -13,18 +13,29 @@ class NullView implements OverlayView {
   showProgress(percent: number | null): void {
     this.percent = percent;
     this.caption = percent === null ? null : String(percent);
+    this.checkOnePlace();
   }
   /** The caption beside the emblem, which the percentage and the waiting line share. */
   caption: string | null = null;
   showWaiting(text: string | null): void {
     this.caption = text;
+    this.checkOnePlace();
   }
   lines: string | null = null;
   /** The buttons of a question that is on screen: "yes|no", or null. */
   buttons: string | null = null;
+  /**
+   * The caption and the subtitle line stand in one place (overlay.css), so they must never be on
+   * screen together: each time they were, what was on screen.
+   */
+  readonly overlaps: string[] = [];
+  private checkOnePlace(): void {
+    if (this.caption !== null && this.lines !== null) this.overlaps.push(`${this.caption} / ${this.lines}`);
+  }
   layout(): void {}
   showLine(text: string): void {
     this.lines = text;
+    this.checkOnePlace();
   }
   clearLine(): void {
     this.lines = null;
@@ -87,6 +98,8 @@ function countingCanvas() {
 }
 
 let frames: FrameRequestCallback[];
+/** The views of the pages of a test. */
+const views: NullView[] = [];
 let now: number;
 let emblemModule: EmblemModule;
 let overlayModule: OverlayModule;
@@ -103,6 +116,8 @@ beforeEach(async () => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  // Whatever the sequence, the caption and a line never stood in their one place together.
+  for (const view of views.splice(0)) expect(view.overlaps).toEqual([]);
 });
 
 /** Lets `ms` milliseconds go by at 60 frames a second, timers included. */
@@ -120,6 +135,7 @@ function page() {
   const { canvas, stats } = countingCanvas();
   const emblem = new emblemModule.Emblem(canvas, 150);
   const view = new NullView();
+  views.push(view);
   const controller = new overlayModule.OverlayController(emblem, view);
   const send = (...events: OverlayEvent[]) => {
     for (const event of events) controller.handle(event);
