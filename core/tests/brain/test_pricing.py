@@ -109,12 +109,19 @@ def test_a_model_priced_per_token_fills_the_token_prices_and_no_minute_price():
     assert (gemini.input_per_mtok, gemini.output_per_mtok, gemini.per_minute) == (2.0, 12.0, None)
 
 
-def test_a_per_second_price_that_cannot_be_one_is_unknown_not_shown_as_six_dollars_a_minute():
+def test_a_per_second_price_that_cannot_be_one_is_read_per_hour_not_shown_as_six_dollars_a_minute():
     # The API lists microsoft/mai-transcribe-2 at "0.1" in the same field that holds a price per
-    # second for the others: US$6 a minute. Microsoft's own prices are per hour; the unit is not
-    # trustworthy, so the price is left out rather than guessed.
+    # second for the others: US$6 a minute. It is Microsoft's US$0.10 per hour of audio.
     mai = parse_models(RECORDED)["microsoft/mai-transcribe-2"]
-    assert (mai.per_minute, mai.input_per_mtok, mai.output_per_mtok) == (None, None, None)
+    assert mai.per_minute == pytest.approx(0.1 / 60, rel=1e-5)
+    assert (mai.input_per_mtok, mai.output_per_mtok) == (None, None)
+
+
+@pytest.mark.parametrize(("listed", "per_minute"), [("0.36", 0.006), ("60", 1.0), ("61", None)])
+def test_a_price_read_per_hour_is_still_unknown_when_it_is_too_dear_even_so(listed, per_minute):
+    # MAI-Transcribe 1.5 is "0.36" (US$0.36 an hour). Over US$1 a minute even per hour is no price.
+    model = {"id": "microsoft/mai-transcribe-2", "pricing": {"prompt": listed, "completion": "0"}}
+    assert parse_models([model])["microsoft/mai-transcribe-2"].per_minute == per_minute
 
 
 def test_only_the_models_raphael_offers_are_parsed():
@@ -226,7 +233,7 @@ async def test_prices_come_through_as_the_app_reads_them(service):
     assert stt["elevenlabs/scribe-v2"]["input_per_mtok"] is None
     assert stt["google/gemini-3.5-transcribe"]["input_per_mtok"] == 2.0
     assert stt["google/gemini-3.5-transcribe"]["output_per_mtok"] == 12.0
-    assert stt["microsoft/mai-transcribe-2"]["per_minute"] is None
+    assert stt["microsoft/mai-transcribe-2"]["per_minute"] == pytest.approx(0.0016667, rel=1e-4)
 
 
 async def test_a_model_the_live_list_lacks_is_unknown_in_the_answer(service, client):

@@ -9,8 +9,9 @@ price for a very long prompt, or a cheaper one for batch use) are ignored: a dic
 - A speech-to-text model is priced per second of audio, which is shown per minute (`per_minute`), or
   per token like a chat model. The list does not say which: a model with a price for the tokens it
   writes (`completion`) is priced per token, any other per second. A per-second price over
-  US$1 a minute cannot be right (the list has one such, in what looks like another unit), so it is
-  left unknown (None) instead of shown.
+  US$1 a minute cannot be right: Microsoft's MAI models are listed by the hour of audio instead
+  (MAI-Transcribe 2 at "0.1", its published US$0.10 an hour; MAI-Transcribe 1.5 at "0.36"), so such
+  a price is read per hour. One that is too dear even so is left unknown (None) instead of shown.
 
 The answer is kept for 24 hours, in memory and in the `settings` table under a key that is no
 setting (so it survives a restart and is not offered by `settings.get`). It is fetched only when
@@ -43,6 +44,7 @@ CACHE_KEY = "cache.pricing"
 _MAX_PER_MINUTE = 1.0
 _PER_MTOK = 1_000_000
 _SECONDS_PER_MINUTE = 60
+_MINUTES_PER_HOUR = 60
 
 # Short names for the app to show.
 MODEL_NAMES = {
@@ -76,7 +78,7 @@ BUILTIN_PRICES: dict[str, ModelPrice] = {
     "google/gemini-3.1-flash-lite": ModelPrice(input_per_mtok=0.25, output_per_mtok=1.5),
     "elevenlabs/scribe-v2": ModelPrice(per_minute=0.00183333),
     "openai/gpt-transcribe": ModelPrice(per_minute=0.0045),
-    "microsoft/mai-transcribe-2": ModelPrice(),  # listed in a unit that cannot be trusted
+    "microsoft/mai-transcribe-2": ModelPrice(per_minute=0.00166667),  # listed per hour
     "assemblyai/universal-3-6-pro": ModelPrice(per_minute=0.005),
     "qwen/qwen3-asr-1.7b": ModelPrice(per_minute=0.00045),
     "google/gemini-3.5-transcribe": ModelPrice(input_per_mtok=2.0, output_per_mtok=12.0),
@@ -122,6 +124,8 @@ def _stt_price(pricing: dict) -> ModelPrice:
     if prompt is None:
         return ModelPrice()
     per_minute = _tidy(prompt * _SECONDS_PER_MINUTE)  # `prompt` is a price per second of audio
+    if per_minute > _MAX_PER_MINUTE:  # no price per second, but per hour (see the module docstring)
+        per_minute = _tidy(prompt / _MINUTES_PER_HOUR)
     return ModelPrice(per_minute=per_minute if per_minute <= _MAX_PER_MINUTE else None)
 
 
