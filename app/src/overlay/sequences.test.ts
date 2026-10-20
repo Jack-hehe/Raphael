@@ -65,8 +65,10 @@ function countingCanvas() {
         return { data: new Uint8ClampedArray([0, 0, 0, stats.ink ? 255 : 0]) };
       };
       return (...args: unknown[]) => {
+        // Checked by hand, and asserted only when a number is bad: an `expect` for every number of
+        // every call at 60 frames a second makes this file several times slower.
         for (const arg of args) {
-          if (typeof arg === "number") expect(Number.isFinite(arg), prop).toBe(true);
+          if (typeof arg === "number" && !Number.isFinite(arg)) expect(arg, prop).toBe("a finite number");
         }
         if (prop === "save") stack.push({ ...target });
         else if (prop === "restore") Object.assign(target, stack.pop());
@@ -81,7 +83,7 @@ function countingCanvas() {
       };
     },
     set(target, prop: string, value) {
-      if (typeof value === "number") expect(Number.isFinite(value), prop).toBe(true);
+      if (typeof value === "number" && !Number.isFinite(value)) expect(value, prop).toBe("a finite number");
       target[prop] = value;
       return true;
     },
