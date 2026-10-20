@@ -154,7 +154,7 @@ export const zhTW = {
   "onboarding.032": "每月上限",
   "onboarding.033": "到了就只聽寫、不整理",
   "onboarding.034": "還沒有金鑰？到 openrouter.ai 建立一把。建議也在 OpenRouter 替金鑰設上限，當作最後一道防線。",
-  "onboarding.035": "<p class=\"ob-skip\"><button type=\"button\" class=\"link\" data-ob=\"skip\">先跳過，聽寫只貼上未整理的文字</button></p>",
+  "onboarding.035": "<p class=\"ob-skip\"><button type=\"button\" class=\"btn\" data-ob=\"skip\">先跳過，聽寫只貼上未整理的文字</button></p>",
   "onboarding.036": "<h2 tabindex=\"-1\">開始設定</h2>",
   "onboarding.037": "<p>大約 2 分鐘：連上 OpenRouter、選麥克風，再試一次聽寫。選麥克風的時候，語音辨識模型會同時在背景下載。</p>",
   "onboarding.038": "<h2 tabindex=\"-1\">連上 OpenRouter</h2>",

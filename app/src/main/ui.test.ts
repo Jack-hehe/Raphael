@@ -1,5 +1,8 @@
+/// <reference types="node" />
 import { describe, expect, test } from "vitest";
-import { menuPlacement, sel, selText } from "./ui";
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+import { btn, menuPlacement, sel, selText } from "./ui";
 
 describe("popover placement", () => {
   const viewport = { width: 720, height: 480, headerBottom: 32 };
@@ -46,5 +49,29 @@ describe("dropdowns", () => {
   test("without a short name it shows the label, and a value it does not know as it is", () => {
     expect(selText({ value: "a", label: "Alpha" }, "a")).toEqual({ shown: "Alpha", full: "Alpha" });
     expect(selText(undefined, "x/old")).toEqual({ shown: "x/old", full: "x/old" });
+  });
+});
+
+describe("the main window's actions", () => {
+  const root = import.meta.dirname;
+  const read = (file: string): string => readFileSync(file, "utf8");
+  const sources = [root, path.join(root, "pages"), path.join(root, "i18n")].flatMap((dir) =>
+    readdirSync(dir).filter((f) => /\.(ts|css)$/.test(f) && !f.endsWith(".test.ts")).map((f) => path.join(dir, f)));
+
+  test("are buttons with a shape: no quiet buttons that read as text, and no links that act", () => {
+    for (const file of sources) {
+      const text = read(file);
+      expect(text, file).not.toMatch(/["'`][^"'`\n]*\bquiet\b[^"'`\n]*["'`]/);
+      // `class=\"link\"` in the catalogs, `class="link"` in the pages, `.link` in the styles
+      expect(text, file).not.toMatch(/\.btn\.quiet|class=\\?"link\\?"|\.link\b/);
+    }
+  });
+
+  test("a button has an edge at rest and a fill when it is pressed", () => {
+    expect(btn("變更", "sm")).toBe('<button type="button" class="btn sm">變更</button>');
+    const css = read(path.join(root, "styles.css"));
+    expect(css).toMatch(/\.btn \{[^}]*border: 1px solid var\(--btn-edge\)/);
+    expect(css).toMatch(/\.btn:hover:not\(:disabled\) \{[^}]*background: var\(--hover\)/);
+    expect(css).toMatch(/\.btn:active:not\(:disabled\) \{[^}]*background: var\(--selected\)/);
   });
 });

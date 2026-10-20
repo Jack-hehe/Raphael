@@ -453,7 +453,7 @@ class Toaster implements Notifier {
       if (this.undoToast) this.messages.delete(this.undoToast);
       this.undoToast?.remove();
       this.undoToast = toast;
-      toast.insertAdjacentHTML("beforeend", btn(t("ui.001"), "quiet"));
+      toast.insertAdjacentHTML("beforeend", btn(t("ui.001"), "sm"));
       toast.querySelector("button")?.addEventListener("click", undo);
     } else {
       setTimeout(() => { toast.remove(); this.messages.delete(toast); }, infoMs(message));

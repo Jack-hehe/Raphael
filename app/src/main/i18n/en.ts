@@ -155,7 +155,7 @@ export const en = {
   "onboarding.032": "Monthly limit",
   "onboarding.033": "At the limit, dictation continues without cleanup",
   "onboarding.034": "Need a key? Create one at openrouter.ai. Set a key limit there too as an extra safeguard.",
-  "onboarding.035": "<p class=\"ob-skip\"><button type=\"button\" class=\"link\" data-ob=\"skip\">Skip for now and paste dictation without cleanup</button></p>",
+  "onboarding.035": "<p class=\"ob-skip\"><button type=\"button\" class=\"btn\" data-ob=\"skip\">Skip for now and paste dictation without cleanup</button></p>",
   "onboarding.036": "<h2 tabindex=\"-1\">Let's get set up</h2>",
   "onboarding.037": "<p>About 2 minutes: connect to OpenRouter, choose a microphone, and try dictation. The speech model downloads in the background while you choose your microphone.</p>",
   "onboarding.038": "<h2 tabindex=\"-1\">Connect to OpenRouter</h2>",

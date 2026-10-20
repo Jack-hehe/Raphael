@@ -24,7 +24,7 @@ export function createAgent(app: AppContext): Page {
   el.dataset.page = "agent";
   el.hidden = true;
   el.innerHTML =
-    `<div class="page-head"><h1>${esc(t("agent.title"))}</h1>${btn(t("agent.clear"), "quiet sm", ' data-act="clear" hidden')}</div>` +
+    `<div class="page-head"><h1>${esc(t("agent.title"))}</h1>${btn(t("agent.clear"), "sm", ' data-act="clear" hidden')}</div>` +
     `<div class="more" hidden>${btn(t("agent.earlier"), "sm", ' data-act="earlier"')}</div>` +
     `<div class="days"></div>` +
     `<div class="empty" hidden></div>`;

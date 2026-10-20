@@ -140,7 +140,7 @@ export function createHome(app: AppContext): Page {
     // an app from before the question key has no `agent_keys` yet
     const agentKeys = d.agent_keys ?? [];
     return (
-      `<div class="card-head"><h2>${esc(t("home.shortcuts"))}</h2>${btn(t("home.018"), "quiet sm", ' data-go="settings" data-pane="dictation"')}</div>` +
+      `<div class="card-head"><h2>${esc(t("home.shortcuts"))}</h2>${btn(t("home.018"), "sm", ' data-go="settings" data-pane="dictation"')}</div>` +
       shortcut(t("home.020"), d.dictation_keys) +
       (agentKeys.length ? shortcut(t("home.askRaphael"), agentKeys) : "") +
       (d.paste_last_keys.length ? shortcut(t("home.021"), d.paste_last_keys) : "") +
@@ -153,7 +153,7 @@ export function createHome(app: AppContext): Page {
     if (latest === null) return "";
     const now = Date.now();
     return (
-      `<div class="card-head"><h2>${esc(t("agent.title"))}</h2>${btn(t("agent.more"), "quiet sm", ' data-go="agent"')}</div>` +
+      `<div class="card-head"><h2>${esc(t("agent.title"))}</h2>${btn(t("agent.more"), "sm", ' data-go="agent"')}</div>` +
       (latest.length > 0
         ? latest.map((turn) => miniTurnHTML(turn, now)).join("")
         : `<div class="mini-empty">${esc(t("agent.empty"))}</div>`)

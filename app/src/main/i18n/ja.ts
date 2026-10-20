@@ -155,7 +155,7 @@ export const ja = {
   "onboarding.032": "月額上限",
   "onboarding.033": "上限に達すると文章整理を省いて音声入力します",
   "onboarding.034": "キーがない場合はopenrouter.aiで作成してください。念のため、OpenRouter側でもキーの利用上限を設定することをおすすめします。",
-  "onboarding.035": "<p class=\"ob-skip\"><button type=\"button\" class=\"link\" data-ob=\"skip\">今はスキップして、文章整理なしで音声入力する</button></p>",
+  "onboarding.035": "<p class=\"ob-skip\"><button type=\"button\" class=\"btn\" data-ob=\"skip\">今はスキップして、文章整理なしで音声入力する</button></p>",
   "onboarding.036": "<h2 tabindex=\"-1\">初期設定</h2>",
   "onboarding.037": "<p>約2分で完了します。OpenRouterに接続し、マイクを選んで音声入力を試しましょう。マイクの選択中に音声認識モデルをバックグラウンドでダウンロードします。</p>",
   "onboarding.038": "<h2 tabindex=\"-1\">OpenRouterに接続</h2>",
