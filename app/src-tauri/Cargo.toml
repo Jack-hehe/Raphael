@@ -12,7 +12,9 @@ edition = "2024"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Only the Rust library that main.rs and the tests use. Tauri's template adds "staticlib" and
+# "cdylib" for builds on iOS and Android, which Raphael does not have; every build would make them.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }

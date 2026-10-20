@@ -70,7 +70,6 @@ fn panic_report(thread: Option<&str>, location: Option<&std::panic::Location<'_>
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     log_panics();
     let builder = tauri::Builder::default();
