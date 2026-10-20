@@ -419,5 +419,17 @@ export const en = {
   "settings.calendarReasonDuplicate": "This address is already added",
   "settings.calendarReasonLimit": "The number of calendars has reached its limit",
   "settings.calendarReasonMissing": "The address of this calendar is gone. Remove it and add it again",
-  "settings.calendarReasonOther": "This calendar could not be read"
+  "settings.calendarReasonOther": "This calendar could not be read",
+  "home.today": "Today",
+  "home.todayAllDay": "All day",
+  "home.todayNoTitle": "(Untitled)",
+  "home.todayEmpty": "Nothing on the calendar today.",
+  "home.todayNone": "No calendar is connected.",
+  "home.todayConnect": "Connect a calendar",
+  "home.todayManage": "Calendar settings",
+  "home.todayMore": "{p0} more",
+  "home.listSep": ", ",
+  "home.todayFailed": "Couldn't read: {p0}",
+  "home.todayFrom": "From {p0}",
+  "home.todayUntil": "Until {p0}"
 } satisfies Messages;

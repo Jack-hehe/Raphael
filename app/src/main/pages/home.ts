@@ -1,9 +1,11 @@
 // Home: a strip with the emblem and Raphael's report, then two columns (spec §12, draft D). On the
-// left the four numbers (words, time saved, speed, time spoken) and the activity with its days and
-// streaks (`stats.summary`, all from this computer's history); on the right the shortcuts and
-// Raphael's latest words (`agent.history.list`). The key, connection and spend are in the settings; the report on the strip
-// says so, with a button, when one of them keeps dictation from working fully. The page scrolls.
-// Loads when shown and every 30 seconds.
+// left the four numbers (words, time saved, speed, time spoken), the activity with its days and
+// streaks (`stats.summary`, all from this computer's history; a day with a dictation opens the
+// history at that day) and today's calendar (`calendar.today`); on the right the shortcuts and
+// Raphael's latest words (`agent.history.list`). The key, connection and spend are in the
+// settings; the report on the strip says so, with a button, when one of them keeps dictation from
+// working fully. The page scrolls. Loads when shown and every 30 seconds; the calendar every five
+// minutes (the core keeps what it downloaded for a few).
 
 import { onLocaleChange, t } from "../i18n";
 
@@ -11,18 +13,21 @@ import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
 import { miniTurnHTML } from "../conversation";
 import { homeHint } from "../dictation";
-import { buildGrid, heatmapSVG, weeksThatFit } from "../heatmap";
+import { buildGrid, dateOfTarget, heatAction, heatmapSVG, weeksThatFit } from "../heatmap";
 import { bindingLabels } from "../keys";
 import { loadingHTML } from "../loading";
 import { buildReport, coreDownReport } from "../report";
 import { Stage } from "../stage";
 import { durationParts, formatCount, hasDictations, periodSpeed } from "../stats";
+import { type TodayState, todayHTML } from "../today";
 import type { AgentTurn, AppContext, Page, PageId, SettingsPane, Status, StatsSummary } from "../types";
 import { btn, esc, iconBtn, keys } from "../ui";
 import "../home.css";
 
 /** How often the page is read again while it is on screen. */
 const REFRESH_MS = 30_000;
+/** How often the calendar is read again while the page is on screen. */
+const TODAY_REFRESH_MS = 5 * 60_000;
 /** How long after a first OpenRouter check that timed out it is made again. */
 const RECHECK_MS = 6_000;
 /** The days the activity grid asks for first (26 weeks), and when paging back (the most there is). */
@@ -68,20 +73,41 @@ const legend = (): string =>
   [1, 2, 3, 4].map((k) => `<i class="h${k}"></i>`).join("") +
   `<span>${esc(t("home.more"))}</span></div>`;
 
+function activityHTML(s: StatsSummary): string {
+  return (
+    `<section class="card activity" aria-labelledby="activity-h">` +
+    `<div class="activity-head"><h2 id="activity-h">${esc(t("home.activity"))}</h2><div class="activity-sum">${activitySummary(s)}</div>` +
+    `<div class="activity-nav">${iconBtn("left", t("home.023"), ' data-act="older"')}${iconBtn("right", t("home.024"), ' data-act="newer"')}</div></div>` +
+    `<div class="heat-box"></div>` +
+    legend() +
+    `</section>`
+  );
+}
+
+/** The cards of the main column that come from the history, in order: the four numbers, then the activity. */
+export const usageHTML = (s: StatsSummary): string => statsHTML(s) + activityHTML(s);
+
+/**
+ * The page: the strip, then the main column (the history's cards, which are drawn into `.usage`,
+ * and below them today's calendar) beside the shortcuts and Raphael's latest words.
+ */
+export const homeHTML = (): string =>
+  `<div class="stage home-stage" role="region" aria-label="Raphael"><canvas class="emb" aria-hidden="true"></canvas><div class="subs" aria-live="polite"></div></div>` +
+  `<div class="home">` +
+  `<div class="home-main"><div class="usage"></div><section class="card today-card" aria-labelledby="today-h" hidden></section></div>` +
+  `<aside class="home-side" aria-label="${esc(t("home.shortcuts"))}">` +
+  `<section class="card keys-card"></section><section class="card turns-card" hidden></section></aside>` +
+  `</div>` +
+  `<p class="ver num home-version" hidden></p>`;
+
 export function createHome(app: AppContext): Page {
   const el = document.createElement("div");
   el.className = "page page-home";
   el.dataset.page = "home";
   el.hidden = true;
-  el.innerHTML =
-    `<div class="stage home-stage" role="region" aria-label="Raphael"><canvas class="emb" aria-hidden="true"></canvas><div class="subs" aria-live="polite"></div></div>` +
-    `<div class="home">` +
-    `<div class="home-main"><div class="usage"></div></div>` +
-    `<aside class="home-side" aria-label="${esc(t("home.shortcuts"))}">` +
-    `<section class="card keys-card"></section><section class="card turns-card" hidden></section></aside>` +
-    `</div>` +
-    `<p class="ver num home-version" hidden></p>`;
+  el.innerHTML = homeHTML();
   const usage = el.querySelector<HTMLElement>(".usage")!;
+  const todayCard = el.querySelector<HTMLElement>(".today-card")!;
   const keysCard = el.querySelector<HTMLElement>(".keys-card")!;
   const turnsCard = el.querySelector<HTMLElement>(".turns-card")!;
   const ver = el.querySelector<HTMLElement>(".ver")!;
@@ -95,16 +121,22 @@ export function createHome(app: AppContext): Page {
 
   let visible = false;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let todayTimer: ReturnType<typeof setInterval> | undefined;
   /** Counts the loads, so that an answer that comes after a newer load started is dropped. */
   let loads = 0;
+  let todayLoads = 0;
   let stats: StatsSummary | null = null;
   let lastStatus: Status | null = null;
   /** Raphael's latest turns, newest first; null when the core does not know conversations (an older one). */
   let latest: AgentTurn[] | null = null;
+  /** The calendar card: null until the page asks, and again when the core cannot answer (an older one). */
+  let today: TodayState | null = null;
   let version = "";
   /** How many days the grid asks for, and how many weeks back from this one it shows. */
   let daysWanted = DAYS_FIRST;
   let back = 0;
+  /** The day of the grid that a Tab reaches; the newest one with a dictation until another is used. */
+  let heatStop: string | null = null;
 
   function hintHTML(): string {
     const parts = app.device().dictation_keys.map((binding) => keys(bindingLabels(binding)));
@@ -146,25 +178,37 @@ export function createHome(app: AppContext): Page {
     turnsCard.innerHTML = turnsCardHTML();
   }
 
+  /** Today's calendar in its card, which is not there until the core has been asked (or when it cannot say). The marked event follows the clock. */
+  function paintToday(): void {
+    todayCard.hidden = today === null;
+    if (today !== null) todayCard.innerHTML = todayHTML(today, Date.now());
+  }
+
+  /** The cell of the day, if the grid has it. */
+  const heatCell = (date: string): SVGElement | null => el.querySelector<SVGElement>(`.heat [data-date="${date}"]`);
+
   /** The activity grid alone, drawn again when the page changes width or pages back. */
   function paintGrid(): void {
     const box = el.querySelector<HTMLElement>(".heat-box");
     if (!box || !stats) return;
+    // a day that has the focus keeps it through the redraw
+    const focused = dateOfTarget(document.activeElement);
+    if (focused !== null) heatStop = focused;
     const grid = buildGrid(stats.by_day, weeksThatFit(box.clientWidth || 600), back);
-    box.innerHTML = heatmapSVG(grid);
+    box.innerHTML = heatmapSVG(grid, heatStop);
     el.querySelector<HTMLButtonElement>('[data-act="older"]')!.disabled = !(grid.older || daysWanted < DAYS_ALL);
     el.querySelector<HTMLButtonElement>('[data-act="newer"]')!.disabled = back === 0;
+    if (focused !== null) heatCell(focused)?.focus();
   }
 
-  function activityHTML(s: StatsSummary): string {
-    return (
-      `<section class="card activity" aria-labelledby="activity-h">` +
-      `<div class="activity-head"><h2 id="activity-h">${esc(t("home.activity"))}</h2><div class="activity-sum">${activitySummary(s)}</div>` +
-      `<div class="activity-nav">${iconBtn("left", t("home.023"), ' data-act="older"')}${iconBtn("right", t("home.024"), ' data-act="newer"')}</div></div>` +
-      `<div class="heat-box"></div>` +
-      legend() +
-      `</section>`
-    );
+  /** Moves the focus (and the Tab stop) from one day of the grid to another. */
+  function moveHeatFocus(date: string): void {
+    const cell = heatCell(date);
+    if (!cell) return;
+    el.querySelector(`.heat [data-date][tabindex="0"]`)?.setAttribute("tabindex", "-1");
+    cell.setAttribute("tabindex", "0");
+    heatStop = date;
+    cell.focus();
   }
 
   function paint(status: Status | null, s: StatsSummary | null): void {
@@ -173,10 +217,14 @@ export function createHome(app: AppContext): Page {
     keysCard.innerHTML = keysCardHTML();
     paintTurns();
 
+    // redrawing everything takes the focus from a day of the grid; it is given back below
+    const focused = dateOfTarget(document.activeElement);
+    if (focused !== null) heatStop = focused;
     stats = s;
     if (s && hasDictations(s)) {
-      usage.innerHTML = statsHTML(s) + activityHTML(s);
+      usage.innerHTML = usageHTML(s);
       paintGrid();
+      if (focused !== null) heatCell(focused)?.focus();
     } else if (s) {
       usage.innerHTML = t("home.025") + t("home.026") + `<p class="hint">${hintHTML()}</p></section>`;
     } else {
@@ -209,6 +257,25 @@ export function createHome(app: AppContext): Page {
       paintTurns();
     });
     if (replay && status?.openrouter.state === "unknown") void checkOpenrouter();
+  }
+
+  /** Reads today's events. The card keeps what it has shown while the core is asked again, and is left out if the core cannot say at all. */
+  async function loadToday(): Promise<void> {
+    const mine = ++todayLoads;
+    if (today === null) {
+      today = { kind: "loading" };
+      paintToday();
+    }
+    let answer: Awaited<ReturnType<typeof api.calendarToday>> | null;
+    try {
+      answer = await api.calendarToday();
+    } catch {
+      answer = null;
+    }
+    if (mine !== todayLoads || !visible) return;
+    if (answer !== null) today = { kind: "ready", today: answer };
+    else if (today?.kind === "loading") today = null;
+    paintToday();
   }
 
   /** Nothing has been sent to OpenRouter yet since the core started: ask once, and once more a
@@ -260,12 +327,36 @@ export function createHome(app: AppContext): Page {
     paintGrid();
   }
 
+  /** What a click or a key on a day of the grid does: opens the history at that day, or moves to another day. */
+  function onHeat(event: MouseEvent | KeyboardEvent): void {
+    const dates = Array.from(el.querySelectorAll(".heat [data-date]"), (cell) => cell.getAttribute("data-date")!);
+    const action = heatAction(
+      { type: event.type === "click" ? "click" : "keydown", key: event instanceof KeyboardEvent ? event.key : undefined, target: event.target as Element | null },
+      dates,
+    );
+    if (action === null) return;
+    event.preventDefault();
+    if ("open" in action) {
+      heatStop = action.open;
+      app.showDay(action.open);
+    } else {
+      moveHeatFocus(action.focus);
+    }
+  }
+
   el.addEventListener("click", (e) => {
     const target = e.target as Element;
+    if (dateOfTarget(target) !== null) {
+      onHeat(e);
+      return;
+    }
     const go = target.closest<HTMLElement>("[data-go]");
     if (go) app.go(go.dataset.go as PageId, go.dataset.pane as SettingsPane | undefined);
     const act = target.closest<HTMLElement>("[data-act]")?.dataset.act;
     if (act === "older" || act === "newer") void turn(act === "older");
+  });
+  el.addEventListener("keydown", (e) => {
+    if (dateOfTarget(e.target as Element) !== null) onHeat(e);
   });
 
   // The grid shows as many weeks as fit.
@@ -289,6 +380,7 @@ export function createHome(app: AppContext): Page {
     el.querySelector("aside")!.setAttribute("aria-label", t("home.shortcuts"));
     if (version) ver.textContent = t("home.027", { p0: version });
     paint(lastStatus, stats);
+    paintToday();
   });
 
   return {
@@ -298,16 +390,25 @@ export function createHome(app: AppContext): Page {
       visible = true;
       ver.hidden = false;
       void load(true);
+      void loadToday();
       clearInterval(timer);
+      clearInterval(todayTimer);
       timer = setInterval(() => {
-        if (!document.hidden) void load(false);
+        if (document.hidden) return;
+        void load(false);
+        paintToday(); // the marked event follows the clock
       }, REFRESH_MS);
+      todayTimer = setInterval(() => {
+        if (!document.hidden) void loadToday();
+      }, TODAY_REFRESH_MS);
     },
     hide() {
       visible = false;
       ver.hidden = true;
       loads++;
+      todayLoads++;
       clearInterval(timer);
+      clearInterval(todayTimer);
     },
   };
 }

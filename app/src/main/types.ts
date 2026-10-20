@@ -281,6 +281,8 @@ export interface Page {
 export interface AppContext {
   /** Goes to a page. The settings panel opens at `pane` if one is given (the key and the limit are in "usage"). */
   go(page: PageId, pane?: SettingsPane): void;
+  /** Opens the history at one day, `2026-10-14`: its dictations only, with a way back to all of them. */
+  showDay(date: string): void;
   /** The device settings as they are now. */
   device(): DeviceSettings;
   /** Reads the device settings from the app again; rejects if they cannot be read. */

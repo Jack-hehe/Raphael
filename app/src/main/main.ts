@@ -116,6 +116,10 @@ async function start(): Promise<void> {
   const listeners = new Set<(event: MainEvent) => void>();
   const ctx: AppContext = {
     go,
+    showDay(date) {
+      history.setDay(date);
+      go("history");
+    },
     device: () => device.get(),
     refreshDevice: () => device.refresh(),
     setDevice: (patch) => device.set(patch),
@@ -127,10 +131,11 @@ async function start(): Promise<void> {
     closeSettings: () => closeSettings(),
   };
 
+  const history = createHistory(ctx);
   const pages: Record<PageId, Page> = {
     home: createHome(ctx),
     agent: createAgent(ctx),
-    history: createHistory(ctx),
+    history,
     dictionary: createDictionary(ctx),
     settings: createSettings(ctx),
   };
