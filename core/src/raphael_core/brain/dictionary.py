@@ -4,15 +4,16 @@ An entry is a word and the forms speech-to-text tends to write for it. Every for
 rule: `replacements()` turns it into the word, in the transcript and again in the cleaned text. What
 the user adds is taken as it is.
 
-What the brain learns from a correction the user made by hand is not (`learn`). Such a pair is often
-no recognition error (a synonym, a word the user changed their mind about), and a replacement rule
-rewrites right text everywhere. So the corrected word becomes a term of the dictionary at once, a
-hint for the speech-to-text engine and the cleanup model, and the pair is kept as evidence with a
-count. The form stays a hint in the cleanup prompt (`hint_forms`), where the model reads it in
-context. It becomes a replacement rule only when the same pair is seen a second time, its form is
-distinctive and sounds like the word (`mishearing.may_become_rule`), and the rule leaves the
-replacements working as they did. When the user changes a learned rule's text back, that is
-evidence against it: the rule is withdrawn and the pair is not learned again, but the word stays.
+What the brain learns from a correction the user made by hand is not (`learn_pair`). Such a pair
+is often no recognition error (a synonym, a word the user changed their mind about), and a
+replacement rule rewrites right text everywhere. So the corrected word becomes a term of the
+dictionary at once, a hint for the speech-to-text engine and the cleanup model, and the pair is
+kept as evidence with a count. The form stays a hint in the cleanup prompt (`hint_forms`), where
+the model reads it in context. It becomes a replacement rule only when the same pair is seen a
+second time, its form is distinctive and sounds like the word (`mishearing.may_become_rule`), and
+the rule leaves the replacements working as they did. When the user changes a learned rule's text
+back, that is evidence against it: the rule is withdrawn and the pair is not learned again, but the
+word stays.
 """
 
 # Postponed annotations: DictionaryStore has a method called `list`, which would otherwise hide the
@@ -193,15 +194,9 @@ class DictionaryStore:
 
     # --- learning -------------------------------------------------------------------------------
 
-    def learn(self, word: str, misheard: str) -> bool:
-        """Learn from a correction: the user replaced `misheard` with `word` in a pasted dictation.
-
-        Returns whether the dictionary or its evidence changed; `learn_pair` says what was done.
-        """
-        return self.learn_pair(word, misheard) is not Learned.NOTHING
-
     def learn_pair(self, word: str, misheard: str) -> Learned:
-        """Learn from a correction, and say what it did (see the module's docstring).
+        """Learn from a correction: the user replaced `misheard` with `word` in a pasted dictation.
+        Says what it did (see the module's docstring).
 
         A new word is added as "learned"; a known word is left as it is. The pair is kept as
         evidence with a count. On the second sighting it becomes a replacement rule, added to the

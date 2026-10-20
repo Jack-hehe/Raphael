@@ -4,7 +4,7 @@ import sqlite3
 import pytest
 
 from raphael_core.brain import db
-from raphael_core.brain.dictionary import DictionaryStore
+from raphael_core.brain.dictionary import DictionaryStore, Learned
 from raphael_core.brain.history import HistoryStore
 from raphael_core.brain.settings import SettingsStore
 
@@ -497,14 +497,18 @@ def test_every_write_the_stores_make_is_committed(tmp_path):
     assert DictionaryStore(reader).dismissed() == {"Tailscale"}
 
     seen = DictionaryStore(reader)
-    assert dictionary.learn("Claude", "cloud")  # a hint, with its evidence
+    # A hint, with its evidence.
+    assert dictionary.learn_pair("Claude", "cloud") is Learned.TERM
     assert ("cloud", "Claude") in seen.hint_forms()
     assert ("cloud", "Claude") not in seen.replacements()
-    assert dictionary.learn("Claude", "cloud")  # the second sighting: a rule
+    # The second sighting: a rule.
+    assert dictionary.learn_pair("Claude", "cloud") is Learned.RULE
     assert ("cloud", "Claude") in seen.replacements()
-    assert dictionary.learn("cloud", "Claude")  # the user changed it back: the rule is withdrawn
+    # The user changed it back: the rule is withdrawn.
+    assert dictionary.learn_pair("cloud", "Claude") is Learned.REVERTED
     assert ("cloud", "Claude") not in seen.hint_forms()
-    assert not dictionary.learn("Claude", "cloud")  # and the pair is blocked, the word is not
+    # And the pair is blocked; the word is not.
+    assert dictionary.learn_pair("Claude", "cloud") is Learned.NOTHING
     assert "Claude" in seen.hint_words()
 
     settings.set("languages", ["ja-JP"])
