@@ -287,6 +287,72 @@ test("dictation never shows subtitles", () => {
   expect(view.log.filter((l) => l.startsWith("line"))).toEqual([]);
 });
 
+const GREETING = "《告。今天有什麼事可以幫忙嗎？》";
+
+test("a question is greeted beside the listening emblem until Raphael has heard it", () => {
+  send({ type: "show", mode: "listening", line: GREETING });
+  expect(lines()).toEqual([]);
+  vi.advanceTimersByTime(833);
+  expect(lines()).toEqual([`line:${GREETING}`]);
+  expect(view.languages).toEqual(["zh-TW"]);
+  // the ring still follows the microphone: Raphael does not speak the greeting
+  expect(emblem.log).toEqual(["appear", "set:listening"]);
+  vi.advanceTimersByTime(60_000);
+  expect(view.last).toBe(`line:${GREETING}`);
+  send({ type: "mode", mode: "thinking", quiet: true });
+  expect(view.last).toBe("clear");
+  send({ type: "say", prefix: "答", text: "好。" });
+  vi.advanceTimersByTime(10);
+  expect(lines()).toEqual([`line:${GREETING}`, "line:《答。好。》"]);
+});
+
+test("a question that took a dictation over is greeted on its emblem, which does not appear again", () => {
+  send({ type: "show", mode: "listening" });
+  vi.advanceTimersByTime(300);
+  send({ type: "show", mode: "listening", line: GREETING });
+  expect(emblem.log.filter((entry) => entry === "appear")).toHaveLength(1);
+  vi.advanceTimersByTime(500);
+  expect(lines()).toEqual([]);
+  vi.advanceTimersByTime(100);
+  expect(lines()).toEqual([`line:${GREETING}`]);
+});
+
+test("the greeting is written even with the subtitles off, as answers are", () => {
+  send(settings("off"));
+  send({ type: "show", mode: "listening", line: GREETING });
+  vi.advanceTimersByTime(833);
+  expect(lines()).toEqual([`line:${GREETING}`]);
+});
+
+test("a cancelled question takes its greeting away, and the next dictation has none", () => {
+  send({ type: "show", mode: "listening", line: GREETING });
+  vi.advanceTimersByTime(833);
+  send({ type: "hide" });
+  expect(view.last).toBe("clear");
+  vi.advanceTimersByTime(1000);
+  send({ type: "show", mode: "listening" });
+  vi.advanceTimersByTime(60_000);
+  expect(lines()).toEqual([`line:${GREETING}`]);
+});
+
+test("a greeting whose question ends before the emblem has appeared is never written", () => {
+  send({ type: "show", mode: "listening", line: GREETING });
+  vi.advanceTimersByTime(400);
+  send({ type: "mode", mode: "thinking", quiet: true });
+  vi.advanceTimersByTime(60_000);
+  expect(lines()).toEqual([]);
+});
+
+test("a notice that ends the question replaces the greeting, which does not come back", () => {
+  send({ type: "show", mode: "listening", line: GREETING });
+  vi.advanceTimersByTime(833);
+  send({ type: "notice", text: ZH });
+  vi.advanceTimersByTime(1);
+  expect(lines()).toEqual([`line:${GREETING}`, `line:${ZH}`]);
+  vi.advanceTimersByTime(noticeDurationMs(ZH) - 2);
+  expect(view.last).toBe(`line:${ZH}`);
+});
+
 test("a question being thought about shows no percentage, and its answer is spoken", () => {
   send({ type: "show", mode: "listening" });
   send({ type: "mode", mode: "thinking", quiet: true });

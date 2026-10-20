@@ -35,7 +35,8 @@ export type AskTier = "T2" | "T3";
 
 /** The events overlay.rs sends (`OverlayEvent`). */
 export type OverlayEvent =
-  | { type: "show"; mode: Mode }
+  /** `line`: Raphael's greeting to a question, beside the emblem while he listens. A dictation has none. */
+  | { type: "show"; mode: Mode; line?: string }
   /** `quiet`: thinking about a question, which has no progress to show. */
   | { type: "mode"; mode: Mode; quiet?: boolean }
   | { type: "level"; value: number }
@@ -143,6 +144,9 @@ export class OverlayController {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private ask: Ask | null = null;
   private askTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Raphael's greeting is on screen (or about to be) while he listens for a question. */
+  private greeting = false;
+  private greetTimer: ReturnType<typeof setTimeout> | undefined;
   private holdTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly progress = new ProgressArc();
   private progressTimer: ReturnType<typeof setInterval> | undefined;
@@ -169,6 +173,7 @@ export class OverlayController {
         this.activeShow = true;
         this.appearIfHidden();
         this.setMode(event.mode);
+        this.greet(words(event.line));
         break;
       case "mode":
         this.setMode(event.mode, event.quiet === true);
@@ -384,7 +389,32 @@ export class OverlayController {
     if (this.emblem.phase === "hidden" || this.emblem.phase === "vanish") this.emblem.appear();
   }
 
+  /**
+   * Raphael greets a question: the line stays beside the listening emblem until he has heard it.
+   * It is written whatever the subtitles setting says, like his answers: it is what tells a
+   * question from a dictation.
+   */
+  private greet(line: string): void {
+    if (line === "") return;
+    this.greeting = true;
+    // The words come when the appear animation has played (at once if already visible).
+    this.greetTimer = setTimeout(() => {
+      this.greetTimer = undefined;
+      this.view.showLine(line, this.language);
+    }, this.emblem.appearLeft * 1000);
+  }
+
+  /** The greeting goes: the question has been heard, or something else takes the stage. */
+  private dropGreeting(): void {
+    clearTimeout(this.greetTimer);
+    this.greetTimer = undefined;
+    if (!this.greeting) return;
+    this.greeting = false;
+    this.view.clearLine();
+  }
+
   private setMode(mode: Mode, quiet = false): void {
+    if (mode !== "listening") this.dropGreeting();
     this.emblem.set(mode);
     if (this.activeShow && mode === "thinking" && !quiet && !this.progress.active) {
       this.progress.report({ stage: "transcribing", done: 0, total: 1, audioSeconds: 0 }, false);
@@ -431,6 +461,7 @@ export class OverlayController {
   /** Raphael speaks: the dictation's progress has said what it had to, and a question is answered. */
   private speak(notice: Notice, first = false): void {
     this.activeShow = false;
+    this.dropGreeting();
     if (this.progress.active) this.stopProgress();
     if (this.ask) this.cancelNotices();
     // Before the learned words that wait, but behind the lines of Raphael's that came earlier.
@@ -471,6 +502,7 @@ export class OverlayController {
 
   /** Stops what is on screen and drops the reports that wait; learned words stay queued. */
   private cancelNotices(): void {
+    this.dropGreeting();
     this.dropAsk();
     this.stopProgress();
     clearTimeout(this.timer);

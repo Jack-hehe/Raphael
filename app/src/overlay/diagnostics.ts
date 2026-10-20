@@ -36,8 +36,10 @@ export function describeError(err: unknown): string {
 function eventMetadata(event: OverlayEvent): object {
   switch (event.type) {
     case "show":
+      // Whether Raphael greets (a question, not a dictation), never what he says.
+      return { type: event.type, mode: event.mode, ...(event.line ? { greeting: true } : {}) };
     case "mode":
-      return { type: event.type, mode: event.mode };
+      return { type: event.type, mode: event.mode, ...(event.quiet === true ? { quiet: true } : {}) };
     case "progress":
       return { type: event.type, stage: event.stage, done: event.done, total: event.total, audio_seconds: event.audio_seconds };
     case "settings":

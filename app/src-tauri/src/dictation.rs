@@ -12,7 +12,8 @@
 //! There are two kinds of session, and only one at a time:
 //!
 //! - **Dictation** (the dictation keys): the text is cleaned up and pasted.
-//! - **Agent** (the agent keys, `Right Alt+Space`): the recording is a question for Raphael. The
+//! - **Agent** (the agent keys, `Right Alt+Space`): the recording is a question for Raphael, who
+//!   greets it on the overlay while he listens (a dictation shows the emblem alone). The
 //!   core starts it with `purpose: "agent"` and transcribes it without cleanup; the text goes to
 //!   `agent.ask`, and the answer is shown by the overlay (`say`). An answer that needs a YES/NO
 //!   first is shown as a question (`ask`) whose buttons answer through [`on_confirm`]; Esc and
@@ -30,10 +31,11 @@
 //!   would find no session, leaving the microphone open and the core busy for good.
 //! - Right Alt+Space is two keys in a row: Right Alt alone starts a dictation, as it does for
 //!   Right Alt+V, and the Space that follows within a second takes that recording over. The
-//!   dictation is cancelled quietly (the emblem it showed stays, and is the agent's), the core
-//!   starts the question only after it has cancelled the dictation, and the release of Right Alt
-//!   does nothing. While an agent session is under way the dictation key does nothing at all: no
-//!   dictation starts or stops because the chord's first key went down.
+//!   dictation is cancelled quietly (the emblem it showed stays, and is the agent's, with
+//!   Raphael's greeting beside it), the core starts the question only after it has cancelled the
+//!   dictation, and the release of Right Alt does nothing. While an agent session is under way the
+//!   dictation key starts no dictation; in toggle mode it ends the question that is listening, as
+//!   it ends a dictation, and the Space of a Right Alt+Space pressed to stop it does nothing more.
 //!
 //! [`spawn`] builds the controller from the app state and runs it in a task that listens to the
 //! hotkeys, the core's notifications and the tray.
@@ -177,6 +179,9 @@ struct State {
     ask: Option<PendingAsk>,
     /// When the current recording started, on the clock of [`DictationController::on_hotkey`].
     started_ms: u64,
+    /// When the dictation key last ended a question, on the same clock: the agent key pressed a
+    /// moment later is the Space of a Right Alt+Space pressed to end it.
+    question_stopped_ms: Option<u64>,
     /// The fallback notices already shown in this app session: each is shown once.
     shown: Vec<Notice>,
     /// [`notices::CORE_DOWN`] was shown since the core last (re)started: it is shown once per
@@ -263,6 +268,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 agent: None,
                 ask: None,
                 started_ms: 0,
+                question_stopped_ms: None,
                 shown: Vec::new(),
                 down_noticed: false,
             })),
@@ -314,10 +320,17 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                         return None;
                     }
                     if state.kind() == Some(Kind::Agent) {
-                        // Right Alt+Space again, to stop the question: Right Alt comes first, and
-                        // it must neither start nor stop anything. The Space that follows does.
-                        log::debug!("dictation key ignored: Raphael is listening");
-                        return None;
+                        // Right Alt ends a question as it ends a dictation (toggle mode), and
+                        // never starts a dictation. The Space of a Right Alt+Space pressed to
+                        // stop it does nothing more (see `agent_down`).
+                        if state.agent_holdtap.on_stop_key() != Action::StopRecording {
+                            log::debug!("dictation key ignored: Raphael is listening");
+                            return None;
+                        }
+                        state.question_stopped_ms = Some(now_ms);
+                        drop(state);
+                        log::info!("agent: stopping (dictation key)");
+                        return self.stop_agent();
                     }
                     state.holdtap.on_down(mode)
                 };
@@ -452,8 +465,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
 
     /// Starts a session of `kind`. A question to Raphael may take over the dictation that Right
     /// Alt, the first half of Right Alt+Space, has just started (see [`Self::agent_down`]): that
-    /// one is dropped, the emblem it showed is kept, and the core hears of the question only
-    /// after it has cancelled the dictation.
+    /// one is dropped, the emblem it showed is kept and greets the question, and the core hears of
+    /// the question only after it has cancelled the dictation.
     fn start(&self, kind: Kind, now_ms: u64) -> Option<JoinHandle<()>> {
         let id = uuid::Uuid::new_v4().to_string();
         let (answered, started) = watch::channel(Started::Pending);
@@ -483,8 +496,13 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         if let Some(hook) = &self.after_paste {
             hook.dictation_started();
         }
-        if replaced.is_none() {
-            self.overlay.show(Mode::Listening);
+        match kind {
+            // Raphael greets a question, on the emblem of the dictation it took over too. A
+            // dictation shows the emblem alone, so the two are never mistaken for each other.
+            Kind::Agent => self
+                .overlay
+                .greet(notices::GREETING.text(&self.language.get())),
+            Kind::Dictation => self.overlay.show(Mode::Listening),
         }
 
         let this = self.clone();
@@ -896,13 +914,27 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     // ---------- questions to Raphael ----------
 
     /// The agent key went down. It follows the dictation mode: a press starts a question and, in
-    /// toggle mode, the next one stops it; in hold mode its release stops it.
+    /// toggle mode, the next one stops it (so does Right Alt alone, see [`Self::on_hotkey`]); in
+    /// hold mode its release stops it.
     ///
     /// Right Alt+Space reports Right Alt first, and that started a dictation. If it did so a
     /// moment ago, the Space is the second half of the chord and the question takes the recording
     /// over ([`Self::start`]); a dictation that has been running longer is a real one, and the
-    /// key does nothing. Neither does it while something is being processed.
+    /// key does nothing. Neither does it while something is being processed, nor a moment after
+    /// Right Alt ended a question: that is the Space of a Right Alt+Space pressed to end it, even
+    /// if the question is over by then (it heard nothing, say).
     fn agent_down(&self, now_ms: u64) -> Option<JoinHandle<()>> {
+        {
+            let state = lock(&self.state);
+            if state.phase != Phase::Recording
+                && state
+                    .question_stopped_ms
+                    .is_some_and(|at| now_ms.saturating_sub(at) < CHORD_CANCELS_WITHIN_MS)
+            {
+                log::debug!("agent key ignored: the rest of the keys that ended the question");
+                return None;
+            }
+        }
         // An answer that is only being shown does not keep a new question waiting.
         self.end_speaking();
         let mode = self.mode.get();
@@ -1437,9 +1469,19 @@ mod app {
                 overlay.show(mode);
             }
         }
+        fn greet(&self, line: &str) {
+            if let Some(overlay) = &self.0 {
+                overlay.greet(line);
+            }
+        }
         fn set_mode(&self, mode: Mode) {
             if let Some(overlay) = &self.0 {
                 overlay.set_mode(mode);
+            }
+        }
+        fn think_quietly(&self) {
+            if let Some(overlay) = &self.0 {
+                overlay.think_quietly();
             }
         }
         fn level(&self, value: f32) {
@@ -1703,8 +1745,8 @@ mod tests {
     use crate::device_settings::DeviceSettings;
     use crate::hotkey::{CancelSwitch, HotkeyEvent};
     use crate::notices::{
-        ASK_FAILED, BUDGET, CORE_DOWN, ELEVATED, FOCUS_CHANGED, LAST_COPIED, NO_MIC, NO_SOUND,
-        NOT_READY, OFFLINE,
+        ASK_FAILED, BUDGET, CORE_DOWN, ELEVATED, FOCUS_CHANGED, GREETING, LAST_COPIED, NO_MIC,
+        NO_SOUND, NOT_READY, OFFLINE,
     };
     use crate::overlay::{Mode, OverlayApi, OverlayEvent, Progress, takes_clicks};
     use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
@@ -1800,6 +1842,8 @@ mod tests {
         completions: Mutex<u32>,
         /// How many times the emblem thought without a progress caption.
         quiet_thoughts: Mutex<u32>,
+        /// Raphael's greetings, oldest first; `events` has a `greet` for each.
+        greetings: Mutex<Vec<String>>,
         events: Mutex<Vec<String>>,
         timeline: Mutex<Vec<String>>,
         /// Whether the real overlay window would take the mouse now: the rule of
@@ -1853,8 +1897,16 @@ mod tests {
 
     impl OverlayApi for FakeOverlay {
         fn show(&self, mode: Mode) {
-            self.track(OverlayEvent::Show { mode });
+            self.track(OverlayEvent::Show { mode, line: None });
             self.push(format!("show:{}", mode_name(mode)));
+        }
+        fn greet(&self, line: &str) {
+            self.track(OverlayEvent::Show {
+                mode: Mode::Listening,
+                line: Some(line.to_owned()),
+            });
+            self.greetings.lock().unwrap().push(line.to_owned());
+            self.push("greet".to_owned());
         }
         fn set_mode(&self, mode: Mode) {
             self.track(OverlayEvent::Mode { mode, quiet: false });
@@ -4311,11 +4363,7 @@ mod tests {
         );
         assert_eq!(
             c.overlay().events(),
-            vec![
-                "show:listening",
-                "mode:thinking",
-                "say:答|台北現在二十四度。"
-            ]
+            vec!["greet", "mode:thinking", "say:答|台北現在二十四度。"]
         );
         // It is nobody's to paste, and the history is not asked either.
         assert!(c.paster().delivered().is_empty());
@@ -4360,7 +4408,7 @@ mod tests {
         run(&c, AgentUp, 3100).await;
         assert_eq!(
             c.overlay().events(),
-            vec!["show:listening", "mode:thinking", "say:答|好"],
+            vec!["greet", "mode:thinking", "say:答|好"],
             "the release of the stopping press does nothing"
         );
         assert_eq!(c.core().count("dictation.start"), 1);
@@ -4520,25 +4568,32 @@ mod tests {
                 vec![json!({"session_id": starts[0]["session_id"]})],
                 "{mode:?}"
             );
-            // One emblem: the dictation's, which is the question's now. Nothing flickers.
-            assert_eq!(c.overlay().events(), vec!["show:listening"], "{mode:?}");
+            // One emblem: the dictation's, which is the question's now and greets it. Nothing
+            // flickers.
+            assert_eq!(
+                c.overlay().events(),
+                vec!["show:listening", "greet"],
+                "{mode:?}"
+            );
+            assert_eq!(
+                *c.overlay().greetings.lock().unwrap(),
+                vec![GREETING.zh],
+                "{mode:?}"
+            );
+            assert!(!c.overlay().mouse(), "{mode:?}: a greeting takes no clicks");
             assert_eq!(c.cancel().last(), Some(true), "{mode:?}");
 
             if mode == DictationMode::Hold {
                 run(&c, AgentUp, 900).await;
                 run(&c, DictationUp, 950).await;
             } else {
-                // both keys are let go, the question keeps listening, then the chord again
+                // both keys are let go, the question keeps listening, then the chord again: its
+                // Right Alt stops the question, and its Space finds nothing more to stop
                 run(&c, AgentUp, 200).await;
                 run(&c, DictationUp, 220).await;
                 assert_eq!(c.phase(), Phase::Recording, "{mode:?}");
                 run(&c, DictationDown, 3000).await;
-                assert_eq!(
-                    c.phase(),
-                    Phase::Recording,
-                    "{mode:?}: Right Alt alone must not stop the question"
-                );
-                assert_eq!(c.core().count("dictation.stop"), 0, "{mode:?}");
+                assert_eq!(c.core().count("dictation.stop"), 1, "{mode:?}");
                 run(&c, AgentDown, 3100).await;
                 run(&c, AgentUp, 3150).await;
                 run(&c, DictationUp, 3200).await;
@@ -4552,12 +4607,154 @@ mod tests {
             );
             assert_eq!(
                 c.overlay().events(),
-                vec!["show:listening", "mode:thinking", "say:答|好"],
+                vec!["show:listening", "greet", "mode:thinking", "say:答|好"],
                 "{mode:?}"
             );
             assert_eq!(c.core().count("dictation.start"), 2, "{mode:?}");
             assert!(c.paster().delivered().is_empty(), "{mode:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn right_alt_alone_ends_a_question_in_toggle_mode_as_it_ends_a_dictation() {
+        // asked with Right Alt+Space, or with an agent key that has no Right Alt in it
+        for chord in [true, false] {
+            let c = controller_in(
+                DictationMode::Toggle,
+                agent_core(answer("答", "好")),
+                FakePaster::pasting("chrome.exe"),
+            );
+            if chord {
+                run(&c, DictationDown, 0).await;
+            }
+            run(&c, AgentDown, 150).await;
+            run(&c, AgentUp, 200).await;
+            run(&c, DictationUp, 220).await;
+            assert_eq!(c.agent_stage(), Some(AgentStage::Listening), "{chord}");
+            run(&c, DictationDown, 3000).await;
+            run(&c, DictationUp, 3100).await;
+            assert_eq!(c.core().count("dictation.stop"), 1, "{chord}");
+            assert_eq!(c.core().count("agent.ask"), 1, "{chord}");
+            assert_eq!(c.overlay().events().last().unwrap(), "say:答|好", "{chord}");
+            // no dictation came of the key, and nothing was pasted
+            let starts = c.core().all_params("dictation.start");
+            assert_eq!(starts.len(), if chord { 2 } else { 1 }, "{chord}");
+            assert_eq!(starts.last().unwrap()["purpose"], "agent", "{chord}");
+            assert!(c.paster().delivered().is_empty(), "{chord}");
+        }
+    }
+
+    #[tokio::test]
+    async fn right_alt_leaves_a_question_alone_while_its_own_key_decides() {
+        // toggle: the press that started the question is still down
+        let c = controller_in(
+            DictationMode::Toggle,
+            agent_core(answer("答", "好")),
+            FakePaster::pasting("chrome.exe"),
+        );
+        run(&c, AgentDown, 0).await;
+        run(&c, DictationDown, 100).await;
+        run(&c, DictationUp, 150).await;
+        assert_eq!(c.agent_stage(), Some(AgentStage::Listening));
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        run(&c, AgentUp, 200).await;
+        run(&c, DictationDown, 3000).await;
+        assert_eq!(
+            c.core().count("dictation.stop"),
+            1,
+            "now it ends the question"
+        );
+
+        // hold: the release of the agent key ends the question, not Right Alt
+        let c = agent(answer("答", "好"));
+        run(&c, AgentDown, 0).await;
+        run(&c, DictationDown, 100).await;
+        run(&c, DictationUp, 150).await;
+        assert_eq!(c.agent_stage(), Some(AgentStage::Listening));
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        run(&c, AgentUp, 900).await;
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        assert_eq!(c.core().count("dictation.start"), 1, "no dictation either");
+    }
+
+    /// A core that hears nothing: a question is over as soon as it is stopped.
+    fn silent_core() -> FakeCore {
+        FakeCore::with(
+            "dictation.stop",
+            json!({"purpose": "agent", "text": "", "silent": true}),
+        )
+    }
+
+    #[tokio::test]
+    async fn the_space_of_the_right_alt_and_space_that_ended_a_question_asks_nothing_new() {
+        let c = controller_in(
+            DictationMode::Toggle,
+            silent_core(),
+            FakePaster::pasting("chrome.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        run(&c, AgentDown, 150).await;
+        run(&c, AgentUp, 200).await;
+        run(&c, DictationUp, 220).await;
+        // the chord again, to end it: the question is over before its Space comes
+        run(&c, DictationDown, 3000).await;
+        assert_eq!(c.phase(), Phase::Idle);
+        run(&c, AgentDown, 3100).await;
+        run(&c, AgentUp, 3150).await;
+        run(&c, DictationUp, 3200).await;
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.core().count("dictation.start"), 2, "no new question");
+        ends_with_notice(&c, NO_SOUND.zh);
+
+        // the chord pressed afresh is a new question, however soon
+        run(&c, DictationDown, 3500).await;
+        run(&c, AgentDown, 3600).await;
+        assert_eq!(c.agent_stage(), Some(AgentStage::Listening));
+        assert_eq!(c.overlay().greetings.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_second_after_right_alt_ended_a_question_the_agent_key_asks_again() {
+        let c = controller_in(
+            DictationMode::Toggle,
+            silent_core(),
+            FakePaster::pasting("chrome.exe"),
+        );
+        run(&c, AgentDown, 0).await;
+        run(&c, AgentUp, 100).await;
+        run(&c, DictationDown, 3000).await;
+        run(&c, DictationUp, 3100).await;
+        run(&c, AgentDown, 3999).await;
+        run(&c, AgentUp, 3999).await;
+        assert_eq!(c.phase(), Phase::Idle, "still the keys that ended it");
+        run(&c, AgentDown, 4000).await;
+        assert_eq!(c.agent_stage(), Some(AgentStage::Listening));
+    }
+
+    #[tokio::test]
+    async fn a_question_is_greeted_in_the_interface_language_and_a_dictation_is_not() {
+        for (language, line) in [
+            ("zh-TW", GREETING.zh),
+            ("en", GREETING.en),
+            ("ja", GREETING.ja),
+        ] {
+            let c = agent(answer("答", "好"));
+            c.language().set(language);
+            ask_aloud(&c).await;
+            assert_eq!(
+                *c.overlay().greetings.lock().unwrap(),
+                vec![line],
+                "{language}"
+            );
+            assert_eq!(c.overlay().events()[0], "greet", "{language}");
+        }
+
+        let c = controller(FakeCore::default(), FakePaster::pasting("notepad.exe"));
+        run(&c, DictationDown, 0).await;
+        run(&c, DictationUp, 900).await;
+        settle().await;
+        assert!(c.overlay().greetings.lock().unwrap().is_empty());
+        assert_eq!(c.overlay().events()[0], "show:listening");
     }
 
     #[tokio::test]
@@ -4571,7 +4768,7 @@ mod tests {
             }
             assert_eq!(
                 c.overlay().events(),
-                vec!["show:listening", "mode:thinking", "say:答|好"],
+                vec!["show:listening", "greet", "mode:thinking", "say:答|好"],
                 "{release:?}"
             );
             assert_eq!(c.core().count("dictation.stop"), 1, "{release:?}");
@@ -4706,7 +4903,7 @@ mod tests {
         );
         gate.notify_one();
         second.await.unwrap();
-        assert_eq!(c.overlay().events(), vec!["show:listening"]);
+        assert_eq!(c.overlay().events(), vec!["show:listening", "greet"]);
         // released before the core answered the question's start: the stop waits for it too
         run(&c, AgentUp, 400).await;
         assert_eq!(c.core().count("dictation.stop"), 1);
@@ -4733,7 +4930,7 @@ mod tests {
         first.await.unwrap();
         assert_eq!(
             c.overlay().events(),
-            vec!["show:listening"],
+            vec!["show:listening", "greet"],
             "the dropped dictation says nothing"
         );
         settle().await;
@@ -4741,7 +4938,11 @@ mod tests {
         second.await.unwrap();
         assert_eq!(
             c.overlay().events(),
-            vec!["show:listening".to_owned(), notice(NO_MIC.zh)]
+            vec![
+                "show:listening".to_owned(),
+                "greet".to_owned(),
+                notice(NO_MIC.zh)
+            ]
         );
         assert_eq!(
             c.core().count("dictation.cancel"),
@@ -4774,7 +4975,7 @@ mod tests {
             );
             assert_eq!(
                 c.overlay().events(),
-                vec!["show:listening", "hide"],
+                vec!["show:listening", "greet", "hide"],
                 "{mode:?}"
             );
             // the keys let go afterwards do nothing, and the next press starts afresh
@@ -4813,7 +5014,7 @@ mod tests {
             ask_aloud(&c).await;
             assert_eq!(
                 c.overlay().events(),
-                vec!["show:listening", "mode:thinking", "hide"],
+                vec!["greet", "mode:thinking", "hide"],
                 "{text:?}"
             );
             assert_eq!(c.core().count("agent.ask"), 0, "{text:?}");
@@ -4846,7 +5047,7 @@ mod tests {
         run(&c, AgentDown, 0).await;
         assert_eq!(
             c.overlay().events(),
-            vec!["show:listening".to_owned(), notice(NO_MIC.zh)]
+            vec!["greet".to_owned(), notice(NO_MIC.zh)]
         );
         assert_eq!(c.core().call_params("dictation.start")["purpose"], "agent");
         assert_eq!(c.phase(), Phase::Idle);
@@ -4864,7 +5065,7 @@ mod tests {
         );
         run(&c, AgentDown, 0).await;
         assert_eq!(c.core().call_params("dictation.cancel"), json!({}));
-        assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
+        assert_eq!(c.overlay().events(), vec!["greet", "hide"]);
         assert_eq!(c.phase(), Phase::Idle);
     }
 
@@ -5035,7 +5236,7 @@ mod tests {
         assert_eq!(
             c.overlay().events(),
             vec![
-                "show:listening".to_owned(),
+                "greet".to_owned(),
                 "mode:thinking".to_owned(),
                 asked("c-1", 30_000)
             ]
@@ -5275,11 +5476,7 @@ mod tests {
                 json!({"session_id": session_of(&c)}),
                 "{mode:?}"
             );
-            assert_eq!(
-                c.overlay().events(),
-                vec!["show:listening", "hide"],
-                "{mode:?}"
-            );
+            assert_eq!(c.overlay().events(), vec!["greet", "hide"], "{mode:?}");
             assert_eq!(c.phase(), Phase::Idle, "{mode:?}");
             assert_eq!(c.cancel().last(), Some(false), "{mode:?}");
             // the release after Esc does nothing and the next press starts afresh
@@ -5423,7 +5620,7 @@ mod tests {
         assert_eq!(c.cancel().last(), Some(true));
         assert_eq!(
             c.overlay().events()[3..],
-            ["show:listening"],
+            ["greet"],
             "the new emblem replaces the answer; nothing is hidden in between"
         );
         // the clock of the old answer does not end the new question
@@ -5496,7 +5693,7 @@ mod tests {
         c.on_level(0.75);
         assert_eq!(
             c.overlay().events(),
-            vec!["show:listening", "level:0.25", "mode:thinking", "say:答|好"]
+            vec!["greet", "level:0.25", "mode:thinking", "say:答|好"]
         );
     }
 
@@ -5536,7 +5733,7 @@ mod tests {
         assert_eq!(
             c.overlay().timeline(),
             vec![
-                "show:listening".to_owned(),
+                "greet".to_owned(),
                 "mode:thinking".to_owned(),
                 asked("c-1", 30_000),
                 "say:了|已複製到剪貼簿。".to_owned(),
@@ -5756,7 +5953,7 @@ mod tests {
         run(&c, AgentDown, 0).await;
         c.copy_last().await.unwrap();
         assert_eq!(c.paster().copied(), vec!["上一次"]);
-        assert_eq!(c.overlay().events(), vec!["show:listening"]);
+        assert_eq!(c.overlay().events(), vec!["greet"]);
     }
 
     #[tokio::test]
@@ -5803,7 +6000,10 @@ mod tests {
             1,
             "only the dictation was cancelled"
         );
-        assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
+        assert_eq!(
+            c.overlay().events(),
+            vec!["show:listening", "greet", "hide"]
+        );
         assert_eq!(c.phase(), Phase::Idle);
         assert_eq!(c.cancel().last(), Some(false));
     }

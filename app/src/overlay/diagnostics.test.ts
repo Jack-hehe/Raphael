@@ -80,6 +80,18 @@ test("event diagnostics log only approved metadata and omit loudness and text", 
   ]);
 });
 
+test("a greeting and a quiet thought are logged as flags, without Raphael's words", () => {
+  const handler = guardHandler(() => {}, log);
+  handler({ type: "show", mode: "listening", line: "《告。今天有什麼事可以幫忙嗎？》" });
+  handler({ type: "mode", mode: "thinking", quiet: true });
+  handler({ type: "mode", mode: "thinking", quiet: false });
+  expect(logged).toEqual([
+    ["debug", 'event {"type":"show","mode":"listening","greeting":true}'],
+    ["debug", 'event {"type":"mode","mode":"thinking","quiet":true}'],
+    ["debug", 'event {"type":"mode","mode":"thinking"}'],
+  ]);
+});
+
 test.each([
   { type: "notice", text: "Private text" },
   { type: "learned", text: "Private text" },

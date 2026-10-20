@@ -1,5 +1,6 @@
 //! Raphael's notices: the short reports the overlay shows as subtitles when a dictation could not
-//! go the usual way, and the word list after learning from the user's corrections. Each one is
+//! go the usual way, the word list after learning from the user's corrections, and his greeting
+//! when a question to him begins. Each one is
 //! wrapped in 《》 and starts with its prefix: 告 (report) or 否 (refusal) in Chinese and Japanese,
 //! 了 for the learned words, and `Notice.`, `Negative.` or `Understood.` in English.
 //!
@@ -134,6 +135,14 @@ pub const ASK_FAILED: Notice = Notice {
     ja: "《否。現在は回答できません。》",
 };
 
+/// A question to Raphael has begun: his greeting beside the emblem while he listens. A dictation
+/// shows the emblem alone, so the two are never mistaken for each other.
+pub const GREETING: Notice = Notice {
+    zh: "《告。今天有什麼事可以幫忙嗎？》",
+    en: "《Notice. What can I help you with today?》",
+    ja: "《告。今日は何をお手伝いしましょうか？》",
+};
+
 /// Words learned from the user's corrections after a paste, in one notice, in `language`:
 /// 《了。「手機」、「Typeless」已加入詞典。》, `《Understood. “Typeless” added to the dictionary.》`
 /// or 《了。「手機」を辞書に追加しました。》.
@@ -170,7 +179,7 @@ pub fn notice_for_fallback(reason: Option<&str>) -> Option<Notice> {
 mod tests {
     use super::*;
 
-    const ALL: [Notice; 11] = [
+    const ALL: [Notice; 12] = [
         ELEVATED,
         FOCUS_CHANGED,
         BUDGET,
@@ -182,6 +191,7 @@ mod tests {
         NOT_READY,
         CORE_DOWN,
         ASK_FAILED,
+        GREETING,
     ];
 
     #[test]

@@ -125,8 +125,14 @@ pub struct AskPrompt {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum OverlayEvent {
-    /// The emblem appears (the appear animation) and shows `mode`.
-    Show { mode: Mode },
+    /// The emblem appears (the appear animation) and shows `mode`. A `line` (sent only when there
+    /// is one) is Raphael's greeting to a question, written beside the emblem while he listens; a
+    /// dictation shows the emblem alone.
+    Show {
+        mode: Mode,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        line: Option<String>,
+    },
     /// The emblem shows another mode. A `quiet` one (sent only when it is) shows no progress
     /// caption beside it: Raphael is thinking about a question, not working through a dictation.
     Mode {
@@ -168,13 +174,16 @@ pub trait OverlayApi: Send + Sync + 'static {
     /// The emblem appears and shows `mode`. The window is put back in its corner first (the
     /// taskbar or the screen's scale may have changed).
     fn show(&self, mode: Mode);
+    /// Raphael listens for a question: like `show(Mode::Listening)`, with `line` (his greeting, in
+    /// the interface language) beside the emblem until he has heard it. It also greets on the
+    /// emblem of a dictation that the question took over. No default: a wrapper that forgot it
+    /// would show a question as a dictation.
+    fn greet(&self, line: &str);
     /// Changes what the visible emblem shows.
     fn set_mode(&self, mode: Mode);
     /// The emblem thinks about a question: [`Mode::Thinking`] without the progress caption of a
-    /// dictation. Fakes can keep the ordinary mode change.
-    fn think_quietly(&self) {
-        self.set_mode(Mode::Thinking);
-    }
+    /// dictation. No default, for the same reason as [`Self::greet`].
+    fn think_quietly(&self);
     /// Loudness from 0 to 1.
     fn level(&self, value: f32);
     /// Raphael reports `text` (in the interface language) as a subtitle for a time that depends on
@@ -558,7 +567,15 @@ impl Overlay {
 impl OverlayApi for Overlay {
     fn show(&self, mode: Mode) {
         self.place_window();
-        self.publish(OverlayEvent::Show { mode });
+        self.publish(OverlayEvent::Show { mode, line: None });
+    }
+
+    fn greet(&self, line: &str) {
+        self.place_window();
+        self.publish(OverlayEvent::Show {
+            mode: Mode::Listening,
+            line: Some(line.to_owned()),
+        });
     }
 
     fn set_mode(&self, mode: Mode) {
@@ -948,9 +965,17 @@ mod tests {
         let json = |e: OverlayEvent| serde_json::to_string(&e).unwrap();
         assert_eq!(
             json(OverlayEvent::Show {
-                mode: Mode::Listening
+                mode: Mode::Listening,
+                line: None
             }),
             r#"{"type":"show","mode":"listening"}"#
+        );
+        assert_eq!(
+            json(OverlayEvent::Show {
+                mode: Mode::Listening,
+                line: Some("《告。今天有什麼事可以幫忙嗎？》".into())
+            }),
+            r#"{"type":"show","mode":"listening","line":"《告。今天有什麼事可以幫忙嗎？》"}"#
         );
         assert_eq!(
             json(OverlayEvent::Mode {
@@ -1083,6 +1108,7 @@ mod tests {
         for ends in [
             OverlayEvent::Show {
                 mode: Mode::Listening,
+                line: None,
             },
             OverlayEvent::Say {
                 prefix: "答".into(),
@@ -1132,6 +1158,7 @@ mod tests {
         };
         let listening = OverlayEvent::Show {
             mode: Mode::Listening,
+            line: None,
         };
         let thinking = OverlayEvent::Mode {
             mode: Mode::Thinking,
@@ -1260,6 +1287,7 @@ mod tests {
         let mut bus = Bus::new(150, "on", "zh-TW");
         bus.publish(OverlayEvent::Show {
             mode: Mode::Listening,
+            line: None,
         });
         bus.publish(OverlayEvent::Level { value: 0.3 }); // a loudness reading is stale by then
         bus.publish(OverlayEvent::Progress(Progress::DONE)); // and so is a progress report
@@ -1312,7 +1340,10 @@ mod tests {
         let (b, got_b) = page();
         bus.subscribe("a", a);
         bus.subscribe("b", b);
-        bus.publish(OverlayEvent::Show { mode: Mode::Steady });
+        bus.publish(OverlayEvent::Show {
+            mode: Mode::Steady,
+            line: None,
+        });
         bus.publish(OverlayEvent::Level { value: 1.0 });
         bus.publish(OverlayEvent::Hide);
         let expected = [
@@ -1385,6 +1416,7 @@ mod tests {
         assert!(!bus.backlog_warned);
         bus.publish(OverlayEvent::Show {
             mode: Mode::Listening,
+            line: None,
         });
         assert!(bus.backlog_warned);
         bus.publish(OverlayEvent::Hide);
@@ -1400,7 +1432,10 @@ mod tests {
     #[test]
     fn every_event_has_its_kind_for_the_log() {
         let events = [
-            OverlayEvent::Show { mode: Mode::Steady },
+            OverlayEvent::Show {
+                mode: Mode::Steady,
+                line: None,
+            },
             OverlayEvent::Mode {
                 mode: Mode::Steady,
                 quiet: false,
