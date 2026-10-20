@@ -111,12 +111,6 @@ const STT_MODELS: Choice[] = [
   { value: "google/gemini-3.5-transcribe", get label() { return t("model.geminiTranscribe"); } },
   { value: "openai/whisper-large-v3-turbo", get label() { return t("settings.008"); } },
 ];
-/** Who works out what an utterance to Raphael asks for (core setting `agent_router`), the default first. */
-const AGENT_ROUTERS: Choice[] = [
-  { value: "jev", get label() { return t("settings.routerJev"); }, get desc() { return t("settings.agentRouterJev"); } },
-  { value: "luna", get label() { return t("settings.routerLuna"); }, get desc() { return t("settings.agentRouterLuna"); } },
-];
-const DEFAULT_ROUTER = AGENT_ROUTERS[0].value;
 const APPEARANCES: Choice[] = [
   { value: "system", get label() { return t("settings.013"); }, get desc() { return t("settings.014"); } },
   { value: "light", get label() { return t("settings.015"); } },
@@ -288,16 +282,6 @@ export function createSettings(app: AppContext): Page {
           head: prices() ? CLEANUP_PRICE_HEAD() : undefined,
         };
       }
-      case "agent-router": {
-        const current = agentRouter();
-        return {
-          choices: withCurrent(AGENT_ROUTERS, current),
-          current,
-          pick: (v) => {
-            if (AGENT_ROUTERS.some((c) => c.value === v) && v !== agentRouter()) void changeBrain("agent_router", v);
-          },
-        };
-      }
       case "agent-model": {
         const current = agentModel();
         return {
@@ -318,7 +302,6 @@ export function createSettings(app: AppContext): Page {
   const sttEngine = (): string => brain?.stt_engine ?? "cloud";
   const sttModel = (): string => brain?.stt_cloud_model ?? STT_MODELS[0].value;
   const cleanupModel = (): string => brain?.cleanup_model ?? MODELS[0].value;
-  const agentRouter = (): string => brain?.agent_router ?? DEFAULT_ROUTER;
   const agentModel = (): string => brain?.agent_model ?? MODELS[0].value;
   const agentCity = (): string => brain?.agent_city ?? "";
   /** The prices once they are read. */
@@ -542,12 +525,11 @@ export function createSettings(app: AppContext): Page {
     );
   }
 
-  /** 拉斐爾: the key that asks her, who works out the request, the model that answers and the weather city. */
+  /** 拉斐爾: the key that asks her, the model that answers and the weather city. Jev always works out what a request is (core agent/routing.py): there is no choice of router. */
   function agentHTML(): string {
     const d = app.device();
     // an app from before the question key has none yet
     const agentKeys = d.agent_keys ?? [];
-    const router = AGENT_ROUTERS.find((c) => c.value === agentRouter());
     const cityShown = cityDraft ?? agentCity();
     return (
       heading() +
@@ -559,11 +541,6 @@ export function createSettings(app: AppContext): Page {
           (agentKeys.length > 0 ? agentKeys.map((binding) => keys(bindingLabels(binding))).join(t("onboarding.009")) : `<span class="val">${esc(t("home.noKeys"))}</span>`) +
             btn(t("home.018"), "sm", ' data-act="rec-agent"'),
           { attrs: ` data-row="${HOTKEY_ROWS.agent_keys}"` },
-        ),
-        row(
-          t("settings.agentRouter"),
-          esc(router?.desc ?? ""),
-          sel(withCurrent(AGENT_ROUTERS, agentRouter()), agentRouter(), t("settings.agentRouter"), ` data-k="agent-router"${brain ? "" : " disabled"}`),
         ),
         row(
           t("settings.agentModel"),

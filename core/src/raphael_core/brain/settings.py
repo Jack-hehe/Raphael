@@ -1,9 +1,14 @@
 """Settings shared by the whole brain, kept in the database as JSON text.
 
 Only keys in DEFAULTS exist. A key nobody has set reads as its default. Most keys are only
-type-checked; the speech-to-text ones and the voice assistant's router must also be one of their
-listed values, `languages` a valid selection (see raphael_core.languages), and the assistant's
-model and city a text of some substance (saved without the spaces around it).
+type-checked; the speech-to-text ones must also be one of their listed values, `languages` a valid
+selection (see raphael_core.languages), and the assistant's model and city a text of some
+substance (saved without the spaces around it).
+
+A key that an older version saved but that is no longer a setting stays in the table and is never
+read: `all` lists only the keys of DEFAULTS, and `get` and `set` refuse the others. `agent_router`
+(whether Jev or the language model routes the assistant's requests) is one: Jev always routes now,
+so a saved "luna" changes nothing and nothing has to be rewritten at start-up.
 
 `language` is the setting `languages` replaced, kept for one release: it reads as what the
 selection amounts to ("zh", "ja", "en" or "auto"), and setting it sets `languages`. A saved
@@ -42,17 +47,13 @@ DEFAULTS: dict[str, Any] = {
     # After a paste, the app watches the text field for up to 60 s and learns the words the user
     # corrects by hand (`dictionary.learn`). Off: the app does not read the field at all.
     "learn_corrections": True,
-    # The voice assistant (raphael_core.agent). The router decides what a request is: "jev" asks
-    # OpenRouter's Jev model and falls back to the language model when Jev fails or is unsure;
-    # "luna" asks the language model only.
-    "agent_router": "jev",
-    # The model that words the assistant's answers (and routes, for "luna" and as the fallback).
+    # The voice assistant (raphael_core.agent). The model that words its answers, and that decides
+    # what a request is when Jev (agent/routing.py, not a setting) fails or is unsure.
     "agent_model": "openai/gpt-6-luna",
     # Where the weather is looked up when the user does not say.
     "agent_city": "台北",
 }
 
-AGENT_ROUTERS = ("jev", "luna")
 # The longest model id or city name taken: far more than any real one, short of an accident.
 AGENT_TEXT_MAX_CHARS = 100
 STT_ENGINES = ("cloud", "local")
@@ -71,7 +72,6 @@ _CHOICES: dict[str, tuple[str, ...]] = {
     "stt_engine": STT_ENGINES,
     "stt_cloud_model": STT_CLOUD_MODELS,
     "language": LEGACY_LANGUAGES,
-    "agent_router": AGENT_ROUTERS,
 }
 _TRIMMED = ("agent_model", "agent_city")
 

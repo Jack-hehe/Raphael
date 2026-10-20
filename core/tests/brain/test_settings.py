@@ -1,7 +1,6 @@
 import pytest
 
 from raphael_core.brain.settings import (
-    AGENT_ROUTERS,
     DEFAULTS,
     STT_CLOUD_MODELS,
     STT_ENGINES,
@@ -34,7 +33,6 @@ def test_the_defaults_are_the_documented_ones():
         "stt_engine": "cloud",
         "stt_cloud_model": "elevenlabs/scribe-v2",
         "learn_corrections": True,
-        "agent_router": "jev",
         "agent_model": "openai/gpt-6-luna",
         "agent_city": "台北",
     }
@@ -238,24 +236,23 @@ def test_learning_corrections_is_on_by_default_and_takes_a_bool(conn):
 # --- the voice assistant -----------------------------------------------------------------------
 
 
-def test_the_assistant_routes_with_jev_and_answers_with_luna_in_taipei_by_default(conn):
+def test_the_assistant_answers_with_luna_in_taipei_by_default(conn):
     s = SettingsStore(conn)
-    assert s.get("agent_router") == "jev"
     assert s.get("agent_model") == "openai/gpt-6-luna"
     assert s.get("agent_city") == "台北"
-    assert AGENT_ROUTERS == ("jev", "luna")
 
 
-def test_the_router_can_be_jev_or_luna_and_nothing_else(conn):
+def test_the_router_is_no_longer_a_setting_and_a_saved_choice_is_ignored(conn):
+    # Jev always routes. A database from a version with the choice may still hold one: it is
+    # neither read nor offered, and it cannot be set again.
+    conn.execute("INSERT INTO settings (key, value) VALUES ('agent_router', '\"luna\"')")
     s = SettingsStore(conn)
-    s.set("agent_router", "luna")
-    assert s.get("agent_router") == "luna"
-    for value in ("JEV", "", "keywords"):
-        with pytest.raises(ValueError, match="agent_router"):
-            s.set("agent_router", value)
-    with pytest.raises(TypeError):
-        s.set("agent_router", 1)
-    assert s.get("agent_router") == "luna"
+    assert "agent_router" not in s.all()
+    assert s.all() == DEFAULTS
+    with pytest.raises(KeyError):
+        s.get("agent_router")
+    with pytest.raises(KeyError):
+        s.set("agent_router", "jev")
 
 
 def test_the_answer_model_and_the_city_are_saved_without_the_spaces_around_them(conn):

@@ -4,8 +4,8 @@ Jev (`typesafe/jev-1.14`, OpenRouter's decisions endpoint) classifies in about h
 fraction of a cent. One request asks everything at once: the `route` (command, answer, delegate,
 discuss, chat or unclear), which fixed `command` it is if it is one, and whether answering needs
 the weather, a web search or the time. The language model (the `agent_model` setting) answers the
-same questions as JSON when Jev fails or is unsure, or always when the `agent_router` setting is
-"luna".
+same questions as JSON when Jev fails or is unsure. Jev is always asked first: there is no setting
+to skip it, since the language model alone is slower and costs more for the same decision.
 
 - Jev gets about 2.5 s in all. A timeout or a server error is asked once more in what is left of
   that; anything else (no key, no credit, a rate limit, no network, a bad request) is not, since
@@ -305,18 +305,15 @@ class Router:
         self._luna_s = luna_s
         self._clock = clock
 
-    async def classify(
-        self, text: str, mode: str, model: str, ledger: Ledger
-    ) -> RouteDecision:
-        """What `text` is: Jev's decision if `mode` is "jev" and Jev is sure, else the language
-        model's `model`. AgentFailure (of a kind) when nothing decides."""
-        if mode == "jev":
-            outcome = await self.ask_jev(text, ledger)
-            if outcome.decision is not None:
-                return outcome.decision
-            if outcome.failure in _SHARED_FAILURES:
-                raise AgentFailure(outcome.failure)
-            logger.info("Jev did not decide (%s); asking the language model", outcome.failure)
+    async def classify(self, text: str, model: str, ledger: Ledger) -> RouteDecision:
+        """What `text` is: Jev's decision if Jev is sure, else the language model's `model`.
+        AgentFailure (of a kind) when nothing decides."""
+        outcome = await self.ask_jev(text, ledger)
+        if outcome.decision is not None:
+            return outcome.decision
+        if outcome.failure in _SHARED_FAILURES:
+            raise AgentFailure(outcome.failure)
+        logger.info("Jev did not decide (%s); asking the language model", outcome.failure)
         return await self.ask_luna(text, model, ledger)
 
     async def ask_jev(self, text: str, ledger: Ledger) -> JevOutcome:

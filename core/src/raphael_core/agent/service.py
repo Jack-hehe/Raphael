@@ -2,7 +2,8 @@
 
 A request travels like this. The app records the user with `dictation.start {purpose: "agent"}`,
 gets the transcript from `dictation.stop`, and sends it with `agent.ask {session_id, text,
-ui_language, target_app}`. The router (Jev, or the language model; `routing`) says what it is:
+ui_language, target_app}`. The router (Jev, and the language model when Jev fails or is unsure;
+`routing`) says what it is:
 
 - a command runs at once if it is T0 or T1 (`commands`, `policy`) and Raphael says 《了。》; at T2 or
   T3 (copying to the clipboard) nothing runs: the answer is a question for a yes or a no
@@ -40,7 +41,7 @@ import httpx
 
 from ..brain.openrouter import OpenRouterClient
 from ..brain.secrets import KeyStore
-from ..brain.settings import AGENT_ROUTERS, DEFAULTS, SettingsStore
+from ..brain.settings import DEFAULTS, SettingsStore
 from ..brain.spend import SpendTracker
 from ..protocol import INVALID_PARAMS, RpcError
 from ..router import Router as RpcRouter
@@ -144,7 +145,6 @@ class _Ask:
 
 @dataclass
 class _Settings:
-    router: str
     model: str
     city: str
     limit_usd: float
@@ -272,9 +272,7 @@ class AgentService:
         failure = blocked
         if blocked is None:
             try:
-                decision = await self._decider.classify(
-                    ask.text, settings.router, settings.model, ledger
-                )
+                decision = await self._decider.classify(ask.text, settings.model, ledger)
             except AgentFailure as error:
                 failure = error.kind
             except Exception as exc:  # a bug in the router must not become an RPC error
@@ -605,11 +603,9 @@ class AgentService:
 
     def _read_settings(self) -> _Settings:
         """The settings of the assistant; one that is not valid reads as its default."""
-        router = self._settings.get("agent_router")
         model = self._settings.get("agent_model")
         city = self._settings.get("agent_city")
         return _Settings(
-            router=router if router in AGENT_ROUTERS else DEFAULTS["agent_router"],
             model=_text_or(model, DEFAULTS["agent_model"]),
             city=_text_or(city, DEFAULTS["agent_city"]),
             limit_usd=self._settings.get("monthly_limit_usd"),

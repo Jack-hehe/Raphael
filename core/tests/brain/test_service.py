@@ -986,12 +986,9 @@ async def test_an_invalid_selection_of_languages_is_invalid_params(router, value
 
 async def test_the_assistants_settings_are_in_settings_get_and_can_be_set(router):
     settings = (await router.call("settings.get", {}))["settings"]
-    assert (settings["agent_router"], settings["agent_model"], settings["agent_city"]) == (
-        "jev",
-        "openai/gpt-6-luna",
-        "台北",
-    )
-    for key, value in [("agent_router", "luna"), ("agent_model", "x/y"), ("agent_city", "東京")]:
+    assert (settings["agent_model"], settings["agent_city"]) == ("openai/gpt-6-luna", "台北")
+    assert "agent_router" not in settings  # Jev always routes: there is no choice to show
+    for key, value in [("agent_model", "x/y"), ("agent_city", "東京")]:
         settings = (await router.call("settings.set", {"key": key, "value": value}))["settings"]
         assert settings[key] == value
 
@@ -999,8 +996,6 @@ async def test_the_assistants_settings_are_in_settings_get_and_can_be_set(router
 @pytest.mark.parametrize(
     ("key", "value"),
     [
-        ("agent_router", "keywords"),
-        ("agent_router", 1),
         ("agent_model", " "),
         ("agent_model", "two words"),
         ("agent_city", ""),

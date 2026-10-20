@@ -465,7 +465,7 @@ async def test_a_language_model_that_hangs_is_a_timeout(client, ledger):
 
 async def test_jev_decides_and_the_language_model_is_not_asked(router, client, ledger):
     client.decisions.append(decision("answer", weather=0.9))
-    result = await router.classify("明天會下雨嗎", "jev", "m", ledger)
+    result = await router.classify("明天會下雨嗎", "m", ledger)
     assert result.source == "jev" and result.route == "answer" and result.needs_weather
     assert client.json_calls == []
 
@@ -486,7 +486,7 @@ async def test_jev_decides_and_the_language_model_is_not_asked(router, client, l
 async def test_when_jev_fails_or_is_unsure_the_language_model_decides(router, client, ledger, jev):
     client.decisions.extend([jev, jev])  # a failure that is retried is asked twice
     client.replies.append(completion(classification(route="discuss")))
-    result = await router.classify("我們來規劃週末", "jev", "m", ledger)
+    result = await router.classify("我們來規劃週末", "m", ledger)
     assert result.source == "luna" and result.route == "discuss"
     assert len(client.json_calls) == 1
 
@@ -500,29 +500,23 @@ async def test_a_key_or_a_balance_jev_cannot_use_is_not_tried_again_with_the_lan
 ):
     client.decisions.append(error)
     with pytest.raises(AgentFailure) as failure:
-        await router.classify("你好", "jev", "m", ledger)
+        await router.classify("你好", "m", ledger)
     assert failure.value.kind == kind
     assert client.json_calls == []
-
-
-async def test_with_the_router_set_to_luna_jev_is_never_asked(router, client, ledger):
-    client.replies.append(completion(classification(route="chat")))
-    result = await router.classify("你好", "luna", "m", ledger)
-    assert result.source == "luna" and client.decide_calls == []
 
 
 async def test_when_both_fail_the_failure_is_the_language_models(router, client, ledger):
     client.decisions.extend([OpenRouterError(0, "network", "offline")])
     client.replies.append(OpenRouterError(0, "network", "offline"))
     with pytest.raises(AgentFailure) as failure:
-        await router.classify("你好", "jev", "m", ledger)
+        await router.classify("你好", "m", ledger)
     assert failure.value.kind == "offline"
 
 
 async def test_the_model_given_is_the_one_the_language_model_is_asked(router, client, ledger):
     client.decisions.append(OpenRouterError(0, "network", "offline"))
     client.replies.append(completion(classification()))
-    await router.classify("你好", "jev", "anthropic/claude-haiku-5.5", ledger)
+    await router.classify("你好", "anthropic/claude-haiku-5.5", ledger)
     assert client.json_calls[0]["model"] == "anthropic/claude-haiku-5.5"
 
 

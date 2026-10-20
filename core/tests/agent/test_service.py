@@ -338,13 +338,13 @@ async def test_the_app_the_language_model_heard_while_routing_is_not_asked_for_a
     rig, client, actions
 ):
     actions.apps = [StartApp("計算機", "calc!App")]
-    rig.settings.set("agent_router", "luna")
+    client.decisions.append(decision("command", "open_app", route_confidence=0.2))  # unsure
     client.replies.append(
         completion(classification(route="command", command="open_app", app="計算機"))
     )
     await rig.ask("打開那個算數的東西")
     assert ("launch_app", "calc!App") in actions.calls
-    assert len(client.json_calls) == 1 and client.decide_calls == []
+    assert len(client.json_calls) == 1 and len(client.decide_calls) == 1
 
 
 async def test_an_app_that_is_not_installed_is_said_so_and_nothing_is_started(
@@ -596,13 +596,15 @@ async def test_an_empty_request_is_not_understood_and_costs_nothing(rig, client,
 # --- the router's settings and fallbacks -----------------------------------------------------------
 
 
-async def test_with_the_router_set_to_luna_jev_is_never_asked(rig, client):
-    rig.settings.set("agent_router", "luna")
-    client.replies.append(completion(classification(route="chat")))
+async def test_a_router_choice_an_older_version_saved_is_ignored_and_jev_routes(rig, client):
+    # The setting `agent_router` is gone: Jev always routes. A saved "luna" must neither break the
+    # start nor skip Jev.
+    rig.conn.execute("INSERT INTO settings (key, value) VALUES ('agent_router', '\"luna\"')")
+    client.decisions.append(decision("chat"))
     client.replies.append(spoken("答", "你好。"))
     result = await rig.ask("你好")
-    assert result["text"] == "你好。" and client.decide_calls == []
-    assert len(client.json_calls) == 2
+    assert result["text"] == "你好。"
+    assert len(client.decide_calls) == 1 and len(client.json_calls) == 1  # the answer only
 
 
 async def test_when_jev_fails_the_language_model_routes(rig, client):
@@ -622,7 +624,7 @@ async def test_the_model_of_the_settings_answers(rig, client):
 
 @pytest.mark.parametrize(
     ("key", "saved"),
-    [("agent_router", '"keywords"'), ("agent_model", '"  "'), ("agent_city", '""')],
+    [("agent_model", '"  "'), ("agent_city", '""')],
 )
 async def test_a_saved_setting_that_is_not_valid_reads_as_its_default(rig, client, key, saved):
     rig.conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, saved))
@@ -953,8 +955,9 @@ async def test_an_irreversible_command_is_asked_as_t3(make_rig, client, actions,
         commands.COMMANDS, "burn", Command("burn", Tier.T3, "Burn it all down.", "copy")
     )
     rig = make_rig()
-    rig.settings.set("agent_router", "luna")
     rig.seed("q", "a")
+    # Jev does not know the new command: the language model routes, with the command list of now.
+    client.decisions.append(decision("command", route_confidence=0.2))
     client.replies.append(completion(classification(route="command", command="burn")))
     result = await rig.ask("burn it")
     assert result["confirm"]["tier"] == "T3"

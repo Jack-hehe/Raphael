@@ -170,8 +170,6 @@ export interface BrainSettings {
   stt_cloud_model: string;
   /** Learn the words the user corrects by hand after a paste (default on). Absent from older cores. */
   learn_corrections?: boolean;
-  /** Who works out what an utterance to Raphael asks for: "jev" (a fast, cheap router) or "luna" (the answer model). */
-  agent_router?: string;
   /** The model that writes Raphael's answers. */
   agent_model?: string;
   /** The city Raphael looks the weather up for. */
