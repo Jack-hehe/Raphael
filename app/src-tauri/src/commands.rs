@@ -383,6 +383,9 @@ pub trait Effects: Send + Sync {
     fn pause_media(&self, on: bool);
     /// Hands the interface language to the controller, which shows its notices in it.
     fn ui_language(&self, language: &str);
+    /// Draws the tray menu again: it names the microphone in use and speaks the interface
+    /// language.
+    fn tray_menu(&self);
 }
 
 fn bindings_of(settings: &DeviceSettings) -> Bindings {
@@ -446,6 +449,9 @@ pub async fn apply_changes<E: Effects>(
     if old.ui_language != new.ui_language {
         effects.ui_language(&new.ui_language);
     }
+    if microphone_changed || old.ui_language != new.ui_language {
+        effects.tray_menu();
+    }
     Ok(())
 }
 
@@ -472,6 +478,17 @@ pub async fn set_device_settings<E: Effects>(
         format!("設定已經生效，但無法存檔：{err}")
     })?;
     Ok(new)
+}
+
+/// Changes the microphone exactly as the settings page does (`device_settings_set` with a
+/// `microphone`), for the tray's menu. `None` is the system's default.
+pub async fn set_microphone(app: &AppHandle, name: Option<&str>) -> Result<(), String> {
+    let store = app
+        .try_state::<DeviceStore>()
+        .ok_or("the device settings are not loaded")?;
+    let effects = AppEffects { app: app.clone() };
+    set_device_settings(&store, &effects, &json!({ "microphone": name })).await?;
+    Ok(())
 }
 
 /// The device settings as they are now.
@@ -587,6 +604,11 @@ impl Effects for AppEffects {
             Some(cell) => cell.set(language),
             None => log::warn!("there is no dictation controller to hand the language to"),
         }
+    }
+
+    fn tray_menu(&self) {
+        // The redraw reads the settings, so it waits here for this change to be saved.
+        crate::tray::refresh(&self.app);
     }
 }
 
@@ -738,6 +760,9 @@ pub fn start(app: &AppHandle) {
     let settings = DeviceSettings::load(&path);
     app.manage(DeviceStore::new(path, settings.clone()));
     apply_saved(app, &settings);
+    // The tray's menu was drawn before the settings were known: it names the microphone and
+    // speaks the language they chose.
+    crate::tray::refresh(app);
     watch_core(app);
 }
 
@@ -831,6 +856,8 @@ async fn restore_from(app: &AppHandle) {
         None => None,
     };
     restore_core(core.inner().as_ref(), microphone.as_deref(), &MONITORING).await;
+    // A new core is the first one that can list the microphones for the tray's menu.
+    crate::tray::rescan(app);
 }
 
 /// Puts back what a new core does not know. Sends `microphone` (nothing for the default one,
@@ -1445,6 +1472,10 @@ mod tests {
         fn ui_language(&self, language: &str) {
             let _ = self.record("ui_language", language.to_owned());
         }
+
+        fn tray_menu(&self) {
+            self.log.lock().unwrap().push("tray_menu".to_owned());
+        }
     }
 
     // ---- the core's answer to audio.set_device ----
@@ -1537,7 +1568,11 @@ mod tests {
         apply_changes(&fake, &old, &new).await.unwrap();
         assert_eq!(
             fake.done(),
-            ["microphone 耳機麥克風", "overlay 150 off zh-TW"]
+            [
+                "microphone 耳機麥克風",
+                "overlay 150 off zh-TW",
+                "tray_menu"
+            ]
         );
 
         // the answer to "onboarded" is the settings file's alone
@@ -1619,7 +1654,10 @@ mod tests {
         let fake = Fake::default();
         let (old, new) = changed(json!({"ui_language": "ja"}));
         apply_changes(&fake, &old, &new).await.unwrap();
-        assert_eq!(fake.done(), ["overlay 150 on ja", "ui_language ja"]);
+        assert_eq!(
+            fake.done(),
+            ["overlay 150 on ja", "ui_language ja", "tray_menu"]
+        );
 
         // the same language again, with something else changed: the controller is left alone
         let fake = Fake::default();
@@ -1683,6 +1721,49 @@ mod tests {
                 "bindings AltRight",
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn the_tray_menu_follows_the_microphone_and_the_language_and_nothing_else() {
+        // It names the microphone in use and speaks the interface language.
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"microphone": "耳機麥克風"}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(fake.done(), ["microphone 耳機麥克風", "tray_menu"]);
+
+        // and back to the system's
+        let fake = Fake::default();
+        apply_changes(&fake, &new, &old).await.unwrap();
+        assert_eq!(fake.done(), ["microphone default", "tray_menu"]);
+
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"ui_language": "en"}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(
+            fake.done(),
+            ["overlay 150 on en", "ui_language en", "tray_menu"]
+        );
+
+        // both at once: drawn once, after both are in force
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"ui_language": "ja", "microphone": "x"}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(
+            fake.done(),
+            [
+                "microphone x",
+                "overlay 150 on ja",
+                "ui_language ja",
+                "tray_menu"
+            ]
+        );
+
+        // a change that fails is undone, and the menu is not drawn for it
+        let fake = Fake::failing("autostart");
+        let (old, new) =
+            changed(json!({"ui_language": "en", "microphone": "x", "autostart": false}));
+        assert!(apply_changes(&fake, &old, &new).await.is_err());
+        assert!(!fake.done().contains(&"tray_menu".to_owned()));
     }
 
     #[tokio::test]

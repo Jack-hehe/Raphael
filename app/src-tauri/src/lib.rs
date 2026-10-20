@@ -133,6 +133,8 @@ pub fn run() {
             }
 
             // ---- Tray ----
+            // Its menu starts in the default language with no microphones: it names the one in
+            // use and speaks the interface language, which the device settings (below) know.
             tray::build(app.handle())?;
 
             // ---- Overlay ----
