@@ -101,26 +101,65 @@ const UNUSABLE: Record<ModelRole, () => string> = {
   stt: () => t("picker.unusableStt"),
 };
 
-/** A row of the list: a model, and whether the role can use it. */
+/**
+ * A choice that is no OpenRouter model, listed above the models: the speech recognition of this
+ * computer, which the settings offer with the speech-to-text models so that what turns speech into
+ * text is one choice. It belongs to no maker, and the role can always use it.
+ */
+export interface PickerExtra {
+  id: string;
+  name: string;
+  /** What it costs, as its row shows it: 免費. */
+  price: string;
+  /** The line under its name. */
+  detail?: string;
+}
+
+/** A row of the list: a model, and whether the role can use it; or a choice that is no model. */
 export interface PickerRow {
   model: CatalogModel;
   usable: boolean;
+  extra?: PickerExtra;
 }
+
+/** A choice that is no model, as a row: it has no maker, no price of OpenRouter's and no date. */
+const extraRow = (extra: PickerExtra): PickerRow => ({
+  model: {
+    id: extra.id,
+    name: extra.name,
+    provider: "",
+    input_per_mtok: null,
+    output_per_mtok: null,
+    per_minute: null,
+    free: false,
+    variable_price: false,
+    context_length: null,
+    created_at_ms: null,
+    capabilities: {},
+    recommended: false,
+    roles: {},
+  },
+  usable: true,
+  extra,
+});
 
 const squeeze = (text: string): string => text.replace(/[^\p{L}\p{N}]+/gu, "");
 
 /**
- * Whether a model answers a search: each of its words is in the model's name, maker or id, whatever
- * the case, also when the spaces and the punctuation in between are left out ("gpt6" finds GPT-6).
+ * Whether a text answers a search: each of its words is in it, whatever the case, also when the
+ * spaces and the punctuation in between are left out ("gpt6" finds GPT-6).
  */
-function matcher(query: string): (model: CatalogModel) => boolean {
+function matcher(query: string): (text: string) => boolean {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  return (model) => {
-    const text = `${model.name} ${model.provider} ${model.id}`.toLowerCase();
-    const packed = squeeze(text);
-    return words.every((word) => text.includes(word) || (squeeze(word) !== "" && packed.includes(squeeze(word))));
+  return (text) => {
+    const lower = text.toLowerCase();
+    const packed = squeeze(lower);
+    return words.every((word) => lower.includes(word) || (squeeze(word) !== "" && packed.includes(squeeze(word))));
   };
 }
+
+/** What a search looks in: a model's name, its maker and its id. */
+const searched = (model: CatalogModel): string => `${model.name} ${model.provider} ${model.id}`;
 
 /**
  * What a model sorts by when the order is the price, cheapest first: free and fixed prices, a speech
@@ -154,7 +193,7 @@ const ORDERS: Record<PickerSort, (a: CatalogModel, b: CatalogModel) => number> =
 export function pickerRows(models: CatalogModel[], role: ModelRole, state: PickerState): PickerRow[] {
   const matches = matcher(state.query);
   const rows = models
-    .filter((model) => (state.provider === "" || model.provider === state.provider) && matches(model))
+    .filter((model) => (state.provider === "" || model.provider === state.provider) && matches(searched(model)))
     .sort(ORDERS[state.sort])
     .map((model) => ({ model, usable: usableFor(model, role) }));
   return [...rows.filter((row) => row.usable), ...rows.filter((row) => !row.usable)];
@@ -226,6 +265,8 @@ export class PickerList {
     /** The model chosen now: checked, and highlighted when the list opens. */
     public current: string,
     state: Partial<PickerState> = {},
+    /** The choices that are no models, above them while no maker is chosen. */
+    private extras: readonly PickerExtra[] = [],
   ) {
     this.state = { ...DEFAULT_PICKER_STATE, ...state };
     this.refresh(current);
@@ -282,8 +323,15 @@ export class PickerList {
     return row?.usable ? row.model.id : null;
   }
 
+  /** How many models the list shows, the choices that are no models aside. */
+  modelCount(): number {
+    return this.rows.filter((row) => !row.extra).length;
+  }
+
   private refresh(keep: string | null): void {
-    this.rows = pickerRows(this.models, this.role, this.state);
+    const matches = matcher(this.state.query);
+    const extras = this.state.provider === "" ? this.extras.filter((e) => matches(`${e.name} ${e.detail ?? ""} ${e.id}`)) : [];
+    this.rows = [...extras.map(extraRow), ...pickerRows(this.models, this.role, this.state)];
     const kept = keep === null ? -1 : this.rows.findIndex((row) => row.model.id === keep);
     this.active = kept >= 0 ? kept : this.rows.length > 0 ? 0 : -1;
   }
@@ -293,16 +341,17 @@ export class PickerList {
 
 /** One row: the name, the price, and a line with the maker, the context or the dictionary, the date when the list is newest first, and why the role cannot use it. */
 function optionHTML(row: PickerRow, index: number, list: PickerList): string {
-  const { model } = row;
+  const { model, extra } = row;
   const chosen = model.id === list.current;
-  const details = [model.provider];
+  const details = extra ? (extra.detail ? [extra.detail] : []) : [model.provider];
   if (model.context_length !== null) details.push(t("picker.context", { p0: formatContext(model.context_length) }));
   if (model.capabilities.dictionary_hints) details.push(t("picker.dictionary"));
   if (list.state.sort === "newest" && model.created_at_ms !== null) details.push(addedText(model.created_at_ms));
   const reason = row.usable ? "" : reasonText(model.roles[list.role]?.reason);
   if (reason) details.push(reason);
+  const price = extra ? extra.price : priceText(model, list.role);
   // What a screen reader says of the row, in an order that makes sense when heard.
-  const heard = [model.name, model.provider, priceDescription(model, list.role)];
+  const heard = extra ? [model.name, ...details, price] : [model.name, model.provider, priceDescription(model, list.role)];
   if (model.recommended) heard.push(t("picker.recommended"));
   if (chosen) heard.push(t("picker.current"));
   if (reason) heard.push(reason);
@@ -312,8 +361,9 @@ function optionHTML(row: PickerRow, index: number, list: PickerList): string {
     `<span class="ck">${chosen ? CHECK : ""}</span>` +
     `<span class="mp-main"><span class="mp-line"><span class="mp-name">${esc(model.name)}</span>` +
     (model.recommended ? `<span class="mp-badge">${esc(t("picker.recommended"))}</span>` : "") +
-    `<span class="mp-price num">${esc(priceText(model, list.role))}</span></span>` +
-    `<span class="mp-sub">${esc(details.join(" · "))}</span></span></button>`
+    `<span class="mp-price num">${esc(price)}</span></span>` +
+    (details.length ? `<span class="mp-sub">${esc(details.join(" · "))}</span>` : "") +
+    `</span></button>`
   );
 }
 
@@ -405,6 +455,10 @@ export interface ModelPickerOptions {
   label: string;
   /** The button's `data-k`: a page that draws itself again gives the focus back by it (settings.ts does). */
   key?: string;
+  /** The choices that are no models, listed above them (`PickerExtra`): `current` may be one. */
+  extras?: readonly PickerExtra[];
+  /** Whether the button shows the price of what is chosen: yes, unless the page shows it beside. */
+  showPrice?: boolean;
   /** No choosing: the brain's settings are not known. */
   disabled?: boolean;
   /** The user chose `id`: never the model chosen now, never one the role cannot use. The page saves it. */
@@ -476,14 +530,16 @@ class MountedPicker implements ModelPicker {
       this.close();
       return;
     }
-    this.list.current = this.o.current;
-    this.list.setModels(this.models());
+    // The list is made again, as it was searched and highlighted: the choices may have changed too.
+    const highlighted = this.list.activeId();
+    this.list = this.newList(this.list.state);
+    if (highlighted) this.list.point(highlighted);
     this.paintFilters();
     this.paintList(null);
   }
 
   open(query = ""): void {
-    this.show(new PickerList(this.o.role, this.models(), this.o.current, { query }), {});
+    this.show(this.newList({ query }), {});
   }
 
   close(): void {
@@ -505,15 +561,23 @@ class MountedPicker implements ModelPicker {
     return this.o.catalog ? modelsFor(this.o.catalog, this.o.role) : [];
   }
 
+  private newList(state: Partial<PickerState>): PickerList {
+    return new PickerList(this.o.role, this.models(), this.o.current, state, this.o.extras ?? []);
+  }
+
   private paintButton(): void {
-    const model = this.models().find((m) => m.id === this.o.current);
-    const name = model?.name ?? shortName(this.o.current);
-    const price = model ? priceText(model, this.o.role) : this.o.loading ? "…" : "";
+    const extra = this.o.extras?.find((e) => e.id === this.o.current);
+    const model = extra ? undefined : this.models().find((m) => m.id === this.o.current);
+    const name = extra?.name ?? model?.name ?? shortName(this.o.current);
+    const price = extra?.price ?? (model ? priceText(model, this.o.role) : this.o.loading ? "…" : "");
+    const said = extra?.price ?? (model ? priceDescription(model, this.o.role) : "");
     this.button.innerHTML =
-      `<span class="mp-tname">${esc(name)}</span>` + (price ? `<span class="mp-tprice num">${esc(price)}</span>` : "") + ico("down");
+      `<span class="mp-tname">${esc(name)}</span>` +
+      (price && this.o.showPrice !== false ? `<span class="mp-tprice num">${esc(price)}</span>` : "") +
+      ico("down");
     this.button.disabled = this.o.disabled === true;
-    this.button.title = model ? `${model.provider}: ${model.name}` : this.o.current;
-    this.button.setAttribute("aria-label", `${this.o.label}: ${name}${model ? `, ${priceDescription(model, this.o.role)}` : ""}`);
+    this.button.title = model ? `${model.provider}: ${model.name}` : (extra?.name ?? this.o.current);
+    this.button.setAttribute("aria-label", `${this.o.label}: ${name}${said ? `, ${said}` : ""}`);
   }
 
   private search(): HTMLInputElement | null {
@@ -555,7 +619,7 @@ class MountedPicker implements ModelPicker {
     const caret = before.picker.search()?.selectionStart ?? undefined;
     const scroll = panel?.querySelector(".mp-scroll")?.scrollTop;
     before.picker.forget();
-    this.show(new PickerList(this.o.role, this.models(), this.o.current, list?.state), { caret, scroll });
+    this.show(this.newList(list?.state ?? {}), { caret, scroll });
   }
 
   /** Lets go of the panel without touching it: the popover closed, or a new button took the list over. */
@@ -587,7 +651,7 @@ class MountedPicker implements ModelPicker {
     const missing = this.o.loading ? t("common.loading") : t("picker.failed");
     empty.textContent = list.rows.length > 0 ? "" : this.o.catalog ? t("picker.empty") : missing;
     empty.hidden = list.rows.length > 0;
-    this.panel.querySelector(".mp-foot")!.textContent = footText(this.o.catalog, list.rows.length);
+    this.panel.querySelector(".mp-foot")!.textContent = footText(this.o.catalog, list.modelCount());
     this.lit = null;
     if (scroll === "top") this.panel.querySelector(".mp-scroll")!.scrollTop = 0;
     this.paintActive(scroll === "center" || scroll === "nearest" ? scroll : null);

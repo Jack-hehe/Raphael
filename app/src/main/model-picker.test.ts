@@ -334,6 +334,35 @@ describe("the chosen model", () => {
   });
 });
 
+describe("a choice that is no model", () => {
+  // The speech recognition of this computer, which the settings offer with the speech models.
+  const LOCAL = { id: "local", name: "本機（離線，聲音不上傳）", price: "免費", detail: "聲音不離開這台電腦" };
+
+  test("comes first, is checked when it is chosen, and can be chosen", () => {
+    const list = new PickerList("stt", STTS, "local", {}, [LOCAL]);
+    expect(ids(list.rows)[0]).toBe("local");
+    expect([list.activeId(), list.chosen()]).toEqual(["local", "local"]);
+    const html = listHTML(list);
+    expect(html).toMatch(/data-id="local"[^>]*data-current/);
+    expect(html).toContain('<span class="mp-price num">免費</span>');
+    expect(html).toContain('<span class="mp-sub">聲音不離開這台電腦</span>');
+    expect(html).toContain('aria-label="本機（離線，聲音不上傳）, 聲音不離開這台電腦, 免費, 目前使用"');
+    expect(list.modelCount()).toBe(STTS.length);
+  });
+
+  test("is found by its name, and leaves a search it does not answer and a maker", () => {
+    const list = new PickerList("stt", STTS, "elevenlabs/scribe-v2", {}, [LOCAL]);
+    list.setQuery("本機");
+    expect(ids(list.rows)).toEqual(["local"]);
+    list.setQuery("whisper");
+    expect(ids(list.rows)).toEqual(["openai/whisper-large-v3-turbo"]);
+    list.setQuery("");
+    expect(list.activeId()).toBe("elevenlabs/scribe-v2");
+    list.setProvider("OpenAI");
+    expect(ids(list.rows)).toEqual(["openai/whisper-large-v3-turbo"]);
+  });
+});
+
 describe("the small print and the notices", () => {
   test("says how many models are shown and where their prices are from", () => {
     expect(footText(CATALOG, 8)).toBe("8 個模型 · 價格來自 OpenRouter，今天更新。實際花費依 OpenRouter 選用的供應商而定。");
@@ -351,8 +380,8 @@ describe("the small print and the notices", () => {
       ],
     };
     expect(replacementNotices(catalog)).toEqual([
-      "OpenRouter 已不再提供「tencent/hunyuan-a13b-instruct」，整理用的模型已改回預設的「GPT-6 Luna」。",
-      "OpenRouter 已不再提供「deepgram/nova-3」，雲端語音轉文字模型已改回預設的「Scribe v2」。",
+      "OpenRouter 已不再提供「tencent/hunyuan-a13b-instruct」，整理文字已改回預設的「GPT-6 Luna」。",
+      "OpenRouter 已不再提供「deepgram/nova-3」，語音轉文字已改回預設的「Scribe v2」。",
     ]);
     setLocale("en");
     expect(replacementNotices(catalog)[0]).toBe(
