@@ -15,19 +15,20 @@ model, not a choice.
 The roles (`ROLES`), and what each needs of a model, from the calls it makes:
 
 - `cleanup` (the `cleanup_model` setting) and `answer` (`agent_model`: Raphael's answers, his
-  routing when the router is "luna" or Jev fails, and his web search) call `complete_json`. It
-  asks for JSON that fits a schema (`response_format` with a strict `json_schema`), with no
-  reasoning (`reasoning.effort: "none"`) and a `max_tokens`, under `provider.require_parameters`,
-  which leaves out every provider that does not take all of those. So the model must list
-  `response_format`, `structured_outputs`, `reasoning` and `max_tokens` among its supported
-  parameters, and must be able to answer without reasoning first: not `reasoning.mandatory`, and
-  "none" among its efforts when it lists them. Tool calling is not needed: Raphael runs his tools
-  himself and hands the model their results, and the web search (`chat_text` with OpenRouter's
-  `web` plugin, which requires no parameter) takes any text model. The one thing that wants it is
-  the call that picks a plugin's tools (agent/plugins.py), which asks for `tools` and `tool_choice`
-  under the same `provider.require_parameters`: the catalog records it as the capability
-  `tool_calling`, so that a request whose answer model lacks it goes on without the plugins. No
-  role needs it to choose a model, and no model is refused for lacking it.
+  routing when Jev fails or is unsure, the app he picks to open, and his web search) call
+  `complete_json`. It asks for JSON that fits a schema (`response_format` with a strict
+  `json_schema`), with no reasoning (`reasoning.effort: "none"`) and a `max_tokens`, under
+  `provider.require_parameters`, which leaves out every provider that does not take all of those.
+  So the model must list `response_format`, `structured_outputs`, `reasoning` and `max_tokens`
+  among its supported parameters, and must be able to answer without reasoning first: not
+  `reasoning.mandatory`, and "none" among its efforts when it lists them. Tool calling is not
+  needed: Raphael runs his tools himself and hands the model their results, and the web search
+  (`chat_text` with OpenRouter's `web` plugin, which requires no parameter) takes any text model.
+  The one thing that wants it is the call that picks a plugin's tools (agent/plugins.py), which
+  asks for `tools` and `tool_choice` under the same `provider.require_parameters`: the catalog
+  records it as the capability `tool_calling`, so that a request whose answer model lacks it goes
+  on without the plugins. No role needs it to choose a model, and no model is refused for lacking
+  it.
 - `stt` (`stt_cloud_model`) calls `transcribe`, which sends the audio and the language to
   POST /audio/transcriptions: every transcription model takes that. Two of them are also given
   the dictionary (`STT_MODELS_WITH_HINTS`).

@@ -484,7 +484,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--models",
         default=",".join(CLEANUP_MODEL_CHOICES),
-        help="comma-separated OpenRouter model ids (default: the models the app offers)",
+        help="comma-separated OpenRouter model ids (default: Raphael's own cleanup models, the"
+        " default and its two fallbacks)",
     )
     parser.add_argument("--report", type=Path, default=Path("../eval/data/cleanup_report.md"))
     parser.add_argument(
