@@ -933,6 +933,18 @@ async def test_nothing_to_copy_is_said_and_nothing_is_asked(rig, client, actions
     assert rig.service._confirmations.waiting == 0 and actions.calls == []
 
 
+async def test_a_history_that_cannot_be_read_is_nothing_to_copy_and_the_log_says_why(
+    rig, client, actions, caplog
+):
+    rig.seed("台北天氣", "台北現在 24 度。")
+    rig.conn.execute("DROP TABLE agent_turns")
+    with caplog.at_level(logging.WARNING):
+        result = await ask_to_copy(rig, client)
+    assert (result["prefix"], result["text"]) == ("否", "無可複製的內容。")
+    assert actions.calls == []
+    assert "Could not read the conversation so far: OperationalError" in caplog.text
+
+
 async def test_small_talk_is_not_what_copy_copies(rig, client, actions):
     rig.seed("台北天氣？", "台北晴，25 度。")
     rig.seed("謝謝", "不客氣。", route="chat", prefix="了")

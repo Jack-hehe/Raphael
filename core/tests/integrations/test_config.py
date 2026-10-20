@@ -1,6 +1,8 @@
 """Tests for the plugins' settings file and the checks on what the user types."""
 
 import json
+import logging
+import re
 
 import pytest
 
@@ -244,6 +246,20 @@ def test_a_file_that_cannot_be_read_is_set_aside_and_the_plugins_start_again(tmp
     assert (tmp_path / "integrations.json.unreadable").read_text(encoding="utf-8") == "{not json"
     store.add(a_server())
     assert len(ConfigStore(tmp_path).servers()) == 1
+
+
+def test_a_file_that_cannot_be_set_aside_says_so_in_the_log(tmp_path, caplog):
+    (tmp_path / "integrations.json").write_text("{not json", encoding="utf-8")
+    (tmp_path / "integrations.json.unreadable").mkdir()  # in the way of the set-aside copy
+    with caplog.at_level(logging.WARNING, logger="raphael_core.integrations.config"):
+        assert ConfigStore(tmp_path).servers() == []
+    [warning] = caplog.records
+    # The next change replaces the file, so the log says that it was not kept, by types only.
+    assert re.fullmatch(
+        r"The plugins file is not valid \(\w+\) and could not be set aside \(\w+\): "
+        r"the next change replaces it",
+        warning.getMessage(),
+    )
 
 
 def test_an_entry_that_is_not_a_server_does_not_cost_the_others(tmp_path):

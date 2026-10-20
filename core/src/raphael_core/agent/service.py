@@ -697,17 +697,14 @@ class AgentService:
             found = quote.search(text)
             if found and found.group(1).strip():
                 return found.group(1).strip(), "copy_quote"
-        try:
-            last = next(
-                (
-                    turn
-                    for turn in reversed(self._history.recent(20))
-                    if turn.route in _ANSWER_ROUTES and (turn.detail or turn.text)
-                ),
-                None,
-            )
-        except sqlite3.Error:
-            last = None
+        last = next(
+            (
+                turn
+                for turn in reversed(self._context(20))
+                if turn.route in _ANSWER_ROUTES and (turn.detail or turn.text)
+            ),
+            None,
+        )
         if last is None:
             return None
         return _copy_text(last), "copy_last"

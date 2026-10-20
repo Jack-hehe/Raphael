@@ -356,12 +356,19 @@ class ConfigStore:
                     if server is not None and all(server.id != other.id for other in servers):
                         servers.append(server)
             except (ValueError, AttributeError) as exc:
-                logger.warning("The plugins file is not valid (%s); it was set aside", type(exc).__name__)
+                servers = []
+                kind = type(exc).__name__
                 try:
                     os.replace(self._path, self._path.with_name(FILE_NAME + ".unreadable"))
-                except OSError:
-                    pass
-                servers = []
+                except OSError as error:
+                    logger.warning(
+                        "The plugins file is not valid (%s) and could not be set aside (%s): the"
+                        " next change replaces it",
+                        kind,
+                        type(error).__name__,
+                    )
+                else:
+                    logger.warning("The plugins file is not valid (%s); it was set aside", kind)
         self._servers = servers
         return servers
 
