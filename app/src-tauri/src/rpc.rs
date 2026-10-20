@@ -6,6 +6,7 @@
 //! manager swap the pipe when the core restarts.
 //!
 //! Never log a request line or its params: `secrets.set_openrouter_key` carries the OpenRouter key.
+//! Nor a line the core printed: its replies carry what was dictated and what Raphael answered.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -241,8 +242,8 @@ impl RpcClient {
                 drop(self.notifications.send(notification))
             }
             None => log::warn!(
-                "ignoring a line from the core that is not a JSON-RPC reply or notification: {}",
-                preview(line)
+                "ignoring a line from the core that is not a JSON-RPC reply or notification ({})",
+                unreadable(line)
             ),
         }
     }
@@ -287,13 +288,12 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The start of a line, for a log message.
-fn preview(line: &str) -> String {
-    let mut shown: String = line.chars().take(120).collect();
-    if shown.len() < line.len() {
-        shown.push('…');
-    }
-    shown
+/// What the log says about a line from the core that is not a reply or a notification: how long
+/// it is, never what it says. The core keeps its stdout for the protocol alone (`claim_stdout`),
+/// so such a line is a reply cut short or gone wrong, and a reply can quote a dictation or an
+/// answer.
+fn unreadable(line: &str) -> String {
+    format!("{} characters", line.chars().count())
 }
 
 #[cfg(test)]
@@ -785,6 +785,19 @@ mod tests {
             notifications.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
+    }
+
+    #[test]
+    fn a_line_that_cannot_be_read_is_logged_by_its_length_alone() {
+        // A reply cut short when the core died, in the middle of the text of a dictation.
+        let cut = r#"{"jsonrpc":"2.0","id":12,"result":{"items":[{"id":3,"text":"明天下午三點開會"#;
+        assert!(parse_line(cut).is_none());
+        let logged = unreadable(cut);
+        assert_eq!(logged, format!("{} characters", cut.chars().count()));
+        assert!(
+            !logged.contains("明天") && !logged.contains("jsonrpc"),
+            "{logged}"
+        );
     }
 
     #[test]
