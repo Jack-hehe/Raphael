@@ -667,6 +667,8 @@ BAD_PARAMS = [
     ("history.list", {"limit": 2.5}, "history.list: limit float"),
     ("history.list", {"limit": True}, "history.list: limit bool"),
     ("history.list", {"before_ms": "x"}, "history.list: before_ms str"),
+    ("history.list", {"after_ms": "x"}, "history.list: after_ms str"),
+    ("history.list", {"after_ms": 1.5}, "history.list: after_ms float"),
     ("history.delete", {}, "history.delete: no id"),
     ("history.delete", {"id": "1"}, "history.delete: id str"),
     ("history.delete", {"id": True}, "history.delete: id bool"),
@@ -754,6 +756,8 @@ async def test_history_list_is_newest_first_and_filters_and_pages(router, conn):
     assert await texts(query="第3") == ["第3句"]
     assert await texts(query="原1") == ["第1句"]  # the query looks at the raw text too
     assert await texts(before_ms=1_003, limit=2) == ["第2句", "第1句"]
+    assert await texts(after_ms=1_003) == ["第4句", "第3句"]
+    assert await texts(after_ms=1_001, before_ms=1_004) == ["第3句", "第2句", "第1句"]
 
 
 async def test_history_latest_and_delete(router, conn):

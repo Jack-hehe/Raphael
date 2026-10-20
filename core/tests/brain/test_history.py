@@ -73,6 +73,21 @@ def test_list_pages_with_limit_and_before_ms(conn):
     assert [i.created_at_ms for i in h.list(query="你好", limit=1, before_ms=3000)] == [2000]
 
 
+def test_list_keeps_a_stretch_with_after_ms_and_before_ms(conn):
+    h = HistoryStore(conn)
+    for ms in (1000, 2000, 3000, 4000, 5000):
+        h.add(item(created_at_ms=ms))
+    # after_ms is inclusive and before_ms exclusive: a day is [midnight, next midnight)
+    assert [i.created_at_ms for i in h.list(after_ms=2000)] == [5000, 4000, 3000, 2000]
+    assert [i.created_at_ms for i in h.list(after_ms=2000, before_ms=4000)] == [3000, 2000]
+    assert [i.created_at_ms for i in h.list(after_ms=2000, before_ms=4000, limit=1)] == [3000]
+    # paging inside the stretch: the cursor lowers before_ms, the start stays
+    assert [i.created_at_ms for i in h.list(after_ms=2000, before_ms=3000)] == [2000]
+    assert h.list(after_ms=6000) == []
+    assert h.list(after_ms=4000, before_ms=4000) == []
+    assert [i.created_at_ms for i in h.list(query="你好", after_ms=4000)] == [5000, 4000]
+
+
 def test_items_from_the_same_millisecond_list_newest_added_first(conn):
     h = HistoryStore(conn)
     h.add(item(created_at_ms=1000, text="first"))

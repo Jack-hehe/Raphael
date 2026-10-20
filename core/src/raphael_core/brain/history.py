@@ -68,12 +68,18 @@ class HistoryStore:
         return None if row is None else _to_item(row)
 
     def list(
-        self, query: str | None = None, limit: int = 50, before_ms: int | None = None
+        self,
+        query: str | None = None,
+        limit: int = 50,
+        before_ms: int | None = None,
+        after_ms: int | None = None,
     ) -> list[HistoryItem]:
         """Newest first.
 
         `query` keeps the items whose text or raw text contains it. `before_ms` keeps the ones
-        created strictly before that time, which is the cursor for the next page.
+        created strictly before that time, which is the cursor for the next page. `after_ms` keeps
+        the ones created at or after that time: with `before_ms` it names a stretch, such as a day
+        (the page works out the day's midnights in its own zone).
         """
         conditions: list[str] = []
         params: list[object] = []
@@ -84,6 +90,9 @@ class HistoryStore:
         if before_ms is not None:
             conditions.append("created_at_ms < ?")
             params.append(before_ms)
+        if after_ms is not None:
+            conditions.append("created_at_ms >= ?")
+            params.append(after_ms)
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         rows = self._conn.execute(
             f"SELECT {_COLUMNS} FROM history{where} {_NEWEST_FIRST} LIMIT ?", [*params, limit]

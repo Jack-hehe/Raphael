@@ -392,11 +392,14 @@ class Brain:
         query = _opt_str(params, "query")
         limit = _opt_int(params, "limit")
         before_ms = _opt_int(params, "before_ms")
+        after_ms = _opt_int(params, "after_ms")
         # A limit is clamped into 1..200. The lower end matters: SQLite reads a negative LIMIT as
         # "no limit", which would hand over the whole history.
         limit = HISTORY_DEFAULT_LIMIT if limit is None else min(max(limit, 1), HISTORY_MAX_LIMIT)
         with _store_call():
-            items = self._history.list(query=query, limit=limit, before_ms=before_ms)
+            items = self._history.list(
+                query=query, limit=limit, before_ms=before_ms, after_ms=after_ms
+            )
         return {"items": [asdict(item) for item in items]}
 
     async def _history_latest(self, params: dict) -> dict:
