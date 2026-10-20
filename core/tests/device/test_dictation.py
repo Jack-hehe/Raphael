@@ -1405,7 +1405,7 @@ async def test_aclose_cancels_an_active_session(rig, router):
     await rig.service.aclose()  # and again, with nothing active
 
 
-# --- the recorder's thread (carry-forward 7) -----------------------------------------------------
+# --- the recorder's thread -----------------------------------------------------------------------
 
 
 async def test_the_last_frames_from_recorder_stop_are_kept(rig, router):
@@ -1520,7 +1520,7 @@ async def test_a_stop_that_is_itself_cancelled_ends_the_session(rig, router, bra
     assert await start(router, "s2") == {}
 
 
-# --- threads (carry-forward 2 and 3) -------------------------------------------------------------
+# --- threads -------------------------------------------------------------------------------------
 
 
 async def test_blocking_calls_run_off_the_loop_thread(rig, router):
@@ -1629,7 +1629,7 @@ async def test_a_segmenter_that_fails_ends_the_recording_with_an_error(rig, rout
     assert rig.segmenter.flush_calls == 1  # and it was reset for the next time
 
 
-# --- the segmenter is the user's, session after session (carry-forward 11) -----------------------
+# --- the segmenter is the user's, session after session ------------------------------------------
 
 
 async def test_audio_seconds_is_the_speech_of_this_dictation_only(rig, router):
@@ -1667,7 +1667,7 @@ async def test_a_cancelled_session_leaves_the_segmenter_flushed(rig, router):
     assert rig.segmenter.flush_calls == 1
 
 
-# --- the 300 s cap (carry-forward 9) -------------------------------------------------------------
+# --- the 300 s cap -------------------------------------------------------------------------------
 
 
 def test_the_cap_is_five_minutes():
@@ -1729,7 +1729,7 @@ async def test_a_stop_after_the_cap_is_not_slowed_by_the_queue(rig, router, monk
     assert r["audio_seconds"] == pytest.approx(2.0)
 
 
-# --- the microphone watchdog (carry-forward 12) --------------------------------------------------
+# --- the microphone watchdog ---------------------------------------------------------------------
 
 
 def test_the_default_stall_is_two_seconds():

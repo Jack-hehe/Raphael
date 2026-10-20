@@ -1,8 +1,10 @@
 """The core's entry point: the device side and the brain wired to one router.
 
-`build_app` makes an `App`, a Router with every method of the plan on it: the brain's (Task 8), the
-dictation service's (Task 12), the voice assistant's (`agent.*`, raphael_core.agent) and the few
-that belong to none of them (`core.*`, `models.*`, `audio.*`). `__main__` serves it on stdio.
+`build_app` makes an `App`, a Router with every method of the core on it: the brain's
+(raphael_core.brain), the dictation service's (`dictation.*`, raphael_core.device), the voice
+assistant's (`agent.*`, raphael_core.agent), the plugins' (`integrations.*`,
+raphael_core.integrations) and the few that belong to none of them (`core.*`, `models.*`,
+`audio.*`). `__main__` serves it on stdio.
 
 Start-up. The app's first calls come within seconds of the process starting (`core.hello`, the
 saved microphone, the settings page's questions), so the models, which take tens of seconds to
@@ -10,8 +12,8 @@ load, are never waited for: the first sherpa-onnx object of a process pays about
 Runtime start-up and the engine a few more. A worker thread imports the speech libraries (the
 "kit": numpy, sherpa-onnx, PortAudio), builds the dictation service and then loads the two models.
 A dictation started before they are loaded still records: the audio queues up, and
-`dictation.stop` waits for the models (spec section 5, Task 12). `dictation.*` and the methods
-that need the kit wait for them instead of failing.
+`dictation.stop` waits for the models (docs/design.md §5). `dictation.*` and the methods that need
+the kit wait for them instead of failing.
 
 The libraries themselves are imported before the core reads its first request (`__main__` calls
 `wait_for_libraries`). On Windows, numpy's DLLs hang while they load if another thread is blocked
@@ -93,7 +95,7 @@ DICTATION_SEGMENT_SECONDS = 10.0
 # The same for cloud speech-to-text: longer, so the model gets context (OpenRouter's upstream limit
 # is 60 s a request).
 CLOUD_SEGMENT_SECONDS = 30.0
-# More threads do not make Qwen3-ASR faster (Task 10).
+# More threads do not make Qwen3-ASR faster.
 STT_THREADS = 4
 # audio.level notifications a second, for the settings page's meter.
 LEVEL_HZ = 30.0
@@ -537,9 +539,10 @@ class App(Router):
 
     `data_dir` holds the database, and the models unless `manager` says otherwise (or
     RAPHAEL_MODELS_DIR does). With `fake_audio`, a WAV file plays in real time in place of the
-    microphone; with `fake_llm`, an in-process client returns the transcript unchanged and there is
-    an in-memory key, and the voice assistant does nothing to this computer. `agent_actions` is
-    what the assistant does to it otherwise (Windows, by default). `load_kit` is for tests.
+    microphone; with `fake_llm`, an in-process client returns the transcript unchanged, the key and
+    the plugins' secrets are kept in memory, and the voice assistant does nothing to this computer.
+    `agent_actions` is what the assistant does to it otherwise (Windows, by default). `load_kit` is
+    for tests.
     """
 
     def __init__(
@@ -1037,7 +1040,7 @@ def build_app(
     `data_dir` is where the database lives (default: Raphael's folder in the user's application
     data, or RAPHAEL_DATA_DIR). `fake_audio` is a WAV file that the recorder plays in real time in
     place of the microphone. `fake_llm` swaps OpenRouter for a client that returns the transcript
-    unchanged at no cost, and the Credential Manager for an in-memory key.
+    unchanged at no cost, and the Credential Manager for an in-memory key and plugin vault.
     """
     app = App(
         data_dir=paths.data_dir() if data_dir is None else Path(data_dir),

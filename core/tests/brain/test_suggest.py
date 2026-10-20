@@ -14,7 +14,7 @@ def suggest(texts, **kwargs):
     return suggest_words(texts, **kwargs)
 
 
-# --- the examples of the plan ---
+# --- what is suggested, and what is not ---
 
 
 def test_suggests_frequent_proper_nouns_only():

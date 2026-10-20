@@ -1,10 +1,10 @@
-"""The brain as RPC methods: dictation, history, dictionary, settings, the OpenRouter key, status,
-OpenRouter's catalog of models with their prices, and dictation statistics.
+"""The brain as RPC methods: dictation, cloud speech-to-text, history, dictionary, settings, the
+OpenRouter key, status, OpenRouter's catalog of models with their prices, and dictation statistics.
 
-`Brain` owns the stores and the cleanup service and registers its methods on a Router. The device
-side and the app reach it only through `router.call`, so every param arrives as JSON and every
-result leaves as JSON. What the methods take and return is in the plan (Task 8); what the table
-does not say is here:
+`Brain` owns the stores and the cleanup service and registers its methods on a Router (`register`
+lists them). The device side and the app reach it only through `router.call`, so every param
+arrives as JSON and every result leaves as JSON. What each method takes and returns is in its
+handler below; what a handler alone does not show is here:
 
 - Params are checked before anything happens. A missing or wrongly typed one is
   RpcError(INVALID_PARAMS), and so is a value that a store refuses (it raises ValueError,

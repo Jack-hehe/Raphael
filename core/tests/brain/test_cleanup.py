@@ -133,7 +133,7 @@ def cleanup_log(caplog):
     return "\n".join(r.getMessage() for r in records)
 
 
-# --- the tests of the plan ----------------------------------------------------------------------
+# --- the basics: the timeout, a cleanup and its fallbacks -----------------------------------------
 
 
 def test_timeout_scales_with_length():

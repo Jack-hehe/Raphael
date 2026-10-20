@@ -4,7 +4,7 @@
 brain clean it, `dictation.cancel` throws everything away. While the key is held the audio is cut
 into stretches of speech as it comes in, and each stretch is transcribed at once, so a long
 dictation is mostly done by the time the key is released and only the last stretch is left to wait
-for (spec section 5).
+for (docs/design.md §5).
 
 A session has a purpose, given to `dictation.start`: "dictation" (the default) or "agent", the voice
 assistant's question. It records and transcribes in the same way, but what its stop returns is not

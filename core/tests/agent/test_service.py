@@ -177,7 +177,7 @@ def rig(make_rig):
 # --- the contract ----------------------------------------------------------------------------------
 
 
-def test_the_five_methods_of_the_plan_are_registered(rig):
+def test_the_five_methods_of_the_assistant_are_registered(rig):
     assert rig.rpc.methods() == METHODS
 
 
@@ -1081,7 +1081,7 @@ async def test_a_second_request_of_a_session_replaces_the_first_that_is_still_go
 # --- the history -------------------------------------------------------------------------------------
 
 
-async def test_the_history_lists_the_newest_turn_first_with_the_fields_of_the_plan(rig, client):
+async def test_the_history_lists_the_newest_turn_first_with_the_fields_the_app_reads(rig, client):
     for n in range(3):
         client.decisions.append(decision("command", "volume_mute"))
         await rig.ask(f"靜音 {n}")

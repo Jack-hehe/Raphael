@@ -7,9 +7,8 @@ how the end-to-end runs speak without anyone speaking.
 
 The frames reach `on_frames` on PortAudio's callback thread (or the automatic-selection worker
 replaying a probe's startup frames), and a thread of its own for a file. `on_frames` must be quick
-and must not call `stop()`
-(PortAudio waits for the callback to return before it stops a stream, so a callback that stops its
-own stream waits for itself).
+and must not call `stop()` (PortAudio waits for the callback to return before it stops a stream, so
+a callback that stops its own stream waits for itself).
 
 Which microphone: the device list is that of PortAudio's default host API, MME on Windows. MME
 resamples through Windows, so a microphone opens at 16 kHz whatever rate it works at; WASAPI shared

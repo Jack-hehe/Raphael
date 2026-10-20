@@ -1,7 +1,7 @@
 """Cutting a stream of audio into stretches of speech with Silero VAD on sherpa-onnx.
 
 Dictation hears the microphone for as long as the key is down, and the speech-to-text engines take
-no more than 20 seconds at a time (Task 10). A `Segmenter` is fed the audio as it arrives, in
+no more than 20 seconds at a time (stt.py). A `Segmenter` is fed the audio as it arrives, in
 pieces of any size, and gives back the stretches that hold speech, each ready to transcribe.
 
 sherpa-onnx ends the whole process, with no exception to catch, when it is given a model path that

@@ -77,7 +77,8 @@ from raphael_core.languages import checked_languages, chinese_variant
 # The languages of a case that names none: the user speaks these three, often mixed.
 DEFAULT_LANGUAGES = ("zh-TW", "en-US", "ja-JP")
 
-# Generous: this measures the models, and the app's own timeout (3 to 15 s) is not what is tested.
+# Generous: the app gives a cleanup 10 s and a second for every 3 of audio (cleanup.timeout_for),
+# and a case is a line of speech. This measures the models, not that timeout.
 CALL_TIMEOUT_S = 30.0
 # A failure of these kinds will be the same for every call that follows.
 _ABORT_KINDS = ("auth", "credits")

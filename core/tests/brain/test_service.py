@@ -199,7 +199,7 @@ def assert_no_traceback_logged(caplog):
     assert all(record.exc_info is None for record in caplog.records), "a traceback was logged"
 
 
-# --- the tests of the plan ----------------------------------------------------------------------
+# --- the basics: a dictation, the key, the status and a setting -----------------------------------
 
 
 async def test_finalize_cleans_normalizes_and_saves(router, fake_client, keys):

@@ -1,4 +1,4 @@
-"""Tests for the entry point's wiring (Task 13).
+"""Tests for the entry point's wiring.
 
 The speech side is a fake kit: a microphone that delivers scripted chunks, a segmenter that makes
 one segment per chunk, an engine that always hears the same words, and the real DictationService.
@@ -1491,7 +1491,7 @@ async def test_a_dictation_with_the_wav_file_of_fake_audio_uses_it_instead_of_th
     assert kit.mics == [] and len(kit.wavs) == 1
     assert (
         kit.wavs[0].path == wav and kit.wavs[0].realtime is True
-    )  # in real time, as the plan says
+    )  # in real time, at the pace of speech
     await app.call("dictation.cancel", {"session_id": "s"})
     assert kit.wavs[0].stopped == 1
 

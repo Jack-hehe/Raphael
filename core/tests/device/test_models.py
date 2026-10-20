@@ -91,7 +91,7 @@ def leftovers(root) -> list[str]:
     return sorted(path.name for path in (root / ".tmp").iterdir())
 
 
-# --- The three tests from the plan ---
+# --- Installing: the download, its size and a safe unpacking ---
 
 
 def test_ensure_downloads_and_extracts(tmp_path):
@@ -158,7 +158,7 @@ def test_rejects_path_traversal(tmp_path):
 # --- The registry ---
 
 
-def test_the_registry_pins_the_models_and_files_the_plan_names():
+def test_the_registry_pins_the_models_and_their_files():
     release = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
     breeze_base = "https://huggingface.co/MediaTek-Research/Breeze-ASR-25-onnx-250806/resolve/main/"
     assert set(REGISTRY) == {"silero-vad", "qwen3-asr", "sensevoice", "breeze-asr-25"}

@@ -24,7 +24,7 @@ def tracker_at(conn, now_ms, tz=TPE):
     return SpendTracker(conn, now_ms=lambda: now_ms, tz=tz)
 
 
-# The two tests of the plan.
+# The month's and the days' totals.
 
 
 def test_month_total_uses_local_calendar_month(conn):

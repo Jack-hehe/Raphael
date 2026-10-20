@@ -10,7 +10,7 @@ from raphael_core.brain.settings import SettingsStore
 
 from .conftest import item
 
-# Schema v1 as the plan fixes it: every column with its type, NOT NULL, DEFAULT and primary key.
+# Schema v1 as it was made: every column with its type, NOT NULL, DEFAULT and primary key.
 SCHEMA_V1 = {
     "history": [
         "id INTEGER PK",
