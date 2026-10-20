@@ -167,13 +167,14 @@ fn require_main(webview: &Webview) -> Result<(), String> {
 
 // ---------- calls to the core ----------
 
-const ALLOWED_PREFIXES: [&str; 6] = [
+const ALLOWED_PREFIXES: [&str; 7] = [
     "history.",
     "dictionary.",
     "settings.",
     "secrets.",
     "status.",
     "agent.history.",
+    "integrations.",
 ];
 // `models.` is no prefix here: it names the speech models of this computer (`models.status`,
 // `models.ensure`) as well as OpenRouter's catalog (`models.catalog`), and each is let through by
@@ -191,8 +192,9 @@ const ALLOWED_METHODS: [&str; 7] = [
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
 /// settings (the `languages` setting too), the key, the status, the usage numbers, OpenRouter's
 /// catalog of models with their prices, the list of languages, the record of the conversations
-/// with Raphael, and the few device methods the settings page needs. Everything else is refused,
-/// the dictation methods and the ones that ask Raphael something above all.
+/// with Raphael, the plugins (the servers the user connects and the tier of each of their tools),
+/// and the few device methods the settings page needs. Everything else is refused, the dictation
+/// methods and the ones that ask Raphael something above all.
 pub fn is_allowed_method(m: &str) -> bool {
     ALLOWED_METHODS.contains(&m)
         || ALLOWED_PREFIXES
@@ -980,6 +982,14 @@ mod tests {
             "languages.list",
             "agent.history.list",
             "agent.history.clear",
+            "integrations.list",
+            "integrations.add",
+            "integrations.set_enabled",
+            "integrations.remove",
+            "integrations.refresh",
+            "integrations.tools",
+            "integrations.set_tier",
+            "integrations.audit",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
@@ -994,6 +1004,10 @@ mod tests {
             "agent.confirm",
             "agent.cancel",
             "brain.finalize_dictation",
+            "integrations", // the prefix alone is no method
+            "integrations.",
+            "Integrations.list",
+            "xintegrations.list",
             "audio.set_device", // goes through device_settings_set
             "audio.start",
             "pricing.get", // gone: models.catalog has every price
