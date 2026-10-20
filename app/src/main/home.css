@@ -1,7 +1,7 @@
 /* Home: a strip with the emblem and Raphael's report, then two columns. On the left the four
-   numbers, the personalization (a rose of the kinds of programs one dictates into) and the activity;
-   on the right the shortcuts and Raphael's latest words. The page scrolls; nothing has to fit one
-   screen. The colours are the app's own (styles.css); this file only lays them out. */
+   numbers, the activity and today's calendar; on the right the shortcuts and Raphael's latest
+   words. The page scrolls; nothing has to fit one screen. The colours are the app's own
+   (styles.css); this file only lays them out. */
 
 .page.page-home { max-width: 1160px; }
 
@@ -43,33 +43,6 @@
 .page-home .icard .v small:last-child { margin-right: 0; }
 .page-home .icard .v.none { font: 400 14px/31px var(--ui); color: var(--text-3); }
 .page-home .icard .k { margin-top: 4px; font-size: 12px; color: var(--text-3); }
-
-/* ---------- the personalization ---------- */
-/* One colour for each kind, from the app's own: blue, teal, gold, rose, sky and grey. */
-.page-home .persona { --cat-ai: var(--heat-4); --cat-dev: var(--ok); --cat-docs: var(--gold); --cat-chat: color-mix(in srgb, var(--err) 62%, #fff); --cat-web: var(--heat-2); --cat-other: color-mix(in srgb, var(--text-3) 35%, var(--panel)); }
-:root[data-theme="dark"] .page-home .persona { --cat-ai: var(--heat-3); --cat-chat: var(--err); --cat-other: var(--btn-edge); }
-.persona .p-ai { fill: var(--cat-ai); background: var(--cat-ai); }
-.persona .p-dev { fill: var(--cat-dev); background: var(--cat-dev); }
-.persona .p-docs { fill: var(--cat-docs); background: var(--cat-docs); }
-.persona .p-chat { fill: var(--cat-chat); background: var(--cat-chat); }
-.persona .p-web { fill: var(--cat-web); background: var(--cat-web); }
-.persona .p-other { fill: var(--cat-other); background: var(--cat-other); }
-.rose-ring { fill: none; stroke: var(--line); stroke-width: 1; }
-.rose-petal { stroke: var(--panel); stroke-width: 1.5; stroke-linejoin: round; }
-.rose-petal:hover { filter: brightness(1.07); }
-.page-home .persona-body { display: grid; grid-template-columns: 188px minmax(0, 1fr); gap: 8px 22px; align-items: center; }
-.page-home .persona .rose { display: block; width: 100%; max-width: 188px; height: auto; margin: 0 auto; }
-@container homemain (max-width: 440px) {
-  .page-home .persona-body { grid-template-columns: minmax(0, 1fr); }
-  .page-home .persona .rose { max-width: 168px; }
-}
-.page-home .persona-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.page-home .persona-table td { padding: 6px 0; vertical-align: top; border-bottom: 1px solid var(--line); }
-.page-home .persona-table tr:last-child td { border-bottom: 0; }
-.page-home .persona-table td:last-child { padding-left: 12px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-2); }
-.page-home .persona-table .sw { display: inline-block; width: 9px; height: 9px; margin-right: 8px; border-radius: 2px; }
-.page-home .persona-table .apps { display: block; margin: 1px 0 0 17px; font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
-.page-home .persona .why { margin: 12px 0 0; font: 600 14px/1.65 var(--voice); color: var(--text); text-wrap: pretty; }
 
 /* ---------- the activity ---------- */
 .page-home .activity-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 12px; }
@@ -129,11 +102,7 @@
   .page-home .icard .v { font-size: 28px; }
   .page-home .icard .v small { font-size: 14px; }
   .page-home .icard .k { font-size: 14px; }
-  .page-home .persona-body { grid-template-columns: 220px minmax(0, 1fr); }
-  .page-home .persona .rose { max-width: 220px; }
-  .page-home .persona-table { font-size: 14px; }
-  .page-home .persona-table .apps, .page-home .activity-sum, .page-home .kc-name { font-size: 13px; }
-  .page-home .persona .why { font-size: 15px; }
+  .page-home .activity-sum, .page-home .kc-name { font-size: 13px; }
   .page-home .kc-name { font-size: 14px; }
   .page-home .mini-a { font-size: 14px; }
   .page-home .mini-q, .page-home .mini-time { font-size: 13px; }

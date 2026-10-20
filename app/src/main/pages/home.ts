@@ -1,8 +1,7 @@
 // Home: a strip with the emblem and Raphael's report, then two columns (spec §12, draft D). On the
-// left the four numbers (words, time saved, speed, time spoken), the personalization (which kinds of
-// programs one dictates into) and the activity with its days and streaks (`stats.summary`, all from
-// this computer's history); on the right the shortcuts and Raphael's latest words
-// (`agent.history.list`). The key, connection and spend are in the settings; the report on the strip
+// left the four numbers (words, time saved, speed, time spoken) and the activity with its days and
+// streaks (`stats.summary`, all from this computer's history); on the right the shortcuts and
+// Raphael's latest words (`agent.history.list`). The key, connection and spend are in the settings; the report on the strip
 // says so, with a button, when one of them keeps dictation from working fully. The page scrolls.
 // Loads when shown and every 30 seconds.
 
@@ -15,8 +14,6 @@ import { homeHint } from "../dictation";
 import { buildGrid, heatmapSVG, weeksThatFit } from "../heatmap";
 import { bindingLabels } from "../keys";
 import { loadingHTML } from "../loading";
-import { personalize } from "../categories";
-import { personaHTML } from "../persona";
 import { buildReport, coreDownReport } from "../report";
 import { Stage } from "../stage";
 import { durationParts, formatCount, hasDictations, periodSpeed } from "../stats";
@@ -178,9 +175,7 @@ export function createHome(app: AppContext): Page {
 
     stats = s;
     if (s && hasDictations(s)) {
-      // `by_app` is missing from an older core: then the card is just not there
-      const people = personalize(s.by_app);
-      usage.innerHTML = statsHTML(s) + (people ? personaHTML(people) : "") + activityHTML(s);
+      usage.innerHTML = statsHTML(s) + activityHTML(s);
       paintGrid();
     } else if (s) {
       usage.innerHTML = t("home.025") + t("home.026") + `<p class="hint">${hintHTML()}</p></section>`;
