@@ -369,7 +369,8 @@ export function openMenu(
     options
       .map(
         (o) =>
-          `<button type="button" role="menuitemradio" tabindex="-1" data-value="${esc(o.value)}" aria-checked="${o.value === current}">` +
+          `<button type="button" role="menuitemradio" tabindex="-1" data-value="${esc(o.value)}" aria-checked="${o.value === current}"` +
+          `${o.title ? ` title="${esc(o.title)}"` : ""}>` +
           `<span class="ck">${o.value === current ? CHECK : ""}</span>` +
           (o.desc
             ? `<span class="mtd"><span class="mt">${esc(o.label)}</span><span class="mdesc">${esc(o.desc)}</span></span>`
@@ -390,6 +391,11 @@ export function openMenu(
     className: `menu${detailed ? " detailed" : ""}${described ? " described" : ""}`,
     role: "menu",
     label: anchor.getAttribute("aria-label") ?? undefined,
+  });
+  // The menu is only so wide (styles.css): a label it cuts short has its whole text as a tooltip.
+  el.querySelectorAll<HTMLElement>("button").forEach((button) => {
+    const label = button.querySelector<HTMLElement>(".mt");
+    if (label && !button.hasAttribute("title") && label.scrollWidth > label.clientWidth) button.setAttribute("title", label.textContent ?? "");
   });
   el.addEventListener("click", (e) => {
     const pick = (e.target as Element).closest("button");

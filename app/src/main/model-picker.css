@@ -14,7 +14,7 @@
 
 /* ---------- the panel ---------- */
 /* Visible overflow lets a dropdown of the head hang below a short panel; the list scrolls itself. */
-.menu.mp-panel { width: min(440px, calc(100vw - 16px)); padding: 0; border-radius: 12px; overflow: visible; display: flex; flex-direction: column; }
+.menu.mp-panel { width: min(440px, calc(100vw - 16px)); max-width: calc(100vw - 16px); padding: 0; border-radius: 12px; overflow: visible; display: flex; flex-direction: column; }
 .mp-head { flex: none; display: grid; gap: 8px; padding: 12px 12px 10px; }
 .mp-head .mp-search { display: flex; width: 100%; }
 .mp-head .mp-search .i { color: var(--text-3); }

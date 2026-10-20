@@ -120,6 +120,8 @@ class FakeElement extends FakeNode {
   querySelector(selector: string): FakeElement | null {
     if (selector === "button") return this.querySelectorAll(selector)[0] ?? null;
     if (selector === '[aria-checked="true"]') return this.children.find((child) => child.getAttribute("aria-checked") === "true") ?? null;
+    // An item's label, which the menu looks at for a tooltip when it is cut: the stand-in draws none.
+    if (selector === ".mt") return null;
     throw new Error(`the stand-in does not know ${selector}`);
   }
   addEventListener(): void {}
