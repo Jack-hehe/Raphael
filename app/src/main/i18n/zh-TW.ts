@@ -366,6 +366,8 @@ export const zhTW = {
   "settings.agentCityDesc": "問天氣時查詢這個城市",
   "settings.agentCityHint": "例：台北",
   "settings.agentCityEmpty": "請輸入城市名稱",
+  "settings.pauseMedia": "說話時暫停播放中的音樂和影片",
+  "settings.pauseMediaDesc": "拉斐爾聆聽時先暫停，錄音結束後自動繼續播放",
   "settings.keyTaken": "這組按鍵已經是「{p0}」的快捷鍵",
   "agent.more": "全部",
   "home.activeDays": "活躍 {p0} 天",

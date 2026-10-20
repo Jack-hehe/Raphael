@@ -367,6 +367,8 @@ export const ja = {
   "settings.agentCityDesc": "天気を聞いたときに調べる都市",
   "settings.agentCityHint": "例：東京",
   "settings.agentCityEmpty": "都市名を入力してください",
+  "settings.pauseMedia": "話している間は再生中の音楽や動画を一時停止",
+  "settings.pauseMediaDesc": "ラファエルが聞いている間は一時停止し、終わると自動で再生を再開します",
   "settings.keyTaken": "このショートカットはすでに「{p0}」に使われています",
   "agent.more": "すべて",
   "home.activeDays": "{p0} 日利用",

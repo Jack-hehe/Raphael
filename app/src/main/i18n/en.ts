@@ -367,6 +367,8 @@ export const en = {
   "settings.agentCityDesc": "Used when you ask about the weather",
   "settings.agentCityHint": "e.g. Taipei",
   "settings.agentCityEmpty": "Enter a city",
+  "settings.pauseMedia": "Pause media while I speak",
+  "settings.pauseMediaDesc": "Music and video that are playing pause while Raphael listens, then play again",
   "settings.keyTaken": "This shortcut is already used for {p0}",
   "agent.more": "All",
   "home.activeDays": "{p0} active days",

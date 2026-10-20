@@ -1,7 +1,7 @@
 // Settings: a panel over the main window with five tabs: 一般, 聽寫, 拉斐爾, 用量 and 關於 (spec
 // §12.3). A change takes effect at once; there is no save button. The settings of the brain (limit,
 // models, language, speech-to-text, retention, how Raphael answers) go to the core with
-// `settings.set`; the settings of this computer (hotkeys, microphone, emblem, theme, autostart) go
+// `settings.set`; the settings of this computer (hotkeys, microphone, pausing media, emblem, theme, autostart) go
 // to the Rust side with `device_settings_set`.
 
 import { isUiLocale, onLocaleChange, t } from "../i18n";
@@ -37,6 +37,7 @@ import {
 import { KeyRecorder, bindingClash, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "../keys";
 import { MonitorSwitch } from "../monitor";
 import { automaticMicrophoneLabel } from "../microphone";
+import { PAUSE_MEDIA_KEY, pauseMediaRow, pauseMediaToggle } from "../pause-media";
 import { cleanupPriceShort, cleanupPriceText, priceOf, pricingNote, sttPriceShort, sttPriceText } from "../pricing";
 import { runOutDay } from "../report";
 import { WARN_FROM, spendVisual, spentShare } from "../spend";
@@ -528,6 +529,7 @@ export function createSettings(app: AppContext): Page {
       ]) +
       section("mic", t("settings.062"), [
         row(t("onboarding.021"), t("settings.063"), meter() + sel(microphoneChoices(), d.microphone ?? AUTO_MICROPHONE, t("onboarding.021"), ' data-k="mic"') + iconBtn("refresh", t("action.refreshMicrophones"), ' data-act="mic-refresh"')),
+        pauseMediaRow(d.pause_media),
       ]) +
       section("wave", t("settings.064"), modelRows(), priceSpan("note")) +
       section("book", t("settings.sectionDictionary"), [
@@ -1101,6 +1103,11 @@ export function createSettings(app: AppContext): Page {
 
     if (target.closest('.tg[data-k="autostart"]')) {
       void changeDevice({ autostart: !app.device().autostart });
+      return;
+    }
+
+    if (target.closest(`.tg[data-k="${PAUSE_MEDIA_KEY}"]`)) {
+      void changeDevice(pauseMediaToggle(app.device()));
       return;
     }
 
