@@ -20,8 +20,8 @@
 //!
 //! The page can draw the emblem in a window that nobody sees: something else may have hidden,
 //! minimized or covered the window, or the shell may keep it on another virtual desktop. So each
-//! time the emblem appears, [`sight`] looks at the window from the main thread and writes what it
-//! saw to the log.
+//! time the emblem appears, [`sight`] looks at the window from the main thread, writes what it saw
+//! to the log, and puts right what it can, without ever activating the window.
 
 mod sight;
 
@@ -811,10 +811,7 @@ fn passive_ex_style(style: isize) -> isize {
 /// `SetWindowLongPtrW` would wait for the main thread, and that is a deadlock waiting to happen.
 #[cfg(windows)]
 fn apply_passive_style(window: &WebviewWindow) {
-    use windows::Win32::{
-        Foundation::HWND,
-        UI::WindowsAndMessaging::{GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW},
-    };
+    use windows::Win32::Foundation::HWND;
 
     let hwnd = match window.hwnd() {
         Ok(hwnd) => hwnd.0 as isize,
@@ -824,16 +821,9 @@ fn apply_passive_style(window: &WebviewWindow) {
         }
     };
     let change = window.run_on_main_thread(move || {
-        let hwnd = HWND(hwnd as *mut _);
         // SAFETY: `hwnd` is the overlay window, which lives as long as the app, and this runs on
         // the thread that owns it.
-        unsafe {
-            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            let wanted = passive_ex_style(style);
-            if wanted != style {
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
-            }
-        }
+        unsafe { restore_passive_style(HWND(hwnd as *mut _)) };
     });
     if let Err(err) = change {
         log::warn!("could not keep the overlay out of Alt+Tab and out of focus: {err}");
@@ -842,6 +832,29 @@ fn apply_passive_style(window: &WebviewWindow) {
 
 #[cfg(not(windows))]
 fn apply_passive_style(_window: &WebviewWindow) {}
+
+/// Gives the window [`passive_ex_style`] if it lost it, and says whether it had.
+///
+/// # Safety
+///
+/// `hwnd` must be a window that the calling thread owns (see [`apply_passive_style`]).
+#[cfg(windows)]
+unsafe fn restore_passive_style(hwnd: windows::Win32::Foundation::HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW,
+    };
+
+    // SAFETY: the caller owns `hwnd`, so the style cannot change between the read and the write.
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let wanted = passive_ex_style(style);
+        if wanted == style {
+            return false;
+        }
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
+    }
+    true
+}
 
 /// The window's handle as a number that can go to the main thread, or `None` (logged) if there is
 /// none. It never changes: the window lives as long as the app.
@@ -861,6 +874,13 @@ fn native_handle(window: &WebviewWindow) -> Option<isize> {
 #[cfg(not(windows))]
 fn native_handle(_window: &WebviewWindow) -> Option<isize> {
     None
+}
+
+/// A Windows error as its HRESULT, for the log: the system's message for it is in the user's
+/// language, and the code is what can be looked up.
+#[cfg(windows)]
+fn hresult(err: &windows::core::Error) -> String {
+    format!("0x{:08X}", err.code().0 as u32)
 }
 
 #[cfg(test)]

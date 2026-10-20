@@ -1,10 +1,16 @@
-//! Whether the person can see the overlay window.
+//! Whether the person can see the overlay window, and what is done when they may not.
 //!
 //! The page can draw the emblem in a window that nobody sees: one that something hid or
 //! minimized, that the shell cloaked because it stayed on another virtual desktop, that another
 //! topmost window covers, or that is away from the work area. Just before the emblem appears,
-//! [`check`] looks at the window from the main thread and writes what it saw to the log: at debug
-//! level every time, at info level when something is wrong.
+//! [`check`] looks at the window from the main thread, writes what it saw to the log (at debug
+//! level every time, at info level when something is wrong), and puts right what it can
+//! ([`remedies`]).
+//!
+//! Nothing here activates the window or takes the focus from the app the person types in. The
+//! window keeps `WS_EX_NOACTIVATE`, which is put back first if it went missing; it is raised
+//! with `SWP_NOACTIVATE`, shown with `SW_SHOWNOACTIVATE`, and moved to the current virtual desktop
+//! by the shell, which changes where it is shown, not which window is active.
 //!
 //! Of the other windows, only how many cover the emblem is written down, never a title or the name
 //! of an app.
@@ -235,6 +241,85 @@ fn cloakers(flags: u32) -> String {
     who.join(" and ")
 }
 
+// ---------- what is done about it ----------
+
+/// What is done to bring the window into sight. None of it activates the window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Remedy {
+    /// Puts back the passive extended style, `WS_EX_NOACTIVATE` above all, before anything else
+    /// touches the window.
+    RestoreStyle,
+    /// `IVirtualDesktopManager::MoveWindowToDesktop`, to the desktop the person is looking at. A
+    /// process may move its own windows between desktops.
+    MoveToCurrentDesktop,
+    /// Lifts the window's own cloak (`DWMWA_CLOAK`). The shell's cloak is the shell's: it hides
+    /// windows of other desktops, and moving the window to this one lifts it.
+    Uncloak,
+    /// `ShowWindow(SW_SHOWNOACTIVATE)`: shows the window, or restores it, without activating it.
+    ShowWithoutActivating,
+    /// Puts the window back where it was placed (`SWP_NOACTIVATE`), for when placing it did not
+    /// take, as for a window that was minimized.
+    Reposition,
+    /// `ICoreWebView2Controller::put_IsVisible(TRUE)`: a webview that is not visible renders
+    /// nothing.
+    ShowWebview,
+    /// Fits the webview to the window's client area again, as wry does after every resize.
+    FitWebview,
+    /// `SetWindowPos(HWND_TOPMOST)` with `SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+    /// SWP_NOOWNERZORDER`: to the top of the topmost windows. Done on every show, because another
+    /// topmost window may have come over the corner since the last one.
+    Raise,
+}
+
+/// What to do about `sight`, in the order it is done: the style first, so that nothing after it
+/// can activate the window; the window shown and in place before its webview is fitted to it; and
+/// raised last, once nothing else will move it.
+pub(super) fn remedies(sight: &Sight) -> Vec<Remedy> {
+    let mut remedies = Vec::new();
+    if !sight.passive {
+        remedies.push(Remedy::RestoreStyle);
+    }
+    if sight.desktop == Desktop::Elsewhere {
+        remedies.push(Remedy::MoveToCurrentDesktop);
+    }
+    if sight.cloaked.is_some_and(|flags| flags & CLOAKED_APP != 0) {
+        remedies.push(Remedy::Uncloak);
+    }
+    if !sight.visible || sight.minimized {
+        remedies.push(Remedy::ShowWithoutActivating);
+    }
+    if sight.placed() == Some(false) {
+        remedies.push(Remedy::Reposition);
+    }
+    if let Some(webview) = sight.webview {
+        if !webview.visible {
+            remedies.push(Remedy::ShowWebview);
+        }
+        // A minimized window is fitted by wry when it is restored.
+        if !webview.fitted && !sight.minimized {
+            remedies.push(Remedy::FitWebview);
+        }
+    }
+    remedies.push(Remedy::Raise);
+    remedies
+}
+
+impl Remedy {
+    /// What is being done, for the log.
+    fn text(self) -> &'static str {
+        match self {
+            Remedy::RestoreStyle => "putting back its passive style",
+            Remedy::MoveToCurrentDesktop => "moving it to this virtual desktop",
+            Remedy::Uncloak => "lifting its cloak",
+            Remedy::ShowWithoutActivating => "showing it without activating it",
+            Remedy::Reposition => "putting it back where it was placed",
+            Remedy::ShowWebview => "showing its webview",
+            Remedy::FitWebview => "fitting its webview to it",
+            Remedy::Raise => "raising it to the top",
+        }
+    }
+}
+
 // ---------- what the log says ----------
 
 fn yes_no(value: bool) -> &'static str {
@@ -326,6 +411,15 @@ pub(super) fn problems_text(problems: &[Problem]) -> String {
         .join(", ")
 }
 
+/// The remedies as a list in words.
+pub(super) fn remedies_text(remedies: &[Remedy]) -> String {
+    remedies
+        .iter()
+        .map(|remedy| remedy.text())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// How long a check took, for the log.
 fn took(elapsed: std::time::Duration) -> String {
     format!("{:.1} ms", elapsed.as_secs_f64() * 1000.0)
@@ -353,17 +447,19 @@ mod native {
         Win32::{
             Foundation::{HWND, POINT, RECT},
             Graphics::{
-                Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
+                Dwm::{DWMWA_CLOAK, DWMWA_CLOAKED, DwmGetWindowAttribute, DwmSetWindowAttribute},
                 Gdi::ClientToScreen,
             },
             System::Com::{CLSCTX_ALL, CoCreateInstance},
             UI::{
                 Shell::{IVirtualDesktopManager, VirtualDesktopManager},
                 WindowsAndMessaging::{
-                    GW_HWNDPREV, GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetForegroundWindow,
-                    GetLayeredWindowAttributes, GetWindow, GetWindowLongPtrW, GetWindowRect,
-                    IsIconic, IsWindowVisible, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA,
-                    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_VISIBLE,
+                    GW_HWNDNEXT, GW_HWNDPREV, GWL_EXSTYLE, GWL_STYLE, GetClientRect,
+                    GetForegroundWindow, GetLayeredWindowAttributes, GetTopWindow, GetWindow,
+                    GetWindowLongPtrW, GetWindowRect, HWND_TOPMOST, IsIconic, IsWindowVisible,
+                    LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
+                    SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+                    ShowWindow, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_VISIBLE,
                 },
             },
         },
@@ -371,10 +467,10 @@ mod native {
     };
 
     use super::{
-        Desktop, Foreground, Sight, WebviewSight, contains, emblem_centre, problems, problems_text,
-        state_line, took,
+        Desktop, Foreground, Remedy, Sight, WebviewSight, contains, emblem_centre, problems,
+        problems_text, remedies, remedies_text, state_line, took,
     };
-    use crate::overlay::{Placement, Rect, passive_ex_style};
+    use crate::overlay::{Placement, Rect, hresult, passive_ex_style, restore_passive_style};
 
     /// How many windows above the overlay are looked at, at most. There are rarely more than a
     /// few dozen; the bound keeps a z-order that changes under the walk from making it endless.
@@ -406,9 +502,10 @@ mod native {
         }
     }
 
-    /// Looks at the overlay window `hwnd`, which `placement` says where it was just put, and
-    /// writes what it saw to the log. It runs on the main thread, which owns the window and the
-    /// webview's controller (wry's `with_webview` hands it over there); the caller does not wait.
+    /// Looks at the overlay window `hwnd`, which `placement` says where it was just put, writes
+    /// what it saw to the log and puts right what it can. It runs on the main thread, which owns
+    /// the window and the webview's controller (wry's `with_webview` hands it over there); the
+    /// caller does not wait.
     pub(in crate::overlay) fn check(
         window: &WebviewWindow,
         hwnd: isize,
@@ -421,23 +518,113 @@ mod native {
             };
             let started = Instant::now();
             let controller = webview.controller();
+            let hwnd = HWND(hwnd as *mut c_void);
             // SAFETY: `hwnd` is the overlay window, which lives as long as the app, and this runs
             // on the main thread, which owns it and the controller.
-            let sight = unsafe { look(HWND(hwnd as *mut c_void), placement, &controller) };
+            let sight = unsafe { look(hwnd, placement, &controller) };
             let wrong = problems(&sight);
+            let remedies = remedies(&sight);
+            // SAFETY: as above.
+            unsafe { apply(hwnd, placement, &controller, &remedies) };
             let elapsed = took(started.elapsed());
             if wrong.is_empty() {
                 log::debug!("overlay: window check in {elapsed}: {}", state_line(&sight));
-            } else {
-                log::info!(
-                    "overlay: the window may be out of sight ({}): {} (in {elapsed})",
-                    problems_text(&wrong),
-                    state_line(&sight)
-                );
+                return;
             }
+            log::info!(
+                "overlay: the window may be out of sight ({}); {} (in {elapsed}). It was: {}",
+                problems_text(&wrong),
+                remedies_text(&remedies),
+                state_line(&sight)
+            );
+            // SAFETY: as above.
+            let after = unsafe { look(hwnd, placement, &controller) };
+            log::info!("overlay: after that, it is: {}", state_line(&after));
         });
         if let Err(err) = posted {
             log::warn!("could not check whether the overlay window can be seen: {err}");
+        }
+    }
+
+    /// Does `remedies` to the window, in their order. A remedy that fails is logged and the next
+    /// one is still done.
+    ///
+    /// # Safety
+    ///
+    /// `hwnd` must be the overlay window, and the caller its thread.
+    unsafe fn apply(
+        hwnd: HWND,
+        placement: Option<Placement>,
+        controller: &ICoreWebView2Controller,
+        remedies: &[Remedy],
+    ) {
+        for &remedy in remedies {
+            // SAFETY: the caller owns `hwnd` and the controller, and every pointer passed is to a
+            // live local.
+            let done = unsafe {
+                match remedy {
+                    Remedy::RestoreStyle => {
+                        restore_passive_style(hwnd);
+                        Ok(())
+                    }
+                    Remedy::MoveToCurrentDesktop => move_to_current_desktop(hwnd),
+                    Remedy::Uncloak => {
+                        let off = BOOL(0);
+                        DwmSetWindowAttribute(
+                            hwnd,
+                            DWMWA_CLOAK,
+                            (&raw const off).cast(),
+                            size_of::<BOOL>() as u32,
+                        )
+                        .map_err(|err| hresult(&err))
+                    }
+                    Remedy::ShowWithoutActivating => {
+                        // It returns whether the window was visible before, not whether it
+                        // worked.
+                        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                        Ok(())
+                    }
+                    Remedy::Reposition => match placement {
+                        Some(placement) => {
+                            let to = placement.window;
+                            SetWindowPos(
+                                hwnd,
+                                None,
+                                to.x,
+                                to.y,
+                                to.w,
+                                to.h,
+                                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+                            )
+                            .map_err(|err| hresult(&err))
+                        }
+                        None => Ok(()),
+                    },
+                    Remedy::ShowWebview => {
+                        controller.SetIsVisible(true).map_err(|err| hresult(&err))
+                    }
+                    Remedy::FitWebview => fit_webview(hwnd, controller),
+                    Remedy::Raise => SetWindowPos(
+                        hwnd,
+                        Some(HWND_TOPMOST),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+                    )
+                    .map_err(|err| hresult(&err)),
+                }
+            };
+            if let Err(err) = done {
+                log::info!("overlay: {} did not work: {err}", remedy.text());
+            }
+        }
+        // None of the above is part of the extended style, which tao rebuilds only when its own
+        // flags or the size change; but nothing here may leave the window able to be activated.
+        // SAFETY: the caller owns `hwnd`.
+        if unsafe { restore_passive_style(hwnd) } {
+            log::info!("overlay: the window lost its passive style while it was put right");
         }
     }
 
@@ -618,6 +805,85 @@ mod native {
         unsafe { manager.GetWindowDesktopId(hwnd) }
             .ok()
             .filter(|id| *id != GUID::zeroed())
+    }
+
+    /// Moves the overlay to the desktop the person is looking at.
+    fn move_to_current_desktop(hwnd: HWND) -> Result<(), String> {
+        let manager = desktops().map_err(|err| hresult(&err))?;
+        // SAFETY: only reads the other windows.
+        let Some(id) = (unsafe { current_desktop(&manager, hwnd) }) else {
+            return Err("no window on this desktop says which desktop it is".into());
+        };
+        // SAFETY: as in `desktop`; the id outlives the call.
+        unsafe { manager.MoveWindowToDesktop(hwnd, &id) }.map_err(|err| hresult(&err))
+    }
+
+    /// The id of the desktop the person is looking at, which the shell has no documented call to
+    /// give: the desktop of the window they are using, or else of the first window from the top
+    /// that is on this desktop and belongs to it.
+    unsafe fn current_desktop(manager: &IVirtualDesktopManager, overlay: HWND) -> Option<GUID> {
+        let here = |window: HWND| -> Option<GUID> {
+            // SAFETY: as in `desktop`.
+            let on = unsafe { manager.IsWindowOnCurrentVirtualDesktop(window) }.ok()?;
+            if on.as_bool() {
+                desktop_id(manager, window)
+            } else {
+                None
+            }
+        };
+        // SAFETY: only reads; a handle that dies during the walk makes `GetWindow` fail.
+        unsafe {
+            let foreground = GetForegroundWindow();
+            if !foreground.is_invalid()
+                && foreground != overlay
+                && let Some(id) = here(foreground)
+            {
+                return Some(id);
+            }
+            let mut next = GetTopWindow(None);
+            for _ in 0..WALK_MAX {
+                let Ok(window) = next else {
+                    break;
+                };
+                if window != overlay
+                    && IsWindowVisible(window).as_bool()
+                    && cloaked(window) == Some(0)
+                    && let Some(id) = here(window)
+                {
+                    return Some(id);
+                }
+                next = GetWindow(window, GW_HWNDNEXT);
+            }
+        }
+        None
+    }
+
+    /// Gives the webview the window's whole client area again, as wry does on every resize: the
+    /// controller's bounds, and the size of the window that hosts it.
+    unsafe fn fit_webview(hwnd: HWND, controller: &ICoreWebView2Controller) -> Result<(), String> {
+        // SAFETY: the caller owns `hwnd` and the controller.
+        unsafe {
+            let (width, height) = client_size(hwnd).ok_or("the window has no client area")?;
+            controller
+                .SetBounds(RECT {
+                    left: 0,
+                    top: 0,
+                    right: width,
+                    bottom: height,
+                })
+                .map_err(|err| hresult(&err))?;
+            let host = host_window(controller).ok_or("the webview has no host window")?;
+            SetWindowPos(
+                host,
+                None,
+                0,
+                0,
+                width,
+                height,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .map_err(|err| hresult(&err))
+        }
     }
 
     /// The window that WebView2 draws in, which wry made inside the overlay window.
@@ -882,6 +1148,177 @@ mod tests {
             problems_text(&[Problem::Cloaked(CLOAKED_APP | 0x20)]),
             "cloaked by the app and 0x20"
         );
+    }
+
+    // ---- what is done about it ----
+
+    #[test]
+    fn a_window_in_sight_is_only_raised() {
+        // Another topmost window may have come over the corner since the last show.
+        assert_eq!(remedies(&in_sight()), [Remedy::Raise]);
+    }
+
+    #[test]
+    fn each_way_of_being_out_of_sight_gets_its_remedy() {
+        use Remedy::*;
+        let cases: [(Spoil, &[Remedy]); 14] = [
+            (|s| s.visible = false, &[ShowWithoutActivating, Raise]),
+            (|s| s.cloaked = Some(CLOAKED_APP), &[Uncloak, Raise]),
+            (|s| s.passive = false, &[RestoreStyle, Raise]),
+            (
+                |s| s.desktop = Desktop::Elsewhere,
+                &[MoveToCurrentDesktop, Raise],
+            ),
+            (|s| s.rect.x -= 300, &[Reposition, Raise]),
+            (
+                |s| {
+                    s.webview = Some(WebviewSight {
+                        visible: false,
+                        fitted: true,
+                    })
+                },
+                &[ShowWebview, Raise],
+            ),
+            (
+                |s| {
+                    s.webview = Some(WebviewSight {
+                        visible: true,
+                        fitted: false,
+                    })
+                },
+                &[FitWebview, Raise],
+            ),
+            // the raise is what there is for these
+            (|s| s.topmost = false, &[Raise]),
+            (|s| s.over_emblem = 1, &[Raise]),
+            // and these are only reported: the shell's cloak is lifted by moving the window to
+            // this desktop when it is on another, an alpha that someone else set is theirs, and a
+            // window that took the focus cannot be made to give it back here
+            (|s| s.cloaked = Some(CLOAKED_SHELL), &[Raise]),
+            (|s| s.cloaked = Some(CLOAKED_INHERITED), &[Raise]),
+            (|s| s.alpha = Some(0), &[Raise]),
+            (|s| s.foreground = Foreground::Overlay, &[Raise]),
+            // a work area that the placing itself missed: placing it again would change nothing
+            (
+                |s| {
+                    let placement = s.placement.as_mut().unwrap();
+                    placement.work.w = 1000;
+                },
+                &[Raise],
+            ),
+        ];
+        for (spoil, expected) in cases {
+            let mut sight = in_sight();
+            spoil(&mut sight);
+            assert_eq!(remedies(&sight), expected, "{sight:?}");
+            assert!(!problems(&sight).is_empty(), "{sight:?}");
+        }
+    }
+
+    #[test]
+    fn the_style_comes_back_first_and_the_raise_comes_last() {
+        let mut sight = in_sight();
+        sight.passive = false;
+        sight.desktop = Desktop::Elsewhere;
+        sight.cloaked = Some(CLOAKED_APP | CLOAKED_SHELL);
+        sight.visible = false;
+        sight.rect.y += 40;
+        sight.webview = Some(WebviewSight {
+            visible: false,
+            fitted: false,
+        });
+        assert_eq!(
+            remedies(&sight),
+            [
+                Remedy::RestoreStyle,
+                Remedy::MoveToCurrentDesktop,
+                Remedy::Uncloak,
+                Remedy::ShowWithoutActivating,
+                Remedy::Reposition,
+                Remedy::ShowWebview,
+                Remedy::FitWebview,
+                Remedy::Raise,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_minimized_window_is_restored_and_put_back_and_wry_fits_its_webview() {
+        let mut sight = in_sight();
+        sight.minimized = true;
+        sight.rect = Rect {
+            x: -32000,
+            y: -32000,
+            w: 160,
+            h: 28,
+        };
+        sight.webview = Some(WebviewSight {
+            visible: true,
+            fitted: false,
+        });
+        assert_eq!(
+            remedies(&sight),
+            [
+                Remedy::ShowWithoutActivating,
+                Remedy::Reposition,
+                Remedy::Raise
+            ]
+        );
+    }
+
+    #[test]
+    fn what_cannot_be_known_is_left_alone() {
+        let mut sight = in_sight();
+        sight.cloaked = None;
+        sight.desktop = Desktop::Unknown(0x8007_06BA_u32 as i32);
+        sight.placement = None;
+        sight.foreground = Foreground::Unknown;
+        sight.webview = None;
+        assert_eq!(remedies(&sight), [Remedy::Raise]);
+    }
+
+    #[test]
+    fn the_remedies_read_as_a_list() {
+        assert_eq!(
+            remedies_text(&[Remedy::MoveToCurrentDesktop, Remedy::Raise]),
+            "moving it to this virtual desktop, raising it to the top"
+        );
+    }
+
+    #[test]
+    fn nothing_in_the_check_can_activate_the_window() {
+        // The window must never take the focus from the app the person types in (see the module
+        // documentation): none of the calls that activate a window, every move of a window with
+        // SWP_NOACTIVATE and every show with SW_SHOWNOACTIVATE.
+        let source = include_str!("sight.rs").replace("\r\n", "\n");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        for call in [
+            "SetForegroundWindow",
+            "SetActiveWindow",
+            "SetFocus",
+            "BringWindowToTop",
+            "SwitchToThisWindow",
+            "SW_SHOWNORMAL",
+            "SW_RESTORE",
+            "SW_SHOWDEFAULT",
+        ] {
+            assert!(!production.contains(call), "the check calls {call}");
+        }
+        let moves: Vec<&str> = production.split("SetWindowPos(").skip(1).collect();
+        assert!(
+            moves.len() >= 3,
+            "the raise, the reposition and the webview"
+        );
+        for after in moves {
+            let call: String = after.chars().take(300).collect();
+            assert!(call.contains("SWP_NOACTIVATE"), "SetWindowPos({call}");
+        }
+        let shows: Vec<&str> = production.split("ShowWindow(").skip(1).collect();
+        assert!(!shows.is_empty());
+        for after in shows {
+            let call: String = after.chars().take(40).collect();
+            assert!(call.contains("SW_SHOWNOACTIVATE"), "ShowWindow({call}");
+        }
     }
 
     #[test]
