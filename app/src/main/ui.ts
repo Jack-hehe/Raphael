@@ -123,24 +123,19 @@ export const st = (kind: "ok" | "warn" | "err" | "idle", text: string): string =
 
 const METER_SEGMENTS = 14;
 
-/** The microphone meter; `setMeter` moves it. */
-export const meter = (): string =>
-  `<span class="meter" aria-hidden="true">${"<i></i>".repeat(METER_SEGMENTS)}</span>`;
+/**
+ * The microphone meter, a row of small bars that light up from the left with its loudness;
+ * `setMeter` moves it. `segments` makes a longer one, such as the one as wide as a dropdown.
+ */
+export const meter = (segments = METER_SEGMENTS): string =>
+  `<span class="meter" aria-hidden="true">${"<i></i>".repeat(segments)}</span>`;
 
-/** Lights the meter's segments for a loudness of 0 to 1. */
+/** Lights the meter's segments for a loudness of 0 to 1 (a little headroom, so a loud voice fills it). */
 export function setMeter(el: Element | null, level: number): void {
   if (!el) return;
-  const lit = Math.round(Math.max(0, Math.min(1, level * 1.05)) * METER_SEGMENTS);
-  el.querySelectorAll("i").forEach((segment, k) => segment.classList.toggle("on", k < lit));
-}
-
-/** The microphone's loudness as one slim bar, for under its dropdown; `setLevel` moves it. */
-export const levelBar = (): string => `<span class="level" aria-hidden="true"><i></i></span>`;
-
-/** Fills the bar to a loudness of 0 to 1 (a little headroom, as the meter has). */
-export function setLevel(el: Element | null, level: number): void {
-  const fill = el?.querySelector<HTMLElement>("i");
-  if (fill) fill.style.transform = `scaleX(${Math.max(0, Math.min(1, level * 1.05))})`;
+  const segments = el.querySelectorAll("i");
+  const lit = Math.round(Math.max(0, Math.min(1, level * 1.05)) * segments.length);
+  segments.forEach((segment, k) => segment.classList.toggle("on", k < lit));
 }
 
 export interface FieldOptions {

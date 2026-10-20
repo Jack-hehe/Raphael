@@ -29,7 +29,7 @@ import { pricingNote } from "../pricing";
 import { runOutDay } from "../report";
 import { WARN_FROM, spendVisual, spentShare } from "../spend";
 import type { AudioDevices, BrainSettings, DeviceSettings, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
-import { type Choice, type IconName, btn, esc, fieldHTML, keys, levelBar, note, row, sel, st, tg } from "../ui";
+import { type Choice, type IconName, btn, esc, fieldHTML, keys, meter, note, row, sel, st, tg } from "../ui";
 
 /** The models the core reads when none is chosen (brain/settings.py), shown while it does not answer. */
 const DEFAULT_MODELS = { cleanup: "openai/gpt-6-luna", answer: "openai/gpt-6-luna", stt: "elevenlabs/scribe-v2" } as const;
@@ -155,6 +155,9 @@ export function microphoneChoices(v: SettingsView): Choice[] {
   if (saved === null || choices.some((c) => c.value === saved)) return choices;
   return [...choices, { value: saved, label: t("onboarding.006", { p0: saved }), short: microphoneText("onboarding.006", saved, DROPDOWN_ROOM) }];
 }
+
+/** The bars of the microphone's meter: 3 px wide and about 2 px apart across its dropdown, as the short meter's are. */
+const MIC_METER_SEGMENTS = 46;
 
 // ---------- prices ----------
 
@@ -371,11 +374,12 @@ function dictationHTML(v: SettingsView): string {
         languageSelectHTML(v.languageGroups ?? [], languagesOf(v), ` data-k="languages"${v.brain ? "" : " disabled"}`),
         { cls: "row-lang" },
       ),
-      // The bar under the dropdown moves with the microphone's loudness while this tab is open.
+      // The meter under the dropdown, as wide as it, moves with the microphone's loudness while
+      // this tab is open.
       row(
         t("onboarding.021"),
         "",
-        `<span class="mic-ctl">${sel(microphoneChoices(v), d.microphone ?? AUTO_MICROPHONE, t("onboarding.021"), ' data-k="mic"')}${levelBar()}</span>`,
+        `<span class="mic-ctl">${sel(microphoneChoices(v), d.microphone ?? AUTO_MICROPHONE, t("onboarding.021"), ' data-k="mic"')}${meter(MIC_METER_SEGMENTS)}</span>`,
         { cls: "row-mic" },
       ),
     ])

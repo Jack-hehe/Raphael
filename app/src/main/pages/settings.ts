@@ -40,7 +40,7 @@ import {
   openPopover,
   placeMenu,
   selText,
-  setLevel,
+  setMeter,
   toaster,
 } from "../ui";
 import {
@@ -658,11 +658,13 @@ export function createSettings(app: AppContext): Page {
       clearInterval(microphoneTimer);
       microphoneTimer = undefined;
       microphoneReads++;
+      // No more levels come: the meter would stay lit at the last one.
+      onLevel(0);
     }
   }
 
   function onLevel(value: number): void {
-    setLevel(el.querySelector(".level"), value);
+    setMeter(el.querySelector(".mic-ctl .meter"), value);
   }
 
   /** Which reading of the microphones is the latest, so that an older, slower one is dropped. */

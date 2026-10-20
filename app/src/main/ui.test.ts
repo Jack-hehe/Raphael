@@ -2,7 +2,7 @@
 import { describe, expect, test } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { btn, menuPlacement, sel, selText } from "./ui";
+import { btn, menuPlacement, meter, sel, selText, setMeter } from "./ui";
 
 describe("popover placement", () => {
   const viewport = { width: 720, height: 480, headerBottom: 32 };
@@ -55,6 +55,36 @@ describe("dropdowns", () => {
     const choice = { value: "", label: "Automatic (current: HyperX Cloud II…)", short: "Automatic (HyperX…)", title: "Automatic (current: Microphone (HyperX Cloud II Core Wireless))" };
     expect(selText(choice, "")).toEqual({ shown: "Automatic (HyperX…)", full: choice.title });
     expect(sel([choice], "", "Mic")).toContain(`title="${choice.title}"`);
+  });
+});
+
+describe("the microphone meter", () => {
+  /** Bars that keep which classes they have, as the meter's `<i>` would. */
+  const bars = (n: number) =>
+    Array.from({ length: n }, () => {
+      const on = new Set<string>();
+      return { on, classList: { toggle: (name: string, force: boolean) => void (force ? on.add(name) : on.delete(name)) } };
+    });
+  const lit = (row: ReturnType<typeof bars>) => row.filter((bar) => bar.on.has("on")).length;
+  const meterOf = (row: ReturnType<typeof bars>) => ({ querySelectorAll: () => row }) as unknown as Element;
+
+  test("is a row of small bars, fourteen unless it is given more", () => {
+    expect(meter()).toBe(`<span class="meter" aria-hidden="true">${"<i></i>".repeat(14)}</span>`);
+    expect(meter(46).match(/<i><\/i>/g)).toHaveLength(46);
+  });
+
+  test("lights its bars from the left with the loudness, however many it has", () => {
+    for (const n of [14, 46]) {
+      const row = bars(n);
+      setMeter(meterOf(row), 0.5);
+      expect(lit(row)).toBe(Math.round(0.525 * n));
+      expect(row.slice(0, lit(row)).every((bar) => bar.on.has("on"))).toBe(true);
+      setMeter(meterOf(row), 1);
+      expect(lit(row)).toBe(n);
+      setMeter(meterOf(row), 0);
+      expect(lit(row)).toBe(0);
+    }
+    expect(() => setMeter(null, 1)).not.toThrow();
   });
 });
 

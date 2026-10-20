@@ -214,12 +214,13 @@ describe("聽寫", () => {
     expect(row).toContain("<span>繁體中文（台灣）、English (United States)</span>");
   });
 
-  test("shows the microphone by a short name, with the whole name in the list and the tooltip, and a level bar under it", () => {
+  test("shows the microphone by a short name, with the whole name in the list and the tooltip, and a meter under it", () => {
     const row = rowOf(tab("dictation"), "麥克風");
     expect(row).toContain('<span class="mic-ctl"><button type="button" class="sel"');
     expect(row).toContain("<span>自動（麥克風排列）</span>");
     expect(row).toContain(`title="自動偵測（目前：${REALTEK}）"`);
-    expect(row).toContain('<span class="level" aria-hidden="true"><i></i></span></span>');
+    // the meter of small bars, under the dropdown and inside its box, which is as wide as the dropdown
+    expect(row).toContain(`<span class="meter" aria-hidden="true">${"<i></i>".repeat(46)}</span></span>`);
     expect(buttons(row)).toHaveLength(1); // the search for microphones is an item of its menu
     const choices = microphoneChoices(view());
     expect(choices.map((c) => c.label)).toEqual(["自動偵測（目前：麥克風排列）", REALTEK]);
