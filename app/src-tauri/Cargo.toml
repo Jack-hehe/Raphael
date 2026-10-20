@@ -27,7 +27,8 @@ serde_json = "1"
 log = "0.4"
 tokio = { version = "1", features = ["sync", "time", "macros", "rt-multi-thread"] }
 # Vendored copy of handy-keys 0.3.4 (crates.io package, commit e7d1b8e), patched: held modifier
-# keys are swallowed whole and injected key events are ignored. See the note at the top of
+# keys are swallowed whole, injected key events are ignored, Space may go down before Right Alt,
+# and an edit observer serves learning from corrections. See the note at the top of
 # vendor/handy-keys/src/platform/windows/listener.rs.
 handy-keys = { path = "vendor/handy-keys" }
 uuid = { version = "1", features = ["v4"] }
@@ -38,7 +39,8 @@ tauri-plugin-single-instance = "2.5"
 [target.'cfg(windows)'.dependencies]
 # Pasting (src/paste): the paste key chord.
 enigo = "0.6"
-# UIA focus events immediately cancel transient keyboard observation.
+# The `#[implement]` of the UI Automation focus handler (src/learn/uia.rs) expands to
+# `::windows_core` paths, so the crate the `windows` crate below uses must be a dependency too.
 windows-core = "0.62"
 # The asynchronous operations of the Windows Runtime (`IAsyncOperation`), which the media controls
 # answer with. It is the version the `windows` crate below already uses.
@@ -49,13 +51,13 @@ windows-future = "0.3"
 webview2-com = "0.39"
 # 0.62 is the version Tauri 2.12 uses, so the HWND types match. Used by the overlay (Alt+Tab,
 # whether the person can see it: cloaking, virtual desktops; and what happens to the screen: the
-# display's power, the session), pasting (clipboard, focus), the core process (Job Object),
-# learning from corrections (UI Automation, COM) and pausing the media that plays during a
-# recording (the media controls).
+# display's power, the session), pasting (clipboard, focus), the core process (Job Object), the
+# settings page's AltGr check (keyboard layouts), learning from corrections (UI Automation, COM,
+# the Chinese word breaker) and pausing the media that plays during a recording (the media
+# controls). `Data_Text` and `Media_Control` bring `Foundation` with them, and the lists their
+# calls return come from windows-collections, which `windows` always uses.
 windows = { version = "0.62", features = [
   "Data_Text",
-  "Foundation",
-  "Foundation_Collections",
   "Media_Control",
   "Win32_Foundation",
   "Win32_Graphics_Dwm",
