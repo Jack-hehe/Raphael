@@ -391,6 +391,10 @@ class IntegrationsService:
                 expected=tool.fingerprint,
                 timeout_s=self._call_timeout_s,
             )
+        except asyncio.CancelledError:
+            # Esc, or the core closing, ended the call part way: whether it was done is not known.
+            end("error", PluginResult(False, "cancelled"), tier)
+            raise
         except McpFailure as failure:
             if failure.fresh is not None and self._config.get(server.id) is server:
                 # The server describes the tool differently now: the user decides again.

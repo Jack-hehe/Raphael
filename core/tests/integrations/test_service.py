@@ -413,6 +413,20 @@ async def test_a_call_that_takes_too_long_is_a_timeout(rpc, service, servers, ca
     assert rows(service) == [("Notes", "slow", "T0", "auto", "timeout")]
 
 
+async def test_a_call_that_is_cancelled_is_written_down_as_an_error(rpc, service, servers):
+    import asyncio
+
+    server_id = await add(rpc, servers)
+    await tiers(rpc, server_id, slow="T0")
+    service._call_timeout_s = 30
+    task = asyncio.ensure_future(service.call(f"mcp:{server_id}/slow", {}, approver="auto"))
+    await asyncio.sleep(0.3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert rows(service) == [("Notes", "slow", "T0", "auto", "error")]
+
+
 async def test_a_tool_that_says_it_failed_is_an_error(rpc, service, servers):
     server_id = await add(rpc, servers)
     await tiers(rpc, server_id, broken="T0")

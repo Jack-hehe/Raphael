@@ -380,8 +380,12 @@ async def test_a_job_leaves_no_server_running(vault):
     assert servers_running() == before
 
 
-async def test_a_real_http_server_gets_the_headers_and_its_tools_are_called(vault, free_tcp_port):
+async def test_a_real_http_server_gets_the_headers_and_its_tools_are_called(
+    vault, free_tcp_port, caplog
+):
     import uvicorn
+
+    caplog.set_level(logging.DEBUG)
 
     app = fake_server.build().streamable_http_app()
     seen: list[bytes | None] = []
@@ -416,6 +420,8 @@ async def test_a_real_http_server_gets_the_headers_and_its_tools_are_called(vaul
         await serving
     assert outcome.text == "found tea"
     assert seen and all(value == f"Bearer {SECRET}".encode() for value in seen)
+    # Neither the SDK nor its HTTP client logged the address or what was said.
+    assert not [r for r in caplog.records if r.name.split(".")[0] in ("mcp", "httpx2", "httpcore2")]
 
 
 async def test_an_http_server_that_is_not_there_is_a_network_failure(vault, free_tcp_port):
@@ -425,3 +431,36 @@ async def test_an_http_server_that_is_not_there_is_a_network_failure(vault, free
     with pytest.raises(McpFailure) as failure:
         await McpConnector(vault).list_tools(config, timeout_s=10)
     assert failure.value.kind == "network"
+
+
+def test_what_the_sdk_and_its_http_client_log_never_reaches_the_log():
+    # They log addresses (a token can be in one), what a server said and what a tool was called.
+    for name in ("mcp", "mcp.client.stdio", "httpx2", "httpcore2"):
+        assert logging.getLogger(name).getEffectiveLevel() == logging.CRITICAL, name
+
+
+async def test_the_sdk_is_loaded_off_the_event_loop(monkeypatch):
+    import threading
+
+    seen = []
+    monkeypatch.setattr(client_module, "_import_sdk", lambda: seen.append(threading.get_ident()))
+    await client_module.load_sdk()
+    assert seen and seen != [threading.get_ident()]
+
+
+async def test_a_job_with_the_real_opener_loads_the_sdk_first_and_one_with_a_test_opener_does_not(
+    vault, servers, monkeypatch
+):
+    loads = []
+
+    async def fake_load():
+        loads.append(1)
+
+    monkeypatch.setattr(client_module, "load_sdk", fake_load)
+    servers.add("Notes")
+    await McpConnector(vault, servers).list_tools(server_config())
+    assert loads == []
+    config = ServerConfig(id="abc123", name="Real", transport="stdio", command="no-such-program-xyz")
+    with pytest.raises(McpFailure):
+        await McpConnector(vault).list_tools(config, timeout_s=10)
+    assert loads == [1]

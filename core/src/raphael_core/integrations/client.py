@@ -37,6 +37,12 @@ from .vault import SecretVault, secret_name
 
 logger = logging.getLogger(__name__)
 
+# The SDK and its HTTP client log addresses (with whatever token is in them), what a server said and
+# what a tool was called. None of it may reach the log, so they are silenced: a failure is reported
+# by `_failure` below, by the types of what went wrong.
+for _sdk_logger in ("mcp", "httpx2", "httpcore2"):
+    logging.getLogger(_sdk_logger).setLevel(logging.CRITICAL)
+
 # The most a job may take, connecting included. Starting a server that is fetched first (npx) can
 # take most of the refresh's time; a call the assistant makes waits for much less, since someone is
 # listening.
@@ -93,6 +99,19 @@ class CallOutcome:
 
 # Opens a client for a job: an `mcp.Client`, or anything with its `list_tools` and `call_tool`.
 Opener = Callable[[ServerConfig, Secrets], AbstractAsyncContextManager[Any]]
+
+
+def _import_sdk() -> None:
+    import httpx2  # noqa: F401
+    import mcp  # noqa: F401
+    import mcp.client.stdio  # noqa: F401
+    import mcp.client.streamable_http  # noqa: F401
+
+
+async def load_sdk() -> None:
+    """Import the SDK on a worker thread. It takes over a second the first time, and the event
+    loop (a dictation among what it serves) must not stand still for that."""
+    await asyncio.to_thread(_import_sdk)
 
 
 @asynccontextmanager
@@ -195,6 +214,11 @@ class McpConnector:
             raise McpFailure("error") from None
         return secrets
 
+    async def _ready(self) -> None:
+        """The SDK is loaded before a real connection is made (a test's own opener needs none)."""
+        if self._opener is open_client:
+            await load_sdk()
+
     @staticmethod
     async def _list(client: Any) -> list[ToolRecord]:
         tools: list[ToolRecord] = []
@@ -222,8 +246,10 @@ class McpConnector:
         """The tools `server` offers now. McpFailure (of a kind) when it cannot be had."""
         secrets = self._secrets(server)
         try:
-            async with asyncio.timeout(timeout_s), self._opener(server, secrets) as client:
-                return await self._list(client)
+            async with asyncio.timeout(timeout_s):
+                await self._ready()
+                async with self._opener(server, secrets) as client:
+                    return await self._list(client)
         except Exception as exc:
             raise _failure("tool list", exc) from None
 
@@ -241,13 +267,15 @@ class McpConnector:
         with `is_error`."""
         secrets = self._secrets(server)
         try:
-            async with asyncio.timeout(timeout_s), self._opener(server, secrets) as client:
-                current = next((t for t in await self._list(client) if t.name == tool), None)
-                if current is None:
-                    raise McpFailure("gone")
-                if current.fingerprint != expected:
-                    raise McpFailure("changed", fresh=current)
-                result = await client.call_tool(tool, arguments)
+            async with asyncio.timeout(timeout_s):
+                await self._ready()
+                async with self._opener(server, secrets) as client:
+                    current = next((t for t in await self._list(client) if t.name == tool), None)
+                    if current is None:
+                        raise McpFailure("gone")
+                    if current.fingerprint != expected:
+                        raise McpFailure("changed", fresh=current)
+                    result = await client.call_tool(tool, arguments)
         except Exception as exc:
             raise _failure("tool call", exc) from None
         text, truncated = render_result(result)
