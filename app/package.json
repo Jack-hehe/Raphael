@@ -9,9 +9,8 @@
     "dev": "vite",
     "prebuild": "node scripts/copy-private.mjs",
     "build": "tsc && vite build",
-    "preview": "vite preview",
     "tauri": "node scripts/tauri.mjs",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "check:contrast": "node scripts/check-palette.mjs"
   },
   "dependencies": {
