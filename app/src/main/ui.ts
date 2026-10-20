@@ -54,12 +54,9 @@ export function row(t: string, d = "", ctl = "", o: { cls?: string; attrs?: stri
 /** A line under a row of a list: a warning about it, or what is wrong with what was typed. */
 export const note = (html: string, attrs = ""): string => `<div class="note"${attrs}>${html}</div>`;
 
-/** A block of rows with a title and a line of small print below. `cls` adds classes to the block. */
-export function group(title: string, rows: string[], foot = "", cls = ""): string {
-  return (
-    `<section class="group${cls ? " " + cls : ""}">${title ? `<h3>${title}</h3>` : ""}` +
-    `<div class="list">${rows.join("")}</div>${foot ? `<p class="foot">${foot}</p>` : ""}</section>`
-  );
+/** A block of rows with a line of small print below. */
+export function group(rows: string[], foot = ""): string {
+  return `<section class="group"><div class="list">${rows.join("")}</div>${foot ? `<p class="foot">${foot}</p>` : ""}</section>`;
 }
 
 /** An on/off switch. `attrs` is raw HTML for the button: a `data-act`, say. */

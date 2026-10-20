@@ -270,7 +270,6 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
   function keyGroup(): string {
     return (
       group(
-        "",
         [
           keyRow(),
           ...(keyError ? [note(st("err", keyError()), ' role="alert"')] : []),
@@ -305,7 +304,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
       case 2:
         return (
           t("onboarding.040") +
-          group("", [
+          group([
             micRow(),
             row(t("onboarding.041"), t("onboarding.042"), `<span class="ctl-model" data-model="ctl"></span>`),
             `<div class="note" data-model="note" hidden></div>`,
