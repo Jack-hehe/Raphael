@@ -1,8 +1,9 @@
 """The core's entry point: the device side and the brain wired to one router.
 
 `build_app` makes an `App`, a Router with every method of the plan on it: the brain's (Task 8), the
-dictation service's (Task 12), the voice assistant's (`agent.*`, raphael_core.agent) and the few
-that belong to none of them (`core.*`, `models.*`, `audio.*`). `__main__` serves it on stdio.
+dictation service's (Task 12), the voice assistant's (`agent.*`, raphael_core.agent), the
+calendars' (`calendar.*`, raphael_core.calendars) and the few that belong to none of them (`core.*`,
+`models.*`, `audio.*`). `__main__` serves it on stdio.
 
 Start-up. The app's first calls come within seconds of the process starting (`core.hello`, the
 saved microphone, the settings page's questions), so the models, which take tens of seconds to
@@ -66,6 +67,8 @@ from .brain.openrouter import (
 )
 from .brain.secrets import CredentialKeyStore, KeyStore, MemoryKeyStore
 from .brain.service import Brain
+from .calendars.service import CalendarService
+from .calendars.vault import CredentialAddressVault, MemoryAddressVault
 from .device.models import REGISTRY, ModelManager
 from .protocol import (
     INVALID_PARAMS,
@@ -564,6 +567,11 @@ class App(Router):
             agent_actions = NullActions() if fake_llm else WindowsActions()
         self.agent = AgentService(self._conn, self.client, self.keys, actions=agent_actions)
         self.agent.register(self)
+        # Like the key, the calendar addresses stay out of the real vault when the LLM is faked.
+        self.calendars = CalendarService(
+            self._conn, MemoryAddressVault() if fake_llm else CredentialAddressVault()
+        )
+        self.calendars.register(self)
 
         self._speech = SpeechModels(
             self.manager, make_segmenter=self._make_segmenter, make_engine=self._make_engine

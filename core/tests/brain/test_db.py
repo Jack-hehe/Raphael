@@ -77,7 +77,16 @@ SCHEMA_V5 = {
         "cost_usd REAL NOT NULL DEFAULT 0",
     ],
 }
-LATEST = 5
+# Schema v6 adds the calendars of the Today card (only their labels: the addresses are secrets).
+SCHEMA_V6 = {
+    **SCHEMA_V5,
+    "calendars": [
+        "id INTEGER PK",
+        "label TEXT NOT NULL",
+        "created_at_ms INTEGER NOT NULL",
+    ],
+}
+LATEST = 6
 
 
 def schema_names(conn, kind):
@@ -101,10 +110,10 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V5)
+    assert schema_names(conn, "table") == set(SCHEMA_V6)
     assert {"history_created", "agent_turns_created"} <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V5.items():
+    for table, columns in SCHEMA_V6.items():
         assert describe_columns(conn, table) == columns
 
 
@@ -309,8 +318,29 @@ def test_a_v4_database_gets_the_turns_table_at_v5_and_keeps_its_rows(tmp_path):
     conn.close()
 
 
-def test_a_database_that_is_at_v5_is_left_alone(tmp_path):
+def test_a_v5_database_gets_the_calendars_table_at_v6_and_keeps_its_rows(tmp_path):
     path = tmp_path / "v5.db"
+    v4_database(path)
+    raw = sqlite3.connect(path)
+    raw.executescript(db._MIGRATION_V5)
+    raw.execute(
+        "INSERT INTO agent_turns (created_at_ms, session_id, question, route, prefix, text, status)"
+        " VALUES (1, 's', 'q', 'chat', '答', 'a', 'done')"
+    )
+    raw.commit()
+    raw.close()
+
+    conn = db.connect(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
+    assert describe_columns(conn, "calendars") == SCHEMA_V6["calendars"]
+    assert conn.execute("SELECT count(*) FROM calendars").fetchone()[0] == 0
+    assert conn.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
+    assert HistoryStore(conn).latest().text == "A"
+    conn.close()
+
+
+def test_a_database_that_is_at_v6_is_left_alone(tmp_path):
+    path = tmp_path / "v6.db"
     first = db.connect(path)
     first.execute(
         "INSERT INTO agent_turns (created_at_ms, session_id, question, route, prefix, text, status)"
@@ -319,8 +349,14 @@ def test_a_database_that_is_at_v5_is_left_alone(tmp_path):
     first.commit()
     first.close()
 
-    second = db.connect(path)  # must not try to create the table again
+    first = db.connect(path)
+    first.execute("INSERT INTO calendars (label, created_at_ms) VALUES ('Personal', 1)")
+    first.commit()
+    first.close()
+
+    second = db.connect(path)  # must not try to create the tables again
     assert second.execute("SELECT question, cost_usd FROM agent_turns").fetchone()[:] == ("q", 0)
+    assert second.execute("SELECT label FROM calendars").fetchone()[0] == "Personal"
     second.close()
 
 
@@ -335,6 +371,20 @@ def test_a_failed_v5_migration_leaves_the_database_at_v4(tmp_path):
     assert not raw.in_transaction
     assert raw.execute("PRAGMA user_version").fetchone()[0] == 4
     assert "agent_turns_created" not in schema_names(raw, "index")
+    raw.close()
+
+
+def test_a_failed_v6_migration_leaves_the_database_at_v5(tmp_path):
+    path = tmp_path / "v5.db"
+    v4_database(path)
+    raw = sqlite3.connect(path)
+    raw.executescript(db._MIGRATION_V5)
+    raw.execute("CREATE TABLE calendars (x)")  # in the way of the v6 migration
+    raw.commit()
+    with pytest.raises(sqlite3.OperationalError):
+        db.migrate(raw)
+    assert not raw.in_transaction
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 5
     raw.close()
 
 

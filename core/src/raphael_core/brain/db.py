@@ -137,12 +137,23 @@ PRAGMA user_version = 5;
 COMMIT;
 """
 
+# v6: the calendars shown on Home's Today card (raphael_core.calendars). Only the label is here:
+# the address of a calendar is a secret and lives in the Windows Credential Manager.
+_MIGRATION_V6 = """
+BEGIN;
+CREATE TABLE calendars (id INTEGER PRIMARY KEY, label TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL);
+PRAGMA user_version = 6;
+COMMIT;
+"""
+
 _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_V1,
     2: _MIGRATION_V2,
     3: _migrate_v3,
     4: _migrate_v4,
     5: _MIGRATION_V5,
+    6: _MIGRATION_V6,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 
