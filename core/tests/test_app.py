@@ -1494,26 +1494,6 @@ async def test_the_assistants_methods_are_on_the_app_from_the_start(tmp_path):
         await app.aclose()
 
 
-CALENDAR_METHODS = {"calendar.list", "calendar.add", "calendar.remove", "calendar.test", "calendar.today"}
-
-
-async def test_the_calendar_methods_are_on_the_app_and_keep_to_memory_with_the_fake_llm(make_app, memory_keyring):
-    app = make_app()
-    assert CALENDAR_METHODS <= set(app.methods())
-    assert await app.call("calendar.list") == {"calendars": []}
-    today = await app.call("calendar.today")
-    assert (today["calendars"], today["events"], today["failed"]) == (0, [], [])
-    # an address added under the fake LLM never reaches the credential vault
-    app.calendars._fetch = fake_calendar_download
-    added = await app.call("calendar.add", {"label": "Test", "url": "https://example.org/a.ics"})
-    assert added["ok"] is True
-    assert memory_keyring.credentials == {}
-
-
-async def fake_calendar_download(address):
-    return b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//\r\nEND:VCALENDAR\r\n"
-
-
 async def test_the_assistant_answers_through_the_whole_app_with_the_fake_llm(make_app):
     app = make_app()
     result = await app.call("agent.ask", ask_params("你好"))

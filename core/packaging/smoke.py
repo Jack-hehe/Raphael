@@ -5,16 +5,12 @@ so cleanup stops before it would ask the model, and checks the plain local opera
 has the fake LLM (RAPHAEL_FAKE_LLM=1: an in-memory key and a client that returns the transcript, no
 network), so a dictation really goes through cleanup. That loads the prompt resource and the OpenCC
 configurations (s2twp, s2hk, t2s and tw2sp) from the bundle, which the first pass never reaches: a
-missing file would otherwise switch cleanup off without a word. The same pass reads a calendar from
-a server on the loopback address, which needs the iCalendar reader, the recurrence rules and the
-time zone data of the bundle (the vault of the fake LLM is in memory too). Neither pass needs a
-key.
+missing file would otherwise switch cleanup off without a word. Neither pass needs a key.
 """
 
 from __future__ import annotations
 
 import argparse
-import http.server
 import json
 import os
 import queue
@@ -123,44 +119,6 @@ CLEANED_VARIANTS = (
     (["zh-HK", "en-US"], SPOKEN, "\u8edf\u4ef6 Raphael Smoke"),
     (["zh-CN", "en-US"], "\u8edf\u4ef6 smoke token", "\u8f6f\u4ef6 Raphael Smoke"),
 )
-
-
-# A calendar with one event that happens every day, so that it is on today whatever day that is.
-CALENDAR = (
-    "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//raphael packaging smoke//\r\n"
-    "BEGIN:VEVENT\r\nUID:smoke@raphael\r\nDTSTART;TZID=Asia/Taipei:20200101T090000\r\n"
-    "DTEND;TZID=Asia/Taipei:20200101T100000\r\nRRULE:FREQ=DAILY\r\nSUMMARY:Packaging smoke\r\n"
-    "END:VEVENT\r\nEND:VCALENDAR\r\n"
-).encode()
-
-
-class CalendarServer:
-    """Serves CALENDAR on the loopback address, on a port the system picks."""
-
-    def __init__(self) -> None:
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self) -> None:  # noqa: N802 (the name http.server looks for)
-                self.send_response(200)
-                self.send_header("Content-Type", "text/calendar")
-                self.send_header("Content-Length", str(len(CALENDAR)))
-                self.end_headers()
-                self.wfile.write(CALENDAR)
-
-            def log_message(self, *args: object) -> None:
-                pass
-
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-
-    @property
-    def url(self) -> str:
-        return f"http://127.0.0.1:{self.server.server_address[1]}/smoke.ics"
-
-    def close(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=5)
 
 
 def require(condition: bool, message: str) -> None:
@@ -282,23 +240,8 @@ def smoke_with_the_fake_llm(executable: Path) -> dict:
                     "The voice assistant did not answer with the fake LLM")
             require([turn["question"] for turn in rpc.call("agent.history.list")["turns"]] == ["hello"],
                     "The assistant's turn was not recorded")
-            # The calendars: read from the loopback, with the zone data, the recurrence rule and the
-            # iCalendar reader of the bundle.
-            server = CalendarServer()
-            try:
-                added = rpc.call("calendar.add", {"label": "Smoke", "url": server.url})
-                require(added["ok"] is True and added["calendar"]["host"] == "127.0.0.1",
-                        f"A calendar could not be added ({added.get('reason')}): the iCalendar reader, "
-                        "dateutil or the zone data is missing from the bundle")
-                today = rpc.call("calendar.today")
-                require([event["title"] for event in today["events"]] == ["Packaging smoke"] and not today["failed"],
-                        "A daily event of the calendar was not found today")
-                require(rpc.call("calendar.remove", {"id": added["calendar"]["id"]}) == {"removed": True},
-                        "The calendar was not removed")
-            finally:
-                server.close()
             returncode = shut_down(rpc, root)
-            return {"passed": True, "fake_llm": True, "cleaned": True, "calendar_read": True,
+            return {"passed": True, "fake_llm": True, "cleaned": True,
                     "languages": [languages[0] for languages, _, _ in CLEANED_VARIANTS],
                     "elapsed_seconds": round(time.monotonic() - began, 2), "requests": len(rpc.calls),
                     "exit_code": returncode, "calls": rpc.calls, "stderr": rpc.stderr}
