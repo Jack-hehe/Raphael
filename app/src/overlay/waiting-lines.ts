@@ -1,8 +1,8 @@
-// How the quiet lines change beside the emblem while Raphael works on a question, so that the wait
-// does not look like a hang. They are not Raphael speaking (no 《》): they take the place of a
-// dictation's percentage and are written in the same way (overlay.ts). The phrase book is fixed,
-// no model is involved, and like every word on this page it comes from the app (notices.rs), in
-// the interface language and in that one alone.
+// How the waiting lines change beside the emblem while Raphael works on a question, so that the
+// wait does not look like a hang. Each is a short report of his on the analysis (《告。解析中……》):
+// they take the place of a dictation's percentage and are written the same way, like every line
+// on this page (overlay.css). The phrase book is fixed, no model is involved, and like every word
+// on this page it comes from the app (notices.rs), in the interface language and in that one alone.
 //
 // Pure and browser-free, so that the tests run it in Node.
 

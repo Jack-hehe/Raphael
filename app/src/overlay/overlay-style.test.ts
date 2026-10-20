@@ -228,3 +228,12 @@ describe.each(SIZES)("beside an emblem of %i px", (emblem) => {
     expect(at.buttons.top).toBeLessThan(at.question.bottom);
   });
 });
+
+test("the room beside the largest emblem holds the longest waiting line notices.rs allows", () => {
+  // notices.rs holds every waiting line to about this many px at 14 px.
+  const allowed = Number(rust("notices.rs").match(/const CAPTION_ROOM_PX: usize = (\d+);/)?.[1]);
+  expect(allowed).toBeGreaterThan(0);
+  const largest = stage(SIZES[SIZES.length - 1]);
+  expect(largest.window.width - largest.caption.right).toBeGreaterThanOrEqual(allowed);
+  expect(largest.line.width).toBeGreaterThanOrEqual(allowed);
+});

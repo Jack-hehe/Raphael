@@ -1005,8 +1005,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         };
         // The app the person was in when the key was released is the one the question is about.
         let target = self.paster.foreground();
-        // No percentage: nothing reports how far an answer has come. Quiet lines in the
-        // interface language, which change until the answer, take its place.
+        // No percentage: nothing reports how far an answer has come. Raphael's reports on the
+        // analysis, in the interface language, change in its place until the answer.
         self.overlay
             .think_quietly(notices::WAITING.lines(&self.language.get()));
 

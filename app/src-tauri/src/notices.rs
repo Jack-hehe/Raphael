@@ -1,8 +1,12 @@
 //! Raphael's notices: the short reports the overlay shows as subtitles when a dictation could not
-//! go the usual way, the word list after learning from the user's corrections, and his greeting
-//! when a question to him begins. Each one is
-//! wrapped in 《》 and starts with its prefix: 告 (report) or 否 (refusal) in Chinese and Japanese,
-//! 了 for the learned words, and `Notice.`, `Negative.` or `Understood.` in English.
+//! go the usual way, the word list after learning from the user's corrections, his greeting when a
+//! question to him begins, and the announcements beside the emblem while he thinks about it. Each
+//! one is wrapped in 《》 and starts with its prefix: 告 (report) or 否 (refusal) in Chinese and
+//! Japanese, 了 for the learned words, and `Notice.`, `Negative.` or `Understood.` in English.
+//!
+//! They are written in his manner: calm, exact and brief. A report states what happened and what
+//! was done about it, a refusal states why, and neither apologises, jokes or exclaims. He calls the
+//! person 主人, マスター or Master only where he addresses them, which here is the greeting alone.
 //!
 //! A notice exists in every interface language, and the overlay is sent only the one for the
 //! language the person chose ([`Notice::text`]): never a Chinese and a Japanese line side by side.
@@ -58,57 +62,57 @@ impl Notice {
 
 /// The target window runs elevated, so the text was only copied.
 pub const ELEVATED: Notice = Notice {
-    zh: "《告。這個視窗不接受貼上。文字已複製，請按 Ctrl+V。》",
-    en: "《Notice. This window does not accept pasting. The text is copied, so press Ctrl+V.》",
-    ja: "《告。このウィンドウには貼り付けできません。コピー済みです。》",
+    zh: "《告。此視窗權限較高，無法貼上。文字已複製，請按 Ctrl+V。》",
+    en: "《Notice. This window has higher privileges and refuses the paste. The text is copied. Press Ctrl+V.》",
+    ja: "《告。権限の高いウィンドウには貼り付けできません。コピー済みです。Ctrl+V で貼り付けてください。》",
 };
 
 /// Focus moved to another window after the key was released, so the text was only copied.
 pub const FOCUS_CHANGED: Notice = Notice {
-    zh: "《告。視窗已經切換。文字已複製，請按 Ctrl+V。》",
-    en: "《Notice. The window changed. The text is copied, so press Ctrl+V.》",
-    ja: "《告。ウィンドウが切り替わりました。コピー済みです。》",
+    zh: "《告。偵測到視窗切換。文字已複製，請按 Ctrl+V。》",
+    en: "《Notice. The focus moved to another window. The text is copied. Press Ctrl+V.》",
+    ja: "《告。ウィンドウの切り替えを検知しました。コピー済みです。Ctrl+V で貼り付けてください。》",
 };
 
 /// The monthly limit is reached: the raw text is pasted without cleanup.
 pub const BUDGET: Notice = Notice {
-    zh: "《告。本月額度已用完，聽寫先不整理。》",
-    en: "《Notice. This month's budget is used up. Dictation skips the cleanup for now.》",
-    ja: "《告。今月の予算を使い切りました。整形せずに貼り付けます。》",
+    zh: "《告。本月額度已用盡。聽寫暫不整理，直接貼上原文。》",
+    en: "《Notice. This month's budget is exhausted. Dictation is pasted without cleanup.》",
+    ja: "《告。今月の予算が上限に達しました。整形を省略して貼り付けます。》",
 };
 
 /// OpenRouter could not be reached: the raw text is pasted.
 pub const OFFLINE: Notice = Notice {
-    zh: "《告。無法連線到 OpenRouter。先貼上未整理的文字。》",
-    en: "《Notice. Cannot reach OpenRouter. Pasting the text without cleanup.》",
+    zh: "《告。無法連線至 OpenRouter。改為貼上未整理的原文。》",
+    en: "《Notice. OpenRouter is unreachable. The text is pasted without cleanup.》",
     ja: "《告。OpenRouter に接続できません。整形前のテキストを貼り付けます。》",
 };
 
 /// No OpenRouter key is stored: the raw text is pasted.
 pub const NO_KEY: Notice = Notice {
-    zh: "《告。尚未設定 OpenRouter 金鑰。先貼上未整理的文字。》",
-    en: "《Notice. No OpenRouter key is set. Pasting the text without cleanup.》",
+    zh: "《告。未設定 OpenRouter 金鑰。改為貼上未整理的原文。》",
+    en: "《Notice. No OpenRouter key is set. The text is pasted without cleanup.》",
     ja: "《告。OpenRouter のキーが未設定です。整形前のテキストを貼り付けます。》",
 };
 
 /// The core found no microphone to record from.
 pub const NO_MIC: Notice = Notice {
-    zh: "《否。找不到麥克風。》",
-    en: "《Negative. No microphone found.》",
-    ja: "《否。マイクが見つかりません。》",
+    zh: "《否。未偵測到麥克風。》",
+    en: "《Negative. No microphone detected.》",
+    ja: "《否。マイクを検出できません。》",
 };
 
 /// The microphone is there but delivered no sound (muted, or a wireless headset asleep), and
 /// nothing came of the recording (`silent` in the result of `dictation.stop`).
 pub const NO_SOUND: Notice = Notice {
-    zh: "《否。沒有收到聲音，請檢查麥克風。》",
-    en: "《Negative. No sound received. Please check the microphone.》",
-    ja: "《否。音声が届いていません。マイクを確認してください。》",
+    zh: "《否。未收到聲音。請確認麥克風。》",
+    en: "《Negative. No sound was received. Check the microphone.》",
+    ja: "《否。音声を検出できませんでした。マイクを確認してください。》",
 };
 
 /// The tray's 「貼上上一次聽寫」: the menu took the focus, so the text is only copied.
 pub const LAST_COPIED: Notice = Notice {
-    zh: "《告。上一次的聽寫已複製。請按 Ctrl+V 貼上。》",
+    zh: "《告。已複製上一次的聽寫。請按 Ctrl+V 貼上。》",
     en: "《Notice. The last dictation is copied. Press Ctrl+V to paste it.》",
     ja: "《告。前回の音声入力をコピーしました。Ctrl+V で貼り付けてください。》",
 };
@@ -116,14 +120,14 @@ pub const LAST_COPIED: Notice = Notice {
 /// The core cannot dictate yet: the speech model is not ready (`NOT_CONFIGURED`).
 pub const NOT_READY: Notice = Notice {
     zh: "《否。語音模型尚未就緒。》",
-    en: "《Negative. The speech model is not ready yet.》",
-    ja: "《否。音声モデルの準備ができていません。》",
+    en: "《Negative. The speech model is not ready.》",
+    ja: "《否。音声モデルの準備が完了していません。》",
 };
 
 /// The core is not running, so nothing can be dictated.
 pub const CORE_DOWN: Notice = Notice {
-    zh: "《否。核心程序未執行，請重新啟動拉斐爾。》",
-    en: "《Negative. The core is not running. Please restart Raphael.》",
+    zh: "《否。核心未在運作。請重新啟動拉斐爾。》",
+    en: "《Negative. The core is not running. Restart Raphael.》",
     ja: "《否。コアが動作していません。ラファエルを再起動してください。》",
 };
 
@@ -131,16 +135,18 @@ pub const CORE_DOWN: Notice = Notice {
 /// The core's own refusals (no key, over budget, offline) arrive as answers and are shown as such.
 pub const ASK_FAILED: Notice = Notice {
     zh: "《否。目前無法回答。》",
-    en: "《Negative. Unable to answer at this time.》",
+    en: "《Negative. No answer can be given at this time.》",
     ja: "《否。現在は回答できません。》",
 };
 
 /// A question to Raphael has begun: his greeting beside the emblem while he listens. A dictation
-/// shows the emblem alone, so the two are never mistaken for each other.
+/// shows the emblem alone, so the two are never mistaken for each other. He stands by for an
+/// order, as a report rather than a question (問 is for what takes a yes or a no), and it is the
+/// one notice that addresses the person.
 pub const GREETING: Notice = Notice {
-    zh: "《告。今天有什麼事可以幫忙嗎？》",
-    en: "《Notice. What can I help you with today?》",
-    ja: "《告。今日は何をお手伝いしましょうか？》",
+    zh: "《告。主人，請下達指示。》",
+    en: "《Notice. Standing by, Master.》",
+    ja: "《告。マスター、ご指示をどうぞ。》",
 };
 
 /// A phrase book in Traditional Chinese (Taiwan), English and Japanese. The overlay is sent the
@@ -165,76 +171,64 @@ impl Phrases {
 }
 
 /// What the overlay writes beside the emblem, one line after another, while Raphael thinks about a
-/// question: like the percentage of a dictation it tells the person that he is at work. These are
-/// no reports of his (no 《》), just quiet words. Mostly the calculation of an analytical skill,
-/// with a few game-tip jokes at the end. Short, because the room beside the emblem is about 300
-/// px wide at 14 px. Generic words only, nothing quoted from anywhere.
+/// question: like the percentage of a dictation it tells the person that he is at work. Each is a
+/// short report of his own (告, `Notice.`) on the analysis that runs, trailing off because it is
+/// still running: no jokes, no tips, no results. Short, so that it stays one line in the room
+/// beside the largest emblem at 14 px. Generic words only, nothing quoted from anywhere.
 pub const WAITING: Phrases = Phrases {
     zh: &[
-        "解析中……",
-        "並列演算中……",
-        "檢索最適解……",
-        "思考加速中……",
-        "整理情報中……",
-        "確認可行路徑……",
-        "比對已知條件……",
-        "展開候補方案……",
-        "驗證推論結果……",
-        "統合各項情報……",
-        "重新評估前提……",
-        "計算成功率……",
-        "篩選有效資訊……",
-        "構築回答模型……",
-        "把答案從異空間拉回來……",
-        "替思考迴路上油……",
-        "計算失敗的可能性：0%……",
-        "給演算核心倒杯茶……",
-        "從資料海裡撈答案……",
-        "拉斐爾小知識：Esc 可以中止一切",
+        "《告。解析中……》",
+        "《告。並列演算中……》",
+        "《告。檢索最適解……》",
+        "《告。思考加速中……》",
+        "《告。整理情報中……》",
+        "《告。比對已知條件……》",
+        "《告。驗證推論中……》",
+        "《告。統合各項資料……》",
+        "《告。重新評估前提……》",
+        "《告。計算成功率……》",
+        "《告。篩選有效資訊……》",
+        "《告。構築回答中……》",
+        "《告。演算持續中……》",
+        "《告。確認可行路徑……》",
+        "《告。比較候補方案……》",
+        "《告。推演中……》",
     ],
     en: &[
-        "Analyzing…",
-        "Running parallel calculations…",
-        "Searching for the best answer…",
-        "Accelerating thought…",
-        "Sorting out the information…",
-        "Checking viable paths…",
-        "Comparing known conditions…",
-        "Expanding candidate plans…",
-        "Verifying the reasoning…",
-        "Integrating the findings…",
-        "Re-evaluating assumptions…",
-        "Estimating the odds…",
-        "Filtering useful information…",
-        "Building an answer model…",
-        "Fetching answers from afar…",
-        "Oiling the thinking circuits…",
-        "Odds of failure: 0%…",
-        "Making the core a cup of tea…",
-        "Fishing answers out of the data…",
-        "Raphael tip: Esc stops everything",
+        "《Notice. Analyzing…》",
+        "《Notice. Computing in parallel…》",
+        "《Notice. Seeking the optimum…》",
+        "《Notice. Accelerating thought…》",
+        "《Notice. Sorting the data…》",
+        "《Notice. Checking known facts…》",
+        "《Notice. Verifying the logic…》",
+        "《Notice. Integrating findings…》",
+        "《Notice. Rechecking premises…》",
+        "《Notice. Estimating the odds…》",
+        "《Notice. Discarding noise…》",
+        "《Notice. Composing the answer…》",
+        "《Notice. Calculation continues…》",
+        "《Notice. Tracing viable paths…》",
+        "《Notice. Comparing options…》",
+        "《Notice. Running inference…》",
     ],
     ja: &[
-        "解析中……",
-        "並列演算を実行中……",
-        "最適解を検索中……",
-        "思考を加速中……",
-        "情報を整理中……",
-        "実行可能な経路を確認中……",
-        "既知の条件を照合中……",
-        "候補案を展開中……",
-        "推論結果を検証中……",
-        "情報を統合中……",
-        "前提を再評価中……",
-        "成功率を算出中……",
-        "有効な情報を選別中……",
-        "回答モデルを構築中……",
-        "答えを異空間から引き戻し中……",
-        "思考回路に油を差し中……",
-        "失敗する確率：0%……",
-        "演算コアにお茶を淹れ中……",
-        "データの海で答えを釣り中……",
-        "ラファエル豆知識：Esc ですべて中止",
+        "《告。解析を実行中……》",
+        "《告。並列演算を実行中……》",
+        "《告。最適解を検索中……》",
+        "《告。思考を加速中……》",
+        "《告。情報を整理中……》",
+        "《告。既知の条件を照合中……》",
+        "《告。推論を検証中……》",
+        "《告。情報を統合中……》",
+        "《告。前提を再評価中……》",
+        "《告。成功率を算出中……》",
+        "《告。有効な情報を選別中……》",
+        "《告。回答を構築中……》",
+        "《告。演算を継続中……》",
+        "《告。実行可能な経路を確認中……》",
+        "《告。候補を比較中……》",
+        "《告。推論を展開中……》",
     ],
 };
 
@@ -359,6 +353,22 @@ mod tests {
         text.chars().any(|c| ('\u{3040}'..='\u{30ff}').contains(&c))
     }
 
+    /// The room beside the largest emblem that one line of the caption may take at 14 px, in px.
+    /// The window is 540 px wide and leaves about 300 beside an emblem of 194; this keeps a margin
+    /// for the estimate below. overlay-style.test.ts checks that overlay.css leaves at least this.
+    const CAPTION_ROOM_PX: usize = 280;
+
+    /// About how wide `line` is at 14 px: a Chinese or Japanese character (the brackets and the
+    /// ellipsis among them) fills a square, the rest is about half as wide.
+    fn width_at_14px(line: &str) -> usize {
+        line.chars()
+            .map(|c| if c.is_ascii() { 8 } else { 14 })
+            .sum()
+    }
+
+    /// How Raphael addresses the person: 主人 in Chinese, マスター in Japanese, Master in English.
+    const ADDRESS: [&str; 3] = ["主人", "マスター", "Master"];
+
     #[test]
     fn notices_are_raphael_lines() {
         for notice in ALL {
@@ -400,14 +410,52 @@ mod tests {
     }
 
     #[test]
-    fn the_waiting_lines_are_a_book_of_about_twenty_in_every_language() {
+    fn raphael_never_exclaims_and_never_asks_in_a_notice() {
+        // A report or a refusal states; only 問 asks, and none of these is one.
+        for notice in ALL {
+            for line in [notice.zh, notice.en, notice.ja] {
+                assert!(!line.contains(['!', '！', '?', '？']), "{line}");
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_greeting_addresses_the_person_and_in_the_word_of_its_language() {
+        // 主人 in Chinese, マスター in Japanese, Master in English: sparingly, as he does.
+        for (line, address) in [
+            (GREETING.zh, "主人"),
+            (GREETING.ja, "マスター"),
+            (GREETING.en, "Master"),
+        ] {
+            assert!(line.contains(address), "{line}");
+            for other in ADDRESS.iter().filter(|other| **other != address) {
+                assert!(!line.contains(other), "{line}");
+            }
+        }
+        for notice in ALL.iter().filter(|notice| **notice != GREETING) {
+            for line in [notice.zh, notice.en, notice.ja] {
+                assert!(!ADDRESS.iter().any(|word| line.contains(word)), "{line}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_greeting_is_one_line_beside_the_largest_emblem() {
+        for line in [GREETING.zh, GREETING.en, GREETING.ja] {
+            let width = width_at_14px(line);
+            assert!(width <= CAPTION_ROOM_PX, "{line}: about {width} px");
+        }
+    }
+
+    #[test]
+    fn the_waiting_lines_are_a_book_of_twelve_to_twenty_in_every_language() {
         for (language, book) in [
             ("zh-TW", WAITING.zh),
             ("en", WAITING.en),
             ("ja", WAITING.ja),
         ] {
             assert!(
-                (18..=24).contains(&book.len()),
+                (12..=20).contains(&book.len()),
                 "{language}: {}",
                 book.len()
             );
@@ -434,42 +482,55 @@ mod tests {
     }
 
     #[test]
-    fn the_waiting_lines_are_quiet_ones_and_each_language_stays_in_its_own_script() {
-        for line in WAITING.zh.iter().chain(WAITING.en).chain(WAITING.ja) {
-            // Not Raphael speaking: no 《》, and nobody is quoted either.
-            assert!(!line.contains(['《', '》', '「', '」']), "{line}");
+    fn every_waiting_line_is_a_report_of_raphael_that_trails_off() {
+        // 《告。…》, still running: the work goes on while it is shown.
+        for line in WAITING.zh.iter().chain(WAITING.ja) {
+            assert!(line.starts_with("《告。"), "{line}");
+            assert!(line.ends_with("……》"), "{line}");
         }
+        for line in WAITING.en {
+            assert!(line.starts_with("《Notice. "), "{line}");
+            assert!(line.ends_with("…》") && !line.ends_with("……》"), "{line}");
+        }
+    }
+
+    #[test]
+    fn each_waiting_book_stays_in_its_own_script() {
         for line in WAITING.zh {
             assert!(!has_kana(line), "{line}");
         }
-        // Nearly every Japanese line has kana; "解析中……" reads the same in both.
-        let with_kana = WAITING.ja.iter().filter(|line| has_kana(line)).count();
-        assert!(with_kana >= WAITING.ja.len() - 2, "{with_kana}");
+        for line in WAITING.ja {
+            assert!(has_kana(line), "{line}");
+        }
         for line in WAITING.en {
-            assert!(line.chars().all(|c| c.is_ascii() || c == '…'), "{line}");
+            assert!(
+                line.chars()
+                    .all(|c| c.is_ascii() || matches!(c, '《' | '》' | '…')),
+                "{line}"
+            );
         }
     }
 
     #[test]
-    fn the_waiting_lines_fit_beside_the_emblem() {
-        // At 14 px: a Chinese or Japanese character (and the ellipsis) fills a square, the rest
-        // is about half as wide. The window leaves about 300 px beside the largest emblem.
+    fn no_waiting_line_jokes_quotes_or_reports_a_result() {
+        // The analysis is under way: no tip about a key, no figure, no quotation, no address.
         for line in WAITING.zh.iter().chain(WAITING.en).chain(WAITING.ja) {
-            let width: usize = line
-                .chars()
-                .map(|c| if c.is_ascii() { 8 } else { 14 })
-                .sum();
-            assert!(width <= 270, "{line}: about {width} px");
+            assert!(!line.contains("Esc"), "{line}");
+            assert!(
+                !line.chars().any(|c| c.is_ascii_digit() || c == '%'),
+                "{line}"
+            );
+            assert!(!line.contains(['「', '」', '『', '』', '"']), "{line}");
+            assert!(!line.contains(['!', '！', '?', '？']), "{line}");
+            assert!(!ADDRESS.iter().any(|word| line.contains(word)), "{line}");
         }
     }
 
     #[test]
-    fn every_waiting_book_is_mostly_calculation_and_ends_with_the_esc_tip() {
-        for book in [WAITING.zh, WAITING.en, WAITING.ja] {
-            assert!(book.last().is_some_and(|line| line.contains("Esc")));
-            assert_eq!(book.iter().filter(|line| line.contains("Esc")).count(), 1);
-            // The running tasks trail off; only the tip does not.
-            assert!(book.iter().filter(|line| line.contains('…')).count() >= book.len() - 2);
+    fn the_waiting_lines_fit_beside_the_largest_emblem() {
+        for line in WAITING.zh.iter().chain(WAITING.en).chain(WAITING.ja) {
+            let width = width_at_14px(line);
+            assert!(width <= CAPTION_ROOM_PX, "{line}: about {width} px");
         }
     }
 

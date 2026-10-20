@@ -43,9 +43,9 @@ export type OverlayEvent =
   /** `line`: Raphael's greeting to a question, beside the emblem while he listens. A dictation has none. */
   | { type: "show"; mode: Mode; line?: string }
   /**
-   * `quiet`: thinking about a question, which has no progress to show. Its `lines` (the phrase
-   * book, in the interface language) change beside the emblem, in the percentage's place, so that
-   * the wait does not look like a hang.
+   * `quiet`: thinking about a question, which has no progress to show. Its `lines` (Raphael's
+   * reports on the analysis, a phrase book in the interface language) change beside the emblem, in
+   * the percentage's place, so that the wait does not look like a hang.
    */
   | { type: "mode"; mode: Mode; quiet?: boolean; lines?: string[] }
   | { type: "level"; value: number }
@@ -91,7 +91,7 @@ export interface OverlayView {
   clearLine(): void;
   /** Processing progress is separate from spoken subtitles; null hides it. */
   showProgress(percent: number | null): void;
-  /** The quiet line of a question being thought about, in the progress caption's place; null hides it. */
+  /** The waiting line of a question being thought about, in the progress caption's place; null hides it. */
   showWaiting(text: string | null, language: UiLanguage): void;
   /** The two buttons come in under the line. */
   showAsk(buttons: AskButtons): void;
@@ -165,7 +165,7 @@ export class OverlayController {
   private progressTimer: ReturnType<typeof setInterval> | undefined;
   private progressClock = 0;
   private lastProgress: number | null = null;
-  /** The quiet lines are rotating beside the emblem: Raphael is thinking about a question. */
+  /** The waiting lines are rotating beside the emblem: Raphael is thinking about a question. */
   private waitingTimer: ReturnType<typeof setInterval> | undefined;
   private waitingLines: string[] = [];
   /** The line on screen now, so that the next one is another. */
@@ -445,7 +445,7 @@ export class OverlayController {
 
   private updateProgress(report: ProgressReport): void {
     if (!this.activeShow) return;
-    // The percentage takes the caption from the quiet lines.
+    // The percentage takes the caption from the waiting lines.
     this.stopWaiting();
     this.progress.report(report, false);
     this.renderProgress();
@@ -481,9 +481,10 @@ export class OverlayController {
   }
 
   /**
-   * A question is being thought about, and nothing reports how far it has come: a quiet line
-   * beside the emblem, in the caption's place, shows that Raphael is at work. It is not Raphael
-   * speaking, so like the percentage it is written whatever the subtitles setting says.
+   * A question is being thought about, and nothing reports how far it has come: a waiting line
+   * beside the emblem, in the caption's place, shows that Raphael is at work. It belongs to the
+   * question, like his greeting and his answer, so like the percentage it is written whatever the
+   * subtitles setting says.
    */
   private startWaiting(lines: string[]): void {
     // Already going, or an app that sent no lines (an older one, say): the thinking stays quiet.
@@ -498,7 +499,7 @@ export class OverlayController {
     this.view.showWaiting(this.waitingLine, this.language);
   }
 
-  /** The quiet lines go: the thinking is over, or something else takes the caption. */
+  /** The waiting lines go: the thinking is over, or something else takes the caption. */
   private stopWaiting(): void {
     if (this.waitingTimer === undefined) return;
     clearInterval(this.waitingTimer);
@@ -600,7 +601,7 @@ class DomView implements OverlayView {
   showProgress(percent: number | null): void {
     this.progress.hidden = percent === null;
     this.progress.textContent = percent === null ? "" : formatProgress(percent);
-    // Digits are set as the page is, whatever language the quiet lines were in.
+    // Digits are set as the page is, whatever language the waiting lines were in.
     this.progress.removeAttribute("lang");
   }
 

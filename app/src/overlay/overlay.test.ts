@@ -95,7 +95,7 @@ class FakeView implements OverlayView {
     this.percentages.push(percent);
     this.checkOnePlace();
   }
-  /** The quiet line in the caption now, and every change of it (null: hidden), kept apart from `log`. */
+  /** The waiting line in the caption now, and every change of it (null: hidden), kept apart from `log`. */
   waiting: string | null = null;
   readonly waitings: Array<string | null> = [];
   readonly waitingLanguages: UiLanguage[] = [];
@@ -323,7 +323,7 @@ test("dictation never shows subtitles", () => {
   expect(view.log.filter((l) => l.startsWith("line"))).toEqual([]);
 });
 
-const GREETING = "《告。今天有什麼事可以幫忙嗎？》";
+const GREETING = "《告。主人，請下達指示。》";
 
 test("a question is greeted beside the listening emblem until Raphael has heard it", () => {
   send({ type: "show", mode: "listening", line: GREETING });
@@ -1114,9 +1114,9 @@ test("other events leave a question alone", () => {
 
 // The app sends the phrase book of the interface language with the quiet thought; the page only rotates it.
 const BOOKS: Record<UiLanguage, string[]> = {
-  "zh-TW": ["解析中……", "並列演算中……", "檢索最適解……", "思考加速中……", "整理情報中……"],
-  ja: ["解析中……", "並列演算を実行中……", "最適解を検索中……", "思考を加速中……"],
-  en: ["Analyzing…", "Running parallel calculations…", "Searching for the best answer…", "Accelerating thought…"],
+  "zh-TW": ["《告。解析中……》", "《告。並列演算中……》", "《告。檢索最適解……》", "《告。思考加速中……》", "《告。整理情報中……》"],
+  ja: ["《告。解析を実行中……》", "《告。並列演算を実行中……》", "《告。最適解を検索中……》", "《告。思考を加速中……》"],
+  en: ["《Notice. Analyzing…》", "《Notice. Computing in parallel…》", "《Notice. Seeking the optimum…》", "《Notice. Accelerating thought…》"],
 };
 const BOOK = BOOKS["zh-TW"];
 
@@ -1141,7 +1141,7 @@ test("quiet thinking drops the greeting and starts a line at once, in the captio
   expect(shown()).toHaveLength(1);
   expect(BOOK).toContain(view.waiting);
   expect(view.waitingLanguages).toEqual(["zh-TW"]);
-  // a quiet line is not Raphael speaking: no subtitle, no percentage, no emblem speaking
+  // a waiting line is no subtitle and no percentage, and the emblem does not speak it
   expect(lines()).toEqual([`line:${GREETING}`]);
   expect(view.percentages.filter((percent) => percent !== null)).toEqual([]);
   expect(emblem.log).not.toContainEqual(expect.stringMatching(/^speak:/));
@@ -1220,7 +1220,7 @@ test("a second quiet thought while the lines go on neither restarts nor doubles 
 test.each([
   ["an app that sends no lines", undefined],
   ["an empty book", []],
-  ["a book that is no list", "解析中……"],
+  ["a book that is no list", "《告。解析中……》"],
   ["a list of nothing that is text", ["", 5, null, {}]],
 ])("%s leaves the thinking quiet", (_, lines) => {
   thinkQuietly(lines);
@@ -1231,10 +1231,10 @@ test.each([
 });
 
 test("what in the book is not a line is left out", () => {
-  thinkQuietly(["", 5, "解析中……", null]);
+  thinkQuietly(["", 5, "《告。解析中……》", null]);
   vi.advanceTimersByTime(WAITING_LINE_MS * 5);
   // a book of one line has no other line to change to
-  expect(shown()).toEqual(Array(6).fill("解析中……"));
+  expect(shown()).toEqual(Array(6).fill("《告。解析中……》"));
 });
 
 test("quiet thinking that no show began has no line", () => {

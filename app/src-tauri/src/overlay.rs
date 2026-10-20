@@ -135,8 +135,9 @@ pub enum OverlayEvent {
     },
     /// The emblem shows another mode. A `quiet` one (sent only when it is) shows no progress
     /// caption beside it: Raphael is thinking about a question, not working through a dictation.
-    /// It may bring `lines` (sent only when there are some): the quiet words, in the interface
-    /// language, that the page changes in the caption's place until the thinking is over.
+    /// It may bring `lines` (sent only when there are some): Raphael's short reports on the
+    /// analysis (《告。解析中……》), in the interface language, that the page changes in the
+    /// caption's place until the thinking is over.
     Mode {
         mode: Mode,
         #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -186,9 +187,9 @@ pub trait OverlayApi: Send + Sync + 'static {
     /// Changes what the visible emblem shows.
     fn set_mode(&self, mode: Mode);
     /// The emblem thinks about a question: [`Mode::Thinking`] without the progress caption of a
-    /// dictation. In its place the page changes the quiet `lines` (in the interface language) every
-    /// second or so, until the answer or something else replaces them. No default, for the same
-    /// reason as [`Self::greet`].
+    /// dictation. In its place the page changes the `lines` (his reports on the analysis, in the
+    /// interface language) every second or so, until the answer or something else replaces them.
+    /// No default, for the same reason as [`Self::greet`].
     fn think_quietly(&self, lines: &[&str]);
     /// Loudness from 0 to 1.
     fn level(&self, value: f32);
@@ -984,9 +985,9 @@ mod tests {
         assert_eq!(
             json(OverlayEvent::Show {
                 mode: Mode::Listening,
-                line: Some("《告。今天有什麼事可以幫忙嗎？》".into())
+                line: Some("《告。主人，請下達指示。》".into())
             }),
-            r#"{"type":"show","mode":"listening","line":"《告。今天有什麼事可以幫忙嗎？》"}"#
+            r#"{"type":"show","mode":"listening","line":"《告。主人，請下達指示。》"}"#
         );
         assert_eq!(
             json(OverlayEvent::Mode {
@@ -1012,7 +1013,7 @@ mod tests {
             }),
             r#"{"type":"mode","mode":"steady"}"#
         );
-        // a question being thought about: no progress caption, and the quiet lines in its place
+        // a question being thought about: no progress caption, and the waiting lines in its place
         assert_eq!(
             json(OverlayEvent::Mode {
                 mode: Mode::Thinking,
@@ -1025,9 +1026,9 @@ mod tests {
             json(OverlayEvent::Mode {
                 mode: Mode::Thinking,
                 quiet: true,
-                lines: vec!["解析中……".into(), "並列演算中……".into()],
+                lines: vec!["《告。解析中……》".into(), "《告。並列演算中……》".into()],
             }),
-            r#"{"type":"mode","mode":"thinking","quiet":true,"lines":["解析中……","並列演算中……"]}"#
+            r#"{"type":"mode","mode":"thinking","quiet":true,"lines":["《告。解析中……》","《告。並列演算中……》"]}"#
         );
         assert_eq!(
             json(OverlayEvent::Level { value: 0.5 }),

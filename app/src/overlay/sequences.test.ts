@@ -550,13 +550,13 @@ test("Esc during a question (the app hides the emblem) takes the buttons away at
   expect(p.emblem.phase).toBe("hidden");
 });
 
-const WAITING = ["解析中……", "並列演算中……", "檢索最適解……"];
+const WAITING = ["《告。解析中……》", "《告。並列演算中……》", "《告。檢索最適解……》"];
 
 test("a question: greeted, thought about with changing lines, and the answer takes them away", () => {
   const p = page();
-  p.send(SETTINGS, { type: "show", mode: "listening", line: "《告。今天有什麼事可以幫忙嗎？》" });
+  p.send(SETTINGS, { type: "show", mode: "listening", line: "《告。主人，請下達指示。》" });
   run(1500);
-  expect(p.view.lines).toBe("《告。今天有什麼事可以幫忙嗎？》");
+  expect(p.view.lines).toBe("《告。主人，請下達指示。》");
   expect(p.view.caption).toBeNull();
   p.send({ type: "mode", mode: "thinking", quiet: true, lines: WAITING });
   expect(p.view.lines).toBeNull();
@@ -582,7 +582,7 @@ test("a question: greeted, thought about with changing lines, and the answer tak
 
 test("Esc while a question is thought about takes the line away with the emblem", () => {
   const p = page();
-  p.send(SETTINGS, { type: "show", mode: "listening", line: "《告。今天有什麼事可以幫忙嗎？》" });
+  p.send(SETTINGS, { type: "show", mode: "listening", line: "《告。主人，請下達指示。》" });
   run(1000);
   p.send({ type: "mode", mode: "thinking", quiet: true, lines: WAITING });
   run(4000);
