@@ -56,7 +56,7 @@ static MONITORING: AtomicBool = AtomicBool::new(false);
 /// The task that passes the core's notifications on to the page that last called `main_events`.
 static FORWARDER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
-/// A page of the main window that the tray's menu can open (`PageId` in types.ts).
+/// A page of the main window that the tray's menu can open (`TrayPage` in types.ts).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TrayPage {
