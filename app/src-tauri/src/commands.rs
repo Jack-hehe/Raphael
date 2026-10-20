@@ -3,8 +3,7 @@
 //! - `core_call` passes a call on to the core, but only the methods the main window needs; the
 //!   dictation methods and the ones that ask Raphael something (`agent.ask`, `agent.confirm`,
 //!   `agent.cancel`) are the controller's alone. The main window may read and clear the record of
-//!   the conversations (`agent.history.`), and manage the calendars of the Today card
-//!   (`calendar.`).
+//!   the conversations (`agent.history.`).
 //! - `device_settings_get` and `device_settings_set` read and change `device.json`
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
 //!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
@@ -19,8 +18,7 @@
 //! what it needs from the app state with `try_state`: after a failure to start, the core, the
 //! hotkeys or the overlay may not be there, and the settings page still has to work.
 //!
-//! Never log the params of a call: `secrets.set_openrouter_key` carries the OpenRouter key, and
-//! `calendar.add` and `calendar.test` a calendar's secret address.
+//! Never log the params of a call: `secrets.set_openrouter_key` carries the OpenRouter key.
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -143,14 +141,13 @@ fn require_main(webview: &Webview) -> Result<(), String> {
 
 // ---------- calls to the core ----------
 
-const ALLOWED_PREFIXES: [&str; 7] = [
+const ALLOWED_PREFIXES: [&str; 6] = [
     "history.",
     "dictionary.",
     "settings.",
     "secrets.",
     "status.",
     "agent.history.",
-    "calendar.",
 ];
 const ALLOWED_METHODS: [&str; 7] = [
     "audio.devices",
@@ -164,8 +161,8 @@ const ALLOWED_METHODS: [&str; 7] = [
 
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
 /// settings (the `languages` setting too), the key, the status, the usage numbers, the model prices,
-/// the list of languages, the record of the conversations with Raphael, the calendars, and the few
-/// device methods the settings page needs. Everything else is refused, the dictation methods and the ones that
+/// the list of languages, the record of the conversations with Raphael, and the few device methods
+/// the settings page needs. Everything else is refused, the dictation methods and the ones that
 /// ask Raphael something above all.
 pub fn is_allowed_method(m: &str) -> bool {
     ALLOWED_METHODS.contains(&m)
@@ -955,11 +952,6 @@ mod tests {
             "languages.list",
             "agent.history.list",
             "agent.history.clear",
-            "calendar.list",
-            "calendar.add",
-            "calendar.remove",
-            "calendar.test",
-            "calendar.today",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
@@ -980,11 +972,6 @@ mod tests {
             "xhistory.list",
             " history.list",
             "HISTORY.list",
-            "calendar",
-            "calendar.",
-            "calendars.list",
-            "xcalendar.list",
-            "Calendar.list",
         ] {
             assert!(!is_allowed_method(method), "{method:?}");
         }

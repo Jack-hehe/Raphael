@@ -57,9 +57,6 @@ pub fn timeout_for(method: &str) -> Duration {
         // Downloads speech models.
         "models.ensure" => 3600,
         "secrets.set_openrouter_key" | "status.check_openrouter" => 15,
-        // Downloads a calendar (8 s at most) and reads it, which takes a few seconds for a large
-        // one; Today reads every calendar the user has.
-        "calendar.add" | "calendar.test" | "calendar.today" => 30,
         _ => 15,
     };
     Duration::from_secs(seconds)
@@ -803,9 +800,6 @@ mod tests {
         assert_eq!(timeout_for("models.ensure"), Duration::from_secs(3600));
         assert_eq!(timeout_for("agent.ask"), Duration::from_secs(60));
         assert_eq!(timeout_for("agent.confirm"), Duration::from_secs(30));
-        for method in ["calendar.add", "calendar.test", "calendar.today"] {
-            assert_eq!(timeout_for(method), Duration::from_secs(30), "{method}");
-        }
         for method in [
             "secrets.set_openrouter_key",
             "status.check_openrouter",
@@ -813,8 +807,6 @@ mod tests {
             "history.list",
             "agent.cancel",
             "agent.history.list",
-            "calendar.list",
-            "calendar.remove",
             "anything.else",
         ] {
             assert_eq!(timeout_for(method), Duration::from_secs(15), "{method}");
