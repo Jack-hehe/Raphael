@@ -304,8 +304,28 @@ async def test_a_clock_that_went_back_counts_the_cache_as_stale(service, client,
     assert len(client.calls) == 2
 
 
+async def test_a_cache_read_the_older_way_is_fetched_again(conn, client, clock):
+    # Cached the hour before by a core that left MAI-Transcribe 2 unknown, with no `reading`.
+    old = json.dumps(
+        {
+            "fetched_at_ms": NOW_MS - HOUR_MS,
+            "prices": {"microsoft/mai-transcribe-2": {"per_minute": None}},
+        }
+    )
+    with conn:
+        conn.execute("INSERT INTO settings (key, value) VALUES ('cache.pricing', ?)", (old,))
+    result = await PricingService(conn, client, clock).get()
+    assert result["source"] == "live"
+    assert by_id(result["stt"])["microsoft/mai-transcribe-2"]["per_minute"] is not None
+
+
 async def test_a_cache_that_is_garbled_is_ignored(conn, client, clock):
-    for value in ["not json", "[]", '{"fetched_at_ms": "soon", "prices": {}}', '{"prices": 3}']:
+    for value in [
+        "not json",
+        "[]",
+        '{"reading": 2, "fetched_at_ms": "soon", "prices": {}}',
+        '{"reading": 2, "prices": 3}',
+    ]:
         with conn:
             conn.execute(
                 "INSERT INTO settings (key, value) VALUES ('cache.pricing', ?)"

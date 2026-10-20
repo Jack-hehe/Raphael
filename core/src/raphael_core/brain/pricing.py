@@ -39,6 +39,9 @@ PRICING_TTL_MS = 24 * 60 * 60 * 1000
 FETCH_TIMEOUT_S = 5.0
 # The settings table's row for the cache. It is no setting: SettingsStore knows no such key.
 CACHE_KEY = "cache.pricing"
+# How the cached prices were read from the list. A cache of another reading is no cache: raise this
+# whenever `parse_models` reads a price differently (2: the MAI models per hour, not unknown).
+CACHE_READING = 2
 # What a minute of speech-to-text can plausibly cost at most, in US dollars. The dearest model
 # (Google Chirp 3) is 1.6 cents.
 _MAX_PER_MINUTE = 1.0
@@ -164,17 +167,22 @@ def _encode(snapshot: _Snapshot) -> str:
         }
         for model_id, price in snapshot.prices.items()
     }
-    return json.dumps({"fetched_at_ms": snapshot.fetched_at_ms, "prices": prices})
+    return json.dumps(
+        {"reading": CACHE_READING, "fetched_at_ms": snapshot.fetched_at_ms, "prices": prices}
+    )
 
 
 def _decode(text: str) -> _Snapshot | None:
-    """The snapshot saved as `text`, or None if it is not one (the cache is only a cache)."""
+    """The snapshot saved as `text`, or None if it is not one (the cache is only a cache), or if
+    it was read from the list by an older `parse_models` (another `reading`)."""
     try:
         data = json.loads(text)
     except ValueError:
         return None
-    fetched_at_ms = data.get("fetched_at_ms") if isinstance(data, dict) else None
-    saved = data.get("prices") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or data.get("reading") != CACHE_READING:
+        return None
+    fetched_at_ms = data.get("fetched_at_ms")
+    saved = data.get("prices")
     if type(fetched_at_ms) is not int or not isinstance(saved, dict):
         return None
     prices: dict[str, ModelPrice] = {}
