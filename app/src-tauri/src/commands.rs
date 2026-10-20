@@ -175,21 +175,25 @@ const ALLOWED_PREFIXES: [&str; 6] = [
     "status.",
     "agent.history.",
 ];
-const ALLOWED_METHODS: [&str; 7] = [
+// `models.` is no prefix here: it names the speech models of this computer (`models.status`,
+// `models.ensure`) as well as OpenRouter's catalog (`models.catalog`), and each is let through by
+// name, so that a method added there later is not opened to the page by accident.
+const ALLOWED_METHODS: [&str; 8] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
     "models.status",
     "models.ensure",
+    "models.catalog",
     "pricing.get",
     "stats.summary",
 ];
 
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
 /// settings (the `languages` setting too), the key, the status, the usage numbers, the model prices,
-/// the list of languages, the record of the conversations with Raphael, and the few device methods
-/// the settings page needs. Everything else is refused, the dictation methods and the ones that
-/// ask Raphael something above all.
+/// OpenRouter's catalog of models, the list of languages, the record of the conversations with
+/// Raphael, and the few device methods the settings page needs. Everything else is refused, the
+/// dictation methods and the ones that ask Raphael something above all.
 pub fn is_allowed_method(m: &str) -> bool {
     ALLOWED_METHODS.contains(&m)
         || ALLOWED_PREFIXES
@@ -199,7 +203,7 @@ pub fn is_allowed_method(m: &str) -> bool {
 
 /// Checks the values the core would only type-check: a monthly limit of 0 or more, a history
 /// retention of at least one day, a language the speech recognition knows, a model that is named,
-/// a speech-to-text engine that exists (the core checks the cloud model against its own list).
+/// a speech-to-text engine that exists (the core checks each model against OpenRouter's list).
 /// `Err` says what is wrong. Calls other than `settings.set` pass.
 pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     if method != "settings.set" {
@@ -972,6 +976,7 @@ mod tests {
             "audio.monitor",
             "models.status",
             "models.ensure",
+            "models.catalog",
             "pricing.get",
             "stats.summary",
             "languages.list",
@@ -997,6 +1002,26 @@ mod tests {
             "xhistory.list",
             " history.list",
             "HISTORY.list",
+        ] {
+            assert!(!is_allowed_method(method), "{method:?}");
+        }
+    }
+
+    #[test]
+    fn the_settings_page_reads_the_catalog_of_models_but_no_other_models_method() {
+        assert!(is_allowed_method("models.catalog"));
+        // `models.` names the speech models of this computer too: each method is let through by
+        // its name, never by the prefix.
+        for method in [
+            "models.",
+            "models",
+            "models.catalogue",
+            "models.catalog.refresh",
+            "models.download",
+            "models.progress",
+            "Models.catalog",
+            " models.catalog",
+            "xmodels.catalog",
         ] {
             assert!(!is_allowed_method(method), "{method:?}");
         }
@@ -1059,8 +1084,9 @@ mod tests {
             Err("語音轉文字只能選雲端或本機".to_owned())
         );
         assert!(set("stt_engine", json!(null)).is_err());
-        // the core checks the cloud model against the models it knows
+        // the core checks each model against OpenRouter's list
         assert!(set("stt_cloud_model", json!("openai/gpt-transcribe")).is_ok());
+        assert!(set("stt_cloud_model", json!("deepgram/nova-3")).is_ok());
     }
 
     #[test]
