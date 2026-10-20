@@ -1289,11 +1289,14 @@ impl FocusWatch {
         !sender.is_empty() && self.containers.iter().any(|id| id.as_slice() == sender)
     }
 
+    /// `sender_in_target`: whether the sender belongs to the target's process (None when that
+    /// cannot be read).
     fn changed_from(
         &self,
         sender_runtime_id: Option<&[i32]>,
         has_keyboard_focus: Option<bool>,
         foreground_matches: bool,
+        sender_in_target: Option<bool>,
     ) -> Option<bool> {
         let same = self
             .runtime_id
@@ -1304,8 +1307,15 @@ impl FocusWatch {
         if !foreground_matches || same.is_none() || has_keyboard_focus.is_none() {
             self.changed();
         } else if has_keyboard_focus == Some(false) {
-            // A stale sender must not poison field reads, but cannot vouch for an input gap.
-            self.block_input_observation();
+            // A stale sender must not poison field reads, but cannot vouch for an input gap. Unless
+            // it lives in another process: while the target window stays in front, keys go to the
+            // focused element of that window, so an element elsewhere without the keyboard focus
+            // took none of them. Such panes raise focus events right after a paste (in the owner's
+            // log, a pane outside Windows Terminal, as Raphael's overlay took its "complete"
+            // event), and blocking on them kept every terminal dictation from being learned.
+            if sender_in_target != Some(false) {
+                self.block_input_observation();
+            }
         } else if same != Some(true) {
             self.changed();
         }
@@ -1365,20 +1375,26 @@ impl IUIAutomationFocusChangedEventHandler_Impl for FocusChanged_Impl {
                 .map_err(|error| error.code().0)
         });
         let foreground_matches = foreground() == self.0.hwnd;
+        let sender_pid = sender
+            .as_ref()
+            .and_then(|element| unsafe { element.CurrentProcessId() }.ok())
+            .map(|pid| pid as u32);
         let sender_id = identity.as_ref().and_then(|result| result.as_deref().ok());
         let same = self.0.changed_from(
             sender_id,
             has_keyboard_focus.and_then(Result::ok),
             foreground_matches,
+            sender_pid.map(|pid| pid == self.0.target_pid),
         );
         let container = sender_id.is_some_and(|id| self.0.is_container(id));
+        let own_process = sender_pid == Some(std::process::id());
         // A small per-watch cap keeps repeated provider notifications from spamming the log.
         if self.0.event_reports.fetch_add(1, Ordering::Relaxed) < 3 {
             let metadata = sender
                 .as_ref()
                 .map(|element| focus_element_metadata(element, self.0.target_pid));
             log::info!(
-                "learn: focus event (sender_present: {}, same_runtime_id: {same:?}, container: {container}, hresult: {:?}, role: {:?}, has_keyboard_focus: {:?}, target_process: {:?}, foreground_matches: {foreground_matches}, input_blocked: {}, field_left: {})",
+                "learn: focus event (sender_present: {}, same_runtime_id: {same:?}, container: {container}, hresult: {:?}, role: {:?}, has_keyboard_focus: {:?}, target_process: {:?}, own_process: {own_process}, foreground_matches: {foreground_matches}, input_blocked: {}, field_left: {})",
                 identity.is_some(),
                 identity
                     .as_ref()
@@ -1443,7 +1459,7 @@ mod tests {
         let original = vec![42, 7, 19];
         let focus = FocusWatch::new(Some(original.clone()), 0, 11);
         for _ in 0..3 {
-            focus.changed_from(Some(&original), Some(true), true);
+            focus.changed_from(Some(&original), Some(true), true, Some(true));
             assert!(!focus.left.load(Ordering::SeqCst));
         }
     }
@@ -1459,7 +1475,7 @@ mod tests {
             (Some(Vec::new()), Some(Vec::new())),
         ] {
             let focus = FocusWatch::new(original, 0, 11);
-            focus.changed_from(sender.as_deref(), Some(true), true);
+            focus.changed_from(sender.as_deref(), Some(true), true, Some(true));
             assert!(focus.left.load(Ordering::SeqCst));
         }
     }
@@ -1475,7 +1491,7 @@ mod tests {
             .with_containers(vec![document.clone(), window.clone()]);
         for sender in [&document, &window] {
             assert_eq!(
-                focus.changed_from(Some(sender), Some(true), true),
+                focus.changed_from(Some(sender), Some(true), true, Some(true)),
                 Some(true)
             );
         }
@@ -1487,8 +1503,8 @@ mod tests {
     fn an_element_around_the_field_does_not_hide_a_move_to_another_field() {
         let original = vec![42, 7, 19];
         let focus = FocusWatch::new(Some(original), 0, 11).with_containers(vec![vec![42, 7, 3]]);
-        focus.changed_from(Some(&[42, 7, 3]), Some(true), true);
-        focus.changed_from(Some(&[42, 7, 20]), Some(true), true);
+        focus.changed_from(Some(&[42, 7, 3]), Some(true), true, Some(true));
+        focus.changed_from(Some(&[42, 7, 20]), Some(true), true, Some(true));
         assert!(focus.left.load(Ordering::SeqCst));
     }
 
@@ -1504,13 +1520,18 @@ mod tests {
             (Some(original.clone()), None, true),
         ] {
             let focus = FocusWatch::new(field, 0, 11).with_containers(vec![document.clone()]);
-            focus.changed_from(Some(&document), has_keyboard_focus, foreground_matches);
+            focus.changed_from(
+                Some(&document),
+                has_keyboard_focus,
+                foreground_matches,
+                Some(true),
+            );
             assert!(focus.left.load(Ordering::SeqCst));
         }
         // An empty id never matches a container.
         let focus = FocusWatch::new(Some(original), 0, 11).with_containers(vec![Vec::new()]);
         assert!(!focus.is_container(&[]));
-        focus.changed_from(Some(&[]), Some(true), true);
+        focus.changed_from(Some(&[]), Some(true), true, Some(true));
         assert!(focus.left.load(Ordering::SeqCst));
     }
 
@@ -1518,8 +1539,8 @@ mod tests {
     fn a_matching_focus_event_never_revives_a_cancelled_watch() {
         let original = vec![42, 7, 19];
         let focus = FocusWatch::new(Some(original.clone()), 0, 11);
-        focus.changed_from(Some(&[42, 7, 20]), Some(true), true);
-        focus.changed_from(Some(&original), Some(true), true);
+        focus.changed_from(Some(&[42, 7, 20]), Some(true), true, Some(true));
+        focus.changed_from(Some(&original), Some(true), true, Some(true));
         assert!(focus.left.load(Ordering::SeqCst));
     }
 
@@ -1527,12 +1548,50 @@ mod tests {
     fn unfocused_background_event_preserves_field_and_blocks_input_observation() {
         let original = vec![42, 7, 19];
         let focus = FocusWatch::new(Some(original.clone()), 0, 11);
-        focus.changed_from(Some(&[42, 7, 20]), Some(false), true);
+        focus.changed_from(Some(&[42, 7, 20]), Some(false), true, Some(true));
         assert!(!focus.left.load(Ordering::SeqCst));
         assert!(focus.input_blocked.load(Ordering::SeqCst));
         assert!(!focus.input_observation_allowed());
         // A later duplicate cannot re-arm keyboard capture for the same watch.
-        focus.changed_from(Some(&original), Some(true), true);
+        focus.changed_from(Some(&original), Some(true), true, Some(true));
+        assert!(!focus.left.load(Ordering::SeqCst));
+        assert!(!focus.input_observation_allowed());
+    }
+
+    #[test]
+    fn an_unfocused_element_of_another_process_changes_nothing_while_the_target_is_in_front() {
+        // A pane outside Windows Terminal raises a focus event right after the paste, without the
+        // keyboard focus: the terminal still gets every key, so the watch and its keyboard
+        // observation go on.
+        let focus = FocusWatch::new(Some(vec![42, 7, 19]), 0, 11);
+        focus.changed_from(Some(&[61, 2, 8]), Some(false), true, Some(false));
+        assert!(!focus.left.load(Ordering::SeqCst));
+        assert!(focus.input_observation_allowed());
+    }
+
+    #[test]
+    fn another_process_still_ends_the_watch_when_it_has_the_focus_or_the_foreground_moved() {
+        for (has_keyboard_focus, foreground_matches) in
+            [(Some(true), true), (Some(false), false), (None, true)]
+        {
+            let focus = FocusWatch::new(Some(vec![42, 7, 19]), 0, 11);
+            focus.changed_from(
+                Some(&[61, 2, 8]),
+                has_keyboard_focus,
+                foreground_matches,
+                Some(false),
+            );
+            assert!(
+                focus.left.load(Ordering::SeqCst),
+                "{has_keyboard_focus:?}, {foreground_matches}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unfocused_sender_of_unknown_process_still_blocks_keyboard_observation() {
+        let focus = FocusWatch::new(Some(vec![42, 7, 19]), 0, 11);
+        focus.changed_from(Some(&[61, 2, 8]), Some(false), true, None);
         assert!(!focus.left.load(Ordering::SeqCst));
         assert!(!focus.input_observation_allowed());
     }
@@ -1548,7 +1607,12 @@ mod tests {
             (None, Some(false), true),
         ] {
             let focus = FocusWatch::new(Some(original.clone()), 0, 11);
-            focus.changed_from(sender.as_deref(), has_keyboard_focus, foreground_matches);
+            focus.changed_from(
+                sender.as_deref(),
+                has_keyboard_focus,
+                foreground_matches,
+                Some(true),
+            );
             assert!(focus.left.load(Ordering::SeqCst));
         }
     }
