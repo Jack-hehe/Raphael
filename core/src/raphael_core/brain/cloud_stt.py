@@ -21,6 +21,7 @@ import binascii
 import io
 import logging
 import math
+import unicodedata
 import wave
 from collections.abc import Callable
 from typing import Any
@@ -92,6 +93,39 @@ def _language(params: dict) -> str | None:
     return LANGUAGES[language]
 
 
+# The scripts a language is written in, by the first word of the Unicode names of its letters.
+# Latin is always let through: English words, names and terms turn up in speech in any language.
+_SCRIPTS = {
+    "zh": {"CJK", "BOPOMOFO"},
+    "yue": {"CJK", "BOPOMOFO"},
+    "ja": {"CJK", "HIRAGANA", "KATAKANA"},
+    "ko": {"HANGUL", "CJK"},
+    "th": {"THAI"},
+}
+# A transcript is foreign when this share of its letters (or more) is in a script of no language
+# the user speaks.
+_FOREIGN_SHARE = 1 / 3
+
+
+def _foreign(text: str, spoken: list[str]) -> bool:
+    """Whether `text` is mostly in scripts that none of the `spoken` codes is written in."""
+    allowed = {"LATIN"}
+    for code in spoken:
+        allowed |= _SCRIPTS.get(code, set())
+    letters = foreign = 0
+    for char in text:
+        if not char.isalpha():
+            continue
+        letters += 1
+        try:
+            script = unicodedata.name(char).replace("-", " ").split()[0]
+        except ValueError:
+            continue
+        if script not in allowed:
+            foreign += 1
+    return letters > 0 and foreign / letters >= _FOREIGN_SHARE
+
+
 class CloudTranscriber:
     """`stt.transcribe {audio, hints, language}` -> `{text, model, cost_usd}`.
 
@@ -99,6 +133,8 @@ class CloudTranscriber:
     `stt_cloud_model` setting, read for each call. `language` is "auto" or one language's code;
     the device side always sends "auto", regardless of the selected variants. With "auto", all
     codes of the `languages` setting still go along for models that accept multiple language hints.
+    A transcript from "auto" that is mostly in a script none of those languages is written in is
+    heard once more as the first of them.
     """
 
     def __init__(
@@ -132,10 +168,33 @@ class CloudTranscriber:
             raise _refusal(BUDGET_EXCEEDED, "budget", "The monthly limit has been reached")
 
         model = self._settings.get("stt_cloud_model")
+        spoken = stt_languages(self._settings.get("languages"))
         candidates: list[str] = []
         if language is None:
-            codes = (LANGUAGES[code] for code in stt_languages(self._settings.get("languages")))
+            codes = (LANGUAGES[code] for code in spoken)
             candidates = [code for code in dict.fromkeys(codes) if code]
+        result = await self._hear(model, audio, hints, language, candidates, seconds)
+        if language is None and _foreign(result.text, spoken):
+            # Automatic detection heard a language the user does not speak (seen: Thai for a
+            # Chinese speaker). The same speech is heard once more as the first of their languages;
+            # if that fails, the first transcript stands.
+            try:
+                result = await self._hear(model, audio, hints, LANGUAGES[spoken[0]], [], seconds)
+            except RpcError:
+                logger.debug("The second hearing of a foreign-script transcript failed")
+        cost = result.cost_usd if math.isfinite(result.cost_usd) and result.cost_usd >= 0 else 0.0
+        return {"text": result.text, "model": result.model, "cost_usd": cost}
+
+    async def _hear(
+        self,
+        model: str,
+        audio: str,
+        hints: list[str],
+        language: str | None,
+        candidates: list[str],
+        seconds: float,
+    ) -> Any:
+        """One transcription by the client, written to the spend; an RpcError when it fails."""
         timeout = timeout_for(seconds)
         try:
             result = await asyncio.wait_for(
@@ -162,8 +221,6 @@ class CloudTranscriber:
         except Exception as exc:  # anything else the client lets out; its message may hold a key
             logger.warning("Cloud speech-to-text failed unexpectedly: %s", type(exc).__name__)
             raise _refusal(INTERNAL_ERROR, "unexpected", "Cloud speech-to-text failed") from None
-
-        cost = result.cost_usd if math.isfinite(result.cost_usd) and result.cost_usd >= 0 else 0.0
         try:
             self._spend.record(
                 purpose="stt",
@@ -174,4 +231,4 @@ class CloudTranscriber:
             )
         except Exception as exc:  # a cost it refuses, or a database that fails
             logger.warning("Could not record what a transcription cost: %s", type(exc).__name__)
-        return {"text": result.text, "model": result.model, "cost_usd": cost}
+        return result
