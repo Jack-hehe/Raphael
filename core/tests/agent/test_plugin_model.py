@@ -256,7 +256,7 @@ async def test_the_catalog_is_read_only_for_a_request_that_may_use_a_plugin(
     assert catalog.reads == 0
     # ...and neither does an answer when no plugin tool has a tier: nothing would be offered.
     [server] = (await plugins.rpc.call("integrations.list"))["servers"]
-    await plugins.set_tier(server["id"], "look", None)
+    await plugins.set_on(server["id"], "look", False)
     route(client)
     client.replies.append(spoken("答", "好。"))
     await rig.ask("你好嗎")

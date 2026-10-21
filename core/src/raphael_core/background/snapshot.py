@@ -3,9 +3,10 @@
 The worker is offered the tools by an alias and a schema and nothing else; the table that says which
 tool an alias is stays here in the core. The snapshot holds:
 
-- the tools of the plugins the user connected that have a tier of T0 or T1 (`PluginHub.offered`):
-  the ones that read, and the ones that change this computer in a way that is easily undone. The tools
-  at T2 and T3 need a yes at the overlay, which the worker cannot ask for yet, so they are left out;
+- the tools of the plugins the user connected that are on (`PluginHub.offered`), whether they read or
+  change something there: the user turned off what a task must not use, and a tool that is on runs
+  without asking, for a task as for the assistant. (A tool that needed a yes would be left out: the
+  worker cannot ask at the overlay yet. None does, today.)
 - Raphael's own lookups on the web: the weather, a web search and the time.
 
 Not the commands for this computer (open a site, the volume, lock the screen, copy): those stay with
@@ -24,7 +25,8 @@ from ..agent.gate import WEB_TOOLS
 from ..agent.plugins import PluginHub, make_offer
 from ..agent.policy import Tier
 
-# The most a task is offered at the highest tier of its snapshot.
+# The most a task is offered at the highest tier of its snapshot: the tier that runs at once. A tool
+# above it would have to ask, which the worker cannot.
 SNAPSHOT_MAX_TIER = Tier.T1
 
 BUILTIN = "builtin"

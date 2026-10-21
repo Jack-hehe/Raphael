@@ -15,6 +15,7 @@ import pytest
 from mcp import Client
 
 from raphael_core.agent.gate import ToolGate
+from raphael_core.agent.policy import Tier
 from raphael_core.agent.tools import Tools
 from raphael_core.background.host import WorkerHost
 from raphael_core.background.run import RunLimits
@@ -191,6 +192,16 @@ class Servers:
             yield client
 
 
+class StrictHub(IntegrationsService):
+    """A hub whose tools can have a tier above the one of a tool that is on, to test what a task is
+    kept from (a tool that would have to ask: the worker cannot)."""
+
+    strict: dict[str, Tier]
+
+    def _tier_for(self, tool):
+        return self.strict.get(tool.name, super()._tier_for(tool))
+
+
 class Plugins:
     """The plugins as the window would set them up, for a test to connect servers to."""
 
@@ -198,24 +209,32 @@ class Plugins:
         self.vault = MemoryVault()
         self.servers = Servers()
         connector = McpConnector(self.vault, self.servers)
-        self.hub = IntegrationsService(conn, directory, self.vault, connector=connector, call_timeout_s=3.0)
+        self.hub = StrictHub(conn, directory, self.vault, connector=connector, call_timeout_s=3.0)
+        self.hub.strict = {}
         self.rpc = RpcRouter()
         self.hub.register(self.rpc)
 
-    async def connect(self, name="Notes", **tiers):
-        """Connect the fake server, read its tools and give the tools the tiers named; its id."""
+    async def connect(self, name="Notes", **only):
+        """Connect a server, read its tools and leave on the tools named (one given as None is
+        off too) and no others; returns its id. Every tool of a new server is on, so the rest
+        are turned off here."""
         self.servers.by_name[name] = fake_server.build()
         added = await self.rpc.call(
             "integrations.add", {"name": name, "transport": "stdio", "command": "unused"}
         )
         server_id = added["server"]["id"]
         await self.rpc.call("integrations.refresh", {"id": server_id})
-        for tool, tier in tiers.items():
-            await self.set_tier(server_id, tool, tier)
+        tools = (await self.rpc.call("integrations.tools", {"id": server_id}))["tools"]
+        for tool in tools:
+            await self.set_on(server_id, tool["name"], only.get(tool["name"]) is not None)
+        # a tier above the one of a tool that is on: the tool would have to ask
+        self.hub.strict.update({tool: Tier[tier] for tool, tier in only.items() if tier in ("T2", "T3")})
         return server_id
 
-    async def set_tier(self, server_id, tool, tier):
-        await self.rpc.call("integrations.set_tier", {"id": server_id, "tool": tool, "tier": tier})
+    async def set_on(self, server_id, tool, on):
+        await self.rpc.call(
+            "integrations.set_tool_enabled", {"id": server_id, "tool": tool, "enabled": on}
+        )
 
     def audit(self):
         """Every row of the audit, oldest first: (server, tool, tier, approver, outcome, task_id)."""

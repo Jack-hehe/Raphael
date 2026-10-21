@@ -49,8 +49,10 @@ def connect_the_fake_server(core, **tiers):
     )["server"]
     refreshed = result(core, "integrations.refresh", {"id": added["id"]}, timeout=60)
     assert refreshed["server"]["status"] == "ready", refreshed
-    for tool, tier in tiers.items():
-        result(core, "integrations.set_tier", {"id": added["id"], "tool": tool, "tier": tier})
+    # every tool of a new server is on: leave on the ones named and no others
+    for tool in refreshed["tools"]:
+        on = tiers.get(tool["name"]) is not None
+        result(core, "integrations.set_tool_enabled", {"id": added["id"], "tool": tool["name"], "enabled": on})
     return added["id"]
 
 
@@ -108,17 +110,17 @@ def test_a_task_is_handed_over_carried_out_by_the_worker_and_reported(spawn):
     task = result(core, "worker.get", {"id": report["task_id"]})["task"]
     assert [(s["kind"], s["tool"], s["server"], s["tier"], s["outcome"]) for s in task["steps"]] == [
         ("model", None, None, None, "ok"),
-        ("tool", "look", "Notes", "T0", "ok"),
+        ("tool", "look", "Notes", "T1", "ok"),
         ("model", None, None, None, "ok"),
-        ("tool", "look", "Notes", "T0", "ok"),
+        ("tool", "look", "Notes", "T1", "ok"),
         ("model", None, None, None, "ok"),
     ]
     assert task["cost_usd"] == 0 and task["tool_calls"] == 2
     # Two audit rows, both the worker's, none with an argument or a result.
     audit = result(core, "integrations.audit", {})["entries"]
     assert [(e["tool"], e["tier"], e["approver"], e["outcome"], e["task_id"]) for e in audit] == [
-        ("look", "T0", "auto", "ok", report["task_id"]),
-        ("look", "T0", "auto", "ok", report["task_id"]),
+        ("look", None, "auto", "ok", report["task_id"]),
+        ("look", None, "auto", "ok", report["task_id"]),
     ]
     assert "alpha" not in json.dumps(audit) and "found" not in json.dumps(task)
     # The conversation shows the report where the handoff was; nothing was spent.

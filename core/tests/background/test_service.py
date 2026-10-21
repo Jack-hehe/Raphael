@@ -50,7 +50,7 @@ async def test_a_task_is_carried_out_step_by_step_and_reported(make_rig, plugins
     assert calls == ["look"]
     assert [(s.kind, s.tool, s.server, s.tier, s.outcome) for s in rig.steps(task_id)] == [
         ("model", None, None, None, "ok"),
-        ("tool", "look", "Notes", "T0", "ok"),
+        ("tool", "look", "Notes", "T1", "ok"),
         ("model", None, None, None, "ok"),
     ]
 
@@ -80,7 +80,7 @@ async def test_every_call_is_audited_with_the_task_and_every_paid_call_is_spent(
     await look_twice_then_report(rig)
     task_id = rig.submit()
     await rig.wait_for_reports()
-    assert plugins.audit() == [("Notes", "look", "T0", "auto", "ok", task_id)]
+    assert plugins.audit() == [("Notes", "look", None, "auto", "ok", task_id)]
     spent = rig.conn.execute("SELECT purpose, model, cost_usd FROM spend ORDER BY id").fetchall()
     assert [tuple(r) for r in spent] == [("agent", "fake/model", 0.002), ("agent", "fake/model", 0.003)]
 
@@ -541,7 +541,7 @@ async def test_the_app_lists_the_tasks_and_reads_one_with_its_steps_and_never_it
     got = (await rig.rpc.call("worker.get", {"id": task_id}))["task"]
     assert [(s["n"], s["kind"], s["tool"], s["tier"], s["outcome"]) for s in got["steps"]] == [
         (1, "model", None, None, "ok"),
-        (2, "tool", "look", "T0", "ok"),
+        (2, "tool", "look", "T1", "ok"),
         (3, "model", None, None, "ok"),
     ]
     assert ARGUMENT not in json.dumps(got) and RESULT not in json.dumps(got)
