@@ -71,6 +71,8 @@ logger = logging.getLogger(__name__)
 
 HISTORY_DEFAULT_LIMIT = 50
 HISTORY_MAX_LIMIT = 200
+# The most words `dictionary.import` takes in one call.
+IMPORT_MAX = 5000
 # The most corrections `dictionary.learn` takes from one dictation.
 LEARN_MAX = 3
 # The dictionary adds words by itself from this many days of history,
@@ -286,6 +288,7 @@ class Brain:
             "history.delete": self._history_delete,
             "dictionary.list": self._dictionary_list,
             "dictionary.add": self._dictionary_add,
+            "dictionary.import": self._dictionary_import,
             "dictionary.delete": self._dictionary_delete,
             "dictionary.auto_add": self._dictionary_auto_add,
             "dictionary.dismiss": self._dictionary_dismiss,
@@ -445,6 +448,26 @@ class Brain:
         with _store_call():
             entry = self._dictionary.add(word, misheard)
         return {"entry": asdict(entry)}
+
+    async def _dictionary_import(self, params: dict) -> dict:
+        """`{words: [word]}` -> `{added, skipped, invalid}`: adds the words as manual entries in
+        one transaction (at most IMPORT_MAX). A word that is in the dictionary already (in any
+        letter case) or repeats is skipped, a blank one is invalid, and a word the user had
+        dismissed is added all the same. Only the counts are logged."""
+        if _required(params, "words") is None:
+            raise _invalid("words must be a list of strings")
+        words = _opt_strings(params, "words")
+        if len(words) > IMPORT_MAX:
+            raise _invalid(f"words takes at most {IMPORT_MAX} entries")
+        with _store_call():
+            added, skipped, invalid = self._dictionary.import_words(words)
+        logger.info(
+            "Imported %d words into the dictionary (%d skipped, %d invalid)",
+            added,
+            skipped,
+            invalid,
+        )
+        return {"added": added, "skipped": skipped, "invalid": invalid}
 
     async def _dictionary_delete(self, params: dict) -> dict:
         entry_id = _int(params, "id")

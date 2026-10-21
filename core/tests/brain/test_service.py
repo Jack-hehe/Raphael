@@ -9,6 +9,7 @@ Router, the way the device side makes it.
 import asyncio
 import json
 import logging
+import sqlite3
 from datetime import UTC, datetime
 
 import httpx
@@ -41,6 +42,7 @@ METHODS = [
     "history.delete",
     "dictionary.list",
     "dictionary.add",
+    "dictionary.import",
     "dictionary.delete",
     "dictionary.auto_add",
     "dictionary.dismiss",
@@ -1684,3 +1686,76 @@ async def test_changing_the_retention_starts_the_day_again(router, conn, clock):
     clock.now_ms = NOW_MS + 12 * 3_600_000 + DAY_MS
     await finalize(router)
     assert store.get(aging) is None
+
+
+# --- dictionary.import ---------------------------------------------------------------------------
+
+
+async def imported(router, words):
+    return await router.call("dictionary.import", {"words": words})
+
+
+async def test_import_adds_the_words_as_manual_entries(router):
+    assert await imported(router, ["Tailscale", "拉斐爾"]) == {"added": 2, "skipped": 0, "invalid": 0}
+    entries = (await router.call("dictionary.list", {}))["entries"]
+    assert sorted((e["word"], e["source"], e["misheard"]) for e in entries) == [
+        ("Tailscale", "manual", []),
+        ("拉斐爾", "manual", []),
+    ]
+
+
+async def test_import_skips_known_words_in_any_letter_case_and_repeats_in_the_list(router):
+    await router.call("dictionary.add", {"word": "Tailscale", "misheard": ["tail scale"]})
+    result = await imported(router, ["tailscale", "OpenRouter", "openrouter", " OpenRouter "])
+    assert result == {"added": 1, "skipped": 3, "invalid": 0}
+    entries = (await router.call("dictionary.list", {}))["entries"]
+    assert sorted(e["word"] for e in entries) == ["OpenRouter", "Tailscale"]
+    assert [e["misheard"] for e in entries if e["word"] == "Tailscale"] == [["tail scale"]]
+
+
+async def test_import_counts_blank_words_as_invalid(router):
+    assert await imported(router, ["Kokoro", "  ", ""]) == {"added": 1, "skipped": 0, "invalid": 2}
+
+
+async def test_import_takes_a_word_the_user_dismissed_and_forgets_the_dismissal(router, conn):
+    DictionaryStore(conn).dismiss("OpenRouter")
+    assert await imported(router, ["openrouter"]) == {"added": 1, "skipped": 0, "invalid": 0}
+    assert DictionaryStore(conn).dismissed() == set()
+
+
+async def test_import_is_one_transaction(router, monkeypatch):
+    real = DictionaryStore._put
+    calls = []
+
+    def failing(self, word, forms, source):
+        calls.append(word)
+        if len(calls) == 2:
+            raise sqlite3.OperationalError("disk full")
+        return real(self, word, forms, source)
+
+    monkeypatch.setattr(DictionaryStore, "_put", failing)
+    with pytest.raises(RpcError) as err:
+        await imported(router, ["a1", "b2", "c3"])
+    assert err.value.code == INTERNAL_ERROR
+    monkeypatch.undo()
+    assert (await router.call("dictionary.list", {}))["entries"] == []
+
+
+async def test_import_never_logs_the_words(router, caplog):
+    caplog.set_level(logging.DEBUG)
+    await imported(router, ["SecretProjectName"])
+    assert "SecretProjectName" not in caplog.text
+
+
+async def test_import_takes_at_most_5000_words(router):
+    await imported(router, [f"w{n}" for n in range(service.IMPORT_MAX)])
+    with pytest.raises(RpcError) as err:
+        await imported(router, [f"x{n}" for n in range(service.IMPORT_MAX + 1)])
+    assert err.value.code == INVALID_PARAMS
+
+
+@pytest.mark.parametrize("params", [{}, {"words": "x"}, {"words": [1]}, {"words": None}])
+async def test_import_refuses_bad_params(router, params):
+    with pytest.raises(RpcError) as err:
+        await router.call("dictionary.import", params)
+    assert err.value.code == INVALID_PARAMS
