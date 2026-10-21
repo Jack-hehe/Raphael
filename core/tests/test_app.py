@@ -1102,6 +1102,7 @@ EXPECTED_METHODS = {
     "integrations.refresh",
     "integrations.tools",
     "integrations.set_tool_enabled",
+    "integrations.set_tools_enabled",
     "integrations.audit",
 }
 
