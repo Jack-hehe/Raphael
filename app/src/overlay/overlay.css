@@ -115,6 +115,8 @@ body {
   bottom: var(--ask-bottom);
   display: flex;
   gap: var(--ask-gap);
+  /* Never wider than the window: a long answer word shrinks its pill instead of pushing it off the left edge. */
+  max-width: calc(100vw - var(--subs-right) - 8px);
   opacity: 0;
   transition: opacity 0.18s ease;
 }
@@ -129,6 +131,7 @@ body {
   position: relative;
   overflow: hidden;
   min-width: 84px;
+  flex: 0 1 auto;
   height: var(--ask-h);
   padding: 0 20px;
   border-radius: calc(var(--ask-h) / 2);

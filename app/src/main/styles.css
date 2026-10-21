@@ -55,7 +55,8 @@
 
 /* ---------- base ---------- */
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; }
+/* Nothing in the app scrolls sideways: a page that is wider than its window has a bug to fix, and a scrollbar along the bottom is no answer. The scrolling parts below set overflow-x: hidden as a last guard; the layouts shrink and wrap so that nothing is cut off. */
+html, body { margin: 0; height: 100%; overflow-x: hidden; }
 body { font: 14px/1.5 var(--ui); color: var(--text); background: var(--side); -webkit-font-smoothing: antialiased; overflow: hidden; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
@@ -106,7 +107,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 :root[data-window-maximized="true"] .window-resize { display: none; }
 .wbody { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); height: 100%; min-height: 0; }
 
-.side { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 12px; min-height: 0; overflow: auto; }
+.side { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 12px; min-height: 0; overflow-x: hidden; overflow-y: auto; }
 .brand { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 10px; margin-bottom: 14px; font: 650 17px/1 var(--display); letter-spacing: -0.01em; color: var(--text); user-select: none; }
 .app-icon { display: block; width: 40px; height: 40px; flex: none; object-fit: contain; object-position: center; border-radius: 0; background: transparent; }
 .nav { position: relative; display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 8px 12px; border: 0; border-radius: 9px; background: transparent; text-align: left; font-size: 14px; line-height: 1.4; color: var(--text-2); width: 100%; }
@@ -115,12 +116,12 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .nav[aria-current="page"] .i { color: var(--accent-text); }
 .side-fill { flex: 1; min-height: 12px; }
 /* This month's spend, a way into the settings. */
-.usage-box { display: grid; gap: 7px; width: 100%; padding: 11px 12px 12px; border-radius: 12px; border: 1px solid var(--edge); background: var(--panel); text-align: left; color: var(--text); }
+.usage-box { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; width: 100%; padding: 11px 12px 12px; border-radius: 12px; border: 1px solid var(--edge); background: var(--panel); text-align: left; color: var(--text); }
 .usage-box:hover { border-color: var(--btn-edge); }
 .usage-t { font-size: 12px; color: var(--text-2); }
 .usage-num { font-size: 12px; color: var(--text-2); }
 .side-foot { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
-.main { position: relative; overflow: auto; background: var(--content); border-top-left-radius: 14px; border-left: 1px solid var(--edge); border-top: 1px solid var(--edge); min-height: 0; container: main / inline-size; scrollbar-gutter: stable; }
+.main { position: relative; overflow-x: hidden; overflow-y: auto; background: var(--content); border-top-left-radius: 14px; border-left: 1px solid var(--edge); border-top: 1px solid var(--edge); min-height: 0; container: main / inline-size; scrollbar-gutter: stable; }
 /* Each page is a column centred in the window: wide windows get margins, nothing stretches edge to edge. */
 .page { max-width: 1160px; margin: 0 auto; padding: calc(var(--window-controls-height) + 8px) 32px 40px; }
 .page h1 { font: 650 28px/1.3 var(--display); margin: 0; letter-spacing: -0.015em; }
@@ -207,7 +208,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .alert { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 8px 8px 8px 14px; border-radius: 10px; background: var(--warn-soft); border: 1px solid var(--warn-edge); }
 .alert .st { white-space: normal; flex: 1; min-width: 0; }
 
-.page-loading { display: grid; gap: 12px; padding: 24px 0; width: 100%; }
+.page-loading { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 24px 0; width: 100%; }
 .loading-line { display: block; height: 64px; border-radius: 12px; background: var(--surface-2); animation: ob-pulse 1.8s ease-in-out infinite; }
 .loading-line:last-child { width: 68%; }
 .wgrid .page-loading { grid-column: 1 / -1; }
@@ -248,7 +249,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 /* Reserve a stable action column so hover and expanded controls never cover the transcript. */
 .hrow .acts { display: flex; gap: 2px; padding: 2px; margin-top: -3px; visibility: hidden; }
 .hrow:hover .acts, .hrow:focus-within .acts, .hrow[aria-expanded="true"] .acts { visibility: visible; }
-.hdetail { padding: 0 8px 14px 68px; display: grid; gap: 4px; }
+.hdetail { padding: 0 8px 14px 68px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
 .hdetail h4 { margin: 6px 0 0; font-size: 12px; font-weight: 600; color: var(--text-3); }
 .hdetail .raw { font-size: 13px; line-height: 1.6; color: var(--text-2); overflow-wrap: anywhere; user-select: text; }
 .empty { padding: 36px 0; text-align: center; color: var(--text-3); font-size: 13px; }
@@ -277,7 +278,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .wchip:hover { border-color: var(--btn-edge); }
 .wchip .spark { display: inline-flex; color: var(--accent-text); }
 .wchip .spark .i { width: 14px; height: 14px; fill: currentColor; stroke-width: 1; }
-.wchip .wtext { flex: 1; min-width: 0; display: grid; }
+.wchip .wtext { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
 .word { font-weight: 600; overflow-wrap: anywhere; }
 .mis { color: var(--text-3); font-size: 12px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wrow .acts { color: var(--text-3); }
@@ -285,8 +286,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 /* ---------- settings: a panel over the window ---------- */
 .modal-scrim { --modal-gap: 24px; position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: calc(var(--window-controls-height) + var(--modal-gap)) var(--modal-gap) var(--modal-gap); background: var(--scrim); }
 .modal { position: relative; display: grid; grid-template-columns: 196px minmax(0, 1fr); width: min(1000px, 100%); height: min(760px, 100%); border-radius: 18px; overflow: hidden; background: var(--content); border: 1px solid var(--edge); box-shadow: var(--pop); }
-.modal-nav { display: flex; flex-direction: column; gap: 4px; padding: 24px 12px; background: var(--side); border-right: 1px solid var(--edge); overflow: auto; min-height: 0; }
-.modal-body { overflow: auto; padding: 32px 40px 44px; min-width: 0; min-height: 0; scrollbar-gutter: stable; }
+.modal-nav { display: flex; flex-direction: column; gap: 4px; padding: 24px 12px; background: var(--side); border-right: 1px solid var(--edge); overflow-x: hidden; overflow-y: auto; min-height: 0; }
+.modal-body { overflow-x: hidden; overflow-y: auto; padding: 32px 40px 44px; min-width: 0; min-height: 0; scrollbar-gutter: stable; }
 .modal-body h1 { font: 650 24px/1.3 var(--display); margin: 0; letter-spacing: -0.015em; padding-right: 24px; }
 .modal-body h1:focus { outline: none; }
 /* The one line under a tab's name: what the tab is for. */
@@ -337,7 +338,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 /* ---------- menu, toast ---------- */
 /* A menu is only so wide, and never wider than the window: a longer label is cut, with its whole
    text as a tooltip (ui.ts). Its right edge lines up with its button's, inside the window (placeMenu). */
-.menu { position: fixed; z-index: 60; min-width: 180px; max-width: min(360px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; padding: 4px; border-radius: 10px; background: var(--menu); border: 1px solid var(--edge); box-shadow: var(--pop); }
+.menu { position: fixed; z-index: 60; min-width: 180px; max-width: min(360px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow-x: hidden; overflow-y: auto; padding: 4px; border-radius: 10px; background: var(--menu); border: 1px solid var(--edge); box-shadow: var(--pop); }
 .menu button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 6px 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; text-align: left; }
 .menu button:hover { background: var(--hover); }
 .menu button:focus-visible { background: var(--hover); outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
@@ -369,7 +370,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .lang-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 10px 6px; }
 .lang-title { font-size: 12px; font-weight: 600; color: var(--text-2); }
 .lang-count { font-size: 12px; color: var(--text-3); }
-.lang-list { overflow: auto; max-height: min(340px, calc(100vh - 140px)); }
+.lang-list { overflow-x: hidden; overflow-y: auto; max-height: min(340px, calc(100vh - 140px)); }
 .menu .lang-item .md { margin-left: 12px; }
 .menu .lang-item[aria-pressed="true"] .mt { font-weight: 600; }
 .menu .lang-item[aria-disabled="true"] { color: var(--text-3); cursor: not-allowed; }
@@ -396,7 +397,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .ob-steps i { width: 28px; height: 4px; border-radius: 2px; background: var(--track); }
 .ob-steps i.done { background: var(--accent); }
 .ob-steps i.now { background: var(--accent); opacity: 0.55; }
-.ob-body { overflow: auto; display: flex; justify-content: center; padding: 14px 24px 18px; }
+.ob-body { overflow-x: hidden; overflow-y: auto; display: flex; justify-content: center; padding: 14px 24px 18px; }
 .ob-col { width: 520px; max-width: 100%; }
 .ob-col h2 { font: 600 22px/1.3 var(--display); margin: 10px 0 6px; }
 .ob-col h2:focus { outline: none; }
