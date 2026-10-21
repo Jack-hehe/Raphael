@@ -196,7 +196,7 @@ const ALLOWED_METHODS: [&str; 7] = [
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
 /// settings (the `languages` setting too), the key, the status, the usage numbers, OpenRouter's
 /// catalog of models with their prices, the list of languages, the record of the conversations
-/// with Raphael, the plugins (the servers the user connects and the tier of each of their tools),
+/// with Raphael, the plugins (the store, the servers the user connects and whether each of their tools is on),
 /// and the few device methods the settings page needs. Everything else is refused, the dictation
 /// methods and the ones that ask Raphael something above all.
 pub fn is_allowed_method(m: &str) -> bool {
@@ -1005,14 +1005,16 @@ mod tests {
             "agent.history.list",
             "agent.history.clear",
             "integrations.list",
+            "integrations.catalog",
+            "integrations.connect",
+            "integrations.connect_cancel",
             "integrations.add",
             "integrations.set_enabled",
-            "integrations.remove",
+            "integrations.disconnect",
             "integrations.refresh",
             "integrations.tools",
-            "integrations.set_tier",
+            "integrations.set_tool_enabled",
             "integrations.audit",
-            "integrations.set_group_tier",
             "toolsets.list",
         ] {
             assert!(is_allowed_method(method), "{method}");
