@@ -64,3 +64,42 @@
   .mp-cols { padding-left: 36px; }
   .menu.mp-panel .mp-dd { max-width: 100%; }
 }
+
+/* ---------- the tabs and the local models (local-models.ts) ---------- */
+.mp-pane { display: flex; flex-direction: column; min-height: 0; }
+.mp-pane[hidden] { display: none; }
+/* Two real buttons side by side, each with its own border; the open one is filled. */
+.mp-tabs { flex: none; display: flex; margin: 12px 12px 0; }
+.menu.mp-panel .mp-tab { flex: 1; width: auto; min-height: 0; height: 30px; justify-content: center; border: 1px solid var(--btn-edge); background: var(--btn); font-size: 13px; color: var(--text-2); text-align: center; }
+.menu.mp-panel .mp-tab:first-child { border-radius: 8px 0 0 8px; }
+.menu.mp-panel .mp-tab:last-child { margin-left: -1px; border-radius: 0 8px 8px 0; }
+.menu.mp-panel .mp-tab:hover { background: var(--hover); color: var(--text); }
+.menu.mp-panel .mp-tab[aria-selected="true"] { position: relative; background: var(--selected); border-color: var(--text-3); color: var(--text); font-weight: 600; }
+.menu.mp-panel .mp-tab:focus-visible { position: relative; z-index: 1; box-shadow: none; outline: 2px solid var(--focus); outline-offset: 1px; }
+.mp-tabs + .mp-pane > .mp-head { padding-top: 10px; }
+/* As tall as the cloud tab, so that the panel does not jump between the two. */
+#mp-pane-local .mp-scroll { height: min(520px, calc(100vh - 150px)); }
+.lm-list { display: grid; gap: 0; padding-top: 8px; }
+.lm-row { display: flex; align-items: flex-start; gap: 6px; }
+.menu.mp-panel .lm-main { display: flex; flex: 1; align-items: flex-start; gap: 10px; width: auto; min-width: 0; min-height: 0; padding: 8px 10px; border-radius: 8px; background: transparent; color: var(--text); text-align: left; }
+.menu.mp-panel .lm-main:hover:not(:disabled) { background: var(--hover); }
+.menu.mp-panel .lm-main:disabled { cursor: default; color: var(--text-3); }
+.menu.mp-panel .lm-main:disabled:has(.lm-bar) { color: var(--text); }
+.lm-main .ck { margin-top: 2px; }
+.lm-state { flex: none; margin-left: auto; padding-left: 8px; font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.lm-main[aria-current="true"] .mp-name { font-weight: 600; }
+.lm-main[aria-current="true"] .lm-state { color: var(--accent-text); font-weight: 600; }
+.lm-bar { display: block; height: 4px; margin-top: 6px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.lm-bar i { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width 0.15s linear; }
+.menu.mp-panel .lm-del { flex: none; display: grid; place-items: center; width: 28px; height: 28px; min-height: 0; margin: 5px 2px 0 0; padding: 0; border-radius: 7px; background: transparent; color: var(--text-3); }
+.menu.mp-panel .lm-del:hover { background: var(--hover); color: var(--text); }
+.lm-del .i { width: 14px; height: 14px; }
+/* A .btn in the menu keeps its border and its fill: ".menu button" would take them away. */
+.menu.mp-panel .lm-row .btn { flex: none; width: auto; justify-content: center; min-height: 28px; margin: 4px 4px 0 0; padding: 4px 10px; border: 1px solid var(--btn-edge); border-radius: 8px; background: var(--btn); font-size: 12px; color: var(--text); }
+.menu.mp-panel .lm-row .btn:hover { background: var(--hover); border-color: var(--text-3); }
+.menu.mp-panel .lm-row .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.menu.mp-panel .lm-row .btn.pri:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.menu.mp-panel .lm-row .btn:focus-visible { box-shadow: none; outline: 2px solid var(--focus); outline-offset: 2px; }
+.lm-confirm { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 6px 4px 6px 10px; border-radius: 8px; background: var(--hover); }
+.lm-ask { flex: 1 1 160px; min-width: 0; font-size: 13px; line-height: 1.4; }
+.menu.mp-panel .lm-confirm .btn { margin: 0; }

@@ -21,9 +21,14 @@ import sherpa_onnx
 from raphael_core.device.models import REGISTRY, ModelManager
 from raphael_core.device.stt import (
     LANGUAGE_NAMES,
+    DolphinEngine,
+    FireRedAsrEngine,
+    ParaformerEngine,
     Qwen3AsrEngine,
     SenseVoiceEngine,
     WhisperOnnxEngine,
+    WhisperSmallEngine,
+    WhisperTurboEngine,
     create_engine,
     read_wav,
 )
@@ -33,6 +38,11 @@ ENGINES = {
     "qwen3-asr": Qwen3AsrEngine,
     "sensevoice": SenseVoiceEngine,
     "breeze-asr-25": WhisperOnnxEngine,
+    "whisper-small": WhisperSmallEngine,
+    "whisper-turbo": WhisperTurboEngine,
+    "paraformer-zh": ParaformerEngine,
+    "dolphin-small": DolphinEngine,
+    "fire-red-asr": FireRedAsrEngine,
 }
 # Every file of every model, to leave out one at a time.
 MODEL_FILES = [(name, file) for name in ENGINES for file in REGISTRY[name].files]
@@ -115,6 +125,15 @@ class FakeOfflineRecognizer:
 
     def from_whisper(self, **arguments):
         return self._built("from_whisper", arguments)
+
+    def from_paraformer(self, **arguments):
+        return self._built("from_paraformer", arguments)
+
+    def from_dolphin_ctc(self, **arguments):
+        return self._built("from_dolphin_ctc", arguments)
+
+    def from_fire_red_asr(self, **arguments):
+        return self._built("from_fire_red_asr", arguments)
 
     def _built(self, method: str, arguments: dict) -> FakeRecognizer:
         self.calls.append((method, arguments))
@@ -274,6 +293,86 @@ def test_whisper_recognizer_settings(tmp_path, sherpa):
             },
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("name", "prefix", "language"),
+    [("whisper-small", "small", ""), ("whisper-turbo", "turbo", "")],
+)
+def test_the_other_whisper_models_find_the_language_themselves(name, prefix, language, tmp_path, sherpa):
+    directory = install(tmp_path, name)
+    create_engine(name, ModelManager(tmp_path))
+    assert sherpa.calls == [
+        (
+            "from_whisper",
+            {
+                "encoder": str(directory / f"{prefix}-encoder.int8.onnx"),
+                "decoder": str(directory / f"{prefix}-decoder.int8.onnx"),
+                "tokens": str(directory / f"{prefix}-tokens.txt"),
+                "num_threads": 4,
+                "provider": "cpu",
+                "language": language,
+            },
+        )
+    ]
+
+
+def test_paraformer_recognizer_settings(tmp_path, sherpa):
+    directory = install(tmp_path, "paraformer-zh")
+    ParaformerEngine(directory)
+    assert sherpa.calls == [
+        (
+            "from_paraformer",
+            {
+                "paraformer": str(directory / "model.int8.onnx"),
+                "tokens": str(directory / "tokens.txt"),
+                "num_threads": 4,
+                "provider": "cpu",
+            },
+        )
+    ]
+
+
+def test_dolphin_recognizer_settings(tmp_path, sherpa):
+    directory = install(tmp_path, "dolphin-small")
+    DolphinEngine(directory)
+    assert sherpa.calls == [
+        (
+            "from_dolphin_ctc",
+            {
+                "model": str(directory / "model.int8.onnx"),
+                "tokens": str(directory / "tokens.txt"),
+                "num_threads": 4,
+                "provider": "cpu",
+            },
+        )
+    ]
+
+
+def test_fire_red_recognizer_settings(tmp_path, sherpa):
+    directory = install(tmp_path, "fire-red-asr")
+    FireRedAsrEngine(directory)
+    assert sherpa.calls == [
+        (
+            "from_fire_red_asr",
+            {
+                "encoder": str(directory / "encoder.int8.onnx"),
+                "decoder": str(directory / "decoder.int8.onnx"),
+                "tokens": str(directory / "tokens.txt"),
+                "num_threads": 4,
+                "provider": "cpu",
+            },
+        )
+    ]
+
+
+def test_the_engines_that_have_no_use_for_hints_ignore_them(tmp_path, sherpa, speech):
+    for name in ("paraformer-zh", "dolphin-small", "fire-red-asr", "whisper-small"):
+        install(tmp_path, name)
+        engine = create_engine(name, ModelManager(tmp_path))
+        engine.transcribe(speech, hints=["拉斐爾"], language="ja")
+    assert all(decoded.options == {} for decoded in sherpa.recognizer.decoded)
+    assert len(sherpa.recognizer.decoded) == 4
 
 
 # --- transcribing

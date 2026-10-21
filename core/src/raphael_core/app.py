@@ -44,6 +44,7 @@ import concurrent.futures
 import functools
 import logging
 import re
+import shutil
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -69,11 +70,14 @@ from .brain.openrouter import (
 )
 from .brain.secrets import CredentialKeyStore, KeyStore, MemoryKeyStore
 from .brain.service import Brain
-from .device.models import REGISTRY, ModelManager
+from .brain.settings import SettingsStore
+from .device.models import LOCAL_STT_MODELS, REGISTRY, ModelDownloadError, ModelManager, local_model
 from .integrations.service import IntegrationsService
 from .integrations.vault import CredentialVault, MemoryVault, SecretVault
 from .protocol import (
+    BUSY,
     INVALID_PARAMS,
+    INTERNAL_ERROR,
     NO_MICROPHONE,
     NOT_CONFIGURED,
     PROTOCOL_VERSION,
@@ -83,8 +87,15 @@ from .router import Router
 
 logger = logging.getLogger(__name__)
 
-# The speech models the app uses, in the order the settings page lists them. The registry has more
-# (sensevoice and breeze-asr-25 are for the evaluation tools); the app downloads these two.
+
+class _DownloadCancelled(Exception):
+    """Raised by the progress callback of a download the user cancelled, to stop it."""
+
+
+# The speech models the app starts with, in the order the settings page lists them: the detector and
+# the engine Raphael has always used. The user may choose another engine of the catalogue
+# (`LOCAL_STT_MODELS`) in the settings; `SpeechModels.engine_name` is the one chosen, and this one
+# until then.
 VAD_MODEL = "silero-vad"
 ENGINE_MODEL = "qwen3-asr"
 APP_MODELS = (VAD_MODEL, ENGINE_MODEL)
@@ -266,12 +277,16 @@ class _SharedSegmenter:
 class SpeechModels:
     """The voice activity detector and the speech engine, loaded once and kept.
 
-    `make_segmenter(path)` builds the detector from its model file and `make_engine()` the engine;
-    both are slow and are called on a worker thread. `load_pending` loads what is downloaded and
-    not yet loaded; it is called at start-up and again when a download finishes. `engine()` and
-    the shared segmenter wait for their own model while a load is under way (not for the other
-    one), and try again if there was no load or it failed, so the first dictation after a download
-    needs nothing else.
+    `make_segmenter(path)` builds the detector from its model file and `make_engine(name)` the
+    engine of the model called `name`; both are slow and are called on a worker thread.
+    `load_pending` loads what is downloaded and not yet loaded; it is called at start-up and again
+    when a download finishes. `engine()` and the shared segmenter wait for their own model while a
+    load is under way (not for the other one), and try again if there was no load or it failed, so
+    the first dictation after a download needs nothing else.
+
+    The engine is the model `engine_name`. `select_engine` names another; `load_pending` then
+    builds it, and until it is built the engine that is loaded goes on serving, so that a dictation
+    never waits for a switch (it waits only when there is no engine at all).
     """
 
     def __init__(
@@ -279,11 +294,14 @@ class SpeechModels:
         manager: ModelManager,
         *,
         make_segmenter: Callable[[Path], Any],
-        make_engine: Callable[[], Any],
+        make_engine: Callable[[str], Any],
+        engine_name: str = ENGINE_MODEL,
     ) -> None:
         self._manager = manager
         self._make_segmenter = make_segmenter
         self._make_engine = make_engine
+        self._engine_name = engine_name
+        self._engine_built_for: str | None = None  # the model the loaded engine was built from
         self._cond = threading.Condition()
         self._loading = False
         self._closed = False
@@ -303,15 +321,53 @@ class SpeechModels:
         try:
             # The detector first: it pays ONNX Runtime's start-up, and any dictation needs it.
             self._load(VAD_MODEL, self._build_segmenter)
-            self._load(ENGINE_MODEL, self._make_engine)
+            self._load_engine()
         finally:
             with self._cond:
                 self._loading = False
                 self._cond.notify_all()
 
+    @property
+    def engine_name(self) -> str:
+        """The model the engine is, or is to be, built from."""
+        return self._engine_name
+
+    @property
+    def loaded_engine_name(self) -> str | None:
+        """The model the engine that is loaded was built from; None while there is none."""
+        return self._engine_built_for
+
+    def select_engine(self, name: str) -> None:
+        """Make `name` (a model of the catalogue) the engine. Nothing is loaded yet: that is
+        `load_pending`, which builds it if it is downloaded."""
+        with self._cond:
+            self._engine_name = name
+
     def _build_segmenter(self) -> Any:
         path = self._manager.dir(VAD_MODEL) / REGISTRY[VAD_MODEL].files[0]
         return self._make_segmenter(path)
+
+    def _load_engine(self) -> None:
+        """Build the engine of the selected model, if it is downloaded and not the one loaded. A
+        failure is logged and the engine that is loaded stays."""
+        name = self._engine_name
+        if self._engine_built_for == name or not self._manager.is_ready(name):
+            return
+        began = time.perf_counter()
+        try:
+            engine = self._make_engine(name)
+        except Exception as exc:
+            logger.exception("The speech model %s could not be loaded", name)
+            self._failures[ENGINE_MODEL] = exc
+            return
+        with self._cond:
+            if self._closed:
+                return
+            self._loaded[ENGINE_MODEL] = engine
+            self._engine_built_for = name
+            self._failures.pop(ENGINE_MODEL, None)
+            self._cond.notify_all()
+        logger.info("Speech model %s loaded in %.1f s", name, time.perf_counter() - began)
 
     def _load(self, name: str, build: Callable[[], Any]) -> None:
         if self._loaded[name] is not None or not self._manager.is_ready(name):
@@ -357,15 +413,16 @@ class SpeechModels:
         failure = self._failures.get(name)
         if failure is not None:
             raise failure
-        raise FileNotFoundError(f"The speech model {name} is not downloaded")
+        missing = self._engine_name if name == ENGINE_MODEL else name
+        raise FileNotFoundError(f"The speech model {missing} is not downloaded")
 
     def require_models(self) -> None:
         """RpcError(NOT_CONFIGURED) if a model is neither loaded nor on disk: better to say so at
         the key press than after the user has spoken."""
         missing = [
             name
-            for name in APP_MODELS
-            if self._loaded[name] is None and not self._manager.is_ready(name)
+            for slot, name in ((VAD_MODEL, VAD_MODEL), (ENGINE_MODEL, self._engine_name))
+            if self._loaded[slot] is None and not self._manager.is_ready(name)
         ]
         if missing:
             raise RpcError(
@@ -377,6 +434,7 @@ class SpeechModels:
         with self._cond:
             self._closed = True
             self._loaded = dict.fromkeys(self._loaded)
+            self._engine_built_for = None
             self._cond.notify_all()
 
 
@@ -607,6 +665,8 @@ class App(Router):
         self._meter_tasks: set[asyncio.Task[None]] = set()
         self._device_name: str | None = None  # the microphone, set by the app from device.json
         self._stt_engine = "local"  # the stt_engine setting, as read at the latest dictation.start
+        self._local_download: str | None = None  # the model that models.local_use is fetching
+        self._local_cancel = threading.Event()
         self._stt_warned: set[str] = set()  # kinds of cloud failure already logged as warnings
         self._loop: asyncio.AbstractEventLoop | None = None
         self._threads: list[threading.Thread] = []
@@ -619,6 +679,10 @@ class App(Router):
             "core.shutdown": self._shutdown,
             "models.status": self._models_status,
             "models.ensure": self._models_ensure,
+            "models.local": self._models_local,
+            "models.local_use": self._models_local_use,
+            "models.local_cancel": self._models_local_cancel,
+            "models.local_delete": self._models_local_delete,
             "audio.devices": self._audio_devices,
             "audio.set_device": self._audio_set_device,
             "audio.monitor": self._audio_monitor,
@@ -635,10 +699,19 @@ class App(Router):
         """Begin loading the speech side and warming up what the first dictation would build."""
         if self._threads:
             return
+        self._select_saved_engine()
         for target, name in ((self._prewarm, "prewarm"), (self._startup, "startup")):
             thread = threading.Thread(target=target, name=f"raphael-{name}", daemon=True)
             self._threads.append(thread)
             thread.start()
+
+    def _select_saved_engine(self) -> None:
+        """Build the local engine the user chose (the `stt_local_model` setting) rather than the
+        one Raphael has always used. On the loop's thread, which the database belongs to."""
+        try:
+            self._speech.select_engine(SettingsStore(self._conn).get("stt_local_model"))
+        except Exception:
+            logger.exception("Could not read the local speech model setting; using the default")
 
     def wait_for_libraries(self, timeout: float | None = None) -> None:
         """Wait until the speech libraries are imported (or failed to be), up to `timeout` s.
@@ -790,8 +863,8 @@ class App(Router):
     def _make_segmenter(self, path: Path) -> Any:
         return self._kit.result().Segmenter(path, max_segment_s=DICTATION_SEGMENT_SECONDS)
 
-    def _make_engine(self) -> Any:
-        return self._kit.result().create_engine(ENGINE_MODEL, self.manager, num_threads=STT_THREADS)
+    def _make_engine(self, name: str) -> Any:
+        return self._kit.result().create_engine(name, self.manager, num_threads=STT_THREADS)
 
     def _dictation_segmenter(self) -> Any:
         """The shared detector, cutting at the length that suits this dictation's engine."""
@@ -830,12 +903,22 @@ class App(Router):
         try:
             settings = (await self.call("settings.get", {}))["settings"]
             engine = settings.get("stt_engine")
+            self._follow_local_model(settings.get("stt_local_model"))
         except Exception as exc:
             logger.warning(
                 "Could not read the speech-to-text setting; using the local one: %s", exc
             )
             engine = "local"
         self._stt_engine = engine if engine in ("cloud", "local") else "local"
+
+    def _follow_local_model(self, name: Any) -> None:
+        """The local model set in the settings is the engine from now on, if it is downloaded. The
+        engine is built in the background: this dictation goes on with the one that is loaded."""
+        if not isinstance(name, str) or name == self._speech.engine_name:
+            return
+        if name in REGISTRY and self.manager.is_ready(name):
+            self._speech.select_engine(name)
+            self._load_models_in_background()
 
     def _new_recorder(self, on_frames: Callable[[Any], None]) -> Any:
         kit = self._kit.result()
@@ -869,43 +952,149 @@ class App(Router):
     # --- models ---------------------------------------------------------------------------------
 
     async def _models_status(self, params: dict) -> dict:
-        return {"models": [{"name": n, "ready": self.manager.is_ready(n)} for n in APP_MODELS]}
+        names = (VAD_MODEL, self._speech.engine_name)
+        return {"models": [{"name": n, "ready": self.manager.is_ready(n)} for n in names]}
+
+    def _progress_notifier(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        name: str,
+        cancelled: threading.Event | None = None,
+    ) -> Callable[[int, int], None]:
+        """The progress callback of a download of `name`: it sends `models.progress` at most every
+        PROGRESS_INTERVAL_S (the last report always), from the download's thread. When `cancelled`
+        is set it raises _DownloadCancelled, which stops the download."""
+        sent_at = -float("inf")
+
+        def progress(done: int, total: int) -> None:
+            nonlocal sent_at
+            if cancelled is not None and cancelled.is_set():
+                raise _DownloadCancelled(name)
+            now = time.monotonic()
+            last = total > 0 and done >= total
+            if not (last or now - sent_at >= PROGRESS_INTERVAL_S):
+                return
+            sent_at = now
+            try:
+                loop.call_soon_threadsafe(
+                    self.notify, "models.progress", {"name": name, "done": done, "total": total}
+                )
+            except RuntimeError:  # the loop is closed
+                pass
+
+        return progress
 
     async def _models_ensure(self, params: dict) -> dict:
         names = params.get("names")
         if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
             raise _invalid("names must be a list of model names")
-        unknown = [n for n in names if n not in APP_MODELS]
+        allowed = {*APP_MODELS, self._speech.engine_name}
+        unknown = [n for n in names if n not in allowed]
         if unknown:
             raise _invalid(f"not a model the app downloads: {', '.join(unknown)}")
         loop = asyncio.get_running_loop()
 
-        def progress_for(name: str) -> Callable[[int, int], None]:
-            sent_at = -float("inf")
-
-            def progress(done: int, total: int) -> None:  # on the download's thread
-                nonlocal sent_at
-                now = time.monotonic()
-                last = total > 0 and done >= total
-                if not (last or now - sent_at >= PROGRESS_INTERVAL_S):
-                    return
-                sent_at = now
-                try:
-                    loop.call_soon_threadsafe(
-                        self.notify, "models.progress", {"name": name, "done": done, "total": total}
-                    )
-                except RuntimeError:  # the loop is closed
-                    pass
-
-            return progress
-
         def download() -> None:
             for name in names:
-                self.manager.ensure(name, progress_for(name))
+                self.manager.ensure(name, self._progress_notifier(loop, name))
 
         await asyncio.to_thread(download)
         self._load_models_in_background()  # the first dictation should not wait for them
         return {"ok": True}
+
+    # --- the catalogue of local speech models ---------------------------------------------------
+
+    @staticmethod
+    def _local_name(params: dict) -> str:
+        """The model of the catalogue that `params` name."""
+        name = params.get("name")
+        if not isinstance(name, str):
+            raise _invalid("name must be a model name")
+        try:
+            return local_model(name).name
+        except ValueError:
+            raise _invalid(f"not a model of the catalogue: {name}") from None
+
+    async def _models_local(self, params: dict) -> dict:
+        """The catalogue: each model with its size and whether it is on disk, the one the local
+        engine is, and the one being downloaded. Reading it touches no speech model."""
+        settings = (await self.call("settings.get", {}))["settings"]
+
+        def read() -> list[dict]:
+            return [
+                {
+                    "name": entry.name,
+                    "title": entry.title,
+                    "languages": list(entry.languages),
+                    "note": entry.note,
+                    "size": REGISTRY[entry.name].download_size,
+                    "ready": self.manager.is_ready(entry.name),
+                }
+                for entry in LOCAL_STT_MODELS
+            ]
+
+        return {
+            "models": await asyncio.to_thread(read),
+            "active": settings["stt_local_model"],
+            "downloading": self._local_download,
+        }
+
+    async def _models_local_use(self, params: dict) -> dict:
+        """Make a model of the catalogue the local engine, downloading it first if it is not on
+        disk. The download reports `models.progress` (named for the model); only a complete one
+        changes the settings, so a download that fails or is cancelled leaves the engine in use
+        as it was. Answers {"ok": True, "settings": ...}, or {"ok": False, "cancelled": True}."""
+        name = self._local_name(params)
+        if self._local_download is not None:
+            raise RpcError(BUSY, f"Another speech model is being downloaded: {self._local_download}")
+        self._local_download = name
+        self._local_cancel.clear()
+        progress = self._progress_notifier(asyncio.get_running_loop(), name, self._local_cancel)
+        try:
+            await asyncio.to_thread(self.manager.ensure, name, progress)
+        except _DownloadCancelled:
+            logger.info("The download of %s was cancelled", name)
+            return {"ok": False, "cancelled": True}
+        except ModelDownloadError as exc:
+            raise RpcError(INTERNAL_ERROR, str(exc)) from exc
+        finally:
+            self._local_download = None
+        await self.call("settings.set", {"key": "stt_local_model", "value": name})
+        reply = await self.call("settings.set", {"key": "stt_engine", "value": "local"})
+        self._speech.select_engine(name)
+        self._load_models_in_background()  # built beside the engine in use, which serves until then
+        return {"ok": True, "settings": reply["settings"]}
+
+    async def _models_local_cancel(self, params: dict) -> dict:
+        if self._local_download is None:
+            return {"cancelled": False}
+        self._local_cancel.set()
+        return {"cancelled": True}
+
+    async def _models_local_delete(self, params: dict) -> dict:
+        """Delete a downloaded model of the catalogue that is not in use. The detector is not one
+        of them. Answers whether anything was there to delete."""
+        name = self._local_name(params)
+        if name == self._local_download:
+            raise RpcError(BUSY, f"{name} is being downloaded")
+        settings = (await self.call("settings.get", {}))["settings"]
+        in_use = {settings["stt_local_model"], self._speech.engine_name}
+        if name in in_use or name == self._speech.loaded_engine_name:
+            raise RpcError(BUSY, f"{name} is in use")
+
+        def delete() -> bool:
+            directory = self.manager.dir(name)
+            if not directory.exists():
+                return False
+            try:
+                shutil.rmtree(directory)
+            except OSError as exc:
+                raise RpcError(INTERNAL_ERROR, f"Could not delete {name}: {exc}") from exc
+            return True
+
+        deleted = await asyncio.to_thread(delete)
+        logger.info("Deleted the speech model %s", name)
+        return {"deleted": deleted}
 
     # --- the microphone -------------------------------------------------------------------------
 

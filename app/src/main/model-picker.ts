@@ -7,8 +7,10 @@
 // button beside its option. The stars are out of the tab order but for the star of the highlighted
 // row, which is one stop of it: the arrows still move the highlight, and the star is reached with a
 // Tab and pressed with Enter or Space.
-// Keys: the arrows and Enter in the list, typing searches, Tab goes between the search, the star of
-// the highlighted row and the two dropdowns, Esc closes. The panel is the app's popover (ui.ts), so
+// The speech-to-text picker has two tabs over it, 雲端 (all of this) and 本機 (local-models.ts: the
+// speech models that run on this computer, downloaded only when the user chooses one).
+// Keys: the arrows and Enter in the list, typing searches, Tab goes between the tabs, the search, the
+// star of the highlighted row and the two dropdowns, Left and Right change the tab, Esc closes. The panel is the app's popover (ui.ts), so
 // it closes the way menus do.
 //
 // The settings page draws its rows as HTML, and draws them again often: a row holds the picker's
@@ -18,6 +20,15 @@
 
 import "./model-picker.css";
 import { t } from "./i18n";
+import {
+  type LocalConfirm,
+  type LocalView,
+  faceTitle,
+  localListHTML,
+  localState,
+  stateText,
+  tabsHTML,
+} from "./local-models";
 import { formatPerMinute, formatPerMtok, pricingNote } from "./pricing";
 import type { CatalogModel, ModelCatalog, ModelRole } from "./types";
 import { CHECK, closeMenu, esc, ico, menuIsOpenFor, openPopover, placeMenu } from "./ui";
@@ -405,10 +416,11 @@ function dropdownHTML(which: "sort" | "provider", label: string, choices: Picker
 const sortLabel = (sort: PickerSort): string => sortChoices().find((c) => c.value === sort)?.label ?? sort;
 const providerLabel = (provider: string): string => provider || t("picker.allProviders");
 
-/** The panel, empty: its list, its line under the list and its small print are filled in apart. */
-function panelHTML(list: PickerList, label: string): string {
+/** The panel, empty: its list, its line under the list and its small print are filled in apart. With `tab`, the picker has the local tab too. */
+function panelHTML(list: PickerList, label: string, tab: "cloud" | "local" | null): string {
   const search = t("picker.search");
-  return (
+  const cloud =
+    `<div class="mp-pane" id="mp-pane-cloud"${tab ? ` role="tabpanel" aria-labelledby="mp-tab-cloud"${tab === "cloud" ? "" : " hidden"}` : ""}>` +
     `<div class="mp-head">` +
     `<label class="field mp-search">${ico("search")}<input id="mp-search" type="text" role="combobox" aria-autocomplete="list" aria-expanded="true" ` +
     `aria-controls="mp-list" aria-label="${esc(search)}" placeholder="${esc(search)}" autocomplete="off" spellcheck="false"></label>` +
@@ -420,7 +432,14 @@ function panelHTML(list: PickerList, label: string): string {
     `<span>${esc(KIND[list.role] === "llm" ? t("picker.tokenPrices") : t("picker.prices"))}</span></div>` +
     `<div class="mp-scroll"><div class="mp-list" id="mp-list" role="listbox" aria-label="${esc(label)}"></div>` +
     `<p class="mp-empty" role="status" hidden></p></div>` +
-    `<p class="mp-foot"></p>`
+    `<p class="mp-foot"></p></div>`;
+  if (!tab) return cloud;
+  return (
+    tabsHTML(tab) +
+    cloud +
+    `<div class="mp-pane" id="mp-pane-local" role="tabpanel" aria-labelledby="mp-tab-local"${tab === "local" ? "" : " hidden"}>` +
+    `<div class="mp-scroll"><div class="lm-list" id="mp-locallist" aria-label="${esc(label)}"></div></div>` +
+    `<p class="mp-foot">${esc(t("local.intro"))}</p></div>`
   );
 }
 
@@ -465,6 +484,14 @@ export interface ModelPickerOptions {
   disabled?: boolean;
   /** The user chose `id`: never the model chosen now, never one the role cannot use. The page saves it. */
   onChoose: (id: string) => void;
+  /** The speech models of this computer (a second tab) and what is under way: only the speech-to-text picker has it. */
+  local?: LocalView;
+  /** The user chose the local model `name`, after the question about downloading it if it was not on disk. The page downloads it, saves it and hands the progress back with `update`. */
+  onUseLocal?: (name: string) => void;
+  /** The user cancelled the download in progress. */
+  onCancelLocal?: () => void;
+  /** The user deleted the local model `name`, after the question. */
+  onDeleteLocal?: (name: string) => void;
   /** The user starred (`on`) or un-starred `id`. The picker shows it at once; the page saves it and hands the saved list back with `update`. */
   onFavorite?: (id: string, on: boolean) => void;
 }
@@ -485,17 +512,18 @@ export interface ModelPicker {
 
 /** What the button shows: the chosen model (or choice), and its price unless the page shows that. */
 function buttonFace(o: ModelPickerLook): { inner: string; label: string; title: string } {
-  const model = (o.catalog ? modelsFor(o.catalog, o.role) : []).find((m) => m.id === o.current);
-  const name = model?.name ?? shortName(o.current);
-  const price = model ? priceText(model, o.role) : o.loading ? "…" : "";
-  const said = model ? priceDescription(model, o.role) : "";
+  const local = o.local ? faceTitle(o.local) : null;
+  const model = local ? undefined : (o.catalog ? modelsFor(o.catalog, o.role) : []).find((m) => m.id === o.current);
+  const name = local ?? model?.name ?? shortName(o.current);
+  const price = local ? t("settings.sttLocalPrice") : model ? priceText(model, o.role) : o.loading ? "…" : "";
+  const said = local ? t("settings.sttLocalPrice") : model ? priceDescription(model, o.role) : "";
   return {
     inner:
       `<span class="mp-tname">${esc(name)}</span>` +
       (price && o.showPrice !== false ? `<span class="mp-tprice num">${esc(price)}</span>` : "") +
       ico("down"),
     label: `${o.label}: ${name}${said ? `, ${said}` : ""}`,
-    title: model ? `${model.provider}: ${model.name}` : o.current,
+    title: local ?? (model ? `${model.provider}: ${model.name}` : o.current),
   };
 }
 
@@ -537,6 +565,12 @@ class MountedPicker implements ModelPicker {
   private dropdown: Dropdown | null = null;
   /** The row drawn as highlighted. */
   private lit: HTMLElement | null = null;
+  /** The tab that is open, when there are two. */
+  private tab: "cloud" | "local" = "cloud";
+  /** The question the local tab is asking, if it is. */
+  private confirm: LocalConfirm | null = null;
+  /** What the local tab was drawn from, to tell a new byte count (drawn in place) from a new state (drawn again). */
+  private localDrawn = "";
 
   constructor(container: HTMLElement, options: ModelPickerOptions) {
     this.o = { ...options };
@@ -571,10 +605,12 @@ class MountedPicker implements ModelPicker {
     if (highlighted) this.list.point(highlighted);
     this.paintFilters();
     this.paintList(null);
+    this.paintLocal();
     placeMenu(); // the small print may have grown
   }
 
   open(query = ""): void {
+    this.tab = this.o.local?.active ? "local" : "cloud";
     this.show(this.newList({ query }), {});
   }
 
@@ -611,7 +647,10 @@ class MountedPicker implements ModelPicker {
   private show(list: PickerList, restore: { caret?: number; scroll?: number }): void {
     if (this.button.disabled) return;
     this.list = list;
-    const panel = openPopover(this.button, panelHTML(list, this.o.label), {
+    if (!this.o.local) this.tab = "cloud";
+    this.confirm = null;
+    this.localDrawn = "";
+    const panel = openPopover(this.button, panelHTML(list, this.o.label, this.o.local ? this.tab : null), {
       className: "menu mp-panel",
       role: "dialog",
       label: this.o.label,
@@ -628,11 +667,17 @@ class MountedPicker implements ModelPicker {
     panel.addEventListener("pointermove", (e) => this.pointed(e));
     const input = this.search()!;
     input.value = list.state.query;
-    this.paintList("center");
+    // With favourites the list opens at its top, where they are, and not at the model in use.
+    this.paintList(list.rows.some((row) => row.favorite) ? "top" : "center");
+    this.paintLocal();
     if (restore.scroll !== undefined) panel.querySelector(".mp-scroll")!.scrollTop = restore.scroll;
     // Placed again now that it is filled in: the popover was placed empty, without its small print,
     // and above its button it would now cover it.
     placeMenu();
+    if (this.tab === "local") {
+      panel.querySelector<HTMLElement>("#mp-tab-local")?.focus({ preventScroll: true });
+      return;
+    }
     input.focus({ preventScroll: true });
     const caret = Math.min(restore.caret ?? input.value.length, input.value.length);
     input.setSelectionRange(caret, caret);
@@ -646,7 +691,9 @@ class MountedPicker implements ModelPicker {
     const caret = before.picker.search()?.selectionStart ?? undefined;
     const scroll = panel?.querySelector(".mp-scroll")?.scrollTop;
     const highlighted = list?.activeId();
+    const tab = before.picker.tab;
     before.picker.forget();
+    this.tab = tab;
     const again = this.newList(list?.state ?? {});
     if (highlighted) again.point(highlighted);
     this.show(again, { caret, scroll });
@@ -658,6 +705,8 @@ class MountedPicker implements ModelPicker {
     this.list = null;
     this.dropdown = null;
     this.lit = null;
+    this.confirm = null;
+    this.localDrawn = "";
     if (opened?.picker === this) opened = null;
   }
 
@@ -700,6 +749,118 @@ class MountedPicker implements ModelPicker {
     if (row && block) row.scrollIntoView({ block });
   }
 
+  /**
+   * Draws the local tab. A new byte count only moves the bar and the percentage of the row being
+   * downloaded, so that the focus stays where it is; anything else (a state changed, a question
+   * asked) draws the rows again and gives the focus back to the same button.
+   */
+  private paintLocal(): void {
+    const local = this.o.local;
+    const host = this.panel?.querySelector<HTMLElement>("#mp-locallist");
+    if (!local || !host) return;
+    const models = local.models;
+    const shape = JSON.stringify([
+      typeof models === "string" ? models : models.map((m) => [m.name, m.ready, localState(m, local).kind]),
+      local.active,
+      local.download?.name ?? null,
+      this.confirm,
+    ]);
+    if (shape === this.localDrawn && typeof models !== "string") {
+      for (const model of models) {
+        const row = host.querySelector<HTMLElement>(`.lm-row[data-name="${CSS.escape(model.name)}"]`);
+        const state = localState(model, local);
+        if (!row || state.kind !== "downloading") continue;
+        row.querySelector("[data-state]")!.textContent = stateText(state);
+        row.querySelector<HTMLElement>(".lm-bar")!.setAttribute("aria-valuenow", String(state.percent));
+        row.querySelector<HTMLElement>(".lm-bar i")!.style.width = `${state.percent}%`;
+      }
+      return;
+    }
+    const focused = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? document.activeElement : null;
+    const back = focused ? { act: focused.dataset.act, name: focused.dataset.name } : null;
+    host.innerHTML = localListHTML(local, this.confirm);
+    this.localDrawn = shape;
+    if (back) {
+      const find = (act: string | undefined): HTMLElement | null =>
+        host.querySelector<HTMLElement>(`[data-act="${act}"][data-name="${CSS.escape(back.name ?? "")}"]`);
+      (find(back.act) ?? find("use") ?? host.querySelector<HTMLElement>("button:not(:disabled)"))?.focus();
+    }
+    placeMenu();
+  }
+
+  private setTab(tab: "cloud" | "local", focus: boolean): void {
+    if (!this.panel || !this.o.local || tab === this.tab) return;
+    this.tab = tab;
+    this.confirm = null;
+    this.closeDropdown(false);
+    for (const which of ["cloud", "local"] as const) {
+      const button = this.panel.querySelector<HTMLElement>(`#mp-tab-${which}`)!;
+      button.setAttribute("aria-selected", String(which === tab));
+      button.tabIndex = which === tab ? 0 : -1;
+      this.panel.querySelector<HTMLElement>(`#mp-pane-${which}`)!.hidden = which !== tab;
+    }
+    this.paintLocal();
+    placeMenu();
+    if (focus) this.panel.querySelector<HTMLElement>(`#mp-tab-${tab}`)!.focus();
+  }
+
+  /** The arrows between the rows of the local tab. */
+  private localKey(e: KeyboardEvent): void {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const rows = Array.from(this.panel?.querySelectorAll<HTMLElement>("#mp-locallist .lm-main:not(:disabled)") ?? []);
+    const at = rows.indexOf(document.activeElement as HTMLElement);
+    const next = moveIndex(rows.length, at, e.key);
+    if (next === null) return;
+    e.preventDefault();
+    rows[next].focus();
+  }
+
+  /** A button of the local tab. */
+  private localAct(button: HTMLElement): void {
+    const local = this.o.local;
+    const name = button.dataset.name ?? "";
+    if (!local) return;
+    switch (button.dataset.act) {
+      case "use": {
+        if (name === local.active) {
+          this.close();
+          return;
+        }
+        const model = typeof local.models === "string" ? undefined : local.models.find((m) => m.name === name);
+        if (!model) return;
+        if (model.ready) {
+          this.close();
+          this.o.onUseLocal?.(name);
+        } else {
+          this.confirm = { kind: "download", name };
+          this.paintLocal();
+          this.panel?.querySelector<HTMLElement>('[data-act="confirm"]')?.focus();
+        }
+        return;
+      }
+      case "delete":
+        this.confirm = { kind: "delete", name };
+        this.paintLocal();
+        this.panel?.querySelector<HTMLElement>('[data-act="confirm"]')?.focus();
+        return;
+      case "confirm": {
+        const asked = this.confirm;
+        this.confirm = null;
+        if (asked?.kind === "delete") this.o.onDeleteLocal?.(name);
+        else if (asked) this.o.onUseLocal?.(name);
+        this.paintLocal();
+        return;
+      }
+      case "dismiss":
+        this.confirm = null;
+        this.paintLocal();
+        return;
+      case "cancel":
+        this.o.onCancelLocal?.();
+        return;
+    }
+  }
+
   // ---------- what the user does ----------
 
   private buttonKey(e: KeyboardEvent): void {
@@ -730,6 +891,16 @@ class MountedPicker implements ModelPicker {
 
   private clicked(e: MouseEvent): void {
     const target = e.target as Element;
+    const tab = target.closest<HTMLElement>(".mp-tab");
+    if (tab) {
+      this.setTab(tab.dataset.tab === "local" ? "local" : "cloud", false);
+      return;
+    }
+    const act = target.closest<HTMLElement>("#mp-locallist [data-act]");
+    if (act) {
+      this.localAct(act);
+      return;
+    }
     const star = target.closest<HTMLElement>(".mp-star");
     if (star) {
       this.star(star.dataset.star ?? "", document.activeElement === star ? "nearest" : null);
@@ -774,6 +945,15 @@ class MountedPicker implements ModelPicker {
       return;
     }
     const target = e.target as HTMLElement;
+    if (target.closest(".mp-tab") && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+      e.preventDefault();
+      this.setTab(e.key === "ArrowLeft" || e.key === "Home" ? "cloud" : "local", true);
+      return;
+    }
+    if (this.tab === "local") {
+      this.localKey(e);
+      return;
+    }
     if (target.id === "mp-search") {
       if (e.key === "Enter") {
         e.preventDefault();
@@ -842,13 +1022,18 @@ class MountedPicker implements ModelPicker {
   }
 
   /**
-   * Tab and Shift+Tab go round the search, the star of the highlighted row and the two dropdowns,
-   * from `from` (the focus, else). The other stars are not stops: a list of hundreds would be no
+   * Tab and Shift+Tab go round the tab that is open, the search, the star of the highlighted row and
+   * the two dropdowns (in the local tab: its buttons), from `from` (the focus, else). The other stars are not stops: a list of hundreds would be no
    * way to Tab through, and the arrows reach every row's star.
    */
   private cycle(back: boolean, from: Element | null = document.activeElement): void {
     if (!this.panel) return;
-    const stops = [this.search(), this.activeStar(), ...Array.from(this.panel.querySelectorAll<HTMLElement>(".mp-dd"))].filter((s): s is HTMLElement => s !== null);
+    const open = this.panel.querySelector<HTMLElement>(`#mp-tab-${this.tab}`);
+    const inside =
+      this.tab === "local"
+        ? Array.from(this.panel.querySelectorAll<HTMLElement>("#mp-pane-local button:not(:disabled)"))
+        : [this.search(), this.activeStar(), ...Array.from(this.panel.querySelectorAll<HTMLElement>(".mp-dd"))];
+    const stops = [open, ...inside].filter((s): s is HTMLElement => s !== null);
     const at = Math.max(0, stops.indexOf(from as HTMLElement));
     stops[(at + (back ? stops.length - 1 : 1)) % stops.length]?.focus();
   }

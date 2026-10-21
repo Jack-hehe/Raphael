@@ -27,7 +27,7 @@ import {
 import { KeyRecorder, bindingClash, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "../keys";
 import { type ModelPicker, mountModelPicker, replacementNotices, withFavorite } from "../model-picker";
 import { MonitorSwitch } from "../monitor";
-import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, ModelCatalog, ModelRole, Page, SettingsPane, Status } from "../types";
+import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, LocalModel, MainEvent, ModelCatalog, ModelRole, Page, SettingsPane, Status } from "../types";
 import {
   type Choice,
   type MenuAction,
@@ -50,7 +50,6 @@ import {
   AUTO_MICROPHONE,
   HOTKEY_ROWS,
   type HotkeyField,
-  LOCAL_STT,
   MODEL_ROWS,
   PANES,
   SIZES,
@@ -62,6 +61,7 @@ import {
   microphoneChoices,
   modelPickerLook,
   paneHTML,
+  localView,
   priceTexts,
   sttEngine,
   sttModel,
@@ -138,6 +138,9 @@ export function createSettings(app: AppContext): SettingsPage {
   let catalog: ModelCatalog | "loading" | "failed" = "loading";
   /** The pickers of the model rows on the tab that is drawn (settings-view.ts draws their buttons). */
   const pickers = new Map<ModelRole, ModelPicker>();
+  /** The speech models of this computer, and the download of one that is under way. */
+  let localModels: LocalModel[] | "loading" | "failed" = "loading";
+  let localDownload: { name: string; done: number; total: number } | null = null;
   let checkingOpenrouter = false;
   let devices: AudioDevices | null = null;
   let altgr = false;
@@ -173,7 +176,7 @@ export function createSettings(app: AppContext): SettingsPage {
   const view = (): SettingsView => ({
     pane, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
     replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
-    connections: connections.view(),
+    connections: connections.view(), localModels, localDownload,
   });
 
   /** The item at the foot of the microphones' menu that looks for them again. */
@@ -405,18 +408,14 @@ export function createSettings(app: AppContext): SettingsPage {
   }
 
   /**
-   * The speech-to-text menu changes one or two settings: 本機 sets the engine alone (the cloud model
-   * is kept for a return to the cloud); a cloud model sets the model, then the engine to the cloud.
-   * In that order, a model the core refuses leaves the engine as it was.
+   * A cloud model chosen in the speech-to-text picker sets the model, then the engine to the cloud
+   * (the local model is kept for a return to this computer). In that order, a model the core refuses
+   * leaves the engine as it was.
    */
   async function changeStt(value: string): Promise<void> {
     try {
-      if (value === LOCAL_STT) {
-        if (sttEngine(view()) !== LOCAL_STT) brain = (await api.settingsSet("stt_engine", LOCAL_STT)).settings;
-      } else {
-        if (value !== sttModel(view())) brain = (await api.settingsSet("stt_cloud_model", value)).settings;
-        if (sttEngine(view()) !== "cloud") brain = (await api.settingsSet("stt_engine", "cloud")).settings;
-      }
+      if (value !== sttModel(view())) brain = (await api.settingsSet("stt_cloud_model", value)).settings;
+      if (sttEngine(view()) !== "cloud") brain = (await api.settingsSet("stt_engine", "cloud")).settings;
     } catch (err) {
       toaster.info(describeError(err));
     }
@@ -474,6 +473,81 @@ export function createSettings(app: AppContext): SettingsPage {
     for (const [role, picker] of pickers) picker.update(modelPickerLook(view(), role));
   }
 
+  // ---------- the speech models of this computer ----------
+
+  /** Reads the catalogue (`models.local`); one that is not to be had is said in the local tab. */
+  async function loadLocalModels(): Promise<void> {
+    const mine = loads;
+    let next: LocalModel[] | "failed";
+    try {
+      next = (await api.modelsLocal()).models;
+    } catch {
+      next = Array.isArray(localModels) ? localModels : "failed";
+    }
+    if (mine !== loads || !visible) return;
+    localModels = next;
+    paintLocal();
+  }
+
+  /** The speech-to-text picker and the price under its row follow the local models. */
+  function paintLocal(): void {
+    paintPrices();
+    pickers.get("stt")?.update({ local: localView(view()) });
+  }
+
+  const localTitle = (name: string): string => (Array.isArray(localModels) ? localModels.find((m) => m.name === name)?.title : undefined) ?? name;
+
+  /**
+   * The user chose a model of the catalogue (and, if it had to be downloaded, said yes to its size).
+   * The core downloads it, with progress that arrives as events, and only then makes it the local
+   * engine: a download that fails or is cancelled leaves the engine in use as it was.
+   */
+  async function useLocal(name: string): Promise<void> {
+    const model = Array.isArray(localModels) ? localModels.find((m) => m.name === name) : undefined;
+    if (model && !model.ready) {
+      localDownload = { name, done: 0, total: 0 };
+      paintLocal();
+    }
+    try {
+      const result = await api.modelsLocalUse(name);
+      if (result.ok) brain = result.settings;
+    } catch {
+      toaster.info(t("local.failed", { p0: localTitle(name) }));
+    }
+    localDownload = null;
+    try {
+      localModels = (await api.modelsLocal()).models;
+    } catch {
+      // the list stays as it was
+    }
+    if (visible) paintLocal();
+  }
+
+  async function cancelLocal(): Promise<void> {
+    try {
+      await api.modelsLocalCancel();
+    } catch {
+      // the download goes on; the user can press the button again
+    }
+  }
+
+  async function deleteLocal(name: string): Promise<void> {
+    try {
+      await api.modelsLocalDelete(name);
+    } catch {
+      toaster.info(t("local.deleteFailed", { p0: localTitle(name) }));
+    }
+    await loadLocalModels();
+  }
+
+  /** The progress of the download under way. */
+  function followDownload(event: MainEvent): void {
+    if (event.type !== "ModelProgress" || localDownload?.name !== event.name) return;
+    localDownload = { name: event.name, done: event.done, total: event.total };
+    pickers.get("stt")?.update({ local: localView(view()) });
+  }
+  app.onEvent(followDownload);
+
   /** Makes the pickers of the model rows work, on the buttons settings-view.ts drew. */
   function mountPickers(): void {
     pickers.clear();
@@ -481,7 +555,17 @@ export function createSettings(app: AppContext): SettingsPage {
     for (const { role } of MODEL_ROWS) {
       const slot = body.querySelector<HTMLElement>(`[data-model-picker="${role}"]`);
       if (slot) {
-        pickers.set(role, mountModelPicker(slot, { ...modelPickerLook(v, role), onChoose: (id) => void chooseModel(role, id), onFavorite: (id, on) => void changeFavorite(role, id, on) }));
+        pickers.set(
+          role,
+          mountModelPicker(slot, {
+            ...modelPickerLook(v, role),
+            onChoose: (id) => void chooseModel(role, id),
+            onFavorite: (id, on) => void changeFavorite(role, id, on),
+            onUseLocal: (name) => void useLocal(name),
+            onCancelLocal: () => void cancelLocal(),
+            onDeleteLocal: (name) => void deleteLocal(name),
+          }),
+        );
       }
     }
   }
@@ -509,7 +593,7 @@ export function createSettings(app: AppContext): SettingsPage {
     return savingFavorites;
   }
 
-  /** A model chosen in a picker: the speech-to-text one may be this computer, which is no model. */
+  /** A model chosen in a picker (a local speech model is chosen in its own tab: `useLocal`). */
   function chooseModel(role: ModelRole, id: string): Promise<void> {
     if (role === "stt") return changeStt(id);
     return changeBrain(role === "cleanup" ? "cleanup_model" : "agent_model", id);
@@ -979,6 +1063,7 @@ export function createSettings(app: AppContext): SettingsPage {
       render();
       if (!el.contains(document.activeElement)) el.querySelector<HTMLElement>("#set-title")?.focus();
       void loadCatalog();
+      void loadLocalModels();
 
       stopEvents?.();
       const stopLevels = app.onEvent((event) => event.type === "Level" && onLevel(event.value));

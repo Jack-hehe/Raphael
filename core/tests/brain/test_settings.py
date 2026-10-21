@@ -34,6 +34,7 @@ def test_the_defaults_are_the_documented_ones():
         "stt_cloud_model": "elevenlabs/scribe-v2",
         "agent_model": "openai/gpt-6-luna",
         "agent_city": "台北",
+        "stt_local_model": "qwen3-asr",
         "model_favorites": {"cleanup": [], "answer": [], "stt": []},
     }
 
@@ -372,3 +373,34 @@ def test_a_saved_value_that_is_damaged_reads_as_the_default(conn):
     s = SettingsStore(conn)
     assert s.get("model_favorites") == _NO_FAVOURITES
     assert s.all()["model_favorites"] == _NO_FAVOURITES
+
+
+# --- the local speech model --------------------------------------------------------------------
+
+
+def test_the_local_engine_is_qwen3_asr_until_another_is_chosen(conn):
+    s = SettingsStore(conn)
+    assert s.get("stt_local_model") == "qwen3-asr"
+    assert s.all()["stt_local_model"] == "qwen3-asr"
+
+
+def test_every_model_of_the_catalogue_can_be_the_local_engine(conn):
+    from raphael_core.device.models import LOCAL_STT_MODELS
+
+    s = SettingsStore(conn)
+    for entry in LOCAL_STT_MODELS:
+        s.set("stt_local_model", entry.name)
+        assert s.get("stt_local_model") == entry.name
+
+
+@pytest.mark.parametrize("value", ["silero-vad", "whisper-large", "", "Qwen3-ASR"])
+def test_a_local_engine_that_is_not_in_the_catalogue_is_refused(conn, value):
+    s = SettingsStore(conn)
+    with pytest.raises(ValueError, match="stt_local_model"):
+        s.set("stt_local_model", value)
+    assert s.get("stt_local_model") == "qwen3-asr"
+
+
+def test_the_local_engine_must_be_text(conn):
+    with pytest.raises(TypeError):
+        SettingsStore(conn).set("stt_local_model", 3)

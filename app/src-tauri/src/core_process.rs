@@ -58,7 +58,7 @@ pub fn timeout_for(method: &str) -> Duration {
         // Starts the plugin (a program that may first have to be fetched), reads its tools.
         "integrations.refresh" => 40,
         // Downloads speech models.
-        "models.ensure" => 3600,
+        "models.ensure" | "models.local_use" => 3600,
         "secrets.set_openrouter_key" | "status.check_openrouter" => 15,
         _ => 15,
     };
@@ -801,6 +801,7 @@ mod tests {
     fn timeouts_follow_the_method() {
         assert_eq!(timeout_for("dictation.stop"), Duration::from_secs(150));
         assert_eq!(timeout_for("models.ensure"), Duration::from_secs(3600));
+        assert_eq!(timeout_for("models.local_use"), Duration::from_secs(3600));
         assert_eq!(timeout_for("agent.ask"), Duration::from_secs(60));
         assert_eq!(timeout_for("agent.confirm"), Duration::from_secs(30));
         assert_eq!(timeout_for("integrations.refresh"), Duration::from_secs(40));

@@ -1,9 +1,9 @@
 """Settings shared by the whole brain, kept in the database as JSON text.
 
 Only keys in DEFAULTS exist. A key nobody has set reads as its default. Most keys are only
-type-checked; the speech-to-text engine must also be one of its listed values, `languages` a valid
-selection (see raphael_core.languages), `model_favorites` the starred model ids of each role (at
-most 50 each), and the models and the assistant's city a text of some
+type-checked; the speech-to-text engine and the local model must also be one of their listed
+values, `languages` a valid selection (see raphael_core.languages), `model_favorites` the starred
+model ids of each role (at most 50 each), and the models and the assistant's city a text of some
 substance (saved without the spaces around it; a model id has none inside). Which models may be
 chosen is for the brain to say, which knows OpenRouter's list of them (brain/catalog.py): here a
 model is only an id.
@@ -25,6 +25,7 @@ import json
 import sqlite3
 from typing import Any
 
+from ..device.models import LOCAL_STT_MODELS
 from ..languages import (
     DEFAULT_LANGUAGES,
     LEGACY_LANGUAGES,
@@ -47,6 +48,9 @@ DEFAULTS: dict[str, Any] = {
     # Speech-to-text: "cloud" (OpenRouter, with the local engine as the fallback) or "local" (the
     # engine on this computer only; no audio leaves it). Read at the start of each dictation.
     "stt_engine": "cloud",
+    # Which of the catalogue's models (device/models.py) the local engine is. The one Raphael has
+    # always used, so that nobody who runs locally needs a new download.
+    "stt_local_model": "qwen3-asr",
     # The most accurate on the samples tried live on 2026-10-18 (gpt-transcribe returned nothing
     # for an English clip and garbled Chinese).
     "stt_cloud_model": "elevenlabs/scribe-v2",
@@ -81,6 +85,7 @@ STT_CLOUD_MODELS = (
 )
 _CHOICES: dict[str, tuple[str, ...]] = {
     "stt_engine": STT_ENGINES,
+    "stt_local_model": tuple(entry.name for entry in LOCAL_STT_MODELS),
     "language": LEGACY_LANGUAGES,
 }
 # The settings that hold the id of an OpenRouter model.
