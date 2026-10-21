@@ -115,6 +115,48 @@ def city_in(text: str) -> str | None:
     return None
 
 
+# How many cities one question is looked up for: a comparison, not a tour.
+MAX_CITIES = 4
+
+
+def cities_in(text: str) -> list[str]:
+    """The cities of the table that `text` names, in the order they are named, each once, at most
+    `MAX_CITIES`, written as `city_in` writes them. As there, the longest name wins and a name
+    inside a longer one is not a second city (新北 in 新北市); of two as long, the one the table
+    lists first (台北 in 台北京站)."""
+    folded = unicodedata.normalize("NFKC", text)
+    # The text as the table is looked up in (`city_key`), each character with where it stood.
+    key, where = "", []
+    for index, char in enumerate(folded):
+        for folded_char in char.casefold():
+            if not folded_char.isspace():
+                key += folded_char
+                where.append(index)
+    found: list[tuple[int, int, int, str, int]] = []  # length, start, end, the city, its rank
+    for rank, spelling in enumerate(ALIASES):
+        start = key.find(spelling)
+        while start != -1:
+            end = start + len(spelling)
+            found.append((len(spelling), where[start], where[end - 1] + 1, spelling, rank))
+            start = key.find(spelling, start + 1)
+    lowered = folded.casefold()
+    for rank, english in enumerate(_ENGLISH_NAMES, start=len(ALIASES)):
+        for match in re.finditer(rf"(?<![a-z]){re.escape(english.casefold())}(?![a-z])", lowered):
+            found.append((len(english), match.start(), match.end(), english, rank))
+    taken: list[tuple[int, int, str]] = []
+    for _, start, end, name, _ in sorted(found, key=lambda f: (-f[0], f[4], f[1])):
+        if all(end <= other_start or start >= other_end for other_start, other_end, _ in taken):
+            taken.append((start, end, name))
+    cities: list[str] = []
+    seen: set[str] = set()
+    for _, _, name in sorted(taken):
+        place = ALIASES.get(name, name)
+        if place not in seen:
+            seen.add(place)
+            cities.append(name)
+    return cities[:MAX_CITIES]
+
+
 def geocoding_queries(city: str, language_code: str) -> list[tuple[str, str]]:
     """The `(name, language)` pairs to ask the geocoder for `city`, in order, until one finds it.
 
