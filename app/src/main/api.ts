@@ -89,6 +89,8 @@ export const languagesList = (): Promise<{ groups: LanguageGroup[] }> => core("l
 export const secretsStatus = (): Promise<{ has_key: boolean }> => core("secrets.status");
 /** Checks the key with OpenRouter and, if it works, stores it. */
 export const secretsSetOpenrouterKey = (key: string): Promise<KeyCheck> => core("secrets.set_openrouter_key", { key });
+/** Removes the stored key. Nothing comes back: the key never reaches the page. */
+export const secretsClearOpenrouterKey = (): Promise<Record<string, never>> => core("secrets.clear_openrouter_key");
 
 // ---------- the device side of the core ----------
 

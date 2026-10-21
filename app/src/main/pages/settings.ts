@@ -108,6 +108,9 @@ export interface SettingsPage extends Page {
   /** The tab that is open; while the panel is closed, the one it was left at. */
   pane(): SettingsPane;
 }
+/** How long 「移除金鑰」 waits for its second press. */
+const KEY_REMOVAL_CONFIRM_MS = 5000;
+
 
 export function createSettings(app: AppContext): SettingsPage {
   const el = document.createElement("div");
@@ -140,6 +143,9 @@ export function createSettings(app: AppContext): SettingsPage {
   /** The key field is shown although there is a key (「變更」). */
   let replacingKey = false;
   let keyBusy = false;
+  /** 「移除金鑰」 was pressed once: pressing it again, within a few seconds, removes the key. */
+  let confirmingKeyRemoval = false;
+  let keyRemovalTimer: ReturnType<typeof setTimeout> | undefined;
   let keyError: (() => string) | null = null;
   /** What was typed in the limit field while it is not a limit, and what is wrong with it. */
   let limitDraft: string | null = null;
@@ -162,7 +168,7 @@ export function createSettings(app: AppContext): SettingsPage {
   /** What the tabs are drawn from, as the panel knows it now. */
   const view = (): SettingsView => ({
     pane, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
-    replacingKey, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
+    replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
   });
 
   /** The item at the foot of the microphones' menu that looks for them again. */
@@ -500,6 +506,39 @@ export function createSettings(app: AppContext): SettingsPage {
     render();
   }
 
+  /** The first press asks again for a few seconds; the second removes the key. */
+  async function removeKey(): Promise<void> {
+    if (keyBusy) return;
+    clearTimeout(keyRemovalTimer);
+    if (!confirmingKeyRemoval) {
+      confirmingKeyRemoval = true;
+      keyRemovalTimer = setTimeout(() => {
+        confirmingKeyRemoval = false;
+        if (visible) render();
+      }, KEY_REMOVAL_CONFIRM_MS);
+      render();
+      el.querySelector<HTMLElement>('[data-act="key-remove"]')?.focus();
+      return;
+    }
+    confirmingKeyRemoval = false;
+    keyBusy = true;
+    render();
+    try {
+      await api.secretsClearOpenrouterKey();
+      hasKey = false;
+      replacingKey = false;
+      keyError = null;
+      openrouter = null;
+      toaster.info(t("settings.keyRemoved"));
+      await readStatus();
+    } catch (err) {
+      toaster.info(describeError(err));
+    }
+    keyBusy = false;
+    render();
+    el.querySelector<HTMLElement>("#key-input")?.focus();
+  }
+
   async function pasteKey(): Promise<void> {
     if (keyBusy) return;
     const input = el.querySelector<HTMLInputElement>("#key-input");
@@ -785,6 +824,9 @@ export function createSettings(app: AppContext): SettingsPage {
         keyError = null;
         render();
         el.querySelector<HTMLElement>('[data-act="key-replace"]')?.focus();
+        break;
+      case "key-remove":
+        void removeKey();
         break;
       case "key-paste":
         void pasteKey();

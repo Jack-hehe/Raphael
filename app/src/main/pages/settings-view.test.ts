@@ -72,7 +72,7 @@ const GROUPS: LanguageGroup[] = [
 const view = (over: Partial<SettingsView> = {}): SettingsView => ({
   pane: "general", device, brain, hasKey: true, openrouter, spend, catalog, checkingOpenrouter: false,
   devices: { devices: [{ index: 0, name: REALTEK, is_default: true }], selected: null, automatic_device: REALTEK },
-  altgr: false, version: "0.1.0", replacingKey: false, keyBusy: false, keyError: null, limitDraft: null, limitError: null,
+  altgr: false, version: "0.1.0", replacingKey: false, confirmingKeyRemoval: false, keyBusy: false, keyError: null, limitDraft: null, limitError: null,
   cityDraft: null, cityError: null, languageGroups: GROUPS, now: NOW, ...over,
 });
 const tab = (pane: SettingsPane, over: Partial<SettingsView> = {}): string => paneHTML(view({ pane, ...over }));
@@ -299,10 +299,20 @@ describe("模型與用量", () => {
     const key = rowOf(tab("usage"), "金鑰");
     expect(key).toContain("已連線");
     expect(key).toContain("延遲 120 ms");
-    expect(buttons(key)).toEqual(['<button type="button" class="btn" data-act="or-check">', '<button type="button" class="btn" data-act="key-replace" data-k="key">']);
+    expect(buttons(key)).toEqual(['<button type="button" class="btn" data-act="or-check">', '<button type="button" class="btn" data-act="key-replace" data-k="key">', '<button type="button" class="btn" data-act="key-remove">']);
     expect(key).toContain(">變更</button>");
     const bad = rowOf(tab("usage", { openrouter: { ...openrouter, state: "error", error: "auth" } }), "金鑰");
     expect(bad).toContain("金鑰無效，請更換");
+  });
+
+  test("has a bordered button to remove the key, only while a key is set, that asks once more", () => {
+    const key = rowOf(tab("usage"), "金鑰");
+    expect(buttons(key)).toContain('<button type="button" class="btn" data-act="key-remove">');
+    expect(key).toContain(">移除金鑰</button>");
+    expect(rowOf(tab("usage", { confirmingKeyRemoval: true }), "金鑰")).toContain(">確定移除？</button>");
+    for (const over of [{ hasKey: false }, { replacingKey: true }]) {
+      expect(rowOf(tab("usage", over), "金鑰")).not.toContain("key-remove");
+    }
   });
 
   test("asks for a key when there is none, or while it is being changed", () => {
