@@ -13,6 +13,7 @@ def fake_home(tmp_path, monkeypatch):
     monkeypatch.delenv("RAPHAEL_DATA_DIR", raising=False)
     monkeypatch.delenv("RAPHAEL_MODELS_DIR", raising=False)
     monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     return home
@@ -90,3 +91,38 @@ def test_other_platforms_have_no_default(monkeypatch):
     on_platform(monkeypatch, "linux")
     with pytest.raises(RuntimeError, match="RAPHAEL_DATA_DIR"):
         paths.data_dir()
+
+
+def test_windows_models_default_to_the_machine_local_folder(fake_home, monkeypatch):
+    on_platform(monkeypatch, "win32")
+    assert paths.local_dir() == fake_home / "AppData" / "Local" / "Raphael"
+    assert paths.models_dir() == fake_home / "AppData" / "Local" / "Raphael" / "models"
+    assert not (fake_home / "AppData").exists()  # only a path is made, nothing on disk
+
+
+def test_the_database_stays_in_the_roaming_data_dir_on_windows(fake_home, monkeypatch):
+    on_platform(monkeypatch, "win32")
+    assert paths.db_path() == fake_home / "AppData" / "Roaming" / "Raphael" / "raphael.db"
+
+
+def test_macos_models_default_to_the_caches_folder(fake_home, monkeypatch):
+    on_platform(monkeypatch, "darwin")
+    assert paths.models_dir() == fake_home / "Library" / "Caches" / "Raphael" / "models"
+
+
+def test_an_explicit_base_still_holds_the_models_beside_it(fake_home, monkeypatch, tmp_path):
+    on_platform(monkeypatch, "win32")
+    assert paths.models_dir(tmp_path / "base") == tmp_path / "base" / "models"
+
+
+def test_the_models_override_wins_over_the_local_default(fake_home, monkeypatch, tmp_path):
+    on_platform(monkeypatch, "win32")
+    monkeypatch.setenv("RAPHAEL_MODELS_DIR", str(tmp_path / "m"))
+    assert paths.models_dir() == tmp_path / "m"
+
+
+def test_the_data_dir_override_takes_the_models_with_it(fake_home, monkeypatch, tmp_path):
+    on_platform(monkeypatch, "win32")
+    monkeypatch.setenv("RAPHAEL_DATA_DIR", str(tmp_path / "d"))
+    assert paths.models_dir() == tmp_path / "d" / "models"
+    assert not (fake_home / "AppData").exists()  # the real local folder is never named

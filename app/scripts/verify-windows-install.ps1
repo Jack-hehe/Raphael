@@ -13,7 +13,10 @@ $verificationRoot = Join-Path $env:RUNNER_TEMP ("raphael-install-" + [guid]::New
 $installDirectory = Join-Path $verificationRoot 'Installed Raphael'
 $dataDirectory = Join-Path $verificationRoot 'data'
 $modelsDirectory = Join-Path $verificationRoot 'models'
-$logFile = Join-Path $env:LOCALAPPDATA 'app.raphael.desktop/logs/raphael.log'
+$localDirectory = Join-Path $env:LOCALAPPDATA 'Raphael'
+$logFile = Join-Path $localDirectory 'logs/raphael.log'
+$webviewDirectory = Join-Path $localDirectory 'WebView2'
+$legacyDirectories = @((Join-Path $env:LOCALAPPDATA 'app.raphael.desktop'), (Join-Path $env:APPDATA 'app.raphael.desktop'))
 # Where the core keeps its data when RAPHAEL_DATA_DIR is not set. The checks put one marker file here to
 # show that an upgrade and a silent uninstall keep user data, and remove nothing but that marker (and the
 # folder, if the checks created it and it is empty again).
@@ -83,6 +86,12 @@ function Start-InstalledApp {
             Start-Sleep -Milliseconds 200
         }
         if (-not $handshake) { throw "The installed desktop app did not complete its core handshake ($Description)." }
+        # Every window keeps its webview data in Raphael's own local folder, and nothing is written
+        # under the app identifier's folders.
+        if (-not (Test-Path -LiteralPath $webviewDirectory -PathType Container)) { throw "The webview data is not in $webviewDirectory ($Description)." }
+        foreach ($legacy in $legacyDirectories) {
+            if (Test-Path -LiteralPath $legacy) { throw "The desktop app wrote to $legacy ($Description)." }
+        }
         $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $($application.Id)" |
             Where-Object { $_.ExecutablePath -eq $coreExecutable })
         if ($children.Count -ne 1) { throw "The desktop app did not launch exactly its installed core ($Description)." }

@@ -497,6 +497,7 @@ impl Overlay {
         .focused(false)
         .resizable(false)
         .no_redirection_bitmap(true)
+        .data_directory(crate::webview_data_dir(app)?)
         .build()?;
 
         // Let the mouse through (`WS_EX_TRANSPARENT | WS_EX_LAYERED`). A window that does not
