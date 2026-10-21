@@ -13,8 +13,9 @@
 /* ---------- the two columns ---------- */
 .page-home .home { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; margin-top: 18px; }
 .page-home .home-main { min-width: 0; container: homemain / inline-size; }
-.page-home .home-main > .usage { display: grid; gap: 14px; }
-.page-home .home-side { min-width: 0; display: grid; gap: 14px; }
+.page-home .home-main > .usage { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+/* An implicit grid column is as wide as its widest unbroken line (a long question on the right). minmax(0, 1fr) lets it shrink and the line truncate. */
+.page-home .home-side { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 /* The shortcuts stay on the right in a window of middling size too: narrower there, at full width
    from 860 px. */
 @container main (min-width: 640px) {

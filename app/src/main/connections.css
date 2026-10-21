@@ -52,7 +52,7 @@
 .cs .note { margin-top: 14px; }
 .cs .ca-alert { margin-top: 14px; }
 .cs-sec { margin-top: 22px; }
-.cs-say { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.cs-say { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 0; padding: 0; list-style: none; }
 .cs-say li { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--edge); background: var(--panel); font-size: 13.5px; line-height: 1.5; }
 .cs-say .i { width: 15px; height: 15px; flex: none; color: var(--text-3); }
 
@@ -86,7 +86,7 @@
 .cs-card .btn.cs-main { flex: 1; min-width: 0; justify-content: flex-start; gap: 12px; align-self: stretch; min-height: 62px; padding: 8px 4px 8px 12px; border: 0; border-radius: 11px; background: transparent; text-align: left; white-space: normal; }
 .cs-card .btn.cs-main:hover:not(:disabled) { background: transparent; }
 .cs-card:has(.cs-main:focus-visible) { box-shadow: 0 0 0 3px var(--accent-ring); border-color: var(--focus); }
-.cs-main .tx { display: grid; flex: 1; min-width: 0; }
+.cs-main .tx { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-width: 0; }
 .cs-main .nm { font-size: 13.5px; font-weight: 600; }
 .cs-main .sub { font-size: 12px; line-height: 1.4; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cs-main .sub.wait { color: var(--accent-text); }
@@ -96,8 +96,8 @@
 
 /* The form that connects a server of the user's own */
 .cd-help { margin: 6px 0 0; font-size: 13px; line-height: 1.5; color: var(--text-2); text-wrap: pretty; }
-.add-grid { display: grid; gap: 16px; margin-top: 18px; }
-.add-grid .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.add-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin-top: 18px; }
+.add-grid .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 .add-acts { display: flex; gap: 8px; margin-top: 4px; }
 .fld { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .fld > .flabel { font-size: 13px; font-weight: 600; color: var(--text); }
@@ -108,7 +108,7 @@
 .secret-row .nm { font-weight: 600; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12.5px; overflow-wrap: anywhere; }
 .secret-row .where { flex: 1; min-width: 0; color: var(--text-3); font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
 .secret-row .where .i { width: 12px; height: 12px; flex: none; }
-.pair { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; }
+.pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; }
 .trust { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; background: var(--warn-soft); border: 1px solid var(--warn-edge); font-size: 12.5px; line-height: 1.55; color: var(--text-2); }
 .trust > .i { width: 15px; height: 15px; flex: none; color: var(--warn); margin-top: 2px; }
 .trust b { color: var(--text); font-weight: 600; }
@@ -123,7 +123,7 @@
   .cs-grid { grid-template-columns: minmax(0, 1fr); }
   .cs-tools { margin-left: 0; width: 100%; }
   .cs-tools .field { flex: 1; width: auto; }
-  .add-grid .two { grid-template-columns: 1fr; }
+  .add-grid .two { grid-template-columns: minmax(0, 1fr); }
   .cs-head { flex-wrap: wrap; }
   .cs-join { width: 100%; }
 }

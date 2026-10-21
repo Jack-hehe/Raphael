@@ -1,5 +1,5 @@
 .settings-loading { margin: 14px 0 0; font-size: 13px; color: var(--text-3); }
-.settings-skeleton { margin-top: 32px; display: grid; gap: 30px; }
+.settings-skeleton { margin-top: 32px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 30px; }
 .skeleton-heading, .skeleton-row i { display: block; border-radius: 5px; background: var(--track); animation: settings-pulse 1.6s ease-in-out infinite; }
 .skeleton-heading { width: 28%; height: 14px; margin-bottom: 16px; }
 .skeleton-card { padding: 0 18px; border-radius: 12px; border: 1px solid var(--edge); background: var(--panel); }
