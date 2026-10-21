@@ -105,10 +105,3 @@ export function keyReasonText(reason: string): string {
   return t("format.014");
 }
 
-/** The spellings typed in the second field of the dictionary: `拉菲爾、拉非爾` is two. */
-export function parseMisheard(text: string): string[] {
-  return text
-    .split(/[、,，;；\n]/)
-    .map((form) => form.trim())
-    .filter(Boolean);
-}

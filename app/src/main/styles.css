@@ -260,6 +260,9 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .addword .field:first-child { flex: 1.2; min-width: 180px; }
 .addword .field { flex: 1; min-width: 160px; }
 .addword-actions { display: flex; gap: 8px; margin-left: auto; }
+.head-actions { display: flex; gap: 8px; }
+.importbox { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; padding: 12px; }
+.importmsg { flex: 1; min-width: 180px; font-size: 13px; }
 @container main (max-width: 600px) {
   .addword .field, .addword .field:first-child { flex: 1 1 calc(50% - 4px); min-width: 0; }
 }

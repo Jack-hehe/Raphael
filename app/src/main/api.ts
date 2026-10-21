@@ -75,9 +75,11 @@ export const agentHistoryClear = (): Promise<{ deleted: number }> => core("agent
 // ---------- dictionary ----------
 
 export const dictionaryList = (): Promise<{ entries: DictionaryEntry[] }> => core("dictionary.list");
-export const dictionaryAdd = (word: string, misheard: string[]): Promise<{ entry: DictionaryEntry }> =>
-  core("dictionary.add", { word, misheard });
+export const dictionaryAdd = (word: string): Promise<{ entry: DictionaryEntry }> => core("dictionary.add", { word });
 export const dictionaryDelete = (id: number): Promise<{ deleted: boolean }> => core("dictionary.delete", { id });
+/** Adds the words as typed entries; says how many were new, already there, or blank. */
+export const dictionaryImport = (words: string[]): Promise<{ added: number; skipped: number; invalid: number }> =>
+  core("dictionary.import", { words });
 
 // ---------- the brain's settings and the key ----------
 

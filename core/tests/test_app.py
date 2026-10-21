@@ -704,6 +704,7 @@ EXPECTED_METHODS = {
     "history.delete",
     "dictionary.list",
     "dictionary.add",
+    "dictionary.import",
     "dictionary.delete",
     "dictionary.auto_add",
     "dictionary.dismiss",
