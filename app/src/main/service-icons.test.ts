@@ -51,8 +51,7 @@ describe("the marks of well-known programs", () => {
     }
   });
 
-  test("Canva has its own artwork, found by its name or its address", () => {
-    expect(serviceIconOf({ name: "Canva", url: "https://mcp.canva.com/mcp" })).toBe("canva");
+  test("a brand with artwork of its own is found by its name or its address", () => {
     expect(serviceIconOf({ name: "x", url: "https://mcp.monday.com/mcp" })).toBe("monday");
     expect(serviceIconOf({ name: "x", url: "https://huggingface.co/mcp" })).toBe("huggingface");
     expect(serviceIconOf({ name: "x", url: "https://mcp.webflow.com/mcp" })).toBe("webflow");
@@ -98,9 +97,9 @@ describe("the marks of well-known programs", () => {
   });
 
   test("an official full-colour logo is a picture file of its own, with the brand's own colours and no tile of ours", () => {
-    expect(hasLogo("canva")).toBe(true);
+    expect(hasLogo("monday")).toBe(true);
     expect(hasLogo("notion")).toBe(false);
-    const html = serviceLogoHTML("canva");
+    const html = serviceLogoHTML("monday");
     expect(html).toMatch(/^<img class="logo lg-l" src="data:image\/png;base64,/);
     expect(html).toContain('alt=""');
     expect(html).not.toContain("lg-d");

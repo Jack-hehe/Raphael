@@ -5,7 +5,7 @@ services apart. The logos are in app/src/main/service-logos/, and where each one
 written in app/src/main/service-logos/sources.json. They are not licensed to Raphael and stay the
 property of their owners.
 
-Canva, monday.com, Jam, Fireflies, Close, Attio, Granola, Klaviyo, Apify, Jotform, Context7, DeepWiki,
+monday.com, Jam, Fireflies, Close, Attio, Granola, Klaviyo, Apify, Jotform, Context7, DeepWiki,
 Microsoft Learn (Microsoft), Amazon Web Services, Hugging Face and Exa, and the marks drawn from Simple
 Icons (Notion, GitHub, Google Drive, Gmail, Google Calendar, Linear, Figma, Spotify, Discord, Todoist,
 Obsidian, Atlassian, Cloudflare, Sentry, Stripe, Zapier, PayPal, Webflow, Wix, Netlify, Neon, Prisma,

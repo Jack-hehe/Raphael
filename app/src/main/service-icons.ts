@@ -4,7 +4,7 @@
 //   notices), bare, in the brand colour where that has enough contrast on every surface of both themes
 //   (`BRAND_COLORS`), else in the colour of the text;
 // - the brand's own full-colour logo, a file in `service-logos/` (with where each came from in
-//   `sources.json`), for the brands Simple Icons does not have: Canva and the Microsoft marks are not in
+//   `sources.json`), for the brands Simple Icons does not have: the Microsoft marks are not in
 //   it, removed at their owners' request. A logo that is dark in its official form has a light twin
 //   (`<id>.dark.svg`) that the dark theme shows instead.
 // The marks belong to their owners, who do not sponsor or endorse Raphael. They are drawn bare, with no
@@ -14,7 +14,7 @@ import { esc } from "./ui";
 
 /** The brands that have a logo file of their own in `service-logos/` (the test keeps this and the folder the same). */
 export const LOGO_IDS = [
-  "canva", "monday", "jam", "fireflies", "close", "attio", "granola", "klaviyo", "apify", "jotform", "context7", "deepwiki", "mslearn", "aws",
+  "monday", "jam", "fireflies", "close", "attio", "granola", "klaviyo", "apify", "jotform", "context7", "deepwiki", "mslearn", "aws",
   "huggingface", "exa",
 ] as const;
 export type LogoIconId = (typeof LOGO_IDS)[number];
@@ -95,7 +95,6 @@ const MATCHERS: Partial<Record<ServiceIconId, readonly (readonly string[])[]>> =
   stripe: [["stripe"]],
   zapier: [["zapier"]],
   paypal: [["paypal"]],
-  canva: [["canva"]],
   monday: [["monday"]],
   webflow: [["webflow"]],
   wix: [["wix"]],

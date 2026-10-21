@@ -16,9 +16,9 @@ from .config import checked_url
 LANGUAGES = ("zh-TW", "en", "ja")
 CATEGORIES = ("docs", "projects", "developer", "payments", "automation", "design", "crm", "analytics")
 # The marks the window has (`service-icons.ts`, `service-logos/`): every entry shows its brand's own.
-ICONS = ("notion", "linear", "atlassian", "cloudflare", "todoist", "sentry", "stripe", "zapier", "paypal", "canva", "monday", "webflow", "wix", "netlify", "neon", "prisma", "airtable", "jam", "fireflies", "close", "calendly", "attio", "granola", "posthog", "postman", "klaviyo", "sanity", "apify", "jotform", "bitly", "context7", "deepwiki", "mslearn", "aws", "huggingface", "exa")
+ICONS = ("notion", "linear", "atlassian", "cloudflare", "todoist", "sentry", "stripe", "zapier", "paypal", "monday", "webflow", "wix", "netlify", "neon", "prisma", "airtable", "jam", "fireflies", "close", "calendly", "attio", "granola", "posthog", "postman", "klaviyo", "sanity", "apify", "jotform", "bitly", "context7", "deepwiki", "mslearn", "aws", "huggingface", "exa")
 # Entries the store shows first, in this order.
-POPULAR = ("notion", "linear", "atlassian", "todoist", "stripe", "canva")
+POPULAR = ("notion", "linear", "atlassian", "todoist", "stripe")
 
 
 @dataclass(frozen=True)
@@ -172,20 +172,6 @@ SERVICES: tuple[Service, ...] = (
             ("我最近的 PayPal 交易有哪些", "列出還沒付款的發票", "建立一張發票給這位客戶"),
             ("What are my recent PayPal transactions", "List the unpaid invoices", "Create an invoice for this customer"),
             ("最近の PayPal の取引を教えて", "未払いの請求書を一覧にして", "この顧客に請求書を作成して"),
-        ),
-    ),
-    _service(
-        "canva", "Canva", "Canva", "https://mcp.canva.com/mcp", "design", "canva",
-        ("搜尋和建立 Canva 設計", "Search and create Canva designs", "Canva のデザインを検索・作成"),
-        (
-            "讓拉斐爾在你的 Canva 裡找設計、建立新設計，也能匯出成圖片或 PDF。",
-            "Lets Raphael find designs in your Canva, create new ones, and export them as images or PDFs.",
-            "Canva でデザインを探し、新しく作成し、画像や PDF として書き出せます。",
-        ),
-        (
-            ("在 Canva 找上次的簡報", "建立一張活動海報", "把這個設計匯出成 PDF"),
-            ("Find my last presentation in Canva", "Make a poster for the event", "Export this design as a PDF"),
-            ("Canva で前回のプレゼンを探して", "イベントのポスターを作って", "このデザインを PDF で書き出して"),
         ),
     ),
     _service(

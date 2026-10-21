@@ -62,10 +62,6 @@ def test_find_and_the_view():
     assert view(find("sentry"))["popular"] is False  # type: ignore[arg-type]
 
 
-def test_canva_has_its_own_mark():
-    assert find("canva").icon == "canva"  # type: ignore[union-attr]
-
-
 def test_the_public_servers_need_no_login_and_the_others_do():
     public = {s.id for s in SERVICES if s.auth == "none"}
     assert {"context7", "deepwiki"} <= public
