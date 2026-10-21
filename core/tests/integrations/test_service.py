@@ -280,6 +280,54 @@ async def test_a_switch_that_is_not_one_is_refused(rpc, servers, params):
     assert listed["enabled_count"] == listed["tool_count"]
 
 
+async def test_many_tools_are_switched_in_one_call_and_one_write(rpc, service, servers, monkeypatch):
+    server_id = await add(rpc, servers)
+    names = [t["name"] for t in (await rpc.call("integrations.tools", {"id": server_id}))["tools"]]
+    assert len(names) >= 2
+    saves = []
+    original = service._save
+
+    def counted():
+        saves.append(1)
+        original()
+
+    monkeypatch.setattr(service, "_save", counted)
+    off = await rpc.call(
+        "integrations.set_tools_enabled", {"id": server_id, "tools": names, "enabled": False}
+    )
+    assert len(saves) == 1
+    assert [t["enabled"] for t in off["tools"]] == [False] * len(names)
+    assert service.tier_of(f"mcp:{server_id}/{names[0]}") is None
+    on = await rpc.call(
+        "integrations.set_tools_enabled", {"id": server_id, "tools": names[:1], "enabled": True}
+    )
+    assert [t["name"] for t in on["tools"]] == names[:1]
+    assert service.tier_of(f"mcp:{server_id}/{names[0]}") is not None
+    assert service.tier_of(f"mcp:{server_id}/{names[1]}") is None
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"tools": ["note", "nope"], "enabled": False},
+        {"tools": "note", "enabled": False},
+        {"tools": [1], "enabled": False},
+        {"tools": [""], "enabled": False},
+        {"tools": [], "enabled": False},
+        {"tools": ["note"], "enabled": "no"},
+        {"tools": ["note"]},
+        {"enabled": False},
+    ],
+)
+async def test_a_bulk_switch_that_is_not_one_changes_nothing(rpc, servers, params):
+    server_id = await add(rpc, servers)
+    with pytest.raises(RpcError) as refused:
+        await rpc.call("integrations.set_tools_enabled", {"id": server_id, **params})
+    assert refused.value.code == INVALID_PARAMS
+    listed = (await rpc.call("integrations.list"))["servers"][0]
+    assert listed["enabled_count"] == listed["tool_count"]
+
+
 async def test_an_unknown_server_is_refused_by_every_method(rpc):
     for method, extra in (
         ("integrations.set_enabled", {"enabled": True}),
@@ -287,6 +335,7 @@ async def test_an_unknown_server_is_refused_by_every_method(rpc):
         ("integrations.refresh", {}),
         ("integrations.tools", {}),
         ("integrations.set_tool_enabled", {"tool": "x", "enabled": True}),
+        ("integrations.set_tools_enabled", {"tools": ["x"], "enabled": True}),
         ("integrations.connect", {}),
     ):
         with pytest.raises(RpcError) as refused:

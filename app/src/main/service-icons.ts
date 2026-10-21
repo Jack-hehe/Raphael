@@ -1,12 +1,23 @@
-// The marks of the well-known programs a connection can be, to tell them apart in the lists, taken
-// from Simple Icons 16.35.0 (https://simpleicons.org, CC0-1.0; its text is in the release notices).
-// Only the ones below are here and nothing is fetched at run time. The marks belong to their owners,
-// who do not sponsor or endorse Raphael. They are drawn bare, with no tile behind them: in the brand
-// colour where that has enough contrast on every surface of both themes (`BRAND_COLORS`), else in the
-// colour of the text. A program that is none of them gets a letter (`monogram`), never a made-up
-// logo: Canva and the Microsoft marks are not in Simple Icons, which removed them at their owners' request.
+// The marks of the well-known programs a connection can be, to tell them apart in the lists. Two kinds,
+// and nothing is fetched at run time:
+// - one drawn path from Simple Icons 16.35.0 (https://simpleicons.org, CC0-1.0; its text is in the release
+//   notices), bare, in the brand colour where that has enough contrast on every surface of both themes
+//   (`BRAND_COLORS`), else in the colour of the text;
+// - the brand's own full-colour logo, a file in `service-logos/` (with where each came from in
+//   `sources.json`), for the brands Simple Icons does not have: the Microsoft marks are not in
+//   it, removed at their owners' request. A logo that is dark in its official form has a light twin
+//   (`<id>.dark.svg`) that the dark theme shows instead.
+// The marks belong to their owners, who do not sponsor or endorse Raphael. They are drawn bare, with no
+// tile of ours behind them. A program that is none of them gets a letter (`monogram`), never a made-up logo.
 
 import { esc } from "./ui";
+
+/** The brands that have a logo file of their own in `service-logos/` (the test keeps this and the folder the same). */
+export const LOGO_IDS = [
+  "monday", "jam", "fireflies", "close", "attio", "granola", "klaviyo", "apify", "jotform", "context7", "deepwiki", "mslearn", "aws",
+  "huggingface", "exa",
+] as const;
+export type LogoIconId = (typeof LOGO_IDS)[number];
 
 export const SERVICE_ICONS = {
   notion: { title: "Notion", path: "M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z" },
@@ -26,12 +37,47 @@ export const SERVICE_ICONS = {
   stripe: { title: "Stripe", path: "M13.976 9.15c-2.172-.806-3.356-1.426-3.356-2.409 0-.831.683-1.305 1.901-1.305 2.227 0 4.515.858 6.09 1.631l.89-5.494C18.252.975 15.697 0 12.165 0 9.667 0 7.589.654 6.104 1.872 4.56 3.147 3.757 4.992 3.757 7.218c0 4.039 2.467 5.76 6.476 7.219 2.585.92 3.445 1.574 3.445 2.583 0 .98-.84 1.545-2.354 1.545-1.875 0-4.965-.921-6.99-2.109l-.9 5.555C5.175 22.99 8.385 24 11.714 24c2.641 0 4.843-.624 6.328-1.813 1.664-1.305 2.525-3.236 2.525-5.732 0-4.128-2.524-5.851-6.594-7.305h.003z" },
   zapier: { title: "Zapier", path: "M4.157 0A4.151 4.151 0 0 0 0 4.161v15.678A4.151 4.151 0 0 0 4.157 24h15.682A4.152 4.152 0 0 0 24 19.839V4.161A4.152 4.152 0 0 0 19.839 0H4.157Zm10.61 8.761h.03a.577.577 0 0 1 .23.038.585.585 0 0 1 .201.124.63.63 0 0 1 .162.431.612.612 0 0 1-.162.435.58.58 0 0 1-.201.128.58.58 0 0 1-.23.042.529.529 0 0 1-.235-.042.585.585 0 0 1-.332-.328.559.559 0 0 1-.038-.235.613.613 0 0 1 .17-.431.59.59 0 0 1 .405-.162Zm2.853 1.572c.03.004.061.004.095.004.325-.011.646.064.937.219.238.144.431.355.552.609.128.279.189.582.185.888v.193a2 2 0 0 1 0 .219h-2.498c.003.227.075.45.204.642a.78.78 0 0 0 .646.265.714.714 0 0 0 .484-.136.642.642 0 0 0 .23-.318l.915.257a1.398 1.398 0 0 1-.28.537c-.14.159-.321.284-.521.355a2.234 2.234 0 0 1-.836.136 1.923 1.923 0 0 1-1.001-.245 1.618 1.618 0 0 1-.665-.703 2.221 2.221 0 0 1-.227-1.036 1.95 1.95 0 0 1 .48-1.398 1.9 1.9 0 0 1 1.3-.488Zm-9.607.023c.162.004.325.026.48.079.207.065.4.174.563.314.26.302.393.692.366 1.088v2.276H8.53l-.109-.711h-.065c-.064.163-.155.31-.272.439a1.122 1.122 0 0 1-.374.264 1.023 1.023 0 0 1-.453.083 1.334 1.334 0 0 1-.866-.264.965.965 0 0 1-.329-.801.993.993 0 0 1 .076-.431 1.02 1.02 0 0 1 .242-.363 1.478 1.478 0 0 1 1.043-.303h.952v-.181a.696.696 0 0 0-.136-.454.553.553 0 0 0-.438-.154.695.695 0 0 0-.378.086.48.48 0 0 0-.193.254l-.99-.144a1.26 1.26 0 0 1 .257-.563c.14-.174.321-.302.533-.378.261-.091.54-.136.82-.129.053-.003.106-.007.163-.007Zm4.384.007c.174 0 .347.038.506.114.182.083.34.211.458.374.257.423.377.911.351 1.406a2.53 2.53 0 0 1-.355 1.448 1.148 1.148 0 0 1-1.009.517c-.204 0-.401-.045-.582-.136a1.052 1.052 0 0 1-.48-.457 1.298 1.298 0 0 1-.114-.234h-.045l.004 1.784h-1.059v-4.713h.904l.117.805h.057c.068-.208.177-.401.328-.56a1.129 1.129 0 0 1 .843-.344h.076v-.004Zm7.559.084h.903l.113.805h.053a1.37 1.37 0 0 1 .235-.484.813.813 0 0 1 .313-.242.82.82 0 0 1 .39-.076h.234v1.051h-.401a.662.662 0 0 0-.313.008.623.623 0 0 0-.272.155.663.663 0 0 0-.174.26.683.683 0 0 0-.027.314v1.875h-1.054v-3.666Zm-17.515.003h3.262v.896L3.73 13.104l.034.113h1.973l.042.9H2.4v-.9l1.931-1.754-.045-.117H2.441v-.896Zm11.815 0h1.055v3.659h-1.055V10.45Zm3.443.684.019.016a.69.69 0 0 0-.351.045.756.756 0 0 0-.287.204c-.11.155-.174.336-.189.522h1.545c-.034-.526-.257-.787-.74-.787h.003Zm-5.718.163c-.026 0-.057 0-.083.004a.78.78 0 0 0-.31.053.746.746 0 0 0-.257.189 1.016 1.016 0 0 0-.204.695v.064c-.015.257.057.507.204.711a.634.634 0 0 0 .253.196.638.638 0 0 0 .314.061.644.644 0 0 0 .578-.265c.14-.223.204-.48.189-.74a1.216 1.216 0 0 0-.181-.711.677.677 0 0 0-.503-.257Zm-4.509 1.266a.464.464 0 0 0-.268.102.373.373 0 0 0-.114.276c0 .053.008.106.027.155a.375.375 0 0 0 .087.132.576.576 0 0 0 .397.11v.004a.863.863 0 0 0 .563-.182.573.573 0 0 0 .211-.457v-.14h-.903Z" },
   paypal: { title: "PayPal", path: "M15.607 4.653H8.941L6.645 19.251H1.82L4.862 0h7.995c3.754 0 6.375 2.294 6.473 5.513-.648-.478-2.105-.86-3.722-.86m6.57 5.546c0 3.41-3.01 6.853-6.958 6.853h-2.493L11.595 24H6.74l1.845-11.538h3.592c4.208 0 7.346-3.634 7.153-6.949a5.24 5.24 0 0 1 2.848 4.686M9.653 5.546h6.408c.907 0 1.942.222 2.363.541-.195 2.741-2.655 5.483-6.441 5.483H8.714Z" },
+  webflow: { title: "Webflow", path: "m24 4.515-7.658 14.97H9.149l3.205-6.204h-.144C9.566 16.713 5.621 18.973 0 19.485v-6.118s3.596-.213 5.71-2.435H0V4.515h6.417v5.278l.144-.001 2.622-5.277h4.854v5.244h.144l2.72-5.244H24Z" },
+  wix: { title: "Wix", path: "m0 7.354 2.113 9.292h.801a1.54 1.54 0 0 0 1.506-1.218l1.351-6.34a.171.171 0 0 1 .167-.137c.08 0 .15.058.167.137l1.352 6.34a1.54 1.54 0 0 0 1.506 1.218h.805l2.113-9.292h-.565c-.62 0-1.159.43-1.296 1.035l-1.26 5.545-1.106-5.176a1.76 1.76 0 0 0-2.19-1.324c-.639.176-1.113.716-1.251 1.365l-1.094 5.127-1.26-5.537A1.33 1.33 0 0 0 .563 7.354H0zm13.992 0a.951.951 0 0 0-.951.95v8.342h.635a.952.952 0 0 0 .951-.95V7.353h-.635zm1.778 0 3.158 4.66-3.14 4.632h1.325c.368 0 .712-.181.918-.486l1.756-2.59a.12.12 0 0 1 .197 0l1.754 2.59c.206.305.55.486.918.486h1.326l-3.14-4.632L24 7.354h-1.326c-.368 0-.712.181-.918.486l-1.772 2.617a.12.12 0 0 1-.197 0L18.014 7.84a1.108 1.108 0 0 0-.918-.486H15.77z" },
+  netlify: { title: "Netlify", path: "M6.49 19.04h-.23L5.13 17.9v-.23l1.73-1.71h1.2l.15.15v1.2L6.5 19.04ZM5.13 6.31V6.1l1.13-1.13h.23L8.2 6.68v1.2l-.15.15h-1.2L5.13 6.31Zm9.96 9.09h-1.65l-.14-.13v-3.83c0-.68-.27-1.2-1.1-1.23-.42 0-.9 0-1.43.02l-.07.08v4.96l-.14.14H8.9l-.13-.14V8.73l.13-.14h3.7a2.6 2.6 0 0 1 2.61 2.6v4.08l-.13.14Zm-8.37-2.44H.14L0 12.82v-1.64l.14-.14h6.58l.14.14v1.64l-.14.14Zm17.14 0h-6.58l-.14-.14v-1.64l.14-.14h6.58l.14.14v1.64l-.14.14ZM11.05 6.55V1.64l.14-.14h1.65l.14.14v4.9l-.14.14h-1.65l-.14-.13Zm0 15.81v-4.9l.14-.14h1.65l.14.13v4.91l-.14.14h-1.65l-.14-.14Z" },
+  neon: { title: "Neon", path: "M24 0V24l-9.365-8.045V24H0V0ZM2.942 21.087h8.751V9.563l9.365 8.204V2.919L2.942 2.914Z" },
+  prisma: { title: "Prisma", path: "M21.8068 18.2848L13.5528.7565c-.207-.4382-.639-.7273-1.1286-.7541-.5023-.0293-.9523.213-1.2062.6253L2.266 15.1271c-.2773.4518-.2718 1.0091.0158 1.4555l4.3759 6.7786c.2608.4046.7127.6388 1.1823.6388.1332 0 .267-.0188.3987-.0577l12.7019-3.7568c.3891-.1151.7072-.3904.8737-.7553s.1633-.7828-.0075-1.1454zm-1.8481.7519L9.1814 22.2242c-.3292.0975-.6448-.1873-.5756-.5194l3.8501-18.4386c.072-.3448.5486-.3996.699-.0803l7.1288 15.138c.1344.2856-.019.6224-.325.7128z" },
+  airtable: { title: "Airtable", path: "M11.992 1.966c-.434 0-.87.086-1.28.257L1.779 5.917c-.503.208-.49.908.012 1.116l8.982 3.558a3.266 3.266 0 0 0 2.454 0l8.982-3.558c.503-.196.503-.908.012-1.116l-8.957-3.694a3.255 3.255 0 0 0-1.272-.257zM23.4 8.056a.589.589 0 0 0-.222.045l-10.012 3.877a.612.612 0 0 0-.38.564v8.896a.6.6 0 0 0 .821.552L23.62 18.1a.583.583 0 0 0 .38-.551V8.653a.6.6 0 0 0-.6-.596zM.676 8.095a.644.644 0 0 0-.48.19C.086 8.396 0 8.53 0 8.69v8.355c0 .442.515.737.908.54l6.27-3.006.307-.147 2.969-1.436c.466-.22.43-.908-.061-1.092L.883 8.138a.57.57 0 0 0-.207-.044z" },
+  calendly: { title: "Calendly", path: "M19.655 14.262c.281 0 .557.023.828.064 0 .005-.005.01-.005.014-.105.267-.234.534-.381.786l-1.219 2.106c-1.112 1.936-3.177 3.127-5.411 3.127h-2.432c-2.23 0-4.294-1.191-5.412-3.127l-1.218-2.106a6.251 6.251 0 0 1 0-6.252l1.218-2.106C6.736 4.832 8.8 3.641 11.035 3.641h2.432c2.23 0 4.294 1.191 5.411 3.127l1.219 2.106c.147.252.271.519.381.786 0 .004.005.009.005.014-.267.041-.543.064-.828.064-1.816 0-2.501-.607-3.291-1.306-.764-.676-1.711-1.517-3.44-1.517h-1.029c-1.251 0-2.387.455-3.2 1.278-.796.805-1.233 1.904-1.233 3.099v1.411c0 1.196.437 2.295 1.233 3.099.813.823 1.949 1.278 3.2 1.278h1.034c1.729 0 2.676-.841 3.439-1.517.791-.703 1.471-1.306 3.287-1.301Zm.005-3.237c.399 0 .794-.036 1.179-.11-.002-.004-.002-.01-.002-.014-.073-.414-.193-.823-.349-1.218.731-.12 1.407-.396 1.986-.819 0-.004-.005-.013-.005-.018-.331-1.085-.832-2.101-1.489-3.03-.649-.915-1.435-1.719-2.331-2.395-1.867-1.398-4.088-2.138-6.428-2.138-1.448 0-2.855.28-4.175.841-1.273.543-2.423 1.315-3.407 2.299S2.878 6.552 2.341 7.83c-.557 1.324-.842 2.726-.842 4.175 0 1.448.281 2.855.842 4.174.542 1.274 1.314 2.423 2.298 3.407s2.129 1.761 3.407 2.299c1.324.556 2.727.841 4.175.841 2.34 0 4.561-.74 6.428-2.137a10.815 10.815 0 0 0 2.331-2.396c.652-.929 1.158-1.949 1.489-3.03 0-.004.005-.014.005-.018-.579-.423-1.255-.699-1.986-.819.161-.395.276-.804.349-1.218.005-.009.005-.014.005-.023.869.166 1.692.506 2.404 1.035.685.505.552 1.075.446 1.416C22.184 20.437 17.619 24 12.221 24c-6.625 0-12-5.375-12-12s5.37-12 12-12c5.398 0 9.963 3.563 11.471 8.464.106.341.239.915-.446 1.421-.717.529-1.535.873-2.404 1.034.128.716.128 1.45 0 2.166-.387-.074-.782-.11-1.182-.11-4.184 0-3.968 2.823-6.736 2.823h-1.029c-1.899 0-3.15-1.357-3.15-3.095v-1.411c0-1.738 1.251-3.094 3.15-3.094h1.034c2.768 0 2.552 2.823 6.731 2.827Z" },
+  posthog: { title: "PostHog", path: "M9.854 14.5 5 9.647.854 5.5A.5.5 0 0 0 0 5.854V8.44a.5.5 0 0 0 .146.353L5 13.647l.147.146L9.854 18.5l.146.147v-.049c.065.03.134.049.207.049h2.586a.5.5 0 0 0 .353-.854L9.854 14.5zm0-5-4-4a.487.487 0 0 0-.409-.144.515.515 0 0 0-.356.21.493.493 0 0 0-.089.288V8.44a.5.5 0 0 0 .147.353l9 9a.5.5 0 0 0 .853-.354v-2.585a.5.5 0 0 0-.146-.354l-5-5zm1-4a.5.5 0 0 0-.854.354V8.44a.5.5 0 0 0 .147.353l4 4a.5.5 0 0 0 .853-.354V9.854a.5.5 0 0 0-.146-.354l-4-4zm12.647 11.515a3.863 3.863 0 0 1-2.232-1.1l-4.708-4.707a.5.5 0 0 0-.854.354v6.585a.5.5 0 0 0 .5.5H23.5a.5.5 0 0 0 .5-.5v-.6c0-.276-.225-.497-.499-.532zm-5.394.032a.8.8 0 1 1 0-1.6.8.8 0 0 1 0 1.6zM.854 15.5a.5.5 0 0 0-.854.354v2.293a.5.5 0 0 0 .5.5h2.293c.222 0 .39-.135.462-.309a.493.493 0 0 0-.109-.545L.854 15.501zM5 14.647.854 10.5a.5.5 0 0 0-.854.353v2.586a.5.5 0 0 0 .146.353L4.854 18.5l.146.147h2.793a.5.5 0 0 0 .353-.854L5 14.647z" },
+  postman: { title: "Postman", path: "M13.527.099C6.955-.744.942 3.9.099 10.473c-.843 6.572 3.8 12.584 10.373 13.428 6.573.843 12.587-3.801 13.428-10.374C24.744 6.955 20.101.943 13.527.099zm2.471 7.485a.855.855 0 0 0-.593.25l-4.453 4.453-.307-.307-.643-.643c4.389-4.376 5.18-4.418 5.996-3.753zm-4.863 4.861l4.44-4.44a.62.62 0 1 1 .847.903l-4.699 4.125-.588-.588zm.33.694l-1.1.238a.06.06 0 0 1-.067-.032.06.06 0 0 1 .01-.073l.645-.645.512.512zm-2.803-.459l1.172-1.172.879.878-1.979.426a.074.074 0 0 1-.085-.039.072.072 0 0 1 .013-.093zm-3.646 6.058a.076.076 0 0 1-.069-.083.077.077 0 0 1 .022-.046h.002l.946-.946 1.222 1.222-2.123-.147zm2.425-1.256a.228.228 0 0 0-.117.256l.203.865a.125.125 0 0 1-.211.117h-.003l-.934-.934-.294-.295 3.762-3.758 1.82-.393.874.874c-1.255 1.102-2.971 2.201-5.1 3.268zm5.279-3.428h-.002l-.839-.839 4.699-4.125a.952.952 0 0 0 .119-.127c-.148 1.345-2.029 3.245-3.977 5.091zm3.657-6.46l-.003-.002a1.822 1.822 0 0 1 2.459-2.684l-1.61 1.613a.119.119 0 0 0 0 .169l1.247 1.247a1.817 1.817 0 0 1-2.093-.343zm2.578 0a1.714 1.714 0 0 1-.271.218h-.001l-1.207-1.207 1.533-1.533c.661.72.637 1.832-.054 2.522zM18.855 6.05a.143.143 0 0 0-.053.157.416.416 0 0 1-.053.45.14.14 0 0 0 .023.197.141.141 0 0 0 .084.03.14.14 0 0 0 .106-.05.691.691 0 0 0 .087-.751.138.138 0 0 0-.194-.033z" },
+  sanity: { title: "Sanity", path: "m23.327 15.205-.893-1.555-4.321 2.632 4.799-6.11.726-.426-.179-.27.33-.421-1.515-1.261-.693.883-13.992 8.186 5.173-6.221 9.636-5.282-.915-1.769-5.248 2.876 2.584-3.106-1.481-1.305-5.816 6.994-5.777 3.168 4.423-5.847 2.771-1.442-.88-1.789-8.075 4.203L6.186 4.43 4.648 3.198 0 9.349l.072.058.868 1.768 5.153-2.683-4.696 6.207.77.617.458.885 5.425-2.974-5.974 7.185 1.481 1.304.297-.358 14.411-8.459-4.785 6.094.078.065-.007.005.992 1.726 6.364-3.877-2.451 3.954 1.642 1.077L24 15.648z" },
+  bitly: { title: "Bitly", path: "M13.055 21.26c-1.345.022-2.325-.41-2.386-1.585-.025-.44-.018-.91.002-1.192.137-1.716 1.333-2.95 2.53-3.19 1.482-.294 2.455.38 2.455 2.31 0 1.303-.36 3.618-2.59 3.657h-.016zM11.923 0C5.32 0 0 5.297 0 12.224c0 3.594 1.92 7.062 4.623 9.147.52.4 1.138.367 1.497.02.297-.285.272-.984-.285-1.475-2.16-1.886-3.652-4.76-3.652-7.635 0-5.15 4.58-9.49 9.74-9.49 6.28 0 9.636 5.102 9.636 9.43 0 2.65-1.29 5.84-3.626 7.874.015 0 .493-.942.493-2.784 0-3.13-1.976-4.836-4.28-4.836-1.663 0-2.667.598-3.34 1.152 0-1.272.045-3.652.045-3.652 0-1.572-.54-2.83-2.47-2.86-1.11-.015-1.932.493-2.44 1.647-.18.436-.12.916.254 1.125.3.18.81.046 1.046-.284.165-.21.254-.254.404-.24.24.03.257.405.257.66.014.193.193 2.903.088 9.865C7.98 21.798 9.493 24 13.1 24c1.56 0 2.756-.435 4.493-1.422C20.243 21.08 24 17.758 24 12.128 23.953 5.045 18.265 0 11.933 0" },
 } as const;
 
-export type ServiceIconId = keyof typeof SERVICE_ICONS;
+export type MonoIconId = keyof typeof SERVICE_ICONS;
+export type ServiceIconId = MonoIconId | LogoIconId;
+
+const svgFiles = import.meta.glob("./service-logos/*.svg", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+const pngFiles = import.meta.glob("./service-logos/*.png", { query: "?inline", import: "default", eager: true }) as Record<string, string>;
+const svgUri = (svg: string): string => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+
+/** The picture files by brand: the one for the light theme, and the twin for the dark theme where there is one. */
+const LOGOS: Partial<Record<ServiceIconId, { light: string; dark?: string }>> = {};
+for (const id of LOGO_IDS) {
+  const light = svgFiles[`./service-logos/${id}.svg`];
+  const dark = svgFiles[`./service-logos/${id}.dark.svg`];
+  const png = pngFiles[`./service-logos/${id}.png`];
+  LOGOS[id] = { light: light ? svgUri(light) : (png ?? ""), ...(dark ? { dark: svgUri(dark) } : {}) };
+}
+
+/** Does the brand have a full-colour logo file (rather than a drawn path)? */
+export const hasLogo = (id: ServiceIconId): id is LogoIconId => id in LOGOS;
+
+/** The logo as pictures: one, or two where the dark theme has its own (the stylesheet shows the right one). */
+export function serviceLogoHTML(id: LogoIconId): string {
+  const logo = LOGOS[id]!;
+  const img = (cls: string, src: string): string => `<img class="logo ${cls}" src="${src}" alt="" draggable="false">`;
+  return img("lg-l", logo.light) + (logo.dark ? img("lg-d", logo.dark) : "");
+}
 
 /** What identifies each program: every word of one of its lists has to be among the words of the connection. */
-const MATCHERS: Record<ServiceIconId, readonly (readonly string[])[]> = {
+const MATCHERS: Partial<Record<ServiceIconId, readonly (readonly string[])[]>> = {
   notion: [["notion"]],
   github: [["github"]],
   googledrive: [["googledrive"], ["google", "drive"], ["gdrive"]],
@@ -49,6 +95,26 @@ const MATCHERS: Record<ServiceIconId, readonly (readonly string[])[]> = {
   stripe: [["stripe"]],
   zapier: [["zapier"]],
   paypal: [["paypal"]],
+  monday: [["monday"]],
+  webflow: [["webflow"]],
+  wix: [["wix"]],
+  netlify: [["netlify"]],
+  neon: [["neon"]],
+  prisma: [["prisma"]],
+  airtable: [["airtable"]],
+  calendly: [["calendly"]],
+  posthog: [["posthog"]],
+  postman: [["postman"]],
+  sanity: [["sanity"]],
+  bitly: [["bitly"]],
+  huggingface: [["huggingface"], ["hugging", "face"]],
+  fireflies: [["fireflies"]],
+  klaviyo: [["klaviyo"]],
+  granola: [["granola"]],
+  apify: [["apify"]],
+  jotform: [["jotform"]],
+  context7: [["context7"]],
+  deepwiki: [["deepwiki"]],
 };
 
 /** The words of a text: lower case, letters and digits. */
@@ -78,7 +144,7 @@ export function serviceIconOf(hints: ServiceHints): ServiceIconId | null {
     }
   }
   for (const id of Object.keys(MATCHERS) as ServiceIconId[]) {
-    if (MATCHERS[id].some((rule) => rule.every((w) => found.has(w)))) return id;
+    if (MATCHERS[id]!.some((rule) => rule.every((w) => found.has(w)))) return id;
   }
   return null;
 }
@@ -88,7 +154,7 @@ export function serviceIconOf(hints: ServiceHints): ServiceIconId | null {
  * surface of both themes (the page and the panels, light and dark). The others are drawn in the colour of
  * the text, which reads on both. The test of this file checks the numbers.
  */
-export const BRAND_COLORS: Partial<Record<ServiceIconId, string>> = {
+export const BRAND_COLORS: Partial<Record<MonoIconId, string>> = {
   googledrive: "#4285F4",
   gmail: "#EA4335",
   googlecalendar: "#4285F4",
@@ -98,13 +164,17 @@ export const BRAND_COLORS: Partial<Record<ServiceIconId, string>> = {
   todoist: "#E44332",
   stripe: "#635BFF",
   zapier: "#FF4F00",
+  webflow: "#146EF5",
+  wix: "#0C6EFC",
+  calendly: "#006BFF",
+  bitly: "#EE6123",
 };
 
 /** The attribute that gives a mark's wrapper its brand colour (`.logo-mono[style]` uses it); none for the others. */
-export const brandStyle = (id: ServiceIconId): string => (BRAND_COLORS[id] ? ` style="--brand:${BRAND_COLORS[id]}"` : "");
+export const brandStyle = (id: MonoIconId): string => (BRAND_COLORS[id] ? ` style="--brand:${BRAND_COLORS[id]}"` : "");
 
 /** The mark as an inline picture in the colour of the text around it. */
-export const serviceIconSVG = (id: ServiceIconId): string =>
+export const serviceIconSVG = (id: MonoIconId): string =>
   `<svg class="logo" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="${SERVICE_ICONS[id].path}"/></svg>`;
 
 /** The first letter of a name, capitalised: the picture of a program that has no mark here. */

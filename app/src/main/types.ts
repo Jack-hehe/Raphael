@@ -420,6 +420,8 @@ export interface StoreService {
   summary: Words;
   about: Words;
   examples: Record<"zh-TW" | "en" | "ja", string[]>;
+  /** "none": a public server, added with no login. */
+  auth?: "oauth" | "none";
   /** The id of the connected service it was added as; null when it is not added. */
   server_id: string | null;
 }

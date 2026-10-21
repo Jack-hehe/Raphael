@@ -1,7 +1,8 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { BRAND_COLORS, SERVICE_ICONS, type ServiceIconId, brandStyle, monogram, serviceIconOf, serviceIconSVG } from "./service-icons";
+import { readdirSync } from "node:fs";
+import { BRAND_COLORS, LOGO_IDS, SERVICE_ICONS, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 
 describe("the marks of well-known programs", () => {
   test.each([
@@ -41,17 +42,23 @@ describe("the marks of well-known programs", () => {
   });
 
   test("every mark is one drawn path in the colour of the text, with no colour of its own", () => {
-    for (const id of Object.keys(SERVICE_ICONS) as ServiceIconId[]) {
+    for (const id of Object.keys(SERVICE_ICONS) as (keyof typeof SERVICE_ICONS)[]) {
       const svg = serviceIconSVG(id);
       expect(svg).toContain('fill="currentColor"');
       expect(svg).toContain('aria-hidden="true"');
       expect(svg).not.toMatch(/#[0-9a-f]{3,6}|rgb\(/i);
-      expect(SERVICE_ICONS[id].path).toMatch(/^M[\d. ,\-a-zA-Z]+$/);
+      expect(SERVICE_ICONS[id].path).toMatch(/^[Mm][\d. ,\-a-zA-Z]+$/);
     }
   });
 
-  test("Canva is not in the set and gets its letter", () => {
-    expect(serviceIconOf({ name: "Canva", url: "https://mcp.canva.com/mcp" })).toBeNull();
+  test("a brand with artwork of its own is found by its name or its address", () => {
+    expect(serviceIconOf({ name: "x", url: "https://mcp.monday.com/mcp" })).toBe("monday");
+    expect(serviceIconOf({ name: "x", url: "https://huggingface.co/mcp" })).toBe("huggingface");
+    expect(serviceIconOf({ name: "x", url: "https://mcp.webflow.com/mcp" })).toBe("webflow");
+  });
+
+  test("plain words that are also a brand do not pick a picture for a program of the user's own", () => {
+    for (const name of ["close", "ramp", "jam", "gamma", "exa"]) expect(serviceIconOf({ name })).toBeNull();
   });
 
   test("a brand colour is kept only where it reads on every surface of both themes", () => {
@@ -87,5 +94,41 @@ describe("the marks of well-known programs", () => {
     expect(monogram("  筆記")).toBe("筆");
     expect(monogram("<b>")).toBe("&lt;");
     expect(monogram("")).toBe("?");
+  });
+
+  test("an official full-colour logo is a picture file of its own, with the brand's own colours and no tile of ours", () => {
+    expect(hasLogo("monday")).toBe(true);
+    expect(hasLogo("notion")).toBe(false);
+    const html = serviceLogoHTML("monday");
+    expect(html).toMatch(/^<img class="logo lg-l" src="data:image\/png;base64,/);
+    expect(html).toContain('alt=""');
+    expect(html).not.toContain("lg-d");
+  });
+
+  test("a logo that is dark in its official form has its own light version, shown on the dark theme", () => {
+    const html = serviceLogoHTML("attio");
+    expect(html).toMatch(/class="logo lg-l" src="data:image\/svg\+xml/);
+    expect(html).toMatch(/class="logo lg-d" src="data:image\/svg\+xml/);
+  });
+
+  test("the logo files and the list of ids are the same, and each has its source written down", () => {
+    const files = readdirSync("src/main/service-logos");
+    const ids = new Set(files.filter((f) => /\.(svg|png)$/.test(f)).map((f) => f.replace(/\.dark\.svg$|\.(svg|png)$/, "")));
+    expect([...ids].sort()).toEqual([...LOGO_IDS].sort());
+    const sources = JSON.parse(readFileSync("src/main/service-logos/sources.json", "utf8")) as Record<string, { file: string; url: string }>;
+    expect(Object.keys(sources).sort()).toEqual([...LOGO_IDS].sort());
+    for (const [id, source] of Object.entries(sources)) {
+      expect(source.url, id).toMatch(/^https:\/\//);
+      expect(files, id).toContain(source.file);
+    }
+  });
+
+  test("a logo file is plain drawing: no script, no outside address, nothing that runs", () => {
+    for (const file of readdirSync("src/main/service-logos").filter((f) => f.endsWith(".svg"))) {
+      const svg = readFileSync(`src/main/service-logos/${file}`, "utf8");
+      expect(svg, file).toMatch(/^\s*(<\?xml[^>]*>\s*)?<svg\b/);
+      expect(svg, file).toContain("viewBox");
+      expect(svg, file).not.toMatch(/<script|<foreignObject|<image|href=|\son\w+=|@import|url\(\s*["']?https?:/i);
+    }
   });
 });

@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   integrationsSetEnabled: vi.fn(),
   integrationsDisconnect: vi.fn(),
   integrationsSetToolEnabled: vi.fn(),
+  integrationsSetToolsEnabled: vi.fn(),
 }));
 vi.mock("./api", () => api);
 vi.mock("./ui", async (original) => ({ ...(await original<typeof import("./ui")>()), toaster: { info: vi.fn() } }));
@@ -178,6 +179,30 @@ describe("the page of a connected service", () => {
     expect(both).toMatch(/aria-checked="true" aria-label="開啟工具 Search" data-conn="tool" data-id="ab12" data-tool="search"/);
   });
 
+  test("gives each list a switch for all its tools: on, mixed or off, a real control with a name of its own", () => {
+    const html = installedPage("ab12");
+    // Notion has two write tools, one on and one off: mixed; its only read tool is on
+    expect(html).toMatch(/<button type="button" class="tg" role="checkbox" aria-checked="mixed" aria-label="全部會改動的工具" data-conn="group" data-id="ab12" data-kind="write"><\/button>/);
+    expect(html).toMatch(/role="checkbox" aria-checked="true" aria-label="全部只讀取的工具" data-conn="group" data-id="ab12" data-kind="read"/);
+    const allOff = { ...notes, tools: notes.tools.map((x) => ({ ...x, enabled: false })) };
+    expect(installedPage("ab12", { groups: [allOff, custom] })).toMatch(/aria-checked="false" aria-label="全部會改動的工具"/);
+    // the switch is beside the fold button, never inside it: a button holds no other control
+    expect(html).toMatch(/<div class="ghead">\s*<button type="button" class="btn ghfold"[^>]*data-conn="fold" data-kind="write">/);
+    expect(html.match(/<button[^>]*data-conn="fold"[^>]*>(?:(?!<\/button>).)*<button/s)).toBeNull();
+    // a service that has only one kind of tool shows only that list's switch
+    expect(installedPage("cu1").match(/data-conn="group"/g)).toHaveLength(1);
+    expect(installedPage("ab12", { busy: new Set(["ab12"]) })).toMatch(/data-conn="group"[^>]* disabled/);
+  });
+
+  test("names the group switches in the language of the window", () => {
+    setLocale("en");
+    expect(installedPage("ab12")).toContain('aria-label="All tools that change things"');
+    expect(installedPage("ab12")).toContain('aria-label="All read-only tools"');
+    setLocale("ja");
+    expect(installedPage("ab12")).toContain('aria-label="変更するツールすべて"');
+    expect(installedPage("ab12")).toContain('aria-label="読み取り専用のツールすべて"');
+  });
+
   test("ends with that service's own latest actions, by tool, and the note that no content is kept", () => {
     const html = installedPage("ab12", { audit: [...AUDIT, { ...AUDIT[0], id: 2, server: "Files", tool: "list" }] });
     const audit = html.slice(html.indexOf("最近的動作"));
@@ -320,6 +345,17 @@ describe("the page of a store service", () => {
     expect(html).toContain("已安裝");
     expect(html).toContain('data-conn="manage" data-id="ab12"');
     expect(html).not.toContain('data-conn="join"');
+  });
+
+  test("a public service has no login to wait for: it says it is connecting, in card and page", () => {
+    const open = service("context7", "Context7", { icon: "context7", auth: "none" });
+    const login = { target: "context7", name: "Context7" };
+    const base = { catalog: [...CATALOG, open], login };
+    const card = connectionsHTML(view({ ...base, tab: "store" }));
+    expect(card.slice(card.indexOf('data-id="context7"'))).toContain("連線中…");
+    const page = storePage("context7", base);
+    expect(page).toContain("連線中…");
+    expect(page).not.toContain("請在瀏覽器登入");
   });
 
   test("waiting for the browser it says so and has 取消; a failed login says why and the button is back", () => {
@@ -490,6 +526,21 @@ describe("what the tab does", () => {
     c.click(button("open-store", { id: "notion" }));
     c.click(button("manage", { id: "ab12" }));
     expect(c.view().open).toEqual({ tab: "installed", id: "ab12" });
+  });
+
+  test("a group switch sets every tool of its list in one call: all off when all are on, all on otherwise", async () => {
+    api.integrationsSetToolsEnabled.mockResolvedValue({});
+    const c = createConnections(host);
+    await c.load();
+    // the write list is mixed (one on, one off): turns all on
+    c.click(button("group", { id: "ab12", kind: "write" }));
+    await settle();
+    expect(api.integrationsSetToolsEnabled).toHaveBeenLastCalledWith("ab12", ["create_page", "delete_page"], true);
+    // the read list is all on: turns all off
+    c.click(button("group", { id: "ab12", kind: "read" }));
+    await settle();
+    expect(api.integrationsSetToolsEnabled).toHaveBeenLastCalledWith("ab12", ["search"], false);
+    expect(api.integrationsSetToolEnabled).not.toHaveBeenCalled();
   });
 
   test("unfolds and folds the two lists of tools", async () => {

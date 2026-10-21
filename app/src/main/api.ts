@@ -117,6 +117,8 @@ export const integrationsDisconnect = (id: string): Promise<{ removed: boolean; 
   core("integrations.disconnect", { id });
 export const integrationsSetToolEnabled = (id: string, tool: string, enabled: boolean): Promise<Record<string, unknown>> =>
   core("integrations.set_tool_enabled", { id, tool, enabled });
+export const integrationsSetToolsEnabled = (id: string, tools: string[], enabled: boolean): Promise<Record<string, unknown>> =>
+  core("integrations.set_tools_enabled", { id, tools, enabled });
 export const integrationsAudit = (limit = 8): Promise<{ entries: AuditEntry[] }> => core("integrations.audit", { limit });
 
 // ---------- the device side of the core ----------

@@ -151,6 +151,9 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .tg::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--text-2); transition: transform 0.12s, background 0.12s; }
 .tg[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
 .tg[aria-checked="true"]::after { transform: translateX(16px); background: var(--on-accent); }
+/* Some on, some off (the switch of a whole list): the knob stays in the middle, in the accent, on an accent border. */
+.tg[aria-checked="mixed"] { background: var(--accent-soft); border-color: var(--accent-text); }
+.tg[aria-checked="mixed"]::after { transform: translateX(8px); background: var(--accent-text); }
 .sel { display: inline-flex; align-items: center; gap: 8px; height: 34px; max-width: 260px; padding: 0 10px 0 12px; border-radius: 8px; border: 1px solid var(--btn-edge); background: var(--btn); font-size: 13px; color: var(--text); }
 .sel > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sel:hover { border-color: var(--text-3); }
