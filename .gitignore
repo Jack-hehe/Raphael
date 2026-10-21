@@ -1,16 +1,13 @@
-# Brainstorm mockups: contain frames from the anime (personal use only)
+# Brainstorm mockups
 .superpowers/
 
-# Reference recordings of the anime (copyrighted, personal use only)
+# Reference recordings
 /raphael_ref/
 
-# Voice models, training data and anime-derived assets: never publish
+# Voice models, training data and local design drafts
 /voice/
 /models/
 /assets-private/
-/app/public/private/
-/app/src-tauri/icons-private/
-/app/src-tauri/tauri.private.conf.json
 *.ckpt
 *.pth
 *.onnx
@@ -47,8 +44,14 @@ coverage/
 # Local agent worktrees
 /.worktrees/
 
-# Personal editor settings (app/.vscode/extensions.json, the shared recommendations, stays tracked)
+# Editor settings
 /.vscode/
+/app/.vscode/
+
+# Documentation and evaluation sets kept outside the repository
+/docs/
+/eval/
+/app/scripts/settings-ui-check.mjs
 
 # Local UI audit evidence and scratch files
 /ui-shots/

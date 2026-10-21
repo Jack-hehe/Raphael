@@ -5,9 +5,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "predev": "node scripts/copy-private.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/copy-private.mjs",
     "build": "tsc && vite build",
     "tauri": "node scripts/tauri.mjs",
     "test": "vitest run",

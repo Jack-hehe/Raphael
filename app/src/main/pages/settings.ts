@@ -10,7 +10,6 @@ import { isUiLocale, onLocaleChange, t } from "../i18n";
 
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
-import { hydrateBrandIcons } from "../brand";
 import "../settings-polish.css";
 import "../connections.css";
 import { createConnections } from "../connections";
@@ -269,7 +268,6 @@ export function createSettings(app: AppContext): SettingsPage {
     const scroll = body.scrollTop;
     body.setAttribute("aria-busy", String(loading && pane !== "about"));
     body.innerHTML = pane !== "about" && loading ? loadingHTML(view()) : paneHTML(view());
-    hydrateBrandIcons(body);
     // Before the focus goes back by `data-k`, which the pickers' buttons have too.
     mountPickers();
     const keyInput = el.querySelector<HTMLInputElement>("#key-input");

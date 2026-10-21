@@ -11,9 +11,11 @@ skipped unless the environment variable RAPHAEL_TEST_MODELS is 1.
 the brain, the assistant and the plugins.
 """
 
+import inspect
 import os
 import sqlite3
 from collections.abc import Iterator
+from pathlib import Path
 
 import keyring
 import keyring.backend
@@ -97,3 +99,22 @@ def conn() -> Iterator[sqlite3.Connection]:
     connection = db.connect(":memory:")
     yield connection
     connection.close()
+
+
+_EVAL_FILE_MARKERS = ("case_named(", "all_cases(", "HELD_OUT", "REGRESSION", 'REPO / "eval"')
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip the tests that read the evaluation sets when the ../eval folder is not checked out."""
+    if (Path(__file__).resolve().parents[2] / "eval").is_dir():
+        return
+    skip = pytest.mark.skip(reason="the eval/ folder is not part of this checkout")
+    for item in items:
+        if item.path.name != "test_eval_tools.py":
+            continue
+        try:
+            source = inspect.getsource(item.function)
+        except (OSError, TypeError):
+            continue
+        if any(marker in source for marker in _EVAL_FILE_MARKERS):
+            item.add_marker(skip)

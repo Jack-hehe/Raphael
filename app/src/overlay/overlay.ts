@@ -642,8 +642,8 @@ class DomView implements OverlayView {
   }
 }
 
-/** The glyph ring texture. It is private (copied there by scripts/copy-private.mjs). */
-const GLYPH_URL = "/private/glyph-ring.png";
+/** The glyph ring texture (app/public/brand/glyph-ring.png). */
+const GLYPH_URL = "/brand/glyph-ring.png";
 /** Until the first Settings event arrives. */
 const DEFAULT_PX = 150;
 /** The texture is a local file; if it takes longer than this, start without it. */

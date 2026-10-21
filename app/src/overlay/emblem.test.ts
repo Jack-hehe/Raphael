@@ -206,7 +206,7 @@ test("a texture that fails to load gives null and the vector ring is drawn", asy
   vi.stubGlobal("Image", FakeImage);
   FakeImage.outcome = "error";
   const emblem = await import("./emblem");
-  expect(await emblem.loadGlyphTexture("/private/glyph-ring.png")).toBeNull();
+  expect(await emblem.loadGlyphTexture("/brand/glyph-ring.png")).toBeNull();
 
   const { ctx, calls } = recordingContext();
   const p = emblem.params("steady", 0, 0.3)!;
@@ -219,7 +219,7 @@ test("a texture that loads is returned and drawn instead of the vector ring", as
   vi.stubGlobal("Image", FakeImage);
   FakeImage.outcome = "load";
   const emblem = await import("./emblem");
-  const image = await emblem.loadGlyphTexture("/private/glyph-ring.png");
+  const image = await emblem.loadGlyphTexture("/brand/glyph-ring.png");
   expect(image).not.toBeNull();
 
   const { ctx, calls } = recordingContext();
@@ -242,7 +242,7 @@ test("light glyphs use the repaired texture as an alpha mask while dark glyphs k
     return canvas;
   } });
   const emblem = await import("./emblem");
-  const image = await emblem.loadGlyphTexture("/private/glyph-ring.png");
+  const image = await emblem.loadGlyphTexture("/brand/glyph-ring.png");
   const p = { ...emblem.params("steady", 0, 0.05)!, ringA: 0, rays: 0, coreA: 0 };
   const options = { tq: 1, rot: 0, dim: 0.8, calm: 0.7, lvl: 0.05 };
   const light = recordingContext();
@@ -269,7 +269,7 @@ test("light glyph appearance and recording boosts do not add washed-out white fr
   const tinted = { width: 0, height: 0, getContext: () => mask.ctx };
   vi.stubGlobal("document", { createElement: () => tinted });
   const emblem = await import("./emblem");
-  await emblem.loadGlyphTexture("/private/glyph-ring.png");
+  await emblem.loadGlyphTexture("/brand/glyph-ring.png");
   for (const boost of [undefined, 0.3]) {
     const rec = recordingContext();
     const p = { ...emblem.params("steady", 0, 0.05)!, glyphGlow: 0.4, glyphMix: 0.5, ringA: 0, rays: 0, coreA: 0 };
@@ -296,7 +296,7 @@ test("the transparent recording overlay removes dark matte colors while retainin
   const tinted = { width: 0, height: 0, getContext: () => mask.ctx };
   vi.stubGlobal("document", { createElement: () => tinted });
   const renderer = await import("./emblem");
-  const image = await renderer.loadGlyphTexture("/private/glyph-ring.png");
+  const image = await renderer.loadGlyphTexture("/brand/glyph-ring.png");
   const rec = recordingContext();
   const canvas = { ...fakeCanvas(), getContext: () => rec.ctx } as unknown as HTMLCanvasElement;
   const options = { surface: "transparent" as const };

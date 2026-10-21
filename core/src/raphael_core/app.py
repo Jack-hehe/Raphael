@@ -12,7 +12,7 @@ load, are never waited for: the first sherpa-onnx object of a process pays about
 Runtime start-up and the engine a few more. A worker thread imports the speech libraries (the
 "kit": numpy, sherpa-onnx, PortAudio), builds the dictation service and then loads the two models.
 A dictation started before they are loaded still records: the audio queues up, and
-`dictation.stop` waits for the models (docs/design.md §5). `dictation.*` and the methods that need
+`dictation.stop` waits for the models. `dictation.*` and the methods that need
 the kit wait for them instead of failing.
 
 The libraries themselves are imported before the core reads its first request (`__main__` calls

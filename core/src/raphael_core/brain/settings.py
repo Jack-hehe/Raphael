@@ -38,7 +38,7 @@ DEFAULTS: dict[str, Any] = {
     "monthly_limit_usd": 10.0,
     # Chosen from the cleanup eval of 2026-10-18 for its cost and its speed (~1.25 s on average).
     # The cases and the prompt have changed since, so no pass rate is claimed for it: compare the
-    # models again with `python -m raphael_core.evaluate.cleanup` (eval/README.md).
+    # models again with `python -m raphael_core.evaluate.cleanup`.
     "cleanup_model": "openai/gpt-6-luna",
     # The dictation languages, in the user's order of priority (raphael_core.languages).
     "languages": list(DEFAULT_LANGUAGES),
