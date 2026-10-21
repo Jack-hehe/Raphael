@@ -108,6 +108,8 @@ export interface SettingsView {
   version: string;
   /** The key field is shown although there is a key (「變更」). */
   replacingKey: boolean;
+  /** 「移除金鑰」 was pressed once and waits for the second press. */
+  confirmingKeyRemoval: boolean;
   keyBusy: boolean;
   keyError: (() => string) | null;
   /** What was typed in the limit field while it is not a limit, and what is wrong with it. */
@@ -248,7 +250,8 @@ function keyRow(v: SettingsView): string {
       t("onboarding.022"),
       keyStatus(v),
       btn(v.checkingOpenrouter ? t("onboarding.011") : t("settings.046"), "", ` data-act="or-check"${v.checkingOpenrouter ? " disabled" : ""}`) +
-        btn(t("home.018"), "", ' data-act="key-replace" data-k="key"'),
+        btn(t("home.018"), "", ' data-act="key-replace" data-k="key"') +
+        btn(v.confirmingKeyRemoval ? t("settings.keyRemoveConfirm") : t("settings.keyRemove"), "", ' data-act="key-remove"'),
       { attrs, cls: "row-key" },
     );
   }
