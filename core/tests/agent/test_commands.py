@@ -51,11 +51,9 @@ def test_no_site_and_no_app_is_named_in_the_registry():
             assert name not in command.guidance.lower() and name not in command.target
 
 
-def test_only_copying_changes_state_so_everything_else_runs_at_once():
-    assert {name: c.tier for name, c in COMMANDS.items() if c.tier != Tier.T1} == {
-        "copy_text": Tier.T2
-    }
-    assert COMMANDS["lock_screen"].tier == Tier.T1  # locking is undone by signing in
+def test_every_command_runs_at_once_with_no_question():
+    # The owner turned every command for this computer on: none asks first, copying included.
+    assert {c.tier for c in COMMANDS.values()} == {Tier.T1}
 
 
 def test_every_command_tells_the_router_what_it_is_for():

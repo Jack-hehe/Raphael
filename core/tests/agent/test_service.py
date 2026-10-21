@@ -5,6 +5,8 @@ No test spends money, presses a key, opens a page or touches the network.
 """
 
 import asyncio
+import dataclasses
+import inspect
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -963,7 +965,50 @@ async def test_every_failure_is_an_answer_never_an_rpc_error(rig, client):
     assert result["status"] == "done" and result["prefix"] == "否"
 
 
+# --- copying runs at once --------------------------------------------------------------------------
+
+
+async def test_copying_runs_at_once_with_no_question(rig, client, actions):
+    rig.seed("台北天氣", "台北現在 24 度。")
+    client.decisions.append(decision("command", "copy_text"))
+    result = await rig.ask("把答案複製起來")
+    assert result == {"status": "done", "turn_id": 2, "prefix": "了", "text": "已複製到剪貼簿。"}
+    assert actions.calls == [("copy_to_clipboard", "台北現在 24 度。")]
+    assert rig.service._confirmations.waiting == 0
+    assert (await rig.turns())[0]["status"] == "done"
+
+
+async def test_a_text_the_speaker_quotes_is_copied_at_once(rig, client, actions):
+    rig.seed("q", "the answer")
+    client.decisions.append(decision("command", "copy_text"))
+    result = await rig.ask("把「今天會議在三點」複製起來")
+    assert result["status"] == "done"
+    assert actions.calls == [("copy_to_clipboard", "今天會議在三點")]
+
+
+async def test_a_copy_that_fails_is_said_to_have_failed(rig, client, actions):
+    rig.seed("q", "a")
+    actions.fail["copy_to_clipboard"] = OSError("the clipboard is busy")
+    client.decisions.append(decision("command", "copy_text"))
+    result = await rig.ask("copy")
+    assert (result["prefix"], result["text"]) == ("否", "執行失敗。")
+    assert (await rig.turns())[0]["status"] == "error"
+
+
 # --- confirmations -----------------------------------------------------------------------------------
+# The question for a yes or a no is still there for a command at T2 or T3 (none is registered now:
+# copying was the one). These tests make copying one, to test the question.
+
+
+@pytest.fixture(autouse=True)
+def _copying_asks_first(request, monkeypatch):
+    source = inspect.getsource(request.function)
+    if "ask_to_copy" in source or ".confirm(" in source or '["confirm"]' in source:
+        monkeypatch.setitem(
+            commands.COMMANDS,
+            "copy_text",
+            dataclasses.replace(commands.COMMANDS["copy_text"], tier=Tier.T2),
+        )
 
 
 async def ask_to_copy(rig, client, text="把答案複製起來"):

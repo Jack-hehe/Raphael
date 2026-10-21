@@ -2,7 +2,7 @@
 
 A command is a small, known action on this computer: open anything (`open`: a web page, an app of
 the Start menu or a page of the Windows settings), change the volume, pause or skip the media that
-plays, lock the screen, and (the one that asks first) copy text to the clipboard. The router picks
+plays, lock the screen, and copy text to the clipboard. None of them asks first. The router picks
 one by its name; running it is the device's work (`DeviceActions`), done on a worker thread. What
 Raphael says afterwards is fixed too (《了。》).
 
@@ -78,7 +78,7 @@ _COMMAND_LIST = (
     Command("lock_screen", Tier.T1, "Lock the screen of the computer.", "lock"),
     Command(
         "copy_text",
-        Tier.T2,
+        Tier.T1,
         "Copy Raphael's last answer, or a text the speaker quotes, to the clipboard.",
         "copy",
     ),

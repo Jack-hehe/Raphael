@@ -5,9 +5,10 @@ gets the transcript from `dictation.stop`, and sends it with `agent.ask {session
 ui_language, target_app}`. The router (Jev, and the language model when Jev fails or is unsure;
 `routing`) says what it is:
 
-- a command runs at once if it is T0 or T1 (`commands`, `policy`) and Raphael says 《了。》; at T2 or
-  T3 (copying to the clipboard) nothing runs: the answer is a question for a yes or a no
-  (`status: "confirm"`), which `agent.confirm` answers within 30 seconds;
+- a command runs at once if it is T0 or T1 (`commands`, `policy`) and Raphael says 《了。》: every
+  command for this computer is T1, copying to the clipboard too. A command at T2 or T3, if one is
+  ever added, does not run: the answer is a question for a yes or a no (`status: "confirm"`),
+  which `agent.confirm` answers within 30 seconds;
 - the command `open` opens a web page, an app or a page of the Windows settings, and what it opens
   is found with no list of sites (`opening`): a domain said outright, a settings page named with
   the word for settings, an app of the Start menu, a name that opened before (`targets`), a
@@ -722,7 +723,10 @@ class AgentService:
             )
         if opening is not None and opening.learn_as:
             self._learn(opening.learn_as, opening.target)  # it opened: now it is known
-        return self._finish(ask, "command", "understood", "", ledger)
+        done = _DONE_PHRASE.get(command.name)
+        return self._finish(
+            ask, "command", "understood", phrase(language, done) if done else "", ledger
+        )
 
     async def _find_opening(
         self, ask: _Ask, decision: RouteDecision, settings: _Settings, ledger: Ledger
