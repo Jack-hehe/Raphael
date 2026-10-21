@@ -51,9 +51,14 @@ LINE_LIMIT = 16 * 1024 * 1024
 # BELOW_NORMAL_PRIORITY_CLASS | CREATE_NO_WINDOW: a task in the background must not slow the
 # dictation down, and a console program started by a program with no window would open one.
 _WINDOWS_FLAGS = 0x00004000 | 0x08000000
-# What the environment of the worker leaves out: anything that looks like a key. (There is none that
-# the core needs to give it; it makes no call of its own.)
-_SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH", re.IGNORECASE)
+# What the environment of the worker leaves out: anything that looks like a secret. (There is none
+# that the core needs to give it; it makes no call of its own.)
+_SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASS|CREDENTIAL|AUTH|COOKIE|SESSION", re.IGNORECASE)
+# A proxy is left out only when its address holds a password: `scheme://user:password@host`.
+_PROXY_NAMES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+_PROXY_PASSWORD = re.compile(r"//[^/@\s:]*:[^/@\s]+@")
+# The longest log line of the worker that is looked at; a longer one is dropped.
+STDERR_LINE_MAX = 8192
 # The log lines of the worker that are passed on: a level and a logger. A traceback is not.
 _LOG_LINE = re.compile(r"^(DEBUG|INFO|WARNING|ERROR|CRITICAL) raphael_core\.worker\.")
 
@@ -94,10 +99,22 @@ def worker_command() -> list[str]:
     return [sys.executable, "-m", "raphael_core", "--worker"]
 
 
+def _leaves_out(name: str, value: str) -> bool:
+    """Whether the worker's environment goes without this variable: its name looks like a key, a
+    password, a credential, a cookie or a session, or it is a proxy address that holds a password.
+    (The bare `PWD` is the working directory, not a password.)"""
+    if _SECRET_NAME.search(name):
+        return True
+    if name.upper() != "PWD" and "PWD" in name.upper():
+        return True
+    return name.upper() in _PROXY_NAMES and bool(_PROXY_PASSWORD.search(value))
+
+
 def worker_environment(environ: Mapping[str, str] | None = None) -> dict[str, str]:
-    """The environment of the worker: that of the core without what looks like a key or a token."""
+    """The environment of the worker: that of the core without what looks like a secret (see
+    `_leaves_out`). PATH, SystemRoot, TEMP and the rest stay."""
     source = os.environ if environ is None else environ
-    env = {name: value for name, value in source.items() if not _SECRET_NAME.search(name)}
+    env = {name: value for name, value in source.items() if not _leaves_out(name, value)}
     env["PYTHONIOENCODING"] = "utf-8"
     env["RAPHAEL_WORKER"] = "1"
     return env
@@ -132,14 +149,29 @@ class ProcessLink:
             yield raw.decode("utf-8", errors="replace")
 
     async def _read_stderr(self) -> None:
+        """Pass on the worker's status lines and drop the rest. Read in chunks: a line longer than
+        the limit is dropped whole and the pipe goes on being drained (a worker that cannot write to
+        a full pipe stops)."""
         stderr = self.process.stderr
         assert stderr is not None
-        while raw := await stderr.readline():
-            line = raw.decode("utf-8", errors="replace").rstrip()
-            if _LOG_LINE.match(line):
-                logger.info("worker: %s", line)
-            else:
-                self.dropped_log_lines += 1  # a traceback may quote the task: it is not passed on
+        line = b""
+        dropping = False
+        while chunk := await stderr.read(65536):
+            *complete, line = (line + chunk).split(b"\n")
+            for raw in complete:
+                self._log_line(raw, dropping)
+                dropping = False
+            if len(line) > STDERR_LINE_MAX:
+                line, dropping = b"", True  # the rest of this line, up to its end, is dropped
+        if line:
+            self._log_line(line, dropping)
+
+    def _log_line(self, raw: bytes, dropping: bool) -> None:
+        text = raw.decode("utf-8", errors="replace").rstrip()
+        if not dropping and len(raw) <= STDERR_LINE_MAX and _LOG_LINE.match(text):
+            logger.info("worker: %s", text)
+        else:
+            self.dropped_log_lines += 1  # a traceback may quote the task: it is not passed on
 
     async def _watch(self) -> None:
         await self.peer.serve(self._lines())
@@ -172,95 +204,6 @@ class ProcessLink:
             with contextlib.suppress(OSError):
                 stdin.close()
         await self._reap()
-        await self._finish()
-
-    def kill(self) -> None:
-        """End it now."""
-        ...
-
-
-Connect = Callable[[], Awaitable[Link]]
-
-
-def worker_command() -> list[str]:
-    """What runs a worker: this executable, with `--worker`."""
-    if getattr(sys, "frozen", False):
-        return [sys.executable, "--worker"]
-    return [sys.executable, "-m", "raphael_core", "--worker"]
-
-
-def worker_environment(environ: Mapping[str, str] | None = None) -> dict[str, str]:
-    """The environment of the worker: that of the core without what looks like a key or a token."""
-    source = os.environ if environ is None else environ
-    env = {name: value for name, value in source.items() if not _SECRET_NAME.search(name)}
-    env["PYTHONIOENCODING"] = "utf-8"
-    env["RAPHAEL_WORKER"] = "1"
-    return env
-
-
-class ProcessLink:
-    """A worker process and the peer that talks to it."""
-
-    def __init__(self, process: asyncio.subprocess.Process) -> None:
-        self.process = process
-        self.peer = Peer(self._write)
-        self._tasks: list[asyncio.Task[None]] = []
-        self.dropped_log_lines = 0
-
-    def _write(self, line: str) -> None:
-        stdin = self.process.stdin
-        if stdin is None or stdin.is_closing():
-            raise BrokenPipeError
-        stdin.write(line.encode("utf-8") + b"\n")
-
-    async def _lines(self) -> AsyncIterator[str]:
-        stdout = self.process.stdout
-        assert stdout is not None
-        while True:
-            try:
-                raw = await stdout.readline()
-            except (asyncio.LimitOverrunError, ValueError):
-                logger.error("The worker wrote a line that is too long")
-                return
-            if not raw:
-                return
-            yield raw.decode("utf-8", errors="replace")
-
-    async def _read_stderr(self) -> None:
-        stderr = self.process.stderr
-        assert stderr is not None
-        while raw := await stderr.readline():
-            line = raw.decode("utf-8", errors="replace").rstrip()
-            if _LOG_LINE.match(line):
-                logger.info("worker: %s", line)
-            else:
-                self.dropped_log_lines += 1  # a traceback may quote the task: it is not passed on
-
-    async def _watch(self) -> None:
-        await self.peer.serve(self._lines())
-        # The worker's output ended: it is gone, or about to be.
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(self.process.wait(), 2.0)
-        if self.process.returncode is None:
-            self.kill()
-
-    def start_reading(self) -> None:
-        self._tasks = [
-            asyncio.ensure_future(self._watch()),
-            asyncio.ensure_future(self._read_stderr()),
-        ]
-
-    async def stop(self) -> None:
-        stdin = self.process.stdin
-        if stdin is not None and not stdin.is_closing():
-            with contextlib.suppress(OSError):
-                stdin.close()
-        try:
-            await asyncio.wait_for(self.process.wait(), 3.0)
-        except TimeoutError:
-            self.kill()
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(self.process.wait(), 3.0)
         await self._finish()
 
     def kill(self) -> None:

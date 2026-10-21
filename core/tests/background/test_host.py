@@ -47,6 +47,10 @@ for line in sys.stdin:
             sys.stderr.write("INFO raphael_core.worker.runner: a line that is passed on\n")
             sys.stderr.write("WARNING somebody.else: a line that is not\n")
             sys.stderr.flush()
+        if mode == "bigerr":
+            sys.stderr.write("x" * 300000 + "\n")
+            sys.stderr.write("INFO raphael_core.worker.runner: after the big line\n")
+            sys.stderr.flush()
         result = {"status": "done", "final": "ok", "kind": None, "detail": None,
                   "model_calls": 0, "tool_calls": 0}
         if mode == "env":
@@ -293,3 +297,74 @@ async def test_the_real_worker_process_starts_and_answers_a_task(rig):
     reply = await host.run(rig.run, spec)
     assert (reply["status"], reply["kind"]) == ("cancelled", "cancelled")
     await host.aclose()
+
+
+# --- the module, the pipes, the environment -------------------------------------------------------
+
+
+def test_the_host_module_defines_each_name_once():
+    import ast
+    from pathlib import Path
+
+    import raphael_core.background.host as module
+
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    names = [
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+    ]
+    assert sorted({n for n in names if names.count(n) > 1}) == []
+
+
+async def test_after_a_crash_our_end_of_its_stdin_is_closed_and_the_process_is_reaped(hosts, rig):
+    host = hosts("crash")
+    with pytest.raises(WorkerCrashed):
+        await run_once(host, rig)
+    link = host._link
+    await until(lambda: link.process.stdin.is_closing(), timeout=3)
+    await asyncio.wait_for(link.process.wait(), 3)
+    assert link.process.returncode is not None
+
+
+async def test_a_log_line_longer_than_the_limit_is_dropped_and_the_pipe_keeps_draining(
+    hosts, rig, monkeypatch, caplog
+):
+    import raphael_core.background.host as module
+
+    monkeypatch.setattr(module, "LINE_LIMIT", 1024)
+    host = hosts("bigerr")
+    with caplog.at_level(logging.INFO, logger="raphael_core.background.host"):
+        reply = await asyncio.wait_for(run_once(host, rig), 15)  # a stalled pipe would hang here
+        await host.aclose()
+    assert reply["status"] == "done"
+    assert "after the big line" in " ".join(r.getMessage() for r in caplog.records)
+    assert "xxxx" not in " ".join(r.getMessage() for r in caplog.records)
+
+
+def test_the_environment_of_the_worker_leaves_out_more_than_keys_and_keeps_what_it_needs():
+    env = worker_environment(
+        {
+            "PATH": "p",
+            "SystemRoot": "r",
+            "TEMP": "t",
+            "PWD": "/where/i/am",
+            "SESSIONNAME": "Console",
+            "DB_PASS": "x",
+            "MYSQL_PWD": "x",
+            "DB_PWD_FILE": "x",
+            "SERVICE_CREDENTIALS": "x",
+            "LOGIN_COOKIE": "x",
+            "ASP_SESSION_ID": "x",
+            "HTTP_PROXY": "http://user:pw@proxy:8080",
+            "https_proxy": "http://user:pw@proxy:8080",
+            "ALL_PROXY": "socks5://u:p@proxy:1080",
+            "NO_PROXY": "localhost",
+        }
+    )
+    assert set(env) == {"PATH", "SystemRoot", "TEMP", "PWD", "NO_PROXY", "PYTHONIOENCODING", "RAPHAEL_WORKER"}
+
+
+def test_a_proxy_without_a_password_is_kept():
+    env = worker_environment({"HTTP_PROXY": "http://proxy:8080", "HTTPS_PROXY": "http://proxy.example/"})
+    assert env["HTTP_PROXY"] == "http://proxy:8080" and "HTTPS_PROXY" in env
