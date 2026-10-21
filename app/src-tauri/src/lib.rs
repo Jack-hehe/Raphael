@@ -5,6 +5,7 @@ mod agent;
 mod background;
 mod commands;
 mod core_process;
+mod data_layout;
 mod device_settings;
 mod dictation;
 mod first_run;
@@ -18,6 +19,7 @@ mod paste;
 mod rpc;
 mod tray;
 
+use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime, WindowEvent, plugin::TauriPlugin};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
@@ -73,6 +75,8 @@ fn panic_report(thread: Option<&str>, location: Option<&std::panic::Location<'_>
 
 pub fn run() {
     log_panics();
+    // Before any window or the core exists: the webview and the core open the folders it moves.
+    let migration = data_layout::migrate_at_start();
     let builder = tauri::Builder::default();
 
     // The single-instance plugin must come first: a second launch hands over to the running
@@ -120,10 +124,25 @@ pub fn run() {
             commands::window_hotkey,
             commands::main_events,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // Tauri keeps only the last `setup` call, so each part of the app starts in its own
             // section of this one closure, in dependency order: a part that needs another part's
             // handle comes after it.
+
+            // ---- Data folders ----
+            // What the move of files from earlier builds did (it ran before the log existed), and
+            // the copy of the speech models when they could not be renamed.
+            for (level, message) in &migration.notes {
+                log::log!(*level, "data folders: {message}");
+            }
+            if let Some(job) = migration.copy {
+                spawn_models_copy(job);
+            }
+
+            // ---- Main window ----
+            // Created here rather than from the config so that it gets the webview data folder
+            // like the overlay does, after the migration has put the old data there.
+            create_main_window(app.handle())?;
 
             if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
                 match window.is_decorated() {
@@ -154,6 +173,15 @@ pub fn run() {
             // app does not need it to run (tray, settings), so a core that cannot be started is
             // logged and the app carries on without dictation.
             match core_process::resolve_app_core_command(app.handle())
+                .map(|mut command| {
+                    // Models that could not be moved yet stay usable where they are.
+                    if let Some(dir) = &migration.models_dir {
+                        command
+                            .env
+                            .push(("RAPHAEL_MODELS_DIR".to_owned(), dir.display().to_string()));
+                    }
+                    command
+                })
                 .and_then(core_process::CoreProcess::start)
             {
                 Ok(core) => {
@@ -215,6 +243,48 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+/// The webview's data folder for every window: `WebView2` in Raphael's local folder.
+pub(crate) fn webview_data_dir(app: &AppHandle) -> tauri::Result<PathBuf> {
+    Ok(app
+        .path()
+        .app_local_data_dir()?
+        .join(data_layout::WEBVIEW_DIR))
+}
+
+/// Builds the main window from its entry in the config, with the shared webview data folder.
+fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
+    let Some(config) = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == MAIN_WINDOW)
+    else {
+        log::error!("the config has no main window");
+        return Ok(());
+    };
+    tauri::WebviewWindowBuilder::from_config(app, config)?
+        .data_directory(webview_data_dir(app)?)
+        .build()?;
+    Ok(())
+}
+
+/// Copies the speech models to their new folder without holding anything up.
+fn spawn_models_copy(job: data_layout::CopyJob) {
+    let spawned = std::thread::Builder::new()
+        .name("raphael-models-copy".into())
+        .spawn(move || match data_layout::run_copy(&job) {
+            Ok(()) => log::info!(
+                "data folders: copied the models to {}; the old folder goes at the next start",
+                job.to.display()
+            ),
+            Err(err) => log::warn!("data folders: could not copy the models: {err}"),
+        });
+    if let Err(err) = spawned {
+        log::warn!("data folders: could not start the models copy: {err}");
+    }
+}
+
 /// Shows the main window, restores it if it was minimized, and gives it focus.
 fn show_main_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
@@ -231,7 +301,7 @@ fn show_main_window(app: &AppHandle) {
 }
 
 /// Logging to stdout (visible in `tauri dev`) and to `raphael.log` in the app log directory
-/// (`%LOCALAPPDATA%\app.raphael.desktop\logs`), with local timestamps. The file rotates at 1 MB
+/// (`%LOCALAPPDATA%\Raphael\logs`), with local timestamps. The file rotates at 1 MB
 /// and the three newest rotated files are kept. `RAPHAEL_LOG=debug` (or `trace`) logs more, for
 /// tracking a problem down.
 fn log_plugin<R: Runtime>() -> TauriPlugin<R> {

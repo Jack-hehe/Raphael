@@ -1,8 +1,10 @@
 ; NSIS installer hooks (bundle > windows > nsis > installerHooks in tauri.release.conf.json).
 ;
-; The core keeps raphael.db, device.json and the downloaded speech models (about 1.2 GB) in
-; %APPDATA%\Raphael. The template's "Delete the application data" option removes only
-; $APPDATA\${BUNDLEID} and $LOCALAPPDATA\${BUNDLEID}, so this hook removes the core's folder as well.
+; Raphael keeps its files in two folders: %APPDATA%\Raphael (the database, device.json,
+; integrations.json) and %LOCALAPPDATA%\Raphael (the downloaded speech models, about 1.2 GB, the
+; logs and the webview data). Earlier builds used folders named after the app identifier.
+; The template's "Delete the application data" option removes only $APPDATA\${BUNDLEID} and
+; $LOCALAPPDATA\${BUNDLEID}, so this hook removes Raphael's own folders as well.
 ;
 ; It uses the template's own two conditions (installer.nsi, Section Uninstall, of tauri-bundler
 ; 2.10.3, which is built into @tauri-apps/cli 2.12.3 in app/package-lock.json; check again when the
@@ -15,5 +17,10 @@
   ${AndIf} $UpdateMode <> 1
     SetShellVarContext current
     RmDir /r "$APPDATA\Raphael"
+    RmDir /r "$LOCALAPPDATA\Raphael"
+    ; What a build from before the folders were renamed may have left (the template removes these
+    ; two too, but only when the identifier matches the one of the build being removed).
+    RmDir /r "$APPDATA\app.raphael.desktop"
+    RmDir /r "$LOCALAPPDATA\app.raphael.desktop"
   ${EndIf}
 !macroend

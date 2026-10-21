@@ -3,7 +3,8 @@
 The Tauri app runs this as a child process. Environment:
 
 - RAPHAEL_DATA_DIR: where the database lives (and the speech models, unless RAPHAEL_MODELS_DIR
-  says otherwise); the default is Raphael's folder in the user's application data.
+  says otherwise); the default is Raphael's folder in the user's application data, with the
+  models in Raphael's machine-local folder.
 - RAPHAEL_FAKE_AUDIO: a WAV file that the recorder plays in real time in place of the microphone.
 - RAPHAEL_FAKE_LLM=1: no OpenRouter; the cleaned text is the transcript as it was, at no cost.
   (The end-to-end tests use the last two.)

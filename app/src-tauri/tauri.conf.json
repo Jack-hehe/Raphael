@@ -10,9 +10,17 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "appDirectoriesOverride": {
+      "config": "$DATA/Raphael",
+      "data": "$DATA/Raphael",
+      "localData": "$LOCALDATA/Raphael",
+      "cache": "$LOCALDATA/Raphael/cache",
+      "log": "$LOCALDATA/Raphael/logs"
+    },
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Raphael",
         "url": "index.html",
         "width": 1120,
