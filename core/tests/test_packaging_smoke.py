@@ -37,7 +37,8 @@ def launcher(tmp_path_factory):
     if not sys.executable.isascii():
         pytest.skip("a batch file cannot name a Python in a non-ASCII path")
     path = tmp_path_factory.mktemp("launcher") / "raphael-core.cmd"
-    path.write_text(f'@echo off\r\n"{sys.executable}" -m raphael_core\r\n', encoding="ascii")
+    # %* passes on what the smoke test gives the executable (--worker).
+    path.write_text(f'@echo off\r\n"{sys.executable}" -m raphael_core %*\r\n', encoding="ascii")
     return path
 
 
@@ -93,3 +94,45 @@ def test_the_second_pass_fails_when_the_prompt_is_missing_from_the_core(
     monkeypatch.setattr(smoke, "RpcProcess", Shadowed)
     with pytest.raises(RuntimeError, match="was not cleaned"):
         smoke.smoke_with_the_fake_llm(launcher)
+
+
+def test_the_second_pass_hands_a_task_to_a_worker_the_core_starts(report):
+    cleanup = report["cleanup_pass"]
+    assert cleanup["background_task"] is True
+    # The scripted task of the fake LLM, carried out by a second process of the same program.
+    asked = [c for c in report["calls"] if c["method"] == "agent.ask"]
+    handed = [c["response"]["result"] for c in asked if "Handed" in str(c["response"])]
+    assert [h["text"] for h in handed] == ["Handed to the background."]
+    steps = [c for c in report["calls"] if c["method"] == "worker.get"]
+    assert [s["kind"] for s in steps[0]["response"]["result"]["task"]["steps"]] == [
+        "model", "tool", "model",
+    ]  # fmt: skip
+
+
+def test_the_third_pass_starts_the_worker_by_itself_and_it_ends_with_its_stdin(report):
+    worker = report["worker_pass"]
+    assert worker["passed"] is True and worker["exit_code"] == 0
+    assert 0 < worker["start_seconds"] < 20
+
+
+def test_the_smoke_fails_when_the_bundle_cannot_start_a_worker(smoke, launcher, tmp_path, monkeypatch):
+    # A bundle that left the worker out: the executable cannot start with --worker, and a task for
+    # the background would never be carried out.
+    shadow = tmp_path / "shadow"
+    shutil.copytree(
+        CORE / "src" / "raphael_core",
+        shadow / "raphael_core",
+        ignore=shutil.ignore_patterns("__pycache__", "runner.py"),
+    )
+    original = smoke.RpcProcess
+
+    class Shadowed(original):
+        def __init__(self, executable, root, extra_environment=None):
+            extra = {**(extra_environment or {}), "PYTHONPATH": str(shadow)}
+            super().__init__(executable, root, extra)
+
+    monkeypatch.setattr(smoke, "RpcProcess", Shadowed)
+    with pytest.raises(RuntimeError, match="did not carry the task out"):
+        smoke.smoke_with_the_fake_llm(launcher)
+    with pytest.raises(RuntimeError, match="The worker"):
+        smoke.smoke_the_worker(launcher, {"PYTHONPATH": str(shadow)})

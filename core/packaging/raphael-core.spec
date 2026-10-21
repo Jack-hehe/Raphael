@@ -21,6 +21,10 @@ from notices import runtime_distributions
 binaries = []
 datas = []
 hiddenimports = [
+    # The background worker is this executable started with --worker; __main__ imports its module
+    # inside a function, which the build would find too, but a worker left out is not found by a test
+    # until the smoke test, so it is named.
+    "raphael_core.worker.runner",
     "keyring.backends.Windows", "keyring.backends.fail", "keyring.backends.null",
     "opencc.clib.opencc_clib", "sherpa_onnx.lib._sherpa_onnx",
 ]
