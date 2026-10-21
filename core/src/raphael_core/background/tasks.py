@@ -208,6 +208,21 @@ class TaskStore:
             )
         return cursor.rowcount
 
+    def delete(self, task_id: int) -> None:
+        """Delete a task and its steps, whatever state it is in."""
+        with self._conn:
+            self._conn.execute("DELETE FROM worker_steps WHERE task_id = ?", (task_id,))
+            self._conn.execute("DELETE FROM worker_tasks WHERE id = ?", (task_id,))
+
+    def scrub(self, task_id: int) -> None:
+        """Take what the user said, and anything reported, out of a task's row."""
+        with self._conn:
+            self._conn.execute(
+                "UPDATE worker_tasks SET text = '', report_prefix = NULL, report_text = NULL,"
+                " report_detail = NULL WHERE id = ?",
+                (task_id,),
+            )
+
     def prune(self, older_than_ms: int) -> int:
         """Delete the finished tasks made before `older_than_ms`, with their steps."""
         with self._conn:

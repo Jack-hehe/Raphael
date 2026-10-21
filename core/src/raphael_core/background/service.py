@@ -168,6 +168,8 @@ class BackgroundService:
         self._pump: asyncio.Task[None] | None = None
         self._run: TaskRun | None = None
         self._executing = False  # a task has been taken off the queue and is being carried out
+        # Tasks the user cleared while they ran: they end without a report and leave no row.
+        self._discarded: set[int] = set()
         # A task that was under way when the last process ended is over: it is never started again.
         try:
             interrupted = self._store.interrupt_unfinished()
@@ -215,8 +217,20 @@ class BackgroundService:
             logger.warning("Could not prune the background tasks: %s", type(exc).__name__)
 
     def clear(self) -> None:
+        """Clear the tasks with the history: the finished ones and the ones that wait are deleted,
+        and the one that runs is stopped, emptied of what the user said at once and deleted when it
+        has stopped, without a report to the overlay or the history."""
         try:
+            for task_id in list(self._queue):
+                self._queue.remove(task_id)
+                self._models.pop(task_id, None)
+                self._store.delete(task_id)
             self._store.clear()
+            run = self._run
+            if run is not None:
+                self._discarded.add(run.task_id)
+                self._store.scrub(run.task_id)
+                self._host.cancel(run)
         except sqlite3.Error as exc:
             logger.warning("Could not clear the background tasks: %s", type(exc).__name__)
 
@@ -251,6 +265,8 @@ class BackgroundService:
 
     async def _execute(self, task: Task) -> None:
         language = task.language
+        if task.id in self._discarded:
+            return
         if self._host.disabled:
             self._conclude(
                 task, None, "failed", PREFIXES[language].negative,
@@ -389,7 +405,16 @@ class BackgroundService:
         reason: str | None,
     ) -> None:
         """Write the end of a task: its row, the turn of the history that handed it over, and the
-        report to the app. `prefix` is a prefix of the task's language (《告》, 《否》 ...)."""
+        report to the app. `prefix` is a prefix of the task's language (《告》, 《否》 ...). A task the
+        user cleared meanwhile is deleted instead, and nothing is said or saved about it."""
+        if task.id in self._discarded:
+            self._discarded.discard(task.id)
+            try:
+                self._store.delete(task.id)
+            except sqlite3.Error as exc:
+                logger.warning("Could not delete a cleared task: %s", type(exc).__name__)
+            self._changed(task.id, state, ending=True)
+            return
         cost = 0.0 if run is None else run.ledger.total
         try:
             if run is not None:
@@ -423,19 +448,23 @@ class BackgroundService:
         self._notify(
             "worker.report", {"task_id": task.id, "state": state, "prefix": prefix, "text": text}
         )
-        self._changed(task.id, state, running=False)
+        self._changed(task.id, state, ending=True)
 
-    def _changed(self, task_id: int, state: str, *, running: bool | None = None) -> None:
+    def _changed(self, task_id: int, state: str, *, ending: bool = False) -> None:
+        """Tell the app a task moved on. `running` is whether any task is under way once this change
+        has been made (the tray offers to stop it while one is, whichever task changed); the counters
+        are those of the task that changed, if it is the one that runs, else zero."""
         run = self._run
+        owner = run if run is not None and run.task_id == task_id else None
         self._notify(
             "worker.changed",
             {
                 "task_id": task_id,
                 "state": state,
-                "running": (state == RUNNING) if running is None else running,
-                "model_calls": 0 if run is None else run.model_calls,
-                "tool_calls": 0 if run is None else run.tool_calls,
-                "cost_usd": 0.0 if run is None else run.ledger.total,
+                "running": run is not None and not (ending and run.task_id == task_id),
+                "model_calls": 0 if owner is None else owner.model_calls,
+                "tool_calls": 0 if owner is None else owner.tool_calls,
+                "cost_usd": 0.0 if owner is None else owner.ledger.total,
             },
         )
 

@@ -568,6 +568,83 @@ async def test_old_tasks_are_pruned_and_cleared_but_one_that_runs_is_kept(make_r
     assert rig.task(second) is None
 
 
+async def test_the_tray_is_told_a_task_runs_while_another_one_waits(make_rig):
+    rig = make_rig()
+    release = asyncio.Event()
+
+    async def hold(**kwargs):
+        await release.wait()
+        return report("ok")
+
+    rig.client.replies = [hold, report("two")]
+    first = rig.submit()
+    await until(lambda: len(rig.client.chat_calls) == 1)
+    second = rig.submit()
+    queued = rig.changes()[-1]
+    assert (queued["task_id"], queued["state"]) == (second, "queued")
+    assert queued["running"] is True  # the first is still under way
+    assert (queued["model_calls"], queued["tool_calls"]) == (0, 0)  # the counters are the owner's
+    assert rig.task(first).state == "running"
+    release.set()
+    await rig.wait_for_reports(2)
+    await until(lambda: rig.changes()[-1]["state"] == "done")
+    assert rig.changes()[-1]["running"] is False
+
+
+async def test_taking_a_waiting_task_out_of_the_queue_does_not_tell_the_tray_none_runs(make_rig):
+    rig = make_rig()
+    release = asyncio.Event()
+
+    async def hold(**kwargs):
+        await release.wait()
+        return report("ok")
+
+    rig.client.replies = [hold]
+    rig.submit()
+    waiting = rig.submit()
+    await until(lambda: len(rig.client.chat_calls) == 1)
+    await rig.rpc.call("worker.cancel", {"task_id": waiting})
+    gone = [c for c in rig.changes() if c["task_id"] == waiting][-1]
+    assert (gone["state"], gone["running"]) == ("cancelled", True)
+    release.set()
+    await rig.wait_for_reports(2)
+
+
+async def test_clearing_the_history_cancels_the_tasks_that_wait_and_the_one_that_runs(make_rig, conn):
+    rig = make_rig()
+    history = AgentHistory(conn, rig.wall)
+    started = asyncio.Event()
+
+    async def hold(**kwargs):
+        started.set()
+        await asyncio.sleep(30)
+
+    rig.client.replies = [hold]
+    running = rig.submit()
+    turn_id = history.add(
+        session_id="s1", question=TASK_TEXT, route="delegate", prefix="Understood",
+        text="Handed to the background.", status="done",
+    )  # fmt: skip
+    rig.service.attach_turn(running, turn_id)
+    waiting = [rig.submit(), rig.submit()]
+    await asyncio.wait_for(started.wait(), 5)
+
+    history.clear()
+    rig.service.clear()  # what agent.history.clear does
+    assert all(rig.task(task_id) is None for task_id in waiting)  # gone at once
+    assert rig.task(running).text == ""  # the running one keeps nothing of what was said
+    await until(lambda: rig.task(running) is None)  # and is gone when it has stopped
+    await until(lambda: rig.changes()[-1]["running"] is False)
+    assert rig.steps(running) == []
+    assert rig.reports() == []  # nothing is said about a task the user cleared
+    assert history.get(turn_id) is None  # and nothing is saved to the history
+    assert len(rig.client.chat_calls) == 1  # the ones that waited never started
+    rig.client.replies = [report("later")]
+    rig.submit()
+    [later] = await rig.wait_for_reports()
+    assert later["text"] == "later"  # the service goes on
+
+
 async def test_the_service_shares_the_one_gate_it_was_given(make_rig):
     rig = make_rig()
     assert rig.service._gate is rig.gate and rig.gate.plugins is rig.plugins.hub
