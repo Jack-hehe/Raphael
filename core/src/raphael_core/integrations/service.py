@@ -41,7 +41,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult, PluginTool, tool_key
+from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult, PluginTool, clean_arguments, tool_key
 from ..agent.policy import PLUGIN_PREFIX, Tier
 from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from ..router import Router
@@ -535,7 +535,7 @@ class IntegrationsService:
             outcome = await self._connector.call_tool(
                 server,
                 tool.name,
-                dict(arguments),
+                clean_arguments(tool.input_schema, arguments),
                 expected=tool.fingerprint,
                 timeout_s=self._call_timeout_s,
             )

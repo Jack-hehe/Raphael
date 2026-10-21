@@ -94,6 +94,7 @@ class ToolOutcome:
     kind: str | None = None
     content: str = ""
     truncated: bool = False
+    tools: list[dict] = field(default_factory=list)  # tools the call made available from now on
 
 
 class Host(Protocol):
@@ -175,6 +176,7 @@ async def run_task(
     the model reports, when a limit is reached, when the task is cancelled or when the host stops
     it; it raises nothing for any of those."""
     cancelled = cancelled if cancelled is not None else asyncio.Event()
+    tools = list(tools)
     offered = {tool["function"]["name"] for tool in tools}
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system},
@@ -209,6 +211,11 @@ async def run_task(
                         host.tool(call.id, call.name, call.arguments), cancelled, deadline, clock
                     )
                     content = _result_text(call.name, outcome)
+                    for found in outcome.tools:
+                        name = found["function"]["name"]
+                        if name not in offered:
+                            offered.add(name)
+                            tools.append(found)
                 else:
                     content = wrap_untrusted(call.name, refusal, ok=False)
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": content})

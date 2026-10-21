@@ -54,7 +54,8 @@ from ..router import Router
 from ..worker.guards import neutralize
 from .host import WorkerCrashed, WorkerHost, WorkerStopped, WorkerUnavailable
 from .run import RunLimits, TaskRun
-from .snapshot import take_snapshot
+from ..agent.toolpick import ToolPicker
+from .snapshot import refine, take_snapshot
 from .tasks import QUEUED, RUNNING, Refused, Task, TaskStore
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,7 @@ class BackgroundService:
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._client = client
+        self._picker = ToolPicker(client)
         self._gate = gate
         self._tools = tools
         self._notify = notify
@@ -275,12 +277,17 @@ class BackgroundService:
             return
         self._store.start(task.id)
         ledger = Ledger(self._spend)
+        model = self._models.pop(task.id, DEFAULTS["agent_model"])
+        context = self._context(task)
+        snapshot = take_snapshot(self._gate.plugins, task.text)
+        # With more tools than fit, the task is shown the ones it needs, not the first few.
+        await refine(snapshot, self._picker, task.text, context, model=model, ledger=ledger)
         run = TaskRun(
             task_id=task.id,
             language=language,
-            model=self._models.pop(task.id, DEFAULTS["agent_model"]),
+            model=model,
             limits=self._limits,
-            snapshot=take_snapshot(self._gate.plugins),
+            snapshot=snapshot,
             client=self._client,
             gate=self._gate,
             tools=self._tools,
@@ -296,7 +303,7 @@ class BackgroundService:
             language,
             task.text,
             self._tools.local_time().data or {},
-            self._context(task),
+            context,
             self._limits,
         )
         self._run = run

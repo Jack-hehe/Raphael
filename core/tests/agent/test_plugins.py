@@ -692,11 +692,10 @@ def tool(server="Notes", name="look", tier=Tier.T0, schema=None, description="Lo
     return PluginTool(f"mcp:id/{name}", server, name, description, schema or {"type": "object"}, tier)
 
 
-def test_the_safest_tools_come_first_and_a_long_list_is_cut():
+def test_the_safest_tools_come_first_and_a_long_list_is_not_cut_by_the_alphabet():
     many = [tool(name=f"t{n}", tier=Tier.T3) for n in range(MAX_OFFERED)] + [tool(name="safe")]
     offer = make_offer(many)
-    assert len(offer.tools) == MAX_OFFERED and offer.tools[0].name == "safe"
-    assert [t.tier for t in offer.tools].count(Tier.T3) == MAX_OFFERED - 1  # one T3 did not fit
+    assert len(offer.tools) == MAX_OFFERED + 1 and offer.tools[0].name == "safe"
 
 
 def test_names_a_model_can_use_are_made_from_the_server_and_the_tool_and_never_repeat():
