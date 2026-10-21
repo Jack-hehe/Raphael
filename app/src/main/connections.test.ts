@@ -1,346 +1,383 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { setLocale } from "./i18n";
-import type { AuditEntry, ConnectionGroup, ToolTier } from "./types";
+import type { AuditEntry, ConnectionGroup, StoreService } from "./types";
 
 const api = vi.hoisted(() => ({
   toolsetsList: vi.fn(),
+  integrationsCatalog: vi.fn(),
   integrationsAudit: vi.fn(),
+  integrationsConnect: vi.fn(),
+  integrationsConnectCancel: vi.fn(),
   integrationsAdd: vi.fn(),
   integrationsRefresh: vi.fn(),
   integrationsSetEnabled: vi.fn(),
-  integrationsRemove: vi.fn(),
-  integrationsSetTier: vi.fn(),
-  integrationsSetGroupTier: vi.fn(),
+  integrationsDisconnect: vi.fn(),
+  integrationsSetToolEnabled: vi.fn(),
 }));
 vi.mock("./api", () => api);
 vi.mock("./ui", async (original) => ({ ...(await original<typeof import("./ui")>()), toaster: { info: vi.fn() } }));
 
-import { type ConnectionForm, type ConnectionsView, connectionsHTML, createConnections, emptyConnectionsView, tierChoices } from "./connections";
+import { type ConnectionForm, type ConnectionsView, bodyHTML, connectionsHTML, createConnections, emptyConnectionsView, needsLogin } from "./connections";
+import { toaster } from "./ui";
 
 afterEach(() => setLocale("zh-TW"));
 
 const NOW = Date.UTC(2026, 9, 21, 6, 0);
 const CJK = /[㐀-鿿぀-ヿ]/;
 
-const builtin = (name: "web" | "computer", tools: [string, ToolTier][]): ConnectionGroup => ({
-  id: `builtin:${name}`, kind: "builtin", name, enabled: true, switchable: false, tier_fixed: true, status: "builtin", error: null,
-  tools: tools.map(([tool, tier]) => ({ name: tool, description: "", tier, decided: true, changed: false, suggested: null })),
+const words = (zh: string, en: string, ja: string) => ({ "zh-TW": zh, en, ja });
+const service = (id: string, name: string, over: Partial<StoreService> = {}): StoreService => ({
+  id, name, publisher: name, url: `https://mcp.${id}.example/mcp`, category: "docs", icon: null, popular: false,
+  summary: words(`${name}的一句話`, `${name} in a line`, `${name}の一言`),
+  about: words(`${name}的說明`, `About ${name}`, `${name}について`),
+  examples: { "zh-TW": [`跟${name}說一`, `跟${name}說二`], en: [`Tell ${name} one`, `Tell ${name} two`], ja: [`${name}に一`, `${name}に二`] },
+  server_id: null, ...over,
 });
+const CATALOG: StoreService[] = [
+  service("notion", "Notion", { icon: "notion", popular: true, server_id: "ab12" }),
+  service("linear", "Linear", { icon: "linear", popular: true }),
+  service("sentry", "Sentry", { icon: "sentry" }),
+  service("canva", "Canva", { popular: true }),
+];
+
 const notes: ConnectionGroup = {
-  id: "ab12", kind: "mcp", name: "Notes", enabled: true, switchable: true, tier_fixed: false, status: "ready", error: null,
-  transport: "stdio", command: "npx", env: ["API_KEY"], headers: [], tool_count: 3, allowed_count: 1, pending_count: 2, checked_at_ms: NOW,
+  id: "ab12", name: "Notion", enabled: true, status: "ready", error: null, auth: "oauth", catalog_id: "notion",
+  transport: "http", command: "", url: "https://mcp.notion.example/mcp", env: [], headers: [], args: [],
+  tool_count: 3, enabled_count: 2, write_count: 2, read_count: 1, checked_at_ms: NOW,
   tools: [
-    { name: "look", description: "Look something up.", tier: null, decided: false, changed: false, suggested: "T0" },
-    { name: "note", description: "Write a note.", tier: "T2", decided: true, changed: false, suggested: null },
-    { name: "wipe", description: "Delete everything.", tier: null, decided: false, changed: true, suggested: null },
+    { name: "search", description: "Search the workspace.", enabled: true, kind: "read" },
+    { name: "create_page", description: "Create a page.", enabled: true, kind: "write" },
+    { name: "delete_page", description: "Delete a page.", enabled: false, kind: "write" },
   ],
 };
-const GROUPS: ConnectionGroup[] = [
-  builtin("web", [["weather", "T0"], ["web_search", "T0"], ["local_time", "T0"]]),
-  builtin("computer", [["open_youtube", "T1"], ["copy_text", "T2"]]),
-  notes,
-];
-const AUDIT: AuditEntry[] = [{ id: 1, at_ms: NOW - 60_000, server: "Notes", tool: "note", tier: "T2", approver: "user", outcome: "ok" }];
+const custom: ConnectionGroup = {
+  ...notes, id: "cu1", name: "Files", catalog_id: null, auth: "none", transport: "stdio", command: "npx", url: "", env: ["API_KEY"],
+  tool_count: 1, enabled_count: 1, write_count: 0, read_count: 1, tools: [{ name: "list", description: "List.", enabled: true, kind: "read" }],
+};
+const GROUPS = [notes, custom];
+const AUDIT: AuditEntry[] = [{ id: 1, at_ms: NOW - 60_000, server: "Notion", tool: "create_page", approver: "auto", outcome: "ok" }];
 
 const view = (over: Partial<ConnectionsView> = {}): ConnectionsView => ({
-  ...emptyConnectionsView(), groups: GROUPS, audit: AUDIT, now: NOW, ...over,
+  ...emptyConnectionsView(), groups: GROUPS, catalog: CATALOG, audit: AUDIT, now: NOW, ...over,
 });
 const form = (over: Partial<ConnectionForm> = {}): ConnectionForm => ({
   type: "stdio", name: "", command: "", args: "", url: "", pairs: [], pairName: "", pairValue: "", busy: false, error: null, ...over,
 });
+const lastToast = (): string => {
+  const calls = vi.mocked(toaster.info).mock.calls;
+  return calls[calls.length - 1]![0] as string;
+};
+const installedPage = (id: string, over: Partial<ConnectionsView> = {}): string =>
+  connectionsHTML(view({ open: { tab: "installed", id }, ...over }));
+const storePage = (id: string, over: Partial<ConnectionsView> = {}): string => connectionsHTML(view({ tab: "store", open: { tab: "store", id }, ...over }));
 
-describe("the list on the left", () => {
-  test("has the overview, Raphael's two groups, each program with a short status, and the button that adds one", () => {
-    const failed: ConnectionGroup = { ...notes, id: "f1", name: "files", status: "error", error: "timeout", pending_count: 0 };
-    const quiet: ConnectionGroup = { ...notes, id: "q1", name: "Quiet", pending_count: 0, tool_count: 2, allowed_count: 1 };
-    const html = connectionsHTML(view({ groups: [...GROUPS, failed, quiet] }));
-    const list = html.slice(html.indexOf('class="ca-list"'), html.indexOf('class="ca-detail"'));
-    expect(list).toContain("總覽");
-    expect(list).toContain("拉斐爾內建");
-    expect(list).toContain("已連接的程式");
-    expect(list).toContain("網路查詢");
-    expect(list).toContain("內建 · 3 個工具");
-    expect(list).toContain("這台電腦");
-    expect(list).toContain("內建 · 2 個工具");
-    expect(list).toContain("2 個新工具待決定"); // Notes
-    expect(list).toContain("連線失敗"); // files
-    expect(list).toContain("已連線 · 1/2 開放"); // Quiet
-    expect(list).toContain("新增連接");
-    expect(list.match(/data-conn="select"/g)).toHaveLength(1 + 2 + 1 + 2);
-  });
-
-  test("the items are real buttons that say which one is open", () => {
-    const html = connectionsHTML(view({ selected: "ab12" }));
-    const items = [...html.matchAll(/<(\w+)[^>]*class="ca-item[^"]*"[^>]*>/g)];
-    expect(items.length).toBe(4);
-    expect(new Set(items.map((m) => m[1]))).toEqual(new Set(["button"]));
-    const open = items.filter((m) => m[0].includes('aria-current="true"'));
-    expect(open).toHaveLength(1);
-    expect(open[0][0]).toContain('data-id="ab12"');
-    expect(html).not.toMatch(/<a[ >]/);
-  });
-
-  test("a core that does not answer, and the list while it is read", () => {
-    expect(connectionsHTML(view({ groups: "failed" }))).toContain("無法讀取連接");
-    expect(connectionsHTML(view({ groups: "loading" }))).toContain("讀取中");
-    expect(connectionsHTML(view({ groups: GROUPS.slice(0, 2) }))).toContain("還沒有連接任何程式");
-  });
-});
-
-describe("the overview", () => {
-  test("says which program has tools to decide, with a button, then the permissions, then the latest actions", () => {
+describe("the two views", () => {
+  test("are segmented buttons that say which is open, with the search and the menu that adds beside them", () => {
     const html = connectionsHTML(view());
-    expect(html).toContain("<b>Notes</b>");
-    expect(html).toContain("有 2 個新工具還沒給權限");
-    expect(html).toContain('data-conn="review" data-id="ab12"');
-    expect(html).toContain("權限怎麼分");
-    for (const word of ["封鎖", "自動 · 只讀", "自動 · 小動作", "先問我", "按住確認"]) expect(html).toContain(word);
+    const bar = html.slice(html.indexOf('class="cs-bar"'), html.indexOf("data-cs-body"));
+    expect(bar).toContain('role="tablist"');
+    expect(bar).toMatch(/<button[^>]*class="btn seg"[^>]*role="tab"[^>]*aria-selected="true"[^>]*data-id="installed"[^>]*>已安裝<span class="n">2<\/span>/);
+    expect(bar).toMatch(/<button[^>]*class="btn seg"[^>]*role="tab"[^>]*aria-selected="false"[^>]*data-id="store"[^>]*>商店</);
+    expect(bar).toContain('id="conn-search"');
+    expect(bar).toMatch(/<button[^>]*class="sel"[^>]*data-k="conn-add"[^>]*><span>新增<\/span>/);
+    expect(connectionsHTML(view({ tab: "store" }))).toMatch(/aria-selected="true"[^>]*data-id="store"/);
+  });
+
+  test("the loading and failed states say so", () => {
+    expect(connectionsHTML(view({ groups: "loading" }))).toContain("讀取中");
+    expect(connectionsHTML(view({ groups: "failed" }))).toContain("無法讀取連接");
+    expect(connectionsHTML(view({ tab: "store", catalog: "failed" }))).toContain("無法讀取連接");
+  });
+});
+
+describe("已安裝", () => {
+  const html = connectionsHTML(view());
+
+  test("has one row for each service, with its mark, its name, a line about it, a switch and a button that opens it", () => {
+    const rows = html.split('class="row cs-row"').slice(1);
+    expect(rows).toHaveLength(2);
+    const [notion, files] = rows;
+    expect(notion).toContain("Notion");
+    expect(notion).toContain("Notion的一句話");
+    expect(notion).toContain('class="logo"');
+    expect(notion).toMatch(/class="tg" role="switch" aria-checked="true" aria-label="開啟 Notion" data-conn="enable" data-id="ab12"/);
+    expect(notion).toMatch(/class="btn icon" data-conn="open" data-id="ab12" aria-label="查看 Notion"/);
+    // a server of the owner's own: where it is reached, and a letter for a mark
+    expect(files).toContain("Files");
+    expect(files).toContain("npx");
+    expect(files).toContain(">F<");
+  });
+
+  test("the switch is the whole service's and shows it off", () => {
+    expect(connectionsHTML(view({ groups: [{ ...notes, enabled: false, status: "disabled" }] }))).toContain('aria-checked="false"');
+  });
+
+  test("says what is wrong with a service where it is, and a login that ran out has a button that signs in again", () => {
+    const login: ConnectionGroup = { ...notes, status: "error", error: "auth" };
+    expect(needsLogin(login)).toBe(true);
+    expect(needsLogin({ ...login, error: "timeout" })).toBe(false);
+    expect(needsLogin({ ...login, auth: "none" })).toBe(false);
+    const out = connectionsHTML(view({ groups: [login] }));
+    expect(out).toContain("需要重新登入");
+    expect(out).toMatch(/<button[^>]*class="btn sm"[^>]*data-conn="relogin" data-id="ab12"[^>]*>重新登入</);
+    const failed = connectionsHTML(view({ groups: [{ ...notes, status: "error", error: "timeout" }] }));
+    expect(failed).toContain("連線失敗：太久沒有回應");
+    expect(failed).not.toContain('data-conn="relogin"');
+    expect(connectionsHTML(view({ groups: [{ ...notes, status: "unchecked" }] }))).toContain("還沒有讀取工具");
+  });
+
+  test("while the sign-in is open the button says so and every other sign-in waits", () => {
+    const login: ConnectionGroup = { ...notes, status: "error", error: "auth" };
+    const out = connectionsHTML(view({ groups: [login], login: { target: "ab12", name: "Notion" } }));
+    expect(out).toMatch(/data-conn="relogin"[^>]*disabled[^>]*>請在瀏覽器登入…/);
+  });
+
+  test("an empty list points at the store, and a search that finds nothing says so", () => {
+    expect(connectionsHTML(view({ groups: [] }))).toContain("到「商店」加入一個");
+    expect(connectionsHTML(view({ search: "zzz" }))).toContain("沒有符合的項目");
+    const found = bodyHTML(view({ search: "files" }));
+    expect(found).toContain("Files");
+    expect(found).not.toContain("Notion");
+  });
+
+  test("lists the latest actions below, by server and tool, never what was in them", () => {
     expect(html).toContain("最近的動作");
-    expect(html).toContain("Notes / note");
-    expect(html).toContain("先問我 · T2 · 你確認");
-    expect(connectionsHTML(view({ audit: [] }))).toContain("還沒有動作");
-    expect(connectionsHTML(view({ groups: [builtin("web", [["weather", "T0"]])] }))).not.toContain("去決定");
+    expect(html).toContain("Notion / create_page");
+    expect(html).toContain("自動執行");
+    expect(connectionsHTML(view({ audit: [] }))).not.toContain("最近的動作");
+    expect(html).not.toMatch(/T[0-3]\b/);
   });
 });
 
-describe("a group of Raphael's own", () => {
-  test("is only shown: no switch, no dropdown, a fixed permission with its T level", () => {
-    const html = connectionsHTML(view({ selected: "builtin:computer" }));
-    const detail = html.slice(html.indexOf('class="ca-detail"'));
-    expect(detail).toContain("這台電腦");
-    expect(detail).toContain("開啟 YouTube");
-    expect(detail).toContain("自動 · 小動作");
-    expect(detail).toContain("先問我");
-    expect(detail).not.toContain('role="switch"');
-    expect(detail).not.toContain("conn-tier:");
-    expect(detail).not.toContain("conn-all:");
-    expect(detail).not.toContain("open_youtube");
+describe("the page of a connected service", () => {
+  test("has the mark, the name, who provides it, the switch, what it is and the count of its tools", () => {
+    const html = installedPage("ab12");
+    expect(html).toContain('data-conn="back"');
+    expect(html).toContain('<h2 class="big">Notion</h2>');
+    expect(html).toContain("由 Notion 提供");
+    expect(html).toContain("Notion的說明");
+    expect(html).toContain("共 3 個工具（2 個會改動、1 個只讀取）");
+    expect(html).toMatch(/class="mono xl logo-mono"/);
+    expect(html).toMatch(/role="switch" aria-checked="true" aria-label="開啟 Notion" data-conn="enable" data-id="ab12"/);
+    expect(html).toContain("https://mcp.notion.example/mcp");
+    expect(html).not.toContain('data-cs-body');
   });
-});
 
-describe("a connected program", () => {
-  const detail = (over: Partial<ConnectionsView> = {}): string => {
-    const html = connectionsHTML(view({ selected: "ab12", ...over }));
-    return html.slice(html.indexOf('class="ca-detail"'));
-  };
+  test("has the tools in two lists that unfold, 會改動 and 只讀取, each with a switch of its own", () => {
+    const folded = installedPage("ab12");
+    expect(folded).toMatch(/aria-expanded="false" data-conn="fold" data-kind="write"><span class="gt">會改動<small>2 個<\/small>/);
+    expect(folded).toMatch(/aria-expanded="false" data-conn="fold" data-kind="read"><span class="gt">只讀取<small>1 個<\/small>/);
+    expect(folded).not.toContain("create_page");
+    const both = installedPage("ab12", { unfolded: { write: true, read: true } });
+    const write = both.slice(both.indexOf('data-kind="write"'), both.indexOf('data-kind="read"'));
+    const read = both.slice(both.indexOf('data-kind="read"'));
+    expect(write).toContain(">create_page<");
+    expect(write).toContain(">delete_page<");
+    expect(write).not.toContain(">search<");
+    expect(read).toContain(">search<");
+    expect(both.match(/data-conn="tool"/g)).toHaveLength(3);
+    expect(both).toMatch(/aria-checked="false" aria-label="開啟工具 delete_page" data-conn="tool" data-id="ab12" data-tool="delete_page"/);
+    expect(both).toMatch(/aria-checked="true" aria-label="開啟工具 search" data-conn="tool" data-id="ab12" data-tool="search"/);
+  });
 
-  test("has its head, where it is reached and the names of its secrets, never their values", () => {
-    const html = detail();
-    expect(html).toContain("<h2 class=\"big\">Notes</h2>");
-    expect(html).toContain("已連線，3 個工具，1 個已開放");
-    expect(html).toContain('role="switch"');
-    expect(html).toContain("重新讀取工具");
-    expect(html).toContain("移除");
-    expect(html).toContain("本機程式");
+  test("has no levels, no review step and no word about pending tools", () => {
+    for (const html of [installedPage("ab12", { unfolded: { write: true, read: true } }), connectionsHTML(view()), storePage("linear")]) {
+      expect(html).not.toMatch(/T[0-3]\b|決定權限|先問我|按住確認|待決定|conn-tier|conn-draft|conn-all|review/);
+    }
+  });
+
+  test("a server that changed its tools shows them all the same, new ones on", () => {
+    const grown: ConnectionGroup = { ...notes, tools: [...notes.tools, { name: "fresh", description: "New.", enabled: true, kind: "read" }], tool_count: 4, read_count: 2, enabled_count: 3 };
+    const html = installedPage("ab12", { groups: [grown], unfolded: { write: false, read: true } });
+    expect(html).toContain("共 4 個工具（2 個會改動、2 個只讀取）");
+    expect(html).toMatch(/aria-checked="true" aria-label="開啟工具 fresh"/);
+    expect(html).not.toMatch(/>新<|待決定/);
+  });
+
+  test("a disconnect asks twice, and a login that ran out is said at the top with a button", () => {
+    expect(installedPage("ab12")).toContain(">中斷連線<");
+    expect(installedPage("ab12")).not.toContain("確定中斷？");
+    expect(installedPage("ab12", { confirmingDisconnect: "ab12" })).toContain("確定中斷？");
+    const out = installedPage("ab12", { groups: [{ ...notes, status: "error", error: "auth" }] });
+    expect(out).toContain("需要重新登入");
+    expect(out).toContain('data-conn="relogin"');
+  });
+
+  test("a server of the owner's own has no store words: no publisher, the command, the names of its secrets", () => {
+    const html = installedPage("cu1");
+    expect(html).toContain("自訂伺服器");
+    expect(html).not.toContain("由 ");
     expect(html).toContain("npx");
     expect(html).toContain("API_KEY");
-    expect(html).toContain("存在認證管理員");
-    expect(html).toContain("有 2 個新工具還沒決定權限");
-    expect(html).toContain("決定權限");
+    expect(html).toContain("共 1 個工具（0 個會改動、1 個只讀取）");
   });
 
-  test("splits the tools into those that change things and those the server says only read, each with its own 「全部設為」", () => {
-    const html = detail();
-    const write = html.slice(html.indexOf("會改動東西"), html.indexOf("伺服器說只讀取"));
-    const read = html.slice(html.indexOf("伺服器說只讀取"));
-    expect(write).toContain(">note<");
-    expect(write).toContain(">wipe<");
-    expect(write).not.toContain(">look<");
-    expect(read).toContain(">look<");
-    expect(html).toContain('data-k="conn-all:ab12:write"');
-    expect(html).toContain('data-k="conn-all:ab12:read"');
-    expect(html.match(/全部設為…/g)!.length).toBeGreaterThanOrEqual(2);
-    expect(html.match(/data-k="conn-tier:ab12:[a-z]+"/g)).toEqual([
-      'data-k="conn-tier:ab12:note"', 'data-k="conn-tier:ab12:wipe"', 'data-k="conn-tier:ab12:look"',
-    ]);
+  test("tools not read yet say how to read them", () => {
+    expect(installedPage("cu1", { groups: [{ ...custom, tools: [], tool_count: 0, status: "unchecked" }] })).toContain("重新讀取工具");
   });
 
-  test("a new tool says so and counts as to decide; one the owner blocked does not", () => {
-    const blocked: ConnectionGroup = { ...notes, tools: notes.tools.map((x) => (x.name === "wipe" ? { ...x, decided: true, changed: false } : x)) };
-    const html = detail({ groups: [blocked] });
-    const rowOf = (name: string): string => html.split('<div class="row conn-tool">').find((r) => r.includes(`>${name}<`)) ?? "";
-    const look = rowOf("look");
-    expect(look).toContain(">新<");
-    expect(look).toContain("未指定"); // never decided: blocked, and it says so
-    const wipe = rowOf("wipe");
-    expect(wipe).not.toContain(">新<");
-    expect(wipe).not.toContain("未指定"); // blocked on purpose
-    expect(wipe).toContain("封鎖");
-    // a tool that changed says so, and is not 「新」
-    const changed = detail();
-    expect(changed).toContain("內容變了，請重新確認");
-    expect(changed.match(/>新</g)).toHaveLength(1);
-  });
-
-  test("the server's read-only claim is only a suggestion beside the tool", () => {
-    expect(detail()).toContain("建議「自動 · 只讀」");
-    expect(detail()).not.toContain("建議 T0");
-  });
-
-  test("the dropdown says the friendly name and keeps the T level beside it", () => {
-    const html = detail();
-    const note = html.slice(html.indexOf('data-k="conn-tier:ab12:note"'), html.indexOf('data-k="conn-tier:ab12:note"') + 300);
-    expect(note).toContain('class="tname">先問我<');
-    expect(note).toContain('class="ttag">T2<');
-  });
-
-  test("its menu lists the five words with the T levels, a line of what each does, and tags the suggested one", () => {
-    const choices = tierChoices("T0");
-    expect(choices.map((c) => c.value)).toEqual(["", "T0", "T1", "T2", "T3"]);
-    expect(choices.map((c) => c.label)).toEqual(["封鎖", "自動 · 只讀", "自動 · 小動作", "先問我", "按住確認"]);
-    expect(choices.map((c) => c.detail)).toEqual([undefined, "T0", "T1", "T2", "T3"]);
-    expect(choices.every((c) => c.desc && !CJK.test("") && c.desc.length > 4)).toBe(true);
-    expect(choices.filter((c) => c.tag).map((c) => c.value)).toEqual(["T0"]);
-    expect(tierChoices().some((c) => c.tag)).toBe(false);
-  });
-
-  test("a program that failed, one that is off and one whose tools are not read say so", () => {
-    expect(detail({ groups: [{ ...notes, status: "error", error: "timeout" }] })).toContain("連線失敗：太久沒有回應");
-    expect(detail({ groups: [{ ...notes, status: "disabled", enabled: false }] })).toContain("已關閉");
-    expect(detail({ groups: [{ ...notes, status: "unchecked", tools: [], tool_count: 0, pending_count: 0 }] })).toContain("還沒有讀取工具");
-  });
-
-  test("asks twice before it removes", () => {
-    expect(detail()).not.toContain("確定移除？");
-    expect(detail({ confirmingRemoval: "ab12" })).toContain("確定移除？");
-  });
-
-  test("an address is shown for a program reached over the network", () => {
-    const remote: ConnectionGroup = { ...notes, transport: "http", url: "https://example.com/mcp", command: "", env: [], headers: ["Authorization"] };
-    const html = detail({ groups: [remote] });
-    expect(html).toContain("https://example.com/mcp");
-    expect(html).toContain("Authorization");
+  test("a page whose service is gone is the list again", () => {
+    expect(installedPage("nope")).toContain("data-cs-body");
   });
 });
 
-describe("the step that decides what the new tools may do", () => {
-  const review = { id: "ab12", tiers: { look: "T0", wipe: null } as Record<string, ToolTier | null>, busy: false };
-  const html = (over: Partial<ConnectionsView> = {}): string => {
-    const all = connectionsHTML(view({ selected: "ab12", review, ...over }));
-    return all.slice(all.indexOf('class="ca-detail"'));
-  };
+describe("商店", () => {
+  const html = connectionsHTML(view({ tab: "store" }));
 
-  test("lists only the tools to decide, with what is proposed, and waits for 「完成」", () => {
-    const out = html();
-    expect(out).toContain("決定權限");
-    expect(out).toContain("已連上「Notes」，讀到 2 個工具");
-    expect(out).toContain('data-k="conn-draft:ab12:look"');
-    expect(out).toContain('data-k="conn-draft:ab12:wipe"');
-    expect(out).not.toContain("conn-draft:ab12:note"); // decided already
-    expect(out).not.toContain("conn-tier:");
-    expect(out).toContain('data-conn="review-done"');
-    expect(out).toContain('data-conn="review-later"');
-    expect(out).toContain("完成");
-    expect(out).toContain("稍後再說");
-    expect(out).toContain("你按「完成」之前，拉斐爾不會用任何一個");
-    const look = out.slice(out.indexOf('data-k="conn-draft:ab12:look"'), out.indexOf('data-k="conn-draft:ab12:look"') + 250);
-    expect(look).toContain('class="ttag">T0<');
+  test("has 熱門 and 全部 as two columns of cards", () => {
+    expect(html).toContain("<h2>熱門</h2>");
+    expect(html).toContain("<h2>全部</h2>");
+    const popular = html.slice(html.indexOf("<h2>熱門</h2>"), html.indexOf("<h2>全部</h2>"));
+    expect([...popular.matchAll(/class="nm">([^<]+)</g)].map((m) => m[1])).toEqual(["Notion", "Linear", "Canva"]);
+    const all = html.slice(html.indexOf("<h2>全部</h2>"));
+    expect([...all.matchAll(/class="nm">([^<]+)</g)].map((m) => m[1])).toEqual(["Canva", "Linear", "Notion", "Sentry"]); // by name
+    expect(html.match(/class="cs-grid"/g)).toHaveLength(2);
   });
 
-  test("is not shown for another group", () => {
-    const all = connectionsHTML(view({ selected: "builtin:web", review }));
-    expect(all).not.toContain("conn-draft:");
+  test("a card is a bordered button that opens the page and, beside it, a button that adds, or 已安裝", () => {
+    const cards = html.split('<div class="cs-card">').slice(1);
+    const card = cards.find((c) => c.includes('data-id="linear"'))!;
+    expect(card).toMatch(/class="btn cs-main" data-conn="open-store" data-id="linear"/);
+    expect(card).toContain("Linear的一句話");
+    expect(card).toMatch(/<button[^>]*class="btn sm" data-conn="join" data-id="linear"[^>]*>.*加入<\/button>/);
+    const notion = cards.find((c) => c.includes('data-id="notion"'))!;
+    expect(notion).toContain("已安裝");
+    expect(notion).not.toContain('data-conn="join" data-id="notion"');
+  });
+
+  test("a service with no mark is a letter, and one with a mark has it bare, in the brand colour where it reads", () => {
+    expect(html).toContain(">C<"); // Canva
+    expect(html).toMatch(/class="mono md logo-mono" style="--brand:#5E6AD2"/); // Linear
+    expect(html).toMatch(/class="mono md logo-mono">/); // Notion: the colour of the text
+    expect(html).not.toMatch(/class="mono[^"]*tile|background/);
+  });
+
+  test("while a login is open the card says so with a button to cancel, and the other 加入 buttons wait", () => {
+    const out = connectionsHTML(view({ tab: "store", login: { target: "linear", name: "Linear" } }));
+    const linear = out.slice(out.indexOf('data-id="linear"'));
+    expect(linear.slice(0, linear.indexOf("</div>"))).toContain("請在瀏覽器登入…");
+    expect(linear.slice(0, linear.indexOf("</div>"))).toContain('data-conn="cancel-login"');
+    expect(out).toMatch(/data-conn="join" data-id="sentry"[^>]*disabled/);
+  });
+
+  test("searches by name, publisher and summary, and then lists the matches once", () => {
+    const found = bodyHTML(view({ tab: "store", search: "lin" }));
+    expect(found).not.toContain("<h2>熱門</h2>");
+    expect([...found.matchAll(/class="nm">([^<]+)</g)].map((m) => m[1])).toEqual(["Linear"]);
+    expect(bodyHTML(view({ tab: "store", search: "zzz" }))).toContain("沒有符合的項目");
   });
 });
 
-describe("the form that connects a program", () => {
-  test("is on the right, not in a dialog: a type dropdown, fields for that type, a warning, two buttons", () => {
-    const html = connectionsHTML(view({ selected: "add", form: form() }));
-    const detail = html.slice(html.indexOf('class="ca-detail"'));
-    expect(html).toContain('data-conn="add" aria-current="true"');
-    expect(detail).toContain("新增連接");
-    expect(detail).toContain('data-k="conn-type"');
-    expect(detail).toContain('id="conn-command"');
-    expect(detail).toContain("只接你信任的程式。");
-    expect(detail).toContain('data-conn="connect"');
-    expect(detail).toContain('data-conn="form-cancel"');
+describe("the page of a store service", () => {
+  test("has a big mark, the name, who provides it, the button that adds, things to say, what it is and the server", () => {
+    const html = storePage("linear");
+    expect(html).toContain('data-conn="back"');
+    expect(html).toMatch(/class="mono xl logo-mono"/);
+    expect(html).toContain('<h2 class="big">Linear</h2>');
+    expect(html).toContain("由 Linear 提供");
+    expect(html).toMatch(/<button[^>]*class="btn pri" data-conn="join" data-id="linear">.*加入<\/button>/);
+    expect(html).toContain("對拉斐爾說說看");
+    expect(html).toContain("跟Linear說一");
+    expect(html).toContain("跟Linear說二");
+    expect(html).toContain("Linear的說明");
+    expect(html).toContain("https://mcp.linear.example/mcp");
+  });
+
+  test("an added service says so and opens its own page", () => {
+    const html = storePage("notion");
+    expect(html).toContain("已安裝");
+    expect(html).toContain('data-conn="manage" data-id="ab12"');
+    expect(html).not.toContain('data-conn="join"');
+  });
+
+  test("waiting for the browser it says so and has 取消; a failed login says why and the button is back", () => {
+    const waiting = storePage("linear", { login: { target: "linear", name: "Linear" } });
+    expect(waiting).toContain("請在瀏覽器登入…");
+    expect(waiting).toContain('data-conn="cancel-login"');
+    expect(waiting).not.toContain('data-conn="join"');
+    const denied = storePage("linear", { loginError: { target: "linear", kind: "denied" } });
+    expect(denied).toContain("你在瀏覽器上拒絕了，所以沒有加入。");
+    expect(denied).toContain('data-conn="join"');
+    expect(storePage("linear", { loginError: { target: "linear", kind: "timeout" } })).toContain("太久沒有登入");
+    expect(storePage("linear", { loginError: { target: "linear", kind: "network" } })).toContain("沒有登入成功：網路連不上");
+    expect(storePage("sentry", { loginError: { target: "linear", kind: "denied" } })).not.toContain("拒絕");
+  });
+});
+
+describe("the form that connects a server of the owner's own", () => {
+  test("takes the place of the tab: a type dropdown, fields for that type, a warning, two buttons", () => {
+    const html = connectionsHTML(view({ form: form() }));
+    expect(html).toContain("自訂伺服器");
+    expect(html).toContain('data-k="conn-type"');
+    expect(html).toContain('id="conn-command"');
+    expect(html).toContain("只接你信任的程式。");
+    expect(html).toContain("全部開啟");
+    expect(html).toContain('data-conn="connect"');
+    expect(html).toContain('data-conn="form-cancel"');
+    expect(html).not.toContain('role="tablist"');
     expect(html).not.toContain('role="dialog"');
   });
 
   test("an address and a header for the network type; the values of secrets are never printed", () => {
     const f = form({ type: "http", name: "Remote", url: "https://example.com/mcp", pairs: [{ name: "Authorization", value: "Bearer TOPSECRET" }], pairName: "X-Key", pairValue: "ALSOSECRET" });
-    const html = connectionsHTML(view({ selected: "add", form: f }));
+    const html = connectionsHTML(view({ form: f }));
     expect(html).toContain('id="conn-url"');
     expect(html).not.toContain('id="conn-command"');
     expect(html).toContain("Authorization");
     expect(html).toContain("標頭名稱");
     expect(html).not.toContain("TOPSECRET");
     const valueField = /<input[^>]*id="conn-pair-value"[^>]*>/.exec(html)![0];
-    expect(valueField).toContain('type="password"');
-    expect(valueField).not.toContain("ALSOSECRET=");
+    expect(valueField).toContain('type="password"'); // typed, not yet added: shown as dots, and only here
   });
 });
 
 describe("the owner's rules for this tab", () => {
-  test("everything that does something is a button or a switch, and every choice is a dropdown", () => {
-    const all = [
-      connectionsHTML(view({ selected: "ab12" })),
-      connectionsHTML(view({ selected: "add", form: form({ pairs: [{ name: "TOKEN", value: "x" }] }) })),
-      connectionsHTML(view({ selected: "ab12", review: { id: "ab12", tiers: { look: "T0" }, busy: false } })),
-      connectionsHTML(view()),
-    ].join("");
+  const pages = (): string[] => [
+    connectionsHTML(view()),
+    connectionsHTML(view({ tab: "store" })),
+    connectionsHTML(view({ tab: "store", login: { target: "linear", name: "Linear" } })),
+    installedPage("ab12", { unfolded: { write: true, read: true }, confirmingDisconnect: "ab12" }),
+    installedPage("ab12", { groups: [{ ...notes, status: "error", error: "auth" }] }),
+    storePage("linear", { loginError: { target: "linear", kind: "denied" } }),
+    connectionsHTML(view({ form: form({ pairs: [{ name: "TOKEN", value: "x" }] }) })),
+  ];
+
+  test("everything that does something is a button or a switch with a shape, and every choice is a dropdown", () => {
+    const all = pages().join("");
     const acts = [...all.matchAll(/<(\w+)[^>]*data-conn="/g)].map((m) => m[1]);
-    expect(acts.length).toBeGreaterThan(12);
+    expect(acts.length).toBeGreaterThan(30);
     expect(new Set(acts)).toEqual(new Set(["button"]));
+    for (const tag of all.match(/<button[^>]*>/g)!) expect(tag).toMatch(/class="(btn[ "]|sel[ "]|tg)/);
     expect(all).not.toMatch(/<a[ >]/);
     expect(all).not.toContain("<select");
     expect(all).not.toContain('type="radio"');
     expect(all).not.toContain("onclick");
   });
 
+  test("the segmented buttons are real bordered buttons, not clickable text", () => {
+    const tabs = connectionsHTML(view()).match(/<button[^>]*role="tab"[^>]*>/g)!;
+    expect(tabs).toHaveLength(2);
+    for (const tag of tabs) expect(tag).toContain('class="btn seg"');
+  });
+
   test.each(["en", "ja"] as const)("is in one language at a time (%s)", (locale) => {
     setLocale(locale);
-    const pages = [
-      connectionsHTML(view()),
-      connectionsHTML(view({ selected: "ab12", confirmingRemoval: "ab12" })),
-      connectionsHTML(view({ selected: "builtin:web" })),
-      connectionsHTML(view({ selected: "ab12", review: { id: "ab12", tiers: { look: "T0", wipe: null }, busy: false } })),
-      connectionsHTML(view({ selected: "add", form: form() })),
-    ].join("");
-    for (const zh of ["全部設為", "重新讀取工具", "網路查詢", "這台電腦", "最近的動作", "封鎖", "新增連接", "決定權限", "先問我", "按住確認", "待決定", "會改動東西"]) expect(pages).not.toContain(zh);
+    const all = pages().join("");
+    for (const zh of ["已安裝", "商店", "加入", "中斷連線", "熱門", "只讀取", "會改動", "請在瀏覽器登入", "重新登入", "重新讀取工具", "最近的動作", "沒有符合"]) expect(all).not.toContain(zh);
     if (locale === "en") {
-      expect(pages).not.toMatch(CJK);
-      expect(pages).toContain("Ask me first");
-      expect(pages).toContain("Decide permissions");
+      // what the service itself says (here the fake store's own words) is the catalog's, in English
+      expect(all).toContain("Installed");
+      expect(all).toContain("Sign in in your browser…");
+      expect(all).toContain("Contains 3 tools (2 write, 1 read)");
+      expect(all).toContain("Tell Linear one");
+      expect(all).not.toMatch(CJK);
     } else {
-      expect(pages).toContain("接続を追加");
-      expect(pages).toContain("権限を決める");
-      expect(pages).not.toMatch(/Set all|Read tools again|Recent actions|Add a connection|Ask me/);
+      expect(all).toContain("インストール済み");
+      expect(all).toContain("ブラウザでログインしてください…");
+      expect(all).toContain("Linearに一");
+      expect(all).not.toMatch(/Installed|Popular|Sign in|Contains|Recent actions|Disconnect/);
+      expect(all).not.toContain("跟");
     }
-  });
-});
-
-describe("the marks of programs", () => {
-  const server = (name: string, over: Partial<ConnectionGroup> = {}): ConnectionGroup => ({ ...notes, id: "x1", name, ...over });
-  const mark = (g: ConnectionGroup): string => {
-    const html = connectionsHTML(view({ groups: [g] }));
-    const item = html.slice(html.indexOf('data-id="x1"'), html.indexOf("</button>", html.indexOf('data-id="x1"')));
-    return item;
-  };
-
-  test("a well-known program has its mark in the colour of the text, found by name, package or address", () => {
-    for (const g of [
-      server("Notion"),
-      server("Work notes", { command: "npx", args: ["-y", "@notionhq/notion-mcp-server"] }),
-      server("Wiki", { transport: "http", url: "https://mcp.notion.com/mcp", command: "" }),
-    ]) {
-      const item = mark(g);
-      expect(item).toContain('class="logo"');
-      expect(item).toContain('fill="currentColor"');
-      expect(item).toContain("logo-mono");
-    }
-  });
-
-  test("an unknown program has a neutral letter, and a built-in group keeps its line icon", () => {
-    const item = mark(server("filesystem", { command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem"] }));
-    expect(item).not.toContain("<svg");
-    expect(item).toContain(">F<");
-    const html = connectionsHTML(view());
-    expect(html).toContain('class="mono sm builtin"');
-  });
-
-  test("the name of a program is what picks the letter, even in other scripts", () => {
-    expect(mark(server("筆記"))).toContain(">筆<");
   });
 });
 
@@ -353,150 +390,259 @@ describe("what the tab does", () => {
 
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
+    vi.mocked(toaster.info).mockReset();
     api.toolsetsList.mockResolvedValue({ groups: GROUPS });
+    api.integrationsCatalog.mockResolvedValue({ services: CATALOG });
     api.integrationsAudit.mockResolvedValue({ entries: AUDIT });
-    for (const name of ["integrationsRefresh", "integrationsSetEnabled", "integrationsSetTier", "integrationsSetGroupTier"] as const) api[name].mockResolvedValue({});
-    api.integrationsRemove.mockResolvedValue({ removed: true });
+    for (const name of ["integrationsRefresh", "integrationsSetEnabled", "integrationsSetToolEnabled"] as const) api[name].mockResolvedValue({});
+    api.integrationsDisconnect.mockResolvedValue({ removed: true, revoked: true });
+    api.integrationsConnectCancel.mockResolvedValue({ cancelled: true });
     host.redraw.mockReset();
   });
 
-  test("reads the groups and the latest actions, and starts at the overview", async () => {
+  test("reads the services, the store and the latest actions, and starts on 已安裝", async () => {
     const c = createConnections(host);
     expect(c.view().groups).toBe("loading");
     await c.load();
     expect(c.view().groups).toEqual(GROUPS);
+    expect(c.view().catalog).toEqual(CATALOG);
     expect(c.view().audit).toEqual(AUDIT);
-    expect(c.view().selected).toBe("overview");
+    expect(c.view().tab).toBe("installed");
   });
 
-  test("says the groups cannot be had when the first read fails, and keeps the old ones when a later one does", async () => {
+  test("with nothing connected yet it starts on the store, once", async () => {
+    api.toolsetsList.mockResolvedValue({ groups: [] });
+    const c = createConnections(host);
+    await c.load();
+    expect(c.view().tab).toBe("store");
+    c.click(button("tab", { id: "installed" }));
+    await c.load();
+    expect(c.view().tab).toBe("installed");
+  });
+
+  test("says the services cannot be had when the first read fails, and keeps the old ones when a later one does", async () => {
     api.toolsetsList.mockRejectedValueOnce("down");
+    api.integrationsCatalog.mockRejectedValueOnce("down");
     const c = createConnections(host);
     await c.load();
     expect(c.view().groups).toBe("failed");
+    expect(c.view().catalog).toBe("failed");
     await c.load();
     api.toolsetsList.mockRejectedValueOnce("down");
+    api.integrationsCatalog.mockRejectedValueOnce("down");
     await c.load();
     expect(c.view().groups).toEqual(GROUPS);
+    expect(c.view().catalog).toEqual(CATALOG);
   });
 
-  test("shows the item that is pressed on the left, and the overview when the one shown is gone", async () => {
+  test("changes view, opens a page and goes back; a page whose service is gone closes", async () => {
     const c = createConnections(host);
     await c.load();
-    expect(c.click(button("select", { id: "ab12" }))).toBe(true);
-    expect(c.view().selected).toBe("ab12");
-    api.toolsetsList.mockResolvedValue({ groups: GROUPS.slice(0, 2) });
+    c.click(button("tab", { id: "store" }));
+    expect(c.view().tab).toBe("store");
+    c.click(button("open-store", { id: "linear" }));
+    expect(c.view().open).toEqual({ tab: "store", id: "linear" });
+    c.click(button("back"));
+    expect(c.view().open).toBeNull();
+    c.click(button("tab", { id: "installed" }));
+    c.click(button("open", { id: "ab12" }));
+    expect(c.view().open).toEqual({ tab: "installed", id: "ab12" });
+    api.toolsetsList.mockResolvedValue({ groups: [custom] });
     await c.load();
-    expect(c.view().selected).toBe("overview");
+    expect(c.view().open).toBeNull();
   });
 
-  test("gives a tool a tier from its dropdown, and a block is a choice of its own", async () => {
+  test("a store page opens the page of the service it was added as", async () => {
     const c = createConnections(host);
     await c.load();
-    c.menuFor("conn-tier:ab12:look")!.pick("T0");
-    await settle();
-    expect(api.integrationsSetTier).toHaveBeenCalledWith("ab12", "look", "T0");
-    c.menuFor("conn-tier:ab12:note")!.pick("");
-    await settle();
-    expect(api.integrationsSetTier).toHaveBeenCalledWith("ab12", "note", null);
-    // a tool nobody decided on, given the block: that decides it
-    api.integrationsSetTier.mockClear();
-    c.menuFor("conn-tier:ab12:look")!.pick("");
-    await settle();
-    expect(api.integrationsSetTier).toHaveBeenCalledWith("ab12", "look", null);
-    // the same tier again, for a tool already decided, does nothing
-    api.integrationsSetTier.mockClear();
-    c.menuFor("conn-tier:ab12:note")!.pick("T2");
-    await settle();
-    expect(api.integrationsSetTier).not.toHaveBeenCalled();
-    expect(c.menuFor("conn-tier:ab12:look")!.choices.map((x) => x.value)).toEqual(["", "T0", "T1", "T2", "T3"]);
-    expect(c.menuFor("conn-tier:ab12:look")!.choices.find((x) => x.tag)?.value).toBe("T0");
-    expect(c.menuFor("nothing")).toBeNull();
+    c.click(button("open-store", { id: "notion" }));
+    c.click(button("manage", { id: "ab12" }));
+    expect(c.view().open).toEqual({ tab: "installed", id: "ab12" });
   });
 
-  test("「全部設為」 gives one tier to the tools of its own list only", async () => {
+  test("unfolds and folds the two lists of tools", async () => {
     const c = createConnections(host);
     await c.load();
-    c.menuFor("conn-all:ab12:write")!.pick("T2");
-    await settle();
-    expect(api.integrationsSetGroupTier).toHaveBeenLastCalledWith("ab12", "T2", ["note", "wipe"]);
-    c.menuFor("conn-all:ab12:read")!.pick("T0");
-    await settle();
-    expect(api.integrationsSetGroupTier).toHaveBeenLastCalledWith("ab12", "T0", ["look"]);
-    c.menuFor("conn-all:ab12:read")!.pick("");
-    await settle();
-    expect(api.integrationsSetGroupTier).toHaveBeenLastCalledWith("ab12", null, ["look"]);
-    expect(c.menuFor("conn-all:nope:read")).toBeNull();
+    c.click(button("open", { id: "ab12" }));
+    c.click(button("fold", { kind: "write" }));
+    expect(c.view().unfolded).toEqual({ write: true, read: false });
+    c.click(button("fold", { kind: "write" }));
+    expect(c.view().unfolded.write).toBe(false);
   });
 
-  test("switches a program on or off, and reads its tools again", async () => {
+  test("the search filters what is under the bar without drawing the page again", async () => {
+    const body = { innerHTML: "" };
+    vi.stubGlobal("document", { querySelector: () => body });
+    try {
+      const c = createConnections(host);
+      await c.load();
+      host.redraw.mockReset();
+      expect(c.input(input("conn-search", "files"))).toBe(true);
+      expect(c.view().search).toBe("files");
+      expect(body.innerHTML).toContain("Files");
+      expect(body.innerHTML).not.toContain("Notion");
+      expect(host.redraw).not.toHaveBeenCalled();
+      c.click(button("tab", { id: "store" }));
+      expect(c.view().search).toBe(""); // another view starts with no search
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("switches a service on or off, a tool on or off, and reads its tools again", async () => {
     const c = createConnections(host);
     await c.load();
     c.click(button("enable", { id: "ab12" }));
     await settle();
     expect(api.integrationsSetEnabled).toHaveBeenCalledWith("ab12", false);
+    c.click(button("tool", { id: "ab12", tool: "delete_page" }));
+    await settle();
+    expect(api.integrationsSetToolEnabled).toHaveBeenLastCalledWith("ab12", "delete_page", true);
+    c.click(button("tool", { id: "ab12", tool: "search" }));
+    await settle();
+    expect(api.integrationsSetToolEnabled).toHaveBeenLastCalledWith("ab12", "search", false);
     c.click(button("refresh", { id: "ab12" }));
     await settle();
     expect(api.integrationsRefresh).toHaveBeenCalledWith("ab12");
   });
 
-  test("removes only on the second press, and goes back to the overview", async () => {
+  test("disconnects only on the second press, and tells where else the access can be taken away", async () => {
     vi.useFakeTimers();
     try {
       const c = createConnections(host);
       await c.load();
-      c.click(button("select", { id: "ab12" }));
-      c.click(button("remove", { id: "ab12" }));
-      expect(c.view().confirmingRemoval).toBe("ab12");
-      expect(api.integrationsRemove).not.toHaveBeenCalled();
+      c.click(button("open", { id: "ab12" }));
+      c.click(button("disconnect", { id: "ab12" }));
+      expect(c.view().confirmingDisconnect).toBe("ab12");
+      expect(api.integrationsDisconnect).not.toHaveBeenCalled();
       vi.advanceTimersByTime(5100);
-      expect(c.view().confirmingRemoval).toBeNull();
-      api.toolsetsList.mockResolvedValue({ groups: GROUPS.slice(0, 2) });
-      c.click(button("remove", { id: "ab12" }));
-      c.click(button("remove", { id: "ab12" }));
+      expect(c.view().confirmingDisconnect).toBeNull();
+      api.toolsetsList.mockResolvedValue({ groups: [custom] });
+      c.click(button("disconnect", { id: "ab12" }));
+      c.click(button("disconnect", { id: "ab12" }));
       await vi.advanceTimersByTimeAsync(0);
-      expect(api.integrationsRemove).toHaveBeenCalledTimes(1);
-      expect(api.integrationsRemove).toHaveBeenCalledWith("ab12");
-      expect(c.view().selected).toBe("overview");
+      expect(api.integrationsDisconnect).toHaveBeenCalledTimes(1);
+      expect(api.integrationsDisconnect).toHaveBeenCalledWith("ab12");
+      expect(c.view().open).toBeNull();
+      expect(lastToast()).toContain("Notion 自己的設定");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  describe("connecting a program", () => {
-    const fresh: ConnectionGroup = {
-      ...notes, id: "new1", name: "Notes", pending_count: 3, allowed_count: 0,
-      tools: [
-        { name: "look", description: "Look.", tier: null, decided: false, changed: false, suggested: "T0" },
-        { name: "list", description: "List.", tier: null, decided: false, changed: false, suggested: "T0" },
-        { name: "wipe", description: "Delete.", tier: null, decided: false, changed: false, suggested: null },
-      ],
-    };
-
-    async function connected() {
-      api.integrationsAdd.mockResolvedValue({ server: { id: "new1" } });
-      api.toolsetsList.mockResolvedValue({ groups: [...GROUPS.slice(0, 2), fresh] });
+  describe("adding a service from the store", () => {
+    test("加入 starts the login, shows the wait, and on success the service is under 已安裝", async () => {
+      let finish!: (value: unknown) => void;
+      api.integrationsConnect.mockReturnValue(new Promise((resolve) => (finish = resolve)));
       const c = createConnections(host);
       await c.load();
-      c.click(button("add"));
-      c.input(input("conn-name", " Notes "));
-      c.input(input("conn-command", "npx"));
-      c.input(input("conn-args", "-y   notes-server"));
-      c.input(input("conn-pair-name", "API_KEY"));
-      c.input(input("conn-pair-value", "TOPSECRET"));
-      c.click(button("pair-add"));
-      c.click(button("connect"));
+      c.click(button("tab", { id: "store" }));
+      c.click(button("join", { id: "linear" }));
+      expect(api.integrationsConnect).toHaveBeenCalledWith({ catalog_id: "linear" });
+      expect(c.view().login).toEqual({ target: "linear", name: "Linear" });
+      expect(connectionsHTML(c.view())).toContain("請在瀏覽器登入…");
+      api.toolsetsList.mockResolvedValue({ groups: [...GROUPS, { ...notes, id: "ln1", name: "Linear", catalog_id: "linear" }] });
+      finish({ connected: true, server: { id: "ln1" } });
       await settle();
-      return c;
-    }
+      expect(c.view().login).toBeNull();
+      expect(c.view().tab).toBe("installed");
+      expect(c.view().open).toBeNull();
+      expect(lastToast()).toBe("已連接 Linear");
+    });
 
-    test("the values go to the core once, the names stay, the form is dropped, and the new program is shown", async () => {
+    test("only one login at a time", async () => {
+      api.integrationsConnect.mockReturnValue(new Promise(() => undefined));
+      const c = createConnections(host);
+      await c.load();
+      c.click(button("join", { id: "linear" }));
+      c.click(button("join", { id: "sentry" }));
+      expect(api.integrationsConnect).toHaveBeenCalledTimes(1);
+    });
+
+    test("取消 ends the wait and says nothing about it", async () => {
+      api.integrationsConnect.mockImplementation(async () => {
+        await settle();
+        return { connected: false, error: "cancelled" };
+      });
+      const c = createConnections(host);
+      await c.load();
+      c.click(button("join", { id: "linear" }));
+      c.click(button("cancel-login"));
+      expect(api.integrationsConnectCancel).toHaveBeenCalled();
+      await settle();
+      await settle();
+      expect(c.view().login).toBeNull();
+      expect(c.view().loginError).toBeNull();
+      expect(toaster.info).not.toHaveBeenCalled();
+    });
+
+    test("a refusal, a timeout or a failure is told, and kept for the page of the service", async () => {
+      const c = createConnections(host);
+      await c.load();
+      api.integrationsConnect.mockResolvedValueOnce({ connected: false, error: "denied" });
+      c.click(button("join", { id: "linear" }));
+      await settle();
+      expect(c.view().loginError).toEqual({ target: "linear", kind: "denied" });
+      expect(lastToast()).toBe("你在瀏覽器上拒絕了，所以沒有加入。");
+      api.integrationsConnect.mockResolvedValueOnce({ connected: false, error: "timeout" });
+      c.click(button("join", { id: "linear" }));
+      await settle();
+      expect(lastToast()).toContain("太久沒有登入");
+      // trying again clears what went wrong
+      api.integrationsConnect.mockReturnValueOnce(new Promise(() => undefined));
+      c.click(button("join", { id: "linear" }));
+      expect(c.view().loginError).toBeNull();
+    });
+
+    test("a call that throws is told and the buttons come back", async () => {
+      api.integrationsConnect.mockRejectedValue("the core is not running");
+      const c = createConnections(host);
+      await c.load();
+      c.click(button("join", { id: "linear" }));
+      await settle();
+      expect(c.view().login).toBeNull();
+      expect(toaster.info).toHaveBeenCalled();
+    });
+
+    test("an entry that is not in the store does nothing", async () => {
+      const c = createConnections(host);
+      await c.load();
+      c.click(button("join", { id: "nope" }));
+      expect(api.integrationsConnect).not.toHaveBeenCalled();
+    });
+  });
+
+  test("a service whose login ran out signs in again from its row, and stays where it was", async () => {
+    api.toolsetsList.mockResolvedValue({ groups: [{ ...notes, status: "error", error: "auth" }, custom] });
+    api.integrationsConnect.mockResolvedValue({ connected: true, server: { id: "ab12" } });
+    const c = createConnections(host);
+    await c.load();
+    c.click(button("open", { id: "ab12" }));
+    c.click(button("relogin", { id: "ab12" }));
+    expect(api.integrationsConnect).toHaveBeenCalledWith({ id: "ab12" });
+    await settle();
+    expect(c.view().open).toEqual({ tab: "installed", id: "ab12" });
+    expect(lastToast()).toBe("已重新登入 Notion");
+  });
+
+  describe("a server of the owner's own", () => {
+    const menu = (c: ReturnType<typeof createConnections>) => c.menuFor("conn-add")!;
+
+    test("the 新增 menu has one item, 自訂伺服器, which opens the form", async () => {
+      const c = createConnections(host);
+      await c.load();
+      expect(menu(c).choices.map((x) => x.label)).toEqual(["自訂伺服器"]);
+      menu(c).pick("custom");
+      expect(c.view().form).not.toBeNull();
+      expect(c.menuFor("nothing")).toBeNull();
+    });
+
+    test("the values go to the core once, the names stay, the form is dropped, and the service is under 已安裝", async () => {
       api.integrationsAdd.mockResolvedValue({ server: { id: "new1" } });
       const c = createConnections(host);
       await c.load();
-      c.click(button("add"));
-      expect(c.view().form).not.toBeNull();
-      expect(c.view().selected).toBe("add");
+      c.click(button("tab", { id: "store" }));
+      menu(c).pick("custom");
       c.input(input("conn-name", " Notes "));
       c.input(input("conn-command", "npx"));
       c.input(input("conn-args", "-y   notes-server"));
@@ -512,139 +658,67 @@ describe("what the tab does", () => {
       });
       expect(api.integrationsRefresh).toHaveBeenCalledWith("new1");
       expect(c.view().form).toBeNull();
+      expect(c.view().tab).toBe("installed");
       expect(JSON.stringify(c.view())).not.toContain("TOPSECRET");
     });
 
-    test("then asks what the new tools may do, with the server's suggestions as a proposal, and grants nothing yet", async () => {
-      const c = await connected();
-      expect(c.view().selected).toBe("new1");
-      expect(c.view().review).toEqual({ id: "new1", tiers: { look: "T0", list: "T0", wipe: null }, busy: false });
-      expect(api.integrationsSetTier).not.toHaveBeenCalled();
-      expect(api.integrationsSetGroupTier).not.toHaveBeenCalled();
-      expect(connectionsHTML(c.view())).toContain("決定權限");
-    });
-
-    test("「完成」 gives each tool what was chosen, in one call for each tier, the block included", async () => {
-      const c = await connected();
-      c.menuFor("conn-draft:new1:look")!.pick("T1");
-      expect(c.view().review!.tiers.look).toBe("T1");
-      expect(api.integrationsSetGroupTier).not.toHaveBeenCalled();
-      api.toolsetsList.mockResolvedValue({ groups: [...GROUPS.slice(0, 2), { ...fresh, pending_count: 0, tools: fresh.tools.map((x) => ({ ...x, decided: true })) }] });
-      c.click(button("review-done"));
-      await settle();
-      expect(api.integrationsSetGroupTier.mock.calls).toEqual([
-        ["new1", "T1", ["look"]],
-        ["new1", "T0", ["list"]],
-        ["new1", null, ["wipe"]],
-      ]);
-      expect(c.view().review).toBeNull();
-      expect(c.view().selected).toBe("new1");
-    });
-
-    test("「稍後再說」 leaves every tool as it was, still to decide", async () => {
-      const c = await connected();
-      c.click(button("review-later"));
-      expect(c.view().review).toBeNull();
-      expect(api.integrationsSetGroupTier).not.toHaveBeenCalled();
-      expect(api.integrationsSetTier).not.toHaveBeenCalled();
-    });
-
-    test("a failure while giving the tiers keeps the step open", async () => {
-      const c = await connected();
-      api.integrationsSetGroupTier.mockRejectedValueOnce("no");
-      c.click(button("review-done"));
-      await settle();
-      expect(c.view().review).not.toBeNull();
-      expect(c.view().review!.busy).toBe(false);
-    });
-
-    test("pressing another item drops the step; 「去決定」 brings it back for a program with tools to decide", async () => {
-      const c = await connected();
-      c.click(button("select", { id: "overview" }));
-      expect(c.view().review).toBeNull();
-      c.click(button("review", { id: "new1" }));
-      expect(c.view().selected).toBe("new1");
-      expect(c.view().review!.tiers).toEqual({ look: "T0", list: "T0", wipe: null });
-    });
-
-    test("a program whose tools could not be read has nothing to decide yet", async () => {
-      api.integrationsAdd.mockResolvedValue({ server: { id: "new1" } });
-      api.integrationsRefresh.mockRejectedValue("down");
-      api.toolsetsList.mockResolvedValue({ groups: [...GROUPS.slice(0, 2), { ...fresh, status: "error", error: "timeout", tools: [], pending_count: 0 }] });
+    test("an address with a header; a half-typed pair and missing fields are told before anything is sent", async () => {
+      api.integrationsAdd.mockResolvedValue({ server: { id: "new2" } });
       const c = createConnections(host);
       await c.load();
-      c.click(button("add"));
+      menu(c).pick("custom");
+      c.click(button("connect"));
+      expect(c.view().form!.error!()).toBe("請填名稱");
+      c.input(input("conn-name", "Remote"));
+      c.click(button("connect"));
+      expect(c.view().form!.error!()).toBe("請填指令");
+      c.menuFor("conn-type")!.pick("http");
+      c.click(button("connect"));
+      expect(c.view().form!.error!()).toBe("請填網址");
+      c.input(input("conn-url", "https://example.com/mcp"));
+      c.input(input("conn-pair-name", "Authorization"));
+      c.click(button("connect"));
+      expect(c.view().form!.error!()).toBe("請先按「加入」，或清掉這一列");
+      c.input(input("conn-pair-value", "Bearer TOKEN"));
+      c.click(button("connect")); // both parts are there: the pair counts
+      await settle();
+      expect(api.integrationsAdd).toHaveBeenCalledTimes(1);
+      expect(api.integrationsAdd).toHaveBeenCalledWith({
+        name: "Remote", transport: "http", url: "https://example.com/mcp", headers: [{ name: "Authorization", value: "Bearer TOKEN" }],
+      });
+    });
+
+    test("a refused connection keeps the form and says why; cancelling drops what was typed", async () => {
+      api.integrationsAdd.mockRejectedValue("[-32602] Invalid params: A plugin with this name exists already");
+      const c = createConnections(host);
+      await c.load();
+      menu(c).pick("custom");
       c.input(input("conn-name", "Notes"));
       c.input(input("conn-command", "npx"));
       c.click(button("connect"));
       await settle();
-      expect(c.view().selected).toBe("new1");
-      expect(c.view().review).toBeNull();
+      expect(c.view().form!.busy).toBe(false);
+      expect(c.view().form!.error!()).toContain("exists already");
+      c.click(button("form-cancel"));
+      expect(c.view().form).toBeNull();
     });
   });
 
-  test("an address with a header; a half-typed pair and missing fields are told before anything is sent", async () => {
-    api.integrationsAdd.mockResolvedValue({ server: { id: "new2" } });
+  test("leaving the tab drops the form, the page, the search and a pending disconnect, but not a login that is under way", async () => {
+    api.integrationsConnect.mockReturnValue(new Promise(() => undefined));
     const c = createConnections(host);
     await c.load();
-    c.click(button("add"));
-    c.click(button("connect"));
-    expect(c.view().form!.error!()).toBe("請填名稱");
-    c.input(input("conn-name", "Remote"));
-    c.click(button("connect"));
-    expect(c.view().form!.error!()).toBe("請填指令");
-    c.menuFor("conn-type")!.pick("http");
-    c.click(button("connect"));
-    expect(c.view().form!.error!()).toBe("請填網址");
-    c.input(input("conn-url", "https://example.com/mcp"));
-    c.input(input("conn-pair-name", "Authorization"));
-    c.click(button("connect"));
-    expect(c.view().form!.error!()).toBe("請先按「加入」，或清掉這一列");
-    c.input(input("conn-pair-value", "Bearer TOKEN"));
-    c.click(button("connect")); // both parts are there: the pair counts
-    await settle();
-    expect(api.integrationsAdd).toHaveBeenCalledTimes(1);
-    expect(api.integrationsAdd).toHaveBeenCalledWith({
-      name: "Remote", transport: "http", url: "https://example.com/mcp", headers: [{ name: "Authorization", value: "Bearer TOKEN" }],
-    });
-  });
-
-  test("a refused connection keeps the form and says why; cancelling drops what was typed", async () => {
-    api.integrationsAdd.mockRejectedValue("[-32602] Invalid params: A plugin with this name exists already");
-    const c = createConnections(host);
-    await c.load();
-    c.click(button("add"));
-    c.input(input("conn-name", "Notes"));
-    c.input(input("conn-command", "npx"));
-    c.click(button("connect"));
-    await settle();
-    expect(c.view().form!.busy).toBe(false);
-    expect(c.view().form!.error!()).toContain("exists already");
-    c.click(button("form-cancel"));
-    expect(c.view().form).toBeNull();
-    expect(c.view().selected).toBe("overview");
-  });
-
-  test("pressing another item drops an unsent form with its values", async () => {
-    const c = createConnections(host);
-    await c.load();
-    c.click(button("add"));
+    c.click(button("open", { id: "ab12" }));
+    c.click(button("disconnect", { id: "ab12" }));
+    c.click(button("join", { id: "linear" }));
+    c.menuFor("conn-add")!.pick("custom");
     c.input(input("conn-name", "Half"));
     c.input(input("conn-pair-name", "TOKEN"));
     c.input(input("conn-pair-value", "TOPSECRET"));
-    c.click(button("select", { id: "builtin:web" }));
-    expect(c.view().form).toBeNull();
-    expect(JSON.stringify(c.view())).not.toContain("TOPSECRET");
-  });
-
-  test("leaving the tab drops the form, the step and the pending removal", async () => {
-    const c = createConnections(host);
-    await c.load();
-    c.click(button("select", { id: "ab12" }));
-    c.click(button("review", { id: "ab12" }));
-    c.click(button("remove", { id: "ab12" }));
     c.reset();
-    expect(c.view()).toMatchObject({ selected: "overview", review: null, form: null, confirmingRemoval: null });
+    expect(c.view()).toMatchObject({ tab: "installed", open: null, form: null, confirmingDisconnect: null, search: "" });
+    expect(c.view().login).not.toBeNull();
+    expect(JSON.stringify(c.view())).not.toContain("TOPSECRET");
   });
 
   test("ignores a click that is none of its own", () => {

@@ -8,9 +8,10 @@ import type { LanguageGroup } from "./languages";
 import type {
   AgentTurn,
   AuditEntry,
+  ConnectResult,
   ConnectionGroup,
   NewConnection,
-  ToolTier,
+  StoreService,
   AudioDevices,
   BrainSettings,
   DeviceSettings,
@@ -96,21 +97,25 @@ export const secretsSetOpenrouterKey = (key: string): Promise<KeyCheck> => core(
 /** Removes the stored key. Nothing comes back: the key never reaches the page. */
 export const secretsClearOpenrouterKey = (): Promise<Record<string, never>> => core("secrets.clear_openrouter_key");
 
-// ---------- connections (plugins and Raphael's own tools) ----------
+// ---------- connections (the plugins and the store) ----------
 
 export const toolsetsList = (): Promise<{ groups: ConnectionGroup[] }> => core("toolsets.list");
-/** Connects a server. The values of its variables and headers go to the vault and never come back. */
+export const integrationsCatalog = (): Promise<{ services: StoreService[] }> => core("integrations.catalog");
+/** Adds a service of the store, or signs in to a connected one again (`id`). Waits for the login in the browser: minutes. */
+export const integrationsConnect = (target: { catalog_id: string } | { id: string }): Promise<ConnectResult> =>
+  core("integrations.connect", target);
+/** Ends the wait for a login; the call that waits then answers `cancelled`. */
+export const integrationsConnectCancel = (): Promise<{ cancelled: boolean }> => core("integrations.connect_cancel");
+/** Connects a server of the owner's own. The values of its variables and headers go to the vault and never come back. */
 export const integrationsAdd = (server: NewConnection): Promise<{ server: { id: string } }> => core("integrations.add", server);
 export const integrationsRefresh = (id: string): Promise<Record<string, unknown>> => core("integrations.refresh", { id });
 export const integrationsSetEnabled = (id: string, enabled: boolean): Promise<Record<string, unknown>> =>
   core("integrations.set_enabled", { id, enabled });
-export const integrationsRemove = (id: string): Promise<{ removed: boolean }> => core("integrations.remove", { id });
-/** The tier of one tool; null blocks it on purpose. */
-export const integrationsSetTier = (id: string, tool: string, tier: ToolTier | null): Promise<Record<string, unknown>> =>
-  core("integrations.set_tier", { id, tool, tier });
-/** One tier for the tools the server has now, or for the ones named; tools it adds later stay undecided and blocked. */
-export const integrationsSetGroupTier = (id: string, tier: ToolTier | null, tools?: string[]): Promise<Record<string, unknown>> =>
-  core("integrations.set_group_tier", tools ? { id, tier, tools } : { id, tier });
+/** Revokes the login where the server allows it, forgets the secrets and removes the service. */
+export const integrationsDisconnect = (id: string): Promise<{ removed: boolean; revoked: boolean }> =>
+  core("integrations.disconnect", { id });
+export const integrationsSetToolEnabled = (id: string, tool: string, enabled: boolean): Promise<Record<string, unknown>> =>
+  core("integrations.set_tool_enabled", { id, tool, enabled });
 export const integrationsAudit = (limit = 8): Promise<{ entries: AuditEntry[] }> => core("integrations.audit", { limit });
 
 // ---------- the device side of the core ----------
