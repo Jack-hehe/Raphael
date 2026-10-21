@@ -15,7 +15,7 @@ import * as api from "./api";
 import { dayLabel, describeError, formatClock } from "./format";
 import { getLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
-import { SERVICE_ICONS, type ServiceIconId, brandStyle, monogram, serviceIconOf, serviceIconSVG } from "./service-icons";
+import { SERVICE_ICONS, type ServiceIconId, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import type { AuditEntry, ConnectionGroup, ConnectionTool, NewConnection, StoreService, Words } from "./types";
 import { type Choice, btn, esc, fieldHTML, ico, row, st, tg, toaster } from "./ui";
 
@@ -154,10 +154,11 @@ function entryOf(g: ConnectionGroup, v: ConnectionsView): StoreService | undefin
 /** The login of a service ran out or was never finished: it asks to sign in again. */
 export const needsLogin = (g: ConnectionGroup): boolean => g.auth === "oauth" && g.status === "error" && g.error === "auth";
 
-const isIcon = (id: string | null | undefined): id is ServiceIconId => !!id && id in SERVICE_ICONS;
+const isIcon = (id: string | null | undefined): id is ServiceIconId => !!id && (id in SERVICE_ICONS || hasLogo(id as ServiceIconId));
 
 /** The picture of a service: its mark, bare, or a letter. */
 function iconHTML(name: string, icon: ServiceIconId | null, size: "md" | "xl"): string {
+  if (icon && hasLogo(icon)) return `<span class="mono ${size} logo-art">${serviceLogoHTML(icon)}</span>`;
   return icon
     ? `<span class="mono ${size} logo-mono"${brandStyle(icon)}>${serviceIconSVG(icon)}</span>`
     : `<span class="mono ${size}" aria-hidden="true">${monogram(name)}</span>`;
@@ -297,10 +298,15 @@ function toolGroupHTML(g: ConnectionGroup, kind: ToolKind, v: ConnectionsView): 
   const tools = g.tools.filter((tool) => tool.kind === kind);
   if (!tools.length) return "";
   const open = v.unfolded[kind];
+  // The switch of the list sits beside the fold button, not in it: a button cannot hold another control.
+  const on = tools.filter((tool) => tool.enabled).length;
+  const state = on === tools.length ? "true" : on === 0 ? "false" : "mixed";
   const head =
-    `<button type="button" class="btn ghead" aria-expanded="${open}" data-conn="fold" data-kind="${kind}">` +
+    `<div class="ghead"><button type="button" class="btn ghfold" aria-expanded="${open}" data-conn="fold" data-kind="${kind}">` +
     `<span class="gt">${esc(t(kind === "write" ? "conn.group.write" : "conn.group.read"))}<small>${esc(t("conn.group.count", { p0: tools.length }))}</small></span>` +
-    `${ico(open ? "down" : "right")}</button>`;
+    `${ico(open ? "down" : "right")}</button>` +
+    // a checkbox role, not a switch: only that one has a "mixed" state
+    `<button type="button" class="tg" role="checkbox" aria-checked="${state}" aria-label="${esc(t(kind === "write" ? "conn.groupSwitch.write" : "conn.groupSwitch.read"))}" data-conn="group" data-id="${esc(g.id)}" data-kind="${kind}"${v.busy.has(g.id) ? " disabled" : ""}></button></div>`;
   return `<div class="slist cs-tools-list">${head}${open ? tools.map((tool) => toolRow(g, tool, v.busy.has(g.id))).join("") : ""}</div>`;
 }
 
@@ -351,7 +357,7 @@ function joinControl(s: StoreService, v: ConnectionsView): string {
 
 function cardHTML(s: StoreService, v: ConnectionsView): string {
   const here = v.login?.target === s.id;
-  const line = here ? t("conn.loggingIn") : words(s.summary);
+  const line = here ? t(s.auth === "none" ? "conn.connecting" : "conn.loggingIn") : words(s.summary);
   return (
     `<div class="cs-card"><button type="button" class="btn cs-main" data-conn="open-store" data-id="${esc(s.id)}" title="${esc(`${s.name}: ${words(s.summary)}`)}">` +
     `${entryIcon(s, "md")}<span class="tx"><span class="nm">${esc(s.name)}</span><span class="sub${here ? " wait" : ""}">${esc(line)}</span></span></button>` +
@@ -378,7 +384,7 @@ function storePageHTML(s: StoreService, v: ConnectionsView): string {
     ? `<span class="cs-state">${st("ok", t("conn.installed"))}</span>` +
       btn(esc(t("conn.manage")), "", ` data-conn="manage" data-id="${esc(s.server_id)}"`)
     : here
-      ? `<span class="cs-wait" role="status">${esc(t("conn.loggingIn"))}</span>` + btn(esc(t("conn.cancel")), "", ' data-conn="cancel-login"')
+      ? `<span class="cs-wait" role="status">${esc(t(s.auth === "none" ? "conn.connecting" : "conn.loggingIn"))}</span>` + btn(esc(t("conn.cancel")), "", ' data-conn="cancel-login"')
       : btn(`${ico("plus")}${esc(t("conn.join"))}`, "pri", ` data-conn="join" data-id="${esc(s.id)}"${v.login ? " disabled" : ""}`);
   const failed = v.loginError?.target === s.id ? `<div class="note" role="alert">${st("err", loginFailure(v.loginError.kind))}</div>` : "";
   const examples = (s.examples[getLocale()] ?? s.examples.en ?? []).map((text) => `<li>${ico("chat")}<span>${esc(text)}</span></li>`).join("");
@@ -727,6 +733,13 @@ export function createConnections(host: ConnectionsHost): Connections {
       case "tool": {
         const tool = groupById(id)?.tools.find((x) => x.name === button.dataset.tool);
         if (tool) void act(id, async () => void (await api.integrationsSetToolEnabled(id, tool.name, !tool.enabled)));
+        break;
+      }
+      case "group": {
+        const kind = button.dataset.kind === "read" ? "read" : "write";
+        const tools = groupById(id)?.tools.filter((x) => x.kind === kind) ?? [];
+        // all on turns all off; off or mixed turns all on
+        if (tools.length) void act(id, async () => void (await api.integrationsSetToolsEnabled(id, tools.map((x) => x.name), !tools.every((x) => x.enabled))));
         break;
       }
       case "fold": {

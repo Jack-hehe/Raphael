@@ -436,7 +436,7 @@ describe("pinned binary and ported components", () => {
     const directory = join(scripts, "release-licenses");
     const manifest = JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8"));
     expect(manifest.components.map((entry) => `${entry.name} ${entry.version}`)).toEqual([
-      "Handy 9e57a0d", "Microsoft Edge WebView2 SDK loader 1.0.3800.47", "Simple Icons 16.35.0",
+      "Handy 9e57a0d", "Microsoft Edge WebView2 SDK loader 1.0.3800.47", "Simple Icons 16.35.0", "Brand logos 1",
     ]);
     for (const entry of manifest.components) {
       expect(entry.source).toMatch(/^https:\/\//);
