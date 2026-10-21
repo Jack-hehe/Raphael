@@ -12,8 +12,12 @@ the time a server takes to start, which is the reason the lists of tools are cac
   anything.
 - What a tool returns is cut to `MAX_RESULT_CHARS` before it goes anywhere, and only its text is
   kept: an image or a file is replaced by a note that it was left out.
-- Before a tool is called its server is asked for the tool list once more, and the call goes
-  ahead only if the tool is still the one the user gave its tier to (`config.fingerprint`).
+- Before a tool is called its server is asked for the tool list once more: a tool that is gone is
+  not called, and one that is described differently since is called all the same, the outcome
+  carrying the new description to keep (a tool is on unless the user turned it off).
+- A server that is signed in to with a login in the browser (`oauth`) is reached with the stored
+  tokens, refreshed when they ran out. A job never opens a browser by itself: when the tokens cannot
+  be had, it fails with the kind `auth`. Only `login`, which the user asks for, waits for a person.
 - A failure is a kind (`McpFailure`), never a message: the message of an exception could hold an
   address with a token in it, or what the server printed.
 
@@ -48,6 +52,8 @@ for _sdk_logger in ("mcp", "httpx2", "httpcore2"):
 # listening.
 REFRESH_TOTAL_S = 30.0
 CALL_TOTAL_S = 15.0
+# How long a person is given to finish a login in the browser.
+LOGIN_TIMEOUT_S = 300.0
 # What of a tool's result is passed on, in characters.
 MAX_RESULT_CHARS = 8000
 # The most tools read from one server, and the most pages of the list that are asked for.
@@ -61,7 +67,7 @@ KINDS = (
     "network",
     "protocol",
     "missing_secret",
-    "changed",
+    "denied",
     "gone",
     "error",
 )
@@ -69,12 +75,11 @@ KINDS = (
 
 class McpFailure(Exception):
     """A job with a server that did not work out. `kind` is one of KINDS and says why in one word;
-    `fresh` is the tool as the server describes it now, for a tool that `changed`."""
+    `denied` is a login the user refused in the browser."""
 
-    def __init__(self, kind: str, fresh: ToolRecord | None = None) -> None:
+    def __init__(self, kind: str) -> None:
         super().__init__(kind)
         self.kind = kind if kind in KINDS else "error"
-        self.fresh = fresh
 
 
 @dataclass
@@ -83,6 +88,7 @@ class Secrets:
 
     env: dict[str, str] = field(default_factory=dict)
     headers: dict[str, str] = field(default_factory=dict)
+    oauth: Any = None  # an `oauth.OAuthAccess`, for a server that is signed in to in the browser
 
     def __repr__(self) -> str:  # a stray print or log line must not carry the values
         return f"Secrets(env={sorted(self.env)}, headers={sorted(self.headers)})"
@@ -95,6 +101,16 @@ class CallOutcome:
     text: str
     is_error: bool
     truncated: bool = False
+    # The tool as its server describes it now, when that is not what the caller expected.
+    fresh: ToolRecord | None = None
+
+
+@dataclass
+class LoginResult:
+    """A login that worked: the tools the server has, and where it takes a token back."""
+
+    tools: list[ToolRecord]
+    revocation_url: str = ""
 
 
 # Opens a client for a job: an `mcp.Client`, or anything with its `list_tools` and `call_tool`.
@@ -104,6 +120,7 @@ Opener = Callable[[ServerConfig, Secrets], AbstractAsyncContextManager[Any]]
 def _import_sdk() -> None:
     import httpx2  # noqa: F401
     import mcp  # noqa: F401
+    import mcp.client.auth.oauth2  # noqa: F401
     import mcp.client.stdio  # noqa: F401
     import mcp.client.streamable_http  # noqa: F401
 
@@ -138,7 +155,11 @@ async def open_client(server: ServerConfig, secrets: Secrets) -> Any:
     from mcp.client.streamable_http import streamable_http_client
 
     timeout = httpx2.Timeout(15.0, read=CALL_TOTAL_S * 2)
-    async with httpx2.AsyncClient(headers=dict(secrets.headers), timeout=timeout) as http:
+    async with contextlib.AsyncExitStack() as stack:
+        auth = await stack.enter_async_context(secrets.oauth.auth(server.url)) if secrets.oauth else None
+        http = await stack.enter_async_context(
+            httpx2.AsyncClient(headers=dict(secrets.headers), timeout=timeout, auth=auth)
+        )
         async with Client(streamable_http_client(server.url, http_client=http)) as client:
             yield client
 
@@ -194,7 +215,7 @@ class McpConnector:
         self._vault = vault
         self._opener = opener
 
-    def _secrets(self, server: ServerConfig) -> Secrets:
+    def _secrets(self, server: ServerConfig, *, signing_in: bool = False) -> Secrets:
         secrets = Secrets()
         try:
             for key in server.env:
@@ -212,7 +233,16 @@ class McpConnector:
         except Exception as exc:  # the vault is locked, say: its message could hold anything
             logger.warning("The vault failed to read a plugin's secrets: %s", type(exc).__name__)
             raise McpFailure("error") from None
+        if server.auth == "oauth" and not signing_in:
+            secrets.oauth = self._oauth(server)
+            if not secrets.oauth.storage.has_tokens():
+                raise McpFailure("auth")  # never signed in, or the tokens are gone: sign in again
         return secrets
+
+    def _oauth(self, server: ServerConfig, **login: Any) -> Any:
+        from .oauth import OAuthAccess, VaultTokenStorage
+
+        return OAuthAccess(VaultTokenStorage(self._vault, server.id), **login)
 
     async def _ready(self) -> None:
         """The SDK is loaded before a real connection is made (a test's own opener needs none)."""
@@ -232,6 +262,7 @@ class McpConnector:
                     getattr(item, "description", None),
                     getattr(item, "input_schema", None),
                     getattr(annotations, "read_only_hint", None),
+                    getattr(annotations, "destructive_hint", None),
                 )
                 if record is not None and all(record.name != other.name for other in tools):
                     tools.append(record)
@@ -253,18 +284,42 @@ class McpConnector:
         except Exception as exc:
             raise _failure("tool list", exc) from None
 
+    async def login(
+        self,
+        server: ServerConfig,
+        open_browser: Any,
+        *,
+        timeout_s: float = LOGIN_TIMEOUT_S,
+    ) -> LoginResult:
+        """Sign in to `server` with a login in the browser, then read its tools. Starts from nothing
+        (an earlier registration or token is forgotten) and waits for a person for up to `timeout_s`.
+        McpFailure (of a kind) when it does not work out; a cancellation ends the wait at once."""
+        access = self._oauth(server, open_browser=open_browser, login_timeout_s=timeout_s)
+        try:
+            access.storage.forget()
+            secrets = self._secrets(server, signing_in=True)
+            secrets.oauth = access
+            async with asyncio.timeout(timeout_s + REFRESH_TOTAL_S):
+                await self._ready()
+                async with self._opener(server, secrets) as client:
+                    tools = await self._list(client)
+        except Exception as exc:
+            raise _failure("login", exc) from None
+        return LoginResult(tools, access.revocation_url)
+
     async def call_tool(
         self,
         server: ServerConfig,
         tool: str,
         arguments: dict[str, Any],
         *,
-        expected: str,
+        expected: str | None = None,
         timeout_s: float = CALL_TOTAL_S,
     ) -> CallOutcome:
-        """Call `tool` of `server`, if it is still the tool with fingerprint `expected`. McpFailure
-        (of a kind) when it cannot be called; a tool that ran and said it failed is a CallOutcome
-        with `is_error`."""
+        """Call `tool` of `server`. McpFailure (of a kind) when it cannot be called, `gone` when the
+        server has no such tool any more; a tool that ran and said it failed is a CallOutcome with
+        `is_error`. When the tool is not the one with fingerprint `expected` (the server describes
+        it differently now) it is called all the same and the outcome has the new description."""
         secrets = self._secrets(server)
         try:
             async with asyncio.timeout(timeout_s):
@@ -273,13 +328,16 @@ class McpConnector:
                     current = next((t for t in await self._list(client) if t.name == tool), None)
                     if current is None:
                         raise McpFailure("gone")
-                    if current.fingerprint != expected:
-                        raise McpFailure("changed", fresh=current)
                     result = await client.call_tool(tool, arguments)
         except Exception as exc:
             raise _failure("tool call", exc) from None
         text, truncated = render_result(result)
-        return CallOutcome(text=text, is_error=bool(getattr(result, "is_error", False)), truncated=truncated)
+        return CallOutcome(
+            text=text,
+            is_error=bool(getattr(result, "is_error", False)),
+            truncated=truncated,
+            fresh=current if expected is not None and current.fingerprint != expected else None,
+        )
 
 
 def render_result(result: Any) -> tuple[str, bool]:

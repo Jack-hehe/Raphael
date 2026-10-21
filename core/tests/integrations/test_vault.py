@@ -11,7 +11,10 @@ from raphael_core.integrations.vault import (
     CredentialVault,
     MemoryVault,
     SecretTooLong,
+    delete_long,
+    load_long,
     secret_name,
+    store_long,
 )
 
 
@@ -77,3 +80,45 @@ def test_a_secret_the_vault_cannot_hold_is_refused_before_anything_is_written(
         vault.set("a:env:TOKEN", "x" * (MAX_SECRET_CHARS + 1))
     assert vault.get("a:env:TOKEN") == "kept"
     vault.set("a:env:TOKEN", "x" * MAX_SECRET_CHARS)
+
+
+# --- values longer than one credential --------------------------------------------------------
+
+
+def test_a_long_value_is_split_over_numbered_credentials(memory_keyring):
+    vault = CredentialVault()
+    value = "".join(chr(0x4E00 + i % 500) + "a" for i in range(1500))  # 3000 characters
+    store_long(vault, "a:oauth:tokens", value)
+    assert load_long(vault, "a:oauth:tokens") == value
+    names = sorted(memory_keyring.credentials)
+    assert len(names) > 3 and all(name.startswith("Raphael plugin a:oauth:tokens") for name in names)
+    assert all(len(secret) <= MAX_SECRET_CHARS for _, secret in memory_keyring.credentials.values())
+
+
+def test_a_short_long_value_and_a_missing_one(vault):
+    assert load_long(vault, "a:oauth:client") is None
+    store_long(vault, "a:oauth:client", "short")
+    assert load_long(vault, "a:oauth:client") == "short"
+
+
+def test_storing_a_shorter_value_leaves_none_of_the_old_pieces(memory_keyring):
+    vault = CredentialVault()
+    store_long(vault, "a:oauth:tokens", "x" * 3000)
+    store_long(vault, "a:oauth:tokens", "y" * 100)
+    assert load_long(vault, "a:oauth:tokens") == "y" * 100
+    assert len(memory_keyring.credentials) == 2  # the count and one piece
+
+
+def test_deleting_a_long_value_removes_every_piece(memory_keyring):
+    vault = CredentialVault()
+    store_long(vault, "a:oauth:tokens", "x" * 3000)
+    delete_long(vault, "a:oauth:tokens")
+    delete_long(vault, "a:oauth:tokens")  # nothing left: not an error
+    assert memory_keyring.credentials == {}
+    assert load_long(vault, "a:oauth:tokens") is None
+
+
+def test_a_long_value_with_a_lost_piece_reads_as_nothing(vault):
+    store_long(vault, "a:oauth:tokens", "x" * 3000)
+    vault.delete("a:oauth:tokens#2")
+    assert load_long(vault, "a:oauth:tokens") is None
