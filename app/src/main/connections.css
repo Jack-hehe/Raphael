@@ -1,0 +1,19 @@
+/* The 「連接」 tab of the settings: one card per group of tools. Colours are the app's tokens. */
+.conn-group { margin-top: 14px; }
+.conn-group:first-of-type { margin-top: 0; }
+.conn-bar { display: flex; align-items: center; margin: 0 0 12px 4px; }
+.conn-bar:empty { display: none; }
+.conn-meta { margin-top: 4px; font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
+.slist > .conn-actions { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0; }
+.slist > .conn-actions::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--line); }
+.slist > .conn-actions + .row::before, .slist > .conn-actions + .note::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--line); }
+.conn-actions .sel { width: 180px; justify-content: space-between; }
+.slist > .conn-tool .t { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.slist > .conn-tool .d { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.conn-hint { display: inline-block; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--edge); font-size: 12px; color: var(--text-2); }
+.conn-hint.warn { border-color: var(--warn-edge); color: var(--warn); }
+.conn-empty { padding: 12px 0; position: relative; }
+.slist > .conn-adder > .ctl { justify-content: flex-start; margin-left: 0; }
+.slist.conn-form > .conn-adder { align-items: flex-start; }
+.slist.conn-form > .conn-adder > .ctl { flex-basis: 100%; }
+.conn-audit .t { overflow-wrap: anywhere; }

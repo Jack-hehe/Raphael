@@ -260,7 +260,7 @@ export type TrayAction = "add-word";
 export type PageId = "home" | "agent" | "history" | "dictionary" | "settings";
 
 /** The tabs of the settings panel. */
-export type SettingsPane = "general" | "dictation" | "agent" | "usage" | "about";
+export type SettingsPane = "general" | "dictation" | "agent" | "connections" | "usage" | "about";
 
 /** One of the five pages of the main window. */
 export interface Page {
@@ -290,4 +290,64 @@ export interface AppContext {
   undo: Undoable;
   /** Closes the settings panel (it opens with `go("settings")`). */
   closeSettings(): void;
+}
+
+// ---------- connections (the toolsets of the core) ----------
+
+/** What a tool may do, by the tier the owner gave it: T0 reads, T1 small, T2 asks, T3 asks and holds. */
+export type ToolTier = "T0" | "T1" | "T2" | "T3";
+
+/** A tool of a group, as `toolsets.list` has it. Its `tier` is null while it is blocked. */
+export interface ConnectionTool {
+  name: string;
+  description: string;
+  tier: ToolTier | null;
+  /** The server describes the tool differently since it was given a tier: the owner looks again. */
+  changed: boolean;
+  /** What the server's read-only claim suggests; only ever a hint. */
+  suggested: ToolTier | null;
+}
+
+/** A group of tools: Raphael's own (`builtin`, fixed) or one connected server (`mcp`). Never a secret, only the names of them. */
+export interface ConnectionGroup {
+  id: string;
+  kind: "builtin" | "mcp";
+  name: string;
+  enabled: boolean;
+  switchable: boolean;
+  tier_fixed: boolean;
+  status: "builtin" | "disabled" | "error" | "unchecked" | "ready";
+  /** The kind of the latest failure, one word. */
+  error: string | null;
+  tools: ConnectionTool[];
+  transport?: "stdio" | "http";
+  command?: string;
+  url?: string;
+  env?: string[];
+  headers?: string[];
+  tool_count?: number;
+  allowed_count?: number;
+  checked_at_ms?: number | null;
+}
+
+/** One line of the record of calls: metadata only, never an argument or a result. */
+export interface AuditEntry {
+  id: number;
+  at_ms: number;
+  server: string;
+  tool: string;
+  tier: ToolTier | null;
+  approver: "auto" | "user" | "none";
+  outcome: "ok" | "error" | "timeout" | "denied" | "expired" | "blocked";
+}
+
+/** What the owner typed to connect a server. The values of `env` and `headers` go to the vault of the core and nowhere else. */
+export interface NewConnection {
+  name: string;
+  transport: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: { name: string; value: string }[];
+  headers?: { name: string; value: string }[];
 }

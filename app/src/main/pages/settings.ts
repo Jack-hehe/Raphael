@@ -1,4 +1,4 @@
-// Settings: a panel over the main window with five tabs: 一般, 聽寫, 拉斐爾, 模型與用量 and 關於 (spec
+// Settings: a panel over the main window with six tabs: 一般, 聽寫, 拉斐爾, 連接, 模型與用量 and 關於 (spec
 // §12.3). This file holds what the panel knows and what it does; settings-view.ts draws each tab
 // from a snapshot of it. A change takes effect at once; there is no save button. The settings of
 // the brain (limit, models, languages, speech-to-text, how Raphael answers) go to the core with
@@ -12,6 +12,8 @@ import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
 import { hydrateBrandIcons } from "../brand";
 import "../settings-polish.css";
+import "../connections.css";
+import { createConnections } from "../connections";
 import { DICTATION_MODES, isDictationMode } from "../dictation";
 import { describeError, keyReasonText, parseLimit } from "../format";
 import { wireKeyField } from "../keyfield";
@@ -162,6 +164,8 @@ export function createSettings(app: AppContext): SettingsPage {
   let visible = false;
   let loading = false;
   let loads = 0;
+  /** The 「連接」 tab: it keeps its own state and asks to be drawn again. */
+  const connections = createConnections({ visible: () => visible && pane === "connections", redraw: () => render() });
 
   // ---------- drawing ----------
 
@@ -169,6 +173,7 @@ export function createSettings(app: AppContext): SettingsPage {
   const view = (): SettingsView => ({
     pane, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
     replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
+    connections: connections.view(),
   });
 
   /** The item at the foot of the microphones' menu that looks for them again. */
@@ -231,7 +236,7 @@ export function createSettings(app: AppContext): SettingsPage {
           },
         };
       default:
-        return null;
+        return connections.menuFor(k);
     }
   }
 
@@ -771,6 +776,8 @@ export function createSettings(app: AppContext): SettingsPage {
     if (paneButton) {
       closeMenu();
       pane = paneButton.dataset.pane as SettingsPane;
+      if (pane === "connections") void connections.load();
+      else connections.reset();
       syncMonitor();
       body.scrollTop = 0;
       render();
@@ -792,6 +799,8 @@ export function createSettings(app: AppContext): SettingsPage {
       if (choose.dataset.k === "mic") void refreshMicrophones(choose);
       return;
     }
+
+    if (connections.click(target)) return;
 
     if (target.closest('.tg[data-k="autostart"]')) {
       void changeDevice({ autostart: !app.device().autostart });
@@ -851,9 +860,11 @@ export function createSettings(app: AppContext): SettingsPage {
   });
   el.addEventListener("input", (e) => {
     const input = e.target as HTMLInputElement;
+    if (connections.input(input)) return;
     if (input.id === "limit-input") limitDraft = input.value;
     else if (input.id === "agent-city") cityDraft = input.value;
   });
+  el.addEventListener("keydown", (e) => void connections.key(e));
   // Menus consume their own Escape; the panel and native window controls share one Tab loop.
   const settingsKey = (e: KeyboardEvent): void => {
     const chrome = document.getElementById("window-chrome");
@@ -895,6 +906,8 @@ export function createSettings(app: AppContext): SettingsPage {
       loading = true;
       // the first tab, unless the way in knows better (the report that says there is no key goes to the key)
       pane = PANES.some((p) => p.id === open) ? open! : "general";
+      connections.reset();
+      if (pane === "connections") void connections.load();
       body.scrollTop = 0;
       closeMenu();
       render();
@@ -947,6 +960,7 @@ export function createSettings(app: AppContext): SettingsPage {
     },
     hide() {
       visible = false;
+      connections.reset();
       document.removeEventListener("keydown", settingsKey);
       loading = false;
       loads++;
