@@ -51,7 +51,7 @@ describe("no sideways scrolling", () => {
   });
 
   it("the overlay window does not scroll at all", () => {
-    expect(ruleFor(overlayRules, "html,\nbody").some((r) => /overflow:\s*hidden/.test(r.body))).toBe(true);
+    expect(ruleFor(overlayRules, "html, body").some((r) => /overflow:\s*hidden/.test(r.body))).toBe(true);
   });
 
   it("no rule scrolls with the overflow shorthand, which would leave the other axis open", () => {
