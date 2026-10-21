@@ -13,7 +13,7 @@ import type { MessageKey } from "./i18n/zh-TW";
 import { replyLine, userLine } from "../shared/anime";
 import { type Session, type SessionDay, VOICE, hasDetail, sessionBusy, sessionTitle } from "./conversation";
 import { dayLabel, formatClock, formatUsd } from "./format";
-import { brandStyle, monogram, serviceIconOf, serviceIconSVG } from "./service-icons";
+import { brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import type { AgentStep, AgentTask, AgentTurn, MainEvent } from "./types";
 import { btn, esc, ico } from "./ui";
 
@@ -182,6 +182,7 @@ function stepIcon(step: AgentStep): string {
     return `<span class="step-ic">${own}</span>`;
   }
   const mark = serviceIconOf({ name: step.server });
+  if (mark && hasLogo(mark)) return `<span class="step-ic logo-art">${serviceLogoHTML(mark)}</span>`;
   return mark
     ? `<span class="step-ic logo-mono"${brandStyle(mark)}>${serviceIconSVG(mark)}</span>`
     : `<span class="step-ic letter">${monogram(step.server)}</span>`;

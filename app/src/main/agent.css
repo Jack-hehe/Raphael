@@ -70,6 +70,11 @@
 .step-ic .i { width: 14px; height: 14px; }
 .step-ic .logo { width: 14px; height: 14px; display: block; }
 .step-ic.letter { font: 700 12px/1 var(--display); color: var(--text); }
+/* a full-colour logo, with its own picture for the dark theme where it has one (as in the connections) */
+.step-ic.logo-art .logo { width: 15px; height: 15px; display: block; object-fit: contain; }
+.step-ic.logo-art .lg-d { display: none; }
+:root[data-theme="dark"] .step-ic.logo-art .lg-d { display: block; }
+:root[data-theme="dark"] .step-ic.logo-art .lg-d ~ .lg-l, :root[data-theme="dark"] .step-ic.logo-art .lg-l:has(+ .lg-d) { display: none; }
 .step-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 8px; min-width: 0; padding-top: 4px; }
 .step-t { font-size: 13.5px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
 .step-s { font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
