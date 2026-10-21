@@ -1,17 +1,19 @@
-// The 「連接」 tab of the settings: the tools Raphael can use, in groups. Raphael's own tools are two
-// groups that are only shown (their tiers are fixed); every program the owner connects is one more
-// group, with a switch, one tier for all its tools, a tier for each tool, and buttons to read its
-// tools again and to remove it. `connectionsHTML` draws the tab from a snapshot (pure, so the
-// owner's rules can be tested without a browser); `createConnections` holds the state and does
-// what the buttons say, through the core. Nothing secret is kept here: the values of a variable or
-// a header are typed, sent to the core's vault once and dropped; only their names are ever shown.
+// The 「連接」 tab of the settings: the tools Raphael can use, in groups. A list on the left (the
+// overview, Raphael's own two groups, every program the owner connected, and the button that
+// connects another) and the chosen one on the right: the overview, a group with the permission of
+// each tool, the form that connects a program, or, right after one is connected, the step that
+// decides what its new tools may do. `connectionsHTML` draws the tab from a snapshot (pure, so the
+// owner's rules can be tested without a browser); `createConnections` holds the state and does what
+// the buttons say, through the core. Nothing secret is kept here: the values of a variable or a
+// header are typed, sent to the core's vault once and dropped; only their names are ever shown.
 
 import * as api from "./api";
 import { dayLabel, describeError, formatClock } from "./format";
 import { t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
+import { type ServiceIconId, monogram, serviceIconOf, serviceIconSVG } from "./service-icons";
 import type { AuditEntry, ConnectionGroup, ConnectionTool, NewConnection, ToolTier } from "./types";
-import { type Choice, btn, esc, fieldHTML, row, sel, st, tg, toaster } from "./ui";
+import { type Choice, btn, esc, fieldHTML, ico, row, st, tg, toaster } from "./ui";
 
 /** `t` for a key that is chosen at run time (its placeholders, if any, are none). */
 const tr = t as unknown as (key: MessageKey) => string;
@@ -21,6 +23,9 @@ export const TOOL_TIERS: readonly ToolTier[] = ["T0", "T1", "T2", "T3"];
 const BLOCKED = "";
 /** How long 「移除」 waits for its second press. */
 const REMOVAL_CONFIRM_MS = 5000;
+/** What is selected on the left besides a group: the overview, or the form that adds one. */
+export const OVERVIEW = "overview";
+export const ADD = "add";
 
 // ---------- what the tab is drawn from ----------
 
@@ -44,12 +49,22 @@ export interface ConnectionForm {
   error: (() => string) | null;
 }
 
+/** The step that decides what the new tools of a group may do. Nothing is granted until 「完成」. */
+export interface ReviewDraft {
+  id: string;
+  /** The tier chosen so far for each tool to decide (null: block it); only a proposal. */
+  tiers: Record<string, ToolTier | null>;
+  busy: boolean;
+}
+
 export interface ConnectionsView {
   /** The groups: being read, read, or not to be had. */
   groups: ConnectionGroup[] | "loading" | "failed";
   audit: AuditEntry[];
-  /** The groups whose tools are listed. */
-  expanded: ReadonlySet<string>;
+  /** What the right side shows: `OVERVIEW`, `ADD` (the form) or the id of a group. */
+  selected: string;
+  /** The tools of the selected group waiting for the owner's decision, with what is proposed. */
+  review: ReviewDraft | null;
   /** The group whose 「移除」 was pressed once. */
   confirmingRemoval: string | null;
   /** The groups a call is under way for. */
@@ -61,7 +76,8 @@ export interface ConnectionsView {
 export const emptyConnectionsView = (): ConnectionsView => ({
   groups: "loading",
   audit: [],
-  expanded: new Set(),
+  selected: OVERVIEW,
+  review: null,
   confirmingRemoval: null,
   busy: new Set(),
   form: null,
@@ -90,16 +106,23 @@ const TIER_KEYS: Record<ToolTier, { label: MessageKey; desc: MessageKey }> = {
   T3: { label: "conn.tier.T3", desc: "conn.tier.T3Desc" },
 };
 
-const tierText = (tier: ToolTier): { label: string; desc: string } => ({
-  label: tr(TIER_KEYS[tier].label),
-  desc: tr(TIER_KEYS[tier].desc),
-});
+/** The friendly name of a tier, which the T level always goes with. */
+const tierLabel = (tier: ToolTier | null): string => (tier === null ? t("conn.tier.none") : tr(TIER_KEYS[tier].label));
 
-/** The choices of a tier dropdown: not set (blocked), then T0 to T3 with what each one means. */
-export function tierChoices(): Choice[] {
+/**
+ * The choices of a tier dropdown: block, then T0 to T3, each with the T level and what it means.
+ * The one the server's read-only claim points at is tagged 「建議」: a suggestion, never a decision.
+ */
+export function tierChoices(suggested: ToolTier | null = null): Choice[] {
   return [
     { value: BLOCKED, label: t("conn.tier.none"), desc: t("conn.tier.noneDesc") },
-    ...TOOL_TIERS.map((tier) => ({ value: tier, ...tierText(tier) })),
+    ...TOOL_TIERS.map((tier) => ({
+      value: tier,
+      label: tierLabel(tier),
+      desc: tr(TIER_KEYS[tier].desc),
+      detail: tier,
+      ...(tier === suggested ? { tag: t("conn.suggested") } : {}),
+    })),
   ];
 }
 
@@ -159,6 +182,130 @@ const FAILURES: Record<string, MessageKey> = {
 
 const failureText = (kind: string | null): string => tr(FAILURES[kind ?? ""] ?? FAILURES.error);
 
+/** How many tools of a group are still to decide: new, or described differently since. */
+const pendingOf = (g: ConnectionGroup): number => g.pending_count ?? g.tools.filter((tool) => !tool.decided).length;
+
+/** The tools the server says only read, and the others: the two lists of a group. */
+const isReadOnly = (tool: ConnectionTool): boolean => tool.suggested !== null;
+const partition = (tools: ConnectionTool[]): { write: ConnectionTool[]; read: ConnectionTool[] } => ({
+  write: tools.filter((tool) => !isReadOnly(tool)),
+  read: tools.filter(isReadOnly),
+});
+
+// ---------- pictures ----------
+
+/** The picture of a group: its own line icon, the mark of a well-known program, or a letter. */
+function iconHTML(g: ConnectionGroup, size: "sm" | "lg"): string {
+  if (g.kind === "builtin") return `<span class="mono ${size} builtin">${ico(g.name === "web" ? "globe" : "monitor")}</span>`;
+  const known: ServiceIconId | null = serviceIconOf({ name: g.name, command: g.command, args: g.args, url: g.url });
+  return known
+    ? `<span class="mono ${size} logo-mono">${serviceIconSVG(known)}</span>`
+    : `<span class="mono ${size}" aria-hidden="true">${monogram(g.name)}</span>`;
+}
+
+// ---------- the list on the left ----------
+
+/** The short line under a group's name in the list: a dot and a few words. */
+function navStatus(g: ConnectionGroup): { kind: "ok" | "warn" | "err" | "idle" | ""; text: string } {
+  if (g.kind === "builtin") return { kind: "", text: t("conn.nav.builtin", { p0: g.tools.length }) };
+  const pending = pendingOf(g);
+  switch (g.status) {
+    case "error":
+      return { kind: "err", text: t("conn.nav.error") };
+    case "disabled":
+      return { kind: "idle", text: t("conn.status.disabled") };
+    case "unchecked":
+      return { kind: "idle", text: t("conn.status.unchecked") };
+    default:
+      return pending > 0
+        ? { kind: "warn", text: t("conn.nav.pending", { p0: pending }) }
+        : { kind: "ok", text: t("conn.nav.ready", { p0: g.tool_count ?? g.tools.length, p1: g.allowed_count ?? 0 }) };
+  }
+}
+
+function navItem(id: string, selected: boolean, icon: string, name: string, sub = "", subKind = ""): string {
+  const status = sub
+    ? `<span class="sub${subKind === "warn" || subKind === "err" ? " " + subKind : ""}">${subKind ? `<span class="dot ${subKind}"></span>` : ""}${esc(sub)}</span>`
+    : "";
+  return (
+    `<button type="button" class="ca-item${id === OVERVIEW ? " overview" : ""}" data-conn="select" data-id="${esc(id)}" data-k="conn-nav:${esc(id)}"` +
+    ` aria-current="${selected}">${icon}<span class="tx"><span class="nm">${esc(name)}</span>${status}</span></button>`
+  );
+}
+
+function listHTML(v: ConnectionsView): string {
+  const groups = Array.isArray(v.groups) ? v.groups : [];
+  const group = (g: ConnectionGroup): string => {
+    const s = navStatus(g);
+    return navItem(g.id, v.selected === g.id, iconHTML(g, "sm"), groupName(g), s.text, s.kind);
+  };
+  const builtin = groups.filter((g) => g.kind === "builtin").map(group).join("");
+  const mcp = groups.filter((g) => g.kind === "mcp");
+  const servers = mcp.length
+    ? mcp.map(group).join("")
+    : Array.isArray(v.groups)
+      ? `<p class="ca-none">${esc(t("conn.noServers"))}</p>`
+      : "";
+  return (
+    `<div class="ca-list"><div class="ca-scroll">` +
+    navItem(OVERVIEW, v.selected === OVERVIEW, ico("grid"), t("conn.nav.overview")) +
+    (builtin ? `<div class="ca-sec">${esc(t("conn.sectionBuiltin"))}</div>${builtin}` : "") +
+    `<div class="ca-sec">${esc(t("conn.sectionServers"))}</div>${servers}</div>` +
+    `<div class="ca-foot"><button type="button" class="btn" data-conn="add" aria-current="${v.selected === ADD}">${ico("plus")}${esc(t("conn.add"))}</button></div></div>`
+  );
+}
+
+// ---------- the permission dropdown ----------
+
+/**
+ * The button of a tier dropdown: the friendly name and, quieter, the T level. A tool nobody
+ * decided on yet says 「未指定」 where a block the owner chose says nothing.
+ */
+function tierSelHTML(k: string, tier: ToolTier | null, decided: boolean, label: string, disabled = false): string {
+  const name = tierLabel(tier);
+  const tag = tier !== null ? tier : decided ? "" : t("conn.tier.noneTag");
+  return (
+    `<button type="button" class="sel tsel${tier === null ? " is-none" : ""}" aria-haspopup="menu" aria-expanded="false"` +
+    ` aria-label="${esc(label)}" title="${esc(name)}" data-k="${esc(k)}"${disabled ? " disabled" : ""}>` +
+    `<span class="tname">${esc(name)}</span>${tag ? `<span class="ttag">${esc(tag)}</span>` : ""}${ico("down")}</button>`
+  );
+}
+
+/** A tier that is only shown: Raphael's own tools have theirs fixed. */
+function tierStatic(tier: ToolTier | null, tag?: string): string {
+  const shown = tag ?? (tier ?? "");
+  return `<span class="tstatic"><span class="tname">${esc(tierLabel(tier))}</span>${shown ? `<span class="ttag">${esc(shown)}</span>` : ""}</span>`;
+}
+
+// ---------- the right side: a group ----------
+
+const chip = (kind: "new" | "warn", text: string): string => `<span class="chip-tag ${kind}">${esc(text)}</span>`;
+
+function toolRow(g: ConnectionGroup, tool: ConnectionTool, control: string): string {
+  const name = toolName(g, tool);
+  const marks =
+    (!tool.decided && !tool.changed && g.kind === "mcp" ? chip("new", t("conn.new")) : "") +
+    (tool.changed ? chip("warn", t("conn.changed")) : "");
+  const suggest =
+    tool.suggested !== null && tool.tier !== tool.suggested ? ` · ${esc(t("conn.suggestAs", { p0: tierLabel(tool.suggested) }))}` : "";
+  const label = g.kind === "builtin" ? esc(name) : `<span class="code">${esc(name)}</span>`;
+  return row(`${label}${marks}`, `${esc(tool.description)}${suggest}`, control, { cls: "conn-tool" });
+}
+
+function toolGroupHTML(g: ConnectionGroup, title: string, tools: ConnectionTool[], group: "read" | "write", busy: boolean): string {
+  if (!tools.length) return "";
+  const all = `<button type="button" class="sel" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(t("conn.setAllFor", { p0: title }))}" data-k="conn-all:${esc(g.id)}:${group}"${busy ? " disabled" : ""}><span>${esc(t("conn.setAll"))}</span>${ico("down")}</button>`;
+  return (
+    `<div class="slist tgroup"><div class="ghead"><span class="gt">${esc(title)}<small>${esc(t("conn.group.count", { p0: tools.length }))}</small></span>${all}</div>` +
+    tools
+      .map((tool) =>
+        toolRow(g, tool, tierSelHTML(`conn-tier:${g.id}:${tool.name}`, tool.tier, tool.decided, t("conn.tierOf", { p0: toolName(g, tool) }), busy)),
+      )
+      .join("") +
+    `</div>`
+  );
+}
+
 function statusHTML(g: ConnectionGroup): string {
   switch (g.status) {
     case "builtin":
@@ -174,89 +321,126 @@ function statusHTML(g: ConnectionGroup): string {
   }
 }
 
-// ---------- drawing ----------
-
-const block = (title: string, inner: string, foot = ""): string =>
-  `<section class="sgroup"><h2>${esc(title)}</h2>${inner}${foot ? `<p class="foot">${esc(foot)}</p>` : ""}</section>`;
-
-function toolRow(g: ConnectionGroup, tool: ConnectionTool): string {
-  const name = toolName(g, tool);
-  const hint = tool.suggested !== null && tool.tier !== tool.suggested ? `<span class="conn-hint">${esc(t("conn.suggest"))}</span>` : "";
-  const changed = tool.changed ? `<span class="conn-hint warn">${esc(t("conn.changed"))}</span>` : "";
-  const control = g.tier_fixed
-    ? `<span class="val num">${esc(tool.tier === null ? t("conn.tier.none") : tierText(tool.tier).label)}</span>`
-    : sel(tierChoices(), tool.tier ?? BLOCKED, t("conn.tierOf", { p0: name }), ` data-k="conn-tier:${esc(g.id)}:${esc(tool.name)}"`);
-  return row(`${esc(name)}${hint}${changed}`, esc(tool.description), control, { cls: "conn-tool" });
-}
-
-function groupCard(g: ConnectionGroup, v: ConnectionsView): string {
-  const open = v.expanded.has(g.id);
+function serverHTML(g: ConnectionGroup, v: ConnectionsView): string {
   const busy = v.busy.has(g.id);
   const id = ` data-id="${esc(g.id)}"`;
-  const builtin = g.kind === "builtin";
-  const meta = builtin
-    ? esc(t(g.name === "web" ? "conn.web.desc" : "conn.computer.desc"))
-    : esc([g.transport === "http" ? g.url : g.command, ...(g.env ?? []), ...(g.headers ?? [])].filter(Boolean).join(" · "));
-  const head = row(
-    esc(groupName(g)),
-    `${statusHTML(g)}${meta ? `<div class="conn-meta">${meta}</div>` : ""}`,
-    g.switchable ? tg(g.enabled, t("conn.switch", { p0: groupName(g) }), ` data-conn="enable"${id}${busy ? " disabled" : ""}`) : "",
-    { cls: "conn-head" },
-  );
-  const count = g.tools.length;
-  const expand = btn(open ? esc(t("conn.hideTools")) : esc(t("conn.showTools", { p0: count })), "", ` data-conn="expand"${id} aria-expanded="${open}"`);
-  const actions = builtin
-    ? expand
-    : sel([], t("conn.setAll"), t("conn.setAll"), ` data-k="conn-all:${esc(g.id)}"${busy ? " disabled" : ""}`) +
-      btn(esc(busy ? t("conn.refreshing") : t("conn.refresh")), "", ` data-conn="refresh"${id}${busy ? " disabled" : ""}`) +
-      btn(esc(v.confirmingRemoval === g.id ? t("conn.removeConfirm") : t("conn.remove")), "", ` data-conn="remove"${id}${busy ? " disabled" : ""}`) +
-      expand;
-  const tools = open
-    ? g.tools.length
-      ? g.tools.map((tool) => toolRow(g, tool)).join("")
-      : `<div class="note conn-empty">${esc(t("conn.noTools"))}</div>`
+  const head =
+    `<div class="cd-head">${iconHTML(g, "lg")}<div class="tx"><h2 class="big">${esc(groupName(g))}</h2><div class="st-line">${statusHTML(g)}</div></div>` +
+    btn(`${ico("refresh")}${esc(busy ? t("conn.refreshing") : t("conn.refresh"))}`, "sm", ` data-conn="refresh"${id}${busy ? " disabled" : ""}`) +
+    btn(esc(v.confirmingRemoval === g.id ? t("conn.removeConfirm") : t("conn.remove")), "sm", ` data-conn="remove"${id}${busy ? " disabled" : ""}`) +
+    tg(g.enabled, t("conn.switch", { p0: groupName(g) }), ` data-conn="enable"${id}${busy ? " disabled" : ""}`) +
+    `</div>`;
+  const where =
+    g.transport === "http"
+      ? `<span>${ico("link")}${esc(t("conn.meta.http"))} · <span class="code">${esc(g.url ?? "")}</span></span>`
+      : `<span>${ico("monitor")}${esc(t("conn.meta.stdio"))} · <span class="code">${esc(g.command ?? "")}</span></span>`;
+  const names = [...(g.env ?? []), ...(g.headers ?? [])];
+  const secrets = names.length ? `<span>${ico("lock")}<span class="code">${esc(names.join(", "))}</span> ${esc(t("conn.meta.stored"))}</span>` : "";
+  const pending = pendingOf(g);
+  const alert = pending
+    ? `<div class="ca-alert">${ico("info")}<span class="msg">${esc(t("conn.pending.some", { p0: pending }))}</span>${btn(esc(t("conn.review.open")), "sm", ` data-conn="review"${id}${busy ? " disabled" : ""}`)}</div>`
     : "";
-  return `<section class="conn-group" data-group="${esc(g.id)}"><div class="slist">${head}<div class="conn-actions">${actions}</div>${tools}</div></section>`;
+  const { write, read } = partition(g.tools);
+  const tools = g.tools.length
+    ? toolGroupHTML(g, t("conn.group.write"), write, "write", busy) + toolGroupHTML(g, t("conn.group.read"), read, "read", busy)
+    : `<div class="slist"><div class="note conn-empty">${esc(t("conn.noTools"))}</div></div>`;
+  return (
+    head +
+    `<div class="cd-meta">${where}${secrets}</div>` +
+    alert +
+    `<div class="cd-tools-h"><h3>${esc(t("conn.tools.title"))}</h3><p>${esc(t("conn.tools.sub"))}</p></div>` +
+    tools
+  );
 }
+
+function builtinHTML(g: ConnectionGroup): string {
+  const desc = t(g.name === "web" ? "conn.web.desc" : "conn.computer.desc");
+  return (
+    `<div class="cd-head">${iconHTML(g, "lg")}<div class="tx"><h2 class="big">${esc(groupName(g))}</h2><div class="st-line">${esc(desc)}</div></div></div>` +
+    `<div class="cd-tools-h"><h3>${esc(t("conn.tools.title"))}</h3><p>${esc(t("conn.builtin.note"))}</p></div>` +
+    `<div class="slist tgroup">${g.tools.map((tool) => toolRow(g, tool, tierStatic(tool.tier))).join("")}</div>`
+  );
+}
+
+// ---------- the right side: deciding what the new tools may do ----------
+
+function reviewHTML(g: ConnectionGroup, r: ReviewDraft): string {
+  const todo = g.tools.filter((tool) => tool.name in r.tiers);
+  const { write, read } = partition(todo);
+  const list = (title: string, tools: ConnectionTool[]): string =>
+    tools.length
+      ? `<div class="slist tgroup"><div class="ghead"><span class="gt">${esc(title)}<small>${esc(t("conn.group.count", { p0: tools.length }))}</small></span></div>` +
+        tools
+          .map((tool) =>
+            toolRow(g, tool, tierSelHTML(`conn-draft:${g.id}:${tool.name}`, r.tiers[tool.name] ?? null, true, t("conn.tierOf", { p0: toolName(g, tool) }), r.busy)),
+          )
+          .join("") +
+        `</div>`
+      : "";
+  return (
+    `<div class="cd-head">${iconHTML(g, "lg")}<div class="tx"><h2 class="big">${esc(t("conn.review.title"))}</h2>` +
+    `<div class="st-line">${esc(t("conn.review.lead", { p0: groupName(g), p1: todo.length }))}</div></div></div>` +
+    `<p class="cd-help">${esc(t("conn.review.help"))}</p>` +
+    list(t("conn.group.write"), write) +
+    list(t("conn.group.read"), read) +
+    `<div class="cd-acts">${btn(esc(r.busy ? t("conn.review.saving") : t("conn.review.done")), "pri", ` data-conn="review-done"${r.busy ? " disabled" : ""}`)}` +
+    `${btn(esc(t("conn.review.later")), "", ` data-conn="review-later"${r.busy ? " disabled" : ""}`)}</div>` +
+    `<p class="foot cd-foot">${esc(t("conn.review.foot"))}</p>`
+  );
+}
+
+// ---------- the right side: the form that connects a program ----------
+
+const fld = (label: string, control: string, hint = "", forId = ""): string =>
+  `<div class="fld">${forId ? `<label class="flabel" for="${forId}">${esc(label)}</label>` : `<span class="flabel">${esc(label)}</span>`}${hint ? `<span class="fhint">${esc(hint)}</span>` : ""}${control}</div>`;
 
 function pairsHTML(f: ConnectionForm): string {
   const http = f.type === "http";
   const label = http ? t("conn.form.headers") : t("conn.form.env");
   const added = f.pairs
-    .map((p, i) => row(esc(p.name), "", btn(esc(t("conn.remove")), "sm", ` data-conn="pair-drop" data-i="${i}" aria-label="${esc(t("conn.form.pairDrop", { p0: p.name }))}"`), { cls: "conn-pair" }))
+    .map(
+      (p, i) =>
+        `<div class="secret-row"><span class="nm">${esc(p.name)}</span><span class="where">${ico("lock")}${esc(t("conn.form.willStore"))}</span>` +
+        btn(esc(t("conn.remove")), "sm", ` data-conn="pair-drop" data-i="${i}" aria-label="${esc(t("conn.form.pairDrop", { p0: p.name }))}"`) +
+        `</div>`,
+    )
     .join("");
-  const adder = row(
-    esc(label),
-    esc(t("conn.form.secretNote")),
-    fieldHTML(http ? t("conn.form.headerName") : t("conn.form.envName"), f.pairName, { w: 170, id: "conn-pair-name" }) +
-      fieldHTML(t("conn.form.value"), f.pairValue, { w: 170, id: "conn-pair-value", type: "password" }) +
-      btn(esc(t("conn.form.pairAdd")), "", ' data-conn="pair-add"'),
-    { cls: "conn-adder" },
-  );
-  return adder + added;
+  const adder =
+    `<div class="pair">` +
+    fieldHTML(http ? t("conn.form.headerName") : t("conn.form.envName"), f.pairName, { id: "conn-pair-name" }) +
+    fieldHTML(t("conn.form.value"), f.pairValue, { id: "conn-pair-value", type: "password" }) +
+    btn(esc(t("conn.form.pairAdd")), "", ' data-conn="pair-add"') +
+    `</div>`;
+  return fld(label, added + adder, t("conn.form.secretNote"));
 }
 
 function formHTML(f: ConnectionForm): string {
   const off = f.busy;
   const fields =
     f.type === "stdio"
-      ? row(esc(t("conn.form.command")), "", fieldHTML(t("conn.form.commandHint"), f.command, { w: 260, id: "conn-command", label: t("conn.form.command"), disabled: off })) +
-        row(esc(t("conn.form.args")), "", fieldHTML(t("conn.form.argsHint"), f.args, { w: 260, id: "conn-args", label: t("conn.form.args"), disabled: off }))
-      : row(esc(t("conn.form.url")), "", fieldHTML(t("conn.form.urlHint"), f.url, { w: 260, id: "conn-url", label: t("conn.form.url"), disabled: off }));
+      ? `<div class="two">` +
+        fld(t("conn.form.command"), fieldHTML(t("conn.form.commandHint"), f.command, { id: "conn-command", label: t("conn.form.command"), disabled: off }), "", "conn-command") +
+        fld(t("conn.form.args"), fieldHTML(t("conn.form.argsHint"), f.args, { id: "conn-args", label: t("conn.form.args"), disabled: off }), "", "conn-args") +
+        `</div>`
+      : fld(t("conn.form.url"), fieldHTML(t("conn.form.urlHint"), f.url, { id: "conn-url", label: t("conn.form.url"), disabled: off }), "", "conn-url");
   const error = f.error ? `<div class="note" role="alert">${st("err", f.error())}</div>` : "";
+  const typeSel = `<button type="button" class="sel" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(t("conn.form.type"))}" title="${esc(t(f.type === "stdio" ? "conn.type.stdio" : "conn.type.http"))}" data-k="conn-type"${off ? " disabled" : ""}><span>${esc(t(f.type === "stdio" ? "conn.type.stdio" : "conn.type.http"))}</span>${ico("down")}</button>`;
   return (
-    `<div class="slist conn-form">` +
-    row(esc(t("conn.form.type")), "", sel(typeChoices(), f.type, t("conn.form.type"), ' data-k="conn-type"')) +
-    row(esc(t("conn.form.name")), "", fieldHTML(t("conn.form.nameHint"), f.name, { w: 260, id: "conn-name", label: t("conn.form.name"), disabled: off })) +
+    `<h2 class="big">${esc(t("conn.add.title"))}</h2><p class="cd-help">${esc(t("conn.add.lead"))}</p>` +
+    `<div class="add-grid">` +
+    `<div class="two">${fld(t("conn.form.type"), typeSel)}${fld(t("conn.form.name"), fieldHTML(t("conn.form.nameHint"), f.name, { id: "conn-name", label: t("conn.form.name"), disabled: off }), "", "conn-name")}</div>` +
     fields +
     pairsHTML(f) +
+    `<div class="trust">${ico("shield")}<span><b>${esc(t("conn.form.trustTitle"))}</b> ${esc(t("conn.form.trustBody"))}</span></div>` +
     error +
-    `<div class="conn-actions">` +
+    `<div class="add-acts">` +
     btn(esc(off ? t("conn.form.connecting") : t("conn.form.connect")), "pri", ` data-conn="connect"${off ? " disabled" : ""}`) +
     btn(esc(t("conn.form.cancel")), "", ` data-conn="form-cancel"${off ? " disabled" : ""}`) +
     `</div></div>`
   );
 }
+
+// ---------- the right side: the overview ----------
 
 const OUTCOMES = {
   ok: { kind: "ok", key: "conn.audit.ok" },
@@ -276,12 +460,12 @@ const APPROVERS: Record<AuditEntry["approver"], MessageKey> = {
 function auditHTML(v: ConnectionsView): string {
   if (!v.audit.length) return `<div class="slist">${row(esc(t("conn.audit.empty")))}</div>`;
   return (
-    `<div class="slist">` +
+    `<div class="slist audit">` +
     v.audit
       .map((e) => {
         const when = `${dayLabel(e.at_ms, v.now)} ${formatClock(e.at_ms)}`;
         const outcome = OUTCOMES[e.outcome] ?? OUTCOMES.error;
-        const tier = e.tier === null ? t("conn.audit.noTier") : e.tier;
+        const tier = e.tier === null ? t("conn.audit.noTier") : `${tierLabel(e.tier)} · ${e.tier}`;
         const who = tr(APPROVERS[e.approver] ?? APPROVERS.none);
         return row(`${esc(e.server)} / ${esc(e.tool)}`, esc(`${when} · ${tier} · ${who}`), st(outcome.kind, tr(outcome.key)), { cls: "conn-audit" });
       })
@@ -291,28 +475,48 @@ function auditHTML(v: ConnectionsView): string {
 }
 
 function explainHTML(): string {
-  const blocked = row(esc(t("conn.tier.none")), esc(t("conn.tier.noneDesc")));
-  return `<div class="slist">${blocked}${TOOL_TIERS.map((tier) => row(esc(tierText(tier).label), esc(tierText(tier).desc))).join("")}</div>`;
+  const levels: [ToolTier | null, string][] = [
+    [null, t("conn.tier.noneDesc")],
+    ...TOOL_TIERS.map((tier): [ToolTier, string] => [tier, tr(TIER_KEYS[tier].desc)]),
+  ];
+  const rows = levels.map(
+    ([tier, desc]) => `<div class="row">${tierStatic(tier, tier === null ? t("conn.tier.noneTag") : undefined)}<div class="d">${esc(desc)}</div></div>`,
+  );
+  return `<div class="slist legend">${rows.join("")}</div>`;
 }
 
-/** The tab, below its name and purpose. */
-export function connectionsHTML(v: ConnectionsView): string {
-  let builtin = "";
-  let servers = "";
-  if (v.groups === "loading") builtin = `<p class="settings-loading" role="status">${esc(t("conn.loading"))}</p>`;
-  else if (v.groups === "failed") builtin = `<div class="alert core-note">${st("err", t("conn.loadFailed"))}</div>`;
-  else {
-    builtin = v.groups.filter((g) => g.kind === "builtin").map((g) => groupCard(g, v)).join("");
-    const mcp = v.groups.filter((g) => g.kind === "mcp");
-    servers = mcp.length || v.form ? mcp.map((g) => groupCard(g, v)).join("") : `<div class="slist">${row(esc(t("conn.noServers")))}</div>`;
-  }
-  const bar = `<div class="conn-bar">${v.form ? "" : btn(esc(t("conn.add")), "pri", ' data-conn="add"')}</div>`;
+function overviewHTML(v: ConnectionsView): string {
+  const waiting = (Array.isArray(v.groups) ? v.groups : []).filter((g) => g.kind === "mcp" && g.enabled && pendingOf(g) > 0);
+  const alerts = waiting
+    .map(
+      (g) =>
+        `<div class="ca-alert">${ico("info")}<span class="msg"><b>${esc(groupName(g))}</b>${esc(t("conn.pending.alert", { p0: pendingOf(g) }))}</span>` +
+        btn(esc(t("conn.ov.decide")), "sm", ` data-conn="review" data-id="${esc(g.id)}"`) +
+        `</div>`,
+    )
+    .join("");
   return (
-    block(t("conn.sectionBuiltin"), builtin) +
-    `<section class="sgroup"><h2>${esc(t("conn.sectionServers"))}</h2>${bar}${v.form ? formHTML(v.form) : ""}${servers}</section>` +
-    block(t("conn.audit.title"), auditHTML(v), t("conn.audit.foot")) +
-    block(t("conn.explain.title"), explainHTML(), t("conn.explain.foot"))
+    (alerts ? `<div class="sgroup ca-alerts">${alerts}</div>` : "") +
+    `<div class="sgroup"><h2>${esc(t("conn.explain.title"))}</h2>${explainHTML()}<p class="foot">${esc(t("conn.explain.foot"))}</p></div>` +
+    `<div class="sgroup"><h2>${esc(t("conn.audit.title"))}</h2>${auditHTML(v)}<p class="foot">${esc(t("conn.audit.foot"))}</p></div>`
   );
+}
+
+// ---------- the tab ----------
+
+function detailHTML(v: ConnectionsView): string {
+  if (v.groups === "loading") return `<p class="settings-loading" role="status">${esc(t("conn.loading"))}</p>`;
+  if (v.groups === "failed") return `<div class="alert core-note">${st("err", t("conn.loadFailed"))}</div>`;
+  if (v.selected === ADD && v.form) return formHTML(v.form);
+  const g = v.groups.find((x) => x.id === v.selected);
+  if (!g) return overviewHTML(v);
+  if (v.review && v.review.id === g.id) return reviewHTML(g, v.review);
+  return g.kind === "builtin" ? builtinHTML(g) : serverHTML(g, v);
+}
+
+/** The tab, below its name and purpose: the list and the chosen item. */
+export function connectionsHTML(v: ConnectionsView): string {
+  return `<div class="ca-split">${listHTML(v)}<div class="ca-detail" data-detail="${esc(v.selected)}">${detailHTML(v)}</div></div>`;
 }
 
 // ---------- doing ----------
@@ -354,7 +558,8 @@ export interface Connections {
 export function createConnections(host: ConnectionsHost): Connections {
   let groups: ConnectionsView["groups"] = "loading";
   let audit: AuditEntry[] = [];
-  const expanded = new Set<string>();
+  let selected = OVERVIEW;
+  let review: ReviewDraft | null = null;
   const busy = new Set<string>();
   let confirmingRemoval: string | null = null;
   let removalTimer: ReturnType<typeof setTimeout> | undefined;
@@ -365,14 +570,22 @@ export function createConnections(host: ConnectionsHost): Connections {
     if (host.visible()) host.redraw();
   };
 
-  const view = (): ConnectionsView => ({ groups, audit, expanded, confirmingRemoval, busy, form, now: Date.now() });
+  const view = (): ConnectionsView => ({ groups, audit, selected, review, confirmingRemoval, busy, form, now: Date.now() });
+
+  function groupById(id: string): ConnectionGroup | undefined {
+    return Array.isArray(groups) ? groups.find((g) => g.id === id) : undefined;
+  }
 
   async function load(): Promise<void> {
     const mine = ++loads;
     const [list, recent] = await Promise.allSettled([api.toolsetsList(), api.integrationsAudit()]);
     if (mine !== loads) return;
-    if (list.status === "fulfilled") groups = list.value.groups;
-    else if (!Array.isArray(groups)) groups = "failed";
+    if (list.status === "fulfilled") {
+      groups = list.value.groups;
+      // what was selected is gone (removed from elsewhere): back to the overview
+      if (selected !== OVERVIEW && selected !== ADD && !groupById(selected)) selected = OVERVIEW;
+      if (review && !groupById(review.id)) review = null;
+    } else if (!Array.isArray(groups)) groups = "failed";
     if (recent.status === "fulfilled") audit = recent.value.entries;
     redraw();
   }
@@ -404,13 +617,36 @@ export function createConnections(host: ConnectionsHost): Connections {
     confirmingRemoval = null;
     void act(id, async () => {
       await api.integrationsRemove(id);
-      expanded.delete(id);
+      if (selected === id) selected = OVERVIEW;
+      if (review?.id === id) review = null;
       toaster.info(t("conn.removed"));
     });
   }
 
-  function groupById(id: string): ConnectionGroup | undefined {
-    return Array.isArray(groups) ? groups.find((g) => g.id === id) : undefined;
+  /** The tools to decide, each with what the server suggests (blocked when it suggests nothing). */
+  function startReview(g: ConnectionGroup): ReviewDraft {
+    const tiers: Record<string, ToolTier | null> = {};
+    for (const tool of g.tools) if (!tool.decided) tiers[tool.name] = tool.suggested;
+    return { id: g.id, tiers, busy: false };
+  }
+
+  /** Gives the tools the tier chosen for them, one call for each tier, and nothing before this. */
+  async function finishReview(): Promise<void> {
+    const r = review;
+    if (!r || r.busy) return;
+    r.busy = true;
+    redraw();
+    const byTier = new Map<ToolTier | null, string[]>();
+    for (const [tool, tier] of Object.entries(r.tiers)) byTier.set(tier, [...(byTier.get(tier) ?? []), tool]);
+    try {
+      for (const [tier, tools] of byTier) await api.integrationsSetGroupTier(r.id, tier, tools);
+      if (review === r) review = null;
+      toaster.info(t("conn.review.saved"));
+    } catch (err) {
+      r.busy = false;
+      toaster.info(describeError(err));
+    }
+    await load();
   }
 
   function addPair(f: ConnectionForm): boolean {
@@ -456,13 +692,20 @@ export function createConnections(host: ConnectionsHost): Connections {
       const added = await api.integrationsAdd(request);
       const name = request.name;
       form = null; // the values were sent to the core's vault: nothing of them stays here
-      expanded.add(added.server.id);
+      selected = added.server.id;
+      let read = true;
       try {
         await api.integrationsRefresh(added.server.id);
       } catch {
-        // the group says it could not read the tools
+        read = false; // the group says it could not read the tools
       }
+      await load();
+      // Its tools are new, so blocked: the owner decides now, or nothing of it does anything.
+      const group = groupById(added.server.id);
+      if (read && group && pendingOf(group) > 0) review = startReview(group);
       toaster.info(t("conn.connected", { p0: name }));
+      redraw();
+      return;
     } catch (err) {
       f.busy = false;
       const text = describeError(err);
@@ -472,11 +715,25 @@ export function createConnections(host: ConnectionsHost): Connections {
     redraw();
   }
 
+  /** Shows another item on the right; what was typed in the form is dropped with it. */
+  function select(id: string): void {
+    if (form?.busy) return;
+    clearTimeout(removalTimer);
+    confirmingRemoval = null;
+    form = null;
+    if (review?.id !== id) review = null;
+    selected = id;
+    redraw();
+  }
+
   function click(target: Element): boolean {
     const button = target.closest<HTMLElement>("[data-conn]");
     if (!button) return false;
     const id = button.dataset.id ?? "";
     switch (button.dataset.conn) {
+      case "select":
+        select(id);
+        break;
       case "enable": {
         const group = groupById(id);
         if (group) void act(id, async () => void (await api.integrationsSetEnabled(id, !group.enabled)));
@@ -491,17 +748,32 @@ export function createConnections(host: ConnectionsHost): Connections {
       case "remove":
         removal(id);
         break;
-      case "expand":
-        if (!expanded.delete(id)) expanded.add(id);
+      case "review": {
+        const group = groupById(id);
+        if (group && pendingOf(group) > 0) {
+          select(id);
+          review = startReview(group);
+          redraw();
+        }
+        break;
+      }
+      case "review-done":
+        void finishReview();
+        break;
+      case "review-later":
+        review = null; // nothing was granted: the tools stay to decide
         redraw();
         break;
       case "add":
+        if (form?.busy) break;
+        select(ADD);
         form = emptyForm();
         redraw();
         focusId("conn-name");
         break;
       case "form-cancel":
         form = null; // an unsent value is dropped with the form
+        selected = OVERVIEW;
         redraw();
         break;
       case "pair-add":
@@ -585,20 +857,43 @@ export function createConnections(host: ConnectionsHost): Connections {
               },
             }
           : null;
-      case "conn-all":
+      case "conn-all": {
+        // one tier for the tools of one list of the group, the ones it has now
+        const group = groupById(id);
+        if (!group) return null;
+        const part = partition(group.tools)[rest[0] === "read" ? "read" : "write"].map((tool) => tool.name);
         return {
           choices: tierChoices(),
           current: t("conn.setAll"), // nothing is checked: it is an act, not a state
-          pick: (value) => void act(id, async () => void (await api.integrationsSetGroupTier(id, tierOf(value)))),
+          pick: (value) => {
+            if (part.length) void act(id, async () => void (await api.integrationsSetGroupTier(id, tierOf(value), part)));
+          },
         };
+      }
       case "conn-tier": {
-        const tool = rest.join(":");
-        const current = groupById(id)?.tools.find((x) => x.name === tool)?.tier ?? BLOCKED;
+        const name = rest.join(":");
+        const tool = groupById(id)?.tools.find((x) => x.name === name);
+        const current = tool?.tier ?? BLOCKED;
         return {
-          choices: tierChoices(),
+          choices: tierChoices(tool?.suggested ?? null),
           current,
           pick: (value) => {
-            if (value !== current) void act(id, async () => void (await api.integrationsSetTier(id, tool, tierOf(value))));
+            // A tool nobody decided on is decided by a pick of the block too.
+            if (value !== current || tool?.decided === false) void act(id, async () => void (await api.integrationsSetTier(id, name, tierOf(value))));
+          },
+        };
+      }
+      case "conn-draft": {
+        const name = rest.join(":");
+        const r = review;
+        if (!r || r.id !== id || !(name in r.tiers)) return null;
+        const tool = groupById(id)?.tools.find((x) => x.name === name);
+        return {
+          choices: tierChoices(tool?.suggested ?? null),
+          current: r.tiers[name] ?? BLOCKED,
+          pick: (value) => {
+            r.tiers[name] = tierOf(value);
+            redraw();
           },
         };
       }
@@ -611,6 +906,8 @@ export function createConnections(host: ConnectionsHost): Connections {
     clearTimeout(removalTimer);
     confirmingRemoval = null;
     form = null;
+    review = null;
+    selected = OVERVIEW;
     loads++;
   }
 

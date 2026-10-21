@@ -420,7 +420,7 @@ function agentHTML(v: SettingsView): string {
   );
 }
 
-/** 連接: the programs Raphael is connected to and what it may do with each tool of them. */
+/** 連接: the programs Raphael is connected to and what it may do with each tool of them: a list and the chosen item, under the heading. */
 function connectionsTabHTML(v: SettingsView): string {
   return headingHTML(v) + connectionsHTML(v.connections);
 }

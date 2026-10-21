@@ -144,7 +144,7 @@ describe("the owner's rules, in every tab and language", () => {
       for (const id of IDS) {
         for (const over of [{}, { hasKey: false }, { brain: null }, { altgr: true }]) {
           const html = tab(id, over);
-          for (const tag of buttons(html)) expect(tag).toMatch(/class="(btn[ "]|sel[ "]|tg")/);
+          for (const tag of buttons(html)) expect(tag).toMatch(/class="(btn[ "]|sel[ "]|tg|ca-item[ "])/);
           expect(html).not.toMatch(/quiet|class="link"|<a\b/);
         }
       }

@@ -264,8 +264,19 @@ export function createSettings(app: AppContext): SettingsPage {
     // A menu that is open stays open when the page is drawn again (a status that came in, say).
     const openK = openAnchorKey();
     const scroll = body.scrollTop;
+    // The 「連接」 tab has two columns that scroll on their own; the page around them does not.
+    const innerScroll = [".ca-scroll", ".ca-detail"].map((selector) => {
+      const column = body.querySelector<HTMLElement>(selector);
+      return [selector, column?.scrollTop ?? 0, column?.dataset.detail] as const;
+    });
     body.setAttribute("aria-busy", String(loading && pane !== "about"));
+    body.classList.toggle("ca-body", pane === "connections" && !loading);
     body.innerHTML = pane !== "about" && loading ? loadingHTML(view()) : paneHTML(view());
+    // The same item keeps its place; another one starts at the top.
+    for (const [selector, top, shown] of innerScroll) {
+      const column = body.querySelector<HTMLElement>(selector);
+      if (column && (selector === ".ca-scroll" || column.dataset.detail === shown)) column.scrollTop = top;
+    }
     hydrateBrandIcons(body);
     // Before the focus goes back by `data-k`, which the pickers' buttons have too.
     mountPickers();

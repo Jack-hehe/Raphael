@@ -302,6 +302,8 @@ export interface ConnectionTool {
   name: string;
   description: string;
   tier: ToolTier | null;
+  /** The owner has looked at the tool and chose a tier or chose to block it; false is a new tool, still to decide. */
+  decided: boolean;
   /** The server describes the tool differently since it was given a tier: the owner looks again. */
   changed: boolean;
   /** What the server's read-only claim suggests; only ever a hint. */
@@ -325,8 +327,11 @@ export interface ConnectionGroup {
   url?: string;
   env?: string[];
   headers?: string[];
+  args?: string[];
   tool_count?: number;
   allowed_count?: number;
+  /** How many of its tools are still to decide. */
+  pending_count?: number;
   checked_at_ms?: number | null;
 }
 

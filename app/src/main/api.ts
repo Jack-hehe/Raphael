@@ -105,12 +105,12 @@ export const integrationsRefresh = (id: string): Promise<Record<string, unknown>
 export const integrationsSetEnabled = (id: string, enabled: boolean): Promise<Record<string, unknown>> =>
   core("integrations.set_enabled", { id, enabled });
 export const integrationsRemove = (id: string): Promise<{ removed: boolean }> => core("integrations.remove", { id });
-/** The tier of one tool; null blocks it. */
+/** The tier of one tool; null blocks it on purpose. */
 export const integrationsSetTier = (id: string, tool: string, tier: ToolTier | null): Promise<Record<string, unknown>> =>
   core("integrations.set_tier", { id, tool, tier });
-/** One tier for the tools the server has now; tools it adds later stay blocked. */
-export const integrationsSetGroupTier = (id: string, tier: ToolTier | null): Promise<Record<string, unknown>> =>
-  core("integrations.set_group_tier", { id, tier });
+/** One tier for the tools the server has now, or for the ones named; tools it adds later stay undecided and blocked. */
+export const integrationsSetGroupTier = (id: string, tier: ToolTier | null, tools?: string[]): Promise<Record<string, unknown>> =>
+  core("integrations.set_group_tier", tools ? { id, tier, tools } : { id, tier });
 export const integrationsAudit = (limit = 8): Promise<{ entries: AuditEntry[] }> => core("integrations.audit", { limit });
 
 // ---------- the device side of the core ----------
