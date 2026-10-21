@@ -20,7 +20,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-// ---- numbers from spec §6.3 and §6.4 ----
+// ---- the timing and keyframe numbers of the animation ----
 
 test("tick quantizes to 24 fps", () => {
   expect(tick(0.05)).toBeCloseTo(1 / 24);
@@ -55,7 +55,7 @@ test("the glyph ring turns at exactly 3.55 degrees a second", () => {
 
 // ---- the renderer's other numbers and the port itself ----
 
-test("the animations last as long as the spec says", () => {
+test("the appear and vanish animations last 0.833 s and 0.467 s", () => {
   expect(AP.dur).toBe(0.833);
   expect(VA.dur).toBe(0.467);
 });

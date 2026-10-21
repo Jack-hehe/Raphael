@@ -1,6 +1,6 @@
-// The small building blocks of the pages, ported from the mockup: rows, groups, switches,
-// buttons, menus and toasts. The functions that make HTML take HTML for `t`, `d`, `ctl`, `rows`
-// and `foot`: whatever a person or the core wrote goes through `esc` first.
+// The small building blocks of the pages: rows, groups, switches, buttons, menus and toasts. The
+// functions that make HTML take HTML for `t`, `d`, `ctl`, `rows` and `foot`: whatever a person or
+// the core wrote goes through `esc` first.
 
 import { onLocaleChange, t, translatedMessage } from "./i18n";
 

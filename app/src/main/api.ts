@@ -105,7 +105,7 @@ export const integrationsConnect = (target: { catalog_id: string } | { id: strin
   core("integrations.connect", target);
 /** Ends the wait for a login; the call that waits then answers `cancelled`. */
 export const integrationsConnectCancel = (): Promise<{ cancelled: boolean }> => core("integrations.connect_cancel");
-/** Connects a server of the owner's own. The values of its variables and headers go to the vault and never come back. */
+/** Connects a server of the user's own. The values of its variables and headers go to the vault and never come back. */
 export const integrationsAdd = (server: NewConnection): Promise<{ server: { id: string } }> => core("integrations.add", server);
 export const integrationsRefresh = (id: string): Promise<Record<string, unknown>> => core("integrations.refresh", { id });
 export const integrationsSetEnabled = (id: string, enabled: boolean): Promise<Record<string, unknown>> =>

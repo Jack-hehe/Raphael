@@ -21,8 +21,7 @@ in a read on the stdin pipe: the loader asks Windows about the stdin handle, and
 that handle for the pending read. The reader of stdio_server is such a thread from its first
 moment to the end of the process, so a numpy imported after it started would load only when the
 app closed stdin. The import takes a fraction of a second when the files are cached. Anything
-else heavy that a later phase imports at run time (PyTorch for TTS, say) is exposed to the same
-trap.
+else heavy imported at run time (PyTorch for TTS, say) is exposed to the same trap.
 
 Speech-to-text. The `stt_engine` setting, read at each `dictation.start`, picks the engine for that
 dictation: "local" is the engine on this computer; "cloud" sends each stretch of speech to the

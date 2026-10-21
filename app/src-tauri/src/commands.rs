@@ -662,7 +662,7 @@ pub fn hotkeys_pause(app: AppHandle, webview: Webview, paused: bool) -> Result<(
 }
 
 /// Whether the keyboard layout in use has an AltGr key, which is the Right Alt key. A hotkey on
-/// Right Alt then gets in the way of typing some characters (spec §4). Always false off Windows.
+/// Right Alt then gets in the way of typing some characters. Always false off Windows.
 #[tauri::command]
 pub fn keyboard_has_altgr(webview: Webview) -> Result<bool, String> {
     require_main(&webview)?;
@@ -968,9 +968,9 @@ mod tests {
 
     #[test]
     fn the_main_window_has_no_part_in_the_background_worker_yet() {
-        // The tray stops a task and the overlay answers its questions; the tasks' cards (and with
-        // them a way to list, read and stop a task from the window) come in a later phase. Whatever
-        // that adds, a yes to a question of the worker is the overlay's real click alone.
+        // The tray stops a task and the overlay answers its questions; the window has no way to
+        // list, read or stop a task. Whatever it gets one day, a yes to a question of the worker
+        // is the overlay's real click alone.
         for method in [
             "worker.list",
             "worker.get",

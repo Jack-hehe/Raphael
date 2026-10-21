@@ -320,7 +320,7 @@ export interface AppContext {
 
 // ---------- connections (the plugins of the core and the store) ----------
 
-/** A tool of a connected service. Every tool is on until the owner turns it off; `kind` only groups it. */
+/** A tool of a connected service. Every tool is on until the user turns it off; `kind` only groups it. */
 export interface ConnectionTool {
   name: string;
   description: string;
@@ -357,7 +357,7 @@ export interface ConnectionGroup {
   checked_at_ms: number | null;
 }
 
-/** The words of the window, in each language the owner can choose. */
+/** The words of the window, in each language the user can choose. */
 export type Words = Record<"zh-TW" | "en" | "ja", string>;
 
 /** A service of the store (`integrations.catalog`). */
@@ -390,7 +390,7 @@ export interface AuditEntry {
   outcome: "ok" | "error" | "timeout" | "denied" | "expired" | "blocked";
 }
 
-/** What the owner typed to connect a server. The values of `env` and `headers` go to the vault of the core and nowhere else. */
+/** What the user typed to connect a server. The values of `env` and `headers` go to the vault of the core and nowhere else. */
 export interface NewConnection {
   name: string;
   transport: "stdio" | "http";

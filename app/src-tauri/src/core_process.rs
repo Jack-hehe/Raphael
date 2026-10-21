@@ -4,7 +4,7 @@
 //! [`CoreProcess::start`] runs the packaged core (or `python -m raphael_core` in development)
 //! with stdin, stdout and stderr piped, inside
 //! a Windows Job Object that kills it when the last handle to the job closes. The OS closes that
-//! handle when the app exits, even by crashing, so the core cannot outlive the app (spec §11.1).
+//! handle when the app exits, even by crashing, so the core cannot outlive the app.
 //! (The core also exits by itself when its stdin closes, which happens at the same moment.)
 //!
 //! Requests go through an [`RpcClient`] to the core's stdin. One thread reads the core's stdout

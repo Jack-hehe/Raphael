@@ -44,7 +44,7 @@ use tauri::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-/// What the emblem shows while it is on screen (spec §6.5).
+/// What the emblem shows while it is on screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
@@ -55,7 +55,7 @@ pub enum Mode {
     /// The white ring follows Raphael's voice.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "Raphael speaks from Phase 3 on (TTS)")
+        expect(dead_code, reason = "Raphael has no voice (TTS) yet")
     )]
     Speaking,
     /// Just there, with a thin ring (used for notices).
@@ -230,7 +230,7 @@ pub trait OverlayApi: Send + Sync + 'static {
     fn progress(&self, progress: Progress);
 }
 
-// ---------- placement (spec §6.1) ----------
+// ---------- placement ----------
 
 /// A rectangle in physical pixels: the work area, or the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

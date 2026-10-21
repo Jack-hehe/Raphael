@@ -137,7 +137,7 @@ async def load_sdk() -> None:
 
 
 def with_user_agent(headers: dict[str, str]) -> dict[str, str]:
-    """`headers` with our User-Agent, unless the owner gave one of their own."""
+    """`headers` with our User-Agent, unless the user gave one of their own."""
     if any(name.lower() == "user-agent" for name in headers):
         return dict(headers)
     return {**headers, "User-Agent": USER_AGENT}

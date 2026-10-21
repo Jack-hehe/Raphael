@@ -1,7 +1,7 @@
 //! Follows a pasted dictation in the text a terminal shows.
 //!
 //! A terminal's UI Automation text is the screen and the history above it: prompts, old
-//! commands, program output and, for a full-screen program (Claude Code, Codex CLI, vim), a frame
+//! commands, program output and, for a full-screen program (an editor or an interactive CLI), a frame
 //! that is redrawn around the input with a status line below it. The pasted text can therefore
 //! be anywhere in it, not only in its last row.
 //!

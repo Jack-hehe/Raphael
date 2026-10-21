@@ -1,4 +1,4 @@
-"""Phase 0 evaluation tools: command-line programs the user runs on their own recordings.
+"""Evaluation tools: command-line programs the user runs on their own recordings.
 
 They pick the speech-to-text engine and the cleanup model by measurement. They are separate
 programs, not part of the app: nothing in the app imports this package, and their output goes to the

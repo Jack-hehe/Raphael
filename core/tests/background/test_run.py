@@ -294,7 +294,7 @@ async def test_a_tool_the_server_describes_differently_after_the_snapshot_is_sti
 async def test_a_tool_that_needs_a_yes_is_not_called_even_when_it_is_in_the_snapshot(rig, calls):
     server = await rig.plugins.connect(look="T0", note="T2")
     rig.resnap()
-    # The snapshot never held `note` (phase 2 has no yes to ask for) ...
+    # The snapshot never held `note` (a background task has no yes to ask for) ...
     assert "Notes__note" not in rig.run.snapshot.refs
     reply = await rig.tool("Notes__note", {"text": "x"})
     assert (reply["ok"], reply["kind"]) == (False, "blocked") and calls == []

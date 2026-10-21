@@ -126,7 +126,7 @@ describe("the tabs", () => {
     }
   });
 
-  test("say what they are for in the owner's words", () => {
+  test("say in a line what they are for", () => {
     const purpose = (id: SettingsPane, over: Partial<SettingsView> = {}): string => /<p class="purpose">(.*?)<\/p>/.exec(tab(id, over))![1];
     expect(purpose("general")).toBe("介面和桌面圖案的外觀");
     expect(purpose("dictation")).toBe("按快捷鍵說話，拉斐爾把你說的打出來");
@@ -142,7 +142,7 @@ describe("the tabs", () => {
   });
 });
 
-describe("the owner's rules, in every tab and language", () => {
+describe("the rules for every tab, in every language", () => {
   test("an action is a button with a shape and a choice is a dropdown or a switch: nothing else can be clicked", () => {
     for (const locale of LOCALES) {
       setLocale(locale);

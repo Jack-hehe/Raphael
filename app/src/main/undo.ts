@@ -4,7 +4,7 @@ import { t } from "./i18n";
 
 import { describeError } from "./format";
 
-/** How long a deleted item can be got back (spec §12.1, point 4). */
+/** How long a deleted item can be got back. */
 export const UNDO_MS = 10_000;
 
 /** Where the message goes: a toast at the bottom of the window. */

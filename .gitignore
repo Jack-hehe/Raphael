@@ -1,27 +1,20 @@
-# Brainstorm mockups
-.superpowers/
-
-# Reference recordings
-/raphael_ref/
-
-# Voice models, training data and local design drafts
-/voice/
+# Speech models and model weights
 /models/
-/assets-private/
 *.ckpt
 *.pth
 *.onnx
 *.safetensors
 
-# Audio and video: the user's own recordings (evaluation set, history) and
-# anything rendered with the private voice model. Generate test audio in tests.
+# Audio and video recordings. Tests generate the audio they need.
 *.wav
 *.mp3
 *.flac
 *.ogg
 *.m4a
 *.mp4
-/eval/data/
+
+# Evaluation sets and recordings (see core/src/raphael_core/evaluate)
+/eval/
 
 # Secrets
 .env
@@ -41,18 +34,6 @@ coverage/
 /core/build/
 /app/src-tauri/release-notices/
 
-# Local agent worktrees
-/.worktrees/
-
 # Editor settings
 /.vscode/
 /app/.vscode/
-
-# Documentation and evaluation sets kept outside the repository
-/docs/
-/eval/
-/core/packaging/README.md
-/app/scripts/settings-ui-check.mjs
-
-# Local UI audit evidence and scratch files
-/ui-shots/

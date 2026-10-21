@@ -85,7 +85,7 @@ def estimate_cost(model: str, request_chars: int) -> float:
 
 @dataclass(frozen=True)
 class RunLimits:
-    """What one task may use (design §9): 15 model calls, 25 tool calls, 10 minutes, US$0.20."""
+    """What one task may use: 15 model calls, 25 tool calls, 10 minutes, US$0.20."""
 
     model_calls: int = 15
     tool_calls: int = 25

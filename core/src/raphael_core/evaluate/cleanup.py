@@ -36,7 +36,7 @@ conversion leaves alone: Chinese in the variant's own script is.
 
 There are two cases files. `cleanup_cases.jsonl` holds the held-out cases: none of them, nor
 anything like its wording, is in the prompt, so that what is measured is the model's judgment, not
-its memory of the examples. `regression_cases.jsonl` holds the owner's own dictations that went
+its memory of the examples. `regression_cases.jsonl` holds real dictations that went
 wrong once, and is run the same way (`--cases ../eval/regression_cases.jsonl`).
 """
 

@@ -1,5 +1,5 @@
 // Raphael's report on the home page: one sentence, in the language of the window, about what is
-// wrong or that nothing is (spec §12.1, point 3). When something is wrong, the sentence says what
+// wrong or that nothing is. When something is wrong, the sentence says what
 // happens and a button next to it fixes it.
 
 import { t } from "./i18n";

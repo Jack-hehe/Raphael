@@ -338,7 +338,7 @@ async def test_every_request_to_the_service_says_who_is_asking(service):
     assert len(ours) >= 8 and set(ours) == {USER_AGENT}
 
 
-async def test_a_user_agent_the_owner_sets_in_a_header_is_kept(service):
+async def test_a_user_agent_the_user_sets_in_a_header_is_kept(service):
     from raphael_core.integrations.client import with_user_agent
 
     assert with_user_agent({"user-agent": "Mine/1"}) == {"user-agent": "Mine/1"}

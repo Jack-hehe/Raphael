@@ -42,7 +42,7 @@ def test_error_response_shape():
     assert msg == {"jsonrpc": "2.0", "id": 7, "error": {"code": 1003, "message": "busy"}}
 
 
-# --- beyond the brief's examples -------------------------------------------------------------
+# --- edge cases ------------------------------------------------------------------------------
 
 
 def test_protocol_version_and_error_codes_are_the_wire_contract():

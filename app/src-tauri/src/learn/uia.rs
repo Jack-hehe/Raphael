@@ -674,8 +674,8 @@ fn find_readers(
 
 /// The runtime ids of the elements that contain `focused`, up to and including the target's root.
 /// A focus event from one of them is not a move to another field: around a contenteditable field,
-/// Chromium raises one for the enclosing document while the field keeps the keyboard focus (in the
-/// owner's log the sender was a Document and GetFocusedElement still returned the field). An
+/// Chromium raises one for the enclosing document while the field keeps the keyboard focus (in a
+/// logged session the sender was a Document and GetFocusedElement still returned the field). An
 /// element whose id cannot be read is left out, so an event from it still counts as a move.
 fn container_ids(
     automation: &IUIAutomation,
@@ -1310,8 +1310,8 @@ impl FocusWatch {
             // A stale sender must not poison field reads, but cannot vouch for an input gap. Unless
             // it lives in another process: while the target window stays in front, keys go to the
             // focused element of that window, so an element elsewhere without the keyboard focus
-            // took none of them. Such panes raise focus events right after a paste (in the owner's
-            // log, a pane outside Windows Terminal, as Raphael's overlay took its "complete"
+            // took none of them. Such panes raise focus events right after a paste (in one
+            // logged session, a pane outside Windows Terminal, as Raphael's overlay took its "complete"
             // event), and blocking on them kept every terminal dictation from being learned.
             if sender_in_target != Some(false) {
                 self.block_input_observation();

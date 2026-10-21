@@ -1,5 +1,5 @@
 // The stage on the home page: a small copy of the emblem on the desktop and Raphael's report as its
-// subtitles. Opening the page plays the appear animation, and the report follows (spec §12.2).
+// subtitles. Opening the page plays the appear animation, and the report follows.
 
 import { Emblem } from "../overlay/emblem";
 import { esc, line } from "./ui";

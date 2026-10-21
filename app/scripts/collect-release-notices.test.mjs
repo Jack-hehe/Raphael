@@ -99,7 +99,7 @@ describe("release notice collection", () => {
     test.rust("unreachable-platform", "9.0.0", {}, { connected: false });
     test.node("@scope/tool", "2.0.0");
     write(join(test.root, ".env"), "DO_NOT_DISTRIBUTE_SECRET");
-    write(join(test.root, "assets-private", "AUTHORS"), "DO_NOT_DISTRIBUTE_PRIVATE_ART");
+    write(join(test.root, "unshipped-art", "AUTHORS"), "DO_NOT_DISTRIBUTE_UNSHIPPED_ART");
 
     const result = collectReleaseNotices(test.options);
 
@@ -114,7 +114,7 @@ describe("release notice collection", () => {
     expect(result.text).toContain("Fixture authors");
     expect(result.text).toContain(mit);
     expect(result.text).toMatch(/Python core dependencies[\s\S]*Python-package 1\.2\.3\nSPDX: MIT\nPython license text\n$/);
-    for (const excluded of [test.root, "unreachable-platform", "Rust: app", "DO_NOT_DISTRIBUTE", ".env", "assets-private", "\r"]) {
+    for (const excluded of [test.root, "unreachable-platform", "Rust: app", "DO_NOT_DISTRIBUTE", ".env", "unshipped-art", "\r"]) {
       expect(result.text).not.toContain(excluded);
     }
   });

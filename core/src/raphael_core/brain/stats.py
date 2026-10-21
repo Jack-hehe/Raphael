@@ -1,6 +1,6 @@
 """Dictation statistics: `stats.summary`, what the history says about how much was dictated.
 
-A word is counted the way Typeless counts mixed text: each Chinese, Japanese or Korean character
+A word is counted like this, in mixed text too: each Chinese, Japanese or Korean character
 (Han, kana, Hangul) is one word, and each run of letters or digits of any other script is one
 word. Punctuation, symbols and emoji are no words. A contraction ("don't") and a number with a
 decimal point or a thousands comma ("3.14", "1,000") each count as one; a hyphen or an underscore

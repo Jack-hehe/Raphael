@@ -149,7 +149,7 @@ describe("parseLimit reads what was typed in the monthly limit field", () => {
 });
 
 describe("keyReasonText says why the key was not taken", () => {
-  test("auth and network, as the brief has them", () => {
+  test("auth and network", () => {
     expect(keyReasonText("auth")).toBe("金鑰無效");
     expect(keyReasonText("network")).toBe("連不上 OpenRouter，請稍後再試");
   });

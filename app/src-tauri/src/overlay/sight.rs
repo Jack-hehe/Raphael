@@ -1007,7 +1007,7 @@ mod native {
 mod tests {
     use super::*;
 
-    /// The overlay on the owner's screen (work area 1920x1032, scale 1, emblem 150): as it
+    /// The overlay on a common screen (work area 1920x1032, scale 1, emblem 150): as it
     /// should be.
     fn in_sight() -> Sight {
         let placement = super::super::placement(

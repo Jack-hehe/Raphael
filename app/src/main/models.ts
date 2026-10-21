@@ -27,7 +27,7 @@ export type ModelPhase =
   | { kind: "failed"; reason: string };
 
 /**
- * The sizes in bytes of the downloads (plan, Task 9), for a bar that starts at the right length
+ * The sizes in bytes of the downloads, for a bar that starts at the right length
  * before the core has reported the second model. The core's own totals win once they arrive.
  */
 const EXPECTED_BYTES: Record<string, number> = {

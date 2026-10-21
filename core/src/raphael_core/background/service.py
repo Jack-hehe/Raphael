@@ -190,8 +190,8 @@ class BackgroundService:
 
     def submit(self, *, session_id: str, text: str, language: str, model: str) -> int:
         """Write a task down and queue it; its id. `Refused` when the worker is switched off or the
-        queue is full. The task starts as soon as the one before it is over. (`model` is for the
-        model setting of a later phase; a task uses the assistant's model now.)"""
+        queue is full. The task starts as soon as the one before it is over. (`model` is accepted
+        but not used yet: a task uses the assistant's model.)"""
         if self._host.disabled:
             raise Refused("worker_disabled")
         if len(self._queue) >= MAX_QUEUED + (0 if self._executing else 1):

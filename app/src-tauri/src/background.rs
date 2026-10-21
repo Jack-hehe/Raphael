@@ -12,7 +12,7 @@
 //! - **The tray offers 「中止背景任務」 while a task runs** ([`tray::set_background_running`]).
 //!
 //! Only the overlay (the person's own screen) gets the words of a report; nothing here logs them.
-//! The core is the only source: the main window reads the tasks itself (a later phase).
+//! The core is the only source of the tasks; the main window does not show them.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
