@@ -35,6 +35,8 @@ npm ci
 npm run tauri -- dev
 ```
 
+Development builds run as a separate app next to an installed release: they keep their settings, database, logs and webview data in `Raphael Dev` folders, and they share only the downloaded speech models. Set `RAPHAEL_DATA_DIR` to point a build at another data folder.
+
 Run the tests:
 
 ```powershell

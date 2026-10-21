@@ -132,11 +132,12 @@ impl Default for DeviceSettings {
 }
 
 impl DeviceSettings {
-    /// Reads `path`. A missing file gives the defaults. A file that cannot be understood is
+    /// Reads `path`. A missing file gives the defaults. A file that is not a JSON object is
     /// renamed to `device.json.bad` (so that it is not lost) and the defaults are used. A file
-    /// that is understood but holds a value that could not be set (an emblem size that does not
-    /// exist, a key combination that is no good, a dictation mode or interface language that is
-    /// not offered) gets the default for that one value.
+    /// that is one but holds a value that could not be set (one that another version of the app
+    /// wrote, a value of the wrong type, an emblem size that does not exist, a key combination
+    /// that is no good, an interface language that is not offered) gets the default for that one
+    /// value.
     pub fn load(path: &Path) -> DeviceSettings {
         let text = match fs::read_to_string(path) {
             Ok(text) => text,
@@ -294,28 +295,28 @@ impl DeviceSettings {
     }
 }
 
-/// The settings in `text`. A `dictation_mode` that is not `"toggle"` or `"hold"` (a mode that a
-/// newer version of the app wrote, a typo, a value of the wrong type) is left out first, so that
-/// the default takes its place and the rest of the file is kept. A `ui_language` of the wrong
-/// type is treated the same way; unsupported strings are handled by `repair`. (The other enums
-/// are strict: an unknown value there makes the whole file unreadable.)
+/// The settings in `text`. Every build on the computer (an older release, a newer one, a
+/// development build) reads and writes the same file, so a field may hold a value this build
+/// does not know: a subtitle mode, theme or dictation mode added or removed by another version,
+/// or a value of the wrong type. Such a field is left out, so that it gets its default and the
+/// rest of the file is kept; fields this build does not know at all are ignored. Values of the
+/// right type that are not offered (an interface language, an emblem size, a key combination)
+/// are handled by `repair`. Only text that is not a JSON object fails.
 fn parse_settings(text: &str) -> Result<DeviceSettings, serde_json::Error> {
     let mut value: Value = serde_json::from_str(text)?;
-    if let Some(mode) = value.get("dictation_mode")
-        && serde_json::from_value::<DictationMode>(mode.clone()).is_err()
-    {
-        log::warn!("device settings: dictation mode {mode} is not offered");
-        if let Some(fields) = value.as_object_mut() {
-            fields.remove("dictation_mode");
-        }
-    }
-    if let Some(language) = value.get("ui_language")
-        && !language.is_string()
-    {
-        log::warn!("device settings: interface language {language} must be a string");
-        if let Some(fields) = value.as_object_mut() {
-            fields.remove("ui_language");
-        }
+    if let Some(fields) = value.as_object_mut() {
+        fields.retain(|name, field| {
+            // The field on its own, with the defaults for the rest: whether this build can read
+            // it does not depend on any other field.
+            let alone = Value::Object(serde_json::Map::from_iter([(name.clone(), field.clone())]));
+            let fits = serde_json::from_value::<DeviceSettings>(alone).is_ok();
+            if !fits {
+                log::warn!(
+                    "device settings: {name} = {field} is not understood; it gets the default"
+                );
+            }
+            fits
+        });
     }
     serde_json::from_value(value)
 }
@@ -923,12 +924,56 @@ mod tests {
     }
 
     #[test]
-    fn a_value_of_the_wrong_type_sets_the_file_aside() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(FILE_NAME);
-        std::fs::write(&path, r#"{"subtitles": "loud"}"#).unwrap();
-        assert_eq!(DeviceSettings::load(&path), DeviceSettings::default());
-        assert!(dir.path().join("device.json.bad").exists());
+    fn a_value_another_version_wrote_defaults_only_that_field() {
+        // Every build on a computer reads the same file, and one may have written a value that
+        // another does not know (an older build reads "on" for the subtitles of a newer one).
+        for (field, unknown) in [
+            ("subtitles", json!("loud")),
+            ("subtitles", json!(1)),
+            ("appearance", json!("sepia")),
+            ("appearance", json!(null)),
+            ("emblem_size", json!("large")),
+            ("emblem_size", json!(-1)),
+            ("autostart", json!("yes")),
+            ("onboarded", json!(1)),
+            ("microphone", json!(7)),
+            ("dictation_keys", json!("AltRight")),
+            ("paste_last_keys", json!([1, 2])),
+            ("agent_keys", json!({"key": "Space"})),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(FILE_NAME);
+            let mut stored = json!({
+                "dictation_keys": ["F9"],
+                "dictation_mode": "hold",
+                "paste_last_keys": ["F10"],
+                "agent_keys": ["F11"],
+                "microphone": "USB mic",
+                "emblem_size": 194,
+                "subtitles": "off",
+                "appearance": "dark",
+                "ui_language": "ja",
+                "autostart": false,
+                "onboarded": true,
+                "a_setting_of_a_newer_version": {"anything": true},
+            });
+            stored[field] = unknown.clone();
+            std::fs::write(&path, stored.to_string()).unwrap();
+
+            let loaded = serde_json::to_value(DeviceSettings::load(&path)).unwrap();
+            let default = serde_json::to_value(DeviceSettings::default()).unwrap();
+            assert_eq!(loaded[field], default[field], "{field} = {unknown}");
+            for (name, value) in loaded.as_object().unwrap() {
+                if name != field {
+                    assert_eq!(value, &stored[name], "{field} = {unknown}: {name} is kept");
+                }
+            }
+            assert!(
+                path.exists(),
+                "{field} = {unknown}: the file is not set aside"
+            );
+            assert!(!dir.path().join("device.json.bad").exists());
+        }
     }
 
     #[test]

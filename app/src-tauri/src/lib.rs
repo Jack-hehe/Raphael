@@ -11,6 +11,7 @@ mod dictation;
 mod first_run;
 mod holdtap;
 mod hotkey;
+mod identity;
 mod learn;
 mod media;
 mod notices;
@@ -21,7 +22,6 @@ mod tray;
 
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime, WindowEvent, plugin::TauriPlugin};
-use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 use tauri_plugin_window_state::StateFlags;
 
@@ -75,22 +75,30 @@ fn panic_report(thread: Option<&str>, location: Option<&std::panic::Location<'_>
 
 pub fn run() {
     log_panics();
-    // Before any window or the core exists: the webview and the core open the folders it moves.
-    let migration = data_layout::migrate_at_start();
-    let builder = tauri::Builder::default();
+    let identity = identity::current();
+    // SAFETY: no other thread runs yet.
+    unsafe { identity::use_own_data(identity) };
+    let mut context = tauri::generate_context!();
+    identity.apply(context.config_mut());
 
-    // The single-instance plugin must come first: a second launch hands over to the running
-    // copy (which shows its main window) and exits before anything else starts.
-    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-        show_main_window(app);
-    }));
+    let builder = startup_plugins(
+        tauri::Builder::default(),
+        |app, _args| {
+            log::info!("another launch handed over: showing the main window");
+            show_main_window(app);
+        },
+        data_layout::migrate_at_start,
+    );
 
     builder
-        .plugin(tauri_plugin_autostart::init(
-            MacosLauncher::LaunchAgent,
-            Some(vec!["--autostart"]),
-        ))
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg("--autostart")
+                .app_name(identity.autostart_name)
+                .build(),
+        )
+        // After the data layout: it reads the window position from the folder the migration
+        // moves it to.
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_denylist(&[OVERLAY_WINDOW])
@@ -132,6 +140,7 @@ pub fn run() {
             // ---- Data folders ----
             // What the move of files from earlier builds did (it ran before the log existed), and
             // the copy of the speech models when they could not be renamed.
+            let migration = take_migration(app.handle());
             for (level, message) in &migration.notes {
                 log::log!(*level, "data folders: {message}");
             }
@@ -239,8 +248,62 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
+}
+
+/// What the data migration did, from its plugin to `setup`, which logs it and starts the copy.
+struct Migration(std::sync::Mutex<Option<data_layout::Outcome>>);
+
+/// The first plugins, which decide whether this launch runs at all and prepare what everything
+/// else opens. Plugins start in the order they are added, all of them before `setup`.
+///
+/// - Single instance: a second launch (from the Start menu, a shortcut, or Windows at sign-in
+///   with `--autostart`) hands its arguments to the running copy, which calls `on_second_launch`,
+///   and exits there: it makes no window, core, keyboard hook or tray icon, and migrates nothing.
+/// - Data layout: `migrate` moves the files of earlier builds before any window, the window
+///   position or the core opens them, and only in the copy that keeps running, since a running
+///   app's webview and core hold those folders open.
+fn startup_plugins<R: Runtime>(
+    builder: tauri::Builder<R>,
+    on_second_launch: impl Fn(&AppHandle<R>, Vec<String>) + Send + Sync + 'static,
+    migrate: impl FnOnce() -> data_layout::Outcome + Send + 'static,
+) -> tauri::Builder<R> {
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(
+        move |app, args, _cwd| on_second_launch(app, args),
+    ));
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+    let _ = on_second_launch;
+    builder.plugin(
+        tauri::plugin::Builder::<R>::new("raphael-data-layout")
+            .setup(move |app, _api| {
+                app.manage(Migration(std::sync::Mutex::new(Some(migrate()))));
+                Ok(())
+            })
+            .build(),
+    )
+}
+
+/// [`startup_plugins`] with `on_migrate` in place of the data migration, for the tests that
+/// launch the app twice (`tests/second_launch.rs`). Not part of the app.
+#[doc(hidden)]
+pub fn startup_plugins_for_tests<R: Runtime>(
+    builder: tauri::Builder<R>,
+    on_second_launch: impl Fn(&AppHandle<R>, Vec<String>) + Send + Sync + 'static,
+    on_migrate: impl FnOnce() + Send + 'static,
+) -> tauri::Builder<R> {
+    startup_plugins(builder, on_second_launch, move || {
+        on_migrate();
+        data_layout::Outcome::default()
+    })
+}
+
+/// Takes what the data migration did; a later call gets nothing to do.
+fn take_migration<R: Runtime>(app: &AppHandle<R>) -> data_layout::Outcome {
+    app.try_state::<Migration>()
+        .and_then(|migration| migration.0.lock().ok()?.take())
+        .unwrap_or_default()
 }
 
 /// The webview's data folder for every window: `WebView2` in Raphael's local folder.
@@ -286,7 +349,7 @@ fn spawn_models_copy(job: data_layout::CopyJob) {
 }
 
 /// Shows the main window, restores it if it was minimized, and gives it focus.
-fn show_main_window(app: &AppHandle) {
+fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
         log::warn!("the main window does not exist");
         return;

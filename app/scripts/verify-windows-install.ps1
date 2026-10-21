@@ -52,16 +52,12 @@ function Assert-InstalledFiles {
     }
 }
 
-# Starts the installed desktop app with isolated data, waits for its own core handshake and checks
-# that the one child it launched is the installed core. The caller stops it with Stop-InstalledApp.
-function Start-InstalledApp {
-    param([string]$Description)
-    $applications = @(Get-ChildItem -LiteralPath $installDirectory -File -Filter '*.exe' |
-        Where-Object { $_.Name -notmatch 'uninstall' })
-    if ($applications.Count -ne 1) { throw 'Expected exactly one installed desktop executable.' }
-
+# How the checks launch the installed desktop app: hidden, with isolated data.
+function New-AppLaunch {
+    param([string]$Executable, [string[]]$Arguments = @())
     $launch = [System.Diagnostics.ProcessStartInfo]::new()
-    $launch.FileName = $applications[0].FullName
+    $launch.FileName = $Executable
+    foreach ($argument in $Arguments) { $launch.ArgumentList.Add($argument) }
     $launch.WorkingDirectory = $verificationRoot
     $launch.UseShellExecute = $false
     $launch.CreateNoWindow = $true
@@ -72,7 +68,18 @@ function Start-InstalledApp {
     # Poison development overrides: an installed release must still use its own core.
     $launch.Environment['RAPHAEL_CORE_PYTHON'] = Join-Path $verificationRoot 'missing-python.exe'
     $launch.Environment['PYTHONPATH'] = Join-Path $verificationRoot 'missing-source'
-    $application = [System.Diagnostics.Process]::Start($launch)
+    return $launch
+}
+
+# Starts the installed desktop app with isolated data, waits for its own core handshake and checks
+# that the one child it launched is the installed core. The caller stops it with Stop-InstalledApp.
+function Start-InstalledApp {
+    param([string]$Description)
+    $applications = @(Get-ChildItem -LiteralPath $installDirectory -File -Filter '*.exe' |
+        Where-Object { $_.Name -notmatch 'uninstall' })
+    if ($applications.Count -ne 1) { throw 'Expected exactly one installed desktop executable.' }
+
+    $application = [System.Diagnostics.Process]::Start((New-AppLaunch -Executable $applications[0].FullName))
     $instance = [pscustomobject]@{ Application = $application; Core = $null }
     try {
         $deadline = [DateTime]::UtcNow.AddSeconds(90)
@@ -102,6 +109,40 @@ function Start-InstalledApp {
     }
     Write-Host "Installed desktop app ($Description): bundled core launched and protocol 1 handshake passed."
     return $instance
+}
+
+# Launches the installed app again while $Instance runs, with $Arguments (none, or --autostart as
+# Windows does at sign-in). The launch must hand over to the running app and exit before it starts
+# anything of its own: the running app hears of it, the log shows no second start-up, and there is
+# still one core.
+function Assert-SecondLaunchHandsOver {
+    param($Instance, [string[]]$Arguments, [string]$Description)
+    $count = { param([string]$Text) @(Select-String -LiteralPath $logFile -SimpleMatch $Text).Count }
+    $startups = & $count 'starting the core'
+    $handovers = & $count 'another launch handed over'
+    $launch = New-AppLaunch -Executable $Instance.Application.Path -Arguments $Arguments
+    $second = [System.Diagnostics.Process]::Start($launch)
+    $null = $second.Handle  # keeps the exit code readable once the process is gone
+    if (-not $second.WaitForExit(30000)) {
+        $second.Kill($true)
+        throw "A second launch ($Description) did not exit within 30 seconds."
+    }
+    if ($second.ExitCode -ne 0) { throw "A second launch ($Description) exited with $($second.ExitCode)." }
+    if ($Instance.Application.HasExited) { throw "A second launch ($Description) ended the running app." }
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while ((& $count 'another launch handed over') -le $handovers -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 200
+    }
+    if ((& $count 'another launch handed over') -le $handovers) {
+        throw "The running app did not hear of a second launch ($Description)."
+    }
+    if ((& $count 'starting the core') -ne $startups) {
+        throw "A second launch ($Description) started the app again instead of handing over."
+    }
+    $cores = @(Get-CimInstance Win32_Process -Filter "Name = 'raphael-core.exe'" |
+        Where-Object { $_.ExecutablePath -eq $coreExecutable })
+    if ($cores.Count -ne 1) { throw "After a second launch ($Description), $($cores.Count) installed cores run." }
+    Write-Host "Second launch ($Description): handed over to the running app and exited."
 }
 
 function Stop-InstalledApp {
@@ -138,6 +179,8 @@ try {
     Remove-Item -LiteralPath $logFile
     $second = Start-InstalledApp -Description 'after the upgrade'
     $running += $second
+    Assert-SecondLaunchHandsOver -Instance $second -Arguments @() -Description 'plain launch'
+    Assert-SecondLaunchHandsOver -Instance $second -Arguments @('--autostart') -Description 'start with Windows'
     Stop-InstalledApp -Instance $second -Description 'after the upgrade'
 
     # Uninstall silently, as a user would from Apps & features. The NSIS uninstaller copies itself to
@@ -168,4 +211,4 @@ try {
         Remove-Item -LiteralPath $userDataDirectory
     }
 }
-Write-Output 'Installer layout, relocated core, desktop startup, upgrade over the running app, silent uninstall and child-process cleanup passed.'
+Write-Output 'Installer layout, relocated core, desktop startup, second-launch handover, upgrade over the running app, silent uninstall and child-process cleanup passed.'
