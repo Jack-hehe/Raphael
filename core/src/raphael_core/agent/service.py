@@ -315,6 +315,9 @@ class AgentService:
     async def aclose(self) -> None:
         """End the requests being thought about and close the HTTP client of the tools."""
         tasks = [*self._inflight.values(), *self._warming]
+        refreshing = self._catalog.cancel()
+        if refreshing is not None:
+            tasks.append(refreshing)
         for task in tasks:
             task.cancel()
         if tasks:

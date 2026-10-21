@@ -319,7 +319,43 @@ async def test_the_list_is_cached(catalog, actions, clock):
     assert actions.listed == 1
     clock.now += 2  # now it is old
     await catalog.apps()
+    await catalog.settle()
     assert actions.listed == 2
+
+
+async def test_an_old_list_is_served_at_once_and_read_again_in_the_background(
+    catalog, actions, clock
+):
+    await catalog.apps()
+    actions.apps = [StartApp("Zoom", "zoom!App")]
+    release = threading.Event()
+    started = threading.Event()
+    original = actions.list_start_apps
+
+    def slow():
+        started.set()
+        release.wait(5)  # PowerShell, slow
+        return original()
+
+    actions.list_start_apps = slow
+    clock.now += commands.APPS_TTL_S + 1
+    stale = await asyncio.wait_for(catalog.apps(), 1)  # does not wait for the read
+    assert [a.name for a in stale][:2] == ["Calculator", "Notepad"]
+    assert await asyncio.to_thread(started.wait, 5)
+    again = await asyncio.wait_for(catalog.apps(), 1)  # still the old list, and no second read
+    assert again == stale
+    release.set()
+    await catalog.settle()
+    assert [a.name for a in await catalog.apps()] == ["Zoom"]
+
+
+async def test_a_read_that_fails_in_the_background_keeps_the_old_list(catalog, actions, clock):
+    await catalog.apps()
+    actions.fail["list_start_apps"] = OSError("slow")
+    clock.now += commands.APPS_TTL_S + 1
+    assert len(await catalog.apps()) == len(APPS)
+    await catalog.settle()
+    assert len(await catalog.apps()) == len(APPS)
 
 
 async def test_two_asks_at_once_read_it_once(catalog, actions):
@@ -345,22 +381,27 @@ async def test_an_app_found_in_an_utterance_is_returned_from_the_cache(catalog, 
     assert actions.listed == 1
 
 
-async def test_an_app_that_is_not_in_the_list_makes_one_fresh_read_when_the_list_is_not_new(
+async def test_an_app_that_is_not_in_the_list_makes_one_fresh_read_in_the_background(
     catalog, actions, clock
 ):
     await catalog.apps()
     actions.apps.append(StartApp("Zoom", "zoom!App"))  # installed since
     assert await catalog.find("open zoom") is None  # the list is still new: no new read
+    await catalog.settle()
     assert actions.listed == 1
     clock.now += commands.APPS_MISS_REFRESH_S
-    assert (await catalog.find("open zoom")).app_id == "zoom!App"
+    assert await catalog.find("open zoom") is None  # answered at once, from the list it has
+    await catalog.settle()
     assert actions.listed == 2
+    assert (await catalog.find("open zoom")).app_id == "zoom!App"  # the next question finds it
 
 
 async def test_a_name_is_looked_up_with_the_same_refresh(catalog, actions, clock):
     await catalog.apps()
     actions.apps.append(StartApp("Zoom", "zoom!App"))
     clock.now += commands.APPS_MISS_REFRESH_S
+    assert await catalog.lookup("Zoom") is None
+    await catalog.settle()
     assert (await catalog.lookup("Zoom")).app_id == "zoom!App"
 
 

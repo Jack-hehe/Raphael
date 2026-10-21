@@ -214,10 +214,12 @@ def lookup_app(name: str, apps: Sequence[StartApp]) -> StartApp | None:
 class AppCatalog:
     """The apps of the Start menu, read once (PowerShell takes seconds) and kept.
 
-    The first question reads them on a worker thread; two asked at once share the read. The list is
-    read again when it is `APPS_TTL_S` old, and when an app is asked for that it lacks and it is
-    `APPS_MISS_REFRESH_S` old. A list that cannot be read is empty, is logged by the type of the
-    error and is not kept: the next question tries again.
+    The first question reads them on a worker thread (the app does it at start-up, `warm`); two
+    asked at once share the read. After that a question never waits for PowerShell: an old list is
+    served as it is and read again in the background, when it is `APPS_TTL_S` old, and when an app
+    is asked for that it lacks and the list is `APPS_MISS_REFRESH_S` old (the next question finds
+    it). A list that cannot be read the first time is empty, is logged by the type of the error and
+    is not kept: the next question tries again. One that cannot be read again is kept as it was.
     """
 
     def __init__(
@@ -228,45 +230,74 @@ class AppCatalog:
         self._apps: list[StartApp] = []
         self._loaded_at: float | None = None
         self._lock = asyncio.Lock()
+        self._refreshing: asyncio.Task[None] | None = None
 
     def _age(self) -> float | None:
         return None if self._loaded_at is None else self._clock() - self._loaded_at
 
     async def apps(self, *, refresh_after_s: float = APPS_TTL_S) -> list[StartApp]:
-        """The apps, read now if they were never read or are `refresh_after_s` old."""
-        async with self._lock:
+        """The apps as they were last read: read now if they never were, and read again in the
+        background, with this list served meanwhile, if they are `refresh_after_s` old."""
+        if self._loaded_at is None:
+            async with self._lock:  # the first read: whoever comes first reads, the rest wait
+                if self._loaded_at is None:
+                    try:
+                        self._apps = await asyncio.to_thread(self._actions.list_start_apps)
+                        self._loaded_at = self._clock()
+                    except Exception as exc:  # PowerShell missing, too slow, unreadable output
+                        logger.warning(
+                            "Could not list the apps of the Start menu: %s", type(exc).__name__
+                        )
+                        self._apps = []
+        else:
             age = self._age()
-            if age is None or age >= refresh_after_s:
-                try:
-                    self._apps = await asyncio.to_thread(self._actions.list_start_apps)
-                    self._loaded_at = self._clock()
-                except Exception as exc:  # PowerShell missing, too slow, unreadable output
-                    logger.warning(
-                        "Could not list the apps of the Start menu: %s", type(exc).__name__
-                    )
-                    self._apps, self._loaded_at = [], None
-            return list(self._apps)
+            if age is not None and age >= refresh_after_s:
+                self._refresh_soon()
+        return list(self._apps)
+
+    def _refresh_soon(self) -> None:
+        if self._refreshing is None or self._refreshing.done():
+            self._refreshing = asyncio.ensure_future(self._reload())
+
+    async def _reload(self) -> None:
+        try:
+            self._apps = await asyncio.to_thread(self._actions.list_start_apps)
+        except Exception as exc:
+            logger.warning("Could not read the apps of the Start menu again: %s", type(exc).__name__)
+        # Whether it was read or not, it is not tried again at once on every question.
+        self._loaded_at = self._clock()
+
+    def cancel(self) -> asyncio.Task[None] | None:
+        """Give up the read in the background, if there is one; the task, to be awaited."""
+        task = self._refreshing
+        if task is not None:
+            task.cancel()
+        return task
+
+    async def settle(self) -> None:
+        """Wait for the read in the background, if there is one."""
+        task = self._refreshing
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
 
     async def warm(self) -> None:
         """Read the Start menu now if it was never read, so that the first question finds it
-        there. (The router takes a second or so: the read goes on meanwhile.)"""
+        there."""
         await self.apps()
 
     async def find(self, utterance: str, *, loose: bool = True) -> StartApp | None:
-        """The app `utterance` names (`match_app`), after reading the list again if it lacks it
-        and has gone old."""
+        """The app `utterance` names (`match_app`), in the list as it is. If it is not there and
+        the list has gone old, the list is read again for the next question."""
         hit = match_app(utterance, await self.apps(), loose=loose)
         if hit is None and self._missed():
-            hit = match_app(
-                utterance, await self.apps(refresh_after_s=APPS_MISS_REFRESH_S), loose=loose
-            )
+            self._refresh_soon()
         return hit
 
     async def lookup(self, name: str) -> StartApp | None:
-        """The app a model named (`lookup_app`), with the same fresh read on a miss."""
+        """The app a model named (`lookup_app`), with the same read in the background on a miss."""
         hit = lookup_app(name, await self.apps())
         if hit is None and self._missed():
-            hit = lookup_app(name, await self.apps(refresh_after_s=APPS_MISS_REFRESH_S))
+            self._refresh_soon()
         return hit
 
     def _missed(self) -> bool:
