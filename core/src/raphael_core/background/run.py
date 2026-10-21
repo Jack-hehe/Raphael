@@ -45,7 +45,7 @@ from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterEr
 from ..brain.pricing import builtin_catalog
 from ..brain.spend import SpendTracker
 from ..protocol import INVALID_PARAMS, WORKER_STOPPED, RpcError
-from .snapshot import BUILTIN, MCP, Snapshot, ToolRef
+from .snapshot import BUILTIN, FIND, MCP, Snapshot, ToolRef
 from .tasks import TaskStore
 
 logger = logging.getLogger(__name__)
@@ -344,6 +344,8 @@ class TaskRun:
             return _refused()
         if ref.kind == MCP:
             reply, outcome, tier = await self._plugin(ref, arguments)
+        elif ref.kind == FIND:
+            reply, outcome, tier = self._find(arguments)
         else:
             reply, outcome, tier = await self._builtin(ref, arguments)
         self._step(
@@ -373,6 +375,19 @@ class TaskRun:
             "truncated": cut or result.truncated,
         }
         return reply, _outcome_of(result), None if now is None else now.name
+
+    def _find(self, arguments: dict) -> tuple[dict, str, str | None]:
+        """Show the task more of the snapshot's tools, by what it says it wants to do. It makes no
+        call to a service and no model call: only the snapshot's own list is read."""
+        query = arguments.get("query")
+        if not isinstance(query, str) or not query.strip():
+            return {"ok": False, "kind": "bad_arguments", "content": "", "truncated": False}, "error", "T0"
+        added, lines = self.snapshot.find(query)
+        text = "\n".join(lines) if lines else "No other tool fits that."
+        reply: dict = {"ok": True, "kind": None, "content": text, "truncated": False}
+        if added:
+            reply["tools"] = added
+        return reply, "ok", "T0"
 
     async def _builtin(self, ref: ToolRef, arguments: dict) -> tuple[dict, str, str | None]:
         gate = self._gate

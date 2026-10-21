@@ -78,6 +78,7 @@ from .local import extract_target, match_command
 from .opening import Opening, clean_target, match_settings, parse_domain, validate_url
 from .persona import DEFAULT_LANGUAGE, PREFIXES, normalize_language, parenthesized, phrase
 from .plugins import (
+    MAX_OFFERED,
     PLAN_CONTEXT_TURNS,
     Offer,
     PlannedCall,
@@ -89,6 +90,7 @@ from .plugins import (
     make_offer,
     preview,
 )
+from .toolpick import ToolPicker
 from .policy import (
     CONFIRM_TIMEOUT_MS,
     Action,
@@ -269,6 +271,7 @@ class AgentService:
         self._gate = gate if gate is not None else ToolGate(plugins, conn=conn, now_ms=now_ms)
         self._background = background
         self._planner = Planner(client)
+        self._picker = ToolPicker(client)
         self._tool_support = ToolSupport(models, clock=clock)
         # pending id -> what the call of a plugin's tool that waits for that yes needs.
         self._followups: dict[str, _Followup] = {}
@@ -566,6 +569,16 @@ class AgentService:
             logger.info("Plugin tools left out of a request: the answer model %s takes no tools", model)
             return None
         try:
+            if len(offer.by_alias) > MAX_OFFERED:
+                # More tools than fit: the request is shown the ones it needs, not the first few.
+                chosen = await self._picker.pick(
+                    offer,
+                    ask.text,
+                    self._context(PLAN_CONTEXT_TURNS),
+                    model=model,
+                    ledger=ledger,
+                )
+                offer = offer.only(chosen)
             return await self._planner.plan(
                 offer,
                 ask.text,

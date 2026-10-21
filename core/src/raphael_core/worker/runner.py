@@ -82,6 +82,7 @@ class CoreHost:
             kind=kind if isinstance(kind, str) else None,
             content=content if isinstance(content, str) else "",
             truncated=reply.get("truncated") is True,
+            tools=[t for t in (reply.get("tools") or []) if _is_tool(t)],
         )
 
 

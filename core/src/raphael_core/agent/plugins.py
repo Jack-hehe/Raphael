@@ -44,7 +44,8 @@ from .policy import PLUGIN_PREFIX, Tier
 
 logger = logging.getLogger(__name__)
 
-# The most tools offered to a model in one request, and the most calls it may ask for.
+# The most tools shown to a model in one request without choosing among them first, and the most
+# calls it may ask for.
 MAX_OFFERED = 40
 MAX_CALLS = 3
 # The most the arguments of one call may come to, as JSON, in characters.
@@ -132,29 +133,36 @@ class Offer:
 
     def definitions(self) -> list[dict[str, Any]]:
         """The tools in the form a chat model takes them."""
-        out = []
-        for alias, tool in self.by_alias.items():
-            out.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": alias,
-                        "description": f"[{tool.server}] {tool.description[:DESCRIPTION_CHARS]}".strip(),
-                        "parameters": tool.schema if tool.schema.get("type") == "object" else _EMPTY,
-                    },
-                }
-            )
-        return out
+        return [self.definition(alias) for alias in self.by_alias]
+
+    def definition(self, alias: str) -> dict[str, Any]:
+        """One tool in the form a chat model takes it."""
+        tool = self.by_alias[alias]
+        return {
+            "type": "function",
+            "function": {
+                "name": alias,
+                "description": f"[{tool.server}] {tool.description[:DESCRIPTION_CHARS]}".strip(),
+                "parameters": tool.schema if tool.schema.get("type") == "object" else _EMPTY,
+            },
+        }
+
+    def only(self, aliases: Sequence[str]) -> "Offer":
+        """The offer of just these tools, under the names they already have."""
+        chosen = {alias: self.by_alias[alias] for alias in aliases if alias in self.by_alias}
+        return Offer(tools=list(chosen.values()), by_alias=chosen)
 
 
 _EMPTY: dict[str, Any] = {"type": "object", "properties": {}}
 
 
 def make_offer(tools: list[PluginTool]) -> Offer:
-    """What to offer a model out of the tools that may be: the safest first, at most MAX_OFFERED,
-    each under a name that starts with a letter and has only letters, digits, `_` and `-` (at most
-    64: what every provider takes) and that no other has."""
-    ordered = sorted(tools, key=lambda t: (t.tier, t.server.casefold(), t.name))[:MAX_OFFERED]
+    """Every tool that may be offered, the safest first, each under a name that starts with a letter
+    and has only letters, digits, `_` and `-` (at most 64: what every provider takes) and that no
+    other has. There is no cut: a list longer than MAX_OFFERED is narrowed to what the request
+    needs (`toolpick`), never by the alphabet. The names depend on the whole list, so narrow the
+    offer (`Offer.only`) rather than the tools, to keep a tool's name the same."""
+    ordered = sorted(tools, key=lambda t: (t.tier, t.server.casefold(), t.name))
     offer = Offer(tools=ordered)
     for tool in ordered:
         base = _ALIAS_UNSAFE.sub("_", f"{tool.server}__{tool.name}").strip("_") or "tool"
@@ -167,6 +175,27 @@ def make_offer(tools: list[PluginTool]) -> Offer:
             alias = f"{base[:56]}_{n}"
         offer.by_alias[alias] = tool
     return offer
+
+
+def clean_arguments(schema: Mapping[str, Any], arguments: Mapping[str, Any]) -> dict[str, Any]:
+    """The arguments of a call as a tool's schema allows them. A model fills optional parameters to
+    be complete, with a null, an empty string or a made-up value, and a server may reject the call
+    or answer it wrongly (an invented pagination cursor). So an optional parameter whose value is
+    null or an empty string is left out, and so is a name the schema does not list when it says
+    `additionalProperties: false`. Everything else, required parameters included, is kept as it is."""
+    properties = schema.get("properties")
+    properties = properties if isinstance(properties, dict) else {}
+    required = schema.get("required")
+    required = set(required) if isinstance(required, list) else set()
+    closed = schema.get("additionalProperties") is False and bool(properties)
+    cleaned: dict[str, Any] = {}
+    for name, value in arguments.items():
+        if closed and name not in properties:
+            continue
+        if name not in required and (value is None or value == ""):
+            continue
+        cleaned[name] = value
+    return cleaned
 
 
 def resolve_calls(offer: Offer, requested: list[tuple[str, Any]]) -> list[PlannedCall]:
@@ -217,6 +246,9 @@ asks to do something in them.
 - Raphael has its own weather, clock and web search: never call a tool for those alone.
 - Call at most three tools, and fill in arguments only with what the request or the conversation \
 says. Never invent a value, a name or an address.
+- Leave optional parameters out unless the request needs them. Never invent an id, a cursor or a \
+url: use only values the user gave or an earlier result held.
+- To find content in a service, call its search tool first.
 - If no tool fits, call none and answer with the single word none."""
 
 
