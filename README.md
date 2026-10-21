@@ -1,43 +1,19 @@
 # Raphael
 
-[![CI](https://github.com/Jack-hehe/Raphael/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Jack-hehe/Raphael/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/Jack-hehe/Raphael)](https://github.com/Jack-hehe/Raphael/releases/latest)
+Raphael is a voice assistant for Windows. Press a key and speak: what you say is cleaned up and typed wherever your cursor is. Hold a second key and Raphael answers questions, opens what you ask for and carries out tasks through the services you connect.
 
-Raphael is a voice assistant for Windows. Press a key and speak, and a clean, punctuated version of what you said appears wherever you were typing.
+## What it does
 
-Dictation is the first milestone. Assistant features come next: carrying out tasks through the services you connect, with your approval before anything sensitive, and spoken replies.
+- **Dictation anywhere.** Press Right Alt to start and stop, or hold it to talk. The text is pasted into the app you are using, and music or video pauses while you speak. Esc cancels.
+- **Clean text.** Filler words and self-corrections are removed and punctuation is added, so "let's meet at two… no, three" becomes "Let's meet at three."
+- **Your vocabulary.** A personal dictionary keeps names and jargon spelled your way. Raphael adds the terms you use often and learns from the corrections you make after a paste. Words can also be imported from a CSV or text file.
+- **Cloud or on-device recognition.** Speech can be recognised through OpenRouter, or on your computer by one of several free local models, each downloaded only when you choose it.
+- **An assistant.** Press Right Alt + Space and ask. Raphael answers from its own knowledge, the weather and web search. It opens any app, website or Windows settings page by name, and controls volume, media playback and the lock screen. Requests that take several steps run in the background, and Raphael reports back when they are done.
+- **Connected services.** A store of services with official MCP servers, such as Notion, Linear, Atlassian and Todoist, connects with one sign-in in the browser. Every tool a service offers can be switched on or off.
+- **Multilingual.** Dictation in Chinese (Taiwan, Hong Kong and Mainland usage), Cantonese, English, Japanese and Korean. The interface comes in English, Traditional Chinese and Japanese.
+- **Local data.** API keys and sign-ins are kept in Windows Credential Manager. Settings, history and the dictionary are kept in `%APPDATA%\Raphael`. Usage is tracked against a monthly spending limit you set.
 
-## Features
-
-- **Works where you type.** Press Right Alt to start and stop dictating, or switch to hold-to-talk. Esc cancels. The text is pasted into the app you were using, and music or video that was playing pauses while you speak and resumes afterwards.
-- **Keeps what you meant.** Raphael removes filler words, adds punctuation and applies the corrections you make while speaking. A question you dictate stays a question; Raphael doesn't answer it.
-- **Learns your vocabulary.** Add names and jargon to a personal dictionary, and Raphael learns new terms from the corrections you make after a paste.
-- **Cloud or on-device recognition.** Use cloud speech recognition through OpenRouter (the default), or a downloadable on-device model that keeps audio on your computer.
-- **Multilingual.** Choose up to five dictation languages, including Chinese (Taiwan, Hong Kong and Mainland usage), Cantonese, English, Japanese and Korean. The interface is available in English, Traditional Chinese and Japanese.
-- **Clear costs.** Review past dictations, track usage and set a monthly spending limit.
-
-## Installation
-
-1. Download `Raphael-<version>-windows-x64-setup.exe` from the [latest release](https://github.com/Jack-hehe/Raphael/releases/latest). Raphael supports Windows 10 and 11 on x64.
-2. Run the installer. Everything Raphael needs is included; the installer fetches the WebView2 runtime if your system lacks it.
-3. Follow the first-run guide: add an [OpenRouter](https://openrouter.ai) API key, which is used for cleanup and cloud recognition, then choose a microphone while the on-device speech model downloads.
-
-Raphael then runs from the system tray.
-
-> [!NOTE]
-> Installers are not code-signed yet, so SmartScreen may warn about an unknown publisher. You can check a download against `SHA256SUMS.txt` from the same release.
-
-## Privacy
-
-- **Your API key** is kept in Windows Credential Manager, never in files, logs or the database.
-- **Your data** (settings, history, dictionary and conversations) stays on your computer, in `%APPDATA%\Raphael`.
-- **Speech recognition** runs in the cloud by default: the recording is sent to OpenRouter, with your dictionary's words as hints for the models that accept them. Choose on-device recognition in Settings to keep audio on your computer.
-- **Cleanup:** with an API key set and budget remaining, Raphael sends the transcript to OpenRouter, together with dictionary hints and replacement rules, your language settings and the name of the app you are dictating into. This also happens with on-device recognition, so Raphael is not fully offline.
-- **Questions to Raphael** (Right Alt + Space, still in development) go to OpenRouter: to a model that sorts them, to the model that answers, together with the last few turns of the conversation, and to OpenRouter's web search when a question needs the web. When an app you ask for is not found, the names of the apps in your Start menu go along so that the model can pick one. A weather question sends only the city to Open-Meteo.
-- **Correction learning** looks only at the field Raphael just pasted into, for up to 60 seconds. It reads the field's text or, where an app does not expose it, the edits you type there. Password fields are skipped.
-- **No telemetry.** Besides OpenRouter and Open-Meteo, Raphael connects only to GitHub, to download the speech models.
-
-## Architecture
+## How it works
 
 Raphael is a [Tauri 2](https://tauri.app) app with a Python core.
 
@@ -48,20 +24,21 @@ Desktop shell (Rust)           hotkeys, focus, paste, correction learning,
                                media pause, tray
         │  JSON-RPC over stdio
 Core (Python 3.12)             audio capture, speech recognition, cleanup,
-                               dictionary, history, spending, assistant
+                               dictionary, history, assistant, connections,
+                               background worker
 ```
 
 | Directory | Contents |
 | --- | --- |
 | [`app/src`](app/src) | Main window and overlay (TypeScript, no framework) |
-| [`app/public/brand`](app/public/brand) | In-app artwork: the sidebar and About image and the emblem's ring texture |
+| [`app/public/brand`](app/public/brand) | In-app artwork |
 | [`app/src-tauri`](app/src-tauri) | Desktop shell (Rust) |
 | [`app/src-tauri/icons`](app/src-tauri/icons) | Application, tray and installer icons, generated from `app-icon.png` |
 | [`core`](core) | Python core |
 
 ## Building from source
 
-You need Windows 10 or 11 (x64), [Node.js](https://nodejs.org) 22.12 or later, [Rust](https://rustup.rs) 1.98, [uv](https://docs.astral.sh/uv/) and the MSVC C++ build tools. uv installs the pinned Python version.
+You need Windows 10 or 11 (x64), [Node.js](https://nodejs.org) 22.12 or later, [Rust](https://rustup.rs) 1.98, [uv](https://docs.astral.sh/uv/) and the MSVC C++ build tools. An [OpenRouter](https://openrouter.ai) API key enables cleanup, cloud recognition and the assistant.
 
 ```powershell
 git clone https://github.com/Jack-hehe/Raphael.git
@@ -72,64 +49,33 @@ npm ci
 npm run tauri -- dev
 ```
 
-Development builds run the Python core from the source tree.
-
-The icons in `app/src-tauri/icons` are generated from `app-icon.png` with `npm run tauri -- icon src-tauri/icons/app-icon.png -o src-tauri/icons`; the generated files are committed, so a build does not need this step.
-
-### Building the installer
-
-The Windows installer bundles the desktop app with a frozen copy of the Python core, so end users need neither Python nor Node.js. From `core/`:
+To build the Windows installer, which bundles a frozen copy of the core, run the following from `core/`:
 
 ```powershell
 uv sync --locked --group packaging
 uv run --locked --no-sync python packaging/build.py
-uv run --locked --no-sync python packaging/smoke.py --core dist/raphael-core/raphael-core.exe
 ```
 
-Then from `app/`:
+Then run this from `app/`:
 
 ```powershell
 npm ci --ignore-scripts
-node scripts/check-release-version.mjs
 node scripts/collect-release-notices.mjs
 node scripts/tauri.mjs build --config src-tauri/tauri.release.conf.json --bundles nsis --ci -- --locked
 ```
 
-`check-release-version.mjs` fails unless `app/package.json`, `tauri.conf.json`, `Cargo.toml`, `core/pyproject.toml` and the core's `__version__` carry the same version. The installer is per-user and needs no administrator rights; speech models are downloaded after installation.
-
-## Secrets
-
-Raphael has no secrets in the repository or its configuration files. The OpenRouter API key you enter in the app is stored in Windows Credential Manager, and settings, history and the dictionary live in `%APPDATA%\Raphael`. The test suite replaces the credential store with a fail-closed backend, so tests never touch real credentials.
-
-## Testing
+Tests:
 
 ```powershell
-# Frontend (app/)
+# app/
 npm test
-npm run check:contrast
-npm run build
-
-# Python core (core/); the fail-closed keyring keeps tests away from your real credentials
+# core/
 $env:PYTHON_KEYRING_BACKEND = "keyring.backends.fail.Keyring"
-uv run --locked pytest -q -ra -W error
-
-# Desktop shell (app/src-tauri/); needs the frontend build above
+uv run --locked pytest -q -W error
+# app/src-tauri/
 cargo test --locked
-cargo clippy --locked --all-targets -- -D warnings
 ```
-
-CI runs these checks on Windows for pull requests and pushes to `main`, together with `cargo fmt --all -- --check`, the vendored keyboard hook's tests (`cargo test --locked --lib --manifest-path vendor/handy-keys/Cargo.toml`) and a debug build of the app (`node scripts/tauri.mjs build --debug --no-bundle --ci -- --locked` in `app/`). Tests that need the downloaded speech models run only with `RAPHAEL_TEST_MODELS=1`. Behaviour that depends on real microphones, input methods and editors is checked by hand.
-
-## Contributing
-
-Bug reports and suggestions are welcome in [GitHub Issues](https://github.com/Jack-hehe/Raphael/issues).
 
 ## License
 
-Raphael is released under the [MIT License](LICENSE).
-
-## Acknowledgements
-
-Raphael builds on [Tauri](https://tauri.app), [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [OpenCC](https://github.com/BYVoid/OpenCC) and [handy-keys](https://github.com/handy-computer/handy-keys), and its paste code is adapted from [Handy](https://github.com/cjpais/Handy). Each release includes the third-party licenses in `THIRD_PARTY_NOTICES.txt`.
-
-Raphael is an unofficial fan project inspired by Raphael, the skill from *That Time I Got Reincarnated as a Slime*. It is not affiliated with the rights holders.
+[MIT](LICENSE). Raphael builds on [Tauri](https://tauri.app), [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [OpenCC](https://github.com/BYVoid/OpenCC) and [handy-keys](https://github.com/handy-computer/handy-keys). Its paste code is adapted from [Handy](https://github.com/cjpais/Handy).
