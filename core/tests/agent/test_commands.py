@@ -52,7 +52,7 @@ def test_no_site_and_no_app_is_named_in_the_registry():
 
 
 def test_every_command_runs_at_once_with_no_question():
-    # The owner turned every command for this computer on: none asks first, copying included.
+    # Every command for this computer is on: none asks first, copying included.
     assert {c.tier for c in COMMANDS.values()} == {Tier.T1}
 
 

@@ -43,7 +43,7 @@ def test_register_twice_fails():
         r.register("a.b", h)
 
 
-# --- beyond the brief's examples -------------------------------------------------------------
+# --- edge cases ------------------------------------------------------------------------------
 
 
 def _router_with(name, handler):

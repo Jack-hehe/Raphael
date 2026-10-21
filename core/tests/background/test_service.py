@@ -583,7 +583,7 @@ async def test_the_tray_is_told_a_task_runs_while_another_one_waits(make_rig):
     queued = rig.changes()[-1]
     assert (queued["task_id"], queued["state"]) == (second, "queued")
     assert queued["running"] is True  # the first is still under way
-    assert (queued["model_calls"], queued["tool_calls"]) == (0, 0)  # the counters are the owner's
+    assert (queued["model_calls"], queued["tool_calls"]) == (0, 0)  # the counters are the running task's
     assert rig.task(first).state == "running"
     release.set()
     await rig.wait_for_reports(2)

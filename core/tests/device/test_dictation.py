@@ -1858,7 +1858,7 @@ async def test_the_tail_of_a_watchdog_close_is_kept_once(make_rig, router):
     assert rig.segmenter.accepted_samples == 2 * RATE
 
 
-# --- a session nobody stops (ruling 8, clarified) ------------------------------------------------
+# --- a session nobody stops ------------------------------------------------------------------
 
 
 def test_a_lost_session_is_given_a_minute_over_the_recording_cap():

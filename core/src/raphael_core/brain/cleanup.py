@@ -42,10 +42,10 @@ def timeout_for(audio_seconds: float) -> float:
     """Seconds to wait for the cleanup of `audio_seconds` of speech: 10, plus 1 for every 3 of
     audio, and 90 at most.
 
-    Every dictation is meant to be cleaned, however long (the owner's rule): the limit is only
+    Every dictation is meant to be cleaned, however long: the limit is only
     there for a model that hangs. The reply grows with what was said, and a slow provider writes
-    a few dozen tokens a second, so a long dictation needs many seconds; the old limit (3 s, plus 1
-    for every 20 s of audio) pasted long dictations raw. dictation.stop leaves room for this in
+    a few dozen tokens a second, so a long dictation needs many seconds; a tight limit (3 s, plus 1
+    for every 20 s of audio) would paste long dictations raw. dictation.stop leaves room for this in
     the shell's wait (core_process.rs)."""
     return min(90.0, 10.0 + audio_seconds / 3.0)
 

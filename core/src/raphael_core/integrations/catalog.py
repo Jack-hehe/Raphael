@@ -4,7 +4,7 @@ The catalog is code in the repository, versioned with the app. Nothing is fetche
 there is no remote path by which a service could be added, and the store works offline. Each entry
 is a service whose official MCP server lets a client sign a user in with no app registered
 beforehand (the server accepts dynamic client registration, RFC 7591, with PKCE and a public
-client); anything that needs a client id from the owner (GitHub, Slack, Figma, Google) is not here.
+client); anything that needs a client id from the user (GitHub, Slack, Figma, Google) is not here.
 
 The words are kept in the languages of the window (`zh-TW`, `en`, `ja`), and the window picks.
 """

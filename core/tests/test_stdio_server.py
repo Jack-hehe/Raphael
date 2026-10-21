@@ -44,7 +44,7 @@ async def test_notifications_are_written():
     assert {"jsonrpc": "2.0", "method": "audio.level", "params": {"level": 0.5}} in [json.loads(x) for x in out]
 
 
-# --- beyond the brief's examples -------------------------------------------------------------
+# --- edge cases ------------------------------------------------------------------------------
 
 
 def feed(*lines):

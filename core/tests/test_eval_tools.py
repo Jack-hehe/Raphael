@@ -774,13 +774,13 @@ def prompt_examples(prompt):
     ]
 
 
-def test_the_held_out_file_has_new_cases_and_none_of_the_owners_anecdotes():
+def test_the_held_out_file_has_new_cases_and_none_of_the_real_dictations():
     cases = eval_cleanup.load_cases(HELD_OUT)
     assert len([case for case in cases if case.id.startswith("heldout-")]) >= 8
     assert not any(case.id.startswith("real-") for case in cases)
 
 
-def test_the_regression_file_holds_the_anecdotal_cases_and_runs_with_the_same_tool(tmp_path):
+def test_the_regression_file_holds_the_real_dictations_and_runs_with_the_same_tool(tmp_path):
     regression = eval_cleanup.load_cases(REGRESSION)
     ids = {case.id for case in regression}
     assert {
@@ -848,7 +848,7 @@ def test_the_prompt_still_has_its_general_rules():
 
 @pytest.mark.parametrize("name", ["Hermes agent", "Hermes Agent", "Hermes agents"])
 @pytest.mark.parametrize("role", ["permission agent", "personal agent"])
-def test_the_hermes_case_accepts_what_the_owner_has_not_ruled_out(name, role):
+def test_the_hermes_case_accepts_every_acceptable_spelling_and_role(name, role):
     case = case_named("real-hermes-personal-agent")
     cleaned = (
         f"之後會有 {name} 可以幫我看 Gmail，處理 GitHub 的東西，"

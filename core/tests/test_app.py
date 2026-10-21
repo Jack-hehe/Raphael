@@ -1311,7 +1311,7 @@ async def test_the_models_load_at_start_without_any_dictation(make_app):
     await wait_until(lambda: kit.segmenters and kit.engines)
     segmenter, engine = kit.segmenters[0], kit.engines[0]
     assert DICTATION_SEGMENT_SECONDS == 10.0 and STT_THREADS == 4
-    assert segmenter.kwargs == {"max_segment_s": 10.0}  # ruling 2: speech without pauses is cut
+    assert segmenter.kwargs == {"max_segment_s": 10.0}  # speech without pauses is cut
     assert segmenter.path == app.manager.dir("silero-vad") / "silero_vad_v5.onnx"
     assert engine.kwargs == {"name": "qwen3-asr", "num_threads": 4}
 
