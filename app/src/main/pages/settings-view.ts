@@ -11,6 +11,7 @@
 import { t } from "../i18n";
 
 import { brandIcon } from "../brand";
+import { type ConnectionsView, connectionsHTML } from "../connections";
 import { DICTATION_MODES } from "../dictation";
 import { formatClock, formatUsd } from "../format";
 import { type LanguageGroup, languageSelectHTML, normalizeLanguages } from "../languages";
@@ -68,6 +69,7 @@ export const PANES: { id: SettingsPane; icon: IconName; title: () => string; pur
   { id: "general", icon: "gear", title: () => t("settings.paneGeneral"), purpose: () => t("settings.purposeGeneral") },
   { id: "dictation", icon: "mic", title: () => t("settings.paneDictation"), purpose: () => t("settings.purposeDictation") },
   { id: "agent", icon: "sparkle", title: () => t("settings.paneAgent"), purpose: agentPurpose },
+  { id: "connections", icon: "link", title: () => t("settings.paneConnections"), purpose: () => t("settings.purposeConnections") },
   { id: "usage", icon: "wallet", title: () => t("settings.paneUsage"), purpose: () => t("settings.purposeUsage") },
   { id: "about", icon: "info", title: () => t("common.about"), purpose: () => t("settings.purposeAbout") },
 ];
@@ -122,6 +124,8 @@ export interface SettingsView {
   languageGroups: LanguageGroup[] | null;
   /** The time the forecasts and the age of the prices are told from. */
   now: number;
+  /** The 「連接」 tab: the groups of tools, the form that adds one, the latest actions. */
+  connections: ConnectionsView;
 }
 
 // ---------- what is chosen ----------
@@ -416,6 +420,11 @@ function agentHTML(v: SettingsView): string {
   );
 }
 
+/** 連接: the programs Raphael is connected to and what it may do with each tool of them: a list and the chosen item, under the heading. */
+function connectionsTabHTML(v: SettingsView): string {
+  return headingHTML(v) + connectionsHTML(v.connections);
+}
+
 /** 模型與用量: the OpenRouter key and what this month has cost against the limit, then the models and their prices. */
 function usageHTML(v: SettingsView): string {
   const limitShown = v.limitDraft ?? String(v.brain?.monthly_limit_usd ?? 10);
@@ -460,6 +469,8 @@ export function paneHTML(v: SettingsView): string {
       return dictationHTML(v);
     case "agent":
       return agentHTML(v);
+    case "connections":
+      return connectionsTabHTML(v);
     case "usage":
       return usageHTML(v);
     case "about":

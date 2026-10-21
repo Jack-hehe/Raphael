@@ -32,7 +32,12 @@ const ICON = {
   left: "M10 3.8 5.8 8l4.2 4.2",
   right: "M6 3.8 10.2 8 6 12.2",
   refresh: "M13 6.5A5.2 5.2 0 0 0 3.4 4.3L2 6M2 2.8V6h3.2M3 9.5a5.2 5.2 0 0 0 9.6 2.2L14 10M10.8 10H14v3.2",
+  link: "M6.8 9.2a2.4 2.4 0 0 0 3.4 0l2.2-2.2a2.4 2.4 0 0 0-3.4-3.4l-.8.8M9.2 6.8a2.4 2.4 0 0 0-3.4 0L3.6 9a2.4 2.4 0 0 0 3.4 3.4l.8-.8",
   chat: "M3.2 3.2h9.6a.8.8 0 0 1 .8.8v5.6a.8.8 0 0 1-.8.8H8.4L5.4 13v-2.6H3.2a.8.8 0 0 1-.8-.8V4a.8.8 0 0 1 .8-.8zM5.6 6.2h4.8M5.6 8h3",
+  globe: "M8 2.2a5.8 5.8 0 1 1 0 11.6A5.8 5.8 0 0 1 8 2.2zM2.4 8h11.2M8 2.2c1.6 1.6 2.4 3.6 2.4 5.8S9.6 12.2 8 13.8M8 2.2C6.4 3.8 5.6 5.8 5.6 8s.8 4.2 2.4 5.8",
+  monitor: "M2.6 3.2h10.8a.6.6 0 0 1 .6.6v6.6a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6V3.8a.6.6 0 0 1 .6-.6zM6 13.6h4M8 11v2.6",
+  shield: "M8 2.2 13 4v3.8c0 3-2.2 5.2-5 6-2.8-.8-5-3-5-6V4zM5.8 8l1.6 1.6 2.8-3",
+  grid: "M2.8 2.8h4v4h-4zM9.2 2.8h4v4h-4zM2.8 9.2h4v4h-4zM9.2 9.2h4v4h-4z",
 } as const;
 
 export type IconName = keyof typeof ICON;
@@ -80,6 +85,8 @@ export interface Choice {
   detail?: string;
   /** A line under the label in a menu: what the choice does. */
   desc?: string;
+  /** A small tag after the label in a menu: 「建議」, say. */
+  tag?: string;
 }
 
 /** The text on a closed dropdown for `choice`, and its tooltip: the whole text. */
@@ -360,6 +367,7 @@ export function openMenu(
           (o.desc
             ? `<span class="mtd"><span class="mt">${esc(o.label)}</span><span class="mdesc">${esc(o.desc)}</span></span>`
             : `<span class="mt">${esc(o.label)}</span>`) +
+          (o.tag ? `<span class="mtag">${esc(o.tag)}</span>` : "") +
           (o.detail ? `<span class="md num">${esc(o.detail)}</span>` : "") +
           `</button>`,
       )

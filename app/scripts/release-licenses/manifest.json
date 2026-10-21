@@ -109,6 +109,21 @@
           "sha256": "0af8f1b807512aae39c2ac1aa4d0cae65cabecb6fd554b8439a5162a0d6eca55"
         }
       ]
+    },
+    {
+      "name": "Simple Icons",
+      "version": "16.35.0",
+      "license": "CC0-1.0",
+      "repository": "https://github.com/simple-icons/simple-icons",
+      "source": "https://github.com/simple-icons/simple-icons/tree/955f17f35634cd58de1748204059bce380d379af",
+      "usage": "The SVG paths of the marks of Notion, GitHub, Google Drive, Gmail, Google Calendar, Linear, Figma, Spotify, Discord, Todoist and Obsidian in app/src/main/service-icons.ts, taken from https://simpleicons.org (CC0-1.0, a public domain dedication). The marks are trademarks of their owners, who do not sponsor or endorse Raphael; they are shown only to tell a connected program apart.",
+      "files": [
+        {
+          "file": "simple-icons-16.35.0-LICENSE.txt",
+          "sourceUrl": "https://raw.githubusercontent.com/simple-icons/simple-icons/955f17f35634cd58de1748204059bce380d379af/LICENSE.md",
+          "sha256": "9046848b63a5c92bff14e4accca80bd987e0623b74adf9226ce5198d312b79d5"
+        }
+      ]
     }
   ]
 }

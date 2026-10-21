@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "vitest";
+import { emptyConnectionsView } from "../connections";
 import { setLocale } from "../i18n";
 import type { LanguageGroup } from "../languages";
 import type { BrainSettings, CatalogModel, DeviceSettings, ModelCatalog, SettingsPane, Status } from "../types";
@@ -73,7 +74,7 @@ const view = (over: Partial<SettingsView> = {}): SettingsView => ({
   pane: "general", device, brain, hasKey: true, openrouter, spend, catalog, checkingOpenrouter: false,
   devices: { devices: [{ index: 0, name: REALTEK, is_default: true }], selected: null, automatic_device: REALTEK },
   altgr: false, version: "0.1.0", replacingKey: false, confirmingKeyRemoval: false, keyBusy: false, keyError: null, limitDraft: null, limitError: null,
-  cityDraft: null, cityError: null, languageGroups: GROUPS, now: NOW, ...over,
+  cityDraft: null, cityError: null, languageGroups: GROUPS, now: NOW, connections: emptyConnectionsView(), ...over,
 });
 const tab = (pane: SettingsPane, over: Partial<SettingsView> = {}): string => paneHTML(view({ pane, ...over }));
 const IDS = PANES.map((p) => p.id);
@@ -97,8 +98,8 @@ const described = (html: string): string[] =>
 
 describe("the tabs", () => {
   test("are General, Dictation, Raphael, Models & usage and About, in each language", () => {
-    expect(IDS).toEqual(["general", "dictation", "agent", "usage", "about"]);
-    const titles = { "zh-TW": ["一般", "聽寫", "拉斐爾", "模型與用量", "關於"], en: ["General", "Dictation", "Raphael", "Models & usage", "About"], ja: ["一般", "音声入力", "ラファエル", "モデルと使用量", "アプリ情報"] };
+    expect(IDS).toEqual(["general", "dictation", "agent", "connections", "usage", "about"]);
+    const titles = { "zh-TW": ["一般", "聽寫", "拉斐爾", "連接", "模型與用量", "關於"], en: ["General", "Dictation", "Raphael", "Connections", "Models & usage", "About"], ja: ["一般", "音声入力", "ラファエル", "接続", "モデルと使用量", "アプリ情報"] };
     for (const locale of LOCALES) {
       setLocale(locale);
       expect(PANES.map((p) => p.title())).toEqual(titles[locale]);
@@ -143,7 +144,7 @@ describe("the owner's rules, in every tab and language", () => {
       for (const id of IDS) {
         for (const over of [{}, { hasKey: false }, { brain: null }, { altgr: true }]) {
           const html = tab(id, over);
-          for (const tag of buttons(html)) expect(tag).toMatch(/class="(btn[ "]|sel[ "]|tg")/);
+          for (const tag of buttons(html)) expect(tag).toMatch(/class="(btn[ "]|sel[ "]|tg|ca-item[ "])/);
           expect(html).not.toMatch(/quiet|class="link"|<a\b/);
         }
       }

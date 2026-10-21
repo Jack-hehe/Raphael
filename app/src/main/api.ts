@@ -7,6 +7,10 @@ import { withWindowHotkeyPause } from "./window-hotkeys";
 import type { LanguageGroup } from "./languages";
 import type {
   AgentTurn,
+  AuditEntry,
+  ConnectionGroup,
+  NewConnection,
+  ToolTier,
   AudioDevices,
   BrainSettings,
   DeviceSettings,
@@ -91,6 +95,23 @@ export const secretsStatus = (): Promise<{ has_key: boolean }> => core("secrets.
 export const secretsSetOpenrouterKey = (key: string): Promise<KeyCheck> => core("secrets.set_openrouter_key", { key });
 /** Removes the stored key. Nothing comes back: the key never reaches the page. */
 export const secretsClearOpenrouterKey = (): Promise<Record<string, never>> => core("secrets.clear_openrouter_key");
+
+// ---------- connections (plugins and Raphael's own tools) ----------
+
+export const toolsetsList = (): Promise<{ groups: ConnectionGroup[] }> => core("toolsets.list");
+/** Connects a server. The values of its variables and headers go to the vault and never come back. */
+export const integrationsAdd = (server: NewConnection): Promise<{ server: { id: string } }> => core("integrations.add", server);
+export const integrationsRefresh = (id: string): Promise<Record<string, unknown>> => core("integrations.refresh", { id });
+export const integrationsSetEnabled = (id: string, enabled: boolean): Promise<Record<string, unknown>> =>
+  core("integrations.set_enabled", { id, enabled });
+export const integrationsRemove = (id: string): Promise<{ removed: boolean }> => core("integrations.remove", { id });
+/** The tier of one tool; null blocks it on purpose. */
+export const integrationsSetTier = (id: string, tool: string, tier: ToolTier | null): Promise<Record<string, unknown>> =>
+  core("integrations.set_tier", { id, tool, tier });
+/** One tier for the tools the server has now, or for the ones named; tools it adds later stay undecided and blocked. */
+export const integrationsSetGroupTier = (id: string, tier: ToolTier | null, tools?: string[]): Promise<Record<string, unknown>> =>
+  core("integrations.set_group_tier", tools ? { id, tier, tools } : { id, tier });
+export const integrationsAudit = (limit = 8): Promise<{ entries: AuditEntry[] }> => core("integrations.audit", { limit });
 
 // ---------- the device side of the core ----------
 
