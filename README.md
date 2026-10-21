@@ -54,10 +54,10 @@ Core (Python 3.12)             audio capture, speech recognition, cleanup,
 | Directory | Contents |
 | --- | --- |
 | [`app/src`](app/src) | Main window and overlay (TypeScript, no framework) |
+| [`app/public/brand`](app/public/brand) | In-app artwork: the sidebar and About image and the emblem's ring texture |
 | [`app/src-tauri`](app/src-tauri) | Desktop shell (Rust) |
+| [`app/src-tauri/icons`](app/src-tauri/icons) | Application, tray and installer icons, generated from `app-icon.png` |
 | [`core`](core) | Python core |
-| [`eval`](eval) | Evaluation sets for cleanup and speech recognition |
-| [`docs`](docs) | CI, release and manual testing guides |
 
 ## Building from source
 
@@ -72,7 +72,34 @@ npm ci
 npm run tauri -- dev
 ```
 
-Development builds run the Python core from the source tree. [docs/windows-release.md](docs/windows-release.md) describes how the installer is built.
+Development builds run the Python core from the source tree.
+
+The icons in `app/src-tauri/icons` are generated from `app-icon.png` with `npm run tauri -- icon src-tauri/icons/app-icon.png -o src-tauri/icons`; the generated files are committed, so a build does not need this step.
+
+### Building the installer
+
+The Windows installer bundles the desktop app with a frozen copy of the Python core, so end users need neither Python nor Node.js. From `core/`:
+
+```powershell
+uv sync --locked --group packaging
+uv run --locked --no-sync python packaging/build.py
+uv run --locked --no-sync python packaging/smoke.py --core dist/raphael-core/raphael-core.exe
+```
+
+Then from `app/`:
+
+```powershell
+npm ci --ignore-scripts
+node scripts/check-release-version.mjs
+node scripts/collect-release-notices.mjs
+node scripts/tauri.mjs build --config src-tauri/tauri.release.conf.json --bundles nsis --ci -- --locked
+```
+
+`check-release-version.mjs` fails unless `app/package.json`, `tauri.conf.json`, `Cargo.toml`, `core/pyproject.toml` and the core's `__version__` carry the same version. The installer is per-user and needs no administrator rights; speech models are downloaded after installation.
+
+## Secrets
+
+Raphael has no secrets in the repository or its configuration files. The OpenRouter API key you enter in the app is stored in Windows Credential Manager, and settings, history and the dictionary live in `%APPDATA%\Raphael`. The test suite replaces the credential store with a fail-closed backend, so tests never touch real credentials.
 
 ## Testing
 
@@ -91,7 +118,7 @@ cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 ```
 
-CI runs these checks on Windows for pull requests and pushes to `main`, together with formatting, the vendored keyboard hook's tests and a debug build of the app; [docs/ci.md](docs/ci.md) lists every command. Tests that need the downloaded speech models run only with `RAPHAEL_TEST_MODELS=1`. Behaviour that depends on real microphones, input methods and editors is covered by the [manual checklist](docs/windows-manual-checks.md).
+CI runs these checks on Windows for pull requests and pushes to `main`, together with `cargo fmt --all -- --check`, the vendored keyboard hook's tests (`cargo test --locked --lib --manifest-path vendor/handy-keys/Cargo.toml`) and a debug build of the app (`node scripts/tauri.mjs build --debug --no-bundle --ci -- --locked` in `app/`). Tests that need the downloaded speech models run only with `RAPHAEL_TEST_MODELS=1`. Behaviour that depends on real microphones, input methods and editors is checked by hand.
 
 ## Contributing
 
@@ -99,10 +126,10 @@ Bug reports and suggestions are welcome in [GitHub Issues](https://github.com/Ja
 
 ## License
 
-Raphael is released under the [MIT License](LICENSE). The license covers this repository's code and public assets; it grants no rights to the series' characters, names or artwork.
+Raphael is released under the [MIT License](LICENSE).
 
 ## Acknowledgements
 
 Raphael builds on [Tauri](https://tauri.app), [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [OpenCC](https://github.com/BYVoid/OpenCC) and [handy-keys](https://github.com/handy-computer/handy-keys), and its paste code is adapted from [Handy](https://github.com/cjpais/Handy). Each release includes the third-party licenses in `THIRD_PARTY_NOTICES.txt`.
 
-Raphael is an unofficial fan project inspired by Raphael, the skill from *That Time I Got Reincarnated as a Slime*. It is not affiliated with the rights holders, and this repository contains no artwork, audio or voice models from the series.
+Raphael is an unofficial fan project inspired by Raphael, the skill from *That Time I Got Reincarnated as a Slime*. It is not affiliated with the rights holders.
