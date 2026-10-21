@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
   DICTATION_MODES,
-  DEFAULT_DICTATION_MODE,
   type DictationMode,
   homeHint,
   historyEmptyHint,
@@ -20,10 +19,6 @@ describe("the choices", () => {
       { value: "toggle", label: "按一下開始／結束", desc: modeDescription("toggle") },
       { value: "hold", label: "按住說話", desc: modeDescription("hold") },
     ]);
-  });
-
-  test("toggle is the default, like device_settings.rs", () => {
-    expect(DEFAULT_DICTATION_MODE).toBe("toggle");
   });
 
   test("only the two modes are modes", () => {

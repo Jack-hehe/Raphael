@@ -145,6 +145,14 @@ def test_whisper_on_groq_gets_the_hints_as_a_prompt_and_a_top_level_language():
     assert "拉斐爾" in prompt and "Tauri" in prompt
 
 
+@pytest.mark.parametrize("model", [*STT_CLOUD_MODELS, "deepgram/nova-3", "openai/whisper-1"])
+def test_the_models_said_to_get_the_dictionary_are_the_ones_that_get_it(model):
+    # The settings page tells the models with the dictionary from the others by this list.
+    body = transcription_body(model, AUDIO, "wav", language=None, hints=["拉斐爾"])
+    hinted = "拉斐爾" in json.dumps(body, ensure_ascii=False)
+    assert hinted == (model in openrouter.STT_MODELS_WITH_HINTS)
+
+
 @pytest.mark.parametrize("model", [m for m in STT_CLOUD_MODELS if m.split("/")[0] != "openai"])
 def test_other_models_get_the_language_at_the_top_level_and_no_options(model):
     body = transcription_body(model, AUDIO, "wav", language="en", hints=["Raphael"])

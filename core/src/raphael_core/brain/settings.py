@@ -1,8 +1,18 @@
 """Settings shared by the whole brain, kept in the database as JSON text.
 
 Only keys in DEFAULTS exist. A key nobody has set reads as its default. Most keys are only
-type-checked; the speech-to-text ones must also be one of their listed values, and `languages` a
-valid selection (see raphael_core.languages).
+type-checked; the speech-to-text engine must also be one of its listed values, `languages` a valid
+selection (see raphael_core.languages), and the models and the assistant's city a text of some
+substance (saved without the spaces around it; a model id has none inside). Which models may be
+chosen is for the brain to say, which knows OpenRouter's list of them (brain/catalog.py): here a
+model is only an id.
+
+A key that an older version saved but that is no longer a setting stays in the table and is never
+read: `all` lists only the keys of DEFAULTS, and `get` and `set` refuse the others, so nothing has
+to be rewritten at start-up. Two are such keys: `agent_router` (whether Jev or the language model
+routed the assistant's requests; Jev always does now, so a saved "luna" changes nothing) and
+`learn_corrections` (whether the words corrected after a paste were learned; they always are now,
+so a saved false changes nothing).
 
 `language` is the setting `languages` replaced, kept for one release: it reads as what the
 selection amounts to ("zh", "ja", "en" or "auto"), and setting it sets `languages`. A saved
@@ -23,7 +33,9 @@ from ..languages import (
 
 DEFAULTS: dict[str, Any] = {
     "monthly_limit_usd": 10.0,
-    # The best of the cleanup eval on 2026-10-18 (33/34 cases, cheapest, ~1.25 s on average).
+    # Chosen from the cleanup eval of 2026-10-18 for its cost and its speed (~1.25 s on average).
+    # The cases and the prompt have changed since, so no pass rate is claimed for it: compare the
+    # models again with `python -m raphael_core.evaluate.cleanup` (eval/README.md).
     "cleanup_model": "openai/gpt-6-luna",
     # The dictation languages, in the user's order of priority (raphael_core.languages).
     "languages": list(DEFAULT_LANGUAGES),
@@ -36,14 +48,19 @@ DEFAULTS: dict[str, Any] = {
     # The most accurate on the samples tried live on 2026-10-18 (gpt-transcribe returned nothing
     # for an English clip and garbled Chinese).
     "stt_cloud_model": "elevenlabs/scribe-v2",
-    # After a paste, the app watches the text field for up to 60 s and learns the words the user
-    # corrects by hand (`dictionary.learn`). Off: the app does not read the field at all.
-    "learn_corrections": True,
+    # The voice assistant (raphael_core.agent). The model that words its answers, and that decides
+    # what a request is when Jev (agent/routing.py, not a setting) fails or is unsure.
+    "agent_model": "openai/gpt-6-luna",
+    # Where the weather is looked up when the user does not say.
+    "agent_city": "台北",
 }
 
+# The longest model id or city name taken: far more than any real one, short of an accident.
+AGENT_TEXT_MAX_CHARS = 100
 STT_ENGINES = ("cloud", "local")
-# The OpenRouter transcription models that can be chosen, the default first. All are listed in
-# OpenRouter's speech-to-text collection, each with an endpoint (checked 2026-10-18).
+# The OpenRouter transcription models the settings page offered before it offered every one, the
+# default first. All are listed in OpenRouter's speech-to-text collection, each with an endpoint
+# (checked 2026-10-18).
 STT_CLOUD_MODELS = (
     "elevenlabs/scribe-v2",
     "openai/gpt-transcribe",
@@ -55,9 +72,11 @@ STT_CLOUD_MODELS = (
 )
 _CHOICES: dict[str, tuple[str, ...]] = {
     "stt_engine": STT_ENGINES,
-    "stt_cloud_model": STT_CLOUD_MODELS,
     "language": LEGACY_LANGUAGES,
 }
+# The settings that hold the id of an OpenRouter model.
+MODEL_SETTINGS = ("cleanup_model", "stt_cloud_model", "agent_model")
+_TRIMMED = (*MODEL_SETTINGS, "agent_city")
 
 
 def _checked(key: str, value: Any) -> Any:
@@ -80,6 +99,34 @@ def _allowed(key: str, value: Any) -> Any:
     if choices is not None and value not in choices:
         raise ValueError(f"Setting {key!r} must be one of {', '.join(choices)}")
     return value
+
+
+def _trimmed(key: str, value: str) -> str:
+    """`value` without the spaces around it, or ValueError if that leaves nothing or too much.
+
+    A model id also has no space inside it. A city may: "New York".
+    """
+    text = value.strip()
+    if not text:
+        raise ValueError(f"Setting {key!r} must not be blank")
+    if len(text) > AGENT_TEXT_MAX_CHARS:
+        raise ValueError(f"Setting {key!r} must be at most {AGENT_TEXT_MAX_CHARS} characters")
+    if key in MODEL_SETTINGS and any(char.isspace() for char in text):
+        raise ValueError(f"Setting {key!r} must not contain spaces")
+    return text
+
+
+def checked(key: str, value: Any) -> tuple[str, Any]:
+    """The key and the value that setting `key` to `value` saves, or the error `SettingsStore.set`
+    raises for them (see there). Nothing is saved."""
+    if key == "languages":
+        return key, checked_languages(key, value)
+    value = _allowed(key, _checked(key, value))
+    if key in _TRIMMED:
+        value = _trimmed(key, value)
+    if key == "language":
+        return "languages", from_legacy(value)
+    return key, value
 
 
 class SettingsStore:
@@ -117,15 +164,11 @@ class SettingsStore:
         """Save a value.
 
         Raises KeyError for an unknown key, TypeError for a value of the wrong type and ValueError
-        for a number JSON cannot hold (nan, inf), a value that is not one of the key's choices or
-        a selection of languages that is not valid. Setting `language` saves `languages`.
+        for a number JSON cannot hold (nan, inf), a value that is not one of the key's choices, a
+        blank or absurd text or a selection of languages that is not valid. Setting `language`
+        saves `languages`.
         """
-        if key == "languages":
-            value = checked_languages(key, value)
-        else:
-            value = _allowed(key, _checked(key, value))
-        if key == "language":
-            key, value = "languages", from_legacy(value)
+        key, value = checked(key, value)
         encoded = json.dumps(value, allow_nan=False)
         with self._conn:
             self._conn.execute(

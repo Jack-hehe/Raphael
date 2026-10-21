@@ -10,15 +10,43 @@ type OverlayModule = typeof import("./overlay");
 
 class NullView implements OverlayView {
   percent: number | null = null;
-  showProgress(percent: number | null): void { this.percent = percent; }
-  lines: string | null = null;
-  place(): void {}
-  layout(): void {}
-  showLines(zh: string | null, ja: string | null): void {
-    this.lines = `${zh ?? "-"}|${ja ?? "-"}`;
+  showProgress(percent: number | null): void {
+    this.percent = percent;
+    this.caption = percent === null ? null : String(percent);
+    this.checkOnePlace();
   }
-  clearLines(): void {
+  /** The caption beside the emblem, which the percentage and the waiting line share. */
+  caption: string | null = null;
+  showWaiting(text: string | null): void {
+    this.caption = text;
+    this.checkOnePlace();
+  }
+  lines: string | null = null;
+  /** The buttons of a question that is on screen: "yes|no", or null. */
+  buttons: string | null = null;
+  /**
+   * The caption and the subtitle line stand in one place (overlay.css), so they must never be on
+   * screen together: each time they were, what was on screen.
+   */
+  readonly overlaps: string[] = [];
+  private checkOnePlace(): void {
+    if (this.caption !== null && this.lines !== null) this.overlaps.push(`${this.caption} / ${this.lines}`);
+  }
+  layout(): void {}
+  showLine(text: string): void {
+    this.lines = text;
+    this.checkOnePlace();
+  }
+  clearLine(): void {
     this.lines = null;
+  }
+  showAsk({ yes, no }: { yes: string; no: string }): void {
+    this.buttons = `${yes}|${no}`;
+  }
+  setHold(): void {}
+  setChoice(): void {}
+  hideAsk(): void {
+    this.buttons = null;
   }
 }
 
@@ -37,8 +65,10 @@ function countingCanvas() {
         return { data: new Uint8ClampedArray([0, 0, 0, stats.ink ? 255 : 0]) };
       };
       return (...args: unknown[]) => {
+        // Checked by hand, and asserted only when a number is bad: an `expect` for every number of
+        // every call at 60 frames a second makes this file several times slower.
         for (const arg of args) {
-          if (typeof arg === "number") expect(Number.isFinite(arg), prop).toBe(true);
+          if (typeof arg === "number" && !Number.isFinite(arg)) expect(arg, prop).toBe("a finite number");
         }
         if (prop === "save") stack.push({ ...target });
         else if (prop === "restore") Object.assign(target, stack.pop());
@@ -53,7 +83,7 @@ function countingCanvas() {
       };
     },
     set(target, prop: string, value) {
-      if (typeof value === "number") expect(Number.isFinite(value), prop).toBe(true);
+      if (typeof value === "number" && !Number.isFinite(value)) expect(value, prop).toBe("a finite number");
       target[prop] = value;
       return true;
     },
@@ -70,6 +100,8 @@ function countingCanvas() {
 }
 
 let frames: FrameRequestCallback[];
+/** The views of the pages of a test. */
+const views: NullView[] = [];
 let now: number;
 let emblemModule: EmblemModule;
 let overlayModule: OverlayModule;
@@ -86,6 +118,8 @@ beforeEach(async () => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  // Whatever the sequence, the caption and a line never stood in their one place together.
+  for (const view of views.splice(0)) expect(view.overlaps).toEqual([]);
 });
 
 /** Lets `ms` milliseconds go by at 60 frames a second, timers included. */
@@ -103,6 +137,7 @@ function page() {
   const { canvas, stats } = countingCanvas();
   const emblem = new emblemModule.Emblem(canvas, 150);
   const view = new NullView();
+  views.push(view);
   const controller = new overlayModule.OverlayController(emblem, view);
   const send = (...events: OverlayEvent[]) => {
     for (const event of events) controller.handle(event);
@@ -116,25 +151,35 @@ function page() {
   return { emblem, view, send, drawsNow, stats, canvas, controller };
 }
 
-const SETTINGS: OverlayEvent = { type: "settings", px: 150, subtitles: "both" };
-const NO_SOUND: OverlayEvent = { type: "notice", zh: "《否。沒有收到聲音，請檢查麥克風。》", ja: "《否。音声が届いていません。》" };
+const SETTINGS: OverlayEvent = { type: "settings", px: 150, subtitles: "on", language: "zh-TW" };
+const NO_SOUND: OverlayEvent = { type: "notice", text: "《否。未收到聲音。請確認麥克風。》" };
 
-test("a delayed corner placement preserves the real dictation progress ring", async () => {
+test("learned words wait through live dictation and completion before appearing", () => {
   const p = page();
-  let placed!: () => void;
-  p.view.place = () => new Promise<void>((resolve) => { placed = resolve; });
+  p.send({ type: "show", mode: "listening" });
+  run(1000);
+  p.send({ type: "learned", text: "learned" });
+  run(1000);
+  expect(p.emblem.phase).toBe("listening");
+  expect(p.view.lines).toBeNull();
   p.send(
-    { type: "show", mode: "listening" },
     { type: "mode", mode: "thinking" },
     { type: "progress", stage: "transcribing", done: 1, total: 3, audio_seconds: 5 },
   );
-  expect(p.emblem.phase).toBe("hidden");
-  placed();
-  await Promise.resolve();
-  run(1000);
+  run(1500);
   expect(p.emblem.phase).toBe("thinking");
-  expect(p.emblem.revealShown).not.toBeNull();
+  expect(p.view.percent).toBe(20);
+  expect(p.view.lines).toBeNull();
   expect(p.drawsNow()).toBe(true);
+  p.send({ type: "complete" });
+  expect(p.view.percent).toBe(100);
+  expect(p.view.lines).toBeNull();
+  run(1000);
+  expect(p.view.percent).toBeNull();
+  expect(p.view.lines).toBe("learned");
+  expect(p.drawsNow()).toBe(true);
+  run(10_000);
+  expect(p.emblem.phase).toBe("hidden");
 });
 
 test("a dictation: show, levels, thinking, hide, and the next dictation shows again", () => {
@@ -259,42 +304,39 @@ const progress = (stage: "transcribing" | "cleaning" | "done", done = 0, total =
   audio_seconds: 6,
 });
 
-test("a dictation with progress: the whole ring while listening, swept away at the stop, drawn in through the stages, then the emblem vanishes", () => {
+test("a dictation with progress: the whole ring all the way through, the percentage beside it, then the emblem vanishes", () => {
   const p = page();
   p.send(SETTINGS);
   for (let round = 0; round < 2; round++) {
     p.send({ type: "show", mode: "listening" });
     run(1200);
-    expect(p.emblem.revealShown, `round ${round}: a new dictation shows the whole ring`).toEqual({ fraction: 0, rest: 0, flash: 0, away: 0, boost: 0 });
+    expect(p.emblem.boost, `round ${round}: a new dictation starts quiet`).toBe(0);
     p.send({ type: "level", value: 0.6 });
     run(100);
-    expect(p.emblem.revealShown?.boost).toBeGreaterThan(0);
+    expect(p.emblem.boost).toBeGreaterThan(0);
     p.send({ type: "level", value: 0 }); // the speech ends
     p.send({ type: "mode", mode: "thinking" }, progress("transcribing", 1, 3));
-    expect(p.drawsNow()).toBe(true); // 100 ms
-    expect(p.emblem.revealShown?.away).toBeGreaterThan(0); // the ring is swept away first
-    expect(p.emblem.revealShown?.fraction).toBe(0);
-    run(220);
-    const first = p.emblem.revealShown?.fraction ?? 0;
-    expect(first).toBeGreaterThan(0);
-    expect(first).toBeLessThanOrEqual(0.2 + 1e-9);
+    expect(p.emblem.boost).toBe(0);
+    expect(p.drawsNow()).toBe(true); // 100 ms: the ring is still there
+    run(1500);
+    expect(p.view.percent).toBe(20);
     p.send(progress("transcribing", 3, 3), progress("cleaning", 3, 3));
     run(800);
-    const cleaning = p.emblem.revealShown?.fraction ?? 0;
-    expect(cleaning).toBeGreaterThan(0.6);
-    expect(cleaning).toBeLessThan(0.95);
+    expect(p.view.percent).toBeGreaterThan(60);
+    expect(p.view.percent).toBeLessThan(95);
     p.send(progress("done"));
-    run(50);
-    expect(p.emblem.revealShown?.fraction).toBe(1);
+    expect(p.view.percent).toBe(99);
+    expect(p.drawsNow()).toBe(true);
     p.send({ type: "hide" });
     run(1000);
+    expect(p.view.percent).toBeNull();
     expect(p.emblem.phase).toBe("hidden");
     expect(p.drawsNow()).toBe(false);
     expect(p.view.lines).toBeNull(); // no words at any point
   }
 });
 
-test("progress then a notice (the text was only copied): the whole ring is back, the notice shows", () => {
+test("progress then a notice (the text was only copied): the percentage goes, the notice shows", () => {
   const p = page();
   p.send({ type: "show", mode: "listening" });
   run(1000);
@@ -302,29 +344,29 @@ test("progress then a notice (the text was only copied): the whole ring is back,
   run(500);
   p.send(progress("done"), NO_SOUND);
   run(400);
-  expect(p.emblem.revealShown).toBeNull(); // the whole ring
+  expect(p.view.percent).toBeNull();
   expect(p.view.lines).not.toBeNull();
   run(10_000);
   expect(p.emblem.phase).toBe("hidden");
   p.send({ type: "show", mode: "listening" });
   expect(p.drawsNow()).toBe(true);
-  expect(p.emblem.revealShown?.fraction).toBe(0);
+  expect(p.emblem.boost).toBe(0);
 });
 
-test("a quick tap: the reply comes during the appear animation, and the ring still closes", () => {
+test("a quick tap: the reply comes during the appear animation", () => {
   const p = page();
   p.send({ type: "show", mode: "listening" });
   run(200);
   p.send({ type: "mode", mode: "thinking" }, progress("transcribing", 0, 1), progress("done"));
   run(50);
   expect(p.emblem.phase).toBe("appear");
-  expect(p.emblem.revealShown?.fraction).toBe(1);
+  expect(p.view.percent).toBe(99);
   p.send({ type: "hide" });
   run(1000);
   expect(p.emblem.phase).toBe("hidden");
   p.send({ type: "show", mode: "listening" });
   expect(p.drawsNow()).toBe(true);
-  expect(p.emblem.revealShown?.fraction).toBe(0);
+  expect(p.view.percent).toBeNull();
 });
 
 test("progress that comes after the hide changes nothing", () => {
@@ -340,17 +382,17 @@ test("progress that comes after the hide changes nothing", () => {
   expect(frames).toHaveLength(0);
 });
 
-test("two shows without a hide reset a swept ring and keep the real emblem drawing", () => {
+test("two shows without a hide start over and keep the real emblem drawing", () => {
   const p = page();
   p.send({ type: "show", mode: "listening" });
   run(1200);
   p.send({ type: "level", value: 0.7 }, { type: "mode", mode: "thinking" }, progress("transcribing", 1, 3));
   run(500);
-  expect(p.emblem.revealShown?.away).toBe(1);
+  expect(p.view.percent).not.toBeNull();
   p.send({ type: "show", mode: "listening" }, { type: "show", mode: "listening" });
   run(2000);
   expect(p.emblem.phase).toBe("listening");
-  expect(p.emblem.revealShown).toMatchObject({ fraction: 0, away: 0, rest: 0 });
+  expect(p.view.percent).toBeNull();
   expect(p.stats.ink).toBe(true);
 });
 
@@ -361,7 +403,7 @@ test("a notice timer cannot hide the next recording after show takes over", () =
   p.send({ type: "show", mode: "listening" });
   run(10_000);
   expect(p.emblem.phase).toBe("listening");
-  expect(p.emblem.revealShown).toMatchObject({ away: 0, fraction: 0 });
+  expect(p.emblem.boost).toBe(0);
   expect(p.stats.ink).toBe(true);
   expect(p.view.lines).toBeNull();
 });
@@ -432,4 +474,124 @@ test("an expired notice stops paint monitoring without an all-transparent warnin
   run(3000);
   expect(p.stats.reads).toBe(reads);
   expect(logged).toEqual([]);
+});
+
+// ---- Raphael answers and asks ----
+
+const ANSWER: OverlayEvent = { type: "say", prefix: "答", text: "台北現在 24 度，多雲。" };
+const QUESTION: OverlayEvent = {
+  type: "ask", id: "c1", tier: "T2", prefix: "問", text: "要複製到剪貼簿嗎？", yes: "是", no: "否", timeout_ms: 30_000,
+};
+
+test("an agent turn: listening, thinking, the answer in words, and the emblem goes after them", () => {
+  const p = page();
+  p.send(SETTINGS, { type: "show", mode: "listening" });
+  run(1000);
+  p.send({ type: "mode", mode: "thinking" });
+  run(1500);
+  expect(p.view.percent).not.toBeNull();
+  p.send(ANSWER);
+  expect(p.view.percent).toBeNull();
+  expect(p.drawsNow()).toBe(true);
+  run(1000);
+  expect(p.view.lines).toBe("《答。台北現在 24 度，多雲。》");
+  run(10_000);
+  expect(p.emblem.phase).toBe("hidden");
+  expect(p.view.lines).toBeNull();
+  expect(p.drawsNow()).toBe(false);
+});
+
+test("a question keeps the emblem drawn while it waits; the answer to it replaces it and the emblem goes", () => {
+  const p = page();
+  p.send(SETTINGS, { type: "show", mode: "listening" });
+  run(1000);
+  p.send({ type: "mode", mode: "thinking" });
+  run(500);
+  p.send(QUESTION);
+  run(1500);
+  expect(p.view.buttons).toBe("是|否");
+  expect(p.view.lines).toBe("《問。要複製到剪貼簿嗎？》");
+  expect(p.view.percent).toBeNull();
+  run(20_000);
+  expect(p.view.buttons).toBe("是|否");
+  expect(p.emblem.phase).not.toBe("hidden");
+  expect(p.drawsNow()).toBe(true);
+  p.controller.clickAsk("yes");
+  p.send({ type: "say", prefix: "了", text: "已複製。" });
+  expect(p.view.buttons).toBeNull();
+  run(1000);
+  expect(p.view.lines).toBe("《了。已複製。》");
+  run(10_000);
+  expect(p.emblem.phase).toBe("hidden");
+  expect(p.view.lines).toBeNull();
+});
+
+test("a question nobody answered is let go, and the next dictation starts clean", () => {
+  const p = page();
+  p.send(SETTINGS, { ...QUESTION, timeout_ms: 5000 });
+  run(5000);
+  expect(p.view.buttons).toBe("是|否");
+  run(3000);
+  expect(p.view.buttons).toBeNull();
+  expect(p.view.lines).toBeNull();
+  run(1000);
+  expect(p.emblem.phase).toBe("hidden");
+  p.send({ type: "show", mode: "listening" });
+  expect(p.drawsNow()).toBe(true);
+  expect(p.view.buttons).toBeNull();
+});
+
+test("Esc during a question (the app hides the emblem) takes the buttons away at once", () => {
+  const p = page();
+  p.send(SETTINGS, QUESTION);
+  run(1500);
+  p.send({ type: "hide" });
+  expect(p.view.buttons).toBeNull();
+  expect(p.view.lines).toBeNull();
+  run(1000);
+  expect(p.emblem.phase).toBe("hidden");
+});
+
+const WAITING = ["《告。解析中……》", "《告。並列演算中……》", "《告。檢索最適解……》"];
+
+test("a question: greeted, thought about with changing lines, and the answer takes them away", () => {
+  const p = page();
+  p.send(SETTINGS, { type: "show", mode: "listening", line: "《告。主人，請下達指示。》" });
+  run(1500);
+  expect(p.view.lines).toBe("《告。主人，請下達指示。》");
+  expect(p.view.caption).toBeNull();
+  p.send({ type: "mode", mode: "thinking", quiet: true, lines: WAITING });
+  expect(p.view.lines).toBeNull();
+  expect(p.view.caption).not.toBeNull();
+  const seen = new Set<string | null>();
+  for (let i = 0; i < 20; i++) {
+    run(1500);
+    seen.add(p.view.caption);
+    expect(p.drawsNow()).toBe(true);
+  }
+  expect(seen.size).toBeGreaterThan(1);
+  for (const caption of seen) expect(WAITING).toContain(caption);
+  expect(p.view.percent).toBeNull();
+  p.send(ANSWER);
+  expect(p.view.caption).toBeNull();
+  run(1000);
+  expect(p.view.lines).toBe("《答。台北現在 24 度，多雲。》");
+  expect(p.view.caption).toBeNull();
+  run(10_000);
+  expect(p.emblem.phase).toBe("hidden");
+  expect(p.view.caption).toBeNull();
+});
+
+test("Esc while a question is thought about takes the line away with the emblem", () => {
+  const p = page();
+  p.send(SETTINGS, { type: "show", mode: "listening", line: "《告。主人，請下達指示。》" });
+  run(1000);
+  p.send({ type: "mode", mode: "thinking", quiet: true, lines: WAITING });
+  run(4000);
+  expect(p.view.caption).not.toBeNull();
+  p.send({ type: "hide" });
+  expect(p.view.caption).toBeNull();
+  run(10_000);
+  expect(p.view.caption).toBeNull();
+  expect(p.emblem.phase).toBe("hidden");
 });

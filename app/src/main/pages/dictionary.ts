@@ -7,11 +7,12 @@ import { onLocaleChange, t } from "../i18n";
 
 import * as api from "../api";
 import { describeError, parseMisheard } from "../format";
+import { LearnHints, editorName } from "../learn-hint";
 import { loadingHTML } from "../loading";
 import type { AppContext, DictionaryEntry, Page } from "../types";
 import { dismissMessage, suggestionsHTML, visibleSuggestions } from "../suggest";
 import { Deletions } from "../undo";
-import { btn, esc, fieldHTML, ico, iconBtn, toaster } from "../ui";
+import { btn, esc, fieldHTML, ico, iconBtn, st, toaster } from "../ui";
 
 type Filter = "all" | "auto" | "manual";
 const FILTERS: { id: Filter; name: string }[] = [
@@ -38,7 +39,13 @@ const wordChip = (entry: DictionaryEntry): string =>
   (entry.misheard.length > 0 ? t("dictionary.005", { p0: esc(entry.misheard.join("、")) }) : "") +
   `</div><span class="acts">${iconBtn("trash", t("dictionary.006", { p0: entry.word }), ' data-act="delete"')}</span></div>`;
 
-export function createDictionary(app: AppContext): Page {
+/** The dictionary, and the way in that the tray's 「將單字加入字典」 takes. */
+export interface DictionaryPage extends Page {
+  /** Opens the fields for a new word and puts the cursor in the word. */
+  addWord(): void;
+}
+
+export function createDictionary(app: AppContext): DictionaryPage {
   const el = document.createElement("div");
   el.className = "page page-dict";
   el.dataset.page = "dictionary";
@@ -53,6 +60,7 @@ export function createDictionary(app: AppContext): Page {
     FILTERS.map((f) => `<button type="button" data-filter="${f.id}" aria-pressed="${f.id === "all"}">${f.name}</button>`).join("") +
     `</div><span class="count num"></span>` +
     `<div class="dsearch">${fieldHTML(t("dictionary.016"), "", { icon: "search", get label() { return t("dictionary.016"); }, id: "dict-q" })}</div></div>` +
+    `<div class="learn-hint" hidden></div>` +
     `<div class="sugg" hidden></div>` +
     `<div class="wgrid"></div><div class="empty" hidden></div>`;
   const wordInput = el.querySelector<HTMLInputElement>("#nw-word")!;
@@ -64,6 +72,23 @@ export function createDictionary(app: AppContext): Page {
   const count = el.querySelector<HTMLElement>(".count")!;
   const grid = el.querySelector<HTMLElement>(".wgrid")!;
   const empty = el.querySelector<HTMLElement>(".empty")!;
+  const hintBox = el.querySelector<HTMLElement>(".learn-hint")!;
+
+  // Editors that hide their text from learning: one hint each, until dismissed.
+  const hints = new LearnHints();
+  app.onEvent((event) => hints.handle(event));
+  hints.onChange(renderHints);
+  function renderHints(): void {
+    const editors = hints.pending();
+    hintBox.hidden = editors.length === 0;
+    hintBox.innerHTML = editors
+      .map(
+        (editor) =>
+          `<div class="alert" role="status">${st("warn", t("learnHint.body", { p0: editorName(editor) }))}` +
+          `${btn(t("learnHint.dismiss"), "sm", ` data-act="hint-dismiss" data-editor="${esc(editor)}"`)}</div>`,
+      )
+      .join("");
+  }
 
   let entries: DictionaryEntry[] = [];
   let suggested: string[] = [];
@@ -196,6 +221,7 @@ export function createDictionary(app: AppContext): Page {
     if (act.dataset.act === "add") void addFromFields();
     else if (act.dataset.act === "new") showAdd(addBox.hidden === true);
     else if (act.dataset.act === "new-cancel") showAdd(false);
+    else if (act.dataset.act === "hint-dismiss") hints.dismiss(act.dataset.editor ?? "");
     else if (act.dataset.act === "suggest") void add(act.dataset.word ?? "", []);
     else if (act.dataset.act === "dismiss" && act.dataset.word) dismiss(act.dataset.word);
     else if (act.dataset.act === "delete") remove(Number(act.closest<HTMLElement>(".wrow")?.dataset.id));
@@ -215,6 +241,7 @@ export function createDictionary(app: AppContext): Page {
   });
 
   onLocaleChange(() => {
+    renderHints();
     el.querySelector("h1")!.textContent = t("main.003");
     newButton.innerHTML = t("dictionary.007", { p0: ico("plus") });
     el.querySelector(".lede")!.outerHTML = t("dictionary.009");
@@ -239,6 +266,9 @@ export function createDictionary(app: AppContext): Page {
     },
     hide() {
       loads++;
+    },
+    addWord() {
+      showAdd(true);
     },
   };
 }

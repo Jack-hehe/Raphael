@@ -1,4 +1,5 @@
-"""Client for OpenRouter's API: JSON that fits a schema from a chat model, and transcriptions.
+"""Client for OpenRouter's API: JSON that fits a schema from a chat model, transcriptions, and
+what the voice assistant asks (a decision from Jev, text from a model that searched the web).
 
 A call that fails raises an OpenRouterError that says what kind of failure it was, so callers
 need not know the exceptions of httpx or of the key store: a key provider that fails is an auth
@@ -10,6 +11,7 @@ the type of the exception behind it when there is one, and nothing else.
 
 import json
 import logging
+import math
 import re
 import threading
 import time
@@ -25,6 +27,8 @@ from .settings import DEFAULTS
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://openrouter.ai/api/v1"
+# Jev's decisions are an alpha API, outside /api/v1.
+ALPHA_URL = "https://openrouter.ai/api/alpha"
 
 DEFAULT_CLEANUP_MODEL: str = DEFAULTS["cleanup_model"]
 # Tried in this order when the chosen model fails. All three models can run with reasoning off,
@@ -45,6 +49,8 @@ _TOKEN = re.compile(r"[\x21-\x7e]+")
 # `languages`, which replaces the singular `language` (OpenAI's speech-to-text guide); Whisper on
 # Groq takes a `prompt` (OpenRouter's speech-to-text guide). The other models get the language only:
 # their hint fields are not documented, and some providers (Azure) refuse a field they do not know.
+# The models that are given the dictionary that way, for the settings page to say so.
+STT_MODELS_WITH_HINTS = ("openai/gpt-transcribe", "openai/whisper-large-v3-turbo")
 MAX_KEYWORDS = 50
 MAX_KEYWORD_CHARS = 64
 _MAX_WHISPER_PROMPT_CHARS = 200
@@ -58,6 +64,46 @@ class Completion:
     data: dict  # the model's reply, parsed
     model: str  # the model that answered, which can be one of the fallbacks
     cost_usd: float
+    prompt_tokens: int
+    completion_tokens: int
+    latency_ms: int  # of the HTTP call
+
+
+@dataclass
+class Decision:
+    """What Jev answered. Each answer is as the API gives it: `{"type": "choice", "choice": ...,
+    "confidence": ..., "probabilities": {...}}` or `{"type": "noul", "noul": ...}`."""
+
+    answers: dict[str, Any]
+    cost_usd: float  # always a number the spend can store: 0 or more, and finite
+    latency_ms: int  # of the HTTP call
+
+
+@dataclass
+class TextCompletion:
+    text: str
+    model: str  # the model that answered, which can be one of the fallbacks
+    cost_usd: float  # always a number the spend can store: 0 or more, and finite
+    prompt_tokens: int
+    completion_tokens: int
+    latency_ms: int  # of the HTTP call
+    sources: list[dict[str, str]]  # {"title", "url"} of the pages a web search drew on
+
+
+@dataclass
+class ToolCall:
+    """A call the model asked for: the name it was offered the tool under, and the arguments as the
+    model wrote them (JSON that was parsed; an object, if the model did as asked)."""
+
+    name: str
+    arguments: Any
+
+
+@dataclass
+class ToolPlan:
+    calls: list[ToolCall]  # none when the model asked for no tool
+    model: str  # the model that answered, which can be one of the fallbacks
+    cost_usd: float  # always a number the spend can store: 0 or more, and finite
     prompt_tokens: int
     completion_tokens: int
     latency_ms: int  # of the HTTP call
@@ -223,6 +269,13 @@ def _usage_amount(usage: dict, field: str) -> float:
     return 0.0
 
 
+def _usage_cost(usage: dict) -> float:
+    """usage["cost"] as a cost the spend tracker takes: 0.0 if it is missing, no number, negative
+    or not finite."""
+    cost = _usage_amount(usage, "cost")
+    return cost if math.isfinite(cost) and cost >= 0 else 0.0
+
+
 def _usage_count(usage: dict, field: str) -> int:
     """usage[field], or 0 if it is missing, null or no whole number."""
     value = usage.get(field)
@@ -260,6 +313,110 @@ def _to_completion(reply: _Reply, requested_model: str) -> Completion:
         data=data,
         model=answered_by if isinstance(answered_by, str) and answered_by else requested_model,
         cost_usd=_usage_amount(usage, "cost"),
+        prompt_tokens=_usage_count(usage, "prompt_tokens"),
+        completion_tokens=_usage_count(usage, "completion_tokens"),
+        latency_ms=reply.latency_ms,
+    )
+
+
+def _usage_of(body: Any) -> dict:
+    raw_usage = body.get("usage") if isinstance(body, dict) else None
+    return raw_usage if isinstance(raw_usage, dict) else {}
+
+
+def _to_decision(reply: _Reply) -> Decision:
+    answers = reply.body.get("answers") if isinstance(reply.body, dict) else None
+    if not isinstance(answers, dict):
+        raise _failure(reply.status, "bad_response", "The reply has no answers")
+    return Decision(
+        answers=answers,
+        cost_usd=_usage_cost(_usage_of(reply.body)),
+        latency_ms=reply.latency_ms,
+    )
+
+
+_MAX_SOURCES = 5
+
+
+def _sources(annotations: Any) -> list[dict[str, str]]:
+    """The pages a reply cites: the `url_citation` annotations that have a URL, each page once."""
+    sources: list[dict[str, str]] = []
+    if not isinstance(annotations, list):
+        return sources
+    for annotation in annotations:
+        if not isinstance(annotation, dict) or annotation.get("type") != "url_citation":
+            continue
+        citation = annotation.get("url_citation")
+        url = citation.get("url") if isinstance(citation, dict) else None
+        if not isinstance(url, str) or not url or any(s["url"] == url for s in sources):
+            continue
+        title = citation.get("title")
+        sources.append({"title": title if isinstance(title, str) else "", "url": url})
+        if len(sources) == _MAX_SOURCES:
+            break
+    return sources
+
+
+def _to_text_completion(reply: _Reply, requested_model: str) -> TextCompletion:
+    body = reply.body
+    choices = body.get("choices") if isinstance(body, dict) else None
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    if not isinstance(choice, dict):
+        raise _failure(reply.status, "bad_response", "The reply has no choices")
+    # Checked before the content: a choice that failed midway holds a part of the reply.
+    if choice.get("finish_reason") == "error":
+        raise _reported_error(
+            _error_object(choice), reply.status, "The model ended its reply with an error"
+        )
+    message = choice.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise _failure(reply.status, "bad_response", "The reply has no text")
+    usage = _usage_of(body)
+    answered_by = body.get("model")
+    return TextCompletion(
+        text=content.strip(),
+        model=answered_by if isinstance(answered_by, str) and answered_by else requested_model,
+        cost_usd=_usage_cost(usage),
+        prompt_tokens=_usage_count(usage, "prompt_tokens"),
+        completion_tokens=_usage_count(usage, "completion_tokens"),
+        latency_ms=reply.latency_ms,
+        sources=_sources(message.get("annotations")),
+    )
+
+
+def _to_tool_plan(reply: _Reply, requested_model: str) -> ToolPlan:
+    body = reply.body
+    choices = body.get("choices") if isinstance(body, dict) else None
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    if not isinstance(choice, dict):
+        raise _failure(reply.status, "bad_response", "The reply has no choices")
+    # Checked before the calls: a choice that failed midway holds a part of the reply.
+    if choice.get("finish_reason") == "error":
+        raise _reported_error(
+            _error_object(choice), reply.status, "The model ended its reply with an error"
+        )
+    message = choice.get("message")
+    raw_calls = message.get("tool_calls") if isinstance(message, dict) else None
+    calls: list[ToolCall] = []
+    for raw in raw_calls if isinstance(raw_calls, list) else []:
+        function = raw.get("function") if isinstance(raw, dict) else None
+        name = function.get("name") if isinstance(function, dict) else None
+        if not isinstance(name, str) or not name:
+            continue
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments) if arguments.strip() else {}
+            except ValueError:
+                continue  # a call whose arguments are not JSON cannot be made
+        calls.append(ToolCall(name=name, arguments=arguments))
+    usage = _usage_of(body)
+    answered_by = body.get("model")
+    return ToolPlan(
+        calls=calls,
+        model=answered_by if isinstance(answered_by, str) and answered_by else requested_model,
+        cost_usd=_usage_cost(usage),
         prompt_tokens=_usage_count(usage, "prompt_tokens"),
         completion_tokens=_usage_count(usage, "completion_tokens"),
         latency_ms=reply.latency_ms,
@@ -399,14 +556,19 @@ class OpenRouterClient:
         schema_name: str,
         timeout_s: float,
         max_tokens: int,
+        reasoning_effort: str = "none",
     ) -> Completion:
         """Ask `model` for JSON that fits `schema`; OpenRouter tries `fallbacks` if it fails.
 
         Only the parameters OpenRouter documents for structured output are sent. In particular
         there is no temperature or top_p: with require_parameters, a model that cannot take one
         (gpt-6-luna has no temperature; claude-haiku-5.5 rejects any value but its default) would
-        be left out. Reasoning is off. `timeout_s` applies to each stage of the request (connect,
-        send, wait, read), so the caller still needs a deadline of its own for the whole call.
+        be left out. Reasoning is off unless `reasoning_effort` asks for some, and every caller
+        keeps it off (agent/answers.py has what thinking first cost an answer, measured live).
+        `data_collection: "deny"` keeps the dictated text away from providers that may store or
+        train on what they are sent, as it does for the audio of a transcription
+        (`transcription_body`). `timeout_s` applies to each stage of the request (connect, send,
+        wait, read), so the caller still needs a deadline of its own for the whole call.
         """
         body: dict[str, Any] = {
             "model": model,
@@ -418,8 +580,8 @@ class OpenRouterClient:
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
-            "provider": {"require_parameters": True, "sort": "latency"},
-            "reasoning": {"effort": "none"},
+            "provider": {"require_parameters": True, "sort": "latency", "data_collection": "deny"},
+            "reasoning": {"effort": reasoning_effort},
             "max_tokens": max_tokens,
         }
         # The chosen model is tried first, so listing it again would only repeat a failed attempt.
@@ -430,6 +592,105 @@ class OpenRouterClient:
             "POST", "/chat/completions", self._stored_key(), timeout_s, body
         )
         return _to_completion(reply, model)
+
+    async def decide(
+        self, *, model: str, state: dict, questions: dict, timeout_s: float
+    ) -> Decision:
+        """Put `questions` about `state` to a decision model (Jev) and return its answers.
+
+        One request answers every question. A `choice` question has the criteria of each option
+        and is answered with the option and a confidence; a `noul` one has a criterion for true
+        and one for false and is answered with a number. `timeout_s` applies to each stage of the
+        request, like complete_json's, so the caller still needs a deadline of its own. The state
+        is what the user said, so `data_collection: "deny"` keeps it away from providers that may
+        store or train on it, as every other call does (the decisions API takes the same provider
+        preferences).
+        """
+        body = {
+            "model": model,
+            "state": state,
+            "questions": questions,
+            "provider": {"data_collection": "deny"},
+        }
+        reply = await self._request(
+            "POST", "/decisions", self._stored_key(), timeout_s, body, base_url=ALPHA_URL
+        )
+        return _to_decision(reply)
+
+    async def chat_text(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        timeout_s: float,
+        max_tokens: int,
+        plugins: Sequence[dict] | None = None,
+        reasoning_effort: str = "none",
+    ) -> TextCompletion:
+        """Ask `model` for text, with the OpenRouter `plugins` given (`{"id": "web",
+        "max_results": 3}` lets it search the web first). The pages it drew on are in `sources`.
+
+        Like complete_json, this sends no temperature and denies data collection. Unlike it, the
+        reply is not JSON and the routing does not require every parameter, since the plugins are
+        OpenRouter's own and no provider has to know them.
+        """
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "provider": {"sort": "latency", "data_collection": "deny"},
+            "reasoning": {"effort": reasoning_effort},
+            "max_tokens": max_tokens,
+        }
+        if plugins:
+            body["plugins"] = list(plugins)
+        reply = await self._request(
+            "POST", "/chat/completions", self._stored_key(), timeout_s, body
+        )
+        return _to_text_completion(reply, model)
+
+    async def plan_tools(
+        self,
+        *,
+        model: str,
+        fallbacks: list[str],
+        system: str,
+        user: str,
+        tools: Sequence[dict],
+        timeout_s: float,
+        max_tokens: int,
+        reasoning_effort: str = "none",
+    ) -> ToolPlan:
+        """Ask `model` which of `tools` (in the chat format: `{"type": "function", "function":
+        {name, description, parameters}}`) the request needs, if any. The model answers with the
+        calls it wants and nothing else; none of them is made here.
+
+        Like complete_json, this requires every parameter from the provider (a provider that cannot
+        take tools is left out), sends no temperature, denies data collection and tries the
+        `fallbacks` if the model fails.
+        """
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "tools": list(tools),
+            "tool_choice": "auto",
+            "provider": {"require_parameters": True, "sort": "latency", "data_collection": "deny"},
+            "reasoning": {"effort": reasoning_effort},
+            "max_tokens": max_tokens,
+        }
+        models = [m for m in fallbacks if m != model]
+        if models:
+            body["models"] = models
+        reply = await self._request(
+            "POST", "/chat/completions", self._stored_key(), timeout_s, body
+        )
+        return _to_tool_plan(reply, model)
 
     async def transcribe(
         self,
@@ -528,10 +789,12 @@ class OpenRouterClient:
         body: dict | None = None,
         *,
         public: bool = False,
+        base_url: str = BASE_URL,
     ) -> _Reply:
         """Send one request and return the decoded reply, or raise the OpenRouterError it earns.
 
         A `public` request is for an endpoint that needs no key: `key` is ignored and not sent.
+        `path` is under `base_url`.
         """
         headers = dict(_APP_HEADERS)
         if not public:
@@ -540,7 +803,7 @@ class OpenRouterClient:
         started = time.perf_counter()
         try:
             response = await client.request(
-                method, BASE_URL + path, headers=headers, json=body, timeout=timeout_s
+                method, base_url + path, headers=headers, json=body, timeout=timeout_s
             )
         except httpx.TimeoutException as exc:
             raise _failure(0, "timeout", _described(exc)) from exc

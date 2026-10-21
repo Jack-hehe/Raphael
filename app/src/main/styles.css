@@ -22,9 +22,10 @@
   --btn: #ffffff; --btn-edge: #b6c4d8; --key: #f0f4fb; --key-edge: #c3cede;
   --track: #dce4f0; --menu: #ffffff; --scrim: rgba(18, 24, 38, 0.26);
   --pop: 0 20px 64px rgba(27, 49, 84, 0.15), 0 3px 10px rgba(27, 49, 84, 0.08);
+  --tab-shadow: 0 1px 2px rgba(10, 34, 70, 0.12);
+  /* the window's close button under the pointer: Windows' own red, the same in both themes */
+  --close: #c42b1c; --on-close: #ffffff;
   --toast-action: #c8e0f8; --toast-hover: #2e4264;
-  --bar-past: #b8d0f8; --bar-today: var(--accent);
-  --gold: #e8b04a;
   --heat-0: #e7eef8; --heat-1: #d0e8f8; --heat-2: #b8d0f8; --heat-3: #90b0e0; --heat-4: #5e86c8; --hatch: #c3cede;
   --scroll-thumb: #bbc8dc; --scroll-hover: #8b9fbe;
   color-scheme: light;
@@ -42,11 +43,15 @@
   --track: #34435f; --menu: #1f2a40; --scrim: rgba(7, 13, 26, 0.58);
   --pop: 0 20px 64px rgba(4, 10, 24, 0.48), 0 3px 10px rgba(4, 10, 24, 0.3);
   --toast-action: #284c82; --toast-hover: #dce8f8;
-  --bar-past: #5e7da9; --bar-today: var(--accent);
   --heat-0: #283650; --heat-1: #354c70; --heat-2: #5e7da9; --heat-3: #90b0e0; --heat-4: #c8e0f8; --hatch: #465a7a;
   --scroll-thumb: #465777; --scroll-hover: #8198bf;
   color-scheme: dark;
 }
+
+/* Raphael's words and the person's: the face of the language of the window. */
+:root { --voice: var(--zh-sub); }
+:root[lang="ja"] { --voice: var(--ja); }
+:root[lang="en"] { --voice: var(--ui); }
 
 /* ---------- base ---------- */
 * { box-sizing: border-box; }
@@ -80,7 +85,11 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .window-button svg { grid-area: 1 / 1; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1; }
 .window-button:hover { background: var(--hover); }
 .window-button:focus-visible { outline-offset: -3px; }
-.window-close:hover { background: #c42b1c; color: #ffffff; }
+/* The focus colour is lost on the close button's red, and on the dimmed page behind the controls
+   while the settings are open: white on the red, and a surface of its own over the dimmed page. */
+.window-close:hover:focus-visible { outline-color: var(--on-close); }
+:root[data-window-modal="true"] .window-button:focus-visible:not(:hover) { background: var(--content); }
+.window-close:hover { background: var(--close); color: var(--on-close); }
 .window-restore-glyph { display: none; }
 :root[data-window-maximized="true"] .window-maximize-glyph { display: none; }
 :root[data-window-maximized="true"] .window-restore-glyph { display: block; }
@@ -124,8 +133,6 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .group { margin-top: 28px; }
 .group > h3 { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 0 0 4px; }
 .foot { margin: 8px 0 0; font-size: 12px; color: var(--text-3); max-width: 70ch; text-wrap: pretty; }
-.foot a, .link { color: var(--accent-text); text-decoration: none; border: 0; background: none; padding: 0; font-size: inherit; cursor: pointer; }
-.foot a:hover, .link:hover { text-decoration: underline; }
 .row { position: relative; display: flex; align-items: center; gap: 16px; min-height: 48px; padding: 9px 0; }
 .list > .row::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--line); }
 .row .lbl { flex: 1; min-width: 0; }
@@ -133,24 +140,10 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .row .d { font-size: 13px; line-height: 1.5; color: var(--text-3); margin-top: 4px; text-wrap: pretty; }
 .row .ctl { flex: none; display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 13px; }
 .row .val { color: var(--text-2); font-size: 13px; }
-.row.block { display: block; }
-.tag { display: inline-block; font-size: 11px; line-height: 18px; padding: 0 6px; border-radius: 4px; background: var(--surface-2); color: var(--text-2); margin-left: 6px; vertical-align: 1px; font-weight: 400; }
 /* A line under a row: a warning about it, or what is wrong with what was typed. */
 .list > .note, .slist > .note { padding: 0 0 10px; font-size: 12px; line-height: 1.45; }
 /* A surface on the page: insight numbers, the activity grid, a day of history. */
 .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 14px; }
-
-/* Settings: each section is one quiet panel, its rows separated by hairlines. */
-.group.panel { margin-top: 26px; }
-.group.panel > h3 { margin: 0 0 8px 2px; }
-.group.panel > .list { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; padding: 0 16px; }
-/* A control too wide to sit beside its name (the language chips at the window's smallest)
-   goes below it rather than squeezing the name into a column. */
-.group.panel > .list > .row { min-height: 56px; padding: 11px 0; flex-wrap: wrap; row-gap: 8px; }
-.group.panel > .list > .row > .lbl { min-width: 11em; }
-.group.panel > .list > .row > .ctl { margin-left: auto; }
-.group.panel > .list > .row:first-child::before { display: none; }
-.group.panel > .foot { margin: 8px 2px 0; max-width: none; }
 
 /* ---------- controls ---------- */
 .tg { position: relative; width: 38px; height: 22px; border-radius: 11px; border: 1px solid var(--text-3); background: transparent; padding: 0; flex: none; transition: background 0.12s, border-color 0.12s; }
@@ -161,16 +154,18 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .sel > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sel:hover { border-color: var(--text-3); }
 .sel[aria-expanded="true"] { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-ring); }
+.sel:disabled { opacity: 0.55; cursor: default; }
+.sel:disabled:hover { border-color: var(--btn-edge); }
 .sel .i { width: 12px; height: 12px; color: var(--text-2); }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 6px 13px; border-radius: 8px; border: 1px solid var(--btn-edge); background: var(--btn); font-size: 13px; line-height: 1.4; color: var(--text); white-space: nowrap; }
-.btn:hover { background: var(--hover); }
+/* Every action is a button with a shape: an edge at rest, a fill under the pointer, a deeper one
+   when pressed. Never a word alone that can be clicked (the owner's rule). */
+.btn:hover:not(:disabled) { background: var(--hover); border-color: var(--text-3); }
+.btn:active:not(:disabled) { background: var(--selected); border-color: var(--text-3); filter: none; }
 .btn:disabled { opacity: 0.55; cursor: default; }
 .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
-.btn.pri:hover, .stage .btn.pri:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-.btn.pri:active, .stage .btn.pri:active { background: var(--accent-pressed); border-color: var(--accent-pressed); }
-.btn.quiet { border-color: transparent; background: transparent; color: var(--accent-text); padding: 0 6px; }
-.btn.quiet:hover { background: var(--hover); }
-.btn.danger { color: var(--err); }
+.btn.pri:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.pri:active { background: var(--accent-pressed); border-color: var(--accent-pressed); }
 .btn.sm { min-height: 28px; padding: 4px 10px; font-size: 12px; }
 .icon-btn { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; border: 0; background: transparent; color: var(--text-2); }
 .icon-btn:hover { background: var(--hover); color: var(--text); }
@@ -199,84 +194,19 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .spend .bar { width: 120px; }
 [data-row="raphael-spend"] .st { white-space: normal; align-items: baseline; }
 
-/* ---------- home: the stage, insights and activity; shortcuts follow below ---------- */
-.page.page-home { max-width: 1160px; }
-.home { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
-.home-main { min-width: 0; min-height: calc(100dvh - 32px); }
-.home-side { min-width: 0; }
-.keys-card { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 24px; padding-bottom: 8px; }
-.keys-card .card-head { grid-column: 1 / -1; }
-.keys-card .kc-row { border-top: 0; padding-top: 2px; }
-@container main (min-width: 1100px) {
-  .home { grid-template-columns: minmax(0, 1fr) 208px; }
-  .home-main { min-height: 0; }
-  .home-side { position: sticky; top: calc(var(--window-controls-height) + 8px); }
-  .keys-card { display: block; }
-  .keys-card .kc-row { border-top: 1px solid var(--line); padding-top: 12px; }
-  .keys-card .card-head + .kc-row { border-top: 0; }
-}
-@container main (max-width: 600px) {
-  .keys-card { grid-template-columns: minmax(0, 1fr); }
-}
+/* ---------- the stage: the emblem and Raphael's words (home, first run) ---------- */
 .stage { position: relative; display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 20px; align-items: center; min-height: 132px; color: var(--text); border-bottom: 1px solid var(--line); padding: 0 0 20px; }
 .stage canvas.emb { position: relative; width: 112px !important; height: 112px !important; }
-.home-stage { grid-template-columns: 128px minmax(0, 1fr); min-height: 156px; }
 .stage .subs { position: relative; min-width: 0; padding: 12px 0; text-align: left; }
-.sub-zh, .sub-ja { text-wrap: pretty; text-shadow: none; }
-.sub-zh { color: var(--text); font-family: var(--zh-sub); font-weight: 650; font-size: 17px; line-height: 1.65; }
-.sub-ja { color: var(--text-3); font-family: var(--ja); font-size: 12px; line-height: 1.65; margin-top: 5px; }
+.sub-line { color: var(--text); font-family: var(--voice); font-weight: 650; font-size: 17px; line-height: 1.65; text-wrap: pretty; text-shadow: none; }
 .subs .line { opacity: 0; transition: opacity 0.18s ease; }
 .subs .line.on { opacity: 1; }
 .stage .act { display: flex; justify-content: flex-start; gap: 8px; margin-top: 10px; }
-.stage .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 
-/* What keeps dictation from working fully, with the way to fix it. */
+/* What keeps dictation from working fully, with the way to fix it (the dictionary page's editor hints). */
 .alert { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 8px 8px 8px 14px; border-radius: 10px; background: var(--warn-soft); border: 1px solid var(--warn-edge); }
 .alert .st { white-space: normal; flex: 1; min-width: 0; }
 
-.insights { margin-top: 22px; }
-.sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 12px; flex-wrap: wrap; margin-bottom: 12px; }
-.sec-head h2 { margin: 0; font: 650 18px/1.3 var(--display); }
-.sec-head .sum { font-size: 13px; color: var(--text-2); }
-.icards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.icard { padding: 14px 18px; background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; min-width: 0; }
-.icard .v, .anum .v { font: 650 26px/1.2 var(--display); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; overflow-wrap: anywhere; }
-.icard .v small, .anum .v small { font: 500 13px/1 var(--ui); color: var(--text-2); margin: 0 6px 0 3px; letter-spacing: 0; }
-.icard .v small:last-child, .anum .v small:last-child { margin-right: 0; }
-.icard .v.none { font: 400 15px/30px var(--ui); color: var(--text-3); }
-.icard .k, .anum .k { margin-top: 6px; font-size: 12px; color: var(--text-3); }
-
-.activity { margin-top: 12px; padding: 18px 18px 14px; }
-.activity > h2 { margin: 0 0 14px 2px; font: 600 13px/1.4 var(--ui); color: var(--text-2); }
-.anums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 0 2px; }
-.heat-wrap { display: flex; align-items: center; gap: 2px; margin-top: 18px; }
-.heat-wrap .icon-btn { flex: none; align-self: flex-start; margin-top: 46px; width: 24px; height: 28px; }
-.heat-wrap .icon-btn:disabled { opacity: 0.35; cursor: default; background: transparent; }
-.heat-box { flex: 1; min-width: 0; overflow: auto; display: flex; justify-content: center; }
-.heat { max-width: 100%; height: auto; }
-.heat { display: block; flex: none; }
-.heat .h0 { fill: var(--heat-0); }
-.heat .h1 { fill: var(--heat-1); } .heat .h2 { fill: var(--heat-2); } .heat .h3 { fill: var(--heat-3); } .heat .h4 { fill: var(--heat-4); }
-.heat .nodata { fill: url(#hatch); }
-.heat .hatch-bg { fill: transparent; }
-.heat .hatch-line { stroke: var(--hatch); stroke-width: 1.6; }
-.heat .future { fill: none; stroke: var(--line); stroke-width: 1; }
-.heat rect:hover { stroke: var(--text-2); stroke-width: 1; }
-.heat .ax { font: 10px var(--ui); fill: var(--text-3); }
-.legend { display: flex; align-items: center; gap: 4px; margin: 10px 0 0 28px; font-size: 11px; color: var(--text-3); }
-.legend span:first-child { margin-right: 2px; } .legend span:last-child { margin-left: 2px; }
-.legend i { width: 11px; height: 11px; border-radius: 3px; }
-.legend i.h1 { background: var(--heat-1); } .legend i.h2 { background: var(--heat-2); } .legend i.h3 { background: var(--heat-3); } .legend i.h4 { background: var(--heat-4); }
-
-.keys-card { padding: 16px 16px 8px; }
-.card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-.card-head h2 { margin: 0; font: 600 13px/1.3 var(--ui); color: var(--text-2); }
-.kc-row { padding: 12px 0; border-top: 1px solid var(--line); }
-.card-head + .kc-row { border-top: 0; }
-.kc-name { font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
-.kc-keys { display: flex; flex-wrap: wrap; gap: 6px; }
-.kc-note { margin-top: 6px; font-size: 12px; line-height: 1.45; color: var(--text-3); text-wrap: pretty; }
-.home-version { position: fixed; right: 20px; bottom: 12px; z-index: 1; margin: 0; text-align: right; font-size: 11px; color: var(--text-3); pointer-events: none; }
 .page-loading { display: grid; gap: 12px; padding: 24px 0; width: 100%; }
 .loading-line { display: block; height: 64px; border-radius: 12px; background: var(--surface-2); animation: ob-pulse 1.8s ease-in-out infinite; }
 .loading-line:last-child { width: 68%; }
@@ -292,14 +222,18 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .hist-top { margin-top: 22px; padding: 2px 18px; }
 .hist-top .row { min-height: 66px; padding: 13px 0; }
 .hist-top .row + .row::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--line); }
-.hist-top .t, .slist .t { font-weight: 600; }
+.hist-top .t { font-weight: 600; }
 .hist-top .t .i { width: 15px; height: 15px; margin-right: 7px; vertical-align: -2px; color: var(--text-2); }
 .tools { display: flex; align-items: center; gap: 12px; margin-top: 22px; flex-wrap: wrap; }
 .tools .field { flex: 1; min-width: 160px; max-width: 300px; margin-left: auto; }
 .tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 18px; background: var(--surface-2); }
 .tabs button { height: 30px; padding: 0 13px; border: 0; border-radius: 15px; background: transparent; font-size: 13px; color: var(--text-2); white-space: nowrap; }
 .tabs button:hover { color: var(--text); }
-.tabs button[aria-pressed="true"] { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(10, 34, 70, 0.12), 0 0 0 1px var(--edge); }
+.tabs button[aria-pressed="true"] { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: var(--tab-shadow), 0 0 0 1px var(--edge); }
+/* The day of the history that Home's activity grid opened it at, with the way back to all of them. */
+.day-row { margin-top: 14px; }
+.chip.day-chip { border-style: solid; border-color: var(--accent); background: var(--accent-soft); }
+.chip.day-chip .chip-label { padding: 0 4px 0 10px; font-weight: 600; }
 .group.day { margin-top: 22px; }
 .group.day > h3 { margin: 0 0 8px 2px; }
 .list.card { padding: 2px 10px; }
@@ -318,11 +252,10 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .hdetail h4 { margin: 6px 0 0; font-size: 12px; font-weight: 600; color: var(--text-3); }
 .hdetail .raw { font-size: 13px; line-height: 1.6; color: var(--text-2); overflow-wrap: anywhere; user-select: text; }
 .empty { padding: 36px 0; text-align: center; color: var(--text-3); font-size: 13px; }
-.empty .say { font-family: var(--zh-sub); font-weight: 700; color: var(--text); font-size: 15px; margin-bottom: 4px; }
+.empty .say { font-family: var(--voice); font-weight: 700; color: var(--text); font-size: 15px; margin-bottom: 4px; }
 .more { display: flex; justify-content: center; margin-top: 14px; }
 
 /* ---------- dictionary ---------- */
-.page.page-dict { max-width: 1160px; }
 .addword { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; padding: 12px; }
 .addword .field:first-child { flex: 1.2; min-width: 180px; }
 .addword .field { flex: 1; min-width: 160px; }
@@ -356,93 +289,109 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .modal-scrim { --modal-gap: 24px; position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: calc(var(--window-controls-height) + var(--modal-gap)) var(--modal-gap) var(--modal-gap); background: var(--scrim); }
 .modal { position: relative; display: grid; grid-template-columns: 196px minmax(0, 1fr); width: min(1000px, 100%); height: min(760px, 100%); border-radius: 18px; overflow: hidden; background: var(--content); border: 1px solid var(--edge); box-shadow: var(--pop); }
 .modal-nav { display: flex; flex-direction: column; gap: 4px; padding: 24px 12px; background: var(--side); border-right: 1px solid var(--edge); overflow: auto; min-height: 0; }
-.modal-body { overflow: auto; padding: 30px 40px 44px; min-width: 0; min-height: 0; scrollbar-gutter: stable; }
-.modal-body h1 { font: 650 26px/1.3 var(--display); margin: 0; letter-spacing: -0.015em; padding-right: 24px; }
+.modal-body { overflow: auto; padding: 32px 40px 44px; min-width: 0; min-height: 0; scrollbar-gutter: stable; }
+.modal-body h1 { font: 650 24px/1.3 var(--display); margin: 0; letter-spacing: -0.015em; padding-right: 24px; }
 .modal-body h1:focus { outline: none; }
+/* The one line under a tab's name: what the tab is for. */
+.modal-body .purpose { margin: 4px 0 0; padding-right: 24px; font-size: 14px; line-height: 1.5; color: var(--text-2); text-wrap: pretty; }
+.modal-body .core-note { margin-top: 18px; }
 .modal-x { position: absolute; top: 12px; right: 12px; }
-.sgroup { margin-top: 34px; }
-.sgroup > h2 { display: flex; align-items: center; gap: 8px; margin: 0; padding-bottom: 12px; border-bottom: 1px solid var(--line); font: 600 14px/1.4 var(--ui); color: var(--text-2); }
-.sgroup > h2 .i { color: var(--text-3); }
-.slist > .row { min-height: 70px; padding: 14px 0; flex-wrap: wrap; row-gap: 10px; }
+/* A group of settings: a short name, then its rows on one card with hairlines between them. */
+.sgroup { margin-top: 28px; }
+.sgroup > h2 { margin: 0 0 8px 4px; font: 600 13px/1.4 var(--ui); color: var(--text-2); }
+.slist { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; padding: 0 18px; }
+.slist > .row { min-height: 60px; padding: 12px 0; flex-wrap: wrap; row-gap: 10px; }
+.slist > .row + .row::before, .slist > .note + .row::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--line); }
 .slist > .row > .lbl { min-width: 12em; }
 .slist > .row > .ctl { flex: 0 1 auto; min-width: 0; max-width: 100%; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
-.slist .d { max-width: 48ch; }
-.slist .ctl .sel { max-width: min(290px, 100%); }
-.row-ui-language .sel { min-width: 176px; justify-content: space-between; }
-.variant-button { border-radius: 18px; padding-inline: 14px; }
-.variant-button[aria-expanded="true"] { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-ring); }
+.slist .d { max-width: 52ch; margin-top: 2px; }
+/* The dropdowns of a card share one width, so that their edges line up down the card. */
+.slist .ctl .sel { width: 232px; max-width: 100%; justify-content: space-between; }
+/* A warning or an error under a row belongs to it: no line between them. */
+.slist > .note { margin-top: -4px; padding: 0 0 12px; }
 .slist.about { margin-top: 18px; }
-.sgroup > .foot { max-width: none; }
+.sgroup > .foot { margin: 8px 4px 0; max-width: none; }
+/* A shortcut: its keys as caps, then the button that changes them. */
+.row-shortcut .caps { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; }
+/* A model: its dropdown is wider for the models' names; the price of what is chosen is under its name. */
+.slist .row-model .ctl .sel { width: 272px; }
+/* The key: how OpenRouter took it, then what came of the latest check. */
+.row-key .d { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0; }
+.status-more { color: var(--text-3); font-size: 13px; }
+.status-more::before { content: "·"; margin: 0 7px; }
+/* The microphone: its dropdown, and under it a meter as wide as it, whose small bars light up with
+   its loudness. The column is the box's width, not the label's, so a long name is cut, not let out. */
+.mic-ctl { display: inline-grid; grid-template-columns: minmax(0, 1fr); gap: 8px; width: 232px; max-width: 100%; }
+.slist .mic-ctl .sel { width: 100%; }
+.mic-ctl .meter { display: flex; justify-content: space-between; gap: 1px; }
+.mic-ctl .meter i { flex: 0 1 3px; width: auto; min-width: 1px; }
 @media (max-width: 820px) {
   .modal-scrim { --modal-gap: 16px; }
-  .modal { grid-template-columns: 136px minmax(0, 1fr); }
+  .modal { grid-template-columns: 160px minmax(0, 1fr); }
   .modal-body { padding: 22px 22px 32px; }
   .modal-nav { padding: 20px 10px; }
   .modal-nav .nav { padding-inline: 8px; gap: 8px; }
-  .modal-nav .nav span { white-space: nowrap; }
+  /* A long tab name (Models & usage) takes two lines rather than losing its end. */
+  .modal-nav .nav span { line-height: 1.3; overflow-wrap: anywhere; }
   .slist > .row > .lbl { min-width: min(12em, 100%); }
+  .slist { padding: 0 14px; }
 }
 
 /* ---------- menu, toast ---------- */
-.menu { position: fixed; z-index: 60; min-width: 180px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; padding: 4px; border-radius: 10px; background: var(--menu); border: 1px solid var(--edge); box-shadow: var(--pop); }
-.menu button { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; text-align: left; }
+/* A menu is only so wide, and never wider than the window: a longer label is cut, with its whole
+   text as a tooltip (ui.ts). Its right edge lines up with its button's, inside the window (placeMenu). */
+.menu { position: fixed; z-index: 60; min-width: 180px; max-width: min(360px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; padding: 4px; border-radius: 10px; background: var(--menu); border: 1px solid var(--edge); box-shadow: var(--pop); }
+.menu button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 6px 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; text-align: left; }
 .menu button:hover { background: var(--hover); }
 .menu button:focus-visible { background: var(--hover); outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
 .menu .ck { width: 14px; height: 14px; flex: none; color: var(--accent-text); }
 .menu .ck svg { display: block; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.menu .mt { white-space: normal; overflow-wrap: anywhere; }
-.menu button { min-height: 34px; height: auto; padding-block: 6px; }
+.menu .mt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A menu whose choices have a detail (a price): the details line up on the right. */
 .menu.detailed { min-width: 340px; }
-.menu.detailed button { height: auto; min-height: 38px; }
-.menu.detailed .mt { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.menu.detailed button { min-height: 38px; }
 .menu .md { flex: none; margin-left: 16px; font-size: 12px; color: var(--text-3); white-space: nowrap; }
 .menu button[aria-checked="true"] .mt { font-weight: 600; }
 .menu button[aria-checked="true"] .md { color: var(--text-2); }
 /* A menu whose choices say what they do: the name, and a quieter line under it. */
 .menu.described { min-width: 260px; max-width: min(340px, calc(100vw - 16px)); }
-.menu.described button { height: auto; min-height: 32px; padding: 7px 10px; align-items: flex-start; }
+.menu.described button { min-height: 32px; padding: 7px 10px; align-items: flex-start; }
 .menu.described .ck { margin-top: 2px; }
 .menu .mtd { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .menu .mtd .mt { white-space: normal; }
 .menu .mdesc { font-size: 12px; line-height: 1.4; color: var(--text-3); text-wrap: pretty; }
 .menu-head { padding: 6px 10px; font-size: 11px; color: var(--text-3); text-align: right; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
-/* The languages: chips on the button, and a panel of groups whose variants fold out. */
-.row-lang > .ctl { flex: 0 1 auto; min-width: 0; max-width: 100%; }
-.slist .ctl .sel.lang-sel { max-width: min(360px, 100%); }
-.sel.lang-sel { height: auto; min-height: 34px; max-width: min(360px, 100%); padding: 4px 8px 4px 4px; }
-.sel.lang-sel > .lang-chips { display: flex; flex-wrap: wrap; gap: 3px; overflow: visible; white-space: normal; }
-.lchip { display: inline-flex; align-items: center; min-height: 23px; padding: 2px 8px; border-radius: 5px; background: var(--accent-soft); color: var(--text); font-size: 12px; line-height: 1.4; white-space: nowrap; }
-.menu.lang-panel { width: 320px; padding: 4px; overflow: hidden; display: flex; flex-direction: column; }
+/* An item that does something rather than choose (「重新搜尋麥克風」), after a line under the choices. */
+.menu-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+.menu .menu-action { color: var(--accent-text); }
+.menu .menu-action[aria-disabled="true"] { color: var(--text-3); cursor: default; }
+/* The languages: one dropdown that says which are chosen, and a panel of them in which a chosen
+   language with several written forms has them under it. */
+.slist .row-lang .ctl .sel { width: 360px; }
+.menu.lang-panel { width: 340px; max-width: calc(100vw - 24px); padding: 4px; overflow: hidden; display: flex; flex-direction: column; }
 .lang-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 10px 6px; }
 .lang-title { font-size: 12px; font-weight: 600; color: var(--text-2); }
 .lang-count { font-size: 12px; color: var(--text-3); }
 .lang-list { overflow: auto; max-height: min(340px, calc(100vh - 140px)); }
-.menu .lang-item .mt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .menu .lang-item .md { margin-left: 12px; }
-.menu .lang-group .md { color: var(--text-2); }
-.menu .lang-group .i { width: 12px; height: 12px; color: var(--text-3); transition: transform 0.15s ease; }
-.menu .lang-group[aria-expanded="true"] .i { transform: rotate(180deg); }
-.menu .lang-group[aria-expanded="true"] .md { visibility: hidden; }
 .menu .lang-item[aria-pressed="true"] .mt { font-weight: 600; }
 .menu .lang-item[aria-disabled="true"] { color: var(--text-3); cursor: not-allowed; }
 .lang-variants { margin: 0 0 4px 16px; padding-left: 6px; border-left: 1px solid var(--line); }
-.lang-variant .radio { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 1.5px solid var(--text-3); }
-.lang-variant[aria-pressed="true"] .radio { border-color: var(--accent-text); background: radial-gradient(circle, var(--accent-text) 0 3.5px, transparent 4px); }
-.lang-sub { margin-top: 4px; padding: 10px 10px 4px; border-top: 1px solid var(--line); font-size: 11px; color: var(--text-3); }
-.menu .lang-item.lang-variant, .menu .lang-item.lang-single { height: auto; min-height: 32px; padding: 6px 10px; align-items: flex-start; }
-.menu .lang-item .mtd .mt { white-space: normal; }
-.lang-variant .radio, .lang-single .ck { margin-top: 2px; }
+.lang-variant .radio { width: 14px; height: 14px; flex: none; margin-top: 2px; border-radius: 50%; border: 1.5px solid var(--text-3); }
+.lang-variant[aria-checked="true"] .radio { border-color: var(--accent-text); background: radial-gradient(circle, var(--accent-text) 0 3.5px, transparent 4px); }
+.menu .lang-item.lang-variant { min-height: 32px; align-items: flex-start; }
 .lang-foot { margin: 4px 0 0; padding: 8px 10px 6px; border-top: 1px solid var(--line); font-size: 12px; color: var(--text-3); }
 .lang-empty { margin: 0; padding: 6px 10px 12px; font-size: 13px; color: var(--text-2); }
 .toasts { position: fixed; left: 50%; bottom: 20px; z-index: 70; transform: translateX(-50%); display: flex; flex-direction: column-reverse; align-items: center; gap: 8px; pointer-events: none; }
 .toast { pointer-events: auto; display: flex; align-items: center; gap: 12px; padding: 7px 8px 7px 16px; border-radius: 8px; background: var(--text); color: var(--content); font-size: 13px; box-shadow: var(--pop); max-width: min(560px, calc(100vw - 32px)); }
-.toast .btn.quiet { color: var(--toast-action); }
-.toast .btn.quiet:hover { background: var(--toast-hover); }
+.toast .btn { border-color: var(--toast-action); background: transparent; color: var(--toast-action); }
+.toast .btn:hover:not(:disabled), .toast .btn:active:not(:disabled) { background: var(--toast-hover); border-color: var(--toast-action); }
 .toast .btn:focus-visible { outline-color: var(--toast-action); }
 .toast > span { min-width: 0; overflow-wrap: anywhere; }
 .toast .btn { flex: none; }
 .main, .modal-body, .menu, .lang-list, .ob-body { scroll-padding-block: 16px; }
+/* The window controls are opaque and fixed over the top of the page: focus scrolls to below them. */
+.main { scroll-padding-top: calc(var(--window-controls-height) + 16px); }
 
 /* ---------- first run ---------- */
 .ob { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; min-height: 0; padding-top: var(--window-controls-height); background: var(--content); border-top: 1px solid var(--edge); }
@@ -476,30 +425,9 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   .side { padding: 10px 14px 16px; }
   .side .nav { min-height: 44px; padding: 10px 14px; font-size: 15px; }
   .brand { min-height: 52px; margin-bottom: 18px; font-size: 18px; }
-  .page, .page.page-home, .page.page-dict { max-width: 1480px; padding: calc(var(--window-controls-height) + 24px) 40px 48px; font-size: 15px; }
+  .page { max-width: 1480px; padding: calc(var(--window-controls-height) + 24px) 40px 48px; font-size: 15px; }
   .page h1 { font-size: 32px; }
   .page .lede { font-size: 15px; }
-  .home { grid-template-columns: minmax(0, 1fr) 240px; gap: 32px; }
-  .home-stage { grid-template-columns: 160px minmax(0, 1fr); min-height: 180px; gap: 24px; padding-bottom: 24px; }
-  .home-stage canvas.emb { width: 140px !important; height: 140px !important; }
-  .home-stage .sub-zh { font-size: 21px; }
-  .home-stage .sub-ja { font-size: 14px; margin-top: 6px; }
-  .insights { margin-top: 28px; }
-  .sec-head { margin-bottom: 16px; }
-  .sec-head h2 { font-size: 21px; }
-  .sec-head .sum { font-size: 14px; }
-  .icards { gap: 16px; }
-  .icard { padding: 20px 24px; }
-  .icard .v, .anum .v { font-size: 32px; }
-  .icard .v small, .anum .v small { font-size: 14px; }
-  .icard .k, .anum .k { font-size: 15px; }
-  .activity { margin-top: 16px; padding: 22px 24px 18px; }
-  .activity > h2 { font-size: 15px; margin-bottom: 18px; }
-  .keys-card { padding: 20px 20px 10px; }
-  .card-head h2 { font-size: 15px; }
-  .kc-row { padding: 16px 0; }
-  .kc-name, .kc-note { font-size: 14px; }
-  .keys-card .keys { font-size: 14px; }
   .page kbd { height: 28px; font-size: 14px; }
   .page .btn { min-height: 38px; font-size: 14px; }
   .page .field { height: 38px; font-size: 14px; }
@@ -519,24 +447,10 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 /* Short windows keep every card open and scroll through the same page. */
 @media (max-height: 700px), (max-width: 960px) and (max-height: 820px) {
   .page.page-home { padding-top: calc(var(--window-controls-height) + 8px); padding-bottom: 18px; }
-  .page-home .home { gap: 12px; grid-template-columns: minmax(0, 1fr); }
-  .page-home .home-side { position: static; }
-  .page-home .home-main { min-height: 0; }
   .stage { min-height: 100px; grid-template-columns: 84px minmax(0, 1fr); gap: 14px; padding-bottom: 12px; }
   .stage canvas.emb { width: 84px !important; height: 84px !important; }
   .stage .subs { padding: 4px 0; }
-  .sub-zh { font-size: 15px; line-height: 1.5; }
-  .sub-ja { font-size: 11px; margin-top: 3px; }
-  .insights { margin-top: 14px; }
-  .sec-head { margin-bottom: 8px; }
-  .sec-head h2 { font-size: 16px; }
-  .icards { gap: 8px; }
-  .icard { padding: 10px 14px; }
-  .icard .v, .anum .v { font-size: 22px; }
-  .icard .k { margin-top: 4px; }
-  .activity { padding: 14px 16px; margin-top: 12px; }
-  .activity > h2 { margin-bottom: 12px; }
-  .home-version { display: none; }
+  .sub-line { font-size: 15px; line-height: 1.5; }
   .modal-scrim { --modal-gap: 12px; }
   .modal-body { padding-top: 20px; padding-bottom: 24px; }
   .sgroup { margin-top: 24px; }

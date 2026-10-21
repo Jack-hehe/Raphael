@@ -1,6 +1,11 @@
 import pytest
 
-from raphael_core.brain.settings import DEFAULTS, STT_CLOUD_MODELS, STT_ENGINES, SettingsStore
+from raphael_core.brain.settings import (
+    DEFAULTS,
+    STT_CLOUD_MODELS,
+    STT_ENGINES,
+    SettingsStore,
+)
 
 
 def test_defaults_and_set(conn):
@@ -27,7 +32,8 @@ def test_the_defaults_are_the_documented_ones():
         "history_retention_days": 30,
         "stt_engine": "cloud",
         "stt_cloud_model": "elevenlabs/scribe-v2",
-        "learn_corrections": True,
+        "agent_model": "openai/gpt-6-luna",
+        "agent_city": "台北",
     }
 
 
@@ -136,12 +142,16 @@ def test_every_listed_cloud_model_can_be_chosen(conn, model):
     assert s.get("stt_cloud_model") == model
 
 
-def test_a_cloud_model_that_is_not_listed_is_refused(conn):
+def test_the_store_takes_any_cloud_model_id_and_leaves_the_list_to_the_brain(conn):
+    # Which models OpenRouter lists for speech-to-text is the brain's to check (brain/catalog.py):
+    # the store only keeps an id, without the spaces around it.
     s = SettingsStore(conn)
-    for model in ("openai/gpt-6-luna", "", "openai/gpt-transcribe "):
+    s.set("stt_cloud_model", " deepgram/nova-3 ")
+    assert s.get("stt_cloud_model") == "deepgram/nova-3"
+    for model in ("", "   ", "openai/gpt transcribe", "m" * 101):
         with pytest.raises(ValueError, match="stt_cloud_model"):
             s.set("stt_cloud_model", model)
-    assert s.get("stt_cloud_model") == "elevenlabs/scribe-v2"
+    assert s.get("stt_cloud_model") == "deepgram/nova-3"
 
 
 # --- languages ---------------------------------------------------------------------------------
@@ -217,10 +227,73 @@ def test_setting_the_old_language_sets_languages(conn):
         s.set("language", "de")
     assert s.get("languages") == ["zh-TW", "en-US", "ja-JP"]
 
-def test_learning_corrections_is_on_by_default_and_takes_a_bool(conn):
+def test_learning_corrections_is_no_longer_a_setting_and_a_saved_off_is_ignored(conn):
+    # Learning is always on. A database from a version with the switch may hold it off: it is
+    # neither read nor offered, and it cannot be set again.
+    conn.execute("INSERT INTO settings (key, value) VALUES ('learn_corrections', 'false')")
     s = SettingsStore(conn)
-    assert s.get("learn_corrections") is True
-    s.set("learn_corrections", False)
-    assert s.get("learn_corrections") is False
+    assert "learn_corrections" not in s.all()
+    with pytest.raises(KeyError):
+        s.get("learn_corrections")
+    with pytest.raises(KeyError):
+        s.set("learn_corrections", True)
+
+
+# --- the voice assistant -----------------------------------------------------------------------
+
+
+def test_the_assistant_answers_with_luna_in_taipei_by_default(conn):
+    s = SettingsStore(conn)
+    assert s.get("agent_model") == "openai/gpt-6-luna"
+    assert s.get("agent_city") == "台北"
+
+
+def test_the_router_is_no_longer_a_setting_and_a_saved_choice_is_ignored(conn):
+    # Jev always routes. A database from a version with the choice may still hold one: it is
+    # neither read nor offered, and it cannot be set again.
+    conn.execute("INSERT INTO settings (key, value) VALUES ('agent_router', '\"luna\"')")
+    s = SettingsStore(conn)
+    assert "agent_router" not in s.all()
+    assert s.all() == DEFAULTS
+    with pytest.raises(KeyError):
+        s.get("agent_router")
+    with pytest.raises(KeyError):
+        s.set("agent_router", "jev")
+
+
+def test_the_answer_model_and_the_city_are_saved_without_the_spaces_around_them(conn):
+    s = SettingsStore(conn)
+    s.set("agent_model", " anthropic/claude-haiku-5.5 ")
+    s.set("agent_city", "  New York ")
+    assert s.get("agent_model") == "anthropic/claude-haiku-5.5"
+    assert s.get("agent_city") == "New York"
+    stored = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM settings")}
+    assert stored == {"agent_model": '"anthropic/claude-haiku-5.5"', "agent_city": '"New York"'}
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("agent_model", ""),
+        ("agent_model", "   "),
+        ("agent_model", "openai/gpt 6"),  # a model id has no spaces
+        ("agent_model", "m" * 101),
+        ("cleanup_model", " "),
+        ("cleanup_model", "openai/gpt 6"),
+        ("cleanup_model", "m" * 101),
+        ("agent_city", ""),
+        ("agent_city", " \t\n"),
+        ("agent_city", "c" * 101),
+    ],
+)
+def test_a_blank_or_absurd_model_or_city_is_refused_and_not_saved(conn, key, value):
+    s = SettingsStore(conn)
+    with pytest.raises(ValueError, match=key):
+        s.set(key, value)
+    assert s.get(key) == DEFAULTS[key]
+
+
+@pytest.mark.parametrize("key", ["agent_model", "cleanup_model", "stt_cloud_model", "agent_city"])
+def test_a_model_or_city_that_is_not_text_is_a_type_error(conn, key):
     with pytest.raises(TypeError):
-        s.set("learn_corrections", 0)
+        SettingsStore(conn).set(key, None)

@@ -1,5 +1,7 @@
-/* The overlay window is transparent and click-through. The canvas sits in its bottom-right
-   corner; the subtitles are right-aligned to the left of the emblem, as in the approved preview.
+/* The overlay window is transparent and click-through, except while a question is up: then the
+   whole window takes the mouse, and only the question's buttons answer it. The canvas sits in
+   its bottom-right corner; every word is right-aligned to the left of the emblem, as in the
+   approved preview.
    --e is the emblem's diameter and --c its square canvas (1.3 times larger, room for the rays);
    overlay.ts sets both from the size in the settings. */
 
@@ -8,9 +10,21 @@
   --c: 195px;
   /* The canvas margin around the emblem's circle. */
   --margin: calc((var(--c) - var(--e)) / 2);
-  /* Distance from the window's right edge to the subtitles: the emblem, and 14 px of air. */
+  /* Distance from the window's right edge to the words: the emblem, and 14 px of air. */
   --subs-right: calc(var(--margin) + var(--e) + 14px);
+  /* Where the words stand: a little over a third of the way up the emblem's circle. A line that
+     wraps grows upwards from here. */
+  --line-bottom: calc(var(--margin) + var(--e) * 0.35);
 
+  /* The buttons of a question sit at a fixed place inside the window, whatever the length of its
+     words: --ask-h tall, their right edge --subs-right from the window's right edge and their
+     bottom edge --ask-bottom above the window's bottom edge. They are two pills, 84 px wide at
+     least and 260 px at most together. */
+  --ask-h: 36px;
+  --ask-gap: 10px;
+  --ask-bottom: calc(var(--margin) + var(--e) * 0.2 - 6px);
+
+  --ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --zh-sub: "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif;
   --ja: "Yu Gothic UI", "Yu Gothic", "Meiryo UI", "Meiryo", "Hiragino Sans", "Noto Sans JP", sans-serif;
 }
@@ -35,14 +49,48 @@ body {
   bottom: 0;
 }
 
+/* Everything written beside the emblem is written one way: a dictation's percentage, the lines
+   while Raphael thinks, his greeting, his answers, his reports and his questions. White,
+   semibold, outlined in black, no box behind it, in the font of the language it is written in
+   (the app's interface language, never two side by side). */
+.progress,
+.sub-line {
+  color: #fff;
+  font: 600 14px/1.45 var(--zh-sub);
+  text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
+}
+
+.progress:lang(ja),
+.sub-line:lang(ja) {
+  font-family: var(--ja);
+}
+
+.progress:lang(en),
+.sub-line:lang(en) {
+  font-family: var(--ui);
+}
+
+/* And in one place. The caption and the line are never on screen together (the controller
+   takes one away before it shows the other), so they can share it. */
+.progress,
 .subs {
   position: fixed;
   right: var(--subs-right);
-  /* A fifth of the emblem above its bottom edge, like the subtitles in the anime. */
-  bottom: calc(var(--margin) + var(--e) * 0.2);
+  bottom: var(--line-bottom);
+}
+
+/* The caption is rewritten where it stands (a number that counts, a line every 1.5 s): it never
+   wraps, and its digits keep one width so that the number does not jitter. */
+.progress {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Raphael's lines can be longer than a caption: they wrap, in lines of balanced length, within
+   the room the window leaves beside the emblem. */
+.subs {
   max-width: min(380px, calc(100vw - var(--subs-right) - 8px));
   text-align: right;
-  color: #fff;
   opacity: 0;
   transition: opacity 0.18s ease;
 }
@@ -51,49 +99,150 @@ body {
   opacity: 1;
 }
 
-/* A single numeric caption shares the space beside the emblem, without bilingual duplication. */
-.progress {
+.sub-line {
+  text-wrap: balance;
+}
+
+/* With a question, the line rises over its buttons. */
+.subs.asking {
+  bottom: calc(var(--ask-bottom) + var(--ask-h) + 10px);
+}
+
+/* ---------- the buttons of a question ---------- */
+
+.ask {
   position: fixed;
   right: var(--subs-right);
-  bottom: calc(var(--margin) + var(--e) * 0.35);
+  bottom: var(--ask-bottom);
+  display: flex;
+  gap: var(--ask-gap);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.ask.on {
+  opacity: 1;
+}
+
+/* The page is click-through; only the buttons are not. */
+.ask-btn {
+  pointer-events: auto;
+  position: relative;
+  overflow: hidden;
+  min-width: 84px;
+  height: var(--ask-h);
+  padding: 0 20px;
+  border-radius: calc(var(--ask-h) / 2);
+  border: 1.5px solid rgba(255, 255, 255, 0.92);
+  background: rgba(14, 20, 34, 0.86);
   color: #fff;
-  font: 600 14px/1.45 var(--zh-sub);
-  font-variant-numeric: tabular-nums;
+  font: 700 15px/1 var(--zh-sub);
   white-space: nowrap;
-  text-shadow: 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
+  cursor: pointer;
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.5);
+  transition: background 0.12s ease, transform 0.08s ease;
 }
 
-/* White, outlined in black, no box behind them. */
-.sub-zh,
-.sub-ja {
-  text-wrap: balance;
-  color: #fff;
-  text-shadow:
-    0 0 2px #000,
-    0 0 2px #000,
-    1px 1px 0 #000,
-    -1px 1px 0 #000,
-    1px -1px 0 #000,
-    -1px -1px 0 #000;
-}
-
-.sub-zh {
-  font-family: var(--zh-sub);
-  font-weight: 700;
-  font-size: 18px;
-  line-height: 1.45;
-}
-
-.sub-ja {
+.ask:lang(ja) .ask-btn {
   font-family: var(--ja);
-  font-style: italic;
-  font-size: 13.5px;
-  line-height: 1.45;
-  margin-top: 2px;
+}
+
+.ask:lang(en) .ask-btn {
+  font-family: var(--ui);
+}
+
+.ask-btn:hover:not(:disabled) {
+  background: rgba(36, 50, 80, 0.94);
+}
+
+.ask-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/* YES wears the app's accent. */
+.ask-yes {
+  border-color: #a8c9ed;
+  background: #a8c9ed;
+  color: #1b3154;
+}
+
+.ask-yes:hover:not(:disabled) {
+  background: #b8d0f8;
+  border-color: #b8d0f8;
+}
+
+/* After an answer: the one that was chosen stays, the other dims, neither takes a click. */
+.ask-btn:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.ask[data-choice="yes"] .ask-yes,
+.ask[data-choice="no"] .ask-no {
+  opacity: 1;
+}
+
+/* The YES of a T3 question: a track under the word, which the hold fills. */
+.ask-fill {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 5px;
+  height: 3px;
+  border-radius: 2px;
+  background: #1b3154;
+  transform: scaleX(0);
+  transform-origin: left center;
+  pointer-events: none;
+}
+
+.ask[data-tier="T3"] .ask-yes::after {
+  content: "";
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 5px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(27, 49, 84, 0.28);
+  pointer-events: none;
+}
+
+.ask-yes[data-hold="idle"] .ask-fill {
+  transition: transform 0.15s ease-out;
+}
+
+.ask-yes[data-hold="holding"] .ask-fill {
+  transform: scaleX(1);
+  transition: transform var(--hold-ms, 600ms) linear;
+}
+
+/* The pointer is on the button while it is held, so this has to win over the hover colour. */
+.ask-yes[data-hold="armed"],
+.ask-yes[data-hold="armed"]:hover:not(:disabled) {
+  background: #c8e0f8;
+  border-color: #c8e0f8;
+  box-shadow: 0 0 0 2px rgba(200, 224, 248, 0.6), 0 1px 8px rgba(0, 0, 0, 0.5);
+}
+
+.ask-yes[data-hold="armed"] .ask-fill {
+  transform: scaleX(1);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .subs {
+  .subs,
+  .ask,
+  .ask-btn {
     transition: none;
+  }
+
+  /* No filling: half the track while the pointer is held, all of it once armed. */
+  .ask-yes[data-hold="idle"] .ask-fill,
+  .ask-yes[data-hold="holding"] .ask-fill {
+    transition: none;
+  }
+
+  .ask-yes[data-hold="holding"] .ask-fill {
+    transform: scaleX(0.5);
   }
 }

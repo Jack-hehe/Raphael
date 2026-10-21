@@ -1,8 +1,22 @@
 name: CI
 
+# The repository is private, so Actions minutes are limited (Windows runners count extra).
+# A branch is checked through its pull request, and main again after each merge. A change to
+# the documents below alone starts no run: no test or build reads them.
 on:
   push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - "LICENSE"
+      - "eval/README.md"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - "LICENSE"
+      - "eval/README.md"
   workflow_dispatch:
 
 permissions:
@@ -110,8 +124,8 @@ jobs:
         working-directory: .
         run: |
           $privatePaths = @(
-            "assets-private", "models", "voice", "raphael_ref", "eval/data",
-            "app/public/private", "app/src-tauri/icons-private",
+            "assets-private", "models", "voice", "raphael_ref", ".superpowers", "ui-shots",
+            "eval/data", "app/public/private", "app/src-tauri/icons-private",
             "app/src-tauri/tauri.private.conf.json"
           )
           foreach ($path in $privatePaths) {
@@ -126,14 +140,16 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
+      # main's cache is the fallback for every pull request; a pull request also saves its own,
+      # which only its later runs can restore, so they skip the dependencies it changed.
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: |
             app/src-tauri -> target
             app/src-tauri/vendor/handy-keys -> target
           cache-bin: false
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

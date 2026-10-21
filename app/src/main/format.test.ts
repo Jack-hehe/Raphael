@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { setLocale } from "./i18n";
 import {
   dayLabel,
   describeError,
@@ -56,6 +57,18 @@ describe("dayLabel goes by calendar days, not by 24 hours", () => {
   });
 });
 
+test("dayLabel has the words of today and yesterday for the middle of a sentence too", () => {
+  const now = Date.parse("2026-10-17T12:00:00+08:00");
+  expect(dayLabel(now - 3_600_000, now, true)).toBe("今天");
+  setLocale("en");
+  try {
+    expect([dayLabel(now - 3_600_000, now), dayLabel(now - 3_600_000, now, true)]).toEqual(["Today", "today"]);
+    expect([dayLabel(now - 86_400_000, now), dayLabel(now - 86_400_000, now, true)]).toEqual(["Yesterday", "yesterday"]);
+  } finally {
+    setLocale("zh-TW");
+  }
+});
+
 test("dayLabel says the year when it is not this one", () => {
   const now = Date.parse("2026-01-02T10:00:00+08:00");
   expect(dayLabel(Date.parse("2025-12-31T10:00:00+08:00"), now)).toBe("2025 年 12 月 31 日");
@@ -98,6 +111,16 @@ describe("describeError says what went wrong in words the page can show", () => 
     expect(describeError("設定已經生效，但無法存檔：disk full")).toBe("設定已經生效，但無法存檔：disk full");
     expect(describeError(new Error("boom"))).toBe("boom");
     expect(describeError({ code: 3 })).toBe('{"code":3}');
+  });
+
+  test("a rejection that JSON cannot write still has words, and never throws", () => {
+    // It runs in catch blocks and while a page draws its error: throwing there would lose the message.
+    const loop: Record<string, unknown> = {};
+    loop.self = loop;
+    expect(describeError(undefined)).toBe("undefined");
+    expect(describeError(Symbol("gone"))).toBe("Symbol(gone)");
+    expect(describeError(10n)).toBe("10");
+    expect(describeError(loop)).toBe("[object Object]");
   });
 });
 

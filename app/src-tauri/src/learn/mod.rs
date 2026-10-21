@@ -3,8 +3,8 @@
 //! the right one, the word goes into the dictionary by itself, with the misheard text as its
 //! misheard form, and Raphael says so (《了。「手機」已加入詞典。》).
 //!
-//! - [`Learner`] is the controller's [`AfterPaste`] hook. After a paste (not a copy) it asks the
-//!   core whether `learn_corrections` is on, then runs a watch on a thread of its own.
+//! - [`Learner`] is the controller's [`AfterPaste`] hook. After a paste (not a copy) it runs a
+//!   watch on a thread of its own.
 //! - The watch ([`watch`]) asks the [`FieldProbe`] for the field that has the keyboard focus (on
 //!   Windows: UI Automation, [`UiaProbe`]), finds the pasted text in it, and reads it every 500 ms
 //!   until the "send" moment: the field lost most of the pasted text (the message was sent and the
@@ -40,7 +40,9 @@ pub use corrections::{Correction, MIN_KEPT_SHARE, Tracker};
 #[cfg(windows)]
 pub use uia::UiaProbe;
 
-use crate::notices;
+#[cfg(windows)]
+use crate::commands::MainEvent;
+use crate::notices::{self, LanguageCell};
 use crate::overlay::OverlayApi;
 use crate::paste::{PasteReceipt, Target};
 use crate::rpc::CoreApi;
@@ -84,7 +86,6 @@ pub trait FieldProbe: Send + Sync + 'static {
 }
 
 const WATCH_LIMIT: Duration = Duration::from_secs(60);
-static CANCELLATION: AtomicU64 = AtomicU64::new(0);
 
 /// Validity travels into discovery too, so a cancelled probe cannot arm a fresh observer.
 #[derive(Clone)]
@@ -92,24 +93,85 @@ pub struct WatchScope {
     deadline: Instant,
     generation: Arc<AtomicU64>,
     started: u64,
-    cancellation: u64,
     #[cfg(windows)]
     input: Option<handy_keys::InputCheckpoint>,
 }
 
 impl WatchScope {
     fn active(&self) -> bool {
-        self.generation.load(Ordering::SeqCst) == self.started
-            && CANCELLATION.load(Ordering::SeqCst) == self.cancellation
-            && Instant::now() < self.deadline
+        self.generation.load(Ordering::SeqCst) == self.started && Instant::now() < self.deadline
     }
 }
 
-/// Stops current watches when the setting is switched off. No text is retained by the hook.
-pub fn cancel_watches() {
-    CANCELLATION.fetch_add(1, Ordering::SeqCst);
-    #[cfg(windows)]
-    handy_keys::cancel_edit_observations();
+/// Why learning is limited in an app, for the main window (see [`MainEvent::LearnLimited`]).
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LimitReason {
+    /// A code editor whose accessibility support is off keeps its text out of reach of other
+    /// programs: the text box UI Automation sees is empty.
+    AccessibilityOff,
+}
+
+#[cfg(windows)]
+impl LimitReason {
+    /// The identifier the main window knows it by. It must not change.
+    const fn id(self) -> &'static str {
+        match self {
+            LimitReason::AccessibilityOff => "accessibility_off",
+        }
+    }
+}
+
+/// What has been reported, so that each thing is said once while Raphael runs.
+#[cfg(windows)]
+#[derive(Default)]
+struct Told(Vec<(&'static str, &'static str)>);
+
+#[cfg(windows)]
+impl Told {
+    /// Whether this is the first report of `reason` for `app`; remembers it.
+    fn first(&mut self, app: &'static str, reason: LimitReason) -> bool {
+        let key = (app, reason.id());
+        if self.0.contains(&key) {
+            return false;
+        }
+        self.0.push(key);
+        true
+    }
+}
+
+#[cfg(windows)]
+static TOLD: Mutex<Told> = Mutex::new(Told(Vec::new()));
+
+/// Tells the main window that learning is limited in `app`, the first time this session.
+#[cfg(windows)]
+fn report_limited(app: &'static str, reason: LimitReason) {
+    report_once(&TOLD, app, reason, crate::commands::tell_main_window);
+}
+
+#[cfg(windows)]
+fn report_once(
+    told: &Mutex<Told>,
+    app: &'static str,
+    reason: LimitReason,
+    send: impl FnOnce(MainEvent),
+) {
+    if !told
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .first(app, reason)
+    {
+        return;
+    }
+    // Metadata only: which editor, and why.
+    log::info!(
+        "learn: learning is limited (app: {app}, reason: {})",
+        reason.id()
+    );
+    send(MainEvent::LearnLimited {
+        app: app.to_owned(),
+        reason: reason.id().to_owned(),
+    });
 }
 
 /// What the dictation controller tells about its pastes.
@@ -235,6 +297,8 @@ pub struct Learner<C: CoreApi, O: OverlayApi, P: FieldProbe> {
     /// Serializes accepting a delivery with cancellation, so stale continuations cannot cancel newer ones.
     latest_delivery: Mutex<u64>,
     timing: Timing,
+    /// The language of the notice that names the learned words.
+    language: LanguageCell,
 }
 
 impl<C: CoreApi, O: OverlayApi, P: FieldProbe> Learner<C, O, P> {
@@ -246,7 +310,15 @@ impl<C: CoreApi, O: OverlayApi, P: FieldProbe> Learner<C, O, P> {
             generation: Arc::new(AtomicU64::new(0)),
             latest_delivery: Mutex::new(0),
             timing: TIMING,
+            language: LanguageCell::default(),
         }
+    }
+
+    /// The learner, naming the learned words in the language `language` holds, which the device
+    /// settings keep up to date.
+    pub fn with_language(mut self, language: LanguageCell) -> Self {
+        self.language = language;
+        self
     }
 
     /// Starts the watch after `text` was pasted into `target`; `None` if there is nothing to
@@ -282,22 +354,18 @@ impl<C: CoreApi, O: OverlayApi, P: FieldProbe> Learner<C, O, P> {
         let generation = self.generation.clone();
         // Even a paste-last action replaces an older watch.
         let started = generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let cancellation = CANCELLATION.load(Ordering::SeqCst);
         let scope = WatchScope {
             deadline,
             generation: generation.clone(),
             started,
-            cancellation,
             #[cfg(windows)]
             input: receipt.input,
         };
         drop(latest_delivery);
         let timing = self.timing;
+        let language = self.language.clone();
         let (text, target) = (text.to_owned(), target.clone());
         Some(tokio::spawn(async move {
-            if !learning_is_on(core.as_ref()).await {
-                return;
-            }
             let (found, corrections) = oneshot::channel();
             // UI Automation is used from a thread of its own (COM, multithreaded apartment), which
             // the field never leaves.
@@ -339,8 +407,7 @@ impl<C: CoreApi, O: OverlayApi, P: FieldProbe> Learner<C, O, P> {
                 log::error!("learn: the watch ended without an answer");
                 return;
             };
-            let words =
-                learn_if_current(core.as_ref(), &corrections, &CANCELLATION, cancellation).await;
+            let words = learn(core.as_ref(), &corrections).await;
             if words.is_empty() {
                 return;
             }
@@ -348,8 +415,7 @@ impl<C: CoreApi, O: OverlayApi, P: FieldProbe> Learner<C, O, P> {
                 log::info!("learn: a new dictation is under way; no notice");
                 return;
             }
-            let (zh, ja) = notices::learned(&words);
-            overlay.learned_notice(&zh, &ja);
+            overlay.learned_notice(&notices::learned(&words, &language.get()));
         }))
     }
 }
@@ -378,40 +444,11 @@ impl<C: CoreApi, O: OverlayApi, P: FieldProbe> AfterPaste for Learner<C, O, P> {
     }
 }
 
-/// Whether the core's `learn_corrections` setting is on. Off if it cannot be read (or the core
-/// predates it).
-async fn learning_is_on<C: CoreApi>(core: &C) -> bool {
-    match core.call("settings.get", json!({})).await {
-        Ok(reply) => reply
-            .pointer("/settings/learn_corrections")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        Err(err) => {
-            log::warn!("learn: settings.get failed: {err}");
-            false
-        }
-    }
-}
-
-/// Revalidates cancellation after the settings RPC, which can outlive an off/on toggle.
-async fn learn_if_current<C: CoreApi>(
-    core: &C,
-    corrections: &[Correction],
-    cancellation: &AtomicU64,
-    started: u64,
-) -> Vec<String> {
-    if corrections.is_empty()
-        || cancellation.load(Ordering::SeqCst) != started
-        || !learning_is_on(core).await
-        || cancellation.load(Ordering::SeqCst) != started
-    {
+/// Hands the corrections to the core; the words it learned. Nothing is sent if there are none.
+async fn learn<C: CoreApi>(core: &C, corrections: &[Correction]) -> Vec<String> {
+    if corrections.is_empty() {
         return Vec::new();
     }
-    learn(core, corrections).await
-}
-
-/// Hands the corrections to the core; the words it learned.
-async fn learn<C: CoreApi>(core: &C, corrections: &[Correction]) -> Vec<String> {
     let params = json!({
         "corrections": corrections
             .iter()
@@ -453,6 +490,43 @@ impl<C: CoreApi, O: OverlayApi, P: FieldProbe> Learner<C, O, P> {
 
     pub fn generation(&self) -> Arc<AtomicU64> {
         self.generation.clone()
+    }
+}
+
+#[cfg(all(test, windows))]
+mod limited_tests {
+    use std::cell::RefCell;
+
+    use super::*;
+
+    fn limited(app: &str) -> MainEvent {
+        MainEvent::LearnLimited {
+            app: app.to_owned(),
+            reason: "accessibility_off".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_identifiers_the_main_window_knows_do_not_change() {
+        assert_eq!(LimitReason::AccessibilityOff.id(), "accessibility_off");
+    }
+
+    #[test]
+    fn each_limit_is_reported_once_per_session() {
+        let told = Mutex::new(Told::default());
+        let sent = RefCell::new(Vec::new());
+        for _ in 0..3 {
+            report_once(&told, "vscode", LimitReason::AccessibilityOff, |event| {
+                sent.borrow_mut().push(event);
+            });
+        }
+        report_once(&told, "cursor", LimitReason::AccessibilityOff, |event| {
+            sent.borrow_mut().push(event);
+        });
+        report_once(&told, "vscode", LimitReason::AccessibilityOff, |event| {
+            sent.borrow_mut().push(event);
+        });
+        assert_eq!(*sent.borrow(), [limited("vscode"), limited("cursor")]);
     }
 }
 
@@ -560,23 +634,19 @@ mod tests {
             deadline: Instant::now() + WATCH_LIMIT,
             generation: Arc::new(AtomicU64::new(7)),
             started: 7,
-            cancellation: CANCELLATION.load(Ordering::SeqCst),
             #[cfg(windows)]
             input: None,
         }
     }
 
     #[test]
-    fn discovery_and_reads_share_generation_cancellation_and_the_paste_deadline() {
+    fn discovery_and_reads_share_the_generation_and_the_paste_deadline() {
         let mut scope = scope();
         assert!(scope.active());
         scope.generation.fetch_add(1, Ordering::SeqCst);
         assert!(!scope.active());
         scope.generation.store(7, Ordering::SeqCst);
         scope.deadline = Instant::now() - Duration::from_secs(1);
-        assert!(!scope.active());
-        scope.deadline = Instant::now() + WATCH_LIMIT;
-        scope.cancellation = scope.cancellation.wrapping_add(1);
         assert!(!scope.active());
     }
 
@@ -734,13 +804,6 @@ mod tests {
             self
         }
 
-        fn learning() -> Self {
-            Self::default().on(
-                "settings.get",
-                json!({"settings": {"learn_corrections": true}}),
-            )
-        }
-
         fn calls(&self, method: &str) -> Vec<Value> {
             let calls = self.calls.lock().unwrap();
             calls
@@ -764,19 +827,23 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct Overlay(Mutex<Vec<(String, String)>>, AtomicU64);
+    struct Overlay(Mutex<Vec<String>>, AtomicU64);
 
     impl OverlayApi for Overlay {
         fn show(&self, _: Mode) {}
+        fn greet(&self, _: &str) {}
         fn set_mode(&self, _: Mode) {}
+        fn think_quietly(&self, _: &[&str]) {}
         fn level(&self, _: f32) {}
-        fn notice(&self, zh: &str, ja: &str) {
-            self.0.lock().unwrap().push((zh.to_owned(), ja.to_owned()));
+        fn notice(&self, text: &str) {
+            self.0.lock().unwrap().push(text.to_owned());
         }
-        fn learned_notice(&self, zh: &str, ja: &str) {
+        fn learned_notice(&self, text: &str) {
             self.1.fetch_add(1, Ordering::SeqCst);
-            self.notice(zh, ja);
+            self.notice(text);
         }
+        fn say(&self, _: &str, _: &str) {}
+        fn ask(&self, _: &crate::overlay::AskPrompt) {}
         fn hide(&self) {}
         fn progress(&self, _: Progress) {}
     }
@@ -820,7 +887,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_correction_is_learned_and_reported_once() {
-        let core = Core::learning().on("dictionary.learn", json!({"learned": ["手提電話"]}));
+        let core = Core::default().on("dictionary.learn", json!({"learned": ["手提電話"]}));
         let (core, overlay, probe, learner) = learner(core, sent_field());
         run(&learner, &target("LINE.exe")).await;
         assert_eq!(
@@ -829,17 +896,35 @@ mod tests {
         );
         assert_eq!(
             *overlay.0.lock().unwrap(),
-            [(
-                "《了。「手提電話」已加入詞典。》".to_owned(),
-                "《了。「手提電話」を辞書に追加しました。》".to_owned()
-            )]
+            ["《了。「手提電話」已加入詞典。》".to_owned()],
+            "one line, in the default language"
         );
         assert_eq!(probe.asked.lock().unwrap()[0].process_name, "LINE.exe");
     }
 
     #[tokio::test]
+    async fn the_learned_words_are_named_in_the_interface_language() {
+        for (language, expected) in [
+            ("ja", "《了。「手提電話」を辞書に追加しました。》"),
+            ("en", "《Understood. “手提電話” added to the dictionary.》"),
+        ] {
+            let core = Core::default().on("dictionary.learn", json!({"learned": ["手提電話"]}));
+            let (_, overlay, _, learner) = learner(core, sent_field());
+            let cell = LanguageCell::default();
+            cell.set(language);
+            let learner = learner.with_language(cell);
+            run(&learner, &target("LINE.exe")).await;
+            assert_eq!(
+                *overlay.0.lock().unwrap(),
+                [expected.to_owned()],
+                "{language}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn confirmed_words_use_the_dedicated_learned_notice_route() {
-        let core = Core::learning().on("dictionary.learn", json!({"learned": ["Typeless"]}));
+        let core = Core::default().on("dictionary.learn", json!({"learned": ["Typeless"]}));
         let (_, overlay, _, learner) = learner(core, sent_field());
         run(&learner, &target("notepad.exe")).await;
         assert_eq!(overlay.1.load(Ordering::SeqCst), 1);
@@ -847,61 +932,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disabling_then_reenabling_during_the_final_settings_reply_drops_old_corrections() {
-        struct DelayedSettings {
-            entered: tokio::sync::Notify,
-            reply: tokio::sync::Notify,
-            writes: Mutex<Vec<Value>>,
-        }
-        impl CoreApi for DelayedSettings {
-            async fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
-                if method == "settings.get" {
-                    self.entered.notify_one();
-                    self.reply.notified().await;
-                    // The setting was turned off and back on while this RPC was in flight.
-                    Ok(json!({"settings": {"learn_corrections": true}}))
-                } else {
-                    assert_eq!(method, "dictionary.learn");
-                    self.writes.lock().unwrap().push(params);
-                    Ok(json!({"learned": ["Typeless"]}))
-                }
-            }
-        }
-        let core = Arc::new(DelayedSettings {
-            entered: tokio::sync::Notify::new(),
-            reply: tokio::sync::Notify::new(),
-            writes: Mutex::new(Vec::new()),
-        });
-        let cancellation = Arc::new(AtomicU64::new(7));
-        let pending = {
-            let core = core.clone();
-            let cancellation = cancellation.clone();
-            tokio::spawn(async move {
-                learn_if_current(
-                    core.as_ref(),
-                    &[Correction {
-                        word: "Typeless".to_owned(),
-                        misheard: "Tyeless".to_owned(),
-                    }],
-                    cancellation.as_ref(),
-                    7,
-                )
-                .await
-            })
-        };
-        core.entered.notified().await;
-        cancellation.fetch_add(1, Ordering::SeqCst);
-        core.reply.notify_one();
-        assert!(pending.await.unwrap().is_empty());
-        assert!(core.writes.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
     async fn an_older_identical_paste_cannot_cancel_the_newer_watch() {
         let older = PasteReceipt::new();
         let newer = PasteReceipt::new();
         assert!(older.sequence < newer.sequence);
-        let (core, _, probe, learner) = learner(Core::learning(), sent_field());
+        let (core, _, probe, learner) = learner(Core::default(), sent_field());
         let target = target("notepad.exe");
         // Deliveries occurred in order, but the second async continuation resumes first.
         let newest = learner.start_with_receipt(PASTED, &target, newer).unwrap();
@@ -914,40 +949,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn nothing_is_read_when_the_setting_is_off() {
-        let core = Core::default().on(
-            "settings.get",
-            json!({"settings": {"learn_corrections": false}}),
-        );
+    async fn learning_does_not_ask_the_core_whether_it_may() {
+        // A core whose database still says learning is off, from the days it was a setting.
+        let core = Core::default()
+            .on(
+                "settings.get",
+                json!({"settings": {"learn_corrections": false}}),
+            )
+            .on("dictionary.learn", json!({"learned": ["手提電話"]}));
         let (core, overlay, probe, learner) = learner(core, sent_field());
         run(&learner, &target("notepad.exe")).await;
-        assert!(probe.asked.lock().unwrap().is_empty());
-        assert!(core.calls("dictionary.learn").is_empty());
-        assert!(overlay.0.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_core_without_the_setting_counts_as_off() {
-        let (_, _, probe, learner) = learner(Core::default(), sent_field());
-        run(&learner, &target("notepad.exe")).await;
-        assert!(probe.asked.lock().unwrap().is_empty());
+        assert!(core.calls("settings.get").is_empty());
+        assert_eq!(probe.asked.lock().unwrap().len(), 1);
+        assert_eq!(core.calls("dictionary.learn").len(), 1);
+        assert_eq!(overlay.0.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
     async fn elevated_windows_are_not_watched() {
-        let (core, _, probe, learner) = learner(Core::learning(), sent_field());
+        let (core, _, probe, learner) = learner(Core::default(), sent_field());
         let elevated = Target {
             is_elevated: true,
             ..target("notepad.exe")
         };
         assert!(learner.start(PASTED, &elevated).is_none());
         assert!(probe.asked.lock().unwrap().is_empty());
-        assert!(core.calls("settings.get").is_empty());
+        assert!(core.calls("dictionary.learn").is_empty());
     }
 
     #[tokio::test]
     async fn terminals_are_probed_after_a_paste() {
-        let (core, _, probe, learner) = learner(Core::learning(), sent_field());
+        let (core, _, probe, learner) = learner(Core::default(), sent_field());
         run(&learner, &target("WindowsTerminal.exe")).await;
         assert_eq!(probe.asked.lock().unwrap().len(), 1);
         assert_eq!(core.calls("dictionary.learn").len(), 1);
@@ -955,7 +987,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreadable_field_learns_nothing() {
-        let (core, overlay, _, learner) = learner(Core::learning(), FakeProbe::unreadable());
+        let (core, overlay, _, learner) = learner(Core::default(), FakeProbe::unreadable());
         run(&learner, &target("notepad.exe")).await;
         assert!(core.calls("dictionary.learn").is_empty());
         assert!(overlay.0.lock().unwrap().is_empty());
@@ -987,7 +1019,7 @@ mod tests {
             }
         }
         let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let core = Arc::new(Core::learning());
+        let core = Arc::new(Core::default());
         let learner = Learner::quick(
             core.clone(),
             Arc::new(Overlay::default()),
@@ -1005,14 +1037,14 @@ mod tests {
     #[tokio::test]
     async fn no_corrections_no_call() {
         let probe = FakeProbe::reading(vec![text(PASTED), text(PASTED), text("")]);
-        let (core, _, _, learner) = learner(Core::learning(), probe);
+        let (core, _, _, learner) = learner(Core::default(), probe);
         run(&learner, &target("notepad.exe")).await;
         assert!(core.calls("dictionary.learn").is_empty());
     }
 
     #[tokio::test]
     async fn nothing_new_in_the_dictionary_no_notice() {
-        let core = Core::learning().on("dictionary.learn", json!({"learned": []}));
+        let core = Core::default().on("dictionary.learn", json!({"learned": []}));
         let (core, overlay, _, learner) = learner(core, sent_field());
         run(&learner, &target("notepad.exe")).await;
         assert_eq!(core.calls("dictionary.learn").len(), 1);
@@ -1021,7 +1053,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_new_dictation_ends_the_watch_and_keeps_the_notice_out_of_its_way() {
-        let core = Core::learning().on("dictionary.learn", json!({"learned": ["手提電話"]}));
+        let core = Core::default().on("dictionary.learn", json!({"learned": ["手提電話"]}));
         let probe = FakeProbe::reading(vec![
             text(PASTED),
             text(&fixed()),
@@ -1041,12 +1073,11 @@ mod tests {
 
     #[tokio::test]
     async fn several_words_get_one_notice() {
-        let core =
-            Core::learning().on("dictionary.learn", json!({"learned": ["手機", "Typeless"]}));
+        let core = Core::default().on("dictionary.learn", json!({"learned": ["手機", "Typeless"]}));
         let (_, overlay, _, learner) = learner(core, sent_field());
         run(&learner, &target("notepad.exe")).await;
         assert_eq!(
-            overlay.0.lock().unwrap()[0].0,
+            overlay.0.lock().unwrap()[0],
             "《了。「手機」、「Typeless」已加入詞典。》"
         );
     }

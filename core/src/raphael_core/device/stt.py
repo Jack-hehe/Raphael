@@ -157,7 +157,8 @@ def _hotwords(hints: Sequence[str]) -> str:
     Empty words are dropped. The words are taken in order until there are _MAX_HINT_WORDS of them.
     A word that would take the list past _MAX_HINT_CHARS characters (commas included) is skipped,
     and the later words are still tried, so one very long entry does not block the rest. The
-    dictionary lists the newest first, so a full list loses the oldest words.
+    dictation service puts the words the user chose first and the learned ones after, so a full
+    list loses the oldest learned words first.
     """
     words = [word.strip() for hint in hints for word in hint.split(",")]
     kept: list[str] = []

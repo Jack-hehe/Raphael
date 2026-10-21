@@ -1,14 +1,13 @@
-// The progress ring: after the dictation key is released, the glyph ring draws itself in
-// clockwise from twelve o'clock, like the ring charging, while the speech that is left is
+// How far a dictation has come once its key is released: while the speech that is left is
 // transcribed (0 to 60 %), while the brain cleans the text (60 to 95 %, an estimate) and when the
-// text is there (100 %).
+// text is there (100 %). The overlay page writes it as a percentage beside the emblem
+// (overlay.ts). It is called the arc from when it was drawn as one around the emblem.
 //
 // The core reports how many segments are transcribed; the cleanup has no such count, so the arc
 // eases towards the end of its range over the time the cleanup is expected to take and stops
-// short of it until the reply comes. The ring never goes back.
+// short of it until the reply comes. The arc never goes back.
 //
-// Pure: no canvas, no clock of its own. `Emblem` advances it with the animation loop and draws
-// what `sample` gives on the 24 fps clock.
+// Pure: no canvas, no clock of its own. The overlay controller advances it with a timer.
 
 export type Stage = "transcribing" | "cleaning" | "done";
 
@@ -23,7 +22,7 @@ export interface ProgressReport {
   audioSeconds: number;
 }
 
-/** The part of the ring each stage fills, as fractions of the full circle. */
+/** The part of the arc each stage fills, as fractions of the whole. */
 export const ARC = {
   transcribing: [0, 0.6],
   cleaning: [0.6, 0.95],
@@ -45,20 +44,10 @@ export function cleaningEstimate(t: number, expected: number): number {
   return 1 - Math.pow(0.1, t / expected);
 }
 
-/** With reduced motion the cleaning estimate moves in this many steps, without easing. */
-const REDUCED_STEPS = 3;
 /** How quickly the arc catches up with the counts, seconds (the time constant). */
 const FOLLOW = 0.12;
-/** The brief flare when the arc closes. */
-const FLASH = 0.2;
 
 const ORDER: Record<Stage, number> = { transcribing: 0, cleaning: 1, done: 2 };
-
-/** What is drawn: `fraction` of the circle, with `flash` (0 to 1) extra light. */
-export interface ArcSample {
-  fraction: number;
-  flash: number;
-}
 
 export class ProgressArc {
   private stage: Stage | null = null;
@@ -66,9 +55,8 @@ export class ProgressArc {
   private cleaningFor = 0;
   private expected = expectedCleanupSeconds(0);
   private value = 0;
-  private doneFor = Infinity;
 
-  /** Whether there is an arc to draw. */
+  /** Whether a dictation's progress is being followed. */
   get active(): boolean {
     return this.stage !== null;
   }
@@ -78,14 +66,14 @@ export class ProgressArc {
     return this.stage;
   }
 
-  /** The fraction of the circle filled now, 0 to 1 (0 when inactive). */
+  /** The fraction of the arc filled now, 0 to 1 (0 when inactive). */
   get fraction(): number {
     return this.stage === null ? 0 : this.value;
   }
 
   /** A new report from the core (or the stop's reply, `done`). Reports from an earlier stage than
    * the one shown come late and are ignored. */
-  report(r: ProgressReport, reduce: boolean): void {
+  report(r: ProgressReport): void {
     if (this.stage !== null && ORDER[r.stage] < ORDER[this.stage]) return;
     const entering = this.stage !== r.stage;
     this.stage = r.stage;
@@ -101,9 +89,7 @@ export class ProgressArc {
       }
     } else {
       this.value = 1;
-      this.doneFor = 0;
     }
-    if (reduce) this.value = Math.max(this.value, this.target(true));
   }
 
   /** No arc, at once. */
@@ -112,19 +98,17 @@ export class ProgressArc {
     this.counted = 0;
     this.cleaningFor = 0;
     this.value = 0;
-    this.doneFor = Infinity;
   }
 
   /** Where the arc is heading now. */
-  private target(reduce: boolean): number {
+  private target(): number {
     switch (this.stage) {
       case null:
         return 0;
       case "transcribing":
         return this.counted;
       case "cleaning": {
-        let share = cleaningEstimate(this.cleaningFor, this.expected);
-        if (reduce) share = Math.floor(share * REDUCED_STEPS) / REDUCED_STEPS;
+        const share = cleaningEstimate(this.cleaningFor, this.expected);
         const [from, to] = ARC.cleaning;
         return Math.max(this.counted, from + (to - from) * share);
       }
@@ -133,20 +117,12 @@ export class ProgressArc {
     }
   }
 
-  /** Moves the arc on by `dt` seconds. With `reduce` it jumps to where it is heading. */
-  advance(dt: number, reduce: boolean): void {
+  /** Moves the arc on by `dt` seconds. */
+  advance(dt: number): void {
     if (this.stage === null || !(dt > 0)) return;
     if (this.stage === "cleaning") this.cleaningFor += dt;
-    if (this.stage === "done") this.doneFor += dt;
-    const target = this.target(reduce);
-    const next = reduce ? target : this.value + (target - this.value) * (1 - Math.exp(-dt / FOLLOW));
+    const target = this.target();
+    const next = this.value + (target - this.value) * (1 - Math.exp(-dt / FOLLOW));
     this.value = Math.min(1, Math.max(this.value, next));
-  }
-
-  /** What to draw now, or null for nothing. */
-  sample(reduce: boolean): ArcSample | null {
-    if (this.stage === null) return null;
-    const flash = !reduce && this.doneFor < FLASH ? 1 - this.doneFor / FLASH : 0;
-    return { fraction: this.value, flash };
   }
 }

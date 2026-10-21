@@ -25,11 +25,20 @@ function dayNumber(ms: number): number {
   return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000);
 }
 
-/** `今天`, `昨天`, else `10 月 15 日` (with the year when it is not this year's). */
-export function dayLabel(ms: number, nowMs: number): string {
+/** The local midnights that start and end a day written `2026-10-14`, in ms: `[from, to)`. A day can be 23 or 25 hours long. */
+export function dayBounds(date: string): [number, number] {
+  const [year, month, day] = date.split("-").map(Number);
+  return [new Date(year, month - 1, day).getTime(), new Date(year, month - 1, day + 1).getTime()];
+}
+
+/**
+ * `今天`, `昨天`, else `10 月 15 日` (with the year when it is not this year's). `inSentence` gives the
+ * words as they read inside a sentence, where English writes "today", not "Today".
+ */
+export function dayLabel(ms: number, nowMs: number, inSentence = false): string {
   const days = dayNumber(nowMs) - dayNumber(ms);
-  if (days === 0) return t("format.001");
-  if (days === 1) return t("format.002");
+  if (days === 0) return t(inSentence ? "format.todayInSentence" : "format.001");
+  if (days === 1) return t(inSentence ? "format.yesterdayInSentence" : "format.002");
   const d = new Date(ms);
   const date = t("format.003", { p0: d.getMonth() + 1, p1: d.getDate() });
   return d.getFullYear() === new Date(nowMs).getFullYear() ? date : t("format.004", { p0: d.getFullYear(), p1: date });
@@ -57,11 +66,23 @@ export function formatRetention(days: number): string {
  * `Raphael's core is not running`, or one of the Chinese messages the Rust side writes itself.
  */
 export function describeError(err: unknown): string {
-  const text = err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
+  const text = err instanceof Error ? err.message : typeof err === "string" ? err : asText(err);
   // CORE_EXITED and TIMEOUT of rpc.rs, and the message of core_call for a core that is missing.
   if (text.includes("core is not running") || text.startsWith("[-32000]")) return t("format.010");
   if (text.startsWith("[-32001]")) return t("format.011");
   return backendMessage(text.replace(/^\[-?\d+\] /, ""));
+}
+
+/**
+ * Any other rejection as text. JSON gives nothing for undefined, a function or a symbol, and
+ * throws on a bigint or a loop: those are written as JavaScript writes them.
+ */
+function asText(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 /** The monthly limit as the home page shows it next to the spend: `20`, `7.50`. */

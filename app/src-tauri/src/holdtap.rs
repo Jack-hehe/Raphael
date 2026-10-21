@@ -8,7 +8,9 @@
 //! - **Hold**: a press starts the recording, the release stops it.
 //!
 //! The controller feeds the key's down and up events to [`HoldTap`] and does what the returned
-//! [`Action`] says. The type has no clock and no threads, so it is plain to test.
+//! [`Action`] says. The type has no clock and no threads, so it is plain to test. The agent key
+//! (the one that asks Raphael something) follows the same two modes, with a detector of its own;
+//! in toggle mode the dictation key ends a question too ([`HoldTap::on_stop_key`]).
 //!
 //! The mode is read when a dictation begins (the press that leaves the idle state) and kept until
 //! that dictation is over, so changing the setting during a dictation takes effect from the next
@@ -89,6 +91,21 @@ impl HoldTap {
             // An up we have no down for (for example the key was held when the app started, or
             // the recording was cancelled) is ignored.
             State::Idle | State::Listening => Action::None,
+        }
+    }
+
+    /// Another key that ends a recording went down: the dictation key ends a question to
+    /// Raphael too. In toggle mode, while recording with this key up, it stops the recording as
+    /// this key's next press would, and the detector is idle again (no release of this key is to
+    /// come). In hold mode, or while this key is still down, it does nothing: this key's release
+    /// decides.
+    pub fn on_stop_key(&mut self) -> Action {
+        match self.state {
+            State::Listening => {
+                self.state = State::Idle;
+                Action::StopRecording
+            }
+            State::Idle | State::Held | State::Starting | State::Stopping => Action::None,
         }
     }
 
@@ -217,6 +234,37 @@ mod tests {
         assert_eq!(h.on_down(Toggle), Action::StartRecording);
     }
 
+    #[test]
+    fn toggle_another_stop_key_stops_a_recording_that_is_listening() {
+        let mut h = HoldTap::new();
+        assert_eq!(h.on_down(Toggle), Action::StartRecording);
+        assert_eq!(
+            h.on_stop_key(),
+            Action::None,
+            "the starting press is still down"
+        );
+        h.on_up();
+        assert_eq!(h.on_stop_key(), Action::StopRecording);
+        assert_eq!(h.on_stop_key(), Action::None, "one stop");
+        assert_eq!(h.on_up(), Action::None, "this key's release is nobody's");
+        assert_eq!(
+            h.on_down(Toggle),
+            Action::StartRecording,
+            "a fresh start, not a stop"
+        );
+    }
+
+    #[test]
+    fn toggle_another_stop_key_leaves_a_stopping_press_alone() {
+        let mut h = HoldTap::new();
+        h.on_down(Toggle);
+        h.on_up();
+        assert_eq!(h.on_down(Toggle), Action::StopRecording);
+        assert_eq!(h.on_stop_key(), Action::None);
+        assert_eq!(h.on_up(), Action::None);
+        assert_eq!(h.on_down(Toggle), Action::StartRecording);
+    }
+
     // ---------- hold: hold to talk, release to stop ----------
 
     #[test]
@@ -266,6 +314,15 @@ mod tests {
             "the release after Esc does nothing"
         );
         assert_eq!(h.on_down(Hold), Action::StartRecording);
+    }
+
+    #[test]
+    fn hold_another_stop_key_does_nothing_and_the_release_still_stops() {
+        let mut h = HoldTap::new();
+        assert_eq!(h.on_stop_key(), Action::None, "idle");
+        h.on_down(Hold);
+        assert_eq!(h.on_stop_key(), Action::None);
+        assert_eq!(h.on_up(), Action::StopRecording);
     }
 
     // ---------- the mode is fixed for the dictation under way ----------

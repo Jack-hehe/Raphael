@@ -11,7 +11,6 @@ from raphael_core.languages import (
     from_legacy,
     language_groups,
     legacy_language,
-    stt_language,
     stt_languages,
 )
 
@@ -125,18 +124,6 @@ def test_display_names():
 
 
 # --- speech-to-text hints -------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "languages",
-    [[language_id] for language_id in LANGUAGE_IDS]
-    + [
-        ["zh-TW", "en-US"],
-        ["zh-TW", "en-US", "ja-JP"],
-    ],
-)
-def test_every_language_selection_uses_automatic_detection(languages):
-    assert stt_language(languages) == "auto"
 
 
 def test_the_codes_of_several_languages_keep_their_order():

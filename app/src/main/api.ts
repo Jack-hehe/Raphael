@@ -6,6 +6,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { withWindowHotkeyPause } from "./window-hotkeys";
 import type { LanguageGroup } from "./languages";
 import type {
+  AgentTurn,
   AudioDevices,
   BrainSettings,
   DeviceSettings,
@@ -13,8 +14,8 @@ import type {
   HistoryItem,
   KeyCheck,
   MainEvent,
+  ModelCatalog,
   ModelsStatus,
-  Pricing,
   Status,
   StatsSummary,
 } from "./types";
@@ -36,8 +37,8 @@ export const statusCheckOpenrouter = (): Promise<Status["openrouter"]> => core("
 /** The numbers of the home page: words, time, speed, the last 14 days. */
 export const statsSummary = (days?: number): Promise<StatsSummary> =>
   core("stats.summary", days === undefined ? {} : { days });
-/** The prices of the cleanup and speech-to-text models, read from OpenRouter when it can be. */
-export const pricingGet = (): Promise<Pricing> => core("pricing.get");
+/** Every OpenRouter model Raphael could use, with its price and what each role can make of it. */
+export const modelsCatalog = (): Promise<ModelCatalog> => core("models.catalog");
 
 // ---------- history ----------
 
@@ -47,10 +48,25 @@ export interface HistoryQuery {
   limit?: number;
   /** Only items older than this: the cursor of the next page. */
   before_ms?: number;
+  /** Only items from this time on (with `before_ms`, one day: from its midnight to the next). */
+  after_ms?: number;
 }
 
 export const historyList = (q: HistoryQuery): Promise<{ items: HistoryItem[] }> => core("history.list", q);
 export const historyDelete = (id: number): Promise<{ deleted: boolean }> => core("history.delete", { id });
+
+// ---------- conversations with Raphael ----------
+
+export interface AgentHistoryQuery {
+  limit?: number;
+  /** Only turns older than this id: the cursor of the next page. */
+  before_id?: number;
+}
+
+/** The turns of the conversations, newest first. */
+export const agentHistoryList = (q: AgentHistoryQuery = {}): Promise<{ turns: AgentTurn[] }> => core("agent.history.list", q);
+/** Forgets every turn; says how many there were. */
+export const agentHistoryClear = (): Promise<{ deleted: number }> => core("agent.history.clear");
 
 // ---------- dictionary ----------
 

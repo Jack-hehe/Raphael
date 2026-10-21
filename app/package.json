@@ -2,15 +2,15 @@
   "name": "app",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "predev": "node scripts/copy-private.mjs",
     "dev": "vite",
     "prebuild": "node scripts/copy-private.mjs",
     "build": "tsc && vite build",
-    "preview": "vite preview",
     "tauri": "node scripts/tauri.mjs",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "check:contrast": "node scripts/check-palette.mjs"
   },
   "dependencies": {

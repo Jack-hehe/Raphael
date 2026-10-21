@@ -1,19 +1,7 @@
-"""Fixtures and helpers shared by the brain's tests."""
+"""Helpers shared by the brain's tests (the database fixture `conn` is the whole suite's)."""
 
-import sqlite3
-from collections.abc import Iterator
-
-import pytest
-
-from raphael_core.brain import db
+from raphael_core.brain.dictionary import DictionaryStore, Learned
 from raphael_core.brain.history import HistoryItem
-
-
-@pytest.fixture
-def conn() -> Iterator[sqlite3.Connection]:
-    connection = db.connect(":memory:")
-    yield connection
-    connection.close()
 
 
 def item(**overrides) -> HistoryItem:
@@ -34,3 +22,9 @@ def item(**overrides) -> HistoryItem:
         "cost_usd": 0.0002,
     }
     return HistoryItem(**{**fields, **overrides})
+
+
+def learn(dictionary: DictionaryStore, word: str, misheard: str) -> bool:
+    """Whether learning that the user corrected `misheard` into `word` changed the dictionary or
+    its evidence; `learn_pair` says how."""
+    return dictionary.learn_pair(word, misheard) is not Learned.NOTHING

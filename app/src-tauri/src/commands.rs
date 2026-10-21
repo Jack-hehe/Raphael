@@ -1,13 +1,21 @@
 //! The commands the main window calls, and the device settings behind some of them.
 //!
 //! - `core_call` passes a call on to the core, but only the methods the main window needs; the
-//!   dictation methods are the controller's alone.
+//!   dictation methods and the ones that ask Raphael something (`agent.ask`, `agent.confirm`,
+//!   `agent.cancel`) are the controller's alone. The main window may read and clear the record of
+//!   the conversations (`agent.history.`).
 //! - `device_settings_get` and `device_settings_set` read and change `device.json`
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
 //!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
 //!   is the file written. (A dictation that is under way finishes in the mode it began in.)
-//! - `keyboard_has_altgr`, `hotkeys_pause` and `main_events` are small helpers of the settings
-//!   page.
+//! - `keyboard_has_altgr` and `hotkeys_pause` are small helpers of the settings page.
+//! - `main_events` is the channel on which the main window hears the core and the app (the
+//!   microphone's loudness, a model's download, learning that is limited, the tray's pages).
+//! - `window_hotkey` hands the hotkeys that the main window sees while it has the focus, and the
+//!   keyboard hook may not, to the hotkey service, which treats them as the hook's.
+//!
+//! Every command here belongs to the main window and refuses a call from any other webview
+//! (`require_main`); the overlay page only loads its own files, but it is a webview too.
 //!
 //! [`start`] is called once from `setup` in `lib.rs`. Like the other parts of the app it takes
 //! what it needs from the app state with `try_state`: after a failure to start, the core, the
@@ -24,7 +32,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tauri::async_runtime::JoinHandle;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State, Webview};
 use tauri_plugin_autostart::ManagerExt;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -33,7 +41,8 @@ use crate::device_settings::{
     self, Appearance, DeviceSettings, DeviceStore, DictationMode, FILE_NAME, Subtitles,
 };
 use crate::dictation::ModeCell;
-use crate::hotkey::{Bindings, HotkeyService, PauseReason, WindowHotkey};
+use crate::hotkey::{Bindings, HotkeyService, WindowHotkey};
+use crate::notices::LanguageCell;
 use crate::overlay::Overlay;
 use crate::rpc::{CORE_EXITED, Notification, RpcError, TIMEOUT};
 
@@ -47,7 +56,26 @@ static MONITORING: AtomicBool = AtomicBool::new(false);
 /// The task that passes the core's notifications on to the page that last called `main_events`.
 static FORWARDER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
-/// What the main window is told about the core.
+/// A page of the main window that the tray's menu can open (`TrayPage` in types.ts).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrayPage {
+    Home,
+    History,
+    Dictionary,
+    Settings,
+}
+
+/// The one thing the tray's menu asks the page to do once it is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TrayAction {
+    /// The dictionary's fields for a new word open, with the cursor in the word.
+    AddWord,
+}
+
+/// What the main window is told about the core, and about the app's own side of learning and
+/// of the tray.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type")]
 pub enum MainEvent {
@@ -55,31 +83,121 @@ pub enum MainEvent {
     Level { value: f32 },
     /// A speech model is being downloaded.
     ModelProgress { name: String, done: u64, total: u64 },
+    /// Learning from corrections cannot read what the user types in `app`, so it learns less
+    /// there. Sent at most once per `app` and `reason` while the app runs, whenever the main
+    /// window is listening (a window that subscribes later is told then). The identifiers are
+    /// stable: `app` is `vscode`, `cursor`, `vscodium`, `windsurf`, `trae` or `positron`;
+    /// `reason` is `accessibility_off` (the editor's `editor.accessibilitySupport` is off, so
+    /// its text box is empty to other programs, and only ASCII typed on the US layout can be
+    /// followed; setting it to `"on"` fixes that).
+    LearnLimited { app: String, reason: String },
+    /// A tray menu item asks for a page, and perhaps one thing to do there. It is sent before the
+    /// window is shown, so that the window opens on that page. The first-run guide ignores it.
+    TrayOpen {
+        page: TrayPage,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        action: Option<TrayAction>,
+    },
+}
+
+/// The most events kept for a main window that has not subscribed yet.
+const WAITING_MAX: usize = 8;
+
+/// The page that last called `main_events`, and the events the app itself had for the main
+/// window before there was one (they do not come from the core, so no notification waits for it).
+struct Page {
+    channel: Option<Channel<MainEvent>>,
+    waiting: Vec<MainEvent>,
+}
+
+impl Page {
+    const fn new() -> Self {
+        Self {
+            channel: None,
+            waiting: Vec::new(),
+        }
+    }
+
+    /// Sends the event, or keeps it for the next page when there is none or it is gone.
+    fn deliver(&mut self, event: MainEvent) {
+        if let Some(channel) = &self.channel {
+            if channel.send(event.clone()).is_ok() {
+                return;
+            }
+            self.channel = None;
+        }
+        if self.waiting.len() < WAITING_MAX {
+            self.waiting.push(event);
+        }
+    }
+
+    /// A page subscribed: it gets what was waiting, and what comes from now on.
+    fn subscribe(&mut self, channel: Channel<MainEvent>) {
+        for event in std::mem::take(&mut self.waiting) {
+            if channel.send(event.clone()).is_err() {
+                self.waiting.push(event);
+            }
+        }
+        self.channel = Some(channel);
+    }
+}
+
+static PAGE: Mutex<Page> = Mutex::new(Page::new());
+
+/// Tells the main window something that did not come from the core (see [`MainEvent`]).
+pub fn tell_main_window(event: MainEvent) {
+    PAGE.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .deliver(event);
+}
+
+// ---------- who may call ----------
+
+/// `Ok` when a webview labelled `label` may call the commands of the window `window`.
+pub(crate) fn ensure_caller(label: &str, window: &str) -> Result<(), String> {
+    if label == window {
+        Ok(())
+    } else {
+        Err(format!(
+            "the \"{label}\" webview may not call the commands of the \"{window}\" window"
+        ))
+    }
+}
+
+fn require_main(webview: &Webview) -> Result<(), String> {
+    ensure_caller(webview.label(), crate::MAIN_WINDOW)
 }
 
 // ---------- calls to the core ----------
 
-const ALLOWED_PREFIXES: [&str; 5] = [
+const ALLOWED_PREFIXES: [&str; 7] = [
     "history.",
     "dictionary.",
     "settings.",
     "secrets.",
     "status.",
+    "agent.history.",
+    "integrations.",
 ];
+// `models.` is no prefix here: it names the speech models of this computer (`models.status`,
+// `models.ensure`) as well as OpenRouter's catalog (`models.catalog`), and each is let through by
+// name, so that a method added there later is not opened to the page by accident.
 const ALLOWED_METHODS: [&str; 7] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
     "models.status",
     "models.ensure",
-    "pricing.get",
+    "models.catalog",
     "stats.summary",
 ];
 
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
-/// settings (the `languages` setting too), the key, the status, the usage numbers, the model prices,
-/// the list of languages, and the few device methods
-/// the settings page needs. Everything else is refused, the dictation methods above all.
+/// settings (the `languages` setting too), the key, the status, the usage numbers, OpenRouter's
+/// catalog of models with their prices, the list of languages, the record of the conversations
+/// with Raphael, the plugins (the servers the user connects and the tier of each of their tools),
+/// and the few device methods the settings page needs. Everything else is refused, the dictation
+/// methods and the ones that ask Raphael something above all.
 pub fn is_allowed_method(m: &str) -> bool {
     ALLOWED_METHODS.contains(&m)
         || ALLOWED_PREFIXES
@@ -87,10 +205,11 @@ pub fn is_allowed_method(m: &str) -> bool {
             .any(|prefix| m.strip_prefix(prefix).is_some_and(|rest| !rest.is_empty()))
 }
 
-/// Checks the values the core would only type-check: a monthly limit of 0 or more, a history
-/// retention of at least one day, a language the speech recognition knows, a model that is named,
-/// a speech-to-text engine that exists (the core checks the cloud model against its own list).
-/// `Err` says what is wrong. Calls other than `settings.set` pass.
+/// Checks a few values of `settings.set` before the core sees them: a monthly limit of 0 or more
+/// and a history retention of at least one day, which the core only type-checks; and a language,
+/// a cleanup model and a speech-to-text engine, which the core checks as well (each model against
+/// OpenRouter's list), so that the settings page gets these refusals in its own words. `Err` says
+/// what is wrong. Calls other than `settings.set` pass.
 pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     if method != "settings.set" {
         return Ok(());
@@ -129,14 +248,17 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
 /// Passes `method` on to the core and returns its answer. Fails with the core's own error (code
 /// and message), or with `Raphael's core is not running`.
 #[tauri::command]
-pub async fn core_call(app: AppHandle, method: String, params: Value) -> Result<Value, String> {
+pub async fn core_call(
+    app: AppHandle,
+    webview: Webview,
+    method: String,
+    params: Value,
+) -> Result<Value, String> {
+    require_main(&webview)?;
     if !is_allowed_method(&method) {
         return Err(format!("the main window may not call {method}"));
     }
     validate_core_call(&method, &params)?;
-    if turns_learning_off(&method, &params) {
-        crate::learn::cancel_watches();
-    }
     let core = app
         .try_state::<Arc<CoreProcess>>()
         .ok_or(CORE_NOT_RUNNING)?;
@@ -151,12 +273,6 @@ pub async fn core_call(app: AppHandle, method: String, params: Value) -> Result<
         MONITORING.store(on, Ordering::Relaxed);
     }
     Ok(result)
-}
-
-fn turns_learning_off(method: &str, params: &Value) -> bool {
-    method == "settings.set"
-        && params.get("key").and_then(Value::as_str) == Some("learn_corrections")
-        && params.get("value").and_then(Value::as_bool) == Some(false)
 }
 
 // ---------- events ----------
@@ -196,12 +312,22 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
 }
 
 /// The page calls this once and receives the events on `channel`. A page that calls it again (it
-/// was reloaded) replaces the one before.
+/// was reloaded) replaces the one before. Without a core the page still hears the app's own
+/// events, such as the tray's.
 #[tauri::command]
-pub async fn main_events(app: AppHandle, channel: Channel<MainEvent>) -> Result<(), String> {
-    let core = app
-        .try_state::<Arc<CoreProcess>>()
-        .ok_or(CORE_NOT_RUNNING)?;
+pub async fn main_events(
+    app: AppHandle,
+    webview: Webview,
+    channel: Channel<MainEvent>,
+) -> Result<(), String> {
+    require_main(&webview)?;
+    PAGE.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .subscribe(channel.clone());
+    let Some(core) = app.try_state::<Arc<CoreProcess>>() else {
+        log::warn!("main events: the core is not running, so the page hears nothing from it");
+        return Ok(());
+    };
     let mut notifications = core.subscribe();
     let forwarder = tauri::async_runtime::spawn(async move {
         loop {
@@ -242,19 +368,26 @@ pub trait Effects: Send + Sync {
     fn microphone(&self, name: Option<&str>) -> impl Future<Output = Result<(), String>> + Send;
     /// Starts Raphael with Windows, or no longer does.
     fn autostart(&self, on: bool) -> Result<(), String>;
-    /// Resizes the overlay's emblem and changes its subtitles.
-    fn overlay(&self, emblem_px: u32, subtitles: Subtitles);
+    /// Resizes the overlay's emblem and changes its subtitles and the interface language it is
+    /// told.
+    fn overlay(&self, emblem_px: u32, subtitles: Subtitles, language: &str);
     /// Changes the theme of the main window's frame.
     fn theme(&self, appearance: Appearance);
     /// Hands the dictation mode to the controller. A dictation that is under way is not touched:
     /// the new mode applies from the next one.
     fn dictation_mode(&self, mode: DictationMode);
+    /// Hands the interface language to the controller, which shows its notices in it.
+    fn ui_language(&self, language: &str);
+    /// Draws the tray menu again: it names the microphone in use and speaks the interface
+    /// language.
+    fn tray_menu(&self);
 }
 
 fn bindings_of(settings: &DeviceSettings) -> Bindings {
     Bindings {
         dictation: settings.dictation_keys.clone(),
         paste_last: settings.paste_last_keys.clone(),
+        agent: settings.agent_keys.clone(),
     }
 }
 
@@ -266,8 +399,9 @@ pub async fn apply_changes<E: Effects>(
     old: &DeviceSettings,
     new: &DeviceSettings,
 ) -> Result<(), String> {
-    let bindings_changed =
-        old.dictation_keys != new.dictation_keys || old.paste_last_keys != new.paste_last_keys;
+    let bindings_changed = old.dictation_keys != new.dictation_keys
+        || old.paste_last_keys != new.paste_last_keys
+        || old.agent_keys != new.agent_keys;
     let microphone_changed = old.microphone != new.microphone;
 
     if bindings_changed {
@@ -292,14 +426,23 @@ pub async fn apply_changes<E: Effects>(
         put_back_bindings().await;
         return Err(err);
     }
-    if old.emblem_size != new.emblem_size || old.subtitles != new.subtitles {
-        effects.overlay(new.emblem_size, new.subtitles);
+    if old.emblem_size != new.emblem_size
+        || old.subtitles != new.subtitles
+        || old.ui_language != new.ui_language
+    {
+        effects.overlay(new.emblem_size, new.subtitles, &new.ui_language);
     }
     if old.appearance != new.appearance {
         effects.theme(new.appearance);
     }
     if old.dictation_mode != new.dictation_mode {
         effects.dictation_mode(new.dictation_mode);
+    }
+    if old.ui_language != new.ui_language {
+        effects.ui_language(&new.ui_language);
+    }
+    if microphone_changed || old.ui_language != new.ui_language {
+        effects.tray_menu();
     }
     Ok(())
 }
@@ -329,9 +472,24 @@ pub async fn set_device_settings<E: Effects>(
     Ok(new)
 }
 
+/// Changes the microphone exactly as the settings page does (`device_settings_set` with a
+/// `microphone`), for the tray's menu. `None` is the system's default.
+pub async fn set_microphone(app: &AppHandle, name: Option<&str>) -> Result<(), String> {
+    let store = app
+        .try_state::<DeviceStore>()
+        .ok_or("the device settings are not loaded")?;
+    let effects = AppEffects { app: app.clone() };
+    set_device_settings(&store, &effects, &json!({ "microphone": name })).await?;
+    Ok(())
+}
+
 /// The device settings as they are now.
 #[tauri::command]
-pub async fn device_settings_get(store: State<'_, DeviceStore>) -> Result<DeviceSettings, String> {
+pub async fn device_settings_get(
+    webview: Webview,
+    store: State<'_, DeviceStore>,
+) -> Result<DeviceSettings, String> {
+    require_main(&webview)?;
     Ok(store.get().await)
 }
 
@@ -340,9 +498,11 @@ pub async fn device_settings_get(store: State<'_, DeviceStore>) -> Result<Device
 #[tauri::command]
 pub async fn device_settings_set(
     app: AppHandle,
+    webview: Webview,
     store: State<'_, DeviceStore>,
     patch: Value,
 ) -> Result<DeviceSettings, String> {
+    require_main(&webview)?;
     set_device_settings(&store, &AppEffects { app }, &patch).await
 }
 
@@ -396,9 +556,9 @@ impl Effects for AppEffects {
         })
     }
 
-    fn overlay(&self, emblem_px: u32, subtitles: Subtitles) {
+    fn overlay(&self, emblem_px: u32, subtitles: Subtitles, language: &str) {
         match self.app.try_state::<Arc<Overlay>>() {
-            Some(overlay) => overlay.apply_settings(emblem_px, subtitles.as_str()),
+            Some(overlay) => overlay.apply_settings(emblem_px, subtitles.as_str(), language),
             None => log::warn!("there is no overlay to resize"),
         }
     }
@@ -422,6 +582,18 @@ impl Effects for AppEffects {
             Some(cell) => cell.set(mode),
             None => log::warn!("there is no dictation controller to hand the mode to"),
         }
+    }
+
+    fn ui_language(&self, language: &str) {
+        match self.app.try_state::<LanguageCell>() {
+            Some(cell) => cell.set(language),
+            None => log::warn!("there is no dictation controller to hand the language to"),
+        }
+    }
+
+    fn tray_menu(&self) {
+        // The redraw reads the settings, so it waits here for this change to be saved.
+        crate::tray::refresh(&self.app);
     }
 }
 
@@ -462,39 +634,38 @@ where
 /// A key-up synthesized on blur is allowed so hold mode cannot get stuck after focus moves.
 #[tauri::command]
 pub fn window_hotkey(
-    window: tauri::WebviewWindow,
+    webview: Webview,
     hotkeys: State<'_, Arc<HotkeyService>>,
     kind: WindowHotkey,
 ) -> Result<(), String> {
-    if window.label() != "main" {
-        return Err("window hotkeys are only available to the main webview".to_string());
-    }
+    require_main(&webview)?;
     hotkeys.window_hotkey(kind)
 }
 
 /// Pauses (`true`) or resumes (`false`) the dictation hotkeys, so that the settings page can
-/// record a new one. It uses its own pause reason ([`PauseReason::KeyRecorder`]), so resuming
-/// never ends the tray's 「暫停 1 小時」.
+/// record a new one.
 #[tauri::command]
-pub fn hotkeys_pause(app: AppHandle, paused: bool) -> Result<(), String> {
+pub fn hotkeys_pause(app: AppHandle, webview: Webview, paused: bool) -> Result<(), String> {
+    require_main(&webview)?;
     let hotkeys = app
         .try_state::<Arc<HotkeyService>>()
         .ok_or("全域快捷鍵沒有啟動")?;
-    hotkeys.set_paused(PauseReason::KeyRecorder, paused);
+    hotkeys.set_paused(paused);
     Ok(())
 }
 
 /// Whether the keyboard layout in use has an AltGr key, which is the Right Alt key. A hotkey on
 /// Right Alt then gets in the way of typing some characters (spec §4). Always false off Windows.
 #[tauri::command]
-pub fn keyboard_has_altgr() -> bool {
+pub fn keyboard_has_altgr(webview: Webview) -> Result<bool, String> {
+    require_main(&webview)?;
     #[cfg(windows)]
     {
-        layout_has_altgr(foreground_layout())
+        Ok(layout_has_altgr(foreground_layout()))
     }
     #[cfg(not(windows))]
     {
-        false
+        Ok(false)
     }
 }
 
@@ -574,6 +745,9 @@ pub fn start(app: &AppHandle) {
     let settings = DeviceSettings::load(&path);
     app.manage(DeviceStore::new(path, settings.clone()));
     apply_saved(app, &settings);
+    // The tray's menu was drawn before the settings were known: it names the microphone and
+    // speaks the language they chose.
+    crate::tray::refresh(app);
     watch_core(app);
 }
 
@@ -582,8 +756,15 @@ fn apply_saved(app: &AppHandle, settings: &DeviceSettings) {
     let effects = AppEffects { app: app.clone() };
     let fresh = DeviceSettings::default();
 
-    if (&settings.dictation_keys, &settings.paste_last_keys)
-        != (&fresh.dictation_keys, &fresh.paste_last_keys)
+    if (
+        &settings.dictation_keys,
+        &settings.paste_last_keys,
+        &settings.agent_keys,
+    ) != (
+        &fresh.dictation_keys,
+        &fresh.paste_last_keys,
+        &fresh.agent_keys,
+    )
         // Startup is not an async context and nothing else is waiting yet, so this blocks.
         && let Err(err) = effects
             .hotkeys()
@@ -591,14 +772,26 @@ fn apply_saved(app: &AppHandle, settings: &DeviceSettings) {
     {
         log::error!("could not use the saved hotkeys: {err}");
     }
-    if (settings.emblem_size, settings.subtitles) != (fresh.emblem_size, fresh.subtitles) {
-        effects.overlay(settings.emblem_size, settings.subtitles);
+    if (
+        settings.emblem_size,
+        settings.subtitles,
+        &settings.ui_language,
+    ) != (fresh.emblem_size, fresh.subtitles, &fresh.ui_language)
+    {
+        effects.overlay(
+            settings.emblem_size,
+            settings.subtitles,
+            &settings.ui_language,
+        );
     }
     if settings.appearance != fresh.appearance {
         effects.theme(settings.appearance);
     }
     if settings.dictation_mode != fresh.dictation_mode {
         effects.dictation_mode(settings.dictation_mode);
+    }
+    if settings.ui_language != fresh.ui_language {
+        effects.ui_language(&settings.ui_language);
     }
     // A debug build runs from the target folder; it must not put itself in the registry.
     if !cfg!(debug_assertions)
@@ -645,6 +838,8 @@ async fn restore_from(app: &AppHandle) {
         None => None,
     };
     restore_core(core.inner().as_ref(), microphone.as_deref(), &MONITORING).await;
+    // A new core is the first one that can list the microphones for the tray's menu.
+    crate::tray::rescan(app);
 }
 
 /// Puts back what a new core does not know. Sends `microphone` (nothing for the default one,
@@ -676,28 +871,57 @@ async fn restore_core<C: CoreApi>(core: &C, microphone: Option<&str>, monitoring
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_disabling_correction_learning_cancels_a_watch() {
-        assert!(turns_learning_off(
-            "settings.set",
-            &json!({"key": "learn_corrections", "value": false})
-        ));
-        assert!(!turns_learning_off(
-            "settings.set",
-            &json!({"key": "learn_corrections", "value": true})
-        ));
-        assert!(!turns_learning_off(
-            "settings.get",
-            &json!({"key": "learn_corrections", "value": false})
-        ));
-        assert!(!turns_learning_off(
-            "settings.set",
-            &json!({"key": "other", "value": false})
-        ));
-    }
     use serde_json::json;
     use std::sync::Mutex;
+
+    // ---- which window may call a command ----
+
+    #[test]
+    fn a_command_answers_only_to_the_window_it_belongs_to() {
+        assert!(ensure_caller("main", "main").is_ok());
+        assert!(ensure_caller("overlay", "overlay").is_ok());
+        for label in ["overlay", "", "Main", "main ", "main2"] {
+            assert!(ensure_caller(label, "main").is_err(), "{label:?}");
+        }
+        assert!(ensure_caller("main", "overlay").is_err());
+        let refused = ensure_caller("overlay", "main").unwrap_err();
+        assert!(refused.contains("overlay"), "{refused}");
+    }
+
+    #[test]
+    fn every_command_of_the_main_window_checks_who_calls_it() {
+        // The commands cannot be called here without a running app, so read their source: each
+        // `#[tauri::command]` in this file must begin with the check.
+        let source = include_str!("commands.rs").replace("\r\n", "\n");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let mut checked = Vec::new();
+        for command in production.split("#[tauri::command]").skip(1) {
+            let body = command.split("\n}\n").next().unwrap();
+            let name = body
+                .split("fn ")
+                .nth(1)
+                .and_then(|rest| rest.split('(').next())
+                .unwrap();
+            assert!(
+                body.contains("require_main("),
+                "`{name}` is a command of the main window and does not check its caller"
+            );
+            checked.push(name.to_owned());
+        }
+        checked.sort();
+        assert_eq!(
+            checked,
+            [
+                "core_call",
+                "device_settings_get",
+                "device_settings_set",
+                "hotkeys_pause",
+                "keyboard_has_altgr",
+                "main_events",
+                "window_hotkey",
+            ]
+        );
+    }
 
     // ---- which methods the window may call ----
 
@@ -707,6 +931,32 @@ mod tests {
         assert!(
             !is_allowed_method("dictation.start") && !is_allowed_method("brain.finalize_dictation")
         );
+    }
+
+    #[test]
+    fn the_main_window_reads_the_conversations_but_never_asks_raphael() {
+        // The record of the conversations is the main window's to read and clear...
+        for method in ["agent.history.list", "agent.history.clear"] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        // ...and the questions are the controller's alone: the main window cannot ask, approve
+        // or cancel anything on Raphael's behalf.
+        for method in [
+            "agent.ask",
+            "agent.confirm",
+            "agent.cancel",
+            "agent.",
+            "agent",
+            "agent.history",
+            "agent.history.",
+            "agent.historyx",
+            "agent.historyx.list",
+            "xagent.history.list",
+            "Agent.history.list",
+            " agent.history.list",
+        ] {
+            assert!(!is_allowed_method(method), "{method:?}");
+        }
     }
 
     #[test]
@@ -731,9 +981,19 @@ mod tests {
             "audio.monitor",
             "models.status",
             "models.ensure",
-            "pricing.get",
+            "models.catalog",
             "stats.summary",
             "languages.list",
+            "agent.history.list",
+            "agent.history.clear",
+            "integrations.list",
+            "integrations.add",
+            "integrations.set_enabled",
+            "integrations.remove",
+            "integrations.refresh",
+            "integrations.tools",
+            "integrations.set_tier",
+            "integrations.audit",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
@@ -744,13 +1004,41 @@ mod tests {
             "dictation.start",
             "dictation.stop",
             "dictation.cancel",
+            "agent.ask",
+            "agent.confirm",
+            "agent.cancel",
             "brain.finalize_dictation",
+            "integrations", // the prefix alone is no method
+            "integrations.",
+            "Integrations.list",
+            "xintegrations.list",
             "audio.set_device", // goes through device_settings_set
             "audio.start",
+            "pricing.get", // gone: models.catalog has every price
             "core.hello",
             "xhistory.list",
             " history.list",
             "HISTORY.list",
+        ] {
+            assert!(!is_allowed_method(method), "{method:?}");
+        }
+    }
+
+    #[test]
+    fn the_settings_page_reads_the_catalog_of_models_but_no_other_models_method() {
+        assert!(is_allowed_method("models.catalog"));
+        // `models.` names the speech models of this computer too: each method is let through by
+        // its name, never by the prefix.
+        for method in [
+            "models.",
+            "models",
+            "models.catalogue",
+            "models.catalog.refresh",
+            "models.download",
+            "models.progress",
+            "Models.catalog",
+            " models.catalog",
+            "xmodels.catalog",
         ] {
             assert!(!is_allowed_method(method), "{method:?}");
         }
@@ -813,8 +1101,9 @@ mod tests {
             Err("語音轉文字只能選雲端或本機".to_owned())
         );
         assert!(set("stt_engine", json!(null)).is_err());
-        // the core checks the cloud model against the models it knows
+        // the core checks each model against OpenRouter's list
         assert!(set("stt_cloud_model", json!("openai/gpt-transcribe")).is_ok());
+        assert!(set("stt_cloud_model", json!("deepgram/nova-3")).is_ok());
     }
 
     #[test]
@@ -916,6 +1205,103 @@ mod tests {
             .unwrap(),
             r#"{"type":"ModelProgress","name":"silero-vad","done":1,"total":2}"#
         );
+        assert_eq!(
+            serde_json::to_string(&MainEvent::LearnLimited {
+                app: "vscode".to_owned(),
+                reason: "accessibility_off".to_owned()
+            })
+            .unwrap(),
+            r#"{"type":"LearnLimited","app":"vscode","reason":"accessibility_off"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&MainEvent::TrayOpen {
+                page: TrayPage::Dictionary,
+                action: Some(TrayAction::AddWord)
+            })
+            .unwrap(),
+            r#"{"type":"TrayOpen","page":"dictionary","action":"add-word"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&MainEvent::TrayOpen {
+                page: TrayPage::History,
+                action: None
+            })
+            .unwrap(),
+            r#"{"type":"TrayOpen","page":"history"}"#
+        );
+    }
+
+    // ---- events of the app itself ----
+
+    fn limited(app: &str) -> MainEvent {
+        MainEvent::LearnLimited {
+            app: app.to_owned(),
+            reason: "accessibility_off".to_owned(),
+        }
+    }
+
+    /// A page that records the JSON of what it is sent, or refuses everything.
+    fn page_channel(refuses: bool) -> (Channel<MainEvent>, Arc<Mutex<Vec<String>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let channel = Channel::new(move |body| {
+            if refuses {
+                return Err(tauri::Error::Io(std::io::Error::other("the page is gone")));
+            }
+            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+                sink.lock().unwrap().push(json);
+            }
+            Ok(())
+        });
+        (channel, seen)
+    }
+
+    #[test]
+    fn an_event_waits_for_the_page_and_reaches_it_when_it_subscribes() {
+        let mut page = Page::new();
+        page.deliver(limited("vscode"));
+        let (channel, seen) = page_channel(false);
+        assert!(seen.lock().unwrap().is_empty());
+        page.subscribe(channel);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [r#"{"type":"LearnLimited","app":"vscode","reason":"accessibility_off"}"#]
+        );
+        // It is not delivered twice.
+        let (second, seen_again) = page_channel(false);
+        page.subscribe(second);
+        assert!(seen_again.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_event_goes_straight_to_a_page_that_is_listening() {
+        let mut page = Page::new();
+        let (channel, seen) = page_channel(false);
+        page.subscribe(channel);
+        page.deliver(limited("cursor"));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert!(page.waiting.is_empty());
+    }
+
+    #[test]
+    fn a_page_that_went_away_leaves_the_event_for_the_next_one() {
+        let mut page = Page::new();
+        let (gone, _) = page_channel(true);
+        page.subscribe(gone);
+        page.deliver(limited("vscode"));
+        assert!(page.channel.is_none());
+        let (next, seen) = page_channel(false);
+        page.subscribe(next);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn only_a_few_events_wait_for_a_page() {
+        let mut page = Page::new();
+        for n in 0..WAITING_MAX + 5 {
+            page.deliver(limited(&format!("editor{n}")));
+        }
+        assert_eq!(page.waiting.len(), WAITING_MAX);
     }
 
     // ---- after the core (re)starts ----
@@ -1021,6 +1407,8 @@ mod tests {
     struct Fake {
         log: Mutex<Vec<String>>,
         fail: Option<&'static str>,
+        /// The bindings of the last `bindings` step.
+        bound: Mutex<Option<Bindings>>,
     }
 
     impl Fake {
@@ -1046,6 +1434,7 @@ mod tests {
 
     impl Effects for Fake {
         async fn bindings(&self, bindings: &Bindings) -> Result<(), String> {
+            *self.bound.lock().unwrap() = Some(bindings.clone());
             self.record("bindings", bindings.dictation.join(","))
         }
 
@@ -1057,8 +1446,11 @@ mod tests {
             self.record("autostart", on.to_string())
         }
 
-        fn overlay(&self, emblem_px: u32, subtitles: Subtitles) {
-            let _ = self.record("overlay", format!("{emblem_px} {}", subtitles.as_str()));
+        fn overlay(&self, emblem_px: u32, subtitles: Subtitles, language: &str) {
+            let _ = self.record(
+                "overlay",
+                format!("{emblem_px} {} {language}", subtitles.as_str()),
+            );
         }
 
         fn theme(&self, appearance: Appearance) {
@@ -1067,6 +1459,14 @@ mod tests {
 
         fn dictation_mode(&self, mode: DictationMode) {
             let _ = self.record("dictation_mode", mode.as_str().to_owned());
+        }
+
+        fn ui_language(&self, language: &str) {
+            let _ = self.record("ui_language", language.to_owned());
+        }
+
+        fn tray_menu(&self) {
+            self.log.lock().unwrap().push("tray_menu".to_owned());
         }
     }
 
@@ -1148,7 +1548,7 @@ mod tests {
         let fake = Fake::default();
         let (old, new) = changed(json!({"emblem_size": 194}));
         apply_changes(&fake, &old, &new).await.unwrap();
-        assert_eq!(fake.done(), ["overlay 194 both"]);
+        assert_eq!(fake.done(), ["overlay 194 on zh-TW"]);
 
         let fake = Fake::default();
         let (old, new) = changed(json!({"appearance": "dark", "autostart": false}));
@@ -1156,15 +1556,45 @@ mod tests {
         assert_eq!(fake.done(), ["autostart false", "theme Dark"]);
 
         let fake = Fake::default();
-        let (old, new) = changed(json!({"microphone": "耳機麥克風", "subtitles": "zh"}));
+        let (old, new) = changed(json!({"microphone": "耳機麥克風", "subtitles": "off"}));
         apply_changes(&fake, &old, &new).await.unwrap();
-        assert_eq!(fake.done(), ["microphone 耳機麥克風", "overlay 150 zh"]);
+        assert_eq!(
+            fake.done(),
+            [
+                "microphone 耳機麥克風",
+                "overlay 150 off zh-TW",
+                "tray_menu"
+            ]
+        );
 
         // the answer to "onboarded" is the settings file's alone
         let fake = Fake::default();
         let (old, new) = changed(json!({"onboarded": true}));
         apply_changes(&fake, &old, &new).await.unwrap();
         assert_eq!(fake.done(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn the_bindings_are_made_of_all_three_actions() {
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"agent_keys": ["F8"]}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(fake.done(), ["bindings AltRight"]);
+        assert_eq!(
+            fake.bound.lock().unwrap().clone().unwrap(),
+            Bindings {
+                dictation: vec!["AltRight".to_owned()],
+                paste_last: vec!["AltRight+V".to_owned()],
+                agent: vec!["F8".to_owned()],
+            }
+        );
+        assert_eq!(bindings_of(&DeviceSettings::default()), Bindings::default());
+
+        // a refused agent key changes nothing else
+        let fake = Fake::failing("bindings");
+        let (old, new) = changed(json!({"agent_keys": ["F8"], "emblem_size": 194}));
+        assert!(apply_changes(&fake, &old, &new).await.is_err());
+        assert_eq!(fake.done(), ["bindings AltRight"]);
     }
 
     #[tokio::test]
@@ -1183,7 +1613,30 @@ mod tests {
         let fake = Fake::default();
         let (old, new) = changed(json!({"dictation_mode": "toggle", "emblem_size": 194}));
         apply_changes(&fake, &old, &new).await.unwrap();
-        assert_eq!(fake.done(), ["overlay 194 both"]);
+        assert_eq!(fake.done(), ["overlay 194 on zh-TW"]);
+    }
+
+    #[tokio::test]
+    async fn a_new_interface_language_goes_to_the_overlay_and_the_controller() {
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"ui_language": "ja"}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(
+            fake.done(),
+            ["overlay 150 on ja", "ui_language ja", "tray_menu"]
+        );
+
+        // the same language again, with something else changed: the controller is left alone
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"ui_language": "zh-TW", "emblem_size": 120}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(fake.done(), ["overlay 120 on zh-TW"]);
+
+        // a refused change does not switch the language
+        let fake = Fake::failing("autostart");
+        let (old, new) = changed(json!({"ui_language": "en", "autostart": false}));
+        assert!(apply_changes(&fake, &old, &new).await.is_err());
+        assert_eq!(fake.done(), ["autostart false"]);
     }
 
     #[tokio::test]
@@ -1238,6 +1691,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_tray_menu_follows_the_microphone_and_the_language_and_nothing_else() {
+        // It names the microphone in use and speaks the interface language.
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"microphone": "耳機麥克風"}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(fake.done(), ["microphone 耳機麥克風", "tray_menu"]);
+
+        // and back to the system's
+        let fake = Fake::default();
+        apply_changes(&fake, &new, &old).await.unwrap();
+        assert_eq!(fake.done(), ["microphone default", "tray_menu"]);
+
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"ui_language": "en"}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(
+            fake.done(),
+            ["overlay 150 on en", "ui_language en", "tray_menu"]
+        );
+
+        // both at once: drawn once, after both are in force
+        let fake = Fake::default();
+        let (old, new) = changed(json!({"ui_language": "ja", "microphone": "x"}));
+        apply_changes(&fake, &old, &new).await.unwrap();
+        assert_eq!(
+            fake.done(),
+            [
+                "microphone x",
+                "overlay 150 on ja",
+                "ui_language ja",
+                "tray_menu"
+            ]
+        );
+
+        // a change that fails is undone, and the menu is not drawn for it
+        let fake = Fake::failing("autostart");
+        let (old, new) =
+            changed(json!({"ui_language": "en", "microphone": "x", "autostart": false}));
+        assert!(apply_changes(&fake, &old, &new).await.is_err());
+        assert!(!fake.done().contains(&"tray_menu".to_owned()));
+    }
+
+    #[tokio::test]
     async fn changes_are_saved_and_returned() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("device.json");
@@ -1250,7 +1746,7 @@ mod tests {
         assert_eq!(saved.emblem_size, 120);
         assert_eq!(store.get().await, saved);
         assert_eq!(DeviceSettings::load(&path), saved);
-        assert_eq!(fake.done(), ["overlay 120 both"]);
+        assert_eq!(fake.done(), ["overlay 120 on zh-TW"]);
     }
 
     #[tokio::test]
@@ -1365,7 +1861,7 @@ mod tests {
         #[test]
         fn the_command_answers_for_the_current_layout() {
             // Whatever the answer is on this machine, asking must not fail.
-            let _ = keyboard_has_altgr();
+            let _ = layout_has_altgr(foreground_layout());
         }
     }
 }

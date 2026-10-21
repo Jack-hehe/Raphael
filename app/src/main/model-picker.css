@@ -1,0 +1,57 @@
+/* The model picker (model-picker.ts): a dropdown that shows the chosen model, and a panel to find
+   any model in: a search, the order and the maker as two small dropdowns, the list, and a line of
+   small print. The colours are the app's own (styles.css); this file only lays them out. A model a
+   role cannot use keeps the muted text colour, never a lower opacity, so that its reason stays
+   readable in both themes. */
+
+/* ---------- the button ---------- */
+/* It is a .sel (styles.css), so it looks and lines up like every dropdown of a card; the name takes
+   the room, and the price, when the button shows one, stays whole beside it. */
+.mp-slot { display: inline-flex; min-width: 0; max-width: 100%; }
+.mp-trigger { min-width: 0; max-width: min(320px, 100%); text-align: left; }
+.mp-tname { flex: 1; min-width: 0; }
+.mp-tprice { flex: none; font-size: 12px; color: var(--text-3); }
+
+/* ---------- the panel ---------- */
+/* Visible overflow lets a dropdown of the head hang below a short panel; the list scrolls itself. */
+.menu.mp-panel { width: min(440px, calc(100vw - 16px)); max-width: calc(100vw - 16px); padding: 0; border-radius: 12px; overflow: visible; display: flex; flex-direction: column; }
+.mp-head { flex: none; display: grid; gap: 8px; padding: 12px 12px 10px; }
+.mp-head .mp-search { display: flex; width: 100%; }
+.mp-head .mp-search .i { color: var(--text-3); }
+.mp-filters { position: relative; display: flex; flex-wrap: wrap; gap: 6px; }
+.menu.mp-panel .mp-dd { width: auto; max-width: 62%; min-height: 0; height: 28px; gap: 6px; padding: 0 8px 0 10px; border: 1px solid var(--btn-edge); border-radius: 7px; background: var(--btn); font-size: 12px; color: var(--text-2); }
+.menu.mp-panel .mp-dd:hover { border-color: var(--text-3); background: var(--btn); color: var(--text); }
+.menu.mp-panel .mp-dd:focus-visible { background: var(--btn); box-shadow: none; outline: 2px solid var(--focus); outline-offset: 2px; }
+.menu.mp-panel .mp-dd[aria-expanded="true"] { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-ring); color: var(--text); }
+.mp-dd > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-dd .i { width: 12px; height: 12px; color: var(--text-3); }
+.mp-ddlist { position: absolute; z-index: 2; top: calc(100% + 4px); min-width: 200px; max-width: min(300px, calc(100vw - 40px)); max-height: 288px; overflow: auto; padding: 4px; border-radius: 10px; background: var(--menu); border: 1px solid var(--edge); box-shadow: var(--pop); }
+.mp-ddlist .mt { flex: 1; min-width: 0; }
+.mp-ddlist button[aria-selected="true"] .mt { font-weight: 600; }
+
+/* The heading of the columns lines up with the names and the prices of the rows below it. */
+.mp-cols { flex: none; display: flex; justify-content: space-between; gap: 12px; padding: 8px 24px 6px 42px; border-top: 1px solid var(--line); font-size: 11px; color: var(--text-3); }
+/* A height of its own, so that the panel does not jump while a search narrows the list. */
+.mp-scroll { flex: 0 1 auto; height: min(380px, calc(100vh - 230px)); min-height: 112px; overflow: auto; padding: 0 4px 6px 6px; scrollbar-gutter: stable; }
+.menu.mp-panel .mp-opt { display: flex; align-items: flex-start; gap: 10px; width: 100%; min-height: 0; padding: 8px 10px; border-radius: 8px; background: transparent; color: var(--text); text-align: left; }
+.menu.mp-panel .mp-opt:hover, .menu.mp-panel .mp-opt[aria-selected="true"] { background: var(--hover); }
+/* The keys move a highlight, not the focus (it stays in the search): the highlight wears the ring. */
+.menu.mp-panel[data-kbd] .mp-opt[aria-selected="true"] { box-shadow: inset 0 0 0 2px var(--focus); }
+.menu.mp-panel .mp-opt[aria-disabled="true"] { color: var(--text-3); cursor: default; }
+.mp-opt .ck { margin-top: 2px; }
+.mp-main { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.mp-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.mp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 1.45; }
+.mp-opt[data-current] .mp-name { font-weight: 600; }
+.mp-badge { flex: none; font-size: 11px; line-height: 17px; padding: 0 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-text); }
+.mp-price { flex: none; margin-left: auto; padding-left: 8px; font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.mp-sub { font-size: 12px; line-height: 1.4; color: var(--text-3); overflow-wrap: anywhere; }
+.mp-opt[aria-disabled="true"] .mp-price { color: var(--text-3); }
+.mp-group { margin: 8px 6px 2px; padding: 10px 4px 2px; border-top: 1px solid var(--line); font-size: 11px; color: var(--text-3); }
+.mp-empty { margin: 0; padding: 32px 12px; text-align: center; font-size: 13px; color: var(--text-3); }
+.mp-foot { flex: none; margin: 0; padding: 8px 14px 10px; border-top: 1px solid var(--line); font-size: 11px; line-height: 1.5; color: var(--text-3); text-wrap: pretty; }
+.mp-foot:empty { display: none; }
+@media (max-width: 520px) {
+  .mp-cols { padding-left: 36px; }
+  .menu.mp-panel .mp-dd { max-width: 100%; }
+}

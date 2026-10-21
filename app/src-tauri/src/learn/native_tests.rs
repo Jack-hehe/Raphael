@@ -133,19 +133,24 @@ struct AuditOverlay {
 
 impl OverlayApi for AuditOverlay {
     fn show(&self, _mode: Mode) {}
+    fn greet(&self, _line: &str) {}
     fn set_mode(&self, _mode: Mode) {}
+    fn think_quietly(&self, _lines: &[&str]) {}
     fn level(&self, _value: f32) {}
     fn hide(&self) {}
     fn progress(&self, _progress: Progress) {}
 
-    fn notice(&self, _zh: &str, _ja: &str) {
+    fn notice(&self, _text: &str) {
         self.ordinary_count.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn learned_notice(&self, zh: &str, ja: &str) {
-        let (expected_zh, expected_ja) = crate::notices::learned(&[WORD.to_owned()]);
+    fn say(&self, _prefix: &str, _text: &str) {}
+    fn ask(&self, _prompt: &crate::overlay::AskPrompt) {}
+
+    fn learned_notice(&self, text: &str) {
+        let expected = crate::notices::learned(&[WORD.to_owned()], "zh-TW");
         self.expected_notice
-            .store(zh == expected_zh && ja == expected_ja, Ordering::SeqCst);
+            .store(text == expected, Ordering::SeqCst);
         let count = self.learned_count.fetch_add(1, Ordering::SeqCst) + 1;
         eprintln!("native learner roundtrip: learned_notice_count={count}");
     }
@@ -199,14 +204,6 @@ async fn foreground_correction_reaches_real_core_and_isolated_dictionary() {
     assert!(
         hello["protocol"].as_u64() == Some(1),
         "native learner roundtrip: reason=protocol_mismatch"
-    );
-    let settings = call(core.as_ref(), "settings.get").await;
-    assert!(
-        settings
-            .pointer("/settings/learn_corrections")
-            .and_then(Value::as_bool)
-            == Some(true),
-        "native learner roundtrip: reason=learning_disabled"
     );
     let history = call(core.as_ref(), "history.latest").await;
     assert!(

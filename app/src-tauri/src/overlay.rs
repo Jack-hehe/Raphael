@@ -1,4 +1,5 @@
-//! The overlay window: Raphael's emblem and reports in the bottom-right corner.
+//! The overlay window: Raphael's emblem, reports, answers and questions in the bottom-right
+//! corner.
 //!
 //! The window is created once, at start-up. It is transparent, never takes focus, lets the mouse
 //! click through, stays on top and stays out of the taskbar and Alt+Tab. It is **never shown or
@@ -6,8 +7,27 @@
 //! the next paste would go to the wrong place. "Hidden" means that the page (`overlay.html`)
 //! draws nothing and stops its animation loop; the empty window stays where it is.
 //!
+//! The one time the window takes the mouse is while Raphael asks a YES/NO question
+//! ([`OverlayApi::ask`]): its buttons must be clickable. Clicking is not activating: the window has
+//! `WS_EX_NOACTIVATE` (tao gives it to a window that is not `focusable`, and
+//! [`apply_passive_style`] makes sure of it), so a click on a button reaches the page without the
+//! window becoming the foreground window, and the app the person was typing into keeps its focus.
+//! [`takes_clicks`] says which events open and close that time.
+//!
 //! The page learns what to do from [`OverlayEvent`]s on a channel that it opens once with the
-//! `overlay_subscribe` command. The rest of the app drives the overlay through [`OverlayApi`].
+//! `overlay_subscribe` command, and answers a question with `overlay_confirm`. The rest of the app
+//! drives the overlay through [`OverlayApi`].
+//!
+//! The page can draw the emblem in a window that nobody sees: something else may have hidden,
+//! minimized or covered the window, or the shell may keep it on another virtual desktop. So each
+//! time the emblem appears, [`sight`] looks at the window from the main thread, writes what it saw
+//! to the log, and puts right what it can, without ever activating the window. In between,
+//! [`screen`] writes down what happens to the screen (the display turning off and on, the session
+//! locking, sleep, the webview's GPU process exiting), so that an emblem that nobody saw in a
+//! window that was in sight can be put next to it.
+
+mod screen;
+mod sight;
 
 use std::{
     collections::VecDeque,
@@ -17,11 +37,12 @@ use std::{
     },
 };
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, Webview, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, ipc::Channel,
 };
+use tokio::sync::mpsc::UnboundedSender;
 
 /// What the emblem shows while it is on screen (spec §6.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -56,9 +77,9 @@ pub enum Stage {
     Done,
 }
 
-/// What the emblem's progress ring shows: `done` of `total` segments transcribed (while
-/// transcribing), and the length of the speech, which sets how long the cleanup is expected to
-/// take.
+/// What the percentage beside the emblem is made from: `done` of `total` segments transcribed
+/// (while transcribing), and the length of the speech, which sets how long the cleanup is expected
+/// to take.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Progress {
     pub stage: Stage,
@@ -77,29 +98,89 @@ impl Progress {
     };
 }
 
-/// What the overlay page is told. `subtitles` in [`OverlayEvent::Settings`] is `"both"`, `"zh"`,
-/// `"ja"` or `"off"`.
+/// How much a question matters (`tier` of the core's confirmations): `T2` changes something that
+/// can be undone, `T3` something that cannot. The page makes the YES of a `T3` question wait for a
+/// long press.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum Tier {
+    T2,
+    T3,
+}
+
+impl Tier {
+    /// The tier the core named. Anything else is taken for the more careful one.
+    pub fn parse(tier: &str) -> Self {
+        match tier {
+            "T2" => Tier::T2,
+            _ => Tier::T3,
+        }
+    }
+}
+
+/// A question for the person to answer YES or NO, with the words on its buttons, from the core's
+/// confirmation. `id` comes back with the answer (`overlay_confirm`); `timeout_ms` is how long the
+/// question stays open before it counts as a NO.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AskPrompt {
+    pub id: String,
+    pub tier: Tier,
+    pub prefix: String,
+    pub text: String,
+    pub yes: String,
+    pub no: String,
+    pub timeout_ms: u64,
+}
+
+/// What the overlay page is told. Every text in it is in the interface language and in that one
+/// alone, never a pair.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum OverlayEvent {
-    /// The emblem appears (the appear animation) and shows `mode`.
-    Show { mode: Mode },
-    /// The emblem shows another mode.
-    Mode { mode: Mode },
+    /// The emblem appears (the appear animation) and shows `mode`. A `line` (sent only when there
+    /// is one) is Raphael's greeting to a question, written beside the emblem while he listens; a
+    /// dictation shows the emblem alone.
+    Show {
+        mode: Mode,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        line: Option<String>,
+    },
+    /// The emblem shows another mode. A `quiet` one (sent only when it is) shows no progress
+    /// caption beside it: Raphael is thinking about a question, not working through a dictation.
+    /// It may bring `lines` (sent only when there are some): Raphael's short reports on the
+    /// analysis (《告。解析中……》), in the interface language, that the page changes in the
+    /// caption's place until the thinking is over.
+    Mode {
+        mode: Mode,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        quiet: bool,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        lines: Vec<String>,
+    },
     /// Loudness from 0 to 1: the white ring's width while listening or speaking.
     Level { value: f32 },
     /// How far the dictation has come since the key was released, shown beside the glyph ring.
     Progress(Progress),
-    /// Raphael's report: the emblem appears with subtitles, then vanishes.
-    Notice { zh: String, ja: String },
-    /// A learned-word report uses the ordinary notice lifecycle and corner placement.
-    Learned { zh: String, ja: String },
+    /// Raphael's report: the emblem appears with `text` as its subtitle, then vanishes.
+    Notice { text: String },
+    /// Learned words are reported like a notice, but they never take the emblem from a dictation
+    /// that is showing: the page tells them when it is over.
+    Learned { text: String },
+    /// Raphael answers: the emblem and one subtitle line, 《`prefix`。`text`》.
+    Say { prefix: String, text: String },
+    /// Raphael asks a question: the subtitle line 《`prefix`。`text`》 and two buttons under it.
+    /// The window takes the mouse until the question is over.
+    Ask(AskPrompt),
     /// Delivery succeeded: show 100% briefly before the normal vanish animation.
     Complete,
     /// The vanish animation.
     Hide,
-    /// The emblem's diameter in logical pixels and which subtitle lines to show.
-    Settings { px: u32, subtitles: String },
+    /// The emblem's diameter in logical pixels, whether the subtitles show (`"on"` or `"off"`)
+    /// and the interface language (`"zh-TW"`, `"en"` or `"ja"`).
+    Settings {
+        px: u32,
+        subtitles: String,
+        language: String,
+    },
 }
 
 /// How the rest of the app drives the overlay. Calls do not wait for the page and none of them
@@ -109,17 +190,36 @@ pub trait OverlayApi: Send + Sync + 'static {
     /// The emblem appears and shows `mode`. The window is put back in its corner first (the
     /// taskbar or the screen's scale may have changed).
     fn show(&self, mode: Mode);
+    /// Raphael listens for a question: like `show(Mode::Listening)`, with `line` (his greeting, in
+    /// the interface language) beside the emblem until he has heard it. It also greets on the
+    /// emblem of a dictation that the question took over. No default: a wrapper that forgot it
+    /// would show a question as a dictation.
+    fn greet(&self, line: &str);
     /// Changes what the visible emblem shows.
     fn set_mode(&self, mode: Mode);
+    /// The emblem thinks about a question: [`Mode::Thinking`] without the progress caption of a
+    /// dictation. In its place the page changes the `lines` (his reports on the analysis, in the
+    /// interface language) every second or so, until the answer or something else replaces them.
+    /// No default, for the same reason as [`Self::greet`].
+    fn think_quietly(&self, lines: &[&str]);
     /// Loudness from 0 to 1.
     fn level(&self, value: f32);
-    /// Raphael reports `zh` and `ja` as subtitles for a time that depends on their length, then
-    /// the emblem vanishes. Reports that arrive meanwhile wait their turn.
-    fn notice(&self, zh: &str, ja: &str);
+    /// Raphael reports `text` (in the interface language) as a subtitle for a time that depends on
+    /// its length, then the emblem vanishes. Reports that arrive meanwhile wait their turn.
+    fn notice(&self, text: &str);
     /// Report learned words in the usual corner. Fakes can keep the ordinary notice behavior.
-    fn learned_notice(&self, zh: &str, ja: &str) {
-        self.notice(zh, ja);
+    fn learned_notice(&self, text: &str) {
+        self.notice(text);
     }
+    /// Raphael answers: the emblem appears with 《`prefix`。`text`》 as one subtitle line, then
+    /// vanishes after a time that depends on the length of `text`.
+    fn say(&self, prefix: &str, text: &str);
+    /// Raphael asks a YES/NO question: the subtitle line and two buttons. From now on the window
+    /// takes the mouse, without ever being activated, until another call puts something else on
+    /// the stage (the reply to the answer, a notice, a hide). It keeps the mouse while the answer
+    /// is being dealt with, so that a second click on a button that is still drawn does not land
+    /// in the app below.
+    fn ask(&self, prompt: &AskPrompt);
     /// The vanish animation plays; the window stays, empty, where it is.
     fn hide(&self);
     /// Finish successfully; simple implementations may retain their ordinary hide behavior.
@@ -131,14 +231,6 @@ pub trait OverlayApi: Send + Sync + 'static {
 }
 
 // ---------- placement (spec §6.1) ----------
-
-/// Placement requests supported by the overlay window; current reports use the corner.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum OverlayPlacement {
-    Corner,
-    Center,
-}
 
 /// A rectangle in physical pixels: the work area, or the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -198,13 +290,47 @@ pub fn place(work: Rect, emblem_px: u32, scale: f64) -> Rect {
     }
 }
 
-fn place_at(work: Rect, emblem_px: u32, scale: f64, placement: OverlayPlacement) -> Rect {
-    let mut target = place(work, emblem_px, scale);
-    if placement == OverlayPlacement::Center {
-        target.x = (f64::from(work.x) + f64::from(work.w - target.w) / 2.0).round() as i32;
-        target.y = (f64::from(work.y) + f64::from(work.h - target.h) / 2.0).round() as i32;
+/// Where the window was put, for the check that follows: the work area, the window's rectangle
+/// in it ([`place`]) and the side of the emblem's square canvas, all in physical pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Placement {
+    pub work: Rect,
+    pub window: Rect,
+    pub canvas: i32,
+}
+
+/// [`place`], with what the check needs to find the emblem in the window.
+pub(crate) fn placement(work: Rect, emblem_px: u32, scale: f64) -> Placement {
+    let canvas = (CANVAS_RATIO * f64::from(emblem_px)).round();
+    Placement {
+        work,
+        window: place(work, emblem_px, scale),
+        canvas: (canvas * scale).round() as i32,
     }
-    target
+}
+
+// ---------- the mouse ----------
+
+/// What an event does to whether the window takes the mouse: `Some(true)` for the question that
+/// needs its buttons clicked, `Some(false)` for everything that puts something else on the stage
+/// (the reply to the answer among them, so the corner is the apps' again as soon as the question
+/// is gone from the screen), `None` for what changes nothing on the stage.
+pub(crate) fn takes_clicks(event: &OverlayEvent) -> Option<bool> {
+    match event {
+        OverlayEvent::Ask(_) => Some(true),
+        OverlayEvent::Show { .. }
+        | OverlayEvent::Say { .. }
+        | OverlayEvent::Notice { .. }
+        | OverlayEvent::Complete
+        | OverlayEvent::Hide => Some(false),
+        // The loudness and progress are about the emblem, learned words wait behind whatever is
+        // on the stage, and the settings are no scene.
+        OverlayEvent::Mode { .. }
+        | OverlayEvent::Level { .. }
+        | OverlayEvent::Progress(_)
+        | OverlayEvent::Learned { .. }
+        | OverlayEvent::Settings { .. } => None,
+    }
 }
 
 // ---------- the pages that listen ----------
@@ -238,6 +364,8 @@ impl OverlayEvent {
             OverlayEvent::Progress(_) => "progress",
             OverlayEvent::Notice { .. } => "notice",
             OverlayEvent::Learned { .. } => "learned",
+            OverlayEvent::Say { .. } => "say",
+            OverlayEvent::Ask(_) => "ask",
             OverlayEvent::Complete => "complete",
             OverlayEvent::Hide => "hide",
             OverlayEvent::Settings { .. } => "settings",
@@ -246,12 +374,13 @@ impl OverlayEvent {
 }
 
 impl Bus {
-    fn new(emblem_px: u32, subtitles: &str) -> Self {
+    fn new(emblem_px: u32, subtitles: &str, language: &str) -> Self {
         Bus {
             subscribers: Vec::new(),
             settings: OverlayEvent::Settings {
                 px: emblem_px,
                 subtitles: subtitles.to_owned(),
+                language: language.to_owned(),
             },
             backlog: VecDeque::new(),
             backlog_warned: false,
@@ -327,10 +456,15 @@ impl Bus {
 pub struct Overlay {
     app: AppHandle,
     window: WebviewWindow,
+    /// The window's handle, which never changes, for the checks that run on the main thread;
+    /// `None` where there is none.
+    hwnd: Option<isize>,
     /// The emblem's diameter in logical pixels, which sets the size of the window.
     emblem_px: AtomicU32,
-    placement: Mutex<OverlayPlacement>,
     bus: Mutex<Bus>,
+    /// Whether the window takes the mouse now (see [`takes_clicks`]); the window starts out
+    /// letting it through. Held while the window is changed, so that two changes cannot cross.
+    clicks: Mutex<bool>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -338,9 +472,15 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Overlay {
-    /// Creates the overlay window, with an emblem `emblem_px` logical pixels wide and the given
-    /// subtitle lines (`"both"`, `"zh"`, `"ja"` or `"off"`). Call it once, from `setup`.
-    pub fn create(app: &AppHandle, emblem_px: u32, subtitles: &str) -> tauri::Result<Arc<Self>> {
+    /// Creates the overlay window, with an emblem `emblem_px` logical pixels wide, the subtitles
+    /// `"on"` or `"off"` and the interface language (`"zh-TW"`, `"en"` or `"ja"`). Call it once,
+    /// from `setup`.
+    pub fn create(
+        app: &AppHandle,
+        emblem_px: u32,
+        subtitles: &str,
+        language: &str,
+    ) -> tauri::Result<Arc<Self>> {
         // Visible from the start: see the module documentation for why it is never shown later.
         let window = WebviewWindowBuilder::new(
             app,
@@ -367,76 +507,95 @@ impl Overlay {
             }
             return Err(err);
         }
-        hide_from_alt_tab(&window);
+        apply_passive_style(&window);
+        let hwnd = native_handle(&window);
+        if let Some(hwnd) = hwnd {
+            screen::watch(&window, hwnd);
+        }
 
         let overlay = Arc::new(Overlay {
             app: app.clone(),
             window,
+            hwnd,
             emblem_px: AtomicU32::new(emblem_px),
-            placement: Mutex::new(OverlayPlacement::Corner),
-            bus: Mutex::new(Bus::new(emblem_px, subtitles)),
+            bus: Mutex::new(Bus::new(emblem_px, subtitles, language)),
+            clicks: Mutex::new(false),
         });
         overlay.place_window();
         Ok(overlay)
     }
 
-    /// A new emblem size or subtitle language preserves the report's current placement.
-    pub fn apply_settings(&self, emblem_px: u32, subtitles: &str) {
+    /// A new emblem size changes the window's size, so it is put in its corner again.
+    pub fn apply_settings(&self, emblem_px: u32, subtitles: &str, language: &str) {
         self.emblem_px.store(emblem_px, Ordering::Relaxed);
         self.place_window();
         self.publish(OverlayEvent::Settings {
             px: emblem_px,
             subtitles: subtitles.to_owned(),
+            language: language.to_owned(),
         });
     }
 
     fn publish(&self, event: OverlayEvent) {
+        // The window takes the mouse before the buttons appear, and lets it go as the page moves
+        // on to something else.
+        if let Some(on) = takes_clicks(&event) {
+            self.set_clicks(on);
+        }
         lock(&self.bus).publish(event);
+    }
+
+    /// Makes the window take the mouse (`true`) or let it through (`false`). It never takes focus
+    /// either way: `WS_EX_NOACTIVATE` is part of the style that [`apply_passive_style`] puts
+    /// back after tao rebuilt it for this change.
+    fn set_clicks(&self, on: bool) {
+        let mut current = lock(&self.clicks);
+        if *current == on {
+            return;
+        }
+        match self.window.set_ignore_cursor_events(!on) {
+            Ok(()) => {
+                *current = on;
+                apply_passive_style(&self.window);
+                log::debug!(
+                    "overlay: the window {} the mouse",
+                    if on { "takes" } else { "lets through" }
+                );
+            }
+            Err(err) => log::warn!("could not change whether the overlay takes the mouse: {err}"),
+        }
     }
 
     fn subscribe(&self, label: &str, channel: Channel<OverlayEvent>) {
         lock(&self.bus).subscribe(label, channel);
     }
 
-    /// Recomputes the current placement when the monitor or the emblem size changes.
-    fn place_window(&self) {
-        let placement = *lock(&self.placement);
-        self.place_window_at(placement);
-    }
-
-    fn place_window_at(&self, placement: OverlayPlacement) {
-        if let Err(err) = self.try_place_window(placement) {
-            log::warn!("could not place the overlay window: {err}");
+    /// Puts the window in its corner of the primary monitor's work area, where the taskbar or the
+    /// screen's scale may have moved it since the last time, and says where that is (`None` if it
+    /// could not).
+    fn place_window(&self) -> Option<Placement> {
+        match self.try_place_window() {
+            Ok(placement) => Some(placement),
+            Err(err) => {
+                log::warn!("could not place the overlay window: {err}");
+                None
+            }
         }
     }
 
-    fn try_place_window(&self, placement: OverlayPlacement) -> tauri::Result<()> {
-        // Never hold a lock across native window operations, which may wait for the UI thread.
-        *lock(&self.placement) = placement;
-        let current = if placement == OverlayPlacement::Center {
-            self.app
-                .cursor_position()
-                .ok()
-                .and_then(|point| self.app.monitor_from_point(point.x, point.y).ok().flatten())
-        } else {
-            None
-        };
-        let monitor = match current {
-            Some(monitor) => Some(monitor),
-            None => self.app.primary_monitor()?,
-        }
-        .ok_or_else(|| {
+    fn try_place_window(&self) -> tauri::Result<Placement> {
+        let monitor = self.app.primary_monitor()?.ok_or_else(|| {
             tauri::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "there is no primary monitor",
             ))
         })?;
-        let target = place_at(
+        let placement = placement(
             Rect::from(monitor.work_area()),
             self.emblem_px.load(Ordering::Relaxed),
             monitor.scale_factor(),
-            placement,
         );
+        let target = placement.window;
         // Compare with where the window really is: Windows itself moves windows when the
         // screens change.
         let position = self.window.outer_position()?;
@@ -444,45 +603,84 @@ impl Overlay {
         if (position.x, position.y, size.width, size.height)
             == (target.x, target.y, target.w as u32, target.h as u32)
         {
-            return Ok(());
+            return Ok(placement);
         }
         self.window
             .set_size(PhysicalSize::new(target.w as u32, target.h as u32))?;
         self.window
             .set_position(PhysicalPosition::new(target.x, target.y))?;
         // tao rebuilds the extended window style whenever it changes flags or the size.
-        hide_from_alt_tab(&self.window);
-        Ok(())
+        apply_passive_style(&self.window);
+        Ok(placement)
+    }
+
+    /// Checks on the main thread that the person can see the window that the emblem is about to
+    /// appear in (see [`sight`]). It is queued behind the placing that came before it, so it sees
+    /// the window where it was just put; the caller does not wait for it.
+    fn keep_in_sight(&self, placement: Option<Placement>) {
+        if let Some(hwnd) = self.hwnd {
+            sight::check(&self.window, hwnd, placement);
+        }
     }
 }
 
 impl OverlayApi for Overlay {
     fn show(&self, mode: Mode) {
-        self.place_window_at(OverlayPlacement::Corner);
-        self.publish(OverlayEvent::Show { mode });
+        let placement = self.place_window();
+        self.keep_in_sight(placement);
+        self.publish(OverlayEvent::Show { mode, line: None });
+    }
+
+    fn greet(&self, line: &str) {
+        let placement = self.place_window();
+        self.keep_in_sight(placement);
+        self.publish(OverlayEvent::Show {
+            mode: Mode::Listening,
+            line: Some(line.to_owned()),
+        });
     }
 
     fn set_mode(&self, mode: Mode) {
-        self.publish(OverlayEvent::Mode { mode });
+        self.publish(OverlayEvent::Mode {
+            mode,
+            quiet: false,
+            lines: Vec::new(),
+        });
+    }
+
+    fn think_quietly(&self, lines: &[&str]) {
+        self.publish(OverlayEvent::Mode {
+            mode: Mode::Thinking,
+            quiet: true,
+            lines: lines.iter().map(|&line| line.to_owned()).collect(),
+        });
     }
 
     fn level(&self, value: f32) {
         self.publish(OverlayEvent::Level { value });
     }
 
-    fn notice(&self, zh: &str, ja: &str) {
-        // The page places a queued report only when its turn begins.
+    fn notice(&self, text: &str) {
         self.publish(OverlayEvent::Notice {
-            zh: zh.to_owned(),
-            ja: ja.to_owned(),
+            text: text.to_owned(),
         });
     }
 
-    fn learned_notice(&self, zh: &str, ja: &str) {
+    fn learned_notice(&self, text: &str) {
         self.publish(OverlayEvent::Learned {
-            zh: zh.to_owned(),
-            ja: ja.to_owned(),
+            text: text.to_owned(),
         });
+    }
+
+    fn say(&self, prefix: &str, text: &str) {
+        self.publish(OverlayEvent::Say {
+            prefix: prefix.to_owned(),
+            text: text.to_owned(),
+        });
+    }
+
+    fn ask(&self, prompt: &AskPrompt) {
+        self.publish(OverlayEvent::Ask(prompt.clone()));
     }
 
     fn hide(&self) {
@@ -498,37 +696,15 @@ impl OverlayApi for Overlay {
     }
 }
 
-fn validate_placement_caller(label: &str) -> Result<(), String> {
-    if label == crate::OVERLAY_WINDOW {
-        Ok(())
-    } else {
-        Err("only the overlay page can place its window".into())
-    }
-}
-
-/// The queued report is ready to appear; the overlay page places its existing window first.
-#[tauri::command]
-pub fn overlay_place(
-    app: AppHandle,
-    webview: Webview,
-    placement: OverlayPlacement,
-) -> Result<(), String> {
-    validate_placement_caller(webview.label())?;
-    let overlay = app
-        .try_state::<Arc<Overlay>>()
-        .ok_or("the overlay is not running")?;
-    overlay
-        .try_place_window(placement)
-        .map_err(|err| err.to_string())
-}
-
-/// The overlay page calls this once and receives all its events on `channel`.
+/// The overlay page calls this once and receives all its events on `channel`. Only the overlay
+/// page may: the events carry Raphael's answers and his questions.
 #[tauri::command]
 pub fn overlay_subscribe(
     app: AppHandle,
     webview: Webview,
     channel: Channel<OverlayEvent>,
 ) -> Result<(), String> {
+    crate::commands::ensure_caller(webview.label(), crate::OVERLAY_WINDOW)?;
     let Some(overlay) = app.try_state::<Arc<Overlay>>() else {
         log::warn!(
             "overlay: the page \"{}\" subscribed before the overlay was running",
@@ -540,6 +716,41 @@ pub fn overlay_subscribe(
     Ok(())
 }
 
+/// The page's answer to the question on screen: whether the YES button (`approved`) or the NO
+/// button was clicked, for the question `id`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Confirmation {
+    pub id: String,
+    pub approved: bool,
+}
+
+/// Where the page's answers go: the dictation controller's task takes them from the other end.
+/// Kept in the app state.
+pub struct ConfirmSender(pub UnboundedSender<Confirmation>);
+
+/// The overlay page answers the question on screen: `approved` is true for its YES button. The
+/// answer goes to the controller, which takes it only for the question that is open (`id`). Only
+/// the overlay page may call it: nothing else may approve what Raphael was about to do.
+///
+/// It needs no capability: the commands of the app itself are not behind the capabilities (the
+/// build declares no app manifest), and the window is checked here, like `overlay_log` does.
+#[tauri::command]
+pub fn overlay_confirm(
+    app: AppHandle,
+    webview: Webview,
+    id: String,
+    approved: bool,
+) -> Result<(), String> {
+    crate::commands::ensure_caller(webview.label(), crate::OVERLAY_WINDOW)?;
+    let Some(answers) = app.try_state::<ConfirmSender>() else {
+        return Err("nothing is listening to the overlay's answers".into());
+    };
+    answers
+        .0
+        .send(Confirmation { id, approved })
+        .map_err(|_| "nothing is listening to the overlay's answers".to_owned())
+}
+
 /// The longest page message that is logged, in characters.
 const PAGE_LOG_MAX: usize = 2000;
 
@@ -547,9 +758,11 @@ const PAGE_LOG_MAX: usize = 2000;
 /// subscription that failed, animation frames that stopped) or, at `info` and `debug`, what it
 /// is doing. It has no console anyone can see, so this is the only trace. `level` is `"error"`,
 /// `"warn"`, `"info"` or `"debug"`; errors are logged as warnings, because the overlay never
-/// stops dictation.
+/// stops dictation. Only the overlay page may call it, and what it sends is event kinds and
+/// metadata, never the words of a report (see diagnostics.ts): the log is not a place for them.
 #[tauri::command]
-pub fn overlay_log(webview: Webview, level: String, message: String) {
+pub fn overlay_log(webview: Webview, level: String, message: String) -> Result<(), String> {
+    crate::commands::ensure_caller(webview.label(), crate::OVERLAY_WINDOW)?;
     let label = webview.label();
     let message = page_message(&message);
     match page_log_level(&level) {
@@ -557,6 +770,7 @@ pub fn overlay_log(webview: Webview, level: String, message: String) {
         log::Level::Debug => log::debug!("overlay page \"{label}\": {message}"),
         _ => log::warn!("overlay page \"{label}\": {message}"),
     }
+    Ok(())
 }
 
 /// How a page message of `level` is logged: unknown levels count as warnings.
@@ -581,22 +795,32 @@ fn page_message(message: &str) -> String {
     out
 }
 
-// ---------- keeping the window out of Alt+Tab ----------
+// ---------- a window that is only ever there ----------
 
-/// Adds `WS_EX_TOOLWINDOW` and removes `WS_EX_APPWINDOW`, which keeps the window out of Alt+Tab
-/// (`skip_taskbar` only keeps it off the taskbar). tao rebuilds the whole extended style from
-/// its own flags whenever one of them changes, so this must be done again after such a change.
+/// The extended style the overlay window must have, from the `style` it has: out of Alt+Tab
+/// (`WS_EX_TOOLWINDOW` added and `WS_EX_APPWINDOW` removed, because `skip_taskbar` only keeps it off
+/// the taskbar) and never activated, not even by a click (`WS_EX_NOACTIVATE`). The rest, the
+/// mouse flags above all, is left as it is.
+#[cfg(windows)]
+fn passive_ex_style(style: isize) -> isize {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    };
+
+    (style | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize)
+        & !(WS_EX_APPWINDOW.0 as isize)
+}
+
+/// Gives the window [`passive_ex_style`]. tao already makes a window that is not `focusable`
+/// `WS_EX_NOACTIVATE`, but it rebuilds the whole extended style from its own flags whenever one
+/// of them changes (and when the size does), which drops the tool window style, so this is done
+/// again after every such change, and it makes sure of `WS_EX_NOACTIVATE` once more.
 ///
 /// The change is made on the main thread, which owns the window: from any other thread
 /// `SetWindowLongPtrW` would wait for the main thread, and that is a deadlock waiting to happen.
 #[cfg(windows)]
-fn hide_from_alt_tab(window: &WebviewWindow) {
-    use windows::Win32::{
-        Foundation::HWND,
-        UI::WindowsAndMessaging::{
-            GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
-        },
-    };
+fn apply_passive_style(window: &WebviewWindow) {
+    use windows::Win32::Foundation::HWND;
 
     let hwnd = match window.hwnd() {
         Ok(hwnd) => hwnd.0 as isize,
@@ -606,24 +830,67 @@ fn hide_from_alt_tab(window: &WebviewWindow) {
         }
     };
     let change = window.run_on_main_thread(move || {
-        let hwnd = HWND(hwnd as *mut _);
         // SAFETY: `hwnd` is the overlay window, which lives as long as the app, and this runs on
         // the thread that owns it.
-        unsafe {
-            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            let wanted = (style | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
-            if wanted != style {
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
-            }
-        }
+        unsafe { restore_passive_style(HWND(hwnd as *mut _)) };
     });
     if let Err(err) = change {
-        log::warn!("could not keep the overlay out of Alt+Tab: {err}");
+        log::warn!("could not keep the overlay out of Alt+Tab and out of focus: {err}");
     }
 }
 
 #[cfg(not(windows))]
-fn hide_from_alt_tab(_window: &WebviewWindow) {}
+fn apply_passive_style(_window: &WebviewWindow) {}
+
+/// Gives the window [`passive_ex_style`] if it lost it, and says whether it had.
+///
+/// # Safety
+///
+/// `hwnd` must be a window that the calling thread owns (see [`apply_passive_style`]).
+#[cfg(windows)]
+unsafe fn restore_passive_style(hwnd: windows::Win32::Foundation::HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW,
+    };
+
+    // SAFETY: the caller owns `hwnd`, so the style cannot change between the read and the write.
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let wanted = passive_ex_style(style);
+        if wanted == style {
+            return false;
+        }
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
+    }
+    true
+}
+
+/// The window's handle as a number that can go to the main thread, or `None` (logged) if there is
+/// none. It never changes: the window lives as long as the app.
+#[cfg(windows)]
+fn native_handle(window: &WebviewWindow) -> Option<isize> {
+    match window.hwnd() {
+        Ok(hwnd) => Some(hwnd.0 as isize),
+        Err(err) => {
+            log::warn!(
+                "no window handle for the overlay, so it is not checked when it shows: {err}"
+            );
+            None
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn native_handle(_window: &WebviewWindow) -> Option<isize> {
+    None
+}
+
+/// A Windows error as its HRESULT, for the log: the system's message for it is in the user's
+/// language, and the code is what can be looked up.
+#[cfg(windows)]
+fn hresult(err: &windows::core::Error) -> String {
+    format!("0x{:08X}", err.code().0 as u32)
+}
 
 #[cfg(test)]
 mod tests {
@@ -631,38 +898,54 @@ mod tests {
     use tauri::ipc::InvokeResponseBody;
 
     #[test]
-    fn explicit_center_placement_uses_the_current_work_area() {
-        let work = Rect {
-            x: -1920,
-            y: -40,
-            w: 1920,
-            h: 1040,
-        };
-        assert_eq!(
-            place_at(work, 194, 1.5, OverlayPlacement::Center),
-            Rect {
-                x: -1365,
-                y: 261,
-                w: 810,
-                h: 438
-            }
-        );
-        assert_eq!(
-            place_at(work, 194, 1.5, OverlayPlacement::Corner),
-            place(work, 194, 1.5)
-        );
+    fn only_the_overlay_page_hears_the_overlay_writes_to_its_log_and_answers_its_questions() {
+        // The commands cannot be called here without a running app, so read their source.
+        let source = include_str!("overlay.rs").replace("\r\n", "\n");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        for name in ["overlay_subscribe", "overlay_log", "overlay_confirm"] {
+            let command = production
+                .split("#[tauri::command]")
+                .find(|command| command.contains(&format!("pub fn {name}(")))
+                .unwrap();
+            let body = command.split("\n}\n").next().unwrap();
+            assert!(
+                body.contains("ensure_caller(webview.label(), crate::OVERLAY_WINDOW)"),
+                "{name} does not check who calls it"
+            );
+            // the check comes before anything is done
+            let first = body
+                .split("-> Result<(), String> {")
+                .nth(1)
+                .unwrap()
+                .trim_start();
+            assert!(
+                first.starts_with("crate::commands::ensure_caller("),
+                "{name}: the check must come first"
+            );
+        }
     }
 
     #[test]
-    fn only_the_overlay_page_can_request_a_placement() {
-        assert!(validate_placement_caller("overlay").is_ok());
-        assert!(validate_placement_caller("main").is_err());
-        assert!(validate_placement_caller("").is_err());
+    fn every_command_of_the_overlay_is_known_to_this_list() {
+        // A new command of the overlay has to decide who may call it, so it has to be added here.
+        let source = include_str!("overlay.rs").replace("\r\n", "\n");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let mut commands: Vec<&str> = production
+            .split("#[tauri::command]")
+            .skip(1)
+            .map(|command| {
+                command
+                    .split("pub fn ")
+                    .nth(1)
+                    .and_then(|rest| rest.split('(').next())
+                    .unwrap()
+            })
+            .collect();
+        commands.sort_unstable();
         assert_eq!(
-            serde_json::from_str::<OverlayPlacement>(r#""center""#).unwrap(),
-            OverlayPlacement::Center
+            commands,
+            ["overlay_confirm", "overlay_log", "overlay_subscribe"]
         );
-        assert!(serde_json::from_str::<OverlayPlacement>(r#""anywhere""#).is_err());
     }
 
     #[test]
@@ -759,6 +1042,24 @@ mod tests {
     }
 
     #[test]
+    fn the_placement_says_where_the_canvas_is_in_the_window() {
+        let work = Rect {
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1032,
+        };
+        for (scale, e, canvas) in [(1.0, 150u32, 195), (1.25, 194, 315), (1.5, 120, 234)] {
+            let placement = placement(work, e, scale);
+            assert_eq!(placement.work, work);
+            assert_eq!(placement.window, place(work, e, scale));
+            assert_eq!(placement.canvas, canvas, "emblem {e} at {scale}");
+            // the canvas and the 40 logical pixels above it make the window's height
+            assert!((placement.window.h - placement.canvas - (40.0 * scale) as i32).abs() <= 1);
+        }
+    }
+
+    #[test]
     fn overlay_api_can_be_held_as_a_trait_object() {
         // The dictation controller keeps `Arc<dyn OverlayApi>` so that it can be tested with a fake.
         fn assert_usable(_: Option<Arc<dyn OverlayApi>>) {}
@@ -791,25 +1092,58 @@ mod tests {
         let json = |e: OverlayEvent| serde_json::to_string(&e).unwrap();
         assert_eq!(
             json(OverlayEvent::Show {
-                mode: Mode::Listening
+                mode: Mode::Listening,
+                line: None
             }),
             r#"{"type":"show","mode":"listening"}"#
         );
         assert_eq!(
+            json(OverlayEvent::Show {
+                mode: Mode::Listening,
+                line: Some("《告。主人，請下達指示。》".into())
+            }),
+            r#"{"type":"show","mode":"listening","line":"《告。主人，請下達指示。》"}"#
+        );
+        assert_eq!(
             json(OverlayEvent::Mode {
-                mode: Mode::Thinking
+                mode: Mode::Thinking,
+                quiet: false,
+                lines: Vec::new(),
             }),
             r#"{"type":"mode","mode":"thinking"}"#
         );
         assert_eq!(
             json(OverlayEvent::Mode {
-                mode: Mode::Speaking
+                mode: Mode::Speaking,
+                quiet: false,
+                lines: Vec::new(),
             }),
             r#"{"type":"mode","mode":"speaking"}"#
         );
         assert_eq!(
-            json(OverlayEvent::Mode { mode: Mode::Steady }),
+            json(OverlayEvent::Mode {
+                mode: Mode::Steady,
+                quiet: false,
+                lines: Vec::new(),
+            }),
             r#"{"type":"mode","mode":"steady"}"#
+        );
+        // a question being thought about: no progress caption, and the waiting lines in its place
+        assert_eq!(
+            json(OverlayEvent::Mode {
+                mode: Mode::Thinking,
+                quiet: true,
+                lines: Vec::new(),
+            }),
+            r#"{"type":"mode","mode":"thinking","quiet":true}"#
+        );
+        assert_eq!(
+            json(OverlayEvent::Mode {
+                mode: Mode::Thinking,
+                quiet: true,
+                lines: vec!["《告。解析中……》".into(), "《告。並列演算中……》".into()],
+            }),
+            r#"{"type":"mode","mode":"thinking","quiet":true,"lines":["《告。解析中……》","《告。並列演算中……》"]}"#
         );
         assert_eq!(
             json(OverlayEvent::Level { value: 0.5 }),
@@ -817,19 +1151,17 @@ mod tests {
         );
         assert_eq!(
             json(OverlayEvent::Notice {
-                zh: "《了。》".into(),
-                ja: "《了。》".into()
+                text: "《了。》".into()
             }),
-            r#"{"type":"notice","zh":"《了。》","ja":"《了。》"}"#
+            r#"{"type":"notice","text":"《了。》"}"#
         );
         assert_eq!(json(OverlayEvent::Hide), r#"{"type":"hide"}"#);
         assert_eq!(json(OverlayEvent::Complete), r#"{"type":"complete"}"#);
         assert_eq!(
             json(OverlayEvent::Learned {
-                zh: "「手機」已加入詞典".into(),
-                ja: String::new()
+                text: "《了。「手機」已加入詞典。》".into()
             }),
-            r#"{"type":"learned","zh":"「手機」已加入詞典","ja":""}"#
+            r#"{"type":"learned","text":"《了。「手機」已加入詞典。》"}"#
         );
         assert_eq!(
             json(OverlayEvent::Progress(Progress {
@@ -854,10 +1186,188 @@ mod tests {
         assert_eq!(
             json(OverlayEvent::Settings {
                 px: 150,
-                subtitles: "both".into()
+                subtitles: "on".into(),
+                language: "zh-TW".into()
             }),
-            r#"{"type":"settings","px":150,"subtitles":"both"}"#
+            r#"{"type":"settings","px":150,"subtitles":"on","language":"zh-TW"}"#
         );
+    }
+
+    fn prompt(tier: Tier) -> AskPrompt {
+        AskPrompt {
+            id: "c-7".into(),
+            tier,
+            prefix: "問".into(),
+            text: "要把這段話複製到剪貼簿嗎？".into(),
+            yes: "是".into(),
+            no: "否".into(),
+            timeout_ms: 30_000,
+        }
+    }
+
+    #[test]
+    fn say_and_ask_have_the_shape_the_page_expects() {
+        let json = |e: OverlayEvent| serde_json::to_string(&e).unwrap();
+        assert_eq!(
+            json(OverlayEvent::Say {
+                prefix: "答".into(),
+                text: "台北現在二十四度，多雲。".into()
+            }),
+            r#"{"type":"say","prefix":"答","text":"台北現在二十四度，多雲。"}"#
+        );
+        assert_eq!(
+            json(OverlayEvent::Ask(prompt(Tier::T2))),
+            concat!(
+                r#"{"type":"ask","id":"c-7","tier":"T2","prefix":"問","#,
+                r#""text":"要把這段話複製到剪貼簿嗎？","yes":"是","no":"否","timeout_ms":30000}"#
+            )
+        );
+        assert_eq!(
+            serde_json::to_value(OverlayEvent::Ask(prompt(Tier::T3))).unwrap()["tier"],
+            "T3"
+        );
+    }
+
+    #[test]
+    fn the_tier_the_core_names_is_kept_and_anything_else_is_the_careful_one() {
+        assert_eq!(Tier::parse("T2"), Tier::T2);
+        assert_eq!(Tier::parse("T3"), Tier::T3);
+        for odd in ["", "T1", "T4", "t2", "T2 ", "high"] {
+            assert_eq!(Tier::parse(odd), Tier::T3, "{odd:?}");
+        }
+    }
+
+    // ---- the mouse ----
+
+    #[test]
+    fn only_a_question_makes_the_window_take_the_mouse() {
+        let ask = OverlayEvent::Ask(prompt(Tier::T2));
+        assert_eq!(takes_clicks(&ask), Some(true));
+        // everything that puts something else on the stage lets the mouse through again
+        for ends in [
+            OverlayEvent::Show {
+                mode: Mode::Listening,
+                line: None,
+            },
+            OverlayEvent::Say {
+                prefix: "答".into(),
+                text: String::new(),
+            },
+            notice(1),
+            OverlayEvent::Complete,
+            OverlayEvent::Hide,
+        ] {
+            assert_eq!(takes_clicks(&ends), Some(false), "{ends:?}");
+        }
+        // and what is not about the stage changes nothing
+        for neutral in [
+            OverlayEvent::Mode {
+                mode: Mode::Thinking,
+                quiet: false,
+                lines: Vec::new(),
+            },
+            OverlayEvent::Level { value: 0.5 },
+            OverlayEvent::Progress(Progress::DONE),
+            OverlayEvent::Learned {
+                text: String::new(),
+            },
+            OverlayEvent::Settings {
+                px: 150,
+                subtitles: "on".into(),
+                language: "zh-TW".into(),
+            },
+        ] {
+            assert_eq!(takes_clicks(&neutral), None, "{neutral:?}");
+        }
+    }
+
+    #[test]
+    fn a_question_that_nobody_answers_is_over_with_the_next_thing_shown() {
+        // The window takes the mouse from the question until an event that ends it: replay the
+        // events of a few scenes the way `Overlay::publish` applies them.
+        let replay = |events: &[OverlayEvent]| {
+            let mut takes = false;
+            let mut seen = Vec::new();
+            for event in events {
+                if let Some(on) = takes_clicks(event) {
+                    takes = on;
+                }
+                seen.push(takes);
+            }
+            seen
+        };
+        let listening = OverlayEvent::Show {
+            mode: Mode::Listening,
+            line: None,
+        };
+        let thinking = OverlayEvent::Mode {
+            mode: Mode::Thinking,
+            quiet: false,
+            lines: Vec::new(),
+        };
+        let ask = OverlayEvent::Ask(prompt(Tier::T3));
+        let say = OverlayEvent::Say {
+            prefix: "了".into(),
+            text: "好了".into(),
+        };
+        let level = OverlayEvent::Level { value: 0.2 };
+        assert_eq!(
+            replay(&[listening, thinking, ask.clone(), level.clone(), say.clone()]),
+            [false, false, true, true, false]
+        );
+        // the loudness of the room does not close the question; a hide does
+        assert_eq!(
+            replay(&[ask, level, OverlayEvent::Hide]),
+            [true, true, false]
+        );
+    }
+
+    #[test]
+    fn the_overlay_window_is_built_to_never_take_focus() {
+        // The window cannot be built here without a running app, so read its source: tao gives a
+        // window that is not focusable `WS_EX_NOACTIVATE`, and `focused(false)` keeps its first
+        // show from activating it.
+        let source = include_str!("overlay.rs").replace("\r\n", "\n");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let build = production
+            .split("WebviewWindowBuilder::new(")
+            .nth(1)
+            .and_then(|rest| rest.split(".build()").next())
+            .unwrap();
+        assert!(build.contains(".focusable(false)"));
+        assert!(build.contains(".focused(false)"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_style_of_the_window_is_never_activated_and_out_of_alt_tab() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            WS_EX_ACCEPTFILES, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE,
+        };
+
+        let has = |style: isize, flag: windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE| {
+            style & flag.0 as isize != 0
+        };
+        let base = (WS_EX_WINDOWEDGE.0 | WS_EX_ACCEPTFILES.0 | WS_EX_TOPMOST.0) as isize;
+        // what tao builds, with the mouse going through, and with the mouse taken
+        for mouse in [(WS_EX_TRANSPARENT.0 | WS_EX_LAYERED.0) as isize, 0] {
+            for tao in [
+                base | mouse | WS_EX_APPWINDOW.0 as isize,
+                base | mouse | WS_EX_NOACTIVATE.0 as isize,
+                base | mouse,
+            ] {
+                let fixed = passive_ex_style(tao);
+                assert!(has(fixed, WS_EX_NOACTIVATE), "{tao:#x}");
+                assert!(has(fixed, WS_EX_TOOLWINDOW), "{tao:#x}");
+                assert!(!has(fixed, WS_EX_APPWINDOW), "{tao:#x}");
+                // the rest is what it was, the mouse flags above all
+                let touched =
+                    (WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0 | WS_EX_APPWINDOW.0) as isize;
+                assert_eq!(fixed & !touched, tao & !touched, "{tao:#x}");
+                assert_eq!(passive_ex_style(fixed), fixed, "it is done once");
+            }
+        }
     }
 
     /// A page that records what it receives, as JSON text.
@@ -879,78 +1389,77 @@ mod tests {
 
     fn notice(n: usize) -> OverlayEvent {
         OverlayEvent::Notice {
-            zh: n.to_string(),
-            ja: String::new(),
+            text: n.to_string(),
         }
     }
 
-    const SETTINGS_150_BOTH: &str = r#"{"type":"settings","px":150,"subtitles":"both"}"#;
+    const SETTINGS_150_ON: &str =
+        r#"{"type":"settings","px":150,"subtitles":"on","language":"zh-TW"}"#;
 
     #[test]
     fn a_new_page_gets_the_settings_first() {
-        let mut bus = Bus::new(150, "zh");
+        let mut bus = Bus::new(150, "off", "ja");
         let (channel, got) = page();
         bus.subscribe("overlay", channel);
         assert_eq!(
             received(&got),
-            [r#"{"type":"settings","px":150,"subtitles":"zh"}"#]
+            [r#"{"type":"settings","px":150,"subtitles":"off","language":"ja"}"#]
         );
     }
 
     #[test]
     fn only_the_latest_settings_reach_a_page_that_loads_late() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         bus.publish(OverlayEvent::Settings {
             px: 194,
             subtitles: "off".into(),
+            language: "en".into(),
         });
         let (channel, got) = page();
         bus.subscribe("overlay", channel);
         assert_eq!(
             received(&got),
-            [r#"{"type":"settings","px":194,"subtitles":"off"}"#]
+            [r#"{"type":"settings","px":194,"subtitles":"off","language":"en"}"#]
         );
     }
 
     #[test]
     fn events_from_before_the_page_loaded_arrive_in_order_after_the_settings() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         bus.publish(OverlayEvent::Show {
             mode: Mode::Listening,
+            line: None,
         });
         bus.publish(OverlayEvent::Level { value: 0.3 }); // a loudness reading is stale by then
         bus.publish(OverlayEvent::Progress(Progress::DONE)); // and so is a progress report
-        bus.publish(OverlayEvent::Notice {
-            zh: "了".into(),
-            ja: "了".into(),
-        });
+        bus.publish(OverlayEvent::Notice { text: "了".into() });
         let (channel, got) = page();
         bus.subscribe("overlay", channel);
         assert_eq!(
             received(&got),
             [
-                SETTINGS_150_BOTH,
+                SETTINGS_150_ON,
                 r#"{"type":"show","mode":"listening"}"#,
-                r#"{"type":"notice","zh":"了","ja":"了"}"#,
+                r#"{"type":"notice","text":"了"}"#,
             ]
         );
     }
 
     #[test]
     fn the_backlog_is_delivered_once() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         bus.publish(notice(1));
         let (first, got_first) = page();
         bus.subscribe("overlay", first);
         let (second, got_second) = page();
         bus.subscribe("other", second);
         assert_eq!(received(&got_first).len(), 2); // settings and the notice
-        assert_eq!(received(&got_second), [SETTINGS_150_BOTH]);
+        assert_eq!(received(&got_second), [SETTINGS_150_ON]);
     }
 
     #[test]
     fn the_backlog_keeps_the_newest_events() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         for n in 0..BACKLOG_MAX + 5 {
             bus.publish(notice(n));
         }
@@ -958,25 +1467,28 @@ mod tests {
         bus.subscribe("overlay", channel);
         let got = received(&got);
         assert_eq!(got.len(), 1 + BACKLOG_MAX);
-        assert_eq!(got[1], r#"{"type":"notice","zh":"5","ja":""}"#);
+        assert_eq!(got[1], r#"{"type":"notice","text":"5"}"#);
         assert_eq!(
             got.last().unwrap(),
-            &format!(r#"{{"type":"notice","zh":"{}","ja":""}}"#, BACKLOG_MAX + 4)
+            &format!(r#"{{"type":"notice","text":"{}"}}"#, BACKLOG_MAX + 4)
         );
     }
 
     #[test]
     fn events_reach_every_page_in_order() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         let (a, got_a) = page();
         let (b, got_b) = page();
         bus.subscribe("a", a);
         bus.subscribe("b", b);
-        bus.publish(OverlayEvent::Show { mode: Mode::Steady });
+        bus.publish(OverlayEvent::Show {
+            mode: Mode::Steady,
+            line: None,
+        });
         bus.publish(OverlayEvent::Level { value: 1.0 });
         bus.publish(OverlayEvent::Hide);
         let expected = [
-            SETTINGS_150_BOTH,
+            SETTINGS_150_ON,
             r#"{"type":"show","mode":"steady"}"#,
             r#"{"type":"level","value":1.0}"#,
             r#"{"type":"hide"}"#,
@@ -987,23 +1499,20 @@ mod tests {
 
     #[test]
     fn a_page_that_subscribes_again_replaces_its_old_channel() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         let (old, got_old) = page();
         bus.subscribe("overlay", old);
         let (new, got_new) = page();
         bus.subscribe("overlay", new); // the page was reloaded
         bus.publish(OverlayEvent::Hide);
         assert_eq!(bus.subscribers.len(), 1);
-        assert_eq!(received(&got_old), [SETTINGS_150_BOTH]);
-        assert_eq!(
-            received(&got_new),
-            [SETTINGS_150_BOTH, r#"{"type":"hide"}"#]
-        );
+        assert_eq!(received(&got_old), [SETTINGS_150_ON]);
+        assert_eq!(received(&got_new), [SETTINGS_150_ON, r#"{"type":"hide"}"#]);
     }
 
     #[test]
     fn a_page_that_is_gone_is_dropped_and_the_others_still_hear() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         let gone = Channel::new(|_| Err(tauri::Error::WebviewNotFound));
         let (alive, got) = page();
         bus.subscribers.push(("gone".into(), gone));
@@ -1011,7 +1520,7 @@ mod tests {
         bus.publish(OverlayEvent::Hide);
         assert_eq!(bus.subscribers.len(), 1);
         assert_eq!(bus.subscribers[0].0, "alive");
-        assert_eq!(received(&got), [SETTINGS_150_BOTH, r#"{"type":"hide"}"#]);
+        assert_eq!(received(&got), [SETTINGS_150_ON, r#"{"type":"hide"}"#]);
     }
 
     #[test]
@@ -1038,15 +1547,17 @@ mod tests {
 
     #[test]
     fn waiting_without_a_page_is_warned_about_once_until_a_page_subscribes() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         bus.publish(OverlayEvent::Level { value: 0.2 }); // dropped, not worth a warning
         bus.publish(OverlayEvent::Settings {
             px: 150,
-            subtitles: "both".into(),
+            subtitles: "on".into(),
+            language: "zh-TW".into(),
         });
         assert!(!bus.backlog_warned);
         bus.publish(OverlayEvent::Show {
             mode: Mode::Listening,
+            line: None,
         });
         assert!(bus.backlog_warned);
         bus.publish(OverlayEvent::Hide);
@@ -1062,25 +1573,59 @@ mod tests {
     #[test]
     fn every_event_has_its_kind_for_the_log() {
         let events = [
-            OverlayEvent::Show { mode: Mode::Steady },
-            OverlayEvent::Mode { mode: Mode::Steady },
+            OverlayEvent::Show {
+                mode: Mode::Steady,
+                line: None,
+            },
+            OverlayEvent::Mode {
+                mode: Mode::Steady,
+                quiet: false,
+                lines: Vec::new(),
+            },
             OverlayEvent::Level { value: 0.0 },
             OverlayEvent::Progress(Progress::DONE),
             notice(0),
             OverlayEvent::Learned {
-                zh: String::new(),
-                ja: String::new(),
+                text: String::new(),
             },
+            OverlayEvent::Say {
+                prefix: "答".into(),
+                text: String::new(),
+            },
+            OverlayEvent::Ask(prompt(Tier::T2)),
+            OverlayEvent::Complete,
             OverlayEvent::Hide,
             OverlayEvent::Settings {
                 px: 150,
-                subtitles: "both".into(),
+                subtitles: "on".into(),
+                language: "zh-TW".into(),
             },
         ];
         for event in events {
             let json = serde_json::to_value(&event).unwrap();
             assert_eq!(json["type"], event.kind());
         }
+    }
+
+    #[test]
+    fn an_answer_and_a_question_from_before_the_page_loaded_wait_for_it() {
+        let mut bus = Bus::new(150, "on", "zh-TW");
+        bus.publish(OverlayEvent::Say {
+            prefix: "答".into(),
+            text: "好".into(),
+        });
+        bus.publish(OverlayEvent::Ask(prompt(Tier::T2)));
+        let (channel, got) = page();
+        bus.subscribe("overlay", channel);
+        let got = received(&got);
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0], SETTINGS_150_ON);
+        assert_eq!(got[1], r#"{"type":"say","prefix":"答","text":"好"}"#);
+        assert!(
+            got[2].starts_with(r#"{"type":"ask","id":"c-7""#),
+            "{}",
+            got[2]
+        );
     }
 
     #[test]
@@ -1106,7 +1651,7 @@ mod tests {
 
     #[test]
     fn events_after_the_last_page_is_gone_wait_for_the_next_one() {
-        let mut bus = Bus::new(150, "both");
+        let mut bus = Bus::new(150, "on", "zh-TW");
         let gone = Channel::new(|_| Err(tauri::Error::WebviewNotFound));
         bus.subscribers.push(("gone".into(), gone));
         bus.publish(OverlayEvent::Hide); // dropped with the page that failed to take it
@@ -1115,7 +1660,7 @@ mod tests {
         bus.subscribe("overlay", channel);
         assert_eq!(
             received(&got),
-            [SETTINGS_150_BOTH, r#"{"type":"notice","zh":"7","ja":""}"#]
+            [SETTINGS_150_ON, r#"{"type":"notice","text":"7"}"#]
         );
     }
 }

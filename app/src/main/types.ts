@@ -49,26 +49,62 @@ export interface KeyInfo {
   usage_total: number | null;
 }
 
-/** One price of `pricing.get`: US$ per million tokens or per minute of audio; null when unknown. */
-export interface CleanupPrice {
+/** What a model is chosen for: the dictation cleanup, Raphael's answers, speech to text (the core's brain/catalog.py). */
+export type ModelRole = "cleanup" | "answer" | "stt";
+
+/** Whether a role can use a model, and if not why: a word of the core such as `no_structured_output`. */
+export interface RoleFit {
+  usable: boolean;
+  reason: string | null;
+}
+
+/** A model of `models.catalog`. Prices are US$; null is unknown or does not apply. */
+export interface CatalogModel {
   id: string;
+  /** Without its maker: "GPT-6 Luna". */
   name: string;
+  /** Its maker: "OpenAI". */
+  provider: string;
+  /** Per million tokens: language models, and speech models priced by the token. */
   input_per_mtok: number | null;
   output_per_mtok: number | null;
-}
-
-export interface SttPrice extends CleanupPrice {
+  /** Per minute of audio: speech models priced by the second. */
   per_minute: number | null;
+  free: boolean;
+  /** No price of its own: a router, which picks a model for each request. */
+  variable_price: boolean;
+  /** In tokens, for a language model. */
+  context_length: number | null;
+  /** When OpenRouter added it. */
+  created_at_ms: number | null;
+  /** What it can do: `structured_output`, `reasoning`, `reasoning_off`, `max_tokens`, `tool_calling` (no role needs it: the plugins do); `dictionary_hints` for speech. */
+  capabilities: Record<string, boolean>;
+  /** One of the models the settings offered before they offered them all. */
+  recommended: boolean;
+  /** The roles of its kind. */
+  roles: Partial<Record<ModelRole, RoleFit>>;
 }
 
-/** `pricing.get`: the prices of the models the settings page offers. */
-export interface Pricing {
-  cleanup: CleanupPrice[];
-  stt: SttPrice[];
-  /** When the prices were read from OpenRouter; null for the built-in ones. */
+/** A chosen model that OpenRouter no longer lists, whose setting went back to its default. */
+export interface ReplacedModel {
+  key: "cleanup_model" | "agent_model" | "stt_cloud_model";
+  role: ModelRole;
+  model: string;
+  default: string;
+}
+
+/** `models.catalog`: every OpenRouter model Raphael could use, by kind. */
+export interface ModelCatalog {
+  /** Text in, text out: the cleanup and the answers. */
+  llm: CatalogModel[];
+  /** Speech to text. */
+  stt: CatalogModel[];
+  /** When the list was read from OpenRouter; null for the built-in one. */
   fetched_at_ms: number | null;
-  /** `live`: read just now; `cached`: read earlier and kept; `builtin`: shipped with the app. */
+  /** `live`: read just now; `cached`: read earlier and kept; `builtin`: Raphael's own models only. */
   source: "live" | "cached" | "builtin";
+  /** The settings this answer set back to their defaults: tell the user. */
+  replaced: ReplacedModel[];
 }
 
 /** What was dictated in a stretch of time (`stats.summary`). */
@@ -120,6 +156,23 @@ export interface HistoryItem {
   stt?: string | null;
 }
 
+/** A turn of the conversation with Raphael (`agent.history.list`, newest first). */
+export interface AgentTurn {
+  id: number;
+  created_at_ms: number;
+  /** What the person said, as the speech recognition heard it. */
+  question: string;
+  /** How the question was routed: a command, a question, a chat... (the core's word). */
+  route: string;
+  /** The word before Raphael's reply: 答, 告, 否, 了 or 問 (Answer, Notice, ... in English). */
+  prefix: string;
+  /** Raphael's reply, the line of the overlay. */
+  text: string;
+  /** The longer version of the reply, when there is one. */
+  detail: string | null;
+  status: string;
+}
+
 /** An entry of `dictionary.list` */
 export interface DictionaryEntry {
   id: number;
@@ -141,8 +194,10 @@ export interface BrainSettings {
   /** "cloud" (OpenRouter, the local engine as fallback) or "local". */
   stt_engine: string;
   stt_cloud_model: string;
-  /** Learn the words the user corrects by hand after a paste (default on). Absent from older cores. */
-  learn_corrections?: boolean;
+  /** The model that writes Raphael's answers. */
+  agent_model?: string;
+  /** The city Raphael looks the weather up for. */
+  agent_city?: string;
 }
 
 /** `secrets.set_openrouter_key` */
@@ -172,10 +227,13 @@ export interface DeviceSettings {
    */
   dictation_mode: "toggle" | "hold";
   paste_last_keys: string[];
+  /** The shortcut that asks Raphael (Right Alt+Space by default); never the same as another one. */
+  agent_keys: string[];
   /** The name of the microphone; null is the system's default one. */
   microphone: string | null;
   emblem_size: 120 | 150 | 194;
-  subtitles: "both" | "zh" | "ja" | "off";
+  /** Reports beside the emblem, on or off. (Files from before had "both", "zh" and "ja": they mean on.) */
+  subtitles: "on" | "off";
   appearance: "system" | "light" | "dark";
   ui_language: "zh-TW" | "en" | "ja";
   autostart: boolean;
@@ -185,25 +243,41 @@ export interface DeviceSettings {
 /** What commands.rs sends on the `main_events` channel (`MainEvent`). */
 export type MainEvent =
   | { type: "Level"; value: number }
-  | { type: "ModelProgress"; name: string; done: number; total: number };
+  | { type: "ModelProgress"; name: string; done: number; total: number }
+  /** An editor hides its text from UI Automation, so corrections in it cannot be learned. */
+  | { type: "LearnLimited"; app: string; reason: string }
+  /** A tray menu item asks for a page, and perhaps one thing to do there (tray-open.ts). */
+  | { type: "TrayOpen"; page: TrayPage; action?: TrayAction };
+
+/** The pages the tray's menu can open. */
+export type TrayPage = "home" | "history" | "dictionary" | "settings";
+
+/** What the tray asks the page to do once it is open: start adding a word to the dictionary. */
+export type TrayAction = "add-word";
 
 // ---------- what the pages share with main.ts ----------
 
-export type PageId = "home" | "history" | "dictionary" | "settings";
+export type PageId = "home" | "agent" | "history" | "dictionary" | "settings";
 
-/** One of the four pages of the main window. */
+/** The tabs of the settings panel. */
+export type SettingsPane = "general" | "dictation" | "agent" | "usage" | "about";
+
+/** One of the five pages of the main window. */
 export interface Page {
   readonly id: PageId;
   readonly el: HTMLElement;
-  /** The page comes on screen (or the window comes back): load what it shows. */
-  show(): void | Promise<void>;
+  /** The page comes on screen (or the window comes back): load what it shows. The settings open at the tab given. */
+  show(pane?: SettingsPane): void | Promise<void>;
   /** The page goes off screen (or the window goes away): stop what runs for it. */
   hide(): void;
 }
 
 /** What main.ts gives the pages. */
 export interface AppContext {
-  go(page: PageId): void;
+  /** Goes to a page. The settings panel opens at `pane` if one is given (the key and the limit are in "usage"). */
+  go(page: PageId, pane?: SettingsPane): void;
+  /** Opens the history at one day, `2026-10-14`: its dictations only, with a way back to all of them. */
+  showDay(date: string): void;
   /** The device settings as they are now. */
   device(): DeviceSettings;
   /** Reads the device settings from the app again; rejects if they cannot be read. */

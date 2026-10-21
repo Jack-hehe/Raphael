@@ -1,8 +1,10 @@
 """The core's entry point: the device side and the brain wired to one router.
 
-`build_app` makes an `App`, a Router with every method of the plan on it: the brain's (Task 8), the
-dictation service's (Task 12) and the few that belong to neither (`core.*`, `models.*`, `audio.*`).
-`__main__` serves it on stdio.
+`build_app` makes an `App`, a Router with every method of the core on it: the brain's
+(raphael_core.brain), the dictation service's (`dictation.*`, raphael_core.device), the voice
+assistant's (`agent.*`, raphael_core.agent), the plugins' (`integrations.*`,
+raphael_core.integrations) and the few that belong to none of them (`core.*`, `models.*`,
+`audio.*`). `__main__` serves it on stdio.
 
 Start-up. The app's first calls come within seconds of the process starting (`core.hello`, the
 saved microphone, the settings page's questions), so the models, which take tens of seconds to
@@ -10,8 +12,8 @@ load, are never waited for: the first sherpa-onnx object of a process pays about
 Runtime start-up and the engine a few more. A worker thread imports the speech libraries (the
 "kit": numpy, sherpa-onnx, PortAudio), builds the dictation service and then loads the two models.
 A dictation started before they are loaded still records: the audio queues up, and
-`dictation.stop` waits for the models (spec section 5, Task 12). `dictation.*` and the methods
-that need the kit wait for them instead of failing.
+`dictation.stop` waits for the models (docs/design.md §5). `dictation.*` and the methods that need
+the kit wait for them instead of failing.
 
 The libraries themselves are imported before the core reads its first request (`__main__` calls
 `wait_for_libraries`). On Windows, numpy's DLLs hang while they load if another thread is blocked
@@ -41,6 +43,7 @@ import asyncio
 import concurrent.futures
 import functools
 import logging
+import re
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -51,12 +54,24 @@ from typing import Any
 import keyring
 
 from . import __version__, paths
+from .agent.device import DeviceActions, NullActions, WindowsActions
+from .agent.service import AgentService
 from .brain import textnorm
 from .brain.db import connect
-from .brain.openrouter import Completion, KeyInfo, OpenRouterClient, OpenRouterError
+from .brain.openrouter import (
+    Completion,
+    Decision,
+    KeyInfo,
+    OpenRouterClient,
+    OpenRouterError,
+    TextCompletion,
+    ToolPlan,
+)
 from .brain.secrets import CredentialKeyStore, KeyStore, MemoryKeyStore
 from .brain.service import Brain
 from .device.models import REGISTRY, ModelManager
+from .integrations.service import IntegrationsService
+from .integrations.vault import CredentialVault, MemoryVault, SecretVault
 from .protocol import (
     INVALID_PARAMS,
     NO_MICROPHONE,
@@ -80,7 +95,7 @@ DICTATION_SEGMENT_SECONDS = 10.0
 # The same for cloud speech-to-text: longer, so the model gets context (OpenRouter's upstream limit
 # is 60 s a request).
 CLOUD_SEGMENT_SECONDS = 30.0
-# More threads do not make Qwen3-ASR faster (Task 10).
+# More threads do not make Qwen3-ASR faster.
 STT_THREADS = 4
 # audio.level notifications a second, for the settings page's meter.
 LEVEL_HZ = 30.0
@@ -93,6 +108,9 @@ SHUTDOWN_PATIENCE_S = 3.0
 # The key the fake LLM's in-memory key store holds: any key makes the cleanup run.
 _FAKE_KEY = "fake-llm-key"
 _TRANSCRIPT_OPEN, _TRANSCRIPT_CLOSE = "<transcript>\n", "\n</transcript>"
+# The question in what the assistant's answering model is shown; a line naming the language to
+# reply in follows it.
+_QUESTION = re.compile(r"<question>\n(.*?)\n</question>", re.DOTALL)
 
 
 # --- the fake LLM -----------------------------------------------------------------------------
@@ -100,7 +118,10 @@ _TRANSCRIPT_OPEN, _TRANSCRIPT_CLOSE = "<transcript>\n", "\n</transcript>"
 
 class EchoClient:
     """Stands in for the OpenRouter client when RAPHAEL_FAKE_LLM=1: the "cleaned" text is the
-    transcript as it was said, at no cost, with no network. The end-to-end runs use it."""
+    transcript as it was said, at no cost, with no network. The end-to-end runs use it.
+
+    The voice assistant gets small talk from it: every request is "chat", and the reply is the
+    question as it was asked."""
 
     def __init__(self) -> None:
         self.warmed_up = False
@@ -117,12 +138,30 @@ class EchoClient:
         schema_name: str,
         timeout_s: float,
         max_tokens: int,
+        reasoning_effort: str = "none",
     ) -> Completion:
-        text = user
-        if text.startswith(_TRANSCRIPT_OPEN) and text.endswith(_TRANSCRIPT_CLOSE):
-            text = text[len(_TRANSCRIPT_OPEN) : len(text) - len(_TRANSCRIPT_CLOSE)]
+        data: dict
+        if schema_name == "raphael_route":  # the assistant's router
+            data = {
+                "route": "chat",
+                "command": "none",
+                "needs_weather": False,
+                "needs_search": False,
+                "needs_time": False,
+                "app": "",
+            }
+        elif schema_name == "raphael_reply":  # the assistant's answer: the question, echoed
+            question = _QUESTION.search(user)
+            data = {"prefix": "", "text": question.group(1) if question else "", "detail": ""}
+        elif schema_name == "raphael_app":
+            data = {"app": ""}
+        else:  # the cleanup
+            text = user
+            if text.startswith(_TRANSCRIPT_OPEN) and text.endswith(_TRANSCRIPT_CLOSE):
+                text = text[len(_TRANSCRIPT_OPEN) : len(text) - len(_TRANSCRIPT_CLOSE)]
+            data = {"text": text}
         return Completion(
-            data={"text": text},
+            data=data,
             model="fake/echo",
             cost_usd=0.0,
             prompt_tokens=0,
@@ -130,10 +169,44 @@ class EchoClient:
             latency_ms=0,
         )
 
+    async def decide(self, **kwargs: Any) -> Decision:
+        # Jev, sure that every request is small talk.
+        answers = {
+            "route": {"type": "choice", "choice": "chat", "confidence": 0.99},
+            "command": {"type": "choice", "choice": "none", "confidence": 0.99},
+            "needs_weather": {"type": "noul", "noul": 0.0},
+            "needs_search": {"type": "noul", "noul": 0.0},
+            "needs_time": {"type": "noul", "noul": 0.0},
+        }
+        return Decision(answers=answers, cost_usd=0.0, latency_ms=0)
+
+    async def plan_tools(self, **kwargs: Any) -> ToolPlan:
+        # No plugin tool is ever wanted.
+        return ToolPlan(
+            calls=[], model="fake/echo", cost_usd=0.0, prompt_tokens=0, completion_tokens=0,
+            latency_ms=0,
+        )  # fmt: skip
+
+    async def chat_text(self, **kwargs: Any) -> TextCompletion:
+        return TextCompletion(
+            text="(the fake LLM does not search the web)",
+            model="fake/echo",
+            cost_usd=0.0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=0,
+            sources=[],
+        )
+
     async def transcribe(self, **kwargs: Any) -> Any:
         # No cloud speech-to-text without the network: the local engine takes over, as it would
         # for a real failure.
         raise OpenRouterError(0, "bad_request", "The fake LLM does not transcribe")
+
+    async def models(self, timeout_s: float = 5.0) -> list[dict]:
+        # No model list without the network either: the catalog is Raphael's own models, as it is
+        # when OpenRouter cannot be reached.
+        raise OpenRouterError(0, "network", "The fake LLM has no model list")
 
     async def key_info(self, key: str | None = None, timeout_s: float = 5.0) -> KeyInfo:
         return KeyInfo(
@@ -466,8 +539,10 @@ class App(Router):
 
     `data_dir` holds the database, and the models unless `manager` says otherwise (or
     RAPHAEL_MODELS_DIR does). With `fake_audio`, a WAV file plays in real time in place of the
-    microphone; with `fake_llm`, an in-process client returns the transcript unchanged and there is
-    an in-memory key. `load_kit` is for tests.
+    microphone; with `fake_llm`, an in-process client returns the transcript unchanged, the key and
+    the plugins' secrets are kept in memory, and the voice assistant does nothing to this computer.
+    `agent_actions` is what the assistant does to it otherwise (Windows, by default). `load_kit` is
+    for tests.
     """
 
     def __init__(
@@ -478,6 +553,7 @@ class App(Router):
         fake_llm: bool = False,
         manager: ModelManager | None = None,
         load_kit: Callable[[], Any] | None = None,
+        agent_actions: DeviceActions | None = None,
     ) -> None:
         super().__init__()
         self._fake_audio = fake_audio
@@ -490,18 +566,35 @@ class App(Router):
         try:
             self.keys: KeyStore
             self.client: Any
+            self.vault: SecretVault
             if fake_llm:
                 self.keys = MemoryKeyStore()
                 self.keys.set(_FAKE_KEY)
                 self.client = EchoClient()
+                self.vault = MemoryVault()
             else:
                 self.keys = CredentialKeyStore()
                 self.client = OpenRouterClient(self.keys.get)
+                self.vault = CredentialVault()
             self.brain = Brain(self._conn, self.client, self.keys)  # prunes the history
         except BaseException:
             self._conn.close()
             raise
         self.brain.register(self)
+        if agent_actions is None:
+            agent_actions = NullActions() if fake_llm else WindowsActions()
+        # The plugins: servers the user connected, and the hub the assistant reaches their tools by.
+        self.integrations = IntegrationsService(self._conn, data_dir, self.vault)
+        self.integrations.register(self)
+        self.agent = AgentService(
+            self._conn,
+            self.client,
+            self.keys,
+            actions=agent_actions,
+            plugins=self.integrations,
+            models=self.brain.known_models,
+        )
+        self.agent.register(self)
 
         self._speech = SpeechModels(
             self.manager, make_segmenter=self._make_segmenter, make_engine=self._make_engine
@@ -567,11 +660,14 @@ class App(Router):
         return any(thread.is_alive() for thread in self._threads)
 
     def _prewarm(self) -> None:
-        """Build the things the first dictation would build: the OpenCC converter (about 100 ms)
-        and the HTTP client of OpenRouter (over a second)."""
+        """Build the things the first dictation would build: the OpenCC converters (about 100 ms
+        each) and the HTTP client of OpenRouter (over a second)."""
         began = time.perf_counter()
         try:
-            textnorm.to_taiwan_traditional("软件")  # simplified: goes through OpenCC
+            textnorm.to_taiwan_traditional("软件")  # simplified: goes through OpenCC (s2twp)
+            # The cleanup is compared with the dictation in Simplified Chinese, by two conversions.
+            textnorm.to_simplified("軟體")
+            textnorm.to_mainland("軟體")
         except Exception:
             logger.exception("Could not warm up OpenCC")
         try:
@@ -665,6 +761,7 @@ class App(Router):
             ("cancel the dictation", close_dictation),
             ("close the level meter", close_meter),
             ("stop the account usage refresh", self.brain.aclose),
+            ("end the assistant's requests", self.agent.aclose),
             ("close the HTTP client", self.client.aclose),
             ("wait for the start-up threads", join_threads),
             ("let go of the speech models", close_speech),
@@ -943,7 +1040,7 @@ def build_app(
     `data_dir` is where the database lives (default: Raphael's folder in the user's application
     data, or RAPHAEL_DATA_DIR). `fake_audio` is a WAV file that the recorder plays in real time in
     place of the microphone. `fake_llm` swaps OpenRouter for a client that returns the transcript
-    unchanged at no cost, and the Credential Manager for an in-memory key.
+    unchanged at no cost, and the Credential Manager for an in-memory key and plugin vault.
     """
     app = App(
         data_dir=paths.data_dir() if data_dir is None else Path(data_dir),

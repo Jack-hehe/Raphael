@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { KeyRecorder, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "./keys";
+import { KeyRecorder, bindingClash, bindingFromCodes, bindingLabels, canonicalKey, keyLabel, sameBinding, validateCodes } from "./keys";
 
 describe("labels", () => {
   test("the keys named in the brief", () => {
@@ -151,5 +151,26 @@ describe("recording", () => {
     const r = new KeyRecorder();
     r.keyDown("ControlLeft");
     expect(r.keyDown("AltRight")).toEqual({ type: "progress", codes: ["ControlLeft", "AltRight"] });
+  });
+});
+
+describe("bindings that are the same", () => {
+  test("the settings file's V and the recorder's KeyV are one key, whatever the case and order", () => {
+    expect(canonicalKey("V")).toBe("keyv");
+    expect(canonicalKey("KeyV")).toBe("keyv");
+    expect(canonicalKey("1")).toBe("digit1");
+    expect(canonicalKey("CtrlLeft")).toBe("controlleft");
+    expect(sameBinding("AltRight+V", "AltRight+KeyV")).toBe(true);
+    expect(sameBinding("KeyV+AltRight", "altright+v")).toBe(true);
+    expect(sameBinding("AltRight", "AltRight+Space")).toBe(false);
+    expect(sameBinding("ControlLeft+Space", "ControlRight+Space")).toBe(false);
+  });
+
+  test("a clash names the action that has the binding", () => {
+    const taken = [["Dictate", ["AltRight"]], ["Paste last", ["AltRight+V"]]] as const;
+    expect(bindingClash("AltRight+KeyV", taken)).toBe("Paste last");
+    expect(bindingClash("AltRight", taken)).toBe("Dictate");
+    expect(bindingClash("AltRight+Space", taken)).toBeNull();
+    expect(bindingClash("F9", [])).toBeNull();
   });
 });

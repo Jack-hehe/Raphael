@@ -449,7 +449,7 @@ def test_run_stdio_exits_when_stdin_closes_without_any_input(child):
 def test_run_stdio_reads_and_writes_utf8_and_plain_newlines(child):
     text = "你好，拉斐爾。こんにちは 🙂"
     request = {"jsonrpc": "2.0", "id": 1, "method": "t.echo", "params": {"text": text}}
-    # A Windows text-mode writer (the Task 13 test, for one) ends its lines with CRLF.
+    # A Windows text-mode writer ends its lines with CRLF.
     child.stdin.write(json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\r\n")
     child.stdin.flush()
     line = read_line(child)
@@ -519,7 +519,7 @@ def test_run_stdio_survives_a_line_that_is_not_valid_utf8(child):
     assert child.returncode == 0
 
 
-# --- run_stdio's on_close: what the entry point does on the way out (Task 13) -----------------
+# --- run_stdio's on_close: what the entry point does on the way out -------------------------------
 
 _CHILD_ON_CLOSE = """
 import asyncio

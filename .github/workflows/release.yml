@@ -15,6 +15,8 @@ jobs:
     name: Build and verify Windows installer
     runs-on: windows-2025
     timeout-minutes: 60
+    outputs:
+      artifact-name: ${{ steps.identity.outputs.artifact-name }}
     defaults:
       run:
         shell: pwsh
@@ -36,19 +38,13 @@ jobs:
           if (Test-Path -LiteralPath $privateDirectory) { throw 'Expected an absent private-assets override.' }
           "RAPHAEL_PRIVATE_DIR=$privateDirectory" >> $env:GITHUB_ENV
           $privatePaths = @(
-            'assets-private', 'models', 'voice', 'raphael_ref', 'eval/data',
-            'app/public/private', 'app/src-tauri/icons-private',
+            'assets-private', 'models', 'voice', 'raphael_ref', '.superpowers', 'ui-shots',
+            'eval/data', 'app/public/private', 'app/src-tauri/icons-private',
             'app/src-tauri/tauri.private.conf.json'
           )
           foreach ($path in $privatePaths) {
             if (Test-Path -LiteralPath $path) { throw "Unexpected private release input: $path" }
           }
-          $version = (Get-Content app/package.json -Raw | ConvertFrom-Json).version
-          $tauriVersion = (Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          if ($version -notmatch '^\d+\.\d+\.\d+$' -or $version -ne $tauriVersion) {
-            throw 'Release versions must match and use a numeric major.minor.patch.'
-          }
-          "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
 
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -56,6 +52,22 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: app/package-lock.json
+
+      # app/package.json, tauri.conf.json, Cargo.toml and core/pyproject.toml must carry the same x.y.z.
+      - name: Check release versions
+        working-directory: app
+        run: |
+          $version = node scripts/check-release-version.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+
+      # Artifacts of different refs and commits must not share a name. Characters that an artifact name
+      # forbids, such as the slash in a branch name, become hyphens.
+      - name: Name the artifact after its source
+        id: identity
+        run: |
+          $ref = ($env:GITHUB_REF_NAME -replace '[^A-Za-z0-9._-]', '-').Trim('-')
+          "artifact-name=Raphael-windows-x64-$ref-$($env:GITHUB_SHA.Substring(0, 12))" >> $env:GITHUB_OUTPUT
 
       - name: Set up uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
@@ -68,21 +80,13 @@ jobs:
             pyproject.toml
             .python-version
 
+      # No Rust cache here: CI caches its builds, a release is compiled from scratch.
       - name: Install Rust toolchain
         run: rustup toolchain install $env:RUSTUP_TOOLCHAIN --profile minimal --component rustfmt --component clippy
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
-        with:
-          workspaces: |
-            app/src-tauri -> target
-            app/src-tauri/vendor/handy-keys -> target
-          key: windows-release
-          cache-bin: false
-
       - name: Install locked frontend dependencies
         working-directory: app
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Check frontend
         working-directory: app
@@ -139,21 +143,55 @@ jobs:
           if ($installers.Count -ne 1) { throw 'Expected one Windows installer.' }
           ./app/scripts/verify-windows-install.ps1 -Installer $installers[0].FullName -Python "$pwd/core/.venv/Scripts/python.exe"
 
+      # The installer, the notices, BUILD-INFO.txt (commit, ref, run and tools) and SHA256SUMS.txt for all of them.
       - name: Prepare release assets and checksums
         run: |
-          New-Item -ItemType Directory -Path release-assets | Out-Null
-          $installer = Get-ChildItem app/src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' -File
-          Copy-Item -LiteralPath $installer.FullName -Destination "release-assets/Raphael-$env:RELEASE_VERSION-windows-x64-setup.exe"
-          Copy-Item -LiteralPath app/src-tauri/release-notices/THIRD_PARTY_NOTICES.txt -Destination release-assets
-          $checksums = Get-ChildItem release-assets -File | Sort-Object Name | ForEach-Object {
-            "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"
-          }
-          $checksums | Set-Content -LiteralPath release-assets/SHA256SUMS.txt -Encoding ascii
+          $installers = @(Get-ChildItem app/src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' -File)
+          if ($installers.Count -ne 1) { throw 'Expected one Windows installer.' }
+          node app/scripts/prepare-release-assets.mjs `
+            --installer $installers[0].FullName `
+            --notices app/src-tauri/release-notices/THIRD_PARTY_NOTICES.txt `
+            --version $env:RELEASE_VERSION `
+            --output release-assets
+
+      # The same check a downloader runs; it fails on CRLF line endings.
+      - name: Check release asset checksums
+        shell: bash
+        working-directory: release-assets
+        run: sha256sum --check --strict SHA256SUMS.txt
 
       - name: Upload verified release assets
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: Raphael-windows-x64
+          name: ${{ steps.identity.outputs.artifact-name }}
           path: release-assets/*
           if-no-files-found: error
           retention-days: 14
+
+  # Provenance only for what is published from main or a tag, and only where GitHub offers artifact
+  # attestations: public repositories (private ones need GitHub Enterprise Cloud). This job alone gets
+  # the two token scopes attestation needs; it checks out nothing and builds nothing.
+  attest:
+    name: Attest build provenance
+    needs: windows-release
+    if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the verified release assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.windows-release.outputs.artifact-name }}
+          path: release-assets
+
+      - name: Check release asset checksums
+        working-directory: release-assets
+        run: sha256sum --check --strict SHA256SUMS.txt
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-assets/*

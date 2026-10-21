@@ -1,4 +1,12 @@
-"""Exercise an installed or relocated core using isolated data and no credential access."""
+"""Exercise an installed or relocated core using isolated data and no credential access.
+
+Two passes, each with a core of its own and temporary data. The first has the fail-closed keyring,
+so cleanup stops before it would ask the model, and checks the plain local operations. The second
+has the fake LLM (RAPHAEL_FAKE_LLM=1: an in-memory key and a client that returns the transcript, no
+network), so a dictation really goes through cleanup. That loads the prompt resource and the OpenCC
+configurations (s2twp, s2hk, t2s and tw2sp) from the bundle, which the first pass never reaches: a
+missing file would otherwise switch cleanup off without a word. Neither pass needs a key.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +22,9 @@ from pathlib import Path
 
 
 class RpcProcess:
-    def __init__(self, executable: Path, root: Path) -> None:
+    def __init__(
+        self, executable: Path, root: Path, extra_environment: dict[str, str] | None = None
+    ) -> None:
         # Deliberately omit inherited credentials, Python paths, proxies and Raphael overrides.
         environment = {name: value for name, value in os.environ.items()
                        if name.upper() in {"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT"}}
@@ -27,6 +37,7 @@ class RpcProcess:
             "RAPHAEL_MODELS_DIR": str(root / "empty-models"),
             "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring",
         })
+        environment.update(extra_environment or {})
         for name in ("home", "appdata", "localappdata", "data", "empty-models"):
             (root / name).mkdir(exist_ok=True)
         self.process = subprocess.Popen(
@@ -99,12 +110,46 @@ class RpcProcess:
                 reader.join(timeout=2)
 
 
+# A Simplified Chinese dictation, with a word the dictionary replaces.
+SPOKEN = "\u8f6f\u4ef6 smoke token"
+# What the second pass dictates for each Chinese variant: (languages, speech, the cleaned text).
+# Each uses another OpenCC configuration: s2twp for Taiwan, s2hk for Hong Kong, t2s for Mainland.
+CLEANED_VARIANTS = (
+    (["zh-TW", "en-US"], SPOKEN, "\u8edf\u9ad4 Raphael Smoke"),
+    (["zh-HK", "en-US"], SPOKEN, "\u8edf\u4ef6 Raphael Smoke"),
+    (["zh-CN", "en-US"], "\u8edf\u4ef6 smoke token", "\u8f6f\u4ef6 Raphael Smoke"),
+)
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
 
 
-def smoke(executable: Path) -> dict:
+def shut_down(rpc: RpcProcess, root: Path) -> int:
+    """Ask the core to stop while stdin stays open, and check how it went and what it left behind."""
+    rpc.call("core.shutdown")
+    # Keep stdin open: shutdown must stop the core without depending on pipe EOF.
+    returncode = rpc.process.wait(timeout=15)
+    for reader in rpc.readers:
+        reader.join(timeout=2)
+    require(returncode == 0, f"Core shutdown exited with {returncode}")
+    while not rpc.messages.empty():
+        trailing = rpc.messages.get_nowait()
+        if isinstance(trailing, BaseException) and not isinstance(trailing, EOFError):
+            raise RuntimeError(f"Invalid trailing stdout: {trailing}")
+    require(any("Speech libraries imported" in line for line in rpc.stderr), "Native speech libraries did not finish importing")
+    require(not any(fragment in line for line in rpc.stderr for fragment in (
+        "The speech side could not be started", "Could not warm up OpenCC",
+        "DLL load failed", "ModuleNotFoundError", "Traceback (most recent call last)",
+    )), "A bundled dependency failed during startup")
+    require(not list((root / "empty-models").iterdir()), "Smoke unexpectedly downloaded models")
+    require((root / "data" / "raphael.db").is_file(), "Database was not written to the isolated directory")
+    return returncode
+
+
+def smoke_without_a_key(executable: Path) -> dict:
+    """The first pass: a core that cannot read a credential, so cleanup stops before the model."""
     began = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="raphael-frozen-smoke-") as temporary:
         root = Path(temporary)
@@ -124,7 +169,7 @@ def smoke(executable: Path) -> dict:
             entry = rpc.call("dictionary.add", {"word": "Raphael Smoke", "misheard": ["smoke token"]})["entry"]
             require(any(item["id"] == entry["id"] for item in rpc.call("dictionary.list")["entries"]), "Dictionary write did not persist")
             finalized = rpc.call("brain.finalize_dictation", {
-                "raw_text": "\u8f6f\u4ef6 smoke token", "audio_seconds": 1.0, "stt_ms": 0,
+                "raw_text": SPOKEN, "audio_seconds": 1.0, "stt_ms": 0,
                 "target_app": "packaging-smoke", "stt": "packaging-smoke",
             })
             require(finalized["text"] == "\u8edf\u9ad4 Raphael Smoke", "OpenCC data or dictionary replacement is unavailable")
@@ -137,23 +182,29 @@ def smoke(executable: Path) -> dict:
             require(rpc.call("history.latest")["item"] is None, "History delete did not persist")
             require(rpc.call("dictionary.delete", {"id": entry["id"]})["deleted"], "Dictionary delete failed")
             require(rpc.call("dictionary.list")["entries"] == [], "Dictionary delete did not persist")
-            rpc.call("core.shutdown")
-            # Keep stdin open: shutdown must stop the core without depending on pipe EOF.
-            returncode = rpc.process.wait(timeout=15)
-            for reader in rpc.readers:
-                reader.join(timeout=2)
-            require(returncode == 0, f"Core shutdown exited with {returncode}")
-            while not rpc.messages.empty():
-                trailing = rpc.messages.get_nowait()
-                if isinstance(trailing, BaseException) and not isinstance(trailing, EOFError):
-                    raise RuntimeError(f"Invalid trailing stdout: {trailing}")
-            require(any("Speech libraries imported" in line for line in rpc.stderr), "Native speech libraries did not finish importing")
-            require(not any(fragment in line for line in rpc.stderr for fragment in (
-                "The speech side could not be started", "Could not warm up OpenCC",
-                "DLL load failed", "ModuleNotFoundError", "Traceback (most recent call last)",
-            )), "A bundled dependency failed during startup")
-            require(not list((root / "empty-models").iterdir()), "Smoke unexpectedly downloaded models")
-            require((root / "data" / "raphael.db").is_file(), "Database was not written to the isolated directory")
+            # The voice assistant is part of the bundle. With no key it answers a refusal that says
+            # why; nothing is asked of a model and nothing is done to this computer (a request that
+            # is a command would be: so this one is not).
+            refused = rpc.call("agent.ask", {"session_id": "smoke", "text": "What is the weather?",
+                                             "ui_language": "en", "target_app": None})
+            require(refused["status"] == "done" and refused["prefix"] == "Negative",
+                    "The voice assistant did not refuse a request it cannot answer without a key")
+            turns = rpc.call("agent.history.list")["turns"]
+            require(len(turns) == 1 and turns[0]["status"] == "error", "The assistant's turn was not recorded")
+            require(rpc.call("agent.history.clear") == {"deleted": 1}, "The assistant's history was not cleared")
+            # The plugins are part of the bundle too, with the MCP SDK and what it imports. A server
+            # whose program does not exist makes the SDK load and fail the one way that proves it:
+            # "not_found". A bundle that left a module of the SDK out fails another way ("error").
+            require(rpc.call("integrations.list") == {"servers": []}, "The plugins did not start empty")
+            added = rpc.call("integrations.add", {"name": "Smoke", "transport": "stdio",
+                                                  "command": "raphael-smoke-no-such-program"})["server"]
+            refreshed = rpc.call("integrations.refresh", {"id": added["id"]})["server"]
+            require(refreshed["status"] == "error" and refreshed["error"] == "not_found",
+                    f"The MCP SDK did not load in the bundle (a missing program should be not_found, "
+                    f"was {refreshed['error']})")
+            require(rpc.call("integrations.remove", {"id": added["id"]}) == {"removed": True},
+                    "A plugin was not removed")
+            returncode = shut_down(rpc, root)
             return {"passed": True, "core": str(executable), "version": hello["version"],
                     "elapsed_seconds": round(time.monotonic() - began, 2), "requests": len(rpc.calls),
                     "device_count": len(devices["devices"]), "exit_code": returncode,
@@ -162,6 +213,65 @@ def smoke(executable: Path) -> dict:
                     "calls": rpc.calls, "stderr": rpc.stderr}
         finally:
             rpc.close()
+
+
+def smoke_with_the_fake_llm(executable: Path) -> dict:
+    """The second pass: a core with the fake LLM, so that a dictation goes through cleanup.
+
+    The text is cleaned only if the cleanup prompt (a data file of the bundle) loads, the reply
+    passes the content check, which converts both texts with OpenCC (t2s and tw2sp), and the final
+    text is made with the OpenCC configuration of the chosen Chinese (s2twp, s2hk or t2s). If any of
+    it is missing from the bundle the dictation falls back to its raw text and `cleaned` is false.
+    """
+    began = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="raphael-frozen-smoke-llm-") as temporary:
+        root = Path(temporary)
+        rpc = RpcProcess(executable, root, {"RAPHAEL_FAKE_LLM": "1"})
+        try:
+            require(rpc.call("core.hello").get("protocol") == 1, "Incompatible JSON-RPC protocol")
+            require(rpc.call("secrets.status")["has_key"] is True, "The fake LLM did not get its in-memory key")
+            rpc.call("dictionary.add", {"word": "Raphael Smoke", "misheard": ["smoke token"]})
+            for languages, spoken, expected in CLEANED_VARIANTS:
+                rpc.call("settings.set", {"key": "languages", "value": languages})
+                finalized = rpc.call("brain.finalize_dictation", {
+                    "raw_text": spoken, "audio_seconds": 1.0, "stt_ms": 0,
+                    "target_app": "packaging-smoke", "stt": "packaging-smoke",
+                })
+                require(finalized["cleaned"] is True and finalized["fallback_reason"] is None,
+                        f"{languages[0]}: the dictation was not cleaned ({finalized['fallback_reason']}): "
+                        "the cleanup prompt or an OpenCC configuration is missing from the bundle")
+                require(finalized["text"] == expected, f"{languages[0]}: the cleaned text was converted wrongly")
+                latest = rpc.call("history.latest")["item"]
+                require(latest["id"] == finalized["id"] and latest["cleaned"] is True
+                        and latest["model"] == "fake/echo" and latest["cost_usd"] == 0,
+                        f"{languages[0]}: the cleaned dictation was not saved as cleaned at no cost")
+            # The voice assistant answers small talk with the fake LLM, in the language asked for.
+            spoken = rpc.call("agent.ask", {"session_id": "smoke", "text": "hello",
+                                            "ui_language": "en", "target_app": None})
+            require(spoken == {"status": "done", "turn_id": 1, "prefix": "Answer", "text": "hello"},
+                    "The voice assistant did not answer with the fake LLM")
+            require([turn["question"] for turn in rpc.call("agent.history.list")["turns"]] == ["hello"],
+                    "The assistant's turn was not recorded")
+            returncode = shut_down(rpc, root)
+            return {"passed": True, "fake_llm": True, "cleaned": True,
+                    "languages": [languages[0] for languages, _, _ in CLEANED_VARIANTS],
+                    "elapsed_seconds": round(time.monotonic() - began, 2), "requests": len(rpc.calls),
+                    "exit_code": returncode, "calls": rpc.calls, "stderr": rpc.stderr}
+        finally:
+            rpc.close()
+
+
+def smoke(executable: Path) -> dict:
+    """Both passes. The report is the first pass's, with the second under `cleanup_pass`."""
+    began = time.monotonic()
+    report = smoke_without_a_key(executable)
+    cleanup = smoke_with_the_fake_llm(executable)
+    report["cleanup_pass"] = {name: value for name, value in cleanup.items() if name not in {"calls", "stderr"}}
+    report["requests"] += cleanup["requests"]
+    report["elapsed_seconds"] = round(time.monotonic() - began, 2)
+    report["calls"] = [*report["calls"], *cleanup["calls"]]
+    report["stderr"] = [*report["stderr"], *cleanup["stderr"]]
+    return report
 
 
 def main() -> None:

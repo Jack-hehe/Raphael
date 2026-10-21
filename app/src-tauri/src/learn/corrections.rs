@@ -122,6 +122,23 @@ impl Tracker {
         })
     }
 
+    /// Starts from the field's text when the caller already knows where the pasted text is, as
+    /// `span` in characters of `field` (line breaks counted as `\n`). `None` if the span is empty
+    /// or reaches past the text. [`Tracker::new`] would take the last occurrence, which is not
+    /// always the one that was found.
+    pub(super) fn with_span(field: &str, span: Range<usize>) -> Option<Self> {
+        let before = chars_of(field);
+        if span.start >= span.end || span.end > before.len() {
+            return None;
+        }
+        Some(Self {
+            origin: (0..before.len()).map(Some).collect(),
+            current: before.clone(),
+            before,
+            span,
+        })
+    }
+
     /// The tracker after the field changed to `text`.
     pub fn advanced(&self, text: &str) -> Self {
         let next = chars_of(text);
@@ -161,6 +178,12 @@ impl Tracker {
             .filter(|&&i| self.span.contains(&i))
             .count();
         kept as f64 / self.span.len().max(1) as f64
+    }
+
+    /// Whether anything inside the pasted text was changed since the paste: not what stands
+    /// before or after it, and not the typing of more text after its last character.
+    pub(super) fn edited(&self) -> bool {
+        !self.edits_in_span().is_empty()
     }
 
     /// Every stretch where `before` and `current` differ, in order.
@@ -601,6 +624,65 @@ mod tests {
     fn the_last_occurrence_is_taken() {
         let tracker = Tracker::new("好的。好的。", "好的。").unwrap();
         assert_eq!(tracker.span, 3..6);
+    }
+
+    #[test]
+    fn a_known_span_is_followed_even_when_the_text_occurs_again_after_it() {
+        let field = "Tyeless is here and Tyeless again";
+        // `new` takes the last occurrence; the caller knows it is the first.
+        assert_eq!(Tracker::new(field, "Tyeless").unwrap().span, 20..27);
+        let tracker = Tracker::with_span(field, 0..7).unwrap();
+        let tracker = tracker.advanced("Typeless is here and Tyeless again");
+        let learned: Vec<_> = tracker
+            .corrections_with_word_ranges(&[], &[])
+            .into_iter()
+            .map(|c| (c.misheard, c.word))
+            .collect();
+        assert_eq!(learned, [("Tyeless".to_owned(), "Typeless".to_owned())]);
+    }
+
+    #[test]
+    fn only_a_change_inside_the_pasted_text_counts_as_an_edit() {
+        let pasted = "Use Tyeless for this";
+        let field = format!("PS> {pasted} and more");
+        let tracker = Tracker::new(&field, pasted).unwrap();
+        assert!(!tracker.edited());
+        // The prompt, and the text after the paste, are not the paste.
+        assert!(
+            !tracker
+                .advanced("PS2> Use Tyeless for this and more")
+                .edited()
+        );
+        assert!(
+            !tracker
+                .advanced("PS> Use Tyeless for this and more more")
+                .edited()
+        );
+        // A letter typed inside it, a word deleted from it, and a replaced word are.
+        assert!(
+            tracker
+                .advanced("PS> Use Typeless for this and more")
+                .edited()
+        );
+        assert!(tracker.advanced("PS> Use Tyeless this and more").edited());
+        assert!(
+            tracker
+                .advanced("PS> Use Tyeless for that and more")
+                .edited()
+        );
+    }
+
+    #[test]
+    #[allow(
+        clippy::reversed_empty_ranges,
+        reason = "a reversed span is one of the cases"
+    )]
+    fn a_span_that_is_empty_or_outside_the_text_starts_nothing() {
+        assert!(Tracker::with_span("abc", 1..1).is_none());
+        assert!(Tracker::with_span("abc", 2..1).is_none());
+        assert!(Tracker::with_span("abc", 0..4).is_none());
+        assert!(Tracker::with_span("abc", 0..3).is_some());
+        assert!(Tracker::with_span("", 0..0).is_none());
     }
 
     #[test]

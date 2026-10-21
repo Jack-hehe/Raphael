@@ -59,12 +59,32 @@ analysis = Analysis(
     excludes=[
         "pytest", "_pytest", "setuptools", "pkg_resources", "pygments",
         "raphael_core.evaluate", "tkinter", "unittest", "win32ctypes.tests", "numpy.testing",
+        # NumPy's own PyInstaller hook adds this C test helper; only NumPy's tests import it.
+        "numpy._core._multiarray_tests",
     ],
     noarchive=False,
 )
 
-# Editable-install provenance is local build information, not needed by the installed core.
-analysis.datas = [item for item in analysis.datas if not item[0].endswith("direct_url.json")]
+
+def unneeded(item):
+    """Files that are collected as a side effect but that the core never loads at run time.
+
+    The pyinstaller-hooks-contrib OpenCC hook copies the whole wheel, including its command-line
+    tools, C++ headers and the static libraries opencc.lib and marisa.lib (about 8 MB); the
+    conversion itself needs only opencc_clib.pyd and the dictionaries under clib/share/opencc.
+    NumPy's C test helpers (_multiarray_tests, _umath_tests, ...) are imported only by its tests.
+    """
+    destination = item[0].replace("\\", "/")
+    stem = destination.rsplit("/", 1)[-1].split(".")[0]
+    return (
+        destination.endswith("direct_url.json")  # local editable-install provenance
+        or destination.startswith(("opencc/clib/bin/", "opencc/clib/include/", "opencc/clib/lib/"))
+        or (destination.endswith((".pyd", ".dll")) and stem.endswith(("_test", "_tests")))
+    )
+
+
+analysis.datas = [item for item in analysis.datas if not unneeded(item)]
+analysis.binaries = [item for item in analysis.binaries if not unneeded(item)]
 for name, _, _ in analysis.pure:
     if name.split(".")[0] in {"pytest", "_pytest", "setuptools", "pygments"}:
         raise RuntimeError(f"Unexpected development module in bundle: {name}")

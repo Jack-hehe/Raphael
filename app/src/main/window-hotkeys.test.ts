@@ -82,6 +82,61 @@ describe("focused-window hotkeys", () => {
     expect(reduceHotkey(space.state, key("AltRight", "keyup"), custom).preventDefault).toBe(true);
   });
 
+  test("Right Alt+Space asks Raphael, after Right Alt went down, as the hook reports it", () => {
+    const withAgent = { ...defaults, agent_keys: ["AltRight+Space"] };
+    const alt = reduceHotkey(emptyHotkeyState(), key("AltRight"), withAgent);
+    expect(alt.actions).toEqual(["dictation_down"]);
+    const space = reduceHotkey(alt.state, key("Space"), withAgent);
+    expect(space.actions).toEqual(["agent_down"]);
+    expect(space.preventDefault).toBe(true);
+    // the key repeats and the release of Space are swallowed; the release of either key ends the question
+    expect(reduceHotkey(space.state, key("Space", "keydown", true), withAgent).actions).toEqual([]);
+    const spaceUp = reduceHotkey(space.state, key("Space", "keyup"), withAgent);
+    expect(spaceUp.actions).toEqual(["agent_up"]);
+    expect(spaceUp.preventDefault).toBe(true);
+    const altUp = reduceHotkey(spaceUp.state, key("AltRight", "keyup"), withAgent);
+    expect(altUp.actions).toEqual(["dictation_up"]);
+  });
+
+  test("letting go of Right Alt first also ends the question once", () => {
+    const withAgent = { ...defaults, agent_keys: ["AltRight+Space"] };
+    const alt = reduceHotkey(emptyHotkeyState(), key("AltRight"), withAgent);
+    const space = reduceHotkey(alt.state, key("Space"), withAgent);
+    const altUp = reduceHotkey(space.state, key("AltRight", "keyup"), withAgent);
+    expect(altUp.actions).toEqual(["dictation_up", "agent_up"]);
+    expect(reduceHotkey(altUp.state, key("Space", "keyup"), withAgent).actions).toEqual([]);
+  });
+
+  test("Space first, then Right Alt, asks Raphael too, as the hook reports it", () => {
+    const withAgent = { ...defaults, agent_keys: ["AltRight+Space"] };
+    const space = reduceHotkey(emptyHotkeyState(), key("Space"), withAgent);
+    expect(space.actions).toEqual([]);
+    expect(space.preventDefault).toBe(false);
+    const alt = reduceHotkey(space.state, key("AltRight"), withAgent);
+    expect(alt.actions).toEqual(["dictation_down", "agent_down"]);
+    expect(alt.preventDefault).toBe(true);
+    // the page saw the Space go down, so it sees it come up; that release ends the question
+    const spaceUp = reduceHotkey(alt.state, key("Space", "keyup"), withAgent);
+    expect(spaceUp.actions).toEqual(["agent_up"]);
+    expect(spaceUp.preventDefault).toBe(false);
+    expect(reduceHotkey(spaceUp.state, key("AltRight", "keyup"), withAgent).actions).toEqual(["dictation_up"]);
+  });
+
+  test("Space alone, and a window without a question key, do not ask Raphael", () => {
+    const withAgent = { ...defaults, agent_keys: ["AltRight+Space"] };
+    expect(reduceHotkey(emptyHotkeyState(), key("Space"), withAgent).actions).toEqual([]);
+    const alt = reduceHotkey(emptyHotkeyState(), key("AltRight"), defaults);
+    expect(reduceHotkey(alt.state, key("Space"), defaults).actions).toEqual([]);
+  });
+
+  test("a question key of its own: an Alt prefix is swallowed like the other chords", () => {
+    const own = { dictation_keys: ["F9"], paste_last_keys: [], agent_keys: ["AltRight+Space"] };
+    const alt = reduceHotkey(emptyHotkeyState(), key("AltRight"), own);
+    expect(alt.actions).toEqual([]);
+    expect(alt.preventDefault).toBe(true);
+    expect(reduceHotkey(alt.state, key("Space"), own).actions).toEqual(["agent_down"]);
+  });
+
   test("ignores Windows' phantom left Ctrl for AltGr", () => {
     const ctrl = reduceHotkey(emptyHotkeyState(), key("ControlLeft"), defaults);
     const alt = reduceHotkey(ctrl.state, { ...key("AltRight"), altGraph: true }, defaults);
@@ -118,6 +173,19 @@ test("capture listener forwards commands, pauses synchronously, releases on blur
   remove();
   dispatch("Escape");
   expect(send).toHaveBeenCalledTimes(3);
+});
+
+test("losing focus during a question lets go of it", async () => {
+  const target = new EventTarget();
+  const send = vi.fn().mockResolvedValue(undefined);
+  const remove = installWindowHotkeys(() => ({ ...defaults, agent_keys: ["F10"] }), target, send);
+  const event = new Event("keydown", { cancelable: true });
+  Object.assign(event, { code: "F10", repeat: false, getModifierState: () => false });
+  target.dispatchEvent(event);
+  target.dispatchEvent(new Event("blur"));
+  await Promise.resolve();
+  expect(send.mock.calls).toEqual([["agent_down"], ["agent_up"]]);
+  remove();
 });
 
 test("recorder API pauses capture before IPC resolves and stays paused until resume resolves", async () => {

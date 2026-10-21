@@ -1,12 +1,14 @@
-// The main window: a sidebar with home, history and dictionary, this month's spend and the way to
-// the settings at the bottom, and the page that is chosen. The settings open as a panel over the
-// window. The pages are in pages/; this file holds what they share (spec §12).
+// The main window: a sidebar with home, Raphael's conversations, history and dictionary, this
+// month's spend and the way to the settings at the bottom, and the page that is chosen. The
+// settings open as a panel over the window. The pages are in pages/; this file holds what they
+// share (spec §12).
 
 import { onLocaleChange, setLocale, t } from "./i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { loadGlyphTexture } from "../overlay/emblem";
 import * as api from "./api";
+import { createAgent } from "./pages/agent";
 import { createDictionary } from "./pages/dictionary";
 import { createHistory } from "./pages/history";
 import { createHome } from "./pages/home";
@@ -14,10 +16,13 @@ import { createSettings } from "./pages/settings";
 import { DeviceState } from "./device";
 import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
+import { Navigation, type Place, samePage } from "./nav-history";
+import { installNavInput } from "./nav-input";
 import { brandIcon, hydrateBrandIcons } from "./brand";
 import { installWindowHotkeys } from "./window-hotkeys";
-import { installWindowChrome } from "./window-chrome";
-import type { AppContext, DeviceSettings, MainEvent, Page, PageId } from "./types";
+import { followTray } from "./tray-open";
+import { installWindowChrome, labelWindowControls, showMaximized } from "./window-chrome";
+import type { AppContext, DeviceSettings, MainEvent, Page, PageId, SettingsPane } from "./types";
 import { spendMini } from "./spend";
 import { Undoable } from "./undo";
 import { type IconName, ico, toaster } from "./ui";
@@ -31,9 +36,10 @@ const DEFAULT_DEVICE: DeviceSettings = {
   dictation_keys: ["AltRight"],
   dictation_mode: "toggle",
   paste_last_keys: ["AltRight+V"],
+  agent_keys: ["AltRight+Space"],
   microphone: null,
   emblem_size: 150,
-  subtitles: "both",
+  subtitles: "on",
   appearance: "system",
   ui_language: "zh-TW",
   autostart: true,
@@ -45,6 +51,7 @@ const RESHOW_MS = 1000;
 
 const NAV: { id: Exclude<PageId, "settings">; name: string; icon: IconName }[] = [
   { id: "home", get name() { return t("main.001"); }, icon: "home" },
+  { id: "agent", get name() { return t("nav.agent"); }, icon: "chat" },
   { id: "history", get name() { return t("main.002"); }, icon: "clock" },
   { id: "dictionary", get name() { return t("main.003"); }, icon: "book" },
 ];
@@ -73,28 +80,19 @@ prefersDark.addEventListener("change", applyTheme);
 
 function mountWindowChrome(): void {
   const chrome = document.getElementById("window-chrome")!;
-  const maximize = chrome.querySelector<HTMLButtonElement>('[data-window-action="maximize"]')!;
-  let maximized = false;
-  const translate = (): void => {
-    chrome.querySelector(".window-controls")!.setAttribute("aria-label", t("window.controls"));
-    for (const [action, label] of [
-      ["minimize", t("window.minimize")],
-      ["maximize", t(maximized ? "window.restore" : "window.maximize")],
-      ["close", t("window.close")],
-    ]) {
-      const button = chrome.querySelector<HTMLButtonElement>(`[data-window-action="${action}"]`)!;
-      button.setAttribute("aria-label", label);
-      button.title = label;
-    }
-    maximize.setAttribute("aria-pressed", String(maximized));
-  };
+  const translate = (): void =>
+    labelWindowControls(chrome, {
+      controls: t("window.controls"),
+      minimize: t("window.minimize"),
+      maximize: t("window.maximize"),
+      close: t("window.close"),
+    });
   translate();
   onLocaleChange(translate);
   try {
-    installWindowChrome(document, getCurrentWindow(), (state) => {
-      maximized = state;
-      document.documentElement.dataset.windowMaximized = String(state);
-      translate();
+    installWindowChrome(document, getCurrentWindow(), (maximized) => {
+      document.documentElement.dataset.windowMaximized = String(maximized);
+      showMaximized(chrome, maximized);
     });
   } catch (error) {
     console.warn("main: window controls are unavailable outside Tauri", error);
@@ -121,6 +119,10 @@ async function start(): Promise<void> {
   const listeners = new Set<(event: MainEvent) => void>();
   const ctx: AppContext = {
     go,
+    showDay(date) {
+      history.setDay(date);
+      go("history");
+    },
     device: () => device.get(),
     refreshDevice: () => device.refresh(),
     setDevice: (patch) => device.set(patch),
@@ -132,22 +134,23 @@ async function start(): Promise<void> {
     closeSettings: () => closeSettings(),
   };
 
-  const pages: Record<PageId, Page> = {
-    home: createHome(ctx),
-    history: createHistory(ctx),
-    dictionary: createDictionary(ctx),
-    settings: createSettings(ctx),
-  };
+  const history = createHistory(ctx);
+  const dictionary = createDictionary(ctx);
+  const home = createHome(ctx);
+  const agent = createAgent(ctx);
+  const settings = createSettings(ctx);
+  const pages: Record<PageId, Page> = { home, agent, history, dictionary, settings };
 
   const nav = document.getElementById("nav")!;
   const main = document.getElementById("main")!;
+  const guide = document.getElementById("ob")!;
   const button = (id: PageId, name: string, icon: IconName): string =>
     `<button type="button" class="nav" data-go="${id}" aria-current="false">${ico(icon)}<span>${name}</span></button>`;
   nav.innerHTML =
     `<div class="brand" data-window-drag>${brandIcon()}<span>Raphael</span></div>` +
     NAV.map((item) => button(item.id, item.name, item.icon)).join("") +
     `<div class="side-fill"></div>` +
-    `<button type="button" class="usage-box" data-go="settings" hidden></button>` +
+    `<button type="button" class="usage-box" data-go="settings" data-pane="usage" hidden></button>` +
     t("main.004", { p0: ico("gear") });
   const usageBox = nav.querySelector<HTMLElement>(".usage-box")!;
   hydrateBrandIcons(nav);
@@ -163,11 +166,11 @@ async function start(): Promise<void> {
   });
   nav.addEventListener("click", (e) => {
     const target = (e.target as Element).closest<HTMLElement>("[data-go]");
-    if (target) go(target.dataset.go as PageId);
+    if (target) go(target.dataset.go as PageId, target.dataset.pane as SettingsPane | undefined);
   });
-  const settings = pages.settings;
   for (const page of Object.values(pages)) if (page !== settings) main.append(page.el);
-  document.body.append(settings.el);
+  // The panel goes before the window controls, which come last in the document.
+  document.getElementById("window-chrome")!.before(settings.el);
   // Keep the version outside the scroll container's containing block.
   document.querySelector(".wbody")!.append(pages.home.el.querySelector(".home-version")!);
 
@@ -177,11 +180,45 @@ async function start(): Promise<void> {
   let opener: HTMLElement | null = null;
   let shownAt = 0;
 
-  function go(id: PageId): void {
-    if (id === "settings") {
-      openSettings();
-      return;
-    }
+  /** Where the window is: the page, the settings panel if it is open over it and the day the history shows. Null before the first page. */
+  function where(): Place | null {
+    if (!current) return null;
+    const place: Place = { page: current };
+    if (settingsOpen) place.pane = settings.pane();
+    const day = current === "history" ? history.day() : null;
+    if (day !== null) place.day = day;
+    return place;
+  }
+
+  /**
+   * What the mouse's side buttons and Alt+Left / Alt+Right walk through. A change the person makes
+   * is a `go`, which records it; a step shows a place again and records nothing.
+   */
+  const navigation = new Navigation({
+    inGuide: () => !guide.hidden,
+    where,
+    show(place) {
+      const here = where();
+      // Back from the settings panel only closes it: the page under it is on screen already.
+      if (!here || !samePage(here, place)) {
+        if (place.page === "history") history.setDay(place.day ?? null);
+        showPage(place.page);
+      }
+      if (place.pane !== undefined) openSettings(place.pane);
+      else closeSettings();
+    },
+  });
+  installNavInput(window, (step) => navigation.step(step));
+
+  /** Goes to a page, or opens the settings panel over the one on screen (at `pane`, if given). */
+  function go(id: PageId, pane?: SettingsPane): void {
+    navigation.visit(() => {
+      if (id === "settings") openSettings(pane);
+      else showPage(id);
+    });
+  }
+
+  function showPage(id: Exclude<PageId, "settings">): void {
     if (settingsOpen) closeSettings(false);
     if (current && current !== id) pages[current].hide();
     current = id;
@@ -195,14 +232,14 @@ async function start(): Promise<void> {
     void refreshUsage();
   }
 
-  function openSettings(): void {
+  function openSettings(pane?: SettingsPane): void {
     if (settingsOpen) return;
     settingsOpen = true;
     document.documentElement.dataset.windowModal = "true";
     opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     settings.el.hidden = false;
     document.querySelector<HTMLElement>(".wbody")!.inert = true;
-    void settings.show();
+    void settings.show(pane);
   }
 
   function closeSettings(restoreFocus = true): void {
@@ -241,14 +278,16 @@ async function start(): Promise<void> {
     if (!document.hidden) comeBack();
   });
 
+  // The tray's menu asks for a page. Rust sends this before it shows the window.
+  ctx.onEvent((event) => followTray(event, { inGuide: () => !guide.hidden, go, addWord: () => dictionary.addWord() }));
+
   api.subscribeMainEvents((event) => listeners.forEach((handler) => handler(event))).catch((err) => {
-    console.warn("main: no events from the core", err);
+    console.warn("main: no events from the app", err);
   });
 
   // Until the first-run guide is done it takes the place of the pages. (Settings that could not be
   // read are no reason to start a guide for someone who has been through it.)
   if (deviceRead && !device.get().onboarded) {
-    const guide = document.getElementById("ob")!;
     document.documentElement.dataset.windowLayout = "onboarding";
     guide.hidden = false;
     mountOnboarding(

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use handy_keys::{
     EditCancellation, EditEvent, EditObservation, observe_edits, observe_submissions,
 };
-use windows::Win32::Foundation::{E_INVALIDARG, E_POINTER, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{E_INVALIDARG, E_POINTER, HWND};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
     SAFEARRAY,
@@ -19,28 +19,120 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::System::Variant::VT_I4;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationCacheRequest, IUIAutomationElement,
-    IUIAutomationFocusChangedEventHandler, IUIAutomationFocusChangedEventHandler_Impl,
-    IUIAutomationTextPattern, IUIAutomationTextRange, IUIAutomationValuePattern,
-    TextPatternRangeEndpoint_End, TextPatternRangeEndpoint_Start, TextUnit_Character,
-    UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_IsPasswordPropertyId,
-    UIA_TextControlTypeId, UIA_TextPatternId, UIA_ValuePatternId, UiaRootObjectId,
+    CUIAutomation, CUIAutomation8, IUIAutomation, IUIAutomation2, IUIAutomationCacheRequest,
+    IUIAutomationElement, IUIAutomationFocusChangedEventHandler,
+    IUIAutomationFocusChangedEventHandler_Impl, IUIAutomationTextPattern, IUIAutomationTextRange,
+    IUIAutomationValuePattern, TextPatternRangeEndpoint_End, TextPatternRangeEndpoint_Start,
+    TextUnit_Character, UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_IsPasswordPropertyId,
+    UIA_TextControlTypeId, UIA_TextPatternId, UIA_ValuePatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
-    SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_GETOBJECT,
+    ES_MULTILINE, GWL_STYLE, GetClassNameW, GetForegroundWindow, GetWindowLongW,
 };
 use windows::core::{Interface, Ref, implement};
 
-use super::apps::{AppKind, classify, needs_accessibility_hint};
-use super::keystrokes::Keystrokes;
+use super::apps::{AppKind, classify, editor_id, needs_accessibility_hint};
+use super::keystrokes::{EnterKey, Keystrokes};
 use super::terminal::{TerminalDecision, TerminalTracker};
-use super::{Correction, FieldProbe, Snapshot, Tracker, WatchScope, WatchedField};
+use super::{
+    Correction, FieldProbe, LimitReason, Snapshot, Tracker, WatchScope, WatchedField,
+    report_limited,
+};
 use crate::paste::Target;
 
 const MAX_CHARS: usize = 20_000;
+/// UI Automation waits 2 s to connect and 20 s per call unless told otherwise, and the watch
+/// thread would stand still that long on a busy app.
 const CALL_TIMEOUT_MS: u32 = 500;
 static CODE_HINT_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// Which UI Automation class a client was made from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClientClass {
+    /// `CUIAutomation8`: offers `IUIAutomation2`, whose timeouts can be set.
+    Modern,
+    /// `CUIAutomation`: the original class. On some systems (Windows 11 build 26300 among them)
+    /// it answers E_NOINTERFACE for `IUIAutomation2`, so its calls keep the default timeouts.
+    Original,
+}
+
+/// Makes the client with the first creator that works. The modern class comes first, because
+/// only it can be given timeouts; `original` runs only when `modern` fails.
+fn create_in_order<T, E>(
+    modern: impl FnOnce() -> Result<T, E>,
+    original: impl FnOnce() -> Result<T, E>,
+) -> Result<(T, ClientClass), E> {
+    match modern() {
+        Ok(client) => Ok((client, ClientClass::Modern)),
+        Err(_) => original().map(|client| (client, ClientClass::Original)),
+    }
+}
+
+fn hresult<T>(result: &windows::core::Result<T>) -> String {
+    match result {
+        Ok(_) => "ok".to_owned(),
+        Err(error) => format!("0x{:08X}", error.code().0 as u32),
+    }
+}
+
+/// A UI Automation client with its call timeouts set where the system allows it. Only metadata
+/// is logged: classes, timeouts and HRESULTs.
+fn create_client() -> Option<IUIAutomation> {
+    // SAFETY: the caller joined a COM apartment, which the client does not outlive.
+    let modern = || {
+        unsafe { CoCreateInstance::<_, IUIAutomation>(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }
+            .inspect_err(|error| {
+                log::info!(
+                    "learn: CUIAutomation8 unavailable (hresult: 0x{:08X})",
+                    error.code().0 as u32
+                );
+            })
+    };
+    let original = || unsafe {
+        CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+    };
+    let (automation, class) = create_in_order(modern, original)
+        .inspect_err(|error| {
+            log::info!(
+                "learn: UI Automation client unavailable (hresult: 0x{:08X})",
+                error.code().0 as u32
+            );
+        })
+        .ok()?;
+    apply_timeouts(&automation, class);
+    Some(automation)
+}
+
+/// Bounds how long one call into an unresponsive app may take. A client that cannot be bounded
+/// is still used, and says so.
+fn apply_timeouts(automation: &IUIAutomation, class: ClientClass) {
+    let client = match automation.cast::<IUIAutomation2>() {
+        Ok(client) => client,
+        Err(error) => {
+            log::info!(
+                "learn: UI Automation timeouts unavailable (client: {class:?}, hresult: 0x{:08X})",
+                error.code().0 as u32
+            );
+            return;
+        }
+    };
+    // SAFETY: plain property setters on a client owned by this thread.
+    let (connection, transaction) = unsafe {
+        (
+            client.SetConnectionTimeout(CALL_TIMEOUT_MS),
+            client.SetTransactionTimeout(CALL_TIMEOUT_MS),
+        )
+    };
+    if connection.is_ok() && transaction.is_ok() {
+        log::debug!("learn: UI Automation timeouts set ({CALL_TIMEOUT_MS} ms, client: {class:?})");
+    } else {
+        log::info!(
+            "learn: UI Automation timeouts not set (client: {class:?}, connection: {}, transaction: {})",
+            hresult(&connection),
+            hresult(&transaction)
+        );
+    }
+}
 
 pub struct UiaProbe;
 
@@ -53,7 +145,6 @@ impl FieldProbe for UiaProbe {
                 deadline: Instant::now() + Duration::from_secs(60),
                 generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 started: 0,
-                cancellation: super::CANCELLATION.load(Ordering::SeqCst),
                 input: None,
             },
         )
@@ -69,114 +160,16 @@ impl FieldProbe for UiaProbe {
             return None;
         }
         let expires = scope.deadline;
-        let com = probe_step(Com::join(), "com_apartment")?;
-        // SAFETY: all COM objects stay on this watch thread and drop before its apartment.
-        let automation: IUIAutomation = probe_step(
-            unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.ok(),
-            "automation_client",
-        )?;
-        if let Ok(client) = automation.cast::<IUIAutomation2>() {
-            unsafe {
-                drop(client.SetConnectionTimeout(CALL_TIMEOUT_MS));
-                drop(client.SetTransactionTimeout(CALL_TIMEOUT_MS));
-            }
-        }
+        // The apartment outlives everything below. The field that is returned joins it once more
+        // for itself, and ends that join last.
+        let _com = probe_step(Com::join(), "com_apartment")?;
+        let automation = probe_step(create_client(), "automation_client")?;
         if foreground() != target.hwnd || !scope.active() {
             return probe_step(None, "target_changed_before_discovery");
         }
         let kind = classify(&target.process_name);
-        if matches!(kind, AppKind::Chromium | AppKind::CodeEditor) {
-            activate_accessibility(target.hwnd);
-            // Chromium builds its accessibility tree asynchronously after the first request.
-            std::thread::sleep(
-                Duration::from_millis(50).min(expires.saturating_duration_since(Instant::now())),
-            );
-        }
-        let root = probe_step(
-            unsafe { automation.ElementFromHandle(HWND(target.hwnd as *mut _)) }.ok(),
-            "target_root",
-        )?;
-        let focused = probe_step(
-            unsafe { automation.GetFocusedElement() }.ok(),
-            "focused_element",
-        )?;
-        let password = declared_password(&focused);
-        if !safe_password_status(password) {
-            log::info!(
-                "learn: probe stopped (stage: password_status, role: {:?}, declared: {password:?})",
-                unsafe { focused.CurrentControlType() }
-                    .ok()
-                    .map(|role| role.0)
-            );
-            return None;
-        }
-        let keyboard_field = unsafe { focused.CurrentControlType() }
-            .ok()
-            .is_some_and(|role| keyboard_field_role(role.0));
-        let readers = probe_step(
-            find_readers(
-                &automation,
-                &root,
-                &focused,
-                &scope,
-                kind == AppKind::Terminal,
-            ),
-            "focused_ancestry",
-        )?;
-        if foreground() != target.hwnd || !scope.active() {
-            return probe_step(None, "target_changed_after_discovery");
-        }
-        let metadata = focus_element_metadata(&focused, target.pid);
-        log::info!(
-            "learn: initial focus metadata (role: {:?}, has_keyboard_focus: {:?}, target_process: {:?})",
-            metadata.role,
-            metadata.has_keyboard_focus,
-            metadata.target_process
-        );
-        let identity = runtime_id(&focused);
-        log::info!(
-            "learn: focus identity (available: {}, hresult: {:?})",
-            identity.is_ok(),
-            identity
-                .as_ref()
-                .err()
-                .map(|error| format!("0x{:08X}", error.code().0 as u32))
-        );
-        let focus = Arc::new(FocusWatch::new(identity.ok(), target.pid, target.hwnd));
-        let handler: IUIAutomationFocusChangedEventHandler = FocusChanged(focus.clone()).into();
-        // Plain fields can still be polled without events. Terminals require a submission guard.
-        let subscribed = unsafe {
-            automation.AddFocusChangedEventHandler(None::<&IUIAutomationCacheRequest>, &handler)
-        }
-        .is_ok();
-        let mut field = UiaField {
-            automation,
-            focused,
-            readers,
-            hwnd: target.hwnd,
-            kind,
-            scope,
-            pasted: pasted.to_owned(),
-            mode: ReadMode::Pending,
-            ended: false,
-            initial: None,
-            keys: Keystrokes::new(pasted),
-            observation: None,
-            focus,
-            handler: subscribed.then_some(handler),
-            _com: com,
-        };
-        if let Err(failure) = field.check_focus() {
-            log::info!(
-                "learn: probe stopped (stage: focus_changed_after_subscription, reason: {}, final_recheck: {}, declared_password: {:?}, hresult: {:?})",
-                failure.reason,
-                failure.final_recheck,
-                failure.declared_password,
-                failure.hresult.map(|code| format!("0x{:08X}", code as u32))
-            );
-            field.log_failed_focus_snapshot();
-            return None;
-        }
+        let mut field = discover_with_retries(&automation, target, pasted, &scope, kind)?;
+        let subscribed = field.handler.is_some();
         if kind == AppKind::Terminal {
             // Screen text cannot prove whether a command has already been submitted. Cover the
             // discovery window too, before accepting any initial terminal text.
@@ -198,26 +191,25 @@ impl FieldProbe for UiaProbe {
             }
         }
         field.initial = field.select_source();
+        if field.initial.is_none()
+            && field.hides_editor_text()
+            && let Some(app) = editor_id(&target.process_name)
+        {
+            report_limited(app, LimitReason::AccessibilityOff);
+        }
         if subscribed && !pasted.is_empty() && field.scope.active() {
             let remaining = expires.saturating_duration_since(Instant::now());
             if kind != AppKind::Terminal
                 && matches!(field.mode, ReadMode::Pending)
-                && keyboard_field
+                && field.keyboard_field
+                && !field.retried
                 && field.keys.is_some()
                 && field.focus.input_observation_allowed()
-                && field
-                    .scope
-                    .input
-                    .as_ref()
-                    .is_some_and(|input| input.is_current())
+                && field.paste_input_is_current()
             {
                 field.set_observation(observe_edits(target.hwnd, remaining));
                 if field.still_focused()
-                    && field
-                        .scope
-                        .input
-                        .as_ref()
-                        .is_some_and(|input| input.is_current())
+                    && field.paste_input_is_current()
                     && field.observation.is_some()
                 {
                     field.mode = ReadMode::Keys;
@@ -240,6 +232,260 @@ impl FieldProbe for UiaProbe {
     }
 }
 
+/// Why one attempt to find the field gave up. Fixed metadata only.
+struct Failure {
+    stage: &'static str,
+    /// Whether the problem could be an accessibility tree that is not built yet, which another
+    /// attempt may find built. A refusal (a password field, another window in front, a cancelled
+    /// watch) is never retried.
+    retry: bool,
+    /// More fixed metadata for the log, ready to follow the stage: roles, flags, HRESULTs.
+    detail: String,
+}
+
+impl Failure {
+    fn stop(stage: &'static str) -> Self {
+        Self {
+            stage,
+            retry: false,
+            detail: String::new(),
+        }
+    }
+
+    fn tree(stage: &'static str, error: Option<&windows::core::Error>) -> Self {
+        Self {
+            stage,
+            retry: true,
+            detail: error
+                .map(|error| format!(", hresult: 0x{:08X}", error.code().0 as u32))
+                .unwrap_or_default(),
+        }
+    }
+}
+
+/// Whether a failed focus check can be a tree that was not built yet. The element a Chromium
+/// tree reports first is replaced by the real one once the tree stands: it compares unequal and
+/// raises a focus event of its own. A cancelled watch or another window in front is a real end,
+/// and a field declared a password is never tried again (an unreadable status is, and still
+/// must read as explicitly not a password before anything goes on).
+fn focus_failure_may_clear(reason: &str, declared_password: Option<bool>) -> bool {
+    match reason {
+        "identity_mismatch_or_error" | "focused_element_error" | "focus_event" => true,
+        "password_unknown_or_true" => declared_password.is_none(),
+        _ => false,
+    }
+}
+
+/// Apps that build their accessibility tree when a client first asks for it: its first answers
+/// can describe a stand-in for the real focused element.
+fn tree_is_built_on_demand(kind: AppKind) -> bool {
+    matches!(kind, AppKind::Chromium | AppKind::CodeEditor)
+}
+
+/// A Chromium tree takes a moment to appear after the first request, and the focused element it
+/// first reports is not the one it ends up with. A few more attempts are allowed inside this
+/// window, which is part of the time the watch waits for the pasted text to show up.
+const DISCOVERY_WINDOW: Duration = Duration::from_secs(1);
+/// The pauses before the second, third and fourth attempt.
+const DISCOVERY_PAUSES: [Duration; 3] = [
+    Duration::from_millis(150),
+    Duration::from_millis(250),
+    Duration::from_millis(350),
+];
+
+/// Hands out the pauses between discovery attempts, as long as they fit in the window.
+struct Retries {
+    ends: Instant,
+    used: usize,
+}
+
+impl Retries {
+    /// `deadline` is the end of the watch, which no attempt may outlast.
+    fn new(now: Instant, deadline: Instant) -> Self {
+        Self {
+            ends: (now + DISCOVERY_WINDOW).min(deadline),
+            used: 0,
+        }
+    }
+
+    /// The pause before the next attempt, or `None` when another would not end inside the window.
+    fn next(&mut self, now: Instant) -> Option<Duration> {
+        let pause = *DISCOVERY_PAUSES.get(self.used)?;
+        if now + pause > self.ends {
+            return None;
+        }
+        self.used += 1;
+        Some(pause)
+    }
+}
+
+/// Whether another attempt is still wanted: the watch is live, the target is still in front, and
+/// nothing was typed or clicked since the paste. (A paste checkpoint is only current while no
+/// physical input was counted and native focus is where it was.)
+fn discovery_wanted(active: bool, target_in_front: bool, input_current: Option<bool>) -> bool {
+    active && target_in_front && input_current != Some(false)
+}
+
+/// One discovery, repeated for an app whose tree is built on demand while the answer looks like
+/// a tree that is not ready, as long as the window and the conditions of [`discovery_wanted`]
+/// allow. Logs why it stopped; never any text.
+fn discover_with_retries(
+    automation: &IUIAutomation,
+    target: &Target,
+    pasted: &str,
+    scope: &WatchScope,
+    kind: AppKind,
+) -> Option<UiaField> {
+    let mut retries = Retries::new(Instant::now(), scope.deadline);
+    let mut attempt = 1;
+    loop {
+        let failure = match discover(automation, target, pasted, scope, kind) {
+            Ok(mut field) => {
+                field.retried = attempt > 1;
+                return Some(field);
+            }
+            Err(failure) => failure,
+        };
+        let pause = (failure.retry && tree_is_built_on_demand(kind))
+            .then(|| retries.next(Instant::now()))
+            .flatten();
+        let Some(pause) = pause else {
+            log::info!(
+                "learn: probe stopped (stage: {}{})",
+                failure.stage,
+                failure.detail
+            );
+            return None;
+        };
+        log::info!(
+            "learn: discovery will be retried (attempt: {attempt}, stage: {}{})",
+            failure.stage,
+            failure.detail
+        );
+        std::thread::sleep(pause);
+        attempt += 1;
+        let wanted = discovery_wanted(
+            scope.active(),
+            foreground() == target.hwnd,
+            scope.input.as_ref().map(|input| input.is_current()),
+        );
+        if !wanted {
+            return probe_step(None, "target_changed_during_discovery");
+        }
+    }
+}
+
+/// One attempt to find the focused field of `target`. Whatever it holds besides the returned
+/// field is released when it returns, inside the apartment the caller joined; the field joins
+/// the apartment for itself and ends that join after its last interface.
+fn discover(
+    automation: &IUIAutomation,
+    target: &Target,
+    pasted: &str,
+    scope: &WatchScope,
+    kind: AppKind,
+) -> Result<UiaField, Failure> {
+    let root = unsafe { automation.ElementFromHandle(HWND(target.hwnd as *mut _)) }
+        .map_err(|error| Failure::tree("target_root", Some(&error)))?;
+    let focused = unsafe { automation.GetFocusedElement() }
+        .map_err(|error| Failure::tree("focused_element", Some(&error)))?;
+    let password = declared_password(&focused);
+    if !safe_password_status(password) {
+        let role = unsafe { focused.CurrentControlType() }
+            .ok()
+            .map(|role| role.0);
+        return Err(Failure {
+            stage: "password_status",
+            // An unreadable status may be a tree that is not ready; a password never is. Either
+            // way nothing goes on until the status reads as explicitly not a password.
+            retry: password.is_none(),
+            detail: format!(", role: {role:?}, declared: {password:?}"),
+        });
+    }
+    let keyboard_field = unsafe { focused.CurrentControlType() }
+        .ok()
+        .is_some_and(|role| keyboard_field_role(role.0));
+    let readers = find_readers(
+        automation,
+        &root,
+        &focused,
+        scope,
+        kind == AppKind::Terminal,
+    )
+    .ok_or_else(|| Failure::tree("focused_ancestry", None))?;
+    if foreground() != target.hwnd || !scope.active() {
+        return Err(Failure::stop("target_changed_after_discovery"));
+    }
+    let containers = container_ids(automation, &root, &focused);
+    // The root is not needed any more, and nothing but the field may outlive this function.
+    drop(root);
+    let metadata = focus_element_metadata(&focused, target.pid);
+    log::info!(
+        "learn: initial focus metadata (role: {:?}, has_keyboard_focus: {:?}, target_process: {:?})",
+        metadata.role,
+        metadata.has_keyboard_focus,
+        metadata.target_process
+    );
+    let identity = runtime_id(&focused);
+    log::info!(
+        "learn: focus identity (available: {}, hresult: {:?})",
+        identity.is_ok(),
+        identity
+            .as_ref()
+            .err()
+            .map(|error| format!("0x{:08X}", error.code().0 as u32))
+    );
+    let enter = enter_key(kind, single_line_edit_box(&focused));
+    let terminal_panel = kind == AppKind::CodeEditor
+        && class_name(&focused).is_some_and(|class| is_terminal_panel_class(&class));
+    let com = Com::join().ok_or_else(|| Failure::stop("com_apartment"))?;
+    let focus = Arc::new(
+        FocusWatch::new(identity.ok(), target.pid, target.hwnd).with_containers(containers),
+    );
+    let handler: IUIAutomationFocusChangedEventHandler = FocusChanged(focus.clone()).into();
+    // Plain fields can still be polled without events. Terminals require a submission guard.
+    let subscribed = unsafe {
+        automation.AddFocusChangedEventHandler(None::<&IUIAutomationCacheRequest>, &handler)
+    }
+    .is_ok();
+    let field = UiaField {
+        automation: automation.clone(),
+        focused,
+        readers,
+        keyboard_field,
+        hidden_input: false,
+        terminal_panel,
+        retried: false,
+        hwnd: target.hwnd,
+        kind,
+        scope: scope.clone(),
+        pasted: pasted.to_owned(),
+        mode: ReadMode::Pending,
+        ended: false,
+        initial: None,
+        keys: Keystrokes::with_enter(pasted, enter),
+        observation: None,
+        focus,
+        handler: subscribed.then_some(handler),
+        _com: com,
+    };
+    if let Err(failure) = field.check_focus() {
+        field.log_failed_focus_snapshot();
+        return Err(Failure {
+            stage: "focus_changed_after_subscription",
+            retry: focus_failure_may_clear(failure.reason, failure.declared_password),
+            detail: format!(
+                ", reason: {}, final_recheck: {}, declared_password: {:?}, hresult: {:?}",
+                failure.reason,
+                failure.final_recheck,
+                failure.declared_password,
+                failure.hresult.map(|code| format!("0x{:08X}", code as u32))
+            ),
+        });
+    }
+    Ok(field)
+}
+
 /// Logs only a fixed stage identifier; never element names, values, or dictated text.
 fn probe_step<T>(value: Option<T>, stage: &'static str) -> Option<T> {
     if value.is_none() {
@@ -260,6 +506,90 @@ fn safe_password_status(password: Option<bool>) -> bool {
 
 fn keyboard_field_role(role: i32) -> bool {
     role == UIA_EditControlTypeId.0
+}
+
+/// Whether every source that could be read held nothing at all (and at least one was read).
+fn all_sources_empty(empty: usize, filled: usize) -> bool {
+    empty > 0 && filled == 0
+}
+
+/// Whether a failed search for the pasted words points to a code editor that keeps its text from
+/// other programs. With accessibility support off, the input box such an editor types into is
+/// empty to UI Automation (it only holds a selection); with it on, it holds the text around the
+/// caret. A paste that was not in a box of that kind, or that is blank, says nothing.
+fn editor_hides_text(
+    kind: AppKind,
+    keyboard_field: bool,
+    all_sources_empty: bool,
+    terminal_panel: bool,
+    pasted: &str,
+) -> bool {
+    kind == AppKind::CodeEditor
+        && keyboard_field
+        && all_sources_empty
+        && !terminal_panel
+        && !pasted.trim().is_empty()
+}
+
+/// The HTML class a page element reports, for telling the editor's own input box from a terminal
+/// panel's. Markup of the app, never text of the user; not logged.
+fn class_name(element: &IUIAutomationElement) -> Option<String> {
+    // SAFETY: a plain property read on an element owned by this thread.
+    unsafe { element.CurrentClassName() }
+        .ok()
+        .map(|name| name.to_string())
+}
+
+/// Whether the class is that of the hidden input of an xterm.js terminal, such as the integrated
+/// terminal of VS Code. It is empty whatever the editor's accessibility setting is, so it says
+/// nothing about that setting.
+fn is_terminal_panel_class(class: &str) -> bool {
+    class
+        .split_whitespace()
+        .any(|name| name.starts_with("xterm"))
+}
+
+/// What Enter means to the keystroke fallback. In a code editor it may accept an IntelliSense
+/// suggestion instead of sending, and the keys cannot tell which, so it cannot end an edit that
+/// can be learned from. Only a one-line edit box is sent by it.
+fn enter_key(kind: AppKind, single_line: bool) -> EnterKey {
+    if kind == AppKind::CodeEditor && !single_line {
+        EnterKey::Invalidate
+    } else {
+        EnterKey::Submit
+    }
+}
+
+/// Whether a window of this class and style is a classic one-line edit box.
+fn is_single_line_edit(class: &str, style: u32) -> bool {
+    class.eq_ignore_ascii_case("Edit") && style & ES_MULTILINE as u32 == 0
+}
+
+/// Whether the focused element is a classic one-line Win32 edit box, such as the file name of a
+/// dialog an editor opened. Nothing else says "one line" from outside the process: a web input
+/// in an Electron editor looks like the editor surface, so those count as multi-line.
+fn single_line_edit_box(element: &IUIAutomationElement) -> bool {
+    // SAFETY: plain queries on a window handle that may already be gone.
+    unsafe {
+        let Ok(hwnd) = element.CurrentNativeWindowHandle() else {
+            return false;
+        };
+        if hwnd.0.is_null() {
+            return false;
+        }
+        let mut class = [0u16; 32];
+        let length = GetClassNameW(hwnd, &mut class);
+        let Some(class) = usize::try_from(length)
+            .ok()
+            .and_then(|length| class.get(..length))
+        else {
+            return false;
+        };
+        is_single_line_edit(
+            &String::from_utf16_lossy(class),
+            GetWindowLongW(hwnd, GWL_STYLE) as u32,
+        )
+    }
 }
 
 fn declared_password(element: &IUIAutomationElement) -> Option<bool> {
@@ -342,37 +672,38 @@ fn find_readers(
     None
 }
 
-/// Ask the existing Chromium provider to expose accessibility. No global screen-reader state,
-/// command-line flags, or editor settings are changed.
-fn activate_accessibility(hwnd: isize) {
-    unsafe {
-        let root = HWND(hwnd as *mut _);
-        let thread = GetWindowThreadProcessId(root, None);
-        let mut info = GUITHREADINFO {
-            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
-            ..Default::default()
-        };
-        let child = GetGUIThreadInfo(thread, &mut info)
-            .ok()
-            .map(|()| info.hwndFocus);
-        for window in [Some(root), child].into_iter().flatten() {
-            if window.0.is_null() {
-                continue;
-            }
-            for object in [UiaRootObjectId, -4] {
-                // -4 is OBJID_CLIENT, for Chromium versions using the MSAA bridge.
-                SendMessageTimeoutW(
-                    window,
-                    WM_GETOBJECT,
-                    WPARAM(0),
-                    LPARAM(object as isize),
-                    SMTO_ABORTIFHUNG,
-                    100,
-                    None,
-                );
-            }
+/// The runtime ids of the elements that contain `focused`, up to and including the target's root.
+/// A focus event from one of them is not a move to another field: around a contenteditable field,
+/// Chromium raises one for the enclosing document while the field keeps the keyboard focus (in the
+/// owner's log the sender was a Document and GetFocusedElement still returned the field). An
+/// element whose id cannot be read is left out, so an event from it still counts as a move.
+fn container_ids(
+    automation: &IUIAutomation,
+    root: &IUIAutomationElement,
+    focused: &IUIAutomationElement,
+) -> Vec<Vec<i32>> {
+    let Ok(walker) = (unsafe { automation.RawViewWalker() }) else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    let mut element = focused.clone();
+    for _ in 0..32 {
+        let at_root =
+            unsafe { automation.CompareElements(&element, root) }.is_ok_and(|same| same.as_bool());
+        if at_root {
+            break;
         }
+        let Ok(parent) = (unsafe { walker.GetParentElement(&element) }) else {
+            break;
+        };
+        if let Ok(id) = runtime_id(&parent)
+            && !id.is_empty()
+        {
+            ids.push(id);
+        }
+        element = parent;
     }
+    ids
 }
 
 struct Reader {
@@ -471,6 +802,17 @@ struct UiaField {
     automation: IUIAutomation,
     focused: IUIAutomationElement,
     readers: Vec<Reader>,
+    /// Whether the focused element is an edit control, the only kind the key fallback may follow.
+    keyboard_field: bool,
+    /// Whether every source that was read came back empty: a code editor's input box while its
+    /// accessibility support is off, as opposed to one that holds other text than the paste.
+    hidden_input: bool,
+    /// Whether the focused element is the hidden input of an editor's terminal panel (xterm.js).
+    terminal_panel: bool,
+    /// Whether discovery took more than one attempt. A retry may have adopted another element
+    /// than the one the paste went to; a source that shows the pasted text proves the field, but
+    /// the key fallback has only the assumption, so it is not started after one.
+    retried: bool,
     hwnd: isize,
     kind: AppKind,
     scope: WatchScope,
@@ -506,46 +848,20 @@ impl FocusFailure {
 
 impl WatchedField for UiaField {
     fn read(&mut self) -> Snapshot {
-        if !self.read_allowed() {
-            return Snapshot::Left;
-        }
+        // The text found during discovery was read under the same guard (`select_source`), and
+        // the last check of the discovery ran just before this call.
         if let Some(initial) = self.initial.take() {
-            return Snapshot::Text(initial);
+            return if self.scope.active() {
+                Snapshot::Text(initial)
+            } else {
+                Snapshot::Left
+            };
         }
-        let mut submitted = false;
-        let mut invalidated = false;
-        if let Some(observation) = &mut self.observation {
-            for event in observation.drain() {
-                submitted |= event == EditEvent::Enter;
-                invalidated |= event == EditEvent::Invalidated;
-                if let Some(keys) = &mut self.keys {
-                    keys.apply(event);
-                }
-            }
-        }
-        if matches!(self.mode, ReadMode::Pending) {
-            if submitted || invalidated {
-                return Snapshot::Left;
-            }
-            // Retry patterns after accessibility activation without searching other fields.
-            if let Ok(root) =
-                unsafe { self.automation.ElementFromHandle(HWND(self.hwnd as *mut _)) }
-                && let Some(readers) = find_readers(
-                    &self.automation,
-                    &root,
-                    &self.focused,
-                    &self.scope,
-                    self.kind == AppKind::Terminal,
-                )
-            {
-                self.readers = readers;
-            }
-            if let Some(text) = self.select_source() {
-                return Snapshot::Text(text);
-            }
-            return Snapshot::Text(String::new());
-        }
+        // Every poll checks focus and password status once before and once after the provider
+        // reads text (`checked_read`), or once if it reads none (`read_keys`). Nothing else
+        // repeats those checks: each one is three calls into another process.
         match &mut self.mode {
+            ReadMode::Pending => self.read_pending(),
             ReadMode::Field(index) => {
                 let index = *index;
                 self.read_source(index)
@@ -553,40 +869,10 @@ impl WatchedField for UiaField {
                     .unwrap_or(Snapshot::Left)
             }
             ReadMode::Terminal { reader, .. } => {
-                if terminal_ended(submitted, invalidated) {
-                    self.ended = true;
-                    self.observation.take();
-                    return Snapshot::Left;
-                }
                 let reader = *reader;
-                let Some(text) = self.read_source(reader) else {
-                    return Snapshot::Left;
-                };
-                let ReadMode::Terminal { tracker, .. } = &mut self.mode else {
-                    unreachable!("reading a source does not change its mode");
-                };
-                if tracker.observe(&text) == TerminalDecision::Continue {
-                    Snapshot::Text(tracker.region().to_owned())
-                } else {
-                    self.observation.take();
-                    Snapshot::Left
-                }
+                self.read_terminal(reader)
             }
-            ReadMode::Keys => {
-                let Some(keys) = &self.keys else {
-                    return Snapshot::Left;
-                };
-                let Some(text) = keys.text().map(str::to_owned) else {
-                    self.observation.take();
-                    return Snapshot::Left;
-                };
-                if keys.is_complete() {
-                    self.ended = true;
-                    self.observation.take();
-                }
-                Snapshot::Text(text)
-            }
-            ReadMode::Pending => Snapshot::Left,
+            ReadMode::Keys => self.read_keys(),
         }
     }
 
@@ -617,6 +903,9 @@ impl UiaField {
             .is_some_and(|input| input.is_current())
     }
 
+    /// Whether the watch may go on, checked before and after every provider call: still the
+    /// same focused field and not a password, and for a terminal no Enter or unknown input
+    /// since the last look (what was typed or printed after it must never be read).
     fn read_allowed(&mut self) -> bool {
         if self.ended || !self.still_focused() {
             self.ended = true;
@@ -624,12 +913,10 @@ impl UiaField {
             return false;
         }
         if self.kind == AppKind::Terminal {
-            let stopped = self.observation.as_mut().is_none_or(|observation| {
-                observation
-                    .drain()
-                    .into_iter()
-                    .any(|event| matches!(event, EditEvent::Enter | EditEvent::Invalidated))
-            });
+            let stopped = self
+                .observation
+                .as_mut()
+                .is_none_or(|observation| ends_terminal(&observation.drain()));
             if stopped {
                 if let ReadMode::Terminal { tracker, .. } = &mut self.mode {
                     tracker.submitted();
@@ -642,18 +929,39 @@ impl UiaField {
         true
     }
 
+    /// The text of one source, with a check on each side of the provider call.
     fn read_source(&mut self, index: usize) -> Option<String> {
         checked_read(self, Self::read_allowed, |field| {
-            field.readers[index].read(field.kind == AppKind::Terminal, &field.scope)
+            field
+                .readers
+                .get(index)?
+                .read(field.kind == AppKind::Terminal, &field.scope)
         })
     }
 
+    /// Finds the source that shows the pasted text, with one check on each side of all the reads.
     fn select_source(&mut self) -> Option<String> {
+        checked_read(self, Self::read_allowed, |field| Some(field.pick_source())).flatten()
+    }
+
+    /// [`Self::select_source`] without the checks, for a caller that makes them.
+    fn pick_source(&mut self) -> Option<String> {
+        let terminal = self.kind == AppKind::Terminal;
+        let (mut empty, mut filled) = (0, 0);
         for index in 0..self.readers.len() {
-            let Some(text) = self.read_source(index) else {
+            let Some(text) = self
+                .readers
+                .get(index)
+                .and_then(|reader| reader.read(terminal, &self.scope))
+            else {
                 continue;
             };
-            if self.kind == AppKind::Terminal {
+            if text.trim().is_empty() {
+                empty += 1;
+            } else {
+                filled += 1;
+            }
+            if terminal {
                 if let Some(tracker) = TerminalTracker::new(&text, &self.pasted) {
                     let region = tracker.region().to_owned();
                     self.mode = ReadMode::Terminal {
@@ -669,12 +977,98 @@ impl UiaField {
                 return Some(text);
             }
         }
+        self.hidden_input = all_sources_empty(empty, filled);
         if needs_accessibility_hint(self.kind) && !CODE_HINT_LOGGED.swap(true, Ordering::Relaxed) {
             log::info!(
                 "learn: editor text unavailable; editor.accessibilitySupport=on may expose it; settings unchanged"
             );
         }
         None
+    }
+
+    /// Whether this looks like a code editor that keeps its text from other programs: the
+    /// pasted words are in no source, the focused element is an edit control (the input box the
+    /// editor types into), and everything the sources hold is empty. With the editor's
+    /// accessibility support on, that box holds the text around the caret instead.
+    fn hides_editor_text(&self) -> bool {
+        editor_hides_text(
+            self.kind,
+            self.keyboard_field,
+            self.hidden_input,
+            self.terminal_panel,
+            &self.pasted,
+        )
+    }
+
+    /// The pasted text has not shown up in any source yet. Looks again, in the sources the
+    /// focused field offers now: a Chromium tree or a terminal may need a moment.
+    fn read_pending(&mut self) -> Snapshot {
+        let found = checked_read(self, Self::read_allowed, |field| {
+            // Retry patterns after accessibility activation without searching other fields.
+            if let Ok(root) = unsafe {
+                field
+                    .automation
+                    .ElementFromHandle(HWND(field.hwnd as *mut _))
+            } && let Some(readers) = find_readers(
+                &field.automation,
+                &root,
+                &field.focused,
+                &field.scope,
+                field.kind == AppKind::Terminal,
+            ) {
+                field.readers = readers;
+            }
+            Some(field.pick_source())
+        });
+        match found {
+            Some(Some(text)) => Snapshot::Text(text),
+            Some(None) => Snapshot::Text(String::new()),
+            None => Snapshot::Left,
+        }
+    }
+
+    /// Follows the pasted rows of a terminal. The checks around the read also drain the keyboard
+    /// observer, so an Enter ends the watch before any later screen is read.
+    fn read_terminal(&mut self, reader: usize) -> Snapshot {
+        let Some(text) = self.read_source(reader) else {
+            return Snapshot::Left;
+        };
+        let ReadMode::Terminal { tracker, .. } = &mut self.mode else {
+            return Snapshot::Left;
+        };
+        if tracker.observe(&text) == TerminalDecision::Continue {
+            Snapshot::Text(tracker.region().to_owned())
+        } else {
+            self.observation.take();
+            Snapshot::Left
+        }
+    }
+
+    /// The text rebuilt from the keys since the last poll. The provider is not asked, so this
+    /// is the one poll with a single check.
+    fn read_keys(&mut self) -> Snapshot {
+        if !self.read_allowed() {
+            return Snapshot::Left;
+        }
+        if let Some(observation) = &mut self.observation {
+            for event in observation.drain() {
+                if let Some(keys) = &mut self.keys {
+                    keys.apply(event);
+                }
+            }
+        }
+        let Some(keys) = &self.keys else {
+            return Snapshot::Left;
+        };
+        let Some(text) = keys.text().map(str::to_owned) else {
+            self.observation.take();
+            return Snapshot::Left;
+        };
+        if keys.is_complete() {
+            self.ended = true;
+            self.observation.take();
+        }
+        Snapshot::Text(text)
     }
 
     fn still_focused(&self) -> bool {
@@ -864,6 +1258,9 @@ unsafe fn copy_owned_runtime_id(array: *mut SAFEARRAY) -> windows::core::Result<
 #[derive(Default)]
 struct FocusWatch {
     runtime_id: Option<Vec<i32>>,
+    /// The elements that contain the field (see `container_ids`). A focus event from one of them
+    /// leaves the field where it is; whether it still has the focus, check_focus asks the system.
+    containers: Vec<Vec<i32>>,
     target_pid: u32,
     hwnd: isize,
     left: AtomicBool,
@@ -882,23 +1279,43 @@ impl FocusWatch {
         }
     }
 
+    fn with_containers(mut self, containers: Vec<Vec<i32>>) -> Self {
+        self.containers = containers;
+        self
+    }
+
+    /// Whether `sender` is one of the elements that contain the field.
+    fn is_container(&self, sender: &[i32]) -> bool {
+        !sender.is_empty() && self.containers.iter().any(|id| id.as_slice() == sender)
+    }
+
+    /// `sender_in_target`: whether the sender belongs to the target's process (None when that
+    /// cannot be read).
     fn changed_from(
         &self,
         sender_runtime_id: Option<&[i32]>,
         has_keyboard_focus: Option<bool>,
         foreground_matches: bool,
+        sender_in_target: Option<bool>,
     ) -> Option<bool> {
         let same = self
             .runtime_id
             .as_deref()
             .filter(|identity| !identity.is_empty())
             .zip(sender_runtime_id.filter(|identity| !identity.is_empty()))
-            .map(|(original, sender)| original == sender);
+            .map(|(original, sender)| original == sender || self.is_container(sender));
         if !foreground_matches || same.is_none() || has_keyboard_focus.is_none() {
             self.changed();
         } else if has_keyboard_focus == Some(false) {
-            // A stale sender must not poison field reads, but cannot vouch for an input gap.
-            self.block_input_observation();
+            // A stale sender must not poison field reads, but cannot vouch for an input gap. Unless
+            // it lives in another process: while the target window stays in front, keys go to the
+            // focused element of that window, so an element elsewhere without the keyboard focus
+            // took none of them. Such panes raise focus events right after a paste (in the owner's
+            // log, a pane outside Windows Terminal, as Raphael's overlay took its "complete"
+            // event), and blocking on them kept every terminal dictation from being learned.
+            if sender_in_target != Some(false) {
+                self.block_input_observation();
+            }
         } else if same != Some(true) {
             self.changed();
         }
@@ -958,18 +1375,26 @@ impl IUIAutomationFocusChangedEventHandler_Impl for FocusChanged_Impl {
                 .map_err(|error| error.code().0)
         });
         let foreground_matches = foreground() == self.0.hwnd;
+        let sender_pid = sender
+            .as_ref()
+            .and_then(|element| unsafe { element.CurrentProcessId() }.ok())
+            .map(|pid| pid as u32);
+        let sender_id = identity.as_ref().and_then(|result| result.as_deref().ok());
         let same = self.0.changed_from(
-            identity.as_ref().and_then(|result| result.as_deref().ok()),
+            sender_id,
             has_keyboard_focus.and_then(Result::ok),
             foreground_matches,
+            sender_pid.map(|pid| pid == self.0.target_pid),
         );
+        let container = sender_id.is_some_and(|id| self.0.is_container(id));
+        let own_process = sender_pid == Some(std::process::id());
         // A small per-watch cap keeps repeated provider notifications from spamming the log.
         if self.0.event_reports.fetch_add(1, Ordering::Relaxed) < 3 {
             let metadata = sender
                 .as_ref()
                 .map(|element| focus_element_metadata(element, self.0.target_pid));
             log::info!(
-                "learn: focus event (sender_present: {}, same_runtime_id: {same:?}, hresult: {:?}, role: {:?}, has_keyboard_focus: {:?}, target_process: {:?}, foreground_matches: {foreground_matches}, input_blocked: {}, field_left: {})",
+                "learn: focus event (sender_present: {}, same_runtime_id: {same:?}, container: {container}, hresult: {:?}, role: {:?}, has_keyboard_focus: {:?}, target_process: {:?}, own_process: {own_process}, foreground_matches: {foreground_matches}, input_blocked: {}, field_left: {})",
                 identity.is_some(),
                 identity
                     .as_ref()
@@ -1004,8 +1429,12 @@ fn foreground() -> isize {
     unsafe { GetForegroundWindow() }.0 as isize
 }
 
-fn terminal_ended(submitted: bool, invalidated: bool) -> bool {
-    submitted || invalidated
+/// Whether any of these keyboard events ends the watch of a terminal: Enter, or input that
+/// cannot be followed.
+fn ends_terminal(events: &[EditEvent]) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, EditEvent::Enter | EditEvent::Invalidated))
 }
 
 /// A provider call may outlive the focused field, the watch, or a terminal submission.
@@ -1030,7 +1459,7 @@ mod tests {
         let original = vec![42, 7, 19];
         let focus = FocusWatch::new(Some(original.clone()), 0, 11);
         for _ in 0..3 {
-            focus.changed_from(Some(&original), Some(true), true);
+            focus.changed_from(Some(&original), Some(true), true, Some(true));
             assert!(!focus.left.load(Ordering::SeqCst));
         }
     }
@@ -1046,17 +1475,72 @@ mod tests {
             (Some(Vec::new()), Some(Vec::new())),
         ] {
             let focus = FocusWatch::new(original, 0, 11);
-            focus.changed_from(sender.as_deref(), Some(true), true);
+            focus.changed_from(sender.as_deref(), Some(true), true, Some(true));
             assert!(focus.left.load(Ordering::SeqCst));
         }
+    }
+
+    #[test]
+    fn a_focus_event_from_an_element_around_the_field_keeps_the_watch() {
+        // Chromium, around a contenteditable field: the document that holds it raises the focus
+        // event while the field keeps the keyboard focus.
+        let original = vec![42, 7, 19];
+        let document = vec![42, 7, 3];
+        let window = vec![42, 1];
+        let focus = FocusWatch::new(Some(original), 0, 11)
+            .with_containers(vec![document.clone(), window.clone()]);
+        for sender in [&document, &window] {
+            assert_eq!(
+                focus.changed_from(Some(sender), Some(true), true, Some(true)),
+                Some(true)
+            );
+        }
+        assert!(!focus.left.load(Ordering::SeqCst));
+        assert!(focus.input_observation_allowed());
+    }
+
+    #[test]
+    fn an_element_around_the_field_does_not_hide_a_move_to_another_field() {
+        let original = vec![42, 7, 19];
+        let focus = FocusWatch::new(Some(original), 0, 11).with_containers(vec![vec![42, 7, 3]]);
+        focus.changed_from(Some(&[42, 7, 3]), Some(true), true, Some(true));
+        focus.changed_from(Some(&[42, 7, 20]), Some(true), true, Some(true));
+        assert!(focus.left.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn the_elements_around_the_field_do_not_loosen_the_other_checks() {
+        let original = vec![42, 7, 19];
+        let document = vec![42, 7, 3];
+        // An unknown field, a foreground that changed, or a sender's focus that cannot be read
+        // still cancel, whatever the sender.
+        for (field, has_keyboard_focus, foreground_matches) in [
+            (None, Some(true), true),
+            (Some(original.clone()), Some(true), false),
+            (Some(original.clone()), None, true),
+        ] {
+            let focus = FocusWatch::new(field, 0, 11).with_containers(vec![document.clone()]);
+            focus.changed_from(
+                Some(&document),
+                has_keyboard_focus,
+                foreground_matches,
+                Some(true),
+            );
+            assert!(focus.left.load(Ordering::SeqCst));
+        }
+        // An empty id never matches a container.
+        let focus = FocusWatch::new(Some(original), 0, 11).with_containers(vec![Vec::new()]);
+        assert!(!focus.is_container(&[]));
+        focus.changed_from(Some(&[]), Some(true), true, Some(true));
+        assert!(focus.left.load(Ordering::SeqCst));
     }
 
     #[test]
     fn a_matching_focus_event_never_revives_a_cancelled_watch() {
         let original = vec![42, 7, 19];
         let focus = FocusWatch::new(Some(original.clone()), 0, 11);
-        focus.changed_from(Some(&[42, 7, 20]), Some(true), true);
-        focus.changed_from(Some(&original), Some(true), true);
+        focus.changed_from(Some(&[42, 7, 20]), Some(true), true, Some(true));
+        focus.changed_from(Some(&original), Some(true), true, Some(true));
         assert!(focus.left.load(Ordering::SeqCst));
     }
 
@@ -1064,12 +1548,50 @@ mod tests {
     fn unfocused_background_event_preserves_field_and_blocks_input_observation() {
         let original = vec![42, 7, 19];
         let focus = FocusWatch::new(Some(original.clone()), 0, 11);
-        focus.changed_from(Some(&[42, 7, 20]), Some(false), true);
+        focus.changed_from(Some(&[42, 7, 20]), Some(false), true, Some(true));
         assert!(!focus.left.load(Ordering::SeqCst));
         assert!(focus.input_blocked.load(Ordering::SeqCst));
         assert!(!focus.input_observation_allowed());
         // A later duplicate cannot re-arm keyboard capture for the same watch.
-        focus.changed_from(Some(&original), Some(true), true);
+        focus.changed_from(Some(&original), Some(true), true, Some(true));
+        assert!(!focus.left.load(Ordering::SeqCst));
+        assert!(!focus.input_observation_allowed());
+    }
+
+    #[test]
+    fn an_unfocused_element_of_another_process_changes_nothing_while_the_target_is_in_front() {
+        // A pane outside Windows Terminal raises a focus event right after the paste, without the
+        // keyboard focus: the terminal still gets every key, so the watch and its keyboard
+        // observation go on.
+        let focus = FocusWatch::new(Some(vec![42, 7, 19]), 0, 11);
+        focus.changed_from(Some(&[61, 2, 8]), Some(false), true, Some(false));
+        assert!(!focus.left.load(Ordering::SeqCst));
+        assert!(focus.input_observation_allowed());
+    }
+
+    #[test]
+    fn another_process_still_ends_the_watch_when_it_has_the_focus_or_the_foreground_moved() {
+        for (has_keyboard_focus, foreground_matches) in
+            [(Some(true), true), (Some(false), false), (None, true)]
+        {
+            let focus = FocusWatch::new(Some(vec![42, 7, 19]), 0, 11);
+            focus.changed_from(
+                Some(&[61, 2, 8]),
+                has_keyboard_focus,
+                foreground_matches,
+                Some(false),
+            );
+            assert!(
+                focus.left.load(Ordering::SeqCst),
+                "{has_keyboard_focus:?}, {foreground_matches}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unfocused_sender_of_unknown_process_still_blocks_keyboard_observation() {
+        let focus = FocusWatch::new(Some(vec![42, 7, 19]), 0, 11);
+        focus.changed_from(Some(&[61, 2, 8]), Some(false), true, None);
         assert!(!focus.left.load(Ordering::SeqCst));
         assert!(!focus.input_observation_allowed());
     }
@@ -1085,7 +1607,12 @@ mod tests {
             (None, Some(false), true),
         ] {
             let focus = FocusWatch::new(Some(original.clone()), 0, 11);
-            focus.changed_from(sender.as_deref(), has_keyboard_focus, foreground_matches);
+            focus.changed_from(
+                sender.as_deref(),
+                has_keyboard_focus,
+                foreground_matches,
+                Some(true),
+            );
             assert!(focus.left.load(Ordering::SeqCst));
         }
     }
@@ -1208,7 +1735,6 @@ mod tests {
             deadline: Instant::now() + Duration::from_secs(60),
             generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             started: 0,
-            cancellation: super::super::CANCELLATION.load(Ordering::SeqCst),
             input: None,
         };
         let mut field = UiaProbe
@@ -1239,10 +1765,216 @@ mod tests {
     }
 
     #[test]
+    fn the_modern_client_class_is_tried_first_and_the_original_only_when_it_fails() {
+        use std::cell::Cell;
+
+        let originals = Cell::new(0);
+        let made = create_in_order(
+            || Ok::<_, i32>("modern"),
+            || {
+                originals.set(originals.get() + 1);
+                Ok("original")
+            },
+        );
+        assert_eq!(made, Ok(("modern", ClientClass::Modern)));
+        assert_eq!(originals.get(), 0);
+
+        let made = create_in_order(
+            || Err(-2147467262),
+            || {
+                originals.set(originals.get() + 1);
+                Ok("original")
+            },
+        );
+        assert_eq!(made, Ok(("original", ClientClass::Original)));
+        assert_eq!(originals.get(), 1);
+    }
+
+    #[test]
+    fn when_no_client_class_can_be_made_the_original_error_is_reported() {
+        let made: Result<(&str, ClientClass), i32> = create_in_order(|| Err(1), || Err(2));
+        assert_eq!(made, Err(2));
+    }
+
+    #[test]
+    fn discovery_is_retried_a_few_times_inside_one_second() {
+        let start = Instant::now();
+        let mut retries = Retries::new(start, start + Duration::from_secs(60));
+        let mut now = start;
+        let mut pauses = Vec::new();
+        while let Some(pause) = retries.next(now) {
+            pauses.push(pause);
+            now += pause + Duration::from_millis(40);
+        }
+        assert_eq!(pauses, DISCOVERY_PAUSES);
+        assert!(now - start <= DISCOVERY_WINDOW);
+    }
+
+    #[test]
+    fn a_retry_that_would_end_after_the_window_is_not_made() {
+        let start = Instant::now();
+        let mut retries = Retries::new(start, start + Duration::from_secs(60));
+        // The first attempt used up most of the window.
+        assert_eq!(retries.next(start + Duration::from_millis(900)), None);
+        // Nothing is handed out after one refusal that was not for lack of pauses either.
+        let mut retries = Retries::new(start, start + Duration::from_secs(60));
+        assert!(retries.next(start + Duration::from_millis(849)).is_some());
+        assert_eq!(retries.next(start + Duration::from_millis(851)), None);
+    }
+
+    #[test]
+    fn the_end_of_the_watch_ends_the_retries_before_the_window_does() {
+        let start = Instant::now();
+        let mut retries = Retries::new(start, start + Duration::from_millis(100));
+        assert_eq!(retries.next(start), None);
+        let mut retries = Retries::new(start, start - Duration::from_millis(1));
+        assert_eq!(retries.next(start), None);
+    }
+
+    #[test]
+    fn only_a_live_watch_in_the_target_with_no_input_since_the_paste_is_worth_a_retry() {
+        assert!(discovery_wanted(true, true, None));
+        assert!(discovery_wanted(true, true, Some(true)));
+        // Typed, clicked or moved native focus since the paste.
+        assert!(!discovery_wanted(true, true, Some(false)));
+        // Another window in front, or the watch was cancelled or ran out.
+        assert!(!discovery_wanted(true, false, Some(true)));
+        assert!(!discovery_wanted(false, true, Some(true)));
+    }
+
+    #[test]
+    fn only_apps_that_build_their_tree_on_demand_are_given_another_try() {
+        assert!(tree_is_built_on_demand(AppKind::Chromium));
+        assert!(tree_is_built_on_demand(AppKind::CodeEditor));
+        assert!(!tree_is_built_on_demand(AppKind::Terminal));
+        assert!(!tree_is_built_on_demand(AppKind::Other));
+    }
+
+    #[test]
+    fn a_focus_check_that_failed_because_the_tree_was_not_built_may_be_retried() {
+        for reason in [
+            "identity_mismatch_or_error",
+            "focused_element_error",
+            "focus_event",
+        ] {
+            assert!(focus_failure_may_clear(reason, Some(false)), "{reason}");
+        }
+        // A password status that cannot be read yet, but never one that reads as true.
+        assert!(focus_failure_may_clear("password_unknown_or_true", None));
+        assert!(!focus_failure_may_clear(
+            "password_unknown_or_true",
+            Some(true)
+        ));
+        // The watch is over, or another window is in front.
+        assert!(!focus_failure_may_clear("scope_cancelled", None));
+        assert!(!focus_failure_may_clear("foreground_changed", None));
+        assert!(!focus_failure_may_clear("anything_else", None));
+    }
+
+    #[test]
+    fn a_refusal_is_never_retryable_and_an_unready_tree_is() {
+        assert!(!Failure::stop("target_changed_after_discovery").retry);
+        let unready = Failure::tree("focused_ancestry", None);
+        assert!(unready.retry);
+        assert!(unready.detail.is_empty());
+        let error = windows::core::Error::from_hresult(E_POINTER);
+        assert_eq!(
+            Failure::tree("focused_element", Some(&error)).detail,
+            ", hresult: 0x80004003"
+        );
+    }
+
+    #[test]
     fn only_explicitly_non_password_fields_are_safe() {
         assert!(safe_password_status(Some(false)));
         assert!(!safe_password_status(Some(true)));
         assert!(!safe_password_status(None));
+    }
+
+    #[test]
+    fn an_editor_whose_input_box_is_empty_is_hiding_its_text() {
+        let hides = |kind, keyboard_field, empty, panel, pasted| {
+            editor_hides_text(kind, keyboard_field, empty, panel, pasted)
+        };
+        assert!(hides(
+            AppKind::CodeEditor,
+            true,
+            true,
+            false,
+            "pasted words"
+        ));
+        // The box holds other text than the paste: accessibility support is on, or it is not the
+        // editor's own input.
+        assert!(!hides(
+            AppKind::CodeEditor,
+            true,
+            false,
+            false,
+            "pasted words"
+        ));
+        // Not an edit control, not an editor, or nothing was pasted.
+        assert!(!hides(
+            AppKind::CodeEditor,
+            false,
+            true,
+            false,
+            "pasted words"
+        ));
+        for kind in [AppKind::Chromium, AppKind::Terminal, AppKind::Other] {
+            assert!(!hides(kind, true, true, false, "pasted words"));
+        }
+        assert!(!hides(AppKind::CodeEditor, true, true, false, " \n"));
+        assert!(!hides(AppKind::CodeEditor, true, true, false, ""));
+        // The terminal panel's input is empty whatever the setting is.
+        assert!(!hides(
+            AppKind::CodeEditor,
+            true,
+            true,
+            true,
+            "pasted words"
+        ));
+    }
+
+    #[test]
+    fn the_hidden_input_of_a_terminal_panel_is_told_from_the_editors_own() {
+        assert!(is_terminal_panel_class("xterm-helper-textarea"));
+        assert!(is_terminal_panel_class("input xterm-helper-textarea"));
+        assert!(!is_terminal_panel_class(
+            "inputarea monaco-mouse-cursor-text"
+        ));
+        assert!(!is_terminal_panel_class(""));
+        assert!(!is_terminal_panel_class("not-xterm"));
+    }
+
+    #[test]
+    fn empty_means_something_was_read_and_all_of_it_was_blank() {
+        assert!(all_sources_empty(1, 0));
+        assert!(all_sources_empty(3, 0));
+        assert!(!all_sources_empty(0, 0), "nothing could be read");
+        assert!(!all_sources_empty(1, 1));
+        assert!(!all_sources_empty(0, 2));
+    }
+
+    #[test]
+    fn enter_cancels_the_key_fallback_in_code_editors_unless_the_field_is_one_line() {
+        assert_eq!(enter_key(AppKind::CodeEditor, false), EnterKey::Invalidate);
+        assert_eq!(enter_key(AppKind::CodeEditor, true), EnterKey::Submit);
+        for kind in [AppKind::Chromium, AppKind::Terminal, AppKind::Other] {
+            assert_eq!(enter_key(kind, false), EnterKey::Submit);
+            assert_eq!(enter_key(kind, true), EnterKey::Submit);
+        }
+    }
+
+    #[test]
+    fn only_a_win32_edit_box_without_the_multiline_style_is_one_line() {
+        const WS_CHILD_VISIBLE: u32 = 0x5000_0000;
+        assert!(is_single_line_edit("Edit", WS_CHILD_VISIBLE));
+        assert!(is_single_line_edit("edit", WS_CHILD_VISIBLE | 0x80));
+        assert!(!is_single_line_edit("Edit", WS_CHILD_VISIBLE | 0x0004));
+        // Other classes say nothing about lines, a rich edit control included.
+        assert!(!is_single_line_edit("RICHEDIT50W", WS_CHILD_VISIBLE));
+        assert!(!is_single_line_edit("Chrome_RenderWidgetHostHWND", 0));
+        assert!(!is_single_line_edit("", 0));
     }
 
     #[test]
@@ -1281,10 +2013,54 @@ mod tests {
 
     #[test]
     fn unknown_or_submitted_terminal_input_never_reads_a_later_screen() {
-        assert!(!terminal_ended(false, false));
-        assert!(terminal_ended(true, false));
-        assert!(terminal_ended(false, true));
-        assert!(terminal_ended(true, true));
+        assert!(!ends_terminal(&[]));
+        assert!(ends_terminal(&[EditEvent::Enter]));
+        assert!(ends_terminal(&[EditEvent::Invalidated]));
+        assert!(ends_terminal(&[EditEvent::Ascii(b'a'), EditEvent::Enter]));
+        // Typing is not buffered for a terminal, so nothing else can be in the list.
+        assert!(!ends_terminal(&[
+            EditEvent::Backspace,
+            EditEvent::Left { shift: false }
+        ]));
+    }
+
+    #[test]
+    fn a_guarded_read_checks_once_before_and_once_after_the_provider() {
+        // The guard is the three-call focus and password check of `check_focus`. A poll reads
+        // through this and nothing else makes the check (see `UiaField::read`).
+        let mut checks = 0;
+        let text = checked_read(
+            &mut checks,
+            |checks| {
+                *checks += 1;
+                true
+            },
+            |checks| {
+                assert_eq!(*checks, 1, "one check before the read");
+                Some("field text")
+            },
+        );
+        assert_eq!(text, Some("field text"));
+        assert_eq!(checks, 2, "and one after it");
+    }
+
+    #[test]
+    fn a_failed_check_before_the_read_costs_one_check_and_no_read() {
+        let mut checks = 0;
+        let mut reads = 0;
+        let text = checked_read(
+            &mut (&mut checks, &mut reads),
+            |(checks, _)| {
+                **checks += 1;
+                false
+            },
+            |(_, reads)| {
+                **reads += 1;
+                Some("never")
+            },
+        );
+        assert_eq!(text, None);
+        assert_eq!((checks, reads), (1, 0));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-"""Tests for the entry point's wiring (Task 13).
+"""Tests for the entry point's wiring.
 
 The speech side is a fake kit: a microphone that delivers scripted chunks, a segmenter that makes
 one segment per chunk, an engine that always hears the same words, and the real DictationService.
@@ -34,14 +34,16 @@ from raphael_core.app import (
     SpeechModels,
     build_app,
 )
-from raphael_core.brain import textnorm
+from raphael_core.brain import catalog, pricing, textnorm
 from raphael_core.brain.cleanup import build_user_message
+from raphael_core.brain.openrouter import OpenRouterError
 from raphael_core.device import audio, dictation, models
 from raphael_core.device.models import REGISTRY, ModelFile, ModelManager, ModelSpec
 from raphael_core.protocol import (
     INVALID_PARAMS,
     NO_MICROPHONE,
     NOT_CONFIGURED,
+    NOT_FOUND,
     PROTOCOL_VERSION,
     RpcError,
 )
@@ -215,7 +217,15 @@ async def make_app(tmp_path):
     """`make_app(kit, ...)` is a started App on a data directory of its own."""
     apps: list[App] = []
 
-    def make(kit=None, *, ready=APP_MODELS, fake_llm=True, fake_audio=None, manager=None):
+    def make(
+        kit=None,
+        *,
+        ready=APP_MODELS,
+        fake_llm=True,
+        fake_audio=None,
+        manager=None,
+        agent_actions=None,
+    ):
         data = tmp_path / "data"
         make_models(data / "models", ready)
         app = App(
@@ -224,6 +234,7 @@ async def make_app(tmp_path):
             fake_llm=fake_llm,
             manager=manager,
             load_kit=lambda: make_kit() if kit is None else kit,
+            agent_actions=agent_actions,
         )
         apps.append(app)
         app.start()
@@ -275,6 +286,17 @@ async def test_the_fake_llm_gives_the_transcript_back_at_no_cost():
     assert (await client.key_info()).label  # a key check passes
     client.warm_up()
     await client.aclose()
+
+
+async def test_the_fake_llm_has_no_model_list_as_if_there_were_no_network(make_app, caplog):
+    with pytest.raises(OpenRouterError) as failed:
+        await EchoClient().models(timeout_s=1.0)
+    assert failed.value.kind == "network"
+    # So the catalog is Raphael's own models, and nothing went wrong on the way there.
+    with caplog.at_level(logging.WARNING):
+        listed = await make_app().call("models.catalog")
+    assert listed["source"] == "builtin" and listed["llm"] and listed["stt"]
+    assert not [record for record in caplog.records if record.name.startswith("raphael_core")]
 
 
 async def test_the_fake_llm_keeps_a_transcript_with_line_breaks_whole():
@@ -692,6 +714,14 @@ EXPECTED_METHODS = {
     "secrets.clear_openrouter_key",
     "status.get",
     "status.check_openrouter",
+    "integrations.list",
+    "integrations.add",
+    "integrations.set_enabled",
+    "integrations.remove",
+    "integrations.refresh",
+    "integrations.tools",
+    "integrations.set_tier",
+    "integrations.audit",
 }
 
 
@@ -806,6 +836,89 @@ async def test_wait_for_libraries_returns_when_the_import_failed(tmp_path):
 async def test_the_version_is_the_packages(make_app):
     hello = await make_app().call("core.hello")
     assert hello == {"protocol": 1, "version": raphael_core.__version__}
+
+
+async def test_the_plugins_are_there_and_keep_their_secrets_in_memory_with_the_fake_llm(
+    make_app, memory_keyring, tmp_path
+):
+    app = make_app()
+    assert await app.call("integrations.list") == {"servers": []}
+    added = await app.call(
+        "integrations.add",
+        {
+            "name": "Notes",
+            "transport": "stdio",
+            "command": "unused",
+            "env": [{"name": "TOKEN", "value": "s3cret-value"}],
+        },
+    )
+    assert added["server"]["env"] == ["TOKEN"]
+    # The run with the fake LLM never touches the user's vault, nor writes a secret to disk.
+    assert memory_keyring.credentials == {}
+    assert "s3cret-value" not in (tmp_path / "data" / "integrations.json").read_text(encoding="utf-8")
+    assert await app.call("integrations.audit") == {"entries": []}
+
+
+async def test_the_plugins_keep_their_secrets_in_the_credential_manager_otherwise(
+    make_app, memory_keyring
+):
+    app = make_app(fake_llm=False)
+    added = await app.call(
+        "integrations.add",
+        {
+            "name": "Notes",
+            "transport": "stdio",
+            "command": "unused",
+            "env": [{"name": "TOKEN", "value": "s3cret-value"}],
+        },
+    )
+    server_id = added["server"]["id"]
+    assert memory_keyring.credentials == {
+        f"Raphael plugin {server_id}:env:TOKEN": ("secret", "s3cret-value")
+    }
+    await app.call("integrations.remove", {"id": server_id})
+    assert memory_keyring.credentials == {}
+
+
+async def test_the_assistant_reads_the_brains_catalog_to_tell_whether_a_model_takes_tools(
+    make_app,
+):
+    app = make_app()
+    luna = "openai/gpt-6-luna"
+    entry = catalog.CatalogEntry(
+        id=luna,
+        kind="llm",
+        name="GPT-6 Luna",
+        provider="OpenAI",
+        price=catalog.ModelPrice(input_per_mtok=0.1, output_per_mtok=0.5),
+        variable_price=False,
+        context_length=None,
+        created_at_ms=None,
+        capabilities=frozenset({"structured_output", "reasoning", "reasoning_off", "max_tokens"}),
+    )
+    saved = {
+        "reading": pricing.CACHE_READING,
+        "fetched_at_ms": 1,
+        "models": [catalog.entry_to_json(entry)],
+    }
+    with app._conn:
+        app._conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            (pricing.CACHE_KEY, json.dumps(saved)),
+        )
+    # The list OpenRouter gave last says the model takes no tools: the next request leaves the
+    # plugins out. The assistant and the brain read the same catalog.
+    assert [e.id for e in app.brain.known_models()] == [luna]
+    assert app.agent._tool_support.supports(luna) is False
+
+
+async def test_before_any_list_was_read_the_assistant_takes_raphaels_own_models_to_take_tools(
+    make_app,
+):
+    app = make_app()
+    assert app.brain.known_models() is None
+    assert app.agent._tool_support.supports("openai/gpt-6-luna") is True  # the builtin table
+    assert app.agent._tool_support.supports("some/other-model") is None
 
 
 # --- start-up loads the heavy things, not the first key press ---------------------------------
@@ -1275,6 +1388,36 @@ async def test_a_dictation_goes_through_the_whole_app(make_app, notes):
     assert {level["session_id"] for level in notes.methods("audio.level")} == {"s1"}
 
 
+async def test_an_agent_dictation_goes_through_the_whole_app_without_cleanup_or_history(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("dictionary.add", {"word": "哈囉", "misheard": ["你好"]})
+    asked = []
+    echo = app.client.complete_json
+
+    async def spy(**kwargs):
+        asked.append(kwargs)
+        return await echo(**kwargs)
+
+    app.client.complete_json = spy
+    assert await app.call("dictation.start", {"session_id": "a1", "purpose": "agent"}) == {}
+    result = await app.call("dictation.stop", {"session_id": "a1", "target_app": "notepad.exe"})
+    assert result == {
+        "purpose": "agent",
+        "text": "哈囉世界哈囉世界",  # the dictionary's replacement, joined as a dictation is
+        "stt": "qwen3-asr",
+        "audio_seconds": pytest.approx(1.0),
+        "silent": False,
+    }
+    assert asked == []  # no cleanup
+    assert (await app.call("history.list"))["items"] == []  # no history row
+    assert (await app.call("history.latest"))["item"] is None  # nothing for "paste last"
+    assert (await app.call("status.get"))["spend"]["month_usd"] == 0
+    # The next one is a dictation as ever.
+    again = await dictate(app, "d1")
+    assert again["cleaned"] is True and len(asked) == 1
+
+
 async def test_one_segmenter_and_one_engine_serve_every_dictation(make_app):
     kit = make_kit()
     app = make_app(kit)
@@ -1348,7 +1491,7 @@ async def test_a_dictation_with_the_wav_file_of_fake_audio_uses_it_instead_of_th
     assert kit.mics == [] and len(kit.wavs) == 1
     assert (
         kit.wavs[0].path == wav and kit.wavs[0].realtime is True
-    )  # in real time, as the plan says
+    )  # in real time, at the pace of speech
     await app.call("dictation.cancel", {"session_id": "s"})
     assert kit.wavs[0].stopped == 1
 
@@ -1364,6 +1507,161 @@ async def test_without_a_key_the_text_comes_back_as_spoken(make_app):
 
 async def test_the_fake_llm_has_a_key(make_app):
     assert await make_app().call("secrets.status") == {"has_key": True}
+
+
+async def test_a_dictation_cancelled_while_its_text_is_cleaned_is_not_the_latest(make_app):
+    # Esc during the cleaning: the app drops the result, and "paste last" must not find the text.
+    app = make_app()
+    await dictate(app, "s0")
+    kept = (await app.call("history.latest"))["item"]
+    entered, gate = asyncio.Event(), asyncio.Event()
+    echo = app.client.complete_json
+
+    async def slow(**kwargs):
+        entered.set()
+        await gate.wait()
+        return await echo(**kwargs)
+
+    app.client.complete_json = slow
+    await app.call("dictation.start", {"session_id": "s1"})
+    stopping = asyncio.ensure_future(
+        app.call("dictation.stop", {"session_id": "s1", "target_app": None})
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        assert await app.call("dictation.cancel", {"session_id": "s1"}) == {}
+    finally:
+        gate.set()
+    with pytest.raises(RpcError) as dropped:
+        await stopping
+    assert dropped.value.code == NOT_FOUND
+    assert (await app.call("history.latest"))["item"] == kept
+    assert len((await app.call("history.list"))["items"]) == 1
+    # The next dictation is kept as ever.
+    app.client.complete_json = echo
+    again = await dictate(app, "s2")
+    assert (await app.call("history.latest"))["item"]["id"] == again["id"]
+
+
+# --- the voice assistant ----------------------------------------------------------------------
+
+ASSISTANT_METHODS = {
+    "agent.ask",
+    "agent.confirm",
+    "agent.cancel",
+    "agent.history.list",
+    "agent.history.clear",
+}
+
+
+class RecordingActions:
+    """What the assistant does to the computer, written down instead of done."""
+
+    def __init__(self):
+        self.calls = []
+
+    def open_url(self, url):
+        self.calls.append(("open_url", url))
+
+    def press_key(self, name, times=1):
+        self.calls.append(("press_key", name, times))
+
+    def lock_screen(self):
+        self.calls.append(("lock_screen",))
+
+    def list_start_apps(self):
+        return []
+
+    def launch_app(self, app_id):
+        self.calls.append(("launch_app", app_id))
+
+    def copy_to_clipboard(self, text):
+        self.calls.append(("copy_to_clipboard", text))
+
+
+def ask_params(text, language="zh-TW", session="a1"):
+    return {"session_id": session, "text": text, "ui_language": language, "target_app": None}
+
+
+async def test_the_assistants_methods_are_on_the_app_from_the_start(tmp_path):
+    release = threading.Event()
+    app = App(data_dir=tmp_path, fake_llm=True, load_kit=lambda: release.wait(30) and make_kit())
+    app.start()
+    try:
+        assert ASSISTANT_METHODS <= set(app.methods())
+        # The assistant does not wait for the speech side: it needs no microphone.
+        result = await asyncio.wait_for(app.call("agent.ask", ask_params("你好")), 5)
+        assert result["status"] == "done"
+    finally:
+        release.set()
+        await app.aclose()
+
+
+async def test_the_assistant_answers_through_the_whole_app_with_the_fake_llm(make_app):
+    app = make_app()
+    result = await app.call("agent.ask", ask_params("你好"))
+    assert result == {"status": "done", "turn_id": 1, "prefix": "答", "text": "你好"}
+    en = await app.call("agent.ask", ask_params("hello", language="en", session="a2"))
+    assert (en["prefix"], en["text"]) == ("Answer", "hello")
+    turns = (await app.call("agent.history.list", {}))["turns"]
+    assert [(t["question"], t["route"], t["status"]) for t in turns] == [
+        ("hello", "chat", "done"),
+        ("你好", "chat", "done"),
+    ]
+    assert (await app.call("status.get"))["spend"]["month_usd"] == 0  # the fake LLM is free
+    assert await app.call("agent.history.clear", {}) == {"deleted": 2}
+
+
+async def test_the_fake_llm_does_nothing_to_the_computer(make_app):
+    from raphael_core.agent.device import NullActions
+
+    assert isinstance(make_app().agent._actions, NullActions)
+
+
+async def test_the_real_core_gets_windows_actions_unless_it_is_given_others(make_app):
+    from raphael_core.agent.device import WindowsActions
+
+    assert isinstance(make_app(fake_llm=False).agent._actions, WindowsActions)
+    actions = RecordingActions()
+    assert make_app(fake_llm=False, agent_actions=actions).agent._actions is actions
+
+
+async def test_without_a_key_the_assistant_still_runs_commands_and_says_why_it_cannot_do_more(
+    make_app,
+):
+    actions = RecordingActions()
+    app = make_app(fake_llm=False, agent_actions=actions)
+    assert await app.call("secrets.status") == {"has_key": False}
+    done = await app.call("agent.ask", ask_params("靜音"))
+    assert (done["prefix"], done["text"]) == ("了", "")
+    assert actions.calls == [("press_key", "volume_mute", 1)]
+    refused = await app.call("agent.ask", ask_params("what is the weather", "en", "a2"))
+    assert (refused["prefix"], refused["text"]) == ("Negative", "No OpenRouter key is set.")
+
+
+async def test_a_dictation_for_the_assistant_and_its_question_go_together(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await app.call("dictation.start", {"session_id": "a1", "purpose": "agent"})
+    heard = await app.call("dictation.stop", {"session_id": "a1", "target_app": None})
+    result = await app.call("agent.ask", ask_params(heard["text"]))
+    assert result == {"status": "done", "turn_id": 1, "prefix": "答", "text": WORDS + WORDS}
+    assert (await app.call("history.list"))["items"] == []  # the dictation history is not touched
+
+
+async def test_closing_the_app_ends_the_assistants_requests_before_closing_the_client(make_app):
+    app = make_app()
+    order = []
+    closing = app.agent.aclose
+
+    async def agent_aclose():
+        order.append(("agent", app.client.closed))
+        await closing()
+
+    app.agent.aclose = agent_aclose
+    await app.aclose()
+    assert order == [("agent", False)]
+    assert app.client.closed
 
 
 # --- shutting down ----------------------------------------------------------------------------

@@ -1,4 +1,6 @@
-// Transcription languages and written variants are separate controls. The persisted core setting
+// The languages a person speaks, and how each is written. One dropdown in the settings opens one
+// picker for both: the languages are checked on or off, and a chosen language with several written
+// variants (中文: 台灣、香港、簡體…) shows them under it as a radio group. The persisted core setting
 // remains an ordered list of variant ids, with one variant per selected language (one to five).
 import { t } from "./i18n";
 import { CHECK, esc, ico } from "./ui";
@@ -84,39 +86,50 @@ export function normalizeLanguages(value: unknown): string[] {
   return ids.length ? ids : [...DEFAULT_LANGUAGES];
 }
 
-function transcriptionNames(groups: LanguageGroup[], selected: string[]): string[] {
-  return selected.map((id) => {
-    const group = groupOf(groups, id);
-    return group ? groupName(group) : id;
-  });
+/**
+ * What the dropdown of the language row says: each chosen language in the saved order, by the name
+ * of its variant when it has several (繁體中文（台灣）), else by its own (日本語). An id the list does not
+ * know (it could not be read) is shown as it is.
+ */
+export function languageSummary(groups: LanguageGroup[], selected: string[]): string {
+  return selected
+    .map((id) => {
+      const group = groupOf(groups, id);
+      if (!group) return id;
+      return group.variants.length > 1 ? languageName(groups, id) : groupName(group);
+    })
+    .join(t("languages.join"));
 }
 
-/** The transcription control shows language names, without regional variants. */
-export function languageChipsHTML(groups: LanguageGroup[], selected: string[]): string {
-  return `<span class="lang-chips">${transcriptionNames(groups, selected)
-    .map((name) => `<span class="lchip">${esc(name)}</span>`).join("")}</span>${ico("pencil")}`;
+/**
+ * The control of the language row. It looks and acts like the other dropdowns, but opens a dialog
+ * rather than a menu: the picker holds two kinds of choice. `attrs` names it for the page.
+ */
+export function languageSelectHTML(groups: LanguageGroup[], selected: string[], attrs = ""): string {
+  const summary = languageSummary(groups, selected);
+  return `<button type="button" class="sel lang-sel" aria-haspopup="dialog" aria-expanded="false" ` +
+    `aria-label="${esc(t("transcription.label", { p0: summary }))}" title="${esc(summary)}"${attrs}>` +
+    `<span>${esc(summary)}</span>${ico("down")}</button>`;
 }
 
-export const transcriptionLabel = (groups: LanguageGroup[], selected: string[]): string =>
-  t("transcription.label", { p0: transcriptionNames(groups, selected).join(", ") });
-
-export const languageLabel = (groups: LanguageGroup[], selected: string[]): string =>
-  t("languages.004", { p0: selected.map((id) => languageName(groups, id)).join(", ") });
-
-export function transcriptionButtonHTML(groups: LanguageGroup[], selected: string[], attrs = ""): string {
-  return `<button type="button" class="btn sel lang-sel" aria-haspopup="dialog" aria-expanded="false" ` +
-    `aria-label="${esc(transcriptionLabel(groups, selected))}" title="${esc(t("transcription.choose"))}"${attrs}>` +
-    languageChipsHTML(groups, selected) + `</button>`;
+/** The variants of a chosen language, as one radio group under it. */
+function variantsHTML(group: LanguageGroup, selected: string[]): string {
+  const variants = group.variants.map((variant) => {
+    const guidance = variantNote(variant);
+    return `<button type="button" role="radio" class="lang-item lang-variant" data-variant="${esc(variant.id)}" aria-checked="${selected.includes(variant.id)}">` +
+      `<span class="radio" aria-hidden="true"></span><span class="mtd"><span class="mt">${esc(variantName(variant))}</span>` +
+      (guidance ? `<span class="mdesc">${esc(guidance)}</span>` : "") + `</span></button>`;
+  }).join("");
+  return `<div class="lang-variants" data-variant-group="${esc(group.id)}" role="radiogroup" ` +
+    `aria-label="${esc(t("languages.variantsOf", { p0: groupName(group) }))}">${variants}</div>`;
 }
 
-/** The separate variant button includes the current variants in its accessible summary. */
-export function languageButtonHTML(groups: LanguageGroup[], selected: string[], attrs = ""): string {
-  return `<button type="button" class="btn sel variant-button" aria-haspopup="dialog" aria-expanded="false" ` +
-    t("languages.005", { p0: esc(languageLabel(groups, selected)), p1: attrs });
-}
-
-/** The transcription picker selects language groups, with no variant controls. */
-export function transcriptionPanelHTML(groups: LanguageGroup[] | null, selected: string[]): string {
+/**
+ * The picker: every language, checked when it is chosen (up to five, at least one). A chosen language
+ * with several variants has them right under it, so that how it is written is chosen where it is
+ * chosen; one that is not chosen says how many it has.
+ */
+export function languagePanelHTML(groups: LanguageGroup[] | null, selected: string[]): string {
   const head = `<div class="lang-head"><span class="lang-title">${esc(t("transcription.title"))}</span>` +
     t("languages.007", { p0: selected.length, p1: MAX_LANGUAGES });
   if (!groups?.length) return head + t("languages.008");
@@ -124,27 +137,12 @@ export function transcriptionPanelHTML(groups: LanguageGroup[] | null, selected:
   const items = groups.filter((g) => g.variants.length).map((group) => {
     const on = chosen.some((g) => g.id === group.id);
     const blocked = !on && selected.length >= MAX_LANGUAGES;
+    const several = group.variants.length > 1;
     return `<button type="button" class="lang-item lang-language" data-language="${esc(group.id)}" aria-pressed="${on}"${blocked ? ' aria-disabled="true"' : ""}>` +
-      `<span class="ck">${on ? CHECK : ""}</span><span class="mt">${esc(groupName(group))}</span></button>`;
+      `<span class="ck">${on ? CHECK : ""}</span><span class="mt">${esc(groupName(group))}</span>` +
+      (several && !on ? `<span class="md">${esc(t("languages.009", { p0: group.variants.length }))}</span>` : "") +
+      `</button>` +
+      (several && on ? variantsHTML(group, selected) : "");
   }).join("");
   return head + `<div class="lang-list">${items}</div><p class="lang-foot">${esc(AUTO_DETECT_HINT())}</p>`;
-}
-
-/** Only selected languages with multiple variants appear, one radio group per language. */
-export function variantPanelHTML(groups: LanguageGroup[] | null, selected: string[]): string {
-  const head = `<div class="lang-head"><span class="lang-title">${esc(t("settings.061"))}</span></div>`;
-  if (!groups?.length) return head + t("languages.008");
-  const withVariants = selectedLanguageGroups(groups, selected).filter((g) => g.variants.length > 1);
-  if (!withVariants.length) return head + `<p class="lang-empty">${esc(t("variants.empty"))}</p>`;
-  const items = withVariants.map((group) => {
-    const variants = group.variants.map((variant) => {
-      const guidance = variantNote(variant);
-      return `<button type="button" role="radio" class="lang-item lang-variant" data-variant="${esc(variant.id)}" aria-checked="${selected.includes(variant.id)}">` +
-        `<span class="radio" aria-hidden="true"></span><span class="mtd"><span class="mt">${esc(variantName(variant))}</span>` +
-        (guidance ? `<span class="mdesc">${esc(guidance)}</span>` : "") + `</span></button>`;
-    }).join("");
-    return `<div class="lang-variant-group" data-variant-group="${esc(group.id)}" role="radiogroup" aria-label="${esc(groupName(group))}">` +
-      `<div class="lang-sub">${esc(groupName(group))}</div>${variants}</div>`;
-  }).join("");
-  return head + `<div class="lang-list">${items}</div><p class="lang-foot">${esc(t("variants.description"))}</p>`;
 }

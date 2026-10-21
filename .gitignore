@@ -47,5 +47,8 @@ coverage/
 # Local agent worktrees
 /.worktrees/
 
+# Personal editor settings (app/.vscode/extensions.json, the shared recommendations, stays tracked)
+/.vscode/
+
 # Local UI audit evidence and scratch files
 /ui-shots/

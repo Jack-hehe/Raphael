@@ -139,11 +139,6 @@ export function dictationKeysText(bindings: string[]): string {
 
 // ---------- the pieces of the steps ----------
 
-const REPORT = {
-  zh: "《告。初次啟動。開始初始設定。》",
-  ja: "《告。初回起動を確認。初期設定を開始します。》",
-} as const;
-
 /** The try box asks how long the dictation took this long after the last change in the box... */
 const TRY_TIMING_DELAY_MS = 300;
 /** ...and the model bar is drawn at most this often. */
@@ -275,7 +270,6 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
   function keyGroup(): string {
     return (
       group(
-        "",
         [
           keyRow(),
           ...(keyError ? [note(st("err", keyError()), ' role="alert"')] : []),
@@ -310,7 +304,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
       case 2:
         return (
           t("onboarding.040") +
-          group("", [
+          group([
             micRow(),
             row(t("onboarding.041"), t("onboarding.042"), `<span class="ctl-model" data-model="ctl"></span>`),
             `<div class="note" data-model="note" hidden></div>`,
@@ -435,7 +429,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
         if (canvas && subs) {
           stage = new Stage(canvas, subs, () => {});
           stage.play();
-          stage.show({ zh: REPORT.zh, ja: REPORT.ja });
+          stage.show({ text: t("report.firstRun") });
         }
         break;
       }

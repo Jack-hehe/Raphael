@@ -17,7 +17,7 @@ use std::thread;
 use std::time::Duration;
 
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
-use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, HANDLE};
+use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, HANDLE, HWND};
 use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
@@ -29,13 +29,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL, VK_RMENU, VK_RSHIFT,
     VK_RWIN,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
+};
 use windows::core::{HRESULT, Owned, PWSTR};
 
 use super::clipboard::ClipboardSession;
 use super::{
-    CopyReason, Decision, PasteDelivery, PasteOutcome, PasteReceipt, Paster, Shortcut, Target,
-    decide,
+    Decision, PasteDelivery, PasteOutcome, PasteReceipt, Paster, Shortcut, Target, decide,
 };
 
 /// How long the chord's modifiers stay down after the key click. Most programs read them from
@@ -112,10 +113,12 @@ impl Paster for WindowsPaster {
         }
     }
 
-    fn copy(&self, text: &str) {
-        // With no target, `decide` always says copy only: the text is published and kept.
-        let outcome = self.deliver(text, None);
-        debug_assert_eq!(outcome, PasteOutcome::CopiedOnly(CopyReason::NoTarget));
+    fn refocus(&self, target: &Target) -> bool {
+        // Windows lets the process that has the foreground give it away, which is this one
+        // when one of its windows took it.
+        let hwnd = HWND(target.hwnd as *mut core::ffi::c_void);
+        // SAFETY: a plain call; a window that is gone makes it fail, nothing more.
+        unsafe { SetForegroundWindow(hwnd) }.as_bool()
     }
 }
 

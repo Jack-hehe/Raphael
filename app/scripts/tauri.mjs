@@ -1,4 +1,6 @@
 // Local icons and the generated config must stay in the gitignored private directories.
+// A release build (the release config) or any CI run is public: it ignores private artwork entirely
+// and fails if a development build left generated private files that it would embed.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -7,12 +9,34 @@ import {
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { privateAssetsDirectory } from "./private-assets.mjs";
+import { assertPublicAssets, isPublicBuild, privateAssetsDirectory } from "./private-assets.mjs";
 
 const script = fileURLToPath(import.meta.url);
 const appDir = resolve(dirname(script), "..");
 const configArg = join("src-tauri", "tauri.private.conf.json");
 const desktopIcons = ["32x32.png", "128x128.png", "128x128@2x.png", "icon.icns", "icon.ico"];
+
+const privateReference = /assets-private|icons-private|public[\\/]private|tauri\.private\.conf\.json/i;
+
+/** True for a build that must not use private artwork: the release config, or CI. */
+export function isReleaseBuild(args, env = process.env) {
+  if (isPublicBuild(env)) return true;
+  const separator = args.indexOf("--");
+  const options = separator < 0 ? args : args.slice(0, separator);
+  return options.some((arg, index) => {
+    const config = arg === "--config" || arg === "-c" ? options[index + 1]
+      : arg.startsWith("--config=") ? arg.slice("--config=".length)
+        : arg.startsWith("-c") ? arg.slice(2) : null;
+    return config?.split(/[\\/]/).at(-1) === "tauri.release.conf.json";
+  });
+}
+
+/** A public build must not be pointed at private files by its arguments or by TAURI_CONFIG. */
+export function assertNoPrivateConfiguration(args, env = process.env) {
+  if (args.some((arg) => privateReference.test(arg)) || privateReference.test(env.TAURI_CONFIG ?? "")) {
+    throw new Error("Public builds refuse configuration that refers to private artwork");
+  }
+}
 
 function isPrivateCommand(args) {
   const command = args.slice(0, args.indexOf("--") < 0 ? args.length : args.indexOf("--"))
@@ -21,8 +45,8 @@ function isPrivateCommand(args) {
 }
 
 // A null config means the private source was absent, even if an old config once existed.
-export function withPrivateConfig(args, privateConfig) {
-  if (!privateConfig || !isPrivateCommand(args)) return [...args];
+export function withPrivateConfig(args, privateConfig, env = process.env) {
+  if (!privateConfig || !isPrivateCommand(args) || isReleaseBuild(args, env)) return [...args];
   const separator = args.indexOf("--");
   const index = separator < 0 ? args.length : separator;
   return [...args.slice(0, index), "--config", privateConfig, ...args.slice(index)];
@@ -42,6 +66,7 @@ function writeIfChanged(path, content) {
 
 export function preparePrivateIcons() {
   const privateDir = privateAssetsDirectory(appDir);
+  if (!privateDir) return null;
   const source = join(privateDir, "app-icon.png");
   const output = join(appDir, "src-tauri", "icons-private");
   const config = join(appDir, configArg);
@@ -91,6 +116,12 @@ export function preparePrivateIcons() {
 if (process.argv[1] && resolve(process.argv[1]) === script) {
   try {
     const args = process.argv.slice(2);
+    if (isPrivateCommand(args) && isReleaseBuild(args)) {
+      // The Tauri CLI runs beforeBuildCommand with this environment, so copy-private.mjs sees it too.
+      process.env.RAPHAEL_PUBLIC_BUILD = "1";
+      assertNoPrivateConfiguration(args);
+      assertPublicAssets(appDir);
+    }
     const config = isPrivateCommand(args) ? preparePrivateIcons() : null;
     process.exitCode = runTauri(withPrivateConfig(args, config));
   } catch (error) {

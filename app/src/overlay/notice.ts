@@ -1,10 +1,11 @@
+/** The longest a line of Raphael's stays on screen, in milliseconds. */
+export const MAX_NOTICE_MS = 12_000;
+
 /**
- * How long Raphael's report stays on screen, in milliseconds: 1.5 s plus 0.15 s for every
- * character of the Chinese line (spec §12.5). Characters are counted as code points, so a rare
- * character outside the Basic Multilingual Plane counts once.
- *
- * Kept apart from `overlay.ts` so that it needs no browser (the tests run in Node).
+ * How long a line of Raphael's stays on screen, in milliseconds: 1.5 s plus 0.15 s for every
+ * character of the line, and never more than 12 s (spec §12.5). Characters are counted as code
+ * points, so a rare character outside the Basic Multilingual Plane counts once.
  */
-export function noticeDurationMs(zh: string): number {
-  return 1500 + 150 * [...zh].length;
+export function noticeDurationMs(line: string): number {
+  return Math.min(MAX_NOTICE_MS, 1500 + 150 * [...line].length);
 }

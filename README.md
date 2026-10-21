@@ -1,106 +1,108 @@
-# Raphael｜拉斐爾
+# Raphael
 
-讓想法直接成為文字，少一點打字造成的中斷。
+[![CI](https://github.com/Jack-hehe/Raphael/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Jack-hehe/Raphael/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Jack-hehe/Raphael)](https://github.com/Jack-hehe/Raphael/releases/latest)
 
-Raphael 是以 Windows 為起點的個人語音助理，靈感來自「智慧之王拉斐爾」。第一階段先專注於一件事：在原本正在使用的應用程式中，按下快捷鍵說話，將保留原意、整理過的文字送回輸入位置。
+Raphael is a voice assistant for Windows. Press a key and speak, and a clean, punctuated version of what you said appears wherever you were typing.
 
-## 專案理念
+Dictation is the first milestone. Assistant features come next: carrying out tasks through the services you connect, with your approval before anything sensitive, and spoken replies.
 
-- **先把聽寫做好。** 可靠的錄音、辨識、取消與貼上，是後續助理功能的基礎。
-- **整理表達，保留你的意思。** 減少口頭贅詞、補上標點、採用說話中的自我更正；聽寫中的問題應保留為文字，不應被模型當成提問來回答。
-- **留在你的工作流程裡。** 浮層只提供聆聽狀態、處理進度與簡短通知，盡量不搶焦點。
-- **逐漸熟悉你的用詞。** 個人詞典與更正學習協助處理人名、專有名詞及慣用寫法。
-- **讓資料與費用有跡可循。** 明確區分本機與雲端處理，提供歷史、使用量與預算設定。
+## Features
 
-這是非官方的粉絲個人專案，與原作權利人無關。儲存庫不提供動畫素材、私人圖案、原始錄音或個人語音模型。
+- **Works where you type.** Press Right Alt to start and stop dictating, or switch to hold-to-talk. Esc cancels. The text is pasted into the app you were using, and music or video that was playing pauses while you speak and resumes afterwards.
+- **Keeps what you meant.** Raphael removes filler words, adds punctuation and applies the corrections you make while speaking. A question you dictate stays a question; Raphael doesn't answer it.
+- **Learns your vocabulary.** Add names and jargon to a personal dictionary, and Raphael learns new terms from the corrections you make after a paste.
+- **Cloud or on-device recognition.** Use cloud speech recognition through OpenRouter (the default), or a downloadable on-device model that keeps audio on your computer.
+- **Multilingual.** Choose up to five dictation languages, including Chinese (Taiwan, Hong Kong and Mainland usage), Cantonese, English, Japanese and Korean. The interface is available in English, Traditional Chinese and Japanese.
+- **Clear costs.** Review past dictations, track usage and set a monthly spending limit.
 
-## 下載安裝
+## Installation
 
-Windows 10／11 x64 使用者可到 [GitHub Releases](https://github.com/Jack-hehe/Raphael/releases/latest) 下載 `Raphael-版本-windows-x64-setup.exe`。安裝檔已包含 Python 核心與執行所需函式庫，不需要安裝 Python、Node.js 或 Rust。
+1. Download `Raphael-<version>-windows-x64-setup.exe` from the [latest release](https://github.com/Jack-hehe/Raphael/releases/latest). Raphael supports Windows 10 and 11 on x64.
+2. Run the installer. Everything Raphael needs is included; the installer fetches the WebView2 runtime if your system lacks it.
+3. Follow the first-run guide: add an [OpenRouter](https://openrouter.ai) API key, which is used for cleanup and cloud recognition, then choose a microphone while the on-device speech model downloads.
 
-首次啟動依照引導設定金鑰、麥克風與語音模型；模型另外下載，需要網路與磁碟空間。若電腦尚未安裝 WebView2，安裝程式會下載其 runtime。公開版使用公開備用圖案。首版未經程式碼簽章，Windows 可能顯示未知發行者提示；可對照 Release 附的 SHA-256 校驗檔確認下載內容。
+Raphael then runs from the system tray.
 
-## 目前可以做什麼
+> [!NOTE]
+> Installers are not code-signed yet, so SmartScreen may warn about an unknown publisher. You can check a download against `SHA256SUMS.txt` from the same release.
 
-目前的里程碑是 Windows 上的第一階段聽寫流程：
+## Privacy
 
-- 預設使用右 Alt 開始／結束聽寫，也可改成按住說話；Esc 取消。
-- 本機或雲端語音辨識、文字整理，以及送回原輸入位置的貼上流程。
-- 透明浮層顯示《 0 % 》到《 100 % 》的處理進度，完成貼上後才結束動畫。
-- 歷史紀錄、個人詞典、常見詞語建議，以及從貼上後更正中學習詞語。
-- 自訂快捷鍵、語言、麥克風、模型與預算設定。
+- **Your API key** is kept in Windows Credential Manager, never in files, logs or the database.
+- **Your data** (settings, history, dictionary and conversations) stays on your computer, in `%APPDATA%\Raphael`.
+- **Speech recognition** runs in the cloud by default: the recording is sent to OpenRouter, with your dictionary's words as hints for the models that accept them. Choose on-device recognition in Settings to keep audio on your computer.
+- **Cleanup:** with an API key set and budget remaining, Raphael sends the transcript to OpenRouter, together with dictionary hints and replacement rules, your language settings and the name of the app you are dictating into. This also happens with on-device recognition, so Raphael is not fully offline.
+- **Questions to Raphael** (Right Alt + Space, still in development) go to OpenRouter: to a model that sorts them, to the model that answers, together with the last few turns of the conversation, and to OpenRouter's web search when a question needs the web. When an app you ask for is not found, the names of the apps in your Start menu go along so that the model can pick one. A weather question sends only the city to Open-Meteo.
+- **Correction learning** looks only at the field Raphael just pasted into, for up to 60 seconds. It reads the field's text or, where an app does not expose it, the edits you type there. Password fields are skipped.
+- **No telemetry.** Besides OpenRouter and Open-Meteo, Raphael connects only to GitHub, to download the speech models.
 
-更正學習會觀察這次成功貼上的輸入欄位，最多 60 秒；送出、離開欄位或觀察結束時才整理可確認的詞語更正。密碼欄位與無法安全讀取的欄位會跳過；整句重寫不等於新增詞語。「常見詞語建議」則來自重複出現的用詞，與更正學習是不同機制。不同編輯器的 UI Automation 支援程度仍會影響學習效果。
+## Architecture
 
-對話、語音回覆、喚醒詞、操作其他應用程式與跨平台支援屬於後續方向，目前未包含在這個里程碑中。
-
-## 架構
+Raphael is a [Tauri 2](https://tauri.app) app with a Python core.
 
 ```text
-TypeScript UI / overlay
-        |
-Tauri commands and events
-        |
-Rust desktop shell
-        |
-JSON-RPC over stdio
-        |
-Python core
-    +-- Brain: text cleanup, dictionary, history, budget
-    +-- Device: audio capture, VAD, speech recognition
+UI (TypeScript, WebView2)      main window, settings, overlay
+        │  Tauri commands and events
+Desktop shell (Rust)           hotkeys, focus, paste, correction learning,
+                               media pause, tray
+        │  JSON-RPC over stdio
+Core (Python 3.12)             audio capture, speech recognition, cleanup,
+                               dictionary, history, spending, assistant
 ```
 
-| 層級 | 責任 |
+| Directory | Contents |
 | --- | --- |
-| `app/src` | 主視窗、設定、詞典、歷史與浮層呈現。 |
-| `app/src-tauri` | Windows 快捷鍵、視窗、焦點、剪貼簿、貼上、更正觀察與核心程序生命週期。 |
-| `core/src/raphael_core` | 以 App 組裝 Brain 與 Device；處理辨識、整理、資料儲存與費用計算。 |
-| `eval` | 可重複使用的聽寫提示與文字整理評估案例。 |
+| [`app/src`](app/src) | Main window and overlay (TypeScript, no framework) |
+| [`app/src-tauri`](app/src-tauri) | Desktop shell (Rust) |
+| [`core`](core) | Python core |
+| [`eval`](eval) | Evaluation sets for cleanup and speech recognition |
+| [`docs`](docs) | CI, release and manual testing guides |
 
-核心的 stdout 專供 JSON-RPC，診斷訊息走 stderr。桌面層管理程序重啟、呼叫期限與 session 狀態，避免取消或晚到的回覆污染後續聽寫。
+## Building from source
 
-## 資料與隱私
-
-- OpenRouter 金鑰透過 App 設定，儲存在 Windows Credential Manager；不需要建立 `.env`。
-- 設定、詞典與聽寫歷史儲存在本機使用者資料目錄，歷史與詞典使用 SQLite。
-- 雲端辨識會將錄音與詞典提示傳給選定的服務商；本機辨識使用下載到電腦的語音模型。
-- **本機辨識不代表全程離線。** 目前有可用金鑰且未達預算上限時，程式會自動透過 OpenRouter 整理文字，傳送辨識結果、詞典提示／替換規則、語言設定與目標程式名稱；目前沒有獨立的整理開關。沒有可用金鑰或達到上限時，則保留未經雲端整理的文字。
-- 模型、私人素材、錄音、使用者資料、憑證及建置產物皆不應提交到 Git。沒有私人素材時，程式使用儲存庫內的公開備用圖案。
-
-## 開發
-
-需要 Windows x64、Node.js 22（至少 22.12）、Rust 1.98、uv，以及 `core/.python-version` 指定的 Python 3.12.14。Windows 建置另需 MSVC C++ build tools 與 WebView2 runtime。
-
-在專案根目錄執行：
+You need Windows 10 or 11 (x64), [Node.js](https://nodejs.org) 22.12 or later, [Rust](https://rustup.rs) 1.98, [uv](https://docs.astral.sh/uv/) and the MSVC C++ build tools. uv installs the pinned Python version.
 
 ```powershell
-cd core
+git clone https://github.com/Jack-hehe/Raphael.git
+cd Raphael\core
 uv sync --locked --dev
-cd ../app
+cd ..\app
 npm ci
 npm run tauri -- dev
 ```
 
-第一次啟動請完成引導；後續啟動主要留在系統匣，可由系統匣開啟主視窗。模型初次使用需要下載。
+Development builds run the Python core from the source tree. [docs/windows-release.md](docs/windows-release.md) describes how the installer is built.
 
-在 `app/` 建置開發用執行檔：
+## Testing
 
 ```powershell
-node scripts/tauri.mjs build --debug --no-bundle -- --locked
+# Frontend (app/)
+npm test
+npm run check:contrast
+npm run build
+
+# Python core (core/); the fail-closed keyring keeps tests away from your real credentials
+$env:PYTHON_KEYRING_BACKEND = "keyring.backends.fail.Keyring"
+uv run --locked pytest -q -ra -W error
+
+# Desktop shell (app/src-tauri/); needs the frontend build above
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
 ```
 
-這個 debug 執行檔仍從原始碼 checkout 啟動 Python 核心，不是安裝程式。正式版會使用安裝目錄內的獨立核心；製作方式見 [Windows Release 流程](docs/windows-release.md)。私人圖案設定請參考[本機素材說明](docs/private-icons.md)。
+CI runs these checks on Windows for pull requests and pushes to `main`, together with formatting, the vendored keyboard hook's tests and a debug build of the app; [docs/ci.md](docs/ci.md) lists every command. Tests that need the downloaded speech models run only with `RAPHAEL_TEST_MODELS=1`. Behaviour that depends on real microphones, input methods and editors is covered by the [manual checklist](docs/windows-manual-checks.md).
 
-## 品質檢查
+## Contributing
 
-GitHub Actions 會執行三組 Windows CI。檢查範圍如下：
+Bug reports and suggestions are welcome in [GitHub Issues](https://github.com/Jack-hehe/Raphael/issues).
 
-| 範圍 | 檢查 |
-| --- | --- |
-| 前端 | Vitest、TypeScript strict／未使用程式碼檢查、Vite build、既有文字配色對比檢查。 |
-| Python | 完整預設 pytest suite，warnings 視為錯誤；測試使用替身服務與隔離 keyring。 |
-| Rust／桌面 | rustfmt、所有 targets 的 cargo check 與 Clippy、單元測試、patched keyboard listener 測試、公開素材的 Tauri 執行檔建置。 |
+## License
 
-目前沒有另設 ESLint 或 Python 專用 linter。需要下載模型、實體鍵盤或真實桌面的測試，與預設 CI 分開執行。測試通過表示上述範圍已驗證，仍需在實際麥克風、IME、編輯器與螢幕環境驗收。
+Raphael is released under the [MIT License](LICENSE). The license covers this repository's code and public assets; it grants no rights to the series' characters, names or artwork.
 
-詳細指令與限制見 [CI 說明](docs/ci.md)、[Windows 手動驗收](docs/windows-manual-checks.md)及[第一階段驗證紀錄](docs/phase1-validation.md)。語音與模型比較工具見[評估工具說明](eval/README.md)。
+## Acknowledgements
+
+Raphael builds on [Tauri](https://tauri.app), [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [OpenCC](https://github.com/BYVoid/OpenCC) and [handy-keys](https://github.com/handy-computer/handy-keys), and its paste code is adapted from [Handy](https://github.com/cjpais/Handy). Each release includes the third-party licenses in `THIRD_PARTY_NOTICES.txt`.
+
+Raphael is an unofficial fan project inspired by Raphael, the skill from *That Time I Got Reincarnated as a Slime*. It is not affiliated with the rights holders, and this repository contains no artwork, audio or voice models from the series.

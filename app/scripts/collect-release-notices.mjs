@@ -8,6 +8,11 @@ import { fileURLToPath } from "node:url";
 
 const script = fileURLToPath(import.meta.url);
 const defaultAppDirectory = resolve(dirname(script), "..");
+const RUST_TARGET = "x86_64-pc-windows-msvc";
+// Build-time npm packages whose code is emitted into the shipped bundle, so their notices ship too.
+// Vite 8.3.4 writes its modulepreload polyfill (a port of Vite's own, injected by Rolldown) into
+// dist/assets/*.js; no other Vite or Rolldown code is in the output. Check any addition against a real build.
+const SHIPPED_BUILD_PACKAGES = new Set(["vite"]);
 const licenseName = /^(?:licen[cs]e|copying)/i;
 const noticeName = /^(?:licen[cs]e|copying|notice|authors|third[-_ ]?party.*(?:licen[cs]e|notice))/i;
 const licenseDirectoryName = /^(?:licen[cs]es?|legal|notices?|third[-_]party[-_]licen[cs]es?)$/i;
@@ -139,7 +144,12 @@ function supplementalTexts(pkg, directory) {
   if (!/^[a-f0-9]{40}$/.test(entry.gitCommit) || !Array.isArray(entry.files) || !entry.files.length) {
     throw new Error("supplemental license provenance is incomplete");
   }
-  return entry.files.map((file) => {
+  return pinnedTexts(directory, entry.files);
+}
+
+// License texts the manifest pins by SHA-256 and by the https URL they were taken from.
+function pinnedTexts(directory, files) {
+  return files.map((file) => {
     const path = resolve(directory, file.file);
     if (!inside(directory, path) || !regularFile(path) || !/^https:\/\//.test(file.sourceUrl)) {
       throw new Error("supplemental license file or source URL is invalid");
@@ -154,20 +164,128 @@ function supplementalTexts(pkg, directory) {
   });
 }
 
+// Shipped code that is neither a crate nor an npm package: binary libraries a crate links in, and
+// source adapted into this repository. A component bound to a crate is listed only while that crate
+// ships and fails closed if the crate's version moved, because the pinned text describes one version.
+function componentRecords(directory, crates, gaps) {
+  const indexPath = join(directory, "manifest.json");
+  if (!existsSync(indexPath)) return [];
+  const index = readJson(indexPath);
+  if (index.schemaVersion !== 1) throw new Error("invalid supplemental license manifest");
+  const records = [];
+  for (const component of index.components ?? []) {
+    const label = `Component ${component.name}@${component.version}`;
+    try {
+      const required = component.requiresCrate;
+      if (required) {
+        const versions = crates.filter((crate) => crate.name === required.name).map((crate) => crate.version);
+        if (!versions.length) continue;
+        if (!versions.includes(required.version)) {
+          throw new Error(`pinned for ${required.name} ${required.version}, but the build has ${versions.join(", ")}`);
+        }
+      }
+      if (!component.usage || !/^https:\/\//.test(component.source) || !Array.isArray(component.files) || !component.files.length) {
+        throw new Error("component provenance is incomplete");
+      }
+      records.push({
+        ecosystem: "Component", name: component.name, version: component.version, spdx: component.license,
+        repository: repositoryUrl(component.repository), source: component.source, note: component.usage,
+        texts: [...new Set(pinnedTexts(directory, component.files))].sort(compare),
+      });
+    } catch (error) {
+      gaps.push(`${label}: ${error.message}`);
+    }
+  }
+  return records;
+}
+
 export function readCargoMetadata(appDirectory) {
   const result = spawnSync("cargo", [
-    "metadata", "--locked", "--format-version", "1", "--filter-platform", "x86_64-pc-windows-msvc",
+    "metadata", "--locked", "--format-version", "1", "--filter-platform", RUST_TARGET,
     "--manifest-path", "src-tauri/Cargo.toml",
   ], { cwd: appDirectory, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   if (result.error || result.status !== 0) throw new Error(`cargo metadata failed (exit ${result.status ?? "unavailable"})`);
   return JSON.parse(result.stdout);
 }
 
-function rustPackages(metadata) {
+/** The cfg set of the release target, as `rustc --print cfg` prints it: `windows`, `target_os="windows"`. */
+export function readRustTargetCfg() {
+  const result = spawnSync("rustc", ["--print", "cfg", "--target", RUST_TARGET], { encoding: "utf8" });
+  if (result.error || result.status !== 0) throw new Error(`rustc --print cfg failed (exit ${result.status ?? "unavailable"})`);
+  return result.stdout.split(/\r?\n/).filter(Boolean);
+}
+
+// Parses the cfg(...) part of a Cargo `[target.'cfg(...)'.dependencies]` key: all(), any(), not(),
+// bare names and key = "value" pairs. Anything else is refused instead of guessed.
+function parseCfg(text) {
+  const tokens = text.match(/"[^"]*"|[A-Za-z_][A-Za-z0-9_]*|[(),=]|\S/g) ?? [];
+  let position = 0;
+  const fail = () => { throw new Error(`Unsupported Cargo target condition: ${text}`); };
+  const take = (expected) => {
+    const token = tokens[position++];
+    if (token === undefined || (expected !== undefined && token !== expected)) fail();
+    return token;
+  };
+  const expression = () => {
+    const name = take();
+    if (!/^[A-Za-z_]\w*$/.test(name)) fail();
+    if (tokens[position] === "(") {
+      if (!["all", "any", "not"].includes(name)) fail();
+      take("(");
+      const args = [];
+      while (tokens[position] !== ")") {
+        args.push(expression());
+        if (tokens[position] === ",") take(",");
+        else if (tokens[position] !== ")") fail();
+      }
+      take(")");
+      if (name === "not" && args.length !== 1) fail();
+      return { name, args };
+    }
+    if (tokens[position] === "=") {
+      take("=");
+      const value = take();
+      if (!/^"[^"]*"$/.test(value)) fail();
+      return { name, value: value.slice(1, -1) };
+    }
+    return { name };
+  };
+  take("cfg");
+  take("(");
+  const root = expression();
+  take(")");
+  if (position !== tokens.length) fail();
+  return root;
+}
+
+function cfgHolds(node, cfg) {
+  if (node.args) {
+    if (node.name === "all") return node.args.every((arg) => cfgHolds(arg, cfg));
+    if (node.name === "any") return node.args.some((arg) => cfgHolds(arg, cfg));
+    return !cfgHolds(node.args[0], cfg);
+  }
+  return cfg.has(node.value === undefined ? node.name : `${node.name}="${node.value}"`);
+}
+
+// A dependency edge's `target` is null (always), a target triple or a cfg() expression.
+function targetApplies(target, cfg) {
+  if (target === null || target === undefined) return true;
+  return target.trim().startsWith("cfg(") ? cfgHolds(parseCfg(target.trim()), cfg) : target.trim() === RUST_TARGET;
+}
+
+// Follow only the edges that put code into the release binary: normal dependencies (not build or
+// dev) that apply to the release target. `--filter-platform` keeps an edge when any of its kinds
+// matches, so each kind is checked on its own: a build-script-only or Linux-only crate is not shipped.
+function rustPackages(metadata, targetCfg) {
   const root = metadata.resolve?.root;
   if (!root) throw new Error("Cargo metadata must have a root package");
+  const cfg = new Set(targetCfg);
   const packages = new Map(metadata.packages.map((pkg) => [pkg.id, pkg]));
   const nodes = new Map(metadata.resolve.nodes.map((node) => [node.id, node]));
+  const shipped = (dependency) => {
+    if (!Array.isArray(dependency.dep_kinds)) throw new Error("Cargo metadata must include dependency kinds");
+    return dependency.dep_kinds.some((kind) => kind.kind === null && targetApplies(kind.target, cfg));
+  };
   const pending = [root];
   const visited = new Set();
   while (pending.length) {
@@ -176,7 +294,7 @@ function rustPackages(metadata) {
     visited.add(id);
     const node = nodes.get(id);
     if (!node || !packages.has(id)) throw new Error("Cargo dependency graph is incomplete");
-    pending.push(...node.deps.map((dependency) => dependency.pkg));
+    pending.push(...node.deps.filter(shipped).map((dependency) => dependency.pkg));
   }
   return [...visited].filter((id) => id !== root).map((id) => packages.get(id));
 }
@@ -209,6 +327,7 @@ function companionLicenseTexts(pkg, spdx, candidates) {
 export function collectDependencyNotices({
   appDirectory = defaultAppDirectory,
   metadata = readCargoMetadata(appDirectory),
+  rustTargetCfg = readRustTargetCfg(),
   supplementalDirectory = join(appDirectory, "scripts", "release-licenses"),
 } = {}) {
   const records = [];
@@ -231,7 +350,8 @@ export function collectDependencyNotices({
       gaps.push(`${label}: ${error.message}`);
     }
   };
-  for (const pkg of rustPackages(metadata)) {
+  const shippedCrates = rustPackages(metadata, rustTargetCfg);
+  for (const pkg of shippedCrates) {
     let source;
     if (pkg.source === "registry+https://github.com/rust-lang/crates.io-index") {
       source = `https://crates.io/api/v1/crates/${encodeURIComponent(pkg.name)}/${encodeURIComponent(pkg.version)}/download`;
@@ -252,11 +372,14 @@ export function collectDependencyNotices({
       gaps.push("Frontend lockfile contains an unsupported package location");
       continue;
     }
+    // Packages only the build and tests need are not distributed, so they need no notice and no installed copy.
+    const name = location.replace(/^(?:.*\/)?node_modules\//, "");
+    if ((entry.dev || entry.devOptional) && !SHIPPED_BUILD_PACKAGES.has(name)) continue;
     const directory = resolve(appDirectory, location);
     const manifest = join(directory, "package.json");
     if (!existsSync(manifest)) {
       if (entry.optional && (!platformMatches(entry.os, "win32") || !platformMatches(entry.cpu, "x64"))) continue;
-      gaps.push(`Frontend ${location.replace(/^(?:.*\/)?node_modules\//, "")}@${entry.version}: locked Windows x64 package is not installed; run npm ci`);
+      gaps.push(`Frontend ${name}@${entry.version}: locked Windows x64 package is not installed; run npm ci`);
       continue;
     }
     const pkg = readJson(manifest);
@@ -270,6 +393,7 @@ export function collectDependencyNotices({
     const spdx = nodeLicense(pkg, entry);
     collect({ ecosystem: "Frontend", name: pkg.name, version: pkg.version, spdx, repository: pkg.repository }, directory, undefined, () => companionLicenseTexts(pkg, spdx, nodeCandidates));
   }
+  records.push(...componentRecords(supplementalDirectory, shippedCrates, gaps));
   const unique = new Map();
   for (const record of records) {
     const key = `${record.ecosystem} ${record.name}@${record.version}`;
@@ -287,6 +411,7 @@ export function renderDependencyNotices({ records, gaps }) {
   return records.map((record) => [
     "=".repeat(78), `${record.ecosystem}: ${record.name} ${record.version}`, `SPDX: ${record.spdx}`,
     `Repository: ${record.repository}`, ...(record.source ? [`Source: ${record.source}`] : []),
+    ...(record.note ? [`Used for: ${record.note}`] : []),
     "-".repeat(78), record.texts.join(`\n\n${"-".repeat(78)}\n\n`),
   ].join("\n")).join("\n\n");
 }

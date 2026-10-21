@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const scripts = dirname(fileURLToPath(import.meta.url));
 const fixtureDirectory = join(scripts, "..", "node_modules", ".cache", "private-assets-tests");
 const temporaryRoots = [];
+const releaseConfig = join("src-tauri", "tauri.release.conf.json");
 
 afterEach(() => {
   for (const root of temporaryRoots.splice(0)) {
@@ -40,23 +41,38 @@ function fixture({ worktree = false } = {}) {
   return { root, app, privateDir };
 }
 
-function runScript(app, name, args = [], privateDir) {
-  const env = { ...process.env };
-  delete env.RAPHAEL_PRIVATE_DIR;
-  if (privateDir) env.RAPHAEL_PRIVATE_DIR = privateDir;
+function spawnScript(app, name, args, privateDir, env) {
+  // The suite may itself run on CI, where every build is public: start from a development environment.
+  const base = { ...process.env };
+  for (const variable of ["CI", "RAPHAEL_PUBLIC_BUILD", "RAPHAEL_PRIVATE_DIR", "TAURI_CONFIG"]) delete base[variable];
+  if (privateDir) base.RAPHAEL_PRIVATE_DIR = privateDir;
   const result = spawnSync(process.execPath, [join(app, "scripts", name), ...args], {
-    cwd: join(app, ".."), env, encoding: "utf8",
+    cwd: join(app, ".."), env: { ...base, ...env }, encoding: "utf8",
   });
   expect(result.error).toBeUndefined();
+  return result;
+}
+
+function runScript(app, name, args = [], privateDir, env = {}) {
+  const result = spawnScript(app, name, args, privateDir, env);
   expect(result.status, result.stderr).toBe(0);
   return result.stdout;
 }
 
+function runFailing(app, name, args = [], privateDir, env = {}) {
+  const result = spawnScript(app, name, args, privateDir, env);
+  expect(result.status).toBe(1);
+  return result.stderr;
+}
+
+// Stands in for the Tauri CLI: `icon` writes the icon set, `build` records what it was given and runs
+// beforeBuildCommand's frontend step (copy-private.mjs, which npm's prebuild hook runs) with its own environment.
 function installIconCli(app) {
   const cli = join(app, "node_modules", "@tauri-apps", "cli");
   mkdirSync(cli, { recursive: true });
   writeFileSync(join(cli, "package.json"), JSON.stringify({ name: "@tauri-apps/cli", type: "module" }));
   writeFileSync(join(cli, "tauri.js"), `
+import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 const args = process.argv.slice(2);
@@ -70,6 +86,11 @@ if (args[0] === "icon") {
   }
 } else if (args[0] === "build") {
   writeFileSync("last-build-args.json", JSON.stringify(args));
+  writeFileSync("last-build-env.json", JSON.stringify({
+    publicBuild: process.env.RAPHAEL_PUBLIC_BUILD ?? null, privateDir: process.env.RAPHAEL_PRIVATE_DIR ?? null,
+  }));
+  const frontend = spawnSync(process.execPath, [join("scripts", "copy-private.mjs")], { stdio: "inherit" });
+  process.exitCode = frontend.status;
 } else {
   process.exitCode = 1;
 }
@@ -77,7 +98,7 @@ if (args[0] === "icon") {
 }
 
 describe("private frontend assets", () => {
-  it("copies distinct in-app artwork and desktop sources from the original checkout", () => {
+  it("copies only the artwork the frontend loads, from the original checkout", () => {
     const { app, privateDir } = fixture({ worktree: true });
     writeFileSync(join(privateDir, "glyph-ring.png"), "glyph");
     writeFileSync(join(privateDir, "app-icon.png"), "desktop icon");
@@ -86,37 +107,33 @@ describe("private frontend assets", () => {
 
     runScript(app, "copy-private.mjs");
 
-    expect(existsSync(join(app, "public/private/glyph-ring.png"))).toBe(true);
-    expect(existsSync(join(app, "public/private/app-icon.png"))).toBe(true);
-    expect(readFileSync(join(app, "public/private/app-icon.png"), "utf8")).toBe("desktop icon");
+    expect(readFileSync(join(app, "public/private/glyph-ring.png"), "utf8")).toBe("glyph");
     expect(readFileSync(join(app, "public/private/in-app-icon.png"), "utf8")).toBe("watercolour in-app icon");
-    expect(readFileSync(join(app, "public/private/avatar.png"), "utf8")).toBe("watercolour character");
+    // The desktop icon is read from the private directory by tauri.mjs; no view loads it or the portrait.
+    expect(readdirSync(join(app, "public/private")).sort()).toEqual(["glyph-ring.png", "in-app-icon.png"]);
   });
 
   it("uses an explicit private directory and removes copies when their sources disappear", () => {
     const { app, root } = fixture();
     const privateDir = join(root, "personal assets");
     mkdirSync(privateDir);
-    for (const name of ["glyph-ring.png", "app-icon.png", "in-app-icon.png", "avatar.png"]) writeFileSync(join(privateDir, name), name);
+    for (const name of ["glyph-ring.png", "in-app-icon.png"]) writeFileSync(join(privateDir, name), name);
     runScript(app, "copy-private.mjs", [], privateDir);
-    expect(existsSync(join(app, "public/private/app-icon.png"))).toBe(true);
+    expect(existsSync(join(app, "public/private/glyph-ring.png"))).toBe(true);
     expect(existsSync(join(app, "public/private/in-app-icon.png"))).toBe(true);
-    expect(existsSync(join(app, "public/private/avatar.png"))).toBe(true);
 
-    for (const name of ["glyph-ring.png", "app-icon.png", "in-app-icon.png", "avatar.png"]) rmSync(join(privateDir, name));
+    for (const name of ["glyph-ring.png", "in-app-icon.png"]) rmSync(join(privateDir, name));
     runScript(app, "copy-private.mjs", [], privateDir);
 
     expect(existsSync(join(app, "public/private/glyph-ring.png"))).toBe(false);
-    expect(existsSync(join(app, "public/private/app-icon.png"))).toBe(false);
     expect(existsSync(join(app, "public/private/in-app-icon.png"))).toBe(false);
-    expect(existsSync(join(app, "public/private/avatar.png"))).toBe(false);
   });
 
   it("keeps optional asset copy failures from failing the frontend build", () => {
     const { app, privateDir } = fixture();
     writeFileSync(join(privateDir, "glyph-ring.png"), "glyph");
-    writeFileSync(join(privateDir, "app-icon.png"), "portrait");
-    mkdirSync(join(app, "public/private/app-icon.png"), { recursive: true });
+    writeFileSync(join(privateDir, "in-app-icon.png"), "portrait");
+    mkdirSync(join(app, "public/private/in-app-icon.png"), { recursive: true });
 
     runScript(app, "copy-private.mjs");
 
@@ -183,5 +200,123 @@ describe("private desktop icon cache", () => {
     expect(existsSync(join(app, "src-tauri/icons-private"))).toBe(false);
     expect(existsSync(join(app, "src-tauri/tauri.private.conf.json"))).toBe(false);
     expect(JSON.parse(readFileSync(join(app, "last-build-args.json"), "utf8"))).toEqual(["build"]);
+  });
+});
+
+// Each case starts several Node processes (the wrapper, the fake CLI and the frontend step).
+describe("public builds", { timeout: 30_000 }, () => {
+  // A checkout whose original directory holds every private source, like the maintainer's.
+  function checkoutWithPrivateArtwork() {
+    const test = fixture({ worktree: true });
+    installIconCli(test.app);
+    for (const name of ["app-icon.png", "in-app-icon.png", "glyph-ring.png", "avatar.png"]) {
+      writeFileSync(join(test.privateDir, name), name);
+    }
+    return test;
+  }
+  const generated = (app) => ["public/private", "src-tauri/icons-private", "src-tauri/tauri.private.conf.json"]
+    .filter((path) => existsSync(join(app, path)));
+  const releaseArgs = ["build", "--config", releaseConfig, "--bundles", "nsis", "--ci", "--", "--locked"];
+
+  it("ignores private artwork for the release config, even from a linked worktree", () => {
+    const { app } = checkoutWithPrivateArtwork();
+
+    runScript(app, "tauri.mjs", releaseArgs);
+
+    expect(generated(app)).toEqual([]);
+    expect(JSON.parse(readFileSync(join(app, "last-build-args.json"), "utf8"))).toEqual(releaseArgs);
+    // The frontend build the CLI starts inherits the decision and copies nothing.
+    expect(JSON.parse(readFileSync(join(app, "last-build-env.json"), "utf8")).publicBuild).toBe("1");
+  });
+
+  it("ignores private artwork when CI is set, with or without the release config", () => {
+    const { app } = checkoutWithPrivateArtwork();
+
+    runScript(app, "tauri.mjs", ["build"], undefined, { CI: "true" });
+    runScript(app, "tauri.mjs", ["build", "--debug", "--no-bundle"], undefined, { CI: "1" });
+
+    expect(generated(app)).toEqual([]);
+    expect(JSON.parse(readFileSync(join(app, "last-build-args.json"), "utf8"))).toEqual(["build", "--debug", "--no-bundle"]);
+  });
+
+  it("does not let RAPHAEL_PRIVATE_DIR bring private artwork into a public build", () => {
+    const { app, root } = checkoutWithPrivateArtwork();
+    const elsewhere = join(root, "personal assets");
+    mkdirSync(elsewhere);
+    writeFileSync(join(elsewhere, "app-icon.png"), "portrait");
+    writeFileSync(join(elsewhere, "glyph-ring.png"), "glyph");
+
+    runScript(app, "tauri.mjs", releaseArgs, elsewhere);
+    runScript(app, "tauri.mjs", ["build"], elsewhere, { CI: "true" });
+
+    expect(generated(app)).toEqual([]);
+  });
+
+  it("treats CI=false and an empty CI as an ordinary development build", () => {
+    const { app } = checkoutWithPrivateArtwork();
+
+    runScript(app, "tauri.mjs", ["build"], undefined, { CI: "false" });
+    expect(existsSync(join(app, "src-tauri/icons-private/icon.ico"))).toBe(true);
+    runScript(app, "tauri.mjs", ["build"], undefined, { CI: "" });
+    expect(readFileSync(join(app, "public/private/in-app-icon.png"), "utf8")).toBe("in-app-icon.png");
+  });
+
+  it.each([
+    ["public/private", (app) => mkdirSync(join(app, "public/private"), { recursive: true })],
+    ["dist/private", (app) => mkdirSync(join(app, "dist/private"), { recursive: true })],
+    ["src-tauri/icons-private", (app) => mkdirSync(join(app, "src-tauri/icons-private"), { recursive: true })],
+    ["src-tauri/tauri.private.conf.json", (app) => {
+      mkdirSync(join(app, "src-tauri"), { recursive: true });
+      writeFileSync(join(app, "src-tauri/tauri.private.conf.json"), "{}");
+    }],
+  ])("fails a release build when a development build left %s behind", (leftover, create) => {
+    const { app } = checkoutWithPrivateArtwork();
+    create(app);
+
+    const stderr = runFailing(app, "tauri.mjs", releaseArgs);
+
+    expect(stderr).toContain("Public builds refuse private artwork");
+    expect(stderr).toContain(leftover);
+    expect(existsSync(join(app, "last-build-args.json"))).toBe(false);
+  });
+
+  it("names every leftover at once and fails a CI frontend build the same way", () => {
+    const { app } = checkoutWithPrivateArtwork();
+    mkdirSync(join(app, "public/private"), { recursive: true });
+    mkdirSync(join(app, "src-tauri/icons-private"), { recursive: true });
+
+    const stderr = runFailing(app, "tauri.mjs", ["build"], undefined, { CI: "true" });
+    expect(stderr).toContain("public/private, src-tauri/icons-private");
+
+    expect(runFailing(app, "copy-private.mjs", [], undefined, { CI: "true" })).toContain("public/private, src-tauri/icons-private");
+  });
+
+  it("copies nothing in the frontend build of a public build and succeeds without leftovers", () => {
+    const { app } = checkoutWithPrivateArtwork();
+
+    expect(runScript(app, "copy-private.mjs", [], undefined, { CI: "true" })).toContain("public build");
+    expect(runScript(app, "copy-private.mjs", [], undefined, { RAPHAEL_PUBLIC_BUILD: "1" })).toContain("public build");
+
+    expect(existsSync(join(app, "public/private"))).toBe(false);
+  });
+
+  it("refuses to be pointed at private files by its arguments or TAURI_CONFIG", () => {
+    const { app } = checkoutWithPrivateArtwork();
+    const privateConfig = join("src-tauri", "tauri.private.conf.json");
+
+    expect(runFailing(app, "tauri.mjs", ["build", "--config", releaseConfig, "--config", privateConfig])).toContain("private artwork");
+    const env = { TAURI_CONFIG: JSON.stringify({ bundle: { icon: ["icons-private/icon.ico"] } }) };
+    expect(runFailing(app, "tauri.mjs", ["build", "--config", releaseConfig], undefined, env)).toContain("private artwork");
+    expect(existsSync(join(app, "last-build-args.json"))).toBe(false);
+  });
+
+  it("leaves other commands alone on CI", () => {
+    const { app } = checkoutWithPrivateArtwork();
+    mkdirSync(join(app, "public/private"), { recursive: true });
+
+    // `info` neither builds nor embeds anything, so a leftover does not matter to it.
+    const result = spawnScript(app, "tauri.mjs", ["info"], undefined, { CI: "true" });
+
+    expect(result.stderr).not.toContain("Public builds refuse");
   });
 });
