@@ -250,6 +250,13 @@ class BackgroundService:
         except sqlite3.Error as exc:
             logger.warning("Could not clear the background tasks: %s", type(exc).__name__)
 
+    def task(self, task_id: int) -> Task | None:
+        """A task as it is written down (for what reports it elsewhere), or None."""
+        try:
+            return self._store.get(task_id)
+        except sqlite3.Error:
+            return None
+
     @property
     def running(self) -> bool:
         return self._run is not None

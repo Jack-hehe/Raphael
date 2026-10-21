@@ -197,7 +197,9 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // `models.local_use`, `models.local_cancel`, `models.local_delete`) as well as OpenRouter's catalog
 // (`models.catalog`), and each is let through by name, so that a method added there later is not
 // opened to the page by accident.
-const ALLOWED_METHODS: [&str; 12] = [
+// The messaging connections are named one by one, for the same reason. A message that arrives from
+// a messaging app has no way to reach any of them: only this window does.
+const ALLOWED_METHODS: [&str; 19] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -209,6 +211,13 @@ const ALLOWED_METHODS: [&str; 12] = [
     "models.local_delete",
     "models.catalog",
     "stats.summary",
+    "messaging.telegram.status",
+    "messaging.telegram.connect",
+    "messaging.telegram.set_enabled",
+    "messaging.telegram.approve",
+    "messaging.telegram.reject",
+    "messaging.telegram.remove_user",
+    "messaging.telegram.disconnect",
     // The conversation view stops the task it shows, by its id (`validate_core_call`). The other
     // methods of the worker stay closed: a yes to its question is the overlay's real click alone.
     "worker.cancel",
@@ -692,6 +701,35 @@ pub fn hotkeys_pause(app: AppHandle, webview: Webview, paused: bool) -> Result<(
     Ok(())
 }
 
+/// The few addresses the main window may open in the browser: the page is not trusted with a
+/// general "open this link".
+const OPENABLE_LINKS: [&str; 1] = ["https://t.me/BotFather"];
+
+fn is_openable_link(url: &str) -> bool {
+    OPENABLE_LINKS.contains(&url)
+}
+
+/// Opens one of the fixed links in the default browser.
+#[tauri::command]
+pub fn open_link(webview: Webview, url: String) -> Result<(), String> {
+    require_main(&webview)?;
+    if !is_openable_link(&url) {
+        return Err("that link may not be opened".to_owned());
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", &url])
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        Err("opening links is only available on Windows".to_owned())
+    }
+}
+
 /// Whether the keyboard layout in use has an AltGr key, which is the Right Alt key. A hotkey on
 /// Right Alt then gets in the way of typing some characters. Always false off Windows.
 #[tauri::command]
@@ -956,6 +994,7 @@ mod tests {
                 "hotkeys_pause",
                 "keyboard_has_altgr",
                 "main_events",
+                "open_link",
                 "window_hotkey",
             ]
         );
@@ -1013,6 +1052,46 @@ mod tests {
             " worker.cancel",
         ] {
             assert!(!is_allowed_method(method), "{method:?}");
+        }
+    }
+
+    #[test]
+    fn the_main_window_manages_telegram_but_only_by_the_named_methods() {
+        for method in [
+            "messaging.telegram.status",
+            "messaging.telegram.connect",
+            "messaging.telegram.set_enabled",
+            "messaging.telegram.approve",
+            "messaging.telegram.reject",
+            "messaging.telegram.remove_user",
+            "messaging.telegram.disconnect",
+        ] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        for method in [
+            "messaging.telegram.",
+            "messaging.telegram",
+            "messaging.",
+            "messaging.telegram.send",
+            "messaging.telegram.statusx",
+            "Messaging.telegram.status",
+        ] {
+            assert!(!is_allowed_method(method), "{method:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_botfather_link_may_be_opened() {
+        assert!(is_openable_link("https://t.me/BotFather"));
+        for url in [
+            "https://t.me/BotFather/",
+            "http://t.me/BotFather",
+            "https://t.me/other",
+            "https://evil.example",
+            "file:///C:/Windows/System32/calc.exe",
+            "",
+        ] {
+            assert!(!is_openable_link(url), "{url:?}");
         }
     }
 

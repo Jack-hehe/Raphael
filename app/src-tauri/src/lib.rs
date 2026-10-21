@@ -128,6 +128,7 @@ pub fn run() {
             commands::device_settings_get,
             commands::device_settings_set,
             commands::keyboard_has_altgr,
+            commands::open_link,
             commands::hotkeys_pause,
             commands::window_hotkey,
             commands::main_events,

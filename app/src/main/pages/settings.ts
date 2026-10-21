@@ -12,7 +12,9 @@ import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
 import "../settings-polish.css";
 import "../connections.css";
+import "../messaging.css";
 import { createConnections } from "../connections";
+import { createMessaging } from "../messaging";
 import { DICTATION_MODES, isDictationMode } from "../dictation";
 import { describeError, keyReasonText, parseLimit } from "../format";
 import { wireKeyField } from "../keyfield";
@@ -168,6 +170,7 @@ export function createSettings(app: AppContext): SettingsPage {
   let loads = 0;
   /** The 「連接」 tab: it keeps its own state and asks to be drawn again. */
   const connections = createConnections({ visible: () => visible && pane === "connections", redraw: () => render() });
+  const messaging = createMessaging({ visible: () => visible && pane === "connections", redraw: () => render() });
 
   // ---------- drawing ----------
 
@@ -175,7 +178,7 @@ export function createSettings(app: AppContext): SettingsPage {
   const view = (): SettingsView => ({
     pane, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
     replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
-    connections: connections.view(), localModels, localDownload,
+    connections: connections.view(), messaging: messaging.view(), localModels, localDownload,
   });
 
   /** The item at the foot of the microphones' menu that looks for them again. */
@@ -883,8 +886,13 @@ export function createSettings(app: AppContext): SettingsPage {
     if (paneButton) {
       closeMenu();
       pane = paneButton.dataset.pane as SettingsPane;
-      if (pane === "connections") void connections.load();
-      else connections.reset();
+      if (pane === "connections") {
+        void connections.load();
+        void messaging.load();
+      } else {
+        connections.reset();
+        messaging.reset();
+      }
       syncMonitor();
       body.scrollTop = 0;
       render();
@@ -907,7 +915,7 @@ export function createSettings(app: AppContext): SettingsPage {
       return;
     }
 
-    if (connections.click(target)) return;
+    if (connections.click(target) || messaging.click(target)) return;
 
     if (target.closest('.tg[data-k="autostart"]')) {
       void changeDevice({ autostart: !app.device().autostart });
@@ -967,11 +975,11 @@ export function createSettings(app: AppContext): SettingsPage {
   });
   el.addEventListener("input", (e) => {
     const input = e.target as HTMLInputElement;
-    if (connections.input(input)) return;
+    if (connections.input(input) || messaging.input(input)) return;
     if (input.id === "limit-input") limitDraft = input.value;
     else if (input.id === "agent-city") cityDraft = input.value;
   });
-  el.addEventListener("keydown", (e) => void connections.key(e));
+  el.addEventListener("keydown", (e) => void (connections.key(e) || messaging.key(e)));
   // Menus consume their own Escape; the panel and native window controls share one Tab loop.
   const settingsKey = (e: KeyboardEvent): void => {
     const chrome = document.getElementById("window-chrome");
@@ -1014,7 +1022,11 @@ export function createSettings(app: AppContext): SettingsPage {
       // the first tab, unless the way in knows better (the report that says there is no key goes to the key)
       pane = PANES.some((p) => p.id === open) ? open! : "general";
       connections.reset();
-      if (pane === "connections") void connections.load();
+      messaging.reset();
+      if (pane === "connections") {
+        void connections.load();
+        void messaging.load();
+      }
       body.scrollTop = 0;
       closeMenu();
       render();
@@ -1069,6 +1081,7 @@ export function createSettings(app: AppContext): SettingsPage {
     hide() {
       visible = false;
       connections.reset();
+      messaging.reset();
       document.removeEventListener("keydown", settingsKey);
       loading = false;
       loads++;

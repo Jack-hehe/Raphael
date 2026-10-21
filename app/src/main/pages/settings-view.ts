@@ -12,6 +12,7 @@ import { t } from "../i18n";
 
 import { brandIcon } from "../brand";
 import { type ConnectionsView, connectionsHTML } from "../connections";
+import { type MessagingView, messagingHTML } from "../messaging";
 import { DICTATION_MODES } from "../dictation";
 import { formatClock, formatUsd } from "../format";
 import { type LanguageGroup, languageSelectHTML, normalizeLanguages } from "../languages";
@@ -120,6 +121,8 @@ export interface SettingsView {
   now: number;
   /** The 「連接」 tab: the groups of tools, the form that adds one, the latest actions. */
   connections: ConnectionsView;
+  /** The messaging apps section under the connected services. */
+  messaging: MessagingView;
   /** The speech models of this computer (`models.local`): being read, read, or not to be had. */
   localModels: LocalModel[] | "loading" | "failed";
   /** The download of one of them under way: bytes done of bytes in all (0 while the size is not known). */
@@ -429,7 +432,9 @@ function agentHTML(v: SettingsView): string {
 
 /** 連接: the services Raphael is connected to and the store that adds them, under the heading. */
 function connectionsTabHTML(v: SettingsView): string {
-  return headingHTML(v) + connectionsHTML(v.connections);
+  // The messaging apps sit under the connected services, not beside a service's own page or the store.
+  const showMessaging = v.connections.tab === "installed" && v.connections.open === null;
+  return headingHTML(v) + connectionsHTML(v.connections) + (showMessaging ? messagingHTML(v.messaging) : "");
 }
 
 /** 模型與用量: the OpenRouter key and what this month has cost against the limit, then the models and their prices. */

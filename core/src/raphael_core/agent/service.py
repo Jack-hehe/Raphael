@@ -337,6 +337,18 @@ class AgentService:
         except sqlite3.Error as exc:
             logger.warning("Could not expire the old questions: %s", type(exc).__name__)
 
+    @property
+    def language(self) -> str:
+        """The language of the latest question: what a message from elsewhere is answered in."""
+        return self._last_language
+
+    def turn(self, turn_id: int) -> Turn | None:
+        """A turn of the history, for a caller that needs the longer text of an answer."""
+        try:
+            return self._history.get(turn_id)
+        except sqlite3.Error:
+            return None
+
     def register(self, router: RpcRouter) -> None:
         """Put the five methods of the assistant on `router`."""
         methods = {
