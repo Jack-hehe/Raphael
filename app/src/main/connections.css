@@ -1,7 +1,7 @@
 /* The 「連接」 tab of the settings: a list on the left, the chosen item on the right. Colours are the app's tokens. */
 .modal-body.ca-body { display: grid; grid-template-rows: auto auto minmax(0, 1fr); padding: 0; overflow: hidden; }
-.ca-body > h1 { margin: 32px 40px 0 32px; padding-right: 0; }
-.ca-body > .purpose { margin: 4px 40px 16px 32px; padding-right: 0; }
+.modal-body.ca-body > h1 { margin: 32px 40px 0 40px; padding-right: 24px; }
+.modal-body.ca-body > .purpose { margin: 4px 40px 16px 40px; padding-right: 24px; }
 .ca-split { display: grid; grid-template-columns: 228px minmax(0, 1fr); min-height: 0; border-top: 1px solid var(--edge); }
 
 /* The list */
@@ -56,8 +56,9 @@
 .cd-head + .ca-alert, .cd-meta + .ca-alert { margin-top: 14px; }
 
 /* A group: its head, where it is reached, the permission of each tool */
-.cd-head { display: flex; align-items: center; gap: 14px; }
-.cd-head .tx { flex: 1; min-width: 0; }
+.cd-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.cd-head .tx { flex: 1 1 8em; min-width: 0; }
+.cd-head .btn, .cd-head .tg { flex: none; }
 .cd-head .st-line { margin-top: 3px; font-size: 13px; color: var(--text-2); }
 .cd-head .tg { margin-left: 6px; }
 .cd-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 14px; font-size: 12.5px; color: var(--text-3); }
@@ -73,9 +74,11 @@
 .tgroup > .ghead { display: flex; align-items: center; gap: 10px; min-height: 50px; padding: 8px 0; }
 .tgroup > .ghead .gt { flex: 1; font-size: 13px; font-weight: 600; }
 .tgroup > .ghead .gt small { margin-left: 6px; font-weight: 400; color: var(--text-3); font-size: 12px; }
-.slist.tgroup > .ghead .sel { width: 176px; justify-content: space-between; color: var(--text-2); }
+.slist.tgroup > .ghead .sel { width: 176px; flex: none; justify-content: space-between; color: var(--text-2); }
 .slist.tgroup > .row { min-height: 56px; padding: 8px 0; flex-wrap: nowrap; }
 .slist.tgroup > .row::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--line); }
+.slist.tgroup > .row > .ctl { flex: none; margin-left: 0; }
+.slist.tgroup > .row > .lbl { flex: 1 1 8em; min-width: 0; }
 .tgroup .row .t { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 13.5px; }
 .tgroup .row .t .code { font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
 .tgroup .row .d { margin-top: 2px; font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -87,16 +90,16 @@
 .chip-tag.new { border-color: var(--accent-soft); background: var(--accent-soft); color: var(--accent-text); }
 
 /* The permission dropdown: the friendly name, then the T level as a quiet tag */
-.slist .ctl .sel.tsel { width: 176px; justify-content: flex-start; }
+.slist .ctl .sel.tsel { width: 176px; flex: none; justify-content: flex-start; }
 .sel.tsel .tname { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sel.tsel .ttag, .tstatic .ttag { flex: none; font-size: 11px; line-height: 1; padding: 3px 5px; border-radius: 4px; background: var(--surface-2); color: var(--text-2); font-variant-numeric: tabular-nums; }
 .sel.tsel.is-none { color: var(--text-2); }
 .sel.tsel.is-none .ttag { background: transparent; border: 1px solid var(--edge); color: var(--text-3); padding: 2px 4px; }
 .tstatic { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 2px; font-size: 13px; color: var(--text-2); }
-.legend > .row { min-height: 40px; padding: 6px 0; flex-wrap: nowrap; }
-.legend .tstatic { width: 150px; min-height: 0; }
-.legend .tstatic .tname { color: var(--text); font-weight: 600; }
-.legend .row .d { margin: 0; flex: 1; max-width: none; }
+.conn-legend > .row { min-height: 40px; padding: 6px 0; flex-wrap: nowrap; }
+.conn-legend .tstatic { width: 150px; min-height: 0; }
+.conn-legend .tstatic .tname { color: var(--text); font-weight: 600; }
+.conn-legend .row .d { margin: 0; flex: 1; max-width: none; }
 .menu .mtag { flex: none; margin-left: 8px; padding: 2px 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-text); font-size: 11px; line-height: 1.2; }
 .menu.detailed.described .mtd { flex: 1; }
 .menu.detailed.described .md { margin-left: 8px; margin-top: 2px; font-variant-numeric: tabular-nums; }
@@ -126,11 +129,14 @@
 .trust b { color: var(--text); font-weight: 600; }
 
 @media (max-width: 720px) {
-  .ca-body > h1 { margin: 22px 22px 0; }
-  .ca-body > .purpose { margin: 4px 22px 14px; }
+  .modal-body.ca-body > h1 { margin: 20px 22px 0; }
+  .modal-body.ca-body > .purpose { margin: 4px 22px 14px; }
   .ca-split { grid-template-columns: 180px minmax(0, 1fr); }
   .ca-detail { padding: 18px 18px 24px; }
   .add-grid .two { grid-template-columns: 1fr; }
+  .conn-legend > .row { flex-wrap: wrap; }
+  .conn-legend .row .d { flex-basis: 100%; }
+  .conn-legend .tstatic { width: auto; }
   .slist .ctl .sel.tsel, .slist.tgroup > .ghead .sel { width: 150px; }
 }
 .slist.tgroup > .row:first-child::before { display: none; }

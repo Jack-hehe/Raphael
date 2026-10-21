@@ -482,7 +482,7 @@ function explainHTML(): string {
   const rows = levels.map(
     ([tier, desc]) => `<div class="row">${tierStatic(tier, tier === null ? t("conn.tier.noneTag") : undefined)}<div class="d">${esc(desc)}</div></div>`,
   );
-  return `<div class="slist legend">${rows.join("")}</div>`;
+  return `<div class="slist conn-legend">${rows.join("")}</div>`;
 }
 
 function overviewHTML(v: ConnectionsView): string {
