@@ -227,6 +227,7 @@ async def test_refreshing_reads_the_tools_and_all_of_them_are_on(rpc, servers):
     assert all(t["enabled"] for t in tools.values())
     # What the server says about a tool groups it on the screen and decides nothing else.
     assert tools["look"]["kind"] == "read" and tools["note"]["kind"] == "write"
+    assert tools["look"]["title"] == "Look it up" and tools["note"]["title"] is None
     assert server["read_count"] + server["write_count"] == server["tool_count"]
 
 

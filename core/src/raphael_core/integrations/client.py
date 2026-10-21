@@ -275,6 +275,7 @@ class McpConnector:
                     getattr(item, "input_schema", None),
                     getattr(annotations, "read_only_hint", None),
                     getattr(annotations, "destructive_hint", None),
+                    getattr(item, "title", None) or getattr(annotations, "title", None),
                 )
                 if record is not None and all(record.name != other.name for other in tools):
                     tools.append(record)

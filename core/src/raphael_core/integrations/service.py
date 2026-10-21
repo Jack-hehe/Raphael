@@ -188,6 +188,7 @@ class IntegrationsService:
             "name": tool.name,
             "description": tool.description,
             "enabled": server.tool_on(tool),
+            "title": tool.title,
             "kind": tool_kind(tool),  # how the screen groups it; decides nothing
         }
 

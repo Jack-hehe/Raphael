@@ -49,6 +49,8 @@ MAX_URL_CHARS = 2048
 MAX_DESCRIPTION_CHARS = 1000
 # A schema longer than this (as JSON) is kept as "an object" only: it would fill a prompt.
 MAX_SCHEMA_CHARS = 16000
+# What is kept of the title a server gives a tool (for the screen only).
+MAX_TITLE_CHARS = 80
 
 _TOOL_NAME = re.compile(r"[A-Za-z0-9_.\-]{1,128}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
@@ -68,6 +70,8 @@ class ToolRecord:
     # What the server claims about the tool. Only ever used to group the tools on the screen.
     read_only_hint: bool | None = None
     destructive_hint: bool | None = None
+    # The human name the server gives the tool, if it does. For the screen only.
+    title: str | None = None
 
 
 @dataclass
@@ -108,7 +112,12 @@ def fingerprint(name: str, description: str, schema: Any) -> str:
 
 
 def tool_record(
-    name: Any, description: Any, schema: Any, read_only_hint: Any = None, destructive_hint: Any = None
+    name: Any,
+    description: Any,
+    schema: Any,
+    read_only_hint: Any = None,
+    destructive_hint: Any = None,
+    title: Any = None,
 ) -> ToolRecord | None:
     """A tool as it is kept, from what a server reported; None for one whose name cannot be kept
     (a name is shown, audited and sent to a model, so it must be plain)."""
@@ -127,6 +136,7 @@ def tool_record(
         fingerprint=fingerprint(name, text, schema),
         read_only_hint=read_only_hint if isinstance(read_only_hint, bool) else None,
         destructive_hint=destructive_hint if isinstance(destructive_hint, bool) else None,
+        title=(title.strip()[:MAX_TITLE_CHARS] or None) if isinstance(title, str) else None,
     )
 
 
@@ -249,6 +259,7 @@ def _tool_to_json(tool: ToolRecord) -> dict[str, Any]:
         "fingerprint": tool.fingerprint,
         "read_only_hint": tool.read_only_hint,
         "destructive_hint": tool.destructive_hint,
+        "title": tool.title,
     }
 
 
@@ -312,6 +323,7 @@ def _server_from_json(raw: Any) -> ServerConfig | None:
             item.get("input_schema"),
             item.get("read_only_hint"),
             item.get("destructive_hint"),
+            item.get("title"),
         )
         if tool is not None:
             server.tools.append(tool)

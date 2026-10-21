@@ -122,6 +122,12 @@ async def test_a_tool_is_called_and_its_text_comes_back(connector, notes, calls)
     assert calls == ["look"]
 
 
+async def test_the_title_a_server_gives_a_tool_is_kept(connector, notes):
+    tools = {t.name: t for t in await connector.list_tools(notes)}
+    assert tools["look"].title == "Look it up"
+    assert tools["note"].title is None
+
+
 async def test_a_tool_that_says_it_failed_is_an_outcome_not_an_exception(connector, notes):
     broken = await current(connector, notes, "broken")
     outcome = await connector.call_tool(notes, "broken", {}, expected=broken.fingerprint)
