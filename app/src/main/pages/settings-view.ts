@@ -25,22 +25,16 @@ import {
   microphoneText,
   shortMicrophoneName,
 } from "../microphone";
-import { type ModelPickerLook, type PickerExtra, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
+import type { LocalView } from "../local-models";
+import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
 import { pricingNote } from "../pricing";
 import { runOutDay } from "../report";
 import { WARN_FROM, spendVisual, spentShare } from "../spend";
-import type { AudioDevices, BrainSettings, DeviceSettings, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
+import type { AudioDevices, BrainSettings, DeviceSettings, LocalModel, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
 import { type Choice, type IconName, btn, esc, fieldHTML, keys, meter, note, row, sel, st, tg } from "../ui";
 
 /** The models the core reads when none is chosen (brain/settings.py), shown while it does not answer. */
 const DEFAULT_MODELS = { cleanup: "openai/gpt-6-luna", answer: "openai/gpt-6-luna", stt: "elevenlabs/scribe-v2" } as const;
-/**
- * The first choice of the speech-to-text picker, above the cloud models: the engine on this computer
- * (core setting `stt_engine` "local"). One picker holds both, so that what turns speech into text is
- * one choice with one price.
- */
-export const LOCAL_STT = "local";
-const localStt = (): PickerExtra => ({ id: LOCAL_STT, name: t("settings.sttLocal"), price: t("settings.sttLocalPrice") });
 /** In the owner's order: light, dark, or as Windows is. */
 export const APPEARANCES: Choice[] = [
   { value: "light", get label() { return t("settings.015"); } },
@@ -126,6 +120,10 @@ export interface SettingsView {
   now: number;
   /** The 「連接」 tab: the groups of tools, the form that adds one, the latest actions. */
   connections: ConnectionsView;
+  /** The speech models of this computer (`models.local`): being read, read, or not to be had. */
+  localModels: LocalModel[] | "loading" | "failed";
+  /** The download of one of them under way: bytes done of bytes in all (0 while the size is not known). */
+  localDownload: { name: string; done: number; total: number } | null;
 }
 
 // ---------- what is chosen ----------
@@ -134,8 +132,16 @@ export interface SettingsView {
 export const languagesOf = (v: SettingsView): string[] => normalizeLanguages(v.brain?.languages);
 export const sttEngine = (v: SettingsView): string => v.brain?.stt_engine ?? "cloud";
 export const sttModel = (v: SettingsView): string => v.brain?.stt_cloud_model ?? DEFAULT_MODELS.stt;
-/** What the speech-to-text menu has chosen: the cloud model, or 本機 when the engine is this computer's. */
-export const sttChoice = (v: SettingsView): string => (sttEngine(v) === LOCAL_STT ? LOCAL_STT : sttModel(v));
+/** The model of the catalogue that is the local engine (Qwen3-ASR until the user chooses another). */
+export const sttLocalModel = (v: SettingsView): string => v.brain?.stt_local_model ?? "qwen3-asr";
+/** Whether the speech-to-text in use is this computer's, and not the cloud's. */
+export const sttIsLocal = (v: SettingsView): boolean => sttEngine(v) === "local";
+/** What the picker's local tab is drawn from. */
+export const localView = (v: SettingsView): LocalView => ({
+  models: v.localModels,
+  active: sttIsLocal(v) ? sttLocalModel(v) : null,
+  download: v.localDownload,
+});
 export const cleanupModel = (v: SettingsView): string => v.brain?.cleanup_model ?? DEFAULT_MODELS.cleanup;
 export const agentModel = (v: SettingsView): string => v.brain?.agent_model ?? DEFAULT_MODELS.answer;
 export const agentCity = (v: SettingsView): string => v.brain?.agent_city ?? "";
@@ -177,7 +183,7 @@ function chosenPrice(catalog: ModelCatalog, role: ModelRole, id: string): string
 /** The texts that depend on the prices, by the `data-price` of the element that shows them. */
 export function priceTexts(v: SettingsView): Record<string, string> {
   const catalog = catalogOf(v);
-  const local = sttChoice(v) === LOCAL_STT ? t("settings.sttLocalPrice") : null;
+  const local = sttIsLocal(v) ? t("settings.sttLocalPrice") : null;
   if (v.catalog === "loading") return { model: PRICES_LOADING(), "agent-model": PRICES_LOADING(), "stt-model": local ?? PRICES_LOADING(), note: "" };
   if (!catalog) return { model: "", "agent-model": "", "stt-model": local ?? "", note: t("settings.030") };
   return {
@@ -213,10 +219,11 @@ export function modelPickerLook(v: SettingsView, role: ModelRole): ModelPickerLo
     role,
     key: k,
     label: label(),
-    current: role === "stt" ? sttChoice(v) : role === "cleanup" ? cleanupModel(v) : agentModel(v),
+    current: role === "stt" ? sttModel(v) : role === "cleanup" ? cleanupModel(v) : agentModel(v),
     catalog: catalogOf(v),
     loading: v.catalog === "loading",
-    extras: role === "stt" ? [localStt()] : [],
+    favorites: v.brain?.model_favorites?.[role] ?? [],
+    ...(role === "stt" ? { local: localView(v) } : {}),
     showPrice: false,
     disabled: v.brain === null,
   };

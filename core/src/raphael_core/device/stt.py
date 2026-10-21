@@ -1,8 +1,11 @@
-"""Speech-to-text on the CPU with sherpa-onnx: three engines behind one interface.
+"""Speech-to-text on the CPU with sherpa-onnx: the engines behind one interface.
 
-`Qwen3AsrEngine` is the one dictation uses. `SenseVoiceEngine` is smaller and quicker, and
-`WhisperOnnxEngine` runs Breeze-ASR-25; those two are there to compare engines on the user's own
-recordings. `create_engine` builds the engine a name asks for from the models folder.
+`Qwen3AsrEngine` is the one dictation uses unless the user chose another of the catalogue
+(`device.models.LOCAL_STT_MODELS`): `SenseVoiceEngine` is smaller and quicker, `WhisperOnnxEngine`
+runs Breeze-ASR-25 and `WhisperSmallEngine` and `WhisperTurboEngine` OpenAI's Whisper,
+`ParaformerEngine`, `DolphinEngine` and `FireRedAsrEngine` the models of their names. The
+evaluation compares them on the user's own recordings. `create_engine` builds the engine a name
+asks for from the models folder.
 
 Building an engine loads its model, which takes a while, so it is done once; `transcribe` then turns
 one segment of speech (20 seconds at most) into text.
@@ -231,30 +234,115 @@ class SenseVoiceEngine(_SherpaEngine):
         )
 
 
-class WhisperOnnxEngine(_SherpaEngine):
-    """Breeze-ASR-25 (MediaTek's Whisper for Taiwanese Mandarin), for evaluation only. It takes
-    neither hints nor a language."""
+class _Whisper(_SherpaEngine):
+    """Whisper in sherpa-onnx's int8 form: `<prefix>-encoder.int8.onnx`, `<prefix>-decoder.int8.onnx`
+    and `<prefix>-tokens.txt`. The language is fixed when the recognizer is built ("" finds it out
+    for each segment). The engines take neither hints nor a language."""
+
+    _prefix: str
+    _language: str
+
+    def _build(self, model_dir: Path, num_threads: int) -> sherpa_onnx.OfflineRecognizer:
+        return sherpa_onnx.OfflineRecognizer.from_whisper(
+            encoder=str(model_dir / f"{self._prefix}-encoder.int8.onnx"),
+            decoder=str(model_dir / f"{self._prefix}-decoder.int8.onnx"),
+            tokens=str(model_dir / f"{self._prefix}-tokens.txt"),
+            num_threads=num_threads,
+            provider="cpu",
+            language=self._language,
+        )
+
+
+class WhisperOnnxEngine(_Whisper):
+    """Breeze-ASR-25, MediaTek's Whisper for Taiwanese Mandarin."""
 
     name = "breeze-asr-25"
+    _prefix = "breeze-asr-25-half"
+    _language = "zh"
     _files = (
         "breeze-asr-25-half-encoder.int8.onnx",
         "breeze-asr-25-half-decoder.int8.onnx",
         "breeze-asr-25-half-tokens.txt",
     )
 
+
+class WhisperSmallEngine(_Whisper):
+    """Whisper Small (multilingual)."""
+
+    name = "whisper-small"
+    _prefix = "small"
+    _language = ""
+    _files = ("small-encoder.int8.onnx", "small-decoder.int8.onnx", "small-tokens.txt")
+
+
+class WhisperTurboEngine(_Whisper):
+    """Whisper Large-v3 Turbo (multilingual)."""
+
+    name = "whisper-turbo"
+    _prefix = "turbo"
+    _language = ""
+    _files = ("turbo-encoder.int8.onnx", "turbo-decoder.int8.onnx", "turbo-tokens.txt")
+
+
+class ParaformerEngine(_SherpaEngine):
+    """Paraformer-large for Mandarin, int8. Ignores the hints."""
+
+    name = "paraformer-zh"
+    _files = ("model.int8.onnx", "tokens.txt")
+
     def _build(self, model_dir: Path, num_threads: int) -> sherpa_onnx.OfflineRecognizer:
-        return sherpa_onnx.OfflineRecognizer.from_whisper(
-            encoder=str(model_dir / "breeze-asr-25-half-encoder.int8.onnx"),
-            decoder=str(model_dir / "breeze-asr-25-half-decoder.int8.onnx"),
-            tokens=str(model_dir / "breeze-asr-25-half-tokens.txt"),
+        return sherpa_onnx.OfflineRecognizer.from_paraformer(
+            paraformer=str(model_dir / "model.int8.onnx"),
+            tokens=str(model_dir / "tokens.txt"),
             num_threads=num_threads,
             provider="cpu",
-            language="zh",
+        )
+
+
+class DolphinEngine(_SherpaEngine):
+    """Dolphin Small, a CTC model for forty languages and many Chinese dialects, int8. Finds the
+    language itself and ignores the hints."""
+
+    name = "dolphin-small"
+    _files = ("model.int8.onnx", "tokens.txt")
+
+    def _build(self, model_dir: Path, num_threads: int) -> sherpa_onnx.OfflineRecognizer:
+        return sherpa_onnx.OfflineRecognizer.from_dolphin_ctc(
+            model=str(model_dir / "model.int8.onnx"),
+            tokens=str(model_dir / "tokens.txt"),
+            num_threads=num_threads,
+            provider="cpu",
+        )
+
+
+class FireRedAsrEngine(_SherpaEngine):
+    """FireRedASR-AED-L for Mandarin and English, int8. Ignores the hints."""
+
+    name = "fire-red-asr"
+    _files = ("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt")
+
+    def _build(self, model_dir: Path, num_threads: int) -> sherpa_onnx.OfflineRecognizer:
+        return sherpa_onnx.OfflineRecognizer.from_fire_red_asr(
+            encoder=str(model_dir / "encoder.int8.onnx"),
+            decoder=str(model_dir / "decoder.int8.onnx"),
+            tokens=str(model_dir / "tokens.txt"),
+            num_threads=num_threads,
+            provider="cpu",
         )
 
 
 _ENGINES: dict[str, type[_SherpaEngine]] = {
-    engine.name: engine for engine in (Qwen3AsrEngine, SenseVoiceEngine, WhisperOnnxEngine)
+    engine.name: engine
+    for engine in (
+        Qwen3AsrEngine,
+        SenseVoiceEngine,
+        WhisperOnnxEngine,
+        WhisperSmallEngine,
+        WhisperTurboEngine,
+        ParaformerEngine,
+        DolphinEngine,
+        FireRedAsrEngine,
+    )
 }
 
 

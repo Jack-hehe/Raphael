@@ -188,6 +188,19 @@ PRAGMA user_version = 9;
 COMMIT;
 """
 
+# v10: what opening anything taught Raphael (raphael_core.agent.targets), one row for each name
+# of a web page that opened: the name as it was said (`name_key`, short, in lower case) and the
+# address it opened. Never what was said around it. It is cleared with the assistant's history
+# and pruned by `last_used_ms`.
+_MIGRATION_V10 = """
+BEGIN;
+CREATE TABLE open_targets (name_key TEXT PRIMARY KEY, url TEXT NOT NULL,
+  uses INTEGER NOT NULL DEFAULT 1, last_used_ms INTEGER NOT NULL);
+CREATE INDEX open_targets_used ON open_targets(last_used_ms);
+PRAGMA user_version = 10;
+COMMIT;
+"""
+
 _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_V1,
     2: _MIGRATION_V2,
@@ -198,6 +211,7 @@ _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     7: _MIGRATION_V7,
     8: _MIGRATION_V8,
     9: _MIGRATION_V9,
+    10: _MIGRATION_V10,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

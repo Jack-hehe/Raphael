@@ -15,11 +15,13 @@ import pytest
 
 from raphael_core.device import models
 from raphael_core.device.models import (
+    LOCAL_STT_MODELS,
     REGISTRY,
     ModelDownloadError,
     ModelFile,
     ModelManager,
     ModelSpec,
+    local_model,
 )
 
 MB = 1_000_000
@@ -160,8 +162,21 @@ def test_rejects_path_traversal(tmp_path):
 
 def test_the_registry_pins_the_models_and_their_files():
     release = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
-    breeze_base = "https://huggingface.co/MediaTek-Research/Breeze-ASR-25-onnx-250806/resolve/main/"
-    assert set(REGISTRY) == {"silero-vad", "qwen3-asr", "sensevoice", "breeze-asr-25"}
+    breeze_base = (
+        "https://huggingface.co/MediaTek-Research/Breeze-ASR-25-onnx-250806/resolve/"
+        "a3a2256b20854a2009ca9b4e1d22a05aa7ba992e/"
+    )
+    assert set(REGISTRY) == {
+        "silero-vad",
+        "qwen3-asr",
+        "sensevoice",
+        "breeze-asr-25",
+        "whisper-small",
+        "whisper-turbo",
+        "paraformer-zh",
+        "dolphin-small",
+        "fire-red-asr",
+    }
     assert all(name == spec.name for name, spec in REGISTRY.items())
 
     silero = REGISTRY["silero-vad"]
@@ -202,7 +217,70 @@ def test_the_registry_pins_the_models_and_their_files():
     breeze = REGISTRY["breeze-asr-25"]
     assert breeze.files == breeze_files
     assert breeze.archive_url is None
-    assert breeze.downloads == tuple(ModelFile(breeze_base + f, f, None) for f in breeze_files)
+    assert breeze.downloads == (
+        ModelFile(breeze_base + breeze_files[0], breeze_files[0], 765_942_323),
+        ModelFile(breeze_base + breeze_files[1], breeze_files[1], 1_008_223_031),
+        ModelFile(breeze_base + breeze_files[2], breeze_files[2], 816_730),
+    )
+
+
+def test_the_models_taken_from_hugging_face_are_pinned_to_a_commit_with_their_sizes():
+    sizes = {
+        "whisper-small": [112_442_483, 262_226_114, 816_730],
+        "whisper-turbo": [674_716_297, 361_080_764, 816_730],
+        "paraformer-zh": [227_330_205, 75_354],
+        "dolphin-small": [249_658_954, 504_662],
+        "fire-red-asr": [1_293_430_814, 445_469_383, 71_448],
+    }
+    for name, expected in sizes.items():
+        spec = REGISTRY[name]
+        assert [file.size for file in spec.downloads] == expected
+        assert {file.path for file in spec.downloads} == set(spec.files)
+        for file in spec.downloads:
+            assert file.url.startswith("https://huggingface.co/csukuangfj/sherpa-onnx-")
+            commit = file.url.split("/resolve/")[1].split("/")[0]
+            assert len(commit) == 40 and int(commit, 16) >= 0, file.url
+            assert file.url.endswith("/" + file.path)
+
+
+def test_the_size_of_a_model_is_what_it_downloads():
+    assert REGISTRY["sensevoice"].download_size == 163_002_883
+    assert REGISTRY["silero-vad"].download_size == 2_313_101
+    assert REGISTRY["paraformer-zh"].download_size == 227_330_205 + 75_354
+    assert REGISTRY["breeze-asr-25"].download_size == 765_942_323 + 1_008_223_031 + 816_730
+    assert ModelSpec(name="x", files=("a",), downloads=(ModelFile("u", "a", None),)).download_size == 0
+
+
+# --- The catalogue of local speech models ---
+
+
+def test_the_catalogue_is_a_few_models_of_the_registry_and_never_the_detector():
+    names = [m.name for m in LOCAL_STT_MODELS]
+    assert 6 <= len(names) <= 10
+    assert len(set(names)) == len(names)
+    assert set(names) <= set(REGISTRY) - {"silero-vad"}
+    assert {"qwen3-asr", "sensevoice", "breeze-asr-25"} <= set(names)
+
+
+def test_every_catalogue_entry_says_what_it_is_and_has_a_size_to_show():
+    for entry in LOCAL_STT_MODELS:
+        assert entry.title and entry.note and entry.languages
+        assert REGISTRY[entry.name].download_size > 0, entry.name
+        assert all(file.size for file in REGISTRY[entry.name].downloads), entry.name
+
+
+def test_the_catalogue_covers_the_languages_of_the_app():
+    covered = {code for entry in LOCAL_STT_MODELS for code in entry.languages}
+    assert {"zh", "en", "ja"} <= covered
+    assert "zh" in local_model("breeze-asr-25").languages
+
+
+def test_a_model_of_the_catalogue_is_found_by_name_and_another_is_not():
+    assert local_model("sensevoice").title == "SenseVoice"
+    with pytest.raises(ValueError, match="nope"):
+        local_model("nope")
+    with pytest.raises(ValueError):
+        local_model("silero-vad")
 
 
 def test_a_registry_model_comes_from_an_archive_or_from_downloads_that_cover_its_files():

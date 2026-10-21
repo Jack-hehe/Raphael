@@ -8,7 +8,8 @@ is unknown and cannot run; and it holds the door to the plugins' tools (`plugins
 - `tier_now` is the tier a tool has this moment, which is what a call is judged by, not the tier it
   had when it was offered or when its question was asked;
 - `check` is `ToolRegistry.check`: a tool at T2 or above does not pass without the `Approval` that
-  only a yes to that very action can make;
+  only a yes to that very action can make; and no command for this computer (opening anything, the
+  volume, the lock...) passes for the worker, which runs while the user is away;
 - `call_plugin` checks, then calls through the hub, which checks the tool once more (it is still the
   one the user gave the tier to) and writes the audit whatever happens, with the task that made the
   call; a call the gate refuses is made as a refused one, so it is written down too;
@@ -86,9 +87,13 @@ class ToolGate:
     def needs_confirmation(self, name: str) -> bool:
         return self._registry.needs_confirmation(name)
 
-    def check(self, action: Action, approval: Approval | None) -> None:
+    def check(self, action: Action, approval: Approval | None, *, worker: bool = False) -> None:
         """Let `action` through: UnknownTool if it has no tier, NotApproved if it is at T2 or above
-        without a yes for this very action that has not been used."""
+        without a yes for this very action that has not been used, and NotApproved for a command
+        for this computer (opening anything, the volume, the lock...) when `worker` is true: those
+        are for the user at the keyboard, never for a task that runs while they are away."""
+        if worker and action.tool in COMMANDS:
+            raise NotApproved(action.tool)
         self._registry.check(action, approval)
 
     # --- the plugins' tools ---------------------------------------------------------------------

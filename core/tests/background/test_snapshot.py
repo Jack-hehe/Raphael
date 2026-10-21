@@ -17,7 +17,7 @@ def test_without_plugins_a_task_has_the_lookups_of_raphael_only():
 
 
 def test_the_commands_for_this_computer_are_not_in_it():
-    assert not {"open_url", "open_app", "set_volume", "lock_screen", "copy_text"} & set(
+    assert not {"open", "open_url", "open_app", "set_volume", "lock_screen", "copy_text"} & set(
         take_snapshot(None).refs
     )
 

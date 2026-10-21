@@ -181,14 +181,20 @@ const ALLOWED_PREFIXES: [&str; 8] = [
     "toolsets.",
 ];
 // `models.` is no prefix here: it names the speech models of this computer (`models.status`,
-// `models.ensure`) as well as OpenRouter's catalog (`models.catalog`), and each is let through by
-// name, so that a method added there later is not opened to the page by accident.
-const ALLOWED_METHODS: [&str; 7] = [
+// `models.ensure`, and the catalogue the speech-to-text picker offers: `models.local`,
+// `models.local_use`, `models.local_cancel`, `models.local_delete`) as well as OpenRouter's catalog
+// (`models.catalog`), and each is let through by name, so that a method added there later is not
+// opened to the page by accident.
+const ALLOWED_METHODS: [&str; 11] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
     "models.status",
     "models.ensure",
+    "models.local",
+    "models.local_use",
+    "models.local_cancel",
+    "models.local_delete",
     "models.catalog",
     "stats.summary",
 ];
@@ -985,8 +991,8 @@ mod tests {
             "history.delete",
             "dictionary.list",
             "dictionary.add",
+            "dictionary.import",
             "dictionary.delete",
-            "dictionary.suggestions",
             "dictionary.dismiss",
             "settings.get",
             "settings.set",
@@ -999,6 +1005,10 @@ mod tests {
             "audio.monitor",
             "models.status",
             "models.ensure",
+            "models.local",
+            "models.local_use",
+            "models.local_cancel",
+            "models.local_delete",
             "models.catalog",
             "stats.summary",
             "languages.list",

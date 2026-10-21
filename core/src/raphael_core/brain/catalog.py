@@ -34,8 +34,7 @@ The roles (`ROLES`), and what each needs of a model, from the calls it makes:
   the dictionary (`STT_MODELS_WITH_HINTS`).
 
 A model that a role cannot use is listed all the same, with the reason as a word that the app puts
-in plain words ("no_structured_output"). `recommended` marks the models the settings page offered
-before it offered them all.
+in plain words ("no_structured_output").
 
 Prices, in US dollars, are each model's headline price, the cheapest endpoint's. What a call costs
 depends on the provider OpenRouter picks for it, so they are a guide, not a bill. Tiers (a higher
@@ -468,7 +467,6 @@ def entry_view(entry: CatalogEntry) -> dict[str, Any]:
         "context_length": entry.context_length,
         "created_at_ms": entry.created_at_ms,
         "capabilities": {name: name in entry.capabilities for name in CAPABILITIES[entry.kind]},
-        "recommended": any(entry.id in role.curated for role in roles),
         "roles": {
             role.name: {"usable": reason is None, "reason": reason}
             for role in roles

@@ -50,8 +50,13 @@ class FakeClient:
         self.calls = []
         self.error = None
         self.delay = 0.0
-        self.result = Transcription(
-            text="你好世界",
+        self.result = self.heard("你好世界")
+        self.later = []  # what the calls after the first hear: each a result or an error
+
+    @staticmethod
+    def heard(text):
+        return Transcription(
+            text=text,
             model="elevenlabs/scribe-v2",
             cost_usd=0.00015,
             seconds=2.0,
@@ -66,6 +71,11 @@ class FakeClient:
             await asyncio.sleep(self.delay)
         if self.error is not None:
             raise self.error
+        if len(self.calls) > 1 and self.later:
+            heard = self.later.pop(0)
+            if isinstance(heard, Exception):
+                raise heard
+            return heard
         return self.result
 
 
@@ -165,6 +175,85 @@ async def test_what_it_cost_is_recorded_in_the_spend(router, conn):
     assert spend_rows(conn) == [("stt", "elevenlabs/scribe-v2", 0.00015, 0, 0)]
     status = await router.call("status.get", {})
     assert status["spend"]["month_usd"] == pytest.approx(0.00015)
+
+
+# --- a transcript in a script the user does not write ------------------------------------------
+
+
+async def test_an_automatic_transcript_in_a_foreign_script_is_heard_again_in_the_first_language(
+    router, fake_client, conn
+):
+    fake_client.result = fake_client.heard("ใครใช้ GitHub")
+    fake_client.later = [fake_client.heard("開啟 GitHub")]
+    result = await transcribe(router, language="auto")
+    assert result["text"] == "開啟 GitHub"
+    first, second = fake_client.calls
+    assert first["language"] is None
+    assert (second["language"], second["languages"]) == ("zh", [])  # the first of the languages
+    assert second["audio_b64"] == first["audio_b64"] and second["hints"] == first["hints"]
+    assert len(spend_rows(conn)) == 2  # both calls were paid for
+
+
+@pytest.mark.parametrize(
+    ("languages", "heard", "first_code"),
+    [
+        (["ja-JP", "en-US"], "Привет, как дела", "ja"),
+        (["en-US"], "مرحبا بالعالم", "en"),
+        (["zh-HK", "en-GB"], "नमस्ते दुनिया", "zh"),
+    ],
+)
+async def test_each_script_outside_the_languages_is_heard_again(
+    router, fake_client, languages, heard, first_code
+):
+    await router.call("settings.set", {"key": "languages", "value": languages})
+    fake_client.result = fake_client.heard(heard)
+    await transcribe(router)
+    assert [call["language"] for call in fake_client.calls] == [None, first_code]
+
+
+@pytest.mark.parametrize(
+    ("languages", "heard"),
+    [
+        (["zh-TW", "en-US", "ja-JP"], "開啟 GitHub 然後 open the page"),
+        (["zh-TW", "en-US", "ja-JP"], "これは日本語です"),
+        (["zh-TW"], "ok"),
+        (["zh-TW"], "12:30"),
+        (["zh-TW", "th-TH"], "สวัสดีครับ"),
+        (["ko-KR"], "안녕하세요"),
+        (["ja-JP"], "コーヒーをください"),
+    ],
+)
+async def test_a_transcript_in_the_scripts_of_the_languages_is_taken_as_it_is(
+    router, fake_client, languages, heard
+):
+    await router.call("settings.set", {"key": "languages", "value": languages})
+    fake_client.result = fake_client.heard(heard)
+    result = await transcribe(router)
+    assert result["text"] == heard and len(fake_client.calls) == 1
+
+
+async def test_a_language_the_user_chose_is_left_alone(router, fake_client):
+    fake_client.result = fake_client.heard("ใครใช้ GitHub")
+    result = await transcribe(router, language="zh")
+    assert result["text"] == "ใครใช้ GitHub" and len(fake_client.calls) == 1
+
+
+async def test_the_second_hearing_is_the_last(router, fake_client):
+    fake_client.result = fake_client.heard("ใครใช้ GitHub")
+    fake_client.later = [fake_client.heard("ใครใช้ GitHub อีกครั้ง"), fake_client.heard("x")]
+    result = await transcribe(router)
+    assert result["text"] == "ใครใช้ GitHub อีกครั้ง" and len(fake_client.calls) == 2
+
+
+async def test_when_the_second_hearing_fails_the_first_transcript_stands(
+    router, fake_client, caplog
+):
+    fake_client.result = fake_client.heard("ใครใช้ GitHub")
+    fake_client.later = [OpenRouterError(0, "network", "no")]
+    with caplog.at_level(logging.DEBUG):
+        result = await transcribe(router)
+    assert result["text"] == "ใครใช้ GitHub"
+    assert "ใคร" not in caplog.text and "GitHub" not in caplog.text
 
 
 # --- refusals ---------------------------------------------------------------------------------

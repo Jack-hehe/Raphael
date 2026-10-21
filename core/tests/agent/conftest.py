@@ -35,6 +35,9 @@ class FakeActions:
     def open_url(self, url):
         self._do("open_url", url)
 
+    def open_settings(self, uri):
+        self._do("open_settings", uri)
+
     def press_key(self, name, times=1):
         self._do("press_key", name, times)
 
@@ -169,7 +172,7 @@ def classification(**overrides):
         "needs_weather": False,
         "needs_search": False,
         "needs_time": False,
-        "app": "",
+        "target": "",
     }
     return {**data, **overrides}
 

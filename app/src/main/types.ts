@@ -79,8 +79,6 @@ export interface CatalogModel {
   created_at_ms: number | null;
   /** What it can do: `structured_output`, `reasoning`, `reasoning_off`, `max_tokens`, `tool_calling` (no role needs it: the plugins do); `dictionary_hints` for speech. */
   capabilities: Record<string, boolean>;
-  /** One of the models the settings offered before they offered them all. */
-  recommended: boolean;
   /** The roles of its kind. */
   roles: Partial<Record<ModelRole, RoleFit>>;
 }
@@ -193,11 +191,15 @@ export interface BrainSettings {
   history_retention_days: number;
   /** "cloud" (OpenRouter, the local engine as fallback) or "local". */
   stt_engine: string;
+  /** Which model of the catalogue the local engine is. */
+  stt_local_model?: string;
   stt_cloud_model: string;
   /** The model that writes Raphael's answers. */
   agent_model?: string;
   /** The city Raphael looks the weather up for. */
   agent_city?: string;
+  /** The models starred in the pickers, per role, in the order they were added. */
+  model_favorites?: Partial<Record<ModelRole, string[]>>;
 }
 
 /** `secrets.set_openrouter_key` */
@@ -216,6 +218,30 @@ export interface AudioDevices {
 /** `models.status` */
 export interface ModelsStatus {
   models: { name: string; ready: boolean }[];
+}
+
+/** A speech model of the catalogue for this computer (`models.local`). */
+export interface LocalModel {
+  /** The id: the name in the core's registry, and the value of the `stt_local_model` setting. */
+  name: string;
+  title: string;
+  /** Codes: `zh`, `en`, `ja`, `ko`, `yue`, and `multi` for many more. */
+  languages: string[];
+  /** What it is for, as a key the window puts in words. */
+  note: string;
+  /** Bytes to download. */
+  size: number;
+  /** On disk. */
+  ready: boolean;
+}
+
+/** `models.local` */
+export interface LocalModels {
+  models: LocalModel[];
+  /** The model that is the local engine (it is in use only when `stt_engine` is "local"). */
+  active: string;
+  /** The model being downloaded, if one is. */
+  downloading: string | null;
 }
 
 /** The settings in `device.json` (device_settings.rs). */

@@ -6,61 +6,61 @@ of the plain ones are listed here, in Traditional Chinese, English and Japanese,
 is nothing but one of them (with the polite words around it taken off) is that command.
 
 It must miss rather than guess. A command is found only when the whole request is one: a volume
-or media or lock phrase on its own, or an open verb and then the name of a site, or of an app (any
-short name, which the app list then finds or does not). "I want to open a bakery", "play me
-something by Radiohead" and "open YouTube and search for cats" are left to the models, and fail
-with the reason they could not run. Copying is never found here: it changes state and asks first.
+or media or lock phrase on its own, or an open verb and then what to open (any short name: no site
+is listed here, the apps, the learned names, the domains and the settings pages find it or do not).
+"I want to open a bakery", "play me something by Radiohead" and "open YouTube and search for cats"
+are left to the models, and fail with the reason they could not run. Copying is never found here:
+it changes state and asks first.
 """
 
 import re
 import unicodedata
 
+from .opening import FILLERS, PREFIXES, SUFFIXES, clean_target
 from .routing import RouteDecision
 
 # Longer than this is not a bare command.
 _MAX_CHARS = 60
-# An app is named in at most this many words (English) or characters.
-_MAX_APP_WORDS = 3
-_MAX_APP_CHARS = 30
+# What is to be opened is named in at most this many words (English) or characters.
+_MAX_TARGET_WORDS = 3
+_MAX_TARGET_CHARS = 30
 _MAX_FORMS = 400
 
-# Words that wrap a request in politeness. English ones are whole words, taken out wherever they
-# are; the Chinese and Japanese ones are taken off the ends.
-_FILLERS = frozenset(
-    "please kindly can could would you the a an my for me now just to it this".split()
-)
-_PREFIXES = tuple(
-    sorted(
-        ("請你", "請", "麻煩你", "麻煩", "幫我", "幫忙", "你可以", "可以", "能不能", "把", "給我",
-         "拜託", "先"),
-        key=len,
-        reverse=True,
-    )
-)  # fmt: skip
-_SUFFIXES = tuple(
-    sorted(
-        ("好不好", "可以嗎", "好嗎", "一下", "謝謝", "吧", "啦", "啊", "喔", "哦", "嘛", "てください",
-         "下さい", "ください", "お願いします", "お願い", "にして", "して", "てほしい", "ほしい",
-         "ちょうだい", "くれ", "て", "よ", "ね"),
-        key=len,
-        reverse=True,
-    )
-)  # fmt: skip
+# The polite words (`opening.FILLERS`, `PREFIXES`, `SUFFIXES`) are shared with the finding of the
+# target.
+_FILLERS = FILLERS
+_PREFIXES = PREFIXES
+_SUFFIXES = SUFFIXES
 _OPEN_EN = ("open", "launch")
-_OPEN_ZH = ("打開", "打开", "開啟", "开启", "啟動", "启动")
+_OPEN_ZH = (
+    "打開一下", "開啟一下", "開一下", "打開", "打开", "開啟", "开启", "啟動", "启动",
+)  # fmt: skip
 _OPEN_JA = ("開いて", "開く", "開け", "起動して", "起動", "立ち上げて", "ひらいて")
 # What follows the verb in Japanese ("開いてください"), apart from the verb itself.
 _JA_POLITE_ENDINGS = ("ください", "下さい", "お願いします", "お願い")
 # Words that join a second request to the first: more than a name to open.
 _CONNECTORS = ("然後", "然后", "並且", "并且", "接著", "接着", "之後", "之后", "再", "そして", "それから")
-_NOT_WORD = re.compile(r"[^\w\s]|_")
+# Words that ask for a search: "open YouTube and search for cats" is for the models.
+_SEARCH_ZH = ("搜尋", "搜索", "搜寻", "検索")
+_SEARCH_EN = ("search", "find", "look")
+# A "開" that opens something: followed by the name of an app or a site in Latin letters.
+_OPEN_ZH_SHORT = re.compile(r"開\s*(?=[a-z0-9])")
+# Punctuation that is part of a name when it has letters on both sides: "reddit.com",
+# "github.com/notifications", "wi-fi", "https://example.org".
+_INNER = {".": "\ue000", ":": "\ue001", "/": "\ue002", "-": "\ue003"}
+_INNER_PUNCTUATION = re.compile(r"(?<=\w)[.:/-](?=\w)")
+_NOT_WORD = re.compile(r"[^\w\s\ue000-\ue004]|_")
 
 
 def _normalize(text: str) -> str:
-    """`text` in lower case with full-width letters made plain, punctuation taken out and the
-    words one space apart."""
-    folded = unicodedata.normalize("NFKC", text).casefold()
-    return " ".join(_NOT_WORD.sub(" ", folded).split())
+    """`text` in lower case with full-width letters made plain, punctuation taken out (but not
+    the dots, slashes and hyphens inside a name) and the words one space apart."""
+    folded = unicodedata.normalize("NFKC", text).casefold().replace("://", "\ue004")
+    folded = _INNER_PUNCTUATION.sub(lambda found: _INNER[found.group()], folded)
+    kept = " ".join(_NOT_WORD.sub(" ", folded).split())
+    for plain, mask in _INNER.items():
+        kept = kept.replace(mask, plain)
+    return kept.replace("\ue004", "://")
 
 
 def _compact(text: str) -> str:
@@ -141,27 +141,6 @@ _STANDALONE = _table(
     }
 )  # fmt: skip
 
-# What follows an open verb, when it is one of these sites.
-_SITES = _table(
-    {
-        "open_youtube": ("youtube", "油管", "ユーチューブ", "ようつべ"),
-        "open_gmail": ("gmail", "g mail", "ジーメール"),
-        "open_github": ("github", "git hub", "ギットハブ"),
-        "open_google": ("google", "谷歌", "グーグル"),
-        "open_google_calendar": (
-            "google calendar", "google 日曆", "google 行事曆", "谷歌日曆", "googleカレンダー",
-            "グーグルカレンダー",
-        ),
-        "open_google_drive": (
-            "google drive", "google 雲端硬碟", "google 雲端", "googleドライブ", "グーグルドライブ"
-        ),
-        "open_notion": ("notion", "ノーション"),
-        "open_chatgpt": ("chatgpt", "chat gpt", "チャットジーピーティー"),
-        "open_claude": ("claude", "クロード"),
-    }
-)  # fmt: skip
-
-
 def _strip_prefixes(text: str) -> str:
     changed = True
     while changed:
@@ -184,6 +163,9 @@ def _open_target(spoken: str) -> str | None:
     for verb in _OPEN_ZH:
         if head.startswith(verb):
             return head[len(verb) :].strip()
+    short = _OPEN_ZH_SHORT.match(head)
+    if short:
+        return head[short.end() :].strip()
     tail = spoken
     for ending in _JA_POLITE_ENDINGS:
         tail = tail.removesuffix(ending).rstrip()
@@ -193,14 +175,25 @@ def _open_target(spoken: str) -> str | None:
     return None
 
 
-def _is_an_app_name(target: str) -> bool:
-    """Whether `target` can be the name of an app: short, and not two requests in one."""
+def _is_a_name(target: str) -> bool:
+    """Whether `target` can be the name of something to open: short, and not two requests in one
+    (a second thing to do, or a search)."""
     words = target.split()
-    if not 0 < len(words) <= _MAX_APP_WORDS or "and" in words:
+    if not 0 < len(words) <= _MAX_TARGET_WORDS or "and" in words:
         return False
-    return not any(connector in target for connector in _CONNECTORS) and (
-        len(_compact(target)) <= _MAX_APP_CHARS
-    )
+    if any(word in _SEARCH_EN for word in words):
+        return False
+    if any(connector in target for connector in (*_CONNECTORS, *_SEARCH_ZH)):
+        return False
+    return len("".join(words)) <= _MAX_TARGET_CHARS
+
+
+def extract_target(text: str) -> str | None:
+    """What `text` asks to open, as `opening.clean_target` leaves it, when it starts with an open
+    verb (English, Chinese) or ends with one (Japanese): "open Reddit" gives "reddit". None when
+    it asks to open nothing."""
+    target = _open_target(_normalize(text))
+    return clean_target(target) or None if target else None
 
 
 def match_command(text: str) -> RouteDecision | None:
@@ -210,12 +203,9 @@ def match_command(text: str) -> RouteDecision | None:
     if not spoken or len(spoken) > _MAX_CHARS:
         return None
     command = next((_STANDALONE[form] for form in _forms(spoken) if form in _STANDALONE), None)
-    if command is None:
-        target = _open_target(spoken)
-        if target:
-            command = next((_SITES[form] for form in _forms(target) if form in _SITES), None)
-            if command is None and _is_an_app_name(target):
-                command = "open_app"
-    if command is None:
+    if command is not None:
+        return RouteDecision(route="command", command=command, source="local")
+    target = extract_target(text)
+    if target is None or not _is_a_name(target):
         return None
-    return RouteDecision(route="command", command=command, source="local")
+    return RouteDecision(route="command", command="open", target=target, source="local")

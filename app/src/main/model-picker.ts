@@ -2,8 +2,16 @@
 // and a panel to choose another from every model OpenRouter offers (`models.catalog`). The panel
 // has a search field, the order and the maker as two small dropdowns, and the models of the role's
 // kind: those the role can use first, then the others, greyed, with the reason in plain words.
-// Keys: the arrows and Enter in the list, typing searches, Tab goes between the search and the two
-// dropdowns, Esc closes. The panel is the app's popover (ui.ts), so it closes the way menus do.
+// The models the user starred (`favorites`, kept by the core for each role) are listed first, under
+// 我的最愛, whatever the order, and a search narrows them like the others. Every row has a star
+// button beside its option. The stars are out of the tab order but for the star of the highlighted
+// row, which is one stop of it: the arrows still move the highlight, and the star is reached with a
+// Tab and pressed with Enter or Space.
+// The speech-to-text picker has two tabs over it, 雲端 (all of this) and 本機 (local-models.ts: the
+// speech models that run on this computer, downloaded only when the user chooses one).
+// Keys: the arrows and Enter in the list, typing searches, Tab goes between the tabs, the search, the
+// star of the highlighted row and the two dropdowns, Left and Right change the tab, Esc closes. The panel is the app's popover (ui.ts), so
+// it closes the way menus do.
 //
 // The settings page draws its rows as HTML, and draws them again often: a row holds the picker's
 // button (`modelPickerHTML`, a dropdown to the page's rules and styles), and the page mounts the
@@ -12,6 +20,15 @@
 
 import "./model-picker.css";
 import { t } from "./i18n";
+import {
+  type LocalConfirm,
+  type LocalView,
+  faceTitle,
+  localListHTML,
+  localState,
+  stateText,
+  tabsHTML,
+} from "./local-models";
 import { formatPerMinute, formatPerMtok, pricingNote } from "./pricing";
 import type { CatalogModel, ModelCatalog, ModelRole } from "./types";
 import { CHECK, closeMenu, esc, ico, menuIsOpenFor, openPopover, placeMenu } from "./ui";
@@ -101,47 +118,16 @@ const UNUSABLE: Record<ModelRole, () => string> = {
   stt: () => t("picker.unusableStt"),
 };
 
-/**
- * A choice that is no OpenRouter model, listed above the models: the speech recognition of this
- * computer, which the settings offer with the speech-to-text models so that what turns speech into
- * text is one choice. It belongs to no maker, and the role can always use it.
- */
-export interface PickerExtra {
-  id: string;
-  name: string;
-  /** What it costs, as its row shows it: 免費. */
-  price: string;
-  /** The line under its name. */
-  detail?: string;
-}
-
-/** A row of the list: a model, and whether the role can use it; or a choice that is no model. */
+/** A row of the list: a model, whether the role can use it, and whether the user starred it. */
 export interface PickerRow {
   model: CatalogModel;
   usable: boolean;
-  extra?: PickerExtra;
+  favorite: boolean;
 }
 
-/** A choice that is no model, as a row: it has no maker, no price of OpenRouter's and no date. */
-const extraRow = (extra: PickerExtra): PickerRow => ({
-  model: {
-    id: extra.id,
-    name: extra.name,
-    provider: "",
-    input_per_mtok: null,
-    output_per_mtok: null,
-    per_minute: null,
-    free: false,
-    variable_price: false,
-    context_length: null,
-    created_at_ms: null,
-    capabilities: {},
-    recommended: false,
-    roles: {},
-  },
-  usable: true,
-  extra,
-});
+/** `favorites` with `id` added (once, at the end) or taken out. */
+export const withFavorite = (favorites: readonly string[], id: string, on: boolean): string[] =>
+  on ? (favorites.includes(id) ? [...favorites] : [...favorites, id]) : favorites.filter((f) => f !== id);
 
 const squeeze = (text: string): string => text.replace(/[^\p{L}\p{N}]+/gu, "");
 
@@ -189,14 +175,20 @@ const byDate = (a: CatalogModel, b: CatalogModel): number =>
 
 const ORDERS: Record<PickerSort, (a: CatalogModel, b: CatalogModel) => number> = { price: byPrice, name: byName, newest: byDate };
 
-/** The rows of the list: the models that answer the search and are of the maker, in the order chosen, those the role can use first. */
-export function pickerRows(models: CatalogModel[], role: ModelRole, state: PickerState): PickerRow[] {
+/**
+ * The rows of the list: the models that answer the search and are of the maker, in the order chosen.
+ * The favourites come first, then the other models; in each, those the role can use before those it
+ * cannot. A favourite that the catalog lacks is no row.
+ */
+export function pickerRows(models: CatalogModel[], role: ModelRole, state: PickerState, favorites: readonly string[] = []): PickerRow[] {
   const matches = matcher(state.query);
+  const starred = new Set(favorites);
   const rows = models
     .filter((model) => (state.provider === "" || model.provider === state.provider) && matches(searched(model)))
     .sort(ORDERS[state.sort])
-    .map((model) => ({ model, usable: usableFor(model, role) }));
-  return [...rows.filter((row) => row.usable), ...rows.filter((row) => !row.usable)];
+    .map((model) => ({ model, usable: usableFor(model, role), favorite: starred.has(model.id) }));
+  const usableFirst = (own: PickerRow[]): PickerRow[] => [...own.filter((row) => row.usable), ...own.filter((row) => !row.usable)];
+  return [...usableFirst(rows.filter((row) => row.favorite)), ...usableFirst(rows.filter((row) => !row.favorite))];
 }
 
 export interface PickerChoice {
@@ -265,11 +257,17 @@ export class PickerList {
     /** The model chosen now: checked, and highlighted when the list opens. */
     public current: string,
     state: Partial<PickerState> = {},
-    /** The choices that are no models, above them while no maker is chosen. */
-    private extras: readonly PickerExtra[] = [],
+    /** The ids the user starred, in the order they were added; those the catalog lacks are kept, not listed. */
+    public favorites: readonly string[] = [],
   ) {
     this.state = { ...DEFAULT_PICKER_STATE, ...state };
     this.refresh(current);
+  }
+
+  /** The user starred or un-starred a model: the rows move, and the highlight stays on its model. */
+  setFavorites(favorites: readonly string[]): void {
+    this.favorites = favorites;
+    this.refresh(this.activeId());
   }
 
   /** A new search highlights the first row; none at all, the chosen model again. */
@@ -317,15 +315,13 @@ export class PickerList {
     return row?.usable ? row.model.id : null;
   }
 
-  /** How many models the list shows, the choices that are no models aside. */
+  /** How many models the list shows. */
   modelCount(): number {
-    return this.rows.filter((row) => !row.extra).length;
+    return this.rows.length;
   }
 
   private refresh(keep: string | null): void {
-    const matches = matcher(this.state.query);
-    const extras = this.state.provider === "" ? this.extras.filter((e) => matches(`${e.name} ${e.detail ?? ""} ${e.id}`)) : [];
-    this.rows = [...extras.map(extraRow), ...pickerRows(this.models, this.role, this.state)];
+    this.rows = pickerRows(this.models, this.role, this.state, this.favorites);
     const kept = keep === null ? -1 : this.rows.findIndex((row) => row.model.id === keep);
     this.active = kept >= 0 ? kept : this.rows.length > 0 ? 0 : -1;
   }
@@ -333,41 +329,64 @@ export class PickerList {
 
 // ---------- the HTML ----------
 
-/** One row: the name, the price, and a line with the maker, the context or the dictionary, the date when the list is newest first, and why the role cannot use it. */
+/** The star beside a row: a real button that adds the model to 我的最愛 or takes it out. It is not a stop of the Tab key (see `MountedPicker.cycle`). */
+function starHTML(model: CatalogModel, on: boolean): string {
+  const label = t(on ? "picker.favRemove" : "picker.favAdd", { p0: model.name });
+  return (
+    `<button type="button" class="mp-star" tabindex="-1" data-star="${esc(model.id)}"${on ? " data-on" : ""} ` +
+    `aria-label="${esc(label)}" title="${esc(t(on ? "picker.favRemoveTitle" : "picker.favAddTitle"))}">${ico("star")}</button>`
+  );
+}
+
+/** One row: the name, the price, and a line with the maker, the context or the dictionary, the date when the list is newest first, and why the role cannot use it; the star is beside it. */
 function optionHTML(row: PickerRow, index: number, list: PickerList): string {
-  const { model, extra } = row;
+  const { model } = row;
   const chosen = model.id === list.current;
-  const details = extra ? (extra.detail ? [extra.detail] : []) : [model.provider];
+  const details = [model.provider];
   if (model.context_length !== null) details.push(t("picker.context", { p0: formatContext(model.context_length) }));
   if (model.capabilities.dictionary_hints) details.push(t("picker.dictionary"));
   if (list.state.sort === "newest" && model.created_at_ms !== null) details.push(addedText(model.created_at_ms));
   const reason = row.usable ? "" : reasonText(model.roles[list.role]?.reason);
   if (reason) details.push(reason);
-  const price = extra ? extra.price : priceText(model, list.role);
+  const price = priceText(model, list.role);
   // What a screen reader says of the row, in an order that makes sense when heard.
-  const heard = extra ? [model.name, ...details, price] : [model.name, model.provider, priceDescription(model, list.role)];
-  if (model.recommended) heard.push(t("picker.recommended"));
+  const heard = [model.name, model.provider, priceDescription(model, list.role)];
+  if (row.favorite) heard.push(t("picker.favorites"));
   if (chosen) heard.push(t("picker.current"));
   if (reason) heard.push(reason);
   return (
+    `<div class="mp-row" role="presentation">` +
     `<button type="button" class="mp-opt" role="option" id="mp-o-${index}" tabindex="-1" data-id="${esc(model.id)}" aria-selected="false"` +
     `${row.usable ? "" : ' aria-disabled="true"'}${chosen ? " data-current" : ""} aria-label="${esc(heard.join(", "))}" title="${esc(model.id)}">` +
     `<span class="ck">${chosen ? CHECK : ""}</span>` +
     `<span class="mp-main"><span class="mp-line"><span class="mp-name">${esc(model.name)}</span>` +
-    (model.recommended ? `<span class="mp-badge">${esc(t("picker.recommended"))}</span>` : "") +
     `<span class="mp-price num">${esc(price)}</span></span>` +
     (details.length ? `<span class="mp-sub">${esc(details.join(" · "))}</span>` : "") +
-    `</span></button>`
+    `</span></button>` +
+    starHTML(model, row.favorite) +
+    `</div>`
   );
 }
 
-/** The rows of the list, with a heading over those the role cannot use. */
+const headingHTML = (text: string): string => `<div class="mp-group" aria-hidden="true">${esc(text)}</div>`;
+
+/**
+ * The rows of the list. With favourites, 我的最愛 heads the list and 所有模型 the rest; the models
+ * the role cannot use are under a heading of their own, which says why.
+ */
 export function listHTML(list: PickerList): string {
-  const first = list.rows.findIndex((row) => !row.usable);
-  return list.rows
-    .map((row, index) =>
-      (index === first ? `<div class="mp-group" aria-hidden="true">${esc(UNUSABLE[list.role]())}</div>` : "") + optionHTML(row, index, list),
-    )
+  const { rows } = list;
+  const starred = rows.findIndex((row) => row.favorite);
+  const others = starred < 0 ? -1 : rows.findIndex((row) => !row.favorite);
+  const unusable = rows.findIndex((row) => !row.usable && !row.favorite);
+  return rows
+    .map((row, index) => {
+      let heading = "";
+      if (index === starred) heading = headingHTML(t("picker.favorites"));
+      if (index === unusable) heading = headingHTML(UNUSABLE[list.role]());
+      else if (index === others) heading = headingHTML(t("picker.others"));
+      return heading + optionHTML(row, index, list);
+    })
     .join("");
 }
 
@@ -397,10 +416,11 @@ function dropdownHTML(which: "sort" | "provider", label: string, choices: Picker
 const sortLabel = (sort: PickerSort): string => sortChoices().find((c) => c.value === sort)?.label ?? sort;
 const providerLabel = (provider: string): string => provider || t("picker.allProviders");
 
-/** The panel, empty: its list, its line under the list and its small print are filled in apart. */
-function panelHTML(list: PickerList, label: string): string {
+/** The panel, empty: its list, its line under the list and its small print are filled in apart. With `tab`, the picker has the local tab too. */
+function panelHTML(list: PickerList, label: string, tab: "cloud" | "local" | null): string {
   const search = t("picker.search");
-  return (
+  const cloud =
+    `<div class="mp-pane" id="mp-pane-cloud"${tab ? ` role="tabpanel" aria-labelledby="mp-tab-cloud"${tab === "cloud" ? "" : " hidden"}` : ""}>` +
     `<div class="mp-head">` +
     `<label class="field mp-search">${ico("search")}<input id="mp-search" type="text" role="combobox" aria-autocomplete="list" aria-expanded="true" ` +
     `aria-controls="mp-list" aria-label="${esc(search)}" placeholder="${esc(search)}" autocomplete="off" spellcheck="false"></label>` +
@@ -412,7 +432,14 @@ function panelHTML(list: PickerList, label: string): string {
     `<span>${esc(KIND[list.role] === "llm" ? t("picker.tokenPrices") : t("picker.prices"))}</span></div>` +
     `<div class="mp-scroll"><div class="mp-list" id="mp-list" role="listbox" aria-label="${esc(label)}"></div>` +
     `<p class="mp-empty" role="status" hidden></p></div>` +
-    `<p class="mp-foot"></p>`
+    `<p class="mp-foot"></p></div>`;
+  if (!tab) return cloud;
+  return (
+    tabsHTML(tab) +
+    cloud +
+    `<div class="mp-pane" id="mp-pane-local" role="tabpanel" aria-labelledby="mp-tab-local"${tab === "local" ? "" : " hidden"}>` +
+    `<div class="mp-scroll"><div class="lm-list" id="mp-locallist" aria-label="${esc(label)}"></div></div>` +
+    `<p class="mp-foot">${esc(t("local.intro"))}</p></div>`
   );
 }
 
@@ -449,14 +476,24 @@ export interface ModelPickerOptions {
   label: string;
   /** The button's `data-k`: a page that draws itself again gives the focus back by it (settings.ts does). */
   key?: string;
-  /** The choices that are no models, listed above them (`PickerExtra`): `current` may be one. */
-  extras?: readonly PickerExtra[];
+  /** The ids the user starred for this role (the core keeps them), in the order they were added. */
+  favorites?: readonly string[];
   /** Whether the button shows the price of what is chosen: yes, unless the page shows it beside. */
   showPrice?: boolean;
   /** No choosing: the brain's settings are not known. */
   disabled?: boolean;
   /** The user chose `id`: never the model chosen now, never one the role cannot use. The page saves it. */
   onChoose: (id: string) => void;
+  /** The speech models of this computer (a second tab) and what is under way: only the speech-to-text picker has it. */
+  local?: LocalView;
+  /** The user chose the local model `name`, after the question about downloading it if it was not on disk. The page downloads it, saves it and hands the progress back with `update`. */
+  onUseLocal?: (name: string) => void;
+  /** The user cancelled the download in progress. */
+  onCancelLocal?: () => void;
+  /** The user deleted the local model `name`, after the question. */
+  onDeleteLocal?: (name: string) => void;
+  /** The user starred (`on`) or un-starred `id`. The picker shows it at once; the page saves it and hands the saved list back with `update`. */
+  onFavorite?: (id: string, on: boolean) => void;
 }
 
 /** What a picker's button is drawn from: all but what choosing does. */
@@ -475,18 +512,18 @@ export interface ModelPicker {
 
 /** What the button shows: the chosen model (or choice), and its price unless the page shows that. */
 function buttonFace(o: ModelPickerLook): { inner: string; label: string; title: string } {
-  const extra = o.extras?.find((e) => e.id === o.current);
-  const model = extra ? undefined : (o.catalog ? modelsFor(o.catalog, o.role) : []).find((m) => m.id === o.current);
-  const name = extra?.name ?? model?.name ?? shortName(o.current);
-  const price = extra?.price ?? (model ? priceText(model, o.role) : o.loading ? "…" : "");
-  const said = extra?.price ?? (model ? priceDescription(model, o.role) : "");
+  const local = o.local ? faceTitle(o.local) : null;
+  const model = local ? undefined : (o.catalog ? modelsFor(o.catalog, o.role) : []).find((m) => m.id === o.current);
+  const name = local ?? model?.name ?? shortName(o.current);
+  const price = local ? t("settings.sttLocalPrice") : model ? priceText(model, o.role) : o.loading ? "…" : "";
+  const said = local ? t("settings.sttLocalPrice") : model ? priceDescription(model, o.role) : "";
   return {
     inner:
       `<span class="mp-tname">${esc(name)}</span>` +
       (price && o.showPrice !== false ? `<span class="mp-tprice num">${esc(price)}</span>` : "") +
       ico("down"),
     label: `${o.label}: ${name}${said ? `, ${said}` : ""}`,
-    title: model ? `${model.provider}: ${model.name}` : (extra?.name ?? o.current),
+    title: local ?? (model ? `${model.provider}: ${model.name}` : o.current),
   };
 }
 
@@ -528,6 +565,12 @@ class MountedPicker implements ModelPicker {
   private dropdown: Dropdown | null = null;
   /** The row drawn as highlighted. */
   private lit: HTMLElement | null = null;
+  /** The tab that is open, when there are two. */
+  private tab: "cloud" | "local" = "cloud";
+  /** The question the local tab is asking, if it is. */
+  private confirm: LocalConfirm | null = null;
+  /** What the local tab was drawn from, to tell a new byte count (drawn in place) from a new state (drawn again). */
+  private localDrawn = "";
 
   constructor(container: HTMLElement, options: ModelPickerOptions) {
     this.o = { ...options };
@@ -562,10 +605,12 @@ class MountedPicker implements ModelPicker {
     if (highlighted) this.list.point(highlighted);
     this.paintFilters();
     this.paintList(null);
+    this.paintLocal();
     placeMenu(); // the small print may have grown
   }
 
   open(query = ""): void {
+    this.tab = this.o.local?.active ? "local" : "cloud";
     this.show(this.newList({ query }), {});
   }
 
@@ -583,7 +628,7 @@ class MountedPicker implements ModelPicker {
   }
 
   private newList(state: Partial<PickerState>): PickerList {
-    return new PickerList(this.o.role, this.models(), this.o.current, state, this.o.extras ?? []);
+    return new PickerList(this.o.role, this.models(), this.o.current, state, this.o.favorites ?? []);
   }
 
   private paintButton(): void {
@@ -602,7 +647,10 @@ class MountedPicker implements ModelPicker {
   private show(list: PickerList, restore: { caret?: number; scroll?: number }): void {
     if (this.button.disabled) return;
     this.list = list;
-    const panel = openPopover(this.button, panelHTML(list, this.o.label), {
+    if (!this.o.local) this.tab = "cloud";
+    this.confirm = null;
+    this.localDrawn = "";
+    const panel = openPopover(this.button, panelHTML(list, this.o.label, this.o.local ? this.tab : null), {
       className: "menu mp-panel",
       role: "dialog",
       label: this.o.label,
@@ -612,18 +660,24 @@ class MountedPicker implements ModelPicker {
     panel.addEventListener("keydown", (e) => this.panelKey(e));
     panel.addEventListener("input", (e) => this.searched(e));
     panel.addEventListener("click", (e) => this.clicked(e));
-    // A click on a row leaves the focus in the search, where the keys work.
+    // A click on a row or its star leaves the focus in the search, where the keys work.
     panel.addEventListener("mousedown", (e) => {
-      if ((e.target as Element).closest(".mp-opt")) e.preventDefault();
+      if ((e.target as Element).closest(".mp-opt, .mp-star")) e.preventDefault();
     });
     panel.addEventListener("pointermove", (e) => this.pointed(e));
     const input = this.search()!;
     input.value = list.state.query;
-    this.paintList("center");
+    // With favourites the list opens at its top, where they are, and not at the model in use.
+    this.paintList(list.rows.some((row) => row.favorite) ? "top" : "center");
+    this.paintLocal();
     if (restore.scroll !== undefined) panel.querySelector(".mp-scroll")!.scrollTop = restore.scroll;
     // Placed again now that it is filled in: the popover was placed empty, without its small print,
     // and above its button it would now cover it.
     placeMenu();
+    if (this.tab === "local") {
+      panel.querySelector<HTMLElement>("#mp-tab-local")?.focus({ preventScroll: true });
+      return;
+    }
     input.focus({ preventScroll: true });
     const caret = Math.min(restore.caret ?? input.value.length, input.value.length);
     input.setSelectionRange(caret, caret);
@@ -637,7 +691,9 @@ class MountedPicker implements ModelPicker {
     const caret = before.picker.search()?.selectionStart ?? undefined;
     const scroll = panel?.querySelector(".mp-scroll")?.scrollTop;
     const highlighted = list?.activeId();
+    const tab = before.picker.tab;
     before.picker.forget();
+    this.tab = tab;
     const again = this.newList(list?.state ?? {});
     if (highlighted) again.point(highlighted);
     this.show(again, { caret, scroll });
@@ -649,6 +705,8 @@ class MountedPicker implements ModelPicker {
     this.list = null;
     this.dropdown = null;
     this.lit = null;
+    this.confirm = null;
+    this.localDrawn = "";
     if (opened?.picker === this) opened = null;
   }
 
@@ -691,6 +749,118 @@ class MountedPicker implements ModelPicker {
     if (row && block) row.scrollIntoView({ block });
   }
 
+  /**
+   * Draws the local tab. A new byte count only moves the bar and the percentage of the row being
+   * downloaded, so that the focus stays where it is; anything else (a state changed, a question
+   * asked) draws the rows again and gives the focus back to the same button.
+   */
+  private paintLocal(): void {
+    const local = this.o.local;
+    const host = this.panel?.querySelector<HTMLElement>("#mp-locallist");
+    if (!local || !host) return;
+    const models = local.models;
+    const shape = JSON.stringify([
+      typeof models === "string" ? models : models.map((m) => [m.name, m.ready, localState(m, local).kind]),
+      local.active,
+      local.download?.name ?? null,
+      this.confirm,
+    ]);
+    if (shape === this.localDrawn && typeof models !== "string") {
+      for (const model of models) {
+        const row = host.querySelector<HTMLElement>(`.lm-row[data-name="${CSS.escape(model.name)}"]`);
+        const state = localState(model, local);
+        if (!row || state.kind !== "downloading") continue;
+        row.querySelector("[data-state]")!.textContent = stateText(state);
+        row.querySelector<HTMLElement>(".lm-bar")!.setAttribute("aria-valuenow", String(state.percent));
+        row.querySelector<HTMLElement>(".lm-bar i")!.style.width = `${state.percent}%`;
+      }
+      return;
+    }
+    const focused = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? document.activeElement : null;
+    const back = focused ? { act: focused.dataset.act, name: focused.dataset.name } : null;
+    host.innerHTML = localListHTML(local, this.confirm);
+    this.localDrawn = shape;
+    if (back) {
+      const find = (act: string | undefined): HTMLElement | null =>
+        host.querySelector<HTMLElement>(`[data-act="${act}"][data-name="${CSS.escape(back.name ?? "")}"]`);
+      (find(back.act) ?? find("use") ?? host.querySelector<HTMLElement>("button:not(:disabled)"))?.focus();
+    }
+    placeMenu();
+  }
+
+  private setTab(tab: "cloud" | "local", focus: boolean): void {
+    if (!this.panel || !this.o.local || tab === this.tab) return;
+    this.tab = tab;
+    this.confirm = null;
+    this.closeDropdown(false);
+    for (const which of ["cloud", "local"] as const) {
+      const button = this.panel.querySelector<HTMLElement>(`#mp-tab-${which}`)!;
+      button.setAttribute("aria-selected", String(which === tab));
+      button.tabIndex = which === tab ? 0 : -1;
+      this.panel.querySelector<HTMLElement>(`#mp-pane-${which}`)!.hidden = which !== tab;
+    }
+    this.paintLocal();
+    placeMenu();
+    if (focus) this.panel.querySelector<HTMLElement>(`#mp-tab-${tab}`)!.focus();
+  }
+
+  /** The arrows between the rows of the local tab. */
+  private localKey(e: KeyboardEvent): void {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const rows = Array.from(this.panel?.querySelectorAll<HTMLElement>("#mp-locallist .lm-main:not(:disabled)") ?? []);
+    const at = rows.indexOf(document.activeElement as HTMLElement);
+    const next = moveIndex(rows.length, at, e.key);
+    if (next === null) return;
+    e.preventDefault();
+    rows[next].focus();
+  }
+
+  /** A button of the local tab. */
+  private localAct(button: HTMLElement): void {
+    const local = this.o.local;
+    const name = button.dataset.name ?? "";
+    if (!local) return;
+    switch (button.dataset.act) {
+      case "use": {
+        if (name === local.active) {
+          this.close();
+          return;
+        }
+        const model = typeof local.models === "string" ? undefined : local.models.find((m) => m.name === name);
+        if (!model) return;
+        if (model.ready) {
+          this.close();
+          this.o.onUseLocal?.(name);
+        } else {
+          this.confirm = { kind: "download", name };
+          this.paintLocal();
+          this.panel?.querySelector<HTMLElement>('[data-act="confirm"]')?.focus();
+        }
+        return;
+      }
+      case "delete":
+        this.confirm = { kind: "delete", name };
+        this.paintLocal();
+        this.panel?.querySelector<HTMLElement>('[data-act="confirm"]')?.focus();
+        return;
+      case "confirm": {
+        const asked = this.confirm;
+        this.confirm = null;
+        if (asked?.kind === "delete") this.o.onDeleteLocal?.(name);
+        else if (asked) this.o.onUseLocal?.(name);
+        this.paintLocal();
+        return;
+      }
+      case "dismiss":
+        this.confirm = null;
+        this.paintLocal();
+        return;
+      case "cancel":
+        this.o.onCancelLocal?.();
+        return;
+    }
+  }
+
   // ---------- what the user does ----------
 
   private buttonKey(e: KeyboardEvent): void {
@@ -711,7 +881,7 @@ class MountedPicker implements ModelPicker {
   }
 
   private pointed(e: PointerEvent): void {
-    const row = (e.target as Element).closest<HTMLElement>(".mp-opt");
+    const row = (e.target as Element).closest<HTMLElement>(".mp-row")?.querySelector<HTMLElement>(".mp-opt");
     if (!row || !this.list || !this.panel) return;
     delete this.panel.dataset.kbd;
     if (row.dataset.id === this.list.activeId()) return;
@@ -721,6 +891,21 @@ class MountedPicker implements ModelPicker {
 
   private clicked(e: MouseEvent): void {
     const target = e.target as Element;
+    const tab = target.closest<HTMLElement>(".mp-tab");
+    if (tab) {
+      this.setTab(tab.dataset.tab === "local" ? "local" : "cloud", false);
+      return;
+    }
+    const act = target.closest<HTMLElement>("#mp-locallist [data-act]");
+    if (act) {
+      this.localAct(act);
+      return;
+    }
+    const star = target.closest<HTMLElement>(".mp-star");
+    if (star) {
+      this.star(star.dataset.star ?? "", document.activeElement === star ? "nearest" : null);
+      return;
+    }
     const row = target.closest<HTMLElement>(".mp-opt");
     if (row) {
       if (row.getAttribute("aria-disabled") !== "true") this.choose(row.dataset.id ?? "");
@@ -760,6 +945,15 @@ class MountedPicker implements ModelPicker {
       return;
     }
     const target = e.target as HTMLElement;
+    if (target.closest(".mp-tab") && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+      e.preventDefault();
+      this.setTab(e.key === "ArrowLeft" || e.key === "Home" ? "cloud" : "local", true);
+      return;
+    }
+    if (this.tab === "local") {
+      this.localKey(e);
+      return;
+    }
     if (target.id === "mp-search") {
       if (e.key === "Enter") {
         e.preventDefault();
@@ -773,6 +967,15 @@ class MountedPicker implements ModelPicker {
         }
       }
       return; // anything else types in the search; Home and End move in it
+    }
+    if (target.closest(".mp-star") && moveIndex(this.list.rows.length, this.list.active, e.key) !== null) {
+      // On a star the arrows still move the highlight, and the focus goes with it to its star.
+      e.preventDefault();
+      this.list.move(e.key);
+      this.panel?.setAttribute("data-kbd", "");
+      this.paintActive("nearest");
+      this.activeStar()?.focus();
+      return;
     }
     const opener = target.closest<HTMLElement>(".mp-dd");
     if (opener && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
@@ -812,10 +1015,25 @@ class MountedPicker implements ModelPicker {
     }
   }
 
-  /** Tab and Shift+Tab go round the search and the two dropdowns, from `from` (the focus, else). */
+  /** The star of the highlighted row. */
+  private activeStar(): HTMLElement | null {
+    const row = this.list && this.list.active >= 0 ? this.panel?.querySelector<HTMLElement>(`#mp-o-${this.list.active}`) : null;
+    return row?.closest(".mp-row")?.querySelector<HTMLElement>(".mp-star") ?? null;
+  }
+
+  /**
+   * Tab and Shift+Tab go round the tab that is open, the search, the star of the highlighted row and
+   * the two dropdowns (in the local tab: its buttons), from `from` (the focus, else). The other stars are not stops: a list of hundreds would be no
+   * way to Tab through, and the arrows reach every row's star.
+   */
   private cycle(back: boolean, from: Element | null = document.activeElement): void {
     if (!this.panel) return;
-    const stops = [this.search(), ...Array.from(this.panel.querySelectorAll<HTMLElement>(".mp-dd"))].filter((s): s is HTMLElement => s !== null);
+    const open = this.panel.querySelector<HTMLElement>(`#mp-tab-${this.tab}`);
+    const inside =
+      this.tab === "local"
+        ? Array.from(this.panel.querySelectorAll<HTMLElement>("#mp-pane-local button:not(:disabled)"))
+        : [this.search(), this.activeStar(), ...Array.from(this.panel.querySelectorAll<HTMLElement>(".mp-dd"))];
+    const stops = [open, ...inside].filter((s): s is HTMLElement => s !== null);
     const at = Math.max(0, stops.indexOf(from as HTMLElement));
     stops[(at + (back ? stops.length - 1 : 1)) % stops.length]?.focus();
   }
@@ -870,6 +1088,19 @@ class MountedPicker implements ModelPicker {
     this.paintFilters();
     // The highlighted model stays highlighted where it went, if it is still listed.
     this.paintList("nearest");
+  }
+
+  /** Stars the model of `id`, or takes it out of the favourites if it is one. `scroll` is where the list goes: with the focus, when it is on a star, else nowhere. */
+  private star(id: string, scroll: "nearest" | null): void {
+    if (!this.list || id === "") return;
+    const on = !this.list.favorites.includes(id);
+    const favorites = withFavorite(this.list.favorites, id, on);
+    this.o = { ...this.o, favorites };
+    this.list.point(id);
+    this.list.setFavorites(favorites);
+    this.paintList(scroll);
+    if (scroll !== null) this.activeStar()?.focus();
+    this.o.onFavorite?.(id, on);
   }
 
   private choose(id: string): void {

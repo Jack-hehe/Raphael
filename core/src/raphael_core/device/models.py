@@ -9,6 +9,10 @@ Nothing is installed half way. An archive is downloaded and unpacked under `<roo
 moves into place with one rename. A single file is written to a `.part` file next to its place
 and renamed once it is complete. An install that fails raises ModelDownloadError and leaves
 nothing behind in `.tmp`, and no `.part` file.
+
+`LOCAL_STT_MODELS` is the catalogue the settings page offers for speech-to-text on this computer:
+which of the registry's models, what to call them and what they are good for. Nothing in it is
+downloaded until the user chooses it.
 """
 
 import contextlib
@@ -34,7 +38,22 @@ _install_lock = threading.Lock()
 Progress = Callable[[int, int], None]  # called with (bytes done, bytes in all; 0 if unknown)
 
 _RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
-_BREEZE = "https://huggingface.co/MediaTek-Research/Breeze-ASR-25-onnx-250806/resolve/main/"
+# The Hugging Face models are pinned to a commit, so that what is downloaded is what was measured.
+_HF = "https://huggingface.co/"
+_BREEZE = _HF + "MediaTek-Research/Breeze-ASR-25-onnx-250806/resolve/a3a2256b20854a2009ca9b4e1d22a05aa7ba992e/"
+_WHISPER_SMALL = _HF + "csukuangfj/sherpa-onnx-whisper-small/resolve/8f3c18b358db4d1f2fc1eae49d75cd20989e4309/"
+_WHISPER_TURBO = _HF + "csukuangfj/sherpa-onnx-whisper-turbo/resolve/2ca6ff69fc878651b770880507669577ac41c2ff/"
+_PARAFORMER_ZH = _HF + "csukuangfj/sherpa-onnx-paraformer-zh-2024-03-09/resolve/906992d326ebf0c5171cde675aa0902be9e5bc6c/"
+_DOLPHIN = (
+    _HF
+    + "csukuangfj/sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02/resolve/"
+    + "c8b6689509acfcd744c04e5e169164f9ac4cae32/"
+)
+_FIRE_RED = (
+    _HF
+    + "csukuangfj/sherpa-onnx-fire-red-asr-large-zh_en-2025-02-16/resolve/"
+    + "a54a778dd577224f5c44b4c408b570d089d7f63a/"
+)
 _QWEN3_ASR = "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
 _SENSE_VOICE = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
 
@@ -73,9 +92,17 @@ class ModelSpec:
     archive_root: str | None = None
     downloads: tuple[ModelFile, ...] = ()
 
+    @property
+    def download_size(self) -> int:
+        """The bytes `ModelManager.ensure` fetches for the model; 0 for sizes that are not pinned."""
+        if self.archive_url is not None:
+            return self.archive_size or 0
+        return sum(file.size or 0 for file in self.downloads)
 
-def _breeze(file: str) -> ModelFile:
-    return ModelFile(_BREEZE + file, file, None)
+
+def _files(base: str, *files: tuple[str, int]) -> tuple[ModelFile, ...]:
+    """Downloads of `base` + path, each with its pinned size."""
+    return tuple(ModelFile(base + path, path, size) for path, size in files)
 
 
 REGISTRY: dict[str, ModelSpec] = {
@@ -111,7 +138,7 @@ REGISTRY: dict[str, ModelSpec] = {
             archive_size=163_002_883,
             archive_root=_SENSE_VOICE,
         ),
-        # For evaluation only, and large (about 1.8 GB): the app does not download it.
+        # Taiwanese Mandarin (MediaTek's Whisper, int8). Large: about 1.8 GB.
         ModelSpec(
             name="breeze-asr-25",
             files=(
@@ -119,14 +146,96 @@ REGISTRY: dict[str, ModelSpec] = {
                 "breeze-asr-25-half-decoder.int8.onnx",
                 "breeze-asr-25-half-tokens.txt",
             ),
-            downloads=(
-                _breeze("breeze-asr-25-half-encoder.int8.onnx"),
-                _breeze("breeze-asr-25-half-decoder.int8.onnx"),
-                _breeze("breeze-asr-25-half-tokens.txt"),
+            downloads=_files(
+                _BREEZE,
+                ("breeze-asr-25-half-encoder.int8.onnx", 765_942_323),
+                ("breeze-asr-25-half-decoder.int8.onnx", 1_008_223_031),
+                ("breeze-asr-25-half-tokens.txt", 816_730),
+            ),
+        ),
+        # OpenAI's Whisper in sherpa-onnx's int8 form. Only the int8 files are fetched: the
+        # archives of the release also hold the float ones, three times the size.
+        ModelSpec(
+            name="whisper-small",
+            files=("small-encoder.int8.onnx", "small-decoder.int8.onnx", "small-tokens.txt"),
+            downloads=_files(
+                _WHISPER_SMALL,
+                ("small-encoder.int8.onnx", 112_442_483),
+                ("small-decoder.int8.onnx", 262_226_114),
+                ("small-tokens.txt", 816_730),
+            ),
+        ),
+        ModelSpec(
+            name="whisper-turbo",
+            files=("turbo-encoder.int8.onnx", "turbo-decoder.int8.onnx", "turbo-tokens.txt"),
+            downloads=_files(
+                _WHISPER_TURBO,
+                ("turbo-encoder.int8.onnx", 674_716_297),
+                ("turbo-decoder.int8.onnx", 361_080_764),
+                ("turbo-tokens.txt", 816_730),
+            ),
+        ),
+        ModelSpec(
+            name="paraformer-zh",
+            files=("model.int8.onnx", "tokens.txt"),
+            downloads=_files(
+                _PARAFORMER_ZH, ("model.int8.onnx", 227_330_205), ("tokens.txt", 75_354)
+            ),
+        ),
+        ModelSpec(
+            name="dolphin-small",
+            files=("model.int8.onnx", "tokens.txt"),
+            downloads=_files(_DOLPHIN, ("model.int8.onnx", 249_658_954), ("tokens.txt", 504_662)),
+        ),
+        ModelSpec(
+            name="fire-red-asr",
+            files=("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"),
+            downloads=_files(
+                _FIRE_RED,
+                ("encoder.int8.onnx", 1_293_430_814),
+                ("decoder.int8.onnx", 445_469_383),
+                ("tokens.txt", 71_448),
             ),
         ),
     )
 }
+
+
+@dataclass(frozen=True)
+class LocalModel:
+    """One entry of the catalogue of speech models for this computer.
+
+    `name` is the registry's, and the id the app and the `stt_local_model` setting use. `languages`
+    are codes (`zh`, `en`, `ja`, `ko`, `yue`; `multi` for many more) and `note` is a key the app
+    puts in words, so that the wording lives with the other texts of the window.
+    """
+
+    name: str
+    title: str
+    languages: tuple[str, ...]
+    note: str
+
+
+# In the order the page lists them: what Raphael uses unless the user chooses otherwise first, then
+# by what they are good for. Sizes come from the registry, which pins them.
+LOCAL_STT_MODELS: tuple[LocalModel, ...] = (
+    LocalModel("qwen3-asr", "Qwen3-ASR", ("zh", "en", "ja", "ko", "yue"), "dictionary"),
+    LocalModel("sensevoice", "SenseVoice", ("zh", "en", "ja", "ko", "yue"), "fast"),
+    LocalModel("breeze-asr-25", "Breeze-ASR-25", ("zh", "en"), "taiwan"),
+    LocalModel("fire-red-asr", "FireRedASR", ("zh", "en"), "mandarin"),
+    LocalModel("paraformer-zh", "Paraformer", ("zh",), "chinese"),
+    LocalModel("whisper-turbo", "Whisper Turbo", ("zh", "en", "ja", "multi"), "multilingual"),
+    LocalModel("whisper-small", "Whisper Small", ("zh", "en", "ja", "multi"), "balanced"),
+    LocalModel("dolphin-small", "Dolphin Small", ("zh", "en", "ja", "multi"), "small"),
+)
+
+
+def local_model(name: str) -> LocalModel:
+    """The catalogue entry called `name`; ValueError for anything else (the detector included)."""
+    for entry in LOCAL_STT_MODELS:
+        if entry.name == name:
+            return entry
+    raise ValueError(f"Not a local speech-to-text model: {name}")
 
 
 class ModelDownloadError(Exception):

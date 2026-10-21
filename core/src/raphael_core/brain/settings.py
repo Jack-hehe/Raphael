@@ -1,8 +1,9 @@
 """Settings shared by the whole brain, kept in the database as JSON text.
 
 Only keys in DEFAULTS exist. A key nobody has set reads as its default. Most keys are only
-type-checked; the speech-to-text engine must also be one of its listed values, `languages` a valid
-selection (see raphael_core.languages), and the models and the assistant's city a text of some
+type-checked; the speech-to-text engine and the local model must also be one of their listed
+values, `languages` a valid selection (see raphael_core.languages), `model_favorites` the starred
+model ids of each role (at most 50 each), and the models and the assistant's city a text of some
 substance (saved without the spaces around it; a model id has none inside). Which models may be
 chosen is for the brain to say, which knows OpenRouter's list of them (brain/catalog.py): here a
 model is only an id.
@@ -19,10 +20,12 @@ selection amounts to ("zh", "ja", "en" or "auto"), and setting it sets `language
 `language` of an older version reads as the selection it stands for until `languages` is saved.
 """
 
+import copy
 import json
 import sqlite3
 from typing import Any
 
+from ..device.models import LOCAL_STT_MODELS
 from ..languages import (
     DEFAULT_LANGUAGES,
     LEGACY_LANGUAGES,
@@ -45,6 +48,9 @@ DEFAULTS: dict[str, Any] = {
     # Speech-to-text: "cloud" (OpenRouter, with the local engine as the fallback) or "local" (the
     # engine on this computer only; no audio leaves it). Read at the start of each dictation.
     "stt_engine": "cloud",
+    # Which of the catalogue's models (device/models.py) the local engine is. The one Raphael has
+    # always used, so that nobody who runs locally needs a new download.
+    "stt_local_model": "qwen3-asr",
     # The most accurate on the samples tried live on 2026-10-18 (gpt-transcribe returned nothing
     # for an English clip and garbled Chinese).
     "stt_cloud_model": "elevenlabs/scribe-v2",
@@ -53,10 +59,17 @@ DEFAULTS: dict[str, Any] = {
     "agent_model": "openai/gpt-6-luna",
     # Where the weather is looked up when the user does not say.
     "agent_city": "台北",
+    # The models the user starred in the pickers, per role (the page's names for them), in the order
+    # they were added. The page shows the ones the catalog still has at the top of its list; the
+    # others stay here, in case the catalog gets them back.
+    "model_favorites": {"cleanup": [], "answer": [], "stt": []},
 }
 
 # The longest model id or city name taken: far more than any real one, short of an accident.
 AGENT_TEXT_MAX_CHARS = 100
+# The roles that have favourites, and the most that one of them holds.
+FAVORITE_ROLES = ("cleanup", "answer", "stt")
+MAX_FAVORITES = 50
 STT_ENGINES = ("cloud", "local")
 # The OpenRouter transcription models the settings page offered before it offered every one, the
 # default first. All are listed in OpenRouter's speech-to-text collection, each with an endpoint
@@ -72,6 +85,7 @@ STT_CLOUD_MODELS = (
 )
 _CHOICES: dict[str, tuple[str, ...]] = {
     "stt_engine": STT_ENGINES,
+    "stt_local_model": tuple(entry.name for entry in LOCAL_STT_MODELS),
     "language": LEGACY_LANGUAGES,
 }
 # The settings that hold the id of an OpenRouter model.
@@ -111,9 +125,42 @@ def _trimmed(key: str, value: str) -> str:
         raise ValueError(f"Setting {key!r} must not be blank")
     if len(text) > AGENT_TEXT_MAX_CHARS:
         raise ValueError(f"Setting {key!r} must be at most {AGENT_TEXT_MAX_CHARS} characters")
-    if key in MODEL_SETTINGS and any(char.isspace() for char in text):
+    if key in (*MODEL_SETTINGS, "model_favorites") and any(char.isspace() for char in text):
         raise ValueError(f"Setting {key!r} must not contain spaces")
     return text
+
+
+def _favorites(value: dict) -> dict[str, list[str]]:
+    """The favourites to save: every role with its list, each id once and in order.
+
+    TypeError for a list that is not a list of texts, ValueError for a role that does not exist,
+    an id that is blank, long or has a space in it, and more than MAX_FAVORITES in one list.
+    """
+    unknown = [role for role in value if role not in FAVORITE_ROLES]
+    if unknown:
+        raise ValueError(f"Setting 'model_favorites' has no role {unknown[0]!r}")
+    result: dict[str, list[str]] = {}
+    for role in FAVORITE_ROLES:
+        ids = value.get(role, [])
+        if type(ids) is not list or any(type(i) is not str for i in ids):
+            raise TypeError(f"Favourites of {role!r} must be a list of model ids")
+        kept = list(dict.fromkeys(_trimmed("model_favorites", i) for i in ids))
+        if len(kept) > MAX_FAVORITES:
+            raise ValueError(f"At most {MAX_FAVORITES} favourite models for {role!r}")
+        result[role] = kept
+    return result
+
+
+def _no_favorites() -> dict[str, list[str]]:
+    return copy.deepcopy(DEFAULTS["model_favorites"])
+
+
+def _read_favorites(saved: Any) -> dict[str, list[str]]:
+    """The favourites as saved; a saved value that is damaged reads as no favourites."""
+    try:
+        return _favorites(saved) if type(saved) is dict else _no_favorites()
+    except (TypeError, ValueError):
+        return _no_favorites()
 
 
 def checked(key: str, value: Any) -> tuple[str, Any]:
@@ -124,6 +171,8 @@ def checked(key: str, value: Any) -> tuple[str, Any]:
     value = _allowed(key, _checked(key, value))
     if key in _TRIMMED:
         value = _trimmed(key, value)
+    if key == "model_favorites":
+        value = _favorites(value)
     if key == "language":
         return "languages", from_legacy(value)
     return key, value
@@ -158,6 +207,8 @@ class SettingsStore:
         if key == "language":
             return legacy_language(self._languages())
         saved = self._saved(key)
+        if key == "model_favorites":
+            return _read_favorites(saved)
         return default if saved is None else saved
 
     def set(self, key: str, value: Any) -> None:
@@ -183,6 +234,7 @@ class SettingsStore:
         for row in self._conn.execute("SELECT key, value FROM settings"):
             if row["key"] in values:
                 values[row["key"]] = json.loads(row["value"])
+        values["model_favorites"] = _read_favorites(values["model_favorites"])
         values["languages"] = self._languages()
         values["language"] = legacy_language(values["languages"])
         return values

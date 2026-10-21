@@ -18,6 +18,7 @@ import type {
   DictionaryEntry,
   HistoryItem,
   KeyCheck,
+  LocalModels,
   MainEvent,
   ModelCatalog,
   ModelsStatus,
@@ -76,18 +77,16 @@ export const agentHistoryClear = (): Promise<{ deleted: number }> => core("agent
 // ---------- dictionary ----------
 
 export const dictionaryList = (): Promise<{ entries: DictionaryEntry[] }> => core("dictionary.list");
-export const dictionaryAdd = (word: string, misheard: string[]): Promise<{ entry: DictionaryEntry }> =>
-  core("dictionary.add", { word, misheard });
+export const dictionaryAdd = (word: string): Promise<{ entry: DictionaryEntry }> => core("dictionary.add", { word });
 export const dictionaryDelete = (id: number): Promise<{ deleted: boolean }> => core("dictionary.delete", { id });
-export const dictionarySuggestions = (): Promise<{ words: { word: string; count: number }[] }> =>
-  core("dictionary.suggestions");
-/** The word is not suggested again. */
-export const dictionaryDismiss = (word: string): Promise<Record<string, never>> => core("dictionary.dismiss", { word });
+/** Adds the words as typed entries; says how many were new, already there, or blank. */
+export const dictionaryImport = (words: string[]): Promise<{ added: number; skipped: number; invalid: number }> =>
+  core("dictionary.import", { words });
 
 // ---------- the brain's settings and the key ----------
 
 export const settingsGet = (): Promise<{ settings: BrainSettings }> => core("settings.get");
-export const settingsSet = (key: keyof BrainSettings, value: string | number | boolean | string[]): Promise<{ settings: BrainSettings }> =>
+export const settingsSet = (key: keyof BrainSettings, value: string | number | boolean | string[] | Record<string, string[]>): Promise<{ settings: BrainSettings }> =>
   core("settings.set", { key, value });
 /** The languages the speech recognition can listen for, in groups (中文: 台灣、香港、…). */
 export const languagesList = (): Promise<{ groups: LanguageGroup[] }> => core("languages.list");
@@ -125,6 +124,16 @@ export const audioDevices = (refresh = true): Promise<AudioDevices> => core("aud
 /** Turns the loudness readings on or off (they arrive as `Level` events). */
 export const audioMonitor = (on: boolean): Promise<Record<string, never>> => core("audio.monitor", { on });
 export const modelsStatus = (): Promise<ModelsStatus> => core("models.status");
+/** The catalogue of speech models for this computer: which are on disk, which is the engine, which is being fetched. */
+export const modelsLocal = (): Promise<LocalModels> => core("models.local");
+/**
+ * Makes a model of the catalogue the local engine, downloading it first if it is not on disk
+ * (progress arrives as `ModelProgress` events). Settles when it is the engine, or has been cancelled.
+ */
+export const modelsLocalUse = (name: string): Promise<{ ok: true; settings: BrainSettings } | { ok: false; cancelled: true }> =>
+  core("models.local_use", { name });
+export const modelsLocalCancel = (): Promise<{ cancelled: boolean }> => core("models.local_cancel");
+export const modelsLocalDelete = (name: string): Promise<{ deleted: boolean }> => core("models.local_delete", { name });
 /** Downloads the models that are missing; progress arrives as `ModelProgress` events. */
 export const modelsEnsure = (names: string[]): Promise<{ ok: boolean }> => core("models.ensure", { names });
 

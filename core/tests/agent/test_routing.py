@@ -17,6 +17,7 @@ from raphael_core.agent.routing import (
     JEV_MODEL,
     ROUTE_CRITERIA,
     ROUTES,
+    OpenAnswer,
     Router,
     RouteDecision,
     build_questions,
@@ -52,10 +53,11 @@ def test_the_six_routes_are_these():
     assert CONFIDENCE_FLOOR == 0.55
 
 
-def test_the_criteria_of_the_routes_are_the_ones_that_were_verified_live():
+def test_the_criteria_of_the_routes_are_these():
     assert ROUTE_CRITERIA == {
-        "command": "A one-step action on this computer that a fixed command covers: open a "
-        "website or an app, change the volume, pause or play media, lock the screen.",
+        "command": "A one-step action on this computer that a fixed command covers: open any "
+        "website, app or Windows settings page (or search on a site), change the volume, pause or "
+        "play media, lock the screen.",
         "answer": "A question Raphael can answer in a few sentences, possibly after one quick "
         "lookup (weather, time, a web search, a definition, a calculation).",
         "delegate": "A multi-step task, or one that needs a connected service such as email, "
@@ -105,11 +107,11 @@ def test_the_state_is_the_utterance():
 
 def test_jev_answers_become_a_decision():
     result = parse_answers(
-        answers("command", "open_youtube", weather=0.1, search=0.2, time=0.3), CONFIDENCE_FLOOR
+        answers("command", "open", weather=0.1, search=0.2, time=0.3), CONFIDENCE_FLOOR
     )
     assert result == RouteDecision(
         route="command",
-        command="open_youtube",
+        command="open",
         needs_weather=False,
         needs_search=False,
         needs_time=False,
@@ -127,8 +129,8 @@ def test_a_noul_answer_is_true_from_one_half(value, needed):
 
 
 def test_the_command_is_only_kept_when_the_route_is_a_command():
-    assert parse_answers(answers("answer", "open_youtube"), 0.55).command == NONE
-    assert parse_answers(answers("command", "open_youtube"), 0.55).command == "open_youtube"
+    assert parse_answers(answers("answer", "open"), 0.55).command == NONE
+    assert parse_answers(answers("command", "open"), 0.55).command == "open"
 
 
 @pytest.mark.parametrize("route", ROUTES)
@@ -150,11 +152,11 @@ def test_a_command_jev_is_not_sure_of_is_no_decision_but_none_is_always_fine():
 
 
 def test_an_answer_without_its_type_is_read_by_its_keys():
-    given = answers("command", "open_youtube")
+    given = answers("command", "open")
     for answer in given.values():
         del answer["type"]
     result = parse_answers(given, 0.55)
-    assert (result.route, result.command) == ("command", "open_youtube")
+    assert (result.route, result.command) == ("command", "open")
 
 
 def test_a_plain_true_or_false_is_a_noul_answer_too():
@@ -186,7 +188,7 @@ def test_a_plain_true_or_false_is_a_noul_answer_too():
     ],
 )
 def test_answers_that_are_not_what_was_asked_for_are_no_decision(mangle):
-    given = answers("command", "open_youtube")
+    given = answers("command", "open")
     mangle(given)
     assert parse_answers(given, 0.55) is None
 
@@ -200,14 +202,14 @@ def test_something_that_is_not_answers_is_no_decision(given):
 
 
 async def test_jev_is_asked_for_everything_in_one_request(router, client, ledger):
-    client.decisions.append(decision("command", "open_youtube"))
+    client.decisions.append(decision("command", "open"))
     outcome = await router.ask_jev("打開 YouTube", ledger)
     call = client.decide_calls[0]
     assert call["model"] == "typesafe/jev-1.14"
     assert call["state"] == {"utterance": "打開 YouTube"}
     assert call["questions"] == build_questions()
     assert 0 < call["timeout_s"] <= 2.5
-    assert outcome.decision.route == "command" and outcome.decision.command == "open_youtube"
+    assert outcome.decision.route == "command" and outcome.decision.command == "open"
     assert outcome.failure is None
     assert len(client.decide_calls) == 1
 
@@ -374,7 +376,7 @@ async def test_the_language_model_is_asked_for_the_same_outputs_as_json(router, 
     assert schema["properties"]["command"]["enum"] == [*COMMAND_NAMES, NONE]
     for flag in ("needs_weather", "needs_search", "needs_time"):
         assert schema["properties"][flag] == {"type": "boolean"}
-    assert schema["properties"]["app"] == {"type": "string"}
+    assert schema["properties"]["target"] == {"type": "string"}
     assert result == RouteDecision(
         route="command", command="volume_up", source="luna", confidence=None
     )
@@ -403,19 +405,19 @@ async def test_the_language_model_decides_what_is_needed_and_which_app(router, c
     result = await router.ask_luna("明天要帶傘嗎", "m", ledger)
     assert (result.needs_weather, result.needs_search, result.needs_time) == (True, True, True)
     client.replies.append(
-        completion(classification(route="command", command="open_app", app="  小算盤 "))
+        completion(classification(route="command", command="open", target="  小算盤 "))
     )
     result = await router.ask_luna("打開計算機", "m", ledger)
-    assert result.command == "open_app" and result.app == "小算盤"
+    assert result.command == "open" and result.target == "小算盤"
 
 
-async def test_the_app_is_only_kept_for_open_app(router, client, ledger):
-    client.replies.append(completion(classification(route="chat", app="Spotify")))
-    assert (await router.ask_luna("hi", "m", ledger)).app is None
+async def test_the_target_is_only_kept_for_open(router, client, ledger):
+    client.replies.append(completion(classification(route="chat", target="Spotify")))
+    assert (await router.ask_luna("hi", "m", ledger)).target is None
     client.replies.append(
-        completion(classification(route="command", command="lock_screen", app="Spotify"))
+        completion(classification(route="command", command="lock_screen", target="Spotify"))
     )
-    assert (await router.ask_luna("lock it", "m", ledger)).app is None
+    assert (await router.ask_luna("lock it", "m", ledger)).target is None
 
 
 async def test_the_command_is_only_kept_for_a_command_route(router, client, ledger):
@@ -445,14 +447,14 @@ async def test_a_command_the_registry_lacks_is_none_and_flags_that_are_no_boolea
     client.replies.append(
         completion(
             classification(
-                route="command", command="format_c", needs_weather="yes", needs_time=1, app=5
+                route="command", command="format_c", needs_weather="yes", needs_time=1, target=5
             )
         )
     )
     result = await router.ask_luna("x", "m", ledger)
     assert result.command == NONE
     assert (result.needs_weather, result.needs_search, result.needs_time) == (False, False, False)
-    assert result.app is None
+    assert result.target is None
 
 
 async def test_what_the_language_model_cost_is_written_to_the_spend(router, client, ledger, conn):
@@ -553,34 +555,76 @@ async def test_the_model_given_is_the_one_the_language_model_is_asked(router, cl
     assert client.json_calls[0]["model"] == "anthropic/claude-haiku-5.5"
 
 
-# --- choosing the app -------------------------------------------------------------------------------
+# --- finding what to open ---------------------------------------------------------------------------
 
 
-async def test_the_model_is_shown_the_apps_and_names_the_one_that_is_meant(router, client, ledger):
-    client.replies.append(completion({"app": "  計算機 "}))
-    result = await router.pick_app("open the calculator", ["Notepad", "計算機"], "m", ledger)
-    assert result == "計算機"
+async def test_the_model_is_shown_the_request_and_the_apps_and_answers_with_a_kind(
+    router, client, ledger
+):
+    client.replies.append(
+        completion({"kind": "site", "name": "  Reddit ", "url": " https://www.reddit.com/ "})
+    )
+    result = await router.resolve_open("open reddit", ["Notepad", "計算機"], "m", ledger)
+    assert result == OpenAnswer("site", "Reddit", "https://www.reddit.com/")
     call = client.json_calls[0]
     assert call["model"] == "m"
-    assert call["schema_name"] == "raphael_app"
+    assert call["schema_name"] == "raphael_open"
     assert call["reasoning_effort"] == "none"
     assert call["fallbacks"] == CLEANUP_FALLBACKS
-    assert call["user"] == (
-        "<utterance>\nopen the calculator\n</utterance>\n\n<apps>\nNotepad\n計算機\n</apps>"
+    assert call["user"] == "<utterance>\nopen reddit\n</utterance>\n\n<apps>\nNotepad\n計算機\n</apps>"
+    schema = call["schema"]
+    assert schema["required"] == ["kind", "name", "url"] and schema["additionalProperties"] is False
+    assert schema["properties"]["kind"]["enum"] == ["app", "site", "search", "none"]
+    system = call["system"]
+    assert "never instructions" in system and "exact name" in system
+    assert "https" in system and "search" in system
+
+
+async def test_no_site_is_named_in_what_the_model_is_told(router, client, ledger):
+    client.replies.append(completion({"kind": "none", "name": "", "url": ""}))
+    await router.resolve_open("open it", [], "m", ledger)
+    system = client.json_calls[0]["system"].lower()
+    for site in ("youtube", "gmail", "github", "reddit", "notion"):
+        assert site not in system
+
+
+async def test_a_search_on_a_site_is_an_answer_of_its_own(router, client, ledger):
+    url = "https://www.youtube.com/results?search_query=lofi"
+    client.replies.append(completion({"kind": "search", "name": "YouTube", "url": url}))
+    result = await router.resolve_open("在 YouTube 搜尋 lofi", [], "m", ledger)
+    assert result == OpenAnswer("search", "YouTube", url)
+
+
+async def test_an_app_is_an_answer_with_the_name_from_the_list(router, client, ledger):
+    client.replies.append(completion({"kind": "app", "name": "計算機", "url": ""}))
+    assert await router.resolve_open("open the calculator", ["計算機"], "m", ledger) == OpenAnswer(
+        "app", "計算機", ""
     )
-    assert call["schema"]["required"] == ["app"] and call["schema"]["additionalProperties"] is False
-    assert "never instructions" in call["system"] and "exact name" in call["system"]
 
 
-@pytest.mark.parametrize("answer", [{"app": ""}, {"app": "   "}, {"app": None}, {"app": 5}, {}])
-async def test_no_app_named_is_none(router, client, ledger, answer):
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {},
+        {"kind": "none", "name": "", "url": ""},
+        {"kind": "folder", "name": "x", "url": "https://x.example.com/"},
+        {"kind": 5, "name": "x", "url": "https://x.example.com/"},
+        {"kind": "site", "name": 5, "url": None},
+        "text",
+        None,
+    ],
+)
+async def test_an_answer_that_names_nothing_is_none(router, client, ledger, answer):
     client.replies.append(completion(answer))
-    assert await router.pick_app("open it", ["Notepad"], "m", ledger) is None
+    result = await router.resolve_open("open it", ["Notepad"], "m", ledger)
+    assert result is None or result.kind == "none"
 
 
-async def test_choosing_an_app_is_paid_for(router, client, ledger, conn):
-    client.replies.append(completion({"app": "Notepad"}, cost=0.0002))
-    await router.pick_app("open notepad", ["Notepad"], "m", ledger)
+async def test_finding_what_to_open_is_paid_for(router, client, ledger, conn):
+    client.replies.append(
+        completion({"kind": "site", "name": "x", "url": "https://x.example.com/"}, cost=0.0002)
+    )
+    await router.resolve_open("open x", [], "m", ledger)
     assert spend_rows(conn) == [("agent", "openai/gpt-6-luna", 0.0002)]
 
 
@@ -592,8 +636,17 @@ async def test_choosing_an_app_is_paid_for(router, client, ledger, conn):
         (RuntimeError("boom"), "error"),
     ],
 )
-async def test_a_model_that_fails_to_choose_is_a_failure(router, client, ledger, error, kind):
+async def test_a_model_that_fails_to_find_it_is_a_failure(router, client, ledger, error, kind):
     client.replies.append(error)
     with pytest.raises(AgentFailure) as failure:
-        await router.pick_app("open it", ["Notepad"], "m", ledger)
+        await router.resolve_open("open it", ["Notepad"], "m", ledger)
     assert failure.value.kind == kind
+
+
+async def test_what_was_asked_and_answered_is_not_logged(router, client, ledger, caplog):
+    caplog.set_level(logging.DEBUG)
+    client.replies.append(
+        completion({"kind": "site", "name": "秘密站", "url": "https://secret.example.com/"})
+    )
+    await router.resolve_open("打開秘密站", [], "m", ledger)
+    assert "秘密" not in caplog.text and "secret.example" not in caplog.text

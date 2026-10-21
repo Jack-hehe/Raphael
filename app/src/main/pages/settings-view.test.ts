@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { emptyConnectionsView } from "../connections";
 import { setLocale } from "../i18n";
 import type { LanguageGroup } from "../languages";
-import type { BrainSettings, CatalogModel, DeviceSettings, ModelCatalog, SettingsPane, Status } from "../types";
+import type { BrainSettings, CatalogModel, DeviceSettings, LocalModel, ModelCatalog, SettingsPane, Status } from "../types";
 import {
   APPEARANCES,
   PANES,
@@ -45,7 +45,7 @@ const brain: BrainSettings = {
 /** A model of the catalog that every role of its kind can use. */
 const model = (id: string, name: string, provider: string, price: Partial<CatalogModel>, stt = false): CatalogModel => ({
   id, name, provider, input_per_mtok: null, output_per_mtok: null, per_minute: null, free: false, variable_price: false,
-  context_length: stt ? null : 1_000_000, created_at_ms: NOW, capabilities: {}, recommended: true,
+  context_length: stt ? null : 1_000_000, created_at_ms: NOW, capabilities: {},
   roles: stt ? { stt: { usable: true, reason: null } } : { cleanup: { usable: true, reason: null }, answer: { usable: true, reason: null } },
   ...price,
 });
@@ -70,11 +70,16 @@ const GROUPS: LanguageGroup[] = [
   { id: "ja", name: "日本語", variants: [{ id: "ja-JP", name: "日本語" }] },
 ];
 
+const LOCAL_MODELS: LocalModel[] = [
+  { name: "qwen3-asr", title: "Qwen3-ASR", languages: ["zh", "en"], note: "dictionary", size: 878_702_423, ready: true },
+  { name: "sensevoice", title: "SenseVoice", languages: ["zh", "en"], note: "fast", size: 163_002_883, ready: true },
+];
 const view = (over: Partial<SettingsView> = {}): SettingsView => ({
   pane: "general", device, brain, hasKey: true, openrouter, spend, catalog, checkingOpenrouter: false,
   devices: { devices: [{ index: 0, name: REALTEK, is_default: true }], selected: null, automatic_device: REALTEK },
   altgr: false, version: "0.1.0", replacingKey: false, confirmingKeyRemoval: false, keyBusy: false, keyError: null, limitDraft: null, limitError: null,
-  cityDraft: null, cityError: null, languageGroups: GROUPS, now: NOW, connections: emptyConnectionsView(), ...over,
+  cityDraft: null, cityError: null, languageGroups: GROUPS, now: NOW, connections: emptyConnectionsView(),
+  localModels: LOCAL_MODELS, localDownload: null, ...over,
 });
 const tab = (pane: SettingsPane, over: Partial<SettingsView> = {}): string => paneHTML(view({ pane, ...over }));
 const IDS = PANES.map((p) => p.id);
@@ -347,18 +352,47 @@ describe("模型與用量", () => {
     expect(priceTexts(view()).note).toBe("價格來自 OpenRouter，今天更新。實際花費依 OpenRouter 選用的供應商而定。");
   });
 
-  test("offers this computer above the cloud models of speech-to-text, which costs nothing", () => {
-    expect(modelPickerLook(view(), "stt").extras).toEqual([{ id: "local", name: "本機（離線，聲音不上傳）", price: "免費" }]);
-    expect(modelPickerLook(view(), "cleanup").extras).toEqual([]);
-    const local = rowOf(tab("usage", { brain: { ...brain, stt_engine: "local" } }), "語音轉文字");
-    expect(local).toContain('data-price="stt-model">免費</span>');
-    expect(local).toContain('<span class="mp-tname">本機（離線，聲音不上傳）</span>');
-  });
-
   test("gives each picker the catalog, what is chosen and the row's name", () => {
     const look = modelPickerLook(view(), "answer");
     expect(look).toMatchObject({ role: "answer", key: "agent-model", label: "拉斐爾的回答", current: "openai/gpt-6-luna", catalog, loading: false, showPrice: false, disabled: false });
     expect(modelPickerLook(view({ brain: { ...brain, stt_cloud_model: "openai/gpt-transcribe" } }), "stt").current).toBe("openai/gpt-transcribe");
+  });
+
+  test("gives the speech-to-text picker the local models, and the others none", () => {
+    expect(modelPickerLook(view(), "stt").local).toEqual({ models: LOCAL_MODELS, active: null, download: null });
+    expect(modelPickerLook(view(), "cleanup").local).toBeUndefined();
+    expect(modelPickerLook(view(), "answer").local).toBeUndefined();
+  });
+
+  test("the local model is in use when the engine is local, and is qwen3-asr until another is chosen", () => {
+    const local = { ...brain, stt_engine: "local" };
+    expect(modelPickerLook(view({ brain: local }), "stt").local?.active).toBe("qwen3-asr");
+    expect(modelPickerLook(view({ brain: { ...local, stt_local_model: "sensevoice" } }), "stt").local?.active).toBe("sensevoice");
+    // With the cloud in use, the local model chosen is only what the fallback is.
+    expect(modelPickerLook(view({ brain: { ...brain, stt_local_model: "sensevoice" } }), "stt").local?.active).toBeNull();
+  });
+
+  test("a download under way, and the catalogue while it is read, reach the picker", () => {
+    const download = { name: "sensevoice", done: 5, total: 10 };
+    expect(modelPickerLook(view({ localDownload: download }), "stt").local?.download).toEqual(download);
+    expect(modelPickerLook(view({ localModels: "loading" }), "stt").local?.models).toBe("loading");
+  });
+
+  test("the cloud model stays the picker's choice, also while the local engine is in use", () => {
+    const local = view({ brain: { ...brain, stt_engine: "local", stt_local_model: "sensevoice" } });
+    expect(modelPickerLook(local, "stt").current).toBe("elevenlabs/scribe-v2");
+    const row = rowOf(tab("usage", { brain: { ...brain, stt_engine: "local", stt_local_model: "sensevoice" } }), "語音轉文字");
+    expect(row).toContain('<span class="mp-tname">本機 · SenseVoice</span>');
+    expect(row).toContain('data-price="stt-model">免費</span>');
+  });
+
+  test("gives each picker the favourites of its own role, none when the core has not said", () => {
+    const starred = { ...brain, model_favorites: { cleanup: ["a/b"], answer: ["c/d", "e/f"] } };
+    expect(modelPickerLook(view({ brain: starred }), "cleanup").favorites).toEqual(["a/b"]);
+    expect(modelPickerLook(view({ brain: starred }), "answer").favorites).toEqual(["c/d", "e/f"]);
+    expect(modelPickerLook(view({ brain: starred }), "stt").favorites).toEqual([]);
+    expect(modelPickerLook(view(), "cleanup").favorites).toEqual([]);
+    expect(modelPickerLook(view({ brain: null }), "cleanup").favorites).toEqual([]);
   });
 
   test("says the prices are coming, and shows none it could not get", () => {

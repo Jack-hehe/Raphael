@@ -22,20 +22,14 @@ from raphael_core.agent.policy import Tier
 
 from .conftest import FakeActions
 
+URL = {"target_kind": "url", "target": "https://www.youtube.com/"}
+
 # --- the registry --------------------------------------------------------------------------------
 
 
 def test_the_commands_are_the_fixed_registry():
     assert COMMAND_NAMES == (
-        "open_youtube",
-        "open_gmail",
-        "open_github",
-        "open_google",
-        "open_notion",
-        "open_chatgpt",
-        "open_claude",
-        "open_google_calendar",
-        "open_google_drive",
+        "open",
         "volume_up",
         "volume_down",
         "volume_mute",
@@ -43,33 +37,23 @@ def test_the_commands_are_the_fixed_registry():
         "media_next",
         "media_previous",
         "lock_screen",
-        "open_app",
         "copy_text",
     )
     assert tuple(COMMANDS) == COMMAND_NAMES
     assert NONE == "none" and NONE not in COMMANDS
 
 
-def test_the_sites_are_the_nine_that_are_known():
-    sites = {c.name: c.target for c in COMMANDS.values() if c.kind == "site"}
-    assert sites == {
-        "open_youtube": "https://www.youtube.com/",
-        "open_gmail": "https://mail.google.com/",
-        "open_github": "https://github.com/",
-        "open_google": "https://www.google.com/",
-        "open_notion": "https://www.notion.so/",
-        "open_chatgpt": "https://chatgpt.com/",
-        "open_claude": "https://claude.ai/",
-        "open_google_calendar": "https://calendar.google.com/",
-        "open_google_drive": "https://drive.google.com/",
-    }
+def test_no_site_and_no_app_is_named_in_the_registry():
+    # Opening anything is one command, whose target is found when it is asked for.
+    assert {c.kind for c in COMMANDS.values()} == {"open", "key", "lock", "copy"}
+    for command in COMMANDS.values():
+        for name in ("youtube", "gmail", "github", "google", "notion"):
+            assert name not in command.guidance.lower() and name not in command.target
 
 
-def test_only_copying_changes_state_so_everything_else_runs_at_once():
-    assert {name: c.tier for name, c in COMMANDS.items() if c.tier != Tier.T1} == {
-        "copy_text": Tier.T2
-    }
-    assert COMMANDS["lock_screen"].tier == Tier.T1  # locking is undone by signing in
+def test_every_command_runs_at_once_with_no_question():
+    # The owner turned every command for this computer on: none asks first, copying included.
+    assert {c.tier for c in COMMANDS.values()} == {Tier.T1}
 
 
 def test_every_command_tells_the_router_what_it_is_for():
@@ -97,11 +81,19 @@ def test_the_keys_the_commands_press_exist():
 
 
 @pytest.mark.parametrize(
-    "name", [n for n, c in COMMANDS.items() if c.kind == "site"], ids=lambda n: n
-)
-async def test_a_site_is_opened_on_a_worker_thread(actions, name):
-    await run_command(COMMANDS[name], {}, actions)
-    assert actions.calls == [("open_url", COMMANDS[name].target)]
+    ("args", "call"),
+    [
+        ({"target_kind": "url", "target": "https://www.reddit.com/"},
+         ("open_url", "https://www.reddit.com/")),
+        ({"target_kind": "app", "target": "Microsoft.Calc!App"},
+         ("launch_app", "Microsoft.Calc!App")),
+        ({"target_kind": "settings", "target": "ms-settings:bluetooth"},
+         ("open_settings", "ms-settings:bluetooth")),
+    ],
+)  # fmt: skip
+async def test_opening_does_what_its_kind_says_on_a_worker_thread(actions, args, call):
+    await run_command(COMMANDS["open"], args, actions)
+    assert actions.calls == [call]
     assert actions.threads == [actions.threads[0]] and actions.threads[0] != threading.get_ident()
 
 
@@ -131,11 +123,6 @@ async def test_the_screen_is_locked(actions):
     assert actions.calls == [("lock_screen",)]
 
 
-async def test_an_app_is_launched_by_its_id(actions):
-    await run_command(COMMANDS["open_app"], {"app_id": "Microsoft.Calc!App"}, actions)
-    assert actions.calls == [("launch_app", "Microsoft.Calc!App")]
-
-
 async def test_text_is_copied_to_the_clipboard(actions):
     await run_command(COMMANDS["copy_text"], {"text": "台北 24 度"}, actions)
     assert actions.calls == [("copy_to_clipboard", "台北 24 度")]
@@ -143,7 +130,15 @@ async def test_text_is_copied_to_the_clipboard(actions):
 
 @pytest.mark.parametrize(
     ("name", "args"),
-    [("open_app", {}), ("open_app", {"app_id": ""}), ("copy_text", {}), ("copy_text", {"text": 5})],
+    [
+        ("open", {}),
+        ("open", {"target_kind": "url"}),
+        ("open", {"target_kind": "url", "target": ""}),
+        ("open", {"target_kind": "folder", "target": "C:\\"}),
+        ("open", {"target_kind": "app", "target": 5}),
+        ("copy_text", {}),
+        ("copy_text", {"text": 5}),
+    ],
 )
 async def test_a_command_missing_what_it_needs_is_a_value_error_and_does_nothing(
     actions, name, args
@@ -156,7 +151,7 @@ async def test_a_command_missing_what_it_needs_is_a_value_error_and_does_nothing
 async def test_a_command_that_fails_raises_what_the_device_raised(actions):
     actions.fail["open_url"] = OSError("no browser")
     with pytest.raises(OSError):
-        await run_command(COMMANDS["open_youtube"], {}, actions)
+        await run_command(COMMANDS["open"], URL, actions)
 
 
 async def test_the_event_loop_is_not_blocked_while_a_command_runs():
@@ -166,7 +161,7 @@ async def test_the_event_loop_is_not_blocked_while_a_command_runs():
         def open_url(self, url):
             gate.wait(5)
 
-    running = asyncio.create_task(run_command(COMMANDS["open_youtube"], {}, Slow()))
+    running = asyncio.create_task(run_command(COMMANDS["open"], URL, Slow()))
     await asyncio.sleep(0.05)
     assert not running.done()  # still inside the device call, and the loop is free to say so
     gate.set()
@@ -241,6 +236,17 @@ def test_two_apps_of_the_same_name_are_the_first_listed():
     assert match_app("open notepad", apps).app_id == "first"
 
 
+def test_a_strict_match_wants_the_whole_name_of_the_app_in_the_utterance():
+    # "google" is the web site before it is the one app that has the word in its name.
+    apps = [*APPS, StartApp("Google Chrome", "chrome")]
+    assert match_app("open google", apps).name == "Google Chrome"
+    assert match_app("open google", apps, loose=False) is None
+    assert match_app("open edge", apps, loose=False) is None
+    assert match_app("open microsoft edge", apps, loose=False).name == "Microsoft Edge"
+    assert match_app("open spotify", apps, loose=False).name == "Spotify"
+    assert match_app("打開小算盤", apps, loose=False).name == "小算盤"
+
+
 # --- looking an app up by the name a model gave -------------------------------------------------------
 
 
@@ -311,12 +317,60 @@ async def test_the_list_is_cached(catalog, actions, clock):
     assert actions.listed == 1
     clock.now += 2  # now it is old
     await catalog.apps()
+    await catalog.settle()
     assert actions.listed == 2
+
+
+async def test_an_old_list_is_served_at_once_and_read_again_in_the_background(
+    catalog, actions, clock
+):
+    await catalog.apps()
+    actions.apps = [StartApp("Zoom", "zoom!App")]
+    release = threading.Event()
+    started = threading.Event()
+    original = actions.list_start_apps
+
+    def slow():
+        started.set()
+        release.wait(5)  # PowerShell, slow
+        return original()
+
+    actions.list_start_apps = slow
+    clock.now += commands.APPS_TTL_S + 1
+    stale = await asyncio.wait_for(catalog.apps(), 1)  # does not wait for the read
+    assert [a.name for a in stale][:2] == ["Calculator", "Notepad"]
+    assert await asyncio.to_thread(started.wait, 5)
+    again = await asyncio.wait_for(catalog.apps(), 1)  # still the old list, and no second read
+    assert again == stale
+    release.set()
+    await catalog.settle()
+    assert [a.name for a in await catalog.apps()] == ["Zoom"]
+
+
+async def test_a_read_that_fails_in_the_background_keeps_the_old_list(catalog, actions, clock):
+    await catalog.apps()
+    actions.fail["list_start_apps"] = OSError("slow")
+    clock.now += commands.APPS_TTL_S + 1
+    assert len(await catalog.apps()) == len(APPS)
+    await catalog.settle()
+    assert len(await catalog.apps()) == len(APPS)
 
 
 async def test_two_asks_at_once_read_it_once(catalog, actions):
     first, second = await asyncio.gather(catalog.apps(), catalog.apps())
     assert first == second and actions.listed == 1
+
+
+async def test_the_catalog_finds_strictly_when_asked_to(catalog):
+    assert await catalog.find("open edge", loose=False) is None
+    assert (await catalog.find("open edge")).name == "Microsoft Edge"
+
+
+async def test_the_catalog_can_be_warmed_before_anyone_asks(catalog, actions):
+    await catalog.warm()
+    assert actions.listed == 1
+    assert (await catalog.find("open spotify")).name == "Spotify"
+    assert actions.listed == 1
 
 
 async def test_an_app_found_in_an_utterance_is_returned_from_the_cache(catalog, actions):
@@ -325,22 +379,27 @@ async def test_an_app_found_in_an_utterance_is_returned_from_the_cache(catalog, 
     assert actions.listed == 1
 
 
-async def test_an_app_that_is_not_in_the_list_makes_one_fresh_read_when_the_list_is_not_new(
+async def test_an_app_that_is_not_in_the_list_makes_one_fresh_read_in_the_background(
     catalog, actions, clock
 ):
     await catalog.apps()
     actions.apps.append(StartApp("Zoom", "zoom!App"))  # installed since
     assert await catalog.find("open zoom") is None  # the list is still new: no new read
+    await catalog.settle()
     assert actions.listed == 1
     clock.now += commands.APPS_MISS_REFRESH_S
-    assert (await catalog.find("open zoom")).app_id == "zoom!App"
+    assert await catalog.find("open zoom") is None  # answered at once, from the list it has
+    await catalog.settle()
     assert actions.listed == 2
+    assert (await catalog.find("open zoom")).app_id == "zoom!App"  # the next question finds it
 
 
 async def test_a_name_is_looked_up_with_the_same_refresh(catalog, actions, clock):
     await catalog.apps()
     actions.apps.append(StartApp("Zoom", "zoom!App"))
     clock.now += commands.APPS_MISS_REFRESH_S
+    assert await catalog.lookup("Zoom") is None
+    await catalog.settle()
     assert (await catalog.lookup("Zoom")).app_id == "zoom!App"
 
 

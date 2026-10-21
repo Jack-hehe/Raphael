@@ -40,6 +40,7 @@ from raphael_core.brain.openrouter import OpenRouterError
 from raphael_core.device import audio, dictation, models
 from raphael_core.device.models import REGISTRY, ModelFile, ModelManager, ModelSpec
 from raphael_core.protocol import (
+    BUSY,
     INVALID_PARAMS,
     NO_MICROPHONE,
     NOT_CONFIGURED,
@@ -336,12 +337,12 @@ class Loads:
         self.segmenters.append(segmenter)
         return segmenter
 
-    def make_engine(self):
+    def make_engine(self, name):
         if self.engine_gate is not None:
             assert self.engine_gate.wait(30)
         if self.engine_errors:
             raise self.engine_errors.pop(0)
-        engine = SimpleNamespace(name="qwen3-asr")
+        engine = SimpleNamespace(name=name)
         self.engines.append(engine)
         return engine
 
@@ -484,6 +485,382 @@ def test_close_lets_go_of_the_models(speech_in):
     # Closed for good: nothing is loaded again behind it.
     speech.load_pending()
     assert len(loads.segmenters) == 1
+
+
+# --- the local speech model the user chose ----------------------------------------------------
+
+
+def test_the_engine_is_built_for_the_model_that_was_selected(speech_in):
+    speech, loads, _ = speech_in(ready=(*APP_MODELS, "sensevoice"))
+    assert speech.engine_name == "qwen3-asr"
+    speech.select_engine("sensevoice")
+    speech.load_pending()
+    assert [engine.name for engine in loads.engines] == ["sensevoice"]
+    assert speech.engine() is loads.engines[0]
+
+
+def test_a_new_selection_keeps_the_old_engine_until_the_new_one_is_built(speech_in):
+    gate = threading.Event()
+    speech, loads, _ = speech_in(ready=(*APP_MODELS, "sensevoice"))
+    speech.load_pending()
+    old = speech.engine()
+    loads.engine_gate = gate
+    speech.select_engine("sensevoice")
+    loader = threading.Thread(target=speech.load_pending)
+    loader.start()
+    deadline = time.monotonic() + 10
+    while not loader.is_alive() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    # A dictation that starts while the new engine loads uses the old one and does not wait.
+    assert speech.engine() is old
+    gate.set()
+    loader.join(10)
+    assert speech.engine() is loads.engines[-1] and speech.engine().name == "sensevoice"
+
+
+def test_selecting_the_engine_that_is_loaded_builds_nothing(speech_in):
+    speech, loads, _ = speech_in()
+    speech.load_pending()
+    speech.select_engine("qwen3-asr")
+    speech.load_pending()
+    assert len(loads.engines) == 1
+
+
+def test_a_selection_that_is_not_downloaded_leaves_the_loaded_engine_alone(speech_in):
+    speech, loads, _ = speech_in()
+    speech.load_pending()
+    speech.select_engine("sensevoice")
+    speech.load_pending()
+    assert len(loads.engines) == 1 and speech.engine() is loads.engines[0]
+
+
+def test_require_models_asks_for_the_selected_model(speech_in):
+    speech, _, manager = speech_in()
+    speech.select_engine("sensevoice")
+    with pytest.raises(RpcError) as caught:
+        speech.require_models()
+    assert caught.value.code == NOT_CONFIGURED and "sensevoice" in caught.value.message
+    make_models(manager.dir("sensevoice").parent, ("sensevoice",))
+    speech.require_models()
+
+
+def test_the_engine_that_is_asked_for_is_the_selected_one_when_nothing_is_loaded(speech_in):
+    speech, loads, _ = speech_in(ready=("silero-vad", "sensevoice"))
+    speech.select_engine("sensevoice")
+    assert speech.engine() is loads.engines[0] and loads.engines[0].name == "sensevoice"
+
+
+@pytest.fixture
+def local_models(monkeypatch):
+    """Tiny stand-ins for two models of the catalogue, served by a mock transport."""
+    served: list[str] = []
+    specs = {
+        "silero-vad": ModelSpec(
+            name="silero-vad",
+            files=("silero_vad_v5.onnx",),
+            downloads=(ModelFile("https://models.test/vad.onnx", "silero_vad_v5.onnx", 10),),
+        ),
+        "qwen3-asr": REGISTRY["qwen3-asr"],
+        "sensevoice": ModelSpec(
+            name="sensevoice",
+            files=("model.int8.onnx", "tokens.txt"),
+            downloads=(
+                ModelFile("https://models.test/sense.onnx", "model.int8.onnx", 1_500_000),
+                ModelFile("https://models.test/tokens.txt", "tokens.txt", 100),
+            ),
+        ),
+        "paraformer-zh": ModelSpec(
+            name="paraformer-zh",
+            files=("model.int8.onnx",),
+            downloads=(ModelFile("https://models.test/gone", "model.int8.onnx", 5),),
+        ),
+    }
+    sizes = {file.url: file.size for spec in specs.values() for file in spec.downloads}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        served.append(url)
+        if url not in sizes or url.endswith("/gone"):
+            return httpx.Response(404)
+        return httpx.Response(200, content=b"\0" * sizes[url])
+
+    for name, spec in specs.items():
+        monkeypatch.setitem(models.REGISTRY, name, spec)
+    http = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    yield SimpleNamespace(served=served, http=http)
+    http.close()
+
+
+def local_app(make_app, local_models, tmp_path, kit=None, ready=APP_MODELS):
+    return make_app(
+        kit or make_kit(), ready=ready, manager=ModelManager(tmp_path / "data" / "models", local_models.http)
+    )
+
+
+async def test_the_local_engine_is_the_model_the_setting_names_from_the_first_load(tmp_path):
+    kit = make_kit()
+    data = tmp_path / "data"
+    make_models(data / "models", (*APP_MODELS, "sensevoice"))
+    app = App(data_dir=data, fake_llm=True, load_kit=lambda: kit, agent_actions=None)
+    try:
+        await app.call("settings.set", {"key": "stt_local_model", "value": "sensevoice"})
+        app.start()
+        await wait_until(lambda: kit.segmenters and kit.engines)
+        assert [engine.kwargs["name"] for engine in kit.engines] == ["sensevoice"]
+    finally:
+        await app.aclose()
+
+
+async def test_models_status_follows_the_chosen_local_model(make_app, tmp_path):
+    app = make_app(ready=("silero-vad", "sensevoice"))
+    await app.call("settings.set", {"key": "stt_local_model", "value": "sensevoice"})
+    await app.call("models.local_use", {"name": "sensevoice"})
+    assert await app.call("models.status") == {
+        "models": [
+            {"name": "silero-vad", "ready": True},
+            {"name": "sensevoice", "ready": True},
+        ]
+    }
+
+
+async def test_models_local_lists_the_catalogue_with_what_is_on_disk(make_app):
+    app = make_app(ready=(*APP_MODELS, "sensevoice"))
+    result = await app.call("models.local")
+    names = [m["name"] for m in result["models"]]
+    assert names == [entry.name for entry in models.LOCAL_STT_MODELS]
+    assert "silero-vad" not in names
+    sense = next(m for m in result["models"] if m["name"] == "sensevoice")
+    assert sense == {
+        "name": "sensevoice",
+        "title": "SenseVoice",
+        "languages": ["zh", "en", "ja", "ko", "yue"],
+        "note": "fast",
+        "size": 163_002_883,
+        "ready": True,
+    }
+    assert {m["name"] for m in result["models"] if m["ready"]} == {"qwen3-asr", "sensevoice"}
+    assert result["active"] == "qwen3-asr" and result["downloading"] is None
+
+
+async def test_choosing_a_local_model_downloads_it_then_makes_it_the_local_engine(
+    make_app, local_models, tmp_path, notes
+):
+    kit = make_kit()
+    app = local_app(make_app, local_models, tmp_path, kit)
+    listen(app, notes)
+    await wait_until(lambda: kit.engines)
+    result = await app.call("models.local_use", {"name": "sensevoice"})
+    assert result["ok"] is True
+    assert result["settings"]["stt_local_model"] == "sensevoice"
+    assert result["settings"]["stt_engine"] == "local"
+    assert (tmp_path / "data" / "models" / "sensevoice" / "tokens.txt").is_file()
+    await asyncio.sleep(0.05)
+    progress = [p for p in notes.methods("models.progress") if p["name"] == "sensevoice"]
+    assert progress and progress[-1] == {"name": "sensevoice", "done": 100, "total": 100}
+    assert any(p["total"] == 1_500_000 and p["done"] == 1_500_000 for p in progress)
+    await wait_until(lambda: kit.engines[-1].kwargs["name"] == "sensevoice")
+    assert (await app.call("models.local"))["active"] == "sensevoice"
+
+
+async def test_the_dictation_after_the_switch_uses_the_new_engine(make_app, local_models, tmp_path):
+    kit = make_kit()
+    app = local_app(make_app, local_models, tmp_path, kit)
+    await wait_until(lambda: kit.engines)
+    await app.call("models.local_use", {"name": "sensevoice"})
+    await wait_until(lambda: kit.engines[-1].kwargs["name"] == "sensevoice")
+    assert (await dictate(app))["text"] == WORDS + WORDS
+
+
+async def test_a_model_that_is_on_disk_is_chosen_without_any_request(
+    make_app, local_models, tmp_path
+):
+    app = local_app(make_app, local_models, tmp_path, ready=(*APP_MODELS, "sensevoice"))
+    result = await app.call("models.local_use", {"name": "sensevoice"})
+    assert result["settings"]["stt_local_model"] == "sensevoice"
+    assert local_models.served == []
+
+
+async def test_a_download_that_fails_leaves_the_engine_in_use_and_says_why(
+    make_app, local_models, tmp_path
+):
+    kit = make_kit()
+    app = local_app(make_app, local_models, tmp_path, kit)
+    await wait_until(lambda: kit.engines)
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_use", {"name": "paraformer-zh"})
+    assert "404" in caught.value.message
+    settings = (await app.call("settings.get"))["settings"]
+    assert settings["stt_local_model"] == "qwen3-asr" and settings["stt_engine"] == "cloud"
+    assert not (tmp_path / "data" / "models" / "paraformer-zh").exists()
+    assert len(kit.engines) == 1
+    assert (await app.call("models.local"))["downloading"] is None  # and another try is allowed
+
+
+@pytest.mark.parametrize("params", [{}, {"name": 3}, {"name": "silero-vad"}, {"name": "nope"}])
+async def test_models_local_use_takes_only_a_model_of_the_catalogue(make_app, params):
+    with pytest.raises(RpcError) as caught:
+        await make_app().call("models.local_use", params)
+    assert caught.value.code == INVALID_PARAMS
+
+
+class SlowManager(ModelManager):
+    """A manager whose download of a model goes on until it is told to end, a chunk at a time."""
+
+    def __init__(self, root):
+        super().__init__(root)
+        self.started = threading.Event()
+        self.finish = threading.Event()
+
+    def ensure(self, name, progress=None):
+        if self.is_ready(name):
+            return self.dir(name)
+        for done in range(1, 1000):
+            if progress is not None:
+                progress(done, 1000)  # raises when the download is cancelled
+            self.started.set()
+            if self.finish.wait(0.01):
+                break
+        make_models(self.dir(name).parent, (name,))
+        return self.dir(name)
+
+
+async def test_a_download_can_be_cancelled_and_leaves_the_engine_in_use(make_app, tmp_path, notes):
+    manager = SlowManager(tmp_path / "data" / "models")
+    kit = make_kit()
+    app = make_app(kit, manager=manager)
+    listen(app, notes)
+    await wait_until(lambda: kit.engines)
+    task = asyncio.create_task(app.call("models.local_use", {"name": "sensevoice"}))
+    await wait_until(manager.started.is_set)
+    assert (await app.call("models.local"))["downloading"] == "sensevoice"
+    assert await app.call("models.local_cancel") == {"cancelled": True}
+    result = await asyncio.wait_for(task, 10)
+    assert result == {"ok": False, "cancelled": True}
+    assert not manager.is_ready("sensevoice")
+    settings = (await app.call("settings.get"))["settings"]
+    assert settings["stt_local_model"] == "qwen3-asr"
+    assert (await app.call("models.local"))["downloading"] is None
+
+
+async def test_cancelling_with_nothing_downloading_is_no_error(make_app):
+    assert await make_app().call("models.local_cancel") == {"cancelled": False}
+
+
+async def test_only_one_local_model_is_downloaded_at_a_time(make_app, tmp_path):
+    manager = SlowManager(tmp_path / "data" / "models")
+    app = make_app(make_kit(), manager=manager)
+    task = asyncio.create_task(app.call("models.local_use", {"name": "sensevoice"}))
+    await wait_until(manager.started.is_set)
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_use", {"name": "paraformer-zh"})
+    assert caught.value.code == BUSY
+    manager.finish.set()
+    assert (await asyncio.wait_for(task, 10))["ok"] is True
+
+
+async def test_dictation_does_not_wait_for_a_download(make_app, tmp_path):
+    manager = SlowManager(tmp_path / "data" / "models")
+    kit = make_kit()
+    app = make_app(kit, manager=manager)
+    await wait_until(lambda: kit.engines)
+    task = asyncio.create_task(app.call("models.local_use", {"name": "sensevoice"}))
+    await wait_until(manager.started.is_set)
+    result = await asyncio.wait_for(dictate(app), 5)  # the download is still under way
+    assert result["text"] == WORDS + WORDS and not task.done()
+    manager.finish.set()
+    await asyncio.wait_for(task, 10)
+
+
+async def test_dictation_does_not_wait_for_the_catalogue(make_app, tmp_path):
+    manager = SlowManager(tmp_path / "data" / "models")
+    app = make_app(make_kit(), manager=manager)
+    assert [m["name"] for m in (await app.call("models.local"))["models"]]
+    assert (await asyncio.wait_for(dictate(app), 5))["text"] == WORDS + WORDS
+
+
+async def test_a_model_chosen_in_the_settings_directly_is_picked_up_by_the_next_dictation(
+    make_app,
+):
+    kit = make_kit()
+    app = make_app(kit, ready=(*APP_MODELS, "sensevoice"))
+    await wait_until(lambda: kit.engines)
+    await app.call("settings.set", {"key": "stt_local_model", "value": "sensevoice"})
+    await dictate(app)
+    await wait_until(lambda: kit.engines[-1].kwargs["name"] == "sensevoice")
+
+
+async def test_a_model_chosen_in_the_settings_that_is_not_downloaded_changes_nothing(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await wait_until(lambda: kit.engines)
+    await app.call("settings.set", {"key": "stt_local_model", "value": "sensevoice"})
+    assert (await dictate(app))["text"] == WORDS + WORDS
+    assert len(kit.engines) == 1
+
+
+async def test_a_model_that_is_not_in_use_can_be_deleted(make_app, tmp_path):
+    app = make_app(ready=(*APP_MODELS, "sensevoice"))
+    directory = tmp_path / "data" / "models" / "sensevoice"
+    assert directory.is_dir()
+    assert await app.call("models.local_delete", {"name": "sensevoice"}) == {"deleted": True}
+    assert not directory.exists()
+    sense = next(m for m in (await app.call("models.local"))["models"] if m["name"] == "sensevoice")
+    assert sense["ready"] is False
+    assert (tmp_path / "data" / "models" / "silero-vad").is_dir()
+
+
+async def test_deleting_a_model_that_is_not_there_is_no_error(make_app):
+    app = make_app()
+    assert await app.call("models.local_delete", {"name": "sensevoice"}) == {"deleted": False}
+
+
+async def test_the_model_in_use_is_not_deleted(make_app, tmp_path):
+    app = make_app()
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_delete", {"name": "qwen3-asr"})
+    assert caught.value.code == BUSY and "in use" in caught.value.message
+    assert (tmp_path / "data" / "models" / "qwen3-asr").is_dir()
+
+
+async def test_the_voice_detector_is_never_deleted(make_app, tmp_path):
+    app = make_app()
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_delete", {"name": "silero-vad"})
+    assert caught.value.code == INVALID_PARAMS
+    assert (tmp_path / "data" / "models" / "silero-vad").is_dir()
+
+
+@pytest.mark.parametrize("params", [{}, {"name": 1}, {"name": "nope"}])
+async def test_models_local_delete_takes_only_a_model_of_the_catalogue(make_app, params):
+    with pytest.raises(RpcError) as caught:
+        await make_app().call("models.local_delete", params)
+    assert caught.value.code == INVALID_PARAMS
+
+
+async def test_a_model_being_downloaded_is_not_deleted(make_app, tmp_path):
+    manager = SlowManager(tmp_path / "data" / "models")
+    app = make_app(make_kit(), manager=manager)
+    task = asyncio.create_task(app.call("models.local_use", {"name": "sensevoice"}))
+    await wait_until(manager.started.is_set)
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_delete", {"name": "sensevoice"})
+    assert caught.value.code == BUSY
+    manager.finish.set()
+    await asyncio.wait_for(task, 10)
+
+
+async def test_a_model_the_disk_will_not_let_go_of_is_an_error_that_says_so(
+    make_app, tmp_path, monkeypatch
+):
+    app = make_app(ready=(*APP_MODELS, "sensevoice"))
+
+    def refuse(path, *args, **kwargs):
+        raise PermissionError("in use by another program")
+
+    monkeypatch.setattr(app_module.shutil, "rmtree", refuse)
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_delete", {"name": "sensevoice"})
+    assert "sensevoice" in caught.value.message and "in use by another" in caught.value.message
 
 
 # --- the level meter --------------------------------------------------------------------------
@@ -704,8 +1081,9 @@ EXPECTED_METHODS = {
     "history.delete",
     "dictionary.list",
     "dictionary.add",
+    "dictionary.import",
     "dictionary.delete",
-    "dictionary.suggestions",
+    "dictionary.auto_add",
     "dictionary.dismiss",
     "settings.get",
     "settings.set",
@@ -1562,6 +1940,7 @@ class RecordingActions:
 
     def __init__(self):
         self.calls = []
+        self.listed = 0
 
     def open_url(self, url):
         self.calls.append(("open_url", url))
@@ -1572,7 +1951,11 @@ class RecordingActions:
     def lock_screen(self):
         self.calls.append(("lock_screen",))
 
+    def open_settings(self, uri):
+        self.calls.append(("open_settings", uri))
+
     def list_start_apps(self):
+        self.listed += 1
         return []
 
     def launch_app(self, app_id):
@@ -1627,6 +2010,18 @@ async def test_the_real_core_gets_windows_actions_unless_it_is_given_others(make
     assert isinstance(make_app(fake_llm=False).agent._actions, WindowsActions)
     actions = RecordingActions()
     assert make_app(fake_llm=False, agent_actions=actions).agent._actions is actions
+
+
+async def test_the_apps_of_the_start_menu_are_read_when_the_app_says_hello(make_app):
+    actions = RecordingActions()
+    app = make_app(fake_llm=False, agent_actions=actions)
+    assert actions.listed == 0
+    await app.call("core.hello")
+    for _ in range(100):
+        if actions.listed:
+            break
+        await asyncio.sleep(0.01)
+    assert actions.listed == 1
 
 
 async def test_without_a_key_the_assistant_still_runs_commands_and_says_why_it_cannot_do_more(

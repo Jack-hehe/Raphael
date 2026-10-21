@@ -16,33 +16,6 @@ def decided(text):
 @pytest.mark.parametrize(
     ("text", "command"),
     [
-        # sites
-        ("打開 YouTube", "open_youtube"),
-        ("幫我開啟油管", "open_youtube"),
-        ("open youtube", "open_youtube"),
-        ("Open YouTube please", "open_youtube"),
-        ("YouTubeを開いて", "open_youtube"),
-        ("ユーチューブを開いて", "open_youtube"),
-        ("打開 gmail", "open_gmail"),
-        ("open Gmail", "open_gmail"),
-        ("Gmailを開いて", "open_gmail"),
-        ("打開 GitHub", "open_github"),
-        ("open github", "open_github"),
-        ("打開 google", "open_google"),
-        ("open google", "open_google"),
-        ("グーグルを開いて", "open_google"),
-        ("打開 Google 日曆", "open_google_calendar"),
-        ("open google calendar", "open_google_calendar"),
-        ("Googleカレンダーを開いて", "open_google_calendar"),
-        ("打開 Google 雲端硬碟", "open_google_drive"),
-        ("open google drive", "open_google_drive"),
-        ("Googleドライブを開いて", "open_google_drive"),
-        ("打開 Notion", "open_notion"),
-        ("open notion", "open_notion"),
-        ("打開 ChatGPT", "open_chatgpt"),
-        ("open chat gpt", "open_chatgpt"),
-        ("打開 Claude", "open_claude"),
-        ("open claude", "open_claude"),
         # volume
         ("音量調大", "volume_up"),
         ("大聲一點", "volume_up"),
@@ -91,20 +64,49 @@ def test_a_plain_command_is_found(text, command):
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("text", "target"),
     [
-        "打開計算機",
-        "打開小算盤",
-        "開啟記事本",
-        "open the calculator",
-        "launch spotify",
-        "please launch notepad",
-        "電卓を開いて",
-        "メモ帳を起動して",
+        # a site, an app and a settings page are opened the same way: by what follows the verb
+        ("打開 YouTube", "youtube"),
+        ("幫我開啟油管", "油管"),
+        ("open youtube", "youtube"),
+        ("Open YouTube please", "youtube"),
+        ("YouTubeを開いて", "youtube"),
+        ("ユーチューブを開いて", "ユーチューブ"),
+        ("open reddit", "reddit"),
+        ("開一下 Reddit", "reddit"),
+        ("開 spotify", "spotify"),
+        ("Redditを開いて", "reddit"),
+        ("X を開いて", "x"),
+        ("open reddit.com", "reddit.com"),
+        ("打開 github.com/notifications", "github.com/notifications"),
+        ("open https://news.ycombinator.com/", "https://news.ycombinator.com"),
+        ("open google calendar", "google calendar"),
+        ("open the calculator", "calculator"),
+        ("launch spotify", "spotify"),
+        ("please launch notepad", "notepad"),
+        ("could you open youtube for me", "youtube"),
+        ("打開計算機", "計算機"),
+        ("打開小算盤", "小算盤"),
+        ("開啟記事本", "記事本"),
+        ("電卓を開いて", "電卓"),
+        ("メモ帳を起動して", "メモ帳"),
+        ("open bluetooth settings", "bluetooth settings"),
+        ("打開藍牙設定", "藍牙設定"),
+        ("Bluetoothの設定を開いて", "bluetoothの設定"),
+        ("open wi-fi settings", "wi-fi settings"),
+        ("open my github notifications", "github notifications"),
     ],
 )
-def test_opening_something_that_is_no_site_is_opening_an_app(text):
-    assert decided(text) == "open_app"
+def test_opening_is_found_with_what_is_to_be_opened(text, target):
+    decision = match_command(text)
+    assert decision == RouteDecision(route="command", command="open", target=target, source="local")
+
+
+def test_no_site_is_named_in_the_matcher():
+    # Any name is a target: the same decision for a site nobody listed, an app and a typo.
+    for text in ("open lobsters", "open Lobsters", "open qwertyuiop"):
+        assert decided(text) == "open"
 
 
 @pytest.mark.parametrize(
@@ -124,6 +126,9 @@ def test_opening_something_that_is_no_site_is_opening_an_app(text):
         "我今天要去開會，順便把音量調整一下然後再把門鎖上然後去買咖啡",  # long
         "pause is a verb that means to stop for a short time",
         "open youtube and search for cats",  # more than a command: left to the models
+        "打開 YouTube 搜尋 lofi",
+        "open github search lofi",
+        "YouTubeで猫を検索して開いて",
         "youtube",  # a site named, nothing asked
         "音量",  # the word alone asks nothing
         "start the timer",  # "start" is not "open"
@@ -134,10 +139,10 @@ def test_opening_something_that_is_no_site_is_opening_an_app(text):
 )
 def test_what_is_no_plain_command_is_left_alone(text):
     decision = match_command(text)
-    # "打開窗戶" asks to open something and names nothing known: the matcher may say open_app,
-    # and the app lookup then finds nothing. Everything else must be left to the models.
+    # "打開窗戶" asks to open something and names nothing known: the matcher may say open, and
+    # finding the target then finds nothing. Everything else must be left to the models.
     if text == "打開窗戶":
-        assert decision is None or decision.command == "open_app"
+        assert decision is None or decision.command == "open"
     else:
         assert decision is None
 
@@ -147,27 +152,21 @@ def test_what_is_no_plain_command_is_left_alone(text):
     [
         ("please mute", "volume_mute"),
         ("Can you pause the music please?", "media_play_pause"),
-        ("could you open youtube for me", "open_youtube"),
+        ("could you open youtube for me", "open"),
         ("turn it up", "volume_up"),
         ("lock it", "lock_screen"),
         ("麻煩幫我暫停一下", "media_play_pause"),
         ("麻煩鎖定螢幕", "lock_screen"),
-        ("請幫我打開 YouTube", "open_youtube"),
+        ("請幫我打開 YouTube", "open"),
         ("音量調大一點", "volume_up"),
         ("ミュートにしてください", "volume_mute"),
-        ("YouTubeを開いてください", "open_youtube"),
+        ("YouTubeを開いてください", "open"),
         ("  MUTE!!  ", "volume_mute"),
         ("Ｍｕｔｅ", "volume_mute"),  # full-width letters
     ],
 )
 def test_polite_words_and_punctuation_around_a_command_do_not_hide_it(text, command):
     assert decided(text) == command
-
-
-def test_the_site_wins_over_the_app_and_google_calendar_over_google():
-    assert decided("open google calendar") == "open_google_calendar"
-    assert decided("open google drive") == "open_google_drive"
-    assert decided("open chatgpt") == "open_chatgpt"
 
 
 def test_a_request_to_copy_is_never_found_here():
