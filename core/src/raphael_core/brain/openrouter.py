@@ -136,6 +136,9 @@ class ChatTurn:
     prompt_tokens: int
     completion_tokens: int
     latency_ms: int  # of the HTTP call
+    # Whether the reply said what it cost. A reply that did not has cost_usd 0.0, which is not a
+    # price: the caller that limits spending must charge an estimate for it.
+    usage_known: bool = True
 
 
 @dataclass
@@ -514,6 +517,7 @@ def _to_chat_turn(reply: _Reply, requested_model: str) -> ChatTurn:
         prompt_tokens=_usage_count(usage, "prompt_tokens"),
         completion_tokens=_usage_count(usage, "completion_tokens"),
         latency_ms=reply.latency_ms,
+        usage_known=_is_number(usage.get("cost")) and _usage_cost(usage) == usage.get("cost"),
     )
 
 

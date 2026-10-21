@@ -207,9 +207,15 @@ async def test_the_words_may_come_as_parts(client_with, content, expected):
 
 
 @pytest.mark.parametrize("cost", [None, "free", -1, True])
-async def test_a_turn_without_a_usable_cost_costs_nothing(client_with, cost):
+async def test_a_turn_without_a_usable_cost_costs_nothing_and_says_it_did_not_say(client_with, cost):
     result = await turn(client_with(lambda request: reply("x", cost=cost)))
-    assert result.cost_usd == 0.0
+    assert result.cost_usd == 0.0 and result.usage_known is False
+
+
+async def test_a_turn_that_gives_its_cost_says_so_even_when_it_is_zero(client_with):
+    for cost in (0.0004, 0, 0.0):
+        result = await turn(client_with(lambda request, cost=cost: reply("x", cost=cost)))
+        assert result.usage_known is True
 
 
 @pytest.mark.parametrize("body", [{}, {"choices": []}, {"choices": ["x"]}, [], "text"])

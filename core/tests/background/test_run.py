@@ -11,7 +11,7 @@ import pytest
 from raphael_core.agent.gate import ToolGate
 from raphael_core.agent.ledger import Ledger
 from raphael_core.agent.tools import Tools
-from raphael_core.background.run import MAX_MESSAGES, RunLimits, TaskRun
+from raphael_core.background.run import RunLimits, TaskRun
 from raphael_core.background.snapshot import take_snapshot
 from raphael_core.background.tasks import TaskStore
 from raphael_core.brain.openrouter import OpenRouterError
@@ -123,7 +123,7 @@ async def test_each_model_call_leaves_a_step_and_tells_the_app(rig):
 
 @pytest.mark.parametrize(
     "messages",
-    [None, "text", [], ["not a message"], [{"role": "user"}] * (MAX_MESSAGES + 1), [{"content": "x" * 700_000}]],
+    [None, "text", [], ["not a message"]],
 )
 async def test_a_conversation_that_is_not_one_is_refused_before_anything_is_paid(rig, messages):
     with pytest.raises(RpcError) as error:

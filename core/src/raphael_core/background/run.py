@@ -40,7 +40,9 @@ from ..agent.ledger import Ledger
 from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult
 from ..agent.policy import Action, NotApproved, UnknownTool
 from ..agent.tools import ToolResult, Tools
+from ..brain.catalog import LLM, find
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
+from ..brain.pricing import builtin_catalog
 from ..brain.spend import SpendTracker
 from ..protocol import INVALID_PARAMS, WORKER_STOPPED, RpcError
 from .snapshot import BUILTIN, MCP, Snapshot, ToolRef
@@ -58,6 +60,27 @@ MAX_MESSAGES = 200
 MAX_CHAT_CHARS = 600_000
 # The most of a tool's result that goes to the worker, in characters (it cuts it further).
 MAX_RESULT_CHARS = 12_000
+
+
+# A model call whose cost is not known, and whose model has no price we know, is charged this.
+UNKNOWN_COST_FLOOR_USD = 0.02
+# A character is counted as a third of a token in the estimate, which is more than the usual
+# quarter: the estimate is meant to be too high rather than too low.
+_CHARS_PER_TOKEN = 3.0
+
+
+def estimate_cost(model: str, request_chars: int) -> float:
+    """What a model call is charged when nobody said what it cost (the reply had no usage, or it was
+    given up on after a time-out or a cancel, when the provider may still bill it): the request's
+    characters as input tokens plus the most the reply may be (`CHAT_MAX_TOKENS`), at the model's
+    price; a model whose price is not known costs the floor, US$0.02."""
+    entry = find(builtin_catalog(), LLM, model)
+    price = None if entry is None else entry.price
+    if price is None or price.input_per_mtok is None or price.output_per_mtok is None:
+        return UNKNOWN_COST_FLOOR_USD
+    tokens_in = request_chars / _CHARS_PER_TOKEN
+    cost = (tokens_in * price.input_per_mtok + CHAT_MAX_TOKENS * price.output_per_mtok) / 1_000_000
+    return cost
 
 
 @dataclass(frozen=True)
@@ -147,6 +170,10 @@ class TaskRun:
         self.deadline = clock() + limits.seconds
         self._live: set[asyncio.Task[Any]] = set()
         self._in_plugin_call = False
+        # One call at a time: the worker may send several at once, and the limits (the money above
+        # all) are read before a reply lands. A call waits for the one before it and checks the
+        # limits only when its turn comes.
+        self._turn = asyncio.Lock()
 
     # --- cancelling -----------------------------------------------------------------------------
 
@@ -219,10 +246,16 @@ class TaskRun:
         messages = params.get("messages")
         if not isinstance(messages, list) or not all(isinstance(m, dict) for m in messages):
             raise _invalid("messages must be a list of messages")
-        if not messages or len(messages) > MAX_MESSAGES:
-            raise _invalid("messages is empty or too long")
-        if len(json.dumps(messages, ensure_ascii=False)) > MAX_CHAT_CHARS:
-            raise _invalid("messages is too long")
+        if not messages:
+            raise _invalid("messages is empty")
+        request_chars = len(json.dumps(messages, ensure_ascii=False))
+        async with self._turn:
+            # A conversation grown past what is sent is a task that has used what it was given.
+            if len(messages) > MAX_MESSAGES or request_chars > MAX_CHAT_CHARS:
+                raise stopped("limit_model")
+            return await self._chat(messages, request_chars)
+
+    async def _chat(self, messages: list[dict], request_chars: int) -> dict:
         self._check(model=True, paid=True)
         self.model_calls += 1
         began = time.perf_counter()
@@ -253,23 +286,28 @@ class TaskRun:
             raise stopped("failed", detail) from None
         except TimeoutError:
             logger.warning("The task's model timed out")
+            self._charge_estimate(request_chars)  # the provider may bill what was given up on
             self._step(kind="model", outcome="timeout", ms=_ms(began))
             if self._clock() >= self.deadline:
                 raise stopped("limit_time") from None
             raise stopped("failed", "offline") from None
         except RpcError:
+            self._charge_estimate(request_chars)  # cancelled while the provider was working
             raise
         except Exception as exc:
             logger.warning("The task's model failed unexpectedly: %s", type(exc).__name__)
             self._step(kind="model", outcome="error", ms=_ms(began))
             raise stopped("failed", "error") from None
+        cost = turn.cost_usd
+        if not turn.usage_known:  # no usage is not a free call
+            cost = max(cost, estimate_cost(self.model, request_chars))
         self.ledger.add(
             model=turn.model,
-            cost_usd=turn.cost_usd,
+            cost_usd=cost,
             prompt_tokens=turn.prompt_tokens,
             completion_tokens=turn.completion_tokens,
         )
-        self._step(kind="model", outcome="ok", cost_usd=turn.cost_usd, ms=_ms(began))
+        self._step(kind="model", outcome="ok", cost_usd=cost, ms=_ms(began))
         return {
             "content": turn.content,
             "calls": [
@@ -278,6 +316,9 @@ class TaskRun:
             ],
         }
 
+    def _charge_estimate(self, request_chars: int) -> None:
+        self.ledger.add(model=self.model, cost_usd=estimate_cost(self.model, request_chars))
+
     # --- host.tool ------------------------------------------------------------------------------
 
     async def tool(self, params: dict) -> dict:
@@ -285,6 +326,10 @@ class TaskRun:
         name, arguments = params.get("name"), params.get("arguments")
         if not isinstance(name, str) or not isinstance(arguments, dict):
             raise _invalid("name must be a string and arguments an object")
+        async with self._turn:
+            return await self._tool(name, arguments)
+
+    async def _tool(self, name: str, arguments: dict) -> dict:
         ref = self.snapshot.refs.get(name)
         searching = ref is not None and ref.kind == BUILTIN and ref.name == "web_search"
         self._check(tool=True, paid=searching)
