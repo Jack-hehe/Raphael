@@ -3,14 +3,16 @@
 //! - `core_call` passes a call on to the core, but only the methods the main window needs; the
 //!   dictation methods and the ones that ask Raphael something (`agent.ask`, `agent.confirm`,
 //!   `agent.cancel`) are the controller's alone. The main window may read and clear the record of
-//!   the conversations (`agent.history.`).
+//!   the conversations (`agent.history.`), and stop one background task it names
+//!   (`worker.cancel {task_id}`), the way the tray stops the one that runs.
 //! - `device_settings_get` and `device_settings_set` read and change `device.json`
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
 //!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
 //!   is the file written. (A dictation that is under way finishes in the mode it began in.)
 //! - `keyboard_has_altgr` and `hotkeys_pause` are small helpers of the settings page.
 //! - `main_events` is the channel on which the main window hears the core and the app (the
-//!   microphone's loudness, a model's download, learning that is limited, the tray's pages).
+//!   microphone's loudness, a model's download, a turn of the conversations written or completed, a
+//!   background task that moved on, learning that is limited, the tray's pages).
 //! - `window_hotkey` hands the hotkeys that the main window sees while it has the focus, and the
 //!   keyboard hook may not, to the hotkey service, which treats them as the hook's.
 //!
@@ -97,6 +99,16 @@ pub enum MainEvent {
         page: TrayPage,
         #[serde(skip_serializing_if = "Option::is_none")]
         action: Option<TrayAction>,
+    },
+    /// A turn of the conversations with Raphael was written or completed (`agent.turn`): the page
+    /// of the conversations reads it again. Only its id: what was said stays in the core.
+    AgentTurn { turn_id: u64 },
+    /// A background task moved on (`worker.changed`): a step was taken, or it started or ended.
+    /// `running` is whether any task is under way.
+    WorkerChanged {
+        task_id: u64,
+        state: String,
+        running: bool,
     },
 }
 
@@ -185,7 +197,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // `models.local_use`, `models.local_cancel`, `models.local_delete`) as well as OpenRouter's catalog
 // (`models.catalog`), and each is let through by name, so that a method added there later is not
 // opened to the page by accident.
-const ALLOWED_METHODS: [&str; 11] = [
+const ALLOWED_METHODS: [&str; 12] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -197,14 +209,17 @@ const ALLOWED_METHODS: [&str; 11] = [
     "models.local_delete",
     "models.catalog",
     "stats.summary",
+    // The conversation view stops the task it shows, by its id (`validate_core_call`). The other
+    // methods of the worker stay closed: a yes to its question is the overlay's real click alone.
+    "worker.cancel",
 ];
 
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
 /// settings (the `languages` setting too), the key, the status, the usage numbers, OpenRouter's
 /// catalog of models with their prices, the list of languages, the record of the conversations
 /// with Raphael, the plugins (the store, the servers the user connects and whether each of their tools is on),
-/// and the few device methods the settings page needs. Everything else is refused, the dictation
-/// methods and the ones that ask Raphael something above all.
+/// stopping a background task, and the few device methods the settings page needs. Everything else
+/// is refused, the dictation methods and the ones that ask Raphael something above all.
 pub fn is_allowed_method(m: &str) -> bool {
     ALLOWED_METHODS.contains(&m)
         || ALLOWED_PREFIXES
@@ -218,6 +233,13 @@ pub fn is_allowed_method(m: &str) -> bool {
 /// OpenRouter's list), so that the settings page gets these refusals in its own words. `Err` says
 /// what is wrong. Calls other than `settings.set` pass.
 pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
+    if method == "worker.cancel" {
+        // Without an id the core stops whichever task runs: the window stops only the one it shows.
+        return match params.get("task_id").and_then(Value::as_u64) {
+            Some(_) => Ok(()),
+            None => Err("worker.cancel needs the task_id of the task to stop".to_owned()),
+        };
+    }
     if method != "settings.set" {
         return Ok(());
     }
@@ -295,8 +317,9 @@ fn whole(value: &Value) -> Option<u64> {
 }
 
 /// The event for a notification from the core, if the main window wants it: the loudness of the
-/// microphone while it is monitored, and the progress of a model download. The loudness of a
-/// dictation (it has a `session_id`) is the overlay's and not the meter's.
+/// microphone while it is monitored, the progress of a model download, a turn of the conversations
+/// and a background task that moved on. The loudness of a dictation (it has a `session_id`) is the
+/// overlay's and not the meter's.
 pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<MainEvent> {
     let params = &notification.params;
     match notification.method.as_str() {
@@ -313,6 +336,14 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
             name: params.get("name")?.as_str()?.to_owned(),
             done: whole(params.get("done")?)?,
             total: whole(params.get("total")?)?,
+        }),
+        "agent.turn" => Some(MainEvent::AgentTurn {
+            turn_id: params.get("turn_id")?.as_u64()?,
+        }),
+        "worker.changed" => Some(MainEvent::WorkerChanged {
+            task_id: params.get("task_id")?.as_u64()?,
+            state: params.get("state")?.as_str()?.to_owned(),
+            running: params.get("running")?.as_bool()?,
         }),
         _ => None,
     }
@@ -967,19 +998,41 @@ mod tests {
     }
 
     #[test]
-    fn the_main_window_has_no_part_in_the_background_worker_yet() {
-        // The tray stops a task and the overlay answers its questions; the window has no way to
-        // list, read or stop a task. Whatever it gets one day, a yes to a question of the worker
-        // is the overlay's real click alone.
+    fn the_main_window_may_stop_a_task_and_nothing_else_of_the_worker() {
+        // The conversation view stops the task it shows. A yes to a question of the worker is the
+        // overlay's real click alone, and the tasks are read with the conversations, not here.
+        assert!(is_allowed_method("worker.cancel"));
         for method in [
             "worker.list",
             "worker.get",
-            "worker.cancel",
             "worker.confirm",
             "worker.",
             "worker",
+            "worker.cancelx",
+            "Worker.cancel",
+            " worker.cancel",
         ] {
             assert!(!is_allowed_method(method), "{method:?}");
+        }
+    }
+
+    #[test]
+    fn the_window_stops_only_the_task_it_names() {
+        assert_eq!(
+            validate_core_call("worker.cancel", &json!({ "task_id": 7 })),
+            Ok(())
+        );
+        for params in [
+            json!({}),
+            json!({ "task_id": null }),
+            json!({ "task_id": "7" }),
+            json!({ "task_id": -1 }),
+            json!({ "task_id": 1.5 }),
+        ] {
+            assert!(
+                validate_core_call("worker.cancel", &params).is_err(),
+                "{params}"
+            );
         }
     }
 
@@ -1027,6 +1080,7 @@ mod tests {
             "integrations.set_tools_enabled",
             "integrations.audit",
             "toolsets.list",
+            "worker.cancel",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
@@ -1218,6 +1272,45 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_and_a_task_that_moved_on_are_forwarded_by_their_ids() {
+        let turn = notification("agent.turn", json!({"turn_id": 12}));
+        assert_eq!(
+            main_event_from(&turn, false),
+            Some(MainEvent::AgentTurn { turn_id: 12 })
+        );
+        let task = notification(
+            "worker.changed",
+            json!({"task_id": 3, "state": "running", "running": true, "model_calls": 2,
+                   "tool_calls": 1, "cost_usd": 0.004}),
+        );
+        assert_eq!(
+            main_event_from(&task, false),
+            Some(MainEvent::WorkerChanged {
+                task_id: 3,
+                state: "running".to_owned(),
+                running: true
+            })
+        );
+        for broken in [
+            notification("agent.turn", json!({})),
+            notification("agent.turn", json!({"turn_id": "12"})),
+            notification("worker.changed", json!({"task_id": 3, "state": "done"})),
+            notification(
+                "worker.changed",
+                json!({"task_id": -3, "state": "done", "running": false}),
+            ),
+        ] {
+            assert_eq!(main_event_from(&broken, true), None, "{:?}", broken.params);
+        }
+        // The report says what Raphael said: it is the overlay's, and the page reads the turn.
+        let report = notification(
+            "worker.report",
+            json!({"task_id": 3, "state": "done", "prefix": "告", "text": "x"}),
+        );
+        assert_eq!(main_event_from(&report, true), None);
+    }
+
+    #[test]
     fn other_notifications_are_not_forwarded() {
         for method in ["core.restarted", "core.down", "dictation.partial"] {
             assert_eq!(
@@ -1249,6 +1342,19 @@ mod tests {
             })
             .unwrap(),
             r#"{"type":"LearnLimited","app":"vscode","reason":"accessibility_off"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&MainEvent::AgentTurn { turn_id: 4 }).unwrap(),
+            r#"{"type":"AgentTurn","turn_id":4}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&MainEvent::WorkerChanged {
+                task_id: 2,
+                state: "done".to_owned(),
+                running: false
+            })
+            .unwrap(),
+            r#"{"type":"WorkerChanged","task_id":2,"state":"done","running":false}"#
         );
         assert_eq!(
             serde_json::to_string(&MainEvent::TrayOpen {

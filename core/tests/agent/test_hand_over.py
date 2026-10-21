@@ -38,6 +38,17 @@ class FakeBackground:
     def clear(self):
         self.cleared += 1
 
+    def tasks_for_turns(self, turn_ids):
+        # Each task as the history shows it with the turn that handed it over.
+        brief = {"id": 0, "state": "running", "started_at_ms": 5}
+        step = {"kind": "tool", "tool": "look", "server": "Notes", "outcome": "ok", "ms": 12,
+                "reason": None, "at_ms": 6}  # fmt: skip
+        return {
+            turn_id: ({**brief, "id": task_id}, [step])
+            for task_id, turn_id in self.attached
+            if turn_id in turn_ids
+        }
+
 
 @pytest.fixture
 def background():
@@ -74,6 +85,9 @@ async def test_the_turn_of_the_history_is_the_handoff_and_the_task_is_tied_to_it
         "do the long thing", "Understood", "Handed to the background.",
     )  # fmt: skip
     assert background.attached == [(1, result["turn_id"])]
+    # The history shows the task with its turn, and the worker's steps after the turn's own.
+    assert turn["task"] == {"id": 1, "state": "running", "started_at_ms": 5}
+    assert [step["tool"] for step in turn["steps"]] == ["look"]
 
 
 async def test_a_queue_that_is_full_or_a_worker_that_is_off_is_a_refusal_with_the_reason(

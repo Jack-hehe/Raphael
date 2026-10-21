@@ -136,7 +136,30 @@ SCHEMA_V10 = {
         "last_used_ms INTEGER NOT NULL",
     ],
 }
-LATEST = 10
+# Schema v11 adds what the conversation view shows: where a turn came from, the model that
+# answered, the fast tier's steps of a turn and why a step of the worker failed.
+SCHEMA_V11 = {
+    **SCHEMA_V10,
+    "agent_turns": [
+        *SCHEMA_V10["agent_turns"],
+        "source TEXT NOT NULL DEFAULT 'voice'",
+        "model TEXT",
+    ],
+    "worker_steps": [*SCHEMA_V10["worker_steps"], "reason TEXT"],
+    "agent_steps": [
+        "id INTEGER PK",
+        "turn_id INTEGER NOT NULL",
+        "n INTEGER NOT NULL",
+        "at_ms INTEGER NOT NULL",
+        "kind TEXT NOT NULL",
+        "tool TEXT NOT NULL",
+        "server TEXT",
+        "outcome TEXT NOT NULL",
+        "ms INTEGER NOT NULL DEFAULT 0",
+        "reason TEXT",
+    ],
+}
+LATEST = 11
 
 
 def schema_names(conn, kind):
@@ -160,7 +183,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V10)
+    assert schema_names(conn, "table") == set(SCHEMA_V11)
     assert {
         "history_created",
         "agent_turns_created",
@@ -168,9 +191,10 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_tasks_created",
         "worker_steps_task",
         "open_targets_used",
+        "agent_steps_turn",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V10.items():
+    for table, columns in SCHEMA_V11.items():
         assert describe_columns(conn, table) == columns
 
 
@@ -368,7 +392,7 @@ def test_a_v4_database_gets_the_turns_table_at_v5_and_keeps_its_rows(tmp_path):
 
     conn = db.connect(path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    assert describe_columns(conn, "agent_turns") == SCHEMA_V5["agent_turns"]
+    assert describe_columns(conn, "agent_turns") == SCHEMA_V11["agent_turns"]
     assert conn.execute("SELECT count(*) FROM agent_turns").fetchone()[0] == 0
     assert HistoryStore(conn).latest().text == "A"
     assert [e.word for e in DictionaryStore(conn).list()] == ["拉斐爾"]
@@ -392,7 +416,7 @@ def assert_has_the_latest_schema(migrated, fresh):
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert schema_names(migrated, "table") == schema_names(fresh, "table")
     assert schema_names(migrated, "index") == schema_names(fresh, "index")
-    for table in SCHEMA_V10:
+    for table in SCHEMA_V11:
         assert describe_columns(migrated, table) == describe_columns(fresh, table)
     assert migrated.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
     assert HistoryStore(migrated).latest().text == "A"
@@ -521,6 +545,46 @@ def test_a_failed_v10_migration_leaves_the_database_at_v9(tmp_path):
         db.migrate(raw)
     assert not raw.in_transaction
     assert raw.execute("PRAGMA user_version").fetchone()[0] == 9
+    raw.close()
+
+
+def v10_database(path):
+    """A database as the version before the conversation view left it: at v10, with a step of the
+    worker in it."""
+    v9_database(path)
+    raw = sqlite3.connect(path)
+    raw.executescript(db._MIGRATION_V10)
+    raw.execute(
+        "INSERT INTO worker_steps (task_id, n, at_ms, kind, outcome) VALUES (1, 1, 8, 'tool', 'ok')"
+    )
+    raw.commit()
+    raw.close()
+
+
+def test_a_v10_database_gets_the_steps_at_v11_and_its_turns_are_voice(tmp_path, conn):
+    path = tmp_path / "v10.db"
+    v10_database(path)
+
+    migrated = db.connect(path)
+    assert_has_the_latest_schema(migrated, conn)
+    turn = migrated.execute("SELECT source, model FROM agent_turns").fetchone()
+    assert (turn["source"], turn["model"]) == ("voice", None)  # every turn so far was spoken
+    assert migrated.execute("SELECT reason FROM worker_steps").fetchone()[0] is None
+    assert migrated.execute("SELECT count(*) FROM agent_steps").fetchone()[0] == 0
+    migrated.close()
+
+
+def test_a_failed_v11_migration_leaves_the_database_at_v10(tmp_path):
+    path = tmp_path / "v10.db"
+    v10_database(path)
+    raw = sqlite3.connect(path)
+    raw.execute("CREATE TABLE agent_steps (x)")  # in the way of the v11 migration
+    raw.commit()
+    with pytest.raises(sqlite3.OperationalError):
+        db.migrate(raw)
+    assert not raw.in_transaction
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert "source" not in [c[1] for c in raw.execute("PRAGMA table_info(agent_turns)")]
     raw.close()
 
 
