@@ -74,16 +74,6 @@ def pytest_configure(config):
     keyring.set_keyring(keyring.backends.fail.Keyring())
 
 
-def pytest_collection_modifyitems(config, items):
-    """Skip the tests marked `models` unless RAPHAEL_TEST_MODELS=1."""
-    if os.environ.get("RAPHAEL_TEST_MODELS") == "1":
-        return
-    skip = pytest.mark.skip(reason="needs the speech models: set RAPHAEL_TEST_MODELS=1")
-    for item in items:
-        if item.get_closest_marker("models"):
-            item.add_marker(skip)
-
-
 @pytest.fixture(autouse=True)
 def memory_keyring():
     """A new, empty in-memory keyring for each test; the previous backend comes back afterwards."""
@@ -105,7 +95,23 @@ _EVAL_FILE_MARKERS = ("case_named(", "all_cases(", "HELD_OUT", "REGRESSION", 'RE
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip the tests that read the evaluation sets when the ../eval folder is not checked out."""
+    """Skip what cannot run here: the tests marked `models` unless RAPHAEL_TEST_MODELS=1, and the
+    tests that read the evaluation sets when the ../eval folder is not checked out. A module keeps
+    only the last function of a name, so both skips must go through this one hook."""
+    skip_model_tests(items)
+    skip_eval_file_tests(items)
+
+
+def skip_model_tests(items) -> None:
+    if os.environ.get("RAPHAEL_TEST_MODELS") == "1":
+        return
+    skip = pytest.mark.skip(reason="needs the speech models: set RAPHAEL_TEST_MODELS=1")
+    for item in items:
+        if item.get_closest_marker("models"):
+            item.add_marker(skip)
+
+
+def skip_eval_file_tests(items) -> None:
     if (Path(__file__).resolve().parents[2] / "eval").is_dir():
         return
     skip = pytest.mark.skip(reason="the eval/ folder is not part of this checkout")
