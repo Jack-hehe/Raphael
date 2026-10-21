@@ -21,6 +21,8 @@ class Ledger:
     def __init__(self, spend: SpendTracker) -> None:
         self._spend = spend
         self.total = 0.0
+        # The model of the latest paid call: the one that worded the answer, for the history.
+        self.model: str | None = None
 
     def add(
         self,
@@ -38,6 +40,8 @@ class Ledger:
             logger.warning("A cost the spend cannot take was counted as nothing: ValueError")
             return
         self.total += cost_usd
+        if model:
+            self.model = model
         try:
             self._spend.record(
                 purpose=PURPOSE,

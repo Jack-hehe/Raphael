@@ -68,6 +68,7 @@ def test_a_step_has_no_column_for_an_argument_or_a_result(conn):
     columns = [row["name"] for row in conn.execute("PRAGMA table_info(worker_steps)")]
     assert columns == [
         "id", "task_id", "n", "at_ms", "kind", "tool", "server", "tier", "outcome", "cost_usd", "ms",
+        "reason",
     ]  # fmt: skip
 
 
@@ -113,3 +114,20 @@ def test_clearing_deletes_what_is_finished_and_leaves_what_runs(store):
     assert store.clear() == 1
     assert store.get(done) is None and store.steps(done) == []
     assert store.get(running) is not None
+
+
+def test_a_step_that_failed_keeps_its_reason(store):
+    task_id = make(store)
+    store.add_step(task_id, kind="tool", outcome="error", tool="look", reason="auth")
+    store.add_step(task_id, kind="tool", outcome="ok", tool="look")
+    assert [s.reason for s in store.steps(task_id)] == ["auth", None]
+
+
+def test_the_task_of_each_turn_is_found_by_the_turn(store):
+    first, second, alone = make(store), make(store), make(store)
+    store.attach_turn(first, 11)
+    store.attach_turn(second, 12)
+    found = store.for_turns([11, 12, 13])
+    assert {turn: task.id for turn, task in found.items()} == {11: first, 12: second}
+    assert store.for_turns([]) == {}
+    assert alone not in {task.id for task in found.values()}
