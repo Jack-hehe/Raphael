@@ -132,8 +132,11 @@ async fn drain<S: ReportStage>(
     draining: Arc<AtomicBool>,
     stage: Arc<S>,
 ) {
+    // The report that is next, taken out of the queue: reports that come while it waits can push
+    // the oldest of the queue out, and never this one.
+    let mut held: Option<Report> = None;
     loop {
-        let next = lock(&queue).front().cloned();
+        let next = held.take().or_else(|| lock(&queue).pop_front());
         let Some(report) = next else {
             // Nothing waits. A report may have been queued since: it saw `draining` still set and
             // started no task, so look again after letting go.
@@ -144,11 +147,11 @@ async fn drain<S: ReportStage>(
             continue;
         };
         match stage.try_say(&report.prefix, &report.text) {
-            Some(stays) => {
-                lock(&queue).pop_front();
-                tokio::time::sleep(stays + GAP).await;
+            Some(stays) => tokio::time::sleep(stays + GAP).await,
+            None => {
+                held = Some(report);
+                tokio::time::sleep(RETRY).await;
             }
-            None => tokio::time::sleep(RETRY).await,
         }
     }
 }
@@ -323,7 +326,8 @@ mod tests {
         reports.push(report("告", "完成。"), &stage);
         let_time_pass(20).await;
         assert!(stage.said().is_empty(), "said over a recording");
-        assert_eq!(reports.waiting(), 1);
+        // (the report that waits is held by the task that says them, no longer in the queue)
+        assert_eq!(reports.waiting(), 0);
         assert!(stage.asked.load(Ordering::SeqCst) > 1, "it keeps looking");
         stage.busy.store(false, Ordering::SeqCst);
         let_time_pass(1).await;
@@ -363,6 +367,23 @@ mod tests {
         assert_eq!(said.len(), MAX_WAITING);
         assert_eq!(said[0], "報告3");
         assert_eq!(said.last().unwrap(), &format!("報告{}", MAX_WAITING + 2));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_report_that_is_waiting_to_be_said_is_not_pushed_out_by_the_ones_that_follow() {
+        let stage = Arc::new(FakeStage::default());
+        stage.busy.store(true, Ordering::SeqCst);
+        let reports = Reports::default();
+        reports.push(report("告", "最早"), &stage);
+        let_time_pass(2).await; // the first is now the one that waits to be said
+        for n in 0..MAX_WAITING + 2 {
+            reports.push(report("告", &format!("後來{n}")), &stage);
+        }
+        stage.busy.store(false, Ordering::SeqCst);
+        let_time_pass(120).await;
+        let said: Vec<_> = stage.said().into_iter().map(|(_, text)| text).collect();
+        assert_eq!(said[0], "最早", "{said:?}");
+        assert_eq!(said.len(), 1 + MAX_WAITING);
     }
 
     #[tokio::test(start_paused = true)]
