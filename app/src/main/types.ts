@@ -301,6 +301,8 @@ export interface ConnectionTool {
   enabled: boolean;
   /** `write` changes something, `read` only looks; from the server's own word about it, else from its name. */
   kind: "write" | "read";
+  /** The human name the server gives the tool, if it does. */
+  title?: string | null;
 }
 
 /** One connected service, as `toolsets.list` has it. Never a secret, only the names of them. */

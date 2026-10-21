@@ -17,7 +17,7 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => api);
 vi.mock("./ui", async (original) => ({ ...(await original<typeof import("./ui")>()), toaster: { info: vi.fn() } }));
 
-import { type ConnectionForm, type ConnectionsView, bodyHTML, connectionsHTML, createConnections, emptyConnectionsView, needsLogin } from "./connections";
+import { type ConnectionForm, type ConnectionsView, bodyHTML, connectionsHTML, createConnections, emptyConnectionsView, needsLogin, toolLabel } from "./connections";
 import { toaster } from "./ui";
 
 afterEach(() => setLocale("zh-TW"));
@@ -140,12 +140,9 @@ describe("已安裝", () => {
     expect(found).not.toContain("Notion");
   });
 
-  test("lists the latest actions below, by server and tool, never what was in them", () => {
-    expect(html).toContain("最近的動作");
-    expect(html).toContain("Notion / create_page");
-    expect(html).toContain("自動執行");
-    expect(connectionsHTML(view({ audit: [] }))).not.toContain("最近的動作");
-    expect(html).not.toMatch(/T[0-3]\b/);
+  test("keeps the list clean: the latest actions are on the page of each service, not here", () => {
+    expect(html).not.toContain("最近的動作");
+    expect(html).not.toContain("create_page");
   });
 });
 
@@ -167,17 +164,30 @@ describe("the page of a connected service", () => {
     const folded = installedPage("ab12");
     expect(folded).toMatch(/aria-expanded="false" data-conn="fold" data-kind="write"><span class="gt">會改動<small>2 個<\/small>/);
     expect(folded).toMatch(/aria-expanded="false" data-conn="fold" data-kind="read"><span class="gt">只讀取<small>1 個<\/small>/);
-    expect(folded).not.toContain("create_page");
+    expect(folded).not.toContain(">Create page<");
     const both = installedPage("ab12", { unfolded: { write: true, read: true } });
     const write = both.slice(both.indexOf('data-kind="write"'), both.indexOf('data-kind="read"'));
     const read = both.slice(both.indexOf('data-kind="read"'));
-    expect(write).toContain(">create_page<");
-    expect(write).toContain(">delete_page<");
-    expect(write).not.toContain(">search<");
-    expect(read).toContain(">search<");
+    expect(write).toContain(">Create page<");
+    expect(write).toContain(">Delete page<");
+    expect(write).not.toContain(">Search<");
+    expect(read).toContain(">Search<");
+    expect(read).toContain('title="search"'); // the raw name stays in the tooltip
     expect(both.match(/data-conn="tool"/g)).toHaveLength(3);
-    expect(both).toMatch(/aria-checked="false" aria-label="開啟工具 delete_page" data-conn="tool" data-id="ab12" data-tool="delete_page"/);
-    expect(both).toMatch(/aria-checked="true" aria-label="開啟工具 search" data-conn="tool" data-id="ab12" data-tool="search"/);
+    expect(both).toMatch(/aria-checked="false" aria-label="開啟工具 Delete page" data-conn="tool" data-id="ab12" data-tool="delete_page"/);
+    expect(both).toMatch(/aria-checked="true" aria-label="開啟工具 Search" data-conn="tool" data-id="ab12" data-tool="search"/);
+  });
+
+  test("ends with that service's own latest actions, by tool, and the note that no content is kept", () => {
+    const html = installedPage("ab12", { audit: [...AUDIT, { ...AUDIT[0], id: 2, server: "Files", tool: "list" }] });
+    const audit = html.slice(html.indexOf("最近的動作"));
+    expect(audit).toContain("Notion / create_page");
+    expect(audit).not.toContain("Files / list");
+    expect(audit).toContain("自動執行");
+    expect(audit).toContain("只記錄時間、工具和結果，不記錄內容。");
+    expect(installedPage("cu1")).not.toContain("最近的動作"); // none of its own
+    expect(installedPage("ab12", { audit: [] })).not.toContain("最近的動作");
+    expect(audit).not.toMatch(/T[0-3]\b/);
   });
 
   test("has no levels, no review step and no word about pending tools", () => {
@@ -190,7 +200,7 @@ describe("the page of a connected service", () => {
     const grown: ConnectionGroup = { ...notes, tools: [...notes.tools, { name: "fresh", description: "New.", enabled: true, kind: "read" }], tool_count: 4, read_count: 2, enabled_count: 3 };
     const html = installedPage("ab12", { groups: [grown], unfolded: { write: false, read: true } });
     expect(html).toContain("共 4 個工具（2 個會改動、2 個只讀取）");
-    expect(html).toMatch(/aria-checked="true" aria-label="開啟工具 fresh"/);
+    expect(html).toMatch(/aria-checked="true" aria-label="開啟工具 Fresh"/);
     expect(html).not.toMatch(/>新<|待決定/);
   });
 
@@ -234,11 +244,15 @@ describe("商店", () => {
     expect(html.match(/class="cs-grid"/g)).toHaveLength(2);
   });
 
-  test("a card is a bordered button that opens the page and, beside it, a button that adds, or 已安裝", () => {
+  test("a card is a container with the button that opens the page and, inside it, the button that adds, or 已安裝; no button is in a button", () => {
     const cards = html.split('<div class="cs-card">').slice(1);
     const card = cards.find((c) => c.includes('data-id="linear"'))!;
     expect(card).toMatch(/class="btn cs-main" data-conn="open-store" data-id="linear"/);
     expect(card).toContain("Linear的一句話");
+    // the container holds both, and nothing is nested
+    expect(html).toMatch(/<div class="cs-card"><button[^>]*cs-main[^>]*>(?:(?!<\/button>).)*<\/button><button[^>]*data-conn="join"/);
+    for (const c of cards) expect(c.match(/<button/g)!.length).toBeLessThanOrEqual(2);
+    expect(html).not.toMatch(/<button(?:(?!<\/button>).)*<button/);
     expect(card).toMatch(/<button[^>]*class="btn sm" data-conn="join" data-id="linear"[^>]*>.*加入<\/button>/);
     const notion = cards.find((c) => c.includes('data-id="notion"'))!;
     expect(notion).toContain("已安裝");
@@ -266,6 +280,23 @@ describe("商店", () => {
     expect(found).toContain("<h2>全部</h2>");
     expect([...found.matchAll(/class="nm">([^<]+)</g)].map((m) => m[1])).toEqual(["Linear"]);
     expect(bodyHTML(view({ tab: "store", search: "zzz" }))).toContain("沒有符合的項目");
+  });
+});
+
+describe("the names of tools", () => {
+  const tool = (name: string, title?: string | null) => ({ name, description: "", enabled: true, kind: "read" as const, title });
+  test("the title a server gives is used", () => {
+    expect(toolLabel(tool("notion-search", "Search Notion"), "Notion")).toBe("Search Notion");
+    expect(toolLabel(tool("x", "  "), "")).toBe("X");
+  });
+  test("otherwise the name is made readable: the service's prefix off, dashes and underscores as spaces, a capital", () => {
+    expect(toolLabel(tool("notion-create-pages"), "Notion")).toBe("Create pages");
+    expect(toolLabel(tool("notion_get_users"), "Notion")).toBe("Get users");
+    expect(toolLabel(tool("create_page"), "Notion")).toBe("Create page");
+    expect(toolLabel(tool("list-issues"), "Linear")).toBe("List issues");
+    expect(toolLabel(tool("linear"), "Linear")).toBe("Linear"); // a name that is only the prefix stays
+    expect(toolLabel(tool("-_"), "")).toBe("-_");
+    expect(toolLabel(tool("getUser"), "")).toBe("GetUser");
   });
 });
 

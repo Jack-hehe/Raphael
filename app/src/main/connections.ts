@@ -26,6 +26,8 @@ const tr = t as unknown as (key: MessageKey) => string;
 const DISCONNECT_CONFIRM_MS = 5000;
 /** How many of the latest actions are shown under the list. */
 const AUDIT_SHOWN = 5;
+/** How many of the latest actions are read, to find each service's own among them. */
+const AUDIT_READ = 50;
 
 // ---------- what the tab is drawn from ----------
 
@@ -231,8 +233,9 @@ function installedRow(g: ConnectionGroup, v: ConnectionsView): string {
   );
 }
 
-function auditHTML(v: ConnectionsView): string {
-  if (!v.audit.length) return "";
+function auditHTML(v: ConnectionsView, server: string): string {
+  const entries = v.audit.filter((e) => e.server === server).slice(0, AUDIT_SHOWN);
+  if (!entries.length) return "";
   const outcomes: Record<AuditEntry["outcome"], { kind: "ok" | "warn" | "err" | "idle"; key: MessageKey }> = {
     ok: { kind: "ok", key: "conn.audit.ok" },
     error: { kind: "err", key: "conn.audit.error" },
@@ -242,7 +245,7 @@ function auditHTML(v: ConnectionsView): string {
     blocked: { kind: "warn", key: "conn.audit.blocked" },
   };
   const approvers: Record<AuditEntry["approver"], MessageKey> = { auto: "conn.audit.auto", user: "conn.audit.user", none: "conn.audit.none" };
-  const rows = v.audit.slice(0, AUDIT_SHOWN).map((e) => {
+  const rows = entries.map((e) => {
     const when = `${dayLabel(e.at_ms, v.now)} ${formatClock(e.at_ms)}`;
     const outcome = outcomes[e.outcome] ?? outcomes.error;
     return row(`${esc(e.server)} / ${esc(e.tool)}`, esc(`${when} · ${tr(approvers[e.approver] ?? approvers.none)}`), st(outcome.kind, tr(outcome.key)), {
@@ -258,18 +261,34 @@ function installedHTML(v: ConnectionsView): string {
   const shown = v.groups.filter((g) => matches(v.search, g.name, entryOf(g, v) ? words(entryOf(g, v)!.summary) : where(g)));
   if (!v.groups.length) return `<p class="cs-none">${esc(t("conn.emptyInstalled"))}</p>`;
   if (!shown.length) return `<p class="cs-none">${esc(t("conn.noMatch"))}</p>`;
-  return `<div class="slist cs-list">${shown.map((g) => installedRow(g, v)).join("")}</div>` + (v.search.trim() ? "" : auditHTML(v));
+  return `<div class="slist cs-list">${shown.map((g) => installedRow(g, v)).join("")}</div>`;
 }
 
 // ---------- the page of a connected service ----------
 
 const backHTML = (): string => `<div class="cs-back">${btn(`${ico("left")}${esc(t("conn.back"))}`, "", ' data-conn="back"')}</div>`;
 
+/**
+ * The name of a tool for the screen: the title its server gives it, else its name made readable (the
+ * service's own name at the start taken off, the dashes and underscores as spaces, a capital first).
+ */
+export function toolLabel(tool: ConnectionTool, service = ""): string {
+  const title = tool.title?.trim();
+  if (title) return title;
+  let name = tool.name;
+  const prefix = service.trim().toLowerCase();
+  if (prefix) {
+    for (const sep of ["-", "_"]) if (name.toLowerCase().startsWith(prefix + sep) && name.length > prefix.length + 1) name = name.slice(prefix.length + 1);
+  }
+  const spaced = name.replace(/[-_]+/g, " ").trim();
+  return spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : tool.name;
+}
+
 function toolRow(g: ConnectionGroup, tool: ConnectionTool, busy: boolean): string {
   return row(
-    `<span class="code">${esc(tool.name)}</span>`,
+    `<span class="tn" title="${esc(tool.name)}">${esc(toolLabel(tool, g.name))}</span>`,
     esc(tool.description),
-    tg(tool.enabled, t("conn.toolSwitch", { p0: tool.name }), ` data-conn="tool" data-id="${esc(g.id)}" data-tool="${esc(tool.name)}"${busy ? " disabled" : ""}`),
+    tg(tool.enabled, t("conn.toolSwitch", { p0: toolLabel(tool, g.name) }), ` data-conn="tool" data-id="${esc(g.id)}" data-tool="${esc(tool.name)}"${busy ? " disabled" : ""}`),
     { cls: "conn-tool" },
   );
 }
@@ -317,7 +336,7 @@ function serviceHTML(g: ConnectionGroup, v: ConnectionsView): string {
     btn(`${ico("refresh")}${esc(busy ? t("conn.refreshing") : t("conn.refresh"))}`, "", ` data-conn="refresh"${id}${busy ? " disabled" : ""}`) +
     btn(esc(v.confirmingDisconnect === g.id ? t("conn.disconnectConfirm") : t("conn.disconnect")), "", ` data-conn="disconnect"${id}${busy ? " disabled" : ""}`) +
     `</div>`;
-  return backHTML() + head + (about ? `<p class="cs-desc">${esc(about)}</p>` : "") + meta + relogin + tools + acts;
+  return backHTML() + head + (about ? `<p class="cs-desc">${esc(about)}</p>` : "") + meta + relogin + tools + acts + auditHTML(v, g.name);
 }
 
 // ---------- 商店: the services that can be added ----------
@@ -524,7 +543,7 @@ export function createConnections(host: ConnectionsHost): Connections {
 
   async function load(): Promise<void> {
     const mine = ++loads;
-    const [list, store, recent] = await Promise.allSettled([api.toolsetsList(), api.integrationsCatalog(), api.integrationsAudit(AUDIT_SHOWN)]);
+    const [list, store, recent] = await Promise.allSettled([api.toolsetsList(), api.integrationsCatalog(), api.integrationsAudit(AUDIT_READ)]);
     if (mine !== loads) return;
     if (list.status === "fulfilled") groups = list.value.groups;
     else if (!Array.isArray(groups)) groups = "failed";
