@@ -22,22 +22,32 @@ def test_the_commands_for_this_computer_are_not_in_it():
     )
 
 
-async def test_the_tools_of_the_plugins_that_read_or_are_easy_to_undo_are_in_it(plugins):
-    server = await plugins.connect(look="T0", lies="T1", note="T2", wipe="T3")
+async def test_every_tool_of_the_plugins_that_is_on_is_in_it_whether_it_reads_or_writes(plugins):
+    server = await plugins.connect(look="T0", lies="T0", note="T0", wipe="T0")
     snapshot = take_snapshot(plugins.hub)
     mcp = {alias: ref for alias, ref in snapshot.refs.items() if ref.kind == MCP}
-    assert sorted(ref.name for ref in mcp.values()) == ["lies", "look"]
+    assert sorted(ref.name for ref in mcp.values()) == ["lies", "look", "note", "wipe"]
     assert all(ref.tier <= SNAPSHOT_MAX_TIER for ref in mcp.values())
-    assert {ref.key for ref in mcp.values()} == {f"mcp:{server}/look", f"mcp:{server}/lies"}
+    assert {ref.key for ref in mcp.values()} == {
+        f"mcp:{server}/{name}" for name in ("look", "lies", "note", "wipe")
+    }
     assert {ref.server for ref in mcp.values()} == {"Notes"}
 
 
-async def test_a_tool_that_has_no_tier_or_was_blocked_on_purpose_is_not_in_it(plugins):
-    server = await plugins.connect(look="T0", broken=None)
+async def test_a_tool_the_user_turned_off_is_not_in_it(plugins):
+    server = await plugins.connect(look="T0", note="T0", wipe="T0")
+    await plugins.set_on(server, "wipe", False)
     snapshot = take_snapshot(plugins.hub)
-    assert [ref.name for ref in snapshot.refs.values() if ref.kind == MCP] == ["look"]
-    await plugins.set_tier(server, "look", None)
+    assert sorted(ref.name for ref in snapshot.refs.values() if ref.kind == MCP) == ["look", "note"]
+    await plugins.set_on(server, "look", False)
+    await plugins.set_on(server, "note", False)
     assert [ref.name for ref in take_snapshot(plugins.hub).refs.values() if ref.kind == MCP] == []
+
+
+async def test_a_tool_that_would_have_to_ask_is_not_in_it(plugins):
+    # None does today (a tool is on or off), but the worker cannot ask at the overlay if one did.
+    await plugins.connect(look="T0", note="T2", wipe="T3")
+    assert [ref.name for ref in take_snapshot(plugins.hub).refs.values() if ref.kind == MCP] == ["look"]
 
 
 async def test_a_plugin_that_is_off_has_no_tool_in_it(plugins):

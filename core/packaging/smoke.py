@@ -231,7 +231,7 @@ def smoke_without_a_key(executable: Path) -> dict:
             require(refreshed["status"] == "error" and refreshed["error"] == "not_found",
                     f"The MCP SDK did not load in the bundle (a missing program should be not_found, "
                     f"was {refreshed['error']})")
-            require(rpc.call("integrations.remove", {"id": added["id"]}) == {"removed": True},
+            require(rpc.call("integrations.disconnect", {"id": added["id"]}).get("removed") is True,
                     "A plugin was not removed")
             returncode = shut_down(rpc, root)
             return {"passed": True, "core": str(executable), "version": hello["version"],

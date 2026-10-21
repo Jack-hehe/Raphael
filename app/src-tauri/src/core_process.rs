@@ -57,6 +57,9 @@ pub fn timeout_for(method: &str) -> Duration {
         "agent.confirm" => 30,
         // Starts the plugin (a program that may first have to be fetched), reads its tools.
         "integrations.refresh" => 40,
+        // Waits for the user to log in in the browser: up to five minutes (the core ends it at
+        // 330 s with a kind of failure), and then reads the tools.
+        "integrations.connect" => 360,
         // Downloads speech models.
         "models.ensure" | "models.local_use" => 3600,
         "secrets.set_openrouter_key" | "status.check_openrouter" => 15,
@@ -805,6 +808,10 @@ mod tests {
         assert_eq!(timeout_for("agent.ask"), Duration::from_secs(60));
         assert_eq!(timeout_for("agent.confirm"), Duration::from_secs(30));
         assert_eq!(timeout_for("integrations.refresh"), Duration::from_secs(40));
+        assert_eq!(
+            timeout_for("integrations.connect"),
+            Duration::from_secs(360)
+        );
         for method in [
             "secrets.set_openrouter_key",
             "status.check_openrouter",
@@ -814,6 +821,8 @@ mod tests {
             "agent.history.list",
             "integrations.list",
             "integrations.add",
+            "integrations.connect_cancel",
+            "integrations.catalog",
             "anything.else",
         ] {
             assert_eq!(timeout_for(method), Duration::from_secs(15), "{method}");

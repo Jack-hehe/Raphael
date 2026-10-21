@@ -318,48 +318,67 @@ export interface AppContext {
   closeSettings(): void;
 }
 
-// ---------- connections (the toolsets of the core) ----------
+// ---------- connections (the plugins of the core and the store) ----------
 
-/** What a tool may do, by the tier the owner gave it: T0 reads, T1 small, T2 asks, T3 asks and holds. */
-export type ToolTier = "T0" | "T1" | "T2" | "T3";
-
-/** A tool of a group, as `toolsets.list` has it. Its `tier` is null while it is blocked. */
+/** A tool of a connected service. Every tool is on until the owner turns it off; `kind` only groups it. */
 export interface ConnectionTool {
   name: string;
   description: string;
-  tier: ToolTier | null;
-  /** The owner has looked at the tool and chose a tier or chose to block it; false is a new tool, still to decide. */
-  decided: boolean;
-  /** The server describes the tool differently since it was given a tier: the owner looks again. */
-  changed: boolean;
-  /** What the server's read-only claim suggests; only ever a hint. */
-  suggested: ToolTier | null;
+  enabled: boolean;
+  /** `write` changes something, `read` only looks; from the server's own word about it, else from its name. */
+  kind: "write" | "read";
+  /** The human name the server gives the tool, if it does. */
+  title?: string | null;
 }
 
-/** A group of tools: Raphael's own (`builtin`, fixed) or one connected server (`mcp`). Never a secret, only the names of them. */
+/** One connected service, as `toolsets.list` has it. Never a secret, only the names of them. */
 export interface ConnectionGroup {
   id: string;
-  kind: "builtin" | "mcp";
   name: string;
   enabled: boolean;
-  switchable: boolean;
-  tier_fixed: boolean;
-  status: "builtin" | "disabled" | "error" | "unchecked" | "ready";
-  /** The kind of the latest failure, one word. */
+  status: "disabled" | "error" | "unchecked" | "ready";
+  /** The kind of the latest failure, one word; `auth` is a login that ran out. */
   error: string | null;
+  /** `oauth` is signed in to with a login in the browser. */
+  auth: "none" | "oauth";
+  /** The entry of the store it was added from. */
+  catalog_id: string | null;
   tools: ConnectionTool[];
-  transport?: "stdio" | "http";
-  command?: string;
-  url?: string;
-  env?: string[];
-  headers?: string[];
-  args?: string[];
-  tool_count?: number;
-  allowed_count?: number;
-  /** How many of its tools are still to decide. */
-  pending_count?: number;
-  checked_at_ms?: number | null;
+  transport: "stdio" | "http";
+  command: string;
+  url: string;
+  env: string[];
+  headers: string[];
+  args: string[];
+  tool_count: number;
+  enabled_count: number;
+  write_count: number;
+  read_count: number;
+  checked_at_ms: number | null;
 }
+
+/** The words of the window, in each language the owner can choose. */
+export type Words = Record<"zh-TW" | "en" | "ja", string>;
+
+/** A service of the store (`integrations.catalog`). */
+export interface StoreService {
+  id: string;
+  name: string;
+  publisher: string;
+  url: string;
+  category: string;
+  /** The mark in `service-icons.ts`, or null for a letter. */
+  icon: string | null;
+  popular: boolean;
+  summary: Words;
+  about: Words;
+  examples: Record<"zh-TW" | "en" | "ja", string[]>;
+  /** The id of the connected service it was added as; null when it is not added. */
+  server_id: string | null;
+}
+
+/** What a login came to: the service, or the kind of what went wrong (`denied`, `cancelled`, `timeout`, ...). */
+export type ConnectResult = { connected: true; server: { id: string } } | { connected: false; error: string };
 
 /** One line of the record of calls: metadata only, never an argument or a result. */
 export interface AuditEntry {
@@ -367,7 +386,6 @@ export interface AuditEntry {
   at_ms: number;
   server: string;
   tool: string;
-  tier: ToolTier | null;
   approver: "auto" | "user" | "none";
   outcome: "ok" | "error" | "timeout" | "denied" | "expired" | "blocked";
 }

@@ -16,7 +16,7 @@ CALLS: list[str] = []
 def build(*, describe: str = "Look something up.") -> MCPServer:
     server = MCPServer("fake")
 
-    @server.tool(annotations=ToolAnnotations(read_only_hint=True), description=describe)
+    @server.tool(annotations=ToolAnnotations(read_only_hint=True), description=describe, title="Look it up")
     def look(topic: str) -> str:
         CALLS.append("look")
         return f"found {topic}"

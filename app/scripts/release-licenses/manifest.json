@@ -116,7 +116,7 @@
       "license": "CC0-1.0",
       "repository": "https://github.com/simple-icons/simple-icons",
       "source": "https://github.com/simple-icons/simple-icons/tree/955f17f35634cd58de1748204059bce380d379af",
-      "usage": "The SVG paths of the marks of Notion, GitHub, Google Drive, Gmail, Google Calendar, Linear, Figma, Spotify, Discord, Todoist and Obsidian in app/src/main/service-icons.ts, taken from https://simpleicons.org (CC0-1.0, a public domain dedication). The marks are trademarks of their owners, who do not sponsor or endorse Raphael; they are shown only to tell a connected program apart.",
+      "usage": "The SVG paths (and, where they read on both themes, the brand colours) of the marks of Notion, GitHub, Google Drive, Gmail, Google Calendar, Linear, Figma, Spotify, Discord, Todoist, Obsidian, Atlassian, Cloudflare, Sentry, Stripe, Zapier and PayPal in app/src/main/service-icons.ts, taken from https://simpleicons.org (CC0-1.0, a public domain dedication). The marks are trademarks of their owners, who do not sponsor or endorse Raphael; they are shown only to tell a connected program apart.",
       "files": [
         {
           "file": "simple-icons-16.35.0-LICENSE.txt",

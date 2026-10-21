@@ -47,10 +47,49 @@ def secret_name(server_id: str, kind: str, key: str) -> str:
     return f"{server_id}:{kind}:{key}"
 
 
+# A value longer than one credential (an OAuth token can be) is cut into pieces of this many
+# characters, each its own credential: the count is kept under the name itself, the pieces under
+# "<name>#1", "<name>#2" and so on.
+CHUNK_CHARS = 800
+
+
 def _checked(value: str) -> str:
     if len(value) > MAX_SECRET_CHARS:
         raise SecretTooLong(f"A secret holds at most {MAX_SECRET_CHARS} characters")
     return value
+
+
+def store_long(vault: SecretVault, name: str, value: str) -> None:
+    """Keep `value`, of any length, under `name`, in as many credentials as it takes. What an earlier
+    value left over (more pieces than this one has) is removed."""
+    before = _piece_count(vault, name)
+    pieces = [value[i : i + CHUNK_CHARS] for i in range(0, len(value), CHUNK_CHARS)] or [""]
+    for number, piece in enumerate(pieces, start=1):
+        vault.set(f"{name}#{number}", piece)
+    vault.set(name, str(len(pieces)))
+    for number in range(len(pieces) + 1, before + 1):
+        vault.delete(f"{name}#{number}")
+
+
+def load_long(vault: SecretVault, name: str) -> str | None:
+    """The value kept under `name`, or None when there is none or a piece of it is missing."""
+    count = _piece_count(vault, name)
+    if count == 0:
+        return None
+    pieces = [vault.get(f"{name}#{number}") for number in range(1, count + 1)]
+    return None if any(piece is None for piece in pieces) else "".join(p for p in pieces if p is not None)
+
+
+def delete_long(vault: SecretVault, name: str) -> None:
+    """Remove a value kept with `store_long`, every piece of it."""
+    for number in range(1, _piece_count(vault, name) + 1):
+        vault.delete(f"{name}#{number}")
+    vault.delete(name)
+
+
+def _piece_count(vault: SecretVault, name: str) -> int:
+    count = vault.get(name)
+    return int(count) if count is not None and count.isdigit() and int(count) <= 1000 else 0
 
 
 class CredentialVault:

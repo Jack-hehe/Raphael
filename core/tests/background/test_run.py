@@ -10,6 +10,7 @@ import pytest
 
 from raphael_core.agent.gate import ToolGate
 from raphael_core.agent.ledger import Ledger
+from raphael_core.agent.policy import Tier
 from raphael_core.agent.tools import Tools
 from raphael_core.background.run import RunLimits, TaskRun
 from raphael_core.background.snapshot import take_snapshot
@@ -227,9 +228,9 @@ async def test_a_tool_of_a_plugin_is_called_through_the_gate_and_audited_with_th
     reply = await rig.tool("Notes__look", {"topic": ARGUMENT})
     assert reply == {"ok": True, "kind": None, "content": RESULT, "truncated": False}
     assert calls == ["look"]
-    assert rig.audit() == [("Notes", "look", "T0", "auto", "ok", rig.task_id)]
+    assert rig.audit() == [("Notes", "look", None, "auto", "ok", rig.task_id)]
     [step] = rig.steps()
-    assert (step.kind, step.tool, step.server, step.tier, step.outcome) == ("tool", "look", "Notes", "T0", "ok")
+    assert (step.kind, step.tool, step.server, step.tier, step.outcome) == ("tool", "look", "Notes", "T1", "ok")
     assert rig.run.tool_calls == 1
 
 
@@ -250,21 +251,21 @@ async def test_neither_the_steps_nor_the_audit_nor_the_database_hold_an_argument
         assert private not in everything
 
 
-async def test_a_tool_whose_tier_was_raised_after_the_snapshot_is_refused_and_audited(rig, calls):
+async def test_a_tool_that_would_have_to_ask_after_the_snapshot_is_refused_and_audited(rig, calls):
     server = await rig.plugins.connect(look="T0")
     rig.resnap()  # the task started with `look` at T0
-    await rig.plugins.set_tier(server, "look", "T2")  # ... and the user raised it meanwhile
+    rig.plugins.hub.strict["look"] = Tier.T2  # ... and it needs a yes now
     reply = await rig.tool("Notes__look", {"topic": "x"})
     assert (reply["ok"], reply["kind"]) == (False, "blocked")
     assert calls == []
-    assert rig.audit() == [("Notes", "look", "T2", "none", "blocked", rig.task_id)]
+    assert rig.audit() == [("Notes", "look", None, "none", "blocked", rig.task_id)]
     assert rig.steps()[0].outcome == "blocked" and rig.steps()[0].tier == "T2"
 
 
 async def test_a_tool_the_user_blocked_after_the_snapshot_is_refused(rig, calls):
     server = await rig.plugins.connect(look="T0")
     rig.resnap()
-    await rig.plugins.set_tier(server, "look", None)
+    await rig.plugins.set_on(server, "look", False)
     reply = await rig.tool("Notes__look", {"topic": "x"})
     assert (reply["ok"], reply["kind"]) == (False, "blocked") and calls == []
     assert rig.audit() == [("Notes", "look", None, "none", "blocked", rig.task_id)]
@@ -279,15 +280,15 @@ async def test_a_plugin_turned_off_after_the_snapshot_is_refused(rig, calls):
     assert rig.audit()[0][4:] == ("blocked", rig.task_id)
 
 
-async def test_a_tool_the_server_describes_differently_after_the_snapshot_is_refused(rig, calls):
+async def test_a_tool_the_server_describes_differently_after_the_snapshot_is_still_on(rig, calls):
     server = await rig.plugins.connect(look="T0")
     rig.resnap()
-    rig.plugins.servers.by_name["Notes"] = __import__("integrations.fake_server", fromlist=["x"]).build(
-        describe="Now it does something else entirely."
-    )
+    from integrations import fake_server
+
+    rig.plugins.servers.by_name["Notes"] = fake_server.build(describe="Now it does something else entirely.")
     await rig.plugins.rpc.call("integrations.refresh", {"id": server})  # the user reads the tools again
     reply = await rig.tool("Notes__look", {"topic": "x"})
-    assert reply["kind"] == "blocked" and calls == []
+    assert reply["ok"] is True and calls == ["look"]  # a tool is on until the user turns it off
 
 
 async def test_a_tool_that_needs_a_yes_is_not_called_even_when_it_is_in_the_snapshot(rig, calls):
@@ -304,7 +305,7 @@ async def test_a_tool_that_needs_a_yes_is_not_called_even_when_it_is_in_the_snap
     rig.run.snapshot.refs["Notes__note"] = ToolRef(MCP, f"mcp:{server}/note", "Notes", "note", Tier.T0)
     reply = await rig.tool("Notes__note", {"text": "x"})
     assert reply["kind"] == "blocked" and calls == []
-    assert rig.audit() == [("Notes", "note", "T2", "none", "blocked", rig.task_id)]
+    assert rig.audit() == [("Notes", "note", None, "none", "blocked", rig.task_id)]
 
 
 async def test_a_name_that_is_not_a_tool_of_the_task_is_not_called_and_not_audited(rig, calls):

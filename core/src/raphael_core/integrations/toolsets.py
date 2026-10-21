@@ -1,103 +1,35 @@
-"""Toolsets: the tools Raphael can use, in groups the user sees on the 「連接」 tab.
+"""How the 「連接」 tab groups a plugin's tools: the ones that change things and the ones that only read.
 
-A group is a `ToolSet`: a name, a label, a description, the tools it holds and the groups it
-includes (`resolve` flattens them; a group that includes itself, directly or not, is read once).
-Raphael's own tools are two groups with a fixed tier each, shown and never changed: 「網路查詢」
-(`web`: the weather, a web search, the time; all T0) and 「這台電腦」 (`computer`: the commands
-for this computer, T1 or T2 as `agent.commands` has them). Every plugin server is one more
-group, whose tools have the tier the user gave them (`IntegrationsService` builds those).
+This is for the screen only. Whether a tool may run is whether it is on (`config.ServerConfig.tool_on`)
+and nothing else, so a wrong guess here puts a tool in the other list and does no harm.
 
-Giving a whole group a tier (`integrations.set_group_tier`) is a one-time act on the tools the
-server has now: a tool the server adds later has no tier, so it stays blocked until the user has
-looked at it. Nothing here logs a name, an argument or a result.
+A tool's own word comes first: its annotations (`readOnlyHint`, `destructiveHint`) as the server
+sent them. A server can claim anything, and a tool with no annotations says nothing, so the name is
+the fallback: a tool named for a verb that reads (`get_`, `search_`, `list_`, ...) is a read, and
+every other, including a name that is none of the known verbs, is counted as one that changes
+things, which is the list a person looks at more carefully.
 """
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+import re
 
-from ..agent.commands import COMMANDS
-from ..agent.gate import WEB_TOOLS
-from ..agent.policy import Tier
+from .config import ToolRecord
 
-
-@dataclass(frozen=True)
-class ToolSet:
-    name: str
-    label: str
-    description: str
-    tools: tuple[str, ...] = ()
-    includes: tuple[str, ...] = ()
-    # Built in: shown, never switched off, never given another tier.
-    builtin: bool = False
-    tiers: Mapping[str, str] = field(default_factory=dict)
-
-
-BUILTIN_SETS: dict[str, ToolSet] = {
-    "web": ToolSet(
-        name="web",
-        label="Web lookups",
-        description="The weather, a web search and the time. They only read.",
-        tools=WEB_TOOLS,
-        builtin=True,
-        tiers={name: Tier.T0.name for name in WEB_TOOLS},
-    ),
-    "computer": ToolSet(
-        name="computer",
-        label="This computer",
-        description="Open a website or an app, the volume, the media keys, lock the screen, copy.",
-        tools=tuple(COMMANDS),
-        builtin=True,
-        tiers={name: command.tier.name for name, command in COMMANDS.items()},
-    ),
-}
-
-
-def resolve(name: str, sets: Mapping[str, ToolSet] = BUILTIN_SETS) -> list[str]:
-    """The tools of group `name` and of the groups it includes, in order, each once. A name that
-    is not a group has no tools."""
-    found: list[str] = []
-    seen: set[str] = set()
-
-    def walk(current: str) -> None:
-        if current in seen or current not in sets:
-            return
-        seen.add(current)
-        for tool in sets[current].tools:
-            if tool not in found:
-                found.append(tool)
-        for included in sets[current].includes:
-            walk(included)
-
-    walk(name)
-    return found
-
-
-def builtin_group(toolset: ToolSet) -> dict:
-    """A built-in group as the window sees it: always on, nothing to switch, tiers fixed."""
-    return {
-        "id": f"builtin:{toolset.name}",
-        "kind": "builtin",
-        "name": toolset.name,
-        "label": toolset.label,
-        "description": toolset.description,
-        "enabled": True,
-        "switchable": False,
-        "tier_fixed": True,
-        "status": "builtin",
-        "error": None,
-        "tools": [
-            {
-                "name": tool,
-                "description": "",
-                "tier": toolset.tiers.get(tool),
-                "decided": True,
-                "changed": False,
-                "suggested": None,
-            }
-            for tool in resolve(toolset.name)
-        ],
+# The words (split at `_`, `-`, `.` and a change of case) that mean a tool only looks.
+_READ_WORDS = frozenset(
+    {
+        "get", "list", "search", "find", "read", "fetch", "query", "lookup", "describe", "show",
+        "view", "check", "count", "retrieve", "browse", "inspect", "export", "download", "preview",
+        "summarize", "who", "whoami", "status", "info", "history", "resolve", "explain", "analyze",
     }
+)
+_WORD = re.compile(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])")
 
 
-def builtin_groups() -> list[dict]:
-    return [builtin_group(toolset) for toolset in BUILTIN_SETS.values()]
+def tool_kind(tool: ToolRecord) -> str:
+    """`"read"` for a tool that only looks, `"write"` for one that changes something (or may)."""
+    if tool.destructive_hint is True or tool.read_only_hint is False:
+        return "write"
+    if tool.read_only_hint is True:
+        return "read"
+    words = [word.lower() for word in _WORD.findall(tool.name)]
+    return "read" if words and words[0] in _READ_WORDS else "write"
