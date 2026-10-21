@@ -5,6 +5,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { withWindowHotkeyPause } from "./window-hotkeys";
 import type { LanguageGroup } from "./languages";
+import type { TelegramStatus } from "./messaging";
 import type {
   AgentTurn,
   AuditEntry,
@@ -117,6 +118,23 @@ export const integrationsSetToolEnabled = (id: string, tool: string, enabled: bo
   core("integrations.set_tool_enabled", { id, tool, enabled });
 export const integrationsAudit = (limit = 8): Promise<{ entries: AuditEntry[] }> => core("integrations.audit", { limit });
 
+// ---------- messaging apps (Telegram) ----------
+
+export const telegramStatus = (): Promise<TelegramStatus> => core("messaging.telegram.status");
+/** Checks the bot token with Telegram and, if it works, keeps it in the vault. The token never comes back. */
+export const telegramConnect = (
+  token: string,
+): Promise<{ ok: true; status: TelegramStatus } | { ok: false; reason: "invalid_token" | "network" }> =>
+  core("messaging.telegram.connect", { token });
+export const telegramSetEnabled = (enabled: boolean): Promise<TelegramStatus> => core("messaging.telegram.set_enabled", { enabled });
+/** Allows the person who was given this code. */
+export const telegramApprove = (code: string): Promise<{ approved: boolean; status: TelegramStatus }> =>
+  core("messaging.telegram.approve", { code });
+export const telegramReject = (code: string): Promise<TelegramStatus> => core("messaging.telegram.reject", { code });
+export const telegramRemoveUser = (user_id: number): Promise<TelegramStatus> => core("messaging.telegram.remove_user", { user_id });
+/** Deletes the token from the vault and forgets who was allowed. */
+export const telegramDisconnect = (): Promise<TelegramStatus> => core("messaging.telegram.disconnect");
+
 // ---------- the device side of the core ----------
 
 /** Passive reads keep the settings meter running while automatic detection settles. */
@@ -138,6 +156,10 @@ export const modelsLocalDelete = (name: string): Promise<{ deleted: boolean }> =
 export const modelsEnsure = (names: string[]): Promise<{ ok: boolean }> => core("models.ensure", { names });
 
 // ---------- commands of the app ----------
+
+/** Opens one of the few fixed links in the browser (commands.rs refuses any other). */
+export const openLink = (url: string): Promise<void> => invoke("open_link", { url });
+
 
 export const deviceSettingsGet = (): Promise<DeviceSettings> => invoke("device_settings_get");
 export const deviceSettingsSet = (patch: Partial<DeviceSettings>): Promise<DeviceSettings> =>

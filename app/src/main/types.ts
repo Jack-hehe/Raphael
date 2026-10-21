@@ -158,6 +158,10 @@ export interface HistoryItem {
 export interface AgentTurn {
   id: number;
   created_at_ms: number;
+  /** The conversation the turn belongs to; a Telegram chat has its own. */
+  session_id?: string;
+  /** Where the question came from: spoken at the computer, or a message from Telegram. */
+  source?: "voice" | "telegram";
   /** What the person said, as the speech recognition heard it. */
   question: string;
   /** How the question was routed: a command, a question, a chat... (the core's word). */

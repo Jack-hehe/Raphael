@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { emptyConnectionsView } from "../connections";
+import { emptyMessagingView } from "../messaging";
 import { setLocale } from "../i18n";
 import type { LanguageGroup } from "../languages";
 import type { BrainSettings, CatalogModel, DeviceSettings, LocalModel, ModelCatalog, SettingsPane, Status } from "../types";
@@ -78,9 +79,18 @@ const view = (over: Partial<SettingsView> = {}): SettingsView => ({
   pane: "general", device, brain, hasKey: true, openrouter, spend, catalog, checkingOpenrouter: false,
   devices: { devices: [{ index: 0, name: REALTEK, is_default: true }], selected: null, automatic_device: REALTEK },
   altgr: false, version: "0.1.0", replacingKey: false, confirmingKeyRemoval: false, keyBusy: false, keyError: null, limitDraft: null, limitError: null,
-  cityDraft: null, cityError: null, languageGroups: GROUPS, now: NOW, connections: emptyConnectionsView(),
+  cityDraft: null, cityError: null, languageGroups: GROUPS, now: NOW, connections: emptyConnectionsView(), messaging: emptyMessagingView(),
   localModels: LOCAL_MODELS, localDownload: null, ...over,
 });
+test("the messaging apps sit under the connected services, and only there", () => {
+  const installed = tab("connections");
+  expect(installed).toContain("data-msg-section");
+  expect(installed.indexOf("data-msg-section")).toBeGreaterThan(installed.indexOf('class="cs'));
+  expect(tab("connections", { connections: { ...emptyConnectionsView(), tab: "store" } })).not.toContain("data-msg-section");
+  expect(tab("connections", { connections: { ...emptyConnectionsView(), open: { tab: "installed", id: "x" } } })).not.toContain("data-msg-section");
+  expect(tab("general")).not.toContain("data-msg-section");
+});
+
 const tab = (pane: SettingsPane, over: Partial<SettingsView> = {}): string => paneHTML(view({ pane, ...over }));
 const IDS = PANES.map((p) => p.id);
 const LOCALES = ["zh-TW", "en", "ja"] as const;
