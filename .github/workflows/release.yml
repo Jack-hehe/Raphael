@@ -34,16 +34,9 @@ jobs:
 
       - name: Check release inputs
         run: |
-          $privateDirectory = Join-Path $env:RUNNER_TEMP 'raphael-release-no-private-assets'
-          if (Test-Path -LiteralPath $privateDirectory) { throw 'Expected an absent private-assets override.' }
-          "RAPHAEL_PRIVATE_DIR=$privateDirectory" >> $env:GITHUB_ENV
-          $privatePaths = @(
-            'assets-private', 'models', 'voice', 'raphael_ref', '.superpowers', 'ui-shots',
-            'eval/data', 'app/public/private', 'app/src-tauri/icons-private',
-            'app/src-tauri/tauri.private.conf.json'
-          )
-          foreach ($path in $privatePaths) {
-            if (Test-Path -LiteralPath $path) { throw "Unexpected private release input: $path" }
+          $excluded = @('models', 'voice', 'raphael_ref', '.superpowers', 'ui-shots', 'eval/data')
+          foreach ($path in $excluded) {
+            if (Test-Path -LiteralPath $path) { throw "Unexpected release input: $path" }
           }
 
       - name: Set up Node.js
@@ -122,7 +115,7 @@ jobs:
         working-directory: app/src-tauri
         run: cargo fmt --all -- --check
 
-      - name: Build public Windows installer
+      - name: Build Windows installer
         working-directory: app
         run: node scripts/tauri.mjs build --config src-tauri/tauri.release.conf.json --bundles nsis --ci -- --locked
 

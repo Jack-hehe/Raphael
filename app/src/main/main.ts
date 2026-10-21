@@ -18,7 +18,7 @@ import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
 import { Navigation, type Place, samePage } from "./nav-history";
 import { installNavInput } from "./nav-input";
-import { brandIcon, hydrateBrandIcons } from "./brand";
+import { brandIcon } from "./brand";
 import { installWindowHotkeys } from "./window-hotkeys";
 import { followTray } from "./tray-open";
 import { installWindowChrome, labelWindowControls, showMaximized } from "./window-chrome";
@@ -28,8 +28,8 @@ import { Undoable } from "./undo";
 import { type IconName, ico, toaster } from "./ui";
 import "./styles.css";
 
-/** The glyph ring texture. It is private (copied there by scripts/copy-private.mjs); without it the emblem draws a plain ring. */
-const GLYPH_URL = "/private/glyph-ring.png";
+/** The glyph ring texture (app/public/brand/glyph-ring.png); if it fails to load the emblem draws a plain ring. */
+const GLYPH_URL = "/brand/glyph-ring.png";
 
 /** What the window uses until the real settings arrive (the same as device_settings.rs). */
 const DEFAULT_DEVICE: DeviceSettings = {
@@ -153,7 +153,6 @@ async function start(): Promise<void> {
     `<button type="button" class="usage-box" data-go="settings" data-pane="usage" hidden></button>` +
     t("main.004", { p0: ico("gear") });
   const usageBox = nav.querySelector<HTMLElement>(".usage-box")!;
-  hydrateBrandIcons(nav);
   function translateNavigation(): void {
     nav.setAttribute("aria-label", t("nav.pages"));
     for (const item of NAV) nav.querySelector<HTMLElement>(`[data-go="${item.id}"] span`)!.textContent = item.name;

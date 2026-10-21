@@ -157,8 +157,7 @@ function mulberry32(seed: number): () => number {
 
 // ---------- the glyph texture ----------
 
-// Sampled from the anime, for personal use only (gitignored, see scripts/copy-private.mjs).
-// Without it a plain vector ring is drawn.
+// The ring texture is app/public/brand/glyph-ring.png. If it fails to load, a plain vector ring is drawn.
 let glyph: HTMLImageElement | null = null;
 let tintCanvas: HTMLCanvasElement | null = null;
 let cleanTint: { source: HTMLImageElement; mix: number; canvas: HTMLCanvasElement } | null = null;

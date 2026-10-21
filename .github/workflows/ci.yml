@@ -1,11 +1,9 @@
 name: CI
 
-# The repository is private, so Actions minutes are limited (Windows runners count double).
-# A branch is checked through its pull request, and each pull request runs only the jobs whose
-# part of the repository it changes (the `changes` job). main is not checked again after a merge:
-# the release workflow runs every check before anything ships. A merge that changes the Rust
-# dependencies runs the Rust job on main once, so main's cache, the one every pull request falls
-# back to, stays current. A change to the documents below alone starts no run.
+# Each pull request runs only the jobs whose part of the repository it changes (the `changes`
+# job). main is not checked again after a merge: the release workflow runs every check before
+# anything ships. A merge that changes the Rust dependencies runs the Rust job on main once, so
+# main's cache, the one every pull request falls back to, stays current.
 on:
   push:
     branches: [main]
@@ -15,10 +13,8 @@ on:
       - "app/src-tauri/vendor/handy-keys/Cargo.toml"
   pull_request:
     paths-ignore:
-      - "docs/**"
       - "README.md"
       - "LICENSE"
-      - "eval/README.md"
   workflow_dispatch:
 
 permissions:
@@ -98,9 +94,7 @@ jobs:
       - name: Check text color contrast
         run: npm run check:contrast
 
-      - name: Type-check and build public frontend
-        env:
-          RAPHAEL_PRIVATE_DIR: ${{ runner.temp }}/raphael-ci-no-private-assets
+      - name: Type-check and build frontend
         run: npm run build
 
   python:
@@ -165,17 +159,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check public checkout
+      - name: Check for files that must not be committed
         working-directory: .
         run: |
-          $privatePaths = @(
-            "assets-private", "models", "voice", "raphael_ref", ".superpowers", "ui-shots",
-            "eval/data", "app/public/private", "app/src-tauri/icons-private",
-            "app/src-tauri/tauri.private.conf.json"
-          )
-          foreach ($path in $privatePaths) {
+          $excluded = @("models", "voice", "raphael_ref", ".superpowers", "ui-shots", "eval/data")
+          foreach ($path in $excluded) {
             if (Test-Path -LiteralPath $path) {
-              throw "The public build requires a checkout without private files: $path"
+              throw "The checkout must not contain: $path"
             }
           }
 
@@ -208,10 +198,8 @@ jobs:
         run: npm ci
 
       # This runs beforeBuildCommand, embeds the real frontend, and links the Windows executable.
-      - name: Build public Tauri debug application
+      - name: Build Tauri debug application
         working-directory: app
-        env:
-          RAPHAEL_PRIVATE_DIR: ${{ runner.temp }}/raphael-ci-no-private-assets
         run: node scripts/tauri.mjs build --debug --no-bundle --ci -- --locked
 
       - name: Run Rust tests

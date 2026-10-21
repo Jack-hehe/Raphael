@@ -11,7 +11,6 @@
 //! reaches the icon (the menu follows a moment later, long before a right click has finished),
 //! when the core starts and when it restarts.
 
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -28,32 +27,7 @@ use crate::device_settings::DeviceStore;
 use crate::notices::{DEFAULT_LANGUAGE, LanguageCell, Notice};
 use crate::rpc::{CoreApi, lock};
 
-fn private_tray_icon_path(crate_dir: &Path, is_dev: bool) -> Option<PathBuf> {
-    // Release builds must not read a path into the developer's checkout.
-    if !is_dev {
-        return None;
-    }
-    let path = crate_dir.join("icons-private").join("tray-icon.png");
-    path.is_file().then_some(path)
-}
-
 fn tray_icon() -> tauri::image::Image<'static> {
-    if let Some(path) = private_tray_icon_path(
-        Path::new(env!("CARGO_MANIFEST_DIR")),
-        cfg!(debug_assertions),
-    ) {
-        match tauri::image::Image::from_path(&path) {
-            Ok(icon) => {
-                log::info!("tray: using private icon from {}", path.display());
-                return icon;
-            }
-            Err(error) => log::warn!(
-                "tray: could not load private icon {}: {error}",
-                path.display()
-            ),
-        }
-    }
-    log::info!("tray: using embedded public icon");
     tauri::include_image!("icons/tray-icon.png")
 }
 
@@ -556,26 +530,6 @@ async fn draw(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-
-    #[test]
-    fn private_tray_path_requires_a_file_in_a_dev_build() {
-        let crate_dir = tempfile::tempdir().unwrap();
-        let icon_dir = crate_dir.path().join("icons-private");
-        let icon_path = icon_dir.join("tray-icon.png");
-        assert_eq!(private_tray_icon_path(crate_dir.path(), true), None);
-
-        fs::create_dir_all(&icon_path).unwrap();
-        assert_eq!(private_tray_icon_path(crate_dir.path(), true), None);
-        fs::remove_dir(&icon_path).unwrap();
-        fs::write(&icon_path, b"path selection only").unwrap();
-
-        assert_eq!(
-            private_tray_icon_path(crate_dir.path(), true),
-            Some(icon_path)
-        );
-        assert_eq!(private_tray_icon_path(crate_dir.path(), false), None);
-    }
 
     // ---- the menu ----
 
