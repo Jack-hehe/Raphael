@@ -1,4 +1,4 @@
-//! Learning from the user's corrections (Typeless-style): after a dictation is pasted, the field
+//! Learning from the user's corrections: after a dictation is pasted, the field
 //! it went into is watched for a little while. When the user selects a misheard word and types
 //! the right one, the word goes into the dictionary by itself, with the misheard text as its
 //! misheard form, and Raphael says so (《了。「手機」已加入詞典。》).

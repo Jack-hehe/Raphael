@@ -8,7 +8,7 @@
 //! The chord is sent as Handy does it in `src-tauri/src/input.rs` (MIT, Copyright (c) 2025
 //! CJ Pais; the notice is in `clipboard.rs`): modifiers down, key click, a 100 ms hold, modifiers
 //! up. Releasing held modifiers first and the per-program chord ([`shortcut_for`]) follow
-//! OpenWhispr (spec section 5).
+//! OpenWhispr.
 //!
 //! [`shortcut_for`]: super::shortcut_for
 

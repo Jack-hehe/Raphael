@@ -2919,8 +2919,8 @@ mod tests {
             task
         });
         attempt.recv().unwrap();
-        // The fixed controller queues this start behind the unfinished overlay transition.
-        // The old one completes it immediately, exposing show -> show -> hide.
+        // The controller queues this start behind the unfinished overlay transition. Completing
+        // it at once instead would expose show -> show -> hide.
         let _ = start_done.recv_timeout(std::time::Duration::from_millis(100));
         resume.send(()).unwrap();
         finish.join().unwrap();
