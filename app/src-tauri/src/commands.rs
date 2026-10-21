@@ -170,7 +170,7 @@ fn require_main(webview: &Webview) -> Result<(), String> {
 
 // ---------- calls to the core ----------
 
-const ALLOWED_PREFIXES: [&str; 7] = [
+const ALLOWED_PREFIXES: [&str; 8] = [
     "history.",
     "dictionary.",
     "settings.",
@@ -178,6 +178,7 @@ const ALLOWED_PREFIXES: [&str; 7] = [
     "status.",
     "agent.history.",
     "integrations.",
+    "toolsets.",
 ];
 // `models.` is no prefix here: it names the speech models of this computer (`models.status`,
 // `models.ensure`) as well as OpenRouter's catalog (`models.catalog`), and each is let through by
@@ -994,6 +995,8 @@ mod tests {
             "integrations.tools",
             "integrations.set_tier",
             "integrations.audit",
+            "integrations.set_group_tier",
+            "toolsets.list",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
@@ -1012,6 +1015,10 @@ mod tests {
             "integrations.",
             "Integrations.list",
             "xintegrations.list",
+            "toolsets", // the prefix alone is no method
+            "toolsets.",
+            "Toolsets.list",
+            "xtoolsets.list",
             "audio.set_device", // goes through device_settings_set
             "audio.start",
             "pricing.get", // gone: models.catalog has every price
