@@ -10,8 +10,8 @@ A tool is on unless the user turned it off, and only the user does: what the ser
 itself (its annotations, its description) groups the tools on the screen and decides nothing. A tool
 that is new, or that the server describes differently later, is on like the rest; one that is off
 is never offered to a model and never run. The first format of the file (version 1) held a tier for
-each tool, tied to a fingerprint: reading it, a tool with any tier is on, and one that was blocked,
-or never decided, is off.
+each tool, tied to a fingerprint: reading it, everything is on but a tool that was
+blocked on purpose.
 """
 
 import hashlib
@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 FILE_NAME = "integrations.json"
 FORMAT_VERSION = 2
 
-# Tiers and blocks, as the first format of the file held them (read once, to migrate).
-_OLD_TIERS = ("T0", "T1", "T2", "T3")
+# What the first format of the file held for a tool the user blocked (read once, to migrate).
+_OLD_BLOCK = "block"
 TRANSPORTS = ("stdio", "http")
 # How a server is signed in to: none (headers, if any), or a login in the browser (OAuth).
 AUTH_KINDS = ("none", "oauth")
@@ -318,12 +318,11 @@ def _server_from_json(raw: Any) -> ServerConfig | None:
     if isinstance(raw.get("disabled_tools"), list):
         server.disabled_tools = set(_strings(raw["disabled_tools"]))
     else:
-        # The first format: a tool the user gave a tier is on, whatever the tier and whether or
-        # not the server describes it differently since; one blocked or never decided is off.
+        # The first format: everything is on but a tool the user blocked on purpose.
         grants = raw.get("grants") if isinstance(raw.get("grants"), dict) else {}
         for tool in server.tools:
             grant = grants.get(tool.name)
-            if not (isinstance(grant, dict) and grant.get("tier") in _OLD_TIERS):
+            if isinstance(grant, dict) and grant.get("tier") == _OLD_BLOCK:
                 server.disabled_tools.add(tool.name)
     return server
 

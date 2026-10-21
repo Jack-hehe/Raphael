@@ -322,17 +322,17 @@ def test_a_file_of_the_first_format_keeps_every_granted_tool_on(tmp_path):
     assert not ({"look", "note", "wipe"} & server.disabled_tools)  # any tier is on
 
 
-def test_a_file_of_the_first_format_turns_off_what_was_blocked_or_never_decided(tmp_path):
+def test_a_file_of_the_first_format_turns_off_only_what_was_blocked_on_purpose(tmp_path):
     old_file(tmp_path, {"look": ("T1", True), "wipe": ("block", True)})
     [server] = ConfigStore(tmp_path).servers()
-    assert server.disabled_tools == {"wipe", "note", "fresh"}  # blocked on purpose, and undecided
+    assert server.disabled_tools == {"wipe"}  # a tool never decided is on, like every new one
     assert not hasattr(server, "grants")
 
 
-def test_a_grant_whose_tier_is_not_a_tier_counts_as_none(tmp_path):
+def test_a_grant_whose_tier_is_not_a_tier_is_not_a_block(tmp_path):
     old_file(tmp_path, {"look": ("T9", True)})
     [server] = ConfigStore(tmp_path).servers()
-    assert "look" in server.disabled_tools
+    assert server.disabled_tools == set()
 
 
 def test_a_file_of_the_new_format_is_not_migrated_again(tmp_path):

@@ -79,7 +79,7 @@ async def test_the_groups_are_the_plugins_only(rpc, servers):
     assert group["env"] == ["API_KEY"] and SECRET not in json.dumps(groups)
 
 
-async def test_a_file_with_the_old_tiers_is_read_as_on_and_off(conn, tmp_path, vault, connector, servers):
+async def test_a_file_with_the_old_tiers_is_read_as_on_but_for_a_block(conn, tmp_path, vault, connector, servers):
     servers.add("Notes")
     tools = [tool_record(n, f"The {n}.", {"type": "object"}) for n in ("look", "note", "wipe", "fresh")]
     old = {
@@ -109,7 +109,7 @@ async def test_a_file_with_the_old_tiers_is_read_as_on_and_off(conn, tmp_path, v
         "look": True,
         "note": True,  # any tier counts as on
         "wipe": False,  # blocked on purpose
-        "fresh": False,  # never decided
+        "fresh": True,  # never decided: on, like every tool
     }
     assert service.tier_of("mcp:s1/look") is not None and service.tier_of("mcp:s1/wipe") is None
 
