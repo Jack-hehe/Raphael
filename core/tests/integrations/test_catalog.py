@@ -28,7 +28,8 @@ def test_an_entry_is_complete(service):
     parts = urlsplit(service.url)
     assert parts.scheme == "https" and parts.hostname and not parts.query and not parts.fragment
     assert service.category in CATEGORIES
-    assert service.icon is None or service.icon in ICONS
+    assert service.icon in ICONS  # every entry shows its brand's own mark
+    assert service.auth in ("oauth", "none")
     assert service.name and service.publisher
     for words in (service.summary, service.about, service.examples):
         assert set(words) == set(LANGUAGES)
@@ -61,10 +62,26 @@ def test_find_and_the_view():
     assert view(find("sentry"))["popular"] is False  # type: ignore[arg-type]
 
 
-def test_a_service_without_a_mark_is_drawn_as_a_letter():
-    assert find("canva").icon is None  # type: ignore[union-attr]
+def test_canva_has_its_own_mark():
+    assert find("canva").icon == "canva"  # type: ignore[union-attr]
+
+
+def test_the_public_servers_need_no_login_and_the_others_do():
+    public = {s.id for s in SERVICES if s.auth == "none"}
+    assert {"context7", "deepwiki"} <= public
+    assert find("notion").auth == "oauth"  # type: ignore[union-attr]
 
 
 def test_the_module_holds_no_secrets_or_client_ids():
     text = Path(catalog.__file__).read_text(encoding="utf-8").lower()
     assert "client_id" not in text and "client_secret" not in text
+
+
+def test_every_mark_the_catalog_names_exists_in_the_app():
+    """ICONS here and the marks of the window are one list: a drawn path of `service-icons.ts` or a logo
+    file of `service-logos/`."""
+    app = Path(__file__).resolve().parents[3] / "app" / "src" / "main"
+    drawn = set(re.findall(r"^  (\w+): \{ title:", (app / "service-icons.ts").read_text(encoding="utf-8"), re.M))
+    files = {re.sub(r"\.dark$", "", f.stem) for f in (app / "service-logos").iterdir() if f.suffix in (".svg", ".png")}
+    assert set(ICONS) <= drawn | files
+    assert {s.icon for s in SERVICES} <= drawn | files

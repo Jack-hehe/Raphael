@@ -1,0 +1,18 @@
+{
+  "canva": { "file": "canva.png", "url": "https://static.canva.com/static/images/android-192x192-2.png", "note": "Canva's own app icon (gradient circle, white script C); it publishes no SVG of the circle." },
+  "monday": { "file": "monday.png", "url": "https://cdn.prod.website-files.com/656da6fea306219773d04208/65af6bd6e742d497b5f23f69_645898132bbaac20f1963919_256x256.png", "page": "https://monday.com/p/news/press-kit/", "note": "monday.com's own icon; the white background was made transparent." },
+  "jam": { "file": "jam.svg", "url": "https://framerusercontent.com/images/3zAY5a6TukbdTWkNAkTDO1Yqpc.svg", "dark": "https://framerusercontent.com/images/80koYhAmzihidcEHG90mbYSSqY.svg", "note": "The site's own light and dark favicons; a viewBox was added." },
+  "fireflies": { "file": "fireflies.svg", "url": "https://fireflies.ai/_next/static/media/logo.4ae482a6.svg" },
+  "close": { "file": "close.svg", "url": "https://cdn.sanity.io/files/qshgei9f/production/3720fe02d5be7da5cc587f930934f968c3c21a64.zip", "page": "https://close.com/downloads/close-logo-2024", "note": "mark.svg of Close's own logo pack." },
+  "attio": { "file": "attio.svg", "url": "https://attio.com/brand/v1/attio-logomark.svg", "page": "https://attio.com/brand", "note": "The dark-theme file is the same path filled white." },
+  "granola": { "file": "granola.png", "url": "https://www.granola.ai/favicon/favicon.svg", "note": "Granola's own app icon (lime square, black spiral): the PNG its favicon file embeds." },
+  "klaviyo": { "file": "klaviyo.svg", "url": "https://www.klaviyo.com/", "note": "The flag mark of the site's own navigation bar; the dark-theme file is the same path filled white." },
+  "apify": { "file": "apify.svg", "url": "https://apify.com/icon0.svg" },
+  "jotform": { "file": "jotform.svg", "url": "https://cdn.jotfor.ms/assets/img/favicons/favicon.svg", "note": "The favicon without its white backdrop; the dark-theme file has the navy part filled white." },
+  "context7": { "file": "context7.svg", "url": "https://context7.com/_next/static/immutable/media/context7-logo-light.1irhnfg2jrcmg.svg", "dark": "https://context7.com/_next/static/immutable/media/context7-logo-dark.2uff47lf7saxy.svg", "note": "The mark cut from the site's own wordmark files (tile and glyphs, no text)." },
+  "deepwiki": { "file": "deepwiki.svg", "url": "https://deepwiki.com/", "note": "The mark in the site's header, drawn black; the dark-theme file is drawn white." },
+  "mslearn": { "file": "mslearn.svg", "url": "https://learn.microsoft.com/", "note": "The four-square mark in the header of Microsoft Learn." },
+  "aws": { "file": "aws.svg", "url": "https://aws.amazon.com/", "note": "The mark in the header of aws.amazon.com, in AWS's colours; the dark-theme file has white letters." },
+  "huggingface": { "file": "huggingface.svg", "url": "https://huggingface.co/datasets/huggingface/brand-assets/resolve/main/hf-logo.svg", "page": "https://huggingface.co/brand" },
+  "exa": { "file": "exa.svg", "url": "https://exa.ai/images/logo/exa-logo-blue.svg", "note": "The symbol cut from the site's wordmark file." }
+}

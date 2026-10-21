@@ -318,3 +318,39 @@ async def test_a_login_for_a_server_that_has_none_is_refused(store, servers):
     with pytest.raises(RpcError) as refused:
         await store.router.call("integrations.connect", {"id": added["server"]["id"]})
     assert refused.value.code == INVALID_PARAMS
+
+
+# --- a service that needs no login ---------------------------------------------------------------
+
+
+def public_entry(monkeypatch):
+    entry = catalog.Service(
+        **{**catalog._BY_ID["notion"].__dict__, "id": "openbook", "name": "Openbook", "auth": "none"}
+    )
+    monkeypatch.setattr(catalog, "_BY_ID", {**catalog._BY_ID, "openbook": entry})
+
+
+async def test_a_public_service_is_added_at_once_with_no_browser(rpc, servers, monkeypatch, vault):
+    public_entry(monkeypatch)
+    servers.add("Openbook")
+    done = await rpc.call("integrations.connect", {"catalog_id": "openbook"})
+    assert done["connected"] is True
+    server = done["server"]
+    assert (server["name"], server["auth"], server["catalog_id"], server["status"]) == (
+        "Openbook",
+        "none",
+        "openbook",
+        "ready",
+    )
+    assert server["tool_count"] > 0 and server["enabled_count"] == server["tool_count"]
+    assert vault.names() == []  # nothing to keep: there is no login
+    with pytest.raises(RpcError) as refused:  # added already
+        await rpc.call("integrations.connect", {"catalog_id": "openbook"})
+    assert refused.value.code == INVALID_PARAMS
+
+
+async def test_a_public_service_that_cannot_be_reached_adds_nothing(rpc, servers, monkeypatch):
+    public_entry(monkeypatch)
+    done = await rpc.call("integrations.connect", {"catalog_id": "openbook"})  # no server of that name
+    assert done["connected"] is False
+    assert (await rpc.call("integrations.list"))["servers"] == []
