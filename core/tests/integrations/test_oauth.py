@@ -7,7 +7,8 @@ import logging
 import httpx
 import pytest
 
-from raphael_core.integrations.client import McpConnector, McpFailure
+from raphael_core import __version__
+from raphael_core.integrations.client import USER_AGENT, McpConnector, McpFailure
 from raphael_core.integrations.config import ServerConfig
 from raphael_core.integrations.oauth import (
     CallbackListener,
@@ -318,6 +319,30 @@ async def test_a_new_login_starts_from_nothing(service):
     await connector.login(server_for(service), service.browser, timeout_s=10)
     await connector.login(server_for(service), service.browser, timeout_s=10)
     assert service.registrations == 2  # the old registration was forgotten, not reused
+
+
+# --- who is asking ------------------------------------------------------------------------------
+
+
+def test_the_user_agent_is_ours_and_says_so():
+    assert USER_AGENT == f"Raphael/{__version__} (Windows)"
+
+
+async def test_every_request_to_the_service_says_who_is_asking(service):
+    vault = MemoryVault()
+    result = await McpConnector(vault).login(server_for(service), service.browser, timeout_s=10)
+    await McpConnector(vault).list_tools(server_for(service))  # a later job, the MCP calls again
+    await revoke(VaultTokenStorage(vault, "s1"), result.revocation_url)
+    # discovery, registration, token and MCP calls, and the revocation; the browser's own are the test's
+    ours = [agent for agent in service.agents if agent != "Browser/1"]
+    assert len(ours) >= 8 and set(ours) == {USER_AGENT}
+
+
+async def test_a_user_agent_the_owner_sets_in_a_header_is_kept(service):
+    from raphael_core.integrations.client import with_user_agent
+
+    assert with_user_agent({"user-agent": "Mine/1"}) == {"user-agent": "Mine/1"}
+    assert with_user_agent({"X-Key": "v"}) == {"X-Key": "v", "User-Agent": USER_AGENT}
 
 
 # --- taking the tokens back ------------------------------------------------------------------

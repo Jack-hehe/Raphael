@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlsplit
 
-from .client import McpFailure
+from .client import USER_AGENT, McpFailure
 from .config import checked_url
 from .vault import SecretVault, delete_long, load_long, secret_name, store_long
 
@@ -271,6 +271,21 @@ def _provider_type() -> type:
             if self.context.current_tokens is not None:
                 self.context.token_expiry_time = getattr(self.context.storage, "expires_at", None)
 
+        async def _auth_flow(self, request):  # type: ignore[no-untyped-def]
+            """The requests of the login itself (discovery, registration, token, refresh) are built
+            by the SDK without the client's headers, so they say who is asking here."""
+            flow = super()._auth_flow(request)
+            try:
+                outgoing = await flow.__anext__()
+                while True:
+                    outgoing.headers.setdefault("User-Agent", USER_AGENT)
+                    response = yield outgoing
+                    outgoing = await flow.asend(response)
+            except StopAsyncIteration:
+                return
+            finally:
+                await flow.aclose()
+
     return Provider
 
 
@@ -359,7 +374,7 @@ async def revoke(storage: VaultTokenStorage, revocation_url: str, *, timeout_s: 
     try:
         checked_url(revocation_url)
         done = False
-        async with httpx2.AsyncClient(timeout=timeout_s, follow_redirects=False) as http:
+        async with httpx2.AsyncClient(timeout=timeout_s, follow_redirects=False, headers={"User-Agent": USER_AGENT}) as http:
             for token, hint in ((refresh, "refresh_token"), (access, "access_token")):
                 if token is None:
                     continue

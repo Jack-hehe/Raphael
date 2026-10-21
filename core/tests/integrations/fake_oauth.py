@@ -56,6 +56,7 @@ class FakeService:
         self.mcp_calls: list[str] = []  # the methods of the requests that were let in
         self.reject_refresh = False
         self.tools = list(TOOLS)
+        self.agents: list[str] = []  # the User-Agent of every request
 
     async def start(self) -> None:
         self.server = await asyncio.start_server(self._serve, "127.0.0.1", 0)
@@ -73,7 +74,7 @@ class FakeService:
     # --- the browser of a test -----------------------------------------------------------------
 
     async def browser(self, url: str) -> None:
-        async with httpx2.AsyncClient(follow_redirects=False) as http:
+        async with httpx2.AsyncClient(follow_redirects=False, headers={"User-Agent": "Browser/1"}) as http:
             reply = await http.get(url)
             if reply.status_code in (301, 302, 303, 307):
                 await http.get(reply.headers["location"])
@@ -87,6 +88,7 @@ class FakeService:
             method, target, _ = lines[0].split(" ")
             headers = {k.strip().lower(): v.strip() for k, _, v in (line.partition(":") for line in lines[1:]) if k}
             body = await reader.readexactly(int(headers.get("content-length", "0")))
+            self.agents.append(headers.get("user-agent", ""))
             status, extra, payload = self.handle(method, target, headers, body)
             data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
             head = f"HTTP/1.1 {status}\r\nContent-Length: {len(data)}\r\nConnection: close\r\n"

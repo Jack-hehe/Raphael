@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .. import __version__
 from .config import ServerConfig, ToolRecord, tool_record
 from .vault import SecretVault, secret_name
 
@@ -46,6 +47,10 @@ logger = logging.getLogger(__name__)
 # by `_failure` below, by the types of what went wrong.
 for _sdk_logger in ("mcp", "httpx2", "httpcore2"):
     logging.getLogger(_sdk_logger).setLevel(logging.CRITICAL)
+
+# Who is asking, on every request to a plugin server or an authorization server: some of them turn
+# away a client that does not say (their firewalls look at it).
+USER_AGENT = f"Raphael/{__version__} (Windows)"
 
 # The most a job may take, connecting included. Starting a server that is fetched first (npx) can
 # take most of the refresh's time; a call the assistant makes waits for much less, since someone is
@@ -131,6 +136,13 @@ async def load_sdk() -> None:
     await asyncio.to_thread(_import_sdk)
 
 
+def with_user_agent(headers: dict[str, str]) -> dict[str, str]:
+    """`headers` with our User-Agent, unless the owner gave one of their own."""
+    if any(name.lower() == "user-agent" for name in headers):
+        return dict(headers)
+    return {**headers, "User-Agent": USER_AGENT}
+
+
 @asynccontextmanager
 async def open_client(server: ServerConfig, secrets: Secrets) -> Any:
     """A client of the server, connected, for the length of the `async with`."""
@@ -158,7 +170,7 @@ async def open_client(server: ServerConfig, secrets: Secrets) -> Any:
     async with contextlib.AsyncExitStack() as stack:
         auth = await stack.enter_async_context(secrets.oauth.auth(server.url)) if secrets.oauth else None
         http = await stack.enter_async_context(
-            httpx2.AsyncClient(headers=dict(secrets.headers), timeout=timeout, auth=auth)
+            httpx2.AsyncClient(headers=with_user_agent(secrets.headers), timeout=timeout, auth=auth)
         )
         async with Client(streamable_http_client(server.url, http_client=http)) as client:
             yield client
