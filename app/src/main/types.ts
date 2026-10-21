@@ -158,10 +158,6 @@ export interface HistoryItem {
 export interface AgentTurn {
   id: number;
   created_at_ms: number;
-  /** The conversation the turn belongs to; a Telegram chat has its own. */
-  session_id?: string;
-  /** Where the question came from: spoken at the computer, or a message from Telegram. */
-  source?: "voice" | "telegram";
   /** What the person said, as the speech recognition heard it. */
   question: string;
   /** How the question was routed: a command, a question, a chat... (the core's word). */
@@ -173,6 +169,49 @@ export interface AgentTurn {
   /** The longer version of the reply, when there is one. */
   detail: string | null;
   status: string;
+  /** The request the turn answered: one press of the key, or one chat of a chat app. */
+  session_id?: string;
+  /** Where the request came from: `voice` (the key and the overlay) or a chat app such as `telegram`. */
+  source?: string;
+  /** What the turn cost in US dollars, the background task's work included. */
+  cost_usd?: number;
+  /** The model that worded the answer, when one did. */
+  model?: string | null;
+  /** What Raphael did between the question and the answer, in order; a background task's steps last. */
+  steps?: AgentStep[];
+  /** The background task the turn handed over, if it handed one over. */
+  task?: AgentTask | null;
+}
+
+/** One thing Raphael did for a turn. Never what a tool was given or what it returned. */
+export interface AgentStep {
+  /** `tool` (a lookup or a connected service's tool), `command` (something done to this PC) or `model` (a model call of a background task). */
+  kind: string;
+  /** The tool's name on its server; null for a call the task was not given. */
+  tool: string | null;
+  /** The connected service the tool belongs to, `Raphael` for Raphael's own lookups, null for a command. */
+  server: string | null;
+  /** `ok`, `error`, `timeout`, `blocked` or `cancelled`. */
+  outcome: string;
+  ms: number;
+  /** Why it failed, one word (`auth`, `timeout`, `not_found`...); null when it went well. */
+  reason: string | null;
+  /** When it ended. */
+  at_ms: number;
+}
+
+/** A background task as the conversations show it: how it stands, without what was said. */
+export interface AgentTask {
+  id: number;
+  /** `queued`, `running`, `done`, `failed`, `limit`, `cancelled` or `interrupted`. */
+  state: string;
+  created_at_ms?: number;
+  started_at_ms: number | null;
+  finished_at_ms: number | null;
+  reason?: string | null;
+  model_calls?: number;
+  tool_calls?: number;
+  cost_usd?: number;
 }
 
 /** An entry of `dictionary.list` */
@@ -277,7 +316,11 @@ export type MainEvent =
   /** An editor hides its text from UI Automation, so corrections in it cannot be learned. */
   | { type: "LearnLimited"; app: string; reason: string }
   /** A tray menu item asks for a page, and perhaps one thing to do there (tray-open.ts). */
-  | { type: "TrayOpen"; page: TrayPage; action?: TrayAction };
+  | { type: "TrayOpen"; page: TrayPage; action?: TrayAction }
+  /** A turn of the conversations was written or completed. */
+  | { type: "AgentTurn"; turn_id: number }
+  /** A background task moved on: a step, a start or an end. */
+  | { type: "WorkerChanged"; task_id: number; state: string; running: boolean };
 
 /** The pages the tray's menu can open. */
 export type TrayPage = "home" | "history" | "dictionary" | "settings";
@@ -377,6 +420,8 @@ export interface StoreService {
   summary: Words;
   about: Words;
   examples: Record<"zh-TW" | "en" | "ja", string[]>;
+  /** "none": a public server, added with no login. */
+  auth?: "oauth" | "none";
   /** The id of the connected service it was added as; null when it is not added. */
   server_id: string | null;
 }

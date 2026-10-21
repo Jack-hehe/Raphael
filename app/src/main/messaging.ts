@@ -8,6 +8,7 @@ import * as api from "./api";
 import { describeError } from "./format";
 import { t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
+import { serviceIconSVG } from "./service-icons";
 import { btn, esc, fieldHTML, ico, row, st, tg, toaster } from "./ui";
 
 /** How long 「中斷連線」 waits for its second press. */
@@ -132,7 +133,7 @@ export function messagingHTML(v: MessagingView): string {
   return (
     `<section class="sgroup msg" data-msg-section><h2>${esc(t("msg.title"))}</h2>` +
     `<p class="foot msg-lead">${esc(t("msg.lead"))}</p>` +
-    `<h3 class="msg-sub">Telegram</h3>${body}</section>`
+    `<h3 class="msg-sub msg-brand"><span class="mono md logo-mono">${serviceIconSVG("telegram")}</span>Telegram</h3>${body}</section>`
   );
 }
 

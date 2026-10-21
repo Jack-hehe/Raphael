@@ -251,14 +251,28 @@ async def test_a_command_is_done_at_once_and_answered_with_the_fixed_reply(rig, 
     assert turn == {
         "id": 1,
         "created_at_ms": NOW_MS,
-        "session_id": turn["session_id"],
-        "source": "voice",
         "question": "打開 youtube.com",
         "route": "command",
         "prefix": "了",
         "text": "",
         "detail": None,
         "status": "done",
+        "session_id": "s1",
+        "source": "voice",
+        "cost_usd": 0.00004,
+        "model": "typesafe/jev-1.14",
+        "steps": [
+            {
+                "kind": "command",
+                "tool": "open",
+                "server": None,
+                "outcome": "ok",
+                "ms": turn["steps"][0]["ms"],
+                "reason": None,
+                "at_ms": NOW_MS,
+            }
+        ],
+        "task": None,
     }
 
 
@@ -1407,8 +1421,8 @@ async def test_the_history_lists_the_newest_turn_first_with_the_fields_the_app_r
     assert [t["question"] for t in turns] == ["靜音 2", "靜音 1", "靜音 0"]
     assert [t["id"] for t in turns] == [3, 2, 1]
     assert set(turns[0]) == {
-        "id", "created_at_ms", "session_id", "source", "question", "route", "prefix", "text",
-        "detail", "status"
+        "id", "created_at_ms", "question", "route", "prefix", "text", "detail", "status",
+        "session_id", "source", "cost_usd", "model", "steps", "task",
     }  # fmt: skip
 
 

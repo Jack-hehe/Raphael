@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { setLocale } from "./i18n";
-import { daysHTML, groupByDay, hasDetail, mergeTurns, miniTurnHTML, oldestId, turnHTML, turnStamp } from "./conversation";
+import {
+  SESSION_GAP_MS,
+  groupSessions,
+  hasDetail,
+  mergeTurns,
+  miniTurnHTML,
+  oldestId,
+  sessionBusy,
+  sessionDays,
+  sessionTitle,
+  sessionWith,
+  turnStamp,
+} from "./conversation";
 import type { AgentTurn } from "./types";
 
 afterEach(() => setLocale("zh-TW"));
@@ -19,6 +31,8 @@ function turn(id: number, when: string, more: Partial<AgentTurn> = {}): AgentTur
     text: `回答 ${id}`,
     detail: null,
     status: "done",
+    session_id: `press-${id}`,
+    source: "voice",
     ...more,
   };
 }
@@ -31,42 +45,86 @@ const NEWEST_FIRST = [
   turn(1, "2025-12-31T12:00:00+08:00"),
 ];
 
-describe("groupByDay", () => {
-  test("the days run oldest to newest and each day oldest to newest: the newest turn is last", () => {
-    const groups = groupByDay(NEWEST_FIRST, now);
-    expect(groups.map((g) => g.label)).toEqual(["2025 年 12 月 31 日", "10 月 17 日", "昨天", "今天"]);
-    expect(groups.map((g) => g.turns.map((t) => t.id))).toEqual([[1], [2], [3, 4], [5]]);
-    expect(groups.map((g) => g.key)).toEqual(["2025-12-31", "2026-10-17", "2026-10-19", "2026-10-20"]);
+describe("conversations", () => {
+  test("each press of the key has its own session id, so spoken turns close together are one conversation", () => {
+    const sessions = groupSessions([
+      turn(3, "2026-10-20T09:20:00+08:00"),
+      turn(2, "2026-10-20T09:05:00+08:00"),
+      turn(1, "2026-10-20T09:00:00+08:00"),
+    ]);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].turns.map((t) => t.id)).toEqual([1, 2, 3]); // oldest first, as it was said
+    expect(sessions[0].source).toBe("voice");
   });
 
-  test("the day is the local one: a turn just after midnight belongs to the new day", () => {
-    const groups = groupByDay(
-      [turn(2, "2026-10-20T00:00:05+08:00"), turn(1, "2026-10-19T23:59:55+08:00")],
-      now,
-    );
-    expect(groups.map((g) => g.label)).toEqual(["昨天", "今天"]);
+  test("half an hour of silence starts a new conversation, and the newest is listed first", () => {
+    const sessions = groupSessions([
+      turn(3, "2026-10-20T10:00:01+08:00"),
+      turn(2, "2026-10-20T09:30:00+08:00"),
+      turn(1, "2026-10-20T09:00:00+08:00"),
+    ]);
+    // 09:00 -> 09:30 is exactly the gap: still the same conversation; 09:30 -> 10:00:01 is not.
+    expect(SESSION_GAP_MS).toBe(30 * 60_000);
+    expect(sessions.map((s) => s.turns.map((t) => t.id))).toEqual([[3], [1, 2]]);
   });
 
-  test("turns that came in a different order than their time are laid out by time", () => {
-    const groups = groupByDay([turn(1, "2026-10-20T09:00:00+08:00"), turn(2, "2026-10-20T08:00:00+08:00")], now);
-    expect(groups[0].turns.map((t) => t.id)).toEqual([2, 1]);
+  test("a chat app's turns are a conversation of their own chat, apart from the spoken ones", () => {
+    const sessions = groupSessions([
+      turn(4, "2026-10-20T09:04:00+08:00", { source: "telegram", session_id: "chat-7" }),
+      turn(3, "2026-10-20T09:03:00+08:00", { source: "telegram", session_id: "chat-9" }),
+      turn(2, "2026-10-20T09:02:00+08:00"),
+      turn(1, "2026-10-20T09:01:00+08:00", { source: "telegram", session_id: "chat-7" }),
+    ]);
+    expect(sessions.map((s) => [s.source, s.turns.map((t) => t.id)])).toEqual([
+      ["telegram", [1, 4]],
+      ["telegram", [3]],
+      ["voice", [2]],
+    ]);
   });
 
-  test("two turns at the same time keep the order of their ids", () => {
-    const groups = groupByDay([turn(8, "2026-10-20T09:00:00+08:00"), turn(7, "2026-10-20T09:00:00+08:00")], now);
-    expect(groups[0].turns.map((t) => t.id)).toEqual([7, 8]);
+  test("a turn from a core that keeps no source is a spoken one", () => {
+    const old = { ...turn(1, "2026-10-20T09:00:00+08:00") };
+    delete old.source;
+    delete old.session_id;
+    expect(groupSessions([old])[0].source).toBe("voice");
   });
 
-  test("the list that was given is not changed, and nothing makes no days", () => {
+  test("a conversation keeps its key when turns are added at its end", () => {
+    const first = groupSessions([turn(1, "2026-10-20T09:00:00+08:00")])[0].key;
+    const later = groupSessions([turn(2, "2026-10-20T09:10:00+08:00"), turn(1, "2026-10-20T09:00:00+08:00")])[0].key;
+    expect(later).toBe(first);
+  });
+
+  test("the list is grouped by the day of each conversation's last turn: today, yesterday, then dates", () => {
+    const days = sessionDays(groupSessions(NEWEST_FIRST), now);
+    expect(days.map((d) => d.label)).toEqual(["今天", "昨天", "10 月 17 日", "2025 年 12 月 31 日"]);
+    // 23:58 and 09:00 of yesterday are far apart: two conversations under the same day
+    expect(days[1].sessions.map((s) => s.turns.map((t) => t.id))).toEqual([[4], [3]]);
+  });
+
+  test("a conversation is called by its first question; one that was not heard has a word for it", () => {
+    const [session] = groupSessions([turn(2, "2026-10-20T09:01:00+08:00"), turn(1, "2026-10-20T09:00:00+08:00", { question: "  幫我\n查   天氣 " })]);
+    expect(sessionTitle(session)).toBe("幫我 查 天氣");
+    const [silent] = groupSessions([turn(1, "2026-10-20T09:00:00+08:00", { question: " " })]);
+    expect(sessionTitle(silent)).toBe("（沒有聽清楚的問題）");
+  });
+
+  test("the conversation of a turn is found by the turn, and one with a task under way says so", () => {
+    const sessions = groupSessions([
+      turn(2, "2026-10-20T09:01:00+08:00", { task: { id: 7, state: "running", started_at_ms: 1, finished_at_ms: null } }),
+      turn(1, "2026-10-19T09:00:00+08:00"),
+    ]);
+    expect(sessionWith(sessions, 1)?.turns[0].id).toBe(1);
+    expect(sessionWith(sessions, 99)).toBeUndefined();
+    expect(sessionBusy(sessions[0])).toBe(true);
+    expect(sessionBusy(sessions[1])).toBe(false);
+  });
+
+  test("nothing makes no conversations, and the list that was given is not changed", () => {
     const copy = [...NEWEST_FIRST];
-    groupByDay(NEWEST_FIRST, now);
+    groupSessions(NEWEST_FIRST);
     expect(NEWEST_FIRST).toEqual(copy);
-    expect(groupByDay([], now)).toEqual([]);
-  });
-
-  test("the headings follow the language of the window", () => {
-    setLocale("en");
-    expect(groupByDay(NEWEST_FIRST, now).map((g) => g.label)).toEqual(["12/31/2025", "10/17", "Yesterday", "Today"]);
+    expect(groupSessions([])).toEqual([]);
   });
 });
 
@@ -76,7 +134,6 @@ describe("detail", () => {
     expect(hasDetail(turn(1, "2026-10-20T09:00:00+08:00", { detail: null }))).toBe(false);
     expect(hasDetail(turn(1, "2026-10-20T09:00:00+08:00", { detail: "   " }))).toBe(false);
     expect(hasDetail(turn(1, "2026-10-20T09:00:00+08:00", { detail: " 回答 1 " }))).toBe(false); // the line again
-    expect(hasDetail(turn(1, "2026-10-20T09:00:00+08:00", { detail: undefined as unknown as null }))).toBe(false);
   });
 });
 
@@ -92,71 +149,6 @@ describe("paging back", () => {
     expect(oldestId(NEWEST_FIRST)).toBe(1);
     expect(oldestId([NEWEST_FIRST[0], NEWEST_FIRST[2]])).toBe(3);
     expect(oldestId([])).toBeUndefined();
-  });
-});
-
-describe("a turn as HTML", () => {
-  test("the time, the person's words in 「」 and Raphael's in 《》", () => {
-    const html = turnHTML(turn(5, "2026-10-20T09:12:00+08:00", { question: "今天台北天氣如何", text: "台北現在 24 度。" }), false);
-    expect(html).toContain('<div class="turn-time num">09:12</div>');
-    expect(html).toContain('<div class="turn-q">「今天台北天氣如何」</div>');
-    expect(html).toContain('<div class="turn-a">《答。台北現在 24 度。》</div>');
-    expect(html).toContain('data-id="5"');
-    expect(html).toContain('data-status="done"');
-    expect(html).not.toContain("turn-detail");
-    expect(html).not.toContain("data-act=");
-  });
-
-  test("an English turn reads 《Answer. …》", () => {
-    const html = turnHTML(turn(5, "2026-10-20T09:12:00+08:00", { question: "what time is it", prefix: "Answer", text: "It is 9:12." }), false);
-    expect(html).toContain("「what time is it」");
-    expect(html).toContain("《Answer. It is 9:12.》");
-  });
-
-  test("a turn with a detail has a closed detail and a button to open it", () => {
-    const html = turnHTML(turn(5, "2026-10-20T09:12:00+08:00", { detail: "第一行\n第二行" }), false);
-    expect(html).toContain('<div class="turn-detail" id="turn-detail-5" hidden>第一行\n第二行</div>');
-    expect(html).toContain('data-act="detail" aria-expanded="false" aria-controls="turn-detail-5"');
-    expect(html).toContain('aria-label="詳細"');
-  });
-
-  test("an open detail is shown and says so", () => {
-    const html = turnHTML(turn(5, "2026-10-20T09:12:00+08:00", { detail: "更多" }), true);
-    expect(html).toContain('<div class="turn-detail" id="turn-detail-5">更多</div>');
-    expect(html).toContain('aria-expanded="true"');
-  });
-
-  test("a turn without a question shows only the answer", () => {
-    const html = turnHTML(turn(5, "2026-10-20T09:12:00+08:00", { question: "  " }), false);
-    expect(html).not.toContain("turn-q");
-    expect(html).toContain("turn-a");
-  });
-
-  test("a missing prefix leaves 《text》", () => {
-    expect(turnHTML(turn(5, "2026-10-20T09:12:00+08:00", { prefix: "" }), false)).toContain("《回答 5》");
-  });
-
-  test("everything that came from outside is escaped", () => {
-    const evil = '<img src=x onerror="alert(1)">';
-    const html = turnHTML(
-      turn(5, "2026-10-20T09:12:00+08:00", { question: evil, prefix: "<b>", text: evil, detail: evil, status: '"><script>' }),
-      true,
-    );
-    expect(html).not.toContain("<img");
-    expect(html).not.toContain("<b>");
-    expect(html).not.toContain("<script>");
-    expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
-    expect(html).toContain('data-status="&quot;&gt;&lt;script&gt;"');
-  });
-
-  test("the days: a heading and a card of turns for each, with the open ones open", () => {
-    const html = daysHTML(groupByDay(NEWEST_FIRST.map((t) => ({ ...t, detail: `d${t.id}` })), now), new Set([4]));
-    expect(html.match(/<section class="group day">/g)).toHaveLength(4);
-    expect(html).toContain("<h3>昨天</h3>");
-    expect(html).toContain('id="turn-detail-4">d4</div>');
-    expect(html).toContain('id="turn-detail-3" hidden>d3</div>');
-    expect(html.indexOf("今天")).toBeGreaterThan(html.indexOf("昨天")); // today is below yesterday
-    expect(daysHTML([], new Set())).toBe("");
   });
 });
 

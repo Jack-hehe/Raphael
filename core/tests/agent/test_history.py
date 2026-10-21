@@ -3,6 +3,7 @@
 import pytest
 
 from raphael_core.agent.history import AgentHistory, Turn
+from raphael_core.agent.steps import Step
 
 
 class Clock:
@@ -149,3 +150,53 @@ def test_every_write_is_committed(tmp_path):
     assert theirs.list() == []
     writer.close()
     reader.close()
+
+
+# --- where a turn came from, and its steps ---
+
+
+def test_a_turn_is_spoken_unless_said_otherwise_and_keeps_its_model(history, clock):
+    spoken = history.get(add(history, clock))
+    assert (spoken.source, spoken.model) == ("voice", None)
+    typed = history.get(add(history, clock, source="telegram", model="google/gemini-3-flash"))
+    assert (typed.source, typed.model) == ("telegram", "google/gemini-3-flash")
+
+
+def test_a_turn_is_stored_with_its_steps_in_order(history, clock):
+    weather = Step("tool", "weather", "Raphael", "ok", 420, at_ms=900)
+    failed = Step("tool", "create-event", "Google Calendar", "error", 1_200, "auth", at_ms=950)
+    turn_id = add(history, clock, steps=[weather, failed])
+    other = add(history, clock)
+    assert history.steps([turn_id, other]) == {turn_id: [weather, failed]}
+    assert history.steps([]) == {}
+
+
+def test_steps_added_later_come_after_the_ones_a_turn_has(history, clock):
+    turn_id = add(history, clock, steps=[Step("tool", "weather", "Raphael", "ok", 1, at_ms=5)])
+    clock.now_ms = 7_000
+    history.add_steps(turn_id, [Step("command", "copy_text", None, "ok", 3)])
+    steps = history.steps([turn_id])[turn_id]
+    assert [s.tool for s in steps] == ["weather", "copy_text"]
+    assert steps[1].at_ms == 7_000  # stamped now when it was not given a time
+
+
+def test_a_negative_duration_is_kept_as_none_at_all(history, clock):
+    turn_id = add(history, clock, steps=[Step("tool", "weather", "Raphael", "ok", -4, at_ms=1)])
+    assert history.steps([turn_id])[turn_id][0].ms == 0
+
+
+def test_resolve_keeps_the_model_unless_a_new_one_answered(history, clock):
+    turn_id = add(history, clock, status="confirm", model="a/first")
+    history.resolve(turn_id, prefix="了", text="", status="done")
+    assert history.get(turn_id).model == "a/first"
+    history.resolve(turn_id, prefix="答", text="好", status="done", model="b/second")
+    assert history.get(turn_id).model == "b/second"
+
+
+def test_clear_and_prune_take_the_steps_with_their_turns(history, clock, conn):
+    old = add(history, clock, advance=10, steps=[Step("tool", "weather", "Raphael", "ok", 1)])
+    new = add(history, clock, advance=10, steps=[Step("tool", "web_search", "Raphael", "ok", 1)])
+    history.prune(1_015)
+    assert set(history.steps([old, new])) == {new}
+    history.clear()
+    assert conn.execute("SELECT count(*) FROM agent_steps").fetchone()[0] == 0

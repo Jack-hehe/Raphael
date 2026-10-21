@@ -20,6 +20,8 @@ The window manages the plugins with:
   tools kept, each on or off and a `kind` (`write` or `read`, for the screen only);
 - `integrations.set_tool_enabled {id, tool, enabled}` the user's decision about one tool. Every tool
   is on until the user turns it off, new ones and ones described differently later included;
+  `integrations.set_tools_enabled {id, tools, enabled}` does the same for a list of tools at once,
+  all or none, with one write of the file;
 - `integrations.audit {limit}` the latest calls;
 - `toolsets.list` the servers of the 「連接」 tab with their tools (`toolsets.py`).
 
@@ -47,7 +49,7 @@ from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from ..router import Router
 from . import catalog
 from .audit import LIST_DEFAULT, AuditLog
-from .client import CALL_TOTAL_S, LOGIN_TIMEOUT_S, McpConnector, McpFailure
+from .client import CALL_TOTAL_S, LOGIN_TIMEOUT_S, LoginResult, McpConnector, McpFailure
 from .config import (
     MAX_NAME_CHARS,
     ConfigStore,
@@ -142,6 +144,7 @@ class IntegrationsService:
             "integrations.refresh": self._refresh,
             "integrations.tools": self._tools,
             "integrations.set_tool_enabled": self._set_tool_enabled,
+            "integrations.set_tools_enabled": self._set_tools_enabled,
             "integrations.audit": self._audit_list,
             "toolsets.list": self._toolsets,
         }
@@ -243,13 +246,16 @@ class IntegrationsService:
                 name=self._unused_name(entry.name),
                 transport="http",
                 url=entry.url,
-                auth="oauth",
+                auth=entry.auth,
                 catalog_id=entry.id,
             )
             new = True
-        self._login = asyncio.create_task(
-            self._connector.login(server, self._open_browser, timeout_s=self._login_timeout_s)
-        )
+        if server.auth == "none":
+            # A public server: there is no login, so the browser stays shut and the tools are read at once.
+            job = self._join_public(server)
+        else:
+            job = self._connector.login(server, self._open_browser, timeout_s=self._login_timeout_s)
+        self._login = asyncio.create_task(job)
         self._login_for = server.id
         try:
             result = await self._login
@@ -279,6 +285,9 @@ class IntegrationsService:
             raise _not_saved(exc) from None
         self._failure.pop(server.id, None)
         return {"connected": True, "server": self._view(server), "tools": self._tool_views(server)}
+
+    async def _join_public(self, server: ServerConfig) -> LoginResult:
+        return LoginResult(await self._connector.list_tools(server))
 
     def _wipe_login(self, server: ServerConfig, new: bool) -> None:
         """Take what a login that did not finish left in the vault (a server added by it goes whole;
@@ -409,6 +418,29 @@ class IntegrationsService:
         (server.disabled_tools.discard if enabled else server.disabled_tools.add)(name)
         self._save()
         return {"tool": self._tool_view(server, tool)}
+
+    async def _set_tools_enabled(self, params: dict) -> dict:
+        """A whole group switched at once. The list is checked in full before anything changes, so a
+        bad name leaves every tool as it was."""
+        server = self._server(params)
+        names = params.get("tools")
+        enabled = params.get("enabled")
+        if type(enabled) is not bool:
+            raise _invalid("enabled must be true or false")
+        if not isinstance(names, list) or not names:
+            raise _invalid("tools must be a list of names")
+        tools = []
+        for name in names:
+            if not isinstance(name, str) or not name:
+                raise _invalid("tools must be a list of names")
+            tool = server.tool(name)
+            if tool is None:
+                raise _invalid("There is no such tool")
+            tools.append(tool)
+        for tool in tools:
+            (server.disabled_tools.discard if enabled else server.disabled_tools.add)(tool.name)
+        self._save()
+        return {"tools": [self._tool_view(server, tool) for tool in tools]}
 
     def _group(self, server: ServerConfig) -> dict[str, Any]:
         return {**self._view(server), "tools": self._tool_views(server)}

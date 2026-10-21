@@ -74,6 +74,8 @@ export interface AgentHistoryQuery {
 export const agentHistoryList = (q: AgentHistoryQuery = {}): Promise<{ turns: AgentTurn[] }> => core("agent.history.list", q);
 /** Forgets every turn; says how many there were. */
 export const agentHistoryClear = (): Promise<{ deleted: number }> => core("agent.history.clear");
+/** Stops the background task `taskId` (the one that runs, or one that waits); says whether there was one to stop. */
+export const workerCancel = (taskId: number): Promise<{ cancelled: boolean }> => core("worker.cancel", { task_id: taskId });
 
 // ---------- dictionary ----------
 
@@ -116,6 +118,8 @@ export const integrationsDisconnect = (id: string): Promise<{ removed: boolean; 
   core("integrations.disconnect", { id });
 export const integrationsSetToolEnabled = (id: string, tool: string, enabled: boolean): Promise<Record<string, unknown>> =>
   core("integrations.set_tool_enabled", { id, tool, enabled });
+export const integrationsSetToolsEnabled = (id: string, tools: string[], enabled: boolean): Promise<Record<string, unknown>> =>
+  core("integrations.set_tools_enabled", { id, tools, enabled });
 export const integrationsAudit = (limit = 8): Promise<{ entries: AuditEntry[] }> => core("integrations.audit", { limit });
 
 // ---------- messaging apps (Telegram) ----------

@@ -33,6 +33,10 @@ describe("the setup", () => {
     expect(html).toContain('data-msg="connect"');
   });
 
+  test("the Telegram heading carries its mark", () => {
+    expect(messagingHTML(view())).toMatch(/msg-brand"><span class="mono md logo-mono"><svg/);
+  });
+
   test("never writes the typed token back into the page as text", () => {
     const html = messagingHTML(view({ token: "123456:uniquemarkeruniquemarker" }));
     expect(html).toContain('value="123456:uniquemarkeruniquemarker"'); // the field's own value, nothing else

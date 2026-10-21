@@ -116,12 +116,27 @@
       "license": "CC0-1.0",
       "repository": "https://github.com/simple-icons/simple-icons",
       "source": "https://github.com/simple-icons/simple-icons/tree/955f17f35634cd58de1748204059bce380d379af",
-      "usage": "The SVG paths (and, where they read on both themes, the brand colours) of the marks of Notion, GitHub, Google Drive, Gmail, Google Calendar, Linear, Figma, Spotify, Discord, Todoist, Obsidian, Atlassian, Cloudflare, Sentry, Stripe, Zapier and PayPal in app/src/main/service-icons.ts, taken from https://simpleicons.org (CC0-1.0, a public domain dedication). The marks are trademarks of their owners, who do not sponsor or endorse Raphael; they are shown only to tell a connected program apart.",
+      "usage": "The SVG paths (and, where they read on both themes, the brand colours) of the marks of Notion, GitHub, Google Drive, Gmail, Google Calendar, Linear, Figma, Spotify, Discord, Todoist, Obsidian, Atlassian, Cloudflare, Sentry, Stripe, Zapier, PayPal, Webflow, Wix, Telegram, Netlify, Neon, Prisma, Airtable, Calendly, PostHog, Postman, Sanity and Bitly in app/src/main/service-icons.ts, taken from https://simpleicons.org (CC0-1.0, a public domain dedication). The marks are trademarks of their owners, who do not sponsor or endorse Raphael; they are shown only to tell a connected program apart.",
       "files": [
         {
           "file": "simple-icons-16.35.0-LICENSE.txt",
           "sourceUrl": "https://raw.githubusercontent.com/simple-icons/simple-icons/955f17f35634cd58de1748204059bce380d379af/LICENSE.md",
           "sha256": "9046848b63a5c92bff14e4accca80bd987e0623b74adf9226ce5198d312b79d5"
+        }
+      ]
+    },
+    {
+      "name": "Brand logos",
+      "version": "1",
+      "license": "Trademarks of their owners (no licence granted)",
+      "repository": "https://github.com/Jack-hehe/Raphael",
+      "source": "https://github.com/Jack-hehe/Raphael/tree/main/app/src/main/service-logos",
+      "usage": "The full-colour logos of the services in the store, in app/src/main/service-logos/, each taken from its owner's own site or press kit (the address of each is in sources.json there). They are trademarks of their owners, who do not sponsor or endorse Raphael; they are shown only to tell a service apart.",
+      "files": [
+        {
+          "file": "brand-logos-NOTICE.txt",
+          "sourceUrl": "https://github.com/Jack-hehe/Raphael/blob/main/app/scripts/release-licenses/brand-logos-NOTICE.txt",
+          "sha256": "0fa3c7dd7d458c4801bdbcab7fd949076bd924375cb2e6e700b0ae954b5eebf3"
         }
       ]
     }

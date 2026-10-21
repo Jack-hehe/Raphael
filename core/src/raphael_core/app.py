@@ -714,6 +714,7 @@ class App(Router):
             models=self.brain.known_models,
             gate=self.gate,
             background=self.background,
+            notify=self.notify,
         )
         self.agent.register(self)
         # Messaging apps (Telegram): messages reach the assistant like a spoken question.
@@ -1013,7 +1014,8 @@ class App(Router):
         """A message from a messaging app, through the same entry as a spoken question. Whatever
         needs a yes is refused on the spot: a yes is given at this computer, never from a message."""
         reply = await self.call(
-            "agent.ask", {"session_id": session_id, "text": text, "ui_language": language}
+            "agent.ask",
+            {"session_id": session_id, "text": text, "ui_language": language, "source": "telegram"},
         )
         if reply.get("status") == "confirm":
             question = reply["confirm"]
