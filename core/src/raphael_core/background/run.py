@@ -38,6 +38,7 @@ from ..agent.failure import failure_kind
 from ..agent.gate import ToolGate
 from ..agent.ledger import Ledger
 from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult
+from ..agent.steps import reason_of
 from ..agent.policy import Action, NotApproved, UnknownTool
 from ..agent.tools import ToolResult, Tools
 from ..brain.catalog import LLM, find
@@ -283,12 +284,12 @@ class TaskRun:
             )
             # With every parameter required, "no endpoint found" is a model that takes no tools.
             detail = "tools" if error.status == HTTPStatus.NOT_FOUND else failure_kind(error)
-            self._step(kind="model", outcome="error", ms=_ms(began))
+            self._step(kind="model", outcome="error", ms=_ms(began), reason=reason_of("error", detail))
             raise stopped("failed", detail) from None
         except TimeoutError:
             logger.warning("The task's model timed out")
             self._charge_estimate(request_chars)  # the provider may bill what was given up on
-            self._step(kind="model", outcome="timeout", ms=_ms(began))
+            self._step(kind="model", outcome="timeout", ms=_ms(began), reason="timeout")
             # The wait that ended was the task's time when that was the shorter bound: not the
             # clock, which a timer that fires a tick early leaves just short of the deadline.
             if remaining <= CHAT_TIMEOUT_S or self._clock() >= self.deadline:
@@ -299,7 +300,7 @@ class TaskRun:
             raise
         except Exception as exc:
             logger.warning("The task's model failed unexpectedly: %s", type(exc).__name__)
-            self._step(kind="model", outcome="error", ms=_ms(began))
+            self._step(kind="model", outcome="error", ms=_ms(began), reason="error")
             raise stopped("failed", "error") from None
         cost = turn.cost_usd
         if not turn.usage_known:  # no usage is not a free call
@@ -340,7 +341,7 @@ class TaskRun:
         began = time.perf_counter()
         if ref is None or len(json.dumps(arguments, ensure_ascii=False)) > MAX_ARGUMENT_CHARS:
             # Not a tool the task was given: nothing to call, and nothing to audit.
-            self._step(kind="tool", outcome="blocked", ms=_ms(began))
+            self._step(kind="tool", outcome="blocked", ms=_ms(began), reason="blocked")
             return _refused()
         if ref.kind == MCP:
             reply, outcome, tier = await self._plugin(ref, arguments)
@@ -355,6 +356,8 @@ class TaskRun:
             tier=tier,
             outcome=outcome,
             ms=_ms(began),
+            # The kind the reply carries, never its content: a service's own words stay out.
+            reason=reason_of(outcome, reply.get("kind")),
         )
         return reply
 

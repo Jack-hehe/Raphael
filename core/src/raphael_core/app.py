@@ -711,6 +711,7 @@ class App(Router):
             models=self.brain.known_models,
             gate=self.gate,
             background=self.background,
+            notify=self.notify,
         )
         self.agent.register(self)
 

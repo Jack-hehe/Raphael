@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 QUEUED, RUNNING = "queued", "running"
@@ -78,13 +78,14 @@ class Step:
     outcome: str  # "ok", "error", "timeout", "blocked", "cancelled" ...
     cost_usd: float
     ms: int
+    reason: str | None = None  # why it failed, one word of agent.steps.REASONS; never a message
 
 
 _TASK_COLUMNS = (
     "id, created_at_ms, started_at_ms, finished_at_ms, state, session_id, turn_id, language, text,"
     " report_prefix, report_text, report_detail, reason, model_calls, tool_calls, cost_usd"
 )
-_STEP_COLUMNS = "n, at_ms, kind, tool, server, tier, outcome, cost_usd, ms"
+_STEP_COLUMNS = "n, at_ms, kind, tool, server, tier, outcome, cost_usd, ms, reason"
 
 
 class TaskStore:
@@ -162,13 +163,26 @@ class TaskStore:
         tier: str | None = None,
         cost_usd: float = 0.0,
         ms: int = 0,
+        reason: str | None = None,
     ) -> None:
         with self._conn:
             self._conn.execute(
                 "INSERT INTO worker_steps (task_id, n, at_ms, kind, tool, server, tier, outcome,"
-                " cost_usd, ms) VALUES (?, (SELECT COALESCE(MAX(n), 0) + 1 FROM worker_steps"
-                " WHERE task_id = ?), ?, ?, ?, ?, ?, ?, ?, ?)",
-                (task_id, task_id, self._now_ms(), kind, tool, server, tier, outcome, cost_usd, ms),
+                " cost_usd, ms, reason) VALUES (?, (SELECT COALESCE(MAX(n), 0) + 1 FROM"
+                " worker_steps WHERE task_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    task_id,
+                    task_id,
+                    self._now_ms(),
+                    kind,
+                    tool,
+                    server,
+                    tier,
+                    outcome,
+                    cost_usd,
+                    ms,
+                    reason,
+                ),
             )
 
     def get(self, task_id: int) -> Task | None:
@@ -184,6 +198,25 @@ class TaskStore:
             f"SELECT {_TASK_COLUMNS} FROM worker_tasks ORDER BY id DESC LIMIT ?", (limit,)
         )
         return [Task(**dict(row)) for row in rows]
+
+    def for_turns(self, turn_ids: Iterable[int]) -> dict[int, Task]:
+        """The task each of `turn_ids` handed over, if it handed one over (the newest, should
+        there be more)."""
+        ids = sorted({int(turn_id) for turn_id in turn_ids})
+        found: dict[int, Task] = {}
+        for start in range(0, len(ids), 500):
+            chunk = ids[start : start + 500]
+            marks = ", ".join("?" * len(chunk))
+            rows = self._conn.execute(
+                f"SELECT {_TASK_COLUMNS} FROM worker_tasks WHERE turn_id IN ({marks})"
+                " ORDER BY id",
+                chunk,
+            )
+            for row in rows:
+                task = Task(**dict(row))
+                assert task.turn_id is not None
+                found[task.turn_id] = task
+        return found
 
     def steps(self, task_id: int) -> list[Step]:
         rows = self._conn.execute(

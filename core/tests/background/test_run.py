@@ -204,6 +204,8 @@ async def test_a_model_that_fails_ends_the_task_with_the_kind_of_failure(rig, er
     rig.client.replies = [error]
     assert await stop_of(rig.chat()) == ("failed", detail)
     assert rig.steps()[0].outcome == "error"
+    # The reason is the kind folded into the view's few words: "offline" is a network that failed.
+    assert rig.steps()[0].reason == {"offline": "network", "tools": "error"}.get(detail, detail)
 
 
 async def test_a_model_that_takes_too_long_is_a_failure_to_reach_it(rig, monkeypatch):
@@ -217,6 +219,7 @@ async def test_a_model_that_takes_too_long_is_a_failure_to_reach_it(rig, monkeyp
     rig.client.replies = [slow]
     assert await stop_of(rig.chat()) == ("failed", "offline")
     assert rig.steps()[0].outcome == "timeout"
+    assert rig.steps()[0].reason == "timeout"
 
 
 # --- the tools of the plugins ---------------------------------------------------------------------
@@ -231,6 +234,7 @@ async def test_a_tool_of_a_plugin_is_called_through_the_gate_and_audited_with_th
     assert rig.audit() == [("Notes", "look", None, "auto", "ok", rig.task_id)]
     [step] = rig.steps()
     assert (step.kind, step.tool, step.server, step.tier, step.outcome) == ("tool", "look", "Notes", "T1", "ok")
+    assert step.reason is None
     assert rig.run.tool_calls == 1
 
 
@@ -353,6 +357,7 @@ async def test_a_tool_that_fails_is_told_as_a_failure_with_its_kind(rig):
     reply = await rig.tool("Notes__broken")
     assert (reply["ok"], reply["kind"]) == (False, "tool_error")
     assert "secret detail" not in json.dumps(rig.steps()[0].__dict__)
+    assert rig.steps()[0].reason == "tool_error"  # the kind, not the service's words
     assert rig.audit()[0][4] == "error"
 
 

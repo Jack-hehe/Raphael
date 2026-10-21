@@ -35,7 +35,13 @@ ui_language, target_app}`. The router (Jev, and the language model when Jev fail
 Whatever goes wrong is answered, never raised: no key, the monthly limit reached, no network, a
 model that fails each get a short 否 reason in the user's language, and the commands still work (a
 list of words finds them, `local`). Every paid call is written to the spend with the purpose
-"agent". Every turn is written to the history (`agent.history.list`, `agent.history.clear`).
+"agent". Every turn is written to the history (`agent.history.list`, `agent.history.clear`), with
+its steps (`steps`): each lookup, plugin call and command it made, how it ended, how long it took
+and, when it failed, why in one word. `agent.history.list` gives each turn its steps and, for a turn
+that handed a task to the worker, the task and the worker's steps, so the app can show what happened
+between the question and the answer. `agent.turn {turn_id}` tells the app a turn was written or
+completed. `agent.ask` takes an optional `source`, where the request came from ("voice", the
+default, or a chat app such as "telegram").
 
 `agent.cancel {session_id}` ends a request that is still being thought about and denies the
 question that session is waiting on. A new request replaces any question that waits.
@@ -52,7 +58,7 @@ import sqlite3
 import time
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from typing import TYPE_CHECKING, Any
 
@@ -71,8 +77,8 @@ from .cities import cities_in
 from .commands import COMMANDS, AppCatalog, run_command
 from .device import DeviceActions
 from .failure import AgentFailure
-from .gate import ToolGate
-from .history import AgentHistory, Turn
+from .gate import BUILTIN_SERVER, ToolGate
+from .history import VOICE, AgentHistory, Turn
 from .ledger import Ledger
 from .local import extract_target, match_command
 from .opening import Opening, clean_target, match_settings, parse_domain, validate_url
@@ -101,6 +107,7 @@ from .policy import (
     Tier,
 )
 from .routing import OpenAnswer, RouteDecision, Router
+from .steps import Step, reason_of
 from .targets import OpenTargets
 from .tools import ToolResult, Tools
 
@@ -116,6 +123,8 @@ CANCELLED_MEMORY_S = 60.0
 HISTORY_MAX_LIMIT = 200
 # A request is cut to this many characters: a dictation holds a few thousand at the very most.
 MAX_QUESTION_CHARS = 1000
+# Where a request may come from: a short lower-case word ("voice", "telegram").
+_SOURCE = re.compile(r"[a-z]{1,20}")
 # How many turns of the conversation each route is shown.
 CONTEXT_TURNS = {"discuss": 10, "answer": 3, "chat": 3}
 _DAY_MS = 86_400_000
@@ -129,6 +138,35 @@ _QUOTES = (
     re.compile(r"“([^”]+)”"),
     re.compile(r'"([^"]+)"'),
 )
+
+
+def _ms_since(began: float) -> int:
+    return round((time.perf_counter() - began) * 1000)
+
+
+def _plugin_outcome(result: PluginResult) -> str:
+    """How a call of a plugin's tool ended, in the words of the steps and the audit."""
+    if result.ok:
+        return "ok"
+    if result.kind == "timeout":
+        return "timeout"
+    if result.kind in ("blocked", "changed", "gone"):
+        return "blocked"
+    if result.kind == "cancelled":
+        return "cancelled"
+    return "error"
+
+
+def _step_view(step: Step) -> dict[str, Any]:
+    return {
+        "kind": step.kind,
+        "tool": step.tool,
+        "server": step.server,
+        "outcome": step.outcome,
+        "ms": step.ms,
+        "reason": step.reason,
+        "at_ms": step.at_ms,
+    }
 
 
 def _unmade(call: PlannedCall) -> ToolResult:
@@ -205,6 +243,9 @@ class _Ask:
     session_id: str
     text: str
     language: str
+    source: str = VOICE
+    # What was done for the request so far; written with its turn.
+    steps: list[Step] = field(default_factory=list)
 
 
 @dataclass
@@ -239,7 +280,7 @@ class AgentService:
     is told whether the answer model takes tools. `gate` is the one gate every tool call goes
     through, shared with the background worker (one is made when none is given), and `background`
     is the worker that takes the tasks of the `delegate` route (none: the route is answered as it
-    was before the worker).
+    was before the worker). `notify` sends a notification to the app (`agent.turn`).
     """
 
     def __init__(
@@ -259,8 +300,10 @@ class AgentService:
         models: Callable[[], Sequence[CatalogEntry] | None] | None = None,
         gate: ToolGate | None = None,
         background: "BackgroundService | None" = None,
+        notify: Callable[[str, dict], None] | None = None,
     ) -> None:
         self._keys = keys
+        self._notify = notify
         self._now_ms = now_ms
         self._actions = actions
         self._settings = SettingsStore(conn)
@@ -337,6 +380,11 @@ class AgentService:
             text=_str(params, "text", blank=True)[:MAX_QUESTION_CHARS],
             language=normalize_language(_str(params, "ui_language")),
         )
+        source = params.get("source")
+        if source is not None:
+            if not isinstance(source, str) or not _SOURCE.fullmatch(source):
+                raise _invalid("source must be a short lower-case word")
+            ask.source = source
         target_app = params.get("target_app")  # for the apps to come; not used yet
         if target_app is not None and not isinstance(target_app, str):
             raise _invalid("target_app must be a string or null")
@@ -483,11 +531,11 @@ class AgentService:
         if decision.needs_weather:
             # Each city the question names, else the one in the settings.
             for city in cities_in(ask.text) or [settings.city]:
-                jobs.append(self._tool(self._tools.weather(city, ask.language), "weather"))
+                jobs.append(self._tool(ask, self._tools.weather(city, ask.language), "weather"))
         if decision.needs_search:
             jobs.append(
                 self._tool(
-                    self._tools.web_search(ask.text, settings.model, ledger), "web_search"
+                    ask, self._tools.web_search(ask.text, settings.model, ledger), "web_search"
                 )
             )
         picking = self._pick_tools(ask, settings, ledger, offer)
@@ -526,14 +574,33 @@ class AgentService:
         )
         return self._finish(ask, "answer", reply.prefix, reply.text, ledger, detail=reply.detail)
 
-    @staticmethod
-    async def _tool(job: Any, name: str) -> ToolResult:
-        """A tool's result, whatever happens: one that breaks is a tool that failed."""
+    async def _tool(self, ask: _Ask, job: Any, name: str) -> ToolResult:
+        """A tool's result, whatever happens: one that breaks is a tool that failed. It is a step
+        of the request."""
+        began = time.perf_counter()
         try:
-            return await job
+            result = await job
         except Exception as exc:
             logger.warning("The %s tool failed unexpectedly: %s", name, type(exc).__name__)
-            return ToolResult(name, False, None, "error")
+            result = ToolResult(name, False, None, "error")
+        outcome = "ok" if result.ok else ("timeout" if result.error == "timeout" else "error")
+        ask.steps.append(self._step("tool", name, BUILTIN_SERVER, outcome, began, result.error))
+        return result
+
+    def _step(
+        self, kind: str, tool: str, server: str | None, outcome: str, began: float, why: str | None
+    ) -> Step:
+        """A step that ended now, begun at `began` (`time.perf_counter`), with the reason of
+        `why`, the kind of its failure."""
+        return Step(
+            kind=kind,
+            tool=tool,
+            server=server,
+            outcome=outcome,
+            ms=_ms_since(began),
+            reason=reason_of(outcome, why),
+            at_ms=self._now_ms(),
+        )
 
     def _context(self, count: int) -> list[Turn]:
         try:
@@ -611,22 +678,39 @@ class AgentService:
         for call in calls:
             tier = self._tier_now(call)
             (asking if tier is not None and tier >= Tier.T2 else automatic).append(call)
-        results = [*results, *await asyncio.gather(*(self._plugin_call(c, None) for c in automatic))]
+        made = await asyncio.gather(*(self._plugin_call(c, None, steps=ask.steps) for c in automatic))
+        results = [*results, *made]
         if not asking:
             return results
         first, *rest = asking
         results += [_unmade(call) for call in rest]
+        for call in rest:
+            ask.steps.append(
+                self._step("tool", call.tool.name, call.tool.server, "blocked", time.perf_counter(), "not_made")
+            )
         return self._ask_plugin(ask, first, results, ledger)
 
     async def _plugin_call(
-        self, call: PlannedCall, approval: Approval | None, action: Action | None = None
+        self,
+        call: PlannedCall,
+        approval: Approval | None,
+        action: Action | None = None,
+        *,
+        steps: list[Step],
     ) -> ToolResult:
         """Make a call of a plugin's tool through the policy's one door, and give its result as
         the answer is shown it. `approval` is the yes for it, if it had to be asked about; a call
-        that the door refuses is not made, and the hub writes down that it was refused."""
+        that the door refuses is not made, and the hub writes down that it was refused. The call
+        is added to `steps`, whatever came of it."""
         action = action or Action(call.tool.key, call.arguments)
+        began = time.perf_counter()
         outcome = await self._gate.call_plugin(
             call.tool.key, call.arguments, approval=approval, action=action
+        )
+        steps.append(
+            self._step(
+                "tool", call.tool.name, call.tool.server, _plugin_outcome(outcome), began, outcome.kind
+            )
         )
         return _tool_result(call, outcome)
 
@@ -668,7 +752,9 @@ class AgentService:
         now = self._tier_now(call)
         if now is None or now > pending.tier:
             approval = None
-        result = await self._plugin_call(call, approval, pending.action)
+        steps: list[Step] = []
+        result = await self._plugin_call(call, approval, pending.action, steps=steps)
+        self._write(lambda: self._history.add_steps(pending.turn_id, steps))
         if not result.ok and result.error == "timeout":
             text = phrase(language, "plugin_unsure", server=call.tool.server)
             return self._outcome(pending, "negative", text, "error")
@@ -692,7 +778,13 @@ class AgentService:
             # It was done, and Raphael cannot say more than that.
             return self._outcome(pending, "understood", "", "done", cost_usd=ledger.total)
         return self._outcome(
-            pending, reply.prefix, reply.text, "done", detail=reply.detail, cost_usd=ledger.total
+            pending,
+            reply.prefix,
+            reply.text,
+            "done",
+            detail=reply.detail,
+            cost_usd=ledger.total,
+            model=ledger.model,
         )
 
     # --- commands -------------------------------------------------------------------------------
@@ -726,14 +818,17 @@ class AgentService:
         action = Action(command.name, args)
         if self._gate.needs_confirmation(command.name):
             return self._ask_to_confirm(ask, action, question, ledger)
+        began = time.perf_counter()
         try:
             self._gate.check(action, None)
             await run_command(command, args, self._actions)
         except Exception as exc:
             logger.warning("The command %s failed: %s", command.name, type(exc).__name__)
+            ask.steps.append(self._step("command", command.name, None, "error", began, None))
             return self._finish(
                 ask, "command", "negative", phrase(language, "failed"), ledger, status="error"
             )
+        ask.steps.append(self._step("command", command.name, None, "ok", began, None))
         if opening is not None and opening.learn_as:
             self._learn(opening.learn_as, opening.target)  # it opened: now it is known
         done = _DONE_PHRASE.get(command.name)
@@ -901,12 +996,17 @@ class AgentService:
         command = COMMANDS.get(pending.action.tool)
         if command is None:
             return self._outcome(pending, "negative", phrase(language, "failed"), "error")
+        began = time.perf_counter()
         try:
             self._gate.check(pending.action, resolution.approval)
             await run_command(command, pending.action.args, self._actions)
         except Exception as exc:  # NotApproved among them: it is a failure all the same
             logger.warning("The confirmed command %s failed: %s", command.name, type(exc).__name__)
+            step = self._step("command", command.name, None, "error", began, None)
+            self._write(lambda: self._history.add_steps(pending.turn_id, [step]))
             return self._outcome(pending, "negative", phrase(language, "failed"), "error")
+        step = self._step("command", command.name, None, "ok", began, None)
+        self._write(lambda: self._history.add_steps(pending.turn_id, [step]))
         done = _DONE_PHRASE.get(command.name)
         return self._outcome(pending, "understood", phrase(language, done) if done else "", "done")
 
@@ -919,6 +1019,7 @@ class AgentService:
         *,
         detail: str | None = None,
         cost_usd: float = 0.0,
+        model: str | None = None,
     ) -> dict:
         """End the turn of a question: what Raphael says now, and how it ended."""
         prefix = _prefix(pending.language, which)
@@ -930,8 +1031,10 @@ class AgentService:
                 status=status,
                 detail=detail,
                 cost_usd=cost_usd,
+                model=model,
             )
         )
+        self._turn_changed(pending.turn_id)
         return self._done(pending.turn_id, pending.language, which, text)
 
     def _deny(self, pendings: list[Pending]) -> None:
@@ -944,6 +1047,7 @@ class AgentService:
                     p.turn_id, prefix=prefix, text=text, status="denied"
                 )
             )
+            self._turn_changed(pending.turn_id)
 
     def _expire(self, pendings: list[Pending]) -> None:
         for pending in pendings:
@@ -955,6 +1059,7 @@ class AgentService:
                     p.turn_id, prefix=prefix, text=text, status="expired"
                 )
             )
+            self._turn_changed(pending.turn_id)
 
     # --- agent.cancel ---------------------------------------------------------------------------
 
@@ -988,21 +1093,33 @@ class AgentService:
         limit = HISTORY_DEFAULT_LIMIT if limit is None else min(max(limit, 1), HISTORY_MAX_LIMIT)
         self._expire(self._confirmations.sweep())
         turns = self._history.list(limit=limit, before_id=before_id)
-        return {
-            "turns": [
+        ids = [turn.id for turn in turns if turn.id is not None]
+        steps = self._history.steps(ids)
+        tasks = {} if self._background is None else self._background.tasks_for_turns(ids)
+        views = []
+        for turn in turns:
+            task, task_steps = tasks.get(turn.id or 0, (None, []))
+            views.append(
                 {
                     "id": turn.id,
                     "created_at_ms": turn.created_at_ms,
+                    "session_id": turn.session_id,
+                    "source": turn.source,
                     "question": turn.question,
                     "route": turn.route,
                     "prefix": turn.prefix,
                     "text": turn.text,
                     "detail": turn.detail,
                     "status": turn.status,
+                    "cost_usd": turn.cost_usd,
+                    "model": turn.model,
+                    # What the fast tier did, then what the worker did for the task it was given.
+                    "steps": [_step_view(step) for step in steps.get(turn.id or 0, [])]
+                    + task_steps,
+                    "task": task,
                 }
-                for turn in turns
-            ]
-        }
+            )
+        return {"turns": views}
 
     async def _history_clear(self, params: dict) -> dict:
         deleted = self._history.clear()
@@ -1100,9 +1217,10 @@ class AgentService:
         detail: str | None,
         ledger: Ledger,
     ) -> int:
-        """Write a turn to the history; 0 if that fails, since the answer matters more."""
+        """Write a turn to the history, with the steps of its request; 0 if that fails, since the
+        answer matters more."""
         try:
-            return self._history.add(
+            turn_id = self._history.add(
                 session_id=ask.session_id,
                 question=ask.text,
                 route=route,
@@ -1111,10 +1229,20 @@ class AgentService:
                 detail=detail,
                 status=status,
                 cost_usd=ledger.total,
+                source=ask.source,
+                model=ledger.model,
+                steps=ask.steps,
             )
         except sqlite3.Error as exc:
             logger.warning("Could not write the turn to the history: %s", type(exc).__name__)
             return 0
+        self._turn_changed(turn_id)
+        return turn_id
+
+    def _turn_changed(self, turn_id: int) -> None:
+        """Tell the app a turn was written or completed, so that a conversation on screen follows."""
+        if self._notify is not None and turn_id:
+            self._notify("agent.turn", {"turn_id": turn_id})
 
     @staticmethod
     def _write(action: Callable[[], Any]) -> None:
