@@ -18,6 +18,7 @@ import {
   reasonText,
   replacementNotices,
   sortChoices,
+  withFavorite,
 } from "./model-picker";
 import type { CatalogModel, ModelCatalog } from "./types";
 
@@ -40,7 +41,6 @@ function llm(id: string, over: Partial<CatalogModel> = {}): CatalogModel {
     context_length: 128_000,
     created_at_ms: OCT_18,
     capabilities: { structured_output: true, reasoning: true, reasoning_off: true, max_tokens: true },
-    recommended: false,
     roles: { cleanup: { usable: true, reason: null }, answer: { usable: true, reason: null } },
     ...over,
   };
@@ -63,8 +63,8 @@ function stt(id: string, over: Partial<CatalogModel> = {}): CatalogModel {
   };
 }
 
-const LUNA = llm("openai/gpt-6-luna", { name: "GPT-6 Luna", provider: "OpenAI", input_per_mtok: 0.1, output_per_mtok: 0.5, context_length: 1_050_000, recommended: true });
-const HAIKU = llm("anthropic/claude-haiku-5.5", { name: "Claude Haiku 5.5", provider: "Anthropic", input_per_mtok: 0.1, output_per_mtok: 0.5, recommended: true, created_at_ms: OCT_18 + DAY });
+const LUNA = llm("openai/gpt-6-luna", { name: "GPT-6 Luna", provider: "OpenAI", input_per_mtok: 0.1, output_per_mtok: 0.5, context_length: 1_050_000 });
+const HAIKU = llm("anthropic/claude-haiku-5.5", { name: "Claude Haiku 5.5", provider: "Anthropic", input_per_mtok: 0.1, output_per_mtok: 0.5, created_at_ms: OCT_18 + DAY });
 const ALIAS = llm("~openai/gpt-luna-latest", { name: "GPT Luna Latest", provider: "OpenAI", input_per_mtok: 0.1, output_per_mtok: 0.5 });
 const FREE = llm("nvidia/nemotron:free", { name: "Nemotron 3 Super (free)", provider: "NVIDIA", input_per_mtok: 0, output_per_mtok: 0, free: true, created_at_ms: null });
 const ROUTER = llm("typesafe/jev-router", { name: "Jev Router", provider: "TypeSafe", input_per_mtok: null, output_per_mtok: null, variable_price: true });
@@ -75,7 +75,7 @@ const FLASH = llm("google/gemini-3.8-flash", { name: "Gemini 3.8 Flash", provide
 const MOON = llm("moondream/moondream3-preview", { name: "Moondream 3 Preview", provider: "Moondream", input_per_mtok: 0.3, output_per_mtok: 2.5, ...unusable("no_structured_output") });
 const LLMS = [LUNA, HAIKU, ALIAS, FREE, ROUTER, DEAR, OLD, UNKNOWN, FLASH, MOON];
 
-const SCRIBE = stt("elevenlabs/scribe-v2", { name: "Scribe v2", provider: "ElevenLabs", per_minute: 0.00366667, recommended: true });
+const SCRIBE = stt("elevenlabs/scribe-v2", { name: "Scribe v2", provider: "ElevenLabs", per_minute: 0.00366667 });
 const WHISPER = stt("openai/whisper-large-v3-turbo", { name: "Whisper Large V3 Turbo", provider: "OpenAI", per_minute: 0.0001998, capabilities: { dictionary_hints: true } });
 const GEMINI = stt("google/gemini-3.5-transcribe", { name: "Gemini 3.5 Transcribe", provider: "Google", per_minute: null, input_per_mtok: 2, output_per_mtok: 12 });
 const MAI = stt("microsoft/mai-transcribe-2", { name: "MAI-Transcribe 2", provider: "Microsoft AI", per_minute: 0.00166667 });
@@ -312,14 +312,15 @@ describe("the chosen model", () => {
     expect(html).toMatch(/data-id="anthropic\/claude-haiku-5\.5"[^>]*data-current/);
     const row = html.slice(html.indexOf('data-id="anthropic/claude-haiku-5.5"'));
     expect(row.slice(0, row.indexOf("</button>"))).toContain("<svg");
-    expect(row).toContain("Claude Haiku 5.5, Anthropic, 輸入 $0.10 / 輸出 $0.50 每百萬 token, 推薦, 目前使用");
+    expect(row).toContain("Claude Haiku 5.5, Anthropic, 輸入 $0.10 / 輸出 $0.50 每百萬 token, 目前使用");
   });
 
-  test("a row shows its maker, its context and its badge", () => {
+  test("a row shows its maker and its context, and no badge", () => {
     const html = listHTML(new PickerList("cleanup", [LUNA], "x/y"));
     expect(html).toContain("GPT-6 Luna");
     expect(html).toContain("OpenAI · 1.05M 上下文");
-    expect(html).toContain('<span class="mp-badge">推薦</span>');
+    expect(html).not.toContain("mp-badge");
+    expect(html).not.toContain("推薦");
     expect(html).toContain('<span class="mp-price num">$0.10 / $0.50</span>');
     expect(html).not.toContain("data-current");
   });
@@ -338,32 +339,121 @@ describe("the chosen model", () => {
   });
 });
 
-describe("a choice that is no model", () => {
-  // The speech recognition of this computer, which the settings offer with the speech models.
-  const LOCAL = { id: "local", name: "本機（離線，聲音不上傳）", price: "免費", detail: "聲音不離開這台電腦" };
+describe("favourites", () => {
+  const list = (favorites: string[], state = {}, current = "openai/gpt-6-luna") => new PickerList("cleanup", LLMS, current, state, favorites);
 
-  test("comes first, is checked when it is chosen, and can be chosen", () => {
-    const list = new PickerList("stt", STTS, "local", {}, [LOCAL]);
-    expect(ids(list.rows)[0]).toBe("local");
-    expect([list.activeId(), list.chosen()]).toEqual(["local", "local"]);
-    const html = listHTML(list);
-    expect(html).toMatch(/data-id="local"[^>]*data-current/);
-    expect(html).toContain('<span class="mp-price num">免費</span>');
-    expect(html).toContain('<span class="mp-sub">聲音不離開這台電腦</span>');
-    expect(html).toContain('aria-label="本機（離線，聲音不上傳）, 聲音不離開這台電腦, 免費, 目前使用"');
-    expect(list.modelCount()).toBe(STTS.length);
+  test("none at all: the list is as it was, with no heading", () => {
+    const html = listHTML(list([]));
+    expect(html).not.toContain("我的最愛");
+    expect(html).not.toContain("所有模型");
+    expect(ids(list([]).rows)).toEqual(rows());
   });
 
-  test("is found by its name, and leaves a search it does not answer and a maker", () => {
-    const list = new PickerList("stt", STTS, "elevenlabs/scribe-v2", {}, [LOCAL]);
-    list.setQuery("本機");
-    expect(ids(list.rows)).toEqual(["local"]);
-    list.setQuery("whisper");
-    expect(ids(list.rows)).toEqual(["openai/whisper-large-v3-turbo"]);
-    list.setQuery("");
-    expect(list.activeId()).toBe("elevenlabs/scribe-v2");
-    list.setProvider("OpenAI");
-    expect(ids(list.rows)).toEqual(["openai/whisper-large-v3-turbo"]);
+  test("come first, in the order of the list, under a heading, and the other models under one of theirs", () => {
+    const l = list(["openai/gpt-10", "nvidia/nemotron:free"]);
+    expect(ids(l.rows).slice(0, 3)).toEqual(["nvidia/nemotron:free", "openai/gpt-10", "anthropic/claude-haiku-5.5"]);
+    expect(l.rows.map((row) => row.favorite).slice(0, 4)).toEqual([true, true, false, false]);
+    const html = listHTML(l);
+    expect(html.indexOf("我的最愛")).toBeLessThan(html.indexOf('data-id="nvidia/nemotron:free"'));
+    expect(html.indexOf("所有模型")).toBeGreaterThan(html.indexOf('data-id="openai/gpt-10"'));
+    expect(html.indexOf("所有模型")).toBeLessThan(html.indexOf('data-id="openai/gpt-6-luna"'));
+  });
+
+  test("are listed once", () => {
+    const l = list(["openai/gpt-10"]);
+    expect(ids(l.rows).filter((id) => id === "openai/gpt-10")).toHaveLength(1);
+    expect(l.rows).toHaveLength(LLMS.length);
+  });
+
+  test("follow the order that was chosen", () => {
+    const l = list(["openai/gpt-10", "openai/gpt-5", "openai/gpt-6-luna"], { sort: "name" });
+    expect(ids(l.rows).slice(0, 3)).toEqual(["openai/gpt-5", "openai/gpt-6-luna", "openai/gpt-10"]);
+    l.setSort("price");
+    expect(ids(l.rows).slice(0, 3)).toEqual(["openai/gpt-6-luna", "openai/gpt-5", "openai/gpt-10"]);
+  });
+
+  test("that answer a search still come first, and those that do not are gone", () => {
+    const l = list(["openai/gpt-10", "nvidia/nemotron:free"]);
+    l.setQuery("gpt");
+    expect(ids(l.rows).slice(0, 2)).toEqual(["openai/gpt-10", "~openai/gpt-luna-latest"]);
+    expect(ids(l.rows)).not.toContain("nvidia/nemotron:free");
+    expect(l.rows.map((row) => row.favorite)).toEqual([true, false, false, false]);
+    expect(listHTML(l)).toContain("我的最愛");
+    l.setQuery("zzz");
+    expect(l.rows).toEqual([]);
+  });
+
+  test("are narrowed to a maker too", () => {
+    const l = list(["openai/gpt-10", "nvidia/nemotron:free"]);
+    l.setProvider("NVIDIA");
+    expect(ids(l.rows)).toEqual(["nvidia/nemotron:free"]);
+  });
+
+  test("whose model the catalog no longer has are not shown, and stay in the list that is saved", () => {
+    const l = list(["gone/model", "openai/gpt-10"]);
+    expect(ids(l.rows)[0]).toBe("openai/gpt-10");
+    expect(ids(l.rows)).not.toContain("gone/model");
+    expect(l.rows.filter((row) => row.favorite)).toHaveLength(1);
+    expect(l.favorites).toEqual(["gone/model", "openai/gpt-10"]);
+    expect(withFavorite(l.favorites, "openai/gpt-5", true)).toEqual(["gone/model", "openai/gpt-10", "openai/gpt-5"]);
+  });
+
+  test("a favourite the role cannot use stays among the favourites, greyed with its reason", () => {
+    const l = list(["google/gemini-3.8-flash", "openai/gpt-10"]);
+    expect(ids(l.rows).slice(0, 2)).toEqual(["openai/gpt-10", "google/gemini-3.8-flash"]);
+    const html = listHTML(l);
+    expect(html).toMatch(/data-id="google\/gemini-3\.8-flash"[^>]*aria-disabled="true"/);
+    expect(html.indexOf("一定會先推理，太慢")).toBeLessThan(html.indexOf("所有模型"));
+    // The heading over the other models that cannot be used comes once, after them.
+    expect(html.match(/無法用來整理聽寫/g)).toHaveLength(1);
+    expect(html.indexOf("無法用來整理聽寫")).toBeGreaterThan(html.indexOf('data-id="odd/model"'));
+  });
+
+  test("a favourite is chosen like any model", () => {
+    const l = list(["openai/gpt-10"], {}, "openai/gpt-10");
+    expect(l.activeId()).toBe("openai/gpt-10");
+    expect(l.chosen()).toBe("openai/gpt-10");
+  });
+
+  test("each row has a real star button beside its option, never inside it, that says what it does", () => {
+    const html = listHTML(list(["openai/gpt-10"]));
+    const fav = html.slice(html.indexOf('data-id="openai/gpt-10"'));
+    const optionEnd = fav.indexOf("</button>");
+    expect(fav.slice(0, optionEnd)).not.toContain("mp-star");
+    const star = fav.slice(optionEnd).match(/<button type="button" class="mp-star"[^>]*>/)![0];
+    expect(star).toContain('data-star="openai/gpt-10"');
+    expect(star).toContain('aria-label="從最愛移除：GPT-10"');
+    expect(star).toContain('tabindex="-1"');
+    expect(star).toContain("data-on");
+    const plain = html.slice(html.indexOf('data-id="openai/gpt-5"'));
+    const plainStar = plain.slice(plain.indexOf("</button>")).match(/<button type="button" class="mp-star"[^>]*>/)![0];
+    expect(plainStar).toContain('aria-label="加到最愛：GPT-5"');
+    expect(plainStar).not.toContain("data-on");
+    expect(html.match(/class="mp-star"/g)).toHaveLength(LLMS.length);
+  });
+
+  test("the star speaks the language of the window", () => {
+    setLocale("en");
+    expect(listHTML(list(["openai/gpt-10"]))).toContain('aria-label="Remove from favorites: GPT-10"');
+    expect(listHTML(list([]))).toContain('aria-label="Add to favorites: GPT-10"');
+  });
+
+  test("a favourite added or removed moves the model and keeps the highlight on it", () => {
+    const l = list([]);
+    l.point("openai/gpt-10");
+    l.setFavorites(withFavorite(l.favorites, "openai/gpt-10", true));
+    expect(ids(l.rows)[0]).toBe("openai/gpt-10");
+    expect(l.activeId()).toBe("openai/gpt-10");
+    l.setFavorites(withFavorite(l.favorites, "openai/gpt-10", false));
+    expect(ids(l.rows)).toEqual(rows());
+    expect(l.activeId()).toBe("openai/gpt-10");
+  });
+
+  test("withFavorite adds once at the end and removes", () => {
+    expect(withFavorite(["a"], "b", true)).toEqual(["a", "b"]);
+    expect(withFavorite(["a", "b"], "a", true)).toEqual(["a", "b"]);
+    expect(withFavorite(["a", "b"], "a", false)).toEqual(["b"]);
+    expect(withFavorite(["a"], "z", false)).toEqual(["a"]);
   });
 });
 
