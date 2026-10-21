@@ -1,9 +1,13 @@
 """Where Raphael keeps its files: the database and the downloaded speech models.
 
-Both live under one data directory. `RAPHAEL_DATA_DIR` overrides it (the tests and the end-to-end
-runs set it); otherwise it is Raphael's folder in the platform's per-user application data.
-`RAPHAEL_MODELS_DIR` puts the models somewhere else: an end-to-end run uses an empty data directory
-but the models that are already downloaded.
+The small user data (database, settings) lives in the data directory: Raphael's folder in the
+platform's per-user application data, which on Windows is Roaming and may follow a profile from
+one PC to another. The speech models are large and can be downloaded again, so they live in the
+machine-local folder instead (`%LOCALAPPDATA%\\Raphael` on Windows, `~/Library/Caches/Raphael` on
+macOS). `RAPHAEL_DATA_DIR` overrides the data directory and, with it, puts the models in its
+`models` folder (the tests and the end-to-end runs set it). `RAPHAEL_MODELS_DIR` puts the models
+somewhere else: an end-to-end run uses an empty data directory but the models that are already
+downloaded.
 """
 
 import os
@@ -26,13 +30,28 @@ def data_dir() -> Path:
     return path
 
 
+def local_dir() -> Path:
+    """Raphael's folder in the per-user machine-local data (not roaming). Only a path: nothing is
+    created."""
+    if sys.platform == "win32":
+        return Path(os.environ["LOCALAPPDATA"]) / "Raphael"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "Raphael"
+    raise RuntimeError(f"No default local directory on {sys.platform}: set RAPHAEL_DATA_DIR")
+
+
 def models_dir(base: Path | None = None) -> Path:
-    """Where the speech models are: `RAPHAEL_MODELS_DIR` if it is set, else `models` in `base`
-    (the data directory when there is no `base`). Only a path: nothing is created."""
+    """Where the speech models are: `RAPHAEL_MODELS_DIR` if it is set, else `models` in `base`.
+    Without a `base` they are in the data directory when `RAPHAEL_DATA_DIR` is set, and in the
+    machine-local folder otherwise. Only a path: nothing is created."""
     override = os.environ.get("RAPHAEL_MODELS_DIR")
     if override:
         return Path(override)
-    return (data_dir() if base is None else base) / "models"
+    if base is not None:
+        return base / "models"
+    if os.environ.get("RAPHAEL_DATA_DIR"):
+        return data_dir() / "models"
+    return local_dir() / "models"
 
 
 def db_path(base: Path | None = None) -> Path:

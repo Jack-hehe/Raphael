@@ -654,6 +654,7 @@ class App(Router):
         self,
         *,
         data_dir: Path,
+        models_dir: Path | None = None,
         fake_audio: Path | None = None,
         fake_llm: bool = False,
         manager: ModelManager | None = None,
@@ -664,7 +665,9 @@ class App(Router):
         self._fake_audio = fake_audio
         self._load_kit = _import_kit if load_kit is None else load_kit
         data_dir.mkdir(parents=True, exist_ok=True)
-        self.manager = ModelManager(paths.models_dir(data_dir)) if manager is None else manager
+        if manager is None:
+            manager = ModelManager(paths.models_dir(data_dir) if models_dir is None else models_dir)
+        self.manager = manager
 
         # The database is opened here, on the thread that runs the loop, and used there only.
         self._conn = connect(paths.db_path(data_dir))
@@ -1292,6 +1295,9 @@ def build_app(
     """
     app = App(
         data_dir=paths.data_dir() if data_dir is None else Path(data_dir),
+        # With no data directory given the models are in the machine-local folder, not beside the
+        # database; `models_dir()` also honours RAPHAEL_DATA_DIR and RAPHAEL_MODELS_DIR.
+        models_dir=paths.models_dir() if data_dir is None else None,
         fake_audio=None if fake_audio is None else Path(fake_audio),
         fake_llm=fake_llm,
     )
