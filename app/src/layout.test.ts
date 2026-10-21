@@ -26,7 +26,7 @@ function rulesOf(files: { file: string; css: string }[]): Rule[] {
   const rules: Rule[] = [];
   for (const { file, css } of files) {
     for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      const selector = m[1].trim();
+      const selector = m[1].trim().replace(/\s+/g, " ");
       if (!selector.startsWith("@")) rules.push({ file, selector, body: m[2] });
     }
   }
