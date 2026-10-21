@@ -54,7 +54,7 @@ from ..brain.spend import SpendTracker
 from ..protocol import INVALID_PARAMS, RpcError
 from ..router import Router as RpcRouter
 from .answers import Voice
-from .cities import city_in
+from .cities import cities_in
 from .commands import COMMANDS, AppCatalog, run_command
 from .device import DeviceActions, StartApp
 from .failure import AgentFailure
@@ -416,9 +416,9 @@ class AgentService:
         be used), a model picks the tools the request needs while the lookups run."""
         jobs = []
         if decision.needs_weather:
-            # The city the question names, else the one in the settings.
-            city = city_in(ask.text) or settings.city
-            jobs.append(self._tool(self._tools.weather(city, ask.language), "weather"))
+            # Each city the question names, else the one in the settings.
+            for city in cities_in(ask.text) or [settings.city]:
+                jobs.append(self._tool(self._tools.weather(city, ask.language), "weather"))
         if decision.needs_search:
             jobs.append(
                 self._tool(

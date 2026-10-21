@@ -53,7 +53,10 @@ SEARCH_PLUGINS = [{"id": "web", "max_results": 3}]
 _SEARCH_SYSTEM = (
     "Answer the user's question with facts from the web results. Reply in plain text of at most "
     "three short sentences, with no markdown, no list and no link. Name the site a fact comes "
-    "from when it matters. If the web results do not answer the question, say so plainly."
+    "from when it matters. The question was dictated and may hold a misheard word: read it as a "
+    "user of speech-to-text software would, search for that meaning, and say which meaning you "
+    "took when you changed it. If the web results answer only part of the question, give that "
+    "part; if they answer none of it, say so plainly."
 )
 
 # The sky for each WMO weather code Open-Meteo reports, in English; the answer puts it in the

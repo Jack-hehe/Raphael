@@ -486,3 +486,9 @@ def test_the_address_of_an_open_meteo_request_is_kept_out_of_the_log_and_others_
         httpx_log.info('HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "200 OK"')
     assert "open-meteo" not in caplog.text
     assert "openrouter.ai" in caplog.text
+
+
+def test_the_web_search_may_correct_a_term_speech_recognition_misheard():
+    system = tools_module._SEARCH_SYSTEM
+    assert "misheard" in system and "speech" in system
+    assert "say which" in system  # the correction is named, not silent
