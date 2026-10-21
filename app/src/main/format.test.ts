@@ -10,7 +10,6 @@ import {
   formatUsd,
   keyReasonText,
   parseLimit,
-  parseMisheard,
 } from "./format";
 
 test("formatUsd", () => {
@@ -161,12 +160,4 @@ describe("keyReasonText says why the key was not taken", () => {
     }
     expect(keyReasonText("credits")).toBe("這把金鑰在 OpenRouter 上已經沒有額度");
   });
-});
-
-test("parseMisheard splits the spellings typed after 常被聽成", () => {
-  expect(parseMisheard("拉菲爾")).toEqual(["拉菲爾"]);
-  expect(parseMisheard("Lafia 先生、拉菲爾先生")).toEqual(["Lafia 先生", "拉菲爾先生"]);
-  expect(parseMisheard("a, b，c;d；e")).toEqual(["a", "b", "c", "d", "e"]);
-  expect(parseMisheard("  、 ,")).toEqual([]);
-  expect(parseMisheard("")).toEqual([]);
 });

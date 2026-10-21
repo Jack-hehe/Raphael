@@ -968,6 +968,7 @@ mod tests {
             "history.delete",
             "dictionary.list",
             "dictionary.add",
+            "dictionary.import",
             "dictionary.delete",
             "dictionary.dismiss",
             "settings.get",
