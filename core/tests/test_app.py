@@ -1664,6 +1664,67 @@ async def test_closing_the_app_ends_the_assistants_requests_before_closing_the_c
     assert app.client.closed
 
 
+# --- the background worker --------------------------------------------------------------------
+
+WORKER_METHODS = {"worker.list", "worker.get", "worker.cancel"}
+
+
+async def test_the_workers_methods_are_on_the_app_from_the_start(make_app):
+    assert WORKER_METHODS <= set(make_app().methods())
+
+
+async def test_the_assistant_and_the_worker_go_through_the_one_gate(make_app):
+    app = make_app()
+    assert app.agent._gate is app.gate and app.background._gate is app.gate
+    assert app.gate.plugins is app.integrations
+
+
+async def test_a_task_for_the_background_goes_through_the_whole_app_with_the_fake_llm(make_app):
+    app = make_app()
+    sent = []
+    app.set_notifier(lambda method, params: sent.append((method, params)))
+    handed = await app.call("agent.ask", ask_params("[delegate] what time is it", "en"))
+    assert (handed["prefix"], handed["text"]) == ("Understood", "Handed to the background.")
+    # The worker is a process of its own, started for the task; its report comes by itself.
+    await wait_until(lambda: any(method == "worker.report" for method, _ in sent), timeout=60)
+    (report,) = [params for method, params in sent if method == "worker.report"]
+    assert (report["state"], report["prefix"], report["text"]) == (
+        "done", "Notice", "The scripted task saw 1 results.",
+    )  # fmt: skip
+    # The turn that handed it over was completed with the report, at no cost.
+    (turn,) = (await app.call("agent.history.list", {}))["turns"]
+    assert (turn["route"], turn["prefix"], turn["text"], turn["status"]) == (
+        "delegate", "Notice", "The scripted task saw 1 results.", "done",
+    )  # fmt: skip
+    task = (await app.call("worker.get", {"id": report["task_id"]}))["task"]
+    assert [(step["kind"], step["tool"], step["tier"]) for step in task["steps"]] == [
+        ("model", None, None),
+        ("tool", "local_time", "T0"),
+        ("model", None, None),
+    ]
+    audit = (await app.call("integrations.audit", {}))["entries"]
+    assert [(e["server"], e["tool"], e["approver"], e["task_id"]) for e in audit] == [
+        ("Raphael", "local_time", "auto", report["task_id"]),
+    ]
+    assert (await app.call("status.get"))["spend"]["month_usd"] == 0
+    assert await app.call("agent.history.clear", {}) == {"deleted": 1}
+    assert (await app.call("worker.list", {}))["tasks"] == []  # the tasks go with the history
+
+
+async def test_closing_the_app_ends_the_background_tasks_and_the_worker_before_the_client(make_app):
+    app = make_app()
+    order = []
+    closing = app.background.aclose
+
+    async def background_aclose():
+        order.append(("background", app.client.closed))
+        await closing()
+
+    app.background.aclose = background_aclose
+    await app.aclose()
+    assert order == [("background", False)]
+
+
 # --- shutting down ----------------------------------------------------------------------------
 
 
