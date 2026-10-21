@@ -436,7 +436,7 @@ describe("pinned binary and ported components", () => {
     const directory = join(scripts, "release-licenses");
     const manifest = JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8"));
     expect(manifest.components.map((entry) => `${entry.name} ${entry.version}`)).toEqual([
-      "Handy 9e57a0d", "Microsoft Edge WebView2 SDK loader 1.0.3800.47",
+      "Handy 9e57a0d", "Microsoft Edge WebView2 SDK loader 1.0.3800.47", "Simple Icons 16.35.0",
     ]);
     for (const entry of manifest.components) {
       expect(entry.source).toMatch(/^https:\/\//);
@@ -456,6 +456,13 @@ describe("pinned binary and ported components", () => {
     expect(webview.requiresCrate).toEqual({ name: "webview2-com-sys", version: "0.39.1" });
     expect(webview.files[0].archiveSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(webview.usage).toContain("89c6b872783b8f6c3cedbff618adb42082d455c615453ae10cfc753f1e8f25d8");
+    // The vendored brand marks are CC0 and pinned to the commit of the release they were taken from.
+    const icons = manifest.components[2];
+    expect(icons.license).toBe("CC0-1.0");
+    expect(icons.usage).toContain("trademarks of their owners");
+    expect(icons.files[0].sourceUrl).toContain("/955f17f35634cd58de1748204059bce380d379af/");
+    expect(readFileSync(join(directory, icons.files[0].file), "utf8")).toContain("CC0 1.0 Universal");
+    expect(readFileSync(join(scripts, "..", "src", "main", "service-icons.ts"), "utf8")).toContain("Simple Icons 16.35.0");
   });
 });
 
