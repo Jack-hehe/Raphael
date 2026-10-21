@@ -85,6 +85,9 @@ windows = { version = "0.62", features = [
 
 [dev-dependencies]
 tempfile = "3"
+# The mock runtime, for tests that start the app's first plugins in processes of their own (a
+# second launch handing over to the first).
+tauri = { version = "2.12", features = ["tray-icon", "image-png", "test"] }
 # Tests of the controller's timers (a question that is not answered, an answer on screen) run on
 # a clock that they move themselves.
 tokio = { version = "1", features = ["test-util"] }
