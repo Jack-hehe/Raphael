@@ -259,7 +259,8 @@ class TaskRun:
         self._check(model=True, paid=True)
         self.model_calls += 1
         began = time.perf_counter()
-        timeout = min(CHAT_TIMEOUT_S, self._remaining_s())
+        remaining = self._remaining_s()
+        timeout = min(CHAT_TIMEOUT_S, remaining)
         try:
             turn = await self._guarded(
                 asyncio.wait_for(
@@ -288,7 +289,9 @@ class TaskRun:
             logger.warning("The task's model timed out")
             self._charge_estimate(request_chars)  # the provider may bill what was given up on
             self._step(kind="model", outcome="timeout", ms=_ms(began))
-            if self._clock() >= self.deadline:
+            # The wait that ended was the task's time when that was the shorter bound: not the
+            # clock, which a timer that fires a tick early leaves just short of the deadline.
+            if remaining <= CHAT_TIMEOUT_S or self._clock() >= self.deadline:
                 raise stopped("limit_time") from None
             raise stopped("failed", "offline") from None
         except RpcError:

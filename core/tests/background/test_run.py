@@ -442,3 +442,18 @@ async def test_nothing_of_the_task_is_logged(rig, caplog):
     logged = " ".join(record.getMessage() for record in caplog.records)
     for private in ("PRIVATE", ARGUMENT, "secret detail", "found"):
         assert private not in logged
+
+
+async def test_a_model_call_that_runs_out_of_the_tasks_time_is_the_time_limit_whatever_the_clock_says(
+    conn, plugins
+):
+    # asyncio fires a timer up to a clock tick early (about 16 ms on Windows), so the monotonic
+    # clock may still read a hair before the deadline when the wait ends. A frozen clock is that.
+    rig = Rig(conn, plugins, limits=RunLimits(seconds=0.05))
+
+    async def hangs(**kwargs):
+        await asyncio.sleep(30)
+
+    rig.client.replies = [hangs]
+    assert await stop_of(rig.chat()) == ("limit_time", None)
+    await rig.meteo.http.aclose()
