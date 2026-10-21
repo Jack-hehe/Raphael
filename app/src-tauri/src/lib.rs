@@ -2,6 +2,7 @@
 //! allows only one running copy.
 
 mod agent;
+mod background;
 mod commands;
 mod core_process;
 mod device_settings;

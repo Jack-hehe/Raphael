@@ -22,6 +22,9 @@ BUDGET_EXCEEDED = 1002
 BUSY = 1003
 NO_MICROPHONE = 1004
 NOT_FOUND = 1005
+# The core refuses a model call or a tool call of a background task (it was cancelled, a limit was
+# reached, the model failed); `data` says which. Only the worker is ever answered this.
+WORKER_STOPPED = 1100
 
 
 class RpcError(Exception):

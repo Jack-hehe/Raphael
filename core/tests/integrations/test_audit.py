@@ -24,7 +24,9 @@ def test_a_tool_with_no_tier_is_written_down_with_none(conn):
 
 def test_the_audit_has_no_column_for_what_a_call_was_given_or_answered(conn):
     columns = [row["name"] for row in conn.execute("PRAGMA table_info(tool_audit)")]
-    assert columns == ["id", "at_ms", "server", "tool", "tier", "approver", "outcome"]
+    assert columns == [
+        "id", "at_ms", "server", "tool", "tier", "approver", "outcome", "task_id",
+    ]  # fmt: skip
 
 
 def test_the_newest_come_first_and_the_list_is_limited(conn):

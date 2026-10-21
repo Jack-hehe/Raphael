@@ -78,6 +78,12 @@ const ADD_WORD: Notice = Notice {
     en: "Add Word to Dictionary",
     ja: "辞書に単語を追加",
 };
+/// Shown only while a background task runs.
+const STOP_BACKGROUND: Notice = Notice {
+    zh: "中止背景任務",
+    en: "Stop Background Task",
+    ja: "バックグラウンドタスクを中止",
+};
 const SETTINGS: Notice = Notice {
     zh: "設定…",
     en: "Settings…",
@@ -124,6 +130,8 @@ enum Action {
     ShowHistory,
     /// 「將單字加入字典」
     AddWord,
+    /// 「中止背景任務」, while a task of the background worker runs
+    StopBackground,
     /// 「設定…」
     Settings,
     /// A microphone of 「選擇麥克風」; `None` is the automatic choice.
@@ -144,6 +152,7 @@ impl Action {
             Self::Open => "open".to_owned(),
             Self::ShowHistory => "history".to_owned(),
             Self::AddWord => "add_word".to_owned(),
+            Self::StopBackground => "stop_background".to_owned(),
             Self::Settings => "settings".to_owned(),
             Self::Microphone(None) => MICROPHONE_AUTOMATIC_ID.to_owned(),
             Self::Microphone(Some(name)) => format!("{MICROPHONE_ID_PREFIX}{name}"),
@@ -156,6 +165,7 @@ impl Action {
             "open" => Self::Open,
             "history" => Self::ShowHistory,
             "add_word" => Self::AddWord,
+            "stop_background" => Self::StopBackground,
             "settings" => Self::Settings,
             MICROPHONE_AUTOMATIC_ID => Self::Microphone(None),
             "quit" => Self::Quit,
@@ -173,7 +183,7 @@ impl Action {
             Self::ShowHistory => Some((TrayPage::History, None)),
             Self::AddWord => Some((TrayPage::Dictionary, Some(TrayAction::AddWord))),
             Self::Settings => Some((TrayPage::Settings, None)),
-            Self::Microphone(_) | Self::Quit => None,
+            Self::StopBackground | Self::Microphone(_) | Self::Quit => None,
         }
     }
 }
@@ -225,12 +235,26 @@ fn check(action: &Action, label: &str, checked: bool) -> Entry {
 }
 
 /// The whole menu, in the interface `language` (`"zh-TW"`, `"en"` or `"ja"`; any other is
-/// Chinese, as for the notices).
-fn model(language: &str, version: &str, microphones: &Microphones) -> Vec<Entry> {
-    vec![
+/// Chinese, as for the notices). `background_running` is whether a task of the background worker
+/// is under way: only then does the menu offer to stop it.
+fn model(
+    language: &str,
+    version: &str,
+    microphones: &Microphones,
+    background_running: bool,
+) -> Vec<Entry> {
+    let mut entries = vec![
         item(&Action::Open, OPEN.text(language)),
         item(&Action::ShowHistory, HISTORY.text(language)),
         item(&Action::AddWord, ADD_WORD.text(language)),
+    ];
+    if background_running {
+        entries.push(item(
+            &Action::StopBackground,
+            STOP_BACKGROUND.text(language),
+        ));
+    }
+    entries.extend([
         Entry::Separator,
         item(&Action::Settings, SETTINGS.text(language)),
         Entry::Submenu {
@@ -244,7 +268,8 @@ fn model(language: &str, version: &str, microphones: &Microphones) -> Vec<Entry>
             enabled: false,
         },
         item(&Action::Quit, QUIT.text(language)),
-    ]
+    ]);
+    entries
 }
 
 /// The automatic choice, then the microphones that were found, with a tick on the one in use. The
@@ -306,6 +331,8 @@ struct TrayState {
     drawing: tokio::sync::Mutex<()>,
     /// A reading of the microphones is under way. The pointer can enter the icon often.
     scanning: AtomicBool,
+    /// A task of the background worker is under way (`background`): the menu offers to stop it.
+    background: AtomicBool,
 }
 
 fn version(app: &AppHandle) -> String {
@@ -355,7 +382,12 @@ pub fn build(app: &AppHandle) -> tauri::Result<TrayIcon> {
     app.manage(TrayState::default());
     let menu = build_menu(
         app,
-        &model(DEFAULT_LANGUAGE, &version(app), &Microphones::default()),
+        &model(
+            DEFAULT_LANGUAGE,
+            &version(app),
+            &Microphones::default(),
+            false,
+        ),
     )?;
 
     let icon = tray_icon();
@@ -387,6 +419,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<TrayIcon> {
 fn run(app: &AppHandle, action: Action) {
     match action {
         Action::Microphone(name) => choose_microphone(app, name),
+        Action::StopBackground => stop_background(app),
         Action::Quit => app.exit(0),
         Action::Open | Action::ShowHistory | Action::AddWord | Action::Settings => {
             if let Some((page, ask)) = action.destination() {
@@ -395,6 +428,31 @@ fn run(app: &AppHandle, action: Action) {
                 crate::show_main_window(app);
             }
         }
+    }
+}
+
+/// Asks the core to stop the background task that runs. Esc does not do this; the tray does. The
+/// core reports what was done by itself when the task has stopped.
+fn stop_background(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let Some(core) = app.try_state::<Arc<CoreProcess>>() else {
+            return;
+        };
+        if let Err(err) = core.call("worker.cancel", json!({})).await {
+            log::warn!("tray: could not stop the background task: {err}");
+        }
+    });
+}
+
+/// Tells the tray whether a task of the background worker is under way, and draws the menu again
+/// when that is not what it shows.
+pub fn set_background_running(app: &AppHandle, running: bool) {
+    let Some(state) = app.try_state::<TrayState>() else {
+        return;
+    };
+    if state.background.swap(running, Ordering::AcqRel) != running {
+        refresh(app);
     }
 }
 
@@ -472,7 +530,12 @@ async fn draw(app: &AppHandle) {
         found: lock(&state.microphones).clone(),
         selected,
     };
-    let entries = model(&language, &version(app), &microphones);
+    let entries = model(
+        &language,
+        &version(app),
+        &microphones,
+        state.background.load(Ordering::Acquire),
+    );
 
     // Items are made on the main thread; one hop for the whole menu keeps this task from waiting
     // there for each of them.
@@ -550,6 +613,7 @@ mod tests {
             "zh-TW",
             "0.1.0",
             &listed(&["麥克風 (Realtek)", "耳機"], None),
+            false,
         );
         assert_eq!(
             outline(&menu),
@@ -572,7 +636,7 @@ mod tests {
 
     #[test]
     fn the_menu_in_english() {
-        let menu = model("en", "0.1.0", &listed(&["Headset"], Some("Headset")));
+        let menu = model("en", "0.1.0", &listed(&["Headset"], Some("Headset")), false);
         assert_eq!(
             outline(&menu),
             [
@@ -593,7 +657,7 @@ mod tests {
 
     #[test]
     fn the_menu_in_japanese() {
-        let menu = model("ja", "0.1.0", &listed(&[], None));
+        let menu = model("ja", "0.1.0", &listed(&[], None), false);
         assert_eq!(
             outline(&menu),
             [
@@ -616,8 +680,8 @@ mod tests {
         let microphones = listed(&["Headset"], None);
         for language in ["", "fr", "zh-CN", "EN", "zh"] {
             assert_eq!(
-                model(language, "0.1.0", &microphones),
-                model("zh-TW", "0.1.0", &microphones),
+                model(language, "0.1.0", &microphones, true),
+                model("zh-TW", "0.1.0", &microphones, true),
                 "{language:?}"
             );
         }
@@ -635,6 +699,7 @@ mod tests {
             OPEN,
             HISTORY,
             ADD_WORD,
+            STOP_BACKGROUND,
             SETTINGS,
             MICROPHONE,
             AUTOMATIC,
@@ -651,9 +716,40 @@ mod tests {
     }
 
     #[test]
+    fn the_menu_offers_to_stop_the_background_task_only_while_one_runs() {
+        let microphones = listed(&["Headset"], None);
+        for (language, stop) in [
+            ("zh-TW", "中止背景任務"),
+            ("en", "Stop Background Task"),
+            ("ja", "バックグラウンドタスクを中止"),
+        ] {
+            let quiet = outline(&model(language, "0.1.0", &microphones, false));
+            let busy = outline(&model(language, "0.1.0", &microphones, true));
+            assert!(!quiet.iter().any(|line| line == stop), "{language}");
+            // It sits with the items that act (open, history, add a word), above the first rule.
+            let at = busy.iter().position(|line| line == stop).expect(language);
+            assert_eq!(at, 3, "{language}");
+            assert_eq!(busy[4], "-", "{language}");
+            let mut without = busy.clone();
+            without.remove(at);
+            assert_eq!(without, quiet, "{language}: nothing else changes");
+        }
+    }
+
+    #[test]
+    fn stopping_the_background_task_is_an_action_that_opens_no_page() {
+        assert_eq!(Action::StopBackground.id(), "stop_background");
+        assert_eq!(
+            Action::from_id("stop_background"),
+            Some(Action::StopBackground)
+        );
+        assert_eq!(Action::StopBackground.destination(), None);
+    }
+
+    #[test]
     fn the_version_line_is_the_only_item_that_is_off() {
         for language in ["zh-TW", "en", "ja"] {
-            let menu = model(language, "2.4.1", &Microphones::default());
+            let menu = model(language, "2.4.1", &Microphones::default(), false);
             let off: Vec<_> = menu
                 .iter()
                 .filter_map(|entry| match entry {
@@ -731,7 +827,7 @@ mod tests {
 
     #[test]
     fn every_item_has_its_own_id_and_a_choice_reads_back_as_itself() {
-        let menu = model("en", "0.1.0", &listed(&["A", "B"], Some("B")));
+        let menu = model("en", "0.1.0", &listed(&["A", "B"], Some("B")), true);
         let mut ids = Vec::new();
         fn collect(entries: &[Entry], ids: &mut Vec<String>) {
             for entry in entries {

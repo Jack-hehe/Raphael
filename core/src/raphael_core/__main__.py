@@ -8,6 +8,11 @@ The Tauri app runs this as a child process. Environment:
 - RAPHAEL_FAKE_LLM=1: no OpenRouter; the cleaned text is the transcript as it was, at no cost.
   (The end-to-end tests use the last two.)
 
+`--worker` makes this process the background worker instead (`raphael_core.worker.runner`): the core
+starts it that way for the tasks it hands over. The branch is the first thing `main` does, before the
+app module (OpenCC, ONNX Runtime) is imported, so a worker starts in a fraction of a second and has
+none of the core's libraries in it.
+
 stdout is taken for the protocol (`claim_stdout`) before anything native is imported: the app
 module brings in OpenCC, and its start-up thread ONNX Runtime and PortAudio. Whatever they write to
 fd 1 goes to stderr, with the log.
@@ -25,6 +30,11 @@ LIBRARIES_TIMEOUT_S = 60.0
 
 
 def main() -> None:
+    if "--worker" in sys.argv[1:]:
+        from raphael_core.worker.runner import main as worker_main  # light: no native libraries
+
+        worker_main()
+        return
     logging.basicConfig(
         stream=sys.stderr, level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )

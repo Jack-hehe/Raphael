@@ -1,11 +1,18 @@
 """Exercise an installed or relocated core using isolated data and no credential access.
 
-Two passes, each with a core of its own and temporary data. The first has the fail-closed keyring,
-so cleanup stops before it would ask the model, and checks the plain local operations. The second
-has the fake LLM (RAPHAEL_FAKE_LLM=1: an in-memory key and a client that returns the transcript, no
-network), so a dictation really goes through cleanup. That loads the prompt resource and the OpenCC
-configurations (s2twp, s2hk, t2s and tw2sp) from the bundle, which the first pass never reaches: a
-missing file would otherwise switch cleanup off without a word. Neither pass needs a key.
+Three passes. The first two each have a core of its own and temporary data. The first has the
+fail-closed keyring, so cleanup stops before it would ask the model, and checks the plain local
+operations. The second has the fake LLM (RAPHAEL_FAKE_LLM=1: an in-memory key and a client that
+returns the transcript, no network), so a dictation really goes through cleanup. That loads the
+prompt resource and the OpenCC configurations (s2twp, s2hk, t2s and tw2sp) from the bundle, which the
+first pass never reaches: a missing file would otherwise switch cleanup off without a word. The
+second pass also hands a task to the background worker, which makes the core start its worker: the
+same executable again, with --worker. That the bundle can start itself that way, and that the worker
+carries the scripted task out, is checked there. Neither pass needs a key.
+
+The third starts the worker by itself (`raphael-core.exe --worker`) and checks the handshake: it says
+hello, loads none of the core's libraries (it is meant to start in a fraction of a second, with no
+speech library, no key store and no database in it), and ends with its stdin.
 """
 
 from __future__ import annotations
@@ -14,6 +21,7 @@ import argparse
 import json
 import os
 import queue
+import re
 import subprocess
 import tempfile
 import threading
@@ -46,6 +54,7 @@ class RpcProcess:
             text=True, encoding="utf-8", errors="strict", bufsize=1,
         )
         self.messages: queue.Queue = queue.Queue()
+        self.notifications: list[dict] = []
         self.stderr: list[str] = []
         self.calls: list[dict] = []
         self.request_id = 0
@@ -86,6 +95,7 @@ class RpcProcess:
             if isinstance(reply, BaseException):
                 raise RuntimeError(f"{method}: {reply}; stderr: {self.stderr[-12:]}")
             if "id" not in reply:
+                self.notifications.append(reply)
                 continue
             if reply["id"] != self.request_id:
                 raise RuntimeError(f"Unexpected response id: {reply['id']}")
@@ -97,6 +107,25 @@ class RpcProcess:
             if "error" in reply:
                 raise RuntimeError(f"{method} failed: {reply['error']}")
             return reply["result"]
+
+    def wait_for_notification(self, method: str, timeout: float = 60.0) -> dict:
+        """The params of the first notification of `method` (one that came earlier counts)."""
+        deadline = time.monotonic() + timeout
+        while True:
+            for notification in self.notifications:
+                if notification.get("method") == method:
+                    return notification["params"]
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"Timed out waiting for {method}; stderr: {self.stderr[-12:]}")
+            try:
+                message = self.messages.get(timeout=min(remaining, 0.5))
+            except queue.Empty:
+                continue
+            if isinstance(message, BaseException):
+                raise RuntimeError(f"{method}: {message}; stderr: {self.stderr[-12:]}")
+            if "id" not in message:
+                self.notifications.append(message)
 
     def close(self) -> None:
         try:
@@ -252,8 +281,21 @@ def smoke_with_the_fake_llm(executable: Path) -> dict:
                     "The voice assistant did not answer with the fake LLM")
             require([turn["question"] for turn in rpc.call("agent.history.list")["turns"]] == ["hello"],
                     "The assistant's turn was not recorded")
+            # A task for the background worker: the core starts its worker (this executable again,
+            # with --worker), which carries out the fake model's script and reports. If the bundle
+            # could not start itself that way the task would end interrupted or failed.
+            handed = rpc.call("agent.ask", {"session_id": "smoke", "text": "[delegate] what time is it",
+                                            "ui_language": "en", "target_app": None})
+            require(handed["status"] == "done" and handed["text"] == "Handed to the background.",
+                    "The task was not handed to the background worker")
+            task = rpc.wait_for_notification("worker.report", timeout=90)
+            require(task["state"] == "done" and task["text"] == "The scripted task saw 1 results.",
+                    f"The background worker did not carry the task out: {task['state']}")
+            steps = rpc.call("worker.get", {"id": task["task_id"]})["task"]["steps"]
+            require([step["kind"] for step in steps] == ["model", "tool", "model"],
+                    "The background worker's steps were not written down")
             returncode = shut_down(rpc, root)
-            return {"passed": True, "fake_llm": True, "cleaned": True,
+            return {"passed": True, "fake_llm": True, "cleaned": True, "background_task": True,
                     "languages": [languages[0] for languages, _, _ in CLEANED_VARIANTS],
                     "elapsed_seconds": round(time.monotonic() - began, 2), "requests": len(rpc.calls),
                     "exit_code": returncode, "calls": rpc.calls, "stderr": rpc.stderr}
@@ -261,16 +303,73 @@ def smoke_with_the_fake_llm(executable: Path) -> dict:
             rpc.close()
 
 
+# What the worker process must not have loaded: the core's libraries and everything secret. The worker
+# says so itself when asked to (worker.hello), but the smoke test cannot look inside a frozen process,
+# so it checks what it can see: how fast it starts and that it says nothing on stderr but its log.
+WORKER_START_SECONDS = 20.0
+
+
+def smoke_the_worker(executable: Path, extra_environment: dict[str, str] | None = None) -> dict:
+    """The third pass: `raphael-core.exe --worker` on its own, as the core starts it."""
+    began = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="raphael-frozen-smoke-worker-") as temporary:
+        root = Path(temporary)
+        environment = {name: value for name, value in os.environ.items()
+                       if name.upper() in {"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT"}}
+        environment.update({
+            "PATH": str(Path(os.environ["SYSTEMROOT"]) / "System32"),
+            "TEMP": str(root), "TMP": str(root), "HOME": str(root), "USERPROFILE": str(root),
+            "APPDATA": str(root), "LOCALAPPDATA": str(root),
+            "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring", "RAPHAEL_WORKER": "1",
+        })
+        environment.update(extra_environment or {})
+        process = subprocess.Popen(
+            [str(executable), "--worker"], cwd=executable.parent, env=environment,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="strict", bufsize=1,
+        )
+        try:
+            hello = {"jsonrpc": "2.0", "id": 1, "method": "worker.hello", "params": {}}
+            process.stdin.write(json.dumps(hello) + "\n")
+            process.stdin.flush()
+            line = process.stdout.readline()  # the worker answers in a fraction of a second
+            started = round(time.monotonic() - began, 2)
+            require(bool(line), f"The worker said nothing; it exited with {process.poll()}")
+            reply = json.loads(line)
+            require(reply.get("id") == 1 and reply.get("result", {}).get("protocol") == 1,
+                    "The worker did not answer hello in the protocol the core speaks")
+            require(isinstance(reply["result"].get("pid"), int), "The worker did not say its process id")
+            require(started < WORKER_START_SECONDS, f"The worker took {started} s to start")
+            process.stdin.close()  # its core is gone: it ends by itself
+            returncode = process.wait(timeout=15)
+            rest, log = process.stdout.read(), process.stderr.read()
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                stream.close()
+        require(returncode == 0, f"The worker exited with {returncode}")
+        require(rest == "", "The worker wrote something besides protocol lines to stdout")
+        require(not re.search(r"Traceback|ModuleNotFoundError|DLL load failed", log),
+                f"The worker failed while it started: {log[-400:]}")
+        require("The worker is serving on stdio" in log, "The worker did not report that it was serving")
+        return {"passed": True, "start_seconds": started, "exit_code": returncode,
+                "elapsed_seconds": round(time.monotonic() - began, 2)}
+
+
 def smoke(executable: Path) -> dict:
-    """Both passes. The report is the first pass's, with the second under `cleanup_pass`."""
+    """The three passes. The report is the first pass's, with the second under `cleanup_pass` and the
+    third under `worker_pass`."""
     began = time.monotonic()
     report = smoke_without_a_key(executable)
     cleanup = smoke_with_the_fake_llm(executable)
     report["cleanup_pass"] = {name: value for name, value in cleanup.items() if name not in {"calls", "stderr"}}
     report["requests"] += cleanup["requests"]
-    report["elapsed_seconds"] = round(time.monotonic() - began, 2)
     report["calls"] = [*report["calls"], *cleanup["calls"]]
     report["stderr"] = [*report["stderr"], *cleanup["stderr"]]
+    report["worker_pass"] = smoke_the_worker(executable)
+    report["elapsed_seconds"] = round(time.monotonic() - began, 2)
     return report
 
 

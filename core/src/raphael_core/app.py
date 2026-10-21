@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import functools
+import json
 import logging
 import re
 import shutil
@@ -56,10 +57,15 @@ import keyring
 
 from . import __version__, paths
 from .agent.device import DeviceActions, NullActions, WindowsActions
+from .agent.gate import ToolGate
 from .agent.service import AgentService
+from .agent.tools import Tools
+from .background.service import BackgroundService
 from .brain import textnorm
 from .brain.db import connect
 from .brain.openrouter import (
+    ChatToolCall,
+    ChatTurn,
     Completion,
     Decision,
     KeyInfo,
@@ -126,13 +132,28 @@ _QUESTION = re.compile(r"<question>\n(.*?)\n</question>", re.DOTALL)
 
 # --- the fake LLM -----------------------------------------------------------------------------
 
+# What a request that begins with this is for the fake LLM: a task for the background worker.
+_DELEGATE_MARK = "[delegate]"
+# The topics the scripted task looks up, one call each.
+_SCRIPT_TOPICS = ("alpha", "beta")
+
+
+def _scripted_delegate(text: str) -> bool:
+    return text.lstrip().startswith(_DELEGATE_MARK)
+
 
 class EchoClient:
     """Stands in for the OpenRouter client when RAPHAEL_FAKE_LLM=1: the "cleaned" text is the
     transcript as it was said, at no cost, with no network. The end-to-end runs use it.
 
     The voice assistant gets small talk from it: every request is "chat", and the reply is the
-    question as it was asked."""
+    question as it was asked.
+
+    One scripted exception, for the tests of the background worker: a request that begins with
+    `[delegate]` is routed to the worker, and `chat_tools` then plays a fixed task. It calls the
+    tool named `look` of a connected service twice (topics "alpha" and "beta"; or the time, when the
+    service is not there), a tool named `slow` once if the request says "slow", and then reports in
+    one sentence with the number of results it had seen. No network, no cost."""
 
     def __init__(self) -> None:
         self.warmed_up = False
@@ -181,9 +202,12 @@ class EchoClient:
         )
 
     async def decide(self, **kwargs: Any) -> Decision:
-        # Jev, sure that every request is small talk.
+        # Jev, sure that every request is small talk (or a task, for the scripted one).
+        state = kwargs.get("state")
+        spoken = state.get("utterance", "") if isinstance(state, dict) else ""
+        route = "delegate" if _scripted_delegate(spoken) else "chat"
         answers = {
-            "route": {"type": "choice", "choice": "chat", "confidence": 0.99},
+            "route": {"type": "choice", "choice": route, "confidence": 0.99},
             "command": {"type": "choice", "choice": "none", "confidence": 0.99},
             "needs_weather": {"type": "noul", "noul": 0.0},
             "needs_search": {"type": "noul", "noul": 0.0},
@@ -197,6 +221,30 @@ class EchoClient:
             calls=[], model="fake/echo", cost_usd=0.0, prompt_tokens=0, completion_tokens=0,
             latency_ms=0,
         )  # fmt: skip
+
+    async def chat_tools(self, *, messages: list[dict], tools: list[dict], **kwargs: Any) -> ChatTurn:
+        # The scripted task of the background worker (see the class).
+        offered = {tool["function"]["name"] for tool in tools}
+        seen = sum(1 for message in messages if message.get("role") == "tool")
+        task = " ".join(
+            str(message.get("content")) for message in messages if message.get("role") == "user"
+        )
+
+        def calling(name: str, arguments: dict) -> ChatTurn:
+            raw = json.dumps(arguments)
+            call = ChatToolCall(id=f"call_{seen}", name=name, arguments=arguments, raw_arguments=raw)
+            return ChatTurn("", [call], "tool_calls", "fake/echo", 0.0, 0, 0, 0)
+
+        look = next((name for name in sorted(offered) if name.endswith("__look")), None)
+        slow = next((name for name in sorted(offered) if name.endswith("__slow")), None)
+        if slow is not None and "slow" in task and seen == 0:
+            return calling(slow, {})
+        if look is not None and seen < len(_SCRIPT_TOPICS):
+            return calling(look, {"topic": _SCRIPT_TOPICS[seen]})
+        if look is None and "local_time" in offered and seen == 0:
+            return calling("local_time", {})
+        report = {"prefix": "告", "text": f"The scripted task saw {seen} results.", "detail": ""}
+        return ChatTurn(json.dumps(report), [], "stop", "fake/echo", 0.0, 0, 0, 0)
 
     async def chat_text(self, **kwargs: Any) -> TextCompletion:
         return TextCompletion(
@@ -644,6 +692,14 @@ class App(Router):
         # The plugins: servers the user connected, and the hub the assistant reaches their tools by.
         self.integrations = IntegrationsService(self._conn, data_dir, self.vault)
         self.integrations.register(self)
+        # The one gate every tool call goes through, the assistant's and the worker's.
+        self.gate = ToolGate(self.integrations, conn=self._conn)
+        # The background worker: tasks the assistant hands over, carried out in a process of their
+        # own that has no key, no database and no plugin (raphael_core.worker).
+        self.background = BackgroundService(
+            self._conn, self.client, self.gate, Tools(self.client), notify=self.notify
+        )
+        self.background.register(self)
         self.agent = AgentService(
             self._conn,
             self.client,
@@ -651,6 +707,8 @@ class App(Router):
             actions=agent_actions,
             plugins=self.integrations,
             models=self.brain.known_models,
+            gate=self.gate,
+            background=self.background,
         )
         self.agent.register(self)
 
@@ -834,6 +892,7 @@ class App(Router):
             ("cancel the dictation", close_dictation),
             ("close the level meter", close_meter),
             ("stop the account usage refresh", self.brain.aclose),
+            ("end the background tasks", self.background.aclose),
             ("end the assistant's requests", self.agent.aclose),
             ("close the HTTP client", self.client.aclose),
             ("wait for the start-up threads", join_threads),
