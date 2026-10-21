@@ -25,7 +25,7 @@ import {
   microphoneText,
   shortMicrophoneName,
 } from "../microphone";
-import { type ModelPickerLook, type PickerExtra, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
+import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
 import { pricingNote } from "../pricing";
 import { runOutDay } from "../report";
 import { WARN_FROM, spendVisual, spentShare } from "../spend";
@@ -40,7 +40,6 @@ const DEFAULT_MODELS = { cleanup: "openai/gpt-6-luna", answer: "openai/gpt-6-lun
  * one choice with one price.
  */
 export const LOCAL_STT = "local";
-const localStt = (): PickerExtra => ({ id: LOCAL_STT, name: t("settings.sttLocal"), price: t("settings.sttLocalPrice") });
 /** In the owner's order: light, dark, or as Windows is. */
 export const APPEARANCES: Choice[] = [
   { value: "light", get label() { return t("settings.015"); } },
@@ -216,7 +215,7 @@ export function modelPickerLook(v: SettingsView, role: ModelRole): ModelPickerLo
     current: role === "stt" ? sttChoice(v) : role === "cleanup" ? cleanupModel(v) : agentModel(v),
     catalog: catalogOf(v),
     loading: v.catalog === "loading",
-    extras: role === "stt" ? [localStt()] : [],
+    favorites: v.brain?.model_favorites?.[role] ?? [],
     showPrice: false,
     disabled: v.brain === null,
   };

@@ -25,7 +25,7 @@ import {
   toggleTranscriptionLanguage,
 } from "../languages";
 import { KeyRecorder, bindingClash, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "../keys";
-import { type ModelPicker, mountModelPicker, replacementNotices } from "../model-picker";
+import { type ModelPicker, mountModelPicker, replacementNotices, withFavorite } from "../model-picker";
 import { MonitorSwitch } from "../monitor";
 import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, ModelCatalog, ModelRole, Page, SettingsPane, Status } from "../types";
 import {
@@ -480,8 +480,33 @@ export function createSettings(app: AppContext): SettingsPage {
     const v = view();
     for (const { role } of MODEL_ROWS) {
       const slot = body.querySelector<HTMLElement>(`[data-model-picker="${role}"]`);
-      if (slot) pickers.set(role, mountModelPicker(slot, { ...modelPickerLook(v, role), onChoose: (id) => void chooseModel(role, id) }));
+      if (slot) {
+        pickers.set(role, mountModelPicker(slot, { ...modelPickerLook(v, role), onChoose: (id) => void chooseModel(role, id), onFavorite: (id, on) => void changeFavorite(role, id, on) }));
+      }
     }
+  }
+
+  /** The saving of favourites, one after the other, so that a quick second star is not saved before the first. */
+  let savingFavorites: Promise<void> = Promise.resolve();
+
+  /**
+   * A star pressed in a picker. The picker shows it at once; here it is saved (the whole map: the core
+   * keeps the favourites of every role in one setting). A refusal puts the list back as it was.
+   */
+  function changeFavorite(role: ModelRole, id: string, on: boolean): Promise<void> {
+    const asked = brain?.model_favorites ?? {};
+    const next = { ...asked, [role]: withFavorite(asked[role] ?? [], id, on) };
+    if (brain) brain = { ...brain, model_favorites: next };
+    savingFavorites = savingFavorites.then(async () => {
+      try {
+        brain = (await api.settingsSet("model_favorites", next)).settings;
+      } catch (err) {
+        toaster.info(describeError(err));
+        if (brain) brain = { ...brain, model_favorites: asked };
+      }
+      pickers.get(role)?.update({ favorites: brain?.model_favorites?.[role] ?? [] });
+    });
+    return savingFavorites;
   }
 
   /** A model chosen in a picker: the speech-to-text one may be this computer, which is no model. */

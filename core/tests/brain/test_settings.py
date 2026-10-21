@@ -34,6 +34,7 @@ def test_the_defaults_are_the_documented_ones():
         "stt_cloud_model": "elevenlabs/scribe-v2",
         "agent_model": "openai/gpt-6-luna",
         "agent_city": "台北",
+        "model_favorites": {"cleanup": [], "answer": [], "stt": []},
     }
 
 
@@ -297,3 +298,77 @@ def test_a_blank_or_absurd_model_or_city_is_refused_and_not_saved(conn, key, val
 def test_a_model_or_city_that_is_not_text_is_a_type_error(conn, key):
     with pytest.raises(TypeError):
         SettingsStore(conn).set(key, None)
+
+
+# --- favourite models ---------------------------------------------------------------------------
+
+_NO_FAVOURITES = {"cleanup": [], "answer": [], "stt": []}
+
+
+def test_nobody_has_favourites_at_first(conn):
+    s = SettingsStore(conn)
+    assert s.get("model_favorites") == _NO_FAVOURITES
+    assert s.all()["model_favorites"] == _NO_FAVOURITES
+
+
+def test_favourites_are_kept_per_role_in_order(conn):
+    s = SettingsStore(conn)
+    s.set("model_favorites", {"cleanup": ["a/b", "c/d"], "answer": ["e/f"]})
+    assert s.get("model_favorites") == {"cleanup": ["a/b", "c/d"], "answer": ["e/f"], "stt": []}
+
+
+def test_favourites_are_saved_across_stores(conn):
+    SettingsStore(conn).set("model_favorites", {"stt": ["elevenlabs/scribe-v2"]})
+    assert SettingsStore(conn).get("model_favorites")["stt"] == ["elevenlabs/scribe-v2"]
+
+
+def test_a_favourite_listed_twice_is_kept_once(conn):
+    s = SettingsStore(conn)
+    s.set("model_favorites", {"cleanup": ["a/b", "c/d", "a/b"]})
+    assert s.get("model_favorites")["cleanup"] == ["a/b", "c/d"]
+
+
+def test_changing_what_get_returns_does_not_change_the_default(conn):
+    s = SettingsStore(conn)
+    s.get("model_favorites")["cleanup"].append("x/y")
+    s.all()["model_favorites"]["stt"].append("x/y")
+    assert SettingsStore(conn).get("model_favorites") == _NO_FAVOURITES
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"voice": ["a/b"]},  # not a role
+        {"cleanup": [f"m/{i}" for i in range(51)]},  # too many
+        {"cleanup": ["a b"]},  # a model id has no spaces
+        {"cleanup": [""]},
+        {"cleanup": ["x" * 101]},
+    ],
+)
+def test_favourites_that_are_not_valid_are_refused_and_not_saved(conn, value):
+    s = SettingsStore(conn)
+    with pytest.raises(ValueError):
+        s.set("model_favorites", value)
+    assert s.get("model_favorites") == _NO_FAVOURITES
+
+
+@pytest.mark.parametrize(
+    "value", ["a/b", ["a/b"], {"cleanup": "a/b"}, {"cleanup": [1]}, {"cleanup": None}, None]
+)
+def test_favourites_of_the_wrong_shape_are_a_type_error(conn, value):
+    with pytest.raises(TypeError):
+        SettingsStore(conn).set("model_favorites", value)
+
+
+def test_exactly_fifty_favourites_are_fine(conn):
+    s = SettingsStore(conn)
+    s.set("model_favorites", {"answer": [f"m/{i}" for i in range(50)]})
+    assert len(s.get("model_favorites")["answer"]) == 50
+
+
+def test_a_saved_value_that_is_damaged_reads_as_the_default(conn):
+    conn.execute("INSERT INTO settings (key, value) VALUES ('model_favorites', '[1, 2]')")
+    conn.commit()
+    s = SettingsStore(conn)
+    assert s.get("model_favorites") == _NO_FAVOURITES
+    assert s.all()["model_favorites"] == _NO_FAVOURITES

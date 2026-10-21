@@ -393,7 +393,6 @@ def test_an_entry_has_what_the_picker_shows():
             "max_tokens": True,
             "tool_calling": True,
         },
-        "recommended": True,
         "roles": {
             "cleanup": {"usable": True, "reason": None},
             "answer": {"usable": True, "reason": None},
@@ -407,10 +406,9 @@ def test_an_entry_has_what_the_picker_shows():
     assert flash["roles"]["cleanup"] == {"usable": False, "reason": "reasoning_required"}
 
 
-def test_raphaels_own_models_are_recommended_and_no_other():
+def test_no_model_is_marked_as_recommended():
     view = catalog_view(parse_catalog(RECORDED), NOW_MS, "live")
-    recommended = {m["id"] for m in [*view["llm"], *view["stt"]] if m["recommended"]}
-    assert recommended == {*CLEANUP_MODEL_CHOICES, *STT_CLOUD_MODELS}
+    assert all("recommended" not in m for m in [*view["llm"], *view["stt"]])
 
 
 def test_an_entry_is_kept_and_read_back_as_it_was():
@@ -489,7 +487,6 @@ async def test_without_the_list_the_catalog_is_raphaels_own_models(conn, client,
     assert [m["id"] for m in view["llm"]] == CLEANUP_MODEL_CHOICES
     assert [m["id"] for m in view["stt"]] == list(STT_CLOUD_MODELS)
     for model in [*view["llm"], *view["stt"]]:
-        assert model["recommended"] is True
         assert all(role["usable"] for role in model["roles"].values())
     luna = by_id(view["llm"])["openai/gpt-6-luna"]
     assert (luna["provider"], luna["name"], luna["input_per_mtok"]) == ("OpenAI", "GPT-6 Luna", 0.1)

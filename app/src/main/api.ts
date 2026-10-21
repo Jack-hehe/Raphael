@@ -86,7 +86,7 @@ export const dictionaryDismiss = (word: string): Promise<Record<string, never>> 
 // ---------- the brain's settings and the key ----------
 
 export const settingsGet = (): Promise<{ settings: BrainSettings }> => core("settings.get");
-export const settingsSet = (key: keyof BrainSettings, value: string | number | boolean | string[]): Promise<{ settings: BrainSettings }> =>
+export const settingsSet = (key: keyof BrainSettings, value: string | number | boolean | string[] | Record<string, string[]>): Promise<{ settings: BrainSettings }> =>
   core("settings.set", { key, value });
 /** The languages the speech recognition can listen for, in groups (中文: 台灣、香港、…). */
 export const languagesList = (): Promise<{ groups: LanguageGroup[] }> => core("languages.list");

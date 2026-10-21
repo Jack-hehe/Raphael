@@ -2,8 +2,14 @@
 // and a panel to choose another from every model OpenRouter offers (`models.catalog`). The panel
 // has a search field, the order and the maker as two small dropdowns, and the models of the role's
 // kind: those the role can use first, then the others, greyed, with the reason in plain words.
-// Keys: the arrows and Enter in the list, typing searches, Tab goes between the search and the two
-// dropdowns, Esc closes. The panel is the app's popover (ui.ts), so it closes the way menus do.
+// The models the user starred (`favorites`, kept by the core for each role) are listed first, under
+// 我的最愛, whatever the order, and a search narrows them like the others. Every row has a star
+// button beside its option. The stars are out of the tab order but for the star of the highlighted
+// row, which is one stop of it: the arrows still move the highlight, and the star is reached with a
+// Tab and pressed with Enter or Space.
+// Keys: the arrows and Enter in the list, typing searches, Tab goes between the search, the star of
+// the highlighted row and the two dropdowns, Esc closes. The panel is the app's popover (ui.ts), so
+// it closes the way menus do.
 //
 // The settings page draws its rows as HTML, and draws them again often: a row holds the picker's
 // button (`modelPickerHTML`, a dropdown to the page's rules and styles), and the page mounts the
@@ -101,47 +107,16 @@ const UNUSABLE: Record<ModelRole, () => string> = {
   stt: () => t("picker.unusableStt"),
 };
 
-/**
- * A choice that is no OpenRouter model, listed above the models: the speech recognition of this
- * computer, which the settings offer with the speech-to-text models so that what turns speech into
- * text is one choice. It belongs to no maker, and the role can always use it.
- */
-export interface PickerExtra {
-  id: string;
-  name: string;
-  /** What it costs, as its row shows it: 免費. */
-  price: string;
-  /** The line under its name. */
-  detail?: string;
-}
-
-/** A row of the list: a model, and whether the role can use it; or a choice that is no model. */
+/** A row of the list: a model, whether the role can use it, and whether the user starred it. */
 export interface PickerRow {
   model: CatalogModel;
   usable: boolean;
-  extra?: PickerExtra;
+  favorite: boolean;
 }
 
-/** A choice that is no model, as a row: it has no maker, no price of OpenRouter's and no date. */
-const extraRow = (extra: PickerExtra): PickerRow => ({
-  model: {
-    id: extra.id,
-    name: extra.name,
-    provider: "",
-    input_per_mtok: null,
-    output_per_mtok: null,
-    per_minute: null,
-    free: false,
-    variable_price: false,
-    context_length: null,
-    created_at_ms: null,
-    capabilities: {},
-    recommended: false,
-    roles: {},
-  },
-  usable: true,
-  extra,
-});
+/** `favorites` with `id` added (once, at the end) or taken out. */
+export const withFavorite = (favorites: readonly string[], id: string, on: boolean): string[] =>
+  on ? (favorites.includes(id) ? [...favorites] : [...favorites, id]) : favorites.filter((f) => f !== id);
 
 const squeeze = (text: string): string => text.replace(/[^\p{L}\p{N}]+/gu, "");
 
@@ -189,14 +164,20 @@ const byDate = (a: CatalogModel, b: CatalogModel): number =>
 
 const ORDERS: Record<PickerSort, (a: CatalogModel, b: CatalogModel) => number> = { price: byPrice, name: byName, newest: byDate };
 
-/** The rows of the list: the models that answer the search and are of the maker, in the order chosen, those the role can use first. */
-export function pickerRows(models: CatalogModel[], role: ModelRole, state: PickerState): PickerRow[] {
+/**
+ * The rows of the list: the models that answer the search and are of the maker, in the order chosen.
+ * The favourites come first, then the other models; in each, those the role can use before those it
+ * cannot. A favourite that the catalog lacks is no row.
+ */
+export function pickerRows(models: CatalogModel[], role: ModelRole, state: PickerState, favorites: readonly string[] = []): PickerRow[] {
   const matches = matcher(state.query);
+  const starred = new Set(favorites);
   const rows = models
     .filter((model) => (state.provider === "" || model.provider === state.provider) && matches(searched(model)))
     .sort(ORDERS[state.sort])
-    .map((model) => ({ model, usable: usableFor(model, role) }));
-  return [...rows.filter((row) => row.usable), ...rows.filter((row) => !row.usable)];
+    .map((model) => ({ model, usable: usableFor(model, role), favorite: starred.has(model.id) }));
+  const usableFirst = (own: PickerRow[]): PickerRow[] => [...own.filter((row) => row.usable), ...own.filter((row) => !row.usable)];
+  return [...usableFirst(rows.filter((row) => row.favorite)), ...usableFirst(rows.filter((row) => !row.favorite))];
 }
 
 export interface PickerChoice {
@@ -265,11 +246,17 @@ export class PickerList {
     /** The model chosen now: checked, and highlighted when the list opens. */
     public current: string,
     state: Partial<PickerState> = {},
-    /** The choices that are no models, above them while no maker is chosen. */
-    private extras: readonly PickerExtra[] = [],
+    /** The ids the user starred, in the order they were added; those the catalog lacks are kept, not listed. */
+    public favorites: readonly string[] = [],
   ) {
     this.state = { ...DEFAULT_PICKER_STATE, ...state };
     this.refresh(current);
+  }
+
+  /** The user starred or un-starred a model: the rows move, and the highlight stays on its model. */
+  setFavorites(favorites: readonly string[]): void {
+    this.favorites = favorites;
+    this.refresh(this.activeId());
   }
 
   /** A new search highlights the first row; none at all, the chosen model again. */
@@ -317,15 +304,13 @@ export class PickerList {
     return row?.usable ? row.model.id : null;
   }
 
-  /** How many models the list shows, the choices that are no models aside. */
+  /** How many models the list shows. */
   modelCount(): number {
-    return this.rows.filter((row) => !row.extra).length;
+    return this.rows.length;
   }
 
   private refresh(keep: string | null): void {
-    const matches = matcher(this.state.query);
-    const extras = this.state.provider === "" ? this.extras.filter((e) => matches(`${e.name} ${e.detail ?? ""} ${e.id}`)) : [];
-    this.rows = [...extras.map(extraRow), ...pickerRows(this.models, this.role, this.state)];
+    this.rows = pickerRows(this.models, this.role, this.state, this.favorites);
     const kept = keep === null ? -1 : this.rows.findIndex((row) => row.model.id === keep);
     this.active = kept >= 0 ? kept : this.rows.length > 0 ? 0 : -1;
   }
@@ -333,41 +318,64 @@ export class PickerList {
 
 // ---------- the HTML ----------
 
-/** One row: the name, the price, and a line with the maker, the context or the dictionary, the date when the list is newest first, and why the role cannot use it. */
+/** The star beside a row: a real button that adds the model to 我的最愛 or takes it out. It is not a stop of the Tab key (see `MountedPicker.cycle`). */
+function starHTML(model: CatalogModel, on: boolean): string {
+  const label = t(on ? "picker.favRemove" : "picker.favAdd", { p0: model.name });
+  return (
+    `<button type="button" class="mp-star" tabindex="-1" data-star="${esc(model.id)}"${on ? " data-on" : ""} ` +
+    `aria-label="${esc(label)}" title="${esc(t(on ? "picker.favRemoveTitle" : "picker.favAddTitle"))}">${ico("star")}</button>`
+  );
+}
+
+/** One row: the name, the price, and a line with the maker, the context or the dictionary, the date when the list is newest first, and why the role cannot use it; the star is beside it. */
 function optionHTML(row: PickerRow, index: number, list: PickerList): string {
-  const { model, extra } = row;
+  const { model } = row;
   const chosen = model.id === list.current;
-  const details = extra ? (extra.detail ? [extra.detail] : []) : [model.provider];
+  const details = [model.provider];
   if (model.context_length !== null) details.push(t("picker.context", { p0: formatContext(model.context_length) }));
   if (model.capabilities.dictionary_hints) details.push(t("picker.dictionary"));
   if (list.state.sort === "newest" && model.created_at_ms !== null) details.push(addedText(model.created_at_ms));
   const reason = row.usable ? "" : reasonText(model.roles[list.role]?.reason);
   if (reason) details.push(reason);
-  const price = extra ? extra.price : priceText(model, list.role);
+  const price = priceText(model, list.role);
   // What a screen reader says of the row, in an order that makes sense when heard.
-  const heard = extra ? [model.name, ...details, price] : [model.name, model.provider, priceDescription(model, list.role)];
-  if (model.recommended) heard.push(t("picker.recommended"));
+  const heard = [model.name, model.provider, priceDescription(model, list.role)];
+  if (row.favorite) heard.push(t("picker.favorites"));
   if (chosen) heard.push(t("picker.current"));
   if (reason) heard.push(reason);
   return (
+    `<div class="mp-row" role="presentation">` +
     `<button type="button" class="mp-opt" role="option" id="mp-o-${index}" tabindex="-1" data-id="${esc(model.id)}" aria-selected="false"` +
     `${row.usable ? "" : ' aria-disabled="true"'}${chosen ? " data-current" : ""} aria-label="${esc(heard.join(", "))}" title="${esc(model.id)}">` +
     `<span class="ck">${chosen ? CHECK : ""}</span>` +
     `<span class="mp-main"><span class="mp-line"><span class="mp-name">${esc(model.name)}</span>` +
-    (model.recommended ? `<span class="mp-badge">${esc(t("picker.recommended"))}</span>` : "") +
     `<span class="mp-price num">${esc(price)}</span></span>` +
     (details.length ? `<span class="mp-sub">${esc(details.join(" · "))}</span>` : "") +
-    `</span></button>`
+    `</span></button>` +
+    starHTML(model, row.favorite) +
+    `</div>`
   );
 }
 
-/** The rows of the list, with a heading over those the role cannot use. */
+const headingHTML = (text: string): string => `<div class="mp-group" aria-hidden="true">${esc(text)}</div>`;
+
+/**
+ * The rows of the list. With favourites, 我的最愛 heads the list and 所有模型 the rest; the models
+ * the role cannot use are under a heading of their own, which says why.
+ */
 export function listHTML(list: PickerList): string {
-  const first = list.rows.findIndex((row) => !row.usable);
-  return list.rows
-    .map((row, index) =>
-      (index === first ? `<div class="mp-group" aria-hidden="true">${esc(UNUSABLE[list.role]())}</div>` : "") + optionHTML(row, index, list),
-    )
+  const { rows } = list;
+  const starred = rows.findIndex((row) => row.favorite);
+  const others = starred < 0 ? -1 : rows.findIndex((row) => !row.favorite);
+  const unusable = rows.findIndex((row) => !row.usable && !row.favorite);
+  return rows
+    .map((row, index) => {
+      let heading = "";
+      if (index === starred) heading = headingHTML(t("picker.favorites"));
+      if (index === unusable) heading = headingHTML(UNUSABLE[list.role]());
+      else if (index === others) heading = headingHTML(t("picker.others"));
+      return heading + optionHTML(row, index, list);
+    })
     .join("");
 }
 
@@ -449,14 +457,16 @@ export interface ModelPickerOptions {
   label: string;
   /** The button's `data-k`: a page that draws itself again gives the focus back by it (settings.ts does). */
   key?: string;
-  /** The choices that are no models, listed above them (`PickerExtra`): `current` may be one. */
-  extras?: readonly PickerExtra[];
+  /** The ids the user starred for this role (the core keeps them), in the order they were added. */
+  favorites?: readonly string[];
   /** Whether the button shows the price of what is chosen: yes, unless the page shows it beside. */
   showPrice?: boolean;
   /** No choosing: the brain's settings are not known. */
   disabled?: boolean;
   /** The user chose `id`: never the model chosen now, never one the role cannot use. The page saves it. */
   onChoose: (id: string) => void;
+  /** The user starred (`on`) or un-starred `id`. The picker shows it at once; the page saves it and hands the saved list back with `update`. */
+  onFavorite?: (id: string, on: boolean) => void;
 }
 
 /** What a picker's button is drawn from: all but what choosing does. */
@@ -475,18 +485,17 @@ export interface ModelPicker {
 
 /** What the button shows: the chosen model (or choice), and its price unless the page shows that. */
 function buttonFace(o: ModelPickerLook): { inner: string; label: string; title: string } {
-  const extra = o.extras?.find((e) => e.id === o.current);
-  const model = extra ? undefined : (o.catalog ? modelsFor(o.catalog, o.role) : []).find((m) => m.id === o.current);
-  const name = extra?.name ?? model?.name ?? shortName(o.current);
-  const price = extra?.price ?? (model ? priceText(model, o.role) : o.loading ? "…" : "");
-  const said = extra?.price ?? (model ? priceDescription(model, o.role) : "");
+  const model = (o.catalog ? modelsFor(o.catalog, o.role) : []).find((m) => m.id === o.current);
+  const name = model?.name ?? shortName(o.current);
+  const price = model ? priceText(model, o.role) : o.loading ? "…" : "";
+  const said = model ? priceDescription(model, o.role) : "";
   return {
     inner:
       `<span class="mp-tname">${esc(name)}</span>` +
       (price && o.showPrice !== false ? `<span class="mp-tprice num">${esc(price)}</span>` : "") +
       ico("down"),
     label: `${o.label}: ${name}${said ? `, ${said}` : ""}`,
-    title: model ? `${model.provider}: ${model.name}` : (extra?.name ?? o.current),
+    title: model ? `${model.provider}: ${model.name}` : o.current,
   };
 }
 
@@ -583,7 +592,7 @@ class MountedPicker implements ModelPicker {
   }
 
   private newList(state: Partial<PickerState>): PickerList {
-    return new PickerList(this.o.role, this.models(), this.o.current, state, this.o.extras ?? []);
+    return new PickerList(this.o.role, this.models(), this.o.current, state, this.o.favorites ?? []);
   }
 
   private paintButton(): void {
@@ -612,9 +621,9 @@ class MountedPicker implements ModelPicker {
     panel.addEventListener("keydown", (e) => this.panelKey(e));
     panel.addEventListener("input", (e) => this.searched(e));
     panel.addEventListener("click", (e) => this.clicked(e));
-    // A click on a row leaves the focus in the search, where the keys work.
+    // A click on a row or its star leaves the focus in the search, where the keys work.
     panel.addEventListener("mousedown", (e) => {
-      if ((e.target as Element).closest(".mp-opt")) e.preventDefault();
+      if ((e.target as Element).closest(".mp-opt, .mp-star")) e.preventDefault();
     });
     panel.addEventListener("pointermove", (e) => this.pointed(e));
     const input = this.search()!;
@@ -711,7 +720,7 @@ class MountedPicker implements ModelPicker {
   }
 
   private pointed(e: PointerEvent): void {
-    const row = (e.target as Element).closest<HTMLElement>(".mp-opt");
+    const row = (e.target as Element).closest<HTMLElement>(".mp-row")?.querySelector<HTMLElement>(".mp-opt");
     if (!row || !this.list || !this.panel) return;
     delete this.panel.dataset.kbd;
     if (row.dataset.id === this.list.activeId()) return;
@@ -721,6 +730,11 @@ class MountedPicker implements ModelPicker {
 
   private clicked(e: MouseEvent): void {
     const target = e.target as Element;
+    const star = target.closest<HTMLElement>(".mp-star");
+    if (star) {
+      this.star(star.dataset.star ?? "", document.activeElement === star ? "nearest" : null);
+      return;
+    }
     const row = target.closest<HTMLElement>(".mp-opt");
     if (row) {
       if (row.getAttribute("aria-disabled") !== "true") this.choose(row.dataset.id ?? "");
@@ -774,6 +788,15 @@ class MountedPicker implements ModelPicker {
       }
       return; // anything else types in the search; Home and End move in it
     }
+    if (target.closest(".mp-star") && moveIndex(this.list.rows.length, this.list.active, e.key) !== null) {
+      // On a star the arrows still move the highlight, and the focus goes with it to its star.
+      e.preventDefault();
+      this.list.move(e.key);
+      this.panel?.setAttribute("data-kbd", "");
+      this.paintActive("nearest");
+      this.activeStar()?.focus();
+      return;
+    }
     const opener = target.closest<HTMLElement>(".mp-dd");
     if (opener && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
       e.preventDefault();
@@ -812,10 +835,20 @@ class MountedPicker implements ModelPicker {
     }
   }
 
-  /** Tab and Shift+Tab go round the search and the two dropdowns, from `from` (the focus, else). */
+  /** The star of the highlighted row. */
+  private activeStar(): HTMLElement | null {
+    const row = this.list && this.list.active >= 0 ? this.panel?.querySelector<HTMLElement>(`#mp-o-${this.list.active}`) : null;
+    return row?.closest(".mp-row")?.querySelector<HTMLElement>(".mp-star") ?? null;
+  }
+
+  /**
+   * Tab and Shift+Tab go round the search, the star of the highlighted row and the two dropdowns,
+   * from `from` (the focus, else). The other stars are not stops: a list of hundreds would be no
+   * way to Tab through, and the arrows reach every row's star.
+   */
   private cycle(back: boolean, from: Element | null = document.activeElement): void {
     if (!this.panel) return;
-    const stops = [this.search(), ...Array.from(this.panel.querySelectorAll<HTMLElement>(".mp-dd"))].filter((s): s is HTMLElement => s !== null);
+    const stops = [this.search(), this.activeStar(), ...Array.from(this.panel.querySelectorAll<HTMLElement>(".mp-dd"))].filter((s): s is HTMLElement => s !== null);
     const at = Math.max(0, stops.indexOf(from as HTMLElement));
     stops[(at + (back ? stops.length - 1 : 1)) % stops.length]?.focus();
   }
@@ -870,6 +903,19 @@ class MountedPicker implements ModelPicker {
     this.paintFilters();
     // The highlighted model stays highlighted where it went, if it is still listed.
     this.paintList("nearest");
+  }
+
+  /** Stars the model of `id`, or takes it out of the favourites if it is one. `scroll` is where the list goes: with the focus, when it is on a star, else nowhere. */
+  private star(id: string, scroll: "nearest" | null): void {
+    if (!this.list || id === "") return;
+    const on = !this.list.favorites.includes(id);
+    const favorites = withFavorite(this.list.favorites, id, on);
+    this.o = { ...this.o, favorites };
+    this.list.point(id);
+    this.list.setFavorites(favorites);
+    this.paintList(scroll);
+    if (scroll !== null) this.activeStar()?.focus();
+    this.o.onFavorite?.(id, on);
   }
 
   private choose(id: string): void {

@@ -45,7 +45,7 @@ const brain: BrainSettings = {
 /** A model of the catalog that every role of its kind can use. */
 const model = (id: string, name: string, provider: string, price: Partial<CatalogModel>, stt = false): CatalogModel => ({
   id, name, provider, input_per_mtok: null, output_per_mtok: null, per_minute: null, free: false, variable_price: false,
-  context_length: stt ? null : 1_000_000, created_at_ms: NOW, capabilities: {}, recommended: true,
+  context_length: stt ? null : 1_000_000, created_at_ms: NOW, capabilities: {},
   roles: stt ? { stt: { usable: true, reason: null } } : { cleanup: { usable: true, reason: null }, answer: { usable: true, reason: null } },
   ...price,
 });
@@ -347,18 +347,19 @@ describe("模型與用量", () => {
     expect(priceTexts(view()).note).toBe("價格來自 OpenRouter，今天更新。實際花費依 OpenRouter 選用的供應商而定。");
   });
 
-  test("offers this computer above the cloud models of speech-to-text, which costs nothing", () => {
-    expect(modelPickerLook(view(), "stt").extras).toEqual([{ id: "local", name: "本機（離線，聲音不上傳）", price: "免費" }]);
-    expect(modelPickerLook(view(), "cleanup").extras).toEqual([]);
-    const local = rowOf(tab("usage", { brain: { ...brain, stt_engine: "local" } }), "語音轉文字");
-    expect(local).toContain('data-price="stt-model">免費</span>');
-    expect(local).toContain('<span class="mp-tname">本機（離線，聲音不上傳）</span>');
-  });
-
   test("gives each picker the catalog, what is chosen and the row's name", () => {
     const look = modelPickerLook(view(), "answer");
     expect(look).toMatchObject({ role: "answer", key: "agent-model", label: "拉斐爾的回答", current: "openai/gpt-6-luna", catalog, loading: false, showPrice: false, disabled: false });
     expect(modelPickerLook(view({ brain: { ...brain, stt_cloud_model: "openai/gpt-transcribe" } }), "stt").current).toBe("openai/gpt-transcribe");
+  });
+
+  test("gives each picker the favourites of its own role, none when the core has not said", () => {
+    const starred = { ...brain, model_favorites: { cleanup: ["a/b"], answer: ["c/d", "e/f"] } };
+    expect(modelPickerLook(view({ brain: starred }), "cleanup").favorites).toEqual(["a/b"]);
+    expect(modelPickerLook(view({ brain: starred }), "answer").favorites).toEqual(["c/d", "e/f"]);
+    expect(modelPickerLook(view({ brain: starred }), "stt").favorites).toEqual([]);
+    expect(modelPickerLook(view(), "cleanup").favorites).toEqual([]);
+    expect(modelPickerLook(view({ brain: null }), "cleanup").favorites).toEqual([]);
   });
 
   test("says the prices are coming, and shows none it could not get", () => {

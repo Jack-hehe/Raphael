@@ -79,8 +79,6 @@ export interface CatalogModel {
   created_at_ms: number | null;
   /** What it can do: `structured_output`, `reasoning`, `reasoning_off`, `max_tokens`, `tool_calling` (no role needs it: the plugins do); `dictionary_hints` for speech. */
   capabilities: Record<string, boolean>;
-  /** One of the models the settings offered before they offered them all. */
-  recommended: boolean;
   /** The roles of its kind. */
   roles: Partial<Record<ModelRole, RoleFit>>;
 }
@@ -198,6 +196,8 @@ export interface BrainSettings {
   agent_model?: string;
   /** The city Raphael looks the weather up for. */
   agent_city?: string;
+  /** The models starred in the pickers, per role, in the order they were added. */
+  model_favorites?: Partial<Record<ModelRole, string[]>>;
 }
 
 /** `secrets.set_openrouter_key` */
