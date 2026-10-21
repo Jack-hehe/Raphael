@@ -86,7 +86,7 @@ class Phrases:
     denied: str  # the user said no, or cancelled
     expired: str  # nobody answered the question in time
     failed: str  # the action was tried and did not work
-    app_not_found: str
+    open_not_found: str  # nothing was found to open by that name
     nothing_to_copy: str
     copy_last: str  # asks whether to copy Raphael's last answer to the clipboard
     copy_quote: str  # ... or a text the user quoted
@@ -134,7 +134,7 @@ PHRASES: dict[str, Phrases] = {
         denied="已取消。",
         expired="逾時未獲回應。未執行。",
         failed="執行失敗。",
-        app_not_found="找不到符合的應用程式。",
+        open_not_found="找不到可以開啟的項目。",
         nothing_to_copy="無可複製的內容。",
         copy_last="是否將上一則回答複製到剪貼簿？",
         copy_quote="是否將引號內的文字複製到剪貼簿？",
@@ -177,7 +177,7 @@ PHRASES: dict[str, Phrases] = {
         denied="Cancelled.",
         expired="No response in time. Nothing was executed.",
         failed="Execution failed.",
-        app_not_found="No matching app was found.",
+        open_not_found="Nothing to open was found by that name.",
         nothing_to_copy="There is nothing to copy.",
         copy_last="Copy my last answer to the clipboard?",
         copy_quote="Copy the quoted text to the clipboard?",
@@ -237,7 +237,7 @@ PHRASES: dict[str, Phrases] = {
         denied="取り消しました。",
         expired="応答がないため、実行を見送りました。",
         failed="実行に失敗しました。",
-        app_not_found="該当するアプリが見つかりません。",
+        open_not_found="開けるものが見つかりません。",
         nothing_to_copy="コピー対象が存在しません。",
         copy_last="直前の回答をクリップボードにコピーしますか？",
         copy_quote="引用された文章をクリップボードにコピーしますか？",

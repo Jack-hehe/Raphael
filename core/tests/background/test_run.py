@@ -444,6 +444,18 @@ async def test_nothing_of_the_task_is_logged(rig, caplog):
         assert private not in logged
 
 
+async def test_a_task_in_the_background_may_not_open_anything_even_when_it_is_put_in_the_snapshot(
+    rig, calls
+):
+    from raphael_core.agent.policy import Tier
+    from raphael_core.background.snapshot import BUILTIN, ToolRef
+
+    rig.run.snapshot.refs["open"] = ToolRef(BUILTIN, "open", "Raphael", "open", Tier.T1)
+    reply = await rig.tool("open", {"target_kind": "url", "target": "https://example.com/"})
+    assert (reply["ok"], reply["kind"]) == (False, "blocked")
+    assert rig.audit() == [("Raphael", "open", "T1", "none", "blocked", rig.task_id)]
+
+
 async def test_a_model_call_that_runs_out_of_the_tasks_time_is_the_time_limit_whatever_the_clock_says(
     conn, plugins
 ):

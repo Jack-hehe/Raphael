@@ -1937,6 +1937,7 @@ class RecordingActions:
 
     def __init__(self):
         self.calls = []
+        self.listed = 0
 
     def open_url(self, url):
         self.calls.append(("open_url", url))
@@ -1947,7 +1948,11 @@ class RecordingActions:
     def lock_screen(self):
         self.calls.append(("lock_screen",))
 
+    def open_settings(self, uri):
+        self.calls.append(("open_settings", uri))
+
     def list_start_apps(self):
+        self.listed += 1
         return []
 
     def launch_app(self, app_id):
@@ -2002,6 +2007,18 @@ async def test_the_real_core_gets_windows_actions_unless_it_is_given_others(make
     assert isinstance(make_app(fake_llm=False).agent._actions, WindowsActions)
     actions = RecordingActions()
     assert make_app(fake_llm=False, agent_actions=actions).agent._actions is actions
+
+
+async def test_the_apps_of_the_start_menu_are_read_when_the_app_says_hello(make_app):
+    actions = RecordingActions()
+    app = make_app(fake_llm=False, agent_actions=actions)
+    assert actions.listed == 0
+    await app.call("core.hello")
+    for _ in range(100):
+        if actions.listed:
+            break
+        await asyncio.sleep(0.01)
+    assert actions.listed == 1
 
 
 async def test_without_a_key_the_assistant_still_runs_commands_and_says_why_it_cannot_do_more(

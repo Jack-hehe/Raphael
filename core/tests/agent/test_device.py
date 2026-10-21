@@ -8,6 +8,7 @@ import base64
 import ctypes
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -100,7 +101,7 @@ class FakeKernel32:
 
 
 class Rig:
-    def __init__(self):
+    def __init__(self, start_menu=()):
         self.kernel32 = FakeKernel32()
         self.user32 = FakeUser32(self.kernel32)
         self.started = []
@@ -115,6 +116,7 @@ class Rig:
             run=self._run,
             popen=self._popen,
             sleep=self.sleeps.append,
+            start_menu=start_menu,
         )
 
     def _run(self, args, **kwargs):
@@ -127,7 +129,7 @@ class Rig:
 
 @pytest.fixture
 def rig():
-    return Rig()
+    return Rig()  # a Start menu with no folders: the tests never read the real one
 
 
 def apps_output(apps):
@@ -189,6 +191,39 @@ def test_a_page_is_opened_with_startfile(rig):
 def test_only_a_web_page_is_opened_since_startfile_would_run_anything(rig, url):
     with pytest.raises(ValueError):
         rig.actions.open_url(url)
+    assert rig.started == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://localhost/", "https://127.0.0.1/", "https://192.168.1.1/", "https://printer.local/",
+     "https://example.com/setup.exe", "https://user:pw@example.com/"],
+)  # fmt: skip
+def test_a_page_of_this_computer_or_its_network_or_a_program_is_not_opened(rig, url):
+    with pytest.raises(ValueError):
+        rig.actions.open_url(url)
+    assert rig.started == []
+
+
+def test_an_http_page_is_opened_when_it_is_given(rig):
+    # The assistant gives one only when the speaker said "http://" outright.
+    rig.actions.open_url("http://example.com/")
+    assert rig.started == ["http://example.com/"]
+
+
+def test_a_settings_page_of_the_list_is_opened_with_startfile(rig):
+    rig.actions.open_settings("ms-settings:bluetooth")
+    assert rig.started == ["ms-settings:bluetooth"]
+
+
+@pytest.mark.parametrize(
+    "uri",
+    ["", "ms-settings:", "ms-settings:nosuchpage", "ms-settings:bluetooth?x=1", "calc.exe",
+     "https://example.com/", "ms-settings:../x", "MS-SETTINGS:BLUETOOTH", "ms-settings:bluetooth\n"],
+)  # fmt: skip
+def test_only_a_page_of_the_list_of_settings_is_opened(rig, uri):
+    with pytest.raises(ValueError):
+        rig.actions.open_settings(uri)
     assert rig.started == []
 
 
@@ -285,6 +320,80 @@ def test_an_app_id_that_cannot_be_one_is_refused(rig, app_id):
     assert rig.popened == []
 
 
+# --- the shortcuts of the Start menu ---------------------------------------------------------------
+
+
+def start_menu(tmp_path, *names):
+    """A Start menu folder holding a shortcut for each of `names` (a name with a slash is in a
+    folder)."""
+    root = tmp_path / "Programs"
+    for name in names:
+        path = root / f"{name}.lnk"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"L")
+    return root
+
+
+def test_the_shortcuts_of_the_start_menu_are_apps_found_without_powershell(tmp_path):
+    root = start_menu(tmp_path, "Spotify", "Office/Word", "筆記本")
+    rig = Rig(start_menu=[root])
+    rig.run_result = subprocess.CompletedProcess([], 1, stdout=b"")  # PowerShell is no help
+    apps = rig.actions.list_start_apps()
+    assert sorted((app.name, Path(app.app_id).name) for app in apps) == [
+        ("Spotify", "Spotify.lnk"),
+        ("Word", "Word.lnk"),
+        ("筆記本", "筆記本.lnk"),
+    ]
+
+
+def test_an_app_of_powershell_wins_over_the_shortcut_of_the_same_name(tmp_path):
+    rig = Rig(start_menu=[start_menu(tmp_path, "Spotify", "Paint")])
+    rig.run_result = subprocess.CompletedProcess(
+        [], 0, stdout=apps_output([{"Name": "spotify", "AppID": "Spotify.Store!App"}])
+    )
+    apps = {app.name: app.app_id for app in rig.actions.list_start_apps()}
+    assert apps["spotify"] == "Spotify.Store!App" and "Spotify" not in apps
+    assert Path(apps["Paint"]).name == "Paint.lnk"
+
+
+def test_the_shortcuts_to_uninstall_something_are_not_apps(tmp_path):
+    rig = Rig(start_menu=[start_menu(tmp_path, "Uninstall Foo", "Foo", "解除安裝 Bar")])
+    assert [app.name for app in rig.actions.list_start_apps()] == ["Foo"]
+
+
+def test_a_start_menu_with_no_folder_is_no_apps(tmp_path):
+    rig = Rig(start_menu=[tmp_path / "nothing"])
+    assert rig.actions.list_start_apps() == []
+
+
+def test_the_apps_cannot_be_listed_when_neither_powershell_nor_the_folders_give_any(tmp_path):
+    rig = Rig(start_menu=[tmp_path / "nothing"])
+    rig.run_result = subprocess.CompletedProcess([], 1, stdout=b"")
+    with pytest.raises(OSError):
+        rig.actions.list_start_apps()
+
+
+def test_a_shortcut_of_the_start_menu_is_opened_with_startfile(tmp_path):
+    rig = Rig(start_menu=[start_menu(tmp_path, "Spotify")])
+    (app,) = rig.actions.list_start_apps()
+    rig.actions.launch_app(app.app_id)
+    assert [Path(started).name for started in rig.started] == ["Spotify.lnk"]
+    assert rig.popened == []
+
+
+def test_a_shortcut_outside_the_start_menu_is_not_opened(tmp_path):
+    root = start_menu(tmp_path, "Spotify")
+    elsewhere = tmp_path / "Downloads" / "evil.lnk"
+    elsewhere.parent.mkdir()
+    elsewhere.write_bytes(b"L")
+    sneaky = root / ".." / "Downloads" / "evil.lnk"
+    rig = Rig(start_menu=[root])
+    for app_id in (str(elsewhere), str(sneaky), str(root / "missing.lnk")):
+        with pytest.raises(ValueError):
+            rig.actions.launch_app(app_id)
+    assert rig.started == [] and rig.popened == []
+
+
 # --- the clipboard ---------------------------------------------------------------------------------
 
 
@@ -338,5 +447,6 @@ def test_the_null_actions_do_nothing_and_find_no_apps():
     actions.press_key("volume_up", 2)
     actions.lock_screen()
     actions.launch_app("x")
+    actions.open_settings("ms-settings:display")
     actions.copy_to_clipboard("x")
     assert actions.list_start_apps() == []

@@ -5,9 +5,16 @@ gets the transcript from `dictation.stop`, and sends it with `agent.ask {session
 ui_language, target_app}`. The router (Jev, and the language model when Jev fails or is unsure;
 `routing`) says what it is:
 
-- a command runs at once if it is T0 or T1 (`commands`, `policy`) and Raphael says 《了。》; at T2 or
-  T3 (copying to the clipboard) nothing runs: the answer is a question for a yes or a no
-  (`status: "confirm"`), which `agent.confirm` answers within 30 seconds;
+- a command runs at once if it is T0 or T1 (`commands`, `policy`) and Raphael says 《了。》: every
+  command for this computer is T1, copying to the clipboard too. A command at T2 or T3, if one is
+  ever added, does not run: the answer is a question for a yes or a no (`status: "confirm"`),
+  which `agent.confirm` answers within 30 seconds;
+- the command `open` opens a web page, an app or a page of the Windows settings, and what it opens
+  is found with no list of sites (`opening`): a domain said outright, a settings page named with
+  the word for settings, an app of the Start menu, a name that opened before (`targets`), a
+  settings page by its name, and only then one call to the language model, which names the site,
+  the app or the search; what it names is checked as strictly as the rest, and learned when it
+  opened. It runs only from the user's own request, never from what a service or the web returned;
 - an answer looks up what it needs, together (`tools`: the weather, a web search, the time), and one
   call to the language model words it (`answers`); a discussion and small talk are worded with the
   last turns of the conversation as context;
@@ -43,6 +50,7 @@ import logging
 import re
 import sqlite3
 import time
+import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
@@ -61,12 +69,13 @@ from ..router import Router as RpcRouter
 from .answers import Voice
 from .cities import cities_in
 from .commands import COMMANDS, AppCatalog, run_command
-from .device import DeviceActions, StartApp
+from .device import DeviceActions
 from .failure import AgentFailure
 from .gate import ToolGate
 from .history import AgentHistory, Turn
 from .ledger import Ledger
-from .local import match_command
+from .local import extract_target, match_command
+from .opening import Opening, clean_target, match_settings, parse_domain, validate_url
 from .persona import DEFAULT_LANGUAGE, PREFIXES, normalize_language, parenthesized, phrase
 from .plugins import (
     PLAN_CONTEXT_TURNS,
@@ -89,7 +98,8 @@ from .policy import (
     Pending,
     Tier,
 )
-from .routing import RouteDecision, Router
+from .routing import OpenAnswer, RouteDecision, Router
+from .targets import OpenTargets
 from .tools import ToolResult, Tools
 
 if TYPE_CHECKING:
@@ -263,6 +273,8 @@ class AgentService:
         # pending id -> what the call of a plugin's tool that waits for that yes needs.
         self._followups: dict[str, _Followup] = {}
         self._catalog = AppCatalog(actions, clock=clock)
+        self._targets = OpenTargets(conn, now_ms)
+        self._warming: set[asyncio.Task[None]] = set()
         self._tools = Tools(client, http=http, now=now)
         self._voice = Voice(client)
         self._decider = decider if decider is not None else Router(client)
@@ -291,9 +303,22 @@ class AgentService:
         for method, handler in methods.items():
             router.register(method, handler)
 
+    def prewarm(self) -> None:
+        """Read the apps of the Start menu now, in the background, so that the first "open" finds
+        them read. Needs the running loop; does nothing without one."""
+        try:
+            task = asyncio.get_running_loop().create_task(self._catalog.warm())
+        except RuntimeError:
+            return
+        self._warming.add(task)
+        task.add_done_callback(self._warming.discard)
+
     async def aclose(self) -> None:
         """End the requests being thought about and close the HTTP client of the tools."""
-        tasks = list(self._inflight.values())
+        tasks = [*self._inflight.values(), *self._warming]
+        refreshing = self._catalog.cancel()
+        if refreshing is not None:
+            tasks.append(refreshing)
         for task in tasks:
             task.cancel()
         if tasks:
@@ -668,13 +693,16 @@ class AgentService:
             return self._finish(ask, "command", "negative", phrase(language, "cannot"), ledger)
         args: dict[str, Any] = {}
         question = ""
-        if command.kind == "app":
-            app = await self._find_app(ask, decision, settings, ledger)
-            if app is None:
+        opening: Opening | None = None
+        if command.kind == "open":
+            opening = await self._find_opening(ask, decision, settings, ledger)
+            if opening is None:
+                logger.info("Open: step=none")
                 return self._finish(
-                    ask, "command", "negative", phrase(language, "app_not_found"), ledger
+                    ask, "command", "negative", phrase(language, "open_not_found"), ledger
                 )
-            args = {"app_id": app.app_id}
+            logger.info("Open: step=%s kind=%s", opening.step, opening.kind)
+            args = {"target_kind": opening.kind, "target": opening.target}
         elif command.kind == "copy":
             copy = self._what_to_copy(ask.text)
             if copy is None:
@@ -693,23 +721,98 @@ class AgentService:
             return self._finish(
                 ask, "command", "negative", phrase(language, "failed"), ledger, status="error"
             )
-        return self._finish(ask, "command", "understood", "", ledger)
+        if opening is not None and opening.learn_as:
+            self._learn(opening.learn_as, opening.target)  # it opened: now it is known
+        done = _DONE_PHRASE.get(command.name)
+        return self._finish(
+            ask, "command", "understood", phrase(language, done) if done else "", ledger
+        )
 
-    async def _find_app(
+    async def _find_opening(
         self, ask: _Ask, decision: RouteDecision, settings: _Settings, ledger: Ledger
-    ) -> StartApp | None:
-        """The app of the Start menu that the request asks for: by the words of the request, else
-        by the name the router heard, else by asking the language model to choose from the list."""
-        app = await self._catalog.find(ask.text)
-        if app is None and decision.app:
-            app = await self._catalog.lookup(decision.app)
-        if app is None and decision.source != "local" and not decision.app:
-            names = await self._catalog.names()
-            if names:
-                chosen = await self._decider.pick_app(ask.text, names, settings.model, ledger)
-                if chosen:
-                    app = await self._catalog.lookup(chosen)
-        return app
+    ) -> Opening | None:
+        """What the request asks to open, or None when nothing is found. AgentFailure if the
+        model was needed and failed, and nothing else found it.
+
+        In order: a domain said outright; a settings page named with the word for settings; an
+        app of the Start menu whose whole name is in the request; a name that opened before; a
+        settings page named alone (after the apps: the camera is the app); one call to the model,
+        which sees the request and the names of the apps; and, last, an app that the request
+        only half names. Only the fifth step costs anything.
+        """
+        text = ask.text
+        heard = decision.target or extract_target(text)
+        target = clean_target(heard) if heard else None
+        if target:
+            url = parse_domain(target)
+            if url is not None:
+                return Opening("url", url, "domain")
+            page = match_settings(target, bare=False)
+            if page is not None:
+                return Opening("settings", page, "settings")
+        subject = target or text
+        app = await self._catalog.find(subject, loose=False)
+        if app is not None:
+            return Opening("app", app.app_id, "app")
+        if target:
+            known = self._known(target)
+            if known is not None:
+                return Opening("url", known, "learned", target)
+            page = match_settings(target, bare=True)
+            if page is not None:
+                return Opening("settings", page, "settings")
+        failure: AgentFailure | None = None
+        if decision.source != "local":
+            try:
+                answer = await self._decider.resolve_open(
+                    text, await self._catalog.names(), settings.model, ledger
+                )
+            except AgentFailure as error:
+                answer, failure = None, error
+            found = None if answer is None else await self._from_answer(answer, target, text)
+            if found is not None:
+                return found
+        app = await self._catalog.find(subject)
+        if app is None and target:
+            app = await self._catalog.lookup(target)
+        if app is not None:
+            return Opening("app", app.app_id, "app")
+        if failure is not None:
+            raise failure
+        return None
+
+    async def _from_answer(
+        self, answer: OpenAnswer, target: str | None, text: str
+    ) -> Opening | None:
+        """The model's answer as something to open, if it may be opened: an app only if it is in
+        the Start menu; an address only if it passes `validate_url` (`http://` made `https://`,
+        unless the speaker said it)."""
+        if answer.kind == "app":
+            app = await self._catalog.lookup(answer.name)
+            return None if app is None else Opening("app", app.app_id, "model")
+        said_http = "http://" in unicodedata.normalize("NFKC", text).casefold()
+        url = answer.url.strip()
+        if not said_http and url[:7].lower() == "http://":
+            url = "https://" + url[7:]
+        checked = validate_url(url, allow_http=said_http)
+        if checked is None:
+            return None
+        # A search is not learned: what was searched for is what was said.
+        name = (target or clean_target(answer.name)) if answer.kind == "site" else None
+        return Opening("url", checked, "model", name or None)
+
+    def _known(self, name_key: str) -> str | None:
+        try:
+            return self._targets.get(name_key)
+        except sqlite3.Error as exc:
+            logger.warning("Could not read the names that opened: %s", type(exc).__name__)
+            return None
+
+    def _learn(self, name_key: str, url: str) -> None:
+        try:
+            self._targets.learn(name_key, url)
+        except sqlite3.Error as exc:
+            logger.warning("Could not keep a name that opened: %s", type(exc).__name__)
 
     def _what_to_copy(self, text: str) -> tuple[str, str] | None:
         """`(what to copy, the phrase that asks about it)`, or None when there is nothing to copy:
@@ -890,6 +993,10 @@ class AgentService:
 
     async def _history_clear(self, params: dict) -> dict:
         deleted = self._history.clear()
+        try:
+            self._targets.clear()  # what opening taught Raphael goes with what was said
+        except sqlite3.Error as exc:
+            logger.warning("Could not clear the names that opened: %s", type(exc).__name__)
         if self._background is not None:
             self._background.clear()
         return {"deleted": deleted}
@@ -907,6 +1014,7 @@ class AgentService:
             if days >= 0:
                 cutoff = max(now - days * _DAY_MS, 0)
                 self._history.prune(cutoff)
+                self._targets.prune(cutoff)
                 if self._background is not None:
                     self._background.prune(cutoff)  # the tasks hold what was said too
         except sqlite3.Error as exc:

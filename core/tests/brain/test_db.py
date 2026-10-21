@@ -126,7 +126,17 @@ SCHEMA_V9 = {
         "ms INTEGER NOT NULL DEFAULT 0",
     ],
 }
-LATEST = 9
+# Schema v10 adds what opening taught Raphael: the names of web pages and the address each opened.
+SCHEMA_V10 = {
+    **SCHEMA_V9,
+    "open_targets": [
+        "name_key TEXT PK",
+        "url TEXT NOT NULL",
+        "uses INTEGER NOT NULL DEFAULT 1",
+        "last_used_ms INTEGER NOT NULL",
+    ],
+}
+LATEST = 10
 
 
 def schema_names(conn, kind):
@@ -150,16 +160,17 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V9)
+    assert schema_names(conn, "table") == set(SCHEMA_V10)
     assert {
         "history_created",
         "agent_turns_created",
         "tool_audit_at",
         "worker_tasks_created",
         "worker_steps_task",
+        "open_targets_used",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V9.items():
+    for table, columns in SCHEMA_V10.items():
         assert describe_columns(conn, table) == columns
 
 
@@ -381,7 +392,7 @@ def assert_has_the_latest_schema(migrated, fresh):
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert schema_names(migrated, "table") == schema_names(fresh, "table")
     assert schema_names(migrated, "index") == schema_names(fresh, "index")
-    for table in SCHEMA_V9:
+    for table in SCHEMA_V10:
         assert describe_columns(migrated, table) == describe_columns(fresh, table)
     assert migrated.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
     assert HistoryStore(migrated).latest().text == "A"
@@ -429,7 +440,7 @@ def test_a_v7_database_gets_the_audit_table_at_v8_and_keeps_its_rows(tmp_path, c
 
     migrated = db.connect(path)
     assert_has_the_latest_schema(migrated, conn)
-    assert describe_columns(migrated, "tool_audit") == SCHEMA_V9["tool_audit"]
+    assert describe_columns(migrated, "tool_audit") == SCHEMA_V10["tool_audit"]
     assert migrated.execute("SELECT count(*) FROM tool_audit").fetchone()[0] == 0
     migrated.close()
 
@@ -472,6 +483,44 @@ def test_a_failed_v9_migration_leaves_the_database_at_v8(tmp_path):
     assert not raw.in_transaction
     assert raw.execute("PRAGMA user_version").fetchone()[0] == 8
     assert "task_id" not in [row[1] for row in raw.execute("PRAGMA table_info(tool_audit)")]
+    raw.close()
+
+
+def v9_database(path):
+    """A database as the version before opening anything left it: at v9, with a task of the
+    worker in it."""
+    v8_database(path)
+    raw = sqlite3.connect(path)
+    raw.executescript(db._MIGRATION_V9)
+    raw.execute(
+        "INSERT INTO worker_tasks (created_at_ms, state, session_id, language, text)"
+        " VALUES (7, 'done', 's', 'en', 'look it up')"
+    )
+    raw.commit()
+    raw.close()
+
+
+def test_a_v9_database_gets_the_learned_names_at_v10_and_keeps_its_tasks(tmp_path, conn):
+    path = tmp_path / "v9.db"
+    v9_database(path)
+
+    migrated = db.connect(path)
+    assert_has_the_latest_schema(migrated, conn)
+    assert migrated.execute("SELECT count(*) FROM open_targets").fetchone()[0] == 0
+    assert migrated.execute("SELECT text FROM worker_tasks").fetchone()[0] == "look it up"
+    migrated.close()
+
+
+def test_a_failed_v10_migration_leaves_the_database_at_v9(tmp_path):
+    path = tmp_path / "v9.db"
+    v9_database(path)
+    raw = sqlite3.connect(path)
+    raw.execute("CREATE TABLE open_targets (x)")  # in the way of the v10 migration
+    raw.commit()
+    with pytest.raises(sqlite3.OperationalError):
+        db.migrate(raw)
+    assert not raw.in_transaction
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 9
     raw.close()
 
 
