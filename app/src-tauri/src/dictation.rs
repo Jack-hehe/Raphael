@@ -45,6 +45,10 @@
 //!   under the state lock with the phase they follow, like the cancel switch; the media is dealt
 //!   with elsewhere (`media`), and never holds a recording up.
 //!
+//! - A report of the background worker (`background`) is said on the overlay only when the controller
+//!   is idle ([`ReportStage`]): not over a recording, a question or an answer. It takes no part in a
+//!   session, so whatever begins next replaces it.
+//!
 //! [`spawn`] builds the controller from the app state and runs it in a task that listens to the
 //! hotkeys, the core's notifications and the overlay's buttons.
 
@@ -56,6 +60,7 @@ use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::agent::{self, Reply};
+use crate::background::ReportStage;
 use crate::device_settings::DictationMode;
 use crate::holdtap::{Action, HoldTap};
 use crate::hotkey::{CancelSwitch, HotkeyEvent};
@@ -1272,6 +1277,19 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
     }
 
+    /// Says a report of the background worker, if nothing is going on: no recording, no question
+    /// and no answer on screen (the session of an answer ends when it has been on screen long
+    /// enough). Returns how long it stays, or None when it cannot be said now. It takes no part
+    /// in a session: whatever begins next, a recording or a question, replaces it.
+    fn say_in_background(&self, prefix: &str, text: &str) -> Option<Duration> {
+        let _transition = lock(&self.transitions);
+        if lock(&self.state).phase != Phase::Idle {
+            return None;
+        }
+        self.overlay.say(prefix, text);
+        Some(Duration::from_millis(agent::say_hold_ms(text)))
+    }
+
     /// An answer that is only being shown ends when something new begins. No overlay call: what
     /// begins next takes the stage.
     fn end_speaking(&self) {
@@ -1327,6 +1345,14 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             return;
         }
         show(self);
+    }
+}
+
+impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> ReportStage
+    for DictationController<C, O, P, S>
+{
+    fn try_say(&self, prefix: &str, text: &str) -> Option<Duration> {
+        self.say_in_background(prefix, text)
     }
 }
 
@@ -1579,6 +1605,7 @@ mod app {
         app.manage(ConfirmSender(confirmations));
 
         let notifications = core.as_ref().map(|core| core.subscribe());
+        let background_notifications = core.as_ref().map(|core| core.subscribe());
         let overlay = Arc::new(MaybeOverlay(overlay));
         let controller = match core {
             Some(core) => {
@@ -1603,6 +1630,11 @@ mod app {
                 None
             }
         };
+        // The reports of the background worker are said by the controller when it is idle, and the
+        // tray follows whether a task runs.
+        if let (Some(controller), Some(notifications)) = (&controller, background_notifications) {
+            crate::background::spawn(app, Arc::new(controller.clone()), notifications);
+        }
         let inputs = Inputs {
             hotkey_events,
             notifications,
@@ -4246,6 +4278,88 @@ mod tests {
         let turn = start_turn(&c).await;
         until_stage(&c, AgentStage::Asking).await;
         (c, turn, gate)
+    }
+
+    // ---------- the reports of the background worker ----------
+
+    #[tokio::test]
+    async fn a_report_of_the_background_is_said_when_nothing_is_going_on() {
+        let c = controller(FakeCore::default(), FakePaster::pasting("chrome.exe"));
+        let stays = c.try_say("告", "三項待辦。");
+        assert_eq!(
+            stays,
+            Some(Duration::from_millis(agent::say_hold_ms("三項待辦。")))
+        );
+        assert_eq!(c.overlay().events(), vec!["say:告|三項待辦。"]);
+        // It is no session: nothing is left to end, and Esc is not taken for it.
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.agent_stage(), None);
+        assert_eq!(c.cancel().last(), None);
+    }
+
+    #[tokio::test]
+    async fn a_report_of_the_background_is_not_said_over_a_dictation() {
+        let c = controller(FakeCore::default(), FakePaster::pasting("chrome.exe"));
+        run(&c, DictationDown, 0).await;
+        assert_eq!(c.phase(), Phase::Recording);
+        let before = c.overlay().events();
+        assert_eq!(c.try_say("告", "完成。"), None);
+        assert_eq!(c.overlay().events(), before, "the overlay was not touched");
+    }
+
+    #[tokio::test]
+    async fn a_report_of_the_background_is_not_said_while_the_person_is_asking() {
+        let c = agent(answer("答", "好"));
+        run(&c, AgentDown, 0).await;
+        assert_eq!(c.agent_stage(), Some(AgentStage::Listening));
+        assert_eq!(c.try_say("告", "完成。"), None);
+        assert!(
+            !c.overlay()
+                .events()
+                .iter()
+                .any(|event| event.starts_with("say:告"))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_report_of_the_background_is_not_said_over_a_question_waiting_for_its_answer() {
+        let (c, turn) = question_on_screen(30_000).await;
+        assert_eq!(c.try_say("告", "完成。"), None);
+        assert!(
+            !c.overlay()
+                .events()
+                .iter()
+                .any(|event| event.starts_with("say:告"))
+        );
+        c.on_confirm("c-1", true);
+        turn.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_report_of_the_background_waits_for_an_answer_on_screen_to_be_over() {
+        let c = agent(answer("答", "台北現在二十四度。"));
+        ask_aloud(&c).await;
+        assert_eq!(c.agent_stage(), Some(AgentStage::Speaking));
+        assert_eq!(c.try_say("告", "完成。"), None, "an answer is on screen");
+        let hold = Duration::from_millis(agent::say_hold_ms("台北現在二十四度。"));
+        tokio::time::advance(hold).await;
+        settle().await;
+        assert_eq!(c.phase(), Phase::Idle);
+        assert!(c.try_say("告", "完成。").is_some());
+        assert_eq!(c.overlay().events().last().unwrap(), "say:告|完成。");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_dictation_that_starts_while_a_report_is_on_screen_takes_the_stage() {
+        let c = controller(FakeCore::default(), FakePaster::pasting("chrome.exe"));
+        assert!(c.try_say("告", "完成。").is_some());
+        run(&c, DictationDown, 100).await;
+        assert_eq!(c.phase(), Phase::Recording);
+        assert_eq!(
+            c.overlay().events(),
+            vec!["say:告|完成。".to_owned(), "show:listening".to_owned()],
+            "the recording replaced the report"
+        );
     }
 
     // ---------- the whole way ----------

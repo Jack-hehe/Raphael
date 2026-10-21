@@ -961,6 +961,23 @@ mod tests {
     }
 
     #[test]
+    fn the_main_window_has_no_part_in_the_background_worker_yet() {
+        // The tray stops a task and the overlay answers its questions; the tasks' cards (and with
+        // them a way to list, read and stop a task from the window) come in a later phase. Whatever
+        // that adds, a yes to a question of the worker is the overlay's real click alone.
+        for method in [
+            "worker.list",
+            "worker.get",
+            "worker.cancel",
+            "worker.confirm",
+            "worker.",
+            "worker",
+        ] {
+            assert!(!is_allowed_method(method), "{method:?}");
+        }
+    }
+
+    #[test]
     fn the_whole_list_of_allowed_methods() {
         for method in [
             "history.list",
