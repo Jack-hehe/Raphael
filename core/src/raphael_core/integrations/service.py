@@ -13,7 +13,11 @@ The window manages the plugins with:
   tools kept, each with the tier the user gave it, if any;
 - `integrations.set_tier {id, tool, tier}` the user's decision about one tool: "T0" to "T3", or null
   to take the tool back (a tool with no tier is blocked: never offered to a model, never run);
-- `integrations.audit {limit}` the latest calls.
+- `integrations.audit {limit}` the latest calls;
+- `integrations.set_group_tier {id, tier}` one tier for every tool the server has now (a tool it
+  adds later stays blocked); `tier` null takes the tiers back;
+- `toolsets.list` the groups of the 「連接」 tab (`toolsets.py`): Raphael's own, fixed, and one for
+  each server, with its tools.
 
 The assistant reaches the tools through `PluginHub` (`agent.plugins`): `offered`, `tier_of`,
 `call` and `record_unrun`. Every call goes through `call`, which checks again that the tool is
@@ -45,6 +49,7 @@ from .config import (
     ToolRecord,
     parse_new_server,
 )
+from .toolsets import builtin_groups
 from .vault import SecretTooLong, SecretVault, secret_name
 
 logger = logging.getLogger(__name__)
@@ -121,6 +126,8 @@ class IntegrationsService:
             "integrations.tools": self._tools,
             "integrations.set_tier": self._set_tier,
             "integrations.audit": self._audit_list,
+            "integrations.set_group_tier": self._set_group_tier,
+            "toolsets.list": self._toolsets,
         }
         for method, handler in methods.items():
             router.register(method, handler)
@@ -287,6 +294,33 @@ class IntegrationsService:
             server.grants[name] = Grant(tier, tool.fingerprint)
         self._save()
         return {"tool": self._tool_view(server, tool)}
+
+    async def _set_group_tier(self, params: dict) -> dict:
+        server = self._server(params)
+        tier = params.get("tier")
+        if tier is not None and tier not in TIERS:
+            raise _invalid("tier must be T0, T1, T2, T3 or null")
+        for tool in server.tools:  # the tools there are now, and no others
+            if tier is None:
+                server.grants.pop(tool.name, None)
+            else:
+                server.grants[tool.name] = Grant(tier, tool.fingerprint)
+        self._save()
+        return {"group": self._group(server)}
+
+    def _group(self, server: ServerConfig) -> dict[str, Any]:
+        return {
+            **self._view(server),
+            "kind": "mcp",
+            "switchable": True,
+            "tier_fixed": False,
+            "tools": self._tool_views(server),
+        }
+
+    async def _toolsets(self, params: dict) -> dict:
+        return {
+            "groups": builtin_groups() + [self._group(server) for server in self._config.servers()]
+        }
 
     async def _audit_list(self, params: dict) -> dict:
         limit = params.get("limit", LIST_DEFAULT)
