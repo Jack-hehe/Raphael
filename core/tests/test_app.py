@@ -715,12 +715,15 @@ EXPECTED_METHODS = {
     "status.get",
     "status.check_openrouter",
     "integrations.list",
+    "integrations.catalog",
+    "integrations.connect",
+    "integrations.connect_cancel",
     "integrations.add",
     "integrations.set_enabled",
-    "integrations.remove",
+    "integrations.disconnect",
     "integrations.refresh",
     "integrations.tools",
-    "integrations.set_tier",
+    "integrations.set_tool_enabled",
     "integrations.audit",
 }
 
@@ -876,7 +879,7 @@ async def test_the_plugins_keep_their_secrets_in_the_credential_manager_otherwis
     assert memory_keyring.credentials == {
         f"Raphael plugin {server_id}:env:TOKEN": ("secret", "s3cret-value")
     }
-    await app.call("integrations.remove", {"id": server_id})
+    await app.call("integrations.disconnect", {"id": server_id})
     assert memory_keyring.credentials == {}
 
 

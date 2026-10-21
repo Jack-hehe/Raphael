@@ -2,16 +2,16 @@
 
 The file is in the data directory and holds, for each server, its name, how to reach it (a command
 and arguments, or a URL), whether it is on, the names (never the values) of its environment
-variables and headers, the list of tools it reported last time, and the tier the user gave each of
-those tools. It never holds a secret: the values are in `vault`. Nothing here logs a name, a
-command, an address or a value.
+variables and headers, the list of tools it reported last time, and the names of the tools the
+user turned off. It never holds a secret: the values are in `vault` (a login's tokens too). Nothing
+here logs a name, a command, an address or a value.
 
-A tier is the user's decision and nothing else: what the server says about itself (its
-annotations, its description) is only ever shown to the user as a suggestion. A tool has no tier
-until the user gives it one, and a tool without a tier is never offered to a model and never run.
-The grant is tied to a fingerprint of the tool's name, description and input schema as the user
-saw them: a server that changes any of them later (to point the model at something else, say)
-takes the grant away until the user looks again.
+A tool is on unless the user turned it off, and only the user does: what the server says about
+itself (its annotations, its description) groups the tools on the screen and decides nothing. A tool
+that is new, or that the server describes differently later, is on like the rest; one that is off
+is never offered to a model and never run. The first format of the file (version 1) held a tier for
+each tool, tied to a fingerprint: reading it, a tool with any tier is on, and one that was blocked,
+or never decided, is off.
 """
 
 import hashlib
@@ -29,13 +29,13 @@ from urllib.parse import urlsplit
 logger = logging.getLogger(__name__)
 
 FILE_NAME = "integrations.json"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
-TIERS = ("T0", "T1", "T2", "T3")
-# What a grant holds when the user looked at a tool and chose to block it: a decision like the
-# others (so the tool is not "new" any more), but one that never lets the tool be offered or run.
-BLOCK = "block"
+# Tiers and blocks, as the first format of the file held them (read once, to migrate).
+_OLD_TIERS = ("T0", "T1", "T2", "T3")
 TRANSPORTS = ("stdio", "http")
+# How a server is signed in to: none (headers, if any), or a login in the browser (OAuth).
+AUTH_KINDS = ("none", "oauth")
 
 MAX_SERVERS = 20
 MAX_NAME_CHARS = 40
@@ -65,16 +65,9 @@ class ToolRecord:
     description: str
     input_schema: dict[str, Any]
     fingerprint: str
-    # What the server claims about the tool. Only ever a suggestion on the screen; never trusted.
+    # What the server claims about the tool. Only ever used to group the tools on the screen.
     read_only_hint: bool | None = None
-
-
-@dataclass
-class Grant:
-    """The tier the user gave a tool, and the fingerprint of the tool they gave it to."""
-
-    tier: str  # "T0" to "T3", or BLOCK
-    fingerprint: str
+    destructive_hint: bool | None = None
 
 
 @dataclass
@@ -90,27 +83,17 @@ class ServerConfig:
     headers: list[str] = field(default_factory=list)  # names; the values are in the vault
     tools: list[ToolRecord] = field(default_factory=list)
     tools_checked_at_ms: int | None = None
-    grants: dict[str, Grant] = field(default_factory=dict)  # tool name -> the user's decision
+    disabled_tools: set[str] = field(default_factory=set)  # the names of the tools turned off
+    auth: str = "none"  # "oauth": signed in to with a login in the browser; the tokens are in the vault
+    catalog_id: str = ""  # the entry of the store this was added from, if it was
+    revocation_url: str = ""  # where the login's token is revoked when the server is disconnected
 
     def tool(self, name: str) -> ToolRecord | None:
         return next((tool for tool in self.tools if tool.name == name), None)
 
-    def granted_tier(self, tool: ToolRecord) -> str | None:
-        """The tier the user gave `tool`, or None when it has none or the tool is not the one the
-        user looked at any more (its fingerprint changed)."""
-        grant = self.grants.get(tool.name)
-        if grant is None or grant.tier not in TIERS or grant.fingerprint != tool.fingerprint:
-            return None
-        return grant.tier
-
-    def decided(self, tool: ToolRecord) -> bool:
-        """The user looked at `tool` as it is now and chose a tier or chose to block it."""
-        grant = self.grants.get(tool.name)
-        return (
-            grant is not None
-            and grant.fingerprint == tool.fingerprint
-            and (grant.tier in TIERS or grant.tier == BLOCK)
-        )
+    def tool_on(self, tool: ToolRecord) -> bool:
+        """Whether `tool` may be used: it is on unless the user turned it off."""
+        return tool.name not in self.disabled_tools
 
 
 def fingerprint(name: str, description: str, schema: Any) -> str:
@@ -125,7 +108,7 @@ def fingerprint(name: str, description: str, schema: Any) -> str:
 
 
 def tool_record(
-    name: Any, description: Any, schema: Any, read_only_hint: Any = None
+    name: Any, description: Any, schema: Any, read_only_hint: Any = None, destructive_hint: Any = None
 ) -> ToolRecord | None:
     """A tool as it is kept, from what a server reported; None for one whose name cannot be kept
     (a name is shown, audited and sent to a model, so it must be plain)."""
@@ -143,6 +126,7 @@ def tool_record(
         input_schema=schema,
         fingerprint=fingerprint(name, text, schema),
         read_only_hint=read_only_hint if isinstance(read_only_hint, bool) else None,
+        destructive_hint=destructive_hint if isinstance(destructive_hint, bool) else None,
     )
 
 
@@ -264,6 +248,7 @@ def _tool_to_json(tool: ToolRecord) -> dict[str, Any]:
         "input_schema": tool.input_schema,
         "fingerprint": tool.fingerprint,
         "read_only_hint": tool.read_only_hint,
+        "destructive_hint": tool.destructive_hint,
     }
 
 
@@ -280,10 +265,10 @@ def _server_to_json(server: ServerConfig) -> dict[str, Any]:
         "headers": server.headers,
         "tools": [_tool_to_json(tool) for tool in server.tools],
         "tools_checked_at_ms": server.tools_checked_at_ms,
-        "grants": {
-            name: {"tier": grant.tier, "fingerprint": grant.fingerprint}
-            for name, grant in server.grants.items()
-        },
+        "disabled_tools": sorted(server.disabled_tools),
+        "auth": server.auth,
+        "catalog_id": server.catalog_id,
+        "revocation_url": server.revocation_url,
     }
 
 
@@ -311,6 +296,9 @@ def _server_from_json(raw: Any) -> ServerConfig | None:
         enabled=raw.get("enabled") is not False,
         env=_strings(raw.get("env")),
         headers=_strings(raw.get("headers")),
+        auth=raw["auth"] if raw.get("auth") in AUTH_KINDS else "none",
+        catalog_id=raw["catalog_id"] if isinstance(raw.get("catalog_id"), str) else "",
+        revocation_url=raw["revocation_url"] if isinstance(raw.get("revocation_url"), str) else "",
     )
     checked = raw.get("tools_checked_at_ms")
     server.tools_checked_at_ms = checked if type(checked) is int else None
@@ -319,16 +307,24 @@ def _server_from_json(raw: Any) -> ServerConfig | None:
             continue
         # Rebuilt, so that the fingerprint is always the one of what is kept.
         tool = tool_record(
-            item.get("name"), item.get("description"), item.get("input_schema"), item.get("read_only_hint")
+            item.get("name"),
+            item.get("description"),
+            item.get("input_schema"),
+            item.get("read_only_hint"),
+            item.get("destructive_hint"),
         )
         if tool is not None:
             server.tools.append(tool)
-    grants = raw.get("grants")
-    for tool_name, grant in grants.items() if isinstance(grants, dict) else []:
-        tier = grant.get("tier") if isinstance(grant, dict) else None
-        seen = grant.get("fingerprint") if isinstance(grant, dict) else None
-        if isinstance(tool_name, str) and (tier in TIERS or tier == BLOCK) and isinstance(seen, str):
-            server.grants[tool_name] = Grant(tier, seen)
+    if isinstance(raw.get("disabled_tools"), list):
+        server.disabled_tools = set(_strings(raw["disabled_tools"]))
+    else:
+        # The first format: a tool the user gave a tier is on, whatever the tier and whether or
+        # not the server describes it differently since; one blocked or never decided is off.
+        grants = raw.get("grants") if isinstance(raw.get("grants"), dict) else {}
+        for tool in server.tools:
+            grant = grants.get(tool.name)
+            if not (isinstance(grant, dict) and grant.get("tier") in _OLD_TIERS):
+                server.disabled_tools.add(tool.name)
     return server
 
 
