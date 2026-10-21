@@ -1,11 +1,9 @@
 name: CI
 
-# The repository is private, so Actions minutes are limited (Windows runners count double).
-# A branch is checked through its pull request, and each pull request runs only the jobs whose
-# part of the repository it changes (the `changes` job). main is not checked again after a merge:
-# the release workflow runs every check before anything ships. A merge that changes the Rust
-# dependencies runs the Rust job on main once, so main's cache, the one every pull request falls
-# back to, stays current. A change to the documents below alone starts no run.
+# Each pull request runs only the jobs whose part of the repository it changes (the `changes`
+# job). main is not checked again after a merge: the release workflow runs every check before
+# anything ships. A merge that changes the Rust dependencies runs the Rust job on main once, so
+# main's cache, the one every pull request falls back to, stays current.
 on:
   push:
     branches: [main]

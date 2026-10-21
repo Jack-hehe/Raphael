@@ -51,6 +51,7 @@ coverage/
 # Documentation and evaluation sets kept outside the repository
 /docs/
 /eval/
+/core/packaging/README.md
 /app/scripts/settings-ui-check.mjs
 
 # Local UI audit evidence and scratch files
