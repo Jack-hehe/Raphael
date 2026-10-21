@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from ..agent.commands import COMMANDS
+from ..agent.gate import WEB_TOOLS
 from ..agent.policy import Tier
 
 
@@ -30,9 +31,6 @@ class ToolSet:
     builtin: bool = False
     tiers: Mapping[str, str] = field(default_factory=dict)
 
-
-# What the weather, the search and the clock are called in the assistant (`agent.service`).
-WEB_TOOLS = ("weather", "web_search", "local_time")
 
 BUILTIN_SETS: dict[str, ToolSet] = {
     "web": ToolSet(

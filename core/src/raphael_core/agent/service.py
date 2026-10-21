@@ -16,10 +16,14 @@ ui_language, target_app}`. The router (Jev, and the language model when Jev fail
   it needs from those alone (`plugins`), the program makes the calls within their tiers, and the
   results are given to the call that words the answer as data, not instructions. A call at T0 or T1
   is made at once; at T2 or T3 it is a question for a yes or a no like a command at that tier, one
-  to a turn, and the call is made when the yes comes. A tool with no tier is never offered, and a
+  to a turn, and the call is made when the yes comes. Every call of a tool goes through the one
+  gate (`gate`), the worker's too. A tool with no tier is never offered, and a
   model that takes no tools (`plugins.ToolSupport`) leaves the plugins out of the request;
-- a request that is too garbled to act on, or a task for the background (not there yet), gets a
-  fixed 否 reply.
+- a task for the background (`delegate`: several steps, or a connected service) is handed to the
+  background worker (`raphael_core.background`) and answered at once with 《了。》; the worker does
+  it step by step within the same tiers, and reports on the overlay when it is done. Without a
+  worker (the tests', say) the task is looked at as before, by one pick of the plugins' tools;
+- a request that is too garbled to act on gets a fixed 否 reply.
 
 Whatever goes wrong is answered, never raised: no key, the monthly limit reached, no network, a
 model that fails each get a short 否 reason in the user's language, and the commands still work (a
@@ -42,10 +46,11 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from ..background.tasks import Refused
 from ..brain.catalog import CatalogEntry
 from ..brain.openrouter import OpenRouterClient
 from ..brain.secrets import KeyStore
@@ -58,6 +63,7 @@ from .cities import city_in
 from .commands import COMMANDS, AppCatalog, run_command
 from .device import DeviceActions, StartApp
 from .failure import AgentFailure
+from .gate import ToolGate
 from .history import AgentHistory, Turn
 from .ledger import Ledger
 from .local import match_command
@@ -79,15 +85,15 @@ from .policy import (
     Action,
     Approval,
     Confirmations,
-    NotApproved,
     Outcome,
     Pending,
     Tier,
-    ToolRegistry,
-    UnknownTool,
 )
 from .routing import RouteDecision, Router
 from .tools import ToolResult, Tools
+
+if TYPE_CHECKING:
+    from ..background.service import BackgroundService
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +224,10 @@ class AgentService:
     Open-Meteo, which the caller then owns; `decider` is the router of requests; `plugins` is the
     hub of the tools the user connected (none: the assistant has only its own); `models` gives the
     catalog of OpenRouter's models as it was last read (`Brain.known_models`), by which a request
-    is told whether the answer model takes tools.
+    is told whether the answer model takes tools. `gate` is the one gate every tool call goes
+    through, shared with the background worker (one is made when none is given), and `background`
+    is the worker that takes the tasks of the `delegate` route (none: the route is answered as it
+    was before the worker).
     """
 
     def __init__(
@@ -236,6 +245,8 @@ class AgentService:
         decider: Router | None = None,
         plugins: PluginHub | None = None,
         models: Callable[[], Sequence[CatalogEntry] | None] | None = None,
+        gate: ToolGate | None = None,
+        background: "BackgroundService | None" = None,
     ) -> None:
         self._keys = keys
         self._now_ms = now_ms
@@ -245,16 +256,12 @@ class AgentService:
         self._history = AgentHistory(conn, now_ms)
         self._confirmations = Confirmations(clock)
         self._plugins = plugins
-        self._registry = ToolRegistry(
-            {name: command.tier for name, command in COMMANDS.items()},
-            plugin_tier=None if plugins is None else plugins.tier_of,
-        )
+        self._gate = gate if gate is not None else ToolGate(plugins, conn=conn, now_ms=now_ms)
+        self._background = background
         self._planner = Planner(client)
         self._tool_support = ToolSupport(models, clock=clock)
         # pending id -> what the call of a plugin's tool that waits for that yes needs.
         self._followups: dict[str, _Followup] = {}
-        for name in ("weather", "web_search", "local_time"):
-            self._registry.register(name, Tier.T0)
         self._catalog = AppCatalog(actions, clock=clock)
         self._tools = Tools(client, http=http, now=now)
         self._voice = Voice(client)
@@ -380,6 +387,8 @@ class AgentService:
         if route == "answer":
             return await self._answer_with_tools(ask, decision, settings, ledger, self._offer())
         if route == "delegate":
+            if self._background is not None:
+                return self._hand_over(ask, settings, ledger)
             # A task for a connected service has somewhere to go once a tool is allowed.
             offer = self._offer()
             if offer is not None:
@@ -398,6 +407,34 @@ class AgentService:
             )
             return self._finish(ask, route, reply.prefix, reply.text, ledger, detail=reply.detail)
         return self._finish(ask, "unclear", "negative", phrase(ask.language, "unclear"), ledger)
+
+    # --- the background ---------------------------------------------------------------------------
+
+    def _hand_over(self, ask: _Ask, settings: _Settings, ledger: Ledger) -> dict:
+        """A task for the background worker: it is queued, and Raphael says 《了。》 at once. The
+        worker reports on the overlay when it is done; the turn of the history is then completed
+        with the report. A model that takes no tools, a queue that is full and a worker that was
+        switched off for crashing too often are a 否 reply with the reason."""
+        language = ask.language
+        background = self._background
+        assert background is not None
+        if self._tool_support.supports(settings.model) is False:
+            logger.info("A task was not handed over: the model %s takes no tools", settings.model)
+            return self._finish(
+                ask, "delegate", "negative", phrase(language, "worker_model"), ledger
+            )
+        try:
+            task_id = background.submit(
+                session_id=ask.session_id, text=ask.text, language=language, model=settings.model
+            )
+        except Refused as refused:
+            return self._finish(ask, "delegate", "negative", phrase(language, refused.kind), ledger)
+        except Exception as exc:  # a worker that cannot take a task is a 否 reply, not a raise
+            logger.warning("A task could not be handed over: %s", type(exc).__name__)
+            return self._failed(ask, "delegate", "error", ledger)
+        reply = self._finish(ask, "delegate", "understood", phrase(language, "handoff"), ledger)
+        background.attach_turn(task_id, reply["turn_id"])
+        return reply
 
     # --- answers --------------------------------------------------------------------------------
 
@@ -523,10 +560,7 @@ class AgentService:
 
     def _tier_now(self, call: PlannedCall) -> Tier | None:
         """The tier the user has given the tool of `call` now; None if it has none any more."""
-        try:
-            return self._registry.tier(call.tool.key)
-        except UnknownTool:
-            return None
+        return self._gate.tier_now(call.tool.key)
 
     async def _carry_out(
         self, ask: _Ask, calls: list[PlannedCall], results: list[ToolResult], ledger: Ledger
@@ -553,19 +587,9 @@ class AgentService:
         the answer is shown it. `approval` is the yes for it, if it had to be asked about; a call
         that the door refuses is not made, and the hub writes down that it was refused."""
         action = action or Action(call.tool.key, call.arguments)
-        plugins = self._plugins
-        if plugins is None:
-            return _tool_result(call, PluginResult(False, "blocked"))
-        try:
-            self._registry.check(action, approval)
-            approver = "auto" if approval is None else "user"
-        except (UnknownTool, NotApproved):
-            approver = "none"
-        try:
-            outcome = await plugins.call(call.tool.key, call.arguments, approver=approver)
-        except Exception as exc:  # not the hub's own failures, which it reports in the outcome
-            logger.warning("A plugin call failed unexpectedly: %s", type(exc).__name__)
-            outcome = PluginResult(False, "error")
+        outcome = await self._gate.call_plugin(
+            call.tool.key, call.arguments, approval=approval, action=action
+        )
         return _tool_result(call, outcome)
 
     def _ask_plugin(
@@ -591,11 +615,8 @@ class AgentService:
         """The question of a plugin's call ended without a yes ("denied" or "expired"): its call is
         forgotten, and the audit says it was asked about and not made."""
         followup = self._followups.pop(pending.id, None)
-        if followup is not None and self._plugins is not None:
-            try:
-                self._plugins.record_unrun(pending.action.tool, outcome=outcome)
-            except Exception as exc:
-                logger.warning("Could not write down a call that was not made: %s", type(exc).__name__)
+        if followup is not None:
+            self._gate.record_unrun(pending.action.tool, outcome=outcome)
 
     async def _confirm_plugin(
         self, pending: Pending, approval: Approval | None, followup: _Followup
@@ -662,10 +683,10 @@ class AgentService:
                 )
             args, question = {"text": copy[0]}, copy[1]
         action = Action(command.name, args)
-        if self._registry.needs_confirmation(command.name):
+        if self._gate.needs_confirmation(command.name):
             return self._ask_to_confirm(ask, action, question, ledger)
         try:
-            self._registry.check(action, None)
+            self._gate.check(action, None)
             await run_command(command, args, self._actions)
         except Exception as exc:
             logger.warning("The command %s failed: %s", command.name, type(exc).__name__)
@@ -721,7 +742,7 @@ class AgentService:
         """Record the turn as waiting for a yes or a no and open the question for `action`, at the
         tier it has; the reply is the question as the overlay is given it."""
         language = ask.language
-        tier = self._registry.tier(action.tool)
+        tier = self._gate.tier(action.tool)
         prefix = PREFIXES[language].question
         turn_id = self._record(ask, route, prefix, text, "confirm", None, ledger)
         pending = self._confirmations.open(ask.session_id, turn_id, action, tier, language)
@@ -765,7 +786,7 @@ class AgentService:
         if command is None:
             return self._outcome(pending, "negative", phrase(language, "failed"), "error")
         try:
-            self._registry.check(pending.action, resolution.approval)
+            self._gate.check(pending.action, resolution.approval)
             await run_command(command, pending.action.args, self._actions)
         except Exception as exc:  # NotApproved among them: it is a failure all the same
             logger.warning("The confirmed command %s failed: %s", command.name, type(exc).__name__)
@@ -868,7 +889,10 @@ class AgentService:
         }
 
     async def _history_clear(self, params: dict) -> dict:
-        return {"deleted": self._history.clear()}
+        deleted = self._history.clear()
+        if self._background is not None:
+            self._background.clear()
+        return {"deleted": deleted}
 
     def _prune_if_due(self) -> None:
         """Delete the turns older than the history retention, at most once a day: they are what
@@ -881,7 +905,10 @@ class AgentService:
         try:
             days = self._settings.get("history_retention_days")
             if days >= 0:
-                self._history.prune(max(now - days * _DAY_MS, 0))
+                cutoff = max(now - days * _DAY_MS, 0)
+                self._history.prune(cutoff)
+                if self._background is not None:
+                    self._background.prune(cutoff)  # the tasks hold what was said too
         except sqlite3.Error as exc:
             logger.warning("Could not prune the assistant's history: %s", type(exc).__name__)
 
