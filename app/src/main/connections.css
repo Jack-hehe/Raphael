@@ -9,7 +9,7 @@
 .ca-scroll { flex: 1; min-height: 0; overflow: auto; padding: 10px 10px 8px; }
 .ca-sec { margin: 14px 10px 4px; font-size: 12px; font-weight: 600; color: var(--text-3); }
 .ca-none { margin: 4px 10px; font-size: 12px; line-height: 1.5; color: var(--text-3); }
-.ca-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 7px 10px; border: 0; border-radius: 9px; background: transparent; text-align: left; color: var(--text); }
+.ca-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 7px 10px; border: 0; border-radius: 9px; background: transparent; text-align: left; color: var(--text); }
 .ca-item:hover { background: var(--hover); }
 .ca-item:focus-visible { background: var(--hover); outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
 .ca-item[aria-current="true"] { background: var(--selected); }
@@ -20,20 +20,19 @@
 .ca-item .sub.warn { color: var(--warn); }
 .ca-item .sub.err { color: var(--err); }
 .ca-item.overview { min-height: 40px; }
-.ca-item.overview > .i { width: 16px; height: 16px; color: var(--text-2); margin: 0 5px 0 5px; }
+.ca-item.overview > .i { width: 18px; height: 18px; flex: none; color: var(--text-2); margin: 0 1px; }
 .ca-foot { padding: 10px; border-top: 1px solid var(--line); }
 .ca-foot .btn { width: 100%; }
 .ca-foot .btn[aria-current="true"] { background: var(--selected); border-color: var(--text-3); }
 
 /* The picture of a connection: its mark, or a letter. Marks are drawn in the colour of the text. */
-.mono { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--edge); color: var(--text); font: 650 14px/1 var(--display); }
-.mono.sm { width: 26px; height: 26px; border-radius: 7px; font-size: 12px; }
-.mono.lg { width: 44px; height: 44px; border-radius: 12px; font-size: 19px; }
-.mono.builtin { background: var(--accent-soft); border-color: transparent; color: var(--accent-text); }
-.mono .i { width: 16px; height: 16px; }
-.mono.sm .i { width: 14px; height: 14px; }
-.mono.lg .i { width: 22px; height: 22px; }
-.mono .logo { width: 56%; height: 56%; display: block; }
+.mono { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; color: var(--text); font: 700 16px/1 var(--display); }
+.mono.sm { width: 20px; height: 20px; font-size: 16px; }
+.mono.lg { width: 28px; height: 28px; font-size: 24px; }
+.mono.builtin { color: var(--accent-text); }
+.mono .i { width: 18px; height: 18px; }
+.mono.lg .i { width: 26px; height: 26px; }
+.mono .logo { width: 100%; height: 100%; display: block; }
 
 /* The chosen item */
 .ca-detail { min-height: 0; overflow: auto; padding: 22px 28px 28px; scrollbar-gutter: stable; }
