@@ -10,6 +10,7 @@ the question that led to it. The window lists the latest rows (`integrations.aud
   time: it may or may not have been done), "denied" (the user said no, or pressed Esc), "expired"
   (nobody answered in time), or "blocked" (the tool had no tier, the plugin was off, or the tool
   was not the one the user gave its tier to).
+- `task_id`: the background task that made the call, or None for a call of the fast tier.
 """
 
 import logging
@@ -41,6 +42,7 @@ class AuditEntry:
     tier: str | None  # None when the tool had none
     approver: str
     outcome: str
+    task_id: int | None = None  # the background task that made the call; None: the fast tier
 
 
 class AuditLog:
@@ -53,7 +55,14 @@ class AuditLog:
         self._now_ms = now_ms
 
     def add(
-        self, *, server: str, tool: str, tier: str | None, approver: str, outcome: str
+        self,
+        *,
+        server: str,
+        tool: str,
+        tier: str | None,
+        approver: str,
+        outcome: str,
+        task_id: int | None = None,
     ) -> None:
         """Write a row, made now. A database that fails does not stop the call it records: it is
         logged by the type of the error."""
@@ -62,9 +71,9 @@ class AuditLog:
         try:
             with self._conn:
                 self._conn.execute(
-                    "INSERT INTO tool_audit (at_ms, server, tool, tier, approver, outcome)"
-                    " VALUES (?, ?, ?, ?, ?, ?)",
-                    (self._now_ms(), server, tool, tier, approver, outcome),
+                    "INSERT INTO tool_audit (at_ms, server, tool, tier, approver, outcome, task_id)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (self._now_ms(), server, tool, tier, approver, outcome, task_id),
                 )
                 self._conn.execute(
                     "DELETE FROM tool_audit WHERE id <= (SELECT max(id) FROM tool_audit) - ?",
@@ -77,7 +86,7 @@ class AuditLog:
         """The latest rows, newest first."""
         limit = min(max(limit, 1), LIST_MAX)
         rows = self._conn.execute(
-            "SELECT id, at_ms, server, tool, tier, approver, outcome FROM tool_audit"
+            "SELECT id, at_ms, server, tool, tier, approver, outcome, task_id FROM tool_audit"
             " ORDER BY id DESC LIMIT ?",
             (limit,),
         )

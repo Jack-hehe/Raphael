@@ -97,12 +97,20 @@ class PluginHub(Protocol):
         """The tier the user gave the tool now, or None when it has none (or is not usable)."""
         ...
 
-    async def call(self, key: str, arguments: Mapping[str, Any], *, approver: str) -> PluginResult:
+    async def call(
+        self,
+        key: str,
+        arguments: Mapping[str, Any],
+        *,
+        approver: str,
+        task_id: int | None = None,
+    ) -> PluginResult:
         """Call a tool and write the audit. `approver` is "auto" for a call that needs no yes, and
-        "user" for one the user said yes to; a call at T2 or T3 is refused without "user"."""
+        "user" for one the user said yes to; a call at T2 or T3 is refused without "user".
+        `task_id` is the background task that makes the call, if one does (the audit says so)."""
         ...
 
-    def record_unrun(self, key: str, *, outcome: str) -> None:
+    def record_unrun(self, key: str, *, outcome: str, task_id: int | None = None) -> None:
         """Write the audit of a call that was asked about and not made: "denied" or "expired"."""
         ...
 

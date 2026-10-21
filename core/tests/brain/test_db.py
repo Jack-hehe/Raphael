@@ -91,7 +91,42 @@ SCHEMA_V8 = {
         "outcome TEXT NOT NULL",
     ],
 }
-LATEST = 8
+# Schema v9 adds the background worker's tasks and steps, and ties the audit to the task.
+SCHEMA_V9 = {
+    **{**SCHEMA_V8, "tool_audit": [*SCHEMA_V8["tool_audit"], "task_id INTEGER"]},
+    "worker_tasks": [
+        "id INTEGER PK",
+        "created_at_ms INTEGER NOT NULL",
+        "started_at_ms INTEGER",
+        "finished_at_ms INTEGER",
+        "state TEXT NOT NULL",
+        "session_id TEXT NOT NULL",
+        "turn_id INTEGER",
+        "language TEXT NOT NULL",
+        "text TEXT NOT NULL",
+        "report_prefix TEXT",
+        "report_text TEXT",
+        "report_detail TEXT",
+        "reason TEXT",
+        "model_calls INTEGER NOT NULL DEFAULT 0",
+        "tool_calls INTEGER NOT NULL DEFAULT 0",
+        "cost_usd REAL NOT NULL DEFAULT 0",
+    ],
+    "worker_steps": [
+        "id INTEGER PK",
+        "task_id INTEGER NOT NULL",
+        "n INTEGER NOT NULL",
+        "at_ms INTEGER NOT NULL",
+        "kind TEXT NOT NULL",
+        "tool TEXT",
+        "server TEXT",
+        "tier TEXT",
+        "outcome TEXT NOT NULL",
+        "cost_usd REAL NOT NULL DEFAULT 0",
+        "ms INTEGER NOT NULL DEFAULT 0",
+    ],
+}
+LATEST = 9
 
 
 def schema_names(conn, kind):
@@ -115,10 +150,16 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V8)
-    assert {"history_created", "agent_turns_created", "tool_audit_at"} <= schema_names(conn, "index")
+    assert schema_names(conn, "table") == set(SCHEMA_V9)
+    assert {
+        "history_created",
+        "agent_turns_created",
+        "tool_audit_at",
+        "worker_tasks_created",
+        "worker_steps_task",
+    } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V8.items():
+    for table, columns in SCHEMA_V9.items():
         assert describe_columns(conn, table) == columns
 
 
@@ -340,7 +381,7 @@ def assert_has_the_latest_schema(migrated, fresh):
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert schema_names(migrated, "table") == schema_names(fresh, "table")
     assert schema_names(migrated, "index") == schema_names(fresh, "index")
-    for table in SCHEMA_V8:
+    for table in SCHEMA_V9:
         assert describe_columns(migrated, table) == describe_columns(fresh, table)
     assert migrated.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
     assert HistoryStore(migrated).latest().text == "A"
@@ -388,9 +429,50 @@ def test_a_v7_database_gets_the_audit_table_at_v8_and_keeps_its_rows(tmp_path, c
 
     migrated = db.connect(path)
     assert_has_the_latest_schema(migrated, conn)
-    assert describe_columns(migrated, "tool_audit") == SCHEMA_V8["tool_audit"]
+    assert describe_columns(migrated, "tool_audit") == SCHEMA_V9["tool_audit"]
     assert migrated.execute("SELECT count(*) FROM tool_audit").fetchone()[0] == 0
     migrated.close()
+
+
+def v8_database(path):
+    """A database as the version before the background worker left it: at v8, with the audit of a
+    plugin's tool call in it."""
+    v7_database(path)
+    raw = sqlite3.connect(path)
+    raw.executescript(db._MIGRATION_V8)
+    raw.execute(
+        "INSERT INTO tool_audit (at_ms, server, tool, tier, approver, outcome)"
+        " VALUES (7, 'Notes', 'look', 'T0', 'auto', 'ok')"
+    )
+    raw.commit()
+    raw.close()
+
+
+def test_a_v8_database_gets_the_worker_tables_at_v9_and_keeps_its_audit(tmp_path, conn):
+    path = tmp_path / "v8.db"
+    v8_database(path)
+
+    migrated = db.connect(path)
+    assert_has_the_latest_schema(migrated, conn)
+    kept = migrated.execute("SELECT server, tool, outcome, task_id FROM tool_audit").fetchall()
+    assert [tuple(row) for row in kept] == [("Notes", "look", "ok", None)]  # the fast tier's
+    assert migrated.execute("SELECT count(*) FROM worker_tasks").fetchone()[0] == 0
+    assert migrated.execute("SELECT count(*) FROM worker_steps").fetchone()[0] == 0
+    migrated.close()
+
+
+def test_a_failed_v9_migration_leaves_the_database_at_v8(tmp_path):
+    path = tmp_path / "v8.db"
+    v8_database(path)
+    raw = sqlite3.connect(path)
+    raw.execute("CREATE TABLE worker_tasks (x)")  # in the way of the v9 migration
+    raw.commit()
+    with pytest.raises(sqlite3.OperationalError):
+        db.migrate(raw)
+    assert not raw.in_transaction
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert "task_id" not in [row[1] for row in raw.execute("PRAGMA table_info(tool_audit)")]
+    raw.close()
 
 
 def test_a_failed_v8_migration_leaves_the_database_at_v7(tmp_path):

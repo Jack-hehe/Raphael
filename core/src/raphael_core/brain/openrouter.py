@@ -110,6 +110,35 @@ class ToolPlan:
 
 
 @dataclass
+class ChatToolCall:
+    """A call the model asked for in a conversation: the id it gave the call (the result is sent
+    back under it), the name it was offered the tool under and the arguments. `arguments` is the
+    JSON the model wrote, parsed (an object, if the model did as asked), or None when what it wrote
+    is not JSON; `raw_arguments` is the text as it came, which goes back to the model as it wrote
+    it."""
+
+    id: str
+    name: str
+    arguments: Any
+    raw_arguments: str
+
+
+@dataclass
+class ChatTurn:
+    """One reply of a model in a conversation with tools: its words (`content`, which is the
+    answer when `calls` is empty) and the calls it asks for."""
+
+    content: str
+    calls: list[ChatToolCall]
+    finish_reason: str | None
+    model: str  # the model that answered, which can be one of the fallbacks
+    cost_usd: float  # always a number the spend can store: 0 or more, and finite
+    prompt_tokens: int
+    completion_tokens: int
+    latency_ms: int  # of the HTTP call
+
+
+@dataclass
 class KeyInfo:
     label: str
     limit: float | None  # None: the key has no spending limit
@@ -423,6 +452,71 @@ def _to_tool_plan(reply: _Reply, requested_model: str) -> ToolPlan:
     )
 
 
+def _content_text(content: Any) -> str:
+    """The words of a message: a string, or a list of parts of which the text ones count."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            part.get("text")
+            for part in content
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        ]
+        return "".join(parts)
+    return ""
+
+
+def _to_chat_turn(reply: _Reply, requested_model: str) -> ChatTurn:
+    body = reply.body
+    choices = body.get("choices") if isinstance(body, dict) else None
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    if not isinstance(choice, dict):
+        raise _failure(reply.status, "bad_response", "The reply has no choices")
+    if choice.get("finish_reason") == "error":
+        raise _reported_error(
+            _error_object(choice), reply.status, "The model ended its reply with an error"
+        )
+    message = choice.get("message")
+    message = message if isinstance(message, dict) else {}
+    raw_calls = message.get("tool_calls")
+    calls: list[ChatToolCall] = []
+    for index, raw in enumerate(raw_calls if isinstance(raw_calls, list) else []):
+        function = raw.get("function") if isinstance(raw, dict) else None
+        name = function.get("name") if isinstance(function, dict) else None
+        if not isinstance(name, str) or not name:
+            continue
+        written = function.get("arguments")
+        arguments: Any = written
+        text = written if isinstance(written, str) else json.dumps(written or {})
+        if isinstance(written, str):
+            try:
+                arguments = json.loads(written) if written.strip() else {}
+            except ValueError:
+                arguments = None  # the model wrote something that is not JSON
+        call_id = raw.get("id")
+        calls.append(
+            ChatToolCall(
+                id=call_id if isinstance(call_id, str) and call_id else f"unnamed_call_{index}",
+                name=name,
+                arguments=arguments,
+                raw_arguments=text,
+            )
+        )
+    usage = _usage_of(body)
+    answered_by = body.get("model")
+    finish = choice.get("finish_reason")
+    return ChatTurn(
+        content=_content_text(message.get("content")),
+        calls=calls,
+        finish_reason=finish if isinstance(finish, str) else None,
+        model=answered_by if isinstance(answered_by, str) and answered_by else requested_model,
+        cost_usd=_usage_cost(usage),
+        prompt_tokens=_usage_count(usage, "prompt_tokens"),
+        completion_tokens=_usage_count(usage, "completion_tokens"),
+        latency_ms=reply.latency_ms,
+    )
+
+
 def _to_key_info(reply: _Reply) -> KeyInfo:
     data = reply.body.get("data") if isinstance(reply.body, dict) else None
     if not isinstance(data, dict):
@@ -691,6 +785,45 @@ class OpenRouterClient:
             "POST", "/chat/completions", self._stored_key(), timeout_s, body
         )
         return _to_tool_plan(reply, model)
+
+    async def chat_tools(
+        self,
+        *,
+        model: str,
+        fallbacks: list[str],
+        messages: Sequence[dict],
+        tools: Sequence[dict],
+        timeout_s: float,
+        max_tokens: int,
+        reasoning_effort: str = "none",
+    ) -> ChatTurn:
+        """One turn of a conversation in which `model` may call `tools` (the chat format, as for
+        plan_tools). `messages` are the whole conversation so far, in the chat format: the system
+        message, the user's, the model's own earlier replies with their `tool_calls`, and a `tool`
+        message for the result of each call. The reply holds the words of the model and the calls it
+        asks for; none of them is made here. With no `tools` the model can only answer.
+
+        Like plan_tools, this requires every parameter from the provider (a provider that cannot
+        take tools is left out), sends no temperature, denies data collection and tries the
+        `fallbacks` if the model fails.
+        """
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": list(messages),
+            "provider": {"require_parameters": True, "sort": "latency", "data_collection": "deny"},
+            "reasoning": {"effort": reasoning_effort},
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            body["tools"] = list(tools)
+            body["tool_choice"] = "auto"
+        models = [m for m in fallbacks if m != model]
+        if models:
+            body["models"] = models
+        reply = await self._request(
+            "POST", "/chat/completions", self._stored_key(), timeout_s, body
+        )
+        return _to_chat_turn(reply, model)
 
     async def transcribe(
         self,

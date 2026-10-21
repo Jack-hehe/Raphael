@@ -501,7 +501,9 @@ async def test_the_audit_holds_no_argument_and_no_result(rpc, service, servers, 
     assert SECRET not in everything
     listed = await rpc.call("integrations.audit", {})
     assert [e["outcome"] for e in listed["entries"]] == ["error", "ok"]  # newest first
-    assert set(listed["entries"][0]) == {"id", "at_ms", "server", "tool", "tier", "approver", "outcome"}
+    assert set(listed["entries"][0]) == {
+        "id", "at_ms", "server", "tool", "tier", "approver", "outcome", "task_id",
+    }  # fmt: skip
     assert SECRET not in json.dumps(listed)
 
 

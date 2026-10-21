@@ -22,7 +22,7 @@ The window manages the plugins with:
   each server, with its tools.
 
 The assistant reaches the tools through `PluginHub` (`agent.plugins`): `offered`, `tier_of`,
-`call` and `record_unrun`. Every call goes through `call`, which checks again that the tool is
+`call` and `record_unrun`, by way of the one gate (`agent.gate`). Every call goes through `call`, which checks again that the tool is
 still the one the user gave its tier to, refuses a call that needs a yes without one, and writes
 the audit whatever happens.
 
@@ -345,6 +345,7 @@ class IntegrationsService:
                     "tier": entry.tier,
                     "approver": entry.approver,
                     "outcome": entry.outcome,
+                    "task_id": entry.task_id,
                 }
                 for entry in self._audit.recent(limit)
             ]
@@ -399,7 +400,7 @@ class IntegrationsService:
             return ("?", "?")
         return (server.name, parsed[1])
 
-    def record_unrun(self, key: str, *, outcome: str) -> None:
+    def record_unrun(self, key: str, *, outcome: str, task_id: int | None = None) -> None:
         server_name, tool_name = self._names(key)
         usable = self._usable(key)
         self._audit.add(
@@ -408,9 +409,17 @@ class IntegrationsService:
             tier=None if usable is None else usable[2].name,
             approver="none",
             outcome=outcome,
+            task_id=task_id,
         )
 
-    async def call(self, key: str, arguments: Mapping[str, Any], *, approver: str) -> PluginResult:
+    async def call(
+        self,
+        key: str,
+        arguments: Mapping[str, Any],
+        *,
+        approver: str,
+        task_id: int | None = None,
+    ) -> PluginResult:
         server_name, tool_name = self._names(key)
         usable = self._usable(key)
 
@@ -421,6 +430,7 @@ class IntegrationsService:
                 tier=None if tier is None else tier.name,
                 approver=approver if outcome not in ("blocked",) else "none",
                 outcome=outcome,
+                task_id=task_id,
             )
             return result
 

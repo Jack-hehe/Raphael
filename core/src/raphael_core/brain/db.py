@@ -165,6 +165,29 @@ PRAGMA user_version = 8;
 COMMIT;
 """
 
+# v9: the background worker (raphael_core.background). `worker_tasks` is one row for each task:
+# what was handed over (`text`, which is what the user said, so it is pruned and cleared with the
+# assistant's history), how it stands (`state`: queued, running, done, failed, limit, cancelled or
+# interrupted) and the report it ended with. `worker_steps` is one row for each model call and each
+# tool call of a task: which tool, at which tier, how it ended and what it cost; never an
+# argument or a result. `tool_audit.task_id` ties a tool call to the task that made it.
+_MIGRATION_V9 = """
+BEGIN;
+ALTER TABLE tool_audit ADD COLUMN task_id INTEGER;
+CREATE TABLE worker_tasks (id INTEGER PRIMARY KEY, created_at_ms INTEGER NOT NULL,
+  started_at_ms INTEGER, finished_at_ms INTEGER, state TEXT NOT NULL, session_id TEXT NOT NULL,
+  turn_id INTEGER, language TEXT NOT NULL, text TEXT NOT NULL, report_prefix TEXT,
+  report_text TEXT, report_detail TEXT, reason TEXT, model_calls INTEGER NOT NULL DEFAULT 0,
+  tool_calls INTEGER NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0);
+CREATE INDEX worker_tasks_created ON worker_tasks(created_at_ms);
+CREATE TABLE worker_steps (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL, n INTEGER NOT NULL,
+  at_ms INTEGER NOT NULL, kind TEXT NOT NULL, tool TEXT, server TEXT, tier TEXT,
+  outcome TEXT NOT NULL, cost_usd REAL NOT NULL DEFAULT 0, ms INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX worker_steps_task ON worker_steps(task_id, n);
+PRAGMA user_version = 9;
+COMMIT;
+"""
+
 _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_V1,
     2: _MIGRATION_V2,
@@ -174,6 +197,7 @@ _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     6: _MIGRATION_V6,
     7: _MIGRATION_V7,
     8: _MIGRATION_V8,
+    9: _MIGRATION_V9,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 
