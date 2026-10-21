@@ -438,7 +438,7 @@ export const ja = {
   "conn.all": "すべて",
   "conn.join": "追加",
   "conn.joinAria": "{p0} を追加",
-  "conn.installed": "インストール済み",
+  "conn.installed": "追加済み",
   "conn.manage": "管理",
   "conn.loggingIn": "ブラウザでログインしてください…",
   "conn.cancel": "キャンセル",

@@ -347,10 +347,10 @@ function storeHTML(v: ConnectionsView): string {
   if (!found.length) return `<p class="cs-none">${esc(t("conn.noMatch"))}</p>`;
   const section = (title: string, list: StoreService[]): string =>
     list.length ? `<section class="cs-sec"><h2>${esc(title)}</h2><div class="cs-grid">${list.map((s) => cardHTML(s, v)).join("")}</div></section>` : "";
-  const byName = [...found].sort((a, b) => a.name.localeCompare(b.name));
-  // The popular ones first, and again among all: a directory lists everything under 「全部」.
+  // The popular ones first; 「全部」 is the rest, by name. A search lists what it finds under 「全部」 alone.
   const popular = v.search.trim() ? [] : found.filter((s) => s.popular);
-  return section(t("conn.hot"), popular) + section(t("conn.all"), byName);
+  const rest = found.filter((s) => !popular.includes(s)).sort((a, b) => a.name.localeCompare(b.name));
+  return section(t("conn.hot"), popular) + section(t("conn.all"), rest);
 }
 
 function storePageHTML(s: StoreService, v: ConnectionsView): string {

@@ -1,5 +1,5 @@
 /* The 「連接」 tab of the settings: 「已安裝」 and 「商店」, a page for one service. Colours are the app's tokens. */
-.cs { margin-top: 4px; }
+.cs { margin-top: 20px; }
 .cs h2.big { margin: 0; font: 650 18px/1.3 var(--display); }
 .cs h2 { margin: 0 0 10px 2px; font-size: 14px; font-weight: 650; }
 .cs h3 { margin: 0 0 8px 2px; font-size: 13px; font-weight: 600; color: var(--text-2); }
@@ -81,14 +81,14 @@
 /* 商店: cards in two columns, each a bordered button that opens the page and a button that adds */
 .cs-sec:first-child { margin-top: 0; }
 .cs-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
-.cs-card { display: flex; align-items: stretch; gap: 8px; min-width: 0; }
-.cs-card .btn.cs-main { flex: 1; min-width: 0; justify-content: flex-start; gap: 12px; min-height: 64px; padding: 8px 12px; border-radius: 12px; text-align: left; white-space: normal; }
+.cs-card { display: grid; grid-template-columns: minmax(0, 1fr) 84px; align-items: center; gap: 8px; min-width: 0; }
+.cs-card .btn.cs-main { min-width: 0; justify-content: flex-start; gap: 12px; min-height: 64px; padding: 8px 12px; border-radius: 12px; text-align: left; white-space: normal; }
 .cs-main .tx { display: grid; flex: 1; min-width: 0; }
 .cs-main .nm { font-size: 13.5px; font-weight: 600; }
 .cs-main .sub { font-size: 12px; line-height: 1.4; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cs-main .sub.wait { color: var(--accent-text); }
-.cs-card > .btn { align-self: center; flex: none; }
-.cs-card > .cs-state { align-self: center; flex: none; padding: 0 4px; font-size: 12.5px; }
+.cs-card > .btn { justify-self: stretch; padding-inline: 8px; }
+.cs-card > .cs-state { justify-self: center; font-size: 12.5px; }
 
 /* The form that connects a server of the owner's own */
 .cd-help { margin: 6px 0 0; font-size: 13px; line-height: 1.5; color: var(--text-2); text-wrap: pretty; }

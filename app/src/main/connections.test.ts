@@ -224,13 +224,13 @@ describe("the page of a connected service", () => {
 describe("商店", () => {
   const html = connectionsHTML(view({ tab: "store" }));
 
-  test("has 熱門 and 全部 as two columns of cards", () => {
+  test("has 熱門, then 全部 for the rest, as two columns of cards", () => {
     expect(html).toContain("<h2>熱門</h2>");
     expect(html).toContain("<h2>全部</h2>");
     const popular = html.slice(html.indexOf("<h2>熱門</h2>"), html.indexOf("<h2>全部</h2>"));
     expect([...popular.matchAll(/class="nm">([^<]+)</g)].map((m) => m[1])).toEqual(["Notion", "Linear", "Canva"]);
     const all = html.slice(html.indexOf("<h2>全部</h2>"));
-    expect([...all.matchAll(/class="nm">([^<]+)</g)].map((m) => m[1])).toEqual(["Canva", "Linear", "Notion", "Sentry"]); // by name
+    expect([...all.matchAll(/class="nm">([^<]+)</g)].map((m) => m[1])).toEqual(["Sentry"]); // the rest, by name, none twice
     expect(html.match(/class="cs-grid"/g)).toHaveLength(2);
   });
 
@@ -263,6 +263,7 @@ describe("商店", () => {
   test("searches by name, publisher and summary, and then lists the matches once", () => {
     const found = bodyHTML(view({ tab: "store", search: "lin" }));
     expect(found).not.toContain("<h2>熱門</h2>");
+    expect(found).toContain("<h2>全部</h2>");
     expect([...found.matchAll(/class="nm">([^<]+)</g)].map((m) => m[1])).toEqual(["Linear"]);
     expect(bodyHTML(view({ tab: "store", search: "zzz" }))).toContain("沒有符合的項目");
   });
