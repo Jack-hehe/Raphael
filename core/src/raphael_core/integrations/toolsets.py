@@ -92,6 +92,7 @@ def builtin_group(toolset: ToolSet) -> dict:
                 "name": tool,
                 "description": "",
                 "tier": toolset.tiers.get(tool),
+                "decided": True,
                 "changed": False,
                 "suggested": None,
             }

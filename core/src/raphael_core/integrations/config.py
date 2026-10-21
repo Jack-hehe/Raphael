@@ -32,6 +32,9 @@ FILE_NAME = "integrations.json"
 FORMAT_VERSION = 1
 
 TIERS = ("T0", "T1", "T2", "T3")
+# What a grant holds when the user looked at a tool and chose to block it: a decision like the
+# others (so the tool is not "new" any more), but one that never lets the tool be offered or run.
+BLOCK = "block"
 TRANSPORTS = ("stdio", "http")
 
 MAX_SERVERS = 20
@@ -70,7 +73,7 @@ class ToolRecord:
 class Grant:
     """The tier the user gave a tool, and the fingerprint of the tool they gave it to."""
 
-    tier: str
+    tier: str  # "T0" to "T3", or BLOCK
     fingerprint: str
 
 
@@ -99,6 +102,15 @@ class ServerConfig:
         if grant is None or grant.tier not in TIERS or grant.fingerprint != tool.fingerprint:
             return None
         return grant.tier
+
+    def decided(self, tool: ToolRecord) -> bool:
+        """The user looked at `tool` as it is now and chose a tier or chose to block it."""
+        grant = self.grants.get(tool.name)
+        return (
+            grant is not None
+            and grant.fingerprint == tool.fingerprint
+            and (grant.tier in TIERS or grant.tier == BLOCK)
+        )
 
 
 def fingerprint(name: str, description: str, schema: Any) -> str:
@@ -315,7 +327,7 @@ def _server_from_json(raw: Any) -> ServerConfig | None:
     for tool_name, grant in grants.items() if isinstance(grants, dict) else []:
         tier = grant.get("tier") if isinstance(grant, dict) else None
         seen = grant.get("fingerprint") if isinstance(grant, dict) else None
-        if isinstance(tool_name, str) and tier in TIERS and isinstance(seen, str):
+        if isinstance(tool_name, str) and (tier in TIERS or tier == BLOCK) and isinstance(seen, str):
             server.grants[tool_name] = Grant(tier, seen)
     return server
 

@@ -12,10 +12,12 @@ The window manages the plugins with:
 - `integrations.refresh {id}` connect, read the tool list, keep it; `integrations.tools {id}` the
   tools kept, each with the tier the user gave it, if any;
 - `integrations.set_tier {id, tool, tier}` the user's decision about one tool: "T0" to "T3", or null
-  to take the tool back (a tool with no tier is blocked: never offered to a model, never run);
+  to block the tool on purpose (a tool with no tier is blocked: never offered to a model, never
+  run; one never decided on is `decided: false`, "new");
 - `integrations.audit {limit}` the latest calls;
-- `integrations.set_group_tier {id, tier}` one tier for every tool the server has now (a tool it
-  adds later stays blocked); `tier` null takes the tiers back;
+- `integrations.set_group_tier {id, tier, tools?}` one tier for every tool the server has now, or
+  only for those named in `tools` (a tool it adds later stays undecided and blocked); `tier`
+  null blocks them on purpose (a decision too, so they are not "new" any more);
 - `toolsets.list` the groups of the 「連接」 tab (`toolsets.py`): Raphael's own, fixed, and one for
   each server, with its tools.
 
@@ -42,6 +44,7 @@ from ..router import Router
 from .audit import LIST_DEFAULT, AuditLog
 from .client import CALL_TOTAL_S, McpConnector, McpFailure
 from .config import (
+    BLOCK,
     TIERS,
     ConfigStore,
     Grant,
@@ -160,17 +163,21 @@ class IntegrationsService:
             "error": failure,
             "tool_count": len(server.tools),
             "allowed_count": allowed,
+            "pending_count": sum(1 for tool in server.tools if not server.decided(tool)),
             "checked_at_ms": server.tools_checked_at_ms,
         }
 
     @staticmethod
     def _tool_view(server: ServerConfig, tool: ToolRecord) -> dict[str, Any]:
         tier = server.granted_tier(tool)
-        changed = tier is None and tool.name in server.grants
+        grant = server.grants.get(tool.name)
+        changed = tier is None and grant is not None and grant.fingerprint != tool.fingerprint
         return {
             "name": tool.name,
             "description": tool.description,
             "tier": tier,
+            # Looked at and given a tier or blocked on purpose; false is "new": still to decide.
+            "decided": server.decided(tool),
             "changed": changed,  # had a tier, but the server describes the tool differently now
             "suggested": SUGGESTED_FOR_READ_ONLY if tool.read_only_hint is True else None,
         }
@@ -287,11 +294,9 @@ class IntegrationsService:
         tool = server.tool(name)
         if tool is None:
             raise _invalid("There is no such tool")
-        if tier is None:
-            server.grants.pop(name, None)
-        else:
-            # Tied to the tool as it is now: the one the user is looking at.
-            server.grants[name] = Grant(tier, tool.fingerprint)
+        # Tied to the tool as it is now: the one the user is looking at. A null tier is a decision
+        # too (block it): the tool is not new any more, and still never offered or run.
+        server.grants[name] = Grant(BLOCK if tier is None else tier, tool.fingerprint)
         self._save()
         return {"tool": self._tool_view(server, tool)}
 
@@ -300,11 +305,15 @@ class IntegrationsService:
         tier = params.get("tier")
         if tier is not None and tier not in TIERS:
             raise _invalid("tier must be T0, T1, T2, T3 or null")
-        for tool in server.tools:  # the tools there are now, and no others
-            if tier is None:
-                server.grants.pop(tool.name, None)
-            else:
-                server.grants[tool.name] = Grant(tier, tool.fingerprint)
+        names = params.get("tools")
+        if names is not None and (
+            not isinstance(names, list) or not all(isinstance(name, str) for name in names)
+        ):
+            raise _invalid("tools must be a list of tool names")
+        for tool in server.tools:  # the tools there are now (and named, if some are), no others
+            if names is not None and tool.name not in names:
+                continue
+            server.grants[tool.name] = Grant(BLOCK if tier is None else tier, tool.fingerprint)
         self._save()
         return {"group": self._group(server)}
 

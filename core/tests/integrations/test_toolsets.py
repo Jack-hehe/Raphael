@@ -104,7 +104,7 @@ async def test_a_group_tier_sets_the_tools_there_are_and_not_the_ones_to_come(
     assert {n for n in tiers_of(group) if tiers_of(group)[n] is not None} == {
         t.name for t in server.tools if t.name != "fresh"
     }
-    assert service.tier_of(f"plugin:{server_id}/fresh") is None
+    assert service.tier_of(f"mcp:{server_id}/fresh") is None
 
 
 async def test_a_group_tier_can_be_taken_back_and_is_checked(rpc, servers):
@@ -112,6 +112,7 @@ async def test_a_group_tier_can_be_taken_back_and_is_checked(rpc, servers):
     await rpc.call("integrations.set_group_tier", {"id": server_id, "tier": "T2"})
     cleared = await rpc.call("integrations.set_group_tier", {"id": server_id, "tier": None})
     assert set(tiers_of(cleared["group"]).values()) == {None}
+    assert all(tool["decided"] for tool in cleared["group"]["tools"])
     for params in ({"id": server_id, "tier": "T9"}, {"id": "nope", "tier": "T0"}, {"tier": "T0"}):
         with pytest.raises(RpcError) as failed:
             await rpc.call("integrations.set_group_tier", params)
@@ -147,3 +148,103 @@ async def test_add_refresh_tiers_and_list_end_to_end(rpc, servers, vault):
     assert (tiers["look"], tiers["wipe"], tiers["big"]) == ("T0", "T3", None)
     assert (group["status"], group["enabled"]) == ("disabled", False)
     assert SECRET not in json.dumps(await rpc.call("toolsets.list"))
+
+
+# --- "never decided" is not "blocked on purpose" ----------------------------------------------
+
+
+def decided_of(group):
+    return {tool["name"]: tool["decided"] for tool in group["tools"]}
+
+
+async def test_a_new_tool_is_undecided_until_the_user_gives_it_a_tier_or_blocks_it(rpc, servers):
+    server_id = await add(rpc, servers)
+    group = by_id((await rpc.call("toolsets.list"))["groups"])[server_id]
+    assert set(decided_of(group).values()) == {False}
+    assert group["pending_count"] == group["tool_count"] > 0
+
+    await rpc.call("integrations.set_tier", {"id": server_id, "tool": "look", "tier": "T0"})
+    await rpc.call("integrations.set_tier", {"id": server_id, "tool": "wipe", "tier": None})
+    group = by_id((await rpc.call("toolsets.list"))["groups"])[server_id]
+    assert (decided_of(group)["look"], decided_of(group)["wipe"]) == (True, True)
+    assert tiers_of(group)["wipe"] is None  # blocked on purpose: no tier, never offered
+    assert group["pending_count"] == group["tool_count"] - 2
+    assert group["allowed_count"] == 1
+    assert not any(tool["changed"] for tool in group["tools"])
+
+
+async def test_a_block_on_purpose_is_never_offered_or_run(rpc, service, servers):
+    server_id = await add(rpc, servers)
+    await rpc.call("integrations.set_group_tier", {"id": server_id, "tier": "T1"})
+    await rpc.call("integrations.set_tier", {"id": server_id, "tool": "wipe", "tier": None})
+    assert service.tier_of(f"mcp:{server_id}/wipe") is None
+    assert service.tier_of(f"mcp:{server_id}/look") is not None
+
+
+async def test_a_group_tier_can_be_limited_to_named_tools(rpc, servers):
+    server_id = await add(rpc, servers)
+    done = await rpc.call(
+        "integrations.set_group_tier", {"id": server_id, "tier": "T2", "tools": ["note", "ghost"]}
+    )
+    assert tiers_of(done["group"])["note"] == "T2"
+    assert [n for n, t in tiers_of(done["group"]).items() if t is not None] == ["note"]
+    assert decided_of(done["group"])["look"] is False
+    for tools in ("note", [1], {"note": 1}):
+        with pytest.raises(RpcError) as failed:
+            await rpc.call(
+                "integrations.set_group_tier", {"id": server_id, "tier": "T0", "tools": tools}
+            )
+        assert failed.value.code == INVALID_PARAMS
+
+
+async def test_a_group_block_decides_the_tools_it_names(rpc, servers):
+    server_id = await add(rpc, servers)
+    done = await rpc.call(
+        "integrations.set_group_tier", {"id": server_id, "tier": None, "tools": ["wipe"]}
+    )
+    assert decided_of(done["group"])["wipe"] is True
+    assert tiers_of(done["group"])["wipe"] is None
+    assert decided_of(done["group"])["look"] is False
+
+
+async def test_a_tool_that_changed_is_not_decided_and_is_flagged(rpc, service, servers):
+    from raphael_core.integrations.config import tool_record
+
+    server_id = await add(rpc, servers)
+    await rpc.call("integrations.set_tier", {"id": server_id, "tool": "look", "tier": "T0"})
+    server = service._config.get(server_id)
+    old = server.tool("look")
+    server.tools[server.tools.index(old)] = tool_record(
+        "look", "Now it does more.", old.input_schema
+    )
+    group = by_id((await rpc.call("toolsets.list"))["groups"])[server_id]
+    look = next(tool for tool in group["tools"] if tool["name"] == "look")
+    assert (look["tier"], look["decided"], look["changed"]) == (None, False, True)
+
+
+async def test_the_built_in_tools_are_always_decided(rpc):
+    groups = (await rpc.call("toolsets.list"))["groups"]
+    assert all(tool["decided"] for group in groups for tool in group["tools"])
+
+
+async def test_a_block_survives_a_restart_and_an_old_file_still_loads(rpc, servers, tmp_path):
+    from raphael_core.integrations.config import ConfigStore
+
+    server_id = await add(rpc, servers)
+    await rpc.call("integrations.set_tier", {"id": server_id, "tool": "wipe", "tier": None})
+    await rpc.call("integrations.set_tier", {"id": server_id, "tool": "look", "tier": "T0"})
+
+    reloaded = ConfigStore(tmp_path).get(server_id)
+    wipe, look = reloaded.tool("wipe"), reloaded.tool("look")
+    assert reloaded.decided(wipe) and reloaded.granted_tier(wipe) is None
+    assert reloaded.granted_tier(look) == "T0"
+
+    # A file from before: its grants hold tiers only, and the tools it does not name are undecided.
+    path = tmp_path / "integrations.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    grants = data["servers"][0]["grants"]
+    data["servers"][0]["grants"] = {k: v for k, v in grants.items() if v["tier"] != "block"}
+    path.write_text(json.dumps(data), encoding="utf-8")
+    old = ConfigStore(tmp_path).get(server_id)
+    assert old.granted_tier(old.tool("look")) == "T0"
+    assert not old.decided(old.tool("wipe"))
