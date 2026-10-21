@@ -1,8 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { dayBounds } from "../format";
-import { setLocale } from "../i18n";
-import { sel } from "../ui";
-import { HISTORY_FILTERS, historyQuery } from "./history";
+import { historyQuery } from "./history";
 
 describe("a day of the history", () => {
   test("is from its midnight to the next one, in local time", () => {
@@ -32,23 +30,5 @@ describe("a day of the history", () => {
   test("without a day the history is asked for as ever", () => {
     expect(historyQuery("", null, null)).toEqual({ limit: 50 });
     expect(historyQuery("hello", null, 1234)).toEqual({ limit: 50, query: "hello", before_ms: 1234 });
-  });
-});
-
-describe("the history filter dropdown", () => {
-  test("offers all, cleaned and original, in that order, as menu choices", () => {
-    expect(HISTORY_FILTERS.map((f) => f.value)).toEqual(["all", "cleaned", "raw"]);
-  });
-
-  test("shows the chosen filter's label in the current language, never a row of buttons", () => {
-    setLocale("en");
-    const html = sel(HISTORY_FILTERS, "cleaned", "Filter", ' data-k="filter"');
-    expect(html).toContain('class="sel"');
-    expect(html).toContain('data-k="filter"');
-    expect(html).toContain("<span>Cleaned up</span>");
-    expect(html).not.toContain("aria-pressed");
-    setLocale("ja");
-    expect(sel(HISTORY_FILTERS, "raw", "x").includes("<span>未整理</span>")).toBe(true);
-    setLocale("zh-TW");
   });
 });

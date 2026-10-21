@@ -342,3 +342,16 @@ def test_each_route_has_its_own_rule():
     assert len(set(rules.values())) == 3
     assert "think something through" in rules["discuss"]
     assert "small talk" in rules["chat"]
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_the_answer_rules_refuse_only_when_nothing_useful_can_be_said(language):
+    prompt = persona.system_prompt(language, "answer")
+    negative = PREFIXES[language].negative
+    assert "Stable general knowledge" in prompt  # no tool needed for what does not change
+    assert "answer with what you have" in prompt  # partial data is not a refusal
+    assert f'Use "{negative}" only when there is truly nothing useful to say' in prompt
+    assert "misheard" in prompt and "state the assumption" in prompt
+    assert "speech-to-text" in prompt  # a dictation app: SST is most likely STT
+    assert "Never invent a number" in prompt  # live facts stay on the tool results
+    assert "use only the tool results and the conversation" not in prompt

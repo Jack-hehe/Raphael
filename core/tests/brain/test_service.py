@@ -9,12 +9,14 @@ Router, the way the device side makes it.
 import asyncio
 import json
 import logging
+import sqlite3
 from datetime import UTC, datetime
 
 import httpx
 import pytest
 
 from raphael_core.brain import service
+from raphael_core.brain.dictionary import DictionaryStore
 from raphael_core.brain.history import HistoryStore
 from raphael_core.brain.openrouter import Completion, KeyInfo, OpenRouterClient, OpenRouterError
 from raphael_core.brain.secrets import MemoryKeyStore
@@ -40,8 +42,9 @@ METHODS = [
     "history.delete",
     "dictionary.list",
     "dictionary.add",
+    "dictionary.import",
     "dictionary.delete",
-    "dictionary.suggestions",
+    "dictionary.auto_add",
     "dictionary.dismiss",
     "dictionary.learn",
     "settings.get",
@@ -930,30 +933,68 @@ def seed_mentions(conn, word, count, created_at_ms):
         store.add(item(created_at_ms=created_at_ms + i, text=f"今天用 {word} 連回家"))
 
 
-async def test_suggestions_come_from_the_last_seven_days(router, conn):
+async def auto_added(router):
+    return (await router.call("dictionary.auto_add", {}))["words"]
+
+
+async def test_auto_add_adds_the_words_of_the_last_seven_days_as_learned(router, conn):
     seed_mentions(conn, "Tailscale", 3, NOW_MS - 2 * DAY_MS)
     seed_mentions(conn, "OpenRouter", 3, NOW_MS - 8 * DAY_MS)
-    assert await router.call("dictionary.suggestions", {}) == {
-        "words": [{"word": "Tailscale", "count": 3}]
-    }
+    assert await auto_added(router) == ["Tailscale"]
+    entries = (await router.call("dictionary.list", {}))["entries"]
+    assert [(e["word"], e["source"]) for e in entries] == [("Tailscale", "learned")]
 
 
-async def test_suggestions_window_is_exactly_seven_days(router, conn):
+async def test_auto_add_window_is_exactly_seven_days(router, conn):
     seed_mentions(conn, "Tailscale", 3, NOW_MS - 7 * DAY_MS)  # from the very start of the window
     stale = HistoryStore(conn)
     for _ in range(3):
         stale.add(item(created_at_ms=NOW_MS - 7 * DAY_MS - 1, text="今天用 OpenRouter"))
-    words = (await router.call("dictionary.suggestions", {}))["words"]
-    assert [w["word"] for w in words] == ["Tailscale"]
+    assert await auto_added(router) == ["Tailscale"]
 
 
-async def test_suggestions_skip_known_and_dismissed_words(router, conn):
+async def test_auto_add_adds_a_word_only_once(router, conn):
     seed_mentions(conn, "Tailscale", 3, NOW_MS - DAY_MS)
+    assert await auto_added(router) == ["Tailscale"]
+    assert await auto_added(router) == []
+    assert len((await router.call("dictionary.list", {}))["entries"]) == 1
+
+
+async def test_auto_add_skips_known_words_in_any_letter_case(router, conn):
+    seed_mentions(conn, "Tailscale", 3, NOW_MS - DAY_MS)
+    await router.call("dictionary.add", {"word": "tailscale"})
+    assert await auto_added(router) == []
+    entries = (await router.call("dictionary.list", {}))["entries"]
+    assert [(e["word"], e["source"]) for e in entries] == [("tailscale", "manual")]
+
+
+async def test_auto_add_skips_a_word_the_user_dismissed(router, conn):
     seed_mentions(conn, "OpenRouter", 3, NOW_MS - DAY_MS)
-    assert len((await router.call("dictionary.suggestions", {}))["words"]) == 2
-    await router.call("dictionary.add", {"word": "tailscale"})  # known, in any letter case
-    assert await router.call("dictionary.dismiss", {"word": "OpenRouter"}) == {}
-    assert await router.call("dictionary.suggestions", {}) == {"words": []}
+    DictionaryStore(conn).dismiss("OpenRouter")
+    assert await auto_added(router) == []
+
+
+async def test_a_deleted_auto_word_is_not_added_again(router, conn):
+    seed_mentions(conn, "Tailscale", 3, NOW_MS - DAY_MS)
+    await auto_added(router)
+    entry = (await router.call("dictionary.list", {}))["entries"][0]
+    await router.call("dictionary.delete", {"id": entry["id"]})
+    assert await auto_added(router) == []
+    assert (await router.call("dictionary.list", {}))["entries"] == []
+
+
+async def test_auto_add_takes_at_most_five_words_a_time(router, conn):
+    for word in ("Alpha1", "Beta2", "Gamma3", "Delta4", "Epsilon5", "Zeta6"):
+        seed_mentions(conn, word, 3, NOW_MS - DAY_MS)
+    assert len(await auto_added(router)) == 5
+    assert len(await auto_added(router)) == 1
+
+
+async def test_auto_add_does_not_log_the_words(router, conn, caplog):
+    caplog.set_level(logging.DEBUG)
+    seed_mentions(conn, "Tailscale", 3, NOW_MS - DAY_MS)
+    await auto_added(router)
+    assert "Tailscale" not in caplog.text
 
 
 # --- settings -----------------------------------------------------------------------------------
@@ -1645,3 +1686,76 @@ async def test_changing_the_retention_starts_the_day_again(router, conn, clock):
     clock.now_ms = NOW_MS + 12 * 3_600_000 + DAY_MS
     await finalize(router)
     assert store.get(aging) is None
+
+
+# --- dictionary.import ---------------------------------------------------------------------------
+
+
+async def imported(router, words):
+    return await router.call("dictionary.import", {"words": words})
+
+
+async def test_import_adds_the_words_as_manual_entries(router):
+    assert await imported(router, ["Tailscale", "拉斐爾"]) == {"added": 2, "skipped": 0, "invalid": 0}
+    entries = (await router.call("dictionary.list", {}))["entries"]
+    assert sorted((e["word"], e["source"], e["misheard"]) for e in entries) == [
+        ("Tailscale", "manual", []),
+        ("拉斐爾", "manual", []),
+    ]
+
+
+async def test_import_skips_known_words_in_any_letter_case_and_repeats_in_the_list(router):
+    await router.call("dictionary.add", {"word": "Tailscale", "misheard": ["tail scale"]})
+    result = await imported(router, ["tailscale", "OpenRouter", "openrouter", " OpenRouter "])
+    assert result == {"added": 1, "skipped": 3, "invalid": 0}
+    entries = (await router.call("dictionary.list", {}))["entries"]
+    assert sorted(e["word"] for e in entries) == ["OpenRouter", "Tailscale"]
+    assert [e["misheard"] for e in entries if e["word"] == "Tailscale"] == [["tail scale"]]
+
+
+async def test_import_counts_blank_words_as_invalid(router):
+    assert await imported(router, ["Kokoro", "  ", ""]) == {"added": 1, "skipped": 0, "invalid": 2}
+
+
+async def test_import_takes_a_word_the_user_dismissed_and_forgets_the_dismissal(router, conn):
+    DictionaryStore(conn).dismiss("OpenRouter")
+    assert await imported(router, ["openrouter"]) == {"added": 1, "skipped": 0, "invalid": 0}
+    assert DictionaryStore(conn).dismissed() == set()
+
+
+async def test_import_is_one_transaction(router, monkeypatch):
+    real = DictionaryStore._put
+    calls = []
+
+    def failing(self, word, forms, source):
+        calls.append(word)
+        if len(calls) == 2:
+            raise sqlite3.OperationalError("disk full")
+        return real(self, word, forms, source)
+
+    monkeypatch.setattr(DictionaryStore, "_put", failing)
+    with pytest.raises(RpcError) as err:
+        await imported(router, ["a1", "b2", "c3"])
+    assert err.value.code == INTERNAL_ERROR
+    monkeypatch.undo()
+    assert (await router.call("dictionary.list", {}))["entries"] == []
+
+
+async def test_import_never_logs_the_words(router, caplog):
+    caplog.set_level(logging.DEBUG)
+    await imported(router, ["SecretProjectName"])
+    assert "SecretProjectName" not in caplog.text
+
+
+async def test_import_takes_at_most_5000_words(router):
+    await imported(router, [f"w{n}" for n in range(service.IMPORT_MAX)])
+    with pytest.raises(RpcError) as err:
+        await imported(router, [f"x{n}" for n in range(service.IMPORT_MAX + 1)])
+    assert err.value.code == INVALID_PARAMS
+
+
+@pytest.mark.parametrize("params", [{}, {"words": "x"}, {"words": [1]}, {"words": None}])
+async def test_import_refuses_bad_params(router, params):
+    with pytest.raises(RpcError) as err:
+        await router.call("dictionary.import", params)
+    assert err.value.code == INVALID_PARAMS

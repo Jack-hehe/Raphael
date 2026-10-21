@@ -71,10 +71,14 @@ logger = logging.getLogger(__name__)
 
 HISTORY_DEFAULT_LIMIT = 50
 HISTORY_MAX_LIMIT = 200
+# The most words `dictionary.import` takes in one call.
+IMPORT_MAX = 5000
 # The most corrections `dictionary.learn` takes from one dictation.
 LEARN_MAX = 3
-# Dictionary suggestions look at this many days of history.
+# The dictionary adds words by itself from this many days of history,
 SUGGESTION_DAYS = 7
+# and at most this many in one go.
+AUTO_ADD_LIMIT = 5
 # How long a key check may take in all. The client's timeout applies to each stage of a request
 # (connect, send, wait, read), so by itself a check could outlast the 15 s the app waits for it.
 KEY_CHECK_TIMEOUT_S = 10.0
@@ -284,8 +288,9 @@ class Brain:
             "history.delete": self._history_delete,
             "dictionary.list": self._dictionary_list,
             "dictionary.add": self._dictionary_add,
+            "dictionary.import": self._dictionary_import,
             "dictionary.delete": self._dictionary_delete,
-            "dictionary.suggestions": self._dictionary_suggestions,
+            "dictionary.auto_add": self._dictionary_auto_add,
             "dictionary.dismiss": self._dictionary_dismiss,
             "dictionary.learn": self._dictionary_learn,
             "settings.get": self._settings_get,
@@ -444,16 +449,48 @@ class Brain:
             entry = self._dictionary.add(word, misheard)
         return {"entry": asdict(entry)}
 
+    async def _dictionary_import(self, params: dict) -> dict:
+        """`{words: [word]}` -> `{added, skipped, invalid}`: adds the words as manual entries in
+        one transaction (at most IMPORT_MAX). A word that is in the dictionary already (in any
+        letter case) or repeats is skipped, a blank one is invalid, and a word the user had
+        dismissed is added all the same. Only the counts are logged."""
+        if _required(params, "words") is None:
+            raise _invalid("words must be a list of strings")
+        words = _opt_strings(params, "words")
+        if len(words) > IMPORT_MAX:
+            raise _invalid(f"words takes at most {IMPORT_MAX} entries")
+        with _store_call():
+            added, skipped, invalid = self._dictionary.import_words(words)
+        logger.info(
+            "Imported %d words into the dictionary (%d skipped, %d invalid)",
+            added,
+            skipped,
+            invalid,
+        )
+        return {"added": added, "skipped": skipped, "invalid": invalid}
+
     async def _dictionary_delete(self, params: dict) -> dict:
         entry_id = _int(params, "id")
         with _store_call():
             return {"deleted": self._dictionary.delete(entry_id)}
 
-    async def _dictionary_suggestions(self, params: dict) -> dict:
+    async def _dictionary_auto_add(self, params: dict) -> dict:
+        """`{}` -> `{words: [word]}`: adds the names and terms that keep coming up in the last
+        seven days of dictation to the dictionary, as learned entries, and returns the ones it
+        added (at most AUTO_ADD_LIMIT). A word that is in the dictionary, or that the user
+        deleted or dismissed, is never added. The app calls it after a dictation is pasted. Only
+        the number of words is logged."""
         texts = self._history.texts_since(self._now_ms() - SUGGESTION_DAYS * _DAY_MS)
         known = set(self._dictionary.hint_words())
-        suggestions = suggest_words(texts, known, self._dictionary.dismissed())
-        return {"words": [{"word": word, "count": count} for word, count in suggestions]}
+        found = suggest_words(texts, known, self._dictionary.dismissed(), limit=AUTO_ADD_LIMIT)
+        words: list[str] = []
+        with _store_call():
+            for word, _count in found:
+                self._dictionary.add(word, source="learned")
+                words.append(word)
+        if words:
+            logger.info("Added %d words to the dictionary by themselves", len(words))
+        return {"words": words}
 
     async def _dictionary_dismiss(self, params: dict) -> dict:
         word = _str(params, "word")

@@ -2,7 +2,7 @@
 
 import pytest
 
-from raphael_core.agent.cities import ALIASES, city_in, city_key, geocoding_queries
+from raphael_core.agent.cities import ALIASES, cities_in, city_in, city_key, geocoding_queries
 
 
 def test_a_city_key_ignores_case_width_and_spaces():
@@ -80,3 +80,21 @@ def test_the_city_a_question_names_is_found(question, city):
 )
 def test_a_question_that_names_no_city_of_the_table_has_none(question):
     assert city_in(question) is None
+
+
+@pytest.mark.parametrize(
+    ("question", "cities"),
+    [
+        ("明天台北和台中哪裡比較適合出門", ["台北", "台中"]),
+        ("東京と大阪の天気を比べて", ["東京", "大阪"]),
+        ("東京 and Osaka tomorrow, which is better?", ["東京", "Osaka"]),
+        ("Osaka or Tokyo for a trip?", ["Osaka", "Tokyo"]),
+        ("新北市和台北誰比較冷", ["新北市", "台北"]),
+        ("台北京站附近的天氣", ["台北"]),
+        ("東京 東京都 Tokyo 都是同一個地方", ["東京"]),
+        ("台北台中高雄新竹基隆天氣", ["台北", "台中", "高雄", "新竹"]),
+        ("明天要帶傘嗎", []),
+    ],
+)
+def test_every_city_a_question_names_is_found_in_order_without_repeats(question, cities):
+    assert cities_in(question) == cities

@@ -645,7 +645,39 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 this.report(delivery.as_ref(), fallback, true);
                 this.learn_after_paste(text, target.as_ref(), delivery);
             });
+            // After the paste, never before it: the text is on its way first.
+            this.auto_add_words().await;
         }))
+    }
+
+    /// Asks the core to add the words that keep coming up in the dictation to the dictionary, and
+    /// reports the ones it added. The report waits behind whatever is on the stage, like the words
+    /// learned from a correction. The words are never logged, only how many.
+    async fn auto_add_words(&self) {
+        let reply = match self.core.call("dictionary.auto_add", json!({})).await {
+            Ok(reply) => reply,
+            Err(err) => {
+                log::warn!("dictionary.auto_add failed: {err}");
+                return;
+            }
+        };
+        let words: Vec<String> = reply
+            .get("words")
+            .and_then(Value::as_array)
+            .map(|words| {
+                words
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if words.is_empty() {
+            return;
+        }
+        log::info!("dictionary: {} word(s) added by themselves", words.len());
+        self.overlay
+            .learned_notice(&notices::auto_added(&words, &self.language.get()));
     }
 
     /// Esc. It ends the session, wherever it is: a dictation or a question to Raphael that is
@@ -2149,6 +2181,72 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn words_the_dictionary_added_by_itself_are_reported_after_the_paste() {
+        let core = FakeCore::with("dictation.stop", stop_result("用 Tailscale 連回家。", None));
+        core.script(
+            "dictionary.auto_add",
+            Ok(json!({"words": ["Tailscale", "Kokoro"]})),
+        );
+        let c = controller(core, FakePaster::pasting("Code.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        assert_eq!(c.paster().delivered(), vec!["用 Tailscale 連回家。"]);
+        assert_eq!(
+            c.overlay().events(),
+            vec![
+                "show:listening".to_owned(),
+                "mode:thinking".to_owned(),
+                "hide".to_owned(),
+                notice("《了。已加入「Tailscale」、「Kokoro」至辭典。》"),
+            ]
+        );
+        // The paste comes first: the core is asked after the text was delivered.
+        let order = c.core().order();
+        assert!(position(&order, "dictation.stop") < position(&order, "dictionary.auto_add"));
+    }
+
+    #[tokio::test]
+    async fn no_notice_when_no_word_was_added() {
+        let core = FakeCore::with("dictation.stop", stop_result("明天開會。", None));
+        core.script("dictionary.auto_add", Ok(json!({"words": []})));
+        let c = controller(core, FakePaster::pasting("Code.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        assert_eq!(c.core().count("dictionary.auto_add"), 1);
+        assert_eq!(
+            c.overlay().events(),
+            vec!["show:listening", "mode:thinking", "hide"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_auto_add_is_silent() {
+        let core = FakeCore::with("dictation.stop", stop_result("明天開會。", None));
+        core.script(
+            "dictionary.auto_add",
+            Err(RpcError::new(-32603, "boom".to_owned())),
+        );
+        let c = controller(core, FakePaster::pasting("Code.exe"));
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        assert_eq!(
+            c.overlay().events(),
+            vec!["show:listening", "mode:thinking", "hide"]
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_is_added_when_there_was_no_text() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("", None)),
+            FakePaster::pasting("Code.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        assert_eq!(c.core().count("dictionary.auto_add"), 0);
+    }
+
     // ---------- toggle mode: press to start, press again to stop ----------
 
     fn toggle_controller(core: FakeCore, paster: FakePaster) -> Ctl {
@@ -2357,7 +2455,12 @@ mod tests {
         stop.await.unwrap();
         assert_eq!(
             c.core().order(),
-            vec!["dictation.start", "dictation.start:reply", "dictation.stop"]
+            vec![
+                "dictation.start",
+                "dictation.start:reply",
+                "dictation.stop",
+                "dictionary.auto_add"
+            ]
         );
         assert_eq!(c.paster().delivered(), vec!["好"]);
     }
@@ -3329,7 +3432,12 @@ mod tests {
         up.await.unwrap();
         assert_eq!(
             c.core().order(),
-            vec!["dictation.start", "dictation.start:reply", "dictation.stop"]
+            vec![
+                "dictation.start",
+                "dictation.start:reply",
+                "dictation.stop",
+                "dictionary.auto_add"
+            ]
         );
         assert_eq!(c.paster().delivered(), vec!["好"]);
         assert_eq!(

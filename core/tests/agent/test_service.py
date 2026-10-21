@@ -447,6 +447,32 @@ async def test_the_weather_is_looked_up_for_the_city_the_question_names(rig, cli
     assert '"asked_for": "東京"' in client.json_calls[0]["user"]
 
 
+async def test_a_question_naming_two_cities_gets_the_weather_of_both_labelled(rig, client):
+    client.decisions.append(decision("answer", weather=0.9))
+    client.replies.append(spoken("答", "台中較適合。"))
+    await rig.ask("明天台北和台中哪裡比較適合出門")
+    names = sorted(
+        r.url.params["name"] for r in rig.meteo.requests if r.url.host.startswith("geocoding")
+    )
+    assert names == ["Taichung", "Taipei"]
+    user = client.json_calls[0]["user"]
+    assert user.count("weather: {") == 2
+    assert '"asked_for": "台北"' in user and '"asked_for": "台中"' in user
+
+
+async def test_one_city_failing_does_not_hide_the_other(rig, client):
+    async def only_taichung_is_unknown(request):
+        if request.url.host.startswith("geocoding") and request.url.params["name"] == "Taichung":
+            raise httpx.ConnectError("no route")
+
+    rig.meteo.on_request = only_taichung_is_unknown
+    client.decisions.append(decision("answer", weather=0.9))
+    client.replies.append(spoken("答", "台北有資料。"))
+    await rig.ask("台北和台中的天氣")
+    user = client.json_calls[0]["user"]
+    assert user.count("weather: {") == 1 and "weather: unavailable" in user
+
+
 async def test_a_question_that_names_no_city_gets_the_weather_of_the_settings(rig, client):
     rig.settings.set("agent_city", "高雄")
     client.decisions.append(decision("answer", weather=0.9))

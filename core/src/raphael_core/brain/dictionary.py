@@ -143,6 +143,38 @@ class DictionaryStore:
             )
             return self._put(word, forms, source)
 
+    def import_words(self, words: Sequence[str]) -> tuple[int, int, int]:
+        """Add many words at once, as manual entries, in one transaction; returns `(added,
+        skipped, invalid)`.
+
+        A word that is blank is invalid (as `add` refuses it). One that the dictionary has already
+        in any letter case, or that repeats in `words`, is skipped. Importing is the user asking
+        for the word, so a word they had dismissed is added all the same and is no longer
+        dismissed.
+        """
+        added = skipped = invalid = 0
+        with self._conn:
+            rows = self._conn.execute("SELECT word FROM dictionary")
+            known = {row["word"].casefold() for row in rows}
+            for raw in words:
+                try:
+                    word = _clean_word(raw)
+                except ValueError:
+                    invalid += 1
+                    continue
+                if word.casefold() in known:
+                    skipped += 1
+                    continue
+                known.add(word.casefold())
+                self._put(word, [], "manual")
+                added += 1
+            for dismissed in self.dismissed():
+                if dismissed.casefold() in known:
+                    self._conn.execute(
+                        "DELETE FROM dismissed_suggestions WHERE word = ?", (dismissed,)
+                    )
+        return added, skipped, invalid
+
     def _put(self, word: str, forms: list[str], source: str) -> Entry:
         """Add the word, or merge `forms` into its entry; part of a transaction."""
         row = self._conn.execute(
