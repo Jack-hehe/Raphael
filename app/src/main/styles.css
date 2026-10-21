@@ -226,6 +226,10 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .hist-top .t .i { width: 15px; height: 15px; margin-right: 7px; vertical-align: -2px; color: var(--text-2); }
 .tools { display: flex; align-items: center; gap: 12px; margin-top: 22px; flex-wrap: wrap; }
 .tools .field { flex: 1; min-width: 160px; max-width: 300px; margin-left: auto; }
+.tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 18px; background: var(--surface-2); }
+.tabs button { height: 30px; padding: 0 13px; border: 0; border-radius: 15px; background: transparent; font-size: 13px; color: var(--text-2); white-space: nowrap; }
+.tabs button:hover { color: var(--text); }
+.tabs button[aria-pressed="true"] { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: var(--tab-shadow), 0 0 0 1px var(--edge); }
 /* The day of the history that Home's activity grid opened it at, with the way back to all of them. */
 .day-row { margin-top: 14px; }
 .chip.day-chip { border-style: solid; border-color: var(--accent); background: var(--accent-soft); }

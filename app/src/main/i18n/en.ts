@@ -240,7 +240,7 @@ export const en = {
   "dictionary.012": "Misheard as (optional)",
   "dictionary.013": "Often heard as",
   "dictionary.014": "Add",
-  "dictionary.015": "<div class=\"tools\">",
+  "dictionary.015": "<div class=\"tools\"><div class=\"tabs\" role=\"group\" aria-label=\"Filter\">",
   "dictionary.016": "Search dictionary",
   "dictionary.017": "{p0} terms",
   "dictionary.018": "<div class=\"say\">《Notice. Your dictionary is empty.》</div>Choose “Add word” to add common terms and improve future dictation.",

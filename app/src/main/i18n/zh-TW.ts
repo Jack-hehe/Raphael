@@ -239,7 +239,7 @@ export const zhTW = {
   "dictionary.012": "常被聽成（選填）",
   "dictionary.013": "常被聽成",
   "dictionary.014": "新增",
-  "dictionary.015": "<div class=\"tools\">",
+  "dictionary.015": "<div class=\"tools\"><div class=\"tabs\" role=\"group\" aria-label=\"篩選\">",
   "dictionary.016": "搜尋字典",
   "dictionary.017": "{p0} 個詞",
   "dictionary.018": "<div class=\"say\">《告。字典還是空的。》</div>按「新增單字」加入常用詞，讓下次聽寫更準確。",

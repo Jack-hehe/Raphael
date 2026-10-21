@@ -12,13 +12,13 @@ import { loadingHTML } from "../loading";
 import type { AppContext, DictionaryEntry, Page } from "../types";
 import { dismissMessage, suggestionsHTML, visibleSuggestions } from "../suggest";
 import { Deletions } from "../undo";
-import { type Choice, btn, closeMenu, esc, fieldHTML, ico, iconBtn, menuIsOpenFor, openMenu, openMenuOnArrow, sel, st, toaster } from "../ui";
+import { btn, esc, fieldHTML, ico, iconBtn, st, toaster } from "../ui";
 
 type Filter = "all" | "auto" | "manual";
-export const DICTIONARY_FILTERS: Choice[] = [
-  { value: "all", get label() { return t("dictionary.001"); } },
-  { value: "auto", get label() { return t("dictionary.002"); } },
-  { value: "manual", get label() { return t("dictionary.003"); } },
+const FILTERS: { id: Filter; name: string }[] = [
+  { id: "all", get name() { return t("dictionary.001"); } },
+  { id: "auto", get name() { return t("dictionary.002"); } },
+  { id: "manual", get name() { return t("dictionary.003"); } },
 ];
 
 /** The core uses "learned" for corrections; "auto" is also accepted. Other sources count as manual. */
@@ -57,8 +57,8 @@ export function createDictionary(app: AppContext): DictionaryPage {
     `${fieldHTML(t("dictionary.012"), "", { id: "nw-mis", get label() { return t("dictionary.013"); } })}` +
     `<div class="addword-actions">${btn(t("dictionary.014"), "pri", ' data-act="add"')}${btn(t("onboarding.031"), "", ' data-act="new-cancel"')}</div></div>` +
     t("dictionary.015") +
-    sel(DICTIONARY_FILTERS, "all", t("common.filter"), ' data-k="filter"') +
-    `<span class="count num"></span>` +
+    FILTERS.map((f) => `<button type="button" data-filter="${f.id}" aria-pressed="${f.id === "all"}">${f.name}</button>`).join("") +
+    `</div><span class="count num"></span>` +
     `<div class="dsearch">${fieldHTML(t("dictionary.016"), "", { icon: "search", get label() { return t("dictionary.016"); }, id: "dict-q" })}</div></div>` +
     `<div class="learn-hint" hidden></div>` +
     `<div class="sugg" hidden></div>` +
@@ -93,10 +93,6 @@ export function createDictionary(app: AppContext): DictionaryPage {
   let entries: DictionaryEntry[] = [];
   let suggested: string[] = [];
   let filter: Filter = "all";
-  /** Shows the chosen filter on its dropdown, in the current language. */
-  function paintFilter(): void {
-    el.querySelector<HTMLElement>('.sel[data-k="filter"]')!.outerHTML = sel(DICTIONARY_FILTERS, filter, t("common.filter"), ' data-k="filter"');
-  }
   let query = "";
   /** Deleted, but not yet for the core (the toast is still there): left out of the list. */
   const deleting = new Set<number>();
@@ -213,15 +209,11 @@ export function createDictionary(app: AppContext): DictionaryPage {
 
   el.addEventListener("click", (e) => {
     const target = e.target as Element;
-    const pick = target.closest<HTMLElement>('.sel[data-k="filter"]');
-    if (pick) {
-      if (menuIsOpenFor(pick)) closeMenu();
-      else
-        openMenu(pick, DICTIONARY_FILTERS, filter, (v) => {
-          filter = v as Filter;
-          paintFilter();
-          render();
-        });
+    const tab = target.closest<HTMLElement>("[data-filter]");
+    if (tab) {
+      filter = tab.dataset.filter as Filter;
+      el.querySelectorAll<HTMLElement>("[data-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b === tab)));
+      render();
       return;
     }
     const act = target.closest<HTMLElement>("[data-act]");
@@ -236,7 +228,6 @@ export function createDictionary(app: AppContext): DictionaryPage {
   });
   el.addEventListener("keydown", (e) => {
     const target = e.target as Element;
-    if (openMenuOnArrow(e)) return;
     if (e.key === "Enter" && (target === wordInput || target === misheardInput)) {
       e.preventDefault();
       void addFromFields();
@@ -254,7 +245,8 @@ export function createDictionary(app: AppContext): DictionaryPage {
     el.querySelector("h1")!.textContent = t("main.003");
     newButton.innerHTML = t("dictionary.007", { p0: ico("plus") });
     el.querySelector(".lede")!.outerHTML = t("dictionary.009");
-    paintFilter();
+    el.querySelector(".tabs")!.setAttribute("aria-label", t("common.filter"));
+    for (const f of FILTERS) el.querySelector<HTMLElement>(`[data-filter="${f.id}"]`)!.textContent = f.name;
     wordInput.placeholder = t("dictionary.010");
     wordInput.setAttribute("aria-label", t("dictionary.011"));
     misheardInput.placeholder = t("dictionary.012");
