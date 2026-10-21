@@ -912,6 +912,7 @@ class App(Router):
     # --- core -----------------------------------------------------------------------------------
 
     async def _hello(self, params: dict) -> dict:
+        self.agent.prewarm()  # the app is up: read the Start menu now, not at the first "open"
         return {"protocol": PROTOCOL_VERSION, "version": __version__}
 
     async def _shutdown(self, params: dict) -> dict:

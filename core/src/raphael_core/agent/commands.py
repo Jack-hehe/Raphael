@@ -1,13 +1,14 @@
 """The fixed commands: what the assistant does at once, with no language model.
 
-A command is a small, known action on this computer: open one of nine web sites, change the volume,
-pause or skip the media that plays, lock the screen, open an app of the Start menu by its name, and
-(the one that asks first) copy text to the clipboard. The router picks one by its name; running it
-is the device's work (`DeviceActions`), done on a worker thread. What Raphael says afterwards is
-fixed too (《了。》).
+A command is a small, known action on this computer: open anything (`open`: a web page, an app of
+the Start menu or a page of the Windows settings), change the volume, pause or skip the media that
+plays, lock the screen, and (the one that asks first) copy text to the clipboard. The router picks
+one by its name; running it is the device's work (`DeviceActions`), done on a worker thread. What
+Raphael says afterwards is fixed too (《了。》).
 
-`open_app` needs the app: `AppCatalog` reads the Start menu once, off the event loop, keeps the list
-and finds an app in what the user said (`match_app`), or by the name a model extracted (`lookup_app`).
+No site is named here: what `open` opens is found when it is asked for (`opening`, `service`). Its
+apps come from `AppCatalog`, which reads the Start menu once, off the event loop, keeps the list
+and finds an app in what the user said (`match_app`), or by the name a model gave (`lookup_app`).
 """
 
 import asyncio
@@ -45,15 +46,11 @@ class Command:
     tier: Tier
     # What the router is told this command is for: one sentence in English.
     guidance: str
-    # "site" (target: the URL), "key" (target: the key, pressed `times`), "lock", "app" (needs an
-    # app_id) or "copy" (needs text).
+    # "open" (needs a `target_kind` and a `target`), "key" (target: the key, pressed `times`),
+    # "lock" or "copy" (needs text).
     kind: str
     target: str = ""
     times: int = 1
-
-
-def _site(name: str, url: str, guidance: str) -> Command:
-    return Command(name, Tier.T1, guidance, "site", url)
 
 
 def _key(name: str, key: str, guidance: str, times: int = 1) -> Command:
@@ -61,17 +58,13 @@ def _key(name: str, key: str, guidance: str, times: int = 1) -> Command:
 
 
 _COMMAND_LIST = (
-    _site("open_youtube", "https://www.youtube.com/", "Open the YouTube website."),
-    _site("open_gmail", "https://mail.google.com/", "Open Gmail, the email inbox, in the browser."),
-    _site("open_github", "https://github.com/", "Open the GitHub website."),
-    _site("open_google", "https://www.google.com/", "Open the Google search page."),
-    _site("open_notion", "https://www.notion.so/", "Open Notion in the browser."),
-    _site("open_chatgpt", "https://chatgpt.com/", "Open ChatGPT in the browser."),
-    _site("open_claude", "https://claude.ai/", "Open Claude in the browser."),
-    _site(
-        "open_google_calendar", "https://calendar.google.com/", "Open Google Calendar, the calendar."
+    Command(
+        "open",
+        Tier.T1,
+        "Open a website, an installed application or a Windows settings page by its name, or "
+        "search on a site.",
+        "open",
     ),
-    _site("open_google_drive", "https://drive.google.com/", "Open Google Drive, the cloud storage."),
     _key("volume_up", "volume_up", "Raise the volume of the computer.", VOLUME_STEPS),
     _key("volume_down", "volume_down", "Lower the volume of the computer.", VOLUME_STEPS),
     _key("volume_mute", "volume_mute", "Mute the computer, or unmute it."),
@@ -84,12 +77,6 @@ _COMMAND_LIST = (
     _key("media_previous", "previous_track", "Go back to the previous song or video."),
     Command("lock_screen", Tier.T1, "Lock the screen of the computer.", "lock"),
     Command(
-        "open_app",
-        Tier.T1,
-        "Open an installed desktop application by its name, one that is not a website above.",
-        "app",
-    ),
-    Command(
         "copy_text",
         Tier.T2,
         "Copy Raphael's last answer, or a text the speaker quotes, to the clipboard.",
@@ -100,22 +87,26 @@ COMMANDS: dict[str, Command] = {command.name: command for command in _COMMAND_LI
 COMMAND_NAMES = tuple(COMMANDS)
 
 
+# The device method that opens each kind of target.
+_OPENERS = {"url": "open_url", "app": "launch_app", "settings": "open_settings"}
+
+
 async def run_command(command: Command, args: Mapping[str, Any], actions: DeviceActions) -> None:
     """Do `command` on the device, on a worker thread. `args` holds what the kind needs: the
-    `app_id` of `open_app`, the `text` of `copy_text`. ValueError, before anything is done, if it is
-    missing; what the device raises (OSError, say) comes out as it is."""
+    `target_kind` ("url", "app" or "settings") and `target` of `open`, the `text` of `copy_text`.
+    ValueError, before anything is done, if it is missing; what the device raises (OSError, say)
+    comes out as it is."""
     kind = command.kind
-    if kind == "site":
-        await asyncio.to_thread(actions.open_url, command.target)
+    if kind == "open":
+        target_kind, target = args.get("target_kind"), args.get("target")
+        opener = _OPENERS.get(target_kind) if isinstance(target_kind, str) else None
+        if opener is None or not isinstance(target, str) or not target.strip():
+            raise ValueError("open needs a target_kind and a target")
+        await asyncio.to_thread(getattr(actions, opener), target)
     elif kind == "key":
         await asyncio.to_thread(actions.press_key, command.target, command.times)
     elif kind == "lock":
         await asyncio.to_thread(actions.lock_screen)
-    elif kind == "app":
-        app_id = args.get("app_id")
-        if not isinstance(app_id, str) or not app_id.strip():
-            raise ValueError("open_app needs an app_id")
-        await asyncio.to_thread(actions.launch_app, app_id)
     elif kind == "copy":
         text = args.get("text")
         if not isinstance(text, str) or not text:
@@ -162,12 +153,16 @@ _WORD = re.compile(r"[a-z0-9]+")
 _MIN_TOKEN = 3
 
 
-def match_app(utterance: str, apps: Sequence[StartApp]) -> StartApp | None:
+def match_app(
+    utterance: str, apps: Sequence[StartApp], *, loose: bool = True
+) -> StartApp | None:
     """The one app that `utterance` names, or None when it names none or cannot tell.
 
     The longest app name that is in the utterance wins. Failing that, a distinctive word of a name
     does ("edge" for Microsoft Edge), when only one app has the longest such word in the
-    utterance. Names are compared in lower case and full-width letters count as ASCII ones.
+    utterance; `loose=False` leaves that out, for when a word may as well be a web site
+    ("google" is not Google Chrome). Names are compared in lower case and full-width letters
+    count as ASCII ones.
     """
     spoken = _norm(utterance)
     if not spoken:
@@ -178,7 +173,7 @@ def match_app(utterance: str, apps: Sequence[StartApp]) -> StartApp | None:
         name = _norm(app.name)
         if len(name) >= 2 and len(name) > best_length and _contains(spoken, name):
             best, best_length = app, len(name)
-    if best is not None:
+    if best is not None or not loose:
         return best
     words = set(_WORD.findall(spoken))
     scores: dict[int, list[StartApp]] = {}
@@ -252,12 +247,19 @@ class AppCatalog:
                     self._apps, self._loaded_at = [], None
             return list(self._apps)
 
-    async def find(self, utterance: str) -> StartApp | None:
+    async def warm(self) -> None:
+        """Read the Start menu now if it was never read, so that the first question finds it
+        there. (The router takes a second or so: the read goes on meanwhile.)"""
+        await self.apps()
+
+    async def find(self, utterance: str, *, loose: bool = True) -> StartApp | None:
         """The app `utterance` names (`match_app`), after reading the list again if it lacks it
         and has gone old."""
-        hit = match_app(utterance, await self.apps())
+        hit = match_app(utterance, await self.apps(), loose=loose)
         if hit is None and self._missed():
-            hit = match_app(utterance, await self.apps(refresh_after_s=APPS_MISS_REFRESH_S))
+            hit = match_app(
+                utterance, await self.apps(refresh_after_s=APPS_MISS_REFRESH_S), loose=loose
+            )
         return hit
 
     async def lookup(self, name: str) -> StartApp | None:

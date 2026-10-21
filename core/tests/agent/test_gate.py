@@ -173,3 +173,20 @@ def test_a_lookup_of_raphael_is_audited_as_raphaels_own_with_the_task(conn):
 
 def test_without_a_database_the_lookups_are_not_audited_and_nothing_breaks():
     ToolGate().record_builtin("weather", outcome="ok", task_id=1)
+
+
+def test_every_command_for_this_computer_is_for_the_foreground_only():
+    gate = ToolGate()
+    for name in COMMANDS:
+        with pytest.raises(NotApproved):
+            gate.check(Action(name, {}), None, worker=True)
+    for name in WEB_TOOLS:
+        gate.check(Action(name, {}), None, worker=True)
+
+
+def test_opening_is_refused_to_the_worker_whatever_the_tier():
+    gate = ToolGate()
+    assert gate.tier("open") is Tier.T1
+    gate.check(Action("open", {"target_kind": "url", "target": "https://example.com/"}), None)
+    with pytest.raises(NotApproved):
+        gate.check(Action("open", {}), None, worker=True)

@@ -375,7 +375,7 @@ class TaskRun:
         gate = self._gate
         tier = gate.tier_now(ref.key)
         try:
-            gate.check(Action(ref.key, arguments), None)
+            gate.check(Action(ref.key, arguments), None, worker=True)
         except (UnknownTool, NotApproved):
             gate.record_builtin(ref.name, outcome="blocked", task_id=self.task_id)
             return _refused(), "blocked", None if tier is None else tier.name
