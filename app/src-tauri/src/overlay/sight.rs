@@ -438,6 +438,7 @@ mod native {
     use std::{
         cell::{Cell, RefCell},
         ffi::c_void,
+        mem::ManuallyDrop,
         time::Instant,
     };
 
@@ -480,11 +481,31 @@ mod native {
         /// The shell's virtual desktop manager. It is made on the main thread, which COM runs as
         /// a single-threaded apartment (tao joins one there before it hides a window from the
         /// taskbar, and wry before it makes a webview), and it is used there only. After a call
-        /// that fails it is made again, because explorer may have restarted.
-        static DESKTOPS: RefCell<Option<IVirtualDesktopManager>> = const { RefCell::new(None) };
+        /// that fails it is made again, because explorer may have restarted (`keep_desktops`).
+        ///
+        /// It is never released when the thread ends. The manager is a proxy to explorer, and
+        /// the main thread's thread-locals are dropped inside `ExitProcess` (the app's event loop
+        /// ends in `std::process::exit`), after every other thread is gone: releasing it there
+        /// waits for an answer from explorer that never comes, and the app hung on its way out,
+        /// its windows hidden, its webview's browser process and its core still running. Once the
+        /// process has ended, COM tells explorer to let go of it.
+        static DESKTOPS: RefCell<Option<ManuallyDrop<IVirtualDesktopManager>>> =
+            const { RefCell::new(None) };
         /// Whether a check is running on this thread. A call into the shell may let window
         /// messages in while it waits, and with them the next check, which then gives way.
         static CHECKING: Cell<bool> = const { Cell::new(false) };
+    }
+
+    // A thread-local with nothing to drop has no destructor to run at the end of the thread.
+    const _: () = assert!(!std::mem::needs_drop::<
+        RefCell<Option<ManuallyDrop<IVirtualDesktopManager>>>,
+    >());
+
+    /// Keeps `manager` as this thread's virtual desktop manager. The one it replaces is released
+    /// now, while the app runs and explorer can answer.
+    fn keep_desktops(manager: Option<IVirtualDesktopManager>) {
+        let previous = DESKTOPS.replace(manager.map(ManuallyDrop::new));
+        drop(previous.map(ManuallyDrop::into_inner));
     }
 
     /// Marks a check as running until it is dropped.
@@ -768,13 +789,13 @@ mod native {
 
     /// The shell's virtual desktop manager, made once on this thread (see `DESKTOPS`).
     fn desktops() -> windows::core::Result<IVirtualDesktopManager> {
-        if let Some(manager) = DESKTOPS.with_borrow(Clone::clone) {
+        if let Some(manager) = DESKTOPS.with_borrow(|kept| kept.as_deref().cloned()) {
             return Ok(manager);
         }
         // SAFETY: COM runs on this thread (see `DESKTOPS`).
         let manager: IVirtualDesktopManager =
             unsafe { CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL) }?;
-        DESKTOPS.set(Some(manager.clone()));
+        keep_desktops(Some(manager.clone()));
         Ok(manager)
     }
 
@@ -791,7 +812,7 @@ mod native {
             },
             Ok(_) => Desktop::Elsewhere,
             Err(err) => {
-                DESKTOPS.set(None);
+                keep_desktops(None);
                 Desktop::Unknown(err.code().0)
             }
         }
@@ -985,7 +1006,7 @@ mod native {
                 let sight = look(hwnd, None, None);
                 let this_desktop = current_desktop(&desktops().unwrap(), hwnd);
                 DestroyWindow(hwnd).unwrap();
-                DESKTOPS.set(None);
+                keep_desktops(None);
                 CoUninitialize();
                 (sight, this_desktop)
             };
@@ -999,6 +1020,94 @@ mod native {
             assert_eq!(sight.webview, None);
             // some window on this desktop says which desktop it is
             assert!(this_desktop.is_some());
+        }
+
+        /// Set in the process that `the_process_exits_after_a_check` starts.
+        const EXIT_CHILD: &str = "RAPHAEL_TEST_SIGHT_EXIT_CHILD";
+
+        /// The child of `the_process_exits_after_a_check`: makes the shell's virtual desktop
+        /// manager the way a check does, uses it, and exits the way the app does (the event loop
+        /// ends in `std::process::exit`).
+        #[test]
+        fn exit_after_a_check_entry() {
+            if std::env::var_os(EXIT_CHILD).is_none() {
+                return; // an ordinary test run
+            }
+            // SAFETY: COM is joined on this thread, which makes and uses the manager, and the
+            // window is this process's own.
+            unsafe {
+                CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap();
+                let hwnd = CreateWindowExW(
+                    WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                    w!("STATIC"),
+                    PCWSTR::null(),
+                    WS_POPUP,
+                    -32000,
+                    -32000,
+                    10,
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+                match desktop(hwnd) {
+                    Desktop::Unknown(code) => {
+                        // No shell to ask (a session without explorer): nothing to show.
+                        println!("\nNO_SHELL {code:#x}");
+                    }
+                    seen => println!("\nCHECKED {seen:?}"),
+                }
+            }
+            std::process::exit(0);
+        }
+
+        #[test]
+        fn the_process_exits_after_a_check() {
+            // The manager is a proxy to explorer. Kept in a thread-local that drops it, it was
+            // released by the thread's destructors inside `ExitProcess`, after every other
+            // thread was gone: the release waited for an answer that could not come, and the
+            // app hung on its way out, its windows hidden, holding the webview's data folder.
+            use std::process::{Command, Stdio};
+            use std::time::{Duration, Instant};
+
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "overlay::sight::native::tests::exit_after_a_check_entry",
+                    "--exact",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(EXIT_CHILD, "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break Some(status);
+                }
+                if Instant::now() > deadline {
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            };
+            let Some(status) = status else {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the process did not exit within 20 s of std::process::exit");
+            };
+            let mut output = String::new();
+            std::io::Read::read_to_string(&mut child.stdout.take().unwrap(), &mut output).unwrap();
+            println!("{output}");
+            assert!(status.success(), "{status}: {output}");
+            assert!(
+                output.contains("CHECKED") || output.contains("NO_SHELL"),
+                "the child did not run the check: {output}"
+            );
         }
     }
 }
