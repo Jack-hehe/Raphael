@@ -351,6 +351,7 @@ class WorkerHost:
                 link = await self._connect()
             except Exception as exc:
                 logger.warning("The worker could not be started: %s", type(exc).__name__)
+                self._note_crash()  # a worker that cannot start is no better than one that dies
                 raise WorkerUnavailable from None
             link.peer.register("host.chat", self._chat)
             link.peer.register("host.tool", self._tool)
@@ -363,6 +364,7 @@ class WorkerHost:
                 link.kill()
                 with contextlib.suppress(Exception):
                     await link.stop()
+                self._note_crash()
                 raise WorkerUnavailable from None
             pid = hello.get("pid") if isinstance(hello, dict) else None
             self.pid = pid if isinstance(pid, int) else None

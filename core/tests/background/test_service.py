@@ -628,3 +628,19 @@ async def test_the_prefixes_of_the_reports_are_the_persona_prefixes(make_rig):
     rig.submit(language="ja")
     [done] = await rig.wait_for_reports()
     assert done["prefix"] == PREFIXES["ja"].notice == "告"
+
+
+async def test_closing_the_service_interrupts_the_task_that_runs_and_the_ones_that_wait(
+    make_rig, calls
+):
+    rig = make_rig()
+    await rig.plugins.connect(slow="T0")
+    rig.client.replies = [turn("", [call("Notes__slow", {}, "c1")])]
+    running, waiting = rig.submit(), rig.submit()
+    await until(lambda: "slow" in calls)
+    await asyncio.wait_for(rig.service.aclose(), 10)
+    assert rig.task(running).state == "interrupted" and rig.task(waiting).state == "interrupted"
+    assert rig.task(running).reason == "closing" and rig.task(waiting).reason == "restart"
+    assert rig.reports() == []  # nobody is left to report to
+    assert rig.host.running is False and rig.service.running is False
+    await rig.service.aclose()  # safe twice

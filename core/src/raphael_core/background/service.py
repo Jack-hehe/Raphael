@@ -55,7 +55,7 @@ from ..worker.guards import neutralize
 from .host import WorkerCrashed, WorkerHost, WorkerStopped, WorkerUnavailable
 from .run import RunLimits, TaskRun
 from .snapshot import take_snapshot
-from .tasks import ACTIVE_STATES, QUEUED, RUNNING, Refused, Task, TaskStore
+from .tasks import QUEUED, RUNNING, Refused, Task, TaskStore
 
 logger = logging.getLogger(__name__)
 
@@ -276,8 +276,6 @@ class BackgroundService:
             changed=lambda: self._changed(task.id, RUNNING),
             clock=self._clock,
         )
-        self._run = run
-        self._changed(task.id, RUNNING)
         system, user = _prompts(
             language,
             task.text,
@@ -285,6 +283,8 @@ class BackgroundService:
             self._context(task),
             self._limits,
         )
+        self._run = run
+        self._changed(task.id, RUNNING)
         spec = {
             "task_id": task.id,
             "system": system,
@@ -322,7 +322,9 @@ class BackgroundService:
         except WorkerCrashed:
             self._conclude_run(task, run, {"status": "interrupted"})
         except asyncio.CancelledError:
-            # The core is closing: the task is over, and nobody is left to report to.
+            # The core is closing: the task is over, and nobody is left to report to. The call
+            # that was under way is given up.
+            run.cancel()
             self._store.finish(
                 task.id, "interrupted", prefix="", text="", detail=None, reason="closing"
             )

@@ -3,7 +3,6 @@ crashes that switch it off, and its idle end. The workers here are small real pr
 of Python, not the real worker), so the processes, pipes and kills are the real ones."""
 
 import asyncio
-import functools
 import logging
 import os
 import sys
@@ -218,19 +217,24 @@ async def test_a_task_that_ran_out_of_time_is_ended_with_its_worker(hosts, rig):
 
 
 async def test_a_worker_that_never_says_hello_is_unavailable_and_counts_as_a_crash(hosts, rig):
-    host = WorkerHost(connect=connector("never_hello"), hello_timeout_s=0.5, grace_s=0.3)
-    with pytest.raises(WorkerUnavailable):
-        await run_once(host, rig)
+    host = WorkerHost(connect=connector("never_hello"), hello_timeout_s=0.3, grace_s=0.3)
+    for _ in range(3):
+        assert not host.disabled
+        with pytest.raises(WorkerUnavailable):
+            await run_once(host, rig)
+    assert host.disabled  # it will not be started for a fourth time
     await host.aclose()
 
 
-async def test_a_worker_that_cannot_be_started_is_unavailable(rig):
+async def test_a_worker_that_cannot_be_started_is_unavailable_and_counts_as_a_crash(rig):
     async def connect():
         return await connect_process(["this-program-does-not-exist-anywhere"])
 
     host = WorkerHost(connect=connect)
-    with pytest.raises(WorkerUnavailable):
-        await run_once(host, rig)
+    for _ in range(3):
+        with pytest.raises(WorkerUnavailable):
+            await run_once(host, rig)
+    assert host.disabled
 
 
 async def test_an_idle_worker_ends_by_itself_and_the_next_task_starts_another(hosts, rig):

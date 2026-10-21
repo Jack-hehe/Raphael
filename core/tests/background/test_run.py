@@ -19,7 +19,7 @@ from raphael_core.brain.settings import SettingsStore
 from raphael_core.brain.spend import SpendTracker
 from raphael_core.protocol import INVALID_PARAMS, WORKER_STOPPED, RpcError
 
-from .conftest import ARGUMENT, LOCAL_NOW, NOW_MS, RESULT, Clock, FakeModel, Meteo, call, report, turn
+from .conftest import ARGUMENT, LOCAL_NOW, NOW_MS, RESULT, Clock, FakeModel, Meteo, call, turn
 
 MESSAGES = [{"role": "system", "content": "S"}, {"role": "user", "content": "PRIVATE-PROMPT"}]
 
