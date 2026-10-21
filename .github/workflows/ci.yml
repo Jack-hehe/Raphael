@@ -1,16 +1,18 @@
 name: CI
 
-# The repository is private, so Actions minutes are limited (Windows runners count extra).
-# A branch is checked through its pull request, and main again after each merge. A change to
-# the documents below alone starts no run: no test or build reads them.
+# The repository is private, so Actions minutes are limited (Windows runners count double).
+# A branch is checked through its pull request, and each pull request runs only the jobs whose
+# part of the repository it changes (the `changes` job). main is not checked again after a merge:
+# the release workflow runs every check before anything ships. A merge that changes the Rust
+# dependencies runs the Rust job on main once, so main's cache, the one every pull request falls
+# back to, stays current. A change to the documents below alone starts no run.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "README.md"
-      - "LICENSE"
-      - "eval/README.md"
+    paths:
+      - "app/src-tauri/Cargo.lock"
+      - "app/src-tauri/Cargo.toml"
+      - "app/src-tauri/vendor/handy-keys/Cargo.toml"
   pull_request:
     paths-ignore:
       - "docs/**"
@@ -27,8 +29,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Choose the jobs to run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      frontend: ${{ steps.pick.outputs.frontend }}
+      python: ${{ steps.pick.outputs.python }}
+      rust: ${{ steps.pick.outputs.rust }}
+    steps:
+      - name: List the changed files
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          out() { echo "frontend=$1" >> "$GITHUB_OUTPUT"; echo "python=$2" >> "$GITHUB_OUTPUT"; echo "rust=$3" >> "$GITHUB_OUTPUT"; echo "frontend=$1 python=$2 rust=$3"; }
+          case "$EVENT" in
+            workflow_dispatch) out true true true; exit 0 ;;
+            push) out false false true; exit 0 ;;  # only the Rust dependencies start a push run
+          esac
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
+          any() { printf '%s\n' "$files" | grep -Eq "$1"; }
+          ci='^\.github/workflows/ci\.yml$'
+          frontend=false; python=false; rust=false
+          # The frontend job: everything under app/ but the shell.
+          if printf '%s\n' "$files" | grep -E '^app/' | grep -Evq '^app/src-tauri/' || any "$ci"; then frontend=true; fi
+          if any '^core/' || any "$ci"; then python=true; fi
+          # The Rust job also builds the app, through tauri.mjs and the locked npm packages.
+          if any '^app/src-tauri/' || any '^app/(package\.json|package-lock\.json|scripts/tauri\.mjs)$' || any "$ci"; then rust=true; fi
+          out "$frontend" "$python" "$rust"
+
   frontend:
     name: Frontend tests and build
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: windows-2025
     timeout-minutes: 15
     defaults:
@@ -64,6 +105,8 @@ jobs:
 
   python:
     name: Python tests
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: windows-2025
     timeout-minutes: 15
     defaults:
@@ -102,6 +145,8 @@ jobs:
 
   windows-shell:
     name: Windows Rust and Tauri shell
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: windows-2025
     timeout-minutes: 45
     defaults:
@@ -168,9 +213,6 @@ jobs:
         env:
           RAPHAEL_PRIVATE_DIR: ${{ runner.temp }}/raphael-ci-no-private-assets
         run: node scripts/tauri.mjs build --debug --no-bundle --ci -- --locked
-
-      - name: Check Rust targets
-        run: cargo check --locked --all-targets
 
       - name: Run Rust tests
         run: cargo test --locked
