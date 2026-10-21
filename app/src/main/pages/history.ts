@@ -43,10 +43,10 @@ export const RETENTIONS: Choice[] = [1, 7, 30, 365, KEEP_FOREVER_DAYS].map((days
 }));
 
 type Filter = "all" | "cleaned" | "raw";
-export const HISTORY_FILTERS: Choice[] = [
-  { value: "all", get label() { return t("dictionary.001"); } },
-  { value: "cleaned", get label() { return t("history.001"); } },
-  { value: "raw", get label() { return t("history.002"); } },
+const FILTERS: { id: Filter; name: string }[] = [
+  { id: "all", get name() { return t("dictionary.001"); } },
+  { id: "cleaned", get name() { return t("history.001"); } },
+  { id: "raw", get name() { return t("history.002"); } },
 ];
 
 function itemHTML(item: HistoryItem, expanded: boolean): string {
@@ -80,8 +80,8 @@ export function createHistory(app: AppContext): HistoryPage {
     t("history.006") +
     `<section class="card hist-top"></section>` +
     t("dictionary.015") +
-    sel(HISTORY_FILTERS, "all", t("common.filter"), ' data-k="filter"') +
-    `${fieldHTML(t("history.007"), "", { icon: "search", get label() { return t("history.008"); }, id: "hist-q" })}</div>` +
+    FILTERS.map((f) => `<button type="button" data-filter="${f.id}" aria-pressed="${f.id === "all"}">${f.name}</button>`).join("") +
+    `</div>${fieldHTML(t("history.007"), "", { icon: "search", get label() { return t("history.008"); }, id: "hist-q" })}</div>` +
     `<div class="day-row" hidden></div>` +
     `<div class="days"></div>` +
     `<div class="more" hidden>${btn(t("history.009"), "", ' data-act="more"')}</div>` +
@@ -106,10 +106,6 @@ export function createHistory(app: AppContext): HistoryPage {
   let loads = 0;
   let retentionDays: number | null = null;
   let filter: Filter = "all";
-  /** Shows the chosen filter on its dropdown, in the current language. */
-  function paintFilter(): void {
-    el.querySelector<HTMLElement>('.sel[data-k="filter"]')!.outerHTML = sel(HISTORY_FILTERS, filter, t("common.filter"), ' data-k="filter"');
-  }
   let pending = false;
   /** The one day shown, `2026-10-14`; null for all of them. */
   let day: string | null = null;
@@ -284,7 +280,8 @@ export function createHistory(app: AppContext): HistoryPage {
 
   onLocaleChange(() => {
     el.querySelector("h1")!.textContent = t("main.002");
-    paintFilter();
+    el.querySelector(".tabs")!.setAttribute("aria-label", t("common.filter"));
+    for (const f of FILTERS) el.querySelector<HTMLElement>(`[data-filter="${f.id}"]`)!.textContent = f.name;
     search.placeholder = t("history.007");
     search.setAttribute("aria-label", t("history.008"));
     more.querySelector("button")!.textContent = t("history.009");
@@ -299,15 +296,11 @@ export function createHistory(app: AppContext): HistoryPage {
       else openMenu(choose, retentionChoices(), String(retentionDays ?? 30), (v) => void changeRetention(v));
       return;
     }
-    const pick = target.closest<HTMLElement>('.sel[data-k="filter"]');
-    if (pick) {
-      if (menuIsOpenFor(pick)) closeMenu();
-      else
-        openMenu(pick, HISTORY_FILTERS, filter, (v) => {
-          filter = v as Filter;
-          paintFilter();
-          render();
-        });
+    const tab = target.closest<HTMLElement>("[data-filter]");
+    if (tab) {
+      filter = tab.dataset.filter as Filter;
+      el.querySelectorAll<HTMLElement>("[data-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b === tab)));
+      render();
       return;
     }
     const act = target.closest<HTMLElement>("[data-act]");

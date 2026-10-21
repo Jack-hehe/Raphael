@@ -246,6 +246,37 @@ pub fn learned(words: &[String], language: &str) -> String {
     }
 }
 
+/// The most words an [`auto_added`] notice names; more are counted.
+const AUTO_ADDED_NAMED: usize = 3;
+
+/// Words the dictionary took in by itself, because they kept coming up in the dictation, in one
+/// notice, in `language`: 《了。已加入「Tailscale」至辭典。》, or for more than three words
+/// 《了。已加入「Tailscale」等 5 個詞至辭典。》.
+pub fn auto_added(words: &[String], language: &str) -> String {
+    let quoted = |open: &str, close: &str, separator: &str| {
+        words
+            .iter()
+            .map(|word| format!("{open}{word}{close}"))
+            .collect::<Vec<_>>()
+            .join(separator)
+    };
+    let many = words.len() > AUTO_ADDED_NAMED;
+    let (first, count) = (words.first().map_or("", String::as_str), words.len());
+    match language {
+        "en" if many => format!(
+            "《Understood. {count} words added to the dictionary, among them \u{201c}{first}\u{201d}.》"
+        ),
+        "en" => format!(
+            "《Understood. {} added to the dictionary.》",
+            quoted("\u{201c}", "\u{201d}", ", ")
+        ),
+        "ja" if many => format!("《了。「{first}」など{count}語を辞書に追加しました。》"),
+        "ja" => format!("《了。{}を辞書に追加しました。》", quoted("「", "」", "、")),
+        _ if many => format!("《了。已加入「{first}」等 {count} 個詞至辭典。》"),
+        _ => format!("《了。已加入{}至辭典。》", quoted("「", "」", "、")),
+    }
+}
+
 /// The notice for the `fallback_reason` of a `dictation.stop` result, if it gets one. A plain
 /// `"timeout"` (the cleanup took too long) and the other reasons are not worth a notice.
 pub fn notice_for_fallback(reason: Option<&str>) -> Option<Notice> {
@@ -318,6 +349,50 @@ mod tests {
             learned(&two, "en"),
             "《Understood. \u{201c}手機\u{201d}, \u{201c}Typeless\u{201d} added to the dictionary.》"
         );
+    }
+
+    #[test]
+    fn the_auto_added_notice_names_up_to_three_words_and_counts_more() {
+        let words = |n: usize| {
+            ["Tailscale", "OpenRouter", "Kokoro", "GPT-SoVITS", "Tauri"][..n]
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            auto_added(&words(1), "zh-TW"),
+            "《了。已加入「Tailscale」至辭典。》"
+        );
+        assert_eq!(
+            auto_added(&words(3), "zh-TW"),
+            "《了。已加入「Tailscale」、「OpenRouter」、「Kokoro」至辭典。》"
+        );
+        assert_eq!(
+            auto_added(&words(5), "zh-TW"),
+            "《了。已加入「Tailscale」等 5 個詞至辭典。》"
+        );
+        assert_eq!(
+            auto_added(&words(2), "ja"),
+            "《了。「Tailscale」、「OpenRouter」を辞書に追加しました。》"
+        );
+        assert_eq!(
+            auto_added(&words(4), "ja"),
+            "《了。「Tailscale」など4語を辞書に追加しました。》"
+        );
+        assert_eq!(
+            auto_added(&words(2), "en"),
+            "《Understood. \u{201c}Tailscale\u{201d}, \u{201c}OpenRouter\u{201d} added to the dictionary.》"
+        );
+        assert_eq!(
+            auto_added(&words(4), "en"),
+            "《Understood. 4 words added to the dictionary, among them \u{201c}Tailscale\u{201d}.》"
+        );
+        for language in ["", "fr", "EN"] {
+            assert_eq!(
+                auto_added(&words(1), language),
+                auto_added(&words(1), "zh-TW")
+            );
+        }
     }
 
     #[test]
