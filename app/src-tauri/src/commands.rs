@@ -969,7 +969,6 @@ mod tests {
             "dictionary.list",
             "dictionary.add",
             "dictionary.delete",
-            "dictionary.suggestions",
             "dictionary.dismiss",
             "settings.get",
             "settings.set",

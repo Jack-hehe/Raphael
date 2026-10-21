@@ -78,10 +78,6 @@ export const dictionaryList = (): Promise<{ entries: DictionaryEntry[] }> => cor
 export const dictionaryAdd = (word: string, misheard: string[]): Promise<{ entry: DictionaryEntry }> =>
   core("dictionary.add", { word, misheard });
 export const dictionaryDelete = (id: number): Promise<{ deleted: boolean }> => core("dictionary.delete", { id });
-export const dictionarySuggestions = (): Promise<{ words: { word: string; count: number }[] }> =>
-  core("dictionary.suggestions");
-/** The word is not suggested again. */
-export const dictionaryDismiss = (word: string): Promise<Record<string, never>> => core("dictionary.dismiss", { word });
 
 // ---------- the brain's settings and the key ----------
 

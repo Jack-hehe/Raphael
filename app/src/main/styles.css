@@ -266,15 +266,9 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .tools .count { font-size: 12px; color: var(--text-3); }
 .dsearch { margin-left: auto; display: flex; flex: 1; justify-content: flex-end; min-width: 160px; }
 .dsearch .field { max-width: 260px; }
-.sugg { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 14px; font-size: 12px; color: var(--text-3); }
 .chip { display: inline-flex; align-items: center; height: 26px; border-radius: 13px; border: 1px dashed var(--btn-edge); background: transparent; font-size: 12px; color: var(--text); }
 .chip:hover, .chip:focus-within { border-style: solid; border-color: var(--accent); }
 .chip button { display: inline-flex; align-items: center; height: 100%; border: 0; background: transparent; color: inherit; font: inherit; }
-.chip .chip-add { gap: 4px; padding: 0 4px 0 10px; border-radius: 13px 0 0 13px; }
-.chip-add .i { width: 12px; height: 12px; color: var(--accent-text); }
-.chip .chip-x { padding: 0 8px 0 4px; border-radius: 0 13px 13px 0; color: var(--text-3); }
-.chip-x .i { width: 10px; height: 10px; opacity: .55; }
-.chip-x:hover .i, .chip-x:focus-visible .i { opacity: 1; }
 .wgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 18px; }
 .wchip { position: relative; display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 8px 6px 8px 14px; border-radius: 11px; border: 1px solid var(--edge); background: var(--panel); min-width: 0; }
 .wchip:hover { border-color: var(--btn-edge); }

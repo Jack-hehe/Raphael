@@ -705,7 +705,7 @@ EXPECTED_METHODS = {
     "dictionary.list",
     "dictionary.add",
     "dictionary.delete",
-    "dictionary.suggestions",
+    "dictionary.auto_add",
     "dictionary.dismiss",
     "settings.get",
     "settings.set",
