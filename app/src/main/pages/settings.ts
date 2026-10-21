@@ -1,10 +1,10 @@
-// Settings: a panel over the main window with six tabs: 一般, 聽寫, 拉斐爾, 連接, 模型與用量 and 關於 (spec
-// §12.3). This file holds what the panel knows and what it does; settings-view.ts draws each tab
+// Settings: a panel over the main window with six tabs: 一般, 聽寫, 拉斐爾, 連接, 模型與用量 and 關於.
+// This file holds what the panel knows and what it does; settings-view.ts draws each tab
 // from a snapshot of it. A change takes effect at once; there is no save button. The settings of
 // the brain (limit, models, languages, speech-to-text, how Raphael answers) go to the core with
 // `settings.set`; the settings of this computer (hotkeys, microphone, emblem, theme, autostart) go
-// to the Rust side with `device_settings_set`. What the owner asked for and wants always (pausing
-// the music while Raphael listens, learning from corrections) has no switch: it is simply on.
+// to the Rust side with `device_settings_set`. What is always wanted (pausing the music while
+// Raphael listens, learning from corrections) has no switch: it is simply on.
 
 import { isUiLocale, onLocaleChange, t } from "../i18n";
 

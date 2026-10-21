@@ -1,7 +1,6 @@
 /* The overlay window is transparent and click-through, except while a question is up: then the
    whole window takes the mouse, and only the question's buttons answer it. The canvas sits in
-   its bottom-right corner; every word is right-aligned to the left of the emblem, as in the
-   approved preview.
+   its bottom-right corner; every word is right-aligned to the left of the emblem.
    --e is the emblem's diameter and --c its square canvas (1.3 times larger, room for the rays);
    overlay.ts sets both from the size in the settings. */
 

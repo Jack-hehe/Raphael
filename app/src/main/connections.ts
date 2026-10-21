@@ -1,14 +1,14 @@
 // The 「連接」 tab of the settings: the services Raphael can use, in two views. 「已安裝」 is one row for
 // each connected service (a switch for the whole service, and a button that opens its tools, each with
 // a switch of its own); 「商店」 is the services that can be added with one login in the browser, as cards
-// in two columns, each opening a page that says what it is for. A server of the owner's own is added
-// from the 「新增」 menu. `connectionsHTML` draws the tab from a snapshot (pure, so the owner's rules
+// in two columns, each opening a page that says what it is for. A server of the user's own is added
+// from the 「新增」 menu. `connectionsHTML` draws the tab from a snapshot (pure, so the rules of the tab
 // can be tested without a browser); `createConnections` holds the state and does what the buttons say,
 // through the core. Nothing secret is kept here: the login happens in the browser and its tokens stay in
 // the core's vault; the values of a variable or a header are typed, sent to the vault once and dropped;
 // only their names are ever shown.
 //
-// A tool is on until the owner turns it off, and one that is on runs without asking. There are no
+// A tool is on until the user turns it off, and one that is on runs without asking. There are no
 // levels to choose: that is the whole of the permission.
 
 import * as api from "./api";
@@ -39,7 +39,7 @@ export interface PairDraft {
   value: string;
 }
 
-/** The form that connects a server of the owner's own. */
+/** The form that connects a server of the user's own. */
 export interface ConnectionForm {
   type: "stdio" | "http";
   name: string;
@@ -137,7 +137,7 @@ const FAILURES: Record<string, MessageKey> = {
 
 const failureText = (kind: string | null): string => tr(FAILURES[kind ?? ""] ?? FAILURES.error);
 
-/** What to tell the owner about a login that did not work out, in a line. */
+/** What to tell the user about a login that did not work out, in a line. */
 function loginFailure(kind: string): string {
   if (kind === "denied") return t("conn.loginFail.denied");
   if (kind === "timeout") return t("conn.loginFail.timeout");
@@ -171,7 +171,7 @@ function groupIcon(g: ConnectionGroup, v: ConnectionsView, size: "md" | "xl"): s
 
 const entryIcon = (s: StoreService, size: "md" | "xl"): string => iconHTML(s.name, isIcon(s.icon) ? s.icon : null, size);
 
-/** Where a service of the owner's own is reached, in a few words. */
+/** Where a service of the user's own is reached, in a few words. */
 function where(g: ConnectionGroup): string {
   if (g.transport === "http") {
     try {
@@ -393,7 +393,7 @@ function storePageHTML(s: StoreService, v: ConnectionsView): string {
   );
 }
 
-// ---------- the form that connects a server of the owner's own ----------
+// ---------- the form that connects a server of the user's own ----------
 
 const fld = (label: string, control: string, hint = "", forId = ""): string =>
   `<div class="fld">${forId ? `<label class="flabel" for="${forId}">${esc(label)}</label>` : `<span class="flabel">${esc(label)}</span>`}${hint ? `<span class="fhint">${esc(hint)}</span>` : ""}${control}</div>`;

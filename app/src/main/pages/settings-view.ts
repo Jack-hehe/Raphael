@@ -1,9 +1,9 @@
 // What the settings panel draws (settings.ts holds the state and the events): the tabs, and each
 // tab as HTML made from a snapshot of what the panel knows. Nothing here reads the page or calls
-// the app, so the structure of every tab and the owner's rules for it can be tested without a
+// the app, so the structure of every tab and the rules for it can be tested without a
 // browser.
 //
-// The owner's rules for every row: a choice among options is a dropdown (`sel`, never the options
+// The rules for every row: a choice among options is a dropdown (`sel`, never the options
 // in a row), an action is a button with a shape (`btn`, never a word that can be clicked), and a
 // line under a row's name only where the setting would otherwise be set wrong. Each tab opens with
 // its name and one line on what it is for, then its rows in a few named groups.
@@ -35,7 +35,7 @@ import { type Choice, type IconName, btn, esc, fieldHTML, keys, meter, note, row
 
 /** The models the core reads when none is chosen (brain/settings.py), shown while it does not answer. */
 const DEFAULT_MODELS = { cleanup: "openai/gpt-6-luna", answer: "openai/gpt-6-luna", stt: "elevenlabs/scribe-v2" } as const;
-/** In the owner's order: light, dark, or as Windows is. */
+/** In this order: light, dark, or as Windows is. */
 export const APPEARANCES: Choice[] = [
   { value: "light", get label() { return t("settings.015"); } },
   { value: "dark", get label() { return t("settings.016"); } },

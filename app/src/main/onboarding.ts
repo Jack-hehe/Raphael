@@ -1,4 +1,4 @@
-// First run (spec §12.4): the main window is a guide of four steps until it has been gone through.
+// First run: the main window is a guide of four steps until it has been gone through.
 //   0  Raphael appears and says the setup begins.
 //   1  The OpenRouter key (tested at once) and the monthly limit; the key can be skipped.
 //   2  The microphone, with the meter; the speech models are fetched meanwhile, with progress.

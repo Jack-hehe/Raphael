@@ -1,4 +1,4 @@
-// Home: a strip with the emblem and Raphael's report, then two columns (spec §12, draft D). On the
+// Home: a strip with the emblem and Raphael's report, then two columns. On the
 // left the four numbers (words, time saved, speed, time spoken) and the activity with its days and
 // streaks (`stats.summary`, all from this computer's history; a day with a dictation opens the
 // history at that day); on the right the shortcuts and Raphael's latest words

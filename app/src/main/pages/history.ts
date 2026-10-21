@@ -1,6 +1,6 @@
 // History: how long it is kept and that it stays on this computer, then a filter and search, and
 // the dictations grouped by day, each row its time, the cleaned text and the target program.
-// Hover for copy and delete; a click shows what the speech recognition heard (spec §12.3). A day of
+// Hover for copy and delete; a click shows what the speech recognition heard. A day of
 // the activity grid on Home opens the page at that day (`setDay`): a chip says so and takes the
 // filter off, and the page shows all days again the next time it is opened.
 

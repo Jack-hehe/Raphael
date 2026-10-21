@@ -6,7 +6,7 @@ export function progressPercent(stage: Stage, fraction: number): number {
   return stage === "done" ? 99 : Math.min(95, Math.max(0, Math.round(value * 100)));
 }
 
-/** The exact compact format requested by the user. */
+/** The progress caption, compact: `《 42 % 》`. */
 export const formatProgress = (percent: number): string => `《 ${percent} % 》`;
 
 export const COMPLETION_MS = 900;

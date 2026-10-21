@@ -1,7 +1,7 @@
 // The main window: a sidebar with home, Raphael's conversations, history and dictionary, this
 // month's spend and the way to the settings at the bottom, and the page that is chosen. The
 // settings open as a panel over the window. The pages are in pages/; this file holds what they
-// share (spec §12).
+// share.
 
 import { onLocaleChange, setLocale, t } from "./i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";

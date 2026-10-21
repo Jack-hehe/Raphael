@@ -3,7 +3,7 @@ export const MAX_NOTICE_MS = 12_000;
 
 /**
  * How long a line of Raphael's stays on screen, in milliseconds: 1.5 s plus 0.15 s for every
- * character of the line, and never more than 12 s (spec §12.5). Characters are counted as code
+ * character of the line, and never more than 12 s. Characters are counted as code
  * points, so a rare character outside the Basic Multilingual Plane counts once.
  */
 export function noticeDurationMs(line: string): number {

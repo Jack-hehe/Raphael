@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { KeyRecorder, bindingClash, bindingFromCodes, bindingLabels, canonicalKey, keyLabel, sameBinding, validateCodes } from "./keys";
 
 describe("labels", () => {
-  test("the keys named in the brief", () => {
+  test("the default dictation and question keys", () => {
     expect(keyLabel("AltRight")).toBe("右 Alt");
     expect(keyLabel("AltLeft")).toBe("左 Alt");
     expect(keyLabel("Space")).toBe("Space");

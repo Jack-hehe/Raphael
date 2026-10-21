@@ -1,7 +1,7 @@
 // Dictionary: words Raphael should spell right. A filter (all, learned by itself, typed), a search,
 // the words as a grid of chips (learned ones with a small sparkle), 「新增單字」 for a word of one's
 // own and 「匯入」 for many from a .csv or .txt, after a confirmation; words that keep coming up in
-// dictation join by themselves (spec §12.3).
+// dictation join by themselves.
 
 import { onLocaleChange, t } from "../i18n";
 

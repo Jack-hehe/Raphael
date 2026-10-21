@@ -14,7 +14,7 @@ import {
 } from "./overlay";
 import type { Mode, Phase } from "./emblem";
 
-// ---- the brief's test ----
+// ---- how long a notice stays ----
 
 test("notice duration", () => {
   expect(noticeDurationMs("《了。》")).toBe(1500 + 150 * 4);

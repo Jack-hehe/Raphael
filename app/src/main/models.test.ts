@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { ModelDownload, type ModelPhase, type ModelsApi, downloadPhase, formatProgress, resumeModels } from "./models";
 import type { MainEvent, ModelsStatus } from "./types";
 
-/** The sizes the plan gives (Task 9): the bar does not jump when the second model starts. */
+/** The expected download sizes: the bar does not jump when the second model starts. */
 const SILERO = 2_313_101;
 const QWEN = 878_702_423;
 

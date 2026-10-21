@@ -1,9 +1,7 @@
-// Raphael's emblem, recreated frame by frame from the anime (spec section 6).
+// Raphael's emblem, recreated frame by frame from the anime.
 //
-// This is the approved renderer, ported from the preview mockups
-// (.superpowers/brainstorm/.../raphael-emblem-v3.html and raphael-settings.html). Every number in
-// the tables and in `params` / `drawEmblem` was measured from the anime clip: change none of them
-// without measuring again. Radii are in units of R, the emblem's outer radius.
+// Every number in the tables and in `params` / `drawEmblem` was measured from the anime clip:
+// change none of them without measuring again. Radii are in units of R, the emblem's outer radius.
 //
 // This module must stay importable without a browser (the tests run in Node), so nothing here
 // touches `document`, `window` or `Image` until a function that needs it is called.
@@ -472,7 +470,7 @@ export function drawEmblem(
 
 // ---------- loudness for notices ----------
 
-// Raphael's notices have no voice yet (that is phase 3), so while one is shown the white ring
+// Raphael's notices have no voice yet, so while one is shown the white ring
 // moves with a made-up loudness, as if she were speaking it.
 interface Syllable {
   t0: number;

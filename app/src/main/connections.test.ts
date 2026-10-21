@@ -102,7 +102,7 @@ describe("已安裝", () => {
     expect(notion).toContain('class="logo"');
     expect(notion).toMatch(/class="tg" role="switch" aria-checked="true" aria-label="開啟 Notion" data-conn="enable" data-id="ab12"/);
     expect(notion).toMatch(/class="btn icon" data-conn="open" data-id="ab12" aria-label="查看 Notion"/);
-    // a server of the owner's own: where it is reached, and a letter for a mark
+    // a server of the user's own: where it is reached, and a letter for a mark
     expect(files).toContain("Files");
     expect(files).toContain("npx");
     expect(files).toContain(">F<");
@@ -213,7 +213,7 @@ describe("the page of a connected service", () => {
     expect(out).toContain('data-conn="relogin"');
   });
 
-  test("a server of the owner's own has no store words: no publisher, the command, the names of its secrets", () => {
+  test("a server of the user's own has no store words: no publisher, the command, the names of its secrets", () => {
     const html = installedPage("cu1");
     expect(html).toContain("自訂伺服器");
     expect(html).not.toContain("由 ");
@@ -336,7 +336,7 @@ describe("the page of a store service", () => {
   });
 });
 
-describe("the form that connects a server of the owner's own", () => {
+describe("the form that connects a server of the user's own", () => {
   test("takes the place of the tab: a type dropdown, fields for that type, a warning, two buttons", () => {
     const html = connectionsHTML(view({ form: form() }));
     expect(html).toContain("自訂伺服器");
@@ -363,7 +363,7 @@ describe("the form that connects a server of the owner's own", () => {
   });
 });
 
-describe("the owner's rules for this tab", () => {
+describe("the rules for this tab", () => {
   const pages = (): string[] => [
     connectionsHTML(view()),
     connectionsHTML(view({ tab: "store" })),
@@ -657,7 +657,7 @@ describe("what the tab does", () => {
     expect(lastToast()).toBe("已重新登入 Notion");
   });
 
-  describe("a server of the owner's own", () => {
+  describe("a server of the user's own", () => {
     const menu = (c: ReturnType<typeof createConnections>) => c.menuFor("conn-add")!;
 
     test("the 新增 menu has one item, 自訂伺服器, which opens the form", async () => {
