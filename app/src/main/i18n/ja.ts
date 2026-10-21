@@ -237,7 +237,7 @@ export const ja = {
   "dictionary.012": "誤認識の表記（任意）",
   "dictionary.013": "よくある誤認識",
   "dictionary.014": "追加",
-  "dictionary.015": "<div class=\"tools\"><div class=\"tabs\" role=\"group\" aria-label=\"絞り込み\">",
+  "dictionary.015": "<div class=\"tools\">",
   "dictionary.016": "辞書を検索",
   "dictionary.017": "{p0}語",
   "dictionary.018": "<div class=\"say\">《告。辞書はまだ空です。》</div>「単語を追加」からよく使う言葉を登録すると、次回の音声入力がより正確になります。",
