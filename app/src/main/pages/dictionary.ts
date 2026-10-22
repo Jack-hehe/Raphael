@@ -1,7 +1,7 @@
 // Dictionary: words Raphael should spell right. A filter (all, learned by itself, typed), a search,
 // the words as a grid of chips (learned ones with a small sparkle), 「新增單字」 for a word of one's
-// own and 「匯入」 for many from a .csv or .txt, after a confirmation; words that keep coming up in
-// dictation join by themselves.
+// own and 「匯入」 for many from a .csv or .txt, after a confirmation. A word joins by itself only when
+// the user corrected it in a pasted dictation, never for being said often.
 
 import { onLocaleChange, t } from "../i18n";
 
@@ -21,7 +21,7 @@ const FILTERS: { id: Filter; name: string }[] = [
   { id: "manual", get name() { return t("dictionary.003"); } },
 ];
 
-/** A word Raphael added by itself (the core's "learned"). The other sources count as manual. */
+/** A word Raphael added by itself, from the user's correction of a pasted dictation (the core's "learned"). The other sources count as manual. */
 export const isAuto = (entry: DictionaryEntry): boolean => entry.source === "learned";
 
 export function matches(entry: DictionaryEntry, filter: Filter, query: string): boolean {
