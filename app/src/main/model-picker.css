@@ -69,11 +69,11 @@
 .mp-pane { display: flex; flex-direction: column; min-height: 0; }
 .mp-pane[hidden] { display: none; }
 /* Two real buttons side by side, each with its own border; the open one is filled. */
-.menu.mp-panel .tabs.nav { flex: none; margin: 12px 12px 0; }
+.menu.mp-panel .tabs.switch { flex: none; margin: 12px 12px 0; }
 .menu.mp-panel .tabs .tab { width: auto; gap: 0; font-size: var(--fs-sm); color: var(--text-2); }
 .menu.mp-panel .tabs .tab:hover { background: var(--hover); color: var(--text); }
 .menu.mp-panel .tabs .tab[aria-selected="true"] { color: var(--text); }
-.tabs.nav + .mp-pane > .mp-head { padding-top: 10px; }
+.tabs.switch + .mp-pane > .mp-head { padding-top: 10px; }
 /* As tall as the cloud tab, so that the panel does not jump between the two. */
 #mp-pane-local .mp-scroll { height: min(520px, calc(100vh - 150px)); }
 .lm-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; padding-top: var(--sp-2); }

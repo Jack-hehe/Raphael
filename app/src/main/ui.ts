@@ -135,7 +135,7 @@ export function tabs(items: TabItem[], selected: string, o: { label: string; kin
     const n = it.count ? `<span class="n">${it.count}</span>` : "";
     return `<button type="button" class="tab" ${state}${it.attrs ?? ""}>${esc(it.label)}${n}</button>`;
   };
-  const cls = nav ? `tabs nav${o.fill ? " fill" : ""}` : "tabs seg";
+  const cls = nav ? `tabs switch${o.fill ? " fill" : ""}` : "tabs seg";
   return `<div class="${cls}" role="${nav ? "tablist" : "group"}" aria-label="${esc(o.label)}">${items.map(one).join("")}</div>`;
 }
 
