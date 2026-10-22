@@ -263,9 +263,9 @@ describe("the tabs", () => {
   test("are two real buttons, the open one selected", () => {
     const html = tabsHTML("local");
     expect(html).toContain('role="tablist"');
-    expect(html).toMatch(/<button type="button" class="mp-tab" role="tab" id="mp-tab-cloud"[^>]*aria-selected="false"[^>]*>雲端<\/button>/);
-    expect(html).toMatch(/<button type="button" class="mp-tab" role="tab" id="mp-tab-local"[^>]*aria-selected="true"[^>]*>本機<\/button>/);
-    expect(tabsHTML("cloud")).toMatch(/id="mp-tab-cloud"[^>]*aria-selected="true"/);
+    expect(html).toMatch(/<button type="button" class="tab" role="tab" aria-selected="false" id="mp-tab-cloud"[^>]*>雲端<\/button>/);
+    expect(html).toMatch(/<button type="button" class="tab" role="tab" aria-selected="true" id="mp-tab-local"[^>]*>本機<\/button>/);
+    expect(tabsHTML("cloud")).toMatch(/aria-selected="true"[^>]*id="mp-tab-cloud"/);
   });
 
   test("only the open one is a stop of the Tab key", () => {

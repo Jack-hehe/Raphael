@@ -62,9 +62,9 @@ it("cuts a text to its room after a whole word, a wide character taking two colu
 });
 
 it("puts a microphone's name in a text as it fits the room of the whole text", () => {
-  expect(microphoneText("onboarding.006", "USB Mic (C-Media)")).toBe("USB Mic (C-Media)（未連接）");
-  expect(microphoneText("onboarding.006", "USB Mic (C-Media)", DROPDOWN_ROOM)).toBe("USB Mic（未連接）");
-  expect(microphoneText("onboarding.006", "麥克風 (5- HyperX Cloud II Core Wireless)", DROPDOWN_ROOM)).toBe("HyperX Cloud II…（未連接）");
+  expect(microphoneText("mic.disconnected", "USB Mic (C-Media)")).toBe("USB Mic (C-Media)（未連接）");
+  expect(microphoneText("mic.disconnected", "USB Mic (C-Media)", DROPDOWN_ROOM)).toBe("USB Mic（未連接）");
+  expect(microphoneText("mic.disconnected", "麥克風 (5- HyperX Cloud II Core Wireless)", DROPDOWN_ROOM)).toBe("HyperX Cloud II…（未連接）");
 });
 
 it("says which microphone automatic detection uses, briefly, on the closed dropdown", () => {

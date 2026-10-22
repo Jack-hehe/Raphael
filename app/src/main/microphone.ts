@@ -66,7 +66,7 @@ export const DROPDOWN_ROOM = 26;
 export const MENU_ROOM = 44;
 
 /** The texts with a microphone's name in them. */
-type MicrophoneKey = "mic.automaticCurrent" | "mic.automaticShort" | "onboarding.006";
+type MicrophoneKey = "mic.automaticCurrent" | "mic.automaticShort" | "mic.disconnected";
 
 /**
  * The text of `key` with the microphone `name` in it as {p0}: the whole name, or, given the `room` of
@@ -83,10 +83,10 @@ export function microphoneText(key: MicrophoneKey, name: string, room?: number):
  * `room`, the microphone goes by its short name, cut to fit.
  */
 export function automaticMicrophoneLabel(devices: AudioDevices | null, room?: number): string {
-  return devices?.automatic_device ? microphoneText("mic.automaticCurrent", devices.automatic_device, room) : t("onboarding.005");
+  return devices?.automatic_device ? microphoneText("mic.automaticCurrent", devices.automatic_device, room) : t("mic.autoDetect");
 }
 
 /** The automatic choice on a closed dropdown: 「自動（HyperX Cloud II…）」, or just 「自動偵測」 before detection or with an older core. */
 export function automaticMicrophoneShort(devices: AudioDevices | null): string {
-  return devices?.automatic_device ? microphoneText("mic.automaticShort", devices.automatic_device, DROPDOWN_ROOM) : t("onboarding.005");
+  return devices?.automatic_device ? microphoneText("mic.automaticShort", devices.automatic_device, DROPDOWN_ROOM) : t("mic.autoDetect");
 }

@@ -17,7 +17,8 @@ import { automaticMicrophoneLabel } from "./microphone";
 import { ModelDownload, type ModelPhase, formatProgress } from "./models";
 import { Stage } from "./stage";
 import type { AppContext, AudioDevices, Status } from "./types";
-import { type Choice, btn, closeMenu, esc, fieldHTML, group, keys, menuIsOpenFor, meter, note, openMenu, openMenuOnArrow, row, sel, setMeter, st, toaster } from "./ui";
+import { keyEntryRow, limitRow, micRow as micRowShared } from "./setup-rows";
+import { type Choice, btn, closeMenu, esc, group, keys, menuIsOpenFor, note, openMenu, openMenuOnArrow, row, setMeter, st, toaster } from "./ui";
 
 // ---------- the rules ----------
 
@@ -73,7 +74,7 @@ export function micChoices(devices: AudioDevices | null, saved: string | null): 
     { value: AUTO_MICROPHONE, get label() { return automaticMicrophoneLabel(devices); } },
     ...(devices?.devices ?? []).map((d) => ({ value: d.name, label: d.name })),
   ];
-  if (saved !== null && !choices.some((c) => c.value === saved)) choices.push({ value: saved, get label() { return t("onboarding.006", { p0: saved }); } });
+  if (saved !== null && !choices.some((c) => c.value === saved)) choices.push({ value: saved, get label() { return t("mic.disconnected", { p0: saved }); } });
   return choices;
 }
 
@@ -145,7 +146,7 @@ const TRY_TIMING_DELAY_MS = 300;
 const MODEL_PAINT_MS = 120;
 
 const keyline = (bindings: string[], mode: DictationMode): string =>
-  `<div class="keyline"><div>${bindings.map((binding) => keys(bindingLabels(binding))).join(t("onboarding.009"))}${esc(keylineAction(mode))}</div>` +
+  `<div class="keyline"><div>${bindings.map((binding) => keys(bindingLabels(binding))).join(t("common.or"))}${esc(keylineAction(mode))}</div>` +
   t("onboarding.010", { p0: keys(["Esc"]) });
 
 /** The model row's control: a bar while fetching, a pulsing dot while unpacking. */
@@ -153,7 +154,7 @@ function modelControl(phase: ModelPhase): string {
   switch (phase.kind) {
     case "idle":
     case "checking":
-      return st("idle", t("onboarding.011"));
+      return st("idle", t("common.checking"));
     case "downloading": {
       if (phase.total <= 0) return st("idle", t("onboarding.012"));
       const percent = Math.min(100, Math.round((phase.done / phase.total) * 100));
@@ -242,29 +243,32 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
 
   function micRow(): string {
     const saved = app.device().microphone;
-    return row(
-      t("onboarding.021"),
-      "",
-      meter() + sel(micChoices(devices, saved), saved ?? AUTO_MICROPHONE, t("onboarding.021"), ' data-ob="mic"'),
-      { attrs: ' id="ob-mic-row"' },
-    );
+    return micRowShared({
+      choices: micChoices(devices, saved),
+      current: saved ?? AUTO_MICROPHONE,
+      selAttrs: ' data-ob="mic"',
+      meter: { place: "before" },
+      row: { attrs: ' id="ob-mic-row"' },
+    });
   }
 
   function keyRow(): string {
     if (keySaved && !replacingKey) {
       return row(
-        t("onboarding.022"),
+        t("common.apiKey"),
         keyName === null ? t("onboarding.023") : t("onboarding.024", { p0: esc(keyName) }),
         `<span class="val num">••••••••</span>${st("ok", keyName === null ? t("onboarding.025") : t("onboarding.026"))}${btn(t("onboarding.027"), "sm", ' data-ob="key-replace"')}`,
       );
     }
-    return row(
-      t("onboarding.022"),
-      t("onboarding.028"),
-      fieldHTML("sk-or-v1-…", "", { w: 220, get label() { return t("onboarding.029"); }, id: "ob-key-input", type: "password", invalid: keyError !== null }) +
-        btn(keyBusy ? t("onboarding.011") : t("onboarding.030"), "pri", ` data-ob="key-paste"${keyBusy ? " disabled" : ""}`) +
-        (keySaved ? btn(t("onboarding.031"), "", ` data-ob="key-cancel"${keyBusy ? " disabled" : ""}`) : ""),
-    );
+    return keyEntryRow({
+      desc: t("onboarding.028"),
+      fieldWidth: 220,
+      inputId: "ob-key-input",
+      hook: (name) => ` data-ob="${name}"`,
+      busy: keyBusy,
+      invalid: keyError !== null,
+      canCancel: keySaved,
+    });
   }
 
   function keyGroup(): string {
@@ -273,11 +277,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
         [
           keyRow(),
           ...(keyError ? [note(st("err", keyError()), ' role="alert"')] : []),
-          row(
-            t("onboarding.032"),
-            t("onboarding.033"),
-            fieldHTML("", limitText, { w: 96, pre: "US$", get label() { return t("onboarding.032"); }, num: true, id: "ob-limit", invalid: limitError !== null }),
-          ),
+          limitRow({ text: limitText, fieldWidth: 96, id: "ob-limit", invalid: limitError !== null }),
           ...(limitError ? [note(st("err", limitError()), ' role="alert"')] : []),
         ],
         t("onboarding.034"),
@@ -537,7 +537,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
         keySaved = true;
         keyName = result.label;
         replacingKey = false;
-        toaster.info(t("onboarding.046"));
+        toaster.info(t("common.keySaved"));
       } else {
         keyError = () => keyReasonText(result.reason);
       }
@@ -567,7 +567,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
     } catch {
       // the webview does not let the page read the clipboard: the field takes Ctrl+V
       input?.focus();
-      toaster.info(t("onboarding.047"));
+      toaster.info(t("common.keyPasteHint"));
       return;
     }
     if (copied.trim()) {
@@ -588,7 +588,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, app: AppC
     const input = root.querySelector<HTMLInputElement>("#ob-limit");
     const action = limitAction(input ? input.value : limitText, limitCurrent);
     if (action.kind === "invalid") {
-      limitError = () => t("onboarding.049");
+      limitError = () => t("common.limitInvalid");
     } else {
       limitError = null;
       if (action.kind === "save") {

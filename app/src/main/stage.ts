@@ -2,7 +2,7 @@
 // subtitles. Opening the page plays the appear animation, and the report follows.
 
 import { Emblem } from "../overlay/emblem";
-import { esc, line } from "./ui";
+import { btn, esc, line } from "./ui";
 import type { Report } from "./report";
 
 /** The emblem's diameter on the stage, in px. */
@@ -81,7 +81,7 @@ export class Stage {
     this.subtitles.innerHTML =
       line(report.text) +
       (report.action
-        ? `<div class="act"><button type="button" class="btn pri" data-target="${report.action.target}">${esc(report.action.label)}</button></div>`
+        ? `<div class="act">${btn(esc(report.action.label), "pri", ` data-target="${report.action.target}"`)}</div>`
         : "");
     // so that the fade-in starts from the cleared state
     void this.subtitles.offsetWidth;

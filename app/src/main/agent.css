@@ -8,23 +8,23 @@
 .page-agent .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 .page-agent .agent-body { display: grid; grid-template-columns: 264px minmax(0, 1fr); min-height: 0; margin-top: 14px; border-top: 1px solid var(--line); }
-.page-agent .agent-wait { padding-top: 24px; }
+.page-agent .agent-wait { padding-top: var(--sp-5); }
 
 /* ---------- the list of conversations ---------- */
 .sess-pane { min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 6px 12px 28px 0; border-right: 1px solid var(--line); }
-.sess-day h3 { margin: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--text-3); }
+.sess-day h3 { margin: 16px 10px 6px; font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); }
 .sess-day:first-child h3 { margin-top: 10px; }
-.sess { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 8px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--text-2); text-align: left; transition: background-color 0.15s ease; }
+.sess { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 8px 10px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text-2); text-align: left; transition: background-color 0.15s ease; }
 .sess + .sess { margin-top: 2px; }
 .sess:hover { background: var(--hover); color: var(--text); }
 .sess[aria-current="true"] { background: var(--selected); color: var(--text); }
 .sess:focus-visible { outline-offset: -2px; }
-.sess-src { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--accent-soft); color: var(--accent-text); }
+.sess-src { display: grid; place-items: center; width: 28px; height: var(--h-ctl-sm); border-radius: var(--r-sm); background: var(--accent-soft); color: var(--accent-text); }
 .sess-src .i { width: 15px; height: 15px; }
 .sess-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; min-width: 0; }
 .sess-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; line-height: 1.45; }
 .sess[aria-current="true"] .sess-title { font-weight: 600; }
-.sess-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-3); }
+.sess-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); color: var(--text-3); }
 .sess-busy { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-text); animation: agent-breathe 1.6s ease-in-out infinite; }
 .sess-pane .more { justify-content: flex-start; margin: 16px 0 0 10px; }
 
@@ -41,17 +41,17 @@
 .tl-src + .num { margin-left: 2px; }
 .tl { list-style: none; margin: 0; padding: 0; }
 
-.tn { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 26px 0 4px; }
+.tn { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); padding: 26px 0 4px; }
 
 /* what was said: the person's words on the right */
 .tn-q { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
-.tn-who { display: flex; gap: 8px; font-size: 12px; color: var(--text-3); }
+.tn-who { display: flex; gap: var(--sp-2); font-size: var(--fs-xs); color: var(--text-3); }
 .bubble { max-width: min(560px, 86%); padding: 9px 15px; border-radius: 18px 18px 6px 18px; background: var(--accent-soft); color: var(--text); font: 15px/1.6 var(--voice); overflow-wrap: anywhere; user-select: text; }
 
 /* what was done: a summary that opens on the steps */
 .steps { display: grid; grid-template-columns: minmax(0, 1fr); }
-.steps-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.btn.sm.steps-sum { gap: 9px; min-height: 30px; padding: 4px 9px 4px 10px; border-radius: 999px; color: var(--text-2); }
+.steps-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.btn.sm.steps-sum { gap: 9px; min-height: 30px; padding: 4px 9px 4px 10px; border-radius: var(--r-pill); color: var(--text-2); }
 .steps-lead { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
 .steps-sum .i { width: 14px; height: 14px; color: var(--text-3); }
 .steps-chev { display: inline-grid; place-items: center; width: 14px; }
@@ -60,7 +60,7 @@
 .steps-time { color: var(--text-3); }
 .steps-bad { display: inline-flex; align-items: center; gap: 3px; color: var(--err); }
 .steps-sum .steps-bad .i { width: 12px; height: 12px; color: var(--err); stroke-width: 1.8; }
-.btn.sm.icon.stop { width: 30px; min-height: 30px; padding: 0; border-radius: 999px; color: var(--err); }
+.btn.sm.icon.stop { width: 30px; min-height: 30px; padding: 0; border-radius: var(--r-pill); color: var(--err); }
 .btn.sm.icon.stop .i { width: 11px; height: 11px; fill: currentColor; }
 .btn.sm.icon.stop:disabled { color: var(--text-3); }
 .btn.sm.rerun { min-height: 30px; padding: 4px 12px; border-radius: 999px; color: var(--text-2); }
@@ -70,9 +70,9 @@
 .steps-list { position: relative; max-width: 620px; list-style: none; margin: 10px 0 2px; padding: 0; }
 /* the thread that ties the steps together, through the middle of their pictures */
 .steps-list::before { content: ""; position: absolute; left: 13px; top: 16px; bottom: 16px; width: 1px; background: var(--line); }
-.step { position: relative; display: grid; grid-template-columns: 27px minmax(0, 1fr) auto; align-items: start; gap: 12px; padding: 5px 2px 5px 0; }
+.step { position: relative; display: grid; grid-template-columns: 27px minmax(0, 1fr) auto; align-items: start; gap: var(--sp-3); padding: 5px 2px 5px 0; }
 .step.is-new { animation: agent-step-in 0.34s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-.step-ic { position: relative; z-index: 1; display: grid; place-items: center; width: 27px; height: 27px; border-radius: 8px; border: 1px solid var(--edge); background: var(--panel); color: var(--text-2); }
+.step-ic { position: relative; z-index: 1; display: grid; place-items: center; width: 27px; height: 27px; border-radius: var(--r-sm); border: 1px solid var(--edge); background: var(--panel); color: var(--text-2); }
 .step-ic .i { width: 14px; height: 14px; }
 .step-ic .logo { width: 14px; height: 14px; display: block; }
 .step-ic.letter { font: 700 12px/1 var(--display); color: var(--text); }
@@ -81,11 +81,11 @@
 .step-ic.logo-art .lg-d { display: none; }
 :root[data-theme="dark"] .step-ic.logo-art .lg-d { display: block; }
 :root[data-theme="dark"] .step-ic.logo-art .lg-d ~ .lg-l, :root[data-theme="dark"] .step-ic.logo-art .lg-l:has(+ .lg-d) { display: none; }
-.step-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 8px; min-width: 0; padding-top: 4px; }
+.step-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 8px; min-width: 0; padding-top: var(--sp-1); }
 .step-t { font-size: 13.5px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
-.step-why { flex-basis: 100%; font-size: 12px; line-height: 1.5; color: var(--err); }
-.step-end { display: inline-flex; align-items: center; gap: 8px; padding-top: 5px; }
-.step-ms { font-size: 12px; color: var(--text-3); }
+.step-why { flex-basis: 100%; font-size: var(--fs-xs); line-height: 1.5; color: var(--err); }
+.step-end { display: inline-flex; align-items: center; gap: var(--sp-2); padding-top: 5px; }
+.step-ms { font-size: var(--fs-xs); color: var(--text-3); }
 .step-mark { display: inline-grid; place-items: center; width: 16px; height: 16px; }
 .step-mark .i { width: 14px; height: 14px; stroke-width: 1.8; }
 .step.is-ok .step-mark { color: var(--ok); }
@@ -107,14 +107,14 @@
 /* while its task runs, the turn's line is only the hand-over: the report takes its place */
 .tn[data-live="true"] .ans { font-weight: 500; color: var(--text-3); }
 .tn-detail { margin-top: 10px; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); font-size: 13.5px; line-height: 1.75; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
-.tn-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 8px; }
-.btn.sm.tn-more { gap: 5px; padding-left: 8px; }
+.tn-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: var(--sp-2); }
+.btn.sm.tn-more { gap: 5px; padding-left: var(--sp-2); }
 .tn-more .i { width: 14px; height: 14px; transition: transform 0.22s ease; }
 .tn-more[aria-expanded="true"] .i { transform: rotate(180deg); }
-.tn-meta { font-size: 12px; color: var(--text-3); }
+.tn-meta { font-size: var(--fs-xs); color: var(--text-3); }
 
 /* ---------- nothing yet ---------- */
-.page-agent .agent-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 0; padding: 40px 16px 96px; }
+.page-agent .agent-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-1); min-height: 0; padding: 40px 16px 96px; }
 .empty-art { width: 168px; height: 126px; margin-bottom: 10px; }
 .empty-art .b2 { fill: var(--accent-soft); stroke: var(--line); stroke-width: 1.5; }
 .empty-art .b1 { fill: var(--panel); stroke: var(--accent-text); stroke-width: 1.5; stroke-linejoin: round; }
@@ -139,10 +139,10 @@
 /* ---------- narrow and wide windows ---------- */
 @container main (max-width: 900px) {
   .page-agent .agent-body { grid-template-columns: 212px minmax(0, 1fr); }
-  .sess-pane { padding-right: 8px; }
-  .sess { grid-template-columns: 24px minmax(0, 1fr) auto; gap: 8px; padding: 8px; }
+  .sess-pane { padding-right: var(--sp-2); }
+  .sess { grid-template-columns: 24px minmax(0, 1fr) auto; gap: var(--sp-2); padding: var(--sp-2); }
   .sess-src { width: 24px; height: 24px; }
-  .tl-pane { padding-left: 20px; padding-right: 4px; }
+  .tl-pane { padding-left: 20px; padding-right: var(--sp-1); }
   .bubble { max-width: 92%; }
 }
 
@@ -151,22 +151,22 @@
   .page-agent .agent-body { grid-template-columns: 296px minmax(0, 1fr); }
   .sess { min-height: 58px; }
   .sess-title { font-size: 14.5px; }
-  .sess-meta { font-size: 13px; }
+  .sess-meta { font-size: var(--fs-sm); }
   .tl-col { max-width: 800px; }
   .tl-title { font-size: 21px; }
-  .tl-meta { font-size: 13px; }
+  .tl-meta { font-size: var(--fs-sm); }
   .bubble { font-size: 16px; }
   .step-t { font-size: 14.5px; }
-  .step-ms, .step-why, .tn-meta, .tn-who { font-size: 13px; }
+  .step-ms, .step-why, .tn-meta, .tn-who { font-size: var(--fs-sm); }
   .ans { font-size: 16.5px; }
   .tn-detail { font-size: 14.5px; }
 }
 
 /* ---------- the tools at the top: clear, and Raphael's settings ---------- */
-.ra-tools { display: flex; align-items: center; gap: 8px; }
-.page-agent .btn.icon { width: 34px; min-height: 34px; padding: 0; }
+.ra-tools { display: flex; align-items: center; gap: var(--sp-2); }
+.page-agent .btn.icon { width: 34px; min-height: var(--h-ctl); padding: 0; }
 .page-agent .btn.icon .i { width: 16px; height: 16px; }
 .btn.icon.ra-clear { transition: width 0.2s ease, color 0.15s ease; }
 .btn.icon.ra-clear.is-confirm { width: auto; padding: 0 12px 0 10px; color: var(--err); border-color: var(--err); }
 .sess-pane .more .btn.icon { width: 30px; min-height: 30px; }
-.tn-more.btn.sm.icon { width: 30px; min-height: 28px; padding: 0; }
+.tn-more.btn.sm.icon { width: 30px; min-height: var(--h-ctl-sm); padding: 0; }
