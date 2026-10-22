@@ -118,6 +118,23 @@ impl Chord {
             }
     }
 
+    /// Whether the chord presses the element with the focus: Enter or Space alone.
+    pub fn presses(self) -> bool {
+        !self.ctrl && !self.shift && !self.alt && matches!(self.key, Key::Enter | Key::Space)
+    }
+
+    /// Whether the chord sends (Ctrl+Enter, Ctrl+Shift+Enter, Alt+S in a mail or a chat) or
+    /// deletes for good (Shift+Delete) wherever it is pressed: the core's `_CONFIRM_CHORDS`,
+    /// which always ask the owner first.
+    pub fn always_asks(self) -> bool {
+        match self.key {
+            Key::Enter => self.ctrl && !self.alt,
+            Key::Char('s') => self.alt && !self.ctrl && !self.shift,
+            Key::Delete => self.shift && !self.ctrl && !self.alt,
+            _ => false,
+        }
+    }
+
     /// Whether the chord, pressed away from a text field, may delete what is selected there:
     /// Delete or Backspace with any modifiers but Alt (a file in File Explorer, a mail in a list,
     /// a row, a slide), and Ctrl+D alone (File Explorer, Outlook). In a field whose text can be
@@ -353,6 +370,29 @@ mod tests {
             "Shift+Esc",
         ] {
             assert!(!parse_chord(text).unwrap().moves_away(), "{text}");
+        }
+    }
+
+    #[test]
+    fn enter_and_space_press_and_the_cores_sending_chords_always_ask() {
+        for text in ["Enter", "Space"] {
+            assert!(parse_chord(text).unwrap().presses(), "{text}");
+        }
+        for text in ["Shift+Enter", "Ctrl+Space", "Tab", "Ctrl+Enter"] {
+            assert!(!parse_chord(text).unwrap().presses(), "{text}");
+        }
+        for text in ["Ctrl+Enter", "Ctrl+Shift+Enter", "Alt+S", "Shift+Delete"] {
+            assert!(parse_chord(text).unwrap().always_asks(), "{text}");
+        }
+        for text in [
+            "Enter",
+            "Shift+Enter",
+            "Ctrl+S",
+            "Alt+Shift+S",
+            "Delete",
+            "Ctrl+Delete",
+        ] {
+            assert!(!parse_chord(text).unwrap().always_asks(), "{text}");
         }
     }
 

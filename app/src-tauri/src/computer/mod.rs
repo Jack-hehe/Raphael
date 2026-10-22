@@ -45,7 +45,9 @@
 //! window brought to the front, a pattern called, a value set, each batch of keys or of a mouse
 //! click sent), so that a step asked for before the run ended, waiting behind a slow look or
 //! halfway through its keys, does nothing more once the overlay says the run is over. A request
-//! of a run that is not the shell's fails with `stopped`.
+//! of a run that is not the shell's fails with `stopped`. A run whose watch on the owner's input
+//! could not be started is refused as it begins ([`Runs::refuse`]): its requests fail with
+//! `watch`, and the core ends it.
 //!
 //! Nothing here logs a window's title, an element's name or value, or what is typed: only
 //! operations, kinds of failure and counts.
@@ -100,9 +102,13 @@ pub enum Failure {
     /// The element named could not be given the keyboard focus, or the live focus is on another:
     /// nothing was pressed or typed.
     Focus,
-    /// Keys that delete what is selected would reach no text field, in a step the owner did not
-    /// say yes to.
+    /// What the live focus is makes the step one that sends or deletes (Enter on a Send button or
+    /// in a message box, a line break typed, Delete on a file), in a step the owner did not say
+    /// yes to.
     Unconfirmed,
+    /// The watch on the owner's own input could not be started: the run is revoked, and nothing
+    /// is done for it.
+    Watch,
     /// Anything else.
     Failed,
 }
@@ -123,6 +129,7 @@ impl Failure {
             Failure::Handoff => "handoff",
             Failure::Focus => "focus",
             Failure::Unconfirmed => "unconfirmed",
+            Failure::Watch => "watch",
             Failure::Failed => "failed",
         }
     }
@@ -143,6 +150,11 @@ pub struct Runs {
     live: Arc<AtomicU64>,
     /// The last generation given.
     given: AtomicU64,
+    /// The id and the generation of the last run refused because it could not be watched, until
+    /// another begins.
+    refused: Mutex<Option<(String, u64)>>,
+    /// The generation of that run, 0 for none: its tickets fail with `watch`.
+    unwatched: Arc<AtomicU64>,
 }
 
 impl Runs {
@@ -154,6 +166,7 @@ impl Runs {
     pub fn begin(&self, run: &str) {
         let generation = self.given.fetch_add(1, Ordering::SeqCst) + 1;
         let mut active = crate::rpc::lock(&self.active);
+        *crate::rpc::lock(&self.refused) = None;
         *active = Some((run.to_owned(), generation));
         self.live.store(generation, Ordering::SeqCst);
     }
@@ -182,15 +195,32 @@ impl Runs {
         *crate::rpc::lock(&self.active) = None;
     }
 
+    /// The run `run` cannot be watched (the hooks on the owner's input did not go in): revoked
+    /// at once, and every request of it fails with `watch`, so that the core ends it with the
+    /// reason instead of operating a desktop the owner could not stop.
+    /// A run that is not the shell's (replaced already) is left alone.
+    pub fn refuse(&self, run: &str) {
+        let mut active = crate::rpc::lock(&self.active);
+        let Some((id, generation)) = active.take_if(|(id, _)| id.as_str() == run) else {
+            return;
+        };
+        self.unwatched.store(generation, Ordering::SeqCst);
+        self.live.store(0, Ordering::SeqCst);
+        *crate::rpc::lock(&self.refused) = Some((id, generation));
+    }
+
     /// The ticket of a request for the run `run`: live while that run is the shell's.
     pub fn ticket(&self, run: Option<&str>) -> Ticket {
         let active = crate::rpc::lock(&self.active);
-        let generation = match (active.as_ref(), run) {
-            (Some((id, generation)), Some(run)) if id == run => *generation,
+        let refused = crate::rpc::lock(&self.refused);
+        let generation = match (active.as_ref(), refused.as_ref(), run) {
+            (Some((id, generation)), _, Some(run)) if id == run => *generation,
+            (None, Some((id, generation)), Some(run)) if id == run => *generation,
             _ => 0,
         };
         Ticket {
             live: self.live.clone(),
+            unwatched: self.unwatched.clone(),
             generation,
         }
     }
@@ -200,6 +230,8 @@ impl Runs {
 #[derive(Clone, Debug)]
 pub struct Ticket {
     live: Arc<AtomicU64>,
+    /// The generation of the run refused because it could not be watched ([`Runs::refuse`]).
+    unwatched: Arc<AtomicU64>,
     /// The generation of its run; 0 for none, never live.
     generation: u64,
 }
@@ -210,11 +242,13 @@ impl Ticket {
         self.generation != 0 && self.live.load(Ordering::SeqCst) == self.generation
     }
 
-    /// `Stopped` once the run of the request is over: checked just before every change to the
-    /// desktop.
+    /// `Stopped` once the run of the request is over (`Watch` when it was refused because the
+    /// owner's input could not be watched): checked just before every change to the desktop.
     pub fn check(&self) -> Result<(), Failure> {
         if self.is_live() {
             Ok(())
+        } else if self.generation != 0 && self.unwatched.load(Ordering::SeqCst) == self.generation {
+            Err(Failure::Watch)
         } else {
             Err(Failure::Stopped)
         }
@@ -810,6 +844,7 @@ mod tests {
             Failure::Handoff,
             Failure::Focus,
             Failure::Unconfirmed,
+            Failure::Watch,
             Failure::Failed,
         ] {
             assert!(
@@ -899,6 +934,44 @@ mod tests {
         assert!(desktop.looks.lock().unwrap().is_empty());
         assert!(desktop.focused.lock().unwrap().is_empty());
         assert_eq!(Failure::Stopped.kind(), "stopped");
+    }
+
+    #[test]
+    fn a_run_that_cannot_be_watched_does_nothing_and_says_why() {
+        let service = service();
+        let runs = Runs::new();
+        runs.begin(RUN);
+        let early = runs.ticket(Some(RUN));
+        runs.refuse(RUN);
+        assert!(
+            !runs.is_active(RUN),
+            "no state of it shows 「操作中」 again"
+        );
+        for ticket in [early, runs.ticket(Some(RUN))] {
+            assert!(!ticket.is_live());
+            for (op, args) in [
+                ("apps", json!({})),
+                ("look", json!({"window": 1})),
+                (
+                    "act",
+                    json!({"window": 1, "element": 3, "action": "click", "confirmed": true}),
+                ),
+            ] {
+                assert_eq!(
+                    service.handle(op, &args, &[], &ticket),
+                    Err(Failure::Watch),
+                    "{op}"
+                );
+            }
+        }
+        assert!(service.desktop().steps.lock().unwrap().is_empty());
+        assert!(service.desktop().looks.lock().unwrap().is_empty());
+        // another run's requests are not told of it, and the next run is watched afresh
+        assert_eq!(runs.ticket(Some(OTHER_RUN)).check(), Err(Failure::Stopped));
+        runs.begin(OTHER_RUN);
+        assert!(runs.ticket(Some(OTHER_RUN)).is_live());
+        assert_eq!(runs.ticket(Some(RUN)).check(), Err(Failure::Stopped));
+        assert_eq!(Failure::Watch.kind(), "watch");
     }
 
     // --- typing: line breaks only with a yes, no other control characters -------------------------

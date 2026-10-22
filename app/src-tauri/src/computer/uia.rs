@@ -25,9 +25,11 @@
 //!   Keys go the same way. Keys or typed text for an element named go only once that element has
 //!   taken the focus and the live focus is it (or the edit field of the combo box named): one
 //!   that cannot take it (a text, a pane, a disabled button) fails with `focus`, and nothing goes
-//!   to whatever had the focus before. Delete, Backspace and Ctrl+D go to no live focus but a
-//!   text field without the owner's yes (`unconfirmed`): on a file or a mail they delete it
-//!   ([`policy::may_reach`]). Every input it sends carries Raphael's marker
+//!   to whatever had the focus before. Without the owner's yes (`unconfirmed`), nothing that
+//!   sends or deletes is judged anew on the live focus and refused: Enter or Space on an element
+//!   called like Send, Delete or Buy, Enter in a message box, the chords that send, a typed line
+//!   break, and Delete, Backspace or Ctrl+D anywhere but in a text field (on a file or a mail they
+//!   delete it) ([`policy::may_reach`]). Every input it sends carries Raphael's marker
 //!   (`handy_keys::RAPHAEL_INPUT_MARKER`) and is injected, so the watch on the owner's input and
 //!   the hotkeys never take it for the owner's.
 //! - The window is in front only when the window Windows has in front is the step's own, or one
@@ -473,11 +475,20 @@ impl State {
                 .CurrentIsPassword()
                 .map_err(|_| Failure::Failed)?
                 .as_bool();
+            // A name that cannot be read is no name: the other checks still hold.
+            let name = focused
+                .CurrentName()
+                .map(|name| name.to_string())
+                .unwrap_or_default();
+            let role = focused.CurrentControlType().map(|c| c.0).unwrap_or(0);
+            let text_role = role == UIA_EditControlTypeId.0 || role == UIA_DocumentControlTypeId.0;
             Reach {
                 password,
-                handoff: handoff(&focused),
+                handoff: policy::is_handoff_name(&name),
                 on_target: target.is_none_or(|target| self.holds_focus(target, &focused)),
                 edits_text: edits_text(&focused),
+                sends: policy::is_confirm_name(&name),
+                message_box: text_role && policy::is_message_name(&name),
             }
         };
         policy::may_reach(reach, press, confirmed)
@@ -543,16 +554,20 @@ impl State {
                 }
             }
             // Typed keys press Enter for a line break, which may send a message or a form: only
-            // in a step the owner said yes to.
+            // in a step the owner said yes to (refused here before the focus moves, and by
+            // `may_reach` before every batch).
             if breaks_lines(text) && !confirmed {
-                return Err(Failure::BadRequest);
+                return Err(Failure::Unconfirmed);
             }
             if let Some(element) = element {
                 give_focus(element, ticket)?;
             }
         }
+        let press = Press::Text {
+            line_breaks: breaks_lines(text),
+        };
         for batch in keys::typing(text) {
-            self.check_focus(hwnd, element, Press::Text, confirmed)?;
+            self.check_focus(hwnd, element, press, confirmed)?;
             match batch {
                 Typed::Units(units) => inject(ticket, &unit_inputs(&units))?,
                 Typed::Enter => {

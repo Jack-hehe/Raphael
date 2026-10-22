@@ -18,7 +18,7 @@
 //! judged ([`may_reach`]).
 
 use super::Failure;
-use super::keys::Chord;
+use super::keys::{Chord, Key};
 
 /// The executables Raphael never operates.
 const REFUSED: &[&str] = &[
@@ -140,6 +140,107 @@ const HANDOFF_CJK: &[&str] = &[
     "パスワード",
 ];
 
+/// The words that make an element one that sends, submits, publishes, deletes, buys or orders:
+/// Enter or Space on the live element with the focus called so is pressed only with the owner's
+/// yes. The core's `_CONFIRM_EN` and `_CONFIRM_CJK`, word for word (a test of the core's holds
+/// them together).
+const CONFIRM_EN: &[&str] = &[
+    "send",
+    "send now",
+    "submit",
+    "post",
+    "publish",
+    "share",
+    "tweet",
+    "reply all",
+    "forward",
+    "delete",
+    "remove",
+    "erase",
+    "discard",
+    "uninstall",
+    "empty recycle bin",
+    "permanently",
+    "buy",
+    "buy now",
+    "purchase",
+    "order",
+    "place order",
+    "subscribe",
+    "confirm",
+    "sign",
+    "transfer",
+    "accept",
+    "approve",
+    "invite",
+    "upload",
+];
+const CONFIRM_CJK: &[&str] = &[
+    "傳送",
+    "發送",
+    "送出",
+    "寄出",
+    "提交",
+    "發布",
+    "發佈",
+    "发布",
+    "公開",
+    "分享",
+    "轉寄",
+    "回覆全部",
+    "刪除",
+    "删除",
+    "移除",
+    "永久",
+    "解除安裝",
+    "清空資源回收筒",
+    "購買",
+    "购买",
+    "下單",
+    "訂購",
+    "訂閱",
+    "確認",
+    "簽署",
+    "轉帳",
+    "上傳",
+    "接受",
+    "核准",
+    "邀請",
+    "送信",
+    "投稿",
+    "公開する",
+    "削除",
+    "アンインストール",
+    "購入",
+    "注文",
+    "購読",
+    "確定",
+    "送金",
+    "アップロード",
+    "承認",
+    "招待",
+    "共有",
+    "転送",
+    "全員に返信",
+];
+/// What a box for a message is called: Enter in it sends. The core's `_MESSAGE_EN` and
+/// `_MESSAGE_CJK`, word for word.
+const MESSAGE_EN: &[&str] = &[
+    "message", "chat", "reply", "comment", "post", "tweet", "compose", "write a",
+];
+const MESSAGE_CJK: &[&str] = &[
+    "訊息",
+    "消息",
+    "聊天",
+    "回覆",
+    "留言",
+    "貼文",
+    "メッセージ",
+    "チャット",
+    "返信",
+    "コメント",
+];
+
 /// A name the way it is matched: full-width letters and digits folded to their ASCII forms, lower
 /// case, each run of spaces, underscores and hyphens one space (the core folds with NFKC, which
 /// does this and more).
@@ -173,9 +274,27 @@ fn has_word(text: &str, word: &str) -> bool {
 /// payment form or a one-time code. Checked on the live element just before keys or text reach
 /// it, whatever the core's look said.
 pub fn is_handoff_name(name: &str) -> bool {
+    names(name, HANDOFF_EN, HANDOFF_CJK)
+}
+
+/// Whether an element called `name` sends, submits, publishes, deletes, buys or orders (the
+/// core's `safety.confirm_by_name`).
+pub fn is_confirm_name(name: &str) -> bool {
+    names(name, CONFIRM_EN, CONFIRM_CJK)
+}
+
+/// Whether a text field called `name` is a box a message is written in, where Enter sends (the
+/// core's `safety.is_message_box`, for an Edit or a Document).
+pub fn is_message_name(name: &str) -> bool {
+    names(name, MESSAGE_EN, MESSAGE_CJK)
+}
+
+/// Whether `name` holds one of the English words as a whole word, or one of the others as it is
+/// written.
+fn names(name: &str, english: &[&str], cjk: &[&str]) -> bool {
     let text = normal(name);
-    HANDOFF_EN.iter().any(|word| has_word(&text, &normal(word)))
-        || HANDOFF_CJK.iter().any(|word| text.contains(word))
+    english.iter().any(|word| has_word(&text, &normal(word)))
+        || cjk.iter().any(|word| text.contains(word))
 }
 
 /// What the keys or the typed text of a step would reach, read live just before they are sent.
@@ -191,13 +310,21 @@ pub struct Reach {
     /// It is a field whose text Delete and Backspace only edit: an Edit or a Document whose value
     /// can be set.
     pub edits_text: bool,
+    /// It is called like an element that sends, submits, deletes or buys ([`is_confirm_name`]).
+    pub sends: bool,
+    /// It is a box a message is written in: an Edit or a Document called so
+    /// ([`is_message_name`]).
+    pub message_box: bool,
 }
 
 /// What a step sends to the element with the focus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Press {
     Keys(Chord),
-    Text,
+    /// Typed text, and whether it breaks a line (which is typed as Enter).
+    Text {
+        line_breaks: bool,
+    },
 }
 
 /// Whether `press` may go to what it would reach, `confirmed` when the owner said yes to the
@@ -209,8 +336,13 @@ pub enum Press {
 /// - only the element named, if one was (`focus` otherwise: it could not take the focus, or the
 ///   focus is elsewhere, and nothing is pressed or typed: a harmless element named while the
 ///   focus sits on a Send button must not press Send);
-/// - keys that delete what is selected ([`Chord::deletes_items`]) only into a text field, unless
-///   the owner said yes (`unconfirmed`): Delete on a file in File Explorer deletes the file.
+/// - without the owner's yes (`unconfirmed` otherwise), nothing that sends or deletes, judged
+///   again on the live focus, since the look the core judged by may not have known it (a window
+///   looked at in the background gets its focus back once it is in front): Enter or Space on an
+///   element called like Send, Delete or Buy ([`is_confirm_name`]), Enter in a message box, a
+///   chord that sends or deletes for good ([`Chord::always_asks`]), a line break typed (it is
+///   Enter), and keys that delete what is selected ([`Chord::deletes_items`]) anywhere but in a
+///   text field: Delete on a file in File Explorer deletes the file.
 ///
 /// A yes to the step does not let keys reach another element than the one named: the owner said
 /// yes to the step the question showed.
@@ -225,11 +357,23 @@ pub fn may_reach(reach: Reach, press: Press, confirmed: bool) -> Result<(), Fail
     if reach.handoff && !moving_away {
         return Err(Failure::Handoff);
     }
-    let deletes = matches!(press, Press::Keys(chord) if chord.deletes_items());
-    if deletes && !reach.edits_text && !confirmed {
-        return Err(Failure::Unconfirmed);
+    if confirmed {
+        return Ok(());
     }
-    Ok(())
+    let asks = match press {
+        Press::Keys(chord) => {
+            chord.always_asks()
+                || (chord.presses() && reach.sends)
+                || (chord.presses() && chord.key == Key::Enter && reach.message_box)
+                || (chord.deletes_items() && !reach.edits_text)
+        }
+        Press::Text { line_breaks } => line_breaks,
+    };
+    if asks {
+        Err(Failure::Unconfirmed)
+    } else {
+        Ok(())
+    }
 }
 
 /// An executable's file name as the lists keep it: the last part of `path`, in lower case.
@@ -367,7 +511,94 @@ mod tests {
         handoff: false,
         on_target: true,
         edits_text: false,
+        sends: false,
+        message_box: false,
     };
+    /// Text on one line.
+    const TEXT: Press = Press::Text { line_breaks: false };
+
+    #[test]
+    fn enter_or_space_on_a_live_send_button_or_in_a_message_box_needs_a_yes() {
+        // the look was of a window in the background: in front, the focus came back to Send
+        let send = Reach {
+            sends: true,
+            ..ON_TARGET
+        };
+        let message_box = Reach {
+            message_box: true,
+            edits_text: true,
+            ..ON_TARGET
+        };
+        for press in [keys("Enter"), keys("Space")] {
+            assert_eq!(
+                may_reach(send, press, false),
+                Err(Failure::Unconfirmed),
+                "{press:?}"
+            );
+            assert_eq!(may_reach(send, press, true), Ok(()));
+        }
+        assert_eq!(
+            may_reach(message_box, keys("Enter"), false),
+            Err(Failure::Unconfirmed)
+        );
+        assert_eq!(may_reach(message_box, keys("Enter"), true), Ok(()));
+        // Space in a message box types a space; Tab moves away from Send
+        assert_eq!(may_reach(message_box, keys("Space"), false), Ok(()));
+        assert_eq!(may_reach(send, keys("Tab"), false), Ok(()));
+        assert_eq!(may_reach(send, keys("Ctrl+C"), false), Ok(()));
+        // typing a line break presses Enter: only with a yes, wherever it goes
+        let lines = Press::Text { line_breaks: true };
+        for reach in [ON_TARGET, message_box] {
+            assert_eq!(may_reach(reach, lines, false), Err(Failure::Unconfirmed));
+            assert_eq!(may_reach(reach, lines, true), Ok(()));
+            assert_eq!(may_reach(reach, TEXT, false), Ok(()));
+        }
+    }
+
+    #[test]
+    fn the_chords_that_send_or_delete_for_good_need_a_yes_wherever_they_go() {
+        let text_field = Reach {
+            edits_text: true,
+            ..ON_TARGET
+        };
+        for text in ["Ctrl+Enter", "Ctrl+Shift+Enter", "Alt+S", "Shift+Delete"] {
+            for reach in [ON_TARGET, text_field] {
+                assert_eq!(
+                    may_reach(reach, keys(text), false),
+                    Err(Failure::Unconfirmed),
+                    "{text}"
+                );
+                assert_eq!(may_reach(reach, keys(text), true), Ok(()), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_send_and_message_words_are_matched_like_the_cores() {
+        for name in [
+            "Send",
+            "SEND_NOW",
+            "傳送",
+            "Delete",
+            "Buy now",
+            "購入",
+            "Reply all",
+        ] {
+            assert!(is_confirm_name(name), "{name}");
+        }
+        for name in ["七", "Sender", "Search", "Settings", ""] {
+            assert!(!is_confirm_name(name), "{name}");
+        }
+        for name in [
+            "Type a message",
+            "輸入訊息",
+            "メッセージを入力",
+            "Write a reply",
+        ] {
+            assert!(is_message_name(name), "{name}");
+        }
+        assert!(!is_message_name("檔名") && !is_message_name("Messages folder name"));
+    }
 
     #[test]
     fn keys_and_text_go_only_to_the_element_named() {
@@ -376,7 +607,7 @@ mod tests {
             on_target: false,
             ..ON_TARGET
         };
-        for press in [keys("Enter"), keys("Space"), keys("Tab"), Press::Text] {
+        for press in [keys("Enter"), keys("Space"), keys("Tab"), TEXT] {
             assert_eq!(
                 may_reach(elsewhere, press, false),
                 Err(Failure::Focus),
@@ -399,7 +630,7 @@ mod tests {
             handoff: true,
             ..ON_TARGET
         };
-        for press in [keys("Enter"), keys("Ctrl+V"), Press::Text] {
+        for press in [keys("Enter"), keys("Ctrl+V"), TEXT] {
             assert_eq!(may_reach(password, press, true), Err(Failure::Password));
             assert_eq!(may_reach(sign_in, press, true), Err(Failure::Handoff));
         }
@@ -432,11 +663,17 @@ mod tests {
                 "{text}"
             );
             assert_eq!(may_reach(ON_TARGET, keys(text), true), Ok(()), "{text}");
-            // in a text field they edit its text
-            assert_eq!(may_reach(text_field, keys(text), false), Ok(()), "{text}");
+            // in a text field they edit its text (but Shift+Delete, which deletes a file for
+            // good, asks wherever it goes, as the core's question does)
+            let in_text_field = may_reach(text_field, keys(text), false);
+            if text == "Shift+Delete" {
+                assert_eq!(in_text_field, Err(Failure::Unconfirmed));
+            } else {
+                assert_eq!(in_text_field, Ok(()), "{text}");
+            }
         }
         // other keys on a selected file, and typed text, go as before
-        for press in [keys("Left"), keys("Ctrl+C"), keys("F2"), Press::Text] {
+        for press in [keys("Left"), keys("Ctrl+C"), keys("F2"), TEXT] {
             assert_eq!(may_reach(ON_TARGET, press, false), Ok(()), "{press:?}");
         }
         assert_eq!(Failure::Unconfirmed.kind(), "unconfirmed");

@@ -9,7 +9,9 @@
 //!   calls wait for UI Automation), and answered with `computer.reply`. `allow` adds the app to
 //!   the always-allowed list of the device settings (`commands::allow_computer_app`).
 //! - `computer.state`: `begin` makes its run the shell's ([`Runs`]), puts the watch's hooks in and
-//!   arms them, and the overlay shows 「操作中」 with the step; `step` changes the step on the
+//!   arms them, and the overlay shows 「操作中」 with the step (when the hooks do not go in, the
+//!   run is refused at once instead: nothing of it reaches the desktop, every request of it fails
+//!   with `watch`, and the core ends it with that reason); `step` changes the step on the
 //!   overlay (and arms the watch again after a question); `pause` disarms the watch for the
 //!   question on screen; `end` revokes the run before anything else (no job of it does anything
 //!   more on the desktop), takes the hooks out, drops the elements the looks kept and, when the
@@ -162,11 +164,17 @@ fn on_state(phase: Phase, run: &str, running: &mut Option<Running>, shown: &Show
                     let _ = told.send(());
                 }))
             });
-            if let Some(watch) = &watch {
-                watch.arm();
-            }
+            let Some(watch) = watch else {
+                // The owner could not stop a run by touching the mouse or the keys: none is
+                // operated. Every request of it fails with `watch`, and the core ends it.
+                log::warn!("computer: the watch on the owner's input did not start: no run");
+                runs.refuse(run);
+                *running = None;
+                return;
+            };
+            watch.arm();
             *running = Some(Running {
-                watch,
+                watch: Some(watch),
                 paused: false,
             });
             log::info!("computer: a run begins");
