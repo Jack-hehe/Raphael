@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from raphael_core.computer import safety
-from raphael_core.computer.safety import CONFIRM, HANDOFF, KeysRefused, judge, parse_chord
+from raphael_core.computer.safety import CONFIRM, HANDOFF, REFUSE, KeysRefused, judge, parse_chord
 
 
 @pytest.mark.parametrize(
@@ -294,3 +294,43 @@ def test_the_shell_judges_the_live_focus_by_the_same_send_words():
     assert rust_list("CONFIRM_CJK") == safety._CONFIRM_CJK
     assert rust_list("MESSAGE_EN") == safety._MESSAGE_EN
     assert rust_list("MESSAGE_CJK") == safety._MESSAGE_CJK
+    assert rust_list("CLOSE_EN") == safety._CLOSE_EN
+    assert rust_list("CLOSE_CJK") == safety._CLOSE_CJK
+
+
+# --- Enter and Space with modifiers press too; nothing that closes is pressed ------------------------
+
+PRESSES = [("shift", "enter"), ("shift", "space"), ("alt", "enter"), ("ctrl", "space"), ("ctrl", "shift", "space")]
+
+
+@pytest.mark.parametrize("chord", PRESSES)
+def test_enter_or_space_with_modifiers_on_a_send_button_asks_first(chord):
+    # Shift+Enter or Shift+Space still presses the button with the focus
+    assert judge(action="keys", declared_final=False, chord=chord, focused_name="Send", focused_role="Button") == CONFIRM
+    assert judge(action="keys", declared_final=False, chord=chord, name="Delete", role="Button") == CONFIRM
+    # with no element named and no known focus, it may press Send
+    assert judge(action="keys", declared_final=False, chord=chord) == CONFIRM
+    # on an ordinary button it runs
+    assert judge(action="keys", declared_final=False, chord=chord, focused_name="七", focused_role="Button") is None
+
+
+def test_shift_enter_in_a_message_box_asks_first_too():
+    assert judge(action="keys", declared_final=False, chord=("shift", "enter"), focused_name="Type a message",
+                 focused_role="Edit", focused_actions=EDITABLE) == CONFIRM  # fmt: skip
+
+
+@pytest.mark.parametrize("name", ["Close", "Close tab", "CLOSE_WINDOW", "Exit", "Quit", "關閉", "关闭", "閉じる"])
+def test_a_button_that_closes_a_window_a_tab_or_the_app_is_never_pressed(name):
+    assert judge(action="click", declared_final=False, name=name, role="Button") == REFUSE
+    # not even with final: Raphael closes nothing
+    assert judge(action="click", declared_final=True, name=name, role="Button") == REFUSE
+    for chord in [("enter",), ("space",), ("shift", "enter")]:
+        assert judge(action="keys", declared_final=False, chord=chord, focused_name=name, focused_role="Button") == REFUSE
+    # moving away from it is fine
+    assert judge(action="keys", declared_final=False, chord=("tab",), focused_name=name, focused_role="Button") is None
+
+
+@pytest.mark.parametrize("name", ["Closed captions", "Enclosed", "Exits list", "七", "Closest store"])
+def test_names_that_only_look_like_closing_are_not_refused(name):
+    verdict = judge(action="click", declared_final=False, name=name, role="Button")
+    assert verdict != REFUSE, name

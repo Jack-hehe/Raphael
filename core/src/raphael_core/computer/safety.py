@@ -1,7 +1,12 @@
 """What a step on the owner's desktop may do by itself, what needs a yes, and what is the owner's.
 
-Three rules, each a pure function of what the model asked for and of what the latest snapshot said
+Four rules, each a pure function of what the model asked for and of what the latest snapshot said
 about the element it named (`snapshot.Element`):
+
+- **Refuse** (`REFUSE`): a button that closes a window, a tab or the app (its title bar's Close, a
+  tab's ×, File > Exit), clicked or pressed with Enter or Space. Raphael closes nothing, whatever
+  the model declares: the step is not taken and the model is told why. The keys that close are
+  refused with the others (`check_keys`).
 
 - **Hand-off** (`HANDOFF`): a password field, a field of a payment form (a card number, a security
   code), a one-time code, a sign-in button, a payment button. Raphael never touches those, with a
@@ -9,7 +14,7 @@ about the element it named (`snapshot.Element`):
   run stops and the owner is told the step is theirs.
 - **Confirm** (`CONFIRM`, T2): a step that sends, submits, publishes, deletes, buys or orders. The
   model declares it (`final` on `computer_act`); the element's name (clicked, or pressed with Enter
-  or Space), a key chord that sends (Ctrl+Enter) or deletes for good (Shift+Delete), a key that
+  or Space, with any modifiers: Shift+Enter presses a button too), a key chord that sends (Ctrl+Enter) or deletes for good (Shift+Delete), a key that
   deletes what is selected away from a text field (`deletes_items`: Delete in File Explorer or a
   mail list), Enter in a message box, Enter or Space where the look knows no focus, and a line
   break in typed text (which the shell presses as Enter) say it too. Any one of them is enough: the
@@ -33,6 +38,7 @@ from collections.abc import Iterable
 
 HANDOFF = "handoff"
 CONFIRM = "confirm"
+REFUSE = "refuse"
 
 # The words that make an element a step of the owner's: signing in, paying, a payment form's
 # fields, one-time codes. (Password fields are told by UI Automation itself, not by their names.)
@@ -74,6 +80,13 @@ _MESSAGE_EN = ("message", "chat", "reply", "comment", "post", "tweet", "compose"
 _MESSAGE_CJK = ("訊息", "消息", "聊天", "回覆", "留言", "貼文", "メッセージ", "チャット", "返信", "コメント")
 _TEXT_ROLES = frozenset({"Edit", "Document"})
 
+# What a button that closes a window, a tab or the app is called: a title bar's Close, a tab's
+# "Close tab", File > Exit or Quit. The shell judges the live element by the same words, and by
+# what UI Automation says of it besides (an automation id of "Close", a button of a title bar)
+# (`app/src-tauri/src/computer/policy.rs`; a test holds them together).
+_CLOSE_EN = ("close", "exit", "quit")
+_CLOSE_CJK = ("關閉", "关闭", "閉じる")
+
 
 def _normal(text: str) -> str:
     """`text` the way it is matched: compatibility forms folded (full-width letters), lower case,
@@ -93,6 +106,7 @@ def _english(words: Iterable[str]) -> re.Pattern[str]:
 _HANDOFF_WORDS = _english(_HANDOFF_EN)
 _CONFIRM_WORDS = _english(_CONFIRM_EN)
 _MESSAGE_WORDS = _english(_MESSAGE_EN)
+_CLOSE_WORDS = _english(_CLOSE_EN)
 
 
 def _names(name: str, words: re.Pattern[str], cjk: Iterable[str]) -> bool:
@@ -109,6 +123,11 @@ def handoff_by_name(name: str) -> bool:
 def confirm_by_name(name: str) -> bool:
     """Whether an element called `name` sends, submits, publishes, deletes, buys or orders."""
     return _names(name, _CONFIRM_WORDS, _CONFIRM_CJK)
+
+
+def closes_by_name(name: str) -> bool:
+    """Whether an element called `name` closes a window, a tab or the app."""
+    return _names(name, _CLOSE_WORDS, _CLOSE_CJK)
 
 
 def is_message_box(name: str, role: str) -> bool:
@@ -239,8 +258,13 @@ def deletes_items(chord: tuple[str, ...]) -> bool:
 _LINE_BREAK = re.compile(r"[\n\r\x0b\x0c\x1c\x1d\x1e\x85  ]")
 # Keys that only move away from the element with the focus: they enter, press and send nothing.
 _MOVE_AWAY = frozenset({("tab",), ("shift", "tab"), ("escape",)})
-# Keys that press the button with the focus.
-_PRESS = frozenset({("enter",), ("space",)})
+
+
+def presses(chord: tuple[str, ...]) -> bool:
+    """Whether `chord` may press the button with the focus: Enter or Space, with any modifiers
+    (Shift+Enter and Shift+Space press a button as Enter does). The shell keeps the same rule
+    (`Chord::presses`)."""
+    return chord[-1] in ("enter", "space")
 
 
 def breaks_lines(text: str) -> bool:
@@ -264,8 +288,8 @@ def judge(
     focused_actions: Iterable[str] = (),
     targeted: bool | None = None,
 ) -> str | None:
-    """What a step needs before it is taken: `HANDOFF` (the owner's), `CONFIRM` (a yes first) or
-    None (it runs).
+    """What a step needs before it is taken: `HANDOFF` (the owner's), `REFUSE` (never taken: it
+    closes a window, a tab or the app), `CONFIRM` (a yes first) or None (it runs).
 
     `action` is the step ("click", "type", "keys", "scroll", "focus"), `declared_final` whether the
     model said it sends, submits, deletes or buys, `chord` the keys it presses and `text` what it
@@ -279,8 +303,9 @@ def judge(
     Keys and typing are judged by the element they reach: the one named (the shell gives it the
     focus first), else the one with the focus. A sign-in, a payment or a code there is the
     owner's whatever the keys, except the ones that only move away from it (Tab, Shift+Tab, Esc);
-    Enter or Space on a button that sends, deletes or buys asks first, as a click on it would, and
-    so does Enter in a message box. A key that deletes what is selected (`deletes_items`) asks
+    Enter or Space (with any modifiers) on a button that sends, deletes or buys asks first, as a
+    click on it would, and so does Enter in a message box; on a button that closes, it is refused
+    as a click on it is. A key that deletes what is selected (`deletes_items`) asks
     first unless what it reaches is a field whose text it only edits (`edits_text`); when the
     snapshot holds no element with the focus, nothing says it is one. Enter or Space on no element
     named, when the snapshot holds no element with the focus (a window looked at in the
@@ -306,6 +331,10 @@ def judge(
         return HANDOFF
     if action == "keys" and chord not in _MOVE_AWAY and target_name and handoff_by_name(target_name):
         return HANDOFF
+    if action == "click" and name and closes_by_name(name):
+        return REFUSE
+    if action == "keys" and chord is not None and presses(chord) and target_name and closes_by_name(target_name):
+        return REFUSE
     if declared_final:
         return CONFIRM
     if action == "click" and name and confirm_by_name(name):
@@ -315,11 +344,11 @@ def judge(
     if action == "keys" and chord is not None:
         if confirm_by_keys(chord):
             return CONFIRM
-        if chord in _PRESS and target_name and confirm_by_name(target_name):
+        if presses(chord) and target_name and confirm_by_name(target_name):
             return CONFIRM
-        if chord in _PRESS and not targeted and not focused_role:
+        if presses(chord) and not targeted and not focused_role:
             return CONFIRM
-        if chord == ("enter",) and is_message_box(target_name, target_role):
+        if chord[-1] == "enter" and is_message_box(target_name, target_role):
             return CONFIRM
         if deletes_items(chord) and not edits_text(target_role, target_actions):
             return CONFIRM

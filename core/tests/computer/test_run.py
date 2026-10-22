@@ -691,3 +691,32 @@ async def test_a_button_renamed_since_the_look_is_asked_about_again(make_run, sh
     _, final = await drive(make_run(model))
     assert "needs the owner's yes" in everything_the_model_saw(model)
     assert final.status == "done"
+
+
+async def test_a_close_button_is_never_clicked_and_the_model_is_told(make_run, shell):
+    rows = [element(1, "Window", "Notes", depth=0, actions=[]), element(2, "Button", "Close")]
+    answering(shell, always=True, look=calculator(elements=rows))
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, element=2, action="click", final=True)),
+        reply(content="無法關閉。"),
+    )
+    asked, final = await drive(make_run(model))
+    assert asked == [] and "act" not in shell.ops()
+    assert "never closes a window, a tab or an app" in everything_the_model_saw(model)
+    assert final.status == "done"
+
+
+async def test_the_shell_refusing_a_close_button_tells_the_model_the_same(make_run, shell):
+    # a title-bar button the look named otherwise, refused by the shell on its automation id
+    answering(shell, always=True, act="closes")
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, element=3, action="click", final=False)),
+        reply(content="無法完成。"),
+    )
+    _, final = await drive(make_run(model))
+    assert "never closes a window, a tab or an app" in everything_the_model_saw(model)
+    assert final.status == "done"

@@ -40,7 +40,8 @@ sign-in, a payment or a code, `focus`: the element named could not be given the 
 or the live focus is elsewhere, so nothing was pressed, `unconfirmed`: the live focus makes the
 step one that sends or deletes (Enter on a Send button or in a message box, Delete on a file), in
 a step the owner did not say yes to, `watch`: the shell could not start its watch on the owner's
-own input, so the run is revoked and nothing is done for it), or `unavailable` (no
+own input, so the run is revoked and nothing is done for it, `closes`: the live element closes a
+window, a tab or the app, which Raphael never does), or `unavailable` (no
 shell to ask, or it did not answer in time). Nothing here logs an argument or a result: they hold
 what is on the owner's screen.
 """
@@ -80,6 +81,7 @@ KINDS = frozenset(
         "focus",
         "unconfirmed",
         "watch",
+        "closes",
         REVOKED,
         HANDOFF,
         UNAVAILABLE,

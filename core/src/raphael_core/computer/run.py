@@ -112,6 +112,13 @@ NEEDS_ELEMENT = "This action needs an element of the latest look."
 NO_MORE_OPENS = "No more apps may be opened in this run. Use the windows that are open."
 # The shell could not start its watch on the owner's own mouse and keys: nothing may be done.
 WATCH = "watch"
+# A button that closes a window, a tab or the app: never pressed (`safety.REFUSE`, or the shell's
+# own refusal of the live element).
+CLOSES = "closes"
+NEVER_CLOSES = (
+    "Raphael never closes a window, a tab or an app, so that step was not taken. Do the task "
+    "without it, or say what is left for the owner."
+)
 _LANGUAGE_NAMES = {
     "zh-TW": "Traditional Chinese as written in Taiwan (never Simplified characters)",
     "en": "English",
@@ -771,6 +778,7 @@ class ComputerRun:
             "own_window": "That window is Raphael's own and cannot be operated.",
             "keys_not_allowed": "Those keys may not be pressed.",
             "bad_request": BAD_ARGUMENTS,
+            CLOSES: NEVER_CLOSES,
             "focus": (
                 "The element could not be given the keyboard focus, so nothing was pressed or "
                 "typed. Look at the window again, and name the element that takes the keys (a "
@@ -846,6 +854,9 @@ class ComputerRun:
         if verdict == safety.HANDOFF:
             self._step(action, window.app, "blocked", time.perf_counter(), "handoff")
             raise _Finished(self._handoff())
+        if verdict == safety.REFUSE:
+            self._step(action, window.app, "blocked", time.perf_counter(), CLOSES)
+            return wrap_untrusted(name, NEVER_CLOSES, ok=False)
         if self.actions >= self.limits.actions:
             raise _Stopped("limit_actions")
         # A step is shown to the model with the look after it: one that could not be is not taken.
