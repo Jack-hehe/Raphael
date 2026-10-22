@@ -20,6 +20,12 @@
 //!   the clock answer NO; then `agent.confirm` gives the answer. An agent session never pastes and
 //!   never touches the clipboard of the focused window.
 //!
+//! A recording has no time limit. It ends when the key stops it, when Esc cancels it, or by
+//! itself when the core has heard no speech in it for ten seconds: the core says so
+//! (`dictation.silence`) and the recording is stopped as the key would stop it ([`on_silence`]).
+//! The wait for the core's `dictation.stop` grows with the length of the recording
+//! ([`dictation_stop_timeout`]).
+//!
 //! Rules that keep it out of trouble with the real core, overlay and paster:
 //!
 //! - Overlay calls are made outside the state lock: they can wait for the main thread (placing
@@ -62,6 +68,7 @@ use tokio::task::JoinHandle;
 use crate::agent::{self, Reply};
 use crate::background::ReportStage;
 use crate::commands::DictationPhase;
+use crate::core_process::dictation_stop_timeout;
 use crate::device_settings::DictationMode;
 use crate::holdtap::{Action, HoldTap};
 use crate::hotkey::{CancelSwitch, HotkeyEvent};
@@ -380,7 +387,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                         state.question_stopped_ms = Some(now_ms);
                         drop(state);
                         log::info!("agent: stopping (dictation key)");
-                        return self.stop_agent();
+                        return self.stop_agent(now_ms);
                     }
                     state.holdtap.on_down(mode)
                 };
@@ -396,7 +403,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 match action {
                     Action::StopRecording => {
                         log::info!("agent: stopping");
-                        self.stop_agent()
+                        self.stop_agent(now_ms)
                     }
                     Action::StartRecording | Action::None => None,
                 }
@@ -444,6 +451,49 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
     }
 
+    /// The core's `dictation.silence`: the recording of the session it names has heard no speech
+    /// for ten seconds. If that session is the current one and still recording, it is stopped at
+    /// `now_ms` (on the clock of [`Self::on_hotkey`]) exactly as the key would stop it: what was
+    /// said is transcribed and pasted, or asked, and a recording in which nothing was said ends
+    /// as one does when the key stops it with nothing heard. Whatever the keys were in the middle
+    /// of is forgotten, as when Esc ends a recording: the release of a key that is still held
+    /// (hold mode), or the next press (toggle mode), is a new start, not a stop. A notification
+    /// about any other session (stopped or cancelled meanwhile, or from before a restart) is
+    /// dropped.
+    pub fn on_silence(&self, params: &Value, now_ms: u64) -> Option<JoinHandle<()>> {
+        let Some(session) = params.get("session_id").and_then(Value::as_str) else {
+            log::debug!("dictation.silence ignored: {params}");
+            return None;
+        };
+        let _transition = lock(&self.transitions);
+        let kind = {
+            let mut state = lock(&self.state);
+            let current = state.phase == Phase::Recording
+                && state
+                    .session
+                    .as_ref()
+                    .is_some_and(|current| current.id == session);
+            if !current {
+                log::debug!("dictation.silence ignored: not the session that is recording");
+                return None;
+            }
+            state.holdtap.reset();
+            state.agent_holdtap.reset();
+            state.kind()
+        };
+        match kind {
+            Some(Kind::Dictation) => {
+                log::info!("dictation: stopping (silence)");
+                self.stop(now_ms)
+            }
+            Some(Kind::Agent) => {
+                log::info!("agent: stopping (silence)");
+                self.stop_agent(now_ms)
+            }
+            None => None,
+        }
+    }
+
     /// The core was started again: whatever it was doing is lost (see [`Self::reset`]). If it goes
     /// down again, that is a new down-state, worth a new [`notices::CORE_DOWN`].
     pub fn on_core_restarted(&self) {
@@ -484,7 +534,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             }
             Action::StopRecording => {
                 log::info!("dictation: stopping");
-                self.stop()
+                self.stop(now_ms)
             }
             Action::None => None,
         }
@@ -586,8 +636,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }))
     }
 
-    fn stop(&self) -> Option<JoinHandle<()>> {
-        let session = {
+    /// Ends the recording of a dictation at `now_ms`, on the clock of [`Self::on_hotkey`]: the key
+    /// stopped it, or the core heard nothing more ([`Self::on_silence`]).
+    fn stop(&self, now_ms: u64) -> Option<JoinHandle<()>> {
+        let (session, wait) = {
             let mut state = lock(&self.state);
             if state.phase != Phase::Recording || state.kind() != Some(Kind::Dictation) {
                 return None;
@@ -595,7 +647,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             let session = state.session.clone()?;
             state.phase = Phase::Processing;
             state.media.end();
-            session
+            (session, stop_timeout(&state, now_ms))
         };
         // The window to paste into is the one that has focus when the key is released.
         let target = self.paster.foreground();
@@ -621,9 +673,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             let target_app = target.as_ref().map(|target| target.process_name.clone());
             let reply = this
                 .core
-                .call(
+                .call_within(
                     "dictation.stop",
                     json!({ "session_id": id, "target_app": target_app }),
+                    wait,
                 )
                 .await;
             if !this.is_current(&id) {
@@ -1054,14 +1107,15 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             }
             Action::StopRecording => {
                 log::info!("agent: stopping");
-                self.stop_agent()
+                self.stop_agent(now_ms)
             }
             Action::None => None,
         }
     }
 
-    fn stop_agent(&self) -> Option<JoinHandle<()>> {
-        let session = {
+    /// Ends the recording of a question at `now_ms`, as [`Self::stop`] does a dictation's.
+    fn stop_agent(&self, now_ms: u64) -> Option<JoinHandle<()>> {
+        let (session, wait) = {
             let mut state = lock(&self.state);
             if state.phase != Phase::Recording || state.kind() != Some(Kind::Agent) {
                 return None;
@@ -1070,7 +1124,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             state.phase = Phase::Processing;
             state.agent = Some(AgentStage::Transcribing);
             state.media.end();
-            session
+            (session, stop_timeout(&state, now_ms))
         };
         // The app the person was in when the key was released is the one the question is about.
         let target = self.paster.foreground();
@@ -1082,14 +1136,14 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
 
         let this = self.clone();
         Some(tokio::spawn(async move {
-            this.agent_turn(session, target).await;
+            this.agent_turn(session, target, wait).await;
         }))
     }
 
-    /// The rest of a question after the key was released: the core transcribes it, the agent
-    /// answers it, the overlay shows the answer. Never logs the words of the question or the
-    /// answer.
-    async fn agent_turn(&self, session: Session, target: Option<Target>) {
+    /// The rest of a question after the key was released (or the core heard nothing more): the
+    /// core transcribes it, within `wait`, the agent answers it, the overlay shows the answer.
+    /// Never logs the words of the question or the answer.
+    async fn agent_turn(&self, session: Session, target: Option<Target>, wait: Duration) {
         // Released before the core answered the start? Then wait, like a dictation does.
         if !session.start_succeeded().await {
             log::info!("dictation.start failed; no dictation.stop to send");
@@ -1103,9 +1157,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         let target_app = target.map(|target| target.process_name);
         let transcript = self
             .core
-            .call(
+            .call_within(
                 "dictation.stop",
                 json!({ "session_id": id, "target_app": target_app }),
+                wait,
             )
             .await;
         if !self.is_current(&id) {
@@ -1454,6 +1509,14 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> ReportStage
     }
 }
 
+/// How long the `dictation.stop` of the recording in `state`, ended at `now_ms`, may take: longer
+/// the longer it lasted ([`dictation_stop_timeout`]).
+fn stop_timeout(state: &State, now_ms: u64) -> Duration {
+    dictation_stop_timeout(Duration::from_millis(
+        now_ms.saturating_sub(state.started_ms),
+    ))
+}
+
 /// The session id and what to show, from a `dictation.progress` notification's params
 /// (`{session_id, stage, done, total, audio_seconds}`, stage "transcribing" or "cleaning"). Counts
 /// past `u32::MAX` are clamped; a missing or unusable `audio_seconds` is 0.
@@ -1798,7 +1861,7 @@ mod app {
                 notification = next_notification(&mut notifications) => {
                     let Some(controller) = &controller else { continue };
                     match notification {
-                        Ok(notification) => on_notification(controller, &notification),
+                        Ok(notification) => on_notification(controller, &notification, now_ms()),
                         Err(RecvError::Lagged(missed)) => {
                             // A core.restarted may have been among them.
                             log::warn!("missed {missed} notifications from the core; resetting the dictation");
@@ -1819,7 +1882,7 @@ mod app {
         }
     }
 
-    fn on_notification(controller: &Controller, notification: &Notification) {
+    fn on_notification(controller: &Controller, notification: &Notification, now_ms: u64) {
         match notification.method.as_str() {
             "audio.level" => {
                 if let Some(level) = notification.params.get("level").and_then(Value::as_f64) {
@@ -1827,6 +1890,8 @@ mod app {
                 }
             }
             "dictation.progress" => controller.on_progress(&notification.params),
+            // The task runs by itself, like a key's; nothing waits for it.
+            "dictation.silence" => drop(controller.on_silence(&notification.params, now_ms)),
             CORE_RESTARTED => controller.on_core_restarted(),
             CORE_DOWN => controller.on_core_down(),
             _ => {}
@@ -1879,6 +1944,8 @@ mod tests {
         order: Mutex<Vec<String>>,
         /// Replies to this method wait until the gate is opened.
         gate: Option<(String, Arc<Notify>)>,
+        /// The calls made with a time of their own (`call_within`), and that time.
+        timeouts: Mutex<Vec<(String, Duration)>>,
     }
 
     impl FakeCore {
@@ -1944,6 +2011,32 @@ mod tests {
             }
             let scripted = self.results.lock().unwrap().get(method).cloned();
             scripted.unwrap_or_else(|| Ok(json!({})))
+        }
+
+        async fn call_within(
+            &self,
+            method: &str,
+            params: Value,
+            timeout: Duration,
+        ) -> Result<Value, RpcError> {
+            self.timeouts
+                .lock()
+                .unwrap()
+                .push((method.to_owned(), timeout));
+            self.call(method, params).await
+        }
+    }
+
+    impl FakeCore {
+        /// The time the last `method` call was given, if it was given one.
+        fn timeout(&self, method: &str) -> Option<Duration> {
+            self.timeouts
+                .lock()
+                .unwrap()
+                .iter()
+                .rev()
+                .find(|(m, _)| m == method)
+                .map(|(_, timeout)| *timeout)
         }
     }
 
@@ -6784,5 +6877,250 @@ mod tests {
         run(&c, DictationDown, 0).await;
         settle().await;
         assert_eq!(seen.lock().unwrap().last(), Some(&(Phased::Failed, false)));
+    }
+
+    // ---------- ten seconds of silence stop the recording ----------
+
+    /// The id of the session the core was last asked to start.
+    fn started_id(c: &Ctl) -> String {
+        c.core().call_params("dictation.start")["session_id"]
+            .as_str()
+            .expect("a session id")
+            .to_owned()
+    }
+
+    /// The core's `dictation.silence` for `session`, at `now_ms`; the stop's task is awaited.
+    async fn silence(c: &Ctl, session: &str, now_ms: u64) -> bool {
+        match c.on_silence(&json!({ "session_id": session }), now_ms) {
+            Some(task) => {
+                task.await.unwrap();
+                true
+            }
+            None => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn silence_stops_the_dictation_as_the_key_would_and_pastes_it() {
+        for mode in BOTH_MODES {
+            let c = controller_in(
+                mode,
+                FakeCore::with("dictation.stop", stop_result("明天開會。", None)),
+                FakePaster::pasting("Code.exe"),
+            );
+            run(&c, DictationDown, 0).await;
+            if mode == DictationMode::Toggle {
+                run(&c, DictationUp, 200).await;
+            }
+            let id = started_id(&c);
+            assert!(silence(&c, &id, 12_000).await, "{mode:?}");
+            assert_eq!(c.paster().delivered(), vec!["明天開會。"], "{mode:?}");
+            assert_eq!(
+                c.overlay().events(),
+                vec!["show:listening", "mode:thinking", "hide"],
+                "{mode:?}: the overlay goes as for a stop by the key"
+            );
+            assert_eq!(c.phase(), Phase::Idle, "{mode:?}");
+            assert_eq!(c.cancel().last(), Some(false), "{mode:?}");
+            assert_eq!(c.core().call_params("dictation.stop")["session_id"], id);
+            assert_eq!(
+                c.core().call_params("dictation.stop")["target_app"],
+                "Code.exe"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn after_a_silence_the_keys_start_afresh() {
+        // Hold mode: the key is still down when the silence ends the recording. Its release is
+        // nobody's, and the next press starts a new dictation.
+        let c = controller_in(
+            DictationMode::Hold,
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("Code.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        assert!(silence(&c, &started_id(&c), 10_500).await);
+        run(&c, DictationUp, 11_000).await;
+        assert_eq!(
+            c.core().count("dictation.stop"),
+            1,
+            "the release stops nothing"
+        );
+        run(&c, DictationDown, 12_000).await;
+        assert_eq!(c.phase(), Phase::Recording);
+        assert_eq!(c.core().count("dictation.start"), 2);
+
+        // Toggle mode: the next press is a start, not a stop.
+        let c = controller_in(
+            DictationMode::Toggle,
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("Code.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        run(&c, DictationUp, 200).await;
+        assert!(silence(&c, &started_id(&c), 10_500).await);
+        run(&c, DictationDown, 12_000).await;
+        assert_eq!(c.phase(), Phase::Recording, "a fresh dictation");
+        assert_eq!(c.core().count("dictation.start"), 2);
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        run(&c, DictationUp, 12_200).await;
+        run(&c, DictationDown, 13_000).await;
+        assert_eq!(
+            c.core().count("dictation.stop"),
+            2,
+            "and its own next press stops it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_silence_in_which_nothing_was_said_ends_like_a_stop_that_heard_nothing() {
+        let c = controller(
+            FakeCore::with("dictation.stop", empty_result(false)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        assert!(silence(&c, &started_id(&c), 10_000).await);
+        assert!(c.paster().delivered().is_empty());
+        assert_eq!(c.overlay().events().last().unwrap(), "hide");
+        assert_eq!(c.phase(), Phase::Idle);
+
+        // And a microphone that gave no sound at all says so, as after the key.
+        let c = controller(
+            FakeCore::with("dictation.stop", empty_result(true)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        assert!(silence(&c, &started_id(&c), 10_000).await);
+        assert!(c.paster().delivered().is_empty());
+        assert_eq!(c.overlay().events().last().unwrap(), &notice(NO_SOUND.zh));
+    }
+
+    #[tokio::test]
+    async fn a_silence_of_another_session_is_ignored() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        // Nothing is recording.
+        assert!(!silence(&c, "old", 1_000).await);
+        run(&c, DictationDown, 2_000).await;
+        // Not the session that is recording: one that was cancelled, or from before a restart.
+        assert!(!silence(&c, "old", 12_000).await);
+        // Nor a notification without a session.
+        assert!(c.on_silence(&json!({}), 12_000).is_none());
+        assert!(c.on_silence(&json!({ "session_id": 7 }), 12_000).is_none());
+        assert_eq!(c.phase(), Phase::Recording);
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        // The key still stops it.
+        let id = started_id(&c);
+        run(&c, DictationUp, 13_000).await;
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        // A silence that comes after the stop is the stopped session's: nothing to do.
+        assert!(!silence(&c, &id, 13_100).await);
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        assert_eq!(c.paster().delivered(), vec!["好"]);
+    }
+
+    #[tokio::test]
+    async fn a_silence_while_the_stop_is_under_way_changes_nothing() {
+        let (core, gate) =
+            FakeCore::with("dictation.stop", stop_result("好", None)).gated("dictation.stop");
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        run(&c, DictationDown, 0).await;
+        let id = started_id(&c);
+        let stopping = c
+            .on_hotkey(DictationUp, 9_000)
+            .expect("the stop runs in a task");
+        settle().await;
+        assert!(
+            !silence(&c, &id, 10_000).await,
+            "the session is no longer recording"
+        );
+        gate.notify_one();
+        stopping.await.unwrap();
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        assert_eq!(c.paster().delivered(), vec!["好"]);
+    }
+
+    #[tokio::test]
+    async fn a_silence_after_esc_is_ignored() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        let id = started_id(&c);
+        run(&c, Cancel, 5_000).await;
+        assert!(!silence(&c, &id, 10_000).await);
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        assert!(c.paster().delivered().is_empty());
+    }
+
+    #[tokio::test]
+    async fn silence_ends_a_question_to_raphael_too() {
+        for mode in BOTH_MODES {
+            let c = controller_in(
+                mode,
+                agent_core(answer("答", "已複製。")),
+                FakePaster::pasting("chrome.exe"),
+            );
+            run(&c, AgentDown, 0).await;
+            if mode == DictationMode::Toggle {
+                run(&c, AgentUp, 200).await;
+            }
+            let id = started_id(&c);
+            assert!(silence(&c, &id, 10_000).await, "{mode:?}");
+            assert_eq!(c.core().call_params("dictation.stop")["session_id"], id);
+            assert_eq!(c.core().call_params("agent.ask")["text"], "幫我複製這句話");
+            assert_eq!(
+                c.overlay().events().last().unwrap(),
+                "say:答|已複製。",
+                "{mode:?}"
+            );
+            assert!(
+                c.paster().delivered().is_empty(),
+                "a question pastes nothing"
+            );
+            // The agent key's release, or its next press, starts nothing it should not.
+            match mode {
+                DictationMode::Hold => run(&c, AgentUp, 11_000).await,
+                DictationMode::Toggle => {}
+            }
+            assert_eq!(c.core().count("dictation.stop"), 1, "{mode:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_stop_of_a_long_recording_is_given_longer() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, DictationDown, 1_000).await;
+        run(&c, DictationUp, 2_000).await;
+        assert_eq!(
+            c.core().timeout("dictation.stop"),
+            Some(dictation_stop_timeout(Duration::from_secs(1)))
+        );
+        // An hour of dictation, ended by its silence.
+        run(&c, DictationDown, 10_000).await;
+        assert!(silence(&c, &started_id(&c), 10_000 + 3_600_000).await);
+        assert_eq!(
+            c.core().timeout("dictation.stop"),
+            Some(dictation_stop_timeout(Duration::from_secs(3600)))
+        );
+        assert!(
+            c.core().timeout("dictation.stop").unwrap() > Duration::from_secs(10 + 3600 / 3),
+            "room for the cleanup of an hour of speech"
+        );
+        // A question is given the same.
+        let c = agent(answer("答", "好。"));
+        run(&c, AgentDown, 0).await;
+        run(&c, AgentUp, 600_000).await;
+        assert_eq!(
+            c.core().timeout("dictation.stop"),
+            Some(dictation_stop_timeout(Duration::from_secs(600)))
+        );
     }
 }
