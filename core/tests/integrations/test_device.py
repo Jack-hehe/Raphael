@@ -124,6 +124,14 @@ async def test_a_code_nobody_uses_runs_out_by_itself():
     assert failure.value.kind == "timeout"
 
 
+async def test_a_code_that_claims_to_last_longer_is_cut_to_the_deadline_of_the_call():
+    fake = FakeGitHub([err("authorization_pending")], interval=5, expires_in=3600)
+    clock = Clock()
+    with pytest.raises(McpFailure) as failure:
+        await run(fake, clock)
+    assert failure.value.kind == "timeout" and sum(clock.slept) <= 900
+
+
 async def test_a_refusal_is_denied():
     with pytest.raises(McpFailure) as failure:
         await run(FakeGitHub([err("authorization_pending"), err("access_denied")]))

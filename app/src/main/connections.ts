@@ -941,7 +941,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     search = "";
     tab = "installed";
     loginError = null;
-    device = null;
+    // the code stays: the login still waits for it in the core, which does not send it again
     loads++;
   }
 

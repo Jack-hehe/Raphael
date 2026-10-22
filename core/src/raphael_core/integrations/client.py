@@ -339,7 +339,7 @@ class McpConnector:
 
     async def _device_login(self, server: ServerConfig, on_code: Any) -> LoginResult:
         from . import catalog
-        from .device import device_login
+        from .device import TOTAL_S, device_login
 
         entry = catalog.find(server.catalog_id)
         if entry is None or entry.device is None or on_code is None:
@@ -347,7 +347,8 @@ class McpConnector:
         access = self._oauth(server)
         try:
             access.storage.forget()
-            token = await device_login(entry.device, on_code, **self._device_http)
+            async with asyncio.timeout(TOTAL_S):
+                token = await device_login(entry.device, on_code, **self._device_http)
             await self._ready()
             from mcp.shared.auth import OAuthToken
 

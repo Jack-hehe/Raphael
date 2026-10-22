@@ -35,6 +35,10 @@ GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 DEFAULT_INTERVAL_S = 5
 SLOW_DOWN_S = 5
 DEFAULT_EXPIRES_S = 900
+# The longest a code is waited for, whatever the service says: the call of the window to the core
+# waits a little longer than this (core_process.rs `timeout_for`), so the core ends the login first.
+MAX_EXPIRES_S = 900
+TOTAL_S = MAX_EXPIRES_S + 30
 REQUEST_TIMEOUT_S = 15.0
 
 
@@ -93,15 +97,15 @@ async def device_login(
             raise McpFailure("auth" if "error" in issued else "protocol")
         if not isinstance(uri, str) or urlsplit(uri).scheme != "https":
             raise McpFailure("protocol")  # the window opens this address: https only
-        expires_in = _number(issued.get("expires_in"), DEFAULT_EXPIRES_S)
+        expires_in = min(_number(issued.get("expires_in"), DEFAULT_EXPIRES_S), MAX_EXPIRES_S)
         interval = _number(issued.get("interval"), DEFAULT_INTERVAL_S)
         await on_code(DeviceCode(user_code, uri, expires_in))
         waited = 0
         while True:
+            if waited + interval > expires_in:
+                raise McpFailure("timeout")
             await sleep(interval)
             waited += interval
-            if waited > expires_in:
-                raise McpFailure("timeout")
             answer = await _post(
                 http,
                 login.token_endpoint,

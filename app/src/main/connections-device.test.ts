@@ -129,6 +129,15 @@ describe("the code of a device login", () => {
     expect(connectionsHTML(c.view())).not.toContain("WDJB");
   });
 
+  test("leaving the tab keeps the code while the login is still waiting", async () => {
+    const { c } = await waitingForCode();
+    c.followEvent(code);
+    c.reset();
+    expect(c.view().login).not.toBeNull();
+    expect(c.view().device?.user_code).toBe("WDJB-MJHT");
+    expect(connectionsHTML(c.view())).toContain("WDJB");
+  });
+
   test("cancelling asks the core to end the wait", async () => {
     const { c } = await waitingForCode();
     c.followEvent(code);
