@@ -142,6 +142,23 @@ def join_segments(texts: Sequence[str]) -> str:
     return joined
 
 
+async def dictionary_hints(call: Callable[[str, dict], Any]) -> list[str]:
+    """The user's dictionary words as hints for an engine (see `DictationService._hints`); `call`
+    is how the brain is reached, `router.call`. Empty when the dictionary cannot be read."""
+    try:
+        result = await call("dictionary.list", {})
+        chosen: list[str] = []
+        learned: list[str] = []
+        for entry in result["entries"]:
+            word = entry.get("word")
+            if isinstance(word, str) and word.strip():
+                (learned if entry.get("source") == "learned" else chosen).append(word)
+    except Exception as exc:
+        logger.warning("Could not read the dictionary; dictating without hints: %s", exc)
+        return []
+    return chosen + learned
+
+
 class _Session:
     """One dictation, from `dictation.start` to the end of `dictation.stop` or `.cancel`."""
 
@@ -403,18 +420,7 @@ class DictationService:
         `languages` setting only chooses how the text is written (raphael_core.languages), which
         is the brain's work.
         """
-        try:
-            result = await self._router.call("dictionary.list", {})
-            chosen: list[str] = []
-            learned: list[str] = []
-            for entry in result["entries"]:
-                word = entry.get("word")
-                if isinstance(word, str) and word.strip():
-                    (learned if entry.get("source") == "learned" else chosen).append(word)
-        except Exception as exc:
-            logger.warning("Could not read the dictionary; dictating without hints: %s", exc)
-            return []
-        return chosen + learned
+        return await dictionary_hints(self._router.call)
 
     async def _wait_for_retired(self, segmenter: SegmenterLike) -> None:
         """A segmenter is used by one thread at a time: wait for a cancelled session that still has

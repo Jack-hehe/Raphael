@@ -27,8 +27,10 @@ hiddenimports = [
     "raphael_core.worker.runner",
     "keyring.backends.Windows", "keyring.backends.fail", "keyring.backends.null",
     "opencc.clib.opencc_clib", "sherpa_onnx.lib._sherpa_onnx",
+    # soundfile (the audio decoder of voice messages) loads libsndfile from _soundfile_data.
+    "_soundfile",
 ]
-for package in ("sherpa_onnx", "numpy", "soxr", "opencc"):
+for package in ("sherpa_onnx", "numpy", "soxr", "opencc", "_soundfile_data"):
     binaries += collect_dynamic_libs(package)
 for package in ("soxr", "win32ctypes"):
     hiddenimports += collect_submodules(package, filter=lambda name: "tests" not in name.split("."))

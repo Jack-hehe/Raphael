@@ -15,6 +15,7 @@ dependencies = [
     # does not, so it is pinned here. Without it Windows loads its own onnxruntime.dll and crashes.
     "sherpa-onnx-core==1.13.8",
     "sounddevice==0.5.6",
+    "soundfile==0.14.0",
     "soxr>=1.1",
 ]
 

@@ -82,7 +82,7 @@ from .integrations.service import IntegrationsService
 from .integrations.vault import CredentialVault, MemoryVault, SecretVault
 from .messaging.config import MessagingStore
 from .messaging.service import MessagingService
-from .messaging.telegram import SESSION_PREFIX, compose, words
+from .messaging.words import compose, words
 from .protocol import (
     BUSY,
     INVALID_PARAMS,
@@ -753,6 +753,7 @@ class App(Router):
             self.vault,
             ask=self._ask_from_messaging,
             stop=self._stop_from_messaging,
+            transcribe=self._transcribe_from_messaging,
             language=lambda: self.agent.language,
         )
         self.messaging.register(self)
@@ -1056,12 +1057,14 @@ class App(Router):
 
     # --- core -----------------------------------------------------------------------------------
 
-    async def _ask_from_messaging(self, session_id: str, text: str, language: str) -> str:
+    async def _ask_from_messaging(
+        self, session_id: str, text: str, language: str, source: str
+    ) -> str:
         """A message from a messaging app, through the same entry as a spoken question. Whatever
         needs a yes is refused on the spot: a yes is given at this computer, never from a message."""
         reply = await self.call(
             "agent.ask",
-            {"session_id": session_id, "text": text, "ui_language": language, "source": "telegram"},
+            {"session_id": session_id, "text": text, "ui_language": language, "source": source},
         )
         if reply.get("status") == "confirm":
             question = reply["confirm"]
@@ -1074,6 +1077,35 @@ class App(Router):
             turn = self.agent.turn(turn_id)
             detail = None if turn is None else turn.detail
         return compose(reply.get("prefix", ""), reply.get("text", ""), detail)
+
+    async def _transcribe_from_messaging(self, audio: bytes, language: str) -> str:
+        """The words of a voice message, heard by the engine that dictation uses (the cloud with
+        the local one behind it, or the local one), with the user's dictionary and the same
+        normalising. The audio stays in memory."""
+        from .device.dictation import dictionary_hints  # numpy: after the start-up
+        from .messaging import voice
+
+        await self._read_stt_engine()
+        hints = await dictionary_hints(self.call)
+        cloud = self._stt_engine == "cloud"
+
+        def hear() -> str:
+            samples = voice.decode(audio)
+            engine = self._dictation_engine()
+            path = self.manager.dir(VAD_MODEL) / REGISTRY[VAD_MODEL].files[0]
+            seconds = CLOUD_SEGMENT_SECONDS if cloud else DICTATION_SEGMENT_SECONDS
+            segmenter = self._kit.result().Segmenter(path, max_segment_s=seconds)
+            return voice.transcribe_clip(samples, engine, segmenter, hints)
+
+        heard = await asyncio.to_thread(hear)
+        if not heard.strip():
+            return ""
+        try:
+            text = (await self.call("brain.normalize_transcript", {"raw_text": heard}))["text"]
+            return text if isinstance(text, str) else heard
+        except Exception as exc:
+            logger.warning("Could not normalize a voice message: %s", type(exc).__name__)
+            return heard
 
     async def _stop_from_messaging(self, session_id: str) -> bool:
         """Stop what this chat has under way: a request that still thinks and its background
@@ -1088,7 +1120,7 @@ class App(Router):
         if method != "worker.report" or type(params.get("task_id")) is not int:
             return
         task = self.background.task(params["task_id"])
-        if task is None or not task.session_id.startswith(SESSION_PREFIX):
+        if task is None or not self.messaging.handles(task.session_id):
             return
         if task.report_text is None:
             return

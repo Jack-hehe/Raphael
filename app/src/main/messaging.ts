@@ -29,7 +29,7 @@ export interface TelegramStatus {
   /** Why the latest poll failed: unauthorized, network, conflict, rate_limited. */
   error: string | null;
   bot: { username: string | null } | null;
-  allowed: { user_id: number; name: string }[];
+  allowed: { user_id: string; name: string }[];
   pending: { code: string; name: string; expires_in_s: number }[];
 }
 
@@ -297,7 +297,7 @@ export function createMessaging(host: MessagingHost): Messaging {
         void act(() => api.telegramReject(button.dataset.code ?? ""));
         return true;
       case "remove":
-        void act(() => api.telegramRemoveUser(Number(button.dataset.user)));
+        void act(() => api.telegramRemoveUser(button.dataset.user ?? ""));
         return true;
       case "disconnect":
         if (!confirming) {

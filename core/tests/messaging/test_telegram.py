@@ -9,21 +9,20 @@ import httpx
 import pytest
 
 from raphael_core.integrations.vault import MemoryVault
-from raphael_core.messaging import telegram
-from raphael_core.messaging.config import MessagingStore
-from raphael_core.messaging.service import TOKEN_SECRET, MessagingService
-from raphael_core.messaging.telegram import (
-    Pairing,
-    TelegramApi,
-    TelegramGateway,
-    compose,
-    split_message,
-)
+from raphael_core.messaging.channels import telegram
+from raphael_core.messaging.channels.base import ChannelError
+from raphael_core.messaging.channels.telegram import TelegramApi, TelegramChannel, split_message
+from raphael_core.messaging.config import AllowedUser, MessagingStore
+from raphael_core.messaging.core import Switchboard
+from raphael_core.messaging.pairing import Pairing
+from raphael_core.messaging.service import MessagingService, secret_name
+from raphael_core.messaging.words import compose
 from raphael_core.protocol import RpcError
 from raphael_core.router import Router
 
 TOKEN = "123456:ABCdefGhIjKlMnOpQrStUvWxYz0123456789"
 OWNER = 111
+TOKEN_SECRET = secret_name("telegram", "bot_token")
 
 
 class FakeTelegram:
@@ -94,11 +93,13 @@ async def settle(predicate, tries=200):
     raise AssertionError("did not happen")
 
 
-def make_gateway(fake, http, *, allowed=(OWNER,), answer="《答》好", stopped=True, sleep=None):
-    asked: list[tuple[str, str, str]] = []
+def make_gateway(
+    fake, http, *, allowed=(OWNER,), answer="《答》好", stopped=True, sleep=None, transcribe=None
+):
+    asked: list[tuple[str, str, str, str]] = []
 
-    async def ask(session, text, language):
-        asked.append((session, text, language))
+    async def ask(session, text, language, source):
+        asked.append((session, text, language, source))
         return answer
 
     stops: list[str] = []
@@ -110,15 +111,18 @@ def make_gateway(fake, http, *, allowed=(OWNER,), answer="《答》好", stopped
     async def nap(seconds):
         await asyncio.sleep(0)
 
-    gateway = TelegramGateway(
-        TelegramApi(TOKEN, http),
+    channel = TelegramChannel(TelegramApi(TOKEN, http), sleep=sleep or nap)
+    users = {str(user) for user in allowed}
+    gateway = Switchboard(
+        channel,
         ask=ask,
         stop=stop,
-        is_allowed=lambda user_id: user_id in allowed,
+        is_allowed=users.__contains__,
+        chat_allowed=users.__contains__,
         language=lambda: "en",
-        sleep=sleep or nap,
+        transcribe=transcribe,
     )
-    gateway.asked, gateway.stops = asked, stops
+    gateway.asked, gateway.stops, gateway.channel = asked, stops, channel
     return gateway
 
 
@@ -168,34 +172,34 @@ def test_compose_adds_detail_only_when_it_says_more():
 
 def test_a_code_is_six_characters_and_told_once_per_user():
     pairing = Pairing()
-    code = pairing.issue(1, 1, "Ann")
+    code = pairing.issue("1", "1", "Ann")
     assert code is not None and len(code) == 6
-    assert pairing.issue(1, 1, "Ann") is None
-    assert pairing.issue(2, 2, "Bo") != code
+    assert pairing.issue("1", "1", "Ann") is None
+    assert pairing.issue("2", "2", "Bo") != code
 
 
 def test_a_code_expires_after_ten_minutes():
     now = [0.0]
     pairing = Pairing(clock=lambda: now[0])
-    code = pairing.issue(1, 1, "Ann")
+    code = pairing.issue("1", "1", "Ann")
     now[0] = 599
     assert [p.code for p, _ in pairing.pending()] == [code]
     now[0] = 601
     assert pairing.pending() == []
     assert pairing.take(code) is None
-    assert pairing.issue(1, 1, "Ann") is not None  # may ask again
+    assert pairing.issue("1", "1", "Ann") is not None  # may ask again
 
 
 def test_take_ignores_case_and_spaces():
     pairing = Pairing()
-    code = pairing.issue(1, 1, "Ann")
-    assert pairing.take(f" {code.lower()} ").user_id == 1
+    code = pairing.issue("1", "1", "Ann")
+    assert pairing.take(f" {code.lower()} ").user == "1"
 
 
 def test_only_ten_codes_wait_at_once():
     pairing = Pairing()
-    assert all(pairing.issue(i, i, "") for i in range(10))
-    assert pairing.issue(99, 99, "") is None
+    assert all(pairing.issue(str(i), str(i), "") for i in range(10))
+    assert pairing.issue("99", "99", "") is None
 
 
 # --- the gateway ---
@@ -220,8 +224,8 @@ async def test_an_allowed_user_is_answered_with_a_stable_session(fake, http):
     gateway = make_gateway(fake, http)
     await run_until(gateway, lambda: len(fake.sent) == 2)
     assert gateway.asked == [
-        (f"telegram:{OWNER}", "what time is it", "en"),
-        (f"telegram:{OWNER}", "and the weather", "en"),
+        (f"telegram:{OWNER}", "what time is it", "en", "telegram"),
+        (f"telegram:{OWNER}", "and the weather", "en", "telegram"),
     ]
     assert fake.sent == [(OWNER, "《答》好")] * 2
 
@@ -230,7 +234,7 @@ async def test_typing_is_shown_while_the_assistant_works(fake, http):
     release = asyncio.Event()
     gateway = make_gateway(fake, http)
 
-    async def slow(session, text, language):
+    async def slow(session, text, language, source):
         await release.wait()
         return "done"
 
@@ -266,7 +270,7 @@ async def test_groups_and_bots_are_ignored(fake, http):
         }
     )
     gateway = make_gateway(fake, http, allowed=(OWNER, 8))
-    await run_until(gateway, lambda: gateway._offset == 51)
+    await run_until(gateway, lambda: gateway.channel._offset == 51)
     await asyncio.sleep(0.05)
     assert fake.sent == [] and gateway.asked == []
 
@@ -333,9 +337,9 @@ async def test_a_revoked_token_ends_the_polling(fake, http):
 
 
 async def test_removing_a_user_takes_effect_at_once(fake, http):
-    allowed = {OWNER}
+    allowed = {str(OWNER)}
     gateway = make_gateway(fake, http)
-    gateway._is_allowed = allowed.__contains__
+    gateway._is_allowed = lambda user: user in allowed
     fake.message(OWNER, "first")
     task = asyncio.ensure_future(gateway.run())
     await settle(lambda: fake.sent)
@@ -362,7 +366,7 @@ async def test_a_network_failure_does_not_leak_the_token():
         raise httpx.ConnectError("cannot reach " + str(request.url))
 
     api = TelegramApi(TOKEN, httpx.AsyncClient(transport=httpx.MockTransport(refuse)))
-    with pytest.raises(telegram.TelegramError) as caught:
+    with pytest.raises(ChannelError) as caught:
         await api.get_me()
     assert TOKEN not in str(caught.value) and caught.value.__cause__ is None
 
@@ -381,7 +385,7 @@ def rig(tmp_path, fake, http):
     vault = MemoryVault()
     asked = []
 
-    async def ask(session, text, language):
+    async def ask(session, text, language, source):
         asked.append(text)
         return "ok"
 
@@ -435,13 +439,13 @@ async def test_pairing_flow_from_stranger_to_allowed_user(rig, fake):
     assert status["pending"][0]["name"] == "Ann" and code in fake.sent[0][1]
     approved = await rig.call("approve", code=code.lower())
     assert approved["approved"] is True
-    assert approved["status"]["allowed"] == [{"user_id": 555, "name": "Ann"}]
+    assert approved["status"]["allowed"] == [{"user_id": "555", "name": "Ann"}]
     assert approved["status"]["pending"] == []
     await settle(lambda: len(fake.sent) == 2)  # the welcome
     fake.message(555, "now talk")
     await settle(lambda: len(fake.sent) == 3)
     # the allowlist is on disk and survives a restart
-    assert MessagingStore(rig.dir).load().allowed[0].user_id == 555
+    assert MessagingStore(rig.dir).load().channel("telegram").allowed[0].user_id == "555"
     await rig.service.aclose()
 
 
@@ -475,14 +479,12 @@ async def test_a_telegram_message_cannot_approve_a_pairing(rig, fake):
 
 async def test_remove_user_and_switch_off_and_on(rig, fake):
     await rig.call("connect", token=TOKEN)
-    rig.service._config.allowed.append(
-        __import__("raphael_core.messaging.config", fromlist=["AllowedUser"]).AllowedUser(OWNER, "O")
-    )
+    rig.service._config.channel("telegram").allowed.append(AllowedUser(str(OWNER), "O"))
     off = await rig.call("set_enabled", enabled=False)
     assert off["enabled"] is False and off["running"] is False
     on = await rig.call("set_enabled", enabled=True)
     assert on["running"] is True
-    removed = await rig.call("remove_user", user_id=OWNER)
+    removed = await rig.call("remove_user", user_id=str(OWNER))
     assert removed["allowed"] == []
     await rig.service.aclose()
 
@@ -492,7 +494,7 @@ async def test_disconnect_deletes_the_token_and_the_allowlist(rig, fake):
     status = await rig.call("disconnect")
     assert status["connected"] is False and status["running"] is False
     assert rig.vault.names() == []
-    assert MessagingStore(rig.dir).load().connected is False
+    assert MessagingStore(rig.dir).load().channel("telegram").connected is False
 
 
 async def test_enabling_without_a_bot_is_refused(rig):
@@ -508,15 +510,13 @@ async def test_a_bot_left_on_polls_again_after_a_restart(rig, fake, http):
         language=lambda: "en", http=http,
     )
     again.start()
-    assert (await again._status({}))["running"] is True
+    assert (await again._status("telegram", {}))["running"] is True
     await again.aclose()
 
 
 async def test_a_background_report_goes_to_its_chat_only_if_allowed(rig, fake):
-    from raphael_core.messaging.config import AllowedUser
-
     await rig.call("connect", token=TOKEN)
-    rig.service._config.allowed.append(AllowedUser(OWNER, "O"))
+    rig.service._config.channel("telegram").allowed.append(AllowedUser(str(OWNER), "O"))
     await rig.service.report(f"telegram:{OWNER}", "《告》done")
     await rig.service.report("telegram:555", "leak")
     await rig.service.report("overlay-1", "leak")
