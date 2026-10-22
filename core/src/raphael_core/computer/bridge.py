@@ -15,7 +15,7 @@ arguments again:
 - `look {window}` → a snapshot of one window (`snapshot.parse_snapshot`);
 - `act {window, element, action, text, keys, direction, confirmed}` → `{method}`: one step
   (`confirmed` when the owner said yes to it: only then does the shell type a line break, as
-  Enter);
+  Enter, or press a key that deletes what is selected where the focus is no text field);
 - `focus {window}` → `{}`: the window is brought to the front;
 - `allow {exe, name}` → `{}`: the app joins the always-allowed list of the device settings.
 
@@ -34,8 +34,11 @@ everything it presses, clicks or sets), and one for a run that is not the shell'
 A failure is `BridgeError` with one word: the shell's own (`gone`, `stale`, `password`,
 `elevated`, `refused_app`, `own_window`, `bad_request`, `failed`, `keys_not_allowed`, `stopped`:
 the run is over for the shell, `handoff`: the element the keys or the text would reach is a
-sign-in, a payment or a code), or `unavailable` (no shell to ask, or it did not answer in time). Nothing here logs an argument or a
-result: they hold what is on the owner's screen.
+sign-in, a payment or a code, `focus`: the element named could not be given the keyboard focus,
+or the live focus is elsewhere, so nothing was pressed, `unconfirmed`: keys that delete what is
+selected would reach no text field, in a step the owner did not say yes to), or `unavailable` (no
+shell to ask, or it did not answer in time). Nothing here logs an argument or a result: they hold
+what is on the owner's screen.
 """
 
 import asyncio
@@ -70,6 +73,8 @@ KINDS = frozenset(
         "bad_request",
         "failed",
         "keys_not_allowed",
+        "focus",
+        "unconfirmed",
         REVOKED,
         HANDOFF,
         UNAVAILABLE,

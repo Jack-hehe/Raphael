@@ -502,3 +502,62 @@ async def test_a_step_that_could_not_be_looked_at_after_is_never_taken(make_run,
     _, final = await drive(run)
     assert final.kind == "limit"
     assert "act" not in shell.ops() and run.looks == 1
+
+
+# --- keys that delete what is selected, and a focus the keys could not be sure of -------------------
+
+EXPLORER = [
+    element(1, "Window", "Downloads - File Explorer", depth=0, actions=[]),
+    element(2, "List", "Items View", actions=["scroll"]),
+    element(3, "ListItem", "report.docx", depth=2, focused=True, state="selected", actions=["select", "invoke"]),
+    element(4, "Edit", "Search Downloads", actions=["value"]),
+]
+
+
+@pytest.mark.parametrize("approved", [True, False])
+async def test_delete_on_a_selected_file_asks_first(make_run, shell, approved):
+    answering(shell, always=True, look=calculator(elements=EXPLORER))
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, action="keys", keys="delete", final=False)),
+        reply(content="已刪除。"),
+    )
+    asked, final = await drive(make_run(model), [(approved, False)])
+    assert [q.text for q in asked] == ["是否按下 Delete？"]
+    acts = [args for op, args in shell.requests if op == "act"]
+    if approved:
+        assert acts == [{"window": 7, "element": None, "action": "keys", "keys": "Delete", "confirmed": True}]
+    else:
+        assert acts == [] and final.status == "denied"
+
+
+async def test_delete_in_a_text_field_runs_by_itself(make_run, shell):
+    answering(shell, always=True, look=calculator(elements=EXPLORER))
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, element=4, action="keys", keys="delete", final=False)),
+        reply(content="已清除。"),
+    )
+    asked, _ = await drive(make_run(model))
+    assert asked == []
+    assert dict(shell.requests)["act"] == {"window": 7, "element": 4, "action": "keys", "keys": "Delete"}
+
+
+@pytest.mark.parametrize("kind, told", [
+    ("focus", "could not be given the keyboard focus"),
+    ("unconfirmed", "needs the owner's yes"),
+])  # fmt: skip
+async def test_the_shell_refusing_keys_it_cannot_be_sure_of_tells_the_model_why(make_run, shell, kind, told):
+    answering(shell, always=True, act=kind)
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, element=3, action="keys", keys="enter", final=False)),
+        reply(content="無法完成。"),
+    )
+    _, final = await drive(make_run(model))
+    # the run goes on: the model is told why, and looks again
+    assert told in everything_the_model_saw(model)
+    assert final.status == "done"

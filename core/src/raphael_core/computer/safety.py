@@ -9,9 +9,10 @@ about the element it named (`snapshot.Element`):
   run stops and the owner is told the step is theirs.
 - **Confirm** (`CONFIRM`, T2): a step that sends, submits, publishes, deletes, buys or orders. The
   model declares it (`final` on `computer_act`); the element's name (clicked, or pressed with Enter
-  or Space), a key chord that sends (Ctrl+Enter) or deletes for good (Shift+Delete), Enter in a
-  message box and a line break in typed text (which the shell presses as Enter) say it too. Any one
-  of them is enough: the owner is asked every time.
+  or Space), a key chord that sends (Ctrl+Enter) or deletes for good (Shift+Delete), a key that
+  deletes what is selected away from a text field (`deletes_items`: Delete in File Explorer or a
+  mail list), Enter in a message box and a line break in typed text (which the shell presses as
+  Enter) say it too. Any one of them is enough: the owner is asked every time.
 - **Keys** (`check_keys`): the chords a step may press, from an allowlist. No Windows key at all
   (Win+L, Win+R...), nothing that switches or closes windows (Alt+Tab, Alt+F4), nothing of the
   system's (Ctrl+Alt+Del, Ctrl+Shift+Esc, Ctrl+Esc), and no bare letters: typing is `type`. The
@@ -112,6 +113,19 @@ def is_message_box(name: str, role: str) -> bool:
     return role in _TEXT_ROLES and _names(name, _MESSAGE_WORDS, _MESSAGE_CJK)
 
 
+def edits_text(role: str, actions: Iterable[str]) -> bool:
+    """Whether an element is a field whose text Delete and Backspace only edit: an Edit or a
+    Document whose value can be set (`value` among its actions, which the shell gives only for a
+    Value pattern that is not read only).
+
+    A Document with no value to set is no such field: a mail's reading pane or a web page, where
+    Delete deletes the mail or the item the page has selected. A rich editor that only has the Text
+    pattern (a Word document) is not one either, as far as this can tell: Delete there asks first,
+    which costs a question and nothing else. The shell tells a text field apart the same way, on
+    the live element with the focus."""
+    return role in _TEXT_ROLES and "value" in actions
+
+
 # --- the keys a step may press ---------------------------------------------------------------------
 
 MODIFIERS = ("ctrl", "shift", "alt")
@@ -132,10 +146,13 @@ _WINDOWS_KEYS = frozenset({"win", "windows", "meta", "super", "cmd", "command", 
 # Keys that, with Alt or Ctrl among the modifiers, switch or close windows or open the system's own
 # (Alt+Tab, Alt+F4, Alt+Space, Ctrl+Esc, Ctrl+Shift+Esc, Ctrl+F4): never pressed.
 _SYSTEM_WITH = {"tab": {"alt"}, "f4": {"alt", "ctrl"}, "escape": {"alt", "ctrl"}, "space": {"alt"}}
-# Chords that send (Ctrl+Enter in a mail or a chat) or delete for good (Shift+Delete).
+# Chords that send (Ctrl+Enter in a mail or a chat) or delete for good (Shift+Delete), wherever
+# they are pressed.
 _CONFIRM_CHORDS = frozenset(
     {("ctrl", "enter"), ("ctrl", "shift", "enter"), ("alt", "s"), ("shift", "delete")}
 )
+# Ctrl+D deletes the selected file in File Explorer and the selected item in Outlook.
+_DELETE_CHORDS = frozenset({("ctrl", "d")})
 MAX_CHORD_CHARS = 40
 
 
@@ -190,6 +207,21 @@ def confirm_by_keys(chord: tuple[str, ...]) -> bool:
     return tuple(chord) in _CONFIRM_CHORDS
 
 
+def deletes_items(chord: tuple[str, ...]) -> bool:
+    """Whether pressing `chord` away from a text field may delete what is selected there: Delete
+    or Backspace with any modifiers but Alt (a file in File Explorer, a mail in a list, a row, a
+    slide; Backspace deletes in some of them too), and Ctrl+D alone (File Explorer, Outlook). In a
+    field whose text can be edited they only edit it (`edits_text`). Alt with either is left out:
+    it undoes, or opens an app's menu.
+
+    The shell keeps the same rule (`Chord::deletes_items` in `app/src-tauri/src/computer/keys.rs`)
+    and refuses such keys on a live focus that is no text field, unless the owner said yes."""
+    *mods, key = chord
+    if key in ("delete", "backspace"):
+        return "alt" not in mods
+    return tuple(chord) in _DELETE_CHORDS
+
+
 # --- one step, judged ------------------------------------------------------------------------------
 
 # What breaks a line, as `str.splitlines` reads it: the shell types a line break as Enter, and an
@@ -213,31 +245,40 @@ def judge(
     name: str = "",
     role: str = "",
     password: bool = False,
+    actions: Iterable[str] = (),
     chord: tuple[str, ...] | None = None,
     text: str = "",
     focused_name: str = "",
     focused_role: str = "",
     focused_password: bool = False,
+    focused_actions: Iterable[str] = (),
 ) -> str | None:
     """What a step needs before it is taken: `HANDOFF` (the owner's), `CONFIRM` (a yes first) or
     None (it runs).
 
     `action` is the step ("click", "type", "keys", "scroll", "focus"), `declared_final` whether the
     model said it sends, submits, deletes or buys, `chord` the keys it presses and `text` what it
-    types. `name`, `role` and `password` are what the latest snapshot said about the element it
-    acts on (empty for a step on no element); the `focused_*` ones about the element that has the
-    keyboard focus, which keys and typing reach when no element is named.
+    types. `name`, `role`, `password` and `actions` are what the latest snapshot said about the
+    element it acts on (empty for a step on no element); the `focused_*` ones about the element
+    that has the keyboard focus, which keys and typing reach when no element is named.
 
     Keys and typing are judged by the element they reach: the one named (the shell gives it the
     focus first), else the one with the focus. A sign-in, a payment or a code there is the
     owner's whatever the keys, except the ones that only move away from it (Tab, Shift+Tab, Esc);
     Enter or Space on a button that sends, deletes or buys asks first, as a click on it would, and
-    so does Enter in a message box. A line break in typed text is pressed as Enter, so it asks
-    first wherever it is typed: the field may be a chat's, or a form's that Enter submits. (The
-    shell checks the live element with the focus once more before it presses anything, and types
-    no line break that was not asked about.)
+    so does Enter in a message box. A key that deletes what is selected (`deletes_items`) asks
+    first unless what it reaches is a field whose text it only edits (`edits_text`); when the
+    snapshot holds no element with the focus, nothing says it is one. A line break in typed text is
+    pressed as Enter, so it asks first wherever it is typed: the field may be a chat's, or a form's
+    that Enter submits. (The shell checks the live element with the focus once more before it
+    presses anything: it must be the element named, if one is, and no deleting key reaches
+    anything but a text field without the owner's yes. It types no line break that was not asked
+    about.)
     """
-    target_name, target_role = (name, role) if name else (focused_name, focused_role)
+    if name:
+        target_name, target_role, target_actions = name, role, frozenset(actions)
+    else:
+        target_name, target_role, target_actions = focused_name, focused_role, frozenset(focused_actions)
     if password or (action in ("type", "keys") and focused_password and not name):
         return HANDOFF
     if action == "click" and name and handoff_by_name(name):
@@ -258,5 +299,7 @@ def judge(
         if chord in _PRESS and target_name and confirm_by_name(target_name):
             return CONFIRM
         if chord == ("enter",) and is_message_box(target_name, target_role):
+            return CONFIRM
+        if deletes_items(chord) and not edits_text(target_role, target_actions):
             return CONFIRM
     return None

@@ -743,6 +743,15 @@ class ComputerRun:
             "own_window": "That window is Raphael's own and cannot be operated.",
             "keys_not_allowed": "Those keys may not be pressed.",
             "bad_request": BAD_ARGUMENTS,
+            "focus": (
+                "The element could not be given the keyboard focus, so nothing was pressed or "
+                "typed. Look at the window again, and name the element that takes the keys (a "
+                "field, not the label or the pane around it), or none for the one with the focus."
+            ),
+            "unconfirmed": (
+                "Those keys would delete what is selected there, which needs the owner's yes. "
+                "Look at the window again, and take the step with final set to true."
+            ),
         }.get(error.kind, "The step failed.")
         return wrap_untrusted(name, told, ok=False)
 
@@ -796,11 +805,13 @@ class ComputerRun:
             name="" if element is None else element.name,
             role="" if element is None else element.role,
             password=element is not None and element.password,
+            actions=frozenset() if element is None else element.actions,
             chord=chord,
             text=text,
             focused_name="" if focused is None else focused.name,
             focused_role="" if focused is None else focused.role,
             focused_password=focused is not None and focused.password,
+            focused_actions=frozenset() if focused is None else focused.actions,
         )
         if verdict == safety.HANDOFF:
             self._step(action, window.app, "blocked", time.perf_counter(), "handoff")
@@ -820,7 +831,8 @@ class ComputerRun:
                 self._step(action, window.app, "blocked", time.perf_counter(), "denied")
                 raise
             self._pass_gate(asked, answer.approval)
-            # The shell types a line break (as Enter) only in a step the owner said yes to.
+            # The shell types a line break (as Enter), or presses a key that deletes what is
+            # selected away from a text field, only in a step the owner said yes to.
             request["confirmed"] = True
         else:
             self._pass_gate(Action(name, request))

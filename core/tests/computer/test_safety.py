@@ -177,3 +177,62 @@ def test_enter_or_space_on_the_focused_button_that_sends_deletes_or_buys_asks_fi
     assert judge(action="keys", declared_final=False, chord=chord, name=name, role="Button") == CONFIRM
     # other keys on it change nothing
     assert judge(action="keys", declared_final=False, chord=("tab",), focused_name=name, focused_role="Button") is None
+
+
+# --- keys that delete what is selected -------------------------------------------------------------
+
+DELETING = [("delete",), ("ctrl", "delete"), ("shift", "delete"), ("ctrl", "shift", "delete"), ("backspace",),
+            ("ctrl", "backspace"), ("shift", "backspace"), ("ctrl", "d")]  # fmt: skip
+SELECTED = frozenset({"select", "invoke"})
+EDITABLE = frozenset({"value"})
+
+
+@pytest.mark.parametrize("chord", DELETING)
+def test_keys_that_delete_what_is_selected_ask_first_away_from_a_text_field(chord):
+    # a file selected in File Explorer, a mail in a list, a row of a table: Delete deletes it
+    for role in ("ListItem", "DataItem", "TreeItem", "List", "Pane", "Button"):
+        assert judge(action="keys", declared_final=False, chord=chord, focused_name="report.docx",
+                     focused_role=role, focused_actions=SELECTED) == CONFIRM, role  # fmt: skip
+        assert judge(action="keys", declared_final=False, chord=chord, name="report.docx", role=role,
+                     actions=SELECTED) == CONFIRM, role  # fmt: skip
+    # nothing known to have the focus: the keys may reach anything
+    assert judge(action="keys", declared_final=False, chord=chord) == CONFIRM
+    # a document that cannot be edited (a mail's reading pane, a web page): Delete deletes the mail
+    assert judge(action="keys", declared_final=False, chord=chord, focused_name="Message body",
+                 focused_role="Document", focused_actions=frozenset({"scroll", "text"})) == CONFIRM  # fmt: skip
+    # a field that is read only
+    assert judge(action="keys", declared_final=False, chord=chord, name="Subject", role="Edit") == CONFIRM
+
+
+@pytest.mark.parametrize("chord", [c for c in DELETING if c != ("shift", "delete")])
+def test_keys_that_delete_inside_a_text_field_only_edit_and_run(chord):
+    assert judge(action="keys", declared_final=False, chord=chord, focused_name="Search",
+                 focused_role="Edit", focused_actions=EDITABLE) is None  # fmt: skip
+    assert judge(action="keys", declared_final=False, chord=chord, name="檔名", role="Edit", actions=EDITABLE) is None
+    assert judge(action="keys", declared_final=False, chord=chord, focused_name="Body",
+                 focused_role="Document", focused_actions=frozenset({"value", "scroll"})) is None  # fmt: skip
+    # the element named is the one the keys reach, whatever has the focus
+    assert judge(action="keys", declared_final=False, chord=chord, name="report.docx", role="ListItem",
+                 actions=SELECTED, focused_name="Search", focused_role="Edit",
+                 focused_actions=EDITABLE) == CONFIRM  # fmt: skip
+
+
+def test_shift_delete_deletes_for_good_and_asks_even_in_a_text_field():
+    assert judge(action="keys", declared_final=False, chord=("shift", "delete"), focused_name="Search",
+                 focused_role="Edit", focused_actions=EDITABLE) == CONFIRM  # fmt: skip
+
+
+@pytest.mark.parametrize("chord", [("left",), ("ctrl", "a"), ("ctrl", "c"), ("f2",), ("alt", "backspace")])
+def test_other_keys_on_a_selected_file_run(chord):
+    assert judge(action="keys", declared_final=False, chord=chord, focused_name="report.docx",
+                 focused_role="ListItem", focused_actions=SELECTED) is None  # fmt: skip
+
+
+def test_the_shell_refuses_the_same_deleting_keys_away_from_a_text_field():
+    keys_rs = Path(__file__).resolve().parents[3] / "app" / "src-tauri" / "src" / "computer" / "keys.rs"
+    source = keys_rs.read_text(encoding="utf-8")
+    assert "pub fn deletes_items(self) -> bool" in source
+    # the rule both sides keep: Delete or Backspace without Alt, and Ctrl+D alone
+    assert all(safety.deletes_items(chord) for chord in DELETING)
+    for chord in [("alt", "delete"), ("alt", "backspace"), ("ctrl", "shift", "d"), ("alt", "d"), ("enter",)]:
+        assert not safety.deletes_items(chord), chord
