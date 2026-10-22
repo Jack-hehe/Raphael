@@ -249,33 +249,6 @@ async def test_the_calls_a_model_picks_together_are_made_together(rig, plugins, 
     assert len(plugins.audit()) == 2
 
 
-async def test_a_task_for_a_connected_service_goes_to_the_tools_when_there_are_some(
-    rig, plugins, client, calls
-):
-    await plugins.connect(look="T0")
-    route(client, "delegate")
-    client.plans.append(tool_plan(("Notes__look", {"topic": "tea"})))
-    client.replies.append(spoken("答", "好。"))
-    result = await rig.ask("幫我在筆記裡查茶")
-    assert (result["status"], result["text"]) == ("done", "好。") and calls == ["look"]
-    assert (await rig.turns())[0]["route"] == "answer"
-
-
-async def test_a_task_for_a_connected_service_is_still_not_there_without_a_tool(rig, client):
-    route(client, "delegate")
-    result = await rig.ask("幫我寄信")
-    assert result["text"] == phrase("zh-TW", "delegate")
-    assert client.plan_calls == []
-
-
-async def test_a_task_that_no_tool_can_do_says_so(rig, plugins, client, calls):
-    await plugins.connect(look="T0")
-    route(client, "delegate")
-    client.plans.append(tool_plan())
-    result = await rig.ask("幫我寄信")
-    assert (result["prefix"], result["text"]) == ("否", phrase("zh-TW", "plugin_none"))
-    assert calls == [] and client.replies == []
-
 
 async def test_a_question_no_tool_is_needed_for_is_answered_as_before(rig, plugins, client, calls):
     await plugins.connect(look="T0")
@@ -294,14 +267,6 @@ async def test_a_model_that_fails_to_pick_does_not_fail_an_answer(rig, plugins, 
     client.replies.append(spoken("答", "好。"))
     result = await rig.ask("你好嗎")
     assert (result["status"], result["text"]) == ("done", "好。") and calls == []
-
-
-async def test_a_model_that_fails_to_pick_fails_a_task_for_a_service(rig, plugins, client):
-    await plugins.connect(look="T0")
-    route(client, "delegate")
-    client.plans.append(OpenRouterError(0, "timeout", "slow"))
-    result = await rig.ask("幫我在筆記裡查茶")
-    assert (result["prefix"], result["text"]) == ("否", phrase("zh-TW", "offline"))
 
 
 async def test_a_name_the_model_was_not_offered_is_not_a_call(rig, plugins, client, calls):

@@ -120,7 +120,7 @@ def call(name, arguments, id=None):
 
 
 def turn(content="", calls=(), cost=0.001, model="fake/model", usage_known=True):
-    return ChatTurn(content, list(calls), "stop", model, cost, 100, 10, 50, usage_known)
+    return ChatTurn(content, list(calls), model, cost, 100, 10, 50, usage_known)
 
 
 def report(text="All looked up.", prefix="告", detail="", cost=0.001):

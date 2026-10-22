@@ -41,5 +41,3 @@ export const ABILITIES: readonly Ability[] = [
   { id: "connect", icon: "link", needs: ["key", "connections"], lessons: [], byDefault: false, name: () => t("onboarding.abilityConnect"), desc: () => t("onboarding.abilityConnectDesc") },
   { id: "phone", icon: "send", needs: ["key", "telegram"], lessons: [], byDefault: false, name: () => t("onboarding.abilityPhone"), desc: () => t("onboarding.abilityPhoneDesc") },
 ];
-
-export const abilityById = (id: AbilityId): Ability => ABILITIES.find((a) => a.id === id)!;

@@ -56,12 +56,10 @@ function statsHTML(s: StatsSummary): string {
   );
 }
 
-/** The days, the streak and the longest streak, in a line. An older core does not say the first and the last: they come from the days it lists. */
+/** The days, the streak and the longest streak, in a line. */
 function activitySummary(s: StatsSummary): string {
-  const active = s.active_days ?? s.by_day.filter((d) => d.dictations > 0).length;
-  const longest = s.longest_streak_days ?? s.streak_days;
   const part = (text: string): string => `<span class="num">${esc(text)}</span>`;
-  return part(t("home.activeDays", { p0: formatCount(active) })) + part(t("home.streak", { p0: formatCount(s.streak_days) })) + part(t("home.longest", { p0: formatCount(longest) }));
+  return part(t("home.activeDays", { p0: formatCount(s.active_days) })) + part(t("home.streak", { p0: formatCount(s.streak_days) })) + part(t("home.longest", { p0: formatCount(s.longest_streak_days) }));
 }
 
 const legend = (): string =>

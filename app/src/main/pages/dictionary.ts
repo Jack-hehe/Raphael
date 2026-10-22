@@ -21,8 +21,8 @@ const FILTERS: { id: Filter; name: string }[] = [
   { id: "manual", get name() { return t("dictionary.003"); } },
 ];
 
-/** The core uses "learned" for corrections; "auto" is also accepted. Other sources count as manual. */
-export const isAuto = (entry: DictionaryEntry): boolean => entry.source === "learned" || entry.source === "auto";
+/** A word Raphael added by itself (the core's "learned"). The other sources count as manual. */
+export const isAuto = (entry: DictionaryEntry): boolean => entry.source === "learned";
 
 export function matches(entry: DictionaryEntry, filter: Filter, query: string): boolean {
   if (filter === "auto" && !isAuto(entry)) return false;

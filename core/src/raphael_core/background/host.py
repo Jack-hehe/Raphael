@@ -127,7 +127,6 @@ class ProcessLink:
         self.process = process
         self.peer = Peer(self._write)
         self._tasks: list[asyncio.Task[None]] = []
-        self.dropped_log_lines = 0
 
     def _write(self, line: str) -> None:
         stdin = self.process.stdin
@@ -168,10 +167,9 @@ class ProcessLink:
 
     def _log_line(self, raw: bytes, dropping: bool) -> None:
         text = raw.decode("utf-8", errors="replace").rstrip()
+        # Any other line is dropped: a traceback may quote the task, so it is not passed on.
         if not dropping and len(raw) <= STDERR_LINE_MAX and _LOG_LINE.match(text):
             logger.info("worker: %s", text)
-        else:
-            self.dropped_log_lines += 1  # a traceback may quote the task: it is not passed on
 
     async def _watch(self) -> None:
         await self.peer.serve(self._lines())

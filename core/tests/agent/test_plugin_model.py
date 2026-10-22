@@ -10,7 +10,6 @@ import logging
 
 import pytest
 
-from raphael_core.agent.persona import phrase
 from raphael_core.agent.plugins import TOOL_REFUSAL_TTL_S, ToolSupport
 from raphael_core.brain.catalog import CatalogEntry, ModelPrice
 from raphael_core.brain.openrouter import OpenRouterError
@@ -152,28 +151,6 @@ async def test_a_model_that_takes_no_tools_leaves_the_plugins_out_of_an_answer(
     assert PRIVATE not in caplog.text
 
 
-async def test_a_task_for_a_service_says_that_the_model_cannot_use_one(
-    rig, plugins, client, catalog, calls
-):
-    await plugins.connect(look="T0")
-    catalog.entries = [llm(DEFAULT, tools=False)]
-    route(client, "delegate")
-    result = await rig.ask("幫我在筆記裡查茶")
-    assert (result["status"], result["prefix"]) == ("done", "否")
-    assert result["text"] == phrase("zh-TW", "plugin_model")
-    assert client.plan_calls == [] and client.replies == [] and calls == []
-    assert (await rig.turns())[0]["status"] == "done"
-
-
-@pytest.mark.parametrize("language", ["en", "ja"])
-async def test_it_says_so_in_the_language_of_the_window(rig, plugins, client, catalog, language):
-    await plugins.connect(look="T0")
-    catalog.entries = [llm(DEFAULT, tools=False)]
-    route(client, "delegate")
-    result = await rig.ask("check my notes", language=language)
-    assert result["text"] == phrase(language, "plugin_model")
-
-
 async def test_each_request_is_decided_by_the_catalog_as_it_is_then(
     rig, plugins, client, catalog, calls
 ):
@@ -291,16 +268,6 @@ async def test_a_refusal_of_the_tools_leaves_the_plugins_out_and_is_remembered(
     client.replies.append(spoken("答", "查到茶了。"))
     await rig.ask("幫我查茶")
     assert len(client.plan_calls) == 2 and calls == ["look"]
-
-
-async def test_a_refusal_for_a_task_for_a_service_says_that_the_model_cannot_use_one(
-    rig, plugins, client
-):
-    await plugins.connect(look="T0")
-    client.plans.append(OpenRouterError(404, "bad_request", "No endpoints found"))
-    route(client, "delegate")
-    result = await rig.ask("幫我在筆記裡查茶")
-    assert result["text"] == phrase("zh-TW", "plugin_model")
 
 
 async def test_a_request_the_provider_found_wrong_is_not_a_model_without_tools(

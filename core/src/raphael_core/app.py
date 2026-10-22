@@ -243,7 +243,7 @@ class EchoClient:
         def calling(name: str, arguments: dict) -> ChatTurn:
             raw = json.dumps(arguments)
             call = ChatToolCall(id=f"call_{seen}", name=name, arguments=arguments, raw_arguments=raw)
-            return ChatTurn("", [call], "tool_calls", "fake/echo", 0.0, 0, 0, 0)
+            return ChatTurn("", [call], "fake/echo", 0.0, 0, 0, 0)
 
         look = next((name for name in sorted(offered) if name.endswith("__look")), None)
         slow = next((name for name in sorted(offered) if name.endswith("__slow")), None)
@@ -254,7 +254,7 @@ class EchoClient:
         if look is None and "local_time" in offered and seen == 0:
             return calling("local_time", {})
         report = {"prefix": "告", "text": f"The scripted task saw {seen} results.", "detail": ""}
-        return ChatTurn(json.dumps(report), [], "stop", "fake/echo", 0.0, 0, 0, 0)
+        return ChatTurn(json.dumps(report), [], "fake/echo", 0.0, 0, 0, 0)
 
     async def chat_text(self, **kwargs: Any) -> TextCompletion:
         return TextCompletion(

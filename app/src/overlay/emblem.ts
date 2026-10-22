@@ -10,7 +10,7 @@ const TAU = Math.PI * 2;
 const clamp = (x: number, a = 0, b = 1): number => Math.max(a, Math.min(b, x));
 
 /** What the emblem shows while it is on screen. */
-export type Mode = "listening" | "thinking" | "speaking" | "steady";
+export type Mode = "listening" | "thinking" | "steady";
 /** `hidden` draws nothing; `appear` and `vanish` are the two animations from the anime. */
 export type Phase = "hidden" | "appear" | "vanish" | Mode;
 
@@ -548,7 +548,7 @@ const prefersReducedMotion = (): boolean =>
  *
  * - `appear()` plays the 0.833 s appear animation and then shows the mode set with `set`.
  * - `vanish()` plays the 0.467 s vanish animation and then the emblem is hidden.
- * - `level` (0 to 1) sets the white ring's width while listening or speaking.
+ * - `level` (0 to 1) sets the white ring's width while listening.
  * - `speak(seconds)` moves the ring with a made-up loudness for that long.
  * - While listening (recording) the emblem looks as always and the glyph ring gets a little
  *   brighter with the voice (`boost`). The ring stays whole after the key is released.
@@ -716,9 +716,8 @@ export class Emblem {
     if (shown === "listening") {
       // Only the microphone moves the ring while listening.
       raw = Math.max(raw, this.external);
-    } else {
-      if (shown === "speaking") raw = Math.max(raw, this.external);
-      if (this.clock < this.talkUntil) raw = Math.max(raw, envAt(SPEAK, (this.clock + this.talkOff) % SPEAK_CYCLE));
+    } else if (this.clock < this.talkUntil) {
+      raw = Math.max(raw, envAt(SPEAK, (this.clock + this.talkOff) % SPEAK_CYCLE));
     }
     this._lvl = clamp(raw);
     this.shownBoost = this.mode === "listening" ? boostAmount(this._lvl) : 0;

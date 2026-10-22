@@ -75,7 +75,7 @@ class Phrases:
     `confirm_plugin` are questions for a yes or a no, `yes` and `no` the labels of its buttons."""
 
     unclear: str  # the request was too garbled or incomplete to act on
-    delegate: str  # a task for the background or a connected service: not there yet
+
     cannot: str  # a request for an action Raphael has no command for
     no_key: str  # no OpenRouter key is stored
     auth: str  # OpenRouter does not accept the key
@@ -92,8 +92,7 @@ class Phrases:
     copy_quote: str  # ... or a text the user quoted
     confirm_action: str  # asks whether to do an action that has no question of its own
     confirm_plugin: str  # asks whether to let a service run a tool: {server} {tool} {what}
-    plugin_none: str  # a connected service was needed, and none of them can do this
-    plugin_model: str  # a connected service was needed, and the answer model takes no tools
+
     plugin_unsure: str  # a service did not answer in time: {server}; whether it was done is unknown
     copied: str
     sources: str  # the heading of the pages an answer drew on, in the history
@@ -123,7 +122,7 @@ class Phrases:
 PHRASES: dict[str, Phrases] = {
     "zh-TW": Phrases(
         unclear="無法辨識指示。請再說一次。",
-        delegate="背景任務與外部服務尚未開放。此項目前無法執行。",
+
         cannot="目前無法執行此操作。",
         no_key="未設定 OpenRouter 金鑰。",
         auth="OpenRouter 金鑰無法使用。",
@@ -140,8 +139,7 @@ PHRASES: dict[str, Phrases] = {
         copy_quote="是否將引號內的文字複製到剪貼簿？",
         confirm_action="是否執行此操作？",
         confirm_plugin="是否讓「{server}」執行「{tool}」{what}？",
-        plugin_none="已連接的服務均無法執行此項。",
-        plugin_model="目前的模型不支援呼叫工具。無法使用已連接的服務。",
+
         plugin_unsure="「{server}」逾時未獲回應。無法確認是否已執行。",
         copied="已複製到剪貼簿。",
         sources="來源",
@@ -163,10 +161,7 @@ PHRASES: dict[str, Phrases] = {
     ),
     "en": Phrases(
         unclear="The instruction could not be recognized. Please repeat it.",
-        delegate=(
-            "Background tasks and connected services are not yet available. "
-            "This cannot be done now."
-        ),
+
         cannot="That action is not yet within my capabilities.",
         no_key="No OpenRouter key is set.",
         auth="The OpenRouter key cannot be used.",
@@ -183,8 +178,7 @@ PHRASES: dict[str, Phrases] = {
         copy_quote="Copy the quoted text to the clipboard?",
         confirm_action="Execute this action?",
         confirm_plugin="Allow {server} to run {tool}{what}?",
-        plugin_none="None of the connected services can perform this action.",
-        plugin_model="The current model cannot call tools. Connected services cannot be used.",
+
         plugin_unsure=(
             "{server} did not respond in time. It is not known whether the action was executed."
         ),
@@ -226,7 +220,7 @@ PHRASES: dict[str, Phrases] = {
     ),
     "ja": Phrases(
         unclear="指示を認識できませんでした。もう一度お願いします。",
-        delegate="バックグラウンド処理と外部サービスは未対応です。現時点では実行できません。",
+
         cannot="その操作は現在の機能では実行できません。",
         no_key="OpenRouter のキーが未設定です。",
         auth="OpenRouter のキーを使用できません。",
@@ -243,8 +237,7 @@ PHRASES: dict[str, Phrases] = {
         copy_quote="引用された文章をクリップボードにコピーしますか？",
         confirm_action="この操作を実行しますか？",
         confirm_plugin="「{server}」で「{tool}」{what}を実行しますか？",
-        plugin_none="接続済みのサービスでは実行できません。",
-        plugin_model="現在のモデルはツールを呼び出せません。接続済みのサービスは利用できません。",
+
         plugin_unsure="「{server}」から時間内に応答がなく、実行されたかどうかは確認できません。",
         copied="クリップボードにコピーしました。",
         sources="出典",

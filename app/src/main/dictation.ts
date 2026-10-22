@@ -36,14 +36,3 @@ export function homeHint(mode: DictationMode): string {
 export function historyEmptyHint(mode: DictationMode, key: string): string {
   return mode === "toggle" ? t("dictation.007", { p0: key }) : t("dictation.008", { p0: key });
 }
-
-/** The first-run guide's step 4, above the try box; `keys` names the dictation keys. */
-export function tryBoxText(mode: DictationMode, keys: string): string {
-  const how = mode === "toggle" ? t("dictation.009", { p0: keys }) : t("dictation.010", { p0: keys });
-  return t("dictation.011", { p0: how });
-}
-
-/** The first-run guide's key line: what the dictation keys do, next to the keys. */
-export function keylineAction(mode: DictationMode): string {
-  return mode === "toggle" ? t("dictation.012") : t("dictation.013");
-}

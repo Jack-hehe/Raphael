@@ -129,7 +129,6 @@ class ChatTurn:
 
     content: str
     calls: list[ChatToolCall]
-    finish_reason: str | None
     model: str  # the model that answered, which can be one of the fallbacks
     cost_usd: float  # always a number the spend can store: 0 or more, and finite
     prompt_tokens: int
@@ -506,11 +505,9 @@ def _to_chat_turn(reply: _Reply, requested_model: str) -> ChatTurn:
         )
     usage = _usage_of(body)
     answered_by = body.get("model")
-    finish = choice.get("finish_reason")
     return ChatTurn(
         content=_content_text(message.get("content")),
         calls=calls,
-        finish_reason=finish if isinstance(finish, str) else None,
         model=answered_by if isinstance(answered_by, str) and answered_by else requested_model,
         cost_usd=_usage_cost(usage),
         prompt_tokens=_usage_count(usage, "prompt_tokens"),

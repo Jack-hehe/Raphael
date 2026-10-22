@@ -256,7 +256,7 @@ async def test_neither_the_steps_nor_the_audit_nor_the_database_hold_an_argument
 
 
 async def test_a_tool_that_would_have_to_ask_after_the_snapshot_is_refused_and_audited(rig, calls):
-    server = await rig.plugins.connect(look="T0")
+    await rig.plugins.connect(look="T0")
     rig.resnap()  # the task started with `look` at T0
     rig.plugins.hub.strict["look"] = Tier.T2  # ... and it needs a yes now
     reply = await rig.tool("Notes__look", {"topic": "x"})
@@ -345,7 +345,7 @@ async def test_the_twenty_sixth_tool_call_is_not_made(rig):
 
 
 async def test_what_a_tool_returns_is_cut_to_a_size_the_worker_can_take(rig):
-    server = await rig.plugins.connect(big="T0")
+    await rig.plugins.connect(big="T0")
     rig.resnap()
     reply = await rig.tool("Notes__big")
     assert reply["ok"] and reply["truncated"] is True and len(reply["content"]) <= 12_000

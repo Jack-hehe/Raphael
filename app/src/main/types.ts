@@ -123,10 +123,10 @@ export interface StatsSummary {
   streak_days: number;
   /** The last 14 days (or as many as asked for), oldest first, today last. */
   by_day: { date: string; dictations: number; words: number }[];
-  /** Days with at least one dictation, in all the history (absent from older cores). */
-  active_days?: number;
-  /** The most days in a row with a dictation, ever (absent from older cores). */
-  longest_streak_days?: number;
+  /** Days with at least one dictation, in all the history. */
+  active_days: number;
+  /** The most days in a row with a dictation, ever. */
+  longest_streak_days: number;
   /** Words per minute of speech; null before there is enough to tell. */
   speed_wpm: number | null;
   /** How much longer typing the same words would have taken. */
@@ -219,8 +219,8 @@ export interface DictionaryEntry {
   id: number;
   word: string;
   misheard: string[];
-  /** The core uses "learned" for corrections; "auto" is also accepted. Absent: typed. */
-  source?: "manual" | "suggested" | "learned" | "auto";
+  /** "manual" for a word the user typed or imported, "suggested" for one taken from a suggestion of an earlier version, "learned" for one Raphael added by itself. */
+  source: "manual" | "suggested" | "learned";
 }
 
 /** `settings.get`: the settings of the brain. */

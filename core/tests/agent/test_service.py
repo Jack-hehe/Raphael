@@ -28,7 +28,7 @@ from raphael_core.brain.spend import SpendTracker
 from raphael_core.protocol import INVALID_PARAMS, RpcError
 from raphael_core.router import Router as RpcRouter
 
-from .conftest import classification, completion, decision
+from .conftest import FakeBackground, classification, completion, decision
 
 KEY = "sk-or-v1-test"
 NOW_MS = int(datetime(2026, 10, 20, 6, 5, tzinfo=timezone.utc).timestamp() * 1000)
@@ -123,6 +123,7 @@ class Rig:
             "http": self.meteo.http,
             "now": lambda: LOCAL_NOW,
             "decider": Decider(client, jev_total_s=1.0, jev_first_s=0.6, luna_s=1.0),
+            "background": FakeBackground(),
         }
         self.service = AgentService(conn, client, self.keys, **{**kwargs, **service_kwargs})
         self.rpc = RpcRouter()
@@ -848,31 +849,6 @@ async def test_a_request_too_garbled_to_act_on_gets_the_fixed_reply_with_no_mode
     assert client.json_calls == []
     assert (await rig.turns())[0]["route"] == "unclear"
 
-
-async def test_a_request_to_do_a_task_in_the_background_is_refused_honestly(rig, client):
-    client.decisions.append(decision("delegate"))
-    result = await rig.ask("幫我整理本週的信件並回覆")
-    assert result["prefix"] == "否"
-    assert result["text"] == "背景任務與外部服務尚未開放。此項目前無法執行。"
-    assert client.json_calls == []
-    assert (await rig.turns())[0]["route"] == "delegate"
-
-
-@pytest.mark.parametrize(
-    ("language", "text"),
-    [
-        (
-            "en",
-            "Background tasks and connected services are not yet available. "
-            "This cannot be done now.",
-        ),
-        ("ja", "バックグラウンド処理と外部サービスは未対応です。現時点では実行できません。"),
-    ],
-)
-async def test_the_refusal_is_in_the_ui_language(rig, client, language, text):
-    client.decisions.append(decision("delegate"))
-    result = await rig.ask("x", language=language)
-    assert result["text"] == text
 
 
 @pytest.mark.parametrize("text", ["", "   ", "\n"])

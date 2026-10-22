@@ -18,18 +18,17 @@ ui_language, target_app}`. The router (Jev, and the language model when Jev fail
 - an answer looks up what it needs, together (`tools`: the weather, a web search, the time), and one
   call to the language model words it (`answers`); a discussion and small talk are worded with the
   last turns of the conversation as context;
-- when the user has connected plugins (`integrations`) with tools that have a tier, an answer, and a
-  task for a connected service, may use them too: one call to the language model picks the tools
-  it needs from those alone (`plugins`), the program makes the calls within their tiers, and the
-  results are given to the call that words the answer as data, not instructions. A call at T0 or T1
-  is made at once; at T2 or T3 it is a question for a yes or a no like a command at that tier, one
-  to a turn, and the call is made when the yes comes. Every call of a tool goes through the one
-  gate (`gate`), the worker's too. A tool with no tier is never offered, and a
+- when the user has connected plugins (`integrations`), an answer may use the tools that are on:
+  one call to the language model picks the tools it needs from those alone (`plugins`), the
+  program makes the calls, and the results are given to the call that words the answer as data,
+  not instructions. A tool that is on runs at once (`integrations.service.ON_TIER`, T1); a hub
+  that gives a tool a higher tier (the tests' do) makes its call a question for a yes or a no
+  like a command at that tier, one to a turn, made when the yes comes. Every call of a tool goes
+  through the one gate (`gate`), the worker's too. A tool that is off is never offered, and a
   model that takes no tools (`plugins.ToolSupport`) leaves the plugins out of the request;
 - a task for the background (`delegate`: several steps, or a connected service) is handed to the
   background worker (`raphael_core.background`) and answered at once with 《了。》; the worker does
-  it step by step within the same tiers, and reports on the overlay when it is done. Without a
-  worker (the tests', say) the task is looked at as before, by one pick of the plugins' tools;
+  it step by step through the same gate, and reports on the overlay when it is done;
 - a request that is too garbled to act on gets a fixed 否 reply.
 
 Whatever goes wrong is answered, never raised: no key, the monthly limit reached, no network, a
@@ -281,8 +280,8 @@ class AgentService:
     catalog of OpenRouter's models as it was last read (`Brain.known_models`), by which a request
     is told whether the answer model takes tools. `gate` is the one gate every tool call goes
     through, shared with the background worker (one is made when none is given), and `background`
-    is the worker that takes the tasks of the `delegate` route (none: the route is answered as it
-    was before the worker). `notify` sends a notification to the app (`agent.turn`).
+    is the worker that takes the tasks of the `delegate` route. `notify` sends a notification to
+    the app (`agent.turn`).
     """
 
     def __init__(
@@ -301,7 +300,7 @@ class AgentService:
         plugins: PluginHub | None = None,
         models: Callable[[], Sequence[CatalogEntry] | None] | None = None,
         gate: ToolGate | None = None,
-        background: "BackgroundService | None" = None,
+        background: "BackgroundService",
         notify: Callable[[str, dict], None] | None = None,
     ) -> None:
         self._keys = keys
@@ -486,13 +485,7 @@ class AgentService:
         if route == "answer":
             return await self._answer_with_tools(ask, decision, settings, ledger, self._offer())
         if route == "delegate":
-            if self._background is not None:
-                return self._hand_over(ask, settings, ledger)
-            # A task for a connected service has somewhere to go once a tool is allowed.
-            offer = self._offer()
-            if offer is not None:
-                return await self._answer_with_tools(ask, decision, settings, ledger, offer)
-            return self._finish(ask, route, "negative", phrase(ask.language, "delegate"), ledger)
+            return self._hand_over(ask, settings, ledger)
         if route in ("discuss", "chat"):
             reply = await self._voice.reply(
                 model=settings.model,
@@ -511,9 +504,7 @@ class AgentService:
 
     def _briefs(self) -> list:
         """The tasks in the background as a few facts (running, waiting, or ended in the last half
-        hour), for the router and the answer. Empty when there is no worker or it cannot say."""
-        if self._background is None:
-            return []
+        hour), for the router and the answer. Empty when the worker cannot say."""
         try:
             return list(self._background.brief_for_assistant())
         except Exception as exc:  # what the background knows must not stop a request
@@ -527,7 +518,6 @@ class AgentService:
         switched off for crashing too often are a 否 reply with the reason."""
         language = ask.language
         background = self._background
-        assert background is not None
         if self._tool_support.supports(settings.model) is False:
             logger.info("A task was not handed over: the model %s takes no tools", settings.model)
             return self._finish(
@@ -578,20 +568,10 @@ class AgentService:
         if decision.needs_time:
             results.append(self._tools.local_time())
         if offer is not None:
-            if picked is None:  # the answer model takes no tools: nothing can be asked of a service
-                if decision.route == "delegate":
-                    return self._finish(
-                        ask, "answer", "negative", phrase(ask.language, "plugin_model"), ledger
-                    )
-                picked = []  # an answer goes on without the services
-            elif isinstance(picked, AgentFailure):
-                if decision.route == "delegate":
-                    raise picked  # the request was for a service, and nothing could look at it
-                picked = []  # an answer goes on without the services
-            if decision.route == "delegate" and not picked:
-                return self._finish(
-                    ask, "answer", "negative", phrase(ask.language, "plugin_none"), ledger
-                )
+            # The answer model takes no tools (None), or the pick failed: the answer goes on
+            # without the services.
+            if picked is None or isinstance(picked, AgentFailure):
+                picked = []
             outcome = await self._carry_out(ask, picked, results, ledger)
             if isinstance(outcome, dict):
                 return outcome  # a question for a yes
@@ -1143,7 +1123,7 @@ class AgentService:
         turns = self._history.list(limit=limit, before_id=before_id)
         ids = [turn.id for turn in turns if turn.id is not None]
         steps = self._history.steps(ids)
-        tasks = {} if self._background is None else self._background.tasks_for_turns(ids)
+        tasks = self._background.tasks_for_turns(ids)
         views = []
         for turn in turns:
             task, task_steps = tasks.get(turn.id or 0, (None, []))
@@ -1175,8 +1155,7 @@ class AgentService:
             self._targets.clear()  # what opening taught Raphael goes with what was said
         except sqlite3.Error as exc:
             logger.warning("Could not clear the names that opened: %s", type(exc).__name__)
-        if self._background is not None:
-            self._background.clear()
+        self._background.clear()
         return {"deleted": deleted}
 
     def _prune_if_due(self) -> None:
@@ -1193,8 +1172,7 @@ class AgentService:
                 cutoff = max(now - days * _DAY_MS, 0)
                 self._history.prune(cutoff)
                 self._targets.prune(cutoff)
-                if self._background is not None:
-                    self._background.prune(cutoff)  # the tasks hold what was said too
+                self._background.prune(cutoff)  # the tasks hold what was said too
         except sqlite3.Error as exc:
             logger.warning("Could not prune the assistant's history: %s", type(exc).__name__)
 

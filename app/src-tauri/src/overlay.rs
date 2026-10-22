@@ -44,7 +44,8 @@ use tauri::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-/// What the emblem shows while it is on screen.
+/// What the emblem shows while it is on screen, as the shell sets it. The page has one more of its
+/// own, "steady", which it picks by itself for a notice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
@@ -52,18 +53,6 @@ pub enum Mode {
     Listening,
     /// Processing continues while its numeric percentage is shown.
     Thinking,
-    /// The white ring follows Raphael's voice.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Raphael has no voice (TTS) yet")
-    )]
-    Speaking,
-    /// Just there, with a thin ring (used for notices).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the overlay page picks it for a notice by itself")
-    )]
-    Steady,
 }
 
 /// How far a dictation has come after the key was released: the speech that is left is
@@ -1113,22 +1102,7 @@ mod tests {
             }),
             r#"{"type":"mode","mode":"thinking"}"#
         );
-        assert_eq!(
-            json(OverlayEvent::Mode {
-                mode: Mode::Speaking,
-                quiet: false,
-                lines: Vec::new(),
-            }),
-            r#"{"type":"mode","mode":"speaking"}"#
-        );
-        assert_eq!(
-            json(OverlayEvent::Mode {
-                mode: Mode::Steady,
-                quiet: false,
-                lines: Vec::new(),
-            }),
-            r#"{"type":"mode","mode":"steady"}"#
-        );
+
         // a question being thought about: no progress caption, and the waiting lines in its place
         assert_eq!(
             json(OverlayEvent::Mode {
@@ -1483,14 +1457,14 @@ mod tests {
         bus.subscribe("a", a);
         bus.subscribe("b", b);
         bus.publish(OverlayEvent::Show {
-            mode: Mode::Steady,
+            mode: Mode::Listening,
             line: None,
         });
         bus.publish(OverlayEvent::Level { value: 1.0 });
         bus.publish(OverlayEvent::Hide);
         let expected = [
             SETTINGS_150_ON,
-            r#"{"type":"show","mode":"steady"}"#,
+            r#"{"type":"show","mode":"listening"}"#,
             r#"{"type":"level","value":1.0}"#,
             r#"{"type":"hide"}"#,
         ];
@@ -1575,11 +1549,11 @@ mod tests {
     fn every_event_has_its_kind_for_the_log() {
         let events = [
             OverlayEvent::Show {
-                mode: Mode::Steady,
+                mode: Mode::Listening,
                 line: None,
             },
             OverlayEvent::Mode {
-                mode: Mode::Steady,
+                mode: Mode::Thinking,
                 quiet: false,
                 lines: Vec::new(),
             },
