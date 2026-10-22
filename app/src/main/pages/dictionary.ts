@@ -119,6 +119,11 @@ export function createDictionary(app: AppContext): DictionaryPage {
     const kept = entries.filter((entry) => !deleting.has(entry.id));
     const shown = kept.filter((entry) => matches(entry, filter, query));
     count.textContent = t("dictionary.017", { p0: shown.length });
+    // The words come in one after another when the list is new (a load, a filter, a search); drawn
+    // again for the same list (a word deleted or added), they stand still (styles.css `data-stagger`).
+    const list = `${filter}|${query}`;
+    grid.classList.toggle("again", grid.dataset.stagger === list);
+    grid.dataset.stagger = list;
     grid.innerHTML = shown.map(wordChip).join("");
     empty.hidden = shown.length > 0;
     empty.innerHTML =
