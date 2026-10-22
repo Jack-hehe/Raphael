@@ -1,10 +1,12 @@
 """Talking to an MCP server: connect when there is something to do, list its tools, call one.
 
 A connection is made for each job and closed when the job is done (a stdio server is started for
-it and stopped after it; an HTTP server is called with a request client of its own). There is
-nothing to keep alive, and so nothing that can be left running when the app closes. The price is
+it and stopped after it; an HTTP server is called with a request client of its own). The price is
 the time a server takes to start, which is the reason the lists of tools are cached
-(`config.ToolRecord`) and the assistant plans from the cache.
+(`config.ToolRecord`) and the assistant plans from the cache. The calls of a tool can be given a
+pool (`pool.McpPool`) instead: one connection for each server, kept for the calls of a background
+task or for a couple of minutes of the assistant's, and closed with the pool, so that nothing is
+left running when the task or the app ends.
 
 - Every job has a time limit that covers the connection too. A stdio server is started with the
   environment the user gave it on top of the few variables a program needs (the SDK's list), not
@@ -34,11 +36,14 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .. import __version__
 from .config import ServerConfig, ToolRecord, tool_record
 from .vault import SecretVault, secret_name
+
+if TYPE_CHECKING:
+    from .pool import McpPool
 
 logger = logging.getLogger(__name__)
 
@@ -328,20 +333,33 @@ class McpConnector:
         *,
         expected: str | None = None,
         timeout_s: float = CALL_TOTAL_S,
+        pool: "McpPool | None" = None,
     ) -> CallOutcome:
         """Call `tool` of `server`. McpFailure (of a kind) when it cannot be called, `gone` when the
         server has no such tool any more; a tool that ran and said it failed is a CallOutcome with
         `is_error`. When the tool is not the one with fingerprint `expected` (the server describes
-        it differently now) it is called all the same and the outcome has the new description."""
+        it differently now) it is called all the same and the outcome has the new description.
+        With a `pool` the call goes through the connection the pool keeps for the server (opened if
+        there is none, with the tool list read then); without one the connection is made for this
+        call alone and closed after it."""
         secrets = self._secrets(server)
         try:
             async with asyncio.timeout(timeout_s):
                 await self._ready()
-                async with self._opener(server, secrets) as client:
-                    current = next((t for t in await self._list(client) if t.name == tool), None)
-                    if current is None:
-                        raise McpFailure("gone")
-                    result = await client.call_tool(tool, arguments)
+                if pool is not None:
+                    result, current = await pool.call(
+                        server.id,
+                        lambda: self._opener(server, secrets),
+                        self._list,
+                        tool,
+                        arguments,
+                    )
+                else:
+                    async with self._opener(server, secrets) as client:
+                        current = next((t for t in await self._list(client) if t.name == tool), None)
+                        if current is None:
+                            raise McpFailure("gone")
+                        result = await client.call_tool(tool, arguments)
         except Exception as exc:
             raise _failure("tool call", exc) from None
         text, truncated = render_result(result)

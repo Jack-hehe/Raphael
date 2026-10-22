@@ -41,7 +41,7 @@ import secrets
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult, PluginTool, clean_arguments, tool_key
 from ..agent.policy import PLUGIN_PREFIX, Tier
@@ -60,6 +60,9 @@ from .config import (
 from .oauth import OpenBrowser, VaultTokenStorage, open_in_browser, revoke
 from .toolsets import tool_kind
 from .vault import SecretTooLong, SecretVault, secret_name
+
+if TYPE_CHECKING:
+    from .pool import McpPool
 
 logger = logging.getLogger(__name__)
 
@@ -537,6 +540,7 @@ class IntegrationsService:
         *,
         approver: str,
         task_id: int | None = None,
+        pool: "McpPool | None" = None,
     ) -> PluginResult:
         server_name, tool_name = self._names(key)
         usable = self._usable(key)
@@ -563,6 +567,8 @@ class IntegrationsService:
             json.dumps(arguments, ensure_ascii=False, default=str)
         ) > MAX_ARGUMENT_CHARS:
             return end("blocked", PluginResult(False, "blocked"))
+        # A pool is passed on only when there is one: a connector of a test may not know it.
+        kept = {} if pool is None else {"pool": pool}
         try:
             outcome = await self._connector.call_tool(
                 server,
@@ -570,6 +576,7 @@ class IntegrationsService:
                 clean_arguments(tool.input_schema, arguments),
                 expected=tool.fingerprint,
                 timeout_s=self._call_timeout_s,
+                **kept,
             )
         except asyncio.CancelledError:
             # Esc, or the core closing, ended the call part way: whether it was done is not known.

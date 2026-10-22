@@ -45,6 +45,7 @@ from ..brain.catalog import LLM, find
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
 from ..brain.pricing import builtin_catalog
 from ..brain.spend import SpendTracker
+from ..integrations.pool import McpPool
 from ..protocol import INVALID_PARAMS, WORKER_STOPPED, RpcError
 from .snapshot import BUILTIN, FIND, MCP, Snapshot, ToolRef
 from .tasks import TaskStore
@@ -171,6 +172,9 @@ class TaskRun:
         self.deadline = clock() + limits.seconds
         self._live: set[asyncio.Task[Any]] = set()
         self._in_plugin_call = False
+        # The connections of the task's plugin calls: one for each server, kept for the task and
+        # closed by whoever ends it (`pool.aclose`).
+        self.pool = McpPool()
         # One call at a time: the worker may send several at once, and the limits (the money above
         # all) are read before a reply lands. A call waits for the one before it and checks the
         # limits only when its turn comes.
@@ -367,7 +371,7 @@ class TaskRun:
         began = time.perf_counter()
         try:
             result = await self._guarded(
-                self._gate.call_plugin(ref.key, arguments, task_id=self.task_id)
+                self._gate.call_plugin(ref.key, arguments, task_id=self.task_id, pool=self.pool)
             )
         except (RpcError, asyncio.CancelledError):
             # The call did not come back: it may or may not have been made. A later attempt is

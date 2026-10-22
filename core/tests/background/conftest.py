@@ -182,6 +182,8 @@ class Servers:
 
     def __init__(self):
         self.by_name = {}
+        self.opened = 0  # connections made
+        self.active = 0  # connections open now
 
     def __call__(self, server, secrets):
         return self._open(server)
@@ -189,7 +191,12 @@ class Servers:
     @asynccontextmanager
     async def _open(self, server):
         async with Client(self.by_name[server.name]) as client:
-            yield client
+            self.opened += 1
+            self.active += 1
+            try:
+                yield client
+            finally:
+                self.active -= 1
 
 
 class StrictHub(IntegrationsService):

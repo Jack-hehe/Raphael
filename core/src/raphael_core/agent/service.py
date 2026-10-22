@@ -67,6 +67,7 @@ import httpx
 from ..background.brief import background_block, background_line
 from ..background.tasks import Refused
 from ..brain.catalog import CatalogEntry
+from ..integrations.pool import McpPool
 from ..brain.openrouter import OpenRouterClient
 from ..brain.secrets import KeyStore
 from ..brain.settings import DEFAULTS, SettingsStore
@@ -128,6 +129,8 @@ MAX_QUESTION_CHARS = 1000
 _SOURCE = re.compile(r"[a-z]{1,20}")
 # How many turns of the conversation each route is shown.
 CONTEXT_TURNS = {"discuss": 10, "answer": 3, "chat": 3}
+# A connection to a plugin's server that nobody uses is closed after this long.
+PLUGIN_IDLE_S = 120.0
 _DAY_MS = 86_400_000
 # The routes that give an answer a later "copy that" can copy. Small talk ("不客氣。") is none.
 _ANSWER_ROUTES = ("answer", "discuss")
@@ -314,6 +317,9 @@ class AgentService:
         self._plugins = plugins
         self._gate = gate if gate is not None else ToolGate(plugins, conn=conn, now_ms=now_ms)
         self._background = background
+        # The connections to the plugins' servers, kept for a short while: a second question about
+        # the same service does not start it again.
+        self._pool = McpPool(idle_s=PLUGIN_IDLE_S)
         self._planner = Planner(client)
         self._picker = ToolPicker(client)
         self._tool_support = ToolSupport(models, clock=clock)
@@ -383,6 +389,7 @@ class AgentService:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._inflight.clear()
+        await self._pool.aclose()
         await self._tools.aclose()
 
     # --- agent.ask ------------------------------------------------------------------------------
@@ -732,7 +739,7 @@ class AgentService:
         action = action or Action(call.tool.key, call.arguments)
         began = time.perf_counter()
         outcome = await self._gate.call_plugin(
-            call.tool.key, call.arguments, approval=approval, action=action
+            call.tool.key, call.arguments, approval=approval, action=action, pool=self._pool
         )
         steps.append(
             self._step(

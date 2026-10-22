@@ -65,6 +65,12 @@ def build(*, describe: str = "Look something up.") -> MCPServer:
         return str(len(os.environ.get(name, "")))
 
     @server.tool()
+    def pid() -> str:
+        """The id of the process this server runs in."""
+        CALLS.append("pid")
+        return str(os.getpid())
+
+    @server.tool()
     def injected() -> str:
         """Returns text that tries to give the model orders."""
         CALLS.append("injected")

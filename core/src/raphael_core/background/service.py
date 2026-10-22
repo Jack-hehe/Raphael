@@ -531,6 +531,8 @@ class BackgroundService:
             raise
         finally:
             self._run = None
+            # The connections to the plugins' servers end with the task, whichever way it ended.
+            await run.pool.aclose()
 
     def _interrupt_closing(self, task: Task, run: TaskRun) -> None:
         """The task that ran when the core closed: told of at the next hello, in its own language."""

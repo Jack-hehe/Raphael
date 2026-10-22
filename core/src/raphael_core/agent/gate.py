@@ -24,12 +24,15 @@ import logging
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..integrations.audit import AuditLog
 from .commands import COMMANDS
 from .plugins import PluginHub, PluginResult
 from .policy import Action, Approval, NotApproved, Tier, ToolRegistry, UnknownTool
+
+if TYPE_CHECKING:
+    from ..integrations.pool import McpPool
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +109,12 @@ class ToolGate:
         approval: Approval | None = None,
         action: Action | None = None,
         task_id: int | None = None,
+        pool: "McpPool | None" = None,
     ) -> PluginResult:
         """Call the tool `key` of a plugin through the door. `approval` is the yes for it, if it had
         to be asked about; a call that the door refuses is not made, and the hub writes down that it
-        was refused. Never raises for a failure of the call: the result says what came of it (a
+        was refused. `pool` keeps the connection to the tool's server open for the calls after
+        this one. Never raises for a failure of the call: the result says what came of it (a
         cancellation is the exception, as everywhere)."""
         plugins = self._plugins
         if plugins is None:
@@ -120,8 +125,9 @@ class ToolGate:
             approver = "auto" if approval is None else "user"
         except (UnknownTool, NotApproved):
             approver = "none"
+        kept = {} if pool is None else {"pool": pool}  # a hub of a test may not know it
         try:
-            return await plugins.call(key, arguments, approver=approver, task_id=task_id)
+            return await plugins.call(key, arguments, approver=approver, task_id=task_id, **kept)
         except Exception as exc:  # not the hub's own failures, which it reports in the outcome
             logger.warning("A plugin call failed unexpectedly: %s", type(exc).__name__)
             return PluginResult(False, "error")
