@@ -4,7 +4,8 @@
 //!   dictation methods and the ones that ask Raphael something (`agent.ask`, `agent.confirm`,
 //!   `agent.cancel`) are the controller's alone. The main window may read and clear the record of
 //!   the conversations (`agent.history.`), and stop one background task it names
-//!   (`worker.cancel {task_id}`), the way the tray stops the one that runs.
+//!   (`worker.cancel {task_id}`) or run one that did not finish again (`worker.rerun {task_id}`), the
+//!   way the tray stops the one that runs.
 //! - `device_settings_get` and `device_settings_set` read and change `device.json`
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
 //!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
@@ -199,7 +200,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 19] = [
+const ALLOWED_METHODS: [&str; 20] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -221,6 +222,8 @@ const ALLOWED_METHODS: [&str; 19] = [
     // The conversation view stops the task it shows, by its id (`validate_core_call`). The other
     // methods of the worker stay closed: a yes to its question is the overlay's real click alone.
     "worker.cancel",
+    // ... and runs one that did not finish again, by its id.
+    "worker.rerun",
 ];
 
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
@@ -249,6 +252,12 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
             None => Err("worker.cancel needs the task_id of the task to stop".to_owned()),
         };
     }
+    if method == "worker.rerun" {
+        return match params.get("task_id").and_then(Value::as_u64) {
+            Some(_) => Ok(()),
+            None => Err("worker.rerun needs the task_id of the task to run again".to_owned()),
+        };
+    }
     if method != "settings.set" {
         return Ok(());
     }
@@ -265,6 +274,9 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
             .as_str()
             .is_some_and(|language| ["auto", "zh", "ja", "en"].contains(&language)),
         "cleanup_model" => value.as_str().is_some_and(|model| !model.trim().is_empty()),
+        "worker_cost_cap_usd" => value
+            .as_f64()
+            .is_some_and(|cap| [0.1, 0.2, 0.5, 1.0].iter().any(|ok| (cap - ok).abs() < 1e-9)),
         "stt_engine" => value
             .as_str()
             .is_some_and(|engine| ["cloud", "local"].contains(&engine)),
@@ -278,6 +290,7 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
         "history_retention_days" => "歷史紀錄至少要保留 1 天",
         "language" => "語言只能是 auto、zh、ja 或 en",
         "stt_engine" => "語音轉文字只能選雲端或本機",
+        "worker_cost_cap_usd" => "背景任務的花費上限只能是 0.10、0.20、0.50 或 1.00 美元",
         _ => "沒有指定整理用的模型",
     }
     .to_owned())
@@ -1116,6 +1129,27 @@ mod tests {
     }
 
     #[test]
+    fn the_window_runs_again_only_the_task_it_names() {
+        assert!(is_allowed_method("worker.rerun"));
+        assert_eq!(
+            validate_core_call("worker.rerun", &json!({ "task_id": 7 })),
+            Ok(())
+        );
+        for params in [
+            json!({}),
+            json!({ "task_id": null }),
+            json!({ "task_id": "7" }),
+            json!({ "task_id": -1 }),
+            json!({ "task_id": 1.5 }),
+        ] {
+            assert!(
+                validate_core_call("worker.rerun", &params).is_err(),
+                "{params}"
+            );
+        }
+    }
+
+    #[test]
     fn the_whole_list_of_allowed_methods() {
         for method in [
             "history.list",
@@ -1160,6 +1194,7 @@ mod tests {
             "integrations.audit",
             "toolsets.list",
             "worker.cancel",
+            "worker.rerun",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
@@ -1237,6 +1272,17 @@ mod tests {
         assert!(set("monthly_limit_usd", json!("10")).is_err());
         assert!(set("monthly_limit_usd", json!(null)).is_err());
         assert!(set("monthly_limit_usd", json!(true)).is_err());
+    }
+
+    #[test]
+    fn the_cost_of_one_background_task_is_one_of_four_amounts() {
+        for cap in [0.1, 0.2, 0.5, 1.0] {
+            assert!(set("worker_cost_cap_usd", json!(cap)).is_ok(), "{cap}");
+        }
+        assert!(set("worker_cost_cap_usd", json!(1)).is_ok());
+        for cap in [json!(0), json!(0.3), json!(2), json!(-1), json!("0.5"), json!(null)] {
+            assert!(set("worker_cost_cap_usd", cap.clone()).is_err(), "{cap}");
+        }
     }
 
     #[test]

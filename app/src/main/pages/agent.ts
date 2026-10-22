@@ -22,6 +22,7 @@ import {
   isLive,
   listMove,
   markSeen,
+  requestRerun,
   requestStop,
   sessionListHTML,
   stepsOpen,
@@ -314,6 +315,14 @@ export function createAgent(app: AppContext): Page {
     else details.add(id);
   }
 
+  async function rerun(button: HTMLElement): Promise<void> {
+    const asked = requestRerun(state, Number(button.dataset.task), api.workerRerun);
+    render(); // the button is off
+    const outcome = await asked;
+    if (outcome.error !== undefined) toaster.info(describeError(outcome.error));
+    if (visible) void load(false);
+  }
+
   async function stop(button: HTMLElement): Promise<void> {
     const taskId = Number(button.dataset.task);
     const asked = requestStop(state, taskId, api.workerCancel);
@@ -347,6 +356,9 @@ export function createAgent(app: AppContext): Page {
         break;
       case "stop":
         void stop(act);
+        break;
+      case "rerun":
+        void rerun(act);
         break;
     }
   });

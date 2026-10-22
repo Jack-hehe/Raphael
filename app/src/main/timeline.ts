@@ -76,6 +76,8 @@ const REASONS: Record<string, MessageKey> = {
   no_key: "agent.reason.no_key",
   error: "agent.reason.error",
 };
+/** The states of a task that did not finish: it can be run again. */
+const RERUNNABLE: ReadonlySet<string> = new Set(["interrupted", "cancelled", "limit", "failed"]);
 const TASK_ENDS: Record<string, MessageKey> = {
   cancelled: "agent.taskCancelled",
   limit: "agent.taskLimit",
@@ -165,10 +167,12 @@ export interface TimelineState {
   seen: Set<string>;
   /** Tasks the reader asked to stop, which have not stopped yet. */
   stopping: Set<number>;
+  /** Tasks the reader asked to run again; each is run again once. */
+  rerunning: Set<number>;
   nowMs: number;
 }
 
-export const emptyTimelineState = (): TimelineState => ({ open: new Map(), seen: new Set(), stopping: new Set(), nowMs: Date.now() });
+export const emptyTimelineState = (): TimelineState => ({ open: new Map(), seen: new Set(), stopping: new Set(), rerunning: new Set(), nowMs: Date.now() });
 
 /** Whether a turn's steps are open: as the reader left them, else open while its task runs and closed once it is done. */
 export const stepsOpen = (turn: AgentTurn, state: TimelineState): boolean => state.open.get(turn.id) ?? isLive(turn.task);
@@ -256,10 +260,14 @@ export function stepsHTML(turn: AgentTurn, state: TimelineState): string {
   const stop = live
     ? `<button type="button" class="btn sm icon stop" data-act="stop" data-task="${esc(task!.id)}" aria-label="${stopLabel}" title="${stopLabel}"${stopping ? " disabled" : ""}>${stopping ? SPINNER : pic("stop")}</button>`
     : "";
+  const again =
+    task && RERUNNABLE.has(task.state)
+      ? `<button type="button" class="btn sm rerun" data-act="rerun" data-task="${esc(task.id)}"${state.rerunning.has(task.id) ? " disabled" : ""}>${esc(t("agent.rerun"))}</button>`
+      : "";
   const rows = steps.map((step, index) => stepHTML(step, !state.seen.has(stepKey(turn, index)))).join("") + (live ? liveStepHTML(task!, state.nowMs) : "");
   return (
     `<div class="steps${live ? " is-live" : ""}" data-open="${open}">` +
-    `<div class="steps-bar">${summary}${stop}</div>` +
+    `<div class="steps-bar">${summary}${stop}${again}</div>` +
     `<div class="steps-body" id="${id}"${open ? "" : " inert"}><div class="steps-clip">` +
     `<ol class="steps-list" aria-label="${esc(t("agent.stepsList"))}">${rows}</ol>` +
     `</div></div></div>`
@@ -287,6 +295,26 @@ export async function requestStop(
   } catch (error) {
     state.stopping.delete(taskId);
     return { cancelled: false, error };
+  }
+}
+
+/**
+ * 「重新執行」: the task is marked at once, so its button is off, and the core starts it again as a
+ * new task. When that fails the mark comes off; otherwise it stays, so that one task is not started
+ * twice.
+ */
+export async function requestRerun(
+  state: TimelineState,
+  taskId: number,
+  rerun: (taskId: number) => Promise<{ task_id: number }>,
+): Promise<{ started: boolean; error?: unknown }> {
+  state.rerunning.add(taskId);
+  try {
+    await rerun(taskId);
+    return { started: true };
+  } catch (error) {
+    state.rerunning.delete(taskId);
+    return { started: false, error };
   }
 }
 

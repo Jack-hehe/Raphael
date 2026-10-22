@@ -13,6 +13,7 @@ import {
   modelPickerLook,
   paneHTML,
   priceTexts,
+  WORKER_COST_CAPS,
 } from "./settings-view";
 
 afterEach(() => setLocale("zh-TW"));
@@ -280,6 +281,17 @@ describe("拉斐爾", () => {
     expect(described(html)).toEqual([]);
     expect(rowOf(html, "問拉斐爾")).toContain('<button type="button" class="btn" data-act="rec-agent" data-k="rec-agent">變更</button>');
     expect(rowOf(html, "天氣的城市")).toContain('id="agent-city" type="text" value="台北"');
+  });
+
+  test("then what one background task may spend, a dropdown of four amounts", () => {
+    const html = tab("agent");
+    expect(names(html).slice(0, 3)).toEqual(["問拉斐爾", "天氣的城市", "背景任務的花費上限"]);
+    const row = rowOf(html, "背景任務的花費上限");
+    expect(row).toContain('class="sel"');
+    expect(row).toContain('data-k="worker-cap"');
+    expect(row).toContain("US$0.20"); // the default
+    expect(tab("agent", { brain: { ...brain, worker_cost_cap_usd: 0.5 } })).toContain("US$0.50");
+    expect(WORKER_COST_CAPS.map((c) => c.value)).toEqual(["0.1", "0.2", "0.5", "1"]);
   });
 
   test("then Telegram, in rows like the others", () => {

@@ -241,6 +241,8 @@ export interface BrainSettings {
   agent_model?: string;
   /** The city Raphael looks the weather up for. */
   agent_city?: string;
+  /** The most one background task may spend, in US$: 0.1, 0.2, 0.5 or 1. */
+  worker_cost_cap_usd?: number;
   /** The models starred in the pickers, per role, in the order they were added. */
   model_favorites?: Partial<Record<ModelRole, string[]>>;
 }
