@@ -44,6 +44,13 @@ def test_a_chord_of_the_allowlist_is_read_in_one_spelling(text, chord):
         ("ctrl+esc", "system"),
         ("alt+space", "system"),
         ("ctrl+alt+t", "system"),
+        # closing a tab, a window or the app: Raphael never closes anything
+        ("ctrl+w", "system"),
+        ("Ctrl+Shift+W", "system"),
+        ("ctrl+f4", "system"),
+        ("ctrl+shift+f4", "system"),
+        ("ctrl+q", "system"),
+        ("ctrl+shift+q", "system"),
         ("a", "typing"),
         ("shift+a", "typing"),
         ("7", "typing"),
@@ -63,6 +70,16 @@ def test_a_chord_outside_the_allowlist_is_refused_and_says_why(text, why):
     with pytest.raises(KeysRefused) as refused:
         parse_chord(text)
     assert refused.value.why == why
+
+
+def test_the_shell_refuses_the_same_closing_chords():
+    keys_rs = Path(__file__).resolve().parents[3] / "app" / "src-tauri" / "src" / "computer" / "keys.rs"
+    body = re.search(r"const CLOSE_LETTERS: &\[char\] = &\[(.*?)\];", keys_rs.read_text(encoding="utf-8"), re.S)
+    assert body, "keys.rs has CLOSE_LETTERS"
+    assert tuple(re.findall(r"'(.)'", body.group(1))) == safety._CLOSE_LETTERS
+    # with Alt or Shift alone the letters are an app's menu or typing, not closing
+    assert parse_chord("alt+w") == ("alt", "w")
+    assert parse_chord("ctrl+e") == ("ctrl", "e")
 
 
 def test_a_chord_is_written_the_way_the_owner_reads_it():

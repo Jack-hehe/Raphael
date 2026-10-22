@@ -17,6 +17,8 @@ arguments again:
   (`confirmed` when the owner said yes to it: only then does the shell type a line break, as
   Enter, or press a key that deletes what is selected where the focus is no text field);
 - `focus {window}` → `{}`: the window is brought to the front;
+- `check` → `{}`: nothing is done; the shell only says whether the run is one it has taken (it
+  fails with `watch`, `stopped` or `failed` otherwise), before the core opens an app itself;
 - `allow {exe, name}` → `{}`: the app joins the always-allowed list of the device settings.
 
 What the shell should show while a run goes on is told with `computer.state {phase, line, run}`,

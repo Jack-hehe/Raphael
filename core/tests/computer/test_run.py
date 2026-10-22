@@ -25,6 +25,7 @@ def answering(shell, *, always=False, act=None, look=None):
         look=look or calculator(),
         act=act or {"method": "invoke"},
         allow={},
+        check={},
     )
 
 
@@ -640,3 +641,53 @@ async def test_a_run_whose_input_watch_did_not_start_ends_at_once(make_run, shel
     assert (final.text, final.status) == (line, "error")
     assert shell.ops() == ["apps"]
     assert shell.states[-1][0] == "end"
+
+
+@pytest.mark.parametrize("answer, kind", [("watch", "unavailable"), ("stopped", "stopped"), (None, "unavailable")])
+async def test_an_app_is_opened_only_for_a_run_the_shell_has_taken(make_run, shell, monkeypatch, answer, kind):
+    # opening an app changes the desktop: not for a run the owner's input cannot stop
+    answering(shell, always=True)
+    if answer is None:
+        monkeypatch.setattr(run_module, "APPS_TIMEOUT_S", 0.01)
+        del shell.handlers["check"]  # the shell does not answer
+    else:
+        shell.handlers["check"] = answer
+    opened = []
+
+    async def open_app(name):
+        opened.append(name)
+        return name
+
+    model = FakeModel(reply(call("computer_open", name="Calculator")), reply(content="已開啟。"))
+    _, final = await drive(make_run(model, open_app=open_app))
+    assert opened == [] and final.kind == kind
+    assert shell.ops() == ["check"]
+
+
+async def test_an_app_the_shell_cannot_operate_for_is_not_opened(make_run, shell):
+    answering(shell, always=True)
+    shell.handlers["check"] = "failed"  # no UI Automation in the shell
+    opened = []
+
+    async def open_app(name):
+        opened.append(name)
+        return name
+
+    model = FakeModel(reply(call("computer_open", name="Calculator")), reply(content="無法開啟。"))
+    _, final = await drive(make_run(model, open_app=open_app))
+    assert opened == [] and final.status == "done"
+    assert "The app could not be opened" in everything_the_model_saw(model)
+
+
+async def test_a_button_renamed_since_the_look_is_asked_about_again(make_run, shell):
+    # the look said 「七」; by the click the page called it Delete, and the shell refuses it
+    answering(shell, always=True, act="unconfirmed")
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, element=3, action="click", final=False)),
+        reply(content="無法完成。"),
+    )
+    _, final = await drive(make_run(model))
+    assert "needs the owner's yes" in everything_the_model_saw(model)
+    assert final.status == "done"

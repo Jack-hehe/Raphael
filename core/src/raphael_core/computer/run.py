@@ -677,6 +677,15 @@ class ComputerRun:
             raise _Stopped("limit_actions")
         if self.opens >= self.limits.opens:
             return wrap_untrusted(name, NO_MORE_OPENS, ok=False)
+        # The core launches the app itself, so the shell is asked first whether the run is one it
+        # has taken: one whose watch on the owner's input did not start (`watch`), that is over
+        # for it (`stopped`), or a shell that does not answer, ends the run here; one that cannot
+        # operate the desktop at all opens nothing.
+        try:
+            await self._shell("check", {}, APPS_TIMEOUT_S)
+        except BridgeError as error:
+            self._step("open", None, "error", time.perf_counter(), error.kind)
+            return wrap_untrusted(name, f"The app could not be opened ({error.kind}).", ok=False)
         self._pass_gate(Action(name, {"name": wanted}))
         self.actions += 1
         self.opens += 1

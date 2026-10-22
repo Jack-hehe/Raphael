@@ -15,9 +15,9 @@ about the element it named (`snapshot.Element`):
   break in typed text (which the shell presses as Enter) say it too. Any one of them is enough: the
   owner is asked every time.
 - **Keys** (`check_keys`): the chords a step may press, from an allowlist. No Windows key at all
-  (Win+L, Win+R...), nothing that switches or closes windows (Alt+Tab, Alt+F4), nothing of the
-  system's (Ctrl+Alt+Del, Ctrl+Shift+Esc, Ctrl+Esc), and no bare letters: typing is `type`. The
-  shell checks the same list again before it presses anything.
+  (Win+L, Win+R...), nothing that switches or closes windows, tabs or apps (Alt+Tab, Alt+F4,
+  Ctrl+W, Ctrl+Q), nothing of the system's (Ctrl+Alt+Del, Ctrl+Shift+Esc, Ctrl+Esc), and no bare
+  letters: typing is `type`. The shell checks the same list again before it presses anything.
 
 The words are matched in English, Traditional Chinese and Japanese, as the apps label their
 buttons; English as whole words, Chinese and Japanese as they are written. A guess that is too
@@ -149,6 +149,11 @@ _WINDOWS_KEYS = frozenset({"win", "windows", "meta", "super", "cmd", "command", 
 # Keys that, with Alt or Ctrl among the modifiers, switch or close windows or open the system's own
 # (Alt+Tab, Alt+F4, Alt+Space, Ctrl+Esc, Ctrl+Shift+Esc, Ctrl+F4): never pressed.
 _SYSTEM_WITH = {"tab": {"alt"}, "f4": {"alt", "ctrl"}, "escape": {"alt", "ctrl"}, "space": {"alt"}}
+# Letters that, with Ctrl (and Shift or not), close a tab, a window or the app: Ctrl+W and
+# Ctrl+Shift+W (a browser's tab and window, File Explorer), Ctrl+Q and Ctrl+Shift+Q (quitting).
+# Never pressed: Raphael closes nothing. The shell's `CLOSE_LETTERS` (keys.rs), held to this by a
+# test.
+_CLOSE_LETTERS = ("w", "q")
 # Chords that send (Ctrl+Enter in a mail or a chat) or delete for good (Shift+Delete), wherever
 # they are pressed.
 _CONFIRM_CHORDS = frozenset(
@@ -195,6 +200,8 @@ def check_keys(chord: tuple[str, ...]) -> None:
     Ctrl or Alt; Ctrl and Alt together are never pressed (they are AltGr, or the system's)."""
     *mods, key = chord
     if set(mods) & _SYSTEM_WITH.get(key, set()) or ("ctrl" in mods and "alt" in mods):
+        raise KeysRefused("system")
+    if key in _CLOSE_LETTERS and "ctrl" in mods:
         raise KeysRefused("system")
     if len(key) == 1 and not ({"ctrl", "alt"} & set(mods)):
         raise KeysRefused("typing")
