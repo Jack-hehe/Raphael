@@ -486,7 +486,7 @@ export interface ModelPickerOptions {
   onChoose: (id: string) => void;
   /** The speech models of this computer (a second tab) and what is under way: only the speech-to-text picker has it. */
   local?: LocalView;
-  /** The user chose the local model `name`, after the question about downloading it if it was not on disk. The page downloads it, saves it and hands the progress back with `update`. */
+  /** The user chose the local model `name`, or pressed 下載 on it. The page downloads it if it is not on disk, saves it and hands the progress back with `update`. */
   onUseLocal?: (name: string) => void;
   /** The user cancelled the download in progress. */
   onCancelLocal?: () => void;
@@ -815,6 +815,13 @@ class MountedPicker implements ModelPicker {
     rows[next].focus();
   }
 
+  /** Starts downloading the local model `name` at once: its row then shows the progress and 取消. */
+  private download(name: string): void {
+    this.confirm = null;
+    this.o.onUseLocal?.(name);
+    this.paintLocal();
+  }
+
   /** A button of the local tab. */
   private localAct(button: HTMLElement): void {
     const local = this.o.local;
@@ -832,12 +839,13 @@ class MountedPicker implements ModelPicker {
           this.close();
           this.o.onUseLocal?.(name);
         } else {
-          this.confirm = { kind: "download", name };
-          this.paintLocal();
-          this.panel?.querySelector<HTMLElement>('[data-act="confirm"]')?.focus();
+          this.download(name);
         }
         return;
       }
+      case "download":
+        this.download(name);
+        return;
       case "delete":
         this.confirm = { kind: "delete", name };
         this.paintLocal();
@@ -847,7 +855,6 @@ class MountedPicker implements ModelPicker {
         const asked = this.confirm;
         this.confirm = null;
         if (asked?.kind === "delete") this.o.onDeleteLocal?.(name);
-        else if (asked) this.o.onUseLocal?.(name);
         this.paintLocal();
         return;
       }

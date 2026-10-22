@@ -6,9 +6,11 @@ so the dictation service uses it like any of them. It runs on the dictation's wo
 reaches the brain only through the router, with JSON params: the app hands it a `call(method,
 params, timeout)` that runs `router.call` on the event loop and waits for it.
 
-Any failure (no key, the monthly limit, no network, a timeout, an error) makes the segment go to the
-local engine, and the rest of that dictation too: a dictation should not wait for a cloud that has
-just failed once per segment. Each kind of failure is logged as a warning once per process (the
+A refusal that passes (too many requests, a server error) is tried again after a short wait. Any
+other failure (no key, the monthly limit, no network, a timeout, an error), or one that does not
+pass, makes the segment go to the local engine, and the rest of that dictation too: a dictation
+should not wait for a cloud that has just failed once per segment. Without a local engine the next
+segment goes to the cloud again, since there is nothing else to hear it. Each kind of failure is logged as a warning once per process (the
 app passes the same `warned` set to every engine), at debug level after that. Neither the audio nor
 the text is ever logged.
 """
@@ -19,6 +21,7 @@ import base64
 import concurrent.futures
 import io
 import logging
+import time
 import wave
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -26,7 +29,7 @@ from typing import Any
 import numpy as np
 
 from raphael_core.device.dictation import join_segments
-from raphael_core.protocol import BUDGET_EXCEEDED, NOT_CONFIGURED, RpcError
+from raphael_core.protocol import BUDGET_EXCEEDED, NO_LOCAL_MODEL, NOT_CONFIGURED, RpcError
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,10 @@ SAMPLE_RATE = 16_000
 MAX_LOCAL_SECONDS = 20.0
 # Beyond the brain's own timeout, min(30, 5 + seconds): the router call and the JSON of the audio.
 _MARGIN_S = 3.0
+
+# The kinds of failure that pass, and the waits before each new try of the same segment.
+_PASSING = frozenset({"rate_limit", "server"})
+_RETRY_WAITS_S = (1.0, 2.0)
 
 Call = Callable[[str, dict, float], Any]
 
@@ -87,8 +94,10 @@ class CloudSttEngine:
         *,
         fallback: Callable[[], Any],
         warned: set[str],
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._call = call
+        self._sleep = sleep
         self._fallback = fallback
         self._warned = warned
         self._failed: str | None = None
@@ -102,12 +111,34 @@ class CloudSttEngine:
             raise ValueError(f"Expected 1-D samples, not {samples.ndim}-D")
         if not samples.any():  # no samples, or all of them zero: there is nothing to hear
             return ""
-        if self._failed is None:
+        if self._failed is not None:
+            return self._local(samples, hints, language)
+        try:
+            return self._cloud_with_retries(samples, hints, language)
+        except Exception as error:
+            kind = _kind(error)
+        try:
+            text = self._local(samples, hints, language)
+        except RpcError as error:
+            if error.code == NO_LOCAL_MODEL:
+                # Nothing else can hear the rest: the next segment tries the cloud again.
+                self._warn(
+                    kind, "Cloud speech-to-text failed (%s) and there is no local engine", "alone"
+                )
+            raise
+        self._note_failure(kind)
+        return text
+
+    def _cloud_with_retries(self, samples: np.ndarray, hints: Sequence[str], language: str) -> str:
+        for wait in _RETRY_WAITS_S:
             try:
                 return self._cloud(samples, hints, language)
             except Exception as error:
-                self._note_failure(_kind(error))
-        return self._local(samples, hints, language)
+                if _kind(error) not in _PASSING:
+                    raise
+                logger.debug("Cloud speech-to-text refused (%s); trying again", _kind(error))
+            self._sleep(wait)
+        return self._cloud(samples, hints, language)
 
     def _cloud(self, samples: np.ndarray, hints: Sequence[str], language: str) -> str:
         params = {
@@ -125,15 +156,20 @@ class CloudSttEngine:
 
     def _note_failure(self, kind: str) -> None:
         self._failed = kind
-        if kind in self._warned:
-            logger.debug("Cloud speech-to-text failed (%s); using the local engine", kind)
-            return
-        self._warned.add(kind)
-        logger.warning(
+        self._warn(
+            kind,
             "Cloud speech-to-text failed (%s); this dictation uses the local engine "
             "(said once per kind of failure)",
-            kind,
         )
+
+    def _warn(self, kind: str, message: str, case: str = "") -> None:
+        """Logs `message` (with `kind`) as a warning once per process for each kind and case."""
+        key = f"{kind}/{case}" if case else kind
+        if key in self._warned:
+            logger.debug(message, kind)
+            return
+        self._warned.add(key)
+        logger.warning(message, kind)
 
     def _local(self, samples: np.ndarray, hints: Sequence[str], language: str) -> str:
         engine = self._fallback()

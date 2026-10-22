@@ -235,7 +235,7 @@ export interface BrainSettings {
   /** "cloud" (OpenRouter, the local engine as fallback) or "local". */
   stt_engine: string;
   /** Which model of the catalogue the local engine is. */
-  stt_local_model?: string;
+  stt_local_model?: string | null;
   stt_cloud_model: string;
   /** The model that writes Raphael's answers. */
   agent_model?: string;
@@ -283,6 +283,8 @@ export interface LocalModels {
   models: LocalModel[];
   /** The model that is the local engine (it is in use only when `stt_engine` is "local"). */
   active: string;
+  /** The model that backs up the cloud (null when the engine is local, or when there is none). */
+  fallback?: string | null;
   /** The model being downloaded, if one is. */
   downloading: string | null;
 }

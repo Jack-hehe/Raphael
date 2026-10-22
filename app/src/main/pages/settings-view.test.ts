@@ -373,7 +373,7 @@ describe("模型與用量", () => {
   });
 
   test("gives the speech-to-text picker the local models, and the others none", () => {
-    expect(modelPickerLook(view(), "stt").local).toEqual({ models: LOCAL_MODELS, active: null, download: null });
+    expect(modelPickerLook(view(), "stt").local).toEqual({ models: LOCAL_MODELS, active: null, fallback: null, download: null });
     expect(modelPickerLook(view(), "cleanup").local).toBeUndefined();
     expect(modelPickerLook(view(), "answer").local).toBeUndefined();
   });
@@ -384,6 +384,9 @@ describe("模型與用量", () => {
     expect(modelPickerLook(view({ brain: { ...local, stt_local_model: "sensevoice" } }), "stt").local?.active).toBe("sensevoice");
     // With the cloud in use, the local model chosen is only what the fallback is.
     expect(modelPickerLook(view({ brain: { ...brain, stt_local_model: "sensevoice" } }), "stt").local?.active).toBeNull();
+    expect(modelPickerLook(view({ brain: { ...brain, stt_local_model: "sensevoice" } }), "stt").local?.fallback).toBe("sensevoice");
+    expect(modelPickerLook(view({ brain: { ...brain, stt_local_model: null } }), "stt").local?.fallback).toBeNull();
+    expect(modelPickerLook(view({ brain: { ...local, stt_local_model: "sensevoice" } }), "stt").local?.fallback).toBeNull();
   });
 
   test("a download under way, and the catalogue while it is read, reach the picker", () => {

@@ -117,6 +117,22 @@ pub const NOT_READY: Notice = Notice {
     ja: "《否。音声モデルの準備が完了していません。》",
 };
 
+/// The cloud could not transcribe the speech and no local model is left to take over
+/// (`NO_LOCAL_MODEL`).
+pub const NO_LOCAL_MODEL: Notice = Notice {
+    zh: "《否。雲端辨識失敗，且沒有本機模型。》",
+    en: "《Negative. Cloud transcription failed and there is no local model.》",
+    ja: "《否。クラウド認識に失敗しました。ローカルモデルがありません。》",
+};
+
+/// The cloud stopped hearing partway and no local model could go on (`incomplete` in the result
+/// of `dictation.stop`): the first part was pasted.
+pub const INCOMPLETE: Notice = Notice {
+    zh: "《否。雲端辨識中斷，只貼上前半段。》",
+    en: "《Negative. Cloud transcription stopped. Only the first part was pasted.》",
+    ja: "《否。クラウド認識が中断しました。前半のみ貼り付けました。》",
+};
+
 /// The core is not running, so nothing can be dictated.
 pub const CORE_DOWN: Notice = Notice {
     zh: "《否。核心未在運作。請重新啟動拉斐爾。》",
@@ -292,7 +308,7 @@ pub fn notice_for_fallback(reason: Option<&str>) -> Option<Notice> {
 mod tests {
     use super::*;
 
-    const ALL: [Notice; 11] = [
+    const ALL: [Notice; 13] = [
         ELEVATED,
         FOCUS_CHANGED,
         BUDGET,
@@ -301,6 +317,8 @@ mod tests {
         NO_MIC,
         NO_SOUND,
         NOT_READY,
+        NO_LOCAL_MODEL,
+        INCOMPLETE,
         CORE_DOWN,
         ASK_FAILED,
         GREETING,

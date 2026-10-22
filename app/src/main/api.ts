@@ -155,7 +155,7 @@ export const modelsLocal = (): Promise<LocalModels> => core("models.local");
 export const modelsLocalUse = (name: string): Promise<{ ok: true; settings: BrainSettings } | { ok: false; cancelled: true }> =>
   core("models.local_use", { name });
 export const modelsLocalCancel = (): Promise<{ cancelled: boolean }> => core("models.local_cancel");
-export const modelsLocalDelete = (name: string): Promise<{ deleted: boolean }> => core("models.local_delete", { name });
+export const modelsLocalDelete = (name: string): Promise<{ deleted: boolean; fallback?: string | null }> => core("models.local_delete", { name });
 /** Downloads the models that are missing; progress arrives as `ModelProgress` events. */
 export const modelsEnsure = (names: string[]): Promise<{ ok: boolean }> => core("models.ensure", { names });
 

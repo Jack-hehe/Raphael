@@ -50,6 +50,7 @@ from raphael_core.protocol import (
     BUSY,
     INTERNAL_ERROR,
     INVALID_PARAMS,
+    NO_LOCAL_MODEL,
     NO_MICROPHONE,
     NOT_CONFIGURED,
     NOT_FOUND,
@@ -204,9 +205,13 @@ class _Session:
         self.fatal = False  # ... and it was one that ends the session's work
 
     def fail(self, error: Exception, *, fatal: bool) -> None:
-        if self.failure is None:
+        if self.failure is None or _is_no_local_model(error):
             self.failure = error
         self.fatal = self.fatal or fatal
+
+
+def _is_no_local_model(error: Exception) -> bool:
+    return isinstance(error, RpcError) and error.code == NO_LOCAL_MODEL
 
 
 def _session_id(params: dict) -> str:
@@ -684,7 +689,13 @@ class DictationService:
         assert session.recorder is not None and session.segmenter is not None
         mic_failed = session.recorder.error is not None or session.stalled
         text = join_segments(session.texts)
-        if session.failure is not None and not text:
+        # With no text at all the failure is the answer. A dictation whose later stretches the
+        # cloud could not hear, with no local model behind it, still delivers the first part and
+        # says `incomplete`; an agent's transcript is not delivered in pieces.
+        cut_short = session.failure is not None and _is_no_local_model(session.failure)
+        if session.failure is not None and (
+            not text or (cut_short and session.purpose == PURPOSE_AGENT)
+        ):
             raise _failure_as_error(session.failure)
         # The segmenter's own count, but not if it never heard this recording: a segmenter that is
         # used again still reports the last dictation until its first frames come.
@@ -740,7 +751,13 @@ class DictationService:
             self._cleaning.pop(session.id, None)
         if session.cancelled:  # while the brain cleaned the text: it has not kept it
             raise RpcError(NOT_FOUND, f"The dictation session {session_id!r} was cancelled")
-        return {**result, "audio_seconds": speech, "stt_ms": stt_ms, "silent": False}
+        return {
+            **result,
+            "audio_seconds": speech,
+            "stt_ms": stt_ms,
+            "silent": False,
+            "incomplete": cut_short,
+        }
 
     async def _agent_transcript(self, session: _Session, text: str, speech: float) -> dict:
         """The stop of an agent session: the transcript, normalized by the brain. Nothing is asked
