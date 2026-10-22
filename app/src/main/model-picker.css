@@ -24,7 +24,7 @@
 .menu.mp-panel .mp-dd:focus-visible { background: var(--btn); box-shadow: none; outline: 2px solid var(--focus); outline-offset: 2px; }
 .menu.mp-panel .mp-dd[aria-expanded="true"] { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-ring); color: var(--text); }
 .mp-dd > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mp-dd .i { width: 12px; height: 12px; color: var(--text-3); }
+.mp-dd .i { color: var(--text-3); }
 .mp-ddlist { position: absolute; z-index: 2; top: calc(100% + 4px); min-width: 200px; max-width: min(300px, calc(100vw - 40px)); max-height: 288px; overflow-x: hidden; overflow-y: auto; padding: var(--sp-1); border-radius: var(--r-md); background: var(--menu); border: 1px solid var(--edge); box-shadow: var(--pop); }
 .mp-ddlist .mt { flex: 1; min-width: 0; }
 .mp-ddlist button[aria-selected="true"] .mt { font-weight: 600; }
@@ -49,7 +49,6 @@
 .mp-opt[aria-disabled="true"] .mp-price { color: var(--text-3); }
 /* The star beside a row: shown on the row that is pointed at or highlighted, always on a favourite, and when the focus is on it. */
 .menu.mp-panel .mp-star { flex: none; display: grid; place-items: center; width: 28px; height: var(--h-ctl-sm); min-height: 0; margin-top: 5px; padding: 0; border-radius: 7px; background: transparent; color: var(--text-3); opacity: 0; }
-.mp-star .i { width: 14px; height: 14px; }
 .mp-row:hover .mp-star, .mp-row:has(.mp-opt[aria-selected="true"]) .mp-star, .menu.mp-panel .mp-star[data-on], .menu.mp-panel .mp-star:focus-visible { opacity: 1; }
 .menu.mp-panel .mp-star:hover { background: var(--hover); color: var(--text); }
 .menu.mp-panel .mp-star[data-on] { color: var(--accent-text); }
@@ -90,7 +89,6 @@
 .lm-bar i { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width 0.15s linear; }
 .menu.mp-panel .lm-del { flex: none; display: grid; place-items: center; width: 28px; height: var(--h-ctl-sm); min-height: 0; margin: 5px 2px 0 0; padding: 0; border-radius: 7px; background: transparent; color: var(--text-3); }
 .menu.mp-panel .lm-del:hover { background: var(--hover); color: var(--text); }
-.lm-del .i { width: 14px; height: 14px; }
 /* A .btn in the menu keeps its border and its fill: ".menu button" would take them away. */
 .menu.mp-panel .lm-row .btn { flex: none; width: auto; justify-content: center; min-height: var(--h-ctl-sm); margin: 4px 4px 0 0; padding: 4px 10px; border: 1px solid var(--btn-edge); border-radius: var(--r-sm); background: var(--btn); font-size: var(--fs-xs); color: var(--text); }
 .menu.mp-panel .lm-row .btn:hover { background: var(--hover); border-color: var(--text-3); }

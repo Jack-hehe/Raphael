@@ -90,7 +90,7 @@ export const PANES: { id: SettingsPane; group: PaneGroup; icon: IconName | "embl
   { id: "connections", group: "integrations", icon: "plug", title: () => t("settings.paneConnections"), purpose: () => t("settings.purposeConnections") },
   { id: "messaging", group: "integrations", icon: "send", title: () => t("settings.paneMessaging"), purpose: () => t("settings.purposeMessaging") },
   { id: "usage", group: "account", icon: "wallet", title: () => t("settings.paneUsage"), purpose: () => t("settings.purposeUsage") },
-  { id: "data", group: "account", icon: "shield", title: () => t("settings.paneData"), purpose: () => t("settings.purposeData") },
+  { id: "data", group: "account", icon: "database", title: () => t("settings.paneData"), purpose: () => t("settings.purposeData") },
   { id: "about", group: "account", icon: "info", title: () => t("common.about"), purpose: () => t("settings.purposeAbout") },
 ];
 

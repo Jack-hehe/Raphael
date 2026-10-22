@@ -19,18 +19,6 @@ import { SERVICE_ICONS, brandStyle, hasLogo, monogram, serviceIconOf, serviceIco
 import type { AgentStep, AgentTask, AgentTurn, MainEvent } from "./types";
 import { btn, esc, ico } from "./ui";
 
-// ---------- the pictures this page adds to the app's icons ----------
-
-const svg = (body: string, cls = "i"): string => `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true">${body}</svg>`;
-const PATHS = {
-  send: "M14 2 7.2 8.8M14 2l-4.3 12-2.5-5.2L2 6.3z",
-  cloud: "M4.8 12.6h6.8a2.8 2.8 0 0 0 .4-5.6 4 4 0 0 0-7.6-1A3.3 3.3 0 0 0 4.8 12.6z",
-  check: "M3.6 8.4 6.6 11.2 12.4 4.8",
-  cross: "M5 5l6 6M11 5l-6 6",
-  stop: "M5 5h6v6H5z",
-} as const;
-const pic = (name: keyof typeof PATHS): string => svg(`<path d="${PATHS[name]}"/>`);
-
 /** The small turning ring of something under way. */
 const SPINNER = `<span class="spin" aria-hidden="true"></span>`;
 
@@ -212,7 +200,7 @@ function stepIcon(step: AgentStep): string {
   if (step.kind === "command") return `<span class="step-ic" ${named}>${ico("monitor")}</span>`;
   if (step.kind === "model") return `<span class="step-ic" ${named}>${ico("sparkle")}</span>`;
   if (!step.server || step.server === RAPHAEL) {
-    const own = step.tool === "weather" ? pic("cloud") : step.tool === "web_search" ? ico("globe") : step.tool === "local_time" ? ico("clock") : ico("search");
+    const own = step.tool === "weather" ? ico("cloud") : step.tool === "web_search" ? ico("globe") : step.tool === "local_time" ? ico("clock") : ico("search");
     return `<span class="step-ic" ${named}>${own}</span>`;
   }
   const mark = serviceIconOf({ name: step.server });
@@ -233,7 +221,7 @@ export function stepHTML(step: AgentStep, isNew: boolean): string {
     (ok ? "" : `<span class="step-why">${esc(why)}</span>`) +
     `</span>` +
     `<span class="step-end"><span class="step-ms num">${esc(formatDuration(step.ms))}</span>` +
-    `<span class="step-mark" role="img" aria-label="${esc(ok ? t("agent.ok") : why)}">${ok ? pic("check") : pic("cross")}</span></span>` +
+    `<span class="step-mark" role="img" aria-label="${esc(ok ? t("agent.ok") : why)}">${ok ? ico("check") : ico("x")}</span></span>` +
     `</li>`
   );
 }
@@ -309,7 +297,7 @@ function taskCardHTML(turn: AgentTurn, state: TimelineState): string {
   const ended = state.ended.has(task.id);
   const mark = live
     ? task.state === "queued" ? ico("clock") : SPINNER
-    : task.state === "done" ? `<span class="task-check${ended ? " is-pop" : ""}">${pic("check")}</span>` : ico("stop");
+    : task.state === "done" ? `<span class="task-check${ended ? " is-pop" : ""}">${ico("check")}</span>` : ico("stop");
   const since = live && task.started_at_ms ? ` data-since="${task.started_at_ms}"` : "";
   const summary = btn(
     `<span class="task-mark">${mark}</span><span class="task-lead">${esc(lead)}</span>` +
@@ -408,7 +396,7 @@ export const sourceIcon = (source: string): string =>
       ? `<svg class="i tg-i" viewBox="0 0 24 24" aria-hidden="true"><path d="${SERVICE_ICONS.telegram.path}"/></svg>`
       : source === TYPED
         ? ico("keyboard")
-        : pic("send");
+        : ico("send");
 
 /** Where a turn came from, in words. */
 export function sourceName(source: string): string {

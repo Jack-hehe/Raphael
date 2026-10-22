@@ -84,6 +84,8 @@ input::placeholder { color: var(--text-3); opacity: 1; }
 [lang="ja"] { font-family: var(--ja); }
 .num { font-variant-numeric: tabular-nums; }
 [hidden] { display: none !important; }
+/* Every icon is drawn for 16 px (ui.ts ICON) and shown at 16 px, or 20 where a larger one is meant:
+   never 12 to 15 px, nor with a stroke of its own, which would blur its lines. */
 svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ---------- window: sidebar and content ---------- */
@@ -177,7 +179,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .sel[aria-expanded="true"] { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-ring); }
 .sel:disabled { opacity: 0.55; cursor: default; }
 .sel:disabled:hover { border-color: var(--btn-edge); }
-.sel .i { width: 12px; height: 12px; color: var(--text-2); }
+.sel .i { color: var(--text-2); }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--h-ctl); padding: 6px 13px; border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--btn); font-size: var(--fs-sm); line-height: 1.4; color: var(--text); white-space: nowrap; }
 /* Every action is a button with a shape: an edge at rest, a fill under the pointer, a deeper one
    when pressed. Never a word alone that can be clicked. */
@@ -255,7 +257,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .hist-top .row { min-height: 66px; padding: 13px 0; }
 .hist-top .row + .row::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--line); }
 .hist-top .t { font-weight: 600; }
-.hist-top .t .i { width: 15px; height: 15px; margin-right: 7px; vertical-align: -2px; color: var(--text-2); }
+.hist-top .t .i { margin-right: 7px; vertical-align: -3px; color: var(--text-2); }
 .tools { display: flex; align-items: center; gap: var(--sp-3); margin-top: 22px; flex-wrap: wrap; }
 .tools .field { flex: 1; min-width: 160px; max-width: 300px; margin-left: auto; }
 /* The one tab component (ui.ts tabs()). .seg narrows one list (History, Dictionary); .switch switches views. */
@@ -325,7 +327,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .wchip { position: relative; display: flex; align-items: center; gap: var(--sp-2); min-height: 46px; padding: 8px 6px 8px 14px; border-radius: 11px; border: 1px solid var(--edge); background: var(--panel); min-width: 0; }
 .wchip:hover { border-color: var(--btn-edge); }
 .wchip .spark { display: inline-flex; color: var(--accent-text); }
-.wchip .spark .i { width: 14px; height: 14px; fill: currentColor; stroke-width: 1; }
+.wchip .spark .i { fill: currentColor; }
 .wchip .wtext { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
 .word { font-weight: 600; overflow-wrap: anywhere; }
 .mis { color: var(--text-3); font-size: var(--fs-xs); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -338,7 +340,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .modal-nav .nav { min-height: 34px; padding: 6px 10px; }
 /* 搜尋設定: a pill at the top of the tabs; while it holds text the tabs give way to what it found. */
 .set-search { flex: none; width: 100%; height: 32px; margin-bottom: var(--sp-2); padding: 0 12px; border-color: transparent; border-radius: var(--r-pill); background: var(--surface-2); }
-.set-search .i { width: 13px; height: 13px; color: var(--text-3); }
+.set-search .i { color: var(--text-3); }
 .set-list { display: flex; flex-direction: column; gap: 2px; min-height: 0; }
 /* The name of a group of tabs: small grey words, no line. */
 .nav-group { padding: 12px 10px 4px; font-size: 11.5px; line-height: 1.4; color: var(--text-3); }
@@ -413,8 +415,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .menu button { display: flex; align-items: center; gap: var(--sp-2); width: 100%; min-height: var(--h-ctl); padding: 6px 10px; border: 0; border-radius: 6px; background: transparent; font-size: var(--fs-sm); text-align: left; }
 .menu button:hover { background: var(--hover); }
 .menu button:focus-visible { background: var(--hover); outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
-.menu .ck { width: 14px; height: 14px; flex: none; color: var(--accent-text); }
-.menu .ck svg { display: block; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.menu .ck { width: 16px; height: 16px; flex: none; color: var(--accent-text); }
+.menu .ck svg { display: block; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .menu .mt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A menu whose choices have a detail (a price): the details line up on the right. */
 .menu.detailed { min-width: 340px; }

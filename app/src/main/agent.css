@@ -12,7 +12,6 @@
 /* icon-only buttons have no border, only a hover background */
 .page-agent .btn.ra-tool { width: 34px; min-height: 34px; padding: 0; border-color: transparent; background: transparent; color: var(--text-2); }
 .page-agent .btn.ra-tool:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--text); }
-.page-agent .btn.ra-tool .i { width: 17px; height: 17px; }
 .page-agent .btn.ra-tool[aria-expanded="true"] { background: var(--selected); color: var(--text); }
 /* 清除全部 asking for its second press is a text button: it has a border, in the colour of what it does */
 .btn.ra-clear { transition: width 0.2s ease, color 0.15s ease; }
@@ -43,7 +42,6 @@
 .tn.is-new { animation: ra-turn-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
 .me { display: flex; align-items: flex-end; justify-content: flex-end; gap: 6px; }
 .me-src { display: inline-grid; place-items: center; width: 16px; height: 16px; margin-bottom: 6px; color: var(--text-3); }
-.me-src .i { width: 13px; height: 13px; }
 .me-src .tg-i { fill: currentColor; stroke: none; }
 .bubble { max-width: min(560px, 78%); max-height: 22em; overflow-y: auto; padding: 8px 13px; border-radius: 16px 16px 4px 16px; background: var(--accent-soft); color: var(--text); font: 14.5px/1.65 var(--voice); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .ra { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 10px; align-items: start; max-width: 88%; }
@@ -58,7 +56,7 @@
 .tn-foot { display: flex; align-items: center; }
 .page-agent .btn.sm.icon.tn-more { width: 26px; min-height: 24px; padding: 0; border-color: transparent; background: transparent; color: var(--text-3); }
 .page-agent .btn.sm.icon.tn-more:hover { background: var(--hover); border-color: transparent; color: var(--text); }
-.tn-more .i { width: 14px; height: 14px; transition: transform 0.22s ease; }
+.tn-more .i { transition: transform 0.22s ease; }
 .tn-more[aria-expanded="true"] .i { transform: rotate(180deg); }
 
 /* a turn not in the history yet */
@@ -69,8 +67,8 @@
 .steps { display: grid; grid-template-columns: minmax(0, 1fr); }
 .page-agent .btn.steps-sum { justify-self: start; gap: 5px; min-height: 24px; padding: 1px 8px 1px 4px; margin-left: -4px; border-color: transparent; background: transparent; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--text-3); }
 .page-agent .btn.steps-sum:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--text-2); }
-.steps-chev { display: inline-grid; place-items: center; width: 14px; }
-.steps-chev .i { width: 13px; height: 13px; transition: transform 0.22s ease; }
+.steps-chev { display: inline-grid; place-items: center; width: 16px; }
+.steps-chev .i { transition: transform 0.22s ease; }
 .steps-sum .steps-chev .i { transform: none; }
 .steps[data-open="true"] .steps-sum .steps-chev .i { transform: rotate(90deg); }
 .steps-bad { color: var(--err); }
@@ -81,10 +79,9 @@
 .step { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 3px 2px 3px 0; font-size: 12.5px; color: var(--text-2); }
 .step.is-new { animation: ra-step-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
 .step-ic { display: grid; place-items: center; width: 18px; height: 18px; color: var(--text-3); }
-.step-ic .i { width: 14px; height: 14px; }
-.step-ic .logo { width: 14px; height: 14px; display: block; }
+.step-ic .logo { width: 16px; height: 16px; display: block; }
 .step-ic.letter { font: 700 11px/1 var(--display); color: var(--text); }
-.step-ic.logo-art .logo { width: 14px; height: 14px; display: block; object-fit: contain; }
+.step-ic.logo-art .logo { width: 16px; height: 16px; display: block; object-fit: contain; }
 .step-ic.logo-art .lg-d { display: none; }
 :root[data-theme="dark"] .step-ic.logo-art .lg-d { display: block; }
 :root[data-theme="dark"] .step-ic.logo-art .lg-d ~ .lg-l, :root[data-theme="dark"] .step-ic.logo-art .lg-l:has(+ .lg-d) { display: none; }
@@ -93,8 +90,7 @@
 .step-why { flex-basis: 100%; font-size: var(--fs-xs); line-height: 1.5; color: var(--err); }
 .step-end { display: inline-flex; align-items: center; gap: 6px; padding-top: 2px; }
 .step-ms { font-size: var(--fs-xs); color: var(--text-3); }
-.step-mark { display: inline-grid; place-items: center; width: 14px; height: 14px; }
-.step-mark .i { width: 13px; height: 13px; stroke-width: 1.8; }
+.step-mark { display: inline-grid; place-items: center; width: 16px; height: 16px; }
 .step.is-ok .step-mark { color: var(--ok); }
 .step.is-bad .step-mark { color: var(--err); }
 .step.is-live { color: var(--text); font-weight: 600; }
@@ -105,9 +101,7 @@
 .page-agent .btn.task-sum { flex: 1; justify-content: flex-start; gap: 8px; min-width: 0; min-height: 30px; padding: 2px 6px; border-color: transparent; background: transparent; font-size: 13px; font-weight: 600; color: var(--text); }
 .page-agent .btn.task-sum:hover:not(:disabled) { background: var(--hover); border-color: transparent; }
 .task-mark { display: inline-grid; place-items: center; width: 16px; height: 16px; color: var(--text-3); }
-.task-mark .i { width: 14px; height: 14px; }
 .task-check { display: inline-grid; place-items: center; width: 16px; height: 16px; color: var(--ok); }
-.task-check .i { width: 15px; height: 15px; stroke-width: 2; }
 .task-check.is-pop { animation: ra-pop 0.3s cubic-bezier(0.3, 1.4, 0.5, 1) both; }
 .task-lead { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-time { font-weight: 400; font-size: var(--fs-xs); color: var(--text-3); }
@@ -134,7 +128,7 @@
 .cmp-row { display: flex; align-items: flex-end; gap: 4px; }
 .page-agent .btn.cmp-attach { flex: none; width: 36px; min-height: 36px; padding: 0; border-radius: 50%; border-color: transparent; background: transparent; color: var(--text-2); }
 .page-agent .btn.cmp-attach:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--text); }
-.btn.cmp-attach .i { width: 18px; height: 18px; }
+.btn.cmp-attach .i { width: 20px; height: 20px; }
 .cmp-input { flex: 1; min-width: 0; min-height: 36px; max-height: 160px; resize: none; border: 0; outline: 0; background: transparent; color: var(--text); font: 14.5px/22px var(--voice); padding: 7px 4px; overflow-y: hidden; }
 .cmp-input.is-tall { overflow-y: auto; }
 .cmp-input::placeholder { color: var(--text-3); }
@@ -144,11 +138,9 @@
 .page-agent .btn.cmp-voice:active:not(:disabled) { background: transparent; transform: scale(0.96); }
 .cmp-file { padding: 2px 4px 0 8px; }
 .cmp-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 4px 2px 9px; border-radius: var(--r-pill); background: var(--surface-2); font-size: var(--fs-xs); color: var(--text-2); }
-.cmp-chip > .i { width: 13px; height: 13px; }
 .cmp-chip-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmp-chip .chip-x { display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-3); }
 .cmp-chip .chip-x:hover { background: var(--hover); color: var(--text); }
-.cmp-chip .chip-x .i { width: 12px; height: 12px; }
 
 /* ---------- Raphael asks: his gold, a soft breathing glow, his face, 否 outlined and 是 gold ---------- */
 .ask-card { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 14px 12px 12px; border: 1px solid var(--rg-edge); background: var(--rg-bg); border-radius: 16px; box-shadow: 0 0 0 3px var(--rg-glow), 0 10px 30px var(--rg-glow); }

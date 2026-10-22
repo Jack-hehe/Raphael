@@ -280,7 +280,7 @@ export function createAgent(app: AppContext): Page {
   function drawFile(): void {
     fileChip.hidden = attached === null;
     fileChip.innerHTML = attached
-      ? `<span class="cmp-chip">${ico("book")}<span class="cmp-chip-t">${esc(attached.name)}</span>` +
+      ? `<span class="cmp-chip">${ico("attach")}<span class="cmp-chip-t">${esc(attached.name)}</span>` +
         `<button type="button" class="chip-x" data-act="unattach" aria-label="${esc(t("agent.unattach"))}" title="${esc(t("agent.unattach"))}">${ico("x")}</button></span>`
       : "";
   }

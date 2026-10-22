@@ -166,3 +166,46 @@ describe("translations", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("icons", () => {
+  // The icons are drawn on a 16 x 16 grid with a 1.5 stroke (ui.ts ICON): at 16 px one edge of each
+  // straight line falls on a whole pixel; at 12 to 15 px none does and they blur. So an icon is shown
+  // at 16 px, or 20 where a larger one is meant, and keeps its stroke. The window's own minimise,
+  // maximise and close are Windows' caption glyphs, drawn for 12 px: not icons of the set.
+  const SIZES = new Set(["16px", "20px"]);
+  const NOT_ICONS = new Set([".window-button svg"]);
+  const strip = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const cssFiles = [...mainFiles, ...walk(join(SRC, "overlay"))].filter((f) => f.endsWith(".css"));
+  const iconRules = (): { file: string; selector: string; body: string }[] =>
+    cssFiles.flatMap((file) =>
+      [...strip(read(file)).matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap(([, selectors, body]) =>
+        selectors
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => /(\.i|\bsvg)(?![\w-])/.test(s) && !NOT_ICONS.has(s))
+          .map((selector) => ({ file: rel(file), selector, body })),
+      ),
+    );
+
+  test("an icon is shown at 16 or 20 px, never 12 to 15", () => {
+    const bad = iconRules().flatMap(({ file, selector, body }) =>
+      [...body.matchAll(/(?:^|;)\s*(width|height)\s*:\s*([^;]+)/g)]
+        .filter(([, , value]) => !SIZES.has(value.trim()))
+        .map(([, prop, value]) => `${file}: ${selector} { ${prop}: ${value.trim()} }`),
+    );
+    expect(iconRules().length).toBeGreaterThan(10);
+    expect(bad).toEqual([]);
+  });
+
+  test("an icon keeps the 1.5 stroke it is drawn for", () => {
+    const bad = iconRules()
+      .filter(({ body }) => [...body.matchAll(/stroke-width\s*:\s*([^;]+)/g)].some(([, value]) => value.trim() !== "1.5"))
+      .map(({ file, selector }) => `${file}: ${selector}`);
+    expect(bad).toEqual([]);
+  });
+
+  test("no page keeps a copy of an icon: every 16 x 16 drawing comes from ui.ts", () => {
+    const copies = sources.filter((f) => rel(f) !== "ui.ts" && read(f).includes('viewBox="0 0 16 16"')).map(rel);
+    expect(copies).toEqual([]);
+  });
+});
