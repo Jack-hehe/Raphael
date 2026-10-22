@@ -46,7 +46,9 @@ const turn = (over: Partial<AgentTurn> = {}): AgentTurn => ({
 });
 
 const play = (lesson: Lesson, ctx: PracticeContext, ...events: PracticeEvent[]): Lesson => events.reduce((l, e) => feed(l, e, ctx), lesson);
-const begin = (id: LessonId, baselineItem: number | null = 10, baselineTurn: number | null = 6): Lesson => startLesson(id, 1_000, baselineItem, baselineTurn);
+/** A lesson in which the person has begun: a dictation or question started after it did. */
+const begin = (id: LessonId, baselineItem: number | null = 10, baselineTurn: number | null = 6): Lesson => ({ ...startLesson(id, 1_000, baselineItem, baselineTurn), started: true });
+const fresh = (id: LessonId): Lesson => startLesson(id, 1_000, 10, 6);
 
 describe("the key lesson", () => {
   test("toggle mode: a press and its release are enough", () => {
@@ -143,14 +145,38 @@ describe("the cleanup lesson", () => {
     const failed = play(begin("cleanup"), TOGGLE, { type: "item", item: item({ id: 11, cleaned: false, fallback_reason: "x" }) });
     const again = retry(failed, 9_000);
     expect(again.phase).toBe("idle");
-    expect(play(again, TOGGLE, { type: "item", item: item({ id: 11 }) }).phase).toBe("idle");
-    expect(play(again, TOGGLE, { type: "item", item: item({ id: 12 }) }).phase).toBe("ok");
+    const begun = play(again, TOGGLE, phase("listening"));
+    expect(play(begun, TOGGLE, { type: "item", item: item({ id: 11 }) }).phase).toBe("listening");
+    expect(play(begun, TOGGLE, { type: "item", item: item({ id: 12 }) }).phase).toBe("ok");
   });
 
   test("a lesson that knew no baseline goes by time", () => {
-    const l = startLesson("cleanup", 1_000);
+    const l = { ...startLesson("cleanup", 1_000), started: true };
     expect(play(l, TOGGLE, { type: "item", item: item({ id: 1, created_at_ms: 999 }) }).phase).toBe("idle");
     expect(play(l, TOGGLE, { type: "item", item: item({ id: 1, created_at_ms: 1_000 }) }).phase).toBe("ok");
+  });
+});
+
+describe("what an earlier session finishes", () => {
+  test("a dictation that began before the lesson does not count for it", () => {
+    // 「跳過」 while a dictation was processing: its pasted event and newer item arrive in the next lesson
+    const next = fresh("cleanup");
+    const l = play(next, TOGGLE, phase("processing"), phase("pasted"), { type: "item", item: item({ id: 11 }) });
+    expect(l.phase).toBe("idle");
+    expect(l.item).toBeNull();
+    expect(play(fresh("dictate"), TOGGLE, phase("pasted")).phase).toBe("idle");
+    expect(play(fresh("dictate"), TOGGLE, { type: "item", item: item({ id: 11 }) }).phase).toBe("idle");
+  });
+
+  test("nor does a question that began before the lesson", () => {
+    const l = play(fresh("ask"), TOGGLE, phase("processing", true), { type: "turn", turn: turn({ id: 7 }) });
+    expect(l.phase).toBe("idle");
+    expect(play(fresh("act"), TOGGLE, { type: "turn", turn: turn({ id: 7, route: "command", prefix: "了" }) }).phase).toBe("idle");
+  });
+
+  test("one that the lesson saw begin does", () => {
+    const l = play(fresh("cleanup"), TOGGLE, phase("listening"), phase("processing"), phase("pasted"), { type: "item", item: item({ id: 11 }) });
+    expect(l.phase).toBe("ok");
   });
 });
 

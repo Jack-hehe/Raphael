@@ -75,6 +75,21 @@ export function initialState(mode: Mode, ready: Readiness): FlowState {
   };
 }
 
+/**
+ * What is set up became known after the guide opened. Only what the person has not decided is filled
+ * in: ticks that were changed, skips, lesson results and where the guide is stay as they are, and a
+ * setup that was already marked (done or skipped) is not taken back.
+ */
+export function applyReadiness(state: FlowState, ready: Readiness, ticksChanged: boolean): FlowState {
+  const fresh = initialState(state.mode, ready);
+  const known = (need: Need): SetupState => (state.setup[need] === "todo" ? fresh.setup[need] : state.setup[need]);
+  return {
+    ...state,
+    abilities: ticksChanged ? state.abilities : fresh.abilities,
+    setup: { key: known("key"), mic: state.setup.mic, connections: known("connections"), telegram: known("telegram") },
+  };
+}
+
 const ticked = (abilities: readonly AbilityId[]) => ABILITIES.filter((a) => abilities.includes(a.id));
 
 /** What the ticked abilities need, in the order of the setup steps. */

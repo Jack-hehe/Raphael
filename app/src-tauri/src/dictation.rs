@@ -1202,7 +1202,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                     // The agent may still be at it, and may yet ask a question nobody will see.
                     self.cancel_in_background(id.to_owned());
                 }
-                self.end_session(id);
+                if self.end_session(id) {
+                    self.tell(DictationPhase::Failed, true);
+                }
                 // A core that is gone says so, once; every other failure is the agent being
                 // unable to answer, and its details are not for the person to read.
                 let gone = (err.code == CORE_EXITED)
@@ -1242,7 +1244,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 if let Some(confirm) = bad.confirm_id {
                     self.deny_in_background(confirm);
                 }
-                self.end_session(id);
+                if self.end_session(id) {
+                    self.tell(DictationPhase::Failed, true);
+                }
                 self.show(notices::ASK_FAILED);
                 None
             }
@@ -6696,6 +6700,30 @@ mod tests {
             *seen.lock().unwrap(),
             [(Phased::Listening, true), (Phased::Processing, true)]
         );
+    }
+
+    #[tokio::test]
+    async fn a_question_the_agent_cannot_answer_is_reported_failed() {
+        let core = FakeCore::with("dictation.stop", transcript("明天會下雨嗎"));
+        core.script("agent.ask", Err(RpcError::new(-32603, "boom".to_owned())));
+        let (c, seen) = reporting(core, FakePaster::pasting("chrome.exe"));
+        ask_aloud(&c).await;
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                (Phased::Listening, true),
+                (Phased::Processing, true),
+                (Phased::Failed, true)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reply_that_cannot_be_shown_is_reported_failed() {
+        let core = agent_core(json!({"status": "nonsense"}));
+        let (c, seen) = reporting(core, FakePaster::pasting("chrome.exe"));
+        ask_aloud(&c).await;
+        assert_eq!(seen.lock().unwrap().last(), Some(&(Phased::Failed, true)));
     }
 
     #[tokio::test]

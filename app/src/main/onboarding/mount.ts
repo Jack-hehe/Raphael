@@ -33,6 +33,7 @@ import {
   type Mode,
   type Readiness,
   canAdvance,
+  applyReadiness,
   canSkip,
   currentLesson,
   hasKey,
@@ -97,6 +98,11 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
   let finishing = false;
   let destroyed = false;
   let windowFocused = true;
+  /** The person ticked or unticked an ability, so late news of what is set up must not overwrite it. */
+  let ticksChanged = false;
+  /** Every listener on the root ends with the guide: a guide opened again on the same root is a new one. */
+  const lifetime = new AbortController();
+  const { signal } = lifetime;
 
   // the key and the limit
   let keyName: string | null = null;
@@ -402,6 +408,8 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
   // ---------- the flow ----------
 
   function dispatch(event: FlowEvent): void {
+    if (destroyed) return;
+    if (event.type === "TICK") ticksChanged = true;
     const before = flow;
     const after = reduce(before, event);
     if (after === before) return;
@@ -494,6 +502,7 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
     void recording.cancel();
     stopEvents();
     stopLocale();
+    lifetime.abort();
     window.removeEventListener("focus", onFocus);
     window.removeEventListener("blur", onBlur);
     window.removeEventListener("keydown", onKey, true);
@@ -518,12 +527,12 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
       cloudSpeech = settings.value.settings.stt_engine === "cloud";
     }
     keyLoaded = stored.status === "fulfilled" && settings.status === "fulfilled";
-    // What was set up is known; where the person is stays.
-    const fresh = initialState(mode, ready);
-    flow = { ...fresh, step: flow.step, lesson: flow.lesson };
+    // What was set up is known; what the person has decided meanwhile stays.
+    flow = applyReadiness(flow, ready, ticksChanged);
     paintTop();
     paintFoot();
     if (flow.step === "key") paintKeyGroup();
+    if (flow.step === "abilities") repaintBody();
   }
 
   // ---------- the key and the limit ----------
@@ -828,6 +837,11 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
   }
 
   function endLesson(): void {
+    // A dictation or question that is under way is ended with Esc, as the person would: it must not
+    // go on into the next lesson, or stay recording when the guide is left.
+    if (lesson && (lesson.phase === "listening" || lesson.phase === "processing") && !practising) {
+      void api.cancelSession().catch(() => {});
+    }
     lessonToken++;
     lesson = null;
     conflict = false;
@@ -992,6 +1006,7 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
   // ---------- events ----------
 
   root.addEventListener("click", (e) => {
+    if (destroyed) return;
     const target = e.target as Element;
 
     const choose = target.closest<HTMLElement>(".sel");
@@ -1073,20 +1088,22 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
         void changeKey(button.dataset.field === "agent" ? "agent" : "dictation");
         break;
     }
-  });
+}, { signal });
 
   // The limit is saved when its field is left or Enter is pressed. The key is not: it is sent by
   // Enter or 貼上 only, never by leaving the field (see keyfield.ts).
   root.addEventListener("change", (e) => {
-    if ((e.target as HTMLInputElement).id === "ob-limit") void commitLimit();
-  });
+    if (!destroyed && (e.target as HTMLInputElement).id === "ob-limit") void commitLimit();
+  }, { signal });
   root.addEventListener("keydown", (e) => {
+    if (destroyed) return;
     openMenuOnArrow(e);
     if (flow.step === "telegram" && (e.target as HTMLElement).id === "msg-token") void messaging.key(e);
-  });
-  wireKeyField(root, { inputId: "ob-key-input", pasteSelector: '[data-ob="key-paste"]', submit: (value) => void submitKey(value) });
+  }, { signal });
+  wireKeyField(root, { inputId: "ob-key-input", pasteSelector: '[data-ob="key-paste"]', submit: (value) => void submitKey(value), signal });
 
   root.addEventListener("input", (e) => {
+    if (destroyed) return;
     const input = e.target as HTMLInputElement;
     if (input.id === "ob-limit") {
       limitText = input.value;
@@ -1094,7 +1111,7 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
     } else if (flow.step === "telegram") {
       messaging.input(input);
     }
-  });
+}, { signal });
 
   // The microphone is listened to only while its step is on screen and the window is in use; the
   // box of a dictation lesson gets the focus back when the window does, so that a paste lands in it.

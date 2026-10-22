@@ -45,6 +45,8 @@ export interface Lesson {
   comboAt: number | null;
   /** The app heard the question key at least once. */
   agentHeard: boolean;
+  /** A dictation or question began after the lesson did. What an earlier one finishes is not this lesson's. */
+  started: boolean;
 }
 
 export type PracticeEvent =
@@ -62,7 +64,7 @@ export interface PracticeContext {
 
 /** A lesson as it begins. `baselineItem` and `baselineTurn` are what the core had then (null: nothing, or unknown). */
 export function startLesson(id: LessonId, now: number, baselineItem: number | null = null, baselineTurn: number | null = null): Lesson {
-  return { id, startedMs: now, baselineItem, baselineTurn, phase: "idle", miss: null, downAt: null, item: null, turn: null, comboAt: null, agentHeard: false };
+  return { id, startedMs: now, baselineItem, baselineTurn, phase: "idle", miss: null, downAt: null, item: null, turn: null, comboAt: null, agentHeard: false, started: false };
 }
 
 const done = (lesson: Lesson): boolean => lesson.phase === "ok";
@@ -98,9 +100,10 @@ function onMain(lesson: Lesson, event: MainEvent, now: number, ctx: PracticeCont
   // A dictation lesson hears dictations, a question lesson hears questions.
   const asks = lesson.id === "ask" || lesson.id === "act";
   if (event.agent !== asks) return lesson;
+  if (event.phase === "listening") return { ...lesson, phase: "listening", miss: null, started: true };
+  // The rest belongs to a session this lesson saw begin; one that began before it is not heard.
+  if (!lesson.started) return lesson;
   switch (event.phase) {
-    case "listening":
-      return { ...lesson, phase: "listening", miss: null };
     case "processing":
       return { ...lesson, phase: "processing", miss: null };
     case "pasted":
@@ -117,7 +120,7 @@ function onMain(lesson: Lesson, event: MainEvent, now: number, ctx: PracticeCont
 function onItem(lesson: Lesson, item: HistoryItem | null): Lesson {
   if (lesson.id !== "dictate" && lesson.id !== "cleanup") return lesson;
   const own = ownItem(lesson, item);
-  if (!own || done(lesson)) return lesson;
+  if (!own || done(lesson) || !lesson.started) return lesson;
   if (lesson.id === "dictate") return { ...lesson, phase: "ok", miss: null, item: own };
   // Cleanup: it has to have been cleaned. A fallback is a miss to tell, not a success.
   if (own.fallback_reason !== null || !own.cleaned) return { ...lesson, phase: "failed", miss: "fallback", item: own };
@@ -128,7 +131,7 @@ function onItem(lesson: Lesson, item: HistoryItem | null): Lesson {
 function onTurn(lesson: Lesson, turn: AgentTurn | null): Lesson {
   if (lesson.id !== "ask" && lesson.id !== "act") return lesson;
   const own = ownTurn(lesson, turn);
-  if (!own || done(lesson)) return lesson;
+  if (!own || done(lesson) || !lesson.started) return lesson;
   if (own.status === "confirm") return lesson; // Raphael waits for an answer; the turn is not over
   if (!own.text.trim()) return { ...lesson, phase: "failed", miss: "noText", turn: own };
   if (lesson.id === "ask") return { ...lesson, phase: "ok", miss: null, turn: own };

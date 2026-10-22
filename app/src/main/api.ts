@@ -180,6 +180,8 @@ export const hotkeysPause = (paused: boolean): Promise<void> =>
  * question (a lesson that shows the key being pressed). Always switch it off again.
  */
 export const hotkeysPractice = (on: boolean): Promise<void> => invoke("hotkeys_practice", { on });
+/** Esc for a dictation or question that is under way (the app ignores it when none is). */
+export const cancelSession = (): Promise<void> => invoke("window_hotkey", { kind: "cancel" });
 /** Whether the privacy settings of Windows let desktop apps use the microphone. */
 export const micAccess = (): Promise<MicAccess> => invoke("mic_access");
 

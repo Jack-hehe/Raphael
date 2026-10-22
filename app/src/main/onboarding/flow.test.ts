@@ -10,6 +10,7 @@ import {
   initialState,
   lessonsFor,
   lessonsOf,
+  applyReadiness,
   needsFor,
   reduce,
   segments,
@@ -197,6 +198,33 @@ describe("running it again", () => {
   test("the lessons start undone, even where they were done before", () => {
     const state = initialState("rerun", { key: true, connections: true, telegram: true });
     expect(Object.values(state.lessons).every((s) => s === "idle")).toBe(true);
+  });
+});
+
+describe("what is set up becomes known late", () => {
+  const ready: Readiness = { key: true, connections: true, telegram: false };
+
+  test("fills in the setup and, on a rerun, the ticks that were not touched", () => {
+    const state = applyReadiness(initialState("rerun", NOTHING), ready, false);
+    expect(state.setup.key).toBe("done");
+    expect(state.abilities).toContain("connect");
+  });
+
+  test("keeps ticks that were changed meanwhile", () => {
+    let state = run(initialState("rerun", NOTHING), { type: "NEXT" }, { type: "TICK", id: "dictate" });
+    state = applyReadiness(state, ready, true);
+    expect(state.abilities).toEqual(["cleanup", "ask", "act"]);
+    expect(state.step).toBe("abilities");
+  });
+
+  test("keeps skips, lesson results and the place in the guide", () => {
+    let state = run(first(), { type: "NEXT" }, { type: "NEXT" }, { type: "SKIP" });
+    state = { ...state, lessons: { ...state.lessons, key: "ok" } };
+    const merged = applyReadiness(state, ready, false);
+    expect(merged.setup.key).toBe("skipped");
+    expect(merged.lessons.key).toBe("ok");
+    expect(merged.step).toBe(state.step);
+    expect(merged.setup.connections).toBe("done");
   });
 });
 
