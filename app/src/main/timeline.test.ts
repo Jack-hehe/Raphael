@@ -44,6 +44,10 @@ const THREE = [
   step({ tool: "create-event", server: "Google Calendar", outcome: "error", reason: "auth", ms: 600, at_ms: T0 + 2_900 }),
 ];
 
+/** What a sighted reader sees: the text outside the tags, without what only a screen reader hears. */
+const visible = (html: string): string =>
+  html.replace(/<span class="sr">.*?<\/span>/g, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+
 const running = (over: Partial<AgentTask> = {}): AgentTask => ({ id: 41, state: "running", started_at_ms: T0, finished_at_ms: null, ...over });
 
 describe("a step in words", () => {
@@ -85,12 +89,16 @@ describe("what a turn did", () => {
     expect(html).toContain('data-open="false"');
     expect(html).toContain('aria-expanded="false" aria-controls="steps-1"');
     expect(html).toContain('id="steps-1" inert'); // closed: out of the way of the keyboard
-    expect(html).toContain("做了 3 件事");
-    expect(html).toContain("1 件失敗");
+    // the summary shows a mark, the count, the time and the failures; its words are its label
+    const summary = /<button[^>]*steps-sum[^>]*>.*?<\/button>/.exec(html)![0];
+    expect(visible(summary)).toBe("3 2.4 秒 1");
+    expect(summary).toContain('aria-label="做了 3 件事 · 2.4 秒 · 1 件失敗"');
     expect(summaryText(t1, T0).time).toBe("2.4 秒"); // the first start (0.48 s) to the last end (2.9 s)
     expect(html.match(/class="step is-ok/g)).toHaveLength(2);
-    expect(html).toContain("需要重新登入");
-    expect(html).toContain("Google Calendar");
+    expect(html).toContain("需要重新登入"); // a failure is said in words
+    // the service is the picture's name, not a word beside the tool
+    expect(html).toContain('role="img" aria-label="Google Calendar" title="Google Calendar"');
+    expect(visible(html)).not.toContain("Google Calendar");
     expect(html).not.toContain('data-act="stop"');
   });
 
@@ -129,12 +137,12 @@ describe("what a turn did", () => {
     const state = { ...emptyTimelineState(), nowMs: T0 + 42_000 };
     const html = stepsHTML(turn(3, { task: running(), steps: [step()] }), state);
     expect(html).toContain('data-open="true"');
-    expect(html).toContain("進行中");
+    expect(html).toContain('aria-label="進行中 · 42 秒"');
     expect(html).toContain(`data-since="${T0}"`);
-    expect(html).toContain("42 秒");
-    expect(html).toContain("思考中…");
+    expect(html).toContain('class="think" role="img" aria-label="思考中…"'); // a shimmer, no words
     expect(html).toContain('class="spin"');
-    expect(html).toMatch(/<button type="button" class="btn sm stop" data-act="stop" data-task="41">.*中止/);
+    expect(html).toContain('<button type="button" class="btn sm icon stop" data-act="stop" data-task="41" aria-label="中止" title="中止">');
+    expect(visible(html)).toBe("42 秒 查天氣 0.4 秒 42 秒");
   });
 
   test("a task that waits is queued, and one that was stopped says so with what it did", () => {
@@ -163,7 +171,7 @@ describe("中止", () => {
     const asked = requestStop(state, 41, cancel);
     expect(cancel).toHaveBeenCalledWith(41);
     const html = stepsHTML(turn(3, { task: running() }), state);
-    expect(html).toMatch(/data-act="stop" data-task="41" disabled>.*正在中止…/);
+    expect(html).toContain('data-act="stop" data-task="41" aria-label="正在中止…" title="正在中止…" disabled>');
     finish({ cancelled: true });
     expect(await asked).toEqual({ cancelled: true });
     expect(state.stopping.has(41)).toBe(true); // until the task is seen to have ended
@@ -189,7 +197,7 @@ describe("中止", () => {
 describe("a turn and a conversation", () => {
   test("the person on the right in 「」 with the time, Raphael's answer in 《》 with the model and cost", () => {
     const html = turnHTML(turn(5), emptyTimelineState(), false);
-    expect(html).toContain('<div class="tn-who"><span>你說</span><time class="num"');
+    expect(html).toContain('<div class="tn-who"><span class="sr">你說</span><time class="num"'); // the side says who
     expect(html).toContain(">09:00</time>");
     expect(html).toContain('<div class="bubble">「台北天氣如何，順便記到行事曆」</div>');
     expect(html).toContain('<p class="ans">《答。台北現在 24 度。》</p>');
@@ -198,7 +206,7 @@ describe("a turn and a conversation", () => {
 
   test("a detail is closed behind a bordered button that says whether it is open", () => {
     const closed = turnHTML(turn(5, { detail: "更多" }), emptyTimelineState(), false);
-    expect(closed).toContain('class="btn sm tn-more" data-act="detail" aria-expanded="false" aria-controls="tn-detail-5"');
+    expect(closed).toContain('class="btn sm icon tn-more" data-act="detail" aria-expanded="false" aria-controls="tn-detail-5" aria-label="詳細" title="詳細"');
     expect(closed).toContain('<div class="tn-detail" id="tn-detail-5" hidden>更多</div>');
     expect(turnHTML(turn(5, { detail: "更多" }), emptyTimelineState(), true)).toContain('<div class="tn-detail" id="tn-detail-5">更多</div>');
   });
@@ -222,7 +230,7 @@ describe("a turn and a conversation", () => {
     expect(html).toContain('aria-current="true" tabindex="0"');
     expect(html.match(/tabindex="-1"/g)).toHaveLength(1);
     expect(html).toContain('title="Telegram"');
-    expect(html).toContain("2 則");
+    expect(html).not.toContain("則"); // the time is enough
   });
 
   test("the arrow keys walk the list and stop at its ends; Home and End jump; other keys do nothing", () => {

@@ -13,7 +13,7 @@ import type { MessageKey } from "./i18n/zh-TW";
 import { replyLine, userLine } from "../shared/anime";
 import { type Session, type SessionDay, VOICE, hasDetail, sessionBusy, sessionTitle } from "./conversation";
 import { dayLabel, formatClock, formatUsd } from "./format";
-import { brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
+import { SERVICE_ICONS, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import type { AgentStep, AgentTask, AgentTurn, MainEvent } from "./types";
 import { btn, esc, ico } from "./ui";
 
@@ -173,19 +173,21 @@ export const emptyTimelineState = (): TimelineState => ({ open: new Map(), seen:
 /** Whether a turn's steps are open: as the reader left them, else open while its task runs and closed once it is done. */
 export const stepsOpen = (turn: AgentTurn, state: TimelineState): boolean => state.open.get(turn.id) ?? isLive(turn.task);
 
-/** The picture of a step: the service's mark, Raphael's own for a lookup, the PC for a command. */
+/** The picture of a step: the service's mark, Raphael's own for a lookup, the PC for a command. It names the place in its label and tooltip. */
 function stepIcon(step: AgentStep): string {
-  if (step.kind === "command") return `<span class="step-ic">${ico("monitor")}</span>`;
-  if (step.kind === "model") return `<span class="step-ic">${ico("sparkle")}</span>`;
+  const place = esc(stepPlace(step));
+  const named = `role="img" aria-label="${place}" title="${place}"`;
+  if (step.kind === "command") return `<span class="step-ic" ${named}>${ico("monitor")}</span>`;
+  if (step.kind === "model") return `<span class="step-ic" ${named}>${ico("sparkle")}</span>`;
   if (!step.server || step.server === RAPHAEL) {
     const own = step.tool === "weather" ? pic("cloud") : step.tool === "web_search" ? ico("globe") : step.tool === "local_time" ? ico("clock") : ico("search");
-    return `<span class="step-ic">${own}</span>`;
+    return `<span class="step-ic" ${named}>${own}</span>`;
   }
   const mark = serviceIconOf({ name: step.server });
-  if (mark && hasLogo(mark)) return `<span class="step-ic logo-art">${serviceLogoHTML(mark)}</span>`;
+  if (mark && hasLogo(mark)) return `<span class="step-ic logo-art" ${named}>${serviceLogoHTML(mark)}</span>`;
   return mark
-    ? `<span class="step-ic logo-mono"${brandStyle(mark)}>${serviceIconSVG(mark)}</span>`
-    : `<span class="step-ic letter">${monogram(step.server)}</span>`;
+    ? `<span class="step-ic logo-mono"${brandStyle(mark)} ${named}>${serviceIconSVG(mark)}</span>`
+    : `<span class="step-ic letter" ${named}>${monogram(step.server)}</span>`;
 }
 
 /** One step: what, where, how long, and whether it worked (a mark and a word, never the colour alone). */
@@ -195,7 +197,7 @@ export function stepHTML(step: AgentStep, isNew: boolean): string {
   return (
     `<li class="step ${ok ? "is-ok" : "is-bad"}${isNew ? " is-new" : ""}">` +
     stepIcon(step) +
-    `<span class="step-main"><span class="step-t">${esc(stepTitle(step))}</span><span class="step-s">${esc(stepPlace(step))}</span>` +
+    `<span class="step-main"><span class="step-t">${esc(stepTitle(step))}</span>` +
     (ok ? "" : `<span class="step-why">${esc(why)}</span>`) +
     `</span>` +
     `<span class="step-end"><span class="step-ms num">${esc(formatDuration(step.ms))}</span>` +
@@ -210,7 +212,7 @@ function liveStepHTML(task: AgentTask, nowMs: number): string {
   return (
     `<li class="step is-live">` +
     `<span class="step-ic">${SPINNER}</span>` +
-    `<span class="step-main"><span class="step-t shimmer">${esc(task.state === "queued" ? t("agent.queued") : t("agent.thinking"))}</span></span>` +
+    `<span class="step-main"><span class="think" role="img" aria-label="${esc(task.state === "queued" ? t("agent.queued") : t("agent.thinking"))}"><i></i><i></i></span></span>` +
     `<span class="step-end">${since ? `<span class="step-ms num" data-since="${since}">${esc(formatDuration(nowMs - since))}</span>` : ""}</span>` +
     `</li>`
   );
@@ -239,15 +241,20 @@ export function stepsHTML(turn: AgentTurn, state: TimelineState): string {
   const { lead, time, failed } = summaryText(turn, state.nowMs);
   const id = `steps-${turn.id}`;
   const since = live && task?.started_at_ms ? ` data-since="${task.started_at_ms}"` : "";
+  const count = steps.filter((step) => step.kind !== "model").length;
+  const words = [lead, time, failed ? t("agent.stepsFailed", { p0: failed }) : ""].filter(Boolean).join(" · ");
+  const mark = live ? (task!.state === "queued" ? ico("clock") : SPINNER) : task && TASK_ENDS[task.state] ? ico("stop") : ico("steps");
   const summary =
-    `<button type="button" class="btn sm steps-sum" data-act="steps" aria-expanded="${open}" aria-controls="${id}">` +
-    `<span class="steps-lead">${live ? SPINNER : ico("down")}<span>${esc(lead)}</span></span>` +
+    `<button type="button" class="btn sm steps-sum" data-act="steps" aria-expanded="${open}" aria-controls="${id}" aria-label="${esc(words)}" title="${esc(words)}">` +
+    `<span class="steps-lead">${mark}${live ? "" : `<span class="num">${count}</span>`}</span>` +
     (time ? `<span class="steps-time num"${since}>${esc(time)}</span>` : "") +
-    (failed ? `<span class="steps-bad">${esc(t("agent.stepsFailed", { p0: failed }))}</span>` : "") +
+    (failed ? `<span class="steps-bad">${pic("cross")}<span class="num">${failed}</span></span>` : "") +
+    `<span class="steps-chev">${ico("down")}</span>` +
     `</button>`;
   const stopping = live && state.stopping.has(task!.id);
+  const stopLabel = esc(stopping ? t("agent.stopping") : t("agent.stop"));
   const stop = live
-    ? btn(`${pic("stop")}<span>${esc(stopping ? t("agent.stopping") : t("agent.stop"))}</span>`, "sm stop", ` data-act="stop" data-task="${esc(task!.id)}"${stopping ? " disabled" : ""}`)
+    ? `<button type="button" class="btn sm icon stop" data-act="stop" data-task="${esc(task!.id)}" aria-label="${stopLabel}" title="${stopLabel}"${stopping ? " disabled" : ""}>${stopping ? SPINNER : pic("stop")}</button>`
     : "";
   const rows = steps.map((step, index) => stepHTML(step, !state.seen.has(stepKey(turn, index)))).join("") + (live ? liveStepHTML(task!, state.nowMs) : "");
   return (
@@ -305,11 +312,11 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
   const detail = hasDetail(turn);
   const asked = turn.question.trim() !== "";
   const foot =
-    (detail ? btn(`${ico("down")}<span>${esc(t("agent.detail"))}</span>`, "sm tn-more", ` data-act="detail" aria-expanded="${detailOpen}" aria-controls="tn-detail-${id}"`) : "") + answerMeta(turn);
+    (detail ? btn(ico("down"), "sm icon tn-more", ` data-act="detail" aria-expanded="${detailOpen}" aria-controls="tn-detail-${id}" aria-label="${esc(t("agent.detail"))}" title="${esc(t("agent.detail"))}"`) : "") + answerMeta(turn);
   return (
     `<li class="tn" data-id="${id}" data-status="${esc(turn.status)}"${isLive(turn.task) ? ' data-live="true"' : ""}>` +
     (asked
-      ? `<div class="tn-q"><div class="tn-who"><span>${esc(t("agent.youSaid"))}</span><time class="num" datetime="${esc(new Date(turn.created_at_ms).toISOString())}">${esc(formatClock(turn.created_at_ms))}</time></div>` +
+      ? `<div class="tn-q"><div class="tn-who"><span class="sr">${esc(t("agent.youSaid"))}</span><time class="num" datetime="${esc(new Date(turn.created_at_ms).toISOString())}">${esc(formatClock(turn.created_at_ms))}</time></div>` +
         `<div class="bubble">${esc(userLine(turn.question))}</div></div>`
       : "") +
     stepsHTML(turn, state) +
@@ -323,7 +330,8 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
 // ---------- the list of conversations ----------
 
 /** The picture of where a conversation came from. */
-export const sourceIcon = (source: string): string => (source === VOICE ? ico("mic") : pic("send"));
+export const sourceIcon = (source: string): string =>
+  source === VOICE ? ico("mic") : source === "telegram" ? `<svg class="i tg-i" viewBox="0 0 24 24" aria-hidden="true"><path d="${SERVICE_ICONS.telegram.path}"/></svg>` : pic("send");
 
 /** Where a conversation came from, in words. */
 export function sourceName(source: string): string {
@@ -332,7 +340,6 @@ export function sourceName(source: string): string {
   return source.charAt(0).toUpperCase() + source.slice(1);
 }
 
-const turnCount = (n: number): string => (n === 1 ? t("agent.turnCountOne") : t("agent.turnCount", { p0: n }));
 
 /** One conversation in the list: a real button, the current one marked, only it in the tab order. */
 export function sessionButtonHTML(session: Session, current: boolean): string {
@@ -341,7 +348,7 @@ export function sessionButtonHTML(session: Session, current: boolean): string {
     `<button type="button" class="sess" data-act="session" data-key="${esc(session.key)}" aria-current="${current}" tabindex="${current ? 0 : -1}">` +
     `<span class="sess-src" title="${esc(sourceName(session.source))}">${sourceIcon(session.source)}</span>` +
     `<span class="sess-main"><span class="sess-title">${esc(sessionTitle(session))}</span>` +
-    `<span class="sess-meta"><span class="sr">${esc(sourceName(session.source))} · </span><span class="num">${esc(formatClock(session.endMs))}</span> · ${esc(turnCount(session.turns.length))}</span></span>` +
+    `<span class="sess-meta"><span class="sr">${esc(sourceName(session.source))} · </span><span class="num">${esc(formatClock(session.endMs))}</span></span></span>` +
     (busy ? `<span class="sess-busy" role="img" aria-label="${esc(t("agent.working"))}"></span>` : "") +
     `</button>`
   );
@@ -372,11 +379,12 @@ export function sessionListHTML(days: readonly SessionDay[], currentKey: string 
 export function sessionHeadHTML(session: Session, nowMs: number): string {
   const cost = session.turns.reduce((sum, turn) => sum + (turn.cost_usd ?? 0), 0);
   const when = `${dayLabel(session.startMs, nowMs)} ${formatClock(session.startMs)}`;
-  const meta = [esc(when), esc(turnCount(session.turns.length)), ...(cost > 0 ? [esc(formatUsd(cost))] : [])];
+  const meta = [esc(when), ...(cost > 0 ? [esc(formatUsd(cost))] : [])];
+  const source = esc(sourceName(session.source));
   return (
     `<header class="tl-head"><h2 class="tl-title">${esc(sessionTitle(session))}</h2>` +
-    `<div class="tl-meta"><span class="tl-src">${sourceIcon(session.source)}<span>${esc(sourceName(session.source))}</span></span>` +
-    meta.map((part) => `<span class="dot-sep" aria-hidden="true">·</span><span class="num">${part}</span>`).join("") +
+    `<div class="tl-meta"><span class="tl-src" role="img" aria-label="${source}" title="${source}">${sourceIcon(session.source)}</span>` +
+    meta.map((part, i) => `${i ? `<span class="dot-sep" aria-hidden="true">·</span>` : ""}<span class="num">${part}</span>`).join("") +
     `</div></header>`
   );
 }

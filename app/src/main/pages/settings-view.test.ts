@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { emptyConnectionsView } from "../connections";
-import { emptyMessagingView } from "../messaging";
 import { setLocale } from "../i18n";
 import type { LanguageGroup } from "../languages";
 import type { BrainSettings, CatalogModel, DeviceSettings, LocalModel, ModelCatalog, SettingsPane, Status } from "../types";
@@ -79,16 +78,17 @@ const view = (over: Partial<SettingsView> = {}): SettingsView => ({
   pane: "general", device, brain, hasKey: true, openrouter, spend, catalog, checkingOpenrouter: false,
   devices: { devices: [{ index: 0, name: REALTEK, is_default: true }], selected: null, automatic_device: REALTEK },
   altgr: false, version: "0.1.0", replacingKey: false, confirmingKeyRemoval: false, keyBusy: false, keyError: null, limitDraft: null, limitError: null,
-  cityDraft: null, cityError: null, languageGroups: GROUPS, now: NOW, connections: emptyConnectionsView(), messaging: emptyMessagingView(),
+  languageGroups: GROUPS, now: NOW, connections: emptyConnectionsView(),
   localModels: LOCAL_MODELS, localDownload: null, ...over,
 });
-test("the messaging apps sit under the connected services, and only there", () => {
-  const installed = tab("connections");
-  expect(installed).toContain("data-msg-section");
-  expect(installed.indexOf("data-msg-section")).toBeGreaterThan(installed.indexOf('class="cs'));
-  expect(tab("connections", { connections: { ...emptyConnectionsView(), tab: "store" } })).not.toContain("data-msg-section");
-  expect(tab("connections", { connections: { ...emptyConnectionsView(), open: { tab: "installed", id: "x" } } })).not.toContain("data-msg-section");
-  expect(tab("general")).not.toContain("data-msg-section");
+test("Raphael's own settings and the messaging apps are on the 拉斐爾 page, not in the panel", () => {
+  expect(PANES.map((p) => p.id)).not.toContain("agent");
+  for (const id of PANES.map((p) => p.id)) {
+    const html = tab(id);
+    expect(html).not.toContain("data-msg");
+    expect(html).not.toContain('id="agent-city"');
+    expect(html).not.toContain("rec-agent");
+  }
 });
 
 const tab = (pane: SettingsPane, over: Partial<SettingsView> = {}): string => paneHTML(view({ pane, ...over }));
@@ -112,9 +112,9 @@ const described = (html: string): string[] =>
   html.split(/(?=<div class="row[ "])/).filter((r) => r.includes('<div class="d">')).map((r) => /<div class="t">(.*?)<\/div>/.exec(r)![1]);
 
 describe("the tabs", () => {
-  test("are General, Dictation, Raphael, Models & usage and About, in each language", () => {
-    expect(IDS).toEqual(["general", "dictation", "agent", "connections", "usage", "about"]);
-    const titles = { "zh-TW": ["一般", "聽寫", "拉斐爾", "連接", "模型與用量", "關於"], en: ["General", "Dictation", "Raphael", "Connections", "Models & usage", "About"], ja: ["一般", "音声入力", "ラファエル", "接続", "モデルと使用量", "アプリ情報"] };
+  test("are General, Dictation, Connections, Models & usage and About, in each language", () => {
+    expect(IDS).toEqual(["general", "dictation", "connections", "usage", "about"]);
+    const titles = { "zh-TW": ["一般", "聽寫", "連接", "模型與用量", "關於"], en: ["General", "Dictation", "Connections", "Models & usage", "About"], ja: ["一般", "音声入力", "接続", "モデルと使用量", "アプリ情報"] };
     for (const locale of LOCALES) {
       setLocale(locale);
       expect(PANES.map((p) => p.title())).toEqual(titles[locale]);
@@ -140,7 +140,6 @@ describe("the tabs", () => {
     const purpose = (id: SettingsPane, over: Partial<SettingsView> = {}): string => /<p class="purpose">(.*?)<\/p>/.exec(tab(id, over))![1];
     expect(purpose("general")).toBe("介面和桌面圖案的外觀");
     expect(purpose("dictation")).toBe("按快捷鍵說話，拉斐爾把你說的打出來");
-    expect(purpose("agent")).toBe("按 右 Alt + Space 問拉斐爾");
     expect(purpose("usage")).toBe("拉斐爾用的雲端模型和花費");
   });
 
@@ -176,7 +175,6 @@ describe("the rules for every tab, in every language", () => {
   test("a line under a row's name only where the setting would otherwise be set wrong", () => {
     expect(described(tab("general"))).toEqual(["字幕"]);
     expect(described(tab("dictation"))).toEqual(["你說的語言"]);
-    expect(described(tab("agent"))).toEqual(["天氣的城市"]);
     // the key's status, the month's forecast, what the limit does, and what each model costs
     expect(described(tab("usage"))).toEqual(["金鑰", "Raphael 本月花費", "每月上限", "語音轉文字", "整理文字", "拉斐爾的回答"]);
   });
@@ -267,40 +265,6 @@ describe("聽寫", () => {
     const html = tab("dictation");
     expect(html).not.toContain('class="tg"');
     expect(html).not.toMatch(/pause-media|data-k="learn"|字典/);
-  });
-});
-
-describe("拉斐爾", () => {
-  test("has the key that asks her and the weather city, and no choice of router", () => {
-    for (const locale of LOCALES) {
-      setLocale(locale);
-      const html = tab("agent");
-      expect(html).not.toMatch(/agent-router|Jev|Luna/);
-      expect(html).not.toContain('data-k="agent-model"'); // with the other models
-    }
-    setLocale("zh-TW");
-    const html = tab("agent");
-    expect(groups(html)).toEqual(["開始方式", "回答"]);
-    expect(names(html)).toEqual(["問拉斐爾", "天氣的城市"]);
-    expect(rowOf(html, "問拉斐爾")).toContain('<button type="button" class="btn" data-act="rec-agent" data-k="rec-agent">變更</button>');
-    expect(rowOf(html, "天氣的城市")).toContain('id="agent-city" type="text" value="台北"');
-  });
-
-  test("still says how to ask her when no key is set", () => {
-    const html = tab("agent", { device: { ...device, agent_keys: [] } });
-    expect(html).toContain('<p class="purpose">設定快捷鍵後，按下就能問拉斐爾</p>');
-    expect(rowOf(html, "問拉斐爾")).toContain("尚未設定");
-  });
-
-  test("warns about Right Alt under her key, as under the dictation key, only when the keyboard uses it as AltGr", () => {
-    const warning = '<div class="note"><span class="st warn"><span class="dot warn"></span>你的鍵盤配置把右 Alt 當 AltGr 用，建議換一個快捷鍵。</span></div>';
-    const html = tab("agent", { altgr: true });
-    expect(html).toContain(warning);
-    expect(html.indexOf(warning)).toBeGreaterThan(html.indexOf('data-row="agent-hotkey"'));
-    expect(html.indexOf(warning)).toBeLessThan(html.indexOf("天氣的城市"));
-    expect(tab("dictation", { altgr: true })).toContain(warning);
-    expect(tab("agent")).not.toContain("AltGr");
-    expect(tab("agent", { altgr: true, device: { ...device, agent_keys: ["ControlLeft+Space"] } })).not.toContain("AltGr");
   });
 });
 
@@ -434,15 +398,12 @@ describe("關於", () => {
 describe("while the core does not answer", () => {
   test("the tabs that need it say so, and its settings cannot be changed; this computer's still can", () => {
     const down = { brain: null };
-    for (const id of ["dictation", "agent", "usage"] as const) expect(tab(id, down)).toContain("core-note");
+    for (const id of ["dictation", "usage"] as const) expect(tab(id, down)).toContain("core-note");
     for (const id of ["general", "about"] as const) expect(tab(id, down)).not.toContain("core-note");
     const dictation = tab("dictation", down);
     expect(rowOf(dictation, "你說的語言")).toMatch(/data-k="languages" disabled>/);
     expect(rowOf(dictation, "麥克風")).not.toContain("disabled");
     expect(rowOf(dictation, "聽寫")).not.toContain("disabled");
-    const agent = tab("agent", down);
-    expect(rowOf(agent, "天氣的城市")).toContain("disabled");
-    expect(rowOf(agent, "問拉斐爾")).not.toContain("disabled");
     const usage = tab("usage", down);
     expect(rowOf(usage, "每月上限")).toContain("disabled");
     for (const name of ["語音轉文字", "整理文字", "拉斐爾的回答"]) expect(rowOf(usage, name)).toMatch(/data-k="[\w-]+" disabled>/);
