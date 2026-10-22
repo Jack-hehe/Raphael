@@ -1054,6 +1054,7 @@ class App(Router):
     async def _hello(self, params: dict) -> dict:
         self.messaging.start()  # a Telegram bot that was left on polls again
         self.agent.prewarm()  # the app is up: read the Start menu now, not at the first "open"
+        self.background.announce_pending()  # a task interrupted while the app was away is told
         return {"protocol": PROTOCOL_VERSION, "version": __version__}
 
     async def _shutdown(self, params: dict) -> dict:

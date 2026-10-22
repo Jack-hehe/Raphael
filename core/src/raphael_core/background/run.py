@@ -364,10 +364,24 @@ class TaskRun:
     async def _plugin(self, ref: ToolRef, arguments: dict) -> tuple[dict, str, str | None]:
         now = self._gate.tier_now(ref.key)
         self._in_plugin_call = True
+        began = time.perf_counter()
         try:
             result = await self._guarded(
                 self._gate.call_plugin(ref.key, arguments, task_id=self.task_id)
             )
+        except (RpcError, asyncio.CancelledError):
+            # The call did not come back: it may or may not have been made. A later attempt is
+            # told so.
+            self._step(
+                kind="tool",
+                tool=ref.name,
+                server=ref.server,
+                tier=None if now is None else now.name,
+                outcome="cancelled",
+                ms=_ms(began),
+                reason="cancelled",
+            )
+            raise
         finally:
             self._in_plugin_call = False
         text, cut = _cut(result.text)

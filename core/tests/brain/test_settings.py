@@ -34,6 +34,7 @@ def test_the_defaults_are_the_documented_ones():
         "stt_cloud_model": "elevenlabs/scribe-v2",
         "agent_model": "openai/gpt-6-luna",
         "agent_city": "台北",
+        "worker_cost_cap_usd": 0.2,
         "stt_local_model": "qwen3-asr",
         "model_favorites": {"cleanup": [], "answer": [], "stt": []},
     }

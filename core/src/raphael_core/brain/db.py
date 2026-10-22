@@ -221,6 +221,17 @@ PRAGMA user_version = 11;
 COMMIT;
 """
 
+# v12: `worker_tasks.announced` is 0 for the report of a task that was interrupted and has not been
+# said yet (it is said once, when the app next says hello), and `rerun_of` the task a rerun started
+# again.
+_MIGRATION_V12 = """
+BEGIN;
+ALTER TABLE worker_tasks ADD COLUMN announced INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE worker_tasks ADD COLUMN rerun_of INTEGER;
+PRAGMA user_version = 12;
+COMMIT;
+"""
+
 _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_V1,
     2: _MIGRATION_V2,
@@ -233,6 +244,7 @@ _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     9: _MIGRATION_V9,
     10: _MIGRATION_V10,
     11: _MIGRATION_V11,
+    12: _MIGRATION_V12,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

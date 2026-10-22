@@ -18,14 +18,22 @@ finished. When it did not (a limit, the user's stop, a worker that died, a model
 fixed line of the persona with the number of tool calls made, and nothing more is spent for it.
 
 RPC methods, for the app: `worker.list {limit?}`, `worker.get {id}` (with the steps; never an
-argument or a result) and `worker.cancel {task_id?}` (the task that runs, or the one named). The
-assistant's history shows each task with the turn that handed it over (`tasks_for_turns`).
+argument or a result), `worker.cancel {task_id?}` (the task that runs, or the one named) and
+`worker.rerun {task_id}` (a task that was interrupted, stopped, ran out of a limit or failed, run
+again as a new task). The assistant's history shows each task with the turn that handed it over
+(`tasks_for_turns`).
+
+A task that was queued or running when the core ended (or when it started again after a crash) is
+interrupted with a report, and its turn of the history is completed with it, so that the
+conversation no longer says it was handed over. The report is said once, after the app says hello
+(`announce_pending`): only the newest, if several were interrupted together.
 
 Everything runs on the event loop, which owns the database. Nothing here logs what a task is, or
 what it said: only ids, states, counts and costs.
 """
 
 import asyncio
+import dataclasses
 import json
 import logging
 import sqlite3
@@ -38,7 +46,7 @@ from typing import Any
 from ..agent.answers import Reply, parse_reply
 from ..agent.failure import KINDS, AgentFailure
 from ..agent.gate import ToolGate
-from ..agent.history import AgentHistory, Turn
+from ..agent.history import VOICE, AgentHistory, Turn
 from ..agent.ledger import Ledger
 from ..agent.persona import (
     PREFIXES,
@@ -50,13 +58,13 @@ from ..agent.tools import Tools
 from ..brain.openrouter import OpenRouterClient
 from ..brain.settings import DEFAULTS, SettingsStore
 from ..brain.spend import SpendTracker
-from ..protocol import INVALID_PARAMS, NOT_FOUND, RpcError
+from ..protocol import BUSY, INVALID_PARAMS, NOT_FOUND, RpcError
 from ..router import Router
 from ..worker.guards import neutralize
 from .host import WorkerCrashed, WorkerHost, WorkerStopped, WorkerUnavailable
 from .run import RunLimits, TaskRun
 from ..agent.toolpick import ToolPicker
-from .snapshot import refine, take_snapshot
+from .snapshot import BUILTIN_SERVER, refine, take_snapshot
 from .tasks import QUEUED, RUNNING, Refused, Step, Task, TaskStore
 
 logger = logging.getLogger(__name__)
@@ -71,6 +79,16 @@ TIME_NET_S = 20.0
 _TURN_STATUS = {"done": "done", "cancelled": "denied"}
 
 _FINAL_FENCE = "```"
+
+# The states of a task that can be run again: it did not finish. A task that is done is not run
+# again, and one that is not over is still running.
+RERUNNABLE = ("interrupted", "cancelled", "limit", "failed")
+# How a step of an earlier attempt ended, as the new attempt is told.
+_EARLIER_OUTCOME = {
+    "ok": "ok",
+    "cancelled": "cut off, may have run",
+    "timeout": "timed out, may have run",
+}
 
 
 def _wall_clock_ms() -> int:
@@ -118,12 +136,18 @@ def report_from(final: str, language: str) -> Reply | None:
         return None
 
 
+def _interrupted_report(language: str, steps: int) -> tuple[str, str]:
+    """The prefix and the line that tell a task was interrupted, in the language of the task."""
+    return PREFIXES[language].notice, phrase(language, "worker_interrupted", steps=str(steps))
+
+
 def _prompts(
     language: str,
     text: str,
     moment: dict[str, str],
     context: Sequence[Turn],
     limits: RunLimits,
+    earlier: Sequence[str] | None = None,
 ) -> tuple[str, str]:
     """The system prompt and the first message of the user for a task."""
     system = worker_system_prompt(
@@ -140,6 +164,15 @@ def _prompts(
         ]
         parts.append("Conversation so far (oldest first):\n" + "\n".join(lines))
     parts.append(f"<task>\n{neutralize(text)}\n</task>")
+    if earlier is not None:
+        calls = "\n".join(f"- {neutralize(line)}" for line in earlier) or "- none"
+        parts.append(
+            "<previous_attempt>\nThis task was started before and stopped. These tool calls were "
+            "already made (what they were given is not kept). Do not repeat a call that is marked "
+            "ok, and check first whether a call that was cut off or timed out took effect; make "
+            "another one only if the task clearly needs it.\n"
+            f"{calls}\n</previous_attempt>"
+        )
     parts.append(language_reminder(language))
     return system, "\n\n".join(parts)
 
@@ -186,25 +219,32 @@ class BackgroundService:
         self._executing = False  # a task has been taken off the queue and is being carried out
         # Tasks the user cleared while they ran: they end without a report and leave no row.
         self._discarded: set[int] = set()
-        # A task that was under way when the last process ended is over: it is never started again.
-        try:
-            interrupted = self._store.interrupt_unfinished()
-            if interrupted:
-                logger.info("%d background tasks were left unfinished by the last run", interrupted)
-        except sqlite3.Error as exc:
-            logger.warning("Could not close the old background tasks: %s", type(exc).__name__)
+        # A task that was under way when the last process ended is over: it is never started
+        # again, and is told so once the app says hello (`announce_pending`).
+        interrupted = self._interrupt_unfinished("restart")
+        if interrupted:
+            logger.info("%d background tasks were left unfinished by the last run", interrupted)
 
     def register(self, router: Router) -> None:
         for method, handler in {
             "worker.list": self._list,
             "worker.get": self._get,
             "worker.cancel": self._cancel,
+            "worker.rerun": self._rerun,
         }.items():
             router.register(method, handler)
 
     # --- taking a task --------------------------------------------------------------------------
 
-    def submit(self, *, session_id: str, text: str, language: str, model: str) -> int:
+    def submit(
+        self,
+        *,
+        session_id: str,
+        text: str,
+        language: str,
+        model: str,
+        rerun_of: int | None = None,
+    ) -> int:
         """Write a task down and queue it; its id. `Refused` when the worker is switched off or the
         queue is full. The task starts as soon as the one before it is over. (`model` is accepted
         but not used yet: a task uses the assistant's model.)"""
@@ -212,7 +252,9 @@ class BackgroundService:
             raise Refused("worker_disabled")
         if len(self._queue) >= MAX_QUEUED + (0 if self._executing else 1):
             raise Refused("worker_busy")
-        task_id = self._store.create(session_id=session_id, language=language, text=text)
+        task_id = self._store.create(
+            session_id=session_id, language=language, text=text, rerun_of=rerun_of
+        )
         self._models[task_id] = model
         self._queue.append(task_id)
         self._ensure_pump()
@@ -225,6 +267,51 @@ class BackgroundService:
             self._store.attach_turn(task_id, turn_id)
         except sqlite3.Error as exc:
             logger.warning("Could not tie a task to its turn: %s", type(exc).__name__)
+
+    def _interrupt_unfinished(self, reason: str) -> int:
+        """Interrupt the tasks that are queued or running, each with its report, and complete the
+        turn that handed it over. Returns how many there were."""
+        try:
+            tasks = self._store.interrupt_unfinished(_interrupted_report, reason)
+        except sqlite3.Error as exc:
+            logger.warning("Could not close the background tasks: %s", type(exc).__name__)
+            return 0
+        for task in tasks:
+            self._resolve_interrupted(task.turn_id, task.report_prefix, task.report_text)
+        return len(tasks)
+
+    def _resolve_interrupted(
+        self, turn_id: int | None, prefix: str | None, text: str | None
+    ) -> None:
+        if not turn_id:
+            return
+        try:
+            self._history.resolve(turn_id, prefix=prefix or "", text=text or "", status="error")
+        except sqlite3.Error as exc:
+            logger.warning("Could not complete the turn of a task: %s", type(exc).__name__)
+
+    def announce_pending(self) -> None:
+        """Say the report of an interrupted task, once. Called after the app says hello, when the
+        overlay and the messaging chats can take it. Of several tasks interrupted together only
+        the newest is said; the others are in the conversation view."""
+        try:
+            pending = self._store.unannounced()
+            self._store.mark_announced()
+        except sqlite3.Error as exc:
+            logger.warning("Could not read the unreported tasks: %s", type(exc).__name__)
+            return
+        if not pending or pending[0].id in self._discarded:
+            return
+        task = pending[0]
+        self._notify(
+            "worker.report",
+            {
+                "task_id": task.id,
+                "state": task.state,
+                "prefix": task.report_prefix or "",
+                "text": task.report_text or "",
+            },
+        )
 
     def prune(self, older_than_ms: int) -> None:
         try:
@@ -324,6 +411,7 @@ class BackgroundService:
             )  # fmt: skip
             return
         self._store.start(task.id)
+        limits = dataclasses.replace(self._limits, cost_usd=self._cost_cap())
         ledger = Ledger(self._spend)
         model = self._models.pop(task.id, DEFAULTS["agent_model"])
         context = self._context(task)
@@ -334,7 +422,7 @@ class BackgroundService:
             task_id=task.id,
             language=language,
             model=model,
-            limits=self._limits,
+            limits=limits,
             snapshot=snapshot,
             client=self._client,
             gate=self._gate,
@@ -352,7 +440,8 @@ class BackgroundService:
             task.text,
             self._tools.local_time().data or {},
             context,
-            self._limits,
+            limits,
+            self._earlier_attempt(task),
         )
         self._run = run
         self._changed(task.id, RUNNING)
@@ -396,12 +485,54 @@ class BackgroundService:
             # The core is closing: the task is over, and nobody is left to report to. The call
             # that was under way is given up.
             run.cancel()
-            self._store.finish(
-                task.id, "interrupted", prefix="", text="", detail=None, reason="closing"
-            )
+            self._interrupt_closing(task, run)
             raise
         finally:
             self._run = None
+
+    def _interrupt_closing(self, task: Task, run: TaskRun) -> None:
+        """The task that ran when the core closed: told of at the next hello, in its own language."""
+        if task.id in self._discarded:
+            self._discarded.discard(task.id)
+            try:
+                self._store.delete(task.id)
+            except sqlite3.Error as exc:
+                logger.warning("Could not delete a cleared task: %s", type(exc).__name__)
+            return
+        prefix, text = _interrupted_report(task.language, run.tool_calls)
+        try:
+            self._store.progress(
+                task.id,
+                model_calls=run.model_calls,
+                tool_calls=run.tool_calls,
+                cost_usd=run.ledger.total,
+            )
+            self._store.finish_interrupted(task.id, prefix=prefix, text=text, reason="closing")
+        except sqlite3.Error as exc:
+            logger.warning("Could not write down the end of a task: %s", type(exc).__name__)
+        self._resolve_interrupted(task.turn_id, prefix, text)
+
+    def _cost_cap(self) -> float:
+        """What one task may spend, as the setting says now."""
+        try:
+            return float(self._settings.get("worker_cost_cap_usd"))
+        except (sqlite3.Error, TypeError, ValueError):
+            return float(DEFAULTS["worker_cost_cap_usd"])
+
+    def _earlier_attempt(self, task: Task) -> list[str] | None:
+        """For a task that runs another again: the tool calls the earlier attempt made and how each
+        ended (never what it was given: that is not kept), or None for a first attempt."""
+        if task.rerun_of is None:
+            return None
+        try:
+            steps = self._store.steps(task.rerun_of)
+        except sqlite3.Error:
+            return []
+        return [
+            f"{step.server} / {step.tool}: {_EARLIER_OUTCOME.get(step.outcome, 'failed')}"
+            for step in steps
+            if step.kind == "tool" and step.tool and step.server != BUILTIN_SERVER
+        ]
 
     def _context(self, task: Task) -> list[Turn]:
         try:
@@ -576,6 +707,46 @@ class BackgroundService:
         ]
         return {"task": {**self._view(task), "steps": steps}}
 
+    async def _rerun(self, params: dict) -> dict:
+        """Run a task that did not finish again, as a new task, with a new turn in the history that
+        is the same as the first (its source too). Nothing stops the new attempt from repeating
+        what the first did, but it is told what that was."""
+        task_id = params.get("task_id")
+        if type(task_id) is not int:
+            raise _invalid("task_id must be a whole number")
+        old = self._store.get(task_id)
+        if old is None:
+            raise RpcError(NOT_FOUND, "There is no such task")
+        if old.state not in RERUNNABLE or not old.text.strip():
+            raise _invalid("only a task that did not finish can run again")
+        model = self._settings.get("agent_model")
+        try:
+            new_id = self.submit(
+                session_id=old.session_id,
+                text=old.text,
+                language=old.language,
+                model=model,
+                rerun_of=old.id,
+            )
+        except Refused as refused:
+            raise RpcError(BUSY, "The background worker cannot take a task now", {"kind": refused.kind}) from None
+        try:
+            earlier = self._history.get(old.turn_id) if old.turn_id else None
+            turn_id = self._history.add(
+                session_id=old.session_id,
+                question=old.text,
+                route="delegate",
+                prefix=PREFIXES[old.language].understood,
+                text=phrase(old.language, "handoff"),
+                status="done",
+                source=VOICE if earlier is None else earlier.source,
+            )
+            self._store.attach_turn(new_id, turn_id)
+        except sqlite3.Error as exc:
+            logger.warning("Could not write the turn of a rerun: %s", type(exc).__name__)
+        self._changed(new_id, QUEUED)
+        return {"task_id": new_id}
+
     async def _cancel(self, params: dict) -> dict:
         """Stop the task that runs (no `task_id`, or its id) or take a queued one out of the queue.
         Esc does not do this: the cancel key of the assistant leaves the background alone."""
@@ -607,9 +778,6 @@ class BackgroundService:
             await asyncio.gather(pump, return_exceptions=True)
         for task_id in list(self._queue):
             self._queue.remove(task_id)
-        try:
-            self._store.interrupt_unfinished()
-        except sqlite3.Error as exc:
-            logger.warning("Could not close the background tasks: %s", type(exc).__name__)
+        self._interrupt_unfinished("restart")
         await self._host.aclose()
         await self._tools.aclose()

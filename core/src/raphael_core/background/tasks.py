@@ -65,6 +65,9 @@ class Task:
     model_calls: int
     tool_calls: int
     cost_usd: float
+    # 0 for the report of an interrupted task that has not been said yet; 1 otherwise.
+    announced: int = 1
+    rerun_of: int | None = None  # the task this one runs again
 
 
 @dataclass
@@ -83,7 +86,8 @@ class Step:
 
 _TASK_COLUMNS = (
     "id, created_at_ms, started_at_ms, finished_at_ms, state, session_id, turn_id, language, text,"
-    " report_prefix, report_text, report_detail, reason, model_calls, tool_calls, cost_usd"
+    " report_prefix, report_text, report_detail, reason, model_calls, tool_calls, cost_usd,"
+    " announced, rerun_of"
 )
 _STEP_COLUMNS = "n, at_ms, kind, tool, server, tier, outcome, cost_usd, ms, reason"
 
@@ -97,12 +101,14 @@ class TaskStore:
         self._conn = conn
         self._now_ms = now_ms
 
-    def create(self, *, session_id: str, language: str, text: str) -> int:
+    def create(
+        self, *, session_id: str, language: str, text: str, rerun_of: int | None = None
+    ) -> int:
         with self._conn:
             cursor = self._conn.execute(
-                "INSERT INTO worker_tasks (created_at_ms, state, session_id, language, text)"
-                " VALUES (?, 'queued', ?, ?, ?)",
-                (self._now_ms(), session_id, language, text),
+                "INSERT INTO worker_tasks (created_at_ms, state, session_id, language, text,"
+                " rerun_of) VALUES (?, 'queued', ?, ?, ?, ?)",
+                (self._now_ms(), session_id, language, text, rerun_of),
             )
         assert cursor.lastrowid is not None
         return cursor.lastrowid
@@ -229,17 +235,61 @@ class TaskStore:
             "SELECT count(*) FROM worker_tasks WHERE state = ?", (state,)
         ).fetchone()[0]
 
-    def interrupt_unfinished(self) -> int:
-        """Mark the tasks that were queued or running when the last process ended as interrupted:
-        the worker they ran in is gone, and a task is never started again by itself. Returns how
-        many there were."""
+    def interrupt_unfinished(
+        self,
+        report: Callable[[str, int], tuple[str, str]] | None = None,
+        reason: str = "restart",
+    ) -> list[Task]:
+        """Mark the tasks that were queued or running as interrupted: the worker they ran in is
+        gone, and a task is never started again by itself. With `report` (the task's language and
+        the tool calls it made, to a prefix and a line) each gets that report, to be said once
+        (`announced` 0). Returns the tasks as they are now."""
         with self._conn:
-            cursor = self._conn.execute(
-                "UPDATE worker_tasks SET state = 'interrupted', finished_at_ms = ?,"
-                " reason = 'restart' WHERE state IN ('queued', 'running')",
-                (self._now_ms(),),
+            rows = self._conn.execute(
+                "SELECT id, language FROM worker_tasks WHERE state IN ('queued', 'running')"
+            ).fetchall()
+            for row in rows:
+                if report is None:
+                    self._conn.execute(
+                        "UPDATE worker_tasks SET state = 'interrupted', finished_at_ms = ?,"
+                        " reason = ? WHERE id = ?",
+                        (self._now_ms(), reason, row["id"]),
+                    )
+                    continue
+                prefix, text = report(row["language"], self.tool_steps(row["id"]))
+                self._conn.execute(
+                    "UPDATE worker_tasks SET state = 'interrupted', finished_at_ms = ?,"
+                    " reason = ?, report_prefix = ?, report_text = ?, announced = 0 WHERE id = ?",
+                    (self._now_ms(), reason, prefix, text, row["id"]),
+                )
+        return [task for task in (self.get(row["id"]) for row in rows) if task is not None]
+
+    def unannounced(self) -> list[Task]:
+        """The interrupted tasks whose report has not been said, newest first."""
+        rows = self._conn.execute(
+            f"SELECT {_TASK_COLUMNS} FROM worker_tasks WHERE announced = 0 ORDER BY id DESC"
+        )
+        return [Task(**dict(row)) for row in rows]
+
+    def mark_announced(self) -> None:
+        with self._conn:
+            self._conn.execute("UPDATE worker_tasks SET announced = 1 WHERE announced = 0")
+
+    def finish_interrupted(self, task_id: int, *, prefix: str, text: str, reason: str) -> None:
+        """End a task that was interrupted while it ran, with a report nobody has heard yet."""
+        with self._conn:
+            self._conn.execute(
+                "UPDATE worker_tasks SET state = 'interrupted', finished_at_ms = ?, reason = ?,"
+                " report_prefix = ?, report_text = ?, report_detail = NULL, announced = 0"
+                " WHERE id = ?",
+                (self._now_ms(), reason, prefix, text, task_id),
             )
-        return cursor.rowcount
+
+    def tool_steps(self, task_id: int) -> int:
+        """How many tool calls the task made."""
+        return self._conn.execute(
+            "SELECT count(*) FROM worker_steps WHERE task_id = ? AND kind = 'tool'", (task_id,)
+        ).fetchone()[0]
 
     def delete(self, task_id: int) -> None:
         """Delete a task and its steps, whatever state it is in."""

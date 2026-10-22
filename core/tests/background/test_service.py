@@ -342,7 +342,7 @@ async def test_a_task_the_user_stops_ends_at_once_with_what_was_done(make_rig, c
     assert done["state"] == "cancelled"
     assert done["text"] == phrase("en", "worker_cancelled_unsure", steps="2")
     assert rig.task(task_id).state == "cancelled" and len(rig.client.chat_calls) == 2
-    assert [s.outcome for s in rig.steps(task_id) if s.kind == "tool"] == ["ok"]
+    assert [s.outcome for s in rig.steps(task_id) if s.kind == "tool"] == ["ok", "cancelled"]  # the cut-off call is a step
 
 
 async def test_a_task_stopped_in_the_middle_of_a_model_call_has_nothing_cut_off(make_rig):
