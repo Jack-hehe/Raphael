@@ -22,7 +22,7 @@ from raphael_core.brain.openrouter import Completion, KeyInfo, OpenRouterClient,
 from raphael_core.brain.secrets import MemoryKeyStore
 from raphael_core.brain.service import Brain
 from raphael_core.brain.settings import DEFAULTS, SettingsStore
-from raphael_core.protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
+from raphael_core.protocol import INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, RpcError
 from raphael_core.router import Router
 
 from .conftest import item
@@ -44,7 +44,6 @@ METHODS = [
     "dictionary.add",
     "dictionary.import",
     "dictionary.delete",
-    "dictionary.auto_add",
     "dictionary.learn",
     "settings.get",
     "settings.set",
@@ -930,74 +929,49 @@ async def test_dictionary_learn_does_not_log_the_words(router, caplog):
     assert "手機" not in caplog.text and "首機" not in caplog.text
 
 
-def seed_mentions(conn, word, count, created_at_ms):
-    store = HistoryStore(conn)
-    for i in range(count):
-        store.add(item(created_at_ms=created_at_ms + i, text=f"今天用 {word} 連回家"))
+# --- what puts a word in the dictionary ----------------------------------------------------------
+#
+# A word joins the dictionary when the user adds or imports it, or when they corrected it in a
+# pasted dictation (`dictionary.learn`). Never because it is said often: a word that speech-to-text
+# writes right every time needs no entry.
 
 
-async def auto_added(router):
-    return (await router.call("dictionary.auto_add", {}))["words"]
+async def test_a_word_said_ten_times_right_is_never_added(router, conn):
+    for _ in range(10):
+        result = await finalize(router, raw_text="今天用 Tailscale 連回家")
+        assert "Tailscale" in result["text"]
+    assert len(HistoryStore(conn).list(limit=50)) == 10
+    assert (await router.call("dictionary.list", {}))["entries"] == []
+    assert DictionaryStore(conn).hint_forms() == []
 
 
-async def test_auto_add_adds_the_words_of_the_last_seven_days_as_learned(router, conn):
-    seed_mentions(conn, "Tailscale", 3, NOW_MS - 2 * DAY_MS)
-    seed_mentions(conn, "OpenRouter", 3, NOW_MS - 8 * DAY_MS)
-    assert await auto_added(router) == ["Tailscale"]
+async def test_there_is_no_method_that_adds_words_by_how_often_they_are_said(router):
+    with pytest.raises(RpcError) as raised:
+        await router.call("dictionary.auto_add", {})
+    assert raised.value.code == METHOD_NOT_FOUND
+
+
+async def test_a_corrected_word_is_added_once_with_its_misheard_form(router, conn):
+    assert await learn(router, "Tailscale", "tail scale") == {"learned": ["Tailscale"]}
     entries = (await router.call("dictionary.list", {}))["entries"]
     assert [(e["word"], e["source"]) for e in entries] == [("Tailscale", "learned")]
-
-
-async def test_auto_add_window_is_exactly_seven_days(router, conn):
-    seed_mentions(conn, "Tailscale", 3, NOW_MS - 7 * DAY_MS)  # from the very start of the window
-    stale = HistoryStore(conn)
-    for _ in range(3):
-        stale.add(item(created_at_ms=NOW_MS - 7 * DAY_MS - 1, text="今天用 OpenRouter"))
-    assert await auto_added(router) == ["Tailscale"]
-
-
-async def test_auto_add_adds_a_word_only_once(router, conn):
-    seed_mentions(conn, "Tailscale", 3, NOW_MS - DAY_MS)
-    assert await auto_added(router) == ["Tailscale"]
-    assert await auto_added(router) == []
-    assert len((await router.call("dictionary.list", {}))["entries"]) == 1
-
-
-async def test_auto_add_skips_known_words_in_any_letter_case(router, conn):
-    seed_mentions(conn, "Tailscale", 3, NOW_MS - DAY_MS)
-    await router.call("dictionary.add", {"word": "tailscale"})
-    assert await auto_added(router) == []
+    # The misheard form is kept with the word: a hint for the cleanup model from the first
+    # sighting, a replacement rule from the second.
+    assert DictionaryStore(conn).hint_forms() == [("tail scale", "Tailscale")]
+    assert await learn(router, "Tailscale", "tail scale") == {
+        "learned": ["Tailscale"],
+        "rules": ["Tailscale"],
+    }
     entries = (await router.call("dictionary.list", {}))["entries"]
-    assert [(e["word"], e["source"]) for e in entries] == [("tailscale", "manual")]
+    assert [(e["word"], e["misheard"]) for e in entries] == [("Tailscale", ["tail scale"])]
 
 
-async def test_auto_add_skips_a_word_the_user_dismissed(router, conn):
-    seed_mentions(conn, "OpenRouter", 3, NOW_MS - DAY_MS)
-    dismiss(conn, "OpenRouter")
-    assert await auto_added(router) == []
-
-
-async def test_a_deleted_auto_word_is_not_added_again(router, conn):
-    seed_mentions(conn, "Tailscale", 3, NOW_MS - DAY_MS)
-    await auto_added(router)
-    entry = (await router.call("dictionary.list", {}))["entries"][0]
-    await router.call("dictionary.delete", {"id": entry["id"]})
-    assert await auto_added(router) == []
+async def test_retyping_the_same_word_is_no_correction(router, conn):
+    assert await learn(router, "Tailscale", "Tailscale") == {"learned": []}
+    assert await learn(router, "手機", " 手機 ") == {"learned": []}
+    assert await learn(router, "Tailscale", "tailscale") == {"learned": []}, "letter case only"
     assert (await router.call("dictionary.list", {}))["entries"] == []
-
-
-async def test_auto_add_takes_at_most_five_words_a_time(router, conn):
-    for word in ("Alpha1", "Beta2", "Gamma3", "Delta4", "Epsilon5", "Zeta6"):
-        seed_mentions(conn, word, 3, NOW_MS - DAY_MS)
-    assert len(await auto_added(router)) == 5
-    assert len(await auto_added(router)) == 1
-
-
-async def test_auto_add_does_not_log_the_words(router, conn, caplog):
-    caplog.set_level(logging.DEBUG)
-    seed_mentions(conn, "Tailscale", 3, NOW_MS - DAY_MS)
-    await auto_added(router)
-    assert "Tailscale" not in caplog.text
+    assert DictionaryStore(conn).hint_forms() == []
 
 
 # --- settings -----------------------------------------------------------------------------------

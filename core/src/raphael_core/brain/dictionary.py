@@ -4,6 +4,11 @@ An entry is a word and the forms speech-to-text tends to write for it. Every for
 rule: `replacements()` turns it into the word, in the transcript and again in the cleaned text. What
 the user adds is taken as it is.
 
+A word joins the dictionary in only two ways: the user adds or imports it, or the user corrected it
+in a pasted dictation because speech-to-text got it wrong (`learn_pair`). A word is never added for
+being said often: one that is written right every time needs no entry. (An earlier version did add
+such words by itself, as "learned" entries. They are left where they are, for the user to delete.)
+
 What the brain learns from a correction the user made by hand is not (`learn_pair`). Such a pair
 is often no recognition error (a synonym, a word the user changed their mind about), and a
 replacement rule rewrites right text everywhere. So the corrected word becomes a term of the
@@ -30,7 +35,8 @@ from ..clock import wall_clock_ms
 from .mishearing import may_become_rule
 from .textnorm import apply_replacements, replacement_key
 
-# "learned": added by itself, from a correction the user made to a pasted dictation.
+# "learned": added by itself, from a correction the user made to a pasted dictation. "suggested":
+# taken from a suggestion of an earlier version.
 _SOURCES = ("manual", "suggested", "learned")
 # What the evidence about a (word, form) pair says. "pending": seen, and not a rule (yet), so the
 # form is a hint. "rule": the pair became a rule by learning. "blocked": the user changed the rule's

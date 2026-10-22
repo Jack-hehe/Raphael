@@ -61,7 +61,6 @@ from .secrets import KeyStore
 from .settings import SettingsStore, checked
 from .spend import SpendTracker
 from .stats import StatsStore
-from .suggest import suggest_words
 from .textnorm import (
     apply_replacements,
     finish_cleaned_text,
@@ -77,10 +76,6 @@ HISTORY_MAX_LIMIT = 200
 IMPORT_MAX = 5000
 # The most corrections `dictionary.learn` takes from one dictation.
 LEARN_MAX = 3
-# The dictionary adds words by itself from this many days of history,
-SUGGESTION_DAYS = 7
-# and at most this many in one go.
-AUTO_ADD_LIMIT = 5
 # How long a key check may take in all. The client's timeout applies to each stage of a request
 # (connect, send, wait, read), so by itself a check could outlast the 15 s the app waits for it.
 KEY_CHECK_TIMEOUT_S = 10.0
@@ -281,8 +276,6 @@ class Brain:
             "dictionary.add": self._dictionary_add,
             "dictionary.import": self._dictionary_import,
             "dictionary.delete": self._dictionary_delete,
-            "dictionary.auto_add": self._dictionary_auto_add,
-
             "dictionary.learn": self._dictionary_learn,
             "settings.get": self._settings_get,
             "settings.set": self._settings_set,
@@ -490,25 +483,6 @@ class Brain:
         entry_id = _int(params, "id")
         with _store_call():
             return {"deleted": self._dictionary.delete(entry_id)}
-
-    async def _dictionary_auto_add(self, params: dict) -> dict:
-        """`{}` -> `{words: [word]}`: adds the names and terms that keep coming up in the last
-        seven days of dictation to the dictionary, as learned entries, and returns the ones it
-        added (at most AUTO_ADD_LIMIT). A word that is in the dictionary, or that the user
-        deleted or dismissed, is never added. The app calls it after a dictation is pasted. Only
-        the number of words is logged."""
-        texts = self._history.texts_since(self._now_ms() - SUGGESTION_DAYS * _DAY_MS)
-        known = set(self._dictionary.hint_words())
-        found = suggest_words(texts, known, self._dictionary.dismissed(), limit=AUTO_ADD_LIMIT)
-        words: list[str] = []
-        with _store_call():
-            for word, _count in found:
-                self._dictionary.add(word, source="learned")
-                words.append(word)
-        if words:
-            logger.info("Added %d words to the dictionary by themselves", len(words))
-        return {"words": words}
-
 
     async def _dictionary_learn(self, params: dict) -> dict:
         """`{corrections: [{word, misheard}]}` from the app's correction watch: the user replaced

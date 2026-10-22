@@ -219,7 +219,7 @@ export interface DictionaryEntry {
   id: number;
   word: string;
   misheard: string[];
-  /** "manual" for a word the user typed or imported, "suggested" for one taken from a suggestion of an earlier version, "learned" for one Raphael added by itself. */
+  /** "manual" for a word the user typed or imported, "suggested" for one taken from a suggestion of an earlier version, "learned" for one Raphael added by itself after the user corrected it in a pasted dictation. */
   source: "manual" | "suggested" | "learned";
 }
 
