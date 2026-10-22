@@ -1,8 +1,9 @@
 //! Raphael's notices: the short reports the overlay shows as subtitles when a dictation could not
-//! go the usual way, the word list after learning from the user's corrections, his greeting when a
-//! question to him begins, and the announcements beside the emblem while he thinks about it. Each
-//! one is wrapped in 《》 and starts with its prefix: 告 (report) or 否 (refusal) in Chinese and
-//! Japanese, 了 for the learned words, and `Notice.`, `Negative.` or `Understood.` in English.
+//! go the usual way, the word list after learning from the user's corrections, the line that says he
+//! wrote down what he was told to remember, his greeting when a question to him begins, and the
+//! announcements beside the emblem while he thinks about it. Each one is wrapped in 《》 and starts
+//! with its prefix: 告 (report) or 否 (refusal) in Chinese and Japanese, 了 for the learned words and
+//! for a memory, and `Notice.`, `Negative.` or `Understood.` in English.
 //!
 //! They are written in his manner: calm, exact and brief. A report states what happened and what
 //! was done about it, a refusal states why, and neither apologises, jokes or exclaims. He calls the
@@ -146,6 +147,14 @@ pub const ASK_FAILED: Notice = Notice {
     zh: "《否。目前無法回答。》",
     en: "《Negative. No answer can be given at this time.》",
     ja: "《否。現在は回答できません。》",
+};
+
+/// Raphael wrote down what he was told to remember, in the same turn as his answer, which said
+/// something else (`"notice": "remembered"` in the reply of `agent.ask`). It follows the answer.
+pub const REMEMBERED: Notice = Notice {
+    zh: "《了。已記下。》",
+    en: "《Understood. Noted.》",
+    ja: "《了。記憶しました。》",
 };
 
 /// A question to Raphael has begun: his greeting beside the emblem while he listens. A dictation
@@ -616,6 +625,23 @@ mod tests {
         for line in WAITING.zh.iter().chain(WAITING.en).chain(WAITING.ja) {
             let width = width_at_14px(line);
             assert!(width <= CAPTION_ROOM_PX, "{line}: about {width} px");
+        }
+    }
+
+    #[test]
+    fn the_memory_notice_is_an_acknowledgement_in_each_language_on_one_line() {
+        assert_eq!(REMEMBERED.text("zh-TW"), "《了。已記下。》");
+        assert_eq!(REMEMBERED.text("en"), "《Understood. Noted.》");
+        assert_eq!(REMEMBERED.text("ja"), "《了。記憶しました。》");
+        assert_eq!(REMEMBERED.text("fr"), REMEMBERED.zh);
+        assert!(!has_kana(REMEMBERED.zh) && has_kana(REMEMBERED.ja));
+        for line in [REMEMBERED.zh, REMEMBERED.en, REMEMBERED.ja] {
+            assert!(
+                line.ends_with('》') && !line.contains(['!', '！', '?', '？']),
+                "{line}"
+            );
+            assert!(width_at_14px(line) <= CAPTION_ROOM_PX, "{line}");
+            assert!(!ADDRESS.iter().any(|word| line.contains(word)), "{line}");
         }
     }
 
