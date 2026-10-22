@@ -1409,6 +1409,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         match parsed {
             Ok(Reply::Say { prefix, text }) => {
                 self.speak(id, &prefix, &text);
+                if agent::remembered(&reply) {
+                    // The answer said something else: 《了。已記下。》 follows it.
+                    self.show(notices::REMEMBERED);
+                }
                 None
             }
             Ok(Reply::Ask(prompt)) => {
@@ -5278,6 +5282,29 @@ mod tests {
         assert_eq!(
             c.overlay().events().last().unwrap(),
             "say:否|沒有設定金鑰。"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_memory_written_beside_the_answer_is_told_after_it_in_one_language() {
+        let mut reply = answer("答", "那就從高雄出發。");
+        reply["notice"] = json!("remembered");
+        let c = agent(reply);
+        ask_aloud(&c).await;
+        let events = c.overlay().events();
+        assert_eq!(
+            events[events.len() - 2..],
+            ["say:答|那就從高雄出發。", "notice:《了。已記下。》"]
+        );
+        // Without the notice, the answer is all.
+        let c = agent(answer("了", "已記下。"));
+        ask_aloud(&c).await;
+        assert_eq!(c.overlay().events().last().unwrap(), "say:了|已記下。");
+        assert!(
+            !c.overlay()
+                .events()
+                .iter()
+                .any(|e| e.starts_with("notice:"))
         );
     }
 

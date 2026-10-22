@@ -16,8 +16,19 @@ ui_language, target_app}`. The router (Jev, and the language model when Jev fail
   the app or the search; what it names is checked as strictly as the rest, and learned when it
   opened. It runs only from the user's own request, never from what a service or the web returned;
 - an answer looks up what it needs, together (`tools`: the weather, a web search, the time), and one
-  call to the language model words it (`answers`); a discussion and small talk are worded with the
-  last turns of the conversation as context;
+  call to the language model words it (`answers`); a discussion and small talk are worded the same
+  way, with no lookup. Every one of them reads the one continuous conversation
+  (`memory.conversation`): the summary of the earlier turns and the latest turns as they were said
+  (a discussion all the turns after the summary, an answer and small talk the last few);
+- with a memory (`raphael_core.memory`), every answer also reads the memory's index, and its reply
+  may write or delete a note (`memory_write`, `memory_delete`, T1: at once, with no yes) when the
+  owner asks it to remember or forget something, or corrects it: Raphael then says 《了。已記下。》
+  (the reply's `notice`, which the overlay shows after the line). That is taken only from the
+  owner's own turn: a reply that was shown what the web or a connected service returned writes
+  nothing. The reply may also ask to read a note in full or to search the past turns (`memory_read`,
+  `history_search`, T0) before it answers, which it then does with what was found. A request to
+  remember that the router took for a task or a command, or could not place, is answered as small
+  talk, where the note is written;
 - when the user has connected plugins (`integrations`), an answer may use the tools that are on:
   one call to the language model picks the tools it needs from those alone (`plugins`), the
   program makes the calls, and the results are given to the call that words the answer as data,
@@ -74,7 +85,8 @@ from ..brain.settings import DEFAULTS, SettingsStore
 from ..brain.spend import SpendTracker
 from ..protocol import invalid_params
 from ..router import Router as RpcRouter
-from .answers import Voice
+from ..memory.conversation import Conversation, asks_to_remember
+from .answers import Reply, Voice
 from .cities import cities_in
 from .commands import COMMANDS, AppCatalog, run_command
 from .device import DeviceActions
@@ -104,9 +116,11 @@ from .policy import (
     Action,
     Approval,
     Confirmations,
+    NotApproved,
     Outcome,
     Pending,
     Tier,
+    UnknownTool,
 )
 from .routing import OpenAnswer, RouteDecision, Router
 from .steps import Step, reason_of
@@ -115,6 +129,8 @@ from .tools import ToolResult, Tools
 
 if TYPE_CHECKING:
     from ..background.service import BackgroundService
+    from ..memory.reflection import Applied
+    from ..memory.service import MemoryService
 
 logger = logging.getLogger(__name__)
 
@@ -129,8 +145,9 @@ _SOURCE = re.compile(r"[a-z]{1,20}")
 TYPED = "app"
 # The sources of the requests made at this computer: a new one replaces every question that waits.
 _AT_THIS_COMPUTER = frozenset({VOICE, TYPED})
-# How many turns of the conversation each route is shown.
-CONTEXT_TURNS = {"discuss": 10, "answer": 3, "chat": 3}
+# The routes that read the whole of the conversation after its summary; the others read its last
+# few turns (`memory.conversation.QUICK_TURNS`), which keeps a quick answer cheap.
+_FULL_CONTEXT_ROUTES = ("discuss",)
 # A connection to a plugin's server that nobody uses is closed after this long.
 PLUGIN_IDLE_S = 120.0
 _DAY_MS = 86_400_000
@@ -278,7 +295,9 @@ class AgentService:
     is told whether the answer model takes tools. `gate` is the one gate every tool call goes
     through, shared with the background worker (one is made when none is given), and `background`
     is the worker that takes the tasks of the `delegate` route. `notify` sends a notification to
-    the app (`agent.turn`).
+    the app (`agent.turn`). `memory` is Raphael's memory (`memory.service`), which also keeps the
+    conversation's summary; without one there is no memory, and the conversation is read without
+    a summary (its last turns, within the same limits).
     """
 
     def __init__(
@@ -299,8 +318,15 @@ class AgentService:
         gate: ToolGate | None = None,
         background: "BackgroundService",
         notify: Callable[[str, dict], None] | None = None,
+        memory: "MemoryService | None" = None,
     ) -> None:
         self._keys = keys
+        self._memory = memory
+        self._conversation = (
+            memory.conversation
+            if memory is not None
+            else Conversation(conn, client, now_ms=now_ms, clock=clock)
+        )
         self._notify = notify
         self._now_ms = now_ms
         self._actions = actions
@@ -373,7 +399,10 @@ class AgentService:
         task.add_done_callback(self._warming.discard)
 
     async def aclose(self) -> None:
-        """End the requests being thought about and close the HTTP client of the tools."""
+        """End the requests being thought about and close the HTTP client of the tools. A fold of
+        the conversation that runs is ended too (the memory's own, by the memory)."""
+        if self._memory is None:
+            await self._conversation.aclose()
         tasks = [*self._inflight.values(), *self._warming]
         refreshing = self._catalog.cancel()
         if refreshing is not None:
@@ -477,6 +506,16 @@ class AgentService:
         self, ask: _Ask, decision: RouteDecision, settings: _Settings, ledger: Ledger
     ) -> dict:
         route = decision.route
+        if (
+            self._memory is not None
+            and asks_to_remember(ask.text)
+            and (
+                route in ("delegate", "unclear")
+                or (route == "command" and COMMANDS.get(decision.command) is None)
+            )
+        ):
+            # "記住…" is no task and no command: it is answered where the note is written.
+            route = "chat"
         if route == "command":
             return await self._command(ask, decision, settings, ledger)
         if route == "answer":
@@ -484,18 +523,152 @@ class AgentService:
         if route == "delegate":
             return self._hand_over(ask, settings, ledger)
         if route in ("discuss", "chat"):
-            reply = await self._voice.reply(
+            reply, seen = await self._reply(ask, route, settings, ledger, [])
+            return self._finish_reply(ask, route, reply, seen, ledger)
+        return self._finish(ask, "unclear", "negative", phrase(ask.language, "unclear"), ledger)
+
+    # --- the words of an answer, and the memory ---------------------------------------------------
+
+    async def _reply(
+        self,
+        ask: _Ask,
+        route: str,
+        settings: _Settings,
+        ledger: Ledger,
+        tools: list[ToolResult],
+        *,
+        background: str = "",
+        question: str | None = None,
+    ) -> tuple[Reply, list[ToolResult]]:
+        """Raphael's words for the request, from the conversation (`memory.conversation`) and
+        the memory's index, and the tool results the model was shown in the end. When the model
+        asks to read notes or to search the past turns, that is done and it is asked once more,
+        with what was found. AgentFailure as `Voice.reply` raises it."""
+        context = self._conversation.context(quick=route not in _FULL_CONTEXT_ROUTES)
+        index = None if self._memory is None else self._memory.index()
+
+        async def word(results: list[ToolResult], looked_up: bool) -> Reply:
+            return await self._voice.reply(
                 model=settings.model,
                 language=ask.language,
                 route=route,
-                question=ask.text,
-                context=self._context(CONTEXT_TURNS[route]),
-                tools=[],
+                question=ask.text if question is None else question,
+                context=context.turns,
+                tools=results,
                 moment=self._moment(),
                 ledger=ledger,
+                background=background,
+                summary=context.summary,
+                memory_index=index,
+                looked_up=looked_up,
             )
-            return self._finish(ask, route, reply.prefix, reply.text, ledger, detail=reply.detail)
-        return self._finish(ask, "unclear", "negative", phrase(ask.language, "unclear"), ledger)
+
+        reply = await word(tools, False)
+        if self._memory is None or not reply.wants_lookup:
+            return reply, tools
+        shown = [turn.id for turn in context.turns if turn.id is not None]
+        found = [*tools, *self._look_up(ask, reply, shown)]
+        again = await word(found, True)
+        if not again.memory:
+            again.memory = reply.memory
+        return again, found
+
+    def _look_up(self, ask: _Ask, reply: Reply, shown: list[int]) -> list[ToolResult]:
+        """The lookups the reply asked for (`memory_read`, `history_search`), through the gate,
+        each a step of the request. The turns the model already reads are not found again."""
+        assert self._memory is not None
+        results: list[ToolResult] = []
+        wanted: list[tuple[str, Callable[[], ToolResult]]] = []
+        if reply.read:
+            wanted.append(("memory_read", lambda: self._memory.read(reply.read)))  # type: ignore[union-attr]
+        if reply.search:
+            wanted.append(
+                ("history_search", lambda: self._memory.search(reply.search, exclude=shown))  # type: ignore[union-attr]
+            )
+        for name, look in wanted:
+            began = time.perf_counter()
+            try:
+                self._gate.check(Action(name, {}), None)
+                result = look()
+            except (UnknownTool, NotApproved):
+                result = ToolResult(name, False, None, "blocked")
+            outcome = "ok" if result.ok else ("blocked" if result.error == "blocked" else "error")
+            ask.steps.append(self._step("tool", name, BUILTIN_SERVER, outcome, began, result.error))
+            results.append(result)
+        return results
+
+    def _remember(self, ask: _Ask, reply: Reply, seen: list[ToolResult]) -> "Applied | None":
+        """Write or delete the notes the reply asked for, if it may: only from the owner's own
+        turn, so not when the model was shown what the web or a connected service returned (that
+        could have put the words in its mouth). Each change goes through the gate and is a step of
+        the request. None when there was nothing to do."""
+        if self._memory is None or not reply.memory:
+            return None
+        if any(r.untrusted or (r.name == "web_search" and r.ok) for r in seen):
+            logger.info("Notes were not written: the reply was shown data from outside")
+            for item in reply.memory:
+                tool = "memory_delete" if item.op == "DELETE" else "memory_write"
+                ask.steps.append(
+                    self._step("tool", tool, BUILTIN_SERVER, "blocked", time.perf_counter(), "blocked")
+                )
+            return None
+        allowed = []
+        for item in reply.memory:
+            tool = "memory_delete" if item.op == "DELETE" else "memory_write"
+            try:
+                self._gate.check(Action(tool, {}), None)
+            except (UnknownTool, NotApproved):
+                ask.steps.append(
+                    self._step("tool", tool, BUILTIN_SERVER, "blocked", time.perf_counter(), "blocked")
+                )
+                continue
+            allowed.append(item)
+        began = time.perf_counter()
+        applied = self._memory.apply_said(allowed, 0)
+        for _ in applied.written:
+            ask.steps.append(self._step("tool", "memory_write", BUILTIN_SERVER, "ok", began, None))
+        for _ in applied.deleted:
+            ask.steps.append(self._step("tool", "memory_delete", BUILTIN_SERVER, "ok", began, None))
+        for _ in applied.refused:
+            ask.steps.append(
+                self._step("tool", "memory_write", BUILTIN_SERVER, "blocked", began, "blocked")
+            )
+        logger.info(
+            "Notes from a turn: written=%d deleted=%d refused=%d",
+            len(applied.written),
+            len(applied.deleted),
+            len(applied.refused),
+        )
+        return applied
+
+    def _finish_reply(
+        self, ask: _Ask, route: str, reply: Reply, seen: list[ToolResult], ledger: Ledger
+    ) -> dict:
+        """Write the turn of a worded reply down and answer, with the notes it asked for. A
+        reply whose line is empty beside a note says what became of the note; one that wrote a
+        note and said something else has the notice "remembered", which the overlay shows after
+        the line."""
+        language = ask.language
+        applied = self._remember(ask, reply, seen)
+        which, text, notice = reply.prefix, reply.text, None
+        if applied is not None and (applied.written or applied.deleted):
+            if not text:
+                which = "understood"
+                text = phrase(language, "remembered" if applied.written else "forgotten")
+            elif applied.written:
+                notice = "remembered"
+        elif applied is not None and applied.refused and not text:
+            which = "negative"
+            secret = any(kind == "secret" for kind in applied.refused)
+            text = phrase(language, "secret_not_kept" if secret else "not_remembered")
+        if not text:
+            raise AgentFailure("error")  # a lookup and nothing after it, or a note it could not take
+        result = self._finish(ask, route, which, text, ledger, detail=reply.detail)
+        if notice is not None:
+            result["notice"] = notice
+        if applied is not None and applied.written and self._memory is not None:
+            self._memory.note_turn(applied.written, result["turn_id"])
+        return result
 
     # --- the background ---------------------------------------------------------------------------
 
@@ -573,18 +746,10 @@ class AgentService:
             if isinstance(outcome, dict):
                 return outcome  # a question for a yes
             results = outcome
-        reply = await self._voice.reply(
-            model=settings.model,
-            language=ask.language,
-            route="answer",
-            question=ask.text,
-            context=self._context(CONTEXT_TURNS["answer"]),
-            tools=results,
-            moment=self._moment(),
-            ledger=ledger,
-            background=background_block(self._briefs()),
+        reply, seen = await self._reply(
+            ask, "answer", settings, ledger, results, background=background_block(self._briefs())
         )
-        return self._finish(ask, "answer", reply.prefix, reply.text, ledger, detail=reply.detail)
+        return self._finish_reply(ask, "answer", reply, seen, ledger)
 
     async def _tool(self, ask: _Ask, job: Any, name: str) -> ToolResult:
         """A tool's result, whatever happens: one that breaks is a tool that failed. It is a step
@@ -776,17 +941,16 @@ class AgentService:
         try:
             if self._blocked(settings) is not None:
                 raise AgentFailure("error")
-            reply = await self._voice.reply(
-                model=settings.model,
-                language=language,
-                route="answer",
-                question=followup.ask.text,
-                context=self._context(CONTEXT_TURNS["answer"]),
-                tools=[*followup.results, result],
-                moment=self._moment(),
-                ledger=ledger,
+            reply, _ = await self._reply(
+                followup.ask,
+                "answer",
+                settings,
+                ledger,
+                [*followup.results, result],
                 background=background_block(self._briefs()),
             )
+            if not reply.text:
+                raise AgentFailure("error")
         except AgentFailure:
             # It was done, and Raphael cannot say more than that.
             return self._outcome(pending, "understood", "", "done", cost_usd=ledger.total)
@@ -1149,6 +1313,13 @@ class AgentService:
     async def _history_clear(self, params: dict) -> dict:
         deleted = self._history.clear()
         try:
+            # The summary is made of the turns, and the reflection pass starts over with the ids.
+            self._conversation.clear_summary()
+            if self._memory is not None:
+                self._memory.forget_turns()
+        except sqlite3.Error as exc:
+            logger.warning("Could not clear the summary: %s", type(exc).__name__)
+        try:
             self._targets.clear()  # what opening taught Raphael goes with what was said
         except sqlite3.Error as exc:
             logger.warning("Could not clear the names that opened: %s", type(exc).__name__)
@@ -1156,8 +1327,9 @@ class AgentService:
         return {"deleted": deleted}
 
     def _prune_if_due(self) -> None:
-        """Delete the turns older than the history retention, at most once a day: they are what
-        the user said, like the dictations."""
+        """Forget the names that opened a page and were not used within the history retention,
+        at most once a day. The conversation itself is not pruned: there is one, and it stays
+        until the user clears it (the retention is the dictations'), with its background tasks."""
         now = self._now_ms()
         last = self._pruned_at_ms
         if last is not None and 0 <= now - last < _DAY_MS:
@@ -1166,12 +1338,9 @@ class AgentService:
         try:
             days = self._settings.get("history_retention_days")
             if days >= 0:
-                cutoff = max(now - days * _DAY_MS, 0)
-                self._history.prune(cutoff)
-                self._targets.prune(cutoff)
-                self._background.prune(cutoff)  # the tasks hold what was said too
+                self._targets.prune(max(now - days * _DAY_MS, 0))
         except sqlite3.Error as exc:
-            logger.warning("Could not prune the assistant's history: %s", type(exc).__name__)
+            logger.warning("Could not prune the names that opened: %s", type(exc).__name__)
 
     # --- the parts every reply uses -------------------------------------------------------------
 
@@ -1260,6 +1429,11 @@ class AgentService:
             logger.warning("Could not write the turn to the history: %s", type(exc).__name__)
             return 0
         self._turn_changed(turn_id)
+        if self._memory is not None:
+            try:
+                self._memory.after_turn()  # the fold and the reflection pass, in the background
+            except Exception as exc:  # the memory must not cost the turn
+                logger.warning("The memory could not follow the turn: %s", type(exc).__name__)
         return turn_id
 
     def _turn_changed(self, turn_id: int) -> None:

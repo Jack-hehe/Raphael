@@ -7,7 +7,8 @@ const exact = [
   "backend.micTimeout", "backend.emptyDictation", "backend.emptyPaste", "backend.duplicateDictation",
   "backend.duplicatePaste", "backend.conflictingKeys", "backend.invalidKeys", "backend.emptyAgent",
   "backend.duplicateAgent", "backend.conflictingDictationAgent", "backend.conflictingPasteAgent",
-  "backend.hotkeysOff", "backend.hotkeysOffChange", "keys.004", "keys.005", "keys.006",
+  "backend.hotkeysOff", "backend.hotkeysOffChange", "backend.memoryBody", "backend.memoryDescription",
+  "keys.004", "keys.005", "keys.006",
   "backend.agentBusy", "backend.agentEmpty", "backend.agentTooLong", "backend.agentOff", "backend.questionGone",
   "backend.questionUnfocused", "backend.avatarKind", "backend.avatarSize", "backend.avatarNone",
 ] as const;

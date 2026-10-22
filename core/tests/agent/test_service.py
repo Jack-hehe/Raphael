@@ -789,21 +789,21 @@ async def test_an_answer_is_worded_in_the_ui_language(rig, client):
     assert "Reply ONLY in English" in client.json_calls[0]["system"]
 
 
-async def test_an_answer_is_given_the_last_three_turns_as_context(rig, client):
-    for n in range(5):
+async def test_an_answer_is_given_the_last_six_turns_as_context(rig, client):
+    for n in range(8):
         rig.seed(f"question {n}", f"answer {n}")
     client.decisions.append(decision("answer"))
     client.replies.append(spoken())
     await rig.ask("那明天呢")
     user = client.json_calls[0]["user"]
-    assert "question 2" in user and "question 4" in user and "question 1" not in user
+    assert "question 2" in user and "question 7" in user and "question 1" not in user
 
 
 # --- discussion and small talk -----------------------------------------------------------------------
 
 
-async def test_a_discussion_is_given_the_last_ten_turns_as_context(rig, client):
-    for n in range(12):
+async def test_a_discussion_is_given_every_turn_after_the_summary_as_context(rig, client):
+    for n in range(32):
         rig.seed(f"question {n}", f"answer {n}")
     client.decisions.append(decision("discuss"))
     client.replies.append(spoken("答", "先從預算開始。", "展開說明。"))
@@ -812,8 +812,9 @@ async def test_a_discussion_is_given_the_last_ten_turns_as_context(rig, client):
     call = client.json_calls[0]
     assert "think something through" in call["system"]
     user = call["user"]
-    assert "question 2" in user and "question 11" in user and "question 1\n" not in user
-    assert user.index("question 2") < user.index("question 11")  # oldest first
+    # With no summary, the last 30 turns (the most the context holds), oldest first.
+    assert "question 2\n" in user and "question 31" in user and "question 1\n" not in user
+    assert user.index("question 2\n") < user.index("question 31")
     assert client.text_calls == [] and rig.meteo.requests == []
     assert (await rig.turns())[0]["route"] == "discuss"
 
@@ -1447,15 +1448,16 @@ async def test_a_cleared_history_is_no_context(rig, client):
     assert "secret" not in client.json_calls[0]["user"]
 
 
-async def test_the_turns_older_than_the_retention_are_deleted(rig, client):
+async def test_the_turns_are_kept_past_the_retention_of_the_dictations(rig, client):
+    # One continuous conversation: the retention setting is the dictations' alone.
     rig.settings.set("history_retention_days", 7)
     old = rig.seed("old", "a")
-    rig.wall.now += 8 * 86_400_000
+    rig.wall.now += 400 * 86_400_000
     fresh = rig.seed("fresh", "a")
     client.decisions.append(decision("command", "volume_mute"))
     await rig.ask("靜音")
     questions = [t["question"] for t in await rig.turns()]
-    assert "old" not in questions and "fresh" in questions and old != fresh
+    assert "old" in questions and "fresh" in questions and old != fresh
 
 
 async def test_a_question_that_died_with_the_last_process_is_expired_when_the_core_starts(

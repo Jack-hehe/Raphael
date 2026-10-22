@@ -169,7 +169,21 @@ SCHEMA_V12 = {
         "rerun_of INTEGER",
     ],
 }
-LATEST = 12
+# Schema v13 adds one continuous conversation: its rolling summary, the numbers the memory keeps,
+# and the search over the turns (an FTS5 table, which SQLite keeps in shadow tables of its own).
+SCHEMA_V13 = {
+    **SCHEMA_V12,
+    "agent_summary": [
+        "id INTEGER PK",
+        "text TEXT NOT NULL",
+        "through_turn_id INTEGER NOT NULL",
+        "updated_at_ms INTEGER NOT NULL",
+    ],
+    "memory_state": ["key TEXT PK", "value INTEGER NOT NULL"],
+    "agent_turns_fts": [" ", " "],  # a virtual table: its columns have no type
+}
+FTS_SHADOWS = {f"agent_turns_fts_{part}" for part in ("data", "idx", "content", "docsize", "config")}
+LATEST = 13
 
 
 def schema_names(conn, kind):
@@ -193,7 +207,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V12)
+    assert schema_names(conn, "table") == set(SCHEMA_V13) | FTS_SHADOWS
     assert {
         "history_created",
         "agent_turns_created",
@@ -204,8 +218,13 @@ def test_connect_creates_the_latest_schema(conn):
         "agent_steps_turn",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V12.items():
-        assert describe_columns(conn, table) == columns
+    for table, columns in SCHEMA_V13.items():
+        if table != "agent_turns_fts":
+            assert describe_columns(conn, table) == columns
+    assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
+        "pairs",
+        "chars",
+    ]
 
 
 def test_a_v1_database_is_migrated_to_v2_and_keeps_its_rows(tmp_path):
@@ -426,7 +445,7 @@ def assert_has_the_latest_schema(migrated, fresh):
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert schema_names(migrated, "table") == schema_names(fresh, "table")
     assert schema_names(migrated, "index") == schema_names(fresh, "index")
-    for table in SCHEMA_V12:
+    for table in SCHEMA_V13:
         assert describe_columns(migrated, table) == describe_columns(fresh, table)
     assert migrated.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
     assert HistoryStore(migrated).latest().text == "A"

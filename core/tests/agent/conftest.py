@@ -20,7 +20,6 @@ class FakeBackground:
     def __init__(self):
         self.submitted = []
         self.attached = []
-        self.pruned = []
         self.cleared = 0
         self.refuse = None
         self.fail = None
@@ -39,9 +38,6 @@ class FakeBackground:
 
     def attach_turn(self, task_id, turn_id):
         self.attached.append((task_id, turn_id))
-
-    def prune(self, older_than_ms):
-        self.pruned.append(older_than_ms)
 
     def clear(self):
         self.cleared += 1

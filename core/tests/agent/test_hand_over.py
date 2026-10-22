@@ -139,9 +139,12 @@ async def test_esc_does_not_stop_the_background(rig, client, background):
     assert background.submitted and background.attached  # nothing was taken back
 
 
-async def test_the_old_tasks_go_with_the_history_when_it_is_pruned_and_cleared(rig, client, background):
+async def test_the_tasks_go_with_the_history_when_it_is_cleared_and_are_never_pruned(
+    rig, client, background
+):
     client.decisions.append(decision("delegate"))
     await rig.ask("do it", language="en")
     assert await rig.call("agent.history.clear") == {"deleted": 1}
     assert background.cleared == 1
-    assert background.pruned  # the retention was applied when the service started
+    # The tasks are part of the one conversation, which the retention of the dictations leaves be.
+    assert not hasattr(background, "pruned")

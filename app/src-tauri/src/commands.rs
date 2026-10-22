@@ -5,7 +5,10 @@
 //!   `agent.cancel`) are the controller's alone. The main window may read and clear the record of
 //!   the conversations (`agent.history.`), and stop one background task it names
 //!   (`worker.cancel {task_id}`) or run one that did not finish again (`worker.rerun {task_id}`), the
-//!   way the tray stops the one that runs.
+//!   way the tray stops the one that runs. It may list, read, edit and delete Raphael's memories and
+//!   clear the summary of the conversation (`memory.list`, `memory.get`, `memory.update`,
+//!   `memory.delete`, `memory.clear`, `memory.summary_clear`), each by its name and with its params
+//!   checked here first.
 //! - `agent_ask_text`, `agent_question_open` and `agent_question_answer` are the 拉斐爾 page's own
 //!   way to Raphael, through the dictation controller rather than the core
 //!   ([`crate::dictation::Desk`]): a question typed in its composer (some text, of a bounded
@@ -305,7 +308,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 20] = [
+const ALLOWED_METHODS: [&str; 26] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -329,7 +332,72 @@ const ALLOWED_METHODS: [&str; 20] = [
     "worker.cancel",
     // ... and runs one that did not finish again, by its id.
     "worker.rerun",
+    // Raphael's memory, in the settings (`validate_core_call` checks the name and the text). Named
+    // one by one, like the messaging methods: a method added to the memory later stays closed.
+    "memory.list",
+    "memory.get",
+    "memory.update",
+    "memory.delete",
+    "memory.clear",
+    "memory.summary_clear",
 ];
+
+/// The types a memory's name starts with (the core's `memory.store.TYPES`).
+const MEMORY_TYPES: [&str; 5] = ["user", "preference", "person", "ongoing", "reference"];
+/// The longest name of a memory, and the most a memory's body and description may hold, in
+/// characters (the core's limits; it checks them again).
+const MEMORY_NAME_MAX: usize = 64;
+const MEMORY_BODY_MAX: usize = 1_200;
+const MEMORY_DESCRIPTION_MAX: usize = 80;
+
+/// Whether `name` is the name of a memory: its type, then an ASCII slug of lower-case letters and
+/// digits in words joined by single hyphens (`preference-answer-length`). Nothing else, so no name
+/// can reach outside the memory's folder.
+pub fn is_memory_name(name: &str) -> bool {
+    if name.len() > MEMORY_NAME_MAX {
+        return false;
+    }
+    let Some((kind, slug)) = name.split_once('-') else {
+        return false;
+    };
+    MEMORY_TYPES.contains(&kind)
+        && slug.split('-').all(|word| {
+            !word.is_empty()
+                && word
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
+}
+
+/// The params of a memory method: `name` a memory's name where one is needed, and for
+/// `memory.update` a `body` of text within the limit and, if given, a `description` within its own.
+fn validate_memory_call(method: &str, params: &Value) -> Result<(), String> {
+    let needs_name = matches!(method, "memory.get" | "memory.update" | "memory.delete");
+    if needs_name
+        && !params
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(is_memory_name)
+    {
+        return Err(format!("{method} needs the name of a memory"));
+    }
+    if method != "memory.update" {
+        return Ok(());
+    }
+    let chars = |value: &Value| value.as_str().map(|text| text.chars().count());
+    match params.get("body").and_then(chars) {
+        Some(count) if count <= MEMORY_BODY_MAX => {}
+        Some(_) => return Err("記憶內容最多 1,200 字".to_owned()),
+        None => return Err("memory.update needs the body of the memory".to_owned()),
+    }
+    match params.get("description") {
+        None | Some(Value::Null) => Ok(()),
+        Some(value) => match chars(value) {
+            Some(count) if (1..=MEMORY_DESCRIPTION_MAX).contains(&count) => Ok(()),
+            _ => Err("記憶的說明最多 80 字".to_owned()),
+        },
+    }
+}
 
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
 /// settings (the `languages` setting too), the key, the status, the usage numbers, OpenRouter's
@@ -349,7 +417,8 @@ pub fn is_allowed_method(m: &str) -> bool {
 /// model, a background task's cost cap and a speech-to-text engine, which the core checks as well
 /// (each model against OpenRouter's list), so that the settings page gets these refusals in its
 /// own words. `Err` says what is wrong. The window's `worker.cancel` and `worker.rerun` must name
-/// their task. Other calls pass.
+/// their task, and the memory's methods a memory by a name that is one, with a text within the
+/// limits. Other calls pass.
 pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     if method == "worker.cancel" {
         // Without an id the core stops whichever task runs: the window stops only the one it shows.
@@ -363,6 +432,9 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
             Some(_) => Ok(()),
             None => Err("worker.rerun needs the task_id of the task to run again".to_owned()),
         };
+    }
+    if method.starts_with("memory.") {
+        return validate_memory_call(method, params);
     }
     if method != "settings.set" {
         return Ok(());
@@ -1345,6 +1417,102 @@ mod tests {
     }
 
     #[test]
+    fn the_main_window_reaches_the_memory_by_its_six_methods_only() {
+        for method in [
+            "memory.",
+            "memory",
+            "memory.write",
+            "memory.reflect",
+            "memory.listx",
+            "Memory.list",
+            " memory.list",
+            "xmemory.list",
+        ] {
+            assert!(!is_allowed_method(method), "{method:?}");
+        }
+    }
+
+    #[test]
+    fn a_memory_is_named_by_its_type_and_an_ascii_slug() {
+        for name in [
+            "user-city",
+            "preference-answer-length",
+            "ongoing-trip-2026",
+            "person-amy",
+        ] {
+            assert!(is_memory_name(name), "{name}");
+        }
+        let long = format!("user-{}", "a".repeat(60));
+        for name in [
+            "",
+            "user",
+            "user-",
+            "user--city",
+            "user-city-",
+            "-user-city",
+            "secret-city",
+            "User-city",
+            "user-City",
+            "user-台北",
+            "user-../raphael",
+            "user-a/b",
+            "user-a\\b",
+            "user-a.md",
+            "user-a b",
+            long.as_str(),
+        ] {
+            assert!(!is_memory_name(name), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn the_memory_methods_have_their_params_checked() {
+        let ok = |method: &str, params: Value| validate_core_call(method, &params).is_ok();
+        assert!(ok("memory.list", json!({})));
+        assert!(ok("memory.clear", json!({})));
+        assert!(ok("memory.summary_clear", json!({})));
+        assert!(ok("memory.get", json!({"name": "user-city"})));
+        assert!(ok("memory.delete", json!({"name": "user-city"})));
+        assert!(ok(
+            "memory.update",
+            json!({"name": "user-city", "body": "主人住在台北。"})
+        ));
+        assert!(ok(
+            "memory.update",
+            json!({"name": "user-city", "body": "", "description": "主人住在台北"})
+        ));
+        assert!(ok(
+            "memory.update",
+            json!({"name": "user-city", "body": "長".repeat(1200), "description": null})
+        ));
+        for (method, params) in [
+            ("memory.get", json!({})),
+            ("memory.get", json!({"name": "../raphael"})),
+            ("memory.delete", json!({"name": 3})),
+            ("memory.update", json!({"name": "user-city"})),
+            ("memory.update", json!({"name": "user-city", "body": 5})),
+            (
+                "memory.update",
+                json!({"name": "user-city", "body": "長".repeat(1201)}),
+            ),
+            (
+                "memory.update",
+                json!({"name": "user-city", "body": "x", "description": ""}),
+            ),
+            (
+                "memory.update",
+                json!({"name": "user-city", "body": "x", "description": "長".repeat(81)}),
+            ),
+            ("memory.update", json!({"name": "x", "body": "x"})),
+        ] {
+            assert!(
+                validate_core_call(method, &params).is_err(),
+                "{method} {params}"
+            );
+        }
+    }
+
+    #[test]
     fn the_main_window_may_stop_a_task_and_nothing_else_of_the_worker() {
         // The conversation view stops the task it shows. A yes to a question of the worker is the
         // overlay's real click alone, and the tasks are read with the conversations, not here.
@@ -1540,6 +1708,12 @@ mod tests {
             "toolsets.list",
             "worker.cancel",
             "worker.rerun",
+            "memory.list",
+            "memory.get",
+            "memory.update",
+            "memory.delete",
+            "memory.clear",
+            "memory.summary_clear",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }

@@ -67,6 +67,7 @@ from .agent.tools import Tools
 from .background.service import BackgroundService
 from .brain import textnorm
 from .brain.db import connect
+from .memory.service import MemoryService
 from .brain.openrouter import (
     ChatToolCall,
     ChatTurn,
@@ -201,6 +202,10 @@ class EchoClient:
             data = {"prefix": "", "text": question.group(1) if question else "", "detail": ""}
         elif schema_name == "raphael_app":
             data = {"app": ""}
+        elif schema_name == "raphael_summary":  # the conversation folded into its summary
+            data = {"summary": "(the fake LLM keeps no summary)"}
+        elif schema_name == "raphael_memory":  # the reflection pass: nothing to change
+            data = {"actions": []}
         else:  # the cleanup
             text = user
             if text.startswith(_TRANSCRIPT_OPEN) and text.endswith(_TRANSCRIPT_CLOSE):
@@ -687,7 +692,8 @@ class App(Router):
     microphone; with `fake_llm`, an in-process client returns the transcript unchanged, the key and
     the plugins' secrets are kept in memory, and the voice assistant does nothing to this computer.
     `agent_actions` is what the assistant does to it otherwise (Windows, by default). `load_kit` is
-    for tests.
+    for tests. `memory_dir` is where Raphael's long-term memory is kept (`paths.memory_dir`, which
+    goes with `data_dir`, by default).
     """
 
     def __init__(
@@ -700,6 +706,7 @@ class App(Router):
         manager: ModelManager | None = None,
         load_kit: Callable[[], Any] | None = None,
         agent_actions: DeviceActions | None = None,
+        memory_dir: Path | None = None,
     ) -> None:
         super().__init__()
         self._fake_audio = fake_audio
@@ -742,6 +749,15 @@ class App(Router):
             self._conn, self.client, self.gate, Tools(self.client), notify=self._worker_notice
         )
         self.background.register(self)
+        # Raphael's memory: the notes on this PC, the summary of the conversation, the reflection.
+        self.memory = MemoryService(
+            self._conn,
+            paths.memory_dir(data_dir) if memory_dir is None else memory_dir,
+            self.client,
+            self.keys,
+        )
+        self.memory.register(self)
+        self.background.use_memory(self.memory)
         self.agent = AgentService(
             self._conn,
             self.client,
@@ -752,6 +768,7 @@ class App(Router):
             gate=self.gate,
             background=self.background,
             notify=self.notify,
+            memory=self.memory,
         )
         self.agent.register(self)
         # Messaging apps (Telegram): messages reach the assistant like a spoken question.
@@ -949,6 +966,7 @@ class App(Router):
             ("end the messaging connections", self.messaging.aclose),
             ("end the background tasks", self.background.aclose),
             ("end the assistant's requests", self.agent.aclose),
+            ("end the memory's background pass", self.memory.aclose),
             ("close the HTTP client", self.client.aclose),
             ("wait for the start-up threads", join_threads),
             ("let go of the speech models", close_speech),
@@ -1141,6 +1159,7 @@ class App(Router):
     async def _hello(self, params: dict) -> dict:
         self.messaging.start()  # a Telegram bot that was left on polls again
         self.agent.prewarm()  # the app is up: read the Start menu now, not at the first "open"
+        self.memory.start()  # and look for turns the reflection pass has not read, soon
         return {"protocol": PROTOCOL_VERSION, "version": __version__}
 
     async def _shutdown(self, params: dict) -> dict:
