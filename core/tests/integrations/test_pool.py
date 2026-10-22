@@ -97,16 +97,12 @@ async def test_a_tool_the_server_does_not_have_is_gone_and_the_connection_stays(
     assert len(servers.opened) == 1
 
 
-async def test_a_tool_described_differently_is_called_and_carries_the_new_description(
+async def test_the_list_cached_when_the_connection_opened_is_never_given_back_as_fresh(
     connector, servers, notes, pool
 ):
     mine = pool()
     outcome = await connector.call_tool(notes, "look", {"topic": "a"}, expected="old", pool=mine)
-    assert outcome.fresh is not None and outcome.fresh.name == "look"
-    again = await connector.call_tool(
-        notes, "look", {"topic": "a"}, expected=outcome.fresh.fingerprint, pool=mine
-    )
-    assert again.fresh is None
+    assert outcome.fresh is None  # the caller would save it over what a refresh found
 
 
 async def test_a_tool_that_says_it_failed_is_an_outcome_and_the_connection_stays(

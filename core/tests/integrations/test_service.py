@@ -583,3 +583,20 @@ async def test_removing_a_server_closes_the_connections_kept_for_it(service, rpc
         await asyncio.sleep(0.02)
     assert pool.open_count == 0
     await pool.aclose()
+
+
+async def test_a_refresh_closes_the_connections_kept_for_the_server(service, rpc, servers, connector):
+    from raphael_core.integrations.pool import McpPool
+
+    server_id = await add(rpc, servers)
+    server = service._config.get(server_id)
+    pool = McpPool()
+    await connector.call_tool(server, "look", {"topic": "a"}, pool=pool)
+    assert pool.open_count == 1
+    await rpc.call("integrations.refresh", {"id": server_id})
+    for _ in range(100):
+        if pool.open_count == 0:
+            break
+        await asyncio.sleep(0.02)
+    assert pool.open_count == 0
+    await pool.aclose()

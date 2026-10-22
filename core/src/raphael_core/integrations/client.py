@@ -378,7 +378,11 @@ class McpConnector:
             text=text,
             is_error=bool(getattr(result, "is_error", False)),
             truncated=truncated,
-            fresh=current if expected is not None and current.fingerprint != expected else None,
+            # A pooled connection knows the list as it was when it opened, which may be older than
+            # the one saved: it is not given back to be saved over it.
+            fresh=current
+            if pool is None and expected is not None and current.fingerprint != expected
+            else None,
         )
 
 

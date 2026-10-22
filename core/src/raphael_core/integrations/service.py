@@ -404,7 +404,19 @@ class IntegrationsService:
                     server.tools = tools
                     server.tools_checked_at_ms = self._now_ms()
                     self._save()
+                    # A connection kept open knows the tools of before.
+                    self._connector.invalidate(server.id)
         return {"server": self._view(server), "tools": self._tool_views(server)}
+
+    def kind_of(self, server_name: str, tool_name: str) -> str:
+        """`"read"` for a tool that only looks, `"write"` for one that changes something or that is
+        not known (the safe guess)."""
+        for server in self._config.servers():
+            if server.name == server_name:
+                for tool in server.tools:
+                    if tool.name == tool_name:
+                        return tool_kind(tool)
+        return "write"
 
     def _tool_views(self, server: ServerConfig) -> list[dict[str, Any]]:
         return [self._tool_view(server, tool) for tool in server.tools]

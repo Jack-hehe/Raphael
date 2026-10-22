@@ -112,3 +112,24 @@ async def test_the_report_of_an_interrupted_task_is_said_when_the_shell_asks_not
     await second.rpc.call("worker.announce_pending", {})
     assert len(second.reports()) == 1
 
+
+
+async def test_a_rerun_may_repeat_a_lookup_but_not_a_call_that_changed_something(make_rig):
+    rig = make_rig()
+    await rig.plugins.connect(look="T0", note="T0")
+    store = rig.service._store
+    first = store.create(session_id="s1", language="en", text=TASK_TEXT)
+    store.add_step(first, kind="tool", tool="look", server="Notes", outcome="ok")
+    store.add_step(first, kind="tool", tool="note", server="Notes", outcome="ok")
+    store.add_step(first, kind="tool", tool="mystery", server="Elsewhere", outcome="ok")
+    store.finish(first, "interrupted", prefix="告", text="x", detail=None, reason="closing")
+    rig.client.replies = [report("Again.")]
+    result = await rig.rpc.call("worker.rerun", {"task_id": first})
+    await rig.wait_for_reports()
+    user = rig.client.chat_calls[0]["messages"][1]["content"]
+    block = user.split("<previous_attempt>")[1].split("</previous_attempt>")[0]
+    assert "Notes / look: ok [read-only]" in block
+    assert "Notes / note: ok\n" in block + "\n"  # a call that changed something has no such mark
+    assert "Elsewhere / mystery: ok\n" in block + "\n"  # a tool not known counts as one that changes
+    assert "read-only" in block.split("Notes / look")[0]  # the model is told what the mark means
+    assert rig.task(result["task_id"]).rerun_of == first

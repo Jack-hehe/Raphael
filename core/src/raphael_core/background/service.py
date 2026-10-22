@@ -186,9 +186,11 @@ def _prompts(
         calls = "\n".join(f"- {neutralize(line)}" for line in earlier) or "- none"
         parts.append(
             "<previous_attempt>\nThis task was started before and stopped. These tool calls were "
-            "already made (what they were given is not kept). Do not repeat a call that is marked "
-            "ok, and check first whether a call that was cut off or timed out took effect; make "
-            "another one only if the task clearly needs it.\n"
+            "already made (what they were given is not kept, and neither is what they returned). "
+            "A call marked [read-only] only looked something up: make it again if you need what it "
+            "returned. Do not repeat any other call that is marked ok, cut off or timed out (it "
+            "changed something, or may have): check first whether it took effect, and make another "
+            "one only if the task clearly needs a second.\n"
             f"{calls}\n</previous_attempt>"
         )
     parts.append(language_reminder(language))
@@ -606,8 +608,18 @@ class BackgroundService:
             steps = [step for task_id in reversed(chain) for step in self._store.steps(task_id)]
         except sqlite3.Error:
             return []
+        kind_of = getattr(self._gate.plugins, "kind_of", None)
+
+        def mark(step: Step) -> str:
+            # A tool that is not known, or a hub that cannot say, counts as one that changes things.
+            try:
+                read = kind_of is not None and kind_of(step.server, step.tool) == "read"
+            except Exception:
+                read = False
+            return " [read-only]" if read else ""
+
         return [
-            f"{step.server} / {step.tool}: {_EARLIER_OUTCOME.get(step.outcome, 'failed')}"
+            f"{step.server} / {step.tool}: {_EARLIER_OUTCOME.get(step.outcome, 'failed')}{mark(step)}"
             for step in steps
             if step.kind == "tool" and step.tool and not _is_builtin(step)
         ]
