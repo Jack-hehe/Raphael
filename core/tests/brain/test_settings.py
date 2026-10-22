@@ -404,3 +404,25 @@ def test_a_local_engine_that_is_not_in_the_catalogue_is_refused(conn, value):
 def test_the_local_engine_must_be_text(conn):
     with pytest.raises(TypeError):
         SettingsStore(conn).set("stt_local_model", 3)
+
+
+def test_there_can_be_no_local_model_while_the_cloud_is_the_engine(conn):
+    s = SettingsStore(conn)
+    s.set("stt_local_model", None)
+    assert s.get("stt_local_model") is None
+    assert s.all()["stt_local_model"] is None
+    s.set("stt_local_model", "sensevoice")
+    assert s.get("stt_local_model") == "sensevoice"
+
+
+def test_the_local_engine_needs_a_local_model(conn):
+    s = SettingsStore(conn)
+    s.set("stt_local_model", None)
+    with pytest.raises(ValueError, match="stt_local_model"):
+        s.set("stt_engine", "local")
+    assert s.get("stt_engine") == "cloud"
+    s.set("stt_local_model", "sensevoice")
+    s.set("stt_engine", "local")
+    with pytest.raises(ValueError, match="stt_local_model"):
+        s.set("stt_local_model", None)
+    assert s.get("stt_local_model") == "sensevoice"

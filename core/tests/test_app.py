@@ -41,7 +41,9 @@ from raphael_core.device import audio, dictation, models
 from raphael_core.device.models import REGISTRY, ModelFile, ModelManager, ModelSpec
 from raphael_core.protocol import (
     BUSY,
+    INTERNAL_ERROR,
     INVALID_PARAMS,
+    NO_LOCAL_MODEL,
     NO_MICROPHONE,
     NOT_CONFIGURED,
     NOT_FOUND,
@@ -816,6 +818,7 @@ async def test_deleting_a_model_that_is_not_there_is_no_error(make_app):
 
 async def test_the_model_in_use_is_not_deleted(make_app, tmp_path):
     app = make_app()
+    await app.call("settings.set", {"key": "stt_engine", "value": "local"})
     with pytest.raises(RpcError) as caught:
         await app.call("models.local_delete", {"name": "qwen3-asr"})
     assert caught.value.code == BUSY and "in use" in caught.value.message
@@ -1740,6 +1743,7 @@ async def test_the_meter_comes_back_after_a_session_nobody_stopped(make_app, mon
 async def test_a_dictation_that_fails_to_start_gives_the_microphone_back_too(make_app):
     kit = make_kit()
     app = make_app(kit, ready=("silero-vad",))
+    await app.call("settings.set", {"key": "stt_engine", "value": "local"})
     await app.call("audio.monitor", {"on": True})
     with pytest.raises(RpcError) as caught:
         await app.call("dictation.start", {"session_id": "s"})  # no engine downloaded
@@ -2606,3 +2610,172 @@ async def test_a_change_of_engine_takes_effect_from_the_next_dictation(make_app,
     await dictate(app, "c")
     assert len(requests["transcriptions"]) == 4 and len(kit.transcriptions) == 2
     assert kit.segmenters[0].max_segment_s == [30.0, 10.0, 30.0]
+
+
+# --- the local model that backs up the cloud ----------------------------------------------------
+
+
+def test_with_no_local_model_the_engine_is_none_and_asking_for_it_says_so(speech_in):
+    speech, loads, _ = speech_in()
+    speech.load_pending()
+    speech.unload_engine()
+    speech.select_engine(None)
+    assert speech.engine_name is None and speech.loaded_engine_name is None
+    speech.load_pending()
+    assert len(loads.engines) == 1
+    with pytest.raises(RpcError) as caught:
+        speech.engine()
+    assert caught.value.code == NO_LOCAL_MODEL
+
+
+def test_unloading_the_engine_lets_it_go_and_the_next_use_builds_it_again(speech_in):
+    speech, loads, _ = speech_in()
+    speech.load_pending()
+    assert speech.loaded_engine_name == "qwen3-asr"
+    speech.unload_engine()
+    assert speech.loaded_engine_name is None
+    assert speech.engine() is loads.engines[1]
+
+
+def test_unloading_waits_for_a_load_that_is_under_way(speech_in):
+    gate = threading.Event()
+    speech, loads, _ = speech_in(engine_gate=gate)
+    loader = threading.Thread(target=speech.load_pending)
+    loader.start()
+    deadline = time.monotonic() + 10
+    while not loads.segmenters and time.monotonic() < deadline:
+        time.sleep(0.005)
+    unloader = threading.Thread(target=speech.unload_engine)
+    unloader.start()
+    unloader.join(0.2)
+    assert unloader.is_alive()
+    gate.set()
+    loader.join(10)
+    unloader.join(10)
+    assert speech.loaded_engine_name is None
+
+
+def test_without_a_local_engine_only_the_detector_is_required(speech_in):
+    speech, _, _ = speech_in(ready=("silero-vad",))
+    speech.require_models(engine_needed=False)
+    with pytest.raises(RpcError) as caught:
+        speech.require_models(engine_needed=True)
+    assert caught.value.code == NOT_CONFIGURED and "qwen3-asr" in caught.value.message
+    speech.select_engine(None)
+    speech.require_models(engine_needed=False)
+
+
+async def test_the_fallback_can_be_deleted_while_the_cloud_is_the_engine(make_app, tmp_path):
+    kit = make_kit()
+    app = make_app(kit, ready=(*APP_MODELS, "sensevoice"))
+    await wait_until(lambda: kit.engines)
+    result = await app.call("models.local_delete", {"name": "qwen3-asr"})
+    assert result == {"deleted": True, "fallback": "sensevoice"}
+    assert not (tmp_path / "data" / "models" / "qwen3-asr").exists()
+    assert (await app.call("settings.get"))["settings"]["stt_local_model"] == "sensevoice"
+    assert (await app.call("models.local"))["fallback"] == "sensevoice"
+    await wait_until(lambda: kit.engines[-1].kwargs["name"] == "sensevoice")
+    assert (await dictate(app))["text"] == WORDS + WORDS
+
+
+async def test_deleting_the_last_fallback_leaves_no_local_model(make_app, tmp_path):
+    kit = make_kit()
+    app = make_app(kit)
+    await wait_until(lambda: kit.engines)
+    result = await app.call("models.local_delete", {"name": "qwen3-asr"})
+    assert result == {"deleted": True, "fallback": None}
+    assert (await app.call("settings.get"))["settings"]["stt_local_model"] is None
+    assert (await app.call("models.local"))["fallback"] is None
+    assert await app.call("models.status") == {"models": [{"name": "silero-vad", "ready": True}]}
+    assert not (tmp_path / "data" / "models" / "qwen3-asr").exists()
+
+
+async def test_the_next_fallback_is_the_first_one_of_the_catalogue_that_is_downloaded(make_app):
+    app = make_app(ready=(*APP_MODELS, "paraformer-zh", "sensevoice"))
+    result = await app.call("models.local_delete", {"name": "qwen3-asr"})
+    assert result["fallback"] == "sensevoice"
+
+
+async def test_without_a_local_model_the_cloud_still_dictates_and_the_start_asks_for_nothing(
+    make_app, openrouter_mock
+):
+    kit = make_kit()
+    app = make_app(kit, fake_llm=False)
+    requests = openrouter_mock(app, cloud_says())
+    await wait_until(lambda: kit.engines)
+    await app.call("models.local_delete", {"name": "qwen3-asr"})
+    result = await dictate(app)
+    assert result["text"] == "cloud words cloud words"
+    assert kit.transcriptions == [] and len(requests["transcriptions"]) == 2
+
+
+async def test_a_cloud_failure_without_a_local_model_is_a_recognisable_error(make_app):
+    kit = make_kit()
+    app = make_app(kit)  # the fake LLM cannot transcribe: the cloud fails
+    await wait_until(lambda: kit.engines)
+    await app.call("models.local_delete", {"name": "qwen3-asr"})
+    await app.call("dictation.start", {"session_id": "s1"})
+    with pytest.raises(RpcError) as caught:
+        await app.call("dictation.stop", {"session_id": "s1", "target_app": "notepad.exe"})
+    assert caught.value.code == NO_LOCAL_MODEL
+
+
+async def test_the_fallback_is_not_deleted_while_a_dictation_runs(make_app, tmp_path):
+    kit = make_kit()
+    app = make_app(kit)
+    await wait_until(lambda: kit.engines)
+    await app.call("dictation.start", {"session_id": "s1"})
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_delete", {"name": "qwen3-asr"})
+    assert caught.value.code == BUSY
+    assert (tmp_path / "data" / "models" / "qwen3-asr").is_dir()
+    assert (await app.call("settings.get"))["settings"]["stt_local_model"] == "qwen3-asr"
+    await app.call("dictation.cancel", {"session_id": "s1"})
+
+
+async def test_a_file_lock_is_waited_out_when_deleting(make_app, monkeypatch):
+    app = make_app(ready=(*APP_MODELS, "sensevoice"))
+    real = app_module.shutil.rmtree
+    attempts: list[int] = []
+
+    def locked_twice(path, *args, **kwargs):
+        attempts.append(1)
+        if len(attempts) <= 2:
+            raise PermissionError("in use by another process")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(app_module.shutil, "rmtree", locked_twice)
+    monkeypatch.setattr(app_module, "DELETE_RETRY_S", 0.001)
+    assert await app.call("models.local_delete", {"name": "sensevoice"}) == {"deleted": True}
+    assert len(attempts) == 3
+
+
+async def test_a_file_lock_that_stays_is_an_internal_error(make_app, tmp_path, monkeypatch):
+    app = make_app(ready=(*APP_MODELS, "sensevoice"))
+
+    def locked(path, *args, **kwargs):
+        raise PermissionError("in use by another process")
+
+    monkeypatch.setattr(app_module.shutil, "rmtree", locked)
+    monkeypatch.setattr(app_module, "DELETE_RETRY_S", 0.001)
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_delete", {"name": "sensevoice"})
+    assert caught.value.code == INTERNAL_ERROR
+    assert (tmp_path / "data" / "models" / "sensevoice").is_dir()
+
+
+async def test_the_start_up_copes_with_no_local_model(tmp_path):
+    kit = make_kit()
+    data = tmp_path / "data"
+    make_models(data / "models", ("silero-vad",))
+    app = App(data_dir=data, fake_llm=True, load_kit=lambda: kit, agent_actions=None)
+    try:
+        await app.call("settings.set", {"key": "stt_local_model", "value": None})
+        app.start()
+        await wait_until(lambda: kit.segmenters)
+        assert kit.engines == []
+        assert await app.call("models.status") == {
+            "models": [{"name": "silero-vad", "ready": True}]
+        }
+    finally:
+        await app.aclose()

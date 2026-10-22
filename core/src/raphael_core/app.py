@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import functools
+import gc
 import json
 import logging
 import re
@@ -86,6 +87,7 @@ from .protocol import (
     BUSY,
     INVALID_PARAMS,
     INTERNAL_ERROR,
+    NO_LOCAL_MODEL,
     NO_MICROPHONE,
     NOT_CONFIGURED,
     PROTOCOL_VERSION,
@@ -116,6 +118,10 @@ DICTATION_SEGMENT_SECONDS = 10.0
 CLOUD_SEGMENT_SECONDS = 30.0
 # More threads do not make Qwen3-ASR faster.
 STT_THREADS = 4
+# Deleting a model folder on Windows can fail while ONNX Runtime still holds a file: it is tried
+# this many times, this far apart.
+DELETE_TRIES = 3
+DELETE_RETRY_S = 0.2
 # audio.level notifications a second, for the settings page's meter.
 LEVEL_HZ = 30.0
 # models.progress notifications are sent at most this often (the last one always is).
@@ -345,7 +351,7 @@ class SpeechModels:
         *,
         make_segmenter: Callable[[Path], Any],
         make_engine: Callable[[str], Any],
-        engine_name: str = ENGINE_MODEL,
+        engine_name: str | None = ENGINE_MODEL,
     ) -> None:
         self._manager = manager
         self._make_segmenter = make_segmenter
@@ -378,8 +384,8 @@ class SpeechModels:
                 self._cond.notify_all()
 
     @property
-    def engine_name(self) -> str:
-        """The model the engine is, or is to be, built from."""
+    def engine_name(self) -> str | None:
+        """The model the engine is, or is to be, built from; None when there is no local model."""
         return self._engine_name
 
     @property
@@ -387,11 +393,22 @@ class SpeechModels:
         """The model the engine that is loaded was built from; None while there is none."""
         return self._engine_built_for
 
-    def select_engine(self, name: str) -> None:
-        """Make `name` (a model of the catalogue) the engine. Nothing is loaded yet: that is
-        `load_pending`, which builds it if it is downloaded."""
+    def select_engine(self, name: str | None) -> None:
+        """Make `name` (a model of the catalogue) the engine, or None for no local engine. Nothing
+        is loaded yet: that is `load_pending`, which builds it if it is downloaded."""
         with self._cond:
             self._engine_name = name
+
+    def unload_engine(self) -> None:
+        """Let go of the engine that is loaded, so that its model files are free to delete. Waits
+        for a load that is under way; the next `engine()` builds the selected one again."""
+        with self._cond:
+            while self._loading:
+                self._cond.wait()
+            self._loaded[ENGINE_MODEL] = None
+            self._engine_built_for = None
+            self._failures.pop(ENGINE_MODEL, None)
+        gc.collect()
 
     def _build_segmenter(self) -> Any:
         path = self._manager.dir(VAD_MODEL) / REGISTRY[VAD_MODEL].files[0]
@@ -401,7 +418,7 @@ class SpeechModels:
         """Build the engine of the selected model, if it is downloaded and not the one loaded. A
         failure is logged and the engine that is loaded stays."""
         name = self._engine_name
-        if self._engine_built_for == name or not self._manager.is_ready(name):
+        if name is None or self._engine_built_for == name or not self._manager.is_ready(name):
             return
         began = time.perf_counter()
         try:
@@ -463,15 +480,21 @@ class SpeechModels:
         failure = self._failures.get(name)
         if failure is not None:
             raise failure
+        if name == ENGINE_MODEL and self._engine_name is None:
+            raise RpcError(NO_LOCAL_MODEL, "There is no local speech model")
         missing = self._engine_name if name == ENGINE_MODEL else name
         raise FileNotFoundError(f"The speech model {missing} is not downloaded")
 
-    def require_models(self) -> None:
+    def require_models(self, engine_needed: bool = True) -> None:
         """RpcError(NOT_CONFIGURED) if a model is neither loaded nor on disk: better to say so at
-        the key press than after the user has spoken."""
+        the key press than after the user has spoken. The engine is asked for only if
+        `engine_needed` (the cloud dictates without a local one) and there is one."""
+        wanted = [(VAD_MODEL, VAD_MODEL)]
+        if engine_needed and self._engine_name is not None:
+            wanted.append((ENGINE_MODEL, self._engine_name))
         missing = [
             name
-            for slot, name in ((VAD_MODEL, VAD_MODEL), (ENGINE_MODEL, self._engine_name))
+            for slot, name in wanted
             if self._loaded[slot] is None and not self._manager.is_ready(name)
         ]
         if missing:
@@ -1070,7 +1093,8 @@ class App(Router):
     # --- models ---------------------------------------------------------------------------------
 
     async def _models_status(self, params: dict) -> dict:
-        names = (VAD_MODEL, self._speech.engine_name)
+        engine = self._speech.engine_name
+        names = (VAD_MODEL,) if engine is None else (VAD_MODEL, engine)
         return {"models": [{"name": n, "ready": self.manager.is_ready(n)} for n in names]}
 
     def _progress_notifier(
@@ -1106,7 +1130,8 @@ class App(Router):
         names = params.get("names")
         if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
             raise _invalid("names must be a list of model names")
-        allowed = {*APP_MODELS, self._speech.engine_name}
+        engine = self._speech.engine_name
+        allowed = {VAD_MODEL} if engine is None else {VAD_MODEL, engine}
         unknown = [n for n in names if n not in allowed]
         if unknown:
             raise _invalid(f"not a model the app downloads: {', '.join(unknown)}")
@@ -1154,6 +1179,7 @@ class App(Router):
         return {
             "models": await asyncio.to_thread(read),
             "active": settings["stt_local_model"],
+            "fallback": None if settings["stt_engine"] == "local" else settings["stt_local_model"],
             "downloading": self._local_download,
         }
 
@@ -1191,28 +1217,62 @@ class App(Router):
 
     async def _models_local_delete(self, params: dict) -> dict:
         """Delete a downloaded model of the catalogue that is not in use. The detector is not one
-        of them. Answers whether anything was there to delete."""
+        of them. While the cloud is the engine the local model is only the fallback, and that can
+        be deleted too (not during a dictation): it is unloaded first, and another downloaded
+        model takes its place, or none does. Answers whether anything was there to delete and, in
+        that case, the fallback that follows."""
         name = self._local_name(params)
         if name == self._local_download:
             raise RpcError(BUSY, f"{name} is being downloaded")
         settings = (await self.call("settings.get", {}))["settings"]
-        in_use = {settings["stt_local_model"], self._speech.engine_name}
-        if name in in_use or name == self._speech.loaded_engine_name:
-            raise RpcError(BUSY, f"{name} is in use")
+        chosen = settings["stt_local_model"]
+        retire = settings["stt_engine"] != "local" and name == chosen
+        if not retire:
+            in_use = {chosen, self._speech.engine_name, self._speech.loaded_engine_name}
+            if name in in_use:
+                raise RpcError(BUSY, f"{name} is in use")
+        elif not self._dictation_idle():
+            raise RpcError(BUSY, f"{name} is needed by the dictation")
+        replacement: str | None = None
+        if retire:
+            replacement = next(
+                (
+                    entry.name
+                    for entry in LOCAL_STT_MODELS
+                    if entry.name != name and self.manager.is_ready(entry.name)
+                ),
+                None,
+            )
+            await self.call("settings.set", {"key": "stt_local_model", "value": replacement})
+            self._speech.select_engine(replacement)
+            await asyncio.to_thread(self._speech.unload_engine)
 
         def delete() -> bool:
             directory = self.manager.dir(name)
             if not directory.exists():
                 return False
-            try:
-                shutil.rmtree(directory)
-            except OSError as exc:
-                raise RpcError(INTERNAL_ERROR, f"Could not delete {name}: {exc}") from exc
+            for attempt in range(DELETE_TRIES):
+                try:
+                    shutil.rmtree(directory)
+                    return True
+                except PermissionError as exc:  # a file ONNX Runtime has not let go of yet
+                    if attempt == DELETE_TRIES - 1:
+                        raise RpcError(INTERNAL_ERROR, f"Could not delete {name}: {exc}") from exc
+                    time.sleep(DELETE_RETRY_S)
+                except OSError as exc:
+                    raise RpcError(INTERNAL_ERROR, f"Could not delete {name}: {exc}") from exc
             return True
 
-        deleted = await asyncio.to_thread(delete)
+        try:
+            deleted = await asyncio.to_thread(delete)
+        finally:
+            if retire:
+                self._load_models_in_background()  # the new fallback, if there is one
         logger.info("Deleted the speech model %s", name)
-        return {"deleted": deleted}
+        reply: dict[str, Any] = {"deleted": deleted}
+        if retire:
+            reply["fallback"] = replacement
+        return reply
 
     # --- the microphone -------------------------------------------------------------------------
 
@@ -1293,10 +1353,10 @@ class App(Router):
                 return await self._inner.call(method, params)
             finally:
                 await self._meter_settled()
-        self._speech.require_models()
         self._starts += 1
         try:
             await self._read_stt_engine()
+            self._speech.require_models(engine_needed=self._stt_engine == "local")
             await self._meter("make way for the dictation", lambda m: m.suspend())
             return await self._inner.call(method, params)
         finally:
