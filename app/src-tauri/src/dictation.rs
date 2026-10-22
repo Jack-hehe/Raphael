@@ -16,9 +16,12 @@
 //!   greets it on the overlay while he listens (a dictation shows the emblem alone). The
 //!   core starts it with `purpose: "agent"` and transcribes it without cleanup; the text goes to
 //!   `agent.ask`, and the answer is shown by the overlay (`say`). An answer that needs a YES/NO
-//!   first is shown as a question (`ask`) whose buttons answer through [`on_confirm`]; Esc and
-//!   the clock answer NO; then `agent.confirm` gives the answer. An agent session never pastes and
-//!   never touches the clipboard of the focused window.
+//!   first is shown as a question (`ask`) whose buttons answer through
+//!   [`DictationController::on_answer`]; Esc and the clock answer NO; then `agent.confirm` gives
+//!   the answer, which for a run on the desktop may be the next question (the app first, then
+//!   each step that sends, deletes or buys; a question about an app has a third answer,
+//!   「一律允許」). Esc while the answer is with the agent stops what it goes on with. An agent
+//!   session never pastes and never touches the clipboard of the focused window.
 //!
 //! A recording has no time limit. It ends when the key stops it, when Esc cancels it, or by
 //! itself when the core has heard no speech in it for ten seconds: the core says so
@@ -60,9 +63,8 @@
 //! `agent.ask` with the source `app` and on from there as a spoken one does, the overlay showing the
 //! answer and any YES/NO question, but not the reports of the wait (the window shows its own). And
 //! the YES/NO question on screen is the window's too: it hears of every question that opens and
-//! closes ([`QuestionNews`]), and its card answers through [`DictationController::on_confirm_in_app`]
-//! as the overlay's buttons answer through [`on_confirm`]. Whichever answers first wins; the other
-//! finds nothing to answer.
+//! closes ([`QuestionNews`]), and its card answers through [`DictationController::on_answer`]
+//! as the overlay's buttons do. Whichever answers first wins; the other finds nothing to answer.
 //!
 //! [`spawn`] builds the controller from the app state and runs it in a task that listens to the
 //! hotkeys, the core's notifications and the overlay's buttons.
@@ -198,12 +200,14 @@ struct PendingAsk {
     answer: oneshot::Sender<Answer>,
 }
 
-/// The answer to a YES/NO question, and whether it came from the main window, which has the focus
-/// when it is clicked (the overlay never takes it).
+/// The answer to a YES/NO question, whether it came from the main window, which has the focus
+/// when it is clicked (the overlay never takes it), and whether it was the third answer of a
+/// question that has one (「一律允許」: a YES kept for next time).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Answer {
     approved: bool,
     in_app: bool,
+    always: bool,
 }
 
 impl Answer {
@@ -211,8 +215,14 @@ impl Answer {
     const NO: Self = Self {
         approved: false,
         in_app: false,
+        always: false,
     };
 }
+
+/// The most questions one turn asks in a row. Only a run on the desktop asks more than one (the
+/// app first, then each step that sends, deletes or buys); a core that asked on and on would be
+/// broken, and its next question is denied.
+pub const MAX_QUESTIONS_IN_A_TURN: usize = 12;
 
 /// A YES/NO question that opened or closed (answered, run out, or dropped with its session), as the
 /// main window hears of it: the card of the 拉斐爾 page shows it while it is open.
@@ -900,10 +910,13 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         let core = self.core.clone();
         Some(tokio::spawn(async move {
             match stage {
-                // The text is with the agent: it hears that nobody wants the answer.
-                Some(AgentStage::Thinking) => agent_cancel(core.as_ref(), &session.id).await,
-                // Nothing is left to cancel: the agent has all it was given, or has said it all.
-                Some(AgentStage::Confirming | AgentStage::Speaking) => {}
+                // The text is with the agent, or the answer to its question is: it hears that
+                // nobody wants what comes next (a run on the desktop that goes on after a yes stops).
+                Some(AgentStage::Thinking | AgentStage::Confirming) => {
+                    agent_cancel(core.as_ref(), &session.id).await
+                }
+                // Nothing is left to cancel: the agent has said it all.
+                Some(AgentStage::Speaking) => {}
                 _ => cancel_after_start(core.as_ref(), &session).await,
             }
         }))
@@ -1318,7 +1331,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
 
     /// The question `question` of the session `id` with the agent: `agent.ask` (with `source`
     /// when it is not the voice, the core's default), the reply shown, and for a YES/NO question
-    /// its answer sent with `agent.confirm` and that reply shown. Never logs the words.
+    /// its answer sent with `agent.confirm` and that reply shown, which may be another question
+    /// (a run on the desktop asks about the app, then about each step that sends), up to
+    /// [`MAX_QUESTIONS_IN_A_TURN`]. Never logs the words.
     async fn converse(
         &self,
         id: &str,
@@ -1335,23 +1350,24 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         if let Some(source) = source {
             params["source"] = json!(source);
         }
-        let answer = self.core.call("agent.ask", params).await;
-        let Some((prompt, answer)) = self.show_reply(id, answer, true) else {
-            return;
-        };
-        // A question is on screen. Only YES goes through; everything else is a NO.
-        let Some(approved) = self.await_answer(id, &prompt, answer).await else {
-            return;
-        };
-        let answer = self
-            .core
-            .call(
-                "agent.confirm",
-                json!({ "id": prompt.id, "approved": approved }),
-            )
-            .await;
-        // The answer to an answer is never another question.
-        let _ = self.show_reply(id, answer, false);
+        let mut reply = self.core.call("agent.ask", params).await;
+        let mut asked = 0;
+        loop {
+            let may_ask = asked < MAX_QUESTIONS_IN_A_TURN;
+            let Some((prompt, answer)) = self.show_reply(id, reply, may_ask) else {
+                return;
+            };
+            asked += 1;
+            // A question is on screen. Only YES goes through; everything else is a NO.
+            let Some(answer) = self.await_answer(id, &prompt, answer).await else {
+                return;
+            };
+            let mut params = json!({ "id": prompt.id, "approved": answer.approved });
+            if answer.approved && answer.always && prompt.always.is_some() {
+                params["always"] = json!(true);
+            }
+            reply = self.core.call("agent.confirm", params).await;
+        }
     }
 
     /// Shows what the agent replied (to the question, or, with `may_ask` false, to its answer):
@@ -1439,15 +1455,14 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
     }
 
-    /// Waits for the answer to the question on screen: a button of the overlay ([`Self::on_confirm`])
-    /// or of the main window's card ([`Self::on_confirm_in_app`]), Esc, or the time the question was
-    /// given. Returns whether it was approved, or `None` if the session ended meanwhile.
+    /// Waits for the answer to the question on screen: a button of the overlay or of the main
+    /// window's card ([`Self::on_answer`]), Esc, or the time the question was given. Returns the answer, or `None` if the session ended meanwhile.
     async fn await_answer(
         &self,
         id: &str,
         prompt: &AskPrompt,
         wait: oneshot::Receiver<Answer>,
-    ) -> Option<bool> {
+    ) -> Option<Answer> {
         // A click must not take the focus from the app the person is typing into. The overlay
         // cannot be activated, in theory; if it was in practice, the log says so.
         let before = self.paster.foreground();
@@ -1490,24 +1505,33 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
         state.take_ask();
         state.agent = Some(AgentStage::Confirming);
-        Some(answer.approved)
+        Some(answer)
     }
 
     /// The overlay's answer to the question on screen: its button was clicked (`overlay_confirm`).
     /// An answer to anything but the question that is open now (a second click, a late one, one for
-    /// a question that is gone) is dropped.
+    /// a question that is gone) is dropped. (The app answers through [`Self::on_answer`].)
+    #[cfg(test)]
     pub fn on_confirm(&self, id: &str, approved: bool) {
-        self.confirm(id, approved, false);
+        self.confirm(id, approved, false, false);
     }
 
     /// The main window's answer to the question on screen: a button of the card that mirrors the
     /// overlay's question was clicked (`agent_question_answer`). Taken as the overlay's would be,
     /// the long press of a `T3` YES included; the focus the window has is left with it.
+    #[cfg(test)]
     pub fn on_confirm_in_app(&self, id: &str, approved: bool) {
-        self.confirm(id, approved, true);
+        self.confirm(id, approved, true, false);
     }
 
-    fn confirm(&self, id: &str, approved: bool, in_app: bool) {
+    /// An answer of either page, the third answer of a question that has one (`always`)
+    /// included: a YES that is kept for next time. An `always` for a question without that
+    /// answer is a plain YES.
+    pub fn on_answer(&self, id: &str, approved: bool, always: bool, in_app: bool) {
+        self.confirm(id, approved, in_app, always);
+    }
+
+    fn confirm(&self, id: &str, approved: bool, in_app: bool, always: bool) {
         let pending = {
             let mut state = lock(&self.state);
             let Some(ask) = state.ask.as_ref().filter(|ask| ask.prompt.id == id) else {
@@ -1531,7 +1555,12 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 "agent: the question was answered ({})",
                 if in_app { "main window" } else { "overlay" }
             );
-            let _ = pending.answer.send(Answer { approved, in_app });
+            let always = approved && always;
+            let _ = pending.answer.send(Answer {
+                approved,
+                in_app,
+                always,
+            });
         }
     }
 
@@ -1876,6 +1905,11 @@ mod app {
                 overlay.progress(progress);
             }
         }
+        fn operate(&self, line: &str) {
+            if let Some(overlay) = &self.0 {
+                overlay.operate(line);
+            }
+        }
     }
 
     /// The hotkey service, if it started. Without it there are no cancel keys to switch.
@@ -2044,9 +2078,8 @@ mod app {
                     }
                 }
                 answer = next(&mut confirmations) => match answer {
-                    Some(Confirmation { id, approved, in_app }) => match &controller {
-                        Some(controller) if in_app => controller.on_confirm_in_app(&id, approved),
-                        Some(controller) => controller.on_confirm(&id, approved),
+                    Some(Confirmation { id, approved, in_app, always }) => match &controller {
+                        Some(controller) => controller.on_answer(&id, approved, always, in_app),
                         None => log::info!("an answer to a question is dropped: the core is not running"),
                     },
                     None => confirmations = None,
@@ -2111,6 +2144,8 @@ mod tests {
     #[derive(Default)]
     struct FakeCore {
         results: Mutex<HashMap<String, Result<Value, RpcError>>>,
+        /// Replies given one after the other before `results` is asked (`script_each`).
+        each: Mutex<HashMap<String, std::collections::VecDeque<Result<Value, RpcError>>>>,
         calls: Mutex<Vec<(String, Value)>>,
         /// What reached the core and when a gated reply was let go: the method name when a call
         /// arrives, and `<method>:reply` when its gate opens.
@@ -2147,6 +2182,14 @@ mod tests {
                 .insert(method.to_owned(), result);
         }
 
+        /// `method` answers with `replies`, one per call, and then as `script` says.
+        fn script_each(&self, method: &str, replies: Vec<Value>) {
+            self.each
+                .lock()
+                .unwrap()
+                .insert(method.to_owned(), replies.into_iter().map(Ok).collect());
+        }
+
         fn count(&self, method: &str) -> usize {
             self.calls
                 .lock()
@@ -2181,6 +2224,15 @@ mod tests {
             {
                 gate.notified().await;
                 self.order.lock().unwrap().push(format!("{method}:reply"));
+            }
+            let next = self
+                .each
+                .lock()
+                .unwrap()
+                .get_mut(method)
+                .and_then(std::collections::VecDeque::pop_front);
+            if let Some(reply) = next {
+                return reply;
             }
             let scripted = self.results.lock().unwrap().get(method).cloned();
             scripted.unwrap_or_else(|| Ok(json!({})))
@@ -5009,6 +5061,7 @@ mod tests {
     /// The prompt of [`question`].
     fn prompt(id: &str, timeout_ms: u64) -> AskPrompt {
         AskPrompt {
+            always: None,
             id: id.to_owned(),
             tier: Tier::T2,
             prefix: "問".to_owned(),
@@ -6154,15 +6207,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_answer_that_is_a_new_question_is_denied_and_not_shown() {
+    async fn an_answer_that_is_a_new_question_is_asked_in_turn() {
+        // A run on the desktop asks about the app, then about a step that sends.
         let core = agent_core(question("c-1", 30_000));
-        core.script("agent.confirm", Ok(question("c-2", 30_000)));
+        core.script_each(
+            "agent.confirm",
+            vec![question("c-2", 30_000), answer("了", "已取消。")],
+        );
         let c = controller(core, FakePaster::pasting("chrome.exe"));
         let turn = start_turn(&c).await;
         until_stage(&c, AgentStage::Asking).await;
         c.on_confirm("c-1", true);
+        for _ in 0..200 {
+            if c.open_question().is_some_and(|q| q.id == "c-2") {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(c.overlay().events().contains(&asked("c-2", 30_000)));
+        c.on_confirm("c-2", false);
         turn.await.unwrap();
-        settle().await;
         assert_eq!(
             c.core().all_params("agent.confirm"),
             vec![
@@ -6170,8 +6234,7 @@ mod tests {
                 json!({"id": "c-2", "approved": false})
             ]
         );
-        ends_with_notice(&c, ASK_FAILED.zh);
-        assert!(!c.overlay().events().contains(&asked("c-2", 30_000)));
+        assert_eq!(c.overlay().events().last().unwrap(), "say:了|已取消。");
     }
 
     #[tokio::test]
@@ -6300,6 +6363,103 @@ mod tests {
         assert!(!c.overlay().events().contains(&asked("c-1", 30_000)));
     }
 
+    /// A run on the desktop's question about an app: three answers.
+    fn app_question(id: &str) -> Value {
+        json!({
+            "status": "confirm",
+            "turn_id": 2,
+            "confirm": {
+                "id": id, "tier": "T2", "prefix": "問", "text": "是否允許操作「Calculator」？",
+                "yes": "允許一次", "no": "不要", "always": "一律允許", "timeout_ms": 30_000,
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn a_turn_may_ask_again_after_a_yes_and_the_third_answer_is_sent() {
+        let core = agent_core(app_question("c-1"));
+        core.script_each(
+            "agent.confirm",
+            vec![question("c-2", 30_000), answer("告", "已按下「七」。")],
+        );
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Asking).await;
+        let shown = c.open_question().expect("the question is open");
+        assert_eq!(shown.always.as_deref(), Some("一律允許"));
+        c.on_answer("c-1", true, true, false);
+        // the next question of the same turn
+        for _ in 0..200 {
+            if c.open_question().is_some_and(|q| q.id == "c-2") {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(c.open_question().map(|q| q.id), Some("c-2".to_owned()));
+        // 「一律允許」 is no answer to a question that does not have it: a plain yes
+        c.on_answer("c-2", true, true, false);
+        turn.await.unwrap();
+        assert_eq!(
+            c.core().all_params("agent.confirm"),
+            vec![
+                json!({"id": "c-1", "approved": true, "always": true}),
+                json!({"id": "c-2", "approved": true}),
+            ]
+        );
+        assert_eq!(
+            c.overlay().events().last().unwrap(),
+            "say:告|已按下「七」。"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_no_is_never_sent_as_always() {
+        let core = agent_core(app_question("c-1"));
+        core.script("agent.confirm", Ok(answer("了", "已取消。")));
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Asking).await;
+        c.on_answer("c-1", false, true, false);
+        turn.await.unwrap();
+        assert_eq!(
+            c.core().all_params("agent.confirm"),
+            vec![json!({"id": "c-1", "approved": false})]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_core_that_asks_on_and_on_has_its_last_question_denied() {
+        let core = agent_core(question("q-0", 30_000));
+        core.script_each(
+            "agent.confirm",
+            (1..=MAX_QUESTIONS_IN_A_TURN)
+                .map(|n| question(&format!("q-{n}"), 30_000))
+                .collect(),
+        );
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let turn = start_turn(&c).await;
+        for n in 0..MAX_QUESTIONS_IN_A_TURN {
+            let id = format!("q-{n}");
+            for _ in 0..400 {
+                if c.open_question().is_some_and(|q| q.id == id) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(c.open_question().map(|q| q.id), Some(id.clone()));
+            c.on_confirm(&id, true);
+        }
+        turn.await.unwrap();
+        // the question beyond the last one that may be asked is denied, never shown
+        let last = format!("q-{MAX_QUESTIONS_IN_A_TURN}");
+        assert!(
+            c.core()
+                .all_params("agent.confirm")
+                .contains(&json!({"id": last, "approved": false}))
+        );
+        assert!(c.open_question().is_none());
+    }
+
     #[tokio::test]
     async fn escape_while_the_answer_to_a_confirmation_is_awaited_drops_it() {
         let core = agent_core(question("c-1", 30_000));
@@ -6313,7 +6473,8 @@ mod tests {
         run(&c, Cancel, 6000).await;
         assert_eq!(c.overlay().events().last().unwrap(), "hide");
         assert_eq!(c.phase(), Phase::Idle);
-        assert_eq!(c.core().count("agent.cancel"), 0);
+        // The agent may go on after the yes (a run on the desktop): it hears that it is to stop.
+        assert_eq!(c.core().count("agent.cancel"), 1);
         assert_eq!(c.core().count("dictation.cancel"), 0);
         let after_cancel = c.overlay().events();
         gate.notify_one();

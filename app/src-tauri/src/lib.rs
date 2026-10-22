@@ -5,6 +5,7 @@ mod agent;
 mod avatar;
 mod background;
 mod commands;
+mod computer;
 mod core_process;
 mod data_layout;
 mod device_settings;
@@ -254,6 +255,13 @@ pub fn run() {
                 log::error!("dictation needs Windows");
                 drop(hotkey_event_rx);
             }
+
+            // ---- Operating the desktop ----
+            // The shell's half of a run on the owner's desktop: the core's requests answered with
+            // UI Automation, the 「操作中」 overlay, the watch on the owner's own input. It takes
+            // the core and the overlay from the app state; without the core there is no run.
+            #[cfg(windows)]
+            computer::spawn(app.handle());
 
             // ---- Device settings ----
             // `device.json`: loads it, puts it in force (hotkeys, overlay size and subtitles,

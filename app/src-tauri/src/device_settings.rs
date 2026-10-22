@@ -1,7 +1,8 @@
 //! Settings that belong to this computer: the hotkeys (dictation, pasting the last dictation and
 //! asking Raphael) and how the dictation key works (press to start and again to stop, or hold
 //! while talking), the microphone, how the emblem looks, the theme, interface language,
-//! autostart, and whether the first-run guide has been done.
+//! autostart, whether the first-run guide has been done, and the apps Raphael may always operate
+//! (`computer_apps`, the 「一律允許」 of the question about an app).
 //!
 //! They live in `device.json` in Raphael's data folder (`%APPDATA%\Raphael`, or the folder named
 //! by `RAPHAEL_DATA_DIR`, like the core's database). The settings of the brain (monthly limit,
@@ -85,6 +86,36 @@ impl DictationMode {
     }
 }
 
+/// The most apps the always-allowed list keeps.
+pub const COMPUTER_APPS_MAX: usize = 200;
+
+/// An app Raphael may always operate, without asking first: its executable, as a file name in
+/// lower case (`excel.exe`), which is what is checked, and the name it goes by (`Microsoft
+/// Excel`), which the settings page shows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComputerApp {
+    pub exe: String,
+    pub name: String,
+}
+
+impl ComputerApp {
+    /// Whether the entry is one the app can keep: an executable's file name in lower case, of
+    /// the characters such names have, and a name of one line, neither too long.
+    pub fn is_valid(&self) -> bool {
+        let exe = &self.exe;
+        let exe_ok = (5..=128).contains(&exe.len())
+            && exe.ends_with(".exe")
+            && exe
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || " ._()-".contains(c))
+            && !exe.starts_with(['.', ' ', '-']);
+        let name_ok = !self.name.trim().is_empty()
+            && self.name.chars().count() <= 80
+            && !self.name.chars().any(char::is_control);
+        exe_ok && name_ok
+    }
+}
+
 /// The settings in `device.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -110,6 +141,8 @@ pub struct DeviceSettings {
     pub autostart: bool,
     /// The first-run guide has been done.
     pub onboarded: bool,
+    /// The apps Raphael may operate without asking first, each once.
+    pub computer_apps: Vec<ComputerApp>,
 }
 
 impl Default for DeviceSettings {
@@ -127,6 +160,7 @@ impl Default for DeviceSettings {
             ui_language: "zh-TW".to_owned(),
             autostart: true,
             onboarded: false,
+            computer_apps: Vec::new(),
         }
     }
 }
@@ -188,6 +222,7 @@ impl DeviceSettings {
                 "ui_language" => next.ui_language = parse_value(name, value)?,
                 "autostart" => next.autostart = parse_value(name, value)?,
                 "onboarded" => next.onboarded = parse_value(name, value)?,
+                "computer_apps" => next.computer_apps = parse_value(name, value)?,
                 other => return Err(format!("unknown setting \"{other}\"")),
             }
         }
@@ -238,6 +273,7 @@ impl DeviceSettings {
         if self.microphone.as_deref() == Some("") {
             return Err("microphone must be a name, or null for the default one".to_owned());
         }
+        check_computer_apps(&self.computer_apps)?;
         check_keys("快捷鍵", &self.dictation_keys)?;
         check_keys("貼上上一次聽寫的快捷鍵", &self.paste_last_keys)?;
         check_keys("問拉斐爾的快捷鍵", &self.agent_keys)?;
@@ -267,6 +303,19 @@ impl DeviceSettings {
         }
         if self.microphone.as_deref() == Some("") {
             self.microphone = None;
+        }
+        if let Err(err) = check_computer_apps(&self.computer_apps) {
+            log::warn!("device settings: {err}");
+            let mut kept: Vec<ComputerApp> = Vec::new();
+            for app in std::mem::take(&mut self.computer_apps) {
+                if app.is_valid()
+                    && kept.len() < COMPUTER_APPS_MAX
+                    && !kept.iter().any(|known| known.exe == app.exe)
+                {
+                    kept.push(app);
+                }
+            }
+            self.computer_apps = kept;
         }
         if let Err(err) = check_keys("dictation_keys", &self.dictation_keys) {
             log::warn!("device settings: {err}");
@@ -324,6 +373,24 @@ fn parse_settings(text: &str) -> Result<DeviceSettings, serde_json::Error> {
 /// One field of a patch as the type it is stored as.
 fn parse_value<T: DeserializeOwned>(name: &str, value: &Value) -> Result<T, String> {
     serde_json::from_value(value.clone()).map_err(|err| format!("bad value for \"{name}\": {err}"))
+}
+
+/// Whether `apps` can be the always-allowed list: each entry valid, none twice, not too many.
+fn check_computer_apps(apps: &[ComputerApp]) -> Result<(), String> {
+    if apps.len() > COMPUTER_APPS_MAX {
+        return Err(format!(
+            "computer_apps holds at most {COMPUTER_APPS_MAX} apps"
+        ));
+    }
+    for (index, app) in apps.iter().enumerate() {
+        if !app.is_valid() {
+            return Err("computer_apps holds an app that cannot be kept".to_owned());
+        }
+        if apps[..index].iter().any(|known| known.exe == app.exe) {
+            return Err("computer_apps holds the same app twice".to_owned());
+        }
+    }
+    Ok(())
 }
 
 /// Renames the file that could not be understood, so that it is not overwritten and lost.
@@ -553,6 +620,62 @@ mod tests {
     }
 
     #[test]
+    fn the_always_allowed_apps_are_kept_by_executable_and_checked() {
+        let mut s = DeviceSettings::default();
+        assert!(s.computer_apps.is_empty());
+        let excel = json!({"exe": "excel.exe", "name": "Microsoft Excel"});
+        s.apply_patch(&json!({"computer_apps": [excel]})).unwrap();
+        assert_eq!(
+            s.computer_apps,
+            [ComputerApp {
+                exe: "excel.exe".into(),
+                name: "Microsoft Excel".into()
+            }]
+        );
+        for bad in [
+            json!([{"exe": "EXCEL.EXE", "name": "x"}]),
+            json!([{"exe": "excel", "name": "x"}]),
+            json!([{"exe": "..\\x.exe", "name": "x"}]),
+            json!([{"exe": "excel.exe", "name": ""}]),
+            json!([{"exe": "excel.exe", "name": "a\nb"}]),
+            json!([{"exe": "excel.exe", "name": "a"}, {"exe": "excel.exe", "name": "b"}]),
+            json!([{"exe": "excel.exe"}]),
+            json!("excel.exe"),
+        ] {
+            assert!(
+                s.apply_patch(&json!({ "computer_apps": bad })).is_err(),
+                "{bad}"
+            );
+        }
+        // nothing changed by a patch that failed
+        assert_eq!(s.computer_apps.len(), 1);
+        s.apply_patch(&json!({"computer_apps": []})).unwrap();
+        assert!(s.computer_apps.is_empty());
+    }
+
+    #[test]
+    fn a_file_with_bad_always_allowed_apps_keeps_the_good_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{"computer_apps": [{"exe": "calc.exe", "name": "Calculator"}, {"exe": "BAD", "name": "x"}, {"exe": "calc.exe", "name": "again"}]}"#,
+        )
+        .unwrap();
+        let loaded = DeviceSettings::load(&path);
+        assert_eq!(
+            loaded.computer_apps,
+            [ComputerApp {
+                exe: "calc.exe".into(),
+                name: "Calculator".into()
+            }]
+        );
+        // a file from before the list has none
+        std::fs::write(&path, r#"{"onboarded": true}"#).unwrap();
+        assert!(DeviceSettings::load(&path).computer_apps.is_empty());
+    }
+
+    #[test]
     fn json_uses_snake_case_names() {
         let s = DeviceSettings {
             subtitles: Subtitles::Off,
@@ -574,6 +697,7 @@ mod tests {
                 "ui_language": "zh-TW",
                 "autostart": true,
                 "onboarded": false,
+                "computer_apps": [],
             })
         );
         for (value, text) in [(Subtitles::On, "on"), (Subtitles::Off, "off")] {
@@ -955,6 +1079,7 @@ mod tests {
                 "ui_language": "ja",
                 "autostart": false,
                 "onboarded": true,
+                "computer_apps": [{"exe": "calc.exe", "name": "Calculator"}],
                 "a_setting_of_a_newer_version": {"anything": true},
             });
             stored[field] = unknown.clone();

@@ -504,6 +504,7 @@ pub fn agent_question_answer(
     webview: Webview,
     id: String,
     approved: bool,
+    always: Option<bool>,
 ) -> Result<(), String> {
     require_main(&webview)?;
     if !is_question_id(&id) {
@@ -519,6 +520,7 @@ pub fn agent_question_answer(
             id,
             approved,
             in_app: true,
+            always: approved && always == Some(true),
         })
         .map_err(|_| AGENT_OFF.to_owned())
 }
@@ -751,6 +753,30 @@ pub async fn set_microphone(app: &AppHandle, name: Option<&str>) -> Result<(), S
         .ok_or("the device settings are not loaded")?;
     let effects = AppEffects { app: app.clone() };
     set_device_settings(&store, &effects, &json!({ "microphone": name })).await?;
+    Ok(())
+}
+
+/// Adds an app to the ones Raphael may always operate (the 「一律允許」 of the question about it),
+/// as the settings page would with `device_settings_set`, for the shell's half of a run
+/// (`computer`). An app that is on the list already is left as it is.
+pub async fn allow_computer_app(app: &AppHandle, exe: &str, name: &str) -> Result<(), String> {
+    let entry = crate::device_settings::ComputerApp {
+        exe: exe.to_owned(),
+        name: crate::computer::policy::clean(name, 60),
+    };
+    if !entry.is_valid() {
+        return Err("this app cannot be kept".to_owned());
+    }
+    let store = app
+        .try_state::<DeviceStore>()
+        .ok_or("the device settings are not loaded")?;
+    let mut apps = store.get().await.computer_apps;
+    if apps.iter().any(|known| known.exe == entry.exe) {
+        return Ok(());
+    }
+    apps.push(entry);
+    let effects = AppEffects { app: app.clone() };
+    set_device_settings(&store, &effects, &json!({ "computer_apps": apps })).await?;
     Ok(())
 }
 
@@ -1287,6 +1313,7 @@ mod tests {
     #[test]
     fn the_window_hears_a_question_open_and_close() {
         let prompt = AskPrompt {
+            always: None,
             id: "c-1".to_owned(),
             tier: crate::overlay::Tier::T3,
             prefix: "問".to_owned(),

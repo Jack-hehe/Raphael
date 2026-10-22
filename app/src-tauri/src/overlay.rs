@@ -108,7 +108,9 @@ impl Tier {
 
 /// A question for the person to answer YES or NO, with the words on its buttons, from the core's
 /// confirmation. `id` comes back with the answer (`overlay_confirm`); `timeout_ms` is how long the
-/// question stays open before it counts as a NO.
+/// question stays open before it counts as a NO. `always`, sent only when there is one, is the
+/// label of a third button (「一律允許」, the question about an app Raphael is to operate): a YES
+/// that is also kept for next time.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AskPrompt {
     pub id: String,
@@ -118,6 +120,8 @@ pub struct AskPrompt {
     pub yes: String,
     pub no: String,
     pub timeout_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub always: Option<String>,
 }
 
 /// What the overlay page is told. Every text in it is in the interface language and in that one
@@ -163,6 +167,10 @@ pub enum OverlayEvent {
     Complete,
     /// The vanish animation.
     Hide,
+    /// Raphael operates the desktop: the emblem shows its 「操作中」 look, with `line` (the step,
+    /// 《告。操作中：點擊「七」》) beside it until something else takes the stage. A question that
+    /// was on screen goes; the corner is the apps' again (the window lets the mouse through).
+    Operate { line: String },
     /// The emblem's diameter in logical pixels, whether the subtitles show (`"on"` or `"off"`)
     /// and the interface language (`"zh-TW"`, `"en"` or `"ja"`).
     Settings {
@@ -220,6 +228,11 @@ pub trait OverlayApi: Send + Sync + 'static {
     }
     /// How far the dictation has come since the key was released.
     fn progress(&self, progress: Progress);
+    /// Raphael operates the desktop: the emblem's 「操作中」 look with `line`, the step, beside it
+    /// (see [`OverlayEvent::Operate`]). A fake may show it as a notice.
+    fn operate(&self, line: &str) {
+        self.notice(line);
+    }
 }
 
 // ---------- placement ----------
@@ -313,6 +326,7 @@ pub(crate) fn takes_clicks(event: &OverlayEvent) -> Option<bool> {
         OverlayEvent::Show { .. }
         | OverlayEvent::Say { .. }
         | OverlayEvent::Notice { .. }
+        | OverlayEvent::Operate { .. }
         | OverlayEvent::Complete
         | OverlayEvent::Hide => Some(false),
         // The loudness and progress are about the emblem, learned words wait behind whatever is
@@ -361,6 +375,7 @@ impl OverlayEvent {
             OverlayEvent::Ask(_) => "ask",
             OverlayEvent::Complete => "complete",
             OverlayEvent::Hide => "hide",
+            OverlayEvent::Operate { .. } => "operate",
             OverlayEvent::Settings { .. } => "settings",
             OverlayEvent::Avatar => "avatar",
         }
@@ -684,6 +699,12 @@ impl OverlayApi for Overlay {
         self.publish(OverlayEvent::Ask(prompt.clone()));
     }
 
+    fn operate(&self, line: &str) {
+        self.publish(OverlayEvent::Operate {
+            line: line.to_owned(),
+        });
+    }
+
     fn hide(&self) {
         self.publish(OverlayEvent::Hide);
     }
@@ -725,6 +746,8 @@ pub struct Confirmation {
     pub id: String,
     pub approved: bool,
     pub in_app: bool,
+    /// The third answer of a question that has one (「一律允許」): a YES, kept for next time.
+    pub always: bool,
 }
 
 /// Where the page's answers go: the dictation controller's task takes them from the other end.
@@ -745,6 +768,7 @@ pub fn overlay_confirm(
     webview: Webview,
     id: String,
     approved: bool,
+    always: Option<bool>,
 ) -> Result<(), String> {
     crate::commands::ensure_caller(webview.label(), crate::OVERLAY_WINDOW)?;
     let Some(answers) = app.try_state::<ConfirmSender>() else {
@@ -756,6 +780,7 @@ pub fn overlay_confirm(
             id,
             approved,
             in_app: false,
+            always: approved && always == Some(true),
         })
         .map_err(|_| "nothing is listening to the overlay's answers".to_owned())
 }
@@ -1189,6 +1214,7 @@ mod tests {
 
     fn prompt(tier: Tier) -> AskPrompt {
         AskPrompt {
+            always: None,
             id: "c-7".into(),
             tier,
             prefix: "問".into(),
