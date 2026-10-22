@@ -358,9 +358,23 @@ def smoke_the_worker(executable: Path, extra_environment: dict[str, str] | None 
                 "elapsed_seconds": round(time.monotonic() - began, 2)}
 
 
+def smoke_the_voice_decoder(executable: Path) -> dict:
+    """The fourth pass: `raphael-core.exe --check-voice-decoder` decodes a small Opus clip that is
+    built into the core, which it can do only if the bundle carries libsndfile with its codecs."""
+    began = time.monotonic()
+    result = subprocess.run(
+        [str(executable), "--check-voice-decoder"], cwd=executable.parent, capture_output=True,
+        text=True, encoding="utf-8", errors="replace", timeout=60,
+    )
+    require(result.returncode == 0 and "voice decoder ok" in result.stdout,
+            f"The bundled audio decoder did not decode an Opus clip (exit {result.returncode}): "
+            f"{(result.stdout + result.stderr)[-400:]}")
+    return {"passed": True, "elapsed_seconds": round(time.monotonic() - began, 2)}
+
+
 def smoke(executable: Path) -> dict:
-    """The three passes. The report is the first pass's, with the second under `cleanup_pass` and the
-    third under `worker_pass`."""
+    """The four passes. The report is the first pass's, with the second under `cleanup_pass`, the
+    third under `worker_pass` and the fourth under `voice_pass`."""
     began = time.monotonic()
     report = smoke_without_a_key(executable)
     cleanup = smoke_with_the_fake_llm(executable)
@@ -369,6 +383,7 @@ def smoke(executable: Path) -> dict:
     report["calls"] = [*report["calls"], *cleanup["calls"]]
     report["stderr"] = [*report["stderr"], *cleanup["stderr"]]
     report["worker_pass"] = smoke_the_worker(executable)
+    report["voice_pass"] = smoke_the_voice_decoder(executable)
     report["elapsed_seconds"] = round(time.monotonic() - began, 2)
     return report
 
