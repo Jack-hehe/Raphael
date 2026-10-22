@@ -26,12 +26,21 @@ for any cancelled session.
 
 Threads. The recorder calls `_on_frames` on the audio thread (and once more, from the thread that
 calls `stop()`, with the last few milliseconds): it only counts the frames, puts them on a
-`queue.SimpleQueue` and, now and then, reports the level. One worker thread per session takes the
-frames off the queue, feeds the segmenter, transcribes every stretch that ends and looks at how
-long the segmenter has heard no speech. Everything else runs on the event loop: the calls to the
-brain (the stores are used on the loop thread only), the state of the session, the microphone
-watchdog. Whatever can block for long (opening the microphone, building a segmenter, getting the
-engine, which may still be loading) runs on a worker thread, never on the loop. Thread to loop goes through `loop.call_soon_threadsafe`.
+`queue.SimpleQueue` and, now and then, reports the level. Two threads per session do the rest. The
+listener takes the frames off that queue as they come, feeds the segmenter and looks at how long it
+has heard no speech; each stretch that ends goes on a second queue, in order, to the transcriber,
+which gets the engine (it may still be loading) and transcribes the stretches one after another.
+So the silence is heard however long the engine takes over a stretch, and the audio waits only as
+stretches of speech that are still to be transcribed, never as frames. Everything else runs on the
+event loop: the calls to the brain (the stores are used on the loop thread only), the state of the
+session, the microphone watchdog. Whatever can block for long (opening the microphone, building a
+segmenter, getting the engine) runs on a thread of its own, never on the loop. Thread to loop goes
+through `loop.call_soon_threadsafe`.
+
+A session whose listening or transcribing has broken down for good (the voice activity detector
+failed, or there is no engine) cannot hear anything more, so it does not wait for a silence that
+will never be counted: the app is sent `dictation.silence` at once, stops the session as the key
+would, and its stop answers with the error, as it would have when the user stopped it.
 
 The service is handed what it uses and builds none of it, so the app can load the engine and the
 voice activity model once, at start-up, which takes tens of seconds (ONNX Runtime). The segmenter
@@ -89,7 +98,7 @@ SILENT_PEAK = 0.003
 # Windows MME may never tell us that a microphone was unplugged: the frames just stop. A recording
 # that gets no frames for this long is treated like one whose recorder reported an error.
 MIC_STALL_SECONDS = 2.0
-# A session still recording this long after the app was told of its silence (`dictation.silence`)
+# A session still recording this long after the app was told to stop it (`dictation.silence`)
 # has been forgotten: the controller stops a silent session at once, and would have done so long
 # since. It is cancelled and the microphone closed, so the service does not stay busy, and the
 # microphone open, for good. Counted from the silence, never from the start: a recording in which
@@ -104,12 +113,15 @@ _LEVEL_METHOD = "audio.level"
 # After the stop: how far the transcription of what is left has come, then that the brain is
 # cleaning the text. The app draws it on the emblem. The stop's reply is the end of it.
 _PROGRESS_METHOD = "dictation.progress"
-# The recording has heard no speech for SILENCE_STOP_SECONDS: the app stops it.
+# The recording has heard no speech for SILENCE_STOP_SECONDS, or can hear nothing more because
+# what listens or transcribes has failed: the app stops it.
 _SILENCE_METHOD = "dictation.silence"
 
-# What goes on a session's queue besides frames.
+# What goes on a session's queues besides frames and stretches of speech: the last item of each.
 _FLUSH = object()  # the recording is over: finish and transcribe what is left
 _CANCEL = object()  # throw it all away
+# The threads of a session: the listener and the transcriber.
+_THREADS = 2
 
 
 class SegmenterLike(Protocol):
@@ -163,25 +175,28 @@ class _Session:
         self.state = "starting"
         self.cancelled = False
         self.ready = asyncio.Event()  # set when the start has finished, well or not
-        self.done: asyncio.Future[None] = loop.create_future()  # set when the worker has exited
+        self.done: asyncio.Future[None] = loop.create_future()  # set when both threads have exited
 
         self.recorder: Recorder | None = None
         self.recorder_open = False
         self.segmenter: SegmenterLike | None = None
-        self.worker: threading.Thread | None = None
-        self.worker_told = False
+        self.listener: threading.Thread | None = None
+        self.transcriber: threading.Thread | None = None
+        self.listener_told = False
         self.watch: asyncio.Task[None] | None = None
         self.watch_busy = False  # the watchdog is closing the recorder or cancelling the session
         self.started_at = now  # when the recording began, on the service's clock
         self.stalled = False
-        # When the app was told that the recording has gone silent (`dictation.silence`), on the
-        # service's clock; None until then. The loop's.
+        # When the app was told to stop the recording (`dictation.silence`: it has gone silent, or
+        # cannot hear any more), on the service's clock; None until then. The loop's.
         self.silence_told_at: float | None = None
         self.close_lock = asyncio.Lock()
         self.hints: list[str] = []
 
-        # The audio thread's, under `lock`. `queue` is thread-safe by itself.
+        # The audio thread's, under `lock`. The queues are thread-safe by themselves: `queue` takes
+        # the frames to the listener, `segments` the stretches of speech to the transcriber.
         self.queue: queue.SimpleQueue[Any] = queue.SimpleQueue()
+        self.segments: queue.SimpleQueue[Any] = queue.SimpleQueue()
         self.lock = threading.Lock()
         self.closed = False  # the recorder is closed: late frames are dropped
         self.levels_on = True
@@ -189,29 +204,35 @@ class _Session:
         self.peak = 0.0  # the loudest block so far, as an RMS amplitude (audio.rms)
         self.last_frame_at = now
         self.last_level_at = -float("inf")
-        # The segments the segmenter has cut and how many of them have been transcribed (or given
-        # up on), and whether the last stretch has been cut (the segmenter was flushed). Written
-        # by the worker, read by the loop for `dictation.progress`, which goes out once the stop
-        # has asked for it (`reporting`).
+        # The segments the segmenter has cut (the listener's count) and how many of them have been
+        # transcribed or given up on (the transcriber's), and whether the last stretch has been cut
+        # (the segmenter was flushed). Under `lock`; read by the loop for `dictation.progress`,
+        # which goes out once the stop has asked for it (`reporting`).
         self.found = 0
         self.finished = 0
         self.flushed = False
         self.reporting = False
         self.last_progress: tuple[str, int, int] | None = None  # the loop's
 
-        # The worker's; the loop reads them once `done` is set.
+        # The threads that have not exited yet, under `lock`: the last one sets `done`.
+        self.threads_left = _THREADS
+
+        # The loop reads these once `done` is set. The transcriber's:
         self.engine: SttEngine | None = None
         self.texts: list[str] = []
         self.stt_used: list[str] = []  # the model that heard each segment, in order
+        # The listener's:
         self.fed_any = False
         self.heard_silence = False  # the segmenter has gone SILENCE_STOP_SECONDS without speech
+        # Either thread's, under `lock`:
         self.failure: Exception | None = None  # the first thing that went wrong
         self.fatal = False  # ... and it was one that ends the session's work
 
     def fail(self, error: Exception, *, fatal: bool) -> None:
-        if self.failure is None or _is_no_local_model(error):
-            self.failure = error
-        self.fatal = self.fatal or fatal
+        with self.lock:
+            if self.failure is None or _is_no_local_model(error):
+                self.failure = error
+            self.fatal = self.fatal or fatal
 
 
 def _is_no_local_model(error: Exception) -> bool:
@@ -306,7 +327,8 @@ class DictationService:
         self._clock = clock
         self._on_idle = on_idle
         self._session: _Session | None = None
-        # Cancelled sessions whose worker has not exited yet (it may be inside the engine).
+        # Cancelled sessions whose threads have not exited yet (the transcriber may be inside the
+        # engine).
         self._retiring: list[_Session] = []
         # Sessions that were stopped and whose text the brain is cleaning, by id. The service is
         # idle by then, but a cancel for one of them still has something to cancel.
@@ -375,10 +397,20 @@ class DictationService:
         session.recorder_open = True
         session.started_at = session.last_frame_at = self._clock()
         self._check_not_cancelled(session)
-        session.worker = threading.Thread(
-            target=self._run, args=(session,), name=f"raphael-dictation-{session.id}", daemon=True
+        session.listener = threading.Thread(
+            target=self._run,
+            args=(session, self._listen),
+            name=f"raphael-dictation-{session.id}-listen",
+            daemon=True,
         )
-        session.worker.start()
+        session.transcriber = threading.Thread(
+            target=self._run,
+            args=(session, self._transcribe_all),
+            name=f"raphael-dictation-{session.id}-transcribe",
+            daemon=True,
+        )
+        session.listener.start()
+        session.transcriber.start()
         session.watch = asyncio.create_task(self._watchdog(session))
         session.state = "recording"
 
@@ -421,18 +453,19 @@ class DictationService:
         now = self._clock()
         with session.lock:
             session.last_frame_at = now
-            if session.closed or frames.size == 0:
+            # A session that can hear no more keeps nothing: it is about to be stopped.
+            if session.closed or session.fatal or frames.size == 0:
                 return
             session.received += frames.size
             session.peak = max(session.peak, self._rms(frames))
             send_level = session.levels_on and now - session.last_level_at >= self._level_interval
             if send_level:
                 session.last_level_at = now
-        # The worker takes them off as they come, and lets them go once the segmenter has them.
+        # The listener takes them off as they come, and lets them go once the segmenter has them.
         session.queue.put(frames)
         if send_level:
-            # Here and not in the worker: that one can be inside the engine for seconds, and the
-            # ring that shows the level should keep moving while the user is still talking.
+            # Here and not on a session's thread: the listener may be waiting for the detector to
+            # load, and the ring that shows the level should keep moving while the user talks.
             self._call_on_loop(
                 session,
                 self._router.notify,
@@ -447,31 +480,49 @@ class DictationService:
         except RuntimeError:  # the loop is closed: the process is going down
             pass
 
-    # --- the worker thread ----------------------------------------------------------------------
+    # --- the listener and the transcriber -------------------------------------------------------
 
-    def _run(self, session: _Session) -> None:
+    def _run(self, session: _Session, work: Callable[[_Session], None]) -> None:
         try:
-            self._work(session)
+            work(session)
         except BaseException as exc:
-            logger.exception("The dictation worker failed")
-            session.fail(exc if isinstance(exc, Exception) else RuntimeError(str(exc)), fatal=True)
+            logger.exception("A dictation thread failed")
+            error = exc if isinstance(exc, Exception) else RuntimeError(str(exc))
+            self._fail_for_good(session, error)
         finally:
-            self._call_on_loop(session, self._set_done, session)
+            with session.lock:
+                session.threads_left -= 1
+                last = session.threads_left == 0
+            if last:
+                self._call_on_loop(session, self._set_done, session)
 
     @staticmethod
     def _set_done(session: _Session) -> None:
         if not session.done.done():
             session.done.set_result(None)
 
-    def _work(self, session: _Session) -> None:
-        while True:
-            item = session.queue.get()
-            if item is _FLUSH or item is _CANCEL:
-                break
-            if session.cancelled or session.fatal:
-                continue  # drained, so the queue does not grow
-            self._feed(session, item)
-        self._finish(session, transcribe=item is _FLUSH)
+    def _fail_for_good(self, session: _Session, error: Exception) -> None:
+        """A failure that ends the session's work: what it hears from now on is thrown away, and
+        the app is asked to stop it (`_tell_silence`), so that its stop says what went wrong."""
+        session.fail(error, fatal=True)
+        self._call_on_loop(session, self._tell_silence, session, True)
+
+    def _listen(self, session: _Session) -> None:
+        """The listener: frames into the segmenter, as they come, until the recording is over."""
+        end: object = _CANCEL
+        try:
+            while True:
+                item = session.queue.get()
+                if item is _FLUSH or item is _CANCEL:
+                    end = item
+                    break
+                if session.cancelled or session.fatal:
+                    continue  # drained, so the queue does not grow
+                self._feed(session, item)
+            self._finish(session, transcribe=end is _FLUSH)
+        finally:
+            # Whatever happened, the transcriber is told that nothing more is coming.
+            session.segments.put(end)
 
     def _feed(self, session: _Session, frames: np.ndarray) -> None:
         assert session.segmenter is not None
@@ -480,18 +531,17 @@ class DictationService:
             segments = session.segmenter.accept(frames)
         except Exception as exc:
             logger.exception("The voice activity detector failed")
-            session.fail(exc, fatal=True)
+            self._fail_for_good(session, exc)
             return
         with session.lock:
             session.found += len(segments)
-        self._look_for_silence(session)
         for segment in segments:
-            self._transcribe(session, segment)
-            self._segment_done(session)
+            session.segments.put(segment)
+        self._look_for_silence(session)
 
     def _look_for_silence(self, session: _Session) -> None:
         """Tell the loop, once, that the segmenter has heard no speech for SILENCE_STOP_SECONDS.
-        Before the stretches that ended are transcribed, so a slow engine does not hold it up."""
+        The listener counts it from the audio as it comes, however long the transcriber takes."""
         assert session.segmenter is not None
         if session.heard_silence:
             return
@@ -499,10 +549,11 @@ class DictationService:
             session.heard_silence = True
             self._call_on_loop(session, self._tell_silence, session)
 
-    def _tell_silence(self, session: _Session) -> None:
-        """On the loop: `dictation.silence`, so the app stops the session as the key would. Once a
-        session, and only while it is still the one recording: one that is being stopped or was
-        cancelled meanwhile has nothing to stop."""
+    def _tell_silence(self, session: _Session, failed: bool = False) -> None:
+        """On the loop: `dictation.silence`, so the app stops the session as the key would, because
+        it has heard no speech for SILENCE_STOP_SECONDS or, if `failed`, because it can hear
+        nothing more. Once a session, and only while it is still the one recording: one that is
+        being stopped or was cancelled meanwhile has nothing to stop."""
         if (
             session.silence_told_at is not None
             or session.state != "recording"
@@ -511,7 +562,10 @@ class DictationService:
         ):
             return
         session.silence_told_at = self._clock()
-        logger.info("No speech for %g s: the dictation ends", SILENCE_STOP_SECONDS)
+        if failed:
+            logger.warning("The dictation can hear nothing more: it ends")
+        else:
+            logger.info("No speech for %g s: the dictation ends", SILENCE_STOP_SECONDS)
         self._router.notify(_SILENCE_METHOD, {"session_id": session.id})
 
     def _finish(self, session: _Session, *, transcribe: bool) -> None:
@@ -528,24 +582,35 @@ class DictationService:
             with session.lock:
                 session.found += len(rest)
                 session.flushed = True
-            self._report_from_worker(session)
+            self._report_progress(session)
             for segment in rest:
-                self._transcribe(session, segment)
-                self._segment_done(session)
+                session.segments.put(segment)
+
+    def _transcribe_all(self, session: _Session) -> None:
+        """The transcriber: each stretch of speech in the order it was cut, until the listener says
+        there is no more. A stretch is let go once it has been transcribed."""
+        while True:
+            segment = session.segments.get()
+            if segment is _FLUSH or segment is _CANCEL:
+                return
+            self._transcribe(session, segment)
+            del segment
+            self._segment_done(session)
 
     def _segment_done(self, session: _Session) -> None:
         with session.lock:
             session.finished += 1
-        self._report_from_worker(session)
+        self._report_progress(session)
 
-    def _report_from_worker(self, session: _Session) -> None:
+    def _report_progress(self, session: _Session) -> None:
         """Send the transcription's progress, if the stop has asked for it. The counts are taken
-        here, under the lock, so the messages go out in the order the work was done."""
+        and handed to the loop under the lock, so that the messages of the two threads go out in
+        the order the work was done."""
         with session.lock:
             if not session.reporting:
                 return
             counts = self._counts(session)
-        self._call_on_loop(session, self._send_progress, session, "transcribing", *counts)
+            self._call_on_loop(session, self._send_progress, session, "transcribing", *counts)
 
     @staticmethod
     def _counts(session: _Session) -> tuple[int, int, float]:
@@ -581,7 +646,7 @@ class DictationService:
                 session.engine = self._engine_provider()
             except Exception as exc:
                 logger.exception("The speech-to-text engine is not available")
-                session.fail(exc, fatal=True)
+                self._fail_for_good(session, exc)
                 return
         try:
             text = session.engine.transcribe(segment, hints=session.hints)
@@ -610,8 +675,9 @@ class DictationService:
         of the silence (`dictation.silence`) all the same, and its stop says what became of the
         microphone.
 
-        A session the app was told of the silence of and that nobody has stopped or cancelled for
-        LOST_SESSION_SECONDS since is cancelled, the way `dictation.cancel` would, and the
+        A session the app was told to stop (`dictation.silence`, for its silence or because it can
+        hear nothing more) and that nobody has stopped or cancelled for LOST_SESSION_SECONDS since
+        is cancelled, the way `dictation.cancel` would, and the
         microphone closed.
         """
         while session.state == "recording" and not session.cancelled:
@@ -622,8 +688,8 @@ class DictationService:
             told = session.silence_told_at
             if told is not None and now - told >= LOST_SESSION_SECONDS:
                 logger.warning(
-                    "The dictation session %r is lost: it was silent and %g s later it has had "
-                    "no stop or cancel; cancelling it and closing the microphone",
+                    "The dictation session %r is lost: the app was told to stop it and %g s later "
+                    "it has had no stop or cancel; cancelling it and closing the microphone",
                     session.id,
                     now - told,
                 )
@@ -684,7 +750,7 @@ class DictationService:
             await self._close_recorder(session)  # the last frames arrive before it returns
             with session.lock:
                 session.closed = True
-            self._tell_worker(session, _FLUSH)
+            self._tell_listener(session, _FLUSH)
             await asyncio.wait([session.done])
         except BaseException:
             self._abandon(session)
@@ -839,8 +905,8 @@ class DictationService:
             raise
         with session.lock:
             session.closed = True
-        self._tell_worker(session, _CANCEL)
-        if session.worker is not None and session not in self._retiring:
+        self._tell_listener(session, _CANCEL)
+        if session.listener is not None and session not in self._retiring:
             self._retiring.append(session)
         self._end(session)
 
@@ -861,10 +927,11 @@ class DictationService:
         except Exception:
             logger.exception("The microphone did not stop cleanly")
 
-    def _tell_worker(self, session: _Session, signal: object) -> None:
-        """Send the worker its last item. Only the first counts."""
-        if session.worker is not None and not session.worker_told:
-            session.worker_told = True
+    def _tell_listener(self, session: _Session, signal: object) -> None:
+        """Send the listener its last item, which it hands on to the transcriber. Only the first
+        counts."""
+        if session.listener is not None and not session.listener_told:
+            session.listener_told = True
             session.queue.put(signal)
 
     def _end(self, session: _Session) -> None:
@@ -884,7 +951,7 @@ class DictationService:
         await self._close_recorder(session)
         with session.lock:
             session.closed = True
-        self._tell_worker(session, _CANCEL)
+        self._tell_listener(session, _CANCEL)
         self._end(session)
 
     def _abandon(self, session: _Session) -> None:
@@ -901,7 +968,7 @@ class DictationService:
             # Fire and forget, like `_close_late`: the request that is being abandoned must not
             # hold up the loop for as long as the microphone takes to close.
             session.loop.run_in_executor(None, self._stop_recorder, session.recorder)
-        self._tell_worker(session, _CANCEL)
-        if session.worker is not None and session not in self._retiring:
+        self._tell_listener(session, _CANCEL)
+        if session.listener is not None and session not in self._retiring:
             self._retiring.append(session)
         self._end(session)
