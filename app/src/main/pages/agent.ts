@@ -3,7 +3,8 @@
 // a time: what the person said, what Raphael did in between and what it answered. The page follows
 // along while it is open: a turn written or completed (`AgentTurn`) and a background task that took
 // a step (`WorkerChanged`) bring the newest turns again, and a task under way can be stopped here.
-// The conversations are had by voice or in a chat app: this page only shows them.
+// The conversations are had by voice or in a chat app: this page only shows them. Raphael's own
+// settings (her key, the weather city, Telegram) open in a sheet from the sliders button at the top.
 
 import { onLocaleChange, t } from "../i18n";
 
@@ -26,8 +27,9 @@ import {
   timelineHTML,
   wantsRefresh,
 } from "../timeline";
+import { createRaphaelSheet, iconButton } from "../raphael-sheet";
 import type { AgentTurn, AppContext, Page } from "../types";
-import { btn, esc, keys, toaster } from "../ui";
+import { esc, ico, keys, toaster } from "../ui";
 import "../agent.css";
 
 /** How many turns one load brings. */
@@ -36,6 +38,8 @@ const PAGE_SIZE = 50;
 const BOTTOM_SLACK_PX = 80;
 /** Events that come together (a task's step and its turn) bring the turns once. */
 const REFRESH_DELAY_MS = 150;
+/** How long 「清除對話」 waits for its second press. */
+const CLEAR_CONFIRM_MS = 4000;
 
 export function createAgent(app: AppContext): Page {
   const el = document.createElement("div");
@@ -43,9 +47,12 @@ export function createAgent(app: AppContext): Page {
   el.dataset.page = "agent";
   el.hidden = true;
   el.innerHTML =
-    `<div class="page-head"><h1>${esc(t("agent.title"))}</h1>${btn(t("agent.clear"), "sm", ' data-act="clear" hidden')}</div>` +
+    `<div class="page-head"><h1>${esc(t("agent.title"))}</h1><div class="ra-tools">` +
+    `<button type="button" class="btn icon ra-clear" data-act="clear" hidden></button>` +
+    iconButton("sliders", t("agent.settings"), ' data-act="settings" aria-haspopup="dialog"') +
+    `</div></div>` +
     `<div class="agent-body" hidden>` +
-    `<nav class="sess-pane"><div class="sess-list"></div><div class="more" hidden>${btn(t("agent.earlier"), "sm", ' data-act="earlier"')}</div></nav>` +
+    `<nav class="sess-pane"><div class="sess-list"></div><div class="more" hidden>${iconButton("down", t("agent.earlier"), ' data-act="earlier"')}</div></nav>` +
     `<section class="tl-pane"><div class="tl-col"></div></section>` +
     `</div>` +
     `<div class="agent-wait"></div>` +
@@ -60,6 +67,9 @@ export function createAgent(app: AppContext): Page {
   const column = el.querySelector<HTMLElement>(".tl-col")!;
   const wait = el.querySelector<HTMLElement>(".agent-wait")!;
   const empty = el.querySelector<HTMLElement>(".empty")!;
+  const settingsButton = el.querySelector<HTMLElement>('[data-act="settings"]')!;
+  const sheet = createRaphaelSheet(app, () => settingsButton);
+  el.append(sheet.el);
 
   /** What is loaded, newest first. */
   let turns: AgentTurn[] = [];
@@ -79,6 +89,9 @@ export function createAgent(app: AppContext): Page {
   /** While the toast of 「清除對話」 waits: the turns up to this id are left out. */
   let clearedUpTo = 0;
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 「清除對話」 was pressed once: a second press within a few seconds clears. */
+  let confirmingClear = false;
+  let clearTimer: ReturnType<typeof setTimeout> | undefined;
   let ticker: ReturnType<typeof setInterval> | null = null;
 
   const atBottom = (): boolean => pane.scrollHeight - pane.scrollTop - pane.clientHeight <= BOTTOM_SLACK_PX;
@@ -89,13 +102,23 @@ export function createAgent(app: AppContext): Page {
     return sessionWith(sessions, anchor) ?? sessions[0];
   }
 
+  /** Nothing yet: the picture and the keys that start a conversation; no sentence unless there are no keys. */
   function emptyHTML(): string {
     if (failure) return `<div class="say">${esc(t("agent.loadFailed"))}</div><p>${esc(failure())}</p>`;
     const binding = app.device().agent_keys?.[0];
     const how = binding
-      ? `<p class="how">${esc(t("agent.emptyBefore"))}${keys(bindingLabels(binding))}${esc(t("agent.emptyAfter"))}</p>`
+      ? `<p class="how" title="${esc(t("agent.emptyHint"))}"><span class="sr">${esc(t("agent.emptyHint"))}</span>${ico("mic")}${keys(bindingLabels(binding))}</p>`
       : `<p class="how">${esc(t("agent.emptyNoKeys"))}</p>`;
-    return `${EMPTY_ART}<div class="say">${esc(t("agent.empty"))}</div>${how}`;
+    return `${EMPTY_ART}${how}`;
+  }
+
+  /** The trash button: an icon, and the words of the question while it waits for the second press. */
+  function drawClear(): void {
+    const label = confirmingClear ? t("agent.clearConfirm") : t("agent.clear");
+    clearButton.classList.toggle("is-confirm", confirmingClear);
+    clearButton.setAttribute("aria-label", label);
+    clearButton.title = label;
+    clearButton.innerHTML = ico("trash") + (confirmingClear ? `<span>${esc(label)}</span>` : "");
   }
 
   function render(): void {
@@ -227,10 +250,23 @@ export function createAgent(app: AppContext): Page {
     if (focus) list.querySelector<HTMLElement>(`.sess[data-key="${CSS.escape(session.key)}"]`)?.focus();
   }
 
-  /** 「清除對話」: the turns go from the page at once and from the core when the toast has run out. */
+  /** 「清除對話」: a first press asks; the second clears the page at once and the core when the toast has run out. */
   function clearAll(): void {
     const shown = shownTurns();
     if (shown.length === 0) return;
+    if (!confirmingClear) {
+      confirmingClear = true;
+      drawClear();
+      clearTimeout(clearTimer);
+      clearTimer = setTimeout(() => {
+        confirmingClear = false;
+        drawClear();
+      }, CLEAR_CONFIRM_MS);
+      return;
+    }
+    clearTimeout(clearTimer);
+    confirmingClear = false;
+    drawClear();
     clearedUpTo = Math.max(...shown.map((turn) => turn.id));
     render();
     app.undo.begin({
@@ -291,6 +327,9 @@ export function createAgent(app: AppContext): Page {
       case "clear":
         clearAll();
         break;
+      case "settings":
+        sheet.open();
+        break;
       case "earlier":
         void load(true);
         break;
@@ -327,13 +366,17 @@ export function createAgent(app: AppContext): Page {
 
   onLocaleChange(() => {
     heading.textContent = t("agent.title");
-    clearButton.textContent = t("agent.clear");
-    more.querySelector("button")!.textContent = t("agent.earlier");
+    drawClear();
+    for (const [button, label] of [[settingsButton, t("agent.settings")], [more.querySelector<HTMLElement>("button")!, t("agent.earlier")]] as const) {
+      button.setAttribute("aria-label", label);
+      button.title = label;
+    }
     nav.setAttribute("aria-label", t("agent.sessions"));
     drawnKey = null;
     render();
   });
   nav.setAttribute("aria-label", t("agent.sessions"));
+  drawClear();
 
   return {
     id: "agent",
@@ -347,6 +390,10 @@ export function createAgent(app: AppContext): Page {
     },
     hide() {
       visible = false;
+      sheet.close();
+      clearTimeout(clearTimer);
+      confirmingClear = false;
+      drawClear();
       loads++;
       stopTicker();
       if (refreshTimer !== null) clearTimeout(refreshTimer);
