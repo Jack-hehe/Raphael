@@ -61,6 +61,7 @@ use tokio::task::JoinHandle;
 
 use crate::agent::{self, Reply};
 use crate::background::ReportStage;
+use crate::commands::DictationPhase;
 use crate::device_settings::DictationMode;
 use crate::holdtap::{Action, HoldTap};
 use crate::hotkey::{CancelSwitch, HotkeyEvent};
@@ -225,6 +226,10 @@ impl State {
     }
 }
 
+/// Told where a dictation (`agent` false) or a question to Raphael (`agent` true) is: the first-run
+/// guide's lessons follow it. Only the phase, never what was said.
+pub type PhaseReport = Arc<dyn Fn(DictationPhase, bool) + Send + Sync>;
+
 /// The dictation controller. Cheap to clone: the clones share their state.
 pub struct DictationController<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> {
     core: Arc<C>,
@@ -242,6 +247,8 @@ pub struct DictationController<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSw
     /// Told of each dictation that was pasted and each that starts: learns from the user's
     /// corrections (`learn`).
     after_paste: Option<Arc<dyn AfterPaste>>,
+    /// Told of each phase a session reaches (see [`PhaseReport`]).
+    phase_report: Option<PhaseReport>,
 }
 
 impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Clone
@@ -258,6 +265,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Clone
             state: self.state.clone(),
             transitions: self.transitions.clone(),
             after_paste: self.after_paste.clone(),
+            phase_report: self.phase_report.clone(),
         }
     }
 }
@@ -294,6 +302,20 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             })),
             transitions: Arc::new(Mutex::new(())),
             after_paste: None,
+            phase_report: None,
+        }
+    }
+
+    /// The controller, telling `report` where each session is.
+    pub fn with_phase_report(mut self, report: PhaseReport) -> Self {
+        self.phase_report = Some(report);
+        self
+    }
+
+    /// Tells the report, if there is one, that a dictation or question reached `phase`.
+    fn tell(&self, phase: DictationPhase, agent: bool) {
+        if let Some(report) = &self.phase_report {
+            report(phase, agent);
         }
     }
 
@@ -510,6 +532,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 .greet(notices::GREETING.text(&self.language.get())),
             Kind::Dictation => self.overlay.show(Mode::Listening),
         }
+        self.tell(DictationPhase::Listening, kind == Kind::Agent);
 
         let this = self.clone();
         Some(tokio::spawn(async move {
@@ -555,7 +578,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             if matches!(err.code, BUSY | TIMEOUT) && this.is_current(&id) {
                 recovery_cancel(this.core.as_ref()).await;
             }
-            this.finish(&id, |this| this.show_failure(&err));
+            this.finish(&id, |this| this.show_failure(&err, kind == Kind::Agent));
             // Only now: a stop or cancel waiting for this answer has nothing left to stop.
             answered.send_replace(Started::Failed);
         }))
@@ -575,6 +598,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         // The window to paste into is the one that has focus when the key is released.
         let target = self.paster.foreground();
         self.overlay.set_mode(Mode::Thinking);
+        self.tell(DictationPhase::Processing, false);
 
         let this = self.clone();
         Some(tokio::spawn(async move {
@@ -608,7 +632,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 Ok(reply) => reply,
                 Err(err) => {
                     log::warn!("dictation.stop failed: {err}");
-                    this.finish(&id, |this| this.show_failure(&err));
+                    this.finish(&id, |this| this.show_failure(&err, false));
                     return;
                 }
             };
@@ -622,10 +646,16 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                     .unwrap_or(false);
                 if silent {
                     log::info!("the dictation has no text and the microphone was silent");
-                    this.finish(&id, |this| this.show(notices::NO_SOUND));
+                    this.finish(&id, |this| {
+                        this.tell(DictationPhase::Failed, false);
+                        this.show(notices::NO_SOUND);
+                    });
                 } else {
                     log::info!("the dictation has no text; nothing to paste");
-                    this.finish(&id, |this| this.overlay.hide());
+                    this.finish(&id, |this| {
+                        this.tell(DictationPhase::Failed, false);
+                        this.overlay.hide();
+                    });
                 }
                 return;
             }
@@ -646,6 +676,17 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 .deliver(text.to_owned(), target.clone(), Some(&id))
                 .await;
             this.finish(&id, |this| {
+                let pasted = delivery
+                    .as_ref()
+                    .is_some_and(|item| item.outcome == PasteOutcome::Pasted);
+                this.tell(
+                    if pasted {
+                        DictationPhase::Pasted
+                    } else {
+                        DictationPhase::Failed
+                    },
+                    false,
+                );
                 let fallback = this.first_time(notices::notice_for_fallback(reason.as_deref()));
                 this.report(delivery.as_ref(), fallback, true);
                 this.learn_after_paste(text, target.as_ref(), delivery);
@@ -718,6 +759,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             }
         );
         self.overlay.hide();
+        self.tell(DictationPhase::Cancelled, stage.is_some());
         let session = session?;
         let core = self.core.clone();
         Some(tokio::spawn(async move {
@@ -890,7 +932,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
 
     /// The end of a dictation whose `dictation.start` or `dictation.stop` failed: Raphael's
     /// notice for the errors the user can do something about, a plain hide for the others.
-    fn show_failure(&self, err: &RpcError) {
+    fn show_failure(&self, err: &RpcError, agent: bool) {
+        self.tell(DictationPhase::Failed, agent);
         match self.failure_notice(err) {
             Some(notice) => self.show(notice),
             None => self.overlay.hide(),
@@ -1023,6 +1066,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         // analysis, in the interface language, change in its place until the answer.
         self.overlay
             .think_quietly(notices::WAITING.lines(&self.language.get()));
+        self.tell(DictationPhase::Processing, true);
 
         let this = self.clone();
         Some(tokio::spawn(async move {
@@ -1060,7 +1104,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             Ok(transcript) => transcript,
             Err(err) => {
                 log::warn!("dictation.stop failed: {err}");
-                self.finish(&id, |this| this.show_failure(&err));
+                self.finish(&id, |this| this.show_failure(&err, true));
                 return;
             }
         };
@@ -1077,10 +1121,16 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 .unwrap_or(false);
             if silent {
                 log::info!("the question has no text and the microphone was silent");
-                self.finish(&id, |this| this.show(notices::NO_SOUND));
+                self.finish(&id, |this| {
+                    this.tell(DictationPhase::Failed, true);
+                    this.show(notices::NO_SOUND);
+                });
             } else {
                 log::info!("the question has no text; nothing to ask");
-                self.finish(&id, |this| this.overlay.hide());
+                self.finish(&id, |this| {
+                    this.tell(DictationPhase::Failed, true);
+                    this.overlay.hide();
+                });
             }
             return;
         }
@@ -1653,6 +1703,12 @@ mod app {
                         mode,
                     )
                     .with_language(language.clone())
+                    .with_phase_report(Arc::new(|phase, agent| {
+                        crate::commands::tell_main_window(crate::commands::MainEvent::Dictation {
+                            phase,
+                            agent,
+                        });
+                    }))
                     .with_after_paste(Arc::new(learner))
                     .with_media(Arc::new(WindowsMedia::start())),
                 )
@@ -1695,21 +1751,26 @@ mod app {
         loop {
             tokio::select! {
                 event = next(&mut hotkey_events) => match event {
-                    Some(event) => match &controller {
-                        // The task runs by itself; nothing waits for it.
-                        Some(controller) => drop(controller.on_hotkey(event, now_ms())),
-                        None => {
-                            log::info!("hotkey {event:?} ignored: the core is not running");
-                            if matches!(
-                                event,
-                                HotkeyEvent::DictationDown | HotkeyEvent::AgentDown
-                            ) && !told_no_core
-                            {
-                                told_no_core = true;
-                                overlay.notice(notices::CORE_DOWN.text(&language.get()));
+                    Some(event) => {
+                        // The guide hears every key; while it practises, only Esc goes on.
+                        let acts = crate::commands::report_hotkey(event);
+                        match &controller {
+                            // The task runs by itself; nothing waits for it.
+                            Some(controller) if acts => drop(controller.on_hotkey(event, now_ms())),
+                            Some(_) => log::debug!("hotkey {event:?} only reported: the guide practises"),
+                            None => {
+                                log::info!("hotkey {event:?} ignored: the core is not running");
+                                if matches!(
+                                    event,
+                                    HotkeyEvent::DictationDown | HotkeyEvent::AgentDown
+                                ) && !told_no_core
+                                {
+                                    told_no_core = true;
+                                    overlay.notice(notices::CORE_DOWN.text(&language.get()));
+                                }
                             }
                         }
-                    },
+                    }
                     None => hotkey_events = None,
                 },
                 notification = next_notification(&mut notifications) => {
@@ -6556,5 +6617,96 @@ mod tests {
         assert!(!stole_focus(Some(&other), Some(&other), 99));
         assert!(!stole_focus(Some(&other), None, 99));
         assert!(!stole_focus(None, None, 99));
+    }
+
+    // ---------- the first-run guide hears where a session is ----------
+
+    use crate::commands::DictationPhase as Phased;
+
+    /// A controller that writes every phase it reaches into the list returned with it.
+    fn reporting(core: FakeCore, paster: FakePaster) -> (Ctl, Arc<Mutex<Vec<(Phased, bool)>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let c = controller(core, paster).with_phase_report(Arc::new(move |phase, agent| {
+            sink.lock().unwrap().push((phase, agent));
+        }));
+        (c, seen)
+    }
+
+    #[tokio::test]
+    async fn a_pasted_dictation_goes_listening_processing_pasted() {
+        let (c, seen) = reporting(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("Code.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        assert_eq!(*seen.lock().unwrap(), [(Phased::Listening, false)]);
+        run(&c, DictationUp, 900).await;
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                (Phased::Listening, false),
+                (Phased::Processing, false),
+                (Phased::Pasted, false)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn text_that_was_only_copied_is_not_a_paste() {
+        let (c, seen) = reporting(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::copying("Code.exe", CopyReason::Elevated),
+        );
+        run(&c, DictationDown, 0).await;
+        run(&c, DictationUp, 900).await;
+        assert_eq!(seen.lock().unwrap().last(), Some(&(Phased::Failed, false)));
+    }
+
+    #[tokio::test]
+    async fn a_dictation_without_text_or_cancelled_says_so() {
+        let (c, seen) = reporting(
+            FakeCore::with("dictation.stop", stop_result("", None)),
+            FakePaster::pasting("Code.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        run(&c, DictationUp, 900).await;
+        assert_eq!(seen.lock().unwrap().last(), Some(&(Phased::Failed, false)));
+
+        let (c, seen) = reporting(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("Code.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        run(&c, Cancel, 400).await;
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [(Phased::Listening, false), (Phased::Cancelled, false)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_question_is_reported_as_the_agent_s() {
+        let core = agent_core(answer("答", "好"));
+        let (c, seen) = reporting(core, FakePaster::pasting("chrome.exe"));
+        ask_aloud(&c).await;
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [(Phased::Listening, true), (Phased::Processing, true)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_is_reported_failed() {
+        let (c, seen) = reporting(
+            FakeCore::failing(
+                "dictation.start",
+                RpcError::new(NO_MICROPHONE, "no".to_owned()),
+            ),
+            FakePaster::pasting("Code.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        settle().await;
+        assert_eq!(seen.lock().unwrap().last(), Some(&(Phased::Failed, false)));
     }
 }
