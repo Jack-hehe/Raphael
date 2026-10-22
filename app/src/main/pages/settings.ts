@@ -69,7 +69,6 @@ import {
   modelPickerLook,
   paneHTML,
   paneListHTML,
-  computerAppsWithout,
   localView,
   priceTexts,
   retentionChoices,
@@ -743,6 +742,15 @@ export function createSettings(app: AppContext): SettingsPage {
     render();
   }
 
+  async function removeComputerApp(exe: string): Promise<void> {
+    try {
+      await app.removeComputerApp(exe);
+    } catch (err) {
+      toaster.info(describeError(err));
+    }
+    render();
+  }
+
   async function submitKey(text: string): Promise<void> {
     const key = text.trim();
     if (!key || keyBusy) return;
@@ -1037,9 +1045,10 @@ export function createSettings(app: AppContext): SettingsPage {
         void checkOpenrouter();
         break;
       case "computer-remove": {
-        // the always-allowed apps that remain are the patch: the app keeps the list whole
+        // one app at a time, taken off under the app's own lock: a list computed from the
+        // settings the window has would put back an app another quick removal takes away
         const exe = target.closest<HTMLElement>("[data-exe]")?.dataset.exe;
-        if (exe !== undefined) void changeDevice({ computer_apps: computerAppsWithout(app.device(), exe) });
+        if (exe !== undefined) void removeComputerApp(exe);
         break;
       }
       case "clear-dictation":

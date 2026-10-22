@@ -13,7 +13,6 @@ import {
   RETENTIONS,
   SEARCH_INDEX,
   computerApps,
-  computerAppsWithout,
   type SettingsView,
   loadingHTML,
   settingsMicrophones,
@@ -660,22 +659,18 @@ describe("電腦操作", () => {
     expect(html).toContain('data-exe="x&quot;.exe"');
   });
 
-  test("removing an app patches computer_apps with the others, in order", () => {
-    const d = { ...device, computer_apps: [EXCEL, CALC] };
-    expect(computerAppsWithout(d, "excel.exe")).toEqual([CALC]);
-    expect(computerAppsWithout(d, "calculatorapp.exe")).toEqual([EXCEL]);
-    expect(computerAppsWithout(d, "nothing.exe")).toEqual([EXCEL, CALC]);
-    // settings from before the feature have none
+  test("settings from before the feature have no always-allowed app", () => {
     const old = { ...device } as Partial<DeviceSettings>;
     delete old.computer_apps;
     expect(computerApps(old as DeviceSettings)).toEqual([]);
-    expect(computerAppsWithout(old as DeviceSettings, "excel.exe")).toEqual([]);
   });
 
-  test("the settings wire the button to that patch", () => {
+  test("the settings wire the button to the removal of that one app, never a whole list", () => {
+    // two apps removed quickly must not compute both lists from the settings the window had
     const source = readFileSync(path.resolve(import.meta.dirname, "settings.ts"), "utf8");
     expect(source).toContain('case "computer-remove"');
-    expect(source).toContain("changeDevice({ computer_apps: computerAppsWithout(app.device(), exe) })");
+    expect(source).toContain("removeComputerApp(exe)");
+    expect(source).not.toContain("computer_apps: computerAppsWithout");
   });
 
   test("the search finds the section by its name in any language", () => {

@@ -205,6 +205,9 @@ export const openLink = (url: string): Promise<void> => invoke("open_link", { ur
 export const deviceSettingsGet = (): Promise<DeviceSettings> => invoke("device_settings_get");
 export const deviceSettingsSet = (patch: Partial<DeviceSettings>): Promise<DeviceSettings> =>
   invoke("device_settings_set", { patch });
+/** Takes one app off the always-allowed list of 電腦操作, under the app's lock on the settings. */
+export const deviceComputerAppRemove = (exe: string): Promise<DeviceSettings> =>
+  invoke("device_computer_app_remove", { exe });
 /** Whether the keyboard layout has an AltGr key (Right Alt types characters). */
 export const keyboardHasAltgr = (): Promise<boolean> => invoke("keyboard_has_altgr");
 /** Pauses the global hotkeys while the page records a new one. */

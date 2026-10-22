@@ -562,10 +562,6 @@ function dictationHTML(v: SettingsView): string {
  */
 export const computerApps = (device: DeviceSettings): readonly { exe: string; name: string }[] => device.computer_apps ?? [];
 
-/** The always-allowed apps that remain when `exe` is taken away: the list a `device_settings_set` patch of `computer_apps` carries. */
-export const computerAppsWithout = (device: DeviceSettings, exe: string): { exe: string; name: string }[] =>
-  computerApps(device).filter((app) => app.exe !== exe);
-
 /**
  * 電腦操作: one row per app Raphael may always operate (its name, and a borderless trash button
  * that takes it away), or a single muted row when there is none. The apps are put there by the

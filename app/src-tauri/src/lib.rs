@@ -132,6 +132,7 @@ pub fn run() {
             commands::core_call,
             commands::device_settings_get,
             commands::device_settings_set,
+            commands::device_computer_app_remove,
             commands::keyboard_has_altgr,
             commands::open_link,
             commands::hotkeys_pause,

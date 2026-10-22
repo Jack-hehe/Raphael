@@ -316,8 +316,8 @@ export interface DeviceSettings {
   /**
    * The apps Raphael may always operate on this PC (the 一律允許 answer of a question), by the
    * executable's file name in lower case (`excel.exe`) and the name to show (`Microsoft Excel`).
-   * Settings written before the feature lack it: read it with `computerApps`. It is changed with
-   * a `device_settings_set` patch holding the whole list that remains.
+   * Settings written before the feature lack it: read it with `computerApps`. An app is taken off
+   * it one at a time, with `device_computer_app_remove`, never with a whole list computed here.
    */
   computer_apps: { exe: string; name: string }[];
 }
@@ -424,6 +424,8 @@ export interface AppContext {
   refreshDevice(): Promise<DeviceSettings>;
   /** Changes some device settings; rejects with the reason. */
   setDevice(patch: Partial<DeviceSettings>): Promise<DeviceSettings>;
+  /** Takes one app off the always-allowed list (`device_computer_app_remove`); rejects with the reason. */
+  removeComputerApp(exe: string): Promise<DeviceSettings>;
   /** Hears the events of the core (microphone level, model download). Returns how to stop hearing. */
   onEvent(handler: (event: MainEvent) => void): () => void;
   /** Things that happen only after 10 seconds, with 「復原」. */
