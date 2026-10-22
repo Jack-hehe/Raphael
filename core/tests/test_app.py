@@ -1951,6 +1951,7 @@ ASSISTANT_METHODS = {
     "agent.confirm",
     "agent.cancel",
     "agent.history.list",
+    "agent.history.search",
     "agent.history.clear",
 }
 

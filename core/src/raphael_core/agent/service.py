@@ -45,11 +45,14 @@ ui_language, target_app}`. The router (Jev, and the language model when Jev fail
 Whatever goes wrong is answered, never raised: no key, the monthly limit reached, no network, a
 model that fails each get a short 否 reason in the user's language, and the commands still work (a
 list of words finds them, `local`). Every paid call is written to the spend with the purpose
-"agent". Every turn is written to the history (`agent.history.list`, `agent.history.clear`), with
+"agent". Every turn is written to the history (`agent.history.list`, `agent.history.search`,
+`agent.history.clear`), with
 its steps (`steps`): each lookup, plugin call and command it made, how it ended, how long it took
 and, when it failed, why in one word. `agent.history.list` gives each turn its steps and, for a turn
 that handed a task to the worker, the task and the worker's steps, so the app can show what happened
-between the question and the answer. `agent.turn {turn_id}` tells the app a turn was written or
+between the question and the answer. `agent.history.search {query, limit}` finds the answered turns
+that hold the words in the whole history (the search of the memory, `AgentHistory.search`), and
+gives them in the same shape. `agent.turn {turn_id}` tells the app a turn was written or
 completed. `agent.ask` takes an optional `source`, where the request came from ("voice", the
 default; "app", typed in the conversation page of the app; or a chat app such as "telegram").
 
@@ -139,6 +142,11 @@ HISTORY_DEFAULT_LIMIT = 50
 # and the request can cross on the pipe), and it is then answered as cancelled, with nothing run.
 CANCELLED_MEMORY_S = 60.0
 HISTORY_MAX_LIMIT = 200
+# The search of the conversation page: how many turns it gives, by default and at most, and the
+# longest words it takes.
+HISTORY_SEARCH_DEFAULT_LIMIT = 50
+HISTORY_SEARCH_MAX_LIMIT = 100
+HISTORY_QUERY_MAX_CHARS = 200
 # Where a request may come from: a short lower-case word ("voice", "app", "telegram").
 _SOURCE = re.compile(r"[a-z]{1,20}")
 # A question typed in the app's conversation page: asked at this computer, like a spoken one.
@@ -377,12 +385,13 @@ class AgentService:
             return None
 
     def register(self, router: RpcRouter) -> None:
-        """Put the five methods of the assistant on `router`."""
+        """Put the six methods of the assistant on `router`."""
         methods = {
             "agent.ask": self._ask,
             "agent.confirm": self._confirm,
             "agent.cancel": self._cancel,
             "agent.history.list": self._history_list,
+            "agent.history.search": self._history_search,
             "agent.history.clear": self._history_clear,
         }
         for method, handler in methods.items():
@@ -1281,7 +1290,25 @@ class AgentService:
         # A limit is clamped into 1..200: SQLite reads a negative LIMIT as "no limit".
         limit = HISTORY_DEFAULT_LIMIT if limit is None else min(max(limit, 1), HISTORY_MAX_LIMIT)
         self._expire(self._confirmations.sweep())
-        turns = self._history.list(limit=limit, before_id=before_id)
+        return {"turns": self._turn_views(self._history.list(limit=limit, before_id=before_id))}
+
+    async def _history_search(self, params: dict) -> dict:
+        """The answered turns of the whole history that hold the words of `query`, best first, in
+        the shape of `agent.history.list`. `limit` is clamped into 1..100 (50 by default)."""
+        query = _str(params, "query").strip()
+        if not query or len(query) > HISTORY_QUERY_MAX_CHARS:
+            raise invalid_params(f"query must be 1 to {HISTORY_QUERY_MAX_CHARS} characters")
+        limit = _opt_int(params, "limit")
+        if limit is None:
+            limit = HISTORY_SEARCH_DEFAULT_LIMIT
+        limit = min(max(limit, 1), HISTORY_SEARCH_MAX_LIMIT)
+        self._expire(self._confirmations.sweep())
+        turns = self._history.search(query, limit=limit, most=HISTORY_SEARCH_MAX_LIMIT)
+        return {"turns": self._turn_views(turns)}
+
+    def _turn_views(self, turns: list[Turn]) -> list[dict]:
+        """The turns as the app reads them: each with its steps and, for a turn that handed a task
+        to the worker, the task and the steps the worker took for it."""
         ids = [turn.id for turn in turns if turn.id is not None]
         steps = self._history.steps(ids)
         tasks = self._background.tasks_for_turns(ids)
@@ -1308,7 +1335,7 @@ class AgentService:
                     "task": task,
                 }
             )
-        return {"turns": views}
+        return views
 
     async def _history_clear(self, params: dict) -> dict:
         deleted = self._history.clear()

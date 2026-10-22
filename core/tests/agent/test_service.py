@@ -39,6 +39,7 @@ METHODS = [
     "agent.confirm",
     "agent.history.clear",
     "agent.history.list",
+    "agent.history.search",
 ]
 GEOCODING = {
     "results": [
@@ -180,7 +181,7 @@ def rig(make_rig):
 # --- the contract ----------------------------------------------------------------------------------
 
 
-def test_the_five_methods_of_the_assistant_are_registered(rig):
+def test_the_six_methods_of_the_assistant_are_registered(rig):
     assert rig.rpc.methods() == METHODS
 
 
@@ -1429,6 +1430,41 @@ async def test_the_history_gives_fifty_turns_by_default_and_at_most_two_hundred(
     assert len(await rig.turns(limit=1000)) == 200
     assert len(await rig.turns(limit=0)) == 1  # at least one: a limit of 0 or less is not "all"
     assert len(await rig.turns(limit=-5)) == 1
+
+
+async def test_the_history_search_finds_turns_of_the_whole_history_in_the_shape_of_the_list(rig):
+    # The 拉斐爾 page shows only the newest fifty turns; the search must reach behind them.
+    old = rig.seed("下週的出差行程", "排好了。")
+    for n in range(80):
+        rig.seed(f"q{n}", "a")
+    rig.seed("出差要帶什麼", "護照。")
+    found = (await rig.call("agent.history.search", {"query": "出差", "limit": 100}))["turns"]
+    assert {t["question"] for t in found} == {"下週的出差行程", "出差要帶什麼"}
+    assert old in {t["id"] for t in found}
+    listed = (await rig.turns(limit=1))[0]
+    assert set(found[0]) == set(listed)  # the page draws and opens them like any turn
+    # A long run of Chinese that is not found as it is written is looked for by its pairs.
+    assert [t["id"] for t in (await rig.call("agent.history.search", {"query": "上次說的出差行程"}))["turns"]][:1] == [old]
+    assert (await rig.call("agent.history.search", {"query": "找不到的字串"}))["turns"] == []
+
+
+async def test_the_history_search_gives_up_to_a_hundred_turns(rig):
+    for n in range(120):
+        rig.seed(f"會議 {n}", "好。")
+    assert len((await rig.call("agent.history.search", {"query": "會議"}))["turns"]) == 50
+    assert len((await rig.call("agent.history.search", {"query": "會議", "limit": 1000}))["turns"]) == 100
+    assert len((await rig.call("agent.history.search", {"query": "會議", "limit": 0}))["turns"]) == 1
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{}, {"query": ""}, {"query": "   "}, {"query": 5}, {"query": "x" * 201},
+     {"query": "會議", "limit": "5"}, {"query": "會議", "limit": True}, {"query": "會議", "limit": 2.5}],
+)  # fmt: skip
+async def test_the_history_search_checks_its_params(rig, params):
+    with pytest.raises(RpcError) as e:
+        await rig.call("agent.history.search", params)
+    assert e.value.code == INVALID_PARAMS
 
 
 async def test_clearing_the_history_deletes_every_turn_and_counts_them(rig):

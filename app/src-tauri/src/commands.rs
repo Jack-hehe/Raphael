@@ -369,6 +369,26 @@ pub fn is_memory_name(name: &str) -> bool {
         })
 }
 
+/// The longest words the search of the conversation takes, in characters (the core's limit too).
+const HISTORY_QUERY_MAX: usize = 200;
+
+/// The params of `agent.history.search`: a `query` of words (not blank, at most
+/// [`HISTORY_QUERY_MAX`] characters) and, if given, a `limit` that is a whole number of 0 or more
+/// (the core clamps it to its own range).
+fn validate_history_search(params: &Value) -> Result<(), String> {
+    let words = params.get("query").and_then(Value::as_str).map(str::trim);
+    if !words.is_some_and(|words| (1..=HISTORY_QUERY_MAX).contains(&words.chars().count())) {
+        return Err(format!(
+            "agent.history.search needs a query of 1 to {HISTORY_QUERY_MAX} characters"
+        ));
+    }
+    match params.get("limit") {
+        None | Some(Value::Null) => Ok(()),
+        Some(limit) if limit.as_u64().is_some() => Ok(()),
+        Some(_) => Err("agent.history.search takes a whole number as its limit".to_owned()),
+    }
+}
+
 /// The params of a memory method: `name` a memory's name where one is needed, and for
 /// `memory.update` a `body` of text within the limit and, if given, a `description` within its own.
 fn validate_memory_call(method: &str, params: &Value) -> Result<(), String> {
@@ -417,8 +437,8 @@ pub fn is_allowed_method(m: &str) -> bool {
 /// model, a background task's cost cap and a speech-to-text engine, which the core checks as well
 /// (each model against OpenRouter's list), so that the settings page gets these refusals in its
 /// own words. `Err` says what is wrong. The window's `worker.cancel` and `worker.rerun` must name
-/// their task, and the memory's methods a memory by a name that is one, with a text within the
-/// limits. Other calls pass.
+/// their task, the memory's methods a memory by a name that is one, with a text within the
+/// limits, and the search of the conversation its words and a whole limit. Other calls pass.
 pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     if method == "worker.cancel" {
         // Without an id the core stops whichever task runs: the window stops only the one it shows.
@@ -435,6 +455,9 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     }
     if method.starts_with("memory.") {
         return validate_memory_call(method, params);
+    }
+    if method == "agent.history.search" {
+        return validate_history_search(params);
     }
     if method != "settings.set" {
         return Ok(());
@@ -1393,7 +1416,11 @@ mod tests {
     #[test]
     fn the_main_window_reads_the_conversations_but_never_asks_raphael() {
         // The record of the conversations is the main window's to read and clear...
-        for method in ["agent.history.list", "agent.history.clear"] {
+        for method in [
+            "agent.history.list",
+            "agent.history.search",
+            "agent.history.clear",
+        ] {
             assert!(is_allowed_method(method), "{method}");
         }
         // ...and the questions are the controller's alone: the main window cannot ask, approve
@@ -1848,6 +1875,26 @@ mod tests {
         // the core checks each model against OpenRouter's list
         assert!(set("stt_cloud_model", json!("openai/gpt-transcribe")).is_ok());
         assert!(set("stt_cloud_model", json!("deepgram/nova-3")).is_ok());
+    }
+
+    #[test]
+    fn the_search_of_the_conversation_takes_words_and_a_whole_limit() {
+        let search = |params: Value| validate_core_call("agent.history.search", &params);
+        assert!(search(json!({"query": "出差", "limit": 100})).is_ok());
+        assert!(search(json!({"query": "出差"})).is_ok());
+        assert!(search(json!({"query": "x".repeat(200)})).is_ok());
+        for params in [
+            json!({}),
+            json!({"query": ""}),
+            json!({"query": "   "}),
+            json!({"query": 5}),
+            json!({"query": "x".repeat(201)}),
+            json!({"query": "出差", "limit": "5"}),
+            json!({"query": "出差", "limit": 2.5}),
+            json!({"query": "出差", "limit": -1}),
+        ] {
+            assert!(search(params.clone()).is_err(), "{params}");
+        }
     }
 
     #[test]

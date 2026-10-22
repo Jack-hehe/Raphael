@@ -57,7 +57,7 @@ _COLUMNS = (
 )
 _STEP_COLUMNS = "turn_id, kind, tool, server, outcome, ms, reason, at_ms"
 _TURN_COLUMNS = ", ".join(f"t.{name.strip()}" for name in _COLUMNS.split(","))
-# The most turns a search returns.
+# The most turns a search returns to the model (the conversation page asks for more).
 SEARCH_MAX = 10
 
 
@@ -264,16 +264,17 @@ class AgentHistory:
         limit: int = 5,
         since_ms: int | None = None,
         exclude: Sequence[int] = (),
+        most: int = SEARCH_MAX,
     ) -> list[Turn]:
         """The answered turns that hold the words of `query`, best first (BM25, then the newest),
-        at most `limit` (and SEARCH_MAX). Each word is looked for as it is written, a word of two
-        Chinese characters too (`memory.terms`), and a turn that holds any of them is found. A word
-        that is a long run of Chinese and is not found as it is written is looked for by its pairs
-        of characters. `since_ms` keeps the turns made from then on. The turns of `exclude` (the
+        at most `limit` and `most` (SEARCH_MAX for the model, more for the conversation page). Each
+        word is looked for as it is written, a word of two Chinese characters too (`memory.terms`),
+        and a turn that holds any of them is found. A word that is a long run of Chinese and is not
+        found as it is written is looked for by its pairs of characters. `since_ms` keeps the turns made from then on. The turns of `exclude` (the
         ones the model already reads) are left out by the query itself, before the limit, so that
         the older turns behind them are found however many of them match."""
         words = query_words(query)
-        limit = max(1, min(limit, SEARCH_MAX))
+        limit = max(1, min(limit, most))
         if not words:
             return []
         where, params = _filters(since_ms, exclude)
