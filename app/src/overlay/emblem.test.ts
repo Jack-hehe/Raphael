@@ -3,6 +3,7 @@ import {
   AP,
   Emblem,
   BOOST_MAX,
+  OPERATING_SPEEDUP,
   RATE,
   VA,
   canvasSize,
@@ -758,4 +759,41 @@ test("with reduced motion the boost still follows the voice while the ring stand
   expect(e.rot).toBe(0);
   e.set("thinking");
   expect(e.boost).toBe(0);
+});
+
+test("the glyph ring turns 2.5 times faster while Raphael operates an app", () => {
+  const e = new Emblem(fakeCanvas(), 150, { visible: true, rot0: 0 });
+  e.set("operating");
+  expect(e.phase).toBe("operating");
+  e.step(1);
+  expect(e.rot).toBeCloseTo(RATE * 2.5);
+  expect(OPERATING_SPEEDUP).toBe(2.5);
+});
+
+test("operating looks like thinking: the same frame, the same quiet ring", () => {
+  expect(params("operating", 0, 0.3)).toEqual(params("thinking", 0, 0.3));
+  const e = new Emblem(fakeCanvas(), 150, { visible: true });
+  e.level = 0.8;
+  e.set("operating");
+  e.step(1 / 24);
+  expect(e.lvl).toBeCloseTo(0.05);
+});
+
+test("the ring already turns fast while the emblem appears into the operating mode", () => {
+  const e = new Emblem(fakeCanvas(), 150, { rot0: 0 });
+  e.set("operating");
+  e.appear();
+  e.step(0.5);
+  expect(e.phase).toBe("appear");
+  expect(e.rot).toBeCloseTo(0.5 * RATE * 2.5);
+});
+
+test("with reduced motion the operating ring stands still too", () => {
+  vi.stubGlobal("window", { matchMedia: () => ({ matches: true }), devicePixelRatio: 1 });
+  const e = new Emblem(fakeCanvas(), 150, { rot0: 0 });
+  e.set("operating");
+  e.appear();
+  expect(e.phase).toBe("operating");
+  e.step(1);
+  expect(e.rot).toBe(0);
 });

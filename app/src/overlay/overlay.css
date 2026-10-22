@@ -180,6 +180,7 @@ body {
 }
 
 .ask[data-choice="yes"] .ask-yes,
+.ask[data-choice="always"] .ask-always,
 .ask[data-choice="no"] .ask-no {
   opacity: 1;
 }

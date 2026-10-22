@@ -22,9 +22,11 @@
     <div id="subtitles" class="subs" aria-live="polite">
       <div class="sub-line"></div>
     </div>
-    <!-- The two buttons of a question (an `ask` event), under its line. Their words come from the event. -->
+    <!-- The buttons of a question (an `ask` event), under its line: no, always (only a question with the
+         third answer), yes. Their words come from the event. -->
     <div id="ask" class="ask" hidden>
       <button type="button" id="ask-no" class="ask-btn ask-no"></button>
+      <button type="button" id="ask-always" class="ask-btn ask-always" hidden></button>
       <button type="button" id="ask-yes" class="ask-btn ask-yes" data-hold="idle">
         <span class="ask-label"></span>
         <i class="ask-fill" aria-hidden="true"></i>
