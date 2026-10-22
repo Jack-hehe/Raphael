@@ -63,6 +63,7 @@
 .btn.sm.icon.stop { width: 30px; min-height: 30px; padding: 0; border-radius: 999px; color: var(--err); }
 .btn.sm.icon.stop .i { width: 11px; height: 11px; fill: currentColor; }
 .btn.sm.icon.stop:disabled { color: var(--text-3); }
+.btn.sm.rerun { min-height: 30px; padding: 4px 12px; border-radius: 999px; color: var(--text-2); }
 .steps-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.26s cubic-bezier(0.2, 0.7, 0.2, 1); }
 .steps[data-open="true"] .steps-body { grid-template-rows: 1fr; }
 .steps-clip { min-height: 0; overflow: hidden; }

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { setLocale } from "./i18n";
 import { groupSessions, sessionDays } from "./conversation";
 import {
+  forgetReruns,
   formatDuration,
   listMove,
   markSeen,
@@ -78,6 +79,46 @@ describe("a step in words", () => {
     expect(formatDuration(12)).toBe("<0.1 秒"); // a key press: never 0.0
     expect(formatDuration(-5)).toBe("<0.1 秒");
     expect(formatDuration(60)).toBe("0.1 秒");
+  });
+});
+
+describe("running a task that did not finish again", () => {
+  const ended = (state: string): AgentTurn => turn(5, { task: running({ id: 52, state, finished_at_ms: T0 + 5_000 }), steps: [step()] });
+
+  test("a real bordered button for a task that was interrupted, stopped, out of a limit or failed", () => {
+    for (const state of ["interrupted", "cancelled", "limit", "failed"]) {
+      const html = stepsHTML(ended(state), emptyTimelineState());
+      expect(html, state).toContain('<button type="button" class="btn sm rerun" data-act="rerun" data-task="52">重新執行</button>');
+    }
+  });
+
+  test("none for a task that is done, one that is under way, or a turn with no task", () => {
+    for (const task of [running({ id: 52, state: "done", finished_at_ms: T0 + 5_000 }), running({ id: 52 }), running({ id: 52, state: "queued" }), null]) {
+      expect(stepsHTML(turn(5, { task, steps: [step()] }), emptyTimelineState())).not.toContain("rerun");
+    }
+  });
+
+  test("a mark is dropped when its task is no longer shown, so a reused id starts fresh", () => {
+    const state = emptyTimelineState();
+    state.rerunning.add(52);
+    state.rerunning.add(7);
+    forgetReruns(state, [ended("failed")]);
+    expect([...state.rerunning]).toEqual([52]);
+    forgetReruns(state, []);
+    expect(state.rerunning.size).toBe(0);
+  });
+
+  test("in the language of the window", () => {
+    setLocale("en");
+    expect(stepsHTML(ended("limit"), emptyTimelineState())).toContain(">Run again</button>");
+    setLocale("ja");
+    expect(stepsHTML(ended("limit"), emptyTimelineState())).toContain(">もう一度実行</button>");
+  });
+
+  test("the button of a task being started again is off", () => {
+    const state = emptyTimelineState();
+    state.rerunning.add(52);
+    expect(stepsHTML(ended("failed"), state)).toContain('data-task="52" disabled>');
   });
 });
 

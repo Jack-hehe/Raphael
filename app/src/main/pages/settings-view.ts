@@ -43,6 +43,13 @@ export const APPEARANCES: Choice[] = [
   { value: "dark", get label() { return t("settings.016"); } },
   { value: "system", get label() { return t("settings.013"); } },
 ];
+/** What one background task may spend (brain/settings.py, WORKER_COST_CAPS). */
+export const WORKER_COST_CAPS: Choice[] = [
+  { value: "0.1", label: "US$0.10" },
+  { value: "0.2", label: "US$0.20" },
+  { value: "0.5", label: "US$0.50" },
+  { value: "1", label: "US$1.00" },
+];
 export const SIZES: Choice[] = [
   { value: "120", get label() { return t("settings.017"); }, get desc() { return t("settings.018"); } },
   { value: "150", get label() { return t("settings.019"); }, get desc() { return t("settings.020"); } },
@@ -150,6 +157,8 @@ export const localView = (v: SettingsView): LocalView => ({
 export const cleanupModel = (v: SettingsView): string => v.brain?.cleanup_model ?? DEFAULT_MODELS.cleanup;
 export const agentModel = (v: SettingsView): string => v.brain?.agent_model ?? DEFAULT_MODELS.answer;
 export const agentCity = (v: SettingsView): string => v.brain?.agent_city ?? "";
+/** What one background task may spend, as the value of its dropdown (the core's default is 0.2). */
+export const workerCostCap = (v: SettingsView): string => String(v.brain?.worker_cost_cap_usd ?? 0.2);
 /** The catalog once it is read. */
 const catalogOf = (v: SettingsView): ModelCatalog | null => (typeof v.catalog === "object" ? v.catalog : null);
 
@@ -426,6 +435,7 @@ function agentHTML(v: SettingsView): string {
         fieldHTML(t("settings.agentCityHint"), cityShown, { w: 200, get label() { return t("settings.agentCity"); }, id: "agent-city", invalid: v.cityError !== null, disabled: v.brain === null }),
       ),
       ...(v.cityError ? [note(st("err", v.cityError()), ' role="alert"')] : []),
+      row(t("settings.workerCostCap"), "", sel(WORKER_COST_CAPS, workerCostCap(v), t("settings.workerCostCap"), ` data-k="worker-cap"${v.brain === null ? " disabled" : ""}`)),
     ]) +
     messagingHTML(v.messaging)
   );

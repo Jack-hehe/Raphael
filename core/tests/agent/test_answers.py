@@ -130,6 +130,20 @@ async def test_the_last_thing_the_model_reads_is_the_language_to_reply_in(
     assert last_line.startswith(f"Reply in {named}") and last_line.endswith(" only.")
 
 
+async def test_the_background_tasks_are_given_as_their_own_block_before_the_question(
+    voice, client, ledger
+):
+    client.replies.append(completion(spoken()))
+    block = "<background_tasks>\nfacts\n</background_tasks>"
+    await reply(voice, ledger, question="寄出去了嗎", background=block)
+    message = client.json_calls[0]["user"]
+    assert block in message
+    assert message.index(block) < message.index("<question>")
+    client.replies.append(completion(spoken()))
+    await reply(voice, ledger)
+    assert "background_tasks" not in client.json_calls[1]["user"]
+
+
 async def test_the_conversation_so_far_is_given_oldest_first(voice, client, ledger):
     client.replies.append(completion(spoken()))
     context = [

@@ -45,6 +45,7 @@ from ..brain.catalog import LLM, find
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
 from ..brain.pricing import builtin_catalog
 from ..brain.spend import SpendTracker
+from ..integrations.pool import McpPool
 from ..protocol import INVALID_PARAMS, WORKER_STOPPED, RpcError
 from .snapshot import BUILTIN, FIND, MCP, Snapshot, ToolRef
 from .tasks import TaskStore
@@ -110,6 +111,8 @@ def _outcome_of(result: PluginResult) -> str:
         return "ok"
     if result.kind == "timeout":
         return "timeout"
+    if result.kind == "cancelled":  # sent, and the connection ended: it may have been made
+        return "cancelled"
     if result.kind in ("blocked", "changed", "gone"):
         return "blocked"
     return "error"
@@ -171,6 +174,9 @@ class TaskRun:
         self.deadline = clock() + limits.seconds
         self._live: set[asyncio.Task[Any]] = set()
         self._in_plugin_call = False
+        # The connections of the task's plugin calls: one for each server, kept for the task and
+        # closed by whoever ends it (`pool.aclose`).
+        self.pool = McpPool()
         # One call at a time: the worker may send several at once, and the limits (the money above
         # all) are read before a reply lands. A call waits for the one before it and checks the
         # limits only when its turn comes.
@@ -226,9 +232,35 @@ class TaskRun:
 
     # --- the steps ------------------------------------------------------------------------------
 
-    def _step(self, **fields: Any) -> None:
+    def _step(self, **fields: Any) -> int | None:
+        step_id = None
         try:
-            self._store.add_step(self.task_id, **fields)
+            step_id = self._store.add_step(self.task_id, **fields)
+            self._store.progress(
+                self.task_id,
+                model_calls=self.model_calls,
+                tool_calls=self.tool_calls,
+                cost_usd=self.ledger.total,
+            )
+        except sqlite3.Error as exc:
+            logger.warning("Could not write down a step: %s", type(exc).__name__)
+        self._changed()
+        return step_id
+
+    def _end_step(self, step_id: int | None, **fields: Any) -> None:
+        """End the step of a call that was written when it was sent; or write it now if that
+        could not be done."""
+        if step_id is None:
+            self._step(kind="tool", **fields)
+            return
+        try:
+            self._store.update_step(
+                step_id,
+                outcome=fields["outcome"],
+                tier=fields.get("tier"),
+                ms=fields.get("ms", 0),
+                reason=fields.get("reason"),
+            )
             self._store.progress(
                 self.task_id,
                 model_calls=self.model_calls,
@@ -343,31 +375,61 @@ class TaskRun:
             # Not a tool the task was given: nothing to call, and nothing to audit.
             self._step(kind="tool", outcome="blocked", ms=_ms(began), reason="blocked")
             return _refused()
+        sent: int | None = None
         if ref.kind == MCP:
-            reply, outcome, tier = await self._plugin(ref, arguments)
+            reply, outcome, tier, sent = await self._plugin(ref, arguments)
         elif ref.kind == FIND:
             reply, outcome, tier = self._find(arguments)
         else:
             reply, outcome, tier = await self._builtin(ref, arguments)
-        self._step(
+        fields = {
+            "tool": ref.name,
+            "server": ref.server,
+            "tier": tier,
+            "outcome": outcome,
+            "ms": _ms(began),
+            # The kind the reply carries, never its content: a service's own words stay out.
+            "reason": reason_of(outcome, reply.get("kind")),
+        }
+        if ref.kind == MCP:
+            self._end_step(sent, **fields)  # the step written when the call was sent
+        else:
+            self._step(kind="tool", **fields)
+        return reply
+
+    async def _plugin(
+        self, ref: ToolRef, arguments: dict
+    ) -> tuple[dict, str, str | None, int | None]:
+        now = self._gate.tier_now(ref.key)
+        self._in_plugin_call = True
+        began = time.perf_counter()
+        # Written before the call is sent: if the core dies in the middle of it, the step is
+        # still there, and a later attempt is told the call may have been made.
+        sent = self._step(
             kind="tool",
             tool=ref.name,
             server=ref.server,
-            tier=tier,
-            outcome=outcome,
-            ms=_ms(began),
-            # The kind the reply carries, never its content: a service's own words stay out.
-            reason=reason_of(outcome, reply.get("kind")),
+            tier=None if now is None else now.name,
+            outcome="in_progress",
+            ms=0,
         )
-        return reply
-
-    async def _plugin(self, ref: ToolRef, arguments: dict) -> tuple[dict, str, str | None]:
-        now = self._gate.tier_now(ref.key)
-        self._in_plugin_call = True
         try:
             result = await self._guarded(
-                self._gate.call_plugin(ref.key, arguments, task_id=self.task_id)
+                self._gate.call_plugin(ref.key, arguments, task_id=self.task_id, pool=self.pool)
             )
+        except (RpcError, asyncio.CancelledError):
+            # The call did not come back: it may or may not have been made. A later attempt is
+            # told so.
+            self._end_step(
+                sent,
+                tool=ref.name,
+                server=ref.server,
+                tier=None if now is None else now.name,
+                outcome="cancelled",
+                ms=_ms(began),
+                reason="cancelled",
+            )
+            raise
         finally:
             self._in_plugin_call = False
         text, cut = _cut(result.text)
@@ -377,7 +439,7 @@ class TaskRun:
             "content": text,
             "truncated": cut or result.truncated,
         }
-        return reply, _outcome_of(result), None if now is None else now.name
+        return reply, _outcome_of(result), None if now is None else now.name, sent
 
     def _find(self, arguments: dict) -> tuple[dict, str, str | None]:
         """Show the task more of the snapshot's tools, by what it says it wants to do. It makes no

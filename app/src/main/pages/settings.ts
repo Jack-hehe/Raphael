@@ -50,6 +50,8 @@ import {
   AUTO_MICROPHONE,
   HOTKEY_ROWS,
   agentCity,
+  WORKER_COST_CAPS,
+  workerCostCap,
   MODEL_ROWS,
   PANES,
   SIZES,
@@ -204,6 +206,15 @@ export function createSettings(app: AppContext): SettingsPage {
           choices: UI_LANGUAGES,
           current: d.ui_language,
           pick: (value) => { if (isUiLocale(value)) void changeDevice({ ui_language: value }); },
+        };
+      case "worker-cap":
+        return {
+          choices: WORKER_COST_CAPS,
+          current: workerCostCap(v),
+          pick: (value) => {
+            const cap = Number(value);
+            if (WORKER_COST_CAPS.some((c) => c.value === value) && cap !== (brain?.worker_cost_cap_usd ?? 0.2)) void changeBrain("worker_cost_cap_usd", cap);
+          },
         };
       case "mode":
         return {

@@ -26,6 +26,7 @@ class FakeHub:
     def __init__(self, **tiers):
         self.tiers = {f"mcp:s/{name}": Tier[tier] for name, tier in tiers.items()}
         self.calls = []
+        self.pools = []
         self.unrun = []
         self.result = PluginResult(True, None, "ok")
         self.error = None
@@ -36,14 +37,24 @@ class FakeHub:
     def tier_of(self, key):
         return self.tiers.get(key)
 
-    async def call(self, key, arguments, *, approver, task_id=None):
+    async def call(self, key, arguments, *, approver, task_id=None, pool=None):
         self.calls.append((key, dict(arguments), approver, task_id))
+        self.pools.append(pool)
         if self.error is not None:
             raise self.error
         return self.result
 
     def record_unrun(self, key, *, outcome, task_id=None):
         self.unrun.append((key, outcome, task_id))
+
+
+async def test_the_pool_goes_through_the_gate_to_the_hub_when_there_is_one():
+    hub = FakeHub(look="T0")
+    gate = ToolGate(hub)
+    pool = object()
+    await gate.call_plugin("mcp:s/look", {"topic": "tea"}, pool=pool)
+    await gate.call_plugin("mcp:s/look", {"topic": "tea"})
+    assert hub.pools == [pool, None]
 
 
 def approval_for(action, tier=Tier.T2):

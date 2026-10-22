@@ -32,6 +32,7 @@ class Servers:
     def __init__(self) -> None:
         self.by_name = {}
         self.opened: list[tuple[str, dict[str, str], dict[str, str]]] = []
+        self.active = 0  # connections that are open now
 
     def add(self, name: str, **kwargs):
         self.by_name[name] = fake_server.build(**kwargs)
@@ -44,7 +45,11 @@ class Servers:
     @asynccontextmanager
     async def _open(self, server: ServerConfig):
         async with Client(self.by_name[server.name]) as client:
-            yield client
+            self.active += 1
+            try:
+                yield client
+            finally:
+                self.active -= 1
 
 
 @pytest.fixture

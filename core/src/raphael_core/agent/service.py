@@ -64,8 +64,10 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from ..background.brief import background_block, background_line
 from ..background.tasks import Refused
 from ..brain.catalog import CatalogEntry
+from ..integrations.pool import McpPool
 from ..brain.openrouter import OpenRouterClient
 from ..brain.secrets import KeyStore
 from ..brain.settings import DEFAULTS, SettingsStore
@@ -127,6 +129,8 @@ MAX_QUESTION_CHARS = 1000
 _SOURCE = re.compile(r"[a-z]{1,20}")
 # How many turns of the conversation each route is shown.
 CONTEXT_TURNS = {"discuss": 10, "answer": 3, "chat": 3}
+# A connection to a plugin's server that nobody uses is closed after this long.
+PLUGIN_IDLE_S = 120.0
 _DAY_MS = 86_400_000
 # The routes that give an answer a later "copy that" can copy. Small talk ("不客氣。") is none.
 _ANSWER_ROUTES = ("answer", "discuss")
@@ -313,6 +317,9 @@ class AgentService:
         self._plugins = plugins
         self._gate = gate if gate is not None else ToolGate(plugins, conn=conn, now_ms=now_ms)
         self._background = background
+        # The connections to the plugins' servers, kept for a short while: a second question about
+        # the same service does not start it again.
+        self._pool = McpPool(idle_s=PLUGIN_IDLE_S)
         self._planner = Planner(client)
         self._picker = ToolPicker(client)
         self._tool_support = ToolSupport(models, clock=clock)
@@ -382,6 +389,7 @@ class AgentService:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._inflight.clear()
+        await self._pool.aclose()
         await self._tools.aclose()
 
     # --- agent.ask ------------------------------------------------------------------------------
@@ -440,7 +448,9 @@ class AgentService:
         failure = blocked
         if blocked is None:
             try:
-                decision = await self._decider.classify(ask.text, settings.model, ledger)
+                decision = await self._decider.classify(
+                    ask.text, settings.model, ledger, background_line(self._briefs())
+                )
             except AgentFailure as error:
                 failure = error.kind
             except Exception as exc:  # a bug in the router must not become an RPC error
@@ -500,6 +510,17 @@ class AgentService:
         return self._finish(ask, "unclear", "negative", phrase(ask.language, "unclear"), ledger)
 
     # --- the background ---------------------------------------------------------------------------
+
+    def _briefs(self) -> list:
+        """The tasks in the background as a few facts (running, waiting, or ended in the last half
+        hour), for the router and the answer. Empty when there is no worker or it cannot say."""
+        if self._background is None:
+            return []
+        try:
+            return list(self._background.brief_for_assistant())
+        except Exception as exc:  # what the background knows must not stop a request
+            logger.warning("Could not read the background for a request: %s", type(exc).__name__)
+            return []
 
     def _hand_over(self, ask: _Ask, settings: _Settings, ledger: Ledger) -> dict:
         """A task for the background worker: it is queued, and Raphael says 《了。》 at once. The
@@ -586,6 +607,7 @@ class AgentService:
             tools=results,
             moment=self._moment(),
             ledger=ledger,
+            background=background_block(self._briefs()),
         )
         return self._finish(ask, "answer", reply.prefix, reply.text, ledger, detail=reply.detail)
 
@@ -720,7 +742,7 @@ class AgentService:
         action = action or Action(call.tool.key, call.arguments)
         began = time.perf_counter()
         outcome = await self._gate.call_plugin(
-            call.tool.key, call.arguments, approval=approval, action=action
+            call.tool.key, call.arguments, approval=approval, action=action, pool=self._pool
         )
         steps.append(
             self._step(
@@ -788,6 +810,7 @@ class AgentService:
                 tools=[*followup.results, result],
                 moment=self._moment(),
                 ledger=ledger,
+                background=background_block(self._briefs()),
             )
         except AgentFailure:
             # It was done, and Raphael cannot say more than that.

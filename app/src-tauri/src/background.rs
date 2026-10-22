@@ -23,7 +23,7 @@ use serde_json::Value;
 use tauri::AppHandle;
 use tokio::sync::broadcast::{self, error::RecvError};
 
-use crate::core_process::{CORE_DOWN, CORE_RESTARTED};
+use crate::core_process::{CORE_DOWN, CORE_RESTARTED, CoreApi, CoreProcess};
 use crate::rpc::{Notification, lock};
 use crate::tray;
 
@@ -156,6 +156,38 @@ async fn drain<S: ReportStage>(
     }
 }
 
+/// Asks the core to say the reports of tasks that were interrupted while the app was away
+/// (`worker.announce_pending`). It is asked here, once the reports have a listener, and not by the
+/// core when it says hello: a report sent before anyone listens is lost, and the core would have
+/// counted it as said. It is asked again each time the core is started again.
+pub fn announce_pending(
+    core: Arc<CoreProcess>,
+    mut notifications: broadcast::Receiver<Notification>,
+) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            if let Err(err) = core
+                .call("worker.announce_pending", serde_json::json!({}))
+                .await
+            {
+                log::warn!("background: could not ask for the interrupted reports: {err}");
+            }
+            loop {
+                match notifications.recv().await {
+                    Ok(notification) if restarts_the_core(&notification) => break,
+                    Ok(_) | Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => return,
+                }
+            }
+        }
+    });
+}
+
+/// Whether a notification says the core was started again.
+fn restarts_the_core(notification: &Notification) -> bool {
+    notification.method == CORE_RESTARTED
+}
+
 /// Follows the core's notifications: says the reports on `stage` and keeps the tray's item right.
 pub fn spawn<S>(
     app: &AppHandle,
@@ -201,6 +233,17 @@ mod tests {
         Report {
             prefix: prefix.to_owned(),
             text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn only_a_restart_of_the_core_asks_for_the_interrupted_reports_again() {
+        assert!(restarts_the_core(&notification(CORE_RESTARTED, json!({}))));
+        for method in [CORE_DOWN, WORKER_REPORT, WORKER_CHANGED] {
+            assert!(
+                !restarts_the_core(&notification(method, json!({}))),
+                "{method}"
+            );
         }
     }
 

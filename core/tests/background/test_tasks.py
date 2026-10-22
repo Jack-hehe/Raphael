@@ -84,11 +84,11 @@ def test_tasks_left_unfinished_by_the_last_process_are_interrupted_and_the_rest_
     store.start(running)
     store.start(done)
     store.finish(done, "done", prefix="告", text="x", detail=None, reason=None)
-    assert store.interrupt_unfinished() == 2
+    assert len(store.interrupt_unfinished()) == 2
     assert store.get(queued).state == store.get(running).state == "interrupted"
     assert store.get(queued).reason == "restart" and store.get(queued).finished_at_ms is not None
     assert store.get(done).state == "done"
-    assert store.interrupt_unfinished() == 0
+    assert store.interrupt_unfinished() == []
 
 
 def test_old_finished_tasks_are_pruned_with_their_steps_and_one_that_runs_is_not(store):

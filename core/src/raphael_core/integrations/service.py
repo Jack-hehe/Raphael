@@ -41,7 +41,7 @@ import secrets
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult, PluginTool, clean_arguments, tool_key
 from ..agent.policy import PLUGIN_PREFIX, Tier
@@ -60,6 +60,9 @@ from .config import (
 from .oauth import OpenBrowser, VaultTokenStorage, open_in_browser, revoke
 from .toolsets import tool_kind
 from .vault import SecretTooLong, SecretVault, secret_name
+
+if TYPE_CHECKING:
+    from .pool import McpPool
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +253,7 @@ class IntegrationsService:
                 catalog_id=entry.id,
             )
             new = True
+        self._connector.invalidate(server.id)  # a login again: the old one is not to be used
         if server.auth == "none":
             # A public server: there is no login, so the browser stays shut and the tools are read at once.
             job = self._join_public(server)
@@ -284,6 +288,7 @@ class IntegrationsService:
                 raise _invalid(str(exc)) from None
             raise _not_saved(exc) from None
         self._failure.pop(server.id, None)
+        self._connector.invalidate(server.id)  # the connections of before used the old login
         return {"connected": True, "server": self._view(server), "tools": self._tool_views(server)}
 
     async def _join_public(self, server: ServerConfig) -> LoginResult:
@@ -370,6 +375,7 @@ class IntegrationsService:
             return {"removed": False, "revoked": False}
         self._failure.pop(server.id, None)
         self._locks.pop(server.id, None)
+        self._connector.invalidate(server.id)
         revoked = False
         if server.auth == "oauth":
             storage = VaultTokenStorage(self._vault, server.id)
@@ -398,7 +404,22 @@ class IntegrationsService:
                     server.tools = tools
                     server.tools_checked_at_ms = self._now_ms()
                     self._save()
+                    # A connection kept open knows the tools of before.
+                    self._connector.invalidate(server.id)
         return {"server": self._view(server), "tools": self._tool_views(server)}
+
+    def kind_of(self, server_name: str, tool_name: str) -> str:
+        """`"read"` for a tool its server says only reads (`readOnlyHint` true and not destructive),
+        `"write"` for any other, one not known too. The screen groups by a guess from the name as
+        well (`toolsets.tool_kind`); here a guess would let a task repeat a call that changed
+        something, so only the server's own word counts."""
+        for server in self._config.servers():
+            if server.name == server_name:
+                for tool in server.tools:
+                    if tool.name == tool_name:
+                        said = tool.read_only_hint is True and tool.destructive_hint is not True
+                        return "read" if said else "write"
+        return "write"
 
     def _tool_views(self, server: ServerConfig) -> list[dict[str, Any]]:
         return [self._tool_view(server, tool) for tool in server.tools]
@@ -537,6 +558,7 @@ class IntegrationsService:
         *,
         approver: str,
         task_id: int | None = None,
+        pool: "McpPool | None" = None,
     ) -> PluginResult:
         server_name, tool_name = self._names(key)
         usable = self._usable(key)
@@ -563,6 +585,8 @@ class IntegrationsService:
             json.dumps(arguments, ensure_ascii=False, default=str)
         ) > MAX_ARGUMENT_CHARS:
             return end("blocked", PluginResult(False, "blocked"))
+        # A pool is passed on only when there is one: a connector of a test may not know it.
+        kept = {} if pool is None else {"pool": pool}
         try:
             outcome = await self._connector.call_tool(
                 server,
@@ -570,6 +594,7 @@ class IntegrationsService:
                 clean_arguments(tool.input_schema, arguments),
                 expected=tool.fingerprint,
                 timeout_s=self._call_timeout_s,
+                **kept,
             )
         except asyncio.CancelledError:
             # Esc, or the core closing, ended the call part way: whether it was done is not known.
@@ -578,17 +603,25 @@ class IntegrationsService:
         except McpFailure as failure:
             if failure.kind == "gone":
                 return end("blocked", PluginResult(False, failure.kind))
+            if failure.kind == "cancelled":  # sent, and the connection ended: not known to have failed
+                return end("error", PluginResult(False, failure.kind))
             self._failure[server.id] = failure.kind
             result = PluginResult(False, failure.kind)
             return end("timeout" if failure.kind == "timeout" else "error", result)
         self._failure.pop(server.id, None)
-        if outcome.fresh is not None and self._config.get(server.id) is server:
-            # The server describes the tool differently now: it is kept as it is (and stays on).
-            server.tools = [outcome.fresh if t.name == tool.name else t for t in server.tools]
-            try:
-                self._config.save()
-            except OSError as exc:
-                logger.warning("Could not save the plugins: %s", type(exc).__name__)
+        if self._config.get(server.id) is server:
+            # The server describes tools differently now: they are kept as they are (and stay on).
+            # The whole list read for this call is compared, not only the tool that was called.
+            newest = {t.name: t for t in outcome.listed or []}
+            if outcome.fresh is not None:
+                newest[outcome.fresh.name] = outcome.fresh
+            changed = [t for t in server.tools if t.name in newest and newest[t.name].fingerprint != t.fingerprint]
+            if changed:
+                server.tools = [newest[t.name] if t in changed else t for t in server.tools]
+                try:
+                    self._config.save()
+                except OSError as exc:
+                    logger.warning("Could not save the plugins: %s", type(exc).__name__)
         if outcome.is_error:
             result = PluginResult(False, "tool_error", outcome.text, outcome.truncated)
             return end("error", result)
