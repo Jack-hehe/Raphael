@@ -19,7 +19,7 @@ import { onLocaleChange, t } from "../i18n";
 import { replyLine } from "../../shared/anime";
 import * as api from "../api";
 import { avatarHTML, onAvatarChange } from "../avatar";
-import { TYPED, VOICE, mergeTurns, oldestId, sourceOf, threadItems, turnMatches } from "../conversation";
+import { TYPED, VOICE, mergeTurns, oldestId, refreshTurns, sourceOf, threadItems, turnMatches } from "../conversation";
 import { describeError } from "../format";
 import { loadingHTML } from "../loading";
 import {
@@ -475,11 +475,11 @@ export function createAgent(app: AppContext): Page {
       canLoadEarlier = got.length === PAGE_SIZE;
     } else {
       pending = false;
-      // The newest page replaces what it covers; what was paged back to beyond it stays.
-      const floor = oldestId(got);
-      const kept = floor === undefined ? [] : turns.filter((turn) => turn.id < floor);
-      canLoadEarlier = kept.length > 0 ? canLoadEarlier : got.length === PAGE_SIZE;
-      turns = mergeTurns(got, kept);
+      // The newest page replaces what it covers; what was paged back to beyond it stays while it
+      // joins the page, and is dropped when more came meanwhile than a page holds (refreshTurns).
+      const next = refreshTurns(turns, got, PAGE_SIZE);
+      canLoadEarlier = next.keptOlder ? canLoadEarlier : got.length === PAGE_SIZE;
+      turns = next.turns;
     }
     // A task that ended is no longer being stopped.
     for (const turn of turns) if (turn.task && !isLive(turn.task)) state.stopping.delete(turn.task.id);

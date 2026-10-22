@@ -140,6 +140,28 @@ describe("loading the earlier turns", () => {
   });
 });
 
+/** The ids of the turns the thread shows, oldest first. */
+const shownIds = (): number[] => [...document.querySelectorAll<HTMLElement>(".tn[data-id]")].map((line) => Number(line.dataset.id));
+
+describe("coming back to the page", () => {
+  test("turns written while it was away are paged back to without leaving a gap", async () => {
+    // A history of `size` turns, ids 1..size, answered a page at a time as the core does.
+    let size = 50;
+    api.agentHistoryList.mockImplementation(async (q: { limit: number; before_id?: number }) => {
+      const top = Math.min(size, (q.before_id ?? Infinity) - 1);
+      return { turns: page(top, Math.max(0, Math.min(q.limit, top))) };
+    });
+    const agent = mount();
+    for (let i = 0; i < 5; i++) await flush();
+    expect(shownIds()).toHaveLength(50); // 1..50, and the earlier page said there is nothing before
+    agent.hide();
+    size = 150; // a hundred turns while the page was not shown
+    agent.show();
+    for (let i = 0; i < 10; i++) await flush();
+    expect(shownIds()).toEqual(Array.from({ length: 150 }, (_, i) => i + 1));
+  });
+});
+
 describe("a question said aloud", () => {
   test("its 「正在辨識」 line goes after the longest wait even when nothing more comes from the core", async () => {
     vi.useFakeTimers();

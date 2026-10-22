@@ -82,6 +82,28 @@ export function mergeTurns(loaded: readonly AgentTurn[], page: readonly AgentTur
   return [...loaded, ...page.filter((turn) => !known.has(turn.id))].sort((a, b) => b.id - a.id);
 }
 
+/**
+ * What is loaded once the newest page (`newest`, newest first, at most `pageSize` turns) is brought
+ * again. The page replaces the turns it covers, and the older ones loaded before are kept only when
+ * they join it: when the page is a full one and reaches back to them (it holds a turn as old as one
+ * of them). A page shorter than a page is the whole history, so nothing older is left to keep. And
+ * when more turns came meanwhile than one page holds, the old ones would leave a gap that paging up
+ * (from the oldest turn loaded) never fills, so the page alone is kept and paging up starts again
+ * under it. `keptOlder` says whether the older ones stayed, and with them what the caller knew of
+ * the turns before them.
+ */
+export function refreshTurns(
+  loaded: readonly AgentTurn[],
+  newest: readonly AgentTurn[],
+  pageSize: number,
+): { turns: AgentTurn[]; keptOlder: boolean } {
+  const floor = oldestId(newest);
+  const older = floor === undefined ? [] : loaded.filter((turn) => turn.id < floor);
+  const joins = floor !== undefined && newest.length >= pageSize && loaded.some((turn) => turn.id >= floor);
+  if (older.length === 0 || !joins) return { turns: mergeTurns(newest, []), keptOlder: false };
+  return { turns: mergeTurns(newest, older), keptOlder: true };
+}
+
 /** The id to ask the core for the turns before, or undefined for the first page. */
 export function oldestId(turns: readonly AgentTurn[]): number | undefined {
   return turns.length === 0 ? undefined : Math.min(...turns.map((turn) => turn.id));
