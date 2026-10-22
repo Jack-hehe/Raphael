@@ -44,6 +44,41 @@ def test_what_follows_a_word_for_a_password_or_a_code_is_a_secret(text):
     assert find_secret(text) == "password"
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Wi-Fi password is hunter",
+        "password: correcthorsebatterystaple",
+        "the passcode = tiger",
+        "my PIN was abcd",
+        "Wi-Fi 密碼是 hunter",
+        "信箱密碼：correcthorse",
+        "密碼為「小橘」",
+        "パスワードは hunter です",
+        "the passphrase is lemonade",
+    ],
+)
+def test_any_value_given_to_a_word_for_a_password_is_a_secret(text):
+    # Letters alone are a password too, once something says "is", ":", "=", 是 or は to the word.
+    assert find_secret(text) == "password"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "the password manager is Bitwarden",
+        "the Wi-Fi password is on the router's sticker",
+        "the password is stored in 1Password",
+        "主人的密碼管理器是 Bitwarden",
+        "Wi-Fi 密碼在路由器背面",
+        "the PIN was changed last week",
+        "password:",
+    ],
+)
+def test_where_a_password_is_kept_is_not_one(text):
+    assert find_secret(text) is None
+
+
 def test_a_card_number_is_told_by_its_check_digit():
     assert find_secret("卡號 4111 1111 1111 1111") == "card"
     assert find_secret("4111-1111-1111-1111") == "card"

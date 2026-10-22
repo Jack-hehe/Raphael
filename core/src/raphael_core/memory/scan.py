@@ -6,9 +6,11 @@ advice of Anthropic's own documentation for its memory tool). So a memory is ref
 
 - a secret (`find_secret`): the shapes of API keys and tokens (OpenRouter's and OpenAI's `sk-`,
   GitHub's `ghp_` and `github_pat_`, Slack's `xox?-`, AWS's `AKIA`, Google's `AIza`, a JWT, a
-  `Bearer` token, a private key block), a long run of random-looking characters, whatever follows a
-  word for a password, a PIN or a one-time code, a card number (the Luhn check), a Taiwanese ID
-  number or an IBAN;
+  `Bearer` token, a private key block), a long run of random-looking characters, what follows a
+  word for a password, a PIN or a one-time code (a value with a digit or a symbol in it, or any
+  value at all once "is", ":", "=", 是, 為 or は gives it to the word, so "password is hunter" too,
+  while "password manager" and "the password is stored in ..." pass), a card number (the Luhn
+  check), a Taiwanese ID number or an IBAN;
 - or something written to steer a model (`find_injection`), which is how a memory is poisoned
   (SpAIware, 2024): an order to ignore the instructions, a line dressed as a system message, a
   Markdown image (a way to send data out), an address with a query string, or invisible characters.
@@ -56,6 +58,21 @@ _SECRET_VALUE = re.compile(
     r"(?:是|為|为|は|:|：|=|\bis\b|\bwas\b)?\s*[「『\"'“]?\s*"
     r"(?=[^\s」』\"'”。，,]*[\d!@#$%^&*])[^\s」』\"'”。，,]{3,}"
 )
+# The words that say where or how a password is kept rather than what it is, after "is" or "was"
+# ("the password is stored in 1Password", "the PIN was changed").
+_NOT_A_VALUE = (
+    r"in|on|at|by|the|a|an|my|your|his|her|their|our|its|this|that|not|also|still|now|"
+    r"stored|saved|kept|written|managed|synced|set|changed|reset|updated|required|needed|"
+    r"same|different|long|short|strong|weak|easy|hard|secret|private|unknown|forgotten|expired"
+)
+# Any value at all, once something gives it to the word ("是", "為", "は", ":", "=", "is", "was"):
+# a password of letters alone ("password is hunter", "密碼是 hunter") is a password too. A word that
+# is followed by no such mark ("password manager", "密碼管理器是 Bitwarden") is left alone.
+_SECRET_GIVEN = re.compile(
+    rf"(?i)(?:{_SECRET_WORDS})(?:\s+(?:code|number|no\.?))?\s*"
+    rf"(?:是|為|为|は|:|=|\b(?:is|was)\b(?!\s+(?:{_NOT_A_VALUE})\b))\s*[「『\"'“]?\s*"
+    r"[^\s」』\"'”。，,]"
+)
 # Thirteen to nineteen digits, in groups or not: a card number if the Luhn check passes.
 _CARD = re.compile(r"(?<![\d.])(?:\d[ \-]?){12,18}\d(?![\d.])")
 _TAIWAN_ID = re.compile(r"\b[A-Z][12]\d{8}\b")
@@ -93,7 +110,7 @@ def find_secret(text: str) -> str | None:
         return "token"
     if any(_looks_random(run) for run in _LONG_RUN.findall(plain)):
         return "token"
-    if _SECRET_VALUE.search(plain):
+    if _SECRET_VALUE.search(plain) or _SECRET_GIVEN.search(plain):
         return "password"
     for found in _CARD.finditer(plain):
         digits = re.sub(r"\D", "", found.group())
