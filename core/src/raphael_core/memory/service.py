@@ -21,7 +21,9 @@ it reads what services return.
 The reflection pass runs in the background on the cheap model (the `agent_model` setting): after
 REFLECT_AFTER_TURNS answered turns it has not read, or once the conversation has been quiet for
 QUIET_S with any such turn, and once soon after the app starts when one is waiting. The weekly
-consolidation runs with it when the last one is a week old. Both need the key and room under the
+consolidation runs with it when the last one is a week old. A timer that finds nothing due yet,
+and every pass when it ends, arms the timer again for the next time something will be (the quiet
+time, the pause of RETRY_S after a failure, the week), so nothing waits for the owner's next turn. Both need the key and room under the
 month's limit, and both are written to the spend with the purpose "memory". The turns are not
 deleted by age any more, so nothing has to be reflected on in a hurry before a prune.
 
@@ -291,9 +293,49 @@ class MemoryService:
         self._timer = loop.call_later(delay_s + 1.0, self._tick)
 
     def _tick(self) -> None:
+        """The timer fired: run what is due, or arm the timer for when something will be. Without
+        the second, a turn that waits at startup but is not quiet yet, or a pass that failed, would
+        wait for the owner's next turn, however long that is."""
         self._timer = None
         if self.reflection_due() or self.consolidation_due():
             self._spawn()
+        else:
+            self._arm_next()
+
+    def _arm_next(self) -> None:
+        """Arm the timer for the next time something is due (`_next_due_s`), if anything ever is."""
+        delay = self._next_due_s()
+        if delay is not None:
+            self._arm(delay)
+
+    def _next_due_s(self) -> float | None:
+        """In how many seconds a pass will next be due: the end of the pause after a failure, else
+        the soonest of the reflection pass (now when REFLECT_AFTER_TURNS turns wait, or when the
+        conversation will have been quiet for QUIET_S) and the weekly consolidation. None when
+        nothing waits: the owner's next turn arms the timer again."""
+        if self._failed_at is not None:
+            left = RETRY_S - (self._clock() - self._failed_at)
+            if left > 0:
+                return left
+        delays: list[float] = []
+        try:
+            unread = self._unread()
+            if len(unread) >= REFLECT_AFTER_TURNS:
+                delays.append(0.0)
+            elif unread:
+                quiet_ms = self._last_turn_ms(unread) + self._quiet_s * 1000 - self._now_ms()
+                delays.append(max(0.0, quiet_ms / 1000))
+        except sqlite3.Error:
+            pass
+        if self.store.all():
+            weekly_ms = self._state(_CONSOLIDATED) + CONSOLIDATE_EVERY_MS - self._now_ms()
+            delays.append(max(0.0, weekly_ms / 1000))
+        return min(delays) if delays else None
+
+    def _last_turn_ms(self, unread: Sequence[Turn]) -> int:
+        """When the latest turn was made, whatever its status (the conversation's last sound)."""
+        latest = self._history.after(0, limit=1)
+        return latest[-1].created_at_ms if latest else unread[-1].created_at_ms
 
     def _waiting(self, limit: int = MAX_TURNS) -> int:
         try:
@@ -317,9 +359,7 @@ class MemoryService:
             return True
         if not unread:
             return False
-        latest = self._history.after(0, limit=1)
-        last_ms = latest[-1].created_at_ms if latest else unread[-1].created_at_ms
-        return self._now_ms() - last_ms >= self._quiet_s * 1000
+        return self._now_ms() - self._last_turn_ms(unread) >= self._quiet_s * 1000
 
     def consolidation_due(self) -> bool:
         if not self.store.all():
@@ -327,9 +367,12 @@ class MemoryService:
         return self._now_ms() - self._state(_CONSOLIDATED) >= CONSOLIDATE_EVERY_MS
 
     def _spawn(self) -> None:
+        """Run what is due in the background, unless a pass runs already (it arms the timer when
+        it ends) or the pause after a failure is not over (the timer is armed for its end)."""
         if self._running is not None and not self._running.done():
             return
         if self._failed_at is not None and self._clock() - self._failed_at < RETRY_S:
+            self._arm_next()
             return
         try:
             loop = asyncio.get_running_loop()
@@ -338,8 +381,14 @@ class MemoryService:
         self._running = loop.create_task(self.run_due())
 
     async def run_due(self) -> None:
-        """The reflection pass and the consolidation, whichever is due, one after the other."""
+        """The reflection pass and the consolidation, whichever is due, one after the other; then
+        the timer is armed for whatever is due next (the rest of a long backlog, the pause after a
+        failure, the next quiet time or week). Without a key or room under the limit nothing runs,
+        and the timer looks again no sooner than RETRY_S."""
         if not self.may_spend():
+            delay = self._next_due_s()
+            if delay is not None:
+                self._arm(max(delay, RETRY_S))
             return
         try:
             if self.reflection_due():
@@ -349,6 +398,7 @@ class MemoryService:
         except Exception as exc:  # the background must not break the conversation
             self._failed_at = self._clock()
             logger.warning("The memory's background pass failed: %s", type(exc).__name__)
+        self._arm_next()
 
     async def reflect(self) -> Applied:
         """One reflection pass over the turns it has not read. The watermark moves past them

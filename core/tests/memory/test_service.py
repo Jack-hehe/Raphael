@@ -6,6 +6,7 @@ import logging
 
 import pytest
 
+from raphael_core.brain.openrouter import OpenRouterError
 from raphael_core.brain.secrets import MemoryKeyStore
 from raphael_core.brain.settings import SettingsStore
 from raphael_core.memory.reflection import Action
@@ -197,6 +198,58 @@ async def test_a_pass_that_failed_leaves_the_turns_for_later(memory, history, mo
     assert memory.reflected_through() == 0
     memory._spawn()
     assert memory._running is None  # waits before it tries again
+
+
+def armed_in(memory):
+    """In how many seconds the background's timer fires, or None when none is armed."""
+    if memory._timer is None:
+        return None
+    return memory._timer.when() - asyncio.get_running_loop().time()
+
+
+async def test_a_turn_waiting_at_startup_is_read_once_it_is_quiet_with_no_new_turn(memory, history, model, clock):
+    # One turn waits, and it is not quiet yet when the startup's look comes: the look arms the
+    # timer for when it will be, and the pass runs then, though the owner says nothing more.
+    add_turn(history, "我喜歡烏龍茶")
+    memory.start()
+    assert armed_in(memory) is not None
+    memory._tick()  # the startup's look: nothing is due yet
+    assert memory._running is None
+    assert armed_in(memory) == pytest.approx(0.05 + 1.0, abs=0.2)
+    clock.advance(seconds=1)
+    model.replies.append({"actions": [memory_item()]})
+    memory._tick()  # the quiet time has come
+    await memory.wait_idle()
+    assert memory.store.get("user-tea") is not None and memory.reflection_due() is False
+
+
+async def test_a_pass_that_failed_is_tried_again_after_its_pause(memory, history, model, clock):
+    from raphael_core.memory.service import RETRY_S
+
+    add_turn(history, "我喜歡烏龍茶")
+    clock.advance(seconds=1)
+    model.replies.append(OpenRouterError(503, "server", "down"))
+    await memory.run_due()
+    assert memory.reflected_through() == 0
+    assert armed_in(memory) == pytest.approx(RETRY_S + 1.0, abs=1.0)
+    memory._spawn()  # a turn asks for a pass meanwhile: it waits out the pause, armed for its end
+    assert memory._running is None
+    assert armed_in(memory) == pytest.approx(RETRY_S + 1.0, abs=1.0)
+    clock.advance(seconds=RETRY_S)
+    model.replies.append({"actions": [memory_item()]})
+    memory._tick()
+    await memory.wait_idle()
+    assert memory.store.get("user-tea") is not None
+
+
+async def test_without_a_key_the_background_looks_again_later_not_at_once(memory, history, model, keys, clock):
+    from raphael_core.memory.service import RETRY_S
+
+    add_turn(history, "q")
+    clock.advance(seconds=1)
+    keys.clear()
+    await memory.run_due()
+    assert model.calls == [] and armed_in(memory) >= RETRY_S
 
 
 async def test_nothing_runs_without_a_key_or_over_the_limit(memory, history, model, keys, conn, clock):
