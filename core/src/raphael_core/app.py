@@ -1227,6 +1227,8 @@ class App(Router):
         finally:
             self._local_download = None
         async with self._models_lock:
+            if not self.manager.is_ready(name):  # deleted while this waited for its turn
+                raise RpcError(BUSY, f"{name} was removed meanwhile")
             await self.call("settings.set", {"key": "stt_local_model", "value": name})
             reply = await self.call("settings.set", {"key": "stt_engine", "value": "local"})
             self._speech.select_engine(name)

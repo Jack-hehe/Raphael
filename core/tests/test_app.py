@@ -10,6 +10,7 @@ with the real models, is tests/test_e2e.py.
 import asyncio
 import json
 import logging
+import shutil
 import subprocess
 import sys
 import threading
@@ -2889,3 +2890,18 @@ async def test_a_delete_that_breaks_the_model_keeps_the_replacement(make_app, mo
     assert caught.value.code == INTERNAL_ERROR
     assert (await app.call("settings.get"))["settings"]["stt_local_model"] == "sensevoice"
     assert (await app.call("models.local"))["fallback"] == "sensevoice"
+
+
+async def test_choosing_a_model_that_was_deleted_while_waiting_for_the_lock_fails_cleanly(
+    make_app, tmp_path
+):
+    app = make_app(ready=(*APP_MODELS, "sensevoice"))
+    async with app._models_lock:  # a delete of the model holds it
+        task = asyncio.create_task(app.call("models.local_use", {"name": "sensevoice"}))
+        await asyncio.sleep(0.1)  # it has found the model on disk and waits
+        shutil.rmtree(tmp_path / "data" / "models" / "sensevoice")
+    with pytest.raises(RpcError) as caught:
+        await asyncio.wait_for(task, 10)
+    assert caught.value.code == BUSY
+    settings = (await app.call("settings.get"))["settings"]
+    assert settings["stt_local_model"] == "qwen3-asr" and settings["stt_engine"] == "cloud"
