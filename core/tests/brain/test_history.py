@@ -113,15 +113,6 @@ def test_search_takes_percent_underscore_and_backslash_literally(conn):
     assert [i.text for i in h.list(query="C:\\temp")] == ["C:\\temp"]
 
 
-def test_texts_since_returns_the_final_text_from_that_time_on_newest_first(conn):
-    h = HistoryStore(conn)
-    h.add(item(created_at_ms=1000, text="old", raw_text="old raw"))
-    h.add(item(created_at_ms=2000, text="edge", raw_text="edge raw"))
-    h.add(item(created_at_ms=3000, text="new", raw_text="new raw"))
-    assert h.texts_since(2000) == ["new", "edge"]
-    assert h.texts_since(4000) == []
-
-
 def test_prune_keeps_items_at_the_cutoff(conn):
     h = HistoryStore(conn)
     h.add(item(created_at_ms=1000))

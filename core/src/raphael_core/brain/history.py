@@ -117,10 +117,3 @@ class HistoryStore:
                 "DELETE FROM history WHERE created_at_ms < ?", (older_than_ms,)
             )
         return cursor.rowcount
-
-    def texts_since(self, ms: int) -> list[str]:
-        """The text of every item created at or after `ms`, newest first."""
-        rows = self._conn.execute(
-            f"SELECT text FROM history WHERE created_at_ms >= ? {_NEWEST_FIRST}", (ms,)
-        )
-        return [row["text"] for row in rows]

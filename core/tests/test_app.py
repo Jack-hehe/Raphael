@@ -1089,7 +1089,6 @@ EXPECTED_METHODS = {
     "dictionary.add",
     "dictionary.import",
     "dictionary.delete",
-    "dictionary.auto_add",
     "settings.get",
     "settings.set",
     "secrets.status",
