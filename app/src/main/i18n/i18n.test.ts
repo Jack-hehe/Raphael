@@ -76,11 +76,11 @@ describe("main window translations", () => {
   });
 
   test("keeps an existing error translated through repeated locale changes", () => {
-    let message = t("onboarding.049");
+    let message = t("common.limitInvalid");
     for (const locale of ["en", "ja", "zh-TW"] as const) {
       setLocale(locale);
       message = translatedMessage(message)();
-      expect(message).toBe(t("onboarding.049"));
+      expect(message).toBe(t("common.limitInvalid"));
     }
     expect(translatedMessage("User data stays literal")()).toBe("User data stays literal");
   });
@@ -98,10 +98,10 @@ describe("main window translations", () => {
   });
 
   test("a captured notice resolver survives a large dictionary redraw", () => {
-    const message = translatedMessage(t("onboarding.049"));
+    const message = translatedMessage(t("common.limitInvalid"));
     for (let n = 0; n < 600; n++) t("dictionary.006", { p0: `word-${n}` });
     setLocale("en");
-    expect(message()).toBe(t("onboarding.049"));
+    expect(message()).toBe(t("common.limitInvalid"));
   });
 
   test("translates known Rust errors while preserving external diagnostic details", () => {

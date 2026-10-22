@@ -17,7 +17,7 @@ import { getLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 import { SERVICE_ICONS, type ServiceIconId, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import type { AuditEntry, ConnectionGroup, ConnectionTool, NewConnection, StoreService, Words } from "./types";
-import { type Choice, btn, esc, fieldHTML, ico, row, st, tg, toaster } from "./ui";
+import { type Choice, btn, esc, fieldHTML, ico, row, st, tabs, tg, toaster } from "./ui";
 
 /** `t` for a key that is chosen at run time (its placeholders, if any, are none). */
 const tr = t as unknown as (key: MessageKey) => string;
@@ -202,17 +202,14 @@ const matches = (query: string, ...texts: string[]): boolean => {
 
 function barHTML(v: ConnectionsView): string {
   const installed = Array.isArray(v.groups) ? v.groups.length : 0;
-  const tab = (id: Tab, label: string, count = 0): string =>
-    `<button type="button" class="btn seg" role="tab" aria-selected="${v.tab === id}" data-conn="tab" data-id="${id}" data-k="conn-tab:${id}">` +
-    `${esc(label)}${count ? `<span class="n">${count}</span>` : ""}</button>`;
+  const tab = (id: Tab, label: string, count = 0) => ({ id, label, count, attrs: ` data-conn="tab" data-id="${id}" data-k="conn-tab:${id}"` });
   const add =
     `<button type="button" class="sel" aria-haspopup="menu" aria-expanded="false" data-k="conn-add">` +
     `<span>${esc(t("conn.addMenu"))}</span>${ico("down")}</button>`;
   return (
-    `<div class="cs-bar"><div class="cs-seg" role="tablist" aria-label="${esc(t("conn.tabs"))}">` +
-    tab("installed", t("conn.tab.installed"), installed) +
-    tab("store", t("conn.tab.store")) +
-    `</div><div class="cs-tools">${fieldHTML(t("conn.search"), v.search, { id: "conn-search", icon: "search", label: t("conn.search") })}${add}</div></div>`
+    `<div class="cs-bar">` +
+    tabs([tab("installed", t("conn.tab.installed"), installed), tab("store", t("conn.tab.store"))], v.tab, { label: t("conn.tabs"), kind: "nav" }) +
+    `<div class="cs-tools">${fieldHTML(t("conn.search"), v.search, { id: "conn-search", icon: "search", label: t("conn.search") })}${add}</div></div>`
   );
 }
 
@@ -302,9 +299,12 @@ function toolGroupHTML(g: ConnectionGroup, kind: ToolKind, v: ConnectionsView): 
   const on = tools.filter((tool) => tool.enabled).length;
   const state = on === tools.length ? "true" : on === 0 ? "false" : "mixed";
   const head =
-    `<div class="ghead"><button type="button" class="btn ghfold" aria-expanded="${open}" data-conn="fold" data-kind="${kind}">` +
-    `<span class="gt">${esc(t(kind === "write" ? "conn.group.write" : "conn.group.read"))}<small>${esc(t("conn.group.count", { p0: tools.length }))}</small></span>` +
-    `${ico(open ? "down" : "right")}</button>` +
+    `<div class="ghead">` +
+    btn(
+      `<span class="gt">${esc(t(kind === "write" ? "conn.group.write" : "conn.group.read"))}<small>${esc(t("conn.group.count", { p0: tools.length }))}</small></span>${ico(open ? "down" : "right")}`,
+      "ghfold",
+      ` aria-expanded="${open}" data-conn="fold" data-kind="${kind}"`,
+    ) +
     // a checkbox role, not a switch: only that one has a "mixed" state
     `<button type="button" class="tg" role="checkbox" aria-checked="${state}" aria-label="${esc(t(kind === "write" ? "conn.groupSwitch.write" : "conn.groupSwitch.read"))}" data-conn="group" data-id="${esc(g.id)}" data-kind="${kind}"${v.busy.has(g.id) ? " disabled" : ""}></button></div>`;
   return `<div class="slist cs-tools-list">${head}${open ? tools.map((tool) => toolRow(g, tool, v.busy.has(g.id))).join("") : ""}</div>`;
@@ -359,8 +359,12 @@ function cardHTML(s: StoreService, v: ConnectionsView): string {
   const here = v.login?.target === s.id;
   const line = here ? t(s.auth === "none" ? "conn.connecting" : "conn.loggingIn") : words(s.summary);
   return (
-    `<div class="cs-card"><button type="button" class="btn cs-main" data-conn="open-store" data-id="${esc(s.id)}" title="${esc(`${s.name}: ${words(s.summary)}`)}">` +
-    `${entryIcon(s, "md")}<span class="tx"><span class="nm">${esc(s.name)}</span><span class="sub${here ? " wait" : ""}">${esc(line)}</span></span></button>` +
+    `<div class="cs-card">` +
+    btn(
+      `${entryIcon(s, "md")}<span class="tx"><span class="nm">${esc(s.name)}</span><span class="sub${here ? " wait" : ""}">${esc(line)}</span></span>`,
+      "cs-main",
+      ` data-conn="open-store" data-id="${esc(s.id)}" title="${esc(`${s.name}: ${words(s.summary)}`)}"`,
+    ) +
     `${joinControl(s, v)}</div>`
   );
 }

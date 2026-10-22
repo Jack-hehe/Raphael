@@ -9,7 +9,7 @@
 
 import { t } from "./i18n";
 import type { LocalModel } from "./types";
-import { CHECK, btn, esc, ico } from "./ui";
+import { CHECK, btn, esc, ico, tabs } from "./ui";
 
 /** What the local tab is drawn from. */
 export interface LocalView {
@@ -103,9 +103,12 @@ export function faceTitle(view: LocalView): string | null {
 
 /** The two tabs over the picker, 雲端 and 本機: real buttons, the open one selected and the only Tab stop. */
 export function tabsHTML(open: "cloud" | "local"): string {
-  const tab = (which: "cloud" | "local", label: string): string =>
-    `<button type="button" class="mp-tab" role="tab" id="mp-tab-${which}" data-tab="${which}" tabindex="${open === which ? 0 : -1}" aria-selected="${open === which}" aria-controls="mp-pane-${which}">${esc(label)}</button>`;
-  return `<div class="mp-tabs" role="tablist" aria-label="${esc(t("picker.tabs"))}">${tab("cloud", t("picker.tabCloud"))}${tab("local", t("picker.tabLocal"))}</div>`;
+  const tab = (which: "cloud" | "local", label: string) => ({
+    id: which,
+    label,
+    attrs: ` id="mp-tab-${which}" data-tab="${which}" tabindex="${open === which ? 0 : -1}" aria-controls="mp-pane-${which}"`,
+  });
+  return tabs([tab("cloud", t("picker.tabCloud")), tab("local", t("picker.tabLocal"))], open, { label: t("picker.tabs"), kind: "nav", fill: true });
 }
 
 function rowHTML(model: LocalModel, view: LocalView, confirm: LocalConfirm | null): string {

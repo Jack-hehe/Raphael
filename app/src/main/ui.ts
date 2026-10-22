@@ -114,6 +114,31 @@ export function sel(options: Choice[], current: string, label: string, attrs = "
   );
 }
 
+export interface TabItem {
+  id: string;
+  label: string;
+  count?: number;
+  /** Extra attributes for the tab's button, with a leading space. */
+  attrs?: string;
+}
+
+/**
+ * The one tab / segmented component. `nav` switches between views (bordered, joined, role=tablist);
+ * `filter` narrows one list (a pill; History and Dictionary only; role=group, aria-pressed).
+ * `fill` stretches the nav tabs across the width of their container.
+ */
+export function tabs(items: TabItem[], selected: string, o: { label: string; kind: "nav" | "filter"; fill?: boolean }): string {
+  const nav = o.kind === "nav";
+  const one = (it: TabItem): string => {
+    const on = it.id === selected;
+    const state = nav ? `role="tab" aria-selected="${on}"` : `aria-pressed="${on}"`;
+    const n = it.count ? `<span class="n">${it.count}</span>` : "";
+    return `<button type="button" class="tab" ${state}${it.attrs ?? ""}>${esc(it.label)}${n}</button>`;
+  };
+  const cls = nav ? `tabs switch${o.fill ? " fill" : ""}` : "tabs seg";
+  return `<div class="${cls}" role="${nav ? "tablist" : "group"}" aria-label="${esc(o.label)}">${items.map(one).join("")}</div>`;
+}
+
 export const btn = (label: string, kind = "", attrs = ""): string =>
   `<button type="button" class="btn${kind ? " " + kind : ""}"${attrs}>${label}</button>`;
 
@@ -121,8 +146,8 @@ export const btn = (label: string, kind = "", attrs = ""): string =>
 export const iconButton = (name: IconName, label: string, attrs = "", cls = ""): string =>
   `<button type="button" class="btn icon${cls ? " " + cls : ""}" aria-label="${esc(label)}" title="${esc(label)}"${attrs}>${ico(name)}</button>`;
 
-export const iconBtn = (name: IconName, label: string, attrs = ""): string =>
-  `<button type="button" class="icon-btn" aria-label="${esc(label)}" title="${esc(label)}"${attrs}>${ico(name)}</button>`;
+/** The small bordered icon button on a row (copy, delete, close): `iconButton` at the row's size. */
+export const iconBtn = (name: IconName, label: string, attrs = "", cls = ""): string => iconButton(name, label, attrs, `row${cls ? " " + cls : ""}`);
 
 /** Keys as caps, such as 「右 Alt」 + 「V」. */
 export const keys = (labels: string[]): string =>

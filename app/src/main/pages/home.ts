@@ -144,7 +144,7 @@ export function createHome(app: AppContext): Page {
       shortcut(t("home.020"), d.dictation_keys) +
       (agentKeys.length ? shortcut(t("home.askRaphael"), agentKeys) : "") +
       (d.paste_last_keys.length ? shortcut(t("home.021"), d.paste_last_keys) : "") +
-      shortcut(t("onboarding.031"), ["Escape"])
+      shortcut(t("common.cancel"), ["Escape"])
     );
   }
 
