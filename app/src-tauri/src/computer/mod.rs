@@ -19,6 +19,10 @@
 //!   (`confirmed`); text with any other control character is refused. Keys and typed text never
 //!   go to a sign-in, a payment field or a one-time code ([`policy::is_handoff_name`]): the live
 //!   element with the focus is read again just before, and such a step fails with `handoff`.
+//!   Keys and typed text for an element named go only to that element once it has the focus
+//!   (`focus` otherwise: nothing is sent to what had the focus before), and keys that delete what
+//!   is selected (Delete, Backspace, Ctrl+D) reach no live focus but a text field unless the step
+//!   is `confirmed` (`unconfirmed` otherwise).
 //! - `focus {window}`: the window is brought to the front.
 //! - `allow {exe, name}`: the app joins the always-allowed list of the device settings.
 //!
@@ -93,6 +97,12 @@ pub enum Failure {
     Stopped,
     /// What the keys or the text would reach is a sign-in, a payment field or a code: the owner's.
     Handoff,
+    /// The element named could not be given the keyboard focus, or the live focus is on another:
+    /// nothing was pressed or typed.
+    Focus,
+    /// Keys that delete what is selected would reach no text field, in a step the owner did not
+    /// say yes to.
+    Unconfirmed,
     /// Anything else.
     Failed,
 }
@@ -111,6 +121,8 @@ impl Failure {
             Failure::KeysNotAllowed => "keys_not_allowed",
             Failure::Stopped => "stopped",
             Failure::Handoff => "handoff",
+            Failure::Focus => "focus",
+            Failure::Unconfirmed => "unconfirmed",
             Failure::Failed => "failed",
         }
     }
@@ -796,6 +808,8 @@ mod tests {
             Failure::KeysNotAllowed,
             Failure::Stopped,
             Failure::Handoff,
+            Failure::Focus,
+            Failure::Unconfirmed,
             Failure::Failed,
         ] {
             assert!(

@@ -117,6 +117,19 @@ impl Chord {
                 _ => false,
             }
     }
+
+    /// Whether the chord, pressed away from a text field, may delete what is selected there:
+    /// Delete or Backspace with any modifiers but Alt (a file in File Explorer, a mail in a list,
+    /// a row, a slide), and Ctrl+D alone (File Explorer, Outlook). In a field whose text can be
+    /// edited they only edit it. The core's rule, word for word
+    /// (`raphael_core.computer.safety.deletes_items`, which a test of the core holds to this).
+    pub fn deletes_items(self) -> bool {
+        match self.key {
+            Key::Delete | Key::Backspace => !self.alt,
+            Key::Char('d') => self.ctrl && !self.shift && !self.alt,
+            _ => false,
+        }
+    }
 }
 
 /// A piece of typed text, as it is sent: characters (UTF-16 units, a few at a time), or a line
@@ -340,6 +353,33 @@ mod tests {
             "Shift+Esc",
         ] {
             assert!(!parse_chord(text).unwrap().moves_away(), "{text}");
+        }
+    }
+
+    #[test]
+    fn delete_backspace_and_ctrl_d_may_delete_what_is_selected() {
+        for text in [
+            "Delete",
+            "Ctrl+Delete",
+            "Shift+Delete",
+            "Ctrl+Shift+Delete",
+            "Backspace",
+            "Ctrl+Backspace",
+            "Shift+Backspace",
+            "Ctrl+D",
+        ] {
+            assert!(parse_chord(text).unwrap().deletes_items(), "{text}");
+        }
+        for text in [
+            "Alt+Delete",
+            "Alt+Backspace",
+            "Ctrl+Shift+D",
+            "Alt+D",
+            "Enter",
+            "Ctrl+X",
+            "Left",
+        ] {
+            assert!(!parse_chord(text).unwrap().deletes_items(), "{text}");
         }
     }
 

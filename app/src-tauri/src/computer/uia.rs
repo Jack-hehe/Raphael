@@ -22,7 +22,12 @@
 //!   text is typed at the caret, as Unicode, in batches, each after the element with the focus is
 //!   read once more (it must be in the window, and neither a password field nor a sign-in, a
 //!   payment field or a code); a line break is Enter, typed only in a step the owner said yes to.
-//!   Keys go the same way. Every input it sends carries Raphael's marker
+//!   Keys go the same way. Keys or typed text for an element named go only once that element has
+//!   taken the focus and the live focus is it (or the edit field of the combo box named): one
+//!   that cannot take it (a text, a pane, a disabled button) fails with `focus`, and nothing goes
+//!   to whatever had the focus before. Delete, Backspace and Ctrl+D go to no live focus but a
+//!   text field without the owner's yes (`unconfirmed`): on a file or a mail they delete it
+//!   ([`policy::may_reach`]). Every input it sends carries Raphael's marker
 //!   (`handy_keys::RAPHAEL_INPUT_MARKER`) and is injected, so the watch on the owner's input and
 //!   the hotkeys never take it for the owner's.
 //! - The window is in front only when the window Windows has in front is the step's own, or one
@@ -60,12 +65,13 @@ use windows::Win32::UI::Accessibility::{
     ScrollAmount, ScrollAmount_LargeDecrement, ScrollAmount_LargeIncrement, ScrollAmount_NoAmount,
     ToggleState_Indeterminate, ToggleState_Off, ToggleState_On, TreeScope_Children,
     UIA_BoundingRectanglePropertyId, UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId,
-    UIA_E_TIMEOUT, UIA_EditControlTypeId, UIA_ExpandCollapseExpandCollapseStatePropertyId,
-    UIA_ExpandCollapsePatternId, UIA_HasKeyboardFocusPropertyId, UIA_InvokePatternId,
-    UIA_IsEnabledPropertyId, UIA_IsOffscreenPropertyId, UIA_IsPasswordPropertyId,
-    UIA_NamePropertyId, UIA_ScrollPatternId, UIA_SelectionItemIsSelectedPropertyId,
-    UIA_SelectionItemPatternId, UIA_TogglePatternId, UIA_ToggleToggleStatePropertyId,
-    UIA_ValueIsReadOnlyPropertyId, UIA_ValuePatternId, UIA_ValueValuePropertyId,
+    UIA_DocumentControlTypeId, UIA_E_TIMEOUT, UIA_EditControlTypeId,
+    UIA_ExpandCollapseExpandCollapseStatePropertyId, UIA_ExpandCollapsePatternId,
+    UIA_HasKeyboardFocusPropertyId, UIA_InvokePatternId, UIA_IsEnabledPropertyId,
+    UIA_IsOffscreenPropertyId, UIA_IsPasswordPropertyId, UIA_NamePropertyId, UIA_ScrollPatternId,
+    UIA_SelectionItemIsSelectedPropertyId, UIA_SelectionItemPatternId, UIA_SpinnerControlTypeId,
+    UIA_TogglePatternId, UIA_ToggleToggleStatePropertyId, UIA_ValueIsReadOnlyPropertyId,
+    UIA_ValuePatternId, UIA_ValueValuePropertyId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
@@ -84,8 +90,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{BOOL, BSTR, HSTRING, Interface, PCWSTR, PWSTR, w};
 
 use super::keys::{self, Chord, Typed};
+use super::policy::{self, Press, Reach};
 use super::tree::{self, Caps, Entry, Props, UiNode};
-use super::{Action, Desktop, Direction, Failure, Step, Ticket, WindowInfo, breaks_lines, policy};
+use super::{Action, Desktop, Direction, Failure, Step, Ticket, WindowInfo, breaks_lines};
 
 /// How long one job of the desktop's thread may take before its caller gives up on it.
 const JOB_TIMEOUT: Duration = Duration::from_secs(12);
@@ -99,6 +106,9 @@ const MAX_WINDOWS: usize = 40;
 const SETTLE: Duration = Duration::from_millis(120);
 /// The most ancestors looked through for one that scrolls.
 const SCROLL_ANCESTORS: usize = 6;
+/// The most ancestors of the element with the focus looked through for the combo box or spinner
+/// the step named, which gives its focus to a part of it (its edit field, its list).
+const FOCUS_HOLDER_ANCESTORS: usize = 3;
 
 type Job = Box<dyn FnOnce(&mut State) + Send>;
 
@@ -395,8 +405,9 @@ impl State {
             Ok(_) => {}
             Err(_) => return Err(Failure::Stale),
         }
-        // A click on it or text for it: the element is the step's target (keys are checked on
-        // the element with the focus, which they reach).
+        // A click on it or text for it: the element is the step's target. Keys are checked on
+        // the element with the focus, which they reach, and which must then be this one
+        // (`check_focus`).
         if matches!(step.action, Action::Click | Action::Type(_)) && handoff(&element) {
             return Err(Failure::Handoff);
         }
@@ -427,11 +438,10 @@ impl State {
                     self.type_text(element.as_ref(), text, step.confirmed, hwnd, ticket)
                 }
                 (Action::Keys(chord), element) => {
-                    if let Some(element) = element {
-                        ticket.check()?;
-                        let _ = element.SetFocus();
+                    if let Some(element) = &element {
+                        give_focus(element, ticket)?;
                     }
-                    self.check_focus(hwnd, chord.moves_away())?;
+                    self.check_focus(hwnd, element.as_ref(), Press::Keys(*chord), step.confirmed)?;
                     send(ticket, &chord_inputs(*chord)).map(|()| "keyboard")
                 }
                 _ => Err(Failure::BadRequest),
@@ -440,29 +450,71 @@ impl State {
     }
 
     /// What keys or typed text would reach, read live, just before they are sent: the window in
-    /// front must be the step's, and the element with the focus no password field, nor (unless
-    /// the keys only move away from it) a sign-in, a payment field or a code. An element with the
-    /// focus that cannot be read is no element the keys may go to.
-    fn check_focus(&self, hwnd: HWND, moving_away: bool) -> Result<(), Failure> {
+    /// front must be the step's, and the element with the focus must be the one the step named
+    /// (`target`, if it named one), and may be what [`policy::may_reach`] lets `press` go to. An
+    /// element with the focus that cannot be read is no element the keys may go to.
+    fn check_focus(
+        &self,
+        hwnd: HWND,
+        target: Option<&IUIAutomationElement>,
+        press: Press,
+        confirmed: bool,
+    ) -> Result<(), Failure> {
         if !in_front(hwnd) {
             return Err(Failure::Failed);
         }
         // SAFETY: COM calls on this thread's objects.
-        unsafe {
+        let reach = unsafe {
             let focused = self
                 .automation
                 .GetFocusedElement()
                 .map_err(|_| Failure::Failed)?;
-            match focused.CurrentIsPassword() {
-                Ok(password) if password.as_bool() => return Err(Failure::Password),
-                Ok(_) => {}
-                Err(_) => return Err(Failure::Failed),
+            let password = focused
+                .CurrentIsPassword()
+                .map_err(|_| Failure::Failed)?
+                .as_bool();
+            Reach {
+                password,
+                handoff: handoff(&focused),
+                on_target: target.is_none_or(|target| self.holds_focus(target, &focused)),
+                edits_text: edits_text(&focused),
             }
-            if !moving_away && handoff(&focused) {
-                return Err(Failure::Handoff);
+        };
+        policy::may_reach(reach, press, confirmed)
+    }
+
+    /// Whether `focused`, the element with the focus, is `target`, or a part of a combo box or a
+    /// spinner `target` is (which give their focus to their edit field). Any other element that
+    /// holds the focus inside `target` is not it: a pane named while its Send button has the
+    /// focus would let Enter press Send. An element that cannot be compared is not it.
+    fn holds_focus(&self, target: &IUIAutomationElement, focused: &IUIAutomationElement) -> bool {
+        // SAFETY: COM calls on this thread's objects, which this runs on.
+        unsafe {
+            let same = |a: &IUIAutomationElement, b: &IUIAutomationElement| -> bool {
+                self.automation
+                    .CompareElements(a, b)
+                    .is_ok_and(|same| same.as_bool())
+            };
+            if same(target, focused) {
+                return true;
             }
+            let role = target.CurrentControlType().map(|c| c.0).unwrap_or(0);
+            if role != UIA_ComboBoxControlTypeId.0 && role != UIA_SpinnerControlTypeId.0 {
+                return false;
+            }
+            let Ok(walker) = self.automation.RawViewWalker() else {
+                return false;
+            };
+            let mut current = walker.GetParentElement(focused).ok();
+            for _ in 0..FOCUS_HOLDER_ANCESTORS {
+                let Some(here) = current.take() else { break };
+                if same(target, &here) {
+                    return true;
+                }
+                current = walker.GetParentElement(&here).ok();
+            }
+            false
         }
-        Ok(())
     }
 
     unsafe fn type_text(
@@ -496,13 +548,11 @@ impl State {
                 return Err(Failure::BadRequest);
             }
             if let Some(element) = element {
-                ticket.check()?;
-                let _ = element.SetFocus();
-                std::thread::sleep(SETTLE);
+                give_focus(element, ticket)?;
             }
         }
         for batch in keys::typing(text) {
-            self.check_focus(hwnd, false)?;
+            self.check_focus(hwnd, element, Press::Text, confirmed)?;
             match batch {
                 Typed::Units(units) => inject(ticket, &unit_inputs(&units))?,
                 Typed::Enter => {
@@ -853,6 +903,32 @@ fn send(ticket: &Ticket, inputs: &[INPUT]) -> Result<(), Failure> {
     inject(ticket, inputs)?;
     std::thread::sleep(SETTLE);
     Ok(())
+}
+
+/// Gives `element` the keyboard focus for keys or typed text, and the app a moment to move it
+/// there. `Focus` when the element cannot take it (a text, a pane, a disabled button): nothing is
+/// then sent, since the keys would reach whatever had the focus before.
+fn give_focus(element: &IUIAutomationElement, ticket: &Ticket) -> Result<(), Failure> {
+    ticket.check()?;
+    // SAFETY: a COM call on an object of the desktop's thread, which this runs on.
+    unsafe { element.SetFocus() }.map_err(|_| Failure::Focus)?;
+    std::thread::sleep(SETTLE);
+    Ok(())
+}
+
+/// Whether the live element is a field whose text Delete and Backspace only edit: an Edit or a
+/// Document with a Value pattern that is not read only (the core's `safety.edits_text`, on what
+/// the look said). A document that cannot be edited (a mail's reading pane, a web page) is not,
+/// and neither is one whose pattern cannot be read.
+fn edits_text(element: &IUIAutomationElement) -> bool {
+    // SAFETY: COM calls on an object of the desktop's thread, which this runs on.
+    unsafe {
+        let role = element.CurrentControlType().map(|c| c.0).unwrap_or(0);
+        (role == UIA_EditControlTypeId.0 || role == UIA_DocumentControlTypeId.0)
+            && element
+                .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+                .is_ok_and(|value| value.CurrentIsReadOnly().is_ok_and(|r| !r.as_bool()))
+    }
 }
 
 /// Whether the live element is called like a sign-in, a payment field or a code. A name that

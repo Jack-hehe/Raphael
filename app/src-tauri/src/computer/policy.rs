@@ -13,7 +13,12 @@
 //! always-allowed list of the device settings keeps it.
 //!
 //! Within a window, an element called like a sign-in, a payment field or a one-time code
-//! ([`is_handoff_name`]) is never clicked, typed into or sent keys: the step is the owner's.
+//! ([`is_handoff_name`]) is never clicked, typed into or sent keys: the step is the owner's. What
+//! keys and typed text reach is read live just before they are sent, and held to what the core
+//! judged ([`may_reach`]).
+
+use super::Failure;
+use super::keys::Chord;
 
 /// The executables Raphael never operates.
 const REFUSED: &[&str] = &[
@@ -173,6 +178,60 @@ pub fn is_handoff_name(name: &str) -> bool {
         || HANDOFF_CJK.iter().any(|word| text.contains(word))
 }
 
+/// What the keys or the typed text of a step would reach, read live just before they are sent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Reach {
+    /// The element with the focus is a password field.
+    pub password: bool,
+    /// It is called like a sign-in, a payment field or a code ([`is_handoff_name`]).
+    pub handoff: bool,
+    /// It is the element the step named, or a part of one that gives its focus to a part (the
+    /// edit field of a combo box); true when the step named none.
+    pub on_target: bool,
+    /// It is a field whose text Delete and Backspace only edit: an Edit or a Document whose value
+    /// can be set.
+    pub edits_text: bool,
+}
+
+/// What a step sends to the element with the focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Press {
+    Keys(Chord),
+    Text,
+}
+
+/// Whether `press` may go to what it would reach, `confirmed` when the owner said yes to the
+/// step. The core judged the element the step named, or the one its look said had the focus; this
+/// holds the live focus to that judgement:
+///
+/// - never a password field (`password`), nor, unless the keys only move away from it, a sign-in,
+///   a payment field or a code (`handoff`);
+/// - only the element named, if one was (`focus` otherwise: it could not take the focus, or the
+///   focus is elsewhere, and nothing is pressed or typed: a harmless element named while the
+///   focus sits on a Send button must not press Send);
+/// - keys that delete what is selected ([`Chord::deletes_items`]) only into a text field, unless
+///   the owner said yes (`unconfirmed`): Delete on a file in File Explorer deletes the file.
+///
+/// A yes to the step does not let keys reach another element than the one named: the owner said
+/// yes to the step the question showed.
+pub fn may_reach(reach: Reach, press: Press, confirmed: bool) -> Result<(), Failure> {
+    if reach.password {
+        return Err(Failure::Password);
+    }
+    if !reach.on_target {
+        return Err(Failure::Focus);
+    }
+    let moving_away = matches!(press, Press::Keys(chord) if chord.moves_away());
+    if reach.handoff && !moving_away {
+        return Err(Failure::Handoff);
+    }
+    let deletes = matches!(press, Press::Keys(chord) if chord.deletes_items());
+    if deletes && !reach.edits_text && !confirmed {
+        return Err(Failure::Unconfirmed);
+    }
+    Ok(())
+}
+
 /// An executable's file name as the lists keep it: the last part of `path`, in lower case.
 pub fn exe_of(path: &str) -> String {
     path.rsplit(['\\', '/'])
@@ -296,6 +355,91 @@ mod tests {
         ] {
             assert!(!is_handoff_name(name), "{name}");
         }
+    }
+
+    fn keys(text: &str) -> Press {
+        Press::Keys(crate::computer::keys::parse_chord(text).unwrap())
+    }
+
+    /// A live focus on the element named, which is no text field.
+    const ON_TARGET: Reach = Reach {
+        password: false,
+        handoff: false,
+        on_target: true,
+        edits_text: false,
+    };
+
+    #[test]
+    fn keys_and_text_go_only_to_the_element_named() {
+        // the element named could not take the focus, which stayed on a Send button
+        let elsewhere = Reach {
+            on_target: false,
+            ..ON_TARGET
+        };
+        for press in [keys("Enter"), keys("Space"), keys("Tab"), Press::Text] {
+            assert_eq!(
+                may_reach(elsewhere, press, false),
+                Err(Failure::Focus),
+                "{press:?}"
+            );
+            // a yes to the step was a yes to the element named, not to what has the focus
+            assert_eq!(may_reach(elsewhere, press, true), Err(Failure::Focus));
+            assert_eq!(may_reach(ON_TARGET, press, false), Ok(()), "{press:?}");
+        }
+        assert_eq!(Failure::Focus.kind(), "focus");
+    }
+
+    #[test]
+    fn a_password_field_or_a_sign_in_with_the_focus_is_the_owners() {
+        let password = Reach {
+            password: true,
+            ..ON_TARGET
+        };
+        let sign_in = Reach {
+            handoff: true,
+            ..ON_TARGET
+        };
+        for press in [keys("Enter"), keys("Ctrl+V"), Press::Text] {
+            assert_eq!(may_reach(password, press, true), Err(Failure::Password));
+            assert_eq!(may_reach(sign_in, press, true), Err(Failure::Handoff));
+        }
+        // keys that only move away from a sign-in may go
+        assert_eq!(may_reach(sign_in, keys("Tab"), false), Ok(()));
+        assert_eq!(
+            may_reach(password, keys("Tab"), false),
+            Err(Failure::Password)
+        );
+    }
+
+    #[test]
+    fn keys_that_delete_reach_no_file_or_list_item_without_a_yes() {
+        let text_field = Reach {
+            edits_text: true,
+            ..ON_TARGET
+        };
+        for text in [
+            "Delete",
+            "Ctrl+Delete",
+            "Shift+Delete",
+            "Backspace",
+            "Ctrl+Backspace",
+            "Ctrl+D",
+        ] {
+            // a selected file in File Explorer, a mail in a list
+            assert_eq!(
+                may_reach(ON_TARGET, keys(text), false),
+                Err(Failure::Unconfirmed),
+                "{text}"
+            );
+            assert_eq!(may_reach(ON_TARGET, keys(text), true), Ok(()), "{text}");
+            // in a text field they edit its text
+            assert_eq!(may_reach(text_field, keys(text), false), Ok(()), "{text}");
+        }
+        // other keys on a selected file, and typed text, go as before
+        for press in [keys("Left"), keys("Ctrl+C"), keys("F2"), Press::Text] {
+            assert_eq!(may_reach(ON_TARGET, press, false), Ok(()), "{press:?}");
+        }
+        assert_eq!(Failure::Unconfirmed.kind(), "unconfirmed");
     }
 
     #[test]
