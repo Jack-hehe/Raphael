@@ -77,6 +77,8 @@ const BUSY: i64 = 1003;
 const NO_MICROPHONE: i64 = 1004;
 /// `NOT_CONFIGURED` in the core's `protocol.py`: the speech model is not ready.
 const NOT_CONFIGURED: i64 = 1001;
+/// `NO_LOCAL_MODEL` in the core's `protocol.py`: the cloud failed and there is no local model.
+const NO_LOCAL_MODEL: i64 = 1006;
 /// A paste-last or agent key press this soon after a dictation started cancels it: Right Alt+V or
 /// Right Alt+Space pressed the dictation key first.
 const CHORD_CANCELS_WITHIN_MS: u64 = 1000;
@@ -901,6 +903,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         match err.code {
             NO_MICROPHONE => Some(notices::NO_MIC),
             NOT_CONFIGURED => Some(notices::NOT_READY),
+            NO_LOCAL_MODEL => Some(notices::NO_LOCAL_MODEL),
             CORE_EXITED => {
                 let mut state = lock(&self.state);
                 if state.down_noticed {
@@ -1775,7 +1778,7 @@ mod tests {
     use crate::hotkey::{CancelSwitch, HotkeyEvent};
     use crate::notices::{
         ASK_FAILED, BUDGET, CORE_DOWN, ELEVATED, FOCUS_CHANGED, GREETING, NO_MIC, NO_SOUND,
-        NOT_READY, OFFLINE, WAITING,
+        NO_LOCAL_MODEL as NO_LOCAL_NOTICE, NOT_READY, OFFLINE, WAITING,
     };
     use crate::overlay::{Mode, OverlayApi, OverlayEvent, Progress, takes_clicks};
     use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
@@ -3092,6 +3095,18 @@ mod tests {
         );
         assert_eq!(c.phase(), Phase::Idle);
         assert_eq!(c.cancel().last(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn no_local_model_at_stop_says_the_cloud_failed_with_nothing_to_fall_back_on() {
+        let c = controller(
+            FakeCore::failing("dictation.stop", RpcError::new(1006, "no local model")),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        ends_with_notice(&c, NO_LOCAL_NOTICE.zh);
+        assert_eq!(c.phase(), Phase::Idle);
     }
 
     #[tokio::test]

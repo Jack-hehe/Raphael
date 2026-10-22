@@ -1263,6 +1263,13 @@ mod tests {
     }
 
     #[test]
+    fn the_local_model_may_be_none_and_the_core_checks_the_rest() {
+        // None is "no local model": the core refuses it only while the engine is local.
+        assert!(set("stt_local_model", json!(null)).is_ok());
+        assert!(set("stt_local_model", json!("sensevoice")).is_ok());
+    }
+
+    #[test]
     fn the_speech_to_text_engine_is_cloud_or_local() {
         assert!(set("stt_engine", json!("cloud")).is_ok());
         assert!(set("stt_engine", json!("local")).is_ok());

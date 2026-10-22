@@ -117,6 +117,14 @@ pub const NOT_READY: Notice = Notice {
     ja: "《否。音声モデルの準備が完了していません。》",
 };
 
+/// The cloud could not transcribe the speech and no local model is left to take over
+/// (`NO_LOCAL_MODEL`).
+pub const NO_LOCAL_MODEL: Notice = Notice {
+    zh: "《否。雲端辨識失敗，且沒有本機模型。》",
+    en: "《Negative. Cloud transcription failed and there is no local model.》",
+    ja: "《否。クラウド認識に失敗しました。ローカルモデルがありません。》",
+};
+
 /// The core is not running, so nothing can be dictated.
 pub const CORE_DOWN: Notice = Notice {
     zh: "《否。核心未在運作。請重新啟動拉斐爾。》",
@@ -292,7 +300,7 @@ pub fn notice_for_fallback(reason: Option<&str>) -> Option<Notice> {
 mod tests {
     use super::*;
 
-    const ALL: [Notice; 11] = [
+    const ALL: [Notice; 12] = [
         ELEVATED,
         FOCUS_CHANGED,
         BUDGET,
@@ -301,6 +309,7 @@ mod tests {
         NO_MIC,
         NO_SOUND,
         NOT_READY,
+        NO_LOCAL_MODEL,
         CORE_DOWN,
         ASK_FAILED,
         GREETING,
