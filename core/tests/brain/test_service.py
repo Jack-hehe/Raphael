@@ -697,7 +697,7 @@ BAD_PARAMS = [
     ("dictionary.learn", {"corrections": ["x"]}, "dictionary.learn: item str"),
 
     ("settings.set", {}, "settings.set: nothing"),
-    ("settings.set", {"key": "language"}, "settings.set: no value"),
+    ("settings.set", {"key": "languages"}, "settings.set: no value"),
     ("settings.set", {"value": "ja"}, "settings.set: no key"),
     ("settings.set", {"key": 5, "value": 1}, "settings.set: key number"),
     ("settings.set", {"key": "no_such_setting", "value": 1}, "settings.set: unknown key"),
@@ -1006,12 +1006,9 @@ async def test_auto_add_does_not_log_the_words(router, conn, caplog):
 async def test_settings_get_and_set_round_trip(router):
     assert await router.call("settings.get", {}) == {"settings": DEFAULTS}
     after = await router.call("settings.set", {"key": "languages", "value": ["ja-JP", "en-GB"]})
-    expected = {**DEFAULTS, "languages": ["ja-JP", "en-GB"], "language": "auto"}
+    expected = {**DEFAULTS, "languages": ["ja-JP", "en-GB"]}
     assert after == {"settings": expected}
     assert (await router.call("settings.get", {}))["settings"] == expected
-    # The old key still works, and sets the new one.
-    old = await router.call("settings.set", {"key": "language", "value": "ja"})
-    assert old["settings"]["languages"] == ["ja-JP"] and old["settings"]["language"] == "ja"
     # A whole number is a valid float setting.
     limit = await router.call("settings.set", {"key": "monthly_limit_usd", "value": 5})
     assert limit["settings"]["monthly_limit_usd"] == 5.0

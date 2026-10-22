@@ -10,14 +10,11 @@ model is only an id.
 
 A key that an older version saved but that is no longer a setting stays in the table and is never
 read: `all` lists only the keys of DEFAULTS, and `get` and `set` refuse the others, so nothing has
-to be rewritten at start-up. Two are such keys: `agent_router` (whether Jev or the language model
-routed the assistant's requests; Jev always does now, so a saved "luna" changes nothing) and
+to be rewritten at start-up. Such keys are `agent_router` (whether Jev or the language model
+routed the assistant's requests; Jev always does now, so a saved "luna" changes nothing),
 `learn_corrections` (whether the words corrected after a paste were learned; they always are now,
-so a saved false changes nothing).
-
-`language` is the setting `languages` replaced, kept for one release: it reads as what the
-selection amounts to ("zh", "ja", "en" or "auto"), and setting it sets `languages`. A saved
-`language` of an older version reads as the selection it stands for until `languages` is saved.
+so a saved false changes nothing) and `language`, the single language that `languages` replaced
+before the first release.
 """
 
 import copy
@@ -26,13 +23,7 @@ import sqlite3
 from typing import Any
 
 from ..device.models import LOCAL_STT_MODELS
-from ..languages import (
-    DEFAULT_LANGUAGES,
-    LEGACY_LANGUAGES,
-    checked_languages,
-    from_legacy,
-    legacy_language,
-)
+from ..languages import DEFAULT_LANGUAGES, checked_languages
 
 DEFAULTS: dict[str, Any] = {
     "monthly_limit_usd": 10.0,
@@ -42,8 +33,6 @@ DEFAULTS: dict[str, Any] = {
     "cleanup_model": "openai/gpt-6-luna",
     # The dictation languages, in the user's order of priority (raphael_core.languages).
     "languages": list(DEFAULT_LANGUAGES),
-    # Derived from `languages`, never saved (see the module's docstring).
-    "language": legacy_language(DEFAULT_LANGUAGES),
     "history_retention_days": 30,
     # Speech-to-text: "cloud" (OpenRouter, with the local engine as the fallback) or "local" (the
     # engine on this computer only; no audio leaves it). Read at the start of each dictation.
@@ -79,7 +68,6 @@ _CHOICES: dict[str, tuple[Any, ...]] = {
     "worker_cost_cap_usd": WORKER_COST_CAPS,
     "stt_engine": STT_ENGINES,
     "stt_local_model": tuple(entry.name for entry in LOCAL_STT_MODELS),
-    "language": LEGACY_LANGUAGES,
 }
 # The settings that hold the id of an OpenRouter model.
 MODEL_SETTINGS = ("cleanup_model", "stt_cloud_model", "agent_model")
@@ -172,8 +160,6 @@ def checked(key: str, value: Any) -> tuple[str, Any]:
         value = _trimmed(key, value)
     if key == "model_favorites":
         value = _favorites(value)
-    if key == "language":
-        return "languages", from_legacy(value)
     return key, value
 
 
@@ -187,12 +173,11 @@ class SettingsStore:
         return None if row is None else json.loads(row["value"])
 
     def _languages(self) -> list[str]:
-        """The saved selection; else the one a saved old `language` stands for; else the default.
-        A saved selection that is no longer valid reads as the default."""
+        """The saved selection, else the default. A saved selection that is no longer valid reads
+        as the default."""
         saved = self._saved("languages")
         if saved is None:
-            old = self._saved("language")
-            return list(DEFAULT_LANGUAGES) if old is None else from_legacy(old)
+            return list(DEFAULT_LANGUAGES)
         try:
             return checked_languages("languages", saved)
         except (TypeError, ValueError):
@@ -203,8 +188,6 @@ class SettingsStore:
         default = DEFAULTS[key]
         if key == "languages":
             return self._languages()
-        if key == "language":
-            return legacy_language(self._languages())
         saved = self._saved(key)
         if key == "model_favorites":
             return _read_favorites(saved)
@@ -219,8 +202,7 @@ class SettingsStore:
 
         Raises KeyError for an unknown key, TypeError for a value of the wrong type and ValueError
         for a number JSON cannot hold (nan, inf), a value that is not one of the key's choices, a
-        blank or absurd text or a selection of languages that is not valid. Setting `language`
-        saves `languages`.
+        blank or absurd text or a selection of languages that is not valid.
         """
         key, value = checked(key, value)
         if key == "stt_engine" and value == "local" and self.get("stt_local_model") is None:
@@ -243,5 +225,4 @@ class SettingsStore:
                 values[row["key"]] = json.loads(row["value"])
         values["model_favorites"] = _read_favorites(values["model_favorites"])
         values["languages"] = self._languages()
-        values["language"] = legacy_language(values["languages"])
         return values

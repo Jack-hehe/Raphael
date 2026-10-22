@@ -8,9 +8,7 @@ from raphael_core.languages import (
     checked_languages,
     chinese_variant,
     display_name,
-    from_legacy,
     language_groups,
-    legacy_language,
     stt_languages,
 )
 
@@ -151,40 +149,3 @@ def test_every_id_has_a_two_or_three_letter_code():
 )
 def test_the_chinese_variant_is_the_one_selected(languages, variant):
     assert chinese_variant(languages) == variant
-
-
-# --- the old `language` setting -------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("old", "new"),
-    [
-        ("auto", ["zh-TW", "en-US", "ja-JP"]),
-        ("zh", ["zh-TW"]),
-        ("ja", ["ja-JP"]),
-        ("en", ["en-US"]),
-    ],
-)
-def test_the_old_language_setting_maps_to_languages(old, new):
-    assert from_legacy(old) == new
-
-
-def test_an_unknown_old_language_maps_to_the_default():
-    assert from_legacy("de") == ["zh-TW"]
-    assert from_legacy(3) == ["zh-TW"]
-
-
-@pytest.mark.parametrize(
-    ("languages", "old"),
-    [
-        (["zh-TW"], "zh"),
-        (["zh-CN"], "zh"),
-        (["yue-HK"], "zh"),
-        (["ja-JP"], "ja"),
-        (["en-GB"], "en"),
-        (["fr-FR"], "auto"),
-        (["zh-TW", "en-US", "ja-JP"], "auto"),
-    ],
-)
-def test_the_old_language_is_derived_from_languages(languages, old):
-    assert legacy_language(languages) == old

@@ -322,10 +322,11 @@ pub fn is_allowed_method(m: &str) -> bool {
 }
 
 /// Checks a few values of `settings.set` before the core sees them: a monthly limit of 0 or more
-/// and a history retention of at least one day, which the core only type-checks; and a language,
-/// a cleanup model and a speech-to-text engine, which the core checks as well (each model against
-/// OpenRouter's list), so that the settings page gets these refusals in its own words. `Err` says
-/// what is wrong. Calls other than `settings.set` pass.
+/// and a history retention of at least one day, which the core only type-checks; and a cleanup
+/// model, a background task's cost cap and a speech-to-text engine, which the core checks as well
+/// (each model against OpenRouter's list), so that the settings page gets these refusals in its
+/// own words. `Err` says what is wrong. The window's `worker.cancel` and `worker.rerun` must name
+/// their task. Other calls pass.
 pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     if method == "worker.cancel" {
         // Without an id the core stops whichever task runs: the window stops only the one it shows.
@@ -352,9 +353,6 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     let fine = match key {
         "monthly_limit_usd" => value.as_f64().is_some_and(|limit| limit >= 0.0),
         "history_retention_days" => value.as_i64().is_some_and(|days| days >= 1),
-        "language" => value
-            .as_str()
-            .is_some_and(|language| ["auto", "zh", "ja", "en"].contains(&language)),
         "cleanup_model" => value.as_str().is_some_and(|model| !model.trim().is_empty()),
         "worker_cost_cap_usd" => value.as_f64().is_some_and(|cap| {
             [0.1, 0.2, 0.5, 1.0]
@@ -372,7 +370,6 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     Err(match key {
         "monthly_limit_usd" => "每月上限要是 0 以上的數字",
         "history_retention_days" => "歷史紀錄至少要保留 1 天",
-        "language" => "語言只能是 auto、zh、ja 或 en",
         "stt_engine" => "語音轉文字只能選雲端或本機",
         "worker_cost_cap_usd" => "背景任務的花費上限只能是 0.10、0.20、0.50 或 1.00 美元",
         _ => "沒有指定整理用的模型",
@@ -1487,12 +1484,7 @@ mod tests {
     }
 
     #[test]
-    fn the_language_and_the_model_are_checked_too() {
-        for language in ["auto", "zh", "ja", "en"] {
-            assert!(set("language", json!(language)).is_ok(), "{language}");
-        }
-        assert!(set("language", json!("de")).is_err());
-        assert!(set("language", json!(1)).is_err());
+    fn the_model_is_checked_too() {
         assert!(set("cleanup_model", json!("google/gemini-3.1-flash-lite")).is_ok());
         assert!(set("cleanup_model", json!("")).is_err());
         assert!(set("cleanup_model", json!(3)).is_err());

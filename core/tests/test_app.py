@@ -1775,7 +1775,7 @@ async def test_a_dictation_goes_through_the_whole_app(make_app, notes):
     app = make_app(kit)
     listen(app, notes)
     await app.call("dictionary.add", {"word": "拉斐爾"})
-    await app.call("settings.set", {"key": "language", "value": "zh"})
+    await app.call("settings.set", {"key": "languages", "value": ["zh-TW"]})
     result = await dictate(app)
     assert result["text"] == WORDS + WORDS  # joined without a space: CJK on both sides
     assert result["cleaned"] is True and result["fallback_reason"] is None
@@ -2552,7 +2552,7 @@ async def test_speech_to_text_is_in_the_cloud_by_default(make_app, openrouter_mo
     kit = make_kit()
     app = make_app(kit, fake_llm=False)
     requests = openrouter_mock(app, cloud_says())
-    await app.call("settings.set", {"key": "language", "value": "zh"})
+    await app.call("settings.set", {"key": "languages", "value": ["zh-TW"]})
     await choose_from_the_list(app, "stt_cloud_model", "openai/gpt-transcribe")
     result = await dictate(app)
     assert result["text"] == "cloud words cloud words"

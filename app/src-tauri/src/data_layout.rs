@@ -313,14 +313,8 @@ fn migrate_window_state(roots: &Roots, outcome: &mut Outcome) {
     remove_empty(&roots.old_roaming, outcome);
 }
 
-/// The task database of an old build (nothing reads it), then the old Roaming folder if that
-/// leaves it empty, and a `device.json.bad` that has been kept long enough.
+/// The old Roaming folder if it is empty, and a `device.json.bad` that has been kept long enough.
 fn remove_stale(roots: &Roots, now: SystemTime, outcome: &mut Outcome) {
-    let assistant = roots.old_roaming.join("assistant");
-    for file in ["tasks.sqlite", "tasks.sqlite-wal", "tasks.sqlite-shm"] {
-        remove_file(&assistant.join(file), outcome);
-    }
-    remove_empty(&assistant, outcome);
     remove_empty(&roots.old_roaming, outcome);
 
     let bad = roots.roaming.join("device.json.bad");
@@ -632,21 +626,18 @@ mod tests {
         let r = roots(dir.path());
         write(&r.old_local.join("logs/raphael.log"), "log");
         write(&r.old_local.join("mystery.txt"), "not ours to delete");
-        write(&r.old_roaming.join("assistant/tasks.sqlite"), "old");
         write(&r.old_roaming.join("other.txt"), "keep");
         migrate(&r, true, now());
         assert!(r.old_local.join("mystery.txt").exists());
         assert!(r.old_roaming.join("other.txt").exists());
-        assert!(!r.old_roaming.join("assistant").exists());
         assert!(!r.old_local.join("logs").exists());
     }
 
     #[test]
-    fn the_leftover_task_database_and_the_empty_folders_are_removed() {
+    fn an_empty_old_roaming_folder_is_removed() {
         let dir = tempfile::tempdir().unwrap();
         let r = roots(dir.path());
-        write(&r.old_roaming.join("assistant/tasks.sqlite"), "old");
-        write(&r.old_roaming.join("assistant/tasks.sqlite-wal"), "old");
+        fs::create_dir_all(&r.old_roaming).unwrap();
         migrate(&r, true, now());
         assert!(!r.old_roaming.exists());
     }

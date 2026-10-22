@@ -23,7 +23,6 @@ export const en = {
   "nav.settings": "Settings",
   "backend.limit": "Enter a monthly limit of 0 or more",
   "backend.retention": "Keep history for at least 1 day",
-  "backend.language": "The language must be auto, zh, ja, or en",
   "backend.stt": "Choose cloud or local transcription",
   "backend.workerCap": "A background task's spending cap is US$0.10, 0.20, 0.50 or 1.00",
   "backend.model": "Choose a cleanup model",

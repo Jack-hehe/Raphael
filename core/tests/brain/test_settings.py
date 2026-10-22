@@ -27,7 +27,6 @@ def test_the_defaults_are_the_documented_ones():
         "monthly_limit_usd": 10.0,
         "cleanup_model": "openai/gpt-6-luna",
         "languages": ["zh-TW"],
-        "language": "zh",
         "history_retention_days": 30,
         "stt_engine": "cloud",
         "stt_cloud_model": "elevenlabs/scribe-v2",
@@ -47,8 +46,8 @@ def test_get_rejects_an_unknown_key(conn):
 def test_all_is_the_defaults_with_saved_values_on_top(conn):
     s = SettingsStore(conn)
     assert s.all() == DEFAULTS
-    s.set("language", "ja")
-    assert s.all() == {**DEFAULTS, "languages": ["ja-JP"], "language": "ja"}
+    s.set("languages", ["ja-JP"])
+    assert s.all() == {**DEFAULTS, "languages": ["ja-JP"]}
     s.all()["languages"].append("changed behind its back")
     s.get("languages").append("changed behind its back")
     assert DEFAULTS["languages"] == ["zh-TW"]
@@ -73,7 +72,7 @@ def test_a_whole_number_for_a_float_setting_is_kept_as_a_float(conn):
         ("history_retention_days", True),
         ("monthly_limit_usd", True),
         ("monthly_limit_usd", "20"),
-        ("language", 1),
+        ("agent_city", 1),
         ("cleanup_model", None),
     ],
 )
@@ -86,7 +85,7 @@ def test_rejects_values_that_are_not_the_defaults_type(conn, key, value):
 
 def test_values_are_stored_as_json_text(conn):
     s = SettingsStore(conn)
-    s.set("language", "ja")
+    s.set("languages", ["ja-JP"])
     s.set("history_retention_days", 7)
     s.set("monthly_limit_usd", 20)
     stored = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM settings")}
@@ -171,7 +170,6 @@ def test_the_store_takes_any_cloud_model_id_and_leaves_the_list_to_the_brain(con
 def test_languages_are_taiwan_chinese_by_default(conn):
     s = SettingsStore(conn)
     assert s.get("languages") == ["zh-TW"]
-    assert s.get("language") == "zh"
 
 
 def test_a_valid_selection_of_languages_is_saved_in_order(conn):
@@ -179,7 +177,6 @@ def test_a_valid_selection_of_languages_is_saved_in_order(conn):
     s.set("languages", ["en-GB", "zh-CN", "ja-JP"])
     assert s.get("languages") == ["en-GB", "zh-CN", "ja-JP"]
     assert s.all()["languages"] == ["en-GB", "zh-CN", "ja-JP"]
-    assert s.get("language") == "auto"
 
 
 @pytest.mark.parametrize(
@@ -200,29 +197,16 @@ def test_languages_that_are_not_a_list_of_strings_are_a_type_error(conn, value):
         SettingsStore(conn).set("languages", value)
 
 
-@pytest.mark.parametrize(
-    ("old", "new"),
-    [
-        ("auto", ["zh-TW", "en-US", "ja-JP"]),
-        ("zh", ["zh-TW"]),
-        ("ja", ["ja-JP"]),
-        ("en", ["en-US"]),
-    ],
-)
-def test_a_saved_old_language_reads_as_languages(conn, old, new):
-    conn.execute("INSERT INTO settings (key, value) VALUES ('language', ?)", (f'"{old}"',))
-    s = SettingsStore(conn)
-    assert s.get("languages") == new
-    assert s.all()["languages"] == new
-    assert s.get("language") == ("auto" if old == "auto" else old)
-
-
-def test_a_saved_selection_wins_over_the_old_language(conn):
+def test_the_single_language_of_before_the_first_release_is_no_longer_a_setting(conn):
+    # A database from a build older than the first release may hold it: it is neither read nor
+    # offered, and it cannot be set again.
     conn.execute("INSERT INTO settings (key, value) VALUES ('language', '\"ja\"')")
     s = SettingsStore(conn)
-    s.set("languages", ["zh-HK"])
-    assert s.get("languages") == ["zh-HK"]
-    assert s.get("language") == "zh"
+    assert s.get("languages") == ["zh-TW"] and "language" not in s.all()
+    with pytest.raises(KeyError):
+        s.get("language")
+    with pytest.raises(KeyError):
+        s.set("language", "ja")
 
 
 def test_a_saved_selection_that_is_no_longer_valid_reads_as_the_default(conn):
@@ -230,13 +214,6 @@ def test_a_saved_selection_that_is_no_longer_valid_reads_as_the_default(conn):
     assert SettingsStore(conn).get("languages") == ["zh-TW"]
 
 
-def test_setting_the_old_language_sets_languages(conn):
-    s = SettingsStore(conn)
-    s.set("language", "auto")
-    assert s.get("languages") == ["zh-TW", "en-US", "ja-JP"]
-    with pytest.raises(ValueError, match="'language'"):
-        s.set("language", "de")
-    assert s.get("languages") == ["zh-TW", "en-US", "ja-JP"]
 
 def test_learning_corrections_is_no_longer_a_setting_and_a_saved_off_is_ignored(conn):
     # Learning is always on. A database from a version with the switch may hold it off: it is

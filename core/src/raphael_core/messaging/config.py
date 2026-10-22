@@ -4,9 +4,6 @@ For each messaging app it holds whether the connection is on, which bot or works
 and name, public facts) and who may talk to Raphael through it (the user and chat ids of the app,
 as strings, and the name each showed when it asked to pair, so the owner can tell them apart). It
 never holds a secret: those are in the vault. Nothing here logs a name or an id.
-
-Version 1 had Telegram only, with whole-number ids; it is read as version 2 and written as such
-the next time something changes.
 """
 
 import contextlib
@@ -63,27 +60,25 @@ class MessagingConfig:
 
 
 def _id(value: object) -> str | None:
-    """An id as a string: a string as it is, a whole number (version 1) as its digits."""
-    if type(value) is int:
-        return str(value)
+    """An id, which is always kept as a string (one may not fit in a JavaScript number)."""
     return value if isinstance(value, str) and value else None
 
 
-def _parse_channel(raw: object, *, v1: bool) -> ChannelConfig:
+def _parse_channel(raw: object) -> ChannelConfig:
     if not isinstance(raw, dict):
         return ChannelConfig()
-    identity = raw.get("bot" if v1 else "identity")
+    identity = raw.get("identity")
     bot_id = _id(identity.get("id")) if isinstance(identity, dict) else None
-    name = identity.get("name" if not v1 else "username") if isinstance(identity, dict) else None
+    name = identity.get("name") if isinstance(identity, dict) else None
     allowed: list[AllowedUser] = []
     for item in raw.get("allowed") or []:
         if not isinstance(item, dict):
             continue
-        user_id = _id(item.get("user_id" if v1 else "user"))
+        user_id = _id(item.get("user"))
         if user_id is None:
             continue
         label = item.get("name")
-        chat_id = "" if v1 else (_id(item.get("chat")) or "")
+        chat_id = _id(item.get("chat")) or ""
         allowed.append(
             AllowedUser(user_id, label[:MAX_NAME_CHARS] if isinstance(label, str) else "", chat_id)
         )
@@ -98,13 +93,11 @@ def _parse_channel(raw: object, *, v1: bool) -> ChannelConfig:
 def _parse(raw: object) -> MessagingConfig:
     if not isinstance(raw, dict):
         return MessagingConfig()
-    if raw.get("version") == 1 or "channels" not in raw and "telegram" in raw:
-        return MessagingConfig({"telegram": _parse_channel(raw.get("telegram"), v1=True)})
     channels = raw.get("channels")
     if not isinstance(channels, dict):
         return MessagingConfig()
     return MessagingConfig(
-        {kind: _parse_channel(item, v1=False) for kind, item in channels.items() if isinstance(kind, str)}
+        {kind: _parse_channel(item) for kind, item in channels.items() if isinstance(kind, str)}
     )
 
 

@@ -22,7 +22,6 @@ export const zhTW = {
   "nav.settings": "設定",
   "backend.limit": "每月上限要是 0 以上的數字",
   "backend.retention": "歷史紀錄至少要保留 1 天",
-  "backend.language": "語言只能是 auto、zh、ja 或 en",
   "backend.stt": "語音轉文字只能選雲端或本機",
   "backend.workerCap": "背景任務的花費上限只能是 0.10、0.20、0.50 或 1.00 美元",
   "backend.model": "沒有指定整理用的模型",

@@ -79,41 +79,6 @@ async def test_the_groups_are_the_plugins_only(rpc, servers):
     assert group["env"] == ["API_KEY"] and SECRET not in json.dumps(groups)
 
 
-async def test_a_file_with_the_old_tiers_is_read_as_on_but_for_a_block(conn, tmp_path, vault, connector, servers):
-    servers.add("Notes")
-    tools = [tool_record(n, f"The {n}.", {"type": "object"}) for n in ("look", "note", "wipe", "fresh")]
-    old = {
-        "version": 1,
-        "servers": [
-            {
-                "id": "s1",
-                "name": "Notes",
-                "transport": "stdio",
-                "command": "npx",
-                "tools": [{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in tools],
-                "tools_checked_at_ms": 1,
-                "grants": {
-                    "look": {"tier": "T0", "fingerprint": tools[0].fingerprint},
-                    "note": {"tier": "T3", "fingerprint": tools[1].fingerprint},
-                    "wipe": {"tier": "block", "fingerprint": tools[2].fingerprint},
-                },
-            }
-        ],
-    }
-    (tmp_path / "integrations.json").write_text(json.dumps(old), encoding="utf-8")
-    service = IntegrationsService(conn, tmp_path, vault, connector=connector)
-    router = Router()
-    service.register(router)
-    [group] = (await router.call("toolsets.list"))["groups"]
-    assert {t["name"]: t["enabled"] for t in group["tools"]} == {
-        "look": True,
-        "note": True,  # any tier counts as on
-        "wipe": False,  # blocked on purpose
-        "fresh": True,  # never decided: on, like every tool
-    }
-    assert service.tier_of("mcp:s1/look") is not None and service.tier_of("mcp:s1/wipe") is None
-
-
 # --- the store ---------------------------------------------------------------------------------
 
 

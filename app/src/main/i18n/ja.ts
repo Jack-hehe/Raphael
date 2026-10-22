@@ -23,7 +23,6 @@ export const ja = {
   "nav.settings": "設定",
   "backend.limit": "月額上限には0以上の数値を入力してください",
   "backend.retention": "履歴の保存期間は1日以上にしてください",
-  "backend.language": "言語にはauto、zh、ja、enを指定してください",
   "backend.stt": "音声認識はクラウドまたはローカルを選んでください",
   "backend.workerCap": "バックグラウンドタスクの上限額は US$0.10、0.20、0.50、1.00 のいずれかです",
   "backend.model": "文章整形用モデルを選んでください",

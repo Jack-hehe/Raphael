@@ -229,8 +229,6 @@ export interface BrainSettings {
   cleanup_model: string;
   /** The languages the speech recognition listens for: locale ids such as "zh-TW", one to five. */
   languages: string[];
-  /** Legacy language setting, derived from `languages` by the core. */
-  language?: string;
   history_retention_days: number;
   /** "cloud" (OpenRouter, the local engine as fallback) or "local". */
   stt_engine: string;
