@@ -144,6 +144,15 @@ def test_search_gives_the_turns_with_their_dates_cut_short(memory, history):
     assert memory.search("會議", exclude=[old]).data["turns"][0]["turn"] == long
 
 
+def test_a_search_that_finds_a_run_on_the_desktop_is_untrusted(memory, history):
+    # Raphael's line of a run tells what the screen showed: the reply that reads it writes no note.
+    add_turn(history, "會議在哪裡", "在三樓。")
+    assert not memory.search("會議").untrusted
+    add_turn(history, "打開會議通知", "畫面寫著會議改到五樓。", route="operate")
+    found = memory.search("會議")
+    assert found.ok and len(found.data["turns"]) == 2 and found.untrusted
+
+
 def test_search_finds_an_older_turn_behind_the_recent_ones_it_leaves_out(memory, history):
     # The turns already in the context are left out; twelve of them match best (the newest come
     # first), more than the most a search gives, and the older match must still be found.

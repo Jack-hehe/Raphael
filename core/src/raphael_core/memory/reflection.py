@@ -6,7 +6,8 @@ sleep-time agents and ChatGPT's "dreaming") reads the turns the owner had with R
 ran, the index of the memory and the few memories those turns touch, and returns a list of actions
 (the mem0 pattern): ADD a memory, UPDATE one, DELETE one, or NOOP. It reads only the owner's
 questions and Raphael's lines: never what a tool returned, a web page, a file, an email or a message
-from anybody else, so nothing from outside can plant a memory.
+from anybody else, so nothing from outside can plant a memory. Of a run on the owner's desktop
+(`operate`) it reads only the question: Raphael's line there tells what the screen showed.
 
 The weekly consolidation first deletes, by code, the `ongoing` memories whose date has passed, then
 asks the model once to merge the memories that say the same thing (UPDATE one, DELETE the others).
@@ -369,6 +370,19 @@ def _memory_block(memory: Memory, body_chars: int | None = None) -> str:
     )
 
 
+# What the reflection pass is shown for Raphael's line of a run on the owner's desktop.
+OPERATED = "(operated an app on the screen)"
+
+
+def _raphael_said(turn: Turn) -> str:
+    """Raphael's line of `turn` as the reflection pass reads it. A run on the owner's desktop
+    (`operate`) said what the model read on the screen, which is untrusted like any tool's result:
+    its line is left out, and only the owner's question is read."""
+    if turn.route == "operate":
+        return OPERATED
+    return turn.text or turn.prefix
+
+
 def reflection_message(
     today: date,
     index: str,
@@ -377,8 +391,8 @@ def reflection_message(
     fill: float,
 ) -> str:
     """What the reflection pass is shown: today's date, the index, the memories the turns touch,
-    and the turns (the owner's question and Raphael's line, and the longer text of a discussion,
-    which a tool did not write), each with its own local date and time (`turn_time`): a turn may
+    and the turns (the owner's question and Raphael's line, but not his line of a run on the
+    desktop, and the longer text of a discussion, which a tool did not write), each with its own local date and time (`turn_time`): a turn may
     be days old, and its relative dates are read against the day it was said."""
     parts = [f"Today: {today.isoformat()} ({today.strftime('%A')})"]
     if fill >= FULL_FROM:
@@ -394,7 +408,7 @@ def reflection_message(
         )
     lines = []
     for turn in turns:
-        said = turn.text or turn.prefix
+        said = _raphael_said(turn)
         extra = ""
         if turn.route in ("discuss", "chat") and turn.detail and turn.detail != said:
             extra = f"\nRaphael, at more length: {turn.detail[:600]}"
@@ -464,7 +478,7 @@ class Reflector:
         if not turns:
             return Applied()
         since = store.mark()
-        seen = "\n".join(f"{turn.question} {turn.text}" for turn in turns)
+        seen = "\n".join(f"{turn.question} {_raphael_said(turn)}" for turn in turns)
         related = store.related(seen, RELATED)
         user = reflection_message(store.today(), store.index(), related, turns, store.fill())
         try:

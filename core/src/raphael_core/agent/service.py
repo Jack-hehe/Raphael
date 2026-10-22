@@ -43,7 +43,9 @@ ui_language, target_app}`. The router (Jev, and the language model when Jev fail
   before it uses an app for the first time and before every step that sends, deletes or buys. Its
   questions are the replies of `agent.ask` and `agent.confirm` like any other, so one turn can ask
   several in a row (`agent.confirm {id, approved, always}`, `always` for 「一律允許」), and its
-  steps are the turn's;
+  steps are the turn's. A run reads the conversation as a quick answer does (the summary, the last
+  turns) and the memory's index, as data, but never writes a note: what it saw on the screen is
+  untrusted;
 - a task for the background (`delegate`: several steps, or a connected service) is handed to the
   background worker (`raphael_core.background`) and answered at once with 《了。》; the worker does
   it step by step through the same gate, and reports on the overlay when it is done;
@@ -89,7 +91,7 @@ from ..background.brief import background_block, background_line
 from ..background.tasks import Refused
 from ..brain.catalog import CatalogEntry
 from ..clock import wall_clock_ms
-from ..computer.run import ComputerRun, ComputerRuns, Final, Question
+from ..computer.run import ComputerRun, ComputerRuns, Final, Question, conversation_block
 from ..computer.words import answers as answer_labels
 from ..integrations.pool import McpPool
 from ..brain.openrouter import OpenRouterClient
@@ -727,6 +729,7 @@ class AgentService:
             ledger=ledger,
             over_budget=lambda: self._over_budget(limit),
             open_app=self._open_for_run,
+            background=self._before_run(),
             clock=self._clock,
             now_ms=self._now_ms,
         )
@@ -735,6 +738,16 @@ class AgentService:
         assert run.task is not None
         run.task.add_done_callback(lambda _done, run=run: self._settle_unheard(run))
         return await self._next_from_run(run)
+
+    def _before_run(self) -> str:
+        """What a run is told of what came before its request: the memory's index, and the
+        conversation as a quick answer reads it (the summary and the last few turns). A run
+        writes no note, now or later: its turn holds what the model read on the screen, which is
+        untrusted, and a note is written only from the owner's own words (see `_remember`, and the
+        reflection pass, which reads only the owner's question of an `operate` turn)."""
+        context = self._conversation.context(quick=True)
+        index = "" if self._memory is None else self._memory.index()
+        return conversation_block(context.summary, context.turns, index)
 
     async def _next_from_run(self, run: ComputerRun) -> dict:
         """What the run says next, as the reply of `agent.ask` or `agent.confirm`: its question

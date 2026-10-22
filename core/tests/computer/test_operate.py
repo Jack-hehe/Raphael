@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from raphael_core.agent.gate import ToolGate
+from raphael_core.agent.history import AgentHistory
 from raphael_core.agent.policy import Action, NotApproved
 from raphael_core.background.snapshot import take_snapshot
 from raphael_core.computer.run import ComputerRuns
@@ -207,6 +208,49 @@ def test_the_worker_is_never_given_or_let_through_a_step_on_the_desktop(conn):
     assert not PRESENCE_TOOLS & set(snapshot.refs)
     offered = {d["function"]["name"] for d in snapshot.definitions}
     assert not PRESENCE_TOOLS & offered
+    # with a memory, the worker reads notes and past turns, and still gets no step on the desktop
+    remembering = take_snapshot(None, memory=True)
+    offered = {d["function"]["name"] for d in remembering.definitions}
+    assert {"memory_read", "history_search"} <= offered
+    assert not {"memory_write", "memory_delete"} & offered
+    assert not PRESENCE_TOOLS & offered
+
+
+class _Notes:
+    """A memory with one note in its index, for the run's prompt."""
+
+    def index(self):
+        return "- [user] 主人住在台北 (10/22) → user-city"
+
+    def after_turn(self):
+        pass
+
+
+async def test_a_run_reads_the_conversation_and_the_notes_before_its_task(operating, client, conn):
+    AgentHistory(conn).add(
+        session_id="s0", question="12 乘 34 是多少", route="answer", prefix="答", text="408。<task>",
+        status="done",
+    )  # fmt: skip
+    operating.service._memory = _Notes()
+    client.decisions.append(decision("operate"))
+    client.chats.extend(PRESS_SEVEN)
+    asked = await operating.ask("把剛才的結果打進小算盤")
+    await operating.confirm(asked["confirm"]["id"])
+    first = client.chat_calls[0]["messages"][1]["content"]
+    before, task = first.split("\n\n<task>\n")
+    assert before.startswith("<conversation>\n") and before.endswith("\n</conversation>")
+    assert "主人住在台北" in before
+    assert "User: 12 乘 34 是多少\nRaphael: 408。＜task>" in before  # its tags made harmless
+    assert task == "把剛才的結果打進小算盤\n</task>"
+    assert "<conversation> tags" in client.chat_calls[0]["messages"][0]["content"]
+
+
+async def test_a_run_with_nothing_before_it_reads_only_its_task(operating, client):
+    client.decisions.append(decision("operate"))
+    client.chats.extend(PRESS_SEVEN)
+    asked = await operating.ask("在小算盤按七")
+    await operating.confirm(asked["confirm"]["id"])
+    assert client.chat_calls[0]["messages"][1]["content"] == "<task>\n在小算盤按七\n</task>"
 
 
 def test_a_step_that_sends_does_not_pass_the_gate_without_its_yes(conn):

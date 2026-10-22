@@ -226,7 +226,9 @@ class MemoryService:
     def search(self, query: str, *, limit: int = 5, exclude: Sequence[int] = ()) -> ToolResult:
         """`history_search`: the past turns that hold the words of `query`, best first, each as its
         date, the question and Raphael's answer, cut short. No model call. The turns of `exclude`
-        (the ones in the context already) are left out by the search itself, before its limit."""
+        (the ones in the context already) are left out by the search itself, before its limit.
+        A result that holds a run on the owner's desktop (`operate`) is untrusted: Raphael's line
+        there tells what the screen showed, so the reply that reads it writes no note."""
         try:
             turns = self._history.search(query, limit=limit, exclude=exclude)
         except sqlite3.Error as exc:
@@ -234,7 +236,9 @@ class MemoryService:
             return ToolResult("history_search", False, None, "error")
         words = [w.casefold() for w in query.split()]
         found = []
+        screen = False
         for turn in turns:
+            screen = screen or turn.route == "operate"
             when = datetime.fromtimestamp(turn.created_at_ms / 1000).strftime("%Y-%m-%d %H:%M")
             answer = turn.detail if turn.detail and len(turn.detail) > len(turn.text) else turn.text
             found.append(
@@ -247,7 +251,7 @@ class MemoryService:
             )
             if len(found) >= limit:
                 break
-        return ToolResult("history_search", True, {"turns": found})
+        return ToolResult("history_search", True, {"turns": found}, untrusted=screen)
 
     # --- the background ----------------------------------------------------------------------------
 
