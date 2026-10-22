@@ -3,10 +3,12 @@ that adds a service from it (against the fake service of `fake_oauth`)."""
 
 import asyncio
 import json
+import re
+from pathlib import Path
 
 import pytest
 
-from raphael_core.integrations import catalog
+from raphael_core.integrations import catalog, toolsets
 from raphael_core.integrations.client import McpConnector
 from raphael_core.integrations.config import ConfigStore, tool_record
 from raphael_core.integrations.service import IntegrationsService
@@ -60,6 +62,20 @@ def by_id(groups):
 def test_tools_are_grouped_by_their_hints_and_then_their_names(hints, name, kind):
     tool = tool_record(name, "", {}, hints[0], hints[1])
     assert tool_kind(tool) == kind
+
+
+def test_the_conversation_reads_the_names_with_the_same_words():
+    """The conversation words a service's step as 「Notion：讀取」 or 「Notion：修改」 by the same guess
+    from the name (`toolAccess` of the app's `timeline.ts`): its list of reading verbs and its way
+    of splitting a name are this module's."""
+    source = (Path(__file__).resolve().parents[3] / "app" / "src" / "main" / "timeline.ts").read_text(
+        encoding="utf-8"
+    )
+    listed = re.search(r"export const READ_WORDS[^=]*= new Set\(\[(.*?)\]\);", source, re.S)
+    assert listed is not None
+    assert set(re.findall(r'"(\w+)"', listed.group(1))) == toolsets._READ_WORDS
+    split = re.search(r"^const WORD = /(.*)/g;", source, re.M)
+    assert split is not None and split.group(1) == toolsets._WORD.pattern
 
 
 # --- the groups --------------------------------------------------------------------------------

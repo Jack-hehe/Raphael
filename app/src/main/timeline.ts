@@ -76,26 +76,54 @@ const TASK_ENDS: Record<string, MessageKey> = {
 };
 
 /**
- * A tool's name made readable, as the connections show it: the service's own name at the start taken
- * off, the dashes and underscores as spaces, a capital first.
+ * The words that, first in a tool's name, mean it only looks: `_READ_WORDS` of the core's
+ * `integrations/toolsets.py`, which groups the tools of 「連接」 the same way (a test of the core keeps
+ * the two lists one).
  */
-export function readableTool(name: string, service = ""): string {
+export const READ_WORDS: ReadonlySet<string> = new Set([
+  "get", "list", "search", "find", "read", "fetch", "query", "lookup", "describe", "show",
+  "view", "check", "count", "retrieve", "browse", "inspect", "export", "download", "preview",
+  "summarize", "who", "whoami", "status", "info", "history", "resolve", "explain", "analyze",
+]);
+/** A word of a tool's name: split at `_`, `-`, `.` and a change of case, as toolsets.py splits it. */
+const WORD = /[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])/g;
+
+/**
+ * Whether a service's tool only reads or may change something, by its name as toolsets.py guesses
+ * when a server says nothing: `read` when its first word is one of `READ_WORDS`, `write` for any
+ * other. The service's own name at the start (`notion-search`) is passed over first. A step keeps no
+ * more than the tool's name, so this is a guess for its words only: it decides nothing.
+ */
+export function toolAccess(name: string, service = ""): "read" | "write" {
   let rest = name;
   const prefix = service.trim().toLowerCase();
   if (prefix) {
-    for (const sep of ["-", "_"]) if (rest.toLowerCase().startsWith(prefix + sep) && rest.length > prefix.length + 1) rest = rest.slice(prefix.length + 1);
+    for (const sep of ["-", "_", "."]) if (rest.toLowerCase().startsWith(prefix + sep) && rest.length > prefix.length + 1) rest = rest.slice(prefix.length + 1);
   }
-  const spaced = rest.replace(/[-_]+/g, " ").trim();
-  return spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : name;
+  const first = rest.match(WORD)?.[0]?.toLowerCase();
+  return first !== undefined && READ_WORDS.has(first) ? "read" : "write";
 }
 
-/** What a step did, in the language of the window. */
+/**
+ * What a step did, in the language of the window. Raphael's own lookups and the commands for this PC
+ * have words of their own; a service's tool, whose name is the server's and in its language, is
+ * 「Notion：讀取」 or 「Notion：修改」 by whether it only reads (`toolAccess`). Its name is the step's
+ * tooltip (`stepToolTip`).
+ */
 export function stepTitle(step: AgentStep): string {
   if (step.kind === "model") return t("agent.stepThinking");
   if (!step.tool) return t("agent.stepUnknown");
-  if (step.kind === "command") return COMMAND_TITLES[step.tool] ? plain(COMMAND_TITLES[step.tool]) : readableTool(step.tool);
+  if (step.kind === "command") return plain(COMMAND_TITLES[step.tool] ?? "agent.cmd.other");
   if (step.server === RAPHAEL && BUILTIN_TITLES[step.tool]) return plain(BUILTIN_TITLES[step.tool]);
-  return readableTool(step.tool, step.server ?? "");
+  const service = !step.server || step.server === RAPHAEL ? t("agent.title") : step.server;
+  return t(toolAccess(step.tool, step.server ?? "") === "read" ? "agent.tool.read" : "agent.tool.write", { p0: service });
+}
+
+/** The tool's own name, for the tooltip of a step whose words do not name it (a service's tool); blank for one that has words of its own. */
+export function stepToolTip(step: AgentStep): string {
+  if (step.kind === "model" || !step.tool) return "";
+  if (step.kind === "command") return COMMAND_TITLES[step.tool] ? "" : step.tool;
+  return step.server === RAPHAEL && BUILTIN_TITLES[step.tool] ? "" : step.tool;
 }
 
 /** Where a step happened: the service, Raphael, or this PC. */
@@ -214,10 +242,11 @@ function stepIcon(step: AgentStep): string {
 export function stepHTML(step: AgentStep, isNew: boolean): string {
   const ok = step.outcome === "ok";
   const why = reasonText(step);
+  const tip = stepToolTip(step);
   return (
     `<li class="step ${ok ? "is-ok" : "is-bad"}${isNew ? " is-new" : ""}">` +
     stepIcon(step) +
-    `<span class="step-main"><span class="step-t">${esc(stepTitle(step))}</span>` +
+    `<span class="step-main"><span class="step-t"${tip ? ` title="${esc(tip)}"` : ""}>${esc(stepTitle(step))}</span>` +
     (ok ? "" : `<span class="step-why">${esc(why)}</span>`) +
     `</span>` +
     `<span class="step-end"><span class="step-ms num">${esc(formatDuration(step.ms))}</span>` +

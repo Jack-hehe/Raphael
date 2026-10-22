@@ -8,7 +8,8 @@ import {
   markSeen,
   noteTaskEnds,
   pendingTurnHTML,
-  readableTool,
+  stepToolTip,
+  toolAccess,
   reasonText,
   requestStop,
   sourceIcon,
@@ -54,15 +55,56 @@ const visible = (html: string): string =>
 const running = (over: Partial<AgentTask> = {}): AgentTask => ({ id: 41, state: "running", started_at_ms: T0, finished_at_ms: null, ...over });
 
 describe("a step in words", () => {
-  test("Raphael's own lookups, commands and a service's tools get readable names", () => {
+  test("Raphael's own lookups and commands have words of their own, in the language of the window", () => {
     expect(stepTitle(step({ tool: "weather" }))).toBe("查天氣");
     expect(stepTitle(step({ tool: "web_search" }))).toBe("搜尋網路");
     expect(stepTitle(step({ kind: "command", tool: "volume_mute", server: null }))).toBe("靜音");
-    expect(stepTitle(step({ tool: "notion-create_page", server: "Notion" }))).toBe("Create page");
     expect(stepTitle(step({ tool: null, server: null, outcome: "blocked" }))).toBe("沒有提供的工具");
-    expect(readableTool("search_issues")).toBe("Search issues");
+    expect(stepToolTip(step({ tool: "weather" }))).toBe("");
+    expect(stepToolTip(step({ kind: "command", tool: "volume_mute", server: null }))).toBe("");
     setLocale("en");
     expect(stepTitle(step({ tool: "weather" }))).toBe("Weather");
+  });
+
+  test("a service's tool is the service and whether it read or changed, never its English name", () => {
+    const tools: [string, string, string][] = [
+      ["notion-create_page", "Notion", "Notion：修改"],
+      ["notion-search", "Notion", "Notion：讀取"],
+      ["list_issues", "GitHub", "GitHub：讀取"],
+      ["createPages", "Notion", "Notion：修改"],
+      ["getMe", "Telegram", "Telegram：讀取"],
+      ["create-event", "Google Calendar", "Google Calendar：修改"],
+      ["frobnicate", "Odd", "Odd：修改"], // a name that is no known verb is counted as one that changes things
+    ];
+    for (const [tool, server, title] of tools) {
+      expect(stepTitle(step({ tool, server })), tool).toBe(title);
+      expect(stepToolTip(step({ tool, server })), tool).toBe(tool);
+    }
+    // a command or a lookup with no words of its own says so in the window's language, its name in the tooltip
+    expect(stepTitle(step({ kind: "command", tool: "something_new", server: null }))).toBe("操作這台電腦");
+    expect(stepToolTip(step({ kind: "command", tool: "something_new", server: null }))).toBe("something_new");
+    expect(stepTitle(step({ tool: "get_news" }))).toBe("拉斐爾：讀取");
+    setLocale("en");
+    expect(stepTitle(step({ tool: "list_issues", server: "GitHub" }))).toBe("GitHub: read");
+    expect(stepTitle(step({ tool: "create_issue", server: "GitHub" }))).toBe("GitHub: change");
+    setLocale("ja");
+    expect(stepTitle(step({ tool: "list_issues", server: "GitHub" }))).toBe("GitHub：読み取り");
+  });
+
+  test("a step's line shows the words and keeps the tool's own name only in its tooltip", () => {
+    const html = stepsHTML(turn(9, { steps: [step({ tool: "list_issues", server: "GitHub" })] }), emptyTimelineState());
+    expect(html).toContain('<span class="step-t" title="list_issues">GitHub：讀取</span>');
+    expect(visible(html)).not.toContain("list_issues");
+    expect(visible(html)).not.toMatch(/List issues/i);
+  });
+
+  test("read or change is told by the name's first word, as the connections group them", () => {
+    expect(toolAccess("search_issues")).toBe("read");
+    expect(toolAccess("fetchPage")).toBe("read");
+    expect(toolAccess("HTTPGet")).toBe("write"); // the first word is HTTP
+    expect(toolAccess("update_page")).toBe("write");
+    expect(toolAccess("github.list_repos", "GitHub")).toBe("read");
+    expect(toolAccess("")).toBe("write");
   });
 
   test("a failure says why in a few words, from its kind; an unknown kind is a plain error", () => {
@@ -140,9 +182,10 @@ describe("what a turn did", () => {
     expect(summaryText(t1, T0).time).toBe("2.4 秒"); // the first start (0.48 s) to the last end (2.9 s)
     expect(html.match(/class="step is-ok/g)).toHaveLength(2);
     expect(html).toContain("需要重新登入"); // a failure is said in words
-    // the service is the picture's name, not a word beside the tool
+    // the service is the picture's name, and its tool is said as the service and what it did
     expect(html).toContain('role="img" aria-label="Google Calendar" title="Google Calendar"');
-    expect(visible(html)).not.toContain("Google Calendar");
+    expect(visible(html)).toContain("Google Calendar：修改");
+    expect(visible(html)).not.toContain("create-event");
     expect(html).not.toContain('data-act="stop"');
     expect(html).not.toContain('class="steps task');
   });
@@ -170,7 +213,7 @@ describe("what a turn did", () => {
     const t1 = turn(1, { task: running({ state: "done", finished_at_ms: T0 + 9_000 }), steps: [step({ tool: "find_tools", ms: 3 }), step({ tool: "search_issues", server: "GitHub" })] });
     const html = stepsHTML(t1, emptyTimelineState());
     expect(html.match(/<li class="step/g)).toHaveLength(1);
-    expect(html).toContain("Search issues");
+    expect(html).toContain("GitHub：讀取");
   });
 
   test("the reader's choice beats the default, which is open while a task runs and closed once done", () => {
