@@ -1410,6 +1410,15 @@ async def test_a_second_request_of_a_session_replaces_the_first_that_is_still_go
     assert actions.calls == [("lock_screen",)]  # once
 
 
+async def test_a_long_question_is_taken_whole(rig, client):
+    # However long the user spoke: nothing of what was asked is cut off.
+    question = "請把聲音關掉，" + "因為我正在開一個很長的會議，" * 200
+    assert len(question) > 2000
+    client.decisions.append(decision("command", "volume_mute"))
+    await rig.ask(question)
+    assert [t["question"] for t in await rig.turns()] == [question]
+
+
 # --- the history -------------------------------------------------------------------------------------
 
 

@@ -40,14 +40,15 @@ CLEANUP_SCHEMA = {
 
 def timeout_for(audio_seconds: float) -> float:
     """Seconds to wait for the cleanup of `audio_seconds` of speech: 10, plus 1 for every 3 of
-    audio, and 90 at most.
+    audio, with no ceiling.
 
-    Every dictation is meant to be cleaned, however long: the limit is only
-    there for a model that hangs. The reply grows with what was said, and a slow provider writes
-    a few dozen tokens a second, so a long dictation needs many seconds; a tight limit (3 s, plus 1
-    for every 20 s of audio) would paste long dictations raw. dictation.stop leaves room for this in
-    the shell's wait (core_process.rs)."""
-    return min(90.0, 10.0 + audio_seconds / 3.0)
+    Every dictation is meant to be cleaned, however long: the limit is only there for a model that
+    hangs. The reply grows with what was said, and a slow provider writes a few dozen tokens a
+    second, so a long dictation needs many seconds; a tight limit (3 s, plus 1 for every 20 s of
+    audio) would paste long dictations raw, and so would a ceiling (it was 90 s, which a dictation
+    of a few minutes outgrows). dictation.stop leaves room for this in the shell's wait, which
+    grows with the recording the same way (core_process.rs `dictation_stop_timeout`)."""
+    return 10.0 + audio_seconds / 3.0
 
 
 def build_user_message(raw: str) -> str:

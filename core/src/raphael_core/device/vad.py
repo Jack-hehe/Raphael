@@ -1,8 +1,10 @@
 """Cutting a stream of audio into stretches of speech with Silero VAD on sherpa-onnx.
 
-Dictation hears the microphone for as long as the key is down, and the speech-to-text engines take
-no more than 20 seconds at a time (stt.py). A `Segmenter` is fed the audio as it arrives, in
-pieces of any size, and gives back the stretches that hold speech, each ready to transcribe.
+Dictation hears the microphone for as long as the recording lasts, and the speech-to-text engines
+take no more than 20 seconds at a time (stt.py). A `Segmenter` is fed the audio as it arrives, in
+pieces of any size, and gives back the stretches that hold speech, each ready to transcribe. It
+also says how long the recording has gone without speech (`silence_seconds`), which ends a
+dictation nobody speaks in any more.
 
 sherpa-onnx ends the whole process, with no exception to catch, when it is given a model path that
 does not exist, so the file is checked before the detector is built.
@@ -38,6 +40,13 @@ class Segmenter:
     `speech_seconds` is the total length of the speech found in the current recording. It can still
     be read after `flush`; the first `accept` of the next recording sets it back to zero.
 
+    `silence_seconds` is how long the current recording has gone without speech: the audio fed
+    since the detector last heard someone speak, or since the recording began if nobody has yet.
+    The detector hears speech from the moment a stretch has lasted long enough to count until
+    `min_silence_s` of quiet has ended it, and that quiet is counted too: the count is the silence
+    itself, not the silence less the detector's patience. The first `accept` of the next recording
+    starts it again from zero.
+
     Not safe to call from several threads at once.
     """
 
@@ -60,13 +69,16 @@ class Segmenter:
         config.silero_vad.window_size = _WINDOW
         config.sample_rate = SAMPLE_RATE
         self._config = config
+        self._min_silence_s = min_silence_s
         self._max_segment_s = 0.0
         self._wanted_max_s = max_segment_s
         self._build(max_segment_s)
         self._rest = np.zeros(0, dtype=np.float32)  # the end of the audio, short of a window
         self._flushed = False  # a recording has ended, and no new one has begun
         self._fresh = True  # nothing has been fed since the detector was built or flushed
+        self._speaking = False  # the detector heard speech in the last window it was given
         self.speech_seconds = 0.0
+        self.silence_seconds = 0.0
 
     def _build(self, max_segment_s: float) -> None:
         # Only makes the detector stricter as a stretch gets long, so it is not a limit: see _split.
@@ -94,6 +106,7 @@ class Segmenter:
         if self._flushed:
             self._flushed = False
             self.speech_seconds = 0.0
+            self.silence_seconds = 0.0
         if self._fresh:
             self._fresh = False
             if self._wanted_max_s != self._max_segment_s:
@@ -104,6 +117,7 @@ class Segmenter:
         for start in range(0, whole, _WINDOW):
             self._vad.accept_waveform(audio[start : start + _WINDOW])
             segments += self._drain()
+            self._count_silence()
         self._rest = audio[whole:].copy()  # a copy: `frames` is the caller's to reuse
         return segments
 
@@ -117,9 +131,23 @@ class Segmenter:
         self._vad.flush()
         segments = self._drain()
         self._vad.reset()  # flush leaves the model's memory of the sound it just heard
+        self._speaking = False
         self._flushed = True
         self._fresh = True
         return segments
+
+    def _count_silence(self) -> None:
+        """After each window: the silence starts again while the detector hears speech, and grows
+        by the window while it does not. When a stretch of speech has just ended, the detector has
+        already waited `min_silence_s` of quiet to say so, and that much has gone by in silence."""
+        speaking = bool(self._vad.is_speech_detected())
+        if speaking:
+            self.silence_seconds = 0.0
+        elif self._speaking:
+            self.silence_seconds = self._min_silence_s
+        else:
+            self.silence_seconds += _WINDOW / SAMPLE_RATE
+        self._speaking = speaking
 
     def _drain(self) -> list[np.ndarray]:
         segments: list[np.ndarray] = []

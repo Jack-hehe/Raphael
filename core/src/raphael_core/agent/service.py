@@ -123,8 +123,6 @@ HISTORY_DEFAULT_LIMIT = 50
 # and the request can cross on the pipe), and it is then answered as cancelled, with nothing run.
 CANCELLED_MEMORY_S = 60.0
 HISTORY_MAX_LIMIT = 200
-# A request is cut to this many characters: a dictation holds a few thousand at the very most.
-MAX_QUESTION_CHARS = 1000
 # Where a request may come from: a short lower-case word ("voice", "telegram").
 _SOURCE = re.compile(r"[a-z]{1,20}")
 # How many turns of the conversation each route is shown.
@@ -397,7 +395,7 @@ class AgentService:
     async def _ask(self, params: dict) -> dict:
         ask = _Ask(
             session_id=_str(params, "session_id"),
-            text=_str(params, "text", blank=True)[:MAX_QUESTION_CHARS],
+            text=_str(params, "text", blank=True),
             language=normalize_language(_str(params, "ui_language")),
         )
         source = params.get("source")

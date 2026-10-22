@@ -126,12 +126,14 @@ class FakeWav:
 
 
 class FakeSegmenter:
-    """One segment per chunk. `speech_seconds` starts again at the first chunk after a flush."""
+    """One segment per chunk. `speech_seconds` starts again at the first chunk after a flush.
+    Every chunk is speech, so `silence_seconds` stays at 0 unless a test sets it."""
 
     def __init__(self, kit, path, **kwargs):
         self.path = path
         self.kwargs = kwargs
         self.speech_seconds = 0.0
+        self.silence_seconds = 0.0
         self.flushes = 0
         self._flushed = False
         self.calls_from: set[int] = set()
@@ -1729,7 +1731,22 @@ async def test_a_stop_that_ends_while_a_new_start_makes_way_does_not_reopen_the_
     assert kit.mics[-1].open and sum(mic.open for mic in kit.mics) == 1  # the meter is back
 
 
+async def test_a_silent_dictation_is_told_of_through_the_whole_app(make_app, notes):
+    kit = make_kit()
+    app = make_app(kit)
+    listen(app, notes)
+    await dictate(app)  # the first dictation has the detector built
+    assert notes.methods("dictation.silence") == []  # it heard speech
+    kit.segmenters[-1].silence_seconds = dictation.SILENCE_STOP_SECONDS
+    await app.call("dictation.start", {"session_id": "s2"})
+    await wait_until(lambda: notes.methods("dictation.silence"))
+    assert notes.methods("dictation.silence") == [{"session_id": "s2"}]
+    result = await app.call("dictation.stop", {"session_id": "s2", "target_app": None})
+    assert result["text"] == WORDS + WORDS  # the stop the app makes delivers what was heard
+
+
 async def test_the_meter_comes_back_after_a_session_nobody_stopped(make_app, monkeypatch):
+    monkeypatch.setattr(dictation, "SILENCE_STOP_SECONDS", 0.0)  # silent at once
     monkeypatch.setattr(dictation, "LOST_SESSION_SECONDS", 0.3)
     kit = make_kit()
     app = make_app(kit)
@@ -2482,15 +2499,24 @@ CLOUD_KEY = "sk-or-v1-test"
 async def openrouter_mock():
     """`openrouter_mock(app, transcription)` sends the app's OpenRouter requests to a mock.
 
-    `transcription(request)` answers POST /audio/transcriptions; every cleanup call fails with a
-    500, so the cleanup falls back to the text as heard. `requests` keeps the bodies, by path.
+    `transcription(request)` answers POST /audio/transcriptions; GET /models is OpenRouter's
+    model list as recorded (tests/brain/fixtures/openrouter_catalog.json); every cleanup call fails
+    with a 500, so the cleanup falls back to the text as heard. `requests` keeps the bodies, by
+    path.
     """
     opened: list[httpx.AsyncClient] = []
+    listed = json.loads(
+        (Path(__file__).parent / "brain" / "fixtures" / "openrouter_catalog.json").read_text(
+            encoding="utf-8"
+        )
+    )
 
     def install(app, transcription):
         requests: dict[str, list] = {"transcriptions": [], "chat": []}
 
         def handler(request):
+            if request.method == "GET" and request.url.path.endswith("/models"):
+                return httpx.Response(200, json=listed)
             body = json.loads(request.content) if request.content else None
             if request.url.path.endswith("/audio/transcriptions"):
                 requests["transcriptions"].append(body)
@@ -2515,12 +2541,20 @@ def cloud_says(text="cloud words", cost=0.0001):
     )
 
 
+async def choose_from_the_list(app, key, model):
+    """Choose `model` for `key` as the settings page does: from OpenRouter's list of models, which
+    `models.catalog` reads first."""
+    catalog = await app.call("models.catalog")
+    assert catalog["source"] == "live"
+    await app.call("settings.set", {"key": key, "value": model})
+
+
 async def test_speech_to_text_is_in_the_cloud_by_default(make_app, openrouter_mock):
     kit = make_kit()
     app = make_app(kit, fake_llm=False)
     requests = openrouter_mock(app, cloud_says())
     await app.call("settings.set", {"key": "language", "value": "zh"})
-    await app.call("settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"})
+    await choose_from_the_list(app, "stt_cloud_model", "openai/gpt-transcribe")
     result = await dictate(app)
     assert result["text"] == "cloud words cloud words"
     assert kit.transcriptions == []  # the local engine heard nothing
@@ -2544,7 +2578,7 @@ async def test_several_languages_go_to_gpt_transcribe_as_the_ones_to_detect_amon
     requests = openrouter_mock(app, cloud_says())
     languages = ["zh-HK", "en-GB", "ja-JP"]
     await app.call("settings.set", {"key": "languages", "value": languages})
-    await app.call("settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"})
+    await choose_from_the_list(app, "stt_cloud_model", "openai/gpt-transcribe")
     await dictate(app)
     body = requests["transcriptions"][0]
     assert body["provider"]["options"]["openai"]["languages"] == ["zh", "en", "ja"]

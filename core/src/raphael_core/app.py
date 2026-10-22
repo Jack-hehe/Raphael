@@ -110,8 +110,10 @@ VAD_MODEL = "silero-vad"
 ENGINE_MODEL = "qwen3-asr"
 APP_MODELS = (VAD_MODEL, ENGINE_MODEL)
 
-# Speech without a pause is cut into pieces of at most this long and transcribed while the key is
-# still held, so there is no long tail to wait for after the release (the engine takes 20 s).
+# Speech without a pause is cut into pieces of at most this long and transcribed while the
+# recording goes on, so there is no long tail to wait for after the stop (the engine takes 20 s).
+# It is the size of one request, not a limit on the dictation, which may run as long as the user
+# speaks.
 DICTATION_SEGMENT_SECONDS = 10.0
 # The same for cloud speech-to-text: longer, so the model gets context (OpenRouter's upstream limit
 # is 60 s a request).
@@ -328,6 +330,11 @@ class _SharedSegmenter:
     def speech_seconds(self) -> float:
         segmenter = self._speech.built_segmenter()
         return 0.0 if segmenter is None else segmenter.speech_seconds
+
+    @property
+    def silence_seconds(self) -> float:
+        segmenter = self._speech.built_segmenter()
+        return 0.0 if segmenter is None else segmenter.silence_seconds
 
 
 class SpeechModels:

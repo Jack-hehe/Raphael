@@ -23,12 +23,14 @@ class FakeDetector:
     """A VoiceActivityDetector that records what it is fed and finds the speech it is told to.
 
     `plan` maps the number of windows accepted so far to the segments (lists of samples) that
-    become available at that point; `flush_plan` is what flush() makes available.
+    become available at that point; `flush_plan` is what flush() makes available. `speaking` holds
+    the numbers of the windows after which the detector says it hears speech.
     """
 
     instances: list["FakeDetector"] = []
     plan: dict[int, list[list[float]]] = {}
     flush_plan: list[list[float]] = []
+    speaking: set[int] = set()
 
     def __init__(self, config, buffer_size_in_seconds):
         self.config = config
@@ -52,6 +54,9 @@ class FakeDetector:
     def reset(self):
         self.resets += 1
 
+    def is_speech_detected(self):
+        return len(self.windows) in self.speaking
+
     def empty(self):
         return not self.queue
 
@@ -68,6 +73,7 @@ def fake_detector(monkeypatch):
     FakeDetector.instances = []
     FakeDetector.plan = {}
     FakeDetector.flush_plan = []
+    FakeDetector.speaking = set()
     monkeypatch.setattr(sherpa_onnx, "VoiceActivityDetector", FakeDetector)
     return FakeDetector
 
@@ -255,6 +261,53 @@ def test_speech_seconds_counts_a_split_segment_once(fake_detector, model_file):
     assert seg.speech_seconds == pytest.approx(30.0)
 
 
+WINDOW_S = WINDOW / 16000
+
+
+def test_silence_is_counted_from_the_start_until_speech_is_heard(fake_detector, model_file):
+    seg = Segmenter(model_file)
+    assert seg.silence_seconds == 0.0
+    seg.accept(np.zeros(10 * WINDOW, np.float32))
+    assert seg.silence_seconds == pytest.approx(10 * WINDOW_S)
+    seg.accept(np.zeros(5 * WINDOW, np.float32))
+    assert seg.silence_seconds == pytest.approx(15 * WINDOW_S)
+
+
+def test_speech_starts_the_silence_again(fake_detector, model_file):
+    fake_detector.speaking = {3, 4, 5}
+    seg = Segmenter(model_file, min_silence_s=0.5)
+    seg.accept(np.zeros(2 * WINDOW, np.float32))
+    assert seg.silence_seconds == pytest.approx(2 * WINDOW_S)
+    seg.accept(np.zeros(3 * WINDOW, np.float32))  # windows 3 to 5: speech
+    assert seg.silence_seconds == 0.0
+    # The detector says the speech is over once min_silence_s of quiet has gone by: that much
+    # silence is already behind, and the count goes on from there.
+    seg.accept(np.zeros(WINDOW, np.float32))
+    assert seg.silence_seconds == pytest.approx(0.5)
+    seg.accept(np.zeros(2 * WINDOW, np.float32))
+    assert seg.silence_seconds == pytest.approx(0.5 + 2 * WINDOW_S)
+
+
+def test_the_silence_of_each_recording_is_its_own(fake_detector, model_file):
+    seg = Segmenter(model_file)
+    seg.accept(np.zeros(20 * WINDOW, np.float32))
+    seg.flush()
+    assert seg.silence_seconds == pytest.approx(20 * WINDOW_S)  # still readable after flush
+    fake_detector.speaking = {22}
+    seg.accept(np.zeros(WINDOW, np.float32))  # a new recording: window 21
+    assert seg.silence_seconds == pytest.approx(WINDOW_S)
+    seg.accept(np.zeros(WINDOW, np.float32))
+    assert seg.silence_seconds == 0.0
+
+
+def test_speech_that_runs_on_keeps_the_silence_at_zero(fake_detector, model_file):
+    fake_detector.speaking = set(range(1, 2000))
+    seg = Segmenter(model_file)
+    for _ in range(40):  # a minute, as the microphone gives it
+        seg.accept(np.zeros(24_000, np.float32))
+        assert seg.silence_seconds == 0.0
+
+
 def test_accept_takes_float32_1d_only(fake_detector, model_file):
     seg = Segmenter(model_file)
     with pytest.raises(ValueError):
@@ -289,6 +342,19 @@ def test_finds_speech_and_ignores_silence():
     assert parts and 0.5 * speech.size / 16000 <= seg.speech_seconds <= 1.1 * speech.size / 16000
     quiet = Segmenter(models.dir("silero-vad") / "silero_vad_v5.onnx")
     assert quiet.accept(np.zeros(48000, np.float32)) + quiet.flush() == []
+
+
+@pytest.mark.models
+def test_the_real_detector_counts_silence_and_starts_again_at_speech():
+    models = ModelManager(models_dir())
+    seg = Segmenter(models.dir("silero-vad") / "silero_vad_v5.onnx")
+    seg.accept(np.zeros(12 * 16000, np.float32))
+    assert seg.silence_seconds == pytest.approx(12.0, abs=WINDOW_S)
+    speech_dir = models.dir("sensevoice") / "test_wavs"
+    if not (speech_dir / "zh.wav").is_file():
+        return  # no recording of speech to try it with
+    seg.accept(read_wav(speech_dir / "zh.wav"))
+    assert seg.silence_seconds < 1.0  # the end of the clip, at most
 
 
 @pytest.mark.models
