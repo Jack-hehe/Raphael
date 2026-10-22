@@ -160,10 +160,16 @@ async fn drain<S: ReportStage>(
 /// (`worker.announce_pending`). It is asked here, once the reports have a listener, and not by the
 /// core when it says hello: a report sent before anyone listens is lost, and the core would have
 /// counted it as said. It is asked again each time the core is started again.
-pub fn announce_pending(core: Arc<CoreProcess>, mut notifications: broadcast::Receiver<Notification>) {
+pub fn announce_pending(
+    core: Arc<CoreProcess>,
+    mut notifications: broadcast::Receiver<Notification>,
+) {
     tauri::async_runtime::spawn(async move {
         loop {
-            if let Err(err) = core.call("worker.announce_pending", serde_json::json!({})).await {
+            if let Err(err) = core
+                .call("worker.announce_pending", serde_json::json!({}))
+                .await
+            {
                 log::warn!("background: could not ask for the interrupted reports: {err}");
             }
             loop {
@@ -234,7 +240,10 @@ mod tests {
     fn only_a_restart_of_the_core_asks_for_the_interrupted_reports_again() {
         assert!(restarts_the_core(&notification(CORE_RESTARTED, json!({}))));
         for method in [CORE_DOWN, WORKER_REPORT, WORKER_CHANGED] {
-            assert!(!restarts_the_core(&notification(method, json!({}))), "{method}");
+            assert!(
+                !restarts_the_core(&notification(method, json!({}))),
+                "{method}"
+            );
         }
     }
 

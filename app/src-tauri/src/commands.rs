@@ -274,9 +274,11 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
             .as_str()
             .is_some_and(|language| ["auto", "zh", "ja", "en"].contains(&language)),
         "cleanup_model" => value.as_str().is_some_and(|model| !model.trim().is_empty()),
-        "worker_cost_cap_usd" => value
-            .as_f64()
-            .is_some_and(|cap| [0.1, 0.2, 0.5, 1.0].iter().any(|ok| (cap - ok).abs() < 1e-9)),
+        "worker_cost_cap_usd" => value.as_f64().is_some_and(|cap| {
+            [0.1, 0.2, 0.5, 1.0]
+                .iter()
+                .any(|ok| (cap - ok).abs() < 1e-9)
+        }),
         "stt_engine" => value
             .as_str()
             .is_some_and(|engine| ["cloud", "local"].contains(&engine)),
@@ -1280,7 +1282,14 @@ mod tests {
             assert!(set("worker_cost_cap_usd", json!(cap)).is_ok(), "{cap}");
         }
         assert!(set("worker_cost_cap_usd", json!(1)).is_ok());
-        for cap in [json!(0), json!(0.3), json!(2), json!(-1), json!("0.5"), json!(null)] {
+        for cap in [
+            json!(0),
+            json!(0.3),
+            json!(2),
+            json!(-1),
+            json!("0.5"),
+            json!(null),
+        ] {
             assert!(set("worker_cost_cap_usd", cap.clone()).is_err(), "{cap}");
         }
     }
