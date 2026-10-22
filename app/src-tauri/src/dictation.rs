@@ -6623,8 +6623,10 @@ mod tests {
 
     use crate::commands::DictationPhase as Phased;
 
+    type Seen = Arc<Mutex<Vec<(Phased, bool)>>>;
+
     /// A controller that writes every phase it reaches into the list returned with it.
-    fn reporting(core: FakeCore, paster: FakePaster) -> (Ctl, Arc<Mutex<Vec<(Phased, bool)>>>) {
+    fn reporting(core: FakeCore, paster: FakePaster) -> (Ctl, Seen) {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = seen.clone();
         let c = controller(core, paster).with_phase_report(Arc::new(move |phase, agent| {
