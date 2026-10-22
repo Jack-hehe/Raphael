@@ -324,7 +324,9 @@ export type MainEvent =
   /** A turn of the conversations was written or completed. */
   | { type: "AgentTurn"; turn_id: number }
   /** A background task moved on: a step, a start or an end. */
-  | { type: "WorkerChanged"; task_id: number; state: string; running: boolean };
+  | { type: "WorkerChanged"; task_id: number; state: string; running: boolean }
+  /** A service is signed in to with a code typed at its own page: show the code, open the address. */
+  | { type: "DeviceCode"; catalog_id: string; user_code: string; verification_uri: string; expires_in: number };
 
 /** The pages the tray's menu can open. */
 export type TrayPage = "home" | "history" | "dictionary" | "settings";
@@ -390,8 +392,8 @@ export interface ConnectionGroup {
   status: "disabled" | "error" | "unchecked" | "ready";
   /** The kind of the latest failure, one word; `auth` is a login that ran out. */
   error: string | null;
-  /** `oauth` is signed in to with a login in the browser. */
-  auth: "none" | "oauth";
+  /** `oauth` is signed in to with a login in the browser, `device` with a code typed at the service. */
+  auth: "none" | "oauth" | "device";
   /** The entry of the store it was added from. */
   catalog_id: string | null;
   tools: ConnectionTool[];
@@ -425,7 +427,7 @@ export interface StoreService {
   about: Words;
   examples: Record<"zh-TW" | "en" | "ja", string[]>;
   /** "none": a public server, added with no login. */
-  auth?: "oauth" | "none";
+  auth?: "oauth" | "none" | "device";
   /** The id of the connected service it was added as; null when it is not added. */
   server_id: string | null;
 }

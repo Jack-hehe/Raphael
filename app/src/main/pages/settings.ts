@@ -163,6 +163,7 @@ export function createSettings(app: AppContext): SettingsPage {
   let loads = 0;
   /** The 「連接」 tab: it keeps its own state and asks to be drawn again. */
   const connections = createConnections({ visible: () => visible && pane === "connections", redraw: () => render() });
+  app.onEvent((event) => connections.followEvent(event));
   /** Telegram, in the 「拉斐爾」 tab: it keeps its own state too. */
   const messaging = createMessaging({ visible: () => visible && pane === "agent", redraw: () => render() });
 

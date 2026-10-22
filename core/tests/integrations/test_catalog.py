@@ -20,7 +20,27 @@ def test_the_store_has_the_services_that_log_in_with_nothing_registered():
     ids = {service.id for service in SERVICES}
     assert {"notion", "linear", "atlassian", "cloudflare", "todoist", "sentry"} <= ids
     # They need an app registered first (or an invitation), so they are not one click.
-    assert not ids & {"github", "google", "slack", "figma"}
+    assert not ids & {"google", "slack", "figma"}
+
+
+def test_github_is_not_in_the_store_until_its_client_id_is_filled_in():
+    assert catalog.GITHUB_CLIENT_ID == ""
+    assert find("github") is None
+    assert all(service.auth != "device" for service in SERVICES)
+
+
+def test_github_is_a_device_login_entry_once_it_has_a_client_id():
+    entry = catalog.github_service("Iv-test")
+    assert entry.id == "github" and entry.auth == "device" and entry.icon in ICONS
+    assert entry.url == "https://api.githubcopilot.com/mcp/"
+    login = entry.device
+    assert login is not None and login.client_id == "Iv-test"
+    assert login.scopes == ("repo", "read:org", "read:user", "notifications")
+    assert login.device_endpoint == "https://github.com/login/device/code"
+    assert login.token_endpoint == "https://github.com/login/oauth/access_token"
+    for lang in LANGUAGES:
+        assert entry.summary[lang].strip() and len(entry.summary[lang]) <= 60
+    assert view(entry)["auth"] == "device" and "Iv-test" not in str(view(entry))
 
 
 @pytest.mark.parametrize("service", SERVICES, ids=lambda s: s.id)
@@ -29,7 +49,7 @@ def test_an_entry_is_complete(service):
     assert parts.scheme == "https" and parts.hostname and not parts.query and not parts.fragment
     assert service.category in CATEGORIES
     assert service.icon in ICONS  # every entry shows its brand's own mark
-    assert service.auth in ("oauth", "none")
+    assert service.auth in ("oauth", "none", "device")
     assert service.name and service.publisher
     for words in (service.summary, service.about, service.examples):
         assert set(words) == set(LANGUAGES)
@@ -68,9 +88,9 @@ def test_the_public_servers_need_no_login_and_the_others_do():
     assert find("notion").auth == "oauth"  # type: ignore[union-attr]
 
 
-def test_the_module_holds_no_secrets_or_client_ids():
+def test_the_module_holds_no_secrets():
     text = Path(catalog.__file__).read_text(encoding="utf-8").lower()
-    assert "client_id" not in text and "client_secret" not in text
+    assert "client_secret" not in text  # the device flow has none; a public client id is all there is
 
 
 def test_every_mark_the_catalog_names_exists_in_the_app():

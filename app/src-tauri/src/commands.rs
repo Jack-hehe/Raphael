@@ -111,6 +111,14 @@ pub enum MainEvent {
         state: String,
         running: bool,
     },
+    /// A service is signed in to with a code typed at its own page (`integrations.device_code`):
+    /// the window shows `user_code` and opens `verification_uri`. The code is not logged.
+    DeviceCode {
+        catalog_id: String,
+        user_code: String,
+        verification_uri: String,
+        expires_in: u64,
+    },
 }
 
 /// The most events kept for a main window that has not subscribed yet.
@@ -369,6 +377,18 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
             state: params.get("state")?.as_str()?.to_owned(),
             running: params.get("running")?.as_bool()?,
         }),
+        "integrations.device_code" => {
+            let verification_uri = params.get("verification_uri")?.as_str()?;
+            if !verification_uri.starts_with("https://") {
+                return None;
+            }
+            Some(MainEvent::DeviceCode {
+                catalog_id: params.get("catalog_id")?.as_str()?.to_owned(),
+                user_code: params.get("user_code")?.as_str()?.to_owned(),
+                verification_uri: verification_uri.to_owned(),
+                expires_in: whole(params.get("expires_in")?)?,
+            })
+        }
         _ => None,
     }
 }
@@ -718,7 +738,11 @@ pub fn hotkeys_pause(app: AppHandle, webview: Webview, paused: bool) -> Result<(
 
 /// The few addresses the main window may open in the browser: the page is not trusted with a
 /// general "open this link".
-const OPENABLE_LINKS: [&str; 1] = ["https://t.me/BotFather"];
+const OPENABLE_LINKS: [&str; 3] = [
+    "https://t.me/BotFather",
+    "https://github.com/login/device",
+    "https://github.com/settings/applications",
+];
 
 fn is_openable_link(url: &str) -> bool {
     OPENABLE_LINKS.contains(&url)
@@ -1096,9 +1120,16 @@ mod tests {
     }
 
     #[test]
-    fn only_the_botfather_link_may_be_opened() {
+    fn only_the_fixed_links_may_be_opened() {
         assert!(is_openable_link("https://t.me/BotFather"));
+        assert!(is_openable_link("https://github.com/login/device"));
+        assert!(is_openable_link("https://github.com/settings/applications"));
         for url in [
+            "https://github.com/login/device/",
+            "https://github.com/login/device?user_code=ABCD",
+            "http://github.com/login/device",
+            "https://github.com/login/oauth/authorize",
+            "https://github.com.evil.example/login/device",
             "https://t.me/BotFather/",
             "http://t.me/BotFather",
             "https://t.me/other",
@@ -1108,6 +1139,47 @@ mod tests {
         ] {
             assert!(!is_openable_link(url), "{url:?}");
         }
+    }
+
+    #[test]
+    fn a_device_code_goes_to_the_window_and_a_bad_one_does_not() {
+        let issued = |uri: &str| {
+            notification(
+                "integrations.device_code",
+                json!({"catalog_id": "github", "user_code": "WDJB-MJHT",
+                       "verification_uri": uri, "expires_in": 900}),
+            )
+        };
+        assert_eq!(
+            main_event_from(&issued("https://github.com/login/device"), false),
+            Some(MainEvent::DeviceCode {
+                catalog_id: "github".to_owned(),
+                user_code: "WDJB-MJHT".to_owned(),
+                verification_uri: "https://github.com/login/device".to_owned(),
+                expires_in: 900
+            })
+        );
+        assert_eq!(
+            main_event_from(&issued("http://github.com/login/device"), false),
+            None
+        );
+        assert_eq!(
+            main_event_from(
+                &notification("integrations.device_code", json!({"catalog_id": "github"})),
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            serde_json::to_string(&MainEvent::DeviceCode {
+                catalog_id: "github".to_owned(),
+                user_code: "ABCD-EFGH".to_owned(),
+                verification_uri: "https://github.com/login/device".to_owned(),
+                expires_in: 900
+            })
+            .unwrap(),
+            r#"{"type":"DeviceCode","catalog_id":"github","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","expires_in":900}"#
+        );
     }
 
     #[test]

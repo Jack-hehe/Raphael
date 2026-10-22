@@ -725,7 +725,7 @@ class App(Router):
         if agent_actions is None:
             agent_actions = NullActions() if fake_llm else WindowsActions()
         # The plugins: servers the user connected, and the hub the assistant reaches their tools by.
-        self.integrations = IntegrationsService(self._conn, data_dir, self.vault)
+        self.integrations = IntegrationsService(self._conn, data_dir, self.vault, notify=self.notify)
         self.integrations.register(self)
         # The one gate every tool call goes through, the assistant's and the worker's.
         self.gate = ToolGate(self.integrations, conn=self._conn)
