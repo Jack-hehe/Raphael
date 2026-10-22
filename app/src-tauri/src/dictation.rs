@@ -1786,8 +1786,8 @@ mod tests {
     use crate::device_settings::DeviceSettings;
     use crate::hotkey::{CancelSwitch, HotkeyEvent};
     use crate::notices::{
-        ASK_FAILED, BUDGET, CORE_DOWN, ELEVATED, FOCUS_CHANGED, GREETING, NO_MIC, NO_SOUND,
-        INCOMPLETE, NO_LOCAL_MODEL as NO_LOCAL_NOTICE, NOT_READY, OFFLINE, WAITING,
+        ASK_FAILED, BUDGET, CORE_DOWN, ELEVATED, FOCUS_CHANGED, GREETING, INCOMPLETE,
+        NO_LOCAL_MODEL as NO_LOCAL_NOTICE, NO_MIC, NO_SOUND, NOT_READY, OFFLINE, WAITING,
     };
     use crate::overlay::{Mode, OverlayApi, OverlayEvent, Progress, takes_clicks};
     use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
