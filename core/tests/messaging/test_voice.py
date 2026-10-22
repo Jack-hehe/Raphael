@@ -228,3 +228,11 @@ def test_the_heard_line_is_cut_and_localised():
     assert line.startswith("聽到：「") and line.endswith("…」") and len(line) <= HEARD_CHARS + 6
     assert heard("en", "hi").startswith("Heard: ") and heard("ja", "hi").startswith("聞き取り")
     assert "\n" not in heard("en", "two\nlines")
+
+
+def test_a_clip_with_many_channels_is_refused_before_it_is_read():
+    audio = np.zeros((8000, 6), dtype="float32")
+    buffer = io.BytesIO()
+    soundfile.write(buffer, audio, 8000, format="OGG", subtype="VORBIS")
+    with pytest.raises(VoiceTooLong):
+        voice.decode(buffer.getvalue())

@@ -20,6 +20,9 @@ from .core import MAX_VOICE_SECONDS, VoiceTooLong
 SAMPLE_RATE = 16_000
 # The length the sender's app says may be a little off.
 _SLACK_S = 5
+# A voice message is mono or stereo; more channels are refused. The decoded audio may take this much.
+MAX_CHANNELS = 2
+MAX_DECODED_BYTES = 128 * 1024 * 1024
 
 
 def decode(data: bytes) -> np.ndarray:
@@ -30,7 +33,12 @@ def decode(data: bytes) -> np.ndarray:
 
     with soundfile.SoundFile(io.BytesIO(data)) as clip:
         rate = clip.samplerate
-        if clip.frames > rate * (MAX_VOICE_SECONDS + _SLACK_S):
+        # What reading allocates is frames x channels x 4 bytes: bound it before reading.
+        if (
+            clip.channels > MAX_CHANNELS
+            or clip.frames > rate * (MAX_VOICE_SECONDS + _SLACK_S)
+            or clip.frames * clip.channels * 4 > MAX_DECODED_BYTES
+        ):
             raise VoiceTooLong
         audio = clip.read(dtype="float32", always_2d=True)
     mono = np.ascontiguousarray(audio.mean(axis=1), dtype=np.float32)
