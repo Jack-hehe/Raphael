@@ -48,6 +48,31 @@ body {
   bottom: 0;
 }
 
+/* The person's picture, laid exactly over the emblem's circle: an <img>, so that a GIF or WebP
+   that moves plays (a canvas paints only its first frame). The emblem grows and fades it with the
+   circle and draws the thin ring around it on the canvas; under reduced motion it stays hidden and
+   the canvas draws the first frame instead. The cut is set on the <img> (pictureStyle). */
+#picture {
+  position: fixed;
+  right: var(--margin);
+  bottom: var(--margin);
+  width: var(--e);
+  height: var(--e);
+  overflow: hidden;
+  border-radius: 50%;
+  transform-origin: 50% 50%;
+  pointer-events: none;
+}
+
+#picture > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
 /* Everything written beside the emblem is written one way: a dictation's percentage, the lines
    while Raphael thinks, his greeting, his answers, his reports and his questions. White,
    semibold, outlined in black, no box behind it, in the font of the language it is written in

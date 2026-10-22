@@ -9,6 +9,7 @@
 // sidebar's 拉斐爾, the composer's voice button, the approval card, the voice-mode flyer and the
 // settings row. They draw again when `onAvatarChange` says the picture changed.
 
+import { pictureStyle } from "../overlay/emblem";
 import { esc } from "./ui";
 import "./avatar.css";
 
@@ -55,6 +56,73 @@ export function readAvatar(value: unknown): CustomAvatar | null {
 
 let custom: CustomAvatar | null = null;
 const listeners = new Set<() => void>();
+const notify = (): void => {
+  for (const listener of listeners) listener();
+};
+
+// ---------- reduced motion ----------
+//
+// Under `prefers-reduced-motion: reduce` nothing of Raphael moves: the turning loop is the still
+// of the same size, and a picture of the person's own that may move (a GIF or a WebP, which CSS
+// cannot stop) is shown as its first frame, drawn once onto a canvas. The preference is followed
+// while the window is open: every place that shows him draws again when it changes.
+
+const motionQuery = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
+let reduced = motionQuery?.matches ?? false;
+motionQuery?.addEventListener?.("change", (e) => {
+  if (e.matches === reduced) return;
+  reduced = e.matches;
+  notify();
+});
+
+/** The kinds of picture that may move. */
+const MAY_MOVE = /^data:image\/(gif|webp);/;
+/** The still is made at most this many px on its shorter side: more than the largest face on the densest screen. */
+const STILL_MAX_PX = 512;
+
+/** The first frame of the person's picture that may move, once made: null while it is being made. */
+let still: { url: string; frame: string | null } | null = null;
+
+/** Draws the first frame of `url` onto a canvas; the picture itself when that cannot be done. */
+async function makeStill(url: string): Promise<string> {
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    const w = image.naturalWidth;
+    const h = image.naturalHeight;
+    if (!w || !h) return url;
+    const k = Math.min(1, STILL_MAX_PX / Math.min(w, h));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(w * k));
+    canvas.height = Math.max(1, Math.round(h * k));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return url;
+    // A canvas paints the first frame of a moving picture (the HTML standard's drawImage).
+    ctx.drawImage(image as CanvasImageSource, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  } catch {
+    // It cannot be decoded either way: the <img> of the picture will show nothing moving.
+    return url;
+  }
+}
+
+/**
+ * The address to show the person's picture with: itself, or under reduced motion the still of one
+ * that may move (null until it is made; every listener draws again then).
+ */
+function shownUrl(url: string): string | null {
+  if (!reduced || !MAY_MOVE.test(url)) return url;
+  if (still?.url === url) return still.frame;
+  const mine = { url, frame: null as string | null };
+  still = mine;
+  void makeStill(url).then((frame) => {
+    if (still !== mine) return;
+    mine.frame = frame;
+    notify();
+  });
+  return null;
+}
 
 /** The person's picture, or null while Raphael is his emblem. */
 export const currentAvatar = (): CustomAvatar | null => custom;
@@ -62,7 +130,7 @@ export const currentAvatar = (): CustomAvatar | null => custom;
 /** Changes the picture everywhere: every listener draws again. */
 export function setAvatar(next: CustomAvatar | null): void {
   custom = next;
-  for (const listener of listeners) listener();
+  notify();
 }
 
 /** Hears the picture change. Returns how to stop hearing. */
@@ -80,12 +148,8 @@ export async function loadAvatar(get: () => Promise<unknown>): Promise<void> {
   }
 }
 
-/** The style that cuts the picture as `crop` says, inside a square box (see `AvatarCrop`). */
-export function cropStyle(crop: AvatarCrop): string {
-  const x = `${Math.round(crop.x * 1000) / 10}%`;
-  const y = `${Math.round(crop.y * 1000) / 10}%`;
-  return `object-position:${x} ${y};transform-origin:${x} ${y};transform:scale(${Math.round(crop.zoom * 1000) / 1000})`;
-}
+/** The style that cuts the picture as `crop` says, inside a square box (see `AvatarCrop`); the overlay's moving picture uses the same. */
+export const cropStyle = (crop: AvatarCrop): string => pictureStyle(crop);
 
 export interface AvatarOptions {
   /** The diameter in CSS pixels. */
@@ -101,15 +165,19 @@ export interface AvatarOptions {
 /**
  * Raphael's face at `size` px: the emblem for the theme (two pictures, the stylesheet shows the
  * one of the theme), or the person's picture in a circle. Decorative: whoever shows it names it.
+ * Under reduced motion nothing in it moves (see above): the loop is the still, a moving picture
+ * its first frame, and the circle is empty for the moment that frame takes to be made.
  */
 export function avatarHTML(o: AvatarOptions): string {
   const chosen = o.avatar === undefined ? custom : o.avatar;
   const cls = `av${chosen ? " av-custom" : ""}${o.cls ? " " + o.cls : ""}`;
   const box = `style="--av:${Math.round(o.size)}px"`;
   if (chosen) {
-    return `<span class="${cls}" ${box} aria-hidden="true"><img src="${esc(chosen.url)}" alt="" draggable="false" style="${cropStyle(chosen.crop)}"></span>`;
+    const url = shownUrl(chosen.url);
+    const img = url === null ? "" : `<img src="${esc(url)}" alt="" draggable="false" style="${cropStyle(chosen.crop)}">`;
+    return `<span class="${cls}" ${box} aria-hidden="true">${img}</span>`;
   }
-  const kind = o.loop ? "loop" : o.size > 40 ? "128" : "64";
+  const kind = o.loop && !reduced ? "loop" : o.size > 40 ? "128" : "64";
   return (
     `<span class="${cls}" ${box} aria-hidden="true">` +
     `<img class="em-l" src="/brand/app-emblem-light-${kind}.webp" alt="" draggable="false">` +

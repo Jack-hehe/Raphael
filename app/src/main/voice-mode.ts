@@ -45,7 +45,7 @@ export const spotTransform = (spot: FlyerSpot): string =>
 export interface VoiceModeParts {
   /** The positioned box the flyer flies in. */
   stage: HTMLElement;
-  /** The composer's voice button, hidden while its picture is up. */
+  /** The composer's voice button: it stays where it is (and keeps the focus) while its picture is up, the picture hidden. */
   button: () => HTMLElement | null;
   /** The composer, whose top the flyer lands above. */
   composer: () => HTMLElement | null;
@@ -57,12 +57,18 @@ export interface VoiceModeParts {
   onClick: () => void;
 }
 
+/** The class of the voice button while its picture is up: what is inside it is hidden (agent.css). */
+const AWAY = "vm-away";
+
 const reduced = (): boolean => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /** The flyer of one page: `up` sends it out (once), `down` brings it back. */
 export class VoiceMode {
   private flyer: HTMLElement | null = null;
+  /** The emblem of the empty page while the flyer is over it. */
   private hidden: HTMLElement[] = [];
+  /** The voice button whose picture is hidden while the flyer is up. */
+  private button: HTMLElement | null = null;
 
   constructor(private readonly parts: VoiceModeParts) {}
 
@@ -86,7 +92,11 @@ export class VoiceMode {
     this.parts.stage.append(flyer);
     this.parts.stage.classList.add("is-voice");
     this.flyer = flyer;
-    this.hidden = [button, ...(target ? [target] : [])];
+    // The button stays on screen with only its picture hidden (`vm-away`): a hidden button would
+    // lose the focus, and with it the release of a key held on it, which ends a recording in hold mode.
+    this.button = button;
+    button.classList.add(AWAY);
+    this.hidden = target ? [target] : [];
     for (const el of this.hidden) el.style.visibility = "hidden";
     if (!reduced()) flyer.animate([{ transform: spotTransform(from) }, { transform: spotTransform(to) }], { ...OUT, fill: "backwards" });
   }
@@ -97,11 +107,17 @@ export class VoiceMode {
     if (!flyer) return;
     this.flyer = null;
     const hidden = this.hidden;
+    const away = this.button;
     this.hidden = [];
+    this.button = null;
     const done = (): void => {
       flyer.remove();
       for (const el of hidden) el.style.visibility = "";
-      if (!this.flyer) this.parts.stage.classList.remove("is-voice");
+      // A picture sent up again meanwhile keeps the button's picture hidden.
+      if (!this.flyer) {
+        away?.classList.remove(AWAY);
+        this.parts.stage.classList.remove("is-voice");
+      }
     };
     const button = this.parts.button();
     const composer = this.parts.composer();
@@ -110,9 +126,8 @@ export class VoiceMode {
       return;
     }
     const { from } = flightPath(this.parts.stage.getBoundingClientRect(), button.getBoundingClientRect(), composer.getBoundingClientRect(), null);
-    // Back on the empty page it lands where it was; elsewhere it goes into the button.
-    const target = hidden.find((el) => el !== button);
-    if (target) {
+    // Back on the empty page it lands where it was (the emblem it hid); elsewhere it goes into the button.
+    if (hidden.length > 0) {
       done();
       return;
     }
@@ -127,6 +142,8 @@ export class VoiceMode {
     flyer?.remove();
     for (const el of this.hidden) el.style.visibility = "";
     this.hidden = [];
+    this.button?.classList.remove(AWAY);
+    this.button = null;
     this.parts.stage.classList.remove("is-voice");
   }
 
