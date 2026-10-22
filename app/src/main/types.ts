@@ -351,22 +351,34 @@ export type TrayAction = "add-word";
 export type PageId = "home" | "agent" | "history" | "dictionary" | "settings";
 
 /** The tabs of the settings panel. */
-export type SettingsPane = "general" | "dictation" | "agent" | "connections" | "usage" | "about";
+export type SettingsPane = "general" | "dictation" | "agent" | "connections" | "messaging" | "usage" | "data" | "about";
+
+/**
+ * What the 拉斐爾 page is to put in its composer when it opens, ready to be sent or changed: the
+ * 「試試看」 of a connected service (Settings › 連接) goes there with one of its example questions.
+ */
+export type AgentDraft = `draft:${string}`;
 
 /** One of the five pages of the main window. */
 export interface Page {
   readonly id: PageId;
   readonly el: HTMLElement;
-  /** The page comes on screen (or the window comes back): load what it shows. The settings open at the tab given. */
-  show(pane?: SettingsPane): void | Promise<void>;
+  /**
+   * The page comes on screen (or the window comes back): load what it shows. The settings open at
+   * the tab given; the 拉斐爾 page may be given a draft for its composer.
+   */
+  show(arg?: SettingsPane | AgentDraft): void | Promise<void>;
   /** The page goes off screen (or the window goes away): stop what runs for it. */
   hide(): void;
 }
 
 /** What main.ts gives the pages. */
 export interface AppContext {
-  /** Goes to a page. The settings panel opens at `pane` if one is given (the key and the limit are in "usage"). */
-  go(page: PageId, pane?: SettingsPane): void;
+  /**
+   * Goes to a page. The settings panel opens at `arg` if a tab is given (the key and the limit are in
+   * "usage"); the 拉斐爾 page takes a draft for its composer (the settings close on the way).
+   */
+  go(page: PageId, arg?: SettingsPane | AgentDraft): void;
   /** Opens the history at one day, `2026-10-14`: its dictations only, with a way back to all of them. */
   showDay(date: string): void;
   /** The device settings as they are now. */

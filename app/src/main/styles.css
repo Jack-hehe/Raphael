@@ -444,7 +444,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 70; display: flex; flex-direction: column-reverse; align-items: flex-end; gap: var(--sp-2); pointer-events: none; }
 .toast { position: relative; overflow: hidden; pointer-events: auto; display: flex; align-items: center; gap: var(--sp-3); min-height: 36px; padding: 7px 8px 7px 16px; border-radius: var(--r-sm); background: var(--text); color: var(--content); font-size: var(--fs-sm); box-shadow: var(--pop); max-width: min(480px, calc(100vw - 40px)); animation: toast-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1); }
 /* The time a toast has left, along its foot. */
-.toast-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--toast-action); opacity: 0.7; transform-origin: left; animation: toast-count linear forwards; }
+.toast-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--toast-action); transform-origin: left; animation: toast-count linear forwards; }
 .toast .btn { border-color: var(--toast-action); background: transparent; color: var(--toast-action); }
 .toast .btn:hover:not(:disabled), .toast .btn:active:not(:disabled) { background: var(--toast-hover); border-color: var(--toast-action); }
 .toast .btn:focus-visible { outline-color: var(--toast-action); }

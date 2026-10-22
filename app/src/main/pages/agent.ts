@@ -4,8 +4,8 @@
 // along while it is open: a turn written or completed (`AgentTurn`) and a background task that took
 // a step (`WorkerChanged`) bring the newest turns again, and a task under way can be stopped here.
 // The conversations are had by voice or in a chat app: this page only shows them. Raphael's own
-// settings (her key, the weather city, Telegram) are the 拉斐爾 tab of Settings, which the sliders
-// button at the top opens.
+// settings (her key, the weather city) are the 拉斐爾 tab of Settings, which the sliders button at
+// the top opens; Telegram is in its 訊息平台 tab.
 
 import { onLocaleChange, t } from "../i18n";
 

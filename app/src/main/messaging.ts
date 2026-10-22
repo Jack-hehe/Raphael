@@ -1,4 +1,4 @@
-// Telegram, in the 拉斐爾 tab of Settings: Raphael can be reached from a phone. It is drawn with the
+// Telegram, in the 訊息平台 tab of Settings: Raphael can be reached from a phone. It is drawn with the
 // rows of every other tab, name on the left and controls on the right. Connected, it is one row (the
 // mark, the bot, a dot for its state, a switch) that opens on a row for each pairing code and each
 // person who may talk to her; before it is set up, a row with a way to BotFather and a row with the

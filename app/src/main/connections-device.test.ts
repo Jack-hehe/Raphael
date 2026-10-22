@@ -39,7 +39,7 @@ const code: MainEvent = {
   type: "DeviceCode", catalog_id: "github", user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device", expires_in: 900,
 };
 
-const host = { visible: () => true, redraw: vi.fn() };
+const host = { visible: () => true, redraw: vi.fn(), tryPrompt: vi.fn() };
 const button = (conn: string, extra: Record<string, string> = {}): Element =>
   ({ closest: () => ({ dataset: { conn, ...extra } }) }) as unknown as Element;
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -147,7 +147,7 @@ describe("the code of a device login", () => {
 });
 
 describe("a connected device service", () => {
-  test("its page has a button that opens GitHub's list of authorised apps", async () => {
+  test("its dialog has a button that opens GitHub's list of authorised apps", async () => {
     api.toolsetsList.mockResolvedValue({ groups: [connected] });
     const c = createConnections(host);
     await c.load();

@@ -1,5 +1,6 @@
-// Settings: a panel over the main window with six tabs: 一般, 聽寫, 拉斐爾, 連接, 模型與用量 and 關於.
-// This file holds what the panel knows and what it does; settings-view.ts draws each tab
+// Settings: a panel over the main window with eight tabs in three groups (一般, 聽寫, 拉斐爾; 「整合」:
+// 連接, 訊息平台; 「帳戶」: 模型與用量, 資料, 關於) under a 「搜尋設定」 field that jumps to a row of any
+// of them. This file holds what the panel knows and what it does; settings-view.ts draws each tab
 // from a snapshot of it. A change takes effect at once; there is no save button. The settings of
 // the brain (limit, models, languages, speech-to-text, how Raphael answers) go to the core with
 // `settings.set`; the settings of this computer (hotkeys, microphone, emblem, theme, autostart) go
@@ -41,8 +42,10 @@ import {
   openMenuOnArrow,
   openPopover,
   placeMenu,
+  replay,
   selText,
   setMeter,
+  swapHTML,
   toaster,
 } from "../ui";
 import { AUTO_MICROPHONE } from "../microphone";
@@ -54,6 +57,7 @@ import {
   workerCostCap,
   MODEL_ROWS,
   PANES,
+  type SearchHit,
   SIZES,
   type SettingsView,
   UI_LANGUAGES,
@@ -62,13 +66,21 @@ import {
   settingsMicrophones,
   modelPickerLook,
   paneHTML,
+  paneListHTML,
   localView,
   priceTexts,
+  retentionChoices,
+  retentionOf,
+  searchResultsHTML,
+  searchSettings,
   sttEngine,
   sttModel,
 } from "./settings-view";
 
 interface FocusStop { focus(): void }
+
+/** A retention the dropdown can send: a whole number of days. */
+const RETENTION_VALUES = /^[1-9]\d*$/;
 
 /**
  * Keep settings and the window controls in one loop without entering the inert main page: the
@@ -103,6 +115,10 @@ export interface SettingsPage extends Page {
 }
 /** How long 「移除金鑰」 waits for its second press. */
 const KEY_REMOVAL_CONFIRM_MS = 5000;
+/** How long a clear of 資料 waits for its second press. */
+const CLEAR_CONFIRM_MS = 5000;
+/** How long a row the search jumped to stays lit. */
+const FOUND_MS = 1600;
 
 
 export function createSettings(app: AppContext): SettingsPage {
@@ -113,13 +129,20 @@ export function createSettings(app: AppContext): SettingsPage {
   el.innerHTML =
     `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="set-title">` +
     `<nav class="modal-nav" aria-label="${esc(t("nav.settings"))}">` +
-    PANES.map((p) => `<button type="button" class="nav" data-pane="${p.id}" aria-current="false">${ico(p.icon)}<span>${esc(p.title())}</span></button>`).join("") +
+    `<label class="field set-search">${ico("search")}<input id="set-search" type="text" autocomplete="off" spellcheck="false"></label>` +
+    `<div class="set-list"></div>` +
     `</nav>` +
     `<div class="modal-body"></div>` +
     `${iconBtn("x", t("common.close"), ' data-act="close"', "modal-x")}` +
     `</div>`;
   const body = el.querySelector<HTMLElement>(".modal-body")!;
+  const searchField = el.querySelector<HTMLInputElement>("#set-search")!;
+  const navList = el.querySelector<HTMLElement>(".set-list")!;
   let pane: SettingsPane = "general";
+  /** What 「搜尋設定」 found for what is typed in it; the tabs are listed again when it is empty. */
+  let hits: SearchHit[] = [];
+  /** A row the search chose, to be lit once its tab is drawn with its rows (not while it is being read). */
+  let pendingJump: SearchHit | null = null;
 
   let brain: BrainSettings | null = null;
   let hasKey = false;
@@ -161,11 +184,18 @@ export function createSettings(app: AppContext): SettingsPage {
   let visible = false;
   let loading = false;
   let loads = 0;
-  /** The 「連接」 tab: it keeps its own state and asks to be drawn again. */
-  const connections = createConnections({ visible: () => visible && pane === "connections", redraw: () => render() });
+  /** In 資料, the clear that was pressed once and waits for its second press. */
+  let confirmingClear: "dictation" | "conversation" | null = null;
+  let clearTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The 「連接」 tab: it keeps its own state and asks to be drawn again. 「試試看」 leaves for the 拉斐爾 page with a draft. */
+  const connections = createConnections({
+    visible: () => visible && pane === "connections",
+    redraw: () => render(),
+    tryPrompt: (text) => app.go("agent", `draft:${text}`),
+  });
   app.onEvent((event) => connections.followEvent(event));
-  /** Telegram, in the 「拉斐爾」 tab: it keeps its own state too. */
-  const messaging = createMessaging({ visible: () => visible && pane === "agent", redraw: () => render() });
+  /** Telegram, in the 「訊息平台」 tab: it keeps its own state too. */
+  const messaging = createMessaging({ visible: () => visible && pane === "messaging", redraw: () => render() });
 
   // ---------- drawing ----------
 
@@ -173,7 +203,7 @@ export function createSettings(app: AppContext): SettingsPage {
   const view = (): SettingsView => ({
     pane, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
     replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
-    connections: connections.view(), messaging: messaging.view(), localModels, localDownload,
+    connections: connections.view(), messaging: messaging.view(), confirmingClear, localModels, localDownload,
   });
 
   /** The item at the foot of the microphones' menu that looks for them again. */
@@ -234,6 +264,14 @@ export function createSettings(app: AppContext): SettingsPage {
             if (APPEARANCES.some((c) => c.value === appearance) && appearance !== app.device().appearance) void changeDevice({ appearance });
           },
         };
+      case "retention":
+        return {
+          choices: retentionChoices(v),
+          current: retentionOf(v),
+          pick: (value) => {
+            if (RETENTION_VALUES.test(value) && value !== retentionOf(view())) void changeBrain("history_retention_days", Number(value));
+          },
+        };
       case "size":
         return {
           choices: SIZES,
@@ -273,7 +311,8 @@ export function createSettings(app: AppContext): SettingsPage {
     const openK = openAnchorKey();
     const scroll = body.scrollTop;
     body.setAttribute("aria-busy", String(loading && pane !== "about"));
-    body.innerHTML = pane !== "about" && loading ? loadingHTML(view()) : paneHTML(view());
+    // Only what changed moves: a list drawn again stands still, a switch that was turned slides.
+    swapHTML(body, pane !== "about" && loading ? loadingHTML(view()) : paneHTML(view()));
     // Before the focus goes back by `data-k`, which the pickers' buttons have too.
     mountPickers();
     const keyInput = el.querySelector<HTMLInputElement>("#key-input");
@@ -283,7 +322,7 @@ export function createSettings(app: AppContext): SettingsPage {
     body.scrollTop = scroll;
     el.querySelectorAll<HTMLElement>("[data-pane]").forEach((b) => b.setAttribute("aria-current", b.dataset.pane === pane ? "page" : "false"));
 
-    if (focused) el.querySelector<HTMLElement>(`[data-k="${focused}"]`)?.focus();
+    if (focused) el.querySelector<HTMLElement>(`[data-k="${CSS.escape(focused)}"]`)?.focus();
     else if (focusedId) el.querySelector<HTMLElement>(`#${CSS.escape(focusedId)}`)?.focus();
     if (openK) {
       const anchor = el.querySelector<HTMLElement>(`.sel[data-k="${openK}"]`);
@@ -291,11 +330,96 @@ export function createSettings(app: AppContext): SettingsPage {
       if (anchor && openK === "languages") openLanguages(anchor);
       else if (anchor && menu) showMenu(anchor, menu);
     }
+    if (pendingJump && !(loading && pane !== "about")) light(pendingJump);
   }
 
-  onLocaleChange(() => {
+  // ---------- the tabs and 「搜尋設定」 ----------
+
+  /** The list on the left: the tabs in their groups, or, while something is typed, what the search found. */
+  function paintNav(): void {
+    navList.innerHTML = searchField.value.trim() ? searchResultsHTML(hits) : paneListHTML();
+    navList.querySelectorAll<HTMLElement>("[data-pane]").forEach((b) => b.setAttribute("aria-current", b.dataset.pane === pane ? "page" : "false"));
+  }
+
+  function translateNav(): void {
     el.querySelector(".modal-nav")!.setAttribute("aria-label", t("nav.settings"));
-    for (const p of PANES) el.querySelector(`[data-pane="${p.id}"] span`)!.textContent = p.title();
+    searchField.placeholder = t("settings.search");
+    searchField.setAttribute("aria-label", t("settings.search"));
+    hits = searchSettings(searchField.value);
+    paintNav();
+  }
+  translateNav();
+
+  /** Goes to a tab: what the tab before it had open is dropped, and the new one comes in. */
+  function openPane(next: SettingsPane): void {
+    closeMenu();
+    pane = next;
+    if (pane === "connections") void connections.load();
+    else connections.reset();
+    if (pane === "messaging") void messaging.load();
+    else messaging.reset();
+    clearTimeout(clearTimer);
+    confirmingClear = null;
+    syncMonitor();
+    body.scrollTop = 0;
+    render();
+    paintNav();
+    replay(body, "pane-in");
+  }
+
+  /** Goes where a hit of the search is: its tab, then its row, which is lit for a moment and gets the focus. */
+  function jump(hit: SearchHit): void {
+    searchField.value = "";
+    hits = [];
+    pendingJump = hit.label ? hit : null;
+    openPane(hit.pane);
+    if (!hit.label) el.querySelector<HTMLElement>("#set-title")?.focus();
+  }
+
+  /** Lights the row a jump was for, if its tab shows it, scrolls it into view and focuses its control. */
+  function light(hit: SearchHit): void {
+    pendingJump = null;
+    if (pane !== hit.pane) return;
+    const rows = Array.from(body.querySelectorAll<HTMLElement>(".row"));
+    const found = rows.find((r) => r.querySelector(":scope > .lbl > .t")?.textContent?.trim() === hit.text);
+    if (!found) return;
+    const control = found.querySelector<HTMLElement>(":scope > .ctl :is(button, input):not([disabled])");
+    control?.focus({ preventScroll: true });
+    found.scrollIntoView({ block: "center" });
+    found.classList.add("found");
+    setTimeout(() => found.classList.remove("found"), FOUND_MS);
+  }
+
+  searchField.addEventListener("input", () => {
+    hits = searchSettings(searchField.value);
+    paintNav();
+  });
+  searchField.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && hits.length) {
+      e.preventDefault();
+      jump(hits[0]);
+    } else if (e.key === "ArrowDown" && hits.length) {
+      e.preventDefault();
+      navList.querySelector<HTMLElement>(".set-hit")?.focus();
+    } else if (e.key === "Escape" && searchField.value) {
+      // Esc empties the search first; the next one closes the settings.
+      e.preventDefault();
+      searchField.value = "";
+      hits = [];
+      paintNav();
+    }
+  });
+  navList.addEventListener("keydown", (e) => {
+    const items = Array.from(navList.querySelectorAll<HTMLElement>(".set-hit"));
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    if (i < 0 || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
+    e.preventDefault();
+    if (e.key === "ArrowUp" && i === 0) searchField.focus();
+    else items[Math.min(items.length - 1, Math.max(0, i + (e.key === "ArrowDown" ? 1 : -1)))].focus();
+  });
+
+  onLocaleChange(() => {
+    translateNav();
     const close = el.querySelector('[data-act="close"]')!;
     close.setAttribute("aria-label", t("common.close"));
     close.setAttribute("title", t("common.close"));
@@ -693,6 +817,31 @@ export function createSettings(app: AppContext): SettingsPage {
     void changeBrain("monthly_limit_usd", limit);
   }
 
+  /**
+   * A clear of 資料: the first press asks again for a few seconds; the second empties what it names
+   * once the 10 seconds of 「復原」 have run out (`app.undo`), through the core.
+   */
+  function clear(what: "dictation" | "conversation"): void {
+    clearTimeout(clearTimer);
+    if (confirmingClear !== what) {
+      confirmingClear = what;
+      clearTimer = setTimeout(() => {
+        confirmingClear = null;
+        if (visible) render();
+      }, CLEAR_CONFIRM_MS);
+      render();
+      return;
+    }
+    confirmingClear = null;
+    render();
+    app.undo.begin({
+      message: what === "dictation" ? t("data.dictationCleared") : t("data.conversationCleared"),
+      commit: async () => void (what === "dictation" ? await api.historyClear() : await api.agentHistoryClear()),
+      restore: () => {}, // nothing was taken off the screen here
+      failure: (err) => t("undo.001", { p0: () => describeError(err) }),
+    });
+  }
+
   function commitCity(input: HTMLInputElement): void {
     const city = input.value.trim();
     if (city === "") {
@@ -798,15 +947,13 @@ export function createSettings(app: AppContext): SettingsPage {
     }
     const paneButton = target.closest<HTMLElement>("[data-pane]");
     if (paneButton) {
-      closeMenu();
-      pane = paneButton.dataset.pane as SettingsPane;
-      if (pane === "connections") void connections.load();
-      else connections.reset();
-      if (pane === "agent") void messaging.load();
-      else messaging.reset();
-      syncMonitor();
-      body.scrollTop = 0;
-      render();
+      openPane(paneButton.dataset.pane as SettingsPane);
+      return;
+    }
+    const hit = target.closest<HTMLElement>("[data-hit]");
+    if (hit) {
+      const chosen = hits[Number(hit.dataset.hit)];
+      if (chosen) jump(chosen);
       return;
     }
 
@@ -874,6 +1021,12 @@ export function createSettings(app: AppContext): SettingsPage {
       case "or-check":
         void checkOpenrouter();
         break;
+      case "clear-dictation":
+        clear("dictation");
+        break;
+      case "clear-conversation":
+        clear("conversation");
+        break;
       case "license":
         e.preventDefault();
         toaster.info(t("settings.085"));
@@ -906,11 +1059,24 @@ export function createSettings(app: AppContext): SettingsPage {
       app.closeSettings();
     } else if (e.key === "Tab") {
       const selector = "button:not([disabled]), input:not([disabled]), a[href], [tabindex='0']";
+      const active = document.activeElement as HTMLElement | null;
+      // A dialog over the settings (a service of 連接) keeps the focus to itself.
+      const trap = el.querySelector<HTMLElement>("[data-trap]");
+      if (trap) {
+        const inside = Array.from(trap.querySelectorAll<HTMLElement>(selector)).filter((item) => item.offsetParent !== null);
+        if (!active || !trap.contains(active)) {
+          e.preventDefault();
+          (inside[0] ?? trap).focus();
+          return;
+        }
+        trapSettingsFocus(e, inside, active, trap);
+        return;
+      }
       const items = [
         ...Array.from(el.querySelectorAll<HTMLElement>(selector)),
         ...Array.from(chrome?.querySelectorAll<HTMLElement>(selector) ?? []),
       ].filter((item) => item.offsetParent !== null);
-      trapSettingsFocus(e, items, document.activeElement as HTMLElement | null, el.querySelector<HTMLElement>("#set-title"));
+      trapSettingsFocus(e, items, active, el.querySelector<HTMLElement>("#set-title"));
     }
   };
   wireKeyField(el, { inputId: "key-input", pasteSelector: '[data-act="key-paste"]', submit: (value) => void submitKey(value) });
@@ -940,10 +1106,16 @@ export function createSettings(app: AppContext): SettingsPage {
       connections.reset();
       messaging.reset();
       if (pane === "connections") void connections.load();
-      if (pane === "agent") void messaging.load();
+      if (pane === "messaging") void messaging.load();
+      searchField.value = "";
+      hits = [];
+      pendingJump = null;
+      clearTimeout(clearTimer);
+      confirmingClear = null;
       body.scrollTop = 0;
       closeMenu();
       render();
+      paintNav();
       el.querySelector<HTMLElement>("#set-title")?.focus();
       const [brainResult, keyResult, statusResult, devicesResult, altgrResult, versionResult, languagesResult] = await Promise.allSettled([
         api.settingsGet(),
