@@ -39,7 +39,7 @@ import {
   turnHTML,
   wantsRefresh,
 } from "../timeline";
-import type { AgentQuestion, AgentTurn, AppContext, Page } from "../types";
+import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, Page, SettingsPane } from "../types";
 import { btn, esc, ico, iconButton, toaster } from "../ui";
 import { VoiceMode } from "../voice-mode";
 import "../agent.css";
@@ -92,6 +92,15 @@ export function typedQuestion(words: string, file: { name: string; text: string 
 /** Whether a key press in the composer sends: Enter alone, never while an input method composes. */
 export const sendsOnEnter = (e: Pick<KeyboardEvent, "key" | "shiftKey" | "isComposing" | "keyCode">): boolean =>
   e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229;
+
+/**
+ * The words of a draft the page is handed when it opens (`app.go("agent", "draft:" + words)`, from
+ * the 「試試看」 of a connected service), cut to what a question may hold; null for none.
+ */
+export function draftText(arg: SettingsPane | AgentDraft | undefined): string | null {
+  if (typeof arg !== "string" || !arg.startsWith("draft:")) return null;
+  return arg.slice("draft:".length).slice(0, TYPED_MAX_CHARS);
+}
 
 /** A turn typed here that the history does not have yet. */
 interface Outgoing {
@@ -533,6 +542,27 @@ export function createAgent(app: AppContext): Page {
     input.classList.toggle("is-tall", input.scrollHeight > line * COMPOSER_LINES + 2);
   }
 
+  /**
+   * A draft handed to the page: its words in the field in place of what was there, to be sent or
+   * changed, never sent by itself. The field has the focus, the caret after the words, once the
+   * composer is where it stays (`focusComposer`).
+   */
+  function putDraft(words: string): void {
+    input.value = words;
+    fit();
+    focusComposer();
+  }
+
+  /**
+   * The focus in the field, the caret at the end, when the composer is on the page: not while
+   * Raphael's YES/NO card stands in its place (the draft waits in the field under it).
+   */
+  function focusComposer(): void {
+    if (!visible || composer.hidden || !composer.isConnected) return;
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+
   /** 「＋」: a text file of this PC, whose text goes with the next question (the app takes text alone). */
   async function attach(file: File): Promise<void> {
     if (!/\.(txt|md|markdown)$/i.test(file.name)) {
@@ -927,18 +957,28 @@ export function createAgent(app: AppContext): Page {
   return {
     id: "agent",
     el,
-    show() {
+    show(arg) {
       visible = true;
+      // A draft goes into the field at once; the composer may then move (the empty page has it
+      // under Raphael, the thread under the turns) or give way to a question, which takes the
+      // focus away: it is given back once each of those is known.
+      const draft = draftText(arg);
+      if (draft !== null) putDraft(draft);
+      const refocus = (): void => {
+        if (draft !== null) focusComposer();
+      };
       // The page opens at the newest turn, and with the question that waits, if one does.
       void api
         .agentQuestionOpen()
         .then((open) => {
           question = open;
           drawDock();
+          refocus();
         })
         .catch(() => {});
       void load(false).then(() => {
         if (visible && !scroller.hidden) scroller.scrollTop = scroller.scrollHeight;
+        refocus();
       });
     },
     hide() {
