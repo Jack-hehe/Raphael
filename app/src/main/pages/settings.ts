@@ -512,7 +512,9 @@ export function createSettings(app: AppContext): SettingsPage {
 
   async function deleteLocal(name: string): Promise<void> {
     try {
-      await api.modelsLocalDelete(name);
+      const reply = await api.modelsLocalDelete(name);
+      // Deleting the model that backed up the cloud names another, or none, in its place.
+      if (brain && reply.fallback !== undefined) brain = { ...brain, stt_local_model: reply.fallback };
     } catch {
       toaster.info(t("local.deleteFailed", { p0: localTitle(name) }));
     }
