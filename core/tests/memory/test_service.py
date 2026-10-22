@@ -223,6 +223,36 @@ async def test_clearing_the_conversation_starts_the_pass_again_from_the_first_tu
     assert memory.reflected_through() == 0
 
 
+async def test_a_pass_that_waited_while_the_conversation_was_cleared_moves_nothing(memory, history, model):
+    for n in range(REFLECT_AFTER_TURNS):
+        add_turn(history, f"q{n}")
+
+    def clear_while_waiting(**_):
+        history.clear()
+        memory.forget_turns()
+        add_turn(history, "新的對話")  # turn 1 again
+        return {"actions": [memory_item()]}
+
+    model.replies.append(clear_while_waiting)
+    await memory.reflect()
+    # The new conversation is still to be read, and nothing came of the one that was cleared.
+    assert memory.reflected_through() == 0 and memory.store.all() == []
+
+
+async def test_a_pass_that_waited_while_the_memory_was_cleared_writes_nothing(rpc, memory, history, model):
+    memory.store.write("user-city", type="user", description="主人住在台北", body="x")
+    for n in range(REFLECT_AFTER_TURNS):
+        add_turn(history, f"q{n}")
+
+    async def clear_while_waiting(**_):
+        await rpc.call("memory.clear", {})
+        return {"actions": [memory_item(), memory_item(name="user-city", op="UPDATE")]}
+
+    model.replies.append(clear_while_waiting)
+    applied = await memory.reflect()
+    assert applied.changed == 0 and memory.store.all() == []
+
+
 async def test_the_memory_logs_no_memory_and_no_turn(memory, history, model, caplog):
     for n in range(REFLECT_AFTER_TURNS):
         add_turn(history, f"秘密的問題 {n}")

@@ -4,12 +4,14 @@ and how its actions are checked before anything is written."""
 from raphael_core.agent.ledger import Ledger
 from raphael_core.brain.openrouter import OpenRouterError
 from raphael_core.brain.spend import SpendTracker
+from raphael_core.memory import store as store_module
 from raphael_core.memory.reflection import (
     MAX_ACTIONS,
     Action,
     BadAnswer,
     Reflector,
     apply_actions,
+    apply_merge,
     parse_actions,
 )
 
@@ -103,7 +105,15 @@ def test_every_action_passes_the_same_checks_as_any_write(store):
 
 
 def test_the_consolidation_may_not_add(store):
-    assert apply_actions([act()], store, allow_add=False).refused == ["add"]
+    assert apply_merge([act()], store, since=store.mark()).refused == ["add"]
+    assert store.all() == []
+
+
+def test_an_update_of_a_memory_that_is_not_there_adds_it_only_when_asked_to(store):
+    # The owner's own turn may (the fast tier said UPDATE for a note that is not there yet); the
+    # reflection pass may not, since the memory it names may be one the owner deleted.
+    assert apply_actions([act(op="UPDATE")], store, update_adds=False).refused == ["not_found"]
+    assert store.all() == []
 
 
 # --- the reflection pass ------------------------------------------------------------------------------
@@ -189,3 +199,107 @@ async def test_a_consolidation_with_one_memory_asks_no_model(store, conn, clock)
     model = FakeModel()
     applied = await Reflector(model).consolidate(store, model="m", ledger=ledger(conn, clock))
     assert applied.changed == 0 and model.calls == []
+
+
+# --- what the owner changed while the model was thinking --------------------------------------------
+
+
+def reply_after(change, answer):
+    """A model's answer that comes after `change` was made, as if while the model was thinking."""
+
+    def reply(**_):
+        change()
+        return answer
+
+    return reply
+
+
+async def test_an_edit_the_owner_made_while_the_pass_waited_is_kept(store, history, conn, clock):
+    store.write("user-city", type="user", description="主人住在台北", body="主人住在台北市。")
+    add_turn(history, "我住在台北")
+    edit = lambda: store.write("user-city", type="user", description="主人住在高雄", body="主人住在高雄市。")
+    model = FakeModel(reply_after(edit, {"actions": [item(op="UPDATE", body="主人住在台北市大安區。")]}))
+    applied = await Reflector(model).reflect(store, history.after(0), model="m", ledger=ledger(conn, clock))
+    assert applied.written == [] and applied.refused == ["changed"]
+    assert store.get("user-city").description == "主人住在高雄"
+
+
+async def test_a_memory_the_owner_deleted_while_the_pass_waited_does_not_come_back(store, history, conn, clock):
+    store.write("user-city", type="user", description="主人住在台北", body="主人住在台北市。")
+    add_turn(history, "我住在台北")
+    model = FakeModel(
+        reply_after(lambda: store.delete("user-city"), {"actions": [item(op="UPDATE", body="主人住在台北市大安區。")]})
+    )
+    applied = await Reflector(model).reflect(store, history.after(0), model="m", ledger=ledger(conn, clock))
+    assert applied.written == [] and store.all() == []
+
+
+async def test_nothing_is_written_when_the_owner_cleared_the_memory_while_the_pass_waited(store, history, conn, clock):
+    store.write("user-city", type="user", description="主人住在台北", body="主人住在台北市。")
+    add_turn(history, "我喜歡茶")
+    model = FakeModel(
+        reply_after(store.clear, {"actions": [item(name="user-tea", description="主人喜歡茶"), item(op="UPDATE")]})
+    )
+    applied = await Reflector(model).reflect(store, history.after(0), model="m", ledger=ledger(conn, clock))
+    assert applied.written == [] and applied.refused == ["changed", "changed"]
+    assert store.all() == []
+
+
+async def test_a_pass_whose_conversation_was_cleared_while_it_waited_writes_nothing(store, history, conn, clock):
+    add_turn(history, "我喜歡茶")
+    current = {"yes": True}
+    model = FakeModel(
+        reply_after(lambda: current.update(yes=False), {"actions": [item(name="user-tea", description="主人喜歡茶")]})
+    )
+    applied = await Reflector(model).reflect(
+        store, history.after(0), model="m", ledger=ledger(conn, clock), current=lambda: current["yes"]
+    )
+    assert applied.changed == 0 and store.all() == [] and not applied.failed
+
+
+async def test_a_consolidation_drops_its_merge_when_the_owner_edited_a_memory_meanwhile(store, conn, clock):
+    store.write("user-tea", type="user", description="主人喜歡喝茶", body="茶。")
+    store.write("preference-tea", type="preference", description="主人偏好烏龍茶", body="烏龍。")
+    edit = lambda: store.write("preference-tea", type="preference", description="主人只喝無糖烏龍茶", body="無糖。")
+    model = FakeModel(
+        reply_after(
+            edit,
+            {"actions": [
+                item(op="UPDATE", name="user-tea", description="主人喜歡喝烏龍茶", body="烏龍茶。"),
+                item(op="DELETE", name="preference-tea"),
+            ]},
+        )  # fmt: skip
+    )
+    applied = await Reflector(model).consolidate(store, model="m", ledger=ledger(conn, clock))
+    assert applied.changed == 0
+    assert store.get("preference-tea").description == "主人只喝無糖烏龍茶"
+    assert store.get("user-tea").description == "主人喜歡喝茶"
+
+
+# --- a merge is one change -----------------------------------------------------------------------------
+
+
+def test_a_merge_whose_keeper_is_refused_deletes_nothing(store):
+    store.write("user-tea", type="user", description="主人喜歡喝茶", body="茶。")
+    store.write("preference-tea", type="preference", description="主人偏好烏龍茶", body="烏龍。")
+    for keeper in (
+        act(op="UPDATE", name="user-tea", description="主人喜歡喝烏龍茶", body="長" * 1201),  # too long
+        act(op="UPDATE", name="user-tea", description="主人喜歡喝烏龍茶", body="Wi-Fi 密碼是 hunter22"),
+        act(op="UPDATE", name="user-tea", description="主人喜歡喝烏龍茶", origin="inferred"),  # said
+    ):
+        # The DELETE first: the order the model gives does not matter.
+        applied = apply_merge([act(op="DELETE", name="preference-tea"), keeper], store, since=store.mark())
+        assert applied.deleted == [] and applied.written == [], keeper
+        assert {m.name for m in store.all()} == {"user-tea", "preference-tea"}
+        assert store.get("user-tea").body == "茶。"
+
+
+def test_a_merge_that_fits_the_index_only_once_its_sources_go_is_made(store, monkeypatch):
+    store.write("user-tea", type="user", description="茶" * 20, body="茶。")
+    store.write("user-oolong", type="user", description="烏" * 20, body="烏龍。")
+    full = len(store.index())
+    monkeypatch.setattr(store_module, "INDEX_MAX_CHARS", full + 5)
+    merged = act(op="UPDATE", name="user-tea", description="茶" * 30, body="茶與烏龍。")
+    applied = apply_merge([merged, act(op="DELETE", name="user-oolong")], store, since=store.mark())
+    assert applied.written == ["user-tea"] and applied.deleted == ["user-oolong"]
+    assert [m.name for m in store.all()] == ["user-tea"]

@@ -244,6 +244,33 @@ class MemoryStore:
         self._cache: list[Memory] = []
         self._index_key: tuple | None = None
         self._index = ""
+        # What changed, in the order it did (`mark`, `changed_since`): a count of the changes, the
+        # count at which each name was last written or deleted, and the count of the last clear.
+        self._changes = 0
+        self._changed: dict[str, int] = {}
+        self._cleared = 0
+
+    # --- what changed ------------------------------------------------------------------------------
+
+    def mark(self) -> int:
+        """A mark of the memory as it is now, for `changed_since`. A pass of the model takes one
+        before it reads the memory, and applies nothing to a memory that changed after it (the
+        owner edited, deleted or cleared it in the settings meanwhile, or a turn wrote it)."""
+        return self._changes
+
+    def changed_since(self, name: str, mark: int) -> bool:
+        """Whether the memory `name` was written or deleted after `mark`, or every memory was
+        cleared after it. Only the changes made through this store are counted (a file edited by
+        hand is not)."""
+        return self._cleared > mark or self._changed.get(name, 0) > mark
+
+    def _count_change(self, name: str | None) -> None:
+        """Count a change of the memory `name`, or of every memory (None: a clear)."""
+        self._changes += 1
+        if name is None:
+            self._cleared = self._changes
+        else:
+            self._changed[name] = self._changes
 
     # --- reading -----------------------------------------------------------------------------------
 
@@ -411,10 +438,12 @@ class MemoryStore:
         expires: str | None = None,
         origin: str = "said",
         turns: Sequence[int] = (),
+        leaving: Iterable[str] = (),
     ) -> Memory:
         """Create the memory `name`, or replace it. Its `created` stays what it was, `updated` is
         now, and the turns it came from are added to the ones it had. MemoryRefused when it breaks
-        a limit or holds something it may not."""
+        a limit or holds something it may not. `leaving` are memories about to be deleted (the
+        ones a merge folds into this one): the index is checked without them."""
         description, body, expires = self.check(
             name=name, type=type, description=description, body=body, expires=expires
         )
@@ -442,12 +471,15 @@ class MemoryStore:
             turns=tuple(kept_turns[-MAX_TURNS:]),
         )
         existing[name] = memory
-        if not _fits(index_of(existing.values(), self.today())):
+        gone = set(leaving) - {name}
+        kept = [m for m in existing.values() if m.name not in gone]
+        if not _fits(index_of(kept, self.today())):
             raise MemoryRefused(
                 "full",
                 "The index of memories is full: merge or delete memories, or shorten descriptions.",
             )
         self._write_file(self.root / f"{name}.md", render(memory))
+        self._count_change(name)
         self._after_change()
         return memory
 
@@ -469,11 +501,13 @@ class MemoryStore:
             (self.root / f"{name}.md").unlink()
         except FileNotFoundError:
             return False
+        self._count_change(name)
         self._after_change()
         return True
 
     def clear(self) -> int:
         """Delete every memory; how many went."""
+        self._count_change(None)
         deleted = 0
         for path in self._files():
             try:

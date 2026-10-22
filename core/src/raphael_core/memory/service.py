@@ -116,6 +116,8 @@ class MemoryService:
         self._timer: asyncio.TimerHandle | None = None
         self._running: asyncio.Task[None] | None = None
         self._failed_at: float | None = None
+        # How many times the conversation was cleared: a pass that began at another count is stale.
+        self._turn_clears = 0
 
     def register(self, router: RpcRouter) -> None:
         methods = {
@@ -194,7 +196,9 @@ class MemoryService:
 
     def forget_turns(self) -> None:
         """The conversation was cleared: the reflection pass starts again from the first turn
-        (the ids of the turns start again too)."""
+        (the ids of the turns start again too). A pass that waits for the model meanwhile read
+        turns that are gone: it applies nothing and leaves the watermark at 0."""
+        self._turn_clears += 1
         self._set_state(_REFLECTED, 0)
 
     def read(self, names: Sequence[str]) -> ToolResult:
@@ -351,16 +355,22 @@ class MemoryService:
     async def reflect(self) -> Applied:
         """One reflection pass over the turns it has not read. The watermark moves past them
         when the model answered, whatever it made of them; a model that failed leaves them for the
-        next pass, which waits RETRY_S."""
+        next pass, which waits RETRY_S. When the conversation was cleared while the model thought,
+        nothing is applied and the watermark stays where the clear put it."""
         turns = self._unread()
         if not turns:
             return Applied()
+        clears = self._turn_clears
+
+        def current() -> bool:
+            return self._turn_clears == clears
+
         applied = await self._reflector.reflect(
-            self.store, turns, model=self._model(), ledger=self.ledger()
+            self.store, turns, model=self._model(), ledger=self.ledger(), current=current
         )
         if applied.failed:
             self._failed_at = self._clock()
-        else:
+        elif current():
             self._set_state(_REFLECTED, max(turns[-1].id or 0, self.reflected_through()))
         return applied
 

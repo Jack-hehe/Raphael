@@ -17,13 +17,21 @@ is one of the four, a name that exists for UPDATE and DELETE, a type, the limits
 an action that says the owner stated the change. An answer that is not the JSON asked for is asked
 for once more, then dropped. At most MAX_ACTIONS are applied from one answer.
 
+The model thinks for seconds, and the owner may edit, delete or clear memories in the settings
+meanwhile. So a pass takes a mark of the memory (`MemoryStore.mark`) before it reads it, and an
+action on a memory that changed after the mark is dropped ("changed"), every action after a clear:
+an edit is never overwritten from the old copy. An UPDATE of a memory that is not there is never
+taken for an ADD here (it may be one the owner deleted). The consolidation's answer is one change
+(`apply_merge`): it is dropped whole when any memory it names changed, and its DELETEs run only
+once every UPDATE was written, so a merge whose kept memory is refused deletes nothing.
+
 Nothing here logs a memory, a turn or what the model said; only counts.
 """
 
 import asyncio
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -202,56 +210,136 @@ def parse_actions(data: object) -> list[Action]:
     return actions
 
 
+def _stale(actions: Sequence[Action], store: MemoryStore, since: int | None) -> set[str]:
+    """The names of `actions` whose memory changed after the mark `since` (see
+    `MemoryStore.changed_since`); none when there is no mark. Found before anything is applied,
+    so that an answer's own writes never make its later actions stale."""
+    if since is None:
+        return set()
+    return {action.name for action in actions if store.changed_since(action.name, since)}
+
+
+def _write(
+    action: Action,
+    existing: Memory | None,
+    store: MemoryStore,
+    *,
+    turns: Sequence[int] = (),
+    leaving: Sequence[str] = (),
+) -> str:
+    """Write `action` (an ADD, or an UPDATE of `existing`); the name written. MemoryRefused with
+    the reason when it may not be written: a guess over what the owner said ("said"), a type
+    that is not one, or anything `MemoryStore.write` refuses."""
+    if existing is not None and existing.origin == "said" and action.origin != "said":
+        raise MemoryRefused("said", "")
+    kind = action.type or (existing.type if existing is not None else "")
+    if kind not in TYPES:
+        raise MemoryRefused("bad_type", "")
+    name = existing.name if existing is not None else _new_name(store, kind, action)
+    store.write(
+        name,
+        type=kind,
+        description=action.description,
+        body=action.body,
+        expires=action.expires,
+        origin=action.origin,
+        turns=turns,
+        leaving=leaving,
+    )
+    return name
+
+
+def _deletable(action: Action, existing: Memory | None) -> str | None:
+    """Why the DELETE `action` of `existing` may not be applied ("not_found", "said"), or None."""
+    if existing is None:
+        return "not_found"
+    if existing.origin == "said" and action.origin != "said":
+        return "said"
+    return None
+
+
 def apply_actions(
     actions: Sequence[Action],
     store: MemoryStore,
     *,
     turns: Sequence[int] = (),
-    allow_add: bool = True,
+    update_adds: bool = True,
+    since: int | None = None,
 ) -> Applied:
     """Apply what may be applied of `actions` to `store`, each checked (see the module); `turns`
-    are the ids of the turns they came from. One that is refused leaves the others."""
+    are the ids of the turns they came from. One that is refused leaves the others.
+
+    `since` is the mark (`MemoryStore.mark`) taken before the model read the memory: an action on
+    a memory that changed after it is refused ("changed"), every one after a clear. With
+    `update_adds` an UPDATE of a memory that is not there adds it (the owner's own turn); without
+    it, it is refused ("not_found"), since the memory it names may be one the owner deleted."""
     applied = Applied()
+    stale = _stale(actions, store, since)
     for action in actions:
+        if action.name in stale:
+            applied.refused.append("changed")
+            continue
         existing = store.get(action.name) if valid_name(action.name) else None
-        op = action.op
-        if op == "ADD" and existing is not None:
-            op = "UPDATE"
-        if op == "UPDATE" and existing is None:
-            op = "ADD"
-        if op == "DELETE":
-            if existing is None:
-                applied.refused.append("not_found")
-            elif existing.origin == "said" and action.origin != "said":
-                applied.refused.append("said")
-            elif store.delete(existing.name):
+        if action.op == "DELETE":
+            why = _deletable(action, existing)
+            if why is not None:
+                applied.refused.append(why)
+            elif existing is not None and store.delete(existing.name):
                 applied.deleted.append(existing.name)
             continue
-        if op == "ADD" and not allow_add:
-            applied.refused.append("add")
+        if action.op == "UPDATE" and existing is None and not update_adds:
+            applied.refused.append("not_found")
             continue
-        if existing is not None and existing.origin == "said" and action.origin != "said":
-            applied.refused.append("said")
-            continue
-        kind = action.type or (existing.type if existing is not None else "")
-        if kind not in TYPES:
-            applied.refused.append("bad_type")
-            continue
-        name = existing.name if existing is not None else _new_name(store, kind, action)
         try:
-            store.write(
-                name,
-                type=kind,
-                description=action.description,
-                body=action.body,
-                expires=action.expires,
-                origin=action.origin,
-                turns=turns,
-            )
+            applied.written.append(_write(action, existing, store, turns=turns))
         except MemoryRefused as refused:
             applied.refused.append(refused.kind)
+    return applied
+
+
+def apply_merge(actions: Sequence[Action], store: MemoryStore, *, since: int) -> Applied:
+    """Apply the consolidation's `actions` to `store` as one change: an UPDATE writes the memory a
+    merge keeps, a DELETE takes away one it folded in (or the older side of a contradiction).
+
+    The answer is a flat list, so which DELETE belongs to which UPDATE cannot be told: the DELETEs
+    run only once every UPDATE of the answer was written, whatever order the model gave them in.
+    An UPDATE that is refused (too long, a secret, a guess over what the owner said, not there)
+    keeps every memory, so a merge never loses what it was to keep; the others are written, which
+    loses nothing either. Each UPDATE is checked against the index as it will be once the DELETEs
+    have run, so that a merge that fits only once its sources go is made.
+
+    `since` is the mark taken before the model read the memory: when any memory the answer names
+    changed after it, nothing of the answer is applied ("changed"). An ADD is refused ("add")
+    unless its name is a memory there (then it is an UPDATE): the consolidation never adds."""
+    applied = Applied()
+    if _stale(actions, store, since):
+        applied.refused += ["changed"] * len(actions)
+        return applied
+    found = {a.name: store.get(a.name) if valid_name(a.name) else None for a in actions}
+    deletes = [action for action in actions if action.op == "DELETE"]
+    leaving = [a.name for a in deletes if _deletable(a, found[a.name]) is None]
+    whole = True
+    for action in actions:
+        if action.op == "DELETE":
             continue
-        applied.written.append(name)
+        existing = found[action.name]
+        if existing is None:
+            applied.refused.append("add" if action.op == "ADD" else "not_found")
+            whole = whole and action.op == "ADD"  # an ADD left out takes nothing from a merge
+            continue
+        try:
+            applied.written.append(_write(action, existing, store, leaving=leaving))
+        except MemoryRefused as refused:
+            applied.refused.append(refused.kind)
+            whole = False
+    for action in deletes:
+        why = _deletable(action, found[action.name])
+        if not whole or action.name in applied.written:
+            why = why or "merge"
+        if why is not None:
+            applied.refused.append(why)
+        elif store.delete(action.name):
+            applied.deleted.append(action.name)
     return applied
 
 
@@ -362,11 +450,15 @@ class Reflector:
         *,
         model: str,
         ledger: Ledger,
+        current: Callable[[], bool] = lambda: True,
     ) -> Applied:
         """One reflection pass over `turns` (oldest first). Never raises for the model: a model
-        that fails changes nothing."""
+        that fails changes nothing. What the model answers is applied only to the memories that
+        did not change while it thought (see `apply_actions`), and not at all when `current` says
+        that `turns` are no longer the conversation's (it was cleared meanwhile)."""
         if not turns:
             return Applied()
+        since = store.mark()
         seen = "\n".join(f"{turn.question} {turn.text}" for turn in turns)
         related = store.related(seen, RELATED)
         user = reflection_message(store.today(), store.index(), related, turns, store.fill())
@@ -375,8 +467,11 @@ class Reflector:
         except (OpenRouterError, TimeoutError, BadAnswer) as error:
             logger.warning("The reflection pass failed: %s", type(error).__name__)
             return Applied(failed=True)
+        if not current():
+            logger.info("Reflection pass: the conversation was cleared meanwhile, nothing applied")
+            return Applied()
         ids = [turn.id for turn in turns if turn.id is not None]
-        applied = apply_actions(actions, store, turns=ids)
+        applied = apply_actions(actions, store, turns=ids, update_adds=False, since=since)
         logger.info(
             "Reflection pass: turns=%d written=%d deleted=%d refused=%d",
             len(turns),
@@ -390,6 +485,7 @@ class Reflector:
         """The weekly tidy: the expired memories go (no model), then the model merges the ones that
         overlap. Never raises for the model."""
         applied = Applied(deleted=store.drop_expired())
+        since = store.mark()
         memories = store.all()
         if len(memories) < 2:
             return applied
@@ -400,7 +496,7 @@ class Reflector:
             logger.warning("The memory could not be consolidated: %s", type(error).__name__)
             applied.failed = True
             return applied
-        merged = apply_actions(actions, store, allow_add=False)
+        merged = apply_merge(actions, store, since=since)
         applied.written += merged.written
         applied.deleted += merged.deleted
         applied.refused += merged.refused
