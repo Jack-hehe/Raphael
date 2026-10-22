@@ -2,15 +2,20 @@
 
 A turn is written when the assistant has its answer, or when it has asked for a yes or a no
 (`status` "confirm"), and the row is completed when that is answered (`resolve`). The app's page of
-conversations lists them, newest first, and the last few are the context of a discussion.
+conversations shows them, and they are the one continuous conversation the model reads: the
+latest turns as they were said, the earlier ones through a summary (`memory.conversation`).
 
 Each turn keeps where it came from (`source`: "voice", or a chat app such as "telegram") and the
 model that answered, and its steps (`agent_steps`, `steps.Step`): what the fast tier did for it, so
 the conversation view can show what happened between the question and the answer. The steps go with
-their turns when the history is pruned or cleared.
+their turns when the history is cleared.
 
-Like the dictation history, it holds what the user said, so it is pruned with the retention setting
-and the user can clear it. Nothing here logs a question or an answer.
+Every turn is also in the search (`agent_turns_fts`, `search`): its question and its answer as
+words and pairs of CJK characters (`memory.terms`), so that Raphael can look up what was said long
+ago, a word of two Chinese characters too.
+
+The conversation is not pruned: unlike the dictations, which go after the retention setting, the
+turns stay until the user clears them (`clear`). Nothing here logs a question or an answer.
 """
 
 # Postponed annotations: AgentHistory has a method called `list`, which would otherwise hide the
@@ -22,6 +27,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 
 from ..clock import wall_clock_ms
+from ..memory.terms import QueryWord, fts_quote, index_terms, query_words
 from .steps import Step
 
 # Where a turn came from when nobody says: the hotkey and the overlay.
@@ -50,6 +56,9 @@ _COLUMNS = (
     " source, model"
 )
 _STEP_COLUMNS = "turn_id, kind, tool, server, outcome, ms, reason, at_ms"
+_TURN_COLUMNS = ", ".join(f"t.{name.strip()}" for name in _COLUMNS.split(","))
+# The most turns a search returns.
+SEARCH_MAX = 10
 
 
 def _to_turn(row: sqlite3.Row) -> Turn:
@@ -103,7 +112,17 @@ class AgentHistory:
             turn_id = cursor.lastrowid
             assert turn_id is not None
             self._insert_steps(turn_id, steps)
+            self._index(turn_id, question, text, detail)
         return turn_id
+
+    def _index(self, turn_id: int, question: str, text: str, detail: str | None) -> None:
+        """Put a turn into the search, in place of what it held for it."""
+        terms = index_terms(question, text, detail)
+        self._conn.execute("DELETE FROM agent_turns_fts WHERE rowid = ?", (turn_id,))
+        self._conn.execute(
+            "INSERT INTO agent_turns_fts (rowid, pairs, chars) VALUES (?, ?, ?)",
+            (turn_id, terms.pairs, terms.chars),
+        )
 
     def add_steps(self, turn_id: int, steps: Sequence[Step]) -> None:
         """Add steps to a turn that is already stored: the call made after a yes, say. They come
@@ -174,6 +193,11 @@ class AgentHistory:
                 " cost_usd = cost_usd + ?, model = COALESCE(?, model) WHERE id = ?",
                 (prefix, text, detail, status, cost_usd, model, turn_id),
             )
+            if cursor.rowcount:
+                row = self._conn.execute(
+                    "SELECT question FROM agent_turns WHERE id = ?", (turn_id,)
+                ).fetchone()
+                self._index(turn_id, row[0], text, detail)
         return cursor.rowcount > 0
 
     def list(self, limit: int = 50, before_id: int | None = None) -> list[Turn]:
@@ -198,24 +222,101 @@ class AgentHistory:
         )
         return [_to_turn(row) for row in reversed(rows.fetchall())]
 
+    def after(self, turn_id: int, *, limit: int | None = None) -> list[Turn]:
+        """The turns made after the turn `turn_id`, whatever their status, oldest first; with a
+        `limit`, only the newest that many of them."""
+        if limit is None:
+            rows = self._conn.execute(
+                f"SELECT {_COLUMNS} FROM agent_turns WHERE id > ? ORDER BY id", (turn_id,)
+            ).fetchall()
+            return [_to_turn(row) for row in rows]
+        if limit <= 0:
+            return []
+        rows = self._conn.execute(
+            f"SELECT {_COLUMNS} FROM agent_turns WHERE id > ? ORDER BY id DESC LIMIT ?",
+            (turn_id, limit),
+        ).fetchall()
+        return [_to_turn(row) for row in reversed(rows)]
+
+    def last_id(self) -> int:
+        """The id of the latest turn; 0 when there is none."""
+        (found,) = self._conn.execute("SELECT COALESCE(MAX(id), 0) FROM agent_turns").fetchone()
+        return int(found)
+
+    def search(self, query: str, *, limit: int = 5, since_ms: int | None = None) -> list[Turn]:
+        """The answered turns that hold the words of `query`, best first (BM25, then the newest),
+        at most `limit` (and SEARCH_MAX). Each word is looked for as it is written, a word of two
+        Chinese characters too (`memory.terms`), and a turn that holds any of them is found. A word
+        that is a long run of Chinese and is not found as it is written is looked for by its pairs
+        of characters. `since_ms` keeps the turns made from then on."""
+        words = query_words(query)
+        limit = max(1, min(limit, SEARCH_MAX))
+        if not words:
+            return []
+        found = self._find(words, limit, since_ms)
+        if not found and any(len(word.pairs) > 1 for word in words):
+            pairs = dict.fromkeys(pair for word in words for pair in word.pairs)
+            found = self._find([QueryWord(pair, (pair,)) for pair in pairs], limit, since_ms)
+        return found
+
+    def _find(self, words: Sequence[QueryWord], limit: int, since_ms: int | None) -> list[Turn]:
+        if not self._has_fts():
+            return self._search_like(words, limit, since_ms)
+        match = " OR ".join(
+            f"chars : {fts_quote(word.char)}"
+            if word.char
+            else "pairs : " + fts_quote(" ".join(word.pairs))
+            for word in words
+        )
+        return self._match(match, limit, since_ms)
+
+    def _match(self, match: str, limit: int, since_ms: int | None) -> list[Turn]:
+        since = "" if since_ms is None else " AND t.created_at_ms >= ?"
+        params: list[object] = [match, *([] if since_ms is None else [since_ms]), limit]
+        rows = self._conn.execute(
+            f"SELECT {_TURN_COLUMNS} FROM agent_turns_fts JOIN agent_turns t"
+            " ON t.id = agent_turns_fts.rowid"
+            f" WHERE agent_turns_fts MATCH ? AND t.status = 'done'{since}"
+            " ORDER BY bm25(agent_turns_fts), t.id DESC LIMIT ?",
+            params,
+        ).fetchall()
+        return [_to_turn(row) for row in rows]
+
+    def _search_like(
+        self, words: Sequence[QueryWord], limit: int, since_ms: int | None
+    ) -> list[Turn]:
+        """The search where this SQLite has no FTS5: the same terms, read with LIKE, newest first.
+        The table holds a few thousand turns a year, so a scan takes milliseconds."""
+        conditions, params = [], []
+        for word in words:
+            if word.char:
+                conditions.append("f.chars LIKE ?")
+                params.append(f"%{word.char}%")
+            else:
+                conditions.append("(' ' || f.pairs || ' ') LIKE ?")
+                params.append(f"% {' '.join(word.pairs)} %")
+        since = "" if since_ms is None else " AND t.created_at_ms >= ?"
+        params += [*([] if since_ms is None else [since_ms]), limit]
+        rows = self._conn.execute(
+            f"SELECT {_TURN_COLUMNS} FROM agent_turns_fts f JOIN agent_turns t ON t.id = f.rowid"
+            f" WHERE ({' OR '.join(conditions)}) AND t.status = 'done'{since}"
+            " ORDER BY t.id DESC LIMIT ?",
+            params,
+        ).fetchall()
+        return [_to_turn(row) for row in rows]
+
+    def _has_fts(self) -> bool:
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'agent_turns_fts'"
+        ).fetchone()
+        return row is not None and "fts5" in (row[0] or "").lower()
+
     def clear(self) -> int:
-        """Delete every turn, with its steps; return how many went."""
+        """Delete every turn, with its steps and its place in the search; return how many went."""
         with self._conn:
             self._conn.execute("DELETE FROM agent_steps")
+            self._conn.execute("DELETE FROM agent_turns_fts")
             cursor = self._conn.execute("DELETE FROM agent_turns")
-        return cursor.rowcount
-
-    def prune(self, older_than_ms: int) -> int:
-        """Delete the turns made before `older_than_ms`, with their steps; return how many went."""
-        with self._conn:
-            self._conn.execute(
-                "DELETE FROM agent_steps WHERE turn_id IN"
-                " (SELECT id FROM agent_turns WHERE created_at_ms < ?)",
-                (older_than_ms,),
-            )
-            cursor = self._conn.execute(
-                "DELETE FROM agent_turns WHERE created_at_ms < ?", (older_than_ms,)
-            )
         return cursor.rowcount
 
     def expire_pending(self) -> int:

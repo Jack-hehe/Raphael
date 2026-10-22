@@ -29,10 +29,10 @@ import json
 import logging
 import sqlite3
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar
 
 from ..agent.failure import failure_kind
 from ..agent.gate import ToolGate
@@ -145,7 +145,9 @@ class TaskRun:
         city: Callable[[], str],
         changed: Callable[[], None] = lambda: None,
         clock: Callable[[], float] = time.monotonic,
+        memory: "MemoryReader | None" = None,
     ) -> None:
+        self._memory = memory
         self.task_id = task_id
         self.language = language
         self.model = model
@@ -482,6 +484,8 @@ class TaskRun:
                 return await self._guarded(
                     self._tools.web_search(query.strip(), self.model, self.ledger)
                 )
+            if name in ("memory_read", "history_search"):
+                return self._read_memory(name, arguments)
             return self._tools.local_time()
         except RpcError:
             raise
@@ -490,6 +494,29 @@ class TaskRun:
         except Exception as exc:
             logger.warning("The %s lookup failed unexpectedly: %s", name, type(exc).__name__)
             return ToolResult(name, False, None, "error")
+
+
+    def _read_memory(self, name: str, arguments: dict) -> ToolResult:
+        """A note read or the past turns searched; never a write."""
+        if self._memory is None:
+            return ToolResult(name, False, None, "blocked")
+        if name == "memory_read":
+            names = arguments.get("names")
+            if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+                return ToolResult(name, False, None, "bad_arguments")
+            return self._memory.read(names)
+        query = arguments.get("query")
+        if not isinstance(query, str) or not query.strip():
+            return ToolResult(name, False, None, "bad_arguments")
+        return self._memory.search(query.strip())
+
+
+class MemoryReader(Protocol):
+    """What a task may do with the memory (`memory.service.MemoryService`): read and search."""
+
+    def read(self, names: Sequence[str]) -> ToolResult: ...
+
+    def search(self, query: str, *, limit: int = 5, exclude: Sequence[int] = ()) -> ToolResult: ...
 
 
 def _ms(began: float) -> int:

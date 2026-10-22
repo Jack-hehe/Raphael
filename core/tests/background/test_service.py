@@ -547,18 +547,18 @@ async def test_the_conversation_shows_a_task_with_its_steps_and_never_its_argume
     assert ARGUMENT not in shown and RESULT not in shown and TASK_TEXT not in shown
 
 
-async def test_old_tasks_are_pruned_and_cleared_but_one_that_runs_is_kept(make_rig):
+async def test_old_tasks_are_kept_and_go_when_the_history_is_cleared(make_rig):
     rig = make_rig()
     rig.client.replies = [report("one"), report("two")]
     first = rig.submit()
     await rig.wait_for_reports()
-    rig.wall.now += 60_000
+    rig.wall.now += 400 * 86_400_000
     second = rig.submit()
     await rig.wait_for_reports(2)
-    rig.service.prune(rig.task(second).created_at_ms)
-    assert rig.task(first) is None and rig.task(second) is not None
+    assert not hasattr(rig.service, "prune")  # part of the one conversation: never pruned by age
+    assert rig.task(first) is not None and rig.task(second) is not None
     rig.service.clear()
-    assert rig.task(second) is None
+    assert rig.task(first) is None and rig.task(second) is None
 
 
 async def test_the_tray_is_told_a_task_runs_while_another_one_waits(make_rig):

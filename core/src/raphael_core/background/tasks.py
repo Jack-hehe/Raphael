@@ -3,7 +3,8 @@
 `worker_tasks` is one row for each task: what was handed over, how it stands and the report it ended
 with. `worker_steps` is one row for each model call and each tool call: which tool, at which tier,
 how it ended and what it cost. A step holds no argument and no result. The text of a task is what the
-user said, so tasks are pruned with the assistant's history and go with its "clear".
+user said, so tasks go with the assistant's history when it is cleared; like the conversation they
+are part of, they are not pruned by age.
 
 `state` is one of:
 
@@ -328,21 +329,6 @@ class TaskStore:
                 " report_detail = NULL WHERE id = ?",
                 (task_id,),
             )
-
-    def prune(self, older_than_ms: int) -> int:
-        """Delete the finished tasks made before `older_than_ms`, with their steps."""
-        with self._conn:
-            self._conn.execute(
-                "DELETE FROM worker_steps WHERE task_id IN (SELECT id FROM worker_tasks"
-                " WHERE created_at_ms < ? AND state NOT IN ('queued', 'running'))",
-                (older_than_ms,),
-            )
-            cursor = self._conn.execute(
-                "DELETE FROM worker_tasks WHERE created_at_ms < ?"
-                " AND state NOT IN ('queued', 'running')",
-                (older_than_ms,),
-            )
-        return cursor.rowcount
 
     def clear(self) -> int:
         """Delete every finished task, with its steps; one that is not over stays."""

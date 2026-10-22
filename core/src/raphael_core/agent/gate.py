@@ -14,7 +14,12 @@ is unknown and cannot run; and it holds the door to the plugins' tools (`plugins
   on, of a plugin that is on) and writes the audit whatever happens, with the task that made the
   call; a call the gate refuses is made as a refused one, so it is written down too;
 - `record_builtin` writes the audit of one of Raphael's own lookups (the weather, a web search,
-  the time) for a task.
+  the time, the memory) for a task.
+
+The memory's tools are Raphael's own too: reading a note (`memory_read`) and searching the past
+turns (`history_search`) only read, so they are T0; writing and deleting a note (`memory_write`,
+`memory_delete`) change only Raphael's own memory, which the user sees and can undo in the settings,
+so they are T1: they run at once, with no yes asked for.
 
 The audit holds a time, a tool, a tier, who approved and how it ended; never an argument or a result.
 Nothing here logs a name, an argument or a result.
@@ -39,6 +44,9 @@ logger = logging.getLogger(__name__)
 # Raphael's own lookups. They only read, so they are T0. The audit calls their "server" this.
 WEB_TOOLS = ("weather", "web_search", "local_time")
 BUILTIN_SERVER = "Raphael"
+# The memory's tools (raphael_core.memory), by tier: the ones that read, and the ones that change it.
+MEMORY_READ_TOOLS = ("memory_read", "history_search")
+MEMORY_WRITE_TOOLS = ("memory_write", "memory_delete")
 
 
 class ToolGate:
@@ -61,8 +69,10 @@ class ToolGate:
             {name: command.tier for name, command in COMMANDS.items()},
             plugin_tier=None if plugins is None else plugins.tier_of,
         )
-        for name in WEB_TOOLS:
+        for name in (*WEB_TOOLS, *MEMORY_READ_TOOLS):
             self._registry.register(name, Tier.T0)
+        for name in MEMORY_WRITE_TOOLS:
+            self._registry.register(name, Tier.T1)
         self._audit = None if conn is None else AuditLog(conn, now_ms)
 
     @property

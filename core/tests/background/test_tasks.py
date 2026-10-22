@@ -85,19 +85,9 @@ def test_tasks_left_unfinished_by_the_last_process_are_interrupted_and_the_rest_
     assert store.interrupt_unfinished() == []
 
 
-def test_old_finished_tasks_are_pruned_with_their_steps_and_one_that_runs_is_not(store):
-    old, young, running = make(store, "old"), make(store, "young"), make(store, "running")
-    for task_id in (old, young):
-        store.add_step(task_id, kind="model", outcome="ok")
-        store.finish(task_id, "done", prefix="告", text="x", detail=None, reason=None)
-    store.add_step(running, kind="model", outcome="ok")
-    store.start(running)
-    cutoff = store.get(young).created_at_ms
-    assert store.prune(cutoff) == 1
-    assert store.get(old) is None and store.steps(old) == []
-    assert store.get(young) is not None and store.steps(young)
-    assert store.prune(10**12) == 1  # everything finished; `running` stays
-    assert store.get(running) is not None and store.steps(running)
+def test_the_tasks_are_never_pruned_by_age(store):
+    # They are part of the one conversation, which stays until the user clears it.
+    assert not hasattr(store, "prune")
 
 
 def test_clearing_deletes_what_is_finished_and_leaves_what_runs(store):
