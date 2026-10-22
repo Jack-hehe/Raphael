@@ -82,3 +82,16 @@ async def test_the_report_of_a_spoken_task_is_not_sent(app, monkeypatch):
 
 async def test_stop_with_nothing_running_says_so(app):
     assert await app._stop_from_messaging("telegram:42") is False
+
+
+async def test_stop_from_a_chat_stops_that_chats_tasks_and_turn_only(app, monkeypatch):
+    stopped = []
+
+    async def cancel_session(session):
+        stopped.append(("worker", session))
+        return False
+
+    monkeypatch.setattr(app.background, "cancel_session", cancel_session)
+    monkeypatch.setattr(app.agent, "stop_session", lambda s: stopped.append(("agent", s)) or True)
+    assert await app._stop_from_messaging("telegram:42") is True
+    assert stopped == [("agent", "telegram:42"), ("worker", "telegram:42")]

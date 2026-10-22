@@ -406,7 +406,10 @@ class AgentService:
             return self._done(0, ask.language, "understood", phrase(ask.language, "denied"))
         # The questions that ran out are expired, and a new request replaces those that still wait.
         self._expire(self._confirmations.sweep())
-        self._deny(self._confirmations.cancel_all())
+        if ask.source == VOICE:
+            self._deny(self._confirmations.cancel_all())
+        else:  # a message from a messaging app leaves a question asked at this computer alone
+            self._deny(self._confirmations.cancel_session(ask.session_id))
         self._prune_if_due()
         earlier = self._inflight.pop(ask.session_id, None)
         if earlier is not None:
@@ -1085,6 +1088,18 @@ class AgentService:
         self._expire(self._confirmations.sweep())
         self._deny(self._confirmations.cancel_session(session_id))
         return {}
+
+    def stop_session(self, session_id: str) -> bool:
+        """End the request of a session that still thinks and deny its question, like Esc but
+        without the memory that would cancel its next request. Whether anything was stopped."""
+        task = self._inflight.get(session_id)
+        stopped = task is not None and not task.done()
+        if stopped:
+            task.cancel()
+        self._expire(self._confirmations.sweep())
+        denied = self._confirmations.cancel_session(session_id)
+        self._deny(denied)
+        return stopped or bool(denied)
 
     def _forget_old_cancels(self) -> None:
         now = self._clock()
