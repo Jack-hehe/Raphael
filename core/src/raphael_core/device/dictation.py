@@ -50,6 +50,7 @@ from raphael_core.protocol import (
     BUSY,
     INTERNAL_ERROR,
     INVALID_PARAMS,
+    NO_LOCAL_MODEL,
     NO_MICROPHONE,
     NOT_CONFIGURED,
     NOT_FOUND,
@@ -204,9 +205,13 @@ class _Session:
         self.fatal = False  # ... and it was one that ends the session's work
 
     def fail(self, error: Exception, *, fatal: bool) -> None:
-        if self.failure is None:
+        if self.failure is None or _is_no_local_model(error):
             self.failure = error
         self.fatal = self.fatal or fatal
+
+
+def _is_no_local_model(error: Exception) -> bool:
+    return isinstance(error, RpcError) and error.code == NO_LOCAL_MODEL
 
 
 def _session_id(params: dict) -> str:
@@ -684,7 +689,9 @@ class DictationService:
         assert session.recorder is not None and session.segmenter is not None
         mic_failed = session.recorder.error is not None or session.stalled
         text = join_segments(session.texts)
-        if session.failure is not None and not text:
+        # Text with a stretch missing because the cloud failed and nothing backs it up is not
+        # pasted as if it were whole.
+        if session.failure is not None and (not text or _is_no_local_model(session.failure)):
             raise _failure_as_error(session.failure)
         # The segmenter's own count, but not if it never heard this recording: a segmenter that is
         # used again still reports the last dictation until its first frames come.

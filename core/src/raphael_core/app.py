@@ -418,7 +418,12 @@ class SpeechModels:
         """Build the engine of the selected model, if it is downloaded and not the one loaded. A
         failure is logged and the engine that is loaded stays."""
         name = self._engine_name
-        if name is None or self._engine_built_for == name or not self._manager.is_ready(name):
+        if name is None:  # no local model: let go of the engine that is loaded
+            with self._cond:
+                self._loaded[ENGINE_MODEL] = None
+                self._engine_built_for = None
+            return
+        if self._engine_built_for == name or not self._manager.is_ready(name):
             return
         began = time.perf_counter()
         try:
@@ -469,6 +474,8 @@ class SpeechModels:
         return self._get(ENGINE_MODEL)
 
     def _get(self, name: str) -> Any:
+        if name == ENGINE_MODEL and self._engine_name is None:
+            raise RpcError(NO_LOCAL_MODEL, "There is no local speech model")
         with self._cond:
             while self._loaded[name] is None and self._loading:
                 self._cond.wait()
@@ -1012,6 +1019,11 @@ class App(Router):
     def _follow_local_model(self, name: Any) -> None:
         """The local model set in the settings is the engine from now on, if it is downloaded. The
         engine is built in the background: this dictation goes on with the one that is loaded."""
+        if name is None:  # set to none directly: the engine goes, the fallback with it
+            if self._speech.engine_name is not None:
+                self._speech.select_engine(None)
+                self._load_models_in_background()
+            return
         if not isinstance(name, str) or name == self._speech.engine_name:
             return
         if name in REGISTRY and self.manager.is_ready(name):
@@ -1265,9 +1277,14 @@ class App(Router):
 
         try:
             deleted = await asyncio.to_thread(delete)
+        except BaseException:
+            if retire:  # the files are still there: so is the fallback
+                await self.call("settings.set", {"key": "stt_local_model", "value": name})
+                self._speech.select_engine(name)
+            raise
         finally:
             if retire:
-                self._load_models_in_background()  # the new fallback, if there is one
+                self._load_models_in_background()  # the fallback, if there is one
         logger.info("Deleted the speech model %s", name)
         reply: dict[str, Any] = {"deleted": deleted}
         if retire:

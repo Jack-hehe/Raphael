@@ -2779,3 +2779,58 @@ async def test_the_start_up_copes_with_no_local_model(tmp_path):
         }
     finally:
         await app.aclose()
+
+
+async def test_a_later_segment_that_fails_with_no_local_model_is_not_a_silent_cut(
+    make_app, openrouter_mock
+):
+    kit = make_kit()
+    app = make_app(kit, fake_llm=False)
+    heard = []
+
+    def first_then_fail(request):
+        heard.append(1)
+        if len(heard) == 1:
+            return httpx.Response(200, json={"text": "one", "usage": {"seconds": 0.5, "cost": 0.0}})
+        return httpx.Response(500)
+
+    openrouter_mock(app, first_then_fail)
+    await wait_until(lambda: kit.engines)
+    await app.call("models.local_delete", {"name": "qwen3-asr"})
+    await app.call("dictation.start", {"session_id": "s1"})
+    with pytest.raises(RpcError) as caught:
+        await app.call("dictation.stop", {"session_id": "s1", "target_app": "notepad.exe"})
+    assert caught.value.code == NO_LOCAL_MODEL
+
+
+async def test_a_delete_that_fails_puts_the_fallback_back(make_app, tmp_path, monkeypatch):
+    kit = make_kit()
+    app = make_app(kit)
+    await wait_until(lambda: kit.engines)
+
+    def locked(path, *args, **kwargs):
+        raise PermissionError("in use by another process")
+
+    monkeypatch.setattr(app_module.shutil, "rmtree", locked)
+    monkeypatch.setattr(app_module, "DELETE_RETRY_S", 0.001)
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_delete", {"name": "qwen3-asr"})
+    assert caught.value.code == INTERNAL_ERROR
+    assert (await app.call("settings.get"))["settings"]["stt_local_model"] == "qwen3-asr"
+    assert (await app.call("models.local"))["fallback"] == "qwen3-asr"
+    names = [m["name"] for m in (await app.call("models.status"))["models"]]
+    assert names == ["silero-vad", "qwen3-asr"]
+    monkeypatch.undo()
+    assert (await dictate(app))["text"] == WORDS + WORDS
+
+
+async def test_setting_no_local_model_directly_takes_effect_at_the_next_dictation(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await wait_until(lambda: kit.engines)
+    await app.call("settings.set", {"key": "stt_local_model", "value": None})
+    await app.call("dictation.start", {"session_id": "s1"})
+    with pytest.raises(RpcError) as caught:
+        await app.call("dictation.stop", {"session_id": "s1", "target_app": "notepad.exe"})
+    assert caught.value.code == NO_LOCAL_MODEL
+    assert await app.call("models.status") == {"models": [{"name": "silero-vad", "ready": True}]}
