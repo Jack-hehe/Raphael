@@ -11,13 +11,16 @@
 //!   its `CoreWindow` child, and a frame without one (a suspended app) is left out. An app goes by
 //!   its executable's file description (`Microsoft Excel`), or its file name.
 //! - A look builds one cache request for the properties and patterns a snapshot needs, and walks
-//!   the control view one level at a time (`FindAllBuildCache` with `TreeScope_Children`), within
+//!   the control view one element at a time (the control view's tree walker, its
+//!   `...BuildCache` calls), within
 //!   the caps and four seconds ([`tree::build`]). The elements are kept until the next look at the
 //!   window, or the end of the run.
 //! - A step checks the element again first (a password field is refused, whatever the look said,
 //!   and so is a click on or text for an element now called like a sign-in, a payment field or a
 //!   code; a click on one now called like Send, Delete or Buy, renamed since the look, goes only
-//!   with the owner's yes, `unconfirmed` otherwise), brings the window to the front, and uses UI
+//!   with the owner's yes, `unconfirmed` otherwise; one that closes a window, a tab or the app, by
+//!   its name, its automation id `Close` or its place in a title bar, never, `closes`), brings the
+//!   window to the front, and uses UI
 //!   Automation's patterns; a click at the
 //!   element's centre only when there is none, and only when the point is the window's (nothing,
 //!   the overlay least of all, covers it). Typing into an edit field sets its value; elsewhere the
@@ -63,17 +66,17 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Accessibility::{
     CUIAutomation8, ExpandCollapseState_Collapsed, ExpandCollapseState_Expanded,
     ExpandCollapseState_PartiallyExpanded, IUIAutomation, IUIAutomation2,
-    IUIAutomationCacheRequest, IUIAutomationCondition, IUIAutomationElement,
-    IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern, IUIAutomationScrollPattern,
-    IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern, IUIAutomationValuePattern,
-    ScrollAmount, ScrollAmount_LargeDecrement, ScrollAmount_LargeIncrement, ScrollAmount_NoAmount,
-    ToggleState_Indeterminate, ToggleState_Off, ToggleState_On, TreeScope_Children,
-    UIA_BoundingRectanglePropertyId, UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId,
-    UIA_DocumentControlTypeId, UIA_E_TIMEOUT, UIA_EditControlTypeId,
-    UIA_ExpandCollapseExpandCollapseStatePropertyId, UIA_ExpandCollapsePatternId,
-    UIA_HasKeyboardFocusPropertyId, UIA_InvokePatternId, UIA_IsEnabledPropertyId,
-    UIA_IsOffscreenPropertyId, UIA_IsPasswordPropertyId, UIA_NamePropertyId, UIA_ScrollPatternId,
-    UIA_SelectionItemIsSelectedPropertyId, UIA_SelectionItemPatternId, UIA_SpinnerControlTypeId,
+    IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationExpandCollapsePattern,
+    IUIAutomationInvokePattern, IUIAutomationScrollPattern, IUIAutomationSelectionItemPattern,
+    IUIAutomationTogglePattern, IUIAutomationTreeWalker, IUIAutomationValuePattern, ScrollAmount,
+    ScrollAmount_LargeDecrement, ScrollAmount_LargeIncrement, ScrollAmount_NoAmount,
+    ToggleState_Indeterminate, ToggleState_Off, ToggleState_On, UIA_BoundingRectanglePropertyId,
+    UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId, UIA_DocumentControlTypeId, UIA_E_TIMEOUT,
+    UIA_EditControlTypeId, UIA_ExpandCollapseExpandCollapseStatePropertyId,
+    UIA_ExpandCollapsePatternId, UIA_HasKeyboardFocusPropertyId, UIA_InvokePatternId,
+    UIA_IsEnabledPropertyId, UIA_IsOffscreenPropertyId, UIA_IsPasswordPropertyId,
+    UIA_NamePropertyId, UIA_ScrollPatternId, UIA_SelectionItemIsSelectedPropertyId,
+    UIA_SelectionItemPatternId, UIA_SpinnerControlTypeId, UIA_TitleBarControlTypeId,
     UIA_TogglePatternId, UIA_ToggleToggleStatePropertyId, UIA_ValueIsReadOnlyPropertyId,
     UIA_ValuePatternId, UIA_ValueValuePropertyId,
 };
@@ -216,7 +219,8 @@ impl Desktop for UiaDesktop {
 struct State {
     automation: IUIAutomation,
     cache: IUIAutomationCacheRequest,
-    view: IUIAutomationCondition,
+    /// The control view's walker: one child, then its next sibling, read one at a time.
+    tree: IUIAutomationTreeWalker,
     /// The elements of the latest look at each window, in the order of their ids.
     looks: HashMap<i64, Vec<IUIAutomationElement>>,
     /// Each process's app: executable, name, elevated.
@@ -260,11 +264,11 @@ impl State {
             ] {
                 cache.AddPattern(pattern).ok()?;
             }
-            let view = automation.ControlViewCondition().ok()?;
+            let tree = automation.ControlViewWalker().ok()?;
             Some(Self {
                 automation,
                 cache,
-                view,
+                tree,
                 looks: HashMap::new(),
                 apps: HashMap::new(),
             })
@@ -368,7 +372,7 @@ impl State {
         .map_err(|_| Failure::Gone)?;
         let walker = Walker {
             cache: &self.cache,
-            view: &self.view,
+            tree: &self.tree,
         };
         let began = Instant::now();
         let shot = tree::build(
@@ -377,7 +381,8 @@ impl State {
                 walker: &walker,
             },
             Caps::default(),
-            || began.elapsed() > LOOK_BUDGET,
+            // out of time, or the run is over: the walk stops where it is, between two elements
+            || began.elapsed() > LOOK_BUDGET || !ticket.is_live(),
         );
         // A run that ended while the look walked the tree keeps nothing: its elements were
         // forgotten, and must stay so.
@@ -428,13 +433,16 @@ impl State {
         unsafe {
             match (&step.action, element) {
                 (Action::Click, Some(element)) => {
-                    // The name now, not the look's: a page may have renamed the same button
-                    // (Next became Delete) since. A name that cannot be read is no such name.
-                    let name = element
-                        .CurrentName()
-                        .map(|name| name.to_string())
-                        .unwrap_or_default();
-                    policy::may_click(&name, step.confirmed)?;
+                    // The element now, not the look's: a page may have renamed the same button
+                    // (Next became Delete) since, and the look says nothing of a title bar.
+                    let (name, automation_id) = (
+                        text_of(element.CurrentName()),
+                        text_of(element.CurrentAutomationId()),
+                    );
+                    policy::may_click(
+                        self.closer(&element, &name, &automation_id),
+                        step.confirmed,
+                    )?;
                     click(&element, hwnd, ticket)
                 }
                 (Action::Focus, Some(element)) => {
@@ -487,10 +495,8 @@ impl State {
                 .map_err(|_| Failure::Failed)?
                 .as_bool();
             // A name that cannot be read is no name: the other checks still hold.
-            let name = focused
-                .CurrentName()
-                .map(|name| name.to_string())
-                .unwrap_or_default();
+            let name = text_of(focused.CurrentName());
+            let automation_id = text_of(focused.CurrentAutomationId());
             let role = focused.CurrentControlType().map(|c| c.0).unwrap_or(0);
             let text_role = role == UIA_EditControlTypeId.0 || role == UIA_DocumentControlTypeId.0;
             Reach {
@@ -500,9 +506,33 @@ impl State {
                 edits_text: edits_text(&focused),
                 sends: policy::is_confirm_name(&name),
                 message_box: text_role && policy::is_message_name(&name),
+                closes: policy::closes(self.closer(&focused, &name, &automation_id)),
             }
         };
         policy::may_reach(reach, press, confirmed)
+    }
+
+    /// What tells whether the live `element` closes a window, a tab or the app: its `name` and
+    /// `automation_id` (read already), and whether its parent is a title bar.
+    fn closer<'a>(
+        &self,
+        element: &IUIAutomationElement,
+        name: &'a str,
+        automation_id: &'a str,
+    ) -> policy::Closer<'a> {
+        // SAFETY: COM calls on this thread's objects, which this runs on.
+        let in_title_bar = unsafe {
+            self.automation
+                .RawViewWalker()
+                .and_then(|walker| walker.GetParentElement(element))
+                .and_then(|parent| parent.CurrentControlType())
+                .is_ok_and(|role| role == UIA_TitleBarControlTypeId)
+        };
+        policy::Closer {
+            name,
+            automation_id,
+            in_title_bar,
+        }
     }
 
     /// Whether `focused`, the element with the focus, is `target`, or a part of a combo box or a
@@ -642,7 +672,7 @@ impl State {
 /// The cached view of an element, for [`tree::build`].
 struct Walker<'a> {
     cache: &'a IUIAutomationCacheRequest,
-    view: &'a IUIAutomationCondition,
+    tree: &'a IUIAutomationTreeWalker,
 }
 
 struct Node<'a> {
@@ -737,25 +767,31 @@ impl UiNode for Node<'_> {
         }
     }
 
-    fn children(&self) -> Vec<Self> {
+    /// One child at a time, each with its cache, so that a list of a hundred thousand items costs
+    /// no more than the room left: the walk asks for the next sibling only while there is room
+    /// and time (a single call for all the children would read every one of them first).
+    fn children(&self, room: usize, stop: &dyn Fn() -> bool) -> (Vec<Self>, bool) {
+        let mut found = Vec::new();
         // SAFETY: COM calls on this thread's objects.
         unsafe {
-            let Ok(found) = self.element.FindAllBuildCache(
-                TreeScope_Children,
-                self.walker.view,
-                self.walker.cache,
-            ) else {
-                return Vec::new();
-            };
-            let count = found.Length().unwrap_or(0).max(0);
-            (0..count)
-                .filter_map(|index| found.GetElement(index).ok())
-                .map(|element| Node {
+            let tree = self.walker.tree;
+            let mut next = tree
+                .GetFirstChildElementBuildCache(&self.element, self.walker.cache)
+                .ok();
+            while let Some(element) = next {
+                if found.len() >= room || stop() {
+                    return (found, true);
+                }
+                next = tree
+                    .GetNextSiblingElementBuildCache(&element, self.walker.cache)
+                    .ok();
+                found.push(Node {
                     element,
                     walker: self.walker,
-                })
-                .collect()
+                });
+            }
         }
+        (found, false)
     }
 }
 
@@ -929,6 +965,11 @@ fn send(ticket: &Ticket, inputs: &[INPUT]) -> Result<(), Failure> {
     inject(ticket, inputs)?;
     std::thread::sleep(SETTLE);
     Ok(())
+}
+
+/// A string UI Automation gave, or none when it could not be read.
+fn text_of(value: windows::core::Result<BSTR>) -> String {
+    value.map(|text| text.to_string()).unwrap_or_default()
 }
 
 /// Gives `element` the keyboard focus for keys or typed text, and the app a moment to move it

@@ -111,6 +111,9 @@ pub enum Failure {
     /// The watch on the owner's own input could not be started: the run is revoked, and nothing
     /// is done for it.
     Watch,
+    /// The live element closes a window, a tab or the app (a title bar's button, a tab's ×,
+    /// Exit): Raphael never presses one.
+    Closes,
     /// Anything else.
     Failed,
 }
@@ -132,6 +135,7 @@ impl Failure {
             Failure::Focus => "focus",
             Failure::Unconfirmed => "unconfirmed",
             Failure::Watch => "watch",
+            Failure::Closes => "closes",
             Failure::Failed => "failed",
         }
     }
@@ -848,6 +852,7 @@ mod tests {
             Failure::Focus,
             Failure::Unconfirmed,
             Failure::Watch,
+            Failure::Closes,
             Failure::Failed,
         ] {
             assert!(

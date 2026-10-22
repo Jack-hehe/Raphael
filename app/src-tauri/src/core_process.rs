@@ -39,6 +39,12 @@ use crate::rpc::{CORE_EXITED, Notification, RpcClient, RpcError, lock};
 pub const CORE_RESTARTED: &str = "core.restarted";
 /// Sent to the subscribers when the core has died too often and will not be started again.
 pub const CORE_DOWN: &str = "core.down";
+/// Sent to the subscribers the moment the core's output ends (it exited, or is about to), before
+/// any restart: what the core was doing is over, and nothing done for it may go on.
+pub const CORE_GONE: &str = "core.gone";
+
+/// What is called, on the thread that reads the core's output, the moment that output ends.
+type ExitHook = Box<dyn Fn() + Send + Sync>;
 
 /// The protocol version this app speaks (`PROTOCOL_VERSION` in the core's `protocol.py`).
 const PROTOCOL_VERSION: u64 = 1;
@@ -363,6 +369,8 @@ struct Shared {
     child: Mutex<Option<Child>>,
     /// Set when the [`CoreProcess`] is dropped, so that nothing starts the core again.
     stopping: AtomicBool,
+    /// Called the moment the core's output ends ([`CoreProcess::on_exit`]).
+    exit_hooks: Mutex<Vec<ExitHook>>,
 }
 
 impl Shared {
@@ -503,13 +511,19 @@ fn read_stdout(shared: &Shared, stdout: ChildStdout, exits: &mpsc::Sender<()>) {
             }
         }
     }
-    // The core is gone. Nothing may be written to it any more, and the calls still waiting for an
-    // answer will never get one. This happens here, not in the supervisor, which may be busy:
-    // calls must not have to wait for the restart to learn that the core died.
+    // The core is gone. What was done for it stops first, here and now (a run on the desktop is
+    // revoked before any job queued for it can act), then nothing may be written to it any more,
+    // and the calls still waiting for an answer will never get one. This happens here, not in the
+    // supervisor, which may be busy or waiting to restart: nothing must wait for the restart to
+    // learn that the core died.
+    for hook in lock(&shared.exit_hooks).iter() {
+        hook();
+    }
     shared.rpc.set_writer(None);
     shared
         .rpc
         .fail_all(RpcError::new(CORE_EXITED, "the core exited"));
+    shared.rpc.notify_local(local_notification(CORE_GONE));
     // Err: the supervisor has stopped, because the app is shutting down or the core was given up.
     let _ = exits.send(());
 }
@@ -619,6 +633,7 @@ impl CoreProcess {
             job: Job::new()?,
             child: Mutex::new(None),
             stopping: AtomicBool::new(false),
+            exit_hooks: Mutex::new(Vec::new()),
         });
         let (exits_tx, exits_rx) = mpsc::channel();
         spawn_core(&shared, &exits_tx)?;
@@ -641,10 +656,18 @@ impl CoreProcess {
         Ok(Arc::new(Self { shared }))
     }
 
-    /// A receiver for the core's notifications (`audio.level`, ...) and for `core.restarted` and
-    /// `core.down`, which this app makes up. One that falls too far behind loses the oldest.
+    /// A receiver for the core's notifications (`audio.level`, ...) and for `core.gone`,
+    /// `core.restarted` and `core.down`, which this app makes up. One that falls too far behind
+    /// loses the oldest.
     pub fn subscribe(&self) -> broadcast::Receiver<Notification> {
         self.shared.rpc.subscribe()
+    }
+
+    /// Calls `hook` each time the core's output ends (it exited, or is about to), at once, on the
+    /// thread that reads it, before the calls waiting on the core fail and before any restart. A
+    /// hook must be quick and must not call the core.
+    pub fn on_exit(&self, hook: impl Fn() + Send + Sync + 'static) {
+        lock(&self.shared.exit_hooks).push(Box::new(hook));
     }
 }
 
@@ -1104,6 +1127,31 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
+    async fn what_was_done_for_a_core_that_died_stops_at_once_not_at_its_restart() {
+        // a long wait before the restart: the hooks and `core.gone` come long before it
+        let core =
+            CoreProcess::start_with(fake_core_command("serve"), quick_restarts(5_000)).unwrap();
+        let mut notifications = core.subscribe();
+        core.call("core.hello", json!({})).await.unwrap();
+        let revoked = Arc::new(AtomicBool::new(false));
+        let seen = revoked.clone();
+        core.on_exit(move || seen.store(true, Ordering::SeqCst));
+        let killed = Instant::now();
+
+        core.kill_child_for_test();
+
+        wait_for(&mut notifications, CORE_GONE, Duration::from_secs(4)).await;
+        assert!(
+            revoked.load(Ordering::SeqCst),
+            "the hook ran before core.gone"
+        );
+        assert!(killed.elapsed() < Duration::from_secs(4));
+        // nothing of the restart yet
+        assert!(matches!(notifications.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
     async fn restarts_a_core_that_was_killed() {
         let core = CoreProcess::start_with(fake_core_command("serve"), quick_restarts(50)).unwrap();
         let mut notifications = core.subscribe();
@@ -1126,19 +1174,22 @@ mod tests {
         let core = CoreProcess::start_with(fake_core_command("die"), quick_restarts(100)).unwrap();
         let mut notifications = core.subscribe();
 
-        let mut restarts = 0;
+        let (mut restarts, mut gone) = (0, 0);
         loop {
             let next = tokio::time::timeout(Duration::from_secs(20), notifications.recv())
                 .await
                 .expect("the core should be given up on within 20 s")
                 .unwrap();
             match next.method.as_str() {
+                CORE_GONE => gone += 1,
                 CORE_RESTARTED => restarts += 1,
                 CORE_DOWN => break,
                 other => panic!("unexpected notification {other}"),
             }
         }
         assert_eq!(restarts, 5);
+        // each death is told at once: the first core's, and each restarted one's
+        assert_eq!(gone, 6);
 
         // after that, calls fail at once and nothing starts the core again
         let err = core.call("core.hello", json!({})).await.unwrap_err();

@@ -51,9 +51,16 @@ pub struct Props {
 /// An element of a tree.
 pub trait UiNode: Sized {
     fn props(&self) -> Props;
-    /// Its children, in order. An element whose children cannot be read has none.
-    fn children(&self) -> Vec<Self>;
+    /// Its children, in order: at most `room` of them, read one at a time and none once `stop`
+    /// says so, and whether some were left (`room` ran out, or `stop` stopped it). An element
+    /// whose children cannot be read has none.
+    fn children(&self, room: usize, stop: &dyn Fn() -> bool) -> (Vec<Self>, bool);
 }
+
+/// The most elements waiting to be looked at, as a multiple of [`Caps::elements`]: some of them
+/// are left out (off the screen, or only there to hold others), so the walk reads a little more
+/// than it keeps, but never all of a huge list.
+const QUEUED_PER_ELEMENT: usize = 2;
 
 /// How much a snapshot holds.
 #[derive(Clone, Copy, Debug)]
@@ -187,15 +194,20 @@ pub fn build<N: UiNode>(root: N, caps: Caps, out_of_time: impl Fn() -> bool) -> 
         let role = role_name(props.control_type);
         let filler = level > 0 && is_filler(&props, role);
         let next_depth = if filler { depth } else { depth + 1 };
-        let children = node.children();
-        if level < caps.depth {
-            for (index, child) in children.into_iter().enumerate() {
-                let mut child_path = path.clone();
-                child_path.push(u32::try_from(index).unwrap_or(u32::MAX));
-                queue.push_back((child, child_path, next_depth, level + 1));
-            }
-        } else if !children.is_empty() {
-            truncated = true;
+        // Only as many children as there is room for, read while there is time: a list of a
+        // hundred thousand items is not read in full before the caps apply. Below the deepest
+        // level none is read, and whether there is one says the snapshot was cut.
+        let room = if level < caps.depth {
+            (QUEUED_PER_ELEMENT * caps.elements).saturating_sub(kept.len() + queue.len())
+        } else {
+            0
+        };
+        let (children, more) = node.children(room, &out_of_time);
+        truncated |= more;
+        for (index, child) in children.into_iter().enumerate() {
+            let mut child_path = path.clone();
+            child_path.push(u32::try_from(index).unwrap_or(u32::MAX));
+            queue.push_back((child, child_path, next_depth, level + 1));
         }
         if filler {
             continue;
@@ -263,9 +275,78 @@ pub(crate) mod tests {
         fn props(&self) -> Props {
             self.props.clone()
         }
-        fn children(&self) -> Vec<Self> {
-            self.children.clone()
+        fn children(&self, room: usize, stop: &dyn Fn() -> bool) -> (Vec<Self>, bool) {
+            let mut found = Vec::new();
+            for child in &self.children {
+                if found.len() >= room || stop() {
+                    return (found, true);
+                }
+                found.push(child.clone());
+            }
+            (found, false)
         }
+    }
+
+    /// A list with `count` items, each made only when it is read; `made` counts them.
+    struct Wide {
+        count: usize,
+        item: Option<usize>,
+        made: std::rc::Rc<Cell<usize>>,
+    }
+
+    impl UiNode for Wide {
+        fn props(&self) -> Props {
+            match self.item {
+                None => node(LIST, "Items", vec![]).props,
+                Some(n) => node(BUTTON, &format!("item {n}"), vec![]).props,
+            }
+        }
+        fn children(&self, room: usize, stop: &dyn Fn() -> bool) -> (Vec<Self>, bool) {
+            if self.item.is_some() {
+                return (Vec::new(), false);
+            }
+            let mut found = Vec::new();
+            for n in 0..self.count {
+                if found.len() >= room || stop() {
+                    return (found, true);
+                }
+                self.made.set(self.made.get() + 1);
+                found.push(Wide {
+                    count: 0,
+                    item: Some(n),
+                    made: self.made.clone(),
+                });
+            }
+            (found, false)
+        }
+    }
+
+    #[test]
+    fn a_huge_list_is_read_only_as_far_as_there_is_room_and_time() {
+        let made = std::rc::Rc::new(Cell::new(0));
+        let list = || Wide {
+            count: 100_000,
+            item: None,
+            made: made.clone(),
+        };
+        let caps = Caps::default();
+        let shot = build(list(), caps, never);
+        assert_eq!(shot.entries.len(), caps.elements);
+        assert!(shot.truncated);
+        assert!(
+            made.get() <= QUEUED_PER_ELEMENT * caps.elements,
+            "{} items read",
+            made.get()
+        );
+        // out of time while the items are read: the reading stops there
+        made.set(0);
+        let asked = Cell::new(0);
+        let shot = build(list(), caps, || {
+            asked.set(asked.get() + 1);
+            asked.get() > 10
+        });
+        assert!(shot.truncated);
+        assert!(made.get() < 10, "{} items read", made.get());
     }
 
     pub fn node(control_type: i32, name: &str, children: Vec<Fake>) -> Fake {
@@ -289,6 +370,7 @@ pub(crate) mod tests {
     pub const EDIT: i32 = 50_004;
     pub const TEXT: i32 = 50_020;
     pub const PANE: i32 = 50_033;
+    pub const LIST: i32 = 50_008;
     pub const WINDOW: i32 = 50_032;
 
     pub fn calculator() -> Fake {
@@ -418,7 +500,9 @@ pub(crate) mod tests {
             asked.set(asked.get() + 1);
             asked.get() > 2
         });
-        assert_eq!(shot.entries.len(), 2);
+        // asked before the root, then before each of its children read: the second child is
+        // never read, and the walk stops before the first
+        assert_eq!(shot.entries.len(), 1);
         assert!(shot.truncated);
     }
 

@@ -240,6 +240,10 @@ const MESSAGE_CJK: &[&str] = &[
     "返信",
     "コメント",
 ];
+/// What a button that closes a window, a tab or the app is called (a title bar's Close, a tab's
+/// "Close tab", File > Exit). The core's `_CLOSE_EN` and `_CLOSE_CJK`, word for word.
+const CLOSE_EN: &[&str] = &["close", "exit", "quit"];
+const CLOSE_CJK: &[&str] = &["關閉", "关闭", "閉じる"];
 
 /// A name the way it is matched: full-width letters and digits folded to their ASCII forms, lower
 /// case, each run of spaces, underscores and hyphens one space (the core folds with NFKC, which
@@ -289,6 +293,26 @@ pub fn is_message_name(name: &str) -> bool {
     names(name, MESSAGE_EN, MESSAGE_CJK)
 }
 
+/// What UI Automation says of a live element, beyond its name, that tells a button that closes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Closer<'a> {
+    pub name: &'a str,
+    /// Its automation id: a title bar's buttons are "Close", "Minimize", "Maximize".
+    pub automation_id: &'a str,
+    /// It is a part of a title bar (its parent is one): Close, Minimize, Maximize, Restore.
+    pub in_title_bar: bool,
+}
+
+/// Whether a live element closes a window, a tab or the app, or changes the window itself: one
+/// called so ([`CLOSE_EN`], [`CLOSE_CJK`], the core's `safety.closes_by_name`), one whose
+/// automation id is `Close`, or any button of a title bar (minimizing or maximizing the window is
+/// no step of a task either). Raphael never presses one (`closes`).
+pub fn closes(element: Closer<'_>) -> bool {
+    names(element.name, CLOSE_EN, CLOSE_CJK)
+        || element.automation_id.eq_ignore_ascii_case("close")
+        || element.in_title_bar
+}
+
 /// Whether `name` holds one of the English words as a whole word, or one of the others as it is
 /// written.
 fn names(name: &str, english: &[&str], cjk: &[&str]) -> bool {
@@ -315,6 +339,8 @@ pub struct Reach {
     /// It is a box a message is written in: an Edit or a Document called so
     /// ([`is_message_name`]).
     pub message_box: bool,
+    /// It closes a window, a tab or the app ([`closes`]).
+    pub closes: bool,
 }
 
 /// What a step sends to the element with the focus.
@@ -336,6 +362,8 @@ pub enum Press {
 /// - only the element named, if one was (`focus` otherwise: it could not take the focus, or the
 ///   focus is elsewhere, and nothing is pressed or typed: a harmless element named while the
 ///   focus sits on a Send button must not press Send);
+/// - never Enter or Space (with any modifiers) on a button that closes a window, a tab or the app
+///   (`closes`), a yes or not;
 /// - without the owner's yes (`unconfirmed` otherwise), nothing that sends or deletes, judged
 ///   again on the live focus, since the look the core judged by may not have known it (a window
 ///   looked at in the background gets its focus back once it is in front): Enter or Space on an
@@ -357,6 +385,10 @@ pub fn may_reach(reach: Reach, press: Press, confirmed: bool) -> Result<(), Fail
     if reach.handoff && !moving_away {
         return Err(Failure::Handoff);
     }
+    // a button that closes is never pressed, a yes or not
+    if reach.closes && matches!(press, Press::Keys(chord) if chord.presses()) {
+        return Err(Failure::Closes);
+    }
     if confirmed {
         return Ok(());
     }
@@ -364,7 +396,7 @@ pub fn may_reach(reach: Reach, press: Press, confirmed: bool) -> Result<(), Fail
         Press::Keys(chord) => {
             chord.always_asks()
                 || (chord.presses() && reach.sends)
-                || (chord.presses() && chord.key == Key::Enter && reach.message_box)
+                || (chord.key == Key::Enter && reach.message_box)
                 || (chord.deletes_items() && !reach.edits_text)
         }
         Press::Text { line_breaks } => line_breaks,
@@ -376,12 +408,17 @@ pub fn may_reach(reach: Reach, press: Press, confirmed: bool) -> Result<(), Fail
     }
 }
 
-/// Whether a click may go to an element called `name` now, read live just before: the look the
-/// core judged may be older than a page that renamed the same button (Next became Submit or
-/// Delete). Without the owner's yes, nothing called like an element that sends, submits, deletes
-/// or buys is clicked (`unconfirmed`: the core asks, and the model looks again).
-pub fn may_click(name: &str, confirmed: bool) -> Result<(), Failure> {
-    if !confirmed && is_confirm_name(name) {
+/// Whether a click may go to `element` now, read live just before: the look the core judged may
+/// be older than a page that renamed the same button (Next became Submit or Delete), and it never
+/// sees an automation id or a title bar. Nothing that closes a window, a tab or the app is clicked
+/// at all (`closes`: the close keys are refused too); without the owner's yes, nothing called like
+/// an element that sends, submits, deletes or buys (`unconfirmed`: the core asks, and the model
+/// looks again).
+pub fn may_click(element: Closer<'_>, confirmed: bool) -> Result<(), Failure> {
+    if closes(element) {
+        return Err(Failure::Closes);
+    }
+    if !confirmed && is_confirm_name(element.name) {
         return Err(Failure::Unconfirmed);
     }
     Ok(())
@@ -524,6 +561,7 @@ mod tests {
         edits_text: false,
         sends: false,
         message_box: false,
+        closes: false,
     };
     /// Text on one line.
     const TEXT: Press = Press::Text { line_breaks: false };
@@ -540,19 +578,23 @@ mod tests {
             edits_text: true,
             ..ON_TARGET
         };
-        for press in [keys("Enter"), keys("Space")] {
+        // with any modifiers: Shift+Enter or Shift+Space presses Send as Enter does
+        for text in ["Enter", "Space", "Shift+Enter", "Shift+Space", "Alt+Enter"] {
             assert_eq!(
-                may_reach(send, press, false),
+                may_reach(send, keys(text), false),
                 Err(Failure::Unconfirmed),
-                "{press:?}"
+                "{text}"
             );
-            assert_eq!(may_reach(send, press, true), Ok(()));
+            assert_eq!(may_reach(send, keys(text), true), Ok(()));
         }
-        assert_eq!(
-            may_reach(message_box, keys("Enter"), false),
-            Err(Failure::Unconfirmed)
-        );
-        assert_eq!(may_reach(message_box, keys("Enter"), true), Ok(()));
+        for text in ["Enter", "Shift+Enter"] {
+            assert_eq!(
+                may_reach(message_box, keys(text), false),
+                Err(Failure::Unconfirmed),
+                "{text}"
+            );
+            assert_eq!(may_reach(message_box, keys(text), true), Ok(()));
+        }
         // Space in a message box types a space; Tab moves away from Send
         assert_eq!(may_reach(message_box, keys("Space"), false), Ok(()));
         assert_eq!(may_reach(send, keys("Tab"), false), Ok(()));
@@ -584,15 +626,70 @@ mod tests {
         }
     }
 
+    fn named(name: &str) -> Closer<'_> {
+        Closer {
+            name,
+            ..Closer::default()
+        }
+    }
+
     #[test]
     fn a_button_renamed_to_send_or_delete_since_the_look_is_clicked_only_with_a_yes() {
         for name in ["Submit", "Delete", "傳送", "購入", "Place order"] {
-            assert_eq!(may_click(name, false), Err(Failure::Unconfirmed), "{name}");
-            assert_eq!(may_click(name, true), Ok(()), "{name}");
+            assert_eq!(
+                may_click(named(name), false),
+                Err(Failure::Unconfirmed),
+                "{name}"
+            );
+            assert_eq!(may_click(named(name), true), Ok(()), "{name}");
         }
         for name in ["Next", "七", "", "Settings"] {
-            assert_eq!(may_click(name, false), Ok(()), "{name}");
+            assert_eq!(may_click(named(name), false), Ok(()), "{name}");
         }
+    }
+
+    #[test]
+    fn a_button_that_closes_a_window_a_tab_or_the_app_is_never_clicked_or_pressed() {
+        let title_bar = |name| Closer {
+            name,
+            automation_id: "",
+            in_title_bar: true,
+        };
+        for element in [
+            named("Close"),
+            named("Close tab"),
+            named("關閉"),
+            named("閉じる"),
+            named("Exit"),
+            // a title bar's own buttons, whatever the app calls them
+            Closer {
+                name: "",
+                automation_id: "Close",
+                in_title_bar: false,
+            },
+            title_bar("Minimize"),
+            title_bar("最小化"),
+        ] {
+            for confirmed in [false, true] {
+                assert_eq!(
+                    may_click(element, confirmed),
+                    Err(Failure::Closes),
+                    "{element:?}"
+                );
+            }
+        }
+        for name in ["Closed captions", "Enclosed", "Next", "七"] {
+            assert!(!closes(named(name)), "{name}");
+        }
+        let close = Reach {
+            closes: true,
+            ..ON_TARGET
+        };
+        for text in ["Enter", "Space", "Shift+Enter"] {
+            assert_eq!(may_reach(close, keys(text), true), Err(Failure::Closes));
+        }
+        assert_eq!(may_reach(close, keys("Tab"), false), Ok(()));
+        assert_eq!(Failure::Closes.kind(), "closes");
     }
 
     #[test]

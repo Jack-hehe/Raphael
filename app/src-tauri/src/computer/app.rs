@@ -18,7 +18,9 @@
 //!   core sends a line (the run was stopped by Esc, which hid the overlay), says it as a notice.
 //!   A state of a run that is not the shell's (the late `end` of a run a newer one replaced)
 //!   changes nothing.
-//! - the core restarting or going away ends a run that was under way, as `end` would.
+//! - the core going away ends a run that was under way, as `end` would: the run is revoked the
+//!   moment the core's output ends (`CoreProcess::on_exit`, on the thread that reads it), and
+//!   `core.gone` then takes the watch and the 「操作中」 look down, before any restart.
 //!
 //! When the watch sees the owner's own input, the run is revoked there and then, on the hook's
 //! thread, and the core is told with `computer.interrupt`.
@@ -33,7 +35,7 @@ use tokio::sync::mpsc;
 use super::uia::UiaDesktop;
 use super::watch::hook::Watch;
 use super::{Failure, Phase, Request, Runs, Service, Ticket, parse_request, parse_state, reply};
-use crate::core_process::{CORE_DOWN, CORE_RESTARTED, CoreProcess};
+use crate::core_process::{CORE_DOWN, CORE_GONE, CORE_RESTARTED, CoreProcess};
 use crate::device_settings::DeviceStore;
 use crate::overlay::{Overlay, OverlayApi};
 
@@ -56,6 +58,10 @@ pub fn spawn(app: &AppHandle) {
     let notifications = core.subscribe();
     let app = app.clone();
     let runs = Arc::new(Runs::new());
+    // The moment the core's output ends, on the thread that reads it: a job of a run still queued
+    // for the desktop does nothing more, long before the core is restarted (or given up).
+    let revoked = runs.clone();
+    core.on_exit(move || revoked.revoke());
     tauri::async_runtime::spawn(run(app, core, service, overlay, runs, notifications));
 }
 
@@ -105,10 +111,14 @@ async fn run(
                         };
                         on_state(phase, &run, &mut running, &shown);
                     }
-                    CORE_RESTARTED | CORE_DOWN if running.is_some() => {
+                    CORE_GONE | CORE_RESTARTED | CORE_DOWN if running.is_some() => {
                         log::info!("computer: the core went away during a run: it is over");
                         runs.revoke();
                         finish(&mut running, None, None, service.as_ref());
+                        // the 「操作中」 look goes too: no core is left to end the run
+                        if let Some(overlay) = overlay.as_deref() {
+                            overlay.hide();
+                        }
                     }
                     _ => {}
                 },

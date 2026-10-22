@@ -119,9 +119,11 @@ impl Chord {
             }
     }
 
-    /// Whether the chord presses the element with the focus: Enter or Space alone.
+    /// Whether the chord may press the element with the focus: Enter or Space, with any
+    /// modifiers (Shift+Enter and Shift+Space press a button as Enter does). The core's
+    /// `safety.presses`.
     pub fn presses(self) -> bool {
-        !self.ctrl && !self.shift && !self.alt && matches!(self.key, Key::Enter | Key::Space)
+        matches!(self.key, Key::Enter | Key::Space)
     }
 
     /// Whether the chord sends (Ctrl+Enter, Ctrl+Shift+Enter, Alt+S in a mail or a chat) or
@@ -389,10 +391,19 @@ mod tests {
 
     #[test]
     fn enter_and_space_press_and_the_cores_sending_chords_always_ask() {
-        for text in ["Enter", "Space"] {
+        // with any modifiers: Shift+Enter and Shift+Space press a button too
+        for text in [
+            "Enter",
+            "Space",
+            "Shift+Enter",
+            "Shift+Space",
+            "Alt+Enter",
+            "Ctrl+Space",
+            "Ctrl+Shift+Space",
+        ] {
             assert!(parse_chord(text).unwrap().presses(), "{text}");
         }
-        for text in ["Shift+Enter", "Ctrl+Space", "Tab", "Ctrl+Enter"] {
+        for text in ["Tab", "Ctrl+S", "Escape", "Down"] {
             assert!(!parse_chord(text).unwrap().presses(), "{text}");
         }
         for text in ["Ctrl+Enter", "Ctrl+Shift+Enter", "Alt+S", "Shift+Delete"] {
