@@ -107,6 +107,29 @@ export function trapSettingsFocus(
   }
 }
 
+/**
+ * Whether a key pressed while the settings are open is theirs: it comes from the panel or the
+ * window's own controls (`owners`), or from `nowhere`, the body and the document, where the focus
+ * falls when the element that had it is drawn away. The page under the panel is inert, so a key
+ * from nowhere can only be meant for the settings.
+ */
+export function ownsSettingsKey(target: Node | null, owners: readonly (Node | null | undefined)[], nowhere: readonly (Node | null)[]): boolean {
+  if (target === null) return false;
+  return nowhere.includes(target) || owners.some((owner) => owner?.contains(target) === true);
+}
+
+/**
+ * Draws the tab list again with `paint` and gives the focus back to the tab that had it, now a new
+ * button for the same tab: without it the focus falls to the body when the list is drawn anew.
+ * A list that did not have the focus does not take it.
+ */
+export function repaintKeepingFocus(list: HTMLElement, active: Element | null, paint: () => void): void {
+  const pane = active !== null && list.contains(active) ? (active as HTMLElement).dataset?.pane : undefined;
+  paint();
+  // The tabs' ids are plain words (`SettingsPane`), so the selector needs no escaping.
+  if (pane !== undefined) list.querySelector<HTMLElement>(`[data-pane="${pane}"]`)?.focus();
+}
+
 /** A dropdown's menu: what it offers, what is chosen, what choosing does, small print above the choices and actions below them. */
 interface MenuSpec { choices: Choice[]; current: string; pick: (value: string) => void; head?: string; actions?: MenuAction[] }
 
@@ -343,7 +366,10 @@ export function createSettings(app: AppContext): SettingsPage {
 
   /** The list on the left: the tabs in their groups, or, while something is typed, what the search found. */
   function paintNav(): void {
-    navList.innerHTML = searchField.value.trim() ? searchResultsHTML(hits) : paneListHTML();
+    // A tab chosen with Enter is drawn anew here: the keyboard stays on it, and Esc still closes.
+    repaintKeepingFocus(navList, document.activeElement, () => {
+      navList.innerHTML = searchField.value.trim() ? searchResultsHTML(hits) : paneListHTML();
+    });
     navList.querySelectorAll<HTMLElement>("[data-pane]").forEach((b) => b.setAttribute("aria-current", b.dataset.pane === pane ? "page" : "false"));
   }
 
@@ -1063,7 +1089,7 @@ export function createSettings(app: AppContext): SettingsPage {
   // Menus consume their own Escape; the panel and native window controls share one Tab loop.
   const settingsKey = (e: KeyboardEvent): void => {
     const chrome = document.getElementById("window-chrome");
-    if (!visible || !(e.target instanceof Node) || (!el.contains(e.target) && !chrome?.contains(e.target))) return;
+    if (!visible || !(e.target instanceof Node) || !ownsSettingsKey(e.target, [el, chrome], [document.body, document.documentElement])) return;
     if (openMenuOnArrow(e)) return;
     if (e.key === "Escape" && !recording.active() && !e.defaultPrevented) {
       e.preventDefault();
