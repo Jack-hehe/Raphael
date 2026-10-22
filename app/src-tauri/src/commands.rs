@@ -1144,7 +1144,10 @@ mod tests {
                 expires_in: 900
             })
         );
-        assert_eq!(main_event_from(&issued("http://github.com/login/device"), false), None);
+        assert_eq!(
+            main_event_from(&issued("http://github.com/login/device"), false),
+            None
+        );
         assert_eq!(
             main_event_from(
                 &notification("integrations.device_code", json!({"catalog_id": "github"})),
