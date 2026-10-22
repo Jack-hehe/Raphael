@@ -1,0 +1,21 @@
+/* Raphael's memory in the 「拉斐爾」 tab of the settings (memory-view.ts): the rows are the panel's
+   own (styles.css); these are the few things only this group has. Colours are the app's tokens. An
+   icon-only button (the chevron, the pencil, the trash can) has no border, only a hover background. */
+.mem .ctl { gap: var(--sp-2); align-items: center; }
+.mem .btn.icon { width: 32px; min-height: 32px; padding: 0; border-color: transparent; background: transparent; }
+.mem .btn.icon:hover:not(:disabled), .mem .btn.icon[aria-expanded="true"] { background: var(--hover); border-color: transparent; }
+.mem .btn.icon .i { width: 15px; height: 15px; }
+.mem-more .i { transition: transform 0.22s ease; }
+.mem-more[aria-expanded="true"] .i { transform: rotate(180deg); }
+/* the notes sit under the row of the memory, set in as its own */
+.slist > .row.mem-sub > .lbl { padding-left: var(--sp-6); min-width: 0; }
+.mem-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.mem-type { flex: none; font-size: var(--fs-xs); color: var(--text-3); }
+.mem-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--text); }
+.mem-tag { flex: none; padding: 0 6px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-xs); }
+/* a note's text, open under its row */
+.mem-edit { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); padding: var(--sp-2) var(--sp-4) var(--sp-3) var(--sp-6); border-top: 1px solid var(--line); }
+.mem-body { width: 100%; min-height: 96px; resize: vertical; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--panel); font-size: var(--fs-sm); line-height: 1.6; }
+.mem-body:focus { outline: 0; border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-ring); }
+.mem-edit-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); }
+.mem-foot { margin: 10px 0 0 4px; }

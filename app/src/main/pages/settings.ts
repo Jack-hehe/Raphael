@@ -13,6 +13,8 @@ import * as api from "../api";
 import "../settings-polish.css";
 import "../connections.css";
 import "../messaging.css";
+import "../memory.css";
+import { createMemory } from "../memory-view";
 import { createConnections } from "../connections";
 import { createMessaging } from "../messaging";
 import { DICTATION_MODES, isDictationMode } from "../dictation";
@@ -166,6 +168,8 @@ export function createSettings(app: AppContext): SettingsPage {
   app.onEvent((event) => connections.followEvent(event));
   /** Telegram, in the 「拉斐爾」 tab: it keeps its own state too. */
   const messaging = createMessaging({ visible: () => visible && pane === "agent", redraw: () => render() });
+  /** Raphael's memory, in the 「拉斐爾」 tab: its notes and the summary of the conversation. */
+  const memory = createMemory({ visible: () => visible && pane === "agent", redraw: () => render(), undo: app.undo });
 
   // ---------- drawing ----------
 
@@ -173,7 +177,7 @@ export function createSettings(app: AppContext): SettingsPage {
   const view = (): SettingsView => ({
     pane, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
     replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
-    connections: connections.view(), messaging: messaging.view(), localModels, localDownload,
+    connections: connections.view(), messaging: messaging.view(), memory: memory.view(), localModels, localDownload,
   });
 
   /** The item at the foot of the microphones' menu that looks for them again. */
@@ -802,8 +806,11 @@ export function createSettings(app: AppContext): SettingsPage {
       pane = paneButton.dataset.pane as SettingsPane;
       if (pane === "connections") void connections.load();
       else connections.reset();
-      if (pane === "agent") void messaging.load();
-      else messaging.reset();
+      if (pane === "agent") void Promise.all([messaging.load(), memory.load()]);
+      else {
+        messaging.reset();
+        memory.reset();
+      }
       syncMonitor();
       body.scrollTop = 0;
       render();
@@ -826,7 +833,7 @@ export function createSettings(app: AppContext): SettingsPage {
       return;
     }
 
-    if (connections.click(target) || messaging.click(target)) return;
+    if (connections.click(target) || messaging.click(target) || memory.click(target)) return;
 
     if (target.closest('.tg[data-k="autostart"]')) {
       void changeDevice({ autostart: !app.device().autostart });
@@ -891,11 +898,11 @@ export function createSettings(app: AppContext): SettingsPage {
   });
   el.addEventListener("input", (e) => {
     const input = e.target as HTMLInputElement;
-    if (connections.input(input) || messaging.input(input)) return;
+    if (connections.input(input) || messaging.input(input) || memory.input(input)) return;
     if (input.id === "limit-input") limitDraft = input.value;
     else if (input.id === "agent-city") cityDraft = input.value;
   });
-  el.addEventListener("keydown", (e) => void (connections.key(e) || messaging.key(e)));
+  el.addEventListener("keydown", (e) => void (connections.key(e) || messaging.key(e) || memory.key(e)));
   // Menus consume their own Escape; the panel and native window controls share one Tab loop.
   const settingsKey = (e: KeyboardEvent): void => {
     const chrome = document.getElementById("window-chrome");
@@ -939,8 +946,9 @@ export function createSettings(app: AppContext): SettingsPage {
       pane = PANES.some((p) => p.id === open) ? open! : "general";
       connections.reset();
       messaging.reset();
+      memory.reset();
       if (pane === "connections") void connections.load();
-      if (pane === "agent") void messaging.load();
+      if (pane === "agent") void Promise.all([messaging.load(), memory.load()]);
       body.scrollTop = 0;
       closeMenu();
       render();
@@ -996,6 +1004,7 @@ export function createSettings(app: AppContext): SettingsPage {
       visible = false;
       connections.reset();
       messaging.reset();
+      memory.reset();
       document.removeEventListener("keydown", settingsKey);
       loading = false;
       loads++;

@@ -7,7 +7,8 @@ const exact = [
   "backend.micTimeout", "backend.emptyDictation", "backend.emptyPaste", "backend.duplicateDictation",
   "backend.duplicatePaste", "backend.conflictingKeys", "backend.invalidKeys", "backend.emptyAgent",
   "backend.duplicateAgent", "backend.conflictingDictationAgent", "backend.conflictingPasteAgent",
-  "backend.hotkeysOff", "backend.hotkeysOffChange", "keys.004", "keys.005", "keys.006",
+  "backend.hotkeysOff", "backend.hotkeysOffChange", "backend.memoryBody", "backend.memoryDescription",
+  "keys.004", "keys.005", "keys.006",
 ] as const;
 const detailed = ["backend.save", "backend.autostartEnable", "backend.autostartDisable", "backend.microphone"] as const;
 

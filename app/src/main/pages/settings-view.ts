@@ -17,6 +17,7 @@ import { formatClock, formatUsd } from "../format";
 import { type LanguageGroup, languageSelectHTML, normalizeLanguages } from "../languages";
 import { bindingLabels } from "../keys";
 import { type MessagingView, messagingHTML } from "../messaging";
+import { type MemoryView, memoryHTML } from "../memory-view";
 import { AUTO_MICROPHONE, microphoneChoices } from "../microphone";
 import type { LocalView } from "../local-models";
 import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
@@ -116,6 +117,8 @@ export interface SettingsView {
   cityError: (() => string) | null;
   /** Telegram, in the 拉斐爾 tab. */
   messaging: MessagingView;
+  /** Raphael's memory, in the 拉斐爾 tab, between its settings and Telegram (none: not drawn). */
+  memory?: MemoryView;
   /** The same for the weather city. */
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
   languageGroups: LanguageGroup[] | null;
@@ -396,7 +399,7 @@ function dictationHTML(v: SettingsView): string {
   );
 }
 
-/** 拉斐爾: the key that asks her, the city of the weather, then Telegram. The model that answers is with the other models. */
+/** 拉斐爾: the key that asks her, the city of the weather, then her memory and Telegram. The model that answers is with the other models. */
 function agentHTML(v: SettingsView): string {
   const cityShown = v.cityDraft ?? agentCity(v);
   // an app from before the question key has none yet
@@ -415,6 +418,7 @@ function agentHTML(v: SettingsView): string {
       ...(v.cityError ? [note(st("err", v.cityError()), ' role="alert"')] : []),
       row(t("settings.workerCostCap"), "", sel(WORKER_COST_CAPS, workerCostCap(v), t("settings.workerCostCap"), ` data-k="worker-cap"${v.brain === null ? " disabled" : ""}`)),
     ]) +
+    (v.memory ? memoryHTML(v.memory) : "") +
     messagingHTML(v.messaging)
   );
 }

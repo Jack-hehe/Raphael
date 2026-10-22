@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { emptyConnectionsView } from "../connections";
 import { emptyMessagingView } from "../messaging";
+import { emptyMemoryView } from "../memory-view";
 import { setLocale } from "../i18n";
 import type { LanguageGroup } from "../languages";
 import type { BrainSettings, CatalogModel, DeviceSettings, LocalModel, ModelCatalog, SettingsPane, Status } from "../types";
@@ -83,6 +84,15 @@ const view = (over: Partial<SettingsView> = {}): SettingsView => ({
   cityDraft: null, cityError: null, languageGroups: GROUPS, now: NOW, connections: emptyConnectionsView(), messaging: emptyMessagingView(),
   localModels: LOCAL_MODELS, localDownload: null, ...over,
 });
+test("the memory is in the 拉斐爾 tab, after its settings and before Telegram, and only there", () => {
+  const memory = { ...emptyMemoryView(), status: { memories: [], summary: null } };
+  const agent = tab("agent", { memory });
+  expect(agent).toContain("data-mem-section");
+  expect(agent.indexOf("data-mem-section")).toBeGreaterThan(agent.indexOf('data-k="worker-cap"'));
+  expect(agent.indexOf("data-mem-section")).toBeLessThan(agent.indexOf("data-msg-section"));
+  for (const id of ["general", "dictation", "connections", "usage", "about"] as const) expect(tab(id, { memory })).not.toContain("data-mem");
+});
+
 test("Telegram is in the 拉斐爾 tab, and only there", () => {
   expect(tab("agent")).toContain("data-msg-section");
   expect(tab("agent").indexOf("data-msg-section")).toBeGreaterThan(tab("agent").indexOf('id="agent-city"'));
