@@ -1,6 +1,8 @@
 """Tests for the one continuous conversation: what the model reads (the summary, then the latest
 turns), when the oldest turns are folded into the summary, and which turns never are yet."""
 
+import time
+
 import pytest
 
 from raphael_core.agent.history import Turn
@@ -20,6 +22,7 @@ from raphael_core.memory.conversation import (
     is_correction,
     plan_fold,
     turn_text,
+    turn_time,
 )
 from raphael_core.memory.terms import estimate_tokens
 
@@ -186,6 +189,23 @@ async def test_a_fold_updates_the_summary_in_place_and_writes_the_spend(conversa
     assert [tuple(r) for r in conn.execute("SELECT purpose, cost_usd FROM spend")] == [("memory", 0.0004)]
     # The folded turns are still there, and still found.
     assert len(history.after(0)) == 31 and history.search("第")
+
+
+async def test_a_fold_shows_each_turn_with_its_own_time(conversation, history, conn, clock):
+    # 「明天有面試」 said two days ago is a date in the past by now: the summary must read it from the
+    # day it was said, which only the turn's own time gives.
+    said = add_turn(history, "明天有面試")
+    said_at = history.get(said).created_at_ms
+    clock.advance(days=2)
+    seed(history, 30)
+    conversation._client.replies.append({"summary": "Ongoing:\n- 面試"})
+    assert await conversation.fold("m", Ledger(SpendTracker(conn, clock.ms))) is True
+    call = conversation._client.calls[0]
+    assert time.strftime("Today: %Y-%m-%d (%A)", time.localtime(clock.ms() / 1000)) in call["user"]
+    stamp = turn_time(said_at)
+    assert stamp == time.strftime("%Y-%m-%d %a %H:%M", time.localtime(said_at / 1000))
+    assert f"[{stamp}]\nUser: 明天有面試" in call["user"]
+    assert "own date" in call["system"]
 
 
 async def test_a_fold_that_fails_keeps_the_summary_and_waits_before_the_next_try(conversation, history, conn, clock):

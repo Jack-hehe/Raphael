@@ -38,6 +38,7 @@ from datetime import date
 from ..agent.history import Turn
 from ..agent.ledger import Ledger
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
+from .conversation import turn_time
 from .store import TYPES, Memory, MemoryRefused, MemoryStore, make_name, valid_name
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,9 @@ password or a key).
 prefers short answers"), never as an order ("Always ...", "永遠要..."). "description" is one line \
 of at most 80 characters, and it is the memory's line in the index; "body" is at most 1,200 \
 characters: the fact, then "Why:" and what the user said or did that shows it.
-- Turn relative dates into absolute ones from today's date ("下星期六" becomes a date).
+- Turn relative dates into absolute ones from the own date of the turn they were said in (each \
+turn carries its date and time), never from today: "明天有面試" said on 2026-10-21 is about \
+2026-10-22, and "下星期六" becomes a date the same way.
 - "name" is an ASCII slug that starts with the type: preference-answer-length, person-amy.
 - "origin" is "said" when the user stated it outright, "inferred" when you deduced it.
 
@@ -375,7 +378,8 @@ def reflection_message(
 ) -> str:
     """What the reflection pass is shown: today's date, the index, the memories the turns touch,
     and the turns (the owner's question and Raphael's line, and the longer text of a discussion,
-    which a tool did not write)."""
+    which a tool did not write), each with its own local date and time (`turn_time`): a turn may
+    be days old, and its relative dates are read against the day it was said."""
     parts = [f"Today: {today.isoformat()} ({today.strftime('%A')})"]
     if fill >= FULL_FROM:
         parts.append(
@@ -394,7 +398,8 @@ def reflection_message(
         extra = ""
         if turn.route in ("discuss", "chat") and turn.detail and turn.detail != said:
             extra = f"\nRaphael, at more length: {turn.detail[:600]}"
-        lines.append(f"[turn {turn.id}] User: {turn.question}\nRaphael: {said}{extra}")
+        when = turn_time(turn.created_at_ms)
+        lines.append(f"[turn {turn.id}, {when}] User: {turn.question}\nRaphael: {said}{extra}")
     parts.append("<turns>\n" + "\n\n".join(lines) + "\n</turns>")
     return "\n\n".join(parts)
 
