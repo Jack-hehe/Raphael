@@ -351,6 +351,51 @@ async def test_a_cancelled_call_ends_the_process_and_the_next_call_starts_anothe
 
 
 @windows_only
+@pytest.mark.parametrize("sent", [False, True], ids=["while-opening", "call-sent"])
+async def test_a_pool_closed_while_its_cancelled_connection_stops_the_server_still_ends(
+    vault, pool, calls, monkeypatch, sent
+):
+    # A background task that the user stops: its call is cancelled, which closes the connection
+    # (the SDK starts to stop the server), and the task's pool is closed right after, while that
+    # is under way. The SDK stops the server in a scope shielded from anyio's cancellation, not
+    # from a plain `Task.cancel()`: a second one there broke the stop off before the server's
+    # stdin was closed, the server stayed, the SDK's reader of its output waited for it for ever,
+    # and so did `aclose`, and every task queued behind. Here the second close comes at the worst
+    # moment: the SDK has begun to stop the server and has not closed its stdin yet.
+    import mcp.client.stdio as sdk_stdio
+
+    spawned, stopping = asyncio.Event(), asyncio.Event()
+    real_spawn, real_stop = sdk_stdio._create_platform_compatible_process, sdk_stdio._stop_server_process
+
+    async def spawn(*args, **kwargs):
+        process = await real_spawn(*args, **kwargs)
+        spawned.set()
+        return process
+
+    async def stop_server_process(process):
+        stopping.set()
+        await asyncio.sleep(0.5)  # the window in which the pool is closed
+        await real_stop(process)
+
+    monkeypatch.setattr(sdk_stdio, "_create_platform_compatible_process", spawn)
+    monkeypatch.setattr(sdk_stdio, "_stop_server_process", stop_server_process)
+    connector, config = real(vault)
+    mine = pool()
+    if sent:
+        await connector.call_tool(config, "pid", {}, timeout_s=30, pool=mine)
+    call = asyncio.ensure_future(connector.call_tool(config, "slow", {}, timeout_s=60, pool=mine))
+    # Opening: the server has been started and is loading (it takes a second) while the client
+    # waits for its hello. Sent: the call is on its way to the server.
+    await asyncio.wait_for(spawned.wait(), 30)
+    if sent:
+        await asyncio.sleep(1.0)
+    call.cancel()  # the user stopped the task: the connection is closed, the server stopped
+    await asyncio.wait_for(stopping.wait(), 30)
+    await asyncio.wait_for(mine.aclose(), 15)  # the task is over: its pool is closed meanwhile
+    assert call.done() and mine.open_count == 0
+
+
+@windows_only
 async def test_a_call_that_times_out_ends_the_process(vault, pool):
     connector, config = real(vault)
     mine = pool()
