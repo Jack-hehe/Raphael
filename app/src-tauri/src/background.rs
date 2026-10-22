@@ -2,7 +2,8 @@
 //!
 //! The core hands a task to its worker and answers 《了。》 at once; some time later it sends
 //! `worker.report {task_id, state, prefix, text}`, Raphael's report of what became of it, and tells
-//! of each move with `worker.changed {task_id, state, running, ...}`. Two things are done with them.
+//! of each move with `worker.changed {task_id, state, running, ...}`. Three things are done with
+//! them.
 //!
 //! - **The report is said on the overlay, when the person is not in the middle of something.** A
 //!   report that comes while they dictate or ask a question (or while Raphael is answering) waits in
@@ -10,9 +11,13 @@
 //!   controller's answer to that). It is not said over a recording or over a question. The reports are
 //!   said one at a time, each for as long as an answer is, in the order they came.
 //! - **The tray offers 「中止背景任務」 while a task runs** ([`tray::set_background_running`]).
+//! - **The main window's conversation view reads the conversation again** at each move
+//!   (`MainEvent::WorkerChanged`, in commands.rs), and shows each task, with its steps, under the
+//!   turn that handed it over. It can stop the task it shows, or run one that did not finish again
+//!   (`worker.cancel` and `worker.rerun`, each with the task's id).
 //!
 //! Only the overlay (the person's own screen) gets the words of a report; nothing here logs them.
-//! The core is the only source of the tasks; the main window does not show them.
+//! The core is the only source of the tasks.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};

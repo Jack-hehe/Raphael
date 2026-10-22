@@ -34,8 +34,9 @@ DEFAULTS: dict[str, Any] = {
     # The dictation languages, in the user's order of priority (raphael_core.languages).
     "languages": list(DEFAULT_LANGUAGES),
     "history_retention_days": 30,
-    # Speech-to-text: "cloud" (OpenRouter, with the local engine as the fallback) or "local" (the
-    # engine on this computer only; no audio leaves it). Read at the start of each dictation.
+    # Speech-to-text: "cloud" (OpenRouter, with the local engine as the fallback when there is one)
+    # or "local" (the engine on this computer only; no audio leaves it). Read at the start of each
+    # dictation.
     "stt_engine": "cloud",
     # Which of the catalogue's models (device/models.py) the local engine is. The one Raphael has
     # always used, so that nobody who runs locally needs a new download.

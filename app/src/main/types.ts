@@ -150,8 +150,8 @@ export interface HistoryItem {
   llm_ms: number;
   model: string | null;
   cost_usd: number;
-  /** The speech-to-text that heard it: a cloud model's slug or the local engine's name ("a+b" when the cloud fell back midway). Absent from older cores. */
-  stt?: string | null;
+  /** The speech-to-text that heard it: a cloud model's slug or the local engine's name ("a+b" when the cloud fell back midway); null when it is not known. */
+  stt: string | null;
 }
 
 /** A turn of the conversation with Raphael (`agent.history.list`, newest first). */
@@ -230,7 +230,7 @@ export interface BrainSettings {
   /** The languages the speech recognition listens for: locale ids such as "zh-TW", one to five. */
   languages: string[];
   history_retention_days: number;
-  /** "cloud" (OpenRouter, the local engine as fallback) or "local". */
+  /** "cloud" (OpenRouter, the local engine as fallback when there is one) or "local". */
   stt_engine: string;
   /** Which model of the catalogue the local engine is. */
   stt_local_model?: string | null;

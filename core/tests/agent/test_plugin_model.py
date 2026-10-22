@@ -231,7 +231,7 @@ async def test_the_catalog_is_read_only_for_a_request_that_may_use_a_plugin(
     client.decisions.append(decision("command", "volume_up"))
     await rig.ask("大聲一點")
     assert catalog.reads == 0
-    # ...and neither does an answer when no plugin tool has a tier: nothing would be offered.
+    # ...and neither does an answer when every plugin tool is off: nothing would be offered.
     [server] = (await plugins.rpc.call("toolsets.list"))["groups"]
     await plugins.set_on(server["id"], "look", False)
     route(client)

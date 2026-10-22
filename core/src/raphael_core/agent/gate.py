@@ -10,8 +10,8 @@ is unknown and cannot run; and it holds the door to the plugins' tools (`plugins
 - `check` is `ToolRegistry.check`: a tool at T2 or above does not pass without the `Approval` that
   only a yes to that very action can make; and no command for this computer (opening anything, the
   volume, the lock...) passes for the worker, which runs while the user is away;
-- `call_plugin` checks, then calls through the hub, which checks the tool once more (it is still the
-  one the user gave the tier to) and writes the audit whatever happens, with the task that made the
+- `call_plugin` checks, then calls through the hub, which checks the tool once more (it is still
+  on, of a plugin that is on) and writes the audit whatever happens, with the task that made the
   call; a call the gate refuses is made as a refused one, so it is written down too;
 - `record_builtin` writes the audit of one of Raphael's own lookups (the weather, a web search,
   the time) for a task.

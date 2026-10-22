@@ -2,18 +2,21 @@
 
 `build_app` makes an `App`, a Router with every method of the core on it: the brain's
 (raphael_core.brain), the dictation service's (`dictation.*`, raphael_core.device), the voice
-assistant's (`agent.*`, raphael_core.agent), the plugins' (`integrations.*`,
-raphael_core.integrations) and the few that belong to none of them (`core.*`, `models.*`,
-`audio.*`). `__main__` serves it on stdio.
+assistant's (`agent.*`, raphael_core.agent), the background worker's (`worker.*`,
+raphael_core.background), the plugins' (`integrations.*` and `toolsets.list`,
+raphael_core.integrations), the messaging apps' (`messaging.<app>.*`, raphael_core.messaging) and
+the few that belong to none of them (`core.*`, `models.*`, `audio.*`). `__main__` serves it on
+stdio.
 
 Start-up. The app's first calls come within seconds of the process starting (`core.hello`, the
 saved microphone, the settings page's questions), so the models, which take tens of seconds to
 load, are never waited for: the first sherpa-onnx object of a process pays about 15 s of ONNX
 Runtime start-up and the engine a few more. A worker thread imports the speech libraries (the
-"kit": numpy, sherpa-onnx, PortAudio), builds the dictation service and then loads the two models.
-A dictation started before they are loaded still records: the audio queues up, and
-`dictation.stop` waits for the models. `dictation.*` and the methods that need
-the kit wait for them instead of failing.
+"kit": numpy, sherpa-onnx, PortAudio), builds the dictation service and then loads the models that
+are downloaded: the voice activity detector and the local speech engine, if the user has one (with
+the cloud engine there need not be any). A dictation started before they are loaded still records:
+the audio queues up, and `dictation.stop` waits for the models. `dictation.*` and the methods that
+need the kit wait for them instead of failing.
 
 The libraries themselves are imported before the core reads its first request (`__main__` calls
 `wait_for_libraries`). On Windows, numpy's DLLs hang while they load if another thread is blocked
@@ -25,9 +28,10 @@ else heavy imported at run time (PyTorch for TTS, say) is exposed to the same tr
 
 Speech-to-text. The `stt_engine` setting, read at each `dictation.start`, picks the engine for that
 dictation: "local" is the engine on this computer; "cloud" sends each stretch of speech to the
-brain's `stt.transcribe` (OpenRouter) and falls back to the local engine, which still loads at
-start-up so the fallback costs no wait. Cloud stretches are cut at 30 s, not 10: the model hears
-more context, and it is fast enough that the last stretch is no long tail.
+brain's `stt.transcribe` (OpenRouter) and falls back to the local engine when there is one, which
+then loads at start-up so the fallback costs no wait (without one, the next stretch goes to the
+cloud again: device/cloud_stt.py). Cloud stretches are cut at 30 s, not 10: the model hears more
+context, and it is fast enough that the last stretch is no long tail.
 
 Threads. The event loop runs the brain and the router; the SQLite connection is used on it only.
 Everything that blocks (downloading a model, opening the microphone, loading a model) runs on a
@@ -1082,9 +1086,9 @@ class App(Router):
         return compose(reply.get("prefix", ""), reply.get("text", ""), detail)
 
     async def _transcribe_from_messaging(self, audio: bytes, language: str) -> str:
-        """The words of a voice message, heard by the engine that dictation uses (the cloud with
-        the local one behind it, or the local one), with the user's dictionary and the same
-        normalising. The audio stays in memory."""
+        """The words of a voice message, heard by the engine that dictation uses (the cloud, with
+        the local one behind it if there is one, or the local one), with the user's dictionary and
+        the same normalising. The audio stays in memory."""
         from .device.dictation import dictionary_hints  # numpy: after the start-up
         from .messaging import voice
 

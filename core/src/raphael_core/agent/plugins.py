@@ -1,10 +1,10 @@
 """What the assistant knows of the plugins: the tools it may offer a model, and the door to call one.
 
 The plugins themselves (`raphael_core.integrations`) are MCP servers the user connected, and each
-of their tools has a tier only because the user gave it one. This module is the assistant's side of
-that: a `PluginHub` says which tools may be offered to a model at all (those with a tier, on a
-plugin that is on, that are still the tool the user gave the tier to), what tier a tool has now,
-and calls one. The assistant never reaches a plugin any other way.
+of their tools is on until the user turns it off. This module is the assistant's side of that: a
+`PluginHub` says which tools may be offered to a model at all (those that are on, of a plugin that
+is on: they have a tier, the one that runs at once), what tier a tool has now, and calls one. The
+assistant never reaches a plugin any other way.
 
 How a model gets to the tools. For a request that may need them, one call to the language model
 sees the request, the last few turns, and only the tools that may be offered, and answers with the
@@ -98,7 +98,7 @@ class PluginHub(Protocol):
         ...
 
     def tier_of(self, key: str) -> Tier | None:
-        """The tier the user gave the tool now, or None when it has none (or is not usable)."""
+        """The tier the tool has now, or None when it has none: it is off, or its plugin is."""
         ...
 
     async def call(

@@ -30,6 +30,7 @@ const item = (over: Partial<HistoryItem> = {}): HistoryItem => ({
   llm_ms: 600,
   model: null,
   cost_usd: 0,
+  stt: null,
   ...over,
 });
 

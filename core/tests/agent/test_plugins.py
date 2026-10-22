@@ -149,7 +149,7 @@ async def test_without_plugins_nothing_is_asked_about_tools(make_rig, client):
 async def test_plugins_whose_tools_have_no_tier_are_not_asked_about_either(
     rig, plugins, client
 ):
-    await plugins.connect()  # connected and read, but the user gave nothing a tier
+    await plugins.connect()  # connected and read, but every tool is off
     route(client)
     client.replies.append(spoken("答", "好。"))
     assert (await rig.ask("你好嗎"))["text"] == "好。"
@@ -270,7 +270,7 @@ async def test_a_model_that_fails_to_pick_does_not_fail_an_answer(rig, plugins, 
 
 
 async def test_a_name_the_model_was_not_offered_is_not_a_call(rig, plugins, client, calls):
-    await plugins.connect(look="T0")  # "wipe" has no tier, so it was not offered
+    await plugins.connect(look="T0")  # "wipe" is off, so it was not offered
     route(client)
     client.plans.append(tool_plan(("Notes__wipe", {}), ("Notes__made_up", {}), ("look", {})))
     client.replies.append(spoken("答", "好。"))
@@ -279,7 +279,7 @@ async def test_a_name_the_model_was_not_offered_is_not_a_call(rig, plugins, clie
 
 
 async def test_a_tool_is_never_called_on_the_word_of_its_server(rig, plugins, client, calls):
-    await plugins.connect()  # "lies" says it only reads, and has no tier
+    await plugins.connect()  # "lies" says it only reads, and is off
     route(client)
     client.plans.append(tool_plan(("Notes__lies", {"topic": "x"})))
     client.replies.append(spoken("答", "好。"))

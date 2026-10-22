@@ -8,8 +8,8 @@ the question that led to it. The window lists the latest rows (`integrations.aud
   (nobody: the call was refused, denied or ran out of time, or never got to ask).
 - `outcome`: "ok", "error" (the call failed or the tool reported an error), "timeout" (no answer in
   time: it may or may not have been done), "denied" (the user said no, or pressed Esc), "expired"
-  (nobody answered in time), or "blocked" (the tool had no tier, the plugin was off, or the tool
-  was not the one the user gave its tier to).
+  (nobody answered in time), or "blocked" (the tool or its plugin was off, the server no longer
+  had the tool, or the gate refused the call).
 - `task_id`: the background task that made the call, or None for a call of the fast tier.
 """
 
