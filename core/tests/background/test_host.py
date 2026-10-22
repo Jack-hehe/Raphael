@@ -238,6 +238,92 @@ async def test_a_worker_that_never_says_hello_is_unavailable_and_counts_as_a_cra
     await host.aclose()
 
 
+class Starts:
+    """`connect` for a WorkerHost: real worker processes of one mode, kept so that a test can look
+    at them. With `gate`, a start waits for it after the process is there, before it is handed
+    over: a start that is still under way."""
+
+    def __init__(self, mode, gate=None):
+        self.mode = mode
+        self.gate = gate
+        self.links = []
+
+    async def __call__(self):
+        link = await connect_process([sys.executable, "-c", SCRIPT, self.mode])
+        self.links.append(link)
+        if self.gate is not None:
+            await self.gate.wait()
+        return link
+
+    async def ended(self, timeout=5.0):
+        """Whether every worker that was started has ended within `timeout` seconds."""
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*(link.process.wait() for link in self.links)), timeout
+            )
+        except TimeoutError:
+            return False
+        return True
+
+
+async def test_a_start_that_is_cancelled_during_the_hello_ends_the_worker_at_once(rig):
+    # The core closes, or the task's time is up, while the worker is still saying hello (it may
+    # take a minute): the worker is ended there and then, not left behind until the core exits.
+    starts = Starts("never_hello")
+    host = WorkerHost(connect=starts, hello_timeout_s=60.0, grace_s=0.3)
+    running = asyncio.ensure_future(run_once(host, rig))
+    await until(lambda: starts.links)
+    await asyncio.sleep(0.2)  # in the hello
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert await starts.ended()
+    assert not host.running and host._crashes == []  # being cancelled is no crash
+    await host.aclose()
+
+
+async def test_a_task_the_user_stops_during_the_hello_ends_the_starting_worker(rig):
+    starts = Starts("never_hello")
+    host = WorkerHost(connect=starts, hello_timeout_s=60.0, grace_s=0.3)
+    running = asyncio.ensure_future(run_once(host, rig))
+    await until(lambda: starts.links)
+    await asyncio.sleep(0.2)
+    host.cancel(rig.run)
+    with pytest.raises(WorkerStopped):  # stopped, as a task that was cancelled is
+        await asyncio.wait_for(running, 5)
+    assert await starts.ended()
+    assert host._crashes == [] and not host.disabled
+    await host.aclose()
+
+
+async def test_a_task_stopped_while_its_worker_is_being_started_ends_that_worker(rig):
+    gate = asyncio.Event()
+    starts = Starts("done", gate=gate)
+    host = WorkerHost(connect=starts, hello_timeout_s=60.0, grace_s=0.3)
+    running = asyncio.ensure_future(run_once(host, rig))
+    await until(lambda: starts.links)  # the process is there; the start is not over
+    host.cancel(rig.run)
+    gate.set()
+    with pytest.raises(WorkerStopped):
+        await asyncio.wait_for(running, 5)
+    assert await starts.ended()
+    assert host._crashes == [] and not host.running
+    await host.aclose()
+
+
+async def test_closing_the_host_during_the_hello_ends_the_starting_worker(rig):
+    starts = Starts("never_hello")
+    host = WorkerHost(connect=starts, hello_timeout_s=60.0, grace_s=0.3)
+    running = asyncio.ensure_future(run_once(host, rig))
+    await until(lambda: starts.links)
+    await asyncio.sleep(0.2)
+    await asyncio.wait_for(host.aclose(), 10)
+    with pytest.raises(WorkerStopped):
+        await asyncio.wait_for(running, 5)
+    assert await starts.ended(timeout=0.5)  # aclose returned once it was over
+    assert not host.running
+
+
 async def test_a_worker_that_cannot_be_started_is_unavailable_and_counts_as_a_crash(rig):
     async def connect():
         return await connect_process(["this-program-does-not-exist-anywhere"])

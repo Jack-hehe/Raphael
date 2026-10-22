@@ -314,9 +314,9 @@ async def test_a_worker_that_is_slow_to_start_is_waited_for_as_long_as_its_hello
     class SlowStart(WorkerHost):
         killed = 0
 
-        async def _ensure(self):
+        async def _ensure(self, run=None):
             await asyncio.sleep(0.8)  # well within the hello it is given
-            return await super()._ensure()
+            return await super()._ensure(run)
 
         def kill(self):
             self.killed += 1
