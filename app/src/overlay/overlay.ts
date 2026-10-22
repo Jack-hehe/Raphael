@@ -11,7 +11,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { replyLine } from "../shared/anime";
-import { Emblem, canvasSize, loadGlyphTexture, type Mode, type Phase } from "./emblem";
+import { Emblem, canvasSize, loadGlyphTexture, type Mode, type Phase, type PictureCrop } from "./emblem";
 import { noticeDurationMs } from "./notice";
 import type { ProgressReport, Stage } from "./progress";
 import { ProgressArc } from "./progress";
@@ -55,7 +55,9 @@ export type OverlayEvent =
   | { type: "ask"; id: string; tier: AskTier; prefix: string; text: string; yes: string; no: string; timeout_ms: number }
   | { type: "complete" }
   | { type: "hide" }
-  | { type: "settings"; px: number; subtitles: string; language: string };
+  | { type: "settings"; px: number; subtitles: string; language: string }
+  /** Raphael's picture changed: the page asks for it again (`avatar_get`). */
+  | { type: "avatar" };
 
 /** What the controller needs from the emblem. */
 export interface EmblemControl {
@@ -739,11 +741,19 @@ async function start(): Promise<void> {
     new Promise((resolve) => setTimeout(resolve, TEXTURE_WAIT_MS)),
   ]);
 
+  // Raphael's picture, when the person chose one: it is drawn in the emblem's place.
+  const picture = (): Promise<void> => showPicture(emblem);
+  await picture();
+
   // Subscribe once (again if that fails). Events that came before this point wait on the Rust
   // side. An event that fails is reported and the channel goes on.
   // Read afresh each time: the controller changes the phase while it handles an event.
   const phase = (): string => emblem.phase;
   const handle = guardHandler((event) => {
+    if (event.type === "avatar") {
+      void picture();
+      return;
+    }
     const away = phase() === "hidden" || phase() === "vanish";
     controller.handle(event);
     if (away && phase() === "appear") entrance.start();
@@ -758,6 +768,44 @@ async function start(): Promise<void> {
     const channel = new Channel<OverlayEvent>(handle);
     return invoke("overlay_subscribe", { channel });
   }, pageLog);
+}
+
+/** The only addresses the picture may have: a data URL of one of the four kinds the app takes. */
+const PICTURE_URL = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+=*$/;
+
+/** What `avatar_get` answered, if it is a picture to draw: its address and its crop. */
+export function pictureOf(value: unknown): { url: string; crop: PictureCrop } | null {
+  if (!value || typeof value !== "object") return null;
+  const { url, crop } = value as { url?: unknown; crop?: Partial<PictureCrop> };
+  if (typeof url !== "string" || !PICTURE_URL.test(url)) return null;
+  const num = (v: unknown, fallback: number, low: number, high: number): number =>
+    typeof v === "number" && Number.isFinite(v) ? Math.min(high, Math.max(low, v)) : fallback;
+  return { url, crop: { x: num(crop?.x, 0.5, 0, 1), y: num(crop?.y, 0.5, 0, 1), zoom: num(crop?.zoom, 1, 1, 4) } };
+}
+
+/** Asks the app for Raphael's picture and draws it in the emblem's place; the emblem when there is none. */
+async function showPicture(emblem: Emblem): Promise<void> {
+  let chosen: { url: string; crop: PictureCrop } | null = null;
+  try {
+    chosen = pictureOf(await invoke("avatar_get"));
+  } catch (err) {
+    pageLog("warn", `the picture could not be read: ${describeError(err)}`);
+  }
+  if (!chosen) {
+    emblem.setPicture(null);
+    return;
+  }
+  const image = new Image();
+  image.decoding = "async";
+  image.src = chosen.url;
+  try {
+    await image.decode();
+  } catch {
+    pageLog("warn", "the picture could not be decoded; the emblem stays");
+    emblem.setPicture(null);
+    return;
+  }
+  emblem.setPicture(image, chosen.crop);
 }
 
 // Only in the overlay page (the tests import this file in Node).

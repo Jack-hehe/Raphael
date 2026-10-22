@@ -517,6 +517,47 @@ const SPEAK_CYCLE = 36;
 
 // ---------- the emblem on a canvas ----------
 
+// ---------- the person's own picture in the emblem's place ----------
+
+/**
+ * Which part of a picture shows in its circle (the same as `AvatarCrop` of the main window): the
+ * picture covers the circle and is enlarged `zoom` times about the point at `x`, `y` (fractions of
+ * its width and height), which stays at the same fractions of the circle.
+ */
+export interface PictureCrop {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+/**
+ * Where a picture `w` × `h` is drawn for a circle of diameter `side` whose top left is 0, 0: the
+ * rectangle the CSS of the main window gives it (`object-fit: cover`, `object-position` and
+ * `transform: scale` about the same point), so that both windows cut it alike.
+ */
+export function pictureRect(w: number, h: number, side: number, crop: PictureCrop): { x: number; y: number; w: number; h: number } {
+  const cover = side / Math.min(w, h);
+  const width = w * cover;
+  const height = h * cover;
+  const at = (fraction: number, over: number): number => (-fraction * over - fraction * side) * crop.zoom + fraction * side;
+  return { x: at(crop.x, width - side), y: at(crop.y, height - side), w: width * crop.zoom, h: height * crop.zoom };
+}
+
+/** The thin ring around the picture: this bright when quiet, up to 1 at full voice while listening. */
+export const PICTURE_RING_REST = 0.35;
+
+/** How bright the ring around the picture is for the loudness `lvl` while listening (else at rest). */
+export const pictureRingAlpha = (lvl: number, listening: boolean): number =>
+  listening ? PICTURE_RING_REST + (1 - PICTURE_RING_REST) * clamp((lvl - 0.05) / 0.6) : PICTURE_RING_REST;
+
+/** How large the picture is during the appear (growing in) and vanish (shrinking away) animations, 0 to 1. */
+export function pictureScale(phase: Phase, pt: number): number {
+  if (phase === "hidden") return 0;
+  if (phase === "appear") return 1 - (1 - clamp(pt / AP.dur)) ** 3;
+  if (phase === "vanish") return 1 - clamp(pt / VA.dur) ** 2;
+  return 1;
+}
+
 /** The canvas is this much larger than the emblem so that the rays have room. */
 export const CANVAS_RATIO = 1.3;
 
@@ -581,6 +622,8 @@ export class Emblem {
   private steps = 0;
   /** The extra light on the glyph ring at the last tick: only a recording has any. */
   private shownBoost = 0;
+  /** The person's picture, drawn in a circle in the emblem's place, or null for the emblem. */
+  private picture: { image: HTMLImageElement; crop: PictureCrop } | null = null;
 
   constructor(canvas: HTMLCanvasElement, sizePx: number, opts: EmblemOptions = {}) {
     this.canvas = canvas;
@@ -632,6 +675,22 @@ export class Emblem {
 
   set level(value: number) {
     this.external = Number.isFinite(value) ? clamp(value) : 0;
+  }
+
+  /**
+   * Shows the person's picture in a circle instead of the emblem (null: the emblem again). The
+   * circle grows in and shrinks away where the emblem appears and vanishes, and while listening a
+   * thin ring around it brightens with the voice instead of the emblem's own movement.
+   */
+  setPicture(image: HTMLImageElement | null, crop: PictureCrop = { x: 0.5, y: 0.5, zoom: 1 }): void {
+    this.picture = image ? { image, crop } : null;
+    this.dirty = true;
+    wake();
+  }
+
+  /** Whether the person's picture is shown instead of the emblem. */
+  get hasPicture(): boolean {
+    return this.picture !== null;
   }
 
   /** Resizes the emblem to a diameter of `px` CSS pixels. */
@@ -736,6 +795,10 @@ export class Emblem {
     const k = this.dpr;
     ctx.setTransform(k, 0, 0, k, (this.side * k) / 2, (this.side * k) / 2);
     const ph = this._phase;
+    if (this.picture) {
+      this.drawPicture(ctx, this.picture);
+      return;
+    }
     drawEmblem(ctx, this.diameter / 2, params(ph, tick(this.pt), this._lvl), {
       tq: tick(this.clock),
       rot: this.shownRot,
@@ -745,6 +808,31 @@ export class Emblem {
       boost: this.shownBoost,
       surface: this.surface ?? (this.canvas.ownerDocument?.documentElement.dataset.theme === "light" ? "light" : "dark"),
     });
+  }
+
+  /** The person's picture in its circle, with the thin ring around it, centred on the canvas. */
+  private drawPicture(ctx: CanvasRenderingContext2D, picture: { image: HTMLImageElement; crop: PictureCrop }): void {
+    const scale = pictureScale(this._phase, this.pt);
+    const { image, crop } = picture;
+    if (scale <= 0 || !image.complete || image.naturalWidth === 0) return;
+    const r = (this.diameter / 2) * scale;
+    const listening = (this._phase === "appear" ? this.mode : this._phase) === "listening";
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, scale * 1.4);
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, TAU);
+    ctx.clip();
+    const box = pictureRect(image.naturalWidth, image.naturalHeight, 2 * r, crop);
+    ctx.drawImage(image, box.x - r, box.y - r, box.w, box.h);
+    ctx.restore();
+    ctx.save();
+    ctx.globalAlpha = pictureRingAlpha(this._lvl, listening) * Math.min(1, scale * 1.4);
+    ctx.strokeStyle = "#ffffff"; // the white of the emblem's own listening ring
+    ctx.lineWidth = Math.max(1.5, this.diameter / 80);
+    ctx.beginPath();
+    ctx.arc(0, 0, r + ctx.lineWidth * 1.5, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
   }
 
   /** Stops animating this emblem for good. */

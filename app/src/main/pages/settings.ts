@@ -13,6 +13,8 @@ import * as api from "../api";
 import "../settings-polish.css";
 import "../connections.css";
 import "../messaging.css";
+import { avatarClick } from "../avatar-settings";
+import { onAvatarChange } from "../avatar";
 import { createConnections } from "../connections";
 import { createMessaging } from "../messaging";
 import { DICTATION_MODES, isDictationMode } from "../dictation";
@@ -164,6 +166,10 @@ export function createSettings(app: AppContext): SettingsPage {
   /** The 「連接」 tab: it keeps its own state and asks to be drawn again. */
   const connections = createConnections({ visible: () => visible && pane === "connections", redraw: () => render() });
   app.onEvent((event) => connections.followEvent(event));
+  // 頭像 shows the picture in force, and whether there is one to take off.
+  onAvatarChange(() => {
+    if (visible && pane === "agent") render();
+  });
   /** Telegram, in the 「拉斐爾」 tab: it keeps its own state too. */
   const messaging = createMessaging({ visible: () => visible && pane === "agent", redraw: () => render() });
 
@@ -826,7 +832,7 @@ export function createSettings(app: AppContext): SettingsPage {
       return;
     }
 
-    if (connections.click(target) || messaging.click(target)) return;
+    if (connections.click(target) || messaging.click(target) || avatarClick(target)) return;
 
     if (target.closest('.tg[data-k="autostart"]')) {
       void changeDevice({ autostart: !app.device().autostart });

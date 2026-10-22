@@ -6,7 +6,9 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { withWindowHotkeyPause } from "./window-hotkeys";
 import type { LanguageGroup } from "./languages";
 import type { TelegramStatus } from "./messaging";
+import type { AvatarCrop } from "./avatar";
 import type {
+  AgentQuestion,
   AgentTurn,
   AuditEntry,
   ConnectResult,
@@ -79,6 +81,32 @@ export const agentHistoryClear = (): Promise<{ deleted: number }> => core("agent
 export const workerCancel = (taskId: number): Promise<{ cancelled: boolean }> => core("worker.cancel", { task_id: taskId });
 /** Runs a task that did not finish again, as a new task; its id. */
 export const workerRerun = (taskId: number): Promise<{ task_id: number }> => core("worker.rerun", { task_id: taskId });
+/** The turns whose words hold `query`, newest first, over the whole history (a core that has the method). */
+export const agentHistorySearch = (query: string): Promise<{ turns: AgentTurn[] }> => core("agent.history.search", { query, limit: 100 });
+
+/**
+ * Asks Raphael in writing (the composer of the 拉斐爾 page). The question goes the way a spoken one
+ * goes once its words are heard, with the source `app`; this settles when its turn is over (its
+ * answer is in the history, or it failed), and rejects when Raphael is busy with another.
+ */
+export const agentAskText = (text: string): Promise<void> => invoke("agent_ask_text", { text });
+/** The YES/NO question that waits for an answer now, if one does. */
+export const agentQuestionOpen = (): Promise<AgentQuestion | null> => invoke("agent_question_open");
+/** Answers the question `id` from the page, as the overlay's buttons do; the window must have the focus. */
+export const agentQuestionAnswer = (id: string, approved: boolean): Promise<void> => invoke("agent_question_answer", { id, approved });
+/** The question key pressed (`down`) or let go (`up`) from the page's voice button: the same path as the key itself. */
+export const agentVoice = (edge: "down" | "up"): Promise<void> => invoke("window_hotkey", { kind: edge === "down" ? "agent_down" : "agent_up" });
+
+// ---------- Raphael's picture ----------
+
+/** The person's picture for Raphael, as a data URL and its crop; null while he is his emblem. */
+export const avatarGet = (): Promise<unknown> => invoke("avatar_get");
+/** Opens the file dialog of Windows; the picture chosen, as a data URL for the crop dialog, or null when none was. */
+export const avatarPick = (): Promise<string | null> => invoke("avatar_pick");
+/** Keeps the picture last picked, cut as `crop` says, as Raphael's picture. */
+export const avatarSave = (crop: AvatarCrop): Promise<void> => invoke("avatar_save", { crop });
+/** Raphael is his emblem again: the picture is deleted. */
+export const avatarClear = (): Promise<void> => invoke("avatar_clear");
 
 // ---------- dictionary ----------
 

@@ -10,6 +10,7 @@
 
 import { t } from "../i18n";
 
+import { avatarRowHTML } from "../avatar-settings";
 import { brandIcon } from "../brand";
 import { type ConnectionsView, connectionsHTML } from "../connections";
 import { DICTATION_MODES } from "../dictation";
@@ -396,7 +397,7 @@ function dictationHTML(v: SettingsView): string {
   );
 }
 
-/** 拉斐爾: the key that asks her, the city of the weather, then Telegram. The model that answers is with the other models. */
+/** 拉斐爾: his picture, the key that asks him, the city of the weather, then Telegram. The model that answers is with the other models. */
 function agentHTML(v: SettingsView): string {
   const cityShown = v.cityDraft ?? agentCity(v);
   // an app from before the question key has none yet
@@ -405,6 +406,7 @@ function agentHTML(v: SettingsView): string {
     headingHTML(v) +
     coreNote(v) +
     section("", [
+      avatarRowHTML(),
       shortcutRow(t("settings.agentKeys"), agentKeys, { act: "rec-agent", field: "agent_keys" }),
       ...altgrNote(v, agentKeys),
       row(

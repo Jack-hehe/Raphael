@@ -35,6 +35,8 @@
   --toast-action: #c8e0f8; --toast-hover: #2e4264;
   --heat-0: #e7eef8; --heat-1: #d0e8f8; --heat-2: #b8d0f8; --heat-3: #90b0e0; --heat-4: #5e86c8; --hatch: #c3cede;
   --scroll-thumb: #bbc8dc; --scroll-hover: #8b9fbe;
+  /* Raphael's own gold, from the emblem: only where he himself asks (the card of his YES/NO question) */
+  --rg-bg: #fff7e2; --rg-edge: #e2b85a; --rg-ink: #6b4a08; --rg-btn: #e0a52e; --rg-on: #2b1c00; --rg-glow: rgba(224, 165, 46, 0.22);
   color-scheme: light;
 }
 :root[data-theme="dark"] {
@@ -52,6 +54,7 @@
   --toast-action: #284c82; --toast-hover: #dce8f8;
   --heat-0: #283650; --heat-1: #354c70; --heat-2: #5e7da9; --heat-3: #90b0e0; --heat-4: #c8e0f8; --hatch: #465a7a;
   --scroll-thumb: #465777; --scroll-hover: #8198bf;
+  --rg-bg: #2a2314; --rg-edge: #b8862a; --rg-ink: #f6d58a; --rg-btn: #f0be55; --rg-on: #2b1c00; --rg-glow: rgba(240, 190, 85, 0.18);
   color-scheme: dark;
 }
 
@@ -121,6 +124,13 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .nav:hover { background: var(--hover); color: var(--text); }
 .nav[aria-current="page"] { background: var(--selected); color: var(--text); font-weight: 600; }
 .nav[aria-current="page"] .i { color: var(--accent-text); }
+/* 拉斐爾 is Raphael's face, and a gold dot while he waits for a YES or a NO */
+.nav .nav-face { margin: -1px; }
+.nav-dot { position: absolute; right: 12px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: var(--rg-btn); }
+@media (prefers-reduced-motion: no-preference) {
+  .nav-dot { animation: nav-dot-pulse 1.6s ease-in-out infinite; }
+  @keyframes nav-dot-pulse { 50% { opacity: 0.35; } }
+}
 .side-fill { flex: 1; min-height: 12px; }
 /* This month's spend, a way into the settings. */
 .usage-box { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; width: 100%; padding: 11px 12px 12px; border-radius: 12px; border: 1px solid var(--edge); background: var(--panel); text-align: left; color: var(--text); }

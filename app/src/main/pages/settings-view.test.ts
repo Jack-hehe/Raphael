@@ -274,7 +274,7 @@ describe("聽寫", () => {
 });
 
 describe("拉斐爾", () => {
-  test("has the key that asks her and the weather city, with no line of explanation, and no choice of router", () => {
+  test("has his picture, the key that asks him and the weather city, with no line of explanation, and no choice of router", () => {
     for (const locale of LOCALES) {
       setLocale(locale);
       const html = tab("agent");
@@ -283,15 +283,19 @@ describe("拉斐爾", () => {
     }
     setLocale("zh-TW");
     const html = tab("agent");
-    expect(names(html).slice(0, 2)).toEqual(["問拉斐爾", "天氣的城市"]);
+    expect(names(html).slice(0, 3)).toEqual(["頭像", "問拉斐爾", "天氣的城市"]);
     expect(described(html)).toEqual([]);
+    // 頭像: the picture in force, 更換, and 還原 only when there is a picture of the person's own
+    expect(rowOf(html, "頭像")).toContain('<button type="button" class="btn sm" data-act="avatar-change">更換</button>');
+    expect(rowOf(html, "頭像")).toContain('<button type="button" class="btn sm" data-act="avatar-reset" disabled>還原</button>');
+    expect(rowOf(html, "頭像")).toContain('src="/brand/app-emblem-light-64.webp"');
     expect(rowOf(html, "問拉斐爾")).toContain('<button type="button" class="btn" data-act="rec-agent" data-k="rec-agent">變更</button>');
     expect(rowOf(html, "天氣的城市")).toContain('id="agent-city" type="text" value="台北"');
   });
 
   test("then what one background task may spend, a dropdown of four amounts", () => {
     const html = tab("agent");
-    expect(names(html).slice(0, 3)).toEqual(["問拉斐爾", "天氣的城市", "背景任務的花費上限"]);
+    expect(names(html).slice(0, 4)).toEqual(["頭像", "問拉斐爾", "天氣的城市", "背景任務的花費上限"]);
     const row = rowOf(html, "背景任務的花費上限");
     expect(row).toContain('class="sel"');
     expect(row).toContain('data-k="worker-cap"');
