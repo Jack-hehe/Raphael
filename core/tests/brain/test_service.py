@@ -40,6 +40,7 @@ METHODS = [
     "history.list",
     "history.latest",
     "history.delete",
+    "history.clear",
     "dictionary.list",
     "dictionary.add",
     "dictionary.import",
@@ -773,6 +774,13 @@ async def test_history_latest_and_delete(router, conn):
     assert await router.call("history.delete", {"id": latest["id"]}) == {"deleted": True}
     assert await router.call("history.delete", {"id": latest["id"]}) == {"deleted": False}
     assert (await router.call("history.latest", {}))["item"]["text"] == "第1句"
+
+
+async def test_history_clear_deletes_every_item_and_counts_them(router, conn):
+    seed_history(conn, 3)
+    assert await router.call("history.clear", {}) == {"deleted": 3}
+    assert (await router.call("history.list", {}))["items"] == []
+    assert await router.call("history.clear", {}) == {"deleted": 0}
 
 
 # --- dictionary ---------------------------------------------------------------------------------

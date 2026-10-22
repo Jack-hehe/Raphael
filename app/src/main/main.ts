@@ -22,10 +22,10 @@ import { brandIcon } from "./brand";
 import { installWindowHotkeys } from "./window-hotkeys";
 import { followTray } from "./tray-open";
 import { installWindowChrome, labelWindowControls, showMaximized } from "./window-chrome";
-import type { AppContext, DeviceSettings, MainEvent, Page, PageId, SettingsPane } from "./types";
+import type { AgentDraft, AppContext, DeviceSettings, MainEvent, Page, PageId, SettingsPane } from "./types";
 import { spendMini } from "./spend";
 import { Undoable } from "./undo";
-import { type IconName, ico, toaster } from "./ui";
+import { type IconName, ico, leave, toaster } from "./ui";
 import "./styles.css";
 
 /** The glyph ring texture (app/public/brand/glyph-ring.png); if it fails to load the emblem draws a plain ring. */
@@ -210,15 +210,22 @@ async function start(): Promise<void> {
   });
   installNavInput(window, (step) => navigation.step(step));
 
-  /** Goes to a page, or opens the settings panel over the one on screen (at `pane`, if given). */
-  function go(id: PageId, pane?: SettingsPane): void {
+  /**
+   * Goes to a page, or opens the settings panel over the one on screen (at the tab `arg` names, if
+   * any). The 拉斐爾 page is handed a draft for its composer the same way.
+   */
+  function go(id: PageId, arg?: SettingsPane | AgentDraft): void {
     navigation.visit(() => {
-      if (id === "settings") openSettings(pane);
-      else showPage(id);
+      if (id === "settings") openSettings(arg?.startsWith("draft:") ? undefined : (arg as SettingsPane | undefined));
+      else showPage(id, arg?.startsWith("draft:") ? arg : undefined);
     });
   }
 
-  function showPage(id: Exclude<PageId, "settings">): void {
+  /**
+   * Shows a page in place of the one on screen. A page that comes on screen fades in and rises a
+   * little (styles.css, on its becoming visible); the same page shown again stands still.
+   */
+  function showPage(id: Exclude<PageId, "settings">, arg?: SettingsPane | AgentDraft): void {
     if (settingsOpen) closeSettings(false);
     if (current && current !== id) pages[current].hide();
     current = id;
@@ -228,13 +235,18 @@ async function start(): Promise<void> {
     );
     main.scrollTop = 0;
     shownAt = performance.now();
-    void pages[id].show();
+    void pages[id].show(arg);
     void refreshUsage();
   }
+
+  /** Stops the settings' way out (`closeSettings`) when they are opened again before it is over. */
+  let stopLeaving: (() => void) | null = null;
 
   function openSettings(pane?: SettingsPane): void {
     if (settingsOpen) return;
     settingsOpen = true;
+    stopLeaving?.();
+    stopLeaving = null;
     document.documentElement.dataset.windowModal = "true";
     opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     settings.el.hidden = false;
@@ -242,12 +254,19 @@ async function start(): Promise<void> {
     void settings.show(pane);
   }
 
+  /**
+   * Closes the settings at once for everything but the eye: the page under them works again, and the
+   * panel shrinks and fades away (140 ms) before it is hidden, letting clicks through meanwhile.
+   */
   function closeSettings(restoreFocus = true): void {
     if (!settingsOpen) return;
     settingsOpen = false;
     delete document.documentElement.dataset.windowModal;
     settings.hide();
-    settings.el.hidden = true;
+    stopLeaving = leave(settings.el, 140, () => {
+      settings.el.hidden = true;
+      stopLeaving = null;
+    });
     document.querySelector<HTMLElement>(".wbody")!.inert = false;
     if (restoreFocus) opener?.focus();
     opener = null;

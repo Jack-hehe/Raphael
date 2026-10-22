@@ -4,7 +4,7 @@
 
 import { onLocaleChange, t, translatedMessage } from "./i18n";
 
-import type { Notifier } from "./undo";
+import { type Notifier, UNDO_MS } from "./undo";
 
 // ---------- HTML ----------
 
@@ -32,6 +32,7 @@ const ICON = {
   left: "M10 3.8 5.8 8l4.2 4.2",
   right: "M6 3.8 10.2 8 6 12.2",
   refresh: "M13 6.5A5.2 5.2 0 0 0 3.4 4.3L2 6M2 2.8V6h3.2M3 9.5a5.2 5.2 0 0 0 9.6 2.2L14 10M10.8 10H14v3.2",
+  plug: "M6 2.4v3M10 2.4v3M4.4 5.4h7.2v2.2a3.6 3.6 0 0 1-7.2 0zM8 11.2v2.4",
   link: "M6.8 9.2a2.4 2.4 0 0 0 3.4 0l2.2-2.2a2.4 2.4 0 0 0-3.4-3.4l-.8.8M9.2 6.8a2.4 2.4 0 0 0-3.4 0L3.6 9a2.4 2.4 0 0 0 3.4 3.4l.8-.8",
   chat: "M3.2 3.2h9.6a.8.8 0 0 1 .8.8v5.6a.8.8 0 0 1-.8.8H8.4L5.4 13v-2.6H3.2a.8.8 0 0 1-.8-.8V4a.8.8 0 0 1 .8-.8zM5.6 6.2h4.8M5.6 8h3",
   globe: "M8 2.2a5.8 5.8 0 1 1 0 11.6A5.8 5.8 0 0 1 8 2.2zM2.4 8h11.2M8 2.2c1.6 1.6 2.4 3.6 2.4 5.8S9.6 12.2 8 13.8M8 2.2C6.4 3.8 5.6 5.8 5.6 8s.8 4.2 2.4 5.8",
@@ -125,17 +126,19 @@ export interface TabItem {
 /**
  * The one tab / segmented component. `nav` switches between views (bordered, joined, role=tablist);
  * `filter` narrows one list (a pill; History and Dictionary only; role=group, aria-pressed).
- * `fill` stretches the nav tabs across the width of their container.
+ * `fill` stretches the nav tabs across the width of their container. `plain` draws the nav tabs as
+ * quiet words with a soft fill under the one that is open, for a bar that also holds a search (the
+ * 「已安裝」 and 「商店」 of 連接): still tabs, with the same roles and keys.
  */
-export function tabs(items: TabItem[], selected: string, o: { label: string; kind: "nav" | "filter"; fill?: boolean }): string {
+export function tabs(items: TabItem[], selected: string, o: { label: string; kind: "nav" | "filter"; fill?: boolean; plain?: boolean }): string {
   const nav = o.kind === "nav";
   const one = (it: TabItem): string => {
     const on = it.id === selected;
     const state = nav ? `role="tab" aria-selected="${on}"` : `aria-pressed="${on}"`;
-    const n = it.count ? `<span class="n">${it.count}</span>` : "";
+    const n = it.count !== undefined && (it.count > 0 || o.plain) ? `<span class="n">${it.count}</span>` : "";
     return `<button type="button" class="tab" ${state}${it.attrs ?? ""}>${esc(it.label)}${n}</button>`;
   };
-  const cls = nav ? `tabs switch${o.fill ? " fill" : ""}` : "tabs seg";
+  const cls = nav ? `tabs ${o.plain ? "plain" : "switch"}${o.fill ? " fill" : ""}` : "tabs seg";
   return `<div class="${cls}" role="${nav ? "tablist" : "group"}" aria-label="${esc(o.label)}">${items.map(one).join("")}</div>`;
 }
 
@@ -145,11 +148,15 @@ export const DISCONNECT_CONFIRM_MS = 5000;
 export const btn = (label: string, kind = "", attrs = ""): string =>
   `<button type="button" class="btn${kind ? " " + kind : ""}"${attrs}>${label}</button>`;
 
-/** A bordered button with an icon only: what it does is its label and its tooltip. */
+/**
+ * A button with an icon only (trash, ×, chevron, search, settings, sliders): what it does is its
+ * label and its tooltip. It has no border, only a fill under the pointer and the focus ring
+ * (styles.css `.btn.icon`): a border is what tells a button with words in it.
+ */
 export const iconButton = (name: IconName, label: string, attrs = "", cls = ""): string =>
   `<button type="button" class="btn icon${cls ? " " + cls : ""}" aria-label="${esc(label)}" title="${esc(label)}"${attrs}>${ico(name)}</button>`;
 
-/** The small bordered icon button on a row (copy, delete, close): `iconButton` at the row's size. */
+/** The small icon button on a row (copy, delete, close): `iconButton` at the row's size, borderless too. */
 export const iconBtn = (name: IconName, label: string, attrs = "", cls = ""): string => iconButton(name, label, attrs, `row${cls ? " " + cls : ""}`);
 
 /** Keys as caps, such as 「右 Alt」 + 「V」. */
@@ -205,6 +212,75 @@ export function fieldHTML(placeholder: string, value = "", o: FieldOptions = {})
 
 /** Raphael's words, as the subtitles on the desktop have them: one line, in the language of the window. */
 export const line = (text: string): string => `<div class="line"><div class="sub-line">${esc(text)}</div></div>`;
+
+// ---------- motion ----------
+// The design's table of motion: a page that changes fades in and rises 6 px (180 ms), the rows of a
+// list that is new come in one after another (25 ms apart, 300 ms at most), a dialog grows in from
+// 96 % (200 ms) and goes the same way out (140 ms), a switch slides and tints its row (160 ms), a
+// toast slides in from the corner with a bar that counts down. Only where something changes; the
+// keyframes are in styles.css, and under `prefers-reduced-motion` nothing moves (the rule at the end
+// of styles.css), and nothing waits for an animation that does not play.
+
+/** Whether Windows asks for less motion. */
+export const reducedMotion = (): boolean =>
+  typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/**
+ * Plays the way out of `el` (its `leaving` class, which styles.css animates over `ms`) and then calls
+ * `done`, at once when nothing may move. Returns what stops the way out and leaves `el` as it was.
+ */
+export function leave(el: HTMLElement | null, ms: number, done: () => void): () => void {
+  if (!el || reducedMotion()) {
+    done();
+    return () => {};
+  }
+  el.classList.add("leaving");
+  const timer = setTimeout(() => {
+    el.classList.remove("leaving");
+    done();
+  }, ms);
+  return () => {
+    clearTimeout(timer);
+    el.classList.remove("leaving");
+  };
+}
+
+/** Plays a one-off animation class on `el` again from its start (a page change, say). */
+export function replay(el: HTMLElement, cls: string): void {
+  el.classList.remove(cls);
+  void el.offsetWidth; // the class goes, so that its animation starts over when it comes back
+  el.classList.add(cls);
+}
+
+/**
+ * Puts `html` into `host` in place of what it holds (as `innerHTML` does) and lets only what changed
+ * move, since a page is drawn again whole after every change:
+ * - a list marked `data-stagger="<key>"` has its rows come in one after another when it is new; the
+ *   same list drawn again (the same key) is marked `again` and stands still;
+ * - a dialog marked `data-dialog="<key>"` grows in when it opens, not each time it is drawn again;
+ * - a switch whose state changed since the last drawing slides to it (`flip`) and tints its row for a
+ *   moment (`tinted`); one drawn in the state it had stands still. Switches are told apart by their
+ *   `aria-label`, which names what each one switches.
+ */
+export function swapHTML(host: HTMLElement, html: string): void {
+  const keys = (attr: string): Set<string> =>
+    new Set(Array.from(host.querySelectorAll<HTMLElement>(`[${attr}]`), (node) => node.getAttribute(attr) ?? ""));
+  const lists = keys("data-stagger");
+  const dialogs = keys("data-dialog");
+  const switches = new Map(Array.from(host.querySelectorAll<HTMLElement>(".tg"), (s) => [s.getAttribute("aria-label") ?? "", s.getAttribute("aria-checked")]));
+  host.innerHTML = html;
+  for (const [attr, seen] of [["data-stagger", lists], ["data-dialog", dialogs]] as const) {
+    host.querySelectorAll<HTMLElement>(`[${attr}]`).forEach((node) => {
+      if (seen.has(node.getAttribute(attr) ?? "")) node.classList.add("again");
+    });
+  }
+  host.querySelectorAll<HTMLElement>(".tg").forEach((s) => {
+    const before = switches.get(s.getAttribute("aria-label") ?? "");
+    if (before === undefined || before === s.getAttribute("aria-checked")) return;
+    s.classList.add("flip");
+    s.closest(".row, .cs-item")?.classList.add("tinted");
+  });
+}
 
 // ---------- menu ----------
 
@@ -485,7 +561,11 @@ class Toaster implements Notifier {
     return this.host;
   }
 
-  /** Shows `message`. With `undo` the toast stays until `hide()` and has a 「復原」 button; without, it goes by itself. */
+  /**
+   * Shows `message`. With `undo` the toast stays until `hide()` (the 10 seconds of `Undoable`) and has
+   * a 「復原」 button; without, it goes by itself. Either way a thin bar along its foot counts down the
+   * time it has left (styles.css), so that its going is no surprise.
+   */
   show(message: string, undo?: () => void): void {
     const toast = document.createElement("div");
     toast.className = "toast";
@@ -495,6 +575,7 @@ class Toaster implements Notifier {
     this.messages.set(toast, translatedMessage(message));
     text.textContent = message;
     toast.append(text);
+    const ms = undo ? UNDO_MS : infoMs(message);
     if (undo) {
       if (this.undoToast) this.messages.delete(this.undoToast);
       this.undoToast?.remove();
@@ -502,8 +583,13 @@ class Toaster implements Notifier {
       toast.insertAdjacentHTML("beforeend", btn(t("ui.001"), "sm"));
       toast.querySelector("button")?.addEventListener("click", undo);
     } else {
-      setTimeout(() => { toast.remove(); this.messages.delete(toast); }, infoMs(message));
+      setTimeout(() => { toast.remove(); this.messages.delete(toast); }, ms);
     }
+    const bar = document.createElement("i");
+    bar.className = "toast-bar";
+    bar.setAttribute("aria-hidden", "true");
+    bar.style.animationDuration = `${ms}ms`;
+    toast.append(bar);
     this.container().append(toast);
   }
 

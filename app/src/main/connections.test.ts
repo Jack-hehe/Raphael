@@ -18,7 +18,18 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => api);
 vi.mock("./ui", async (original) => ({ ...(await original<typeof import("./ui")>()), toaster: { info: vi.fn() } }));
 
-import { type ConnectionForm, type ConnectionsView, bodyHTML, connectionsHTML, createConnections, emptyConnectionsView, needsLogin, toolLabel } from "./connections";
+import {
+  type ConnectionForm,
+  type ConnectionsView,
+  bodyHTML,
+  connectionsAddHTML,
+  connectionsHTML,
+  createConnections,
+  emptyConnectionsView,
+  examplePrompt,
+  needsLogin,
+  toolLabel,
+} from "./connections";
 import { toaster } from "./ui";
 
 afterEach(() => setLocale("zh-TW"));
@@ -73,15 +84,22 @@ const installedPage = (id: string, over: Partial<ConnectionsView> = {}): string 
 const storePage = (id: string, over: Partial<ConnectionsView> = {}): string => connectionsHTML(view({ tab: "store", open: { tab: "store", id }, ...over }));
 
 describe("the two views", () => {
-  test("are segmented buttons that say which is open, with the search and the menu that adds beside them", () => {
+  test("are quiet tabs that say which is open and how many each holds, with the search beside them", () => {
     const html = connectionsHTML(view());
     const bar = html.slice(html.indexOf('class="cs-bar"'), html.indexOf("data-cs-body"));
+    expect(bar).toContain('class="tabs plain"');
     expect(bar).toContain('role="tablist"');
     expect(bar).toMatch(/<button[^>]*class="tab"[^>]*role="tab"[^>]*aria-selected="true"[^>]*data-id="installed"[^>]*>已安裝<span class="n">2<\/span>/);
-    expect(bar).toMatch(/<button[^>]*class="tab"[^>]*role="tab"[^>]*aria-selected="false"[^>]*data-id="store"[^>]*>商店</);
+    expect(bar).toMatch(/<button[^>]*class="tab"[^>]*role="tab"[^>]*aria-selected="false"[^>]*data-id="store"[^>]*>商店<span class="n">4<\/span>/);
     expect(bar).toContain('id="conn-search"');
-    expect(bar).toMatch(/<button[^>]*class="sel"[^>]*data-k="conn-add"[^>]*><span>新增<\/span>/);
     expect(connectionsHTML(view({ tab: "store" }))).toMatch(/aria-selected="true"[^>]*data-id="store"/);
+    // nothing connected yet still says so: 0
+    expect(connectionsHTML(view({ groups: [] }))).toMatch(/data-id="installed"[^>]*>已安裝<span class="n">0<\/span>/);
+  });
+
+  test("the menu that adds a server of the user's own is a dropdown, beside the tab's name (settings-view.ts puts it there)", () => {
+    expect(connectionsAddHTML()).toMatch(/^<button type="button" class="sel cs-add" aria-haspopup="menu" aria-expanded="false" data-k="conn-add"><span>新增<\/span>/);
+    expect(connectionsHTML(view())).not.toContain('data-k="conn-add"');
   });
 
   test("the loading and failed states say so", () => {
@@ -93,16 +111,23 @@ describe("the two views", () => {
 
 describe("已安裝", () => {
   const html = connectionsHTML(view());
+  const items = (out: string): string[] => out.split('<div class="cs-item"').slice(1);
 
-  test("has one row for each service, with its mark, its name, a line about it, a switch and a button that opens it", () => {
-    const rows = html.split('class="row cs-row"').slice(1);
+  test("is one list, a row for each service: its mark, its name and a line, a switch, a chevron; the row opens the dialog", () => {
+    expect(html.match(/class="cs-list"/g)).toHaveLength(1);
+    expect(html).toContain('class="cs-list" data-stagger="installed"');
+    const rows = items(html);
     expect(rows).toHaveLength(2);
     const [notion, files] = rows;
-    expect(notion).toContain("Notion");
-    expect(notion).toContain("Notion的一句話");
+    expect(notion).toMatch(/^ data-conn="open" data-id="ab12">/);
+    expect(notion).toMatch(/<button type="button" class="btn cs-open" data-conn="open" data-id="ab12" data-k="cs-open:ab12" aria-haspopup="dialog" title="查看 Notion">/);
+    expect(notion).toContain('<span class="nm">Notion</span>');
+    expect(notion).toContain('<span class="ds">Notion的一句話</span>');
     expect(notion).toContain('class="logo"');
     expect(notion).toMatch(/class="tg" role="switch" aria-checked="true" aria-label="開啟 Notion" data-conn="enable" data-id="ab12"/);
-    expect(notion).toMatch(/class="btn icon" data-conn="open" data-id="ab12" aria-label="查看 Notion"/);
+    // the chevron is a picture of where the row goes, not a second button
+    expect(notion).toMatch(/<span class="chev" aria-hidden="true"><svg/);
+    expect(notion.match(/<button/g)).toHaveLength(2);
     // a server of the user's own: where it is reached, and a letter for a mark
     expect(files).toContain("Files");
     expect(files).toContain("npx");
@@ -113,24 +138,17 @@ describe("已安裝", () => {
     expect(connectionsHTML(view({ groups: [{ ...notes, enabled: false, status: "disabled" }] }))).toContain('aria-checked="false"');
   });
 
-  test("says what is wrong with a service where it is, and a login that ran out has a button that signs in again", () => {
+  test("says what is wrong with a service in its line; the way to sign in again is in its dialog", () => {
     const login: ConnectionGroup = { ...notes, status: "error", error: "auth" };
     expect(needsLogin(login)).toBe(true);
     expect(needsLogin({ ...login, error: "timeout" })).toBe(false);
     expect(needsLogin({ ...login, auth: "none" })).toBe(false);
     const out = connectionsHTML(view({ groups: [login] }));
     expect(out).toContain("需要重新登入");
-    expect(out).toMatch(/<button[^>]*class="btn sm"[^>]*data-conn="relogin" data-id="ab12"[^>]*>重新登入</);
+    expect(out).not.toContain('data-conn="relogin"');
     const failed = connectionsHTML(view({ groups: [{ ...notes, status: "error", error: "timeout" }] }));
     expect(failed).toContain("連線失敗：太久沒有回應");
-    expect(failed).not.toContain('data-conn="relogin"');
     expect(connectionsHTML(view({ groups: [{ ...notes, status: "unchecked" }] }))).toContain("還沒有讀取工具");
-  });
-
-  test("while the sign-in is open the button says so and every other sign-in waits", () => {
-    const login: ConnectionGroup = { ...notes, status: "error", error: "auth" };
-    const out = connectionsHTML(view({ groups: [login], login: { target: "ab12", name: "Notion" } }));
-    expect(out).toMatch(/data-conn="relogin"[^>]*disabled[^>]*>請在瀏覽器登入…/);
   });
 
   test("an empty list points at the store, and a search that finds nothing says so", () => {
@@ -141,125 +159,168 @@ describe("已安裝", () => {
     expect(found).not.toContain("Notion");
   });
 
-  test("keeps the list clean: the latest actions are on the page of each service, not here", () => {
+  test("keeps the list clean: the tools and the latest actions are in each service's dialog, not here", () => {
     expect(html).not.toContain("最近的動作");
     expect(html).not.toContain("create_page");
+    expect(html).not.toContain('role="dialog"');
   });
 });
 
-describe("the page of a connected service", () => {
-  test("has the mark, the name, who provides it, the switch, what it is and the count of its tools", () => {
+describe("the dialog of a connected service", () => {
+  const dialog = (html: string): string => html.slice(html.indexOf('<div class="cs-scrim"'));
+
+  test("opens over the list, which stays under it: a modal dialog named by the service, that grows in once", () => {
     const html = installedPage("ab12");
-    expect(html).toContain('data-conn="back"');
-    expect(html).toContain('<h2 class="big">Notion</h2>');
-    expect(html).toContain("由 Notion 提供");
-    expect(html).toContain("Notion的說明");
-    expect(html).toContain("共 3 個工具（2 個會改動、1 個只讀取）");
-    expect(html).toMatch(/class="mono xl logo-mono"/);
-    expect(html).toMatch(/role="switch" aria-checked="true" aria-label="開啟 Notion" data-conn="enable" data-id="ab12"/);
-    expect(html).toContain("https://mcp.notion.example/mcp");
-    expect(html).not.toContain('data-cs-body');
+    expect(html).toContain("data-cs-body");
+    expect(html).toContain('<div class="cs-scrim" data-conn="scrim" data-dialog="ab12">');
+    expect(html).toContain('<div class="cs-dialog" id="cs-dialog" role="dialog" aria-modal="true" aria-labelledby="cs-dlg-title" tabindex="-1" data-trap>');
+    expect(dialog(html)).toContain('<h2 class="cs-dlg-name" id="cs-dlg-title">Notion</h2>');
   });
 
-  test("has the tools in two lists that unfold, 會改動 and 只讀取, each with a switch of its own", () => {
-    const folded = installedPage("ab12");
-    expect(folded).toMatch(/aria-expanded="false" data-conn="fold" data-kind="write"><span class="gt">會改動<small>2 個<\/small>/);
-    expect(folded).toMatch(/aria-expanded="false" data-conn="fold" data-kind="read"><span class="gt">只讀取<small>1 個<\/small>/);
-    expect(folded).not.toContain(">Create page<");
-    const both = installedPage("ab12", { unfolded: { write: true, read: true } });
-    const write = both.slice(both.indexOf('data-kind="write"'), both.indexOf('data-kind="read"'));
-    const read = both.slice(both.indexOf('data-kind="read"'));
+  test("has the mark, the switch, a close button, the name, what it is and the count of its tools", () => {
+    const d = dialog(installedPage("ab12"));
+    expect(d).toMatch(/class="mono xl logo-mono"/);
+    expect(d).toMatch(/role="switch" aria-checked="true" aria-label="開啟 Notion" data-conn="enable" data-id="ab12" data-k="cs-dlg-enable"/);
+    expect(d).toMatch(/<button type="button" class="btn icon" aria-label="關閉" title="關閉" data-conn="close"/);
+    expect(d).toContain("Notion的說明");
+    expect(d).toContain("共 3 個工具（2 個會改動、1 個只讀取）");
+  });
+
+  test("lists 會改動 and 只讀取 as two rows with their counts, each opening its tools; no tool is listed before", () => {
+    const d = dialog(installedPage("ab12"));
+    expect(d).toMatch(/<div class="cs-grp"><button type="button" class="btn gr" data-conn="tools" data-kind="write" data-k="cs-kind:write"><span class="gt">會改動<em class="num">2<\/em><\/span>/);
+    expect(d).toMatch(/<button type="button" class="btn gr" data-conn="tools" data-kind="read" data-k="cs-kind:read"><span class="gt">只讀取<em class="num">1<\/em><\/span>/);
+    expect(d).not.toContain(">Create page<");
+    // a service with only one kind of tool has only that row
+    expect(dialog(installedPage("cu1")).match(/data-conn="tools"/g)).toHaveLength(1);
+  });
+
+  test("a row of tools opens them in the dialog: back, the kind and its count, a switch for them all, then a switch each", () => {
+    const write = dialog(installedPage("ab12", { toolsKind: "write" }));
+    expect(write).toMatch(/aria-label="返回"[^>]*data-conn="tools-back"/);
+    expect(write).toContain('<h2 class="cs-dlg-name" id="cs-dlg-title">會改動<em class="num">2</em></h2>');
     expect(write).toContain(">Create page<");
     expect(write).toContain(">Delete page<");
     expect(write).not.toContain(">Search<");
+    expect(write).not.toContain("共 3 個工具");
+    expect(write).toContain('data-stagger="tools:write"');
+    expect(write).toMatch(/aria-checked="false" aria-label="開啟工具 Delete page" data-conn="tool" data-id="ab12" data-tool="delete_page"/);
+    const read = dialog(installedPage("ab12", { toolsKind: "read" }));
     expect(read).toContain(">Search<");
     expect(read).toContain('title="search"'); // the raw name stays in the tooltip
-    expect(both.match(/data-conn="tool"/g)).toHaveLength(3);
-    expect(both).toMatch(/aria-checked="false" aria-label="開啟工具 Delete page" data-conn="tool" data-id="ab12" data-tool="delete_page"/);
-    expect(both).toMatch(/aria-checked="true" aria-label="開啟工具 Search" data-conn="tool" data-id="ab12" data-tool="search"/);
+    expect(read.match(/data-conn="tool"/g)).toHaveLength(1);
+    // a kind the service has no tools of shows the summary
+    expect(dialog(installedPage("cu1", { toolsKind: "write" }))).toContain("共 1 個工具");
   });
 
-  test("gives each list a switch for all its tools: on, mixed or off, a real control with a name of its own", () => {
-    const html = installedPage("ab12");
+  test("the switch for a whole list is on, mixed or off, a real control with a name of its own", () => {
     // Notion has two write tools, one on and one off: mixed; its only read tool is on
-    expect(html).toMatch(/<button type="button" class="tg" role="checkbox" aria-checked="mixed" aria-label="全部會改動的工具" data-conn="group" data-id="ab12" data-kind="write"><\/button>/);
-    expect(html).toMatch(/role="checkbox" aria-checked="true" aria-label="全部只讀取的工具" data-conn="group" data-id="ab12" data-kind="read"/);
+    expect(installedPage("ab12", { toolsKind: "write" })).toMatch(
+      /<button type="button" class="tg" role="checkbox" aria-checked="mixed" aria-label="全部會改動的工具" data-conn="group" data-id="ab12" data-kind="write" data-k="cs-group"><\/button>/,
+    );
+    expect(installedPage("ab12", { toolsKind: "read" })).toMatch(/role="checkbox" aria-checked="true" aria-label="全部只讀取的工具" data-conn="group" data-id="ab12" data-kind="read"/);
     const allOff = { ...notes, tools: notes.tools.map((x) => ({ ...x, enabled: false })) };
-    expect(installedPage("ab12", { groups: [allOff, custom] })).toMatch(/aria-checked="false" aria-label="全部會改動的工具"/);
-    // the switch is beside the fold button, never inside it: a button holds no other control
-    expect(html).toMatch(/<div class="ghead">\s*<button type="button" class="btn ghfold"[^>]*data-conn="fold" data-kind="write">/);
-    expect(html.match(/<button[^>]*data-conn="fold"[^>]*>(?:(?!<\/button>).)*<button/s)).toBeNull();
-    // a service that has only one kind of tool shows only that list's switch
-    expect(installedPage("cu1").match(/data-conn="group"/g)).toHaveLength(1);
-    expect(installedPage("ab12", { busy: new Set(["ab12"]) })).toMatch(/data-conn="group"[^>]* disabled/);
+    expect(installedPage("ab12", { groups: [allOff, custom], toolsKind: "write" })).toMatch(/aria-checked="false" aria-label="全部會改動的工具"/);
+    expect(installedPage("ab12", { toolsKind: "write", busy: new Set(["ab12"]) })).toMatch(/data-conn="group"[^>]* disabled/);
+    // no button holds another control
+    expect(installedPage("ab12", { toolsKind: "write" })).not.toMatch(/<button(?:(?!<\/button>).)*<button/s);
   });
 
   test("names the group switches in the language of the window", () => {
     setLocale("en");
-    expect(installedPage("ab12")).toContain('aria-label="All tools that change things"');
-    expect(installedPage("ab12")).toContain('aria-label="All read-only tools"');
+    expect(installedPage("ab12", { toolsKind: "write" })).toContain('aria-label="All tools that change things"');
+    expect(installedPage("ab12", { toolsKind: "read" })).toContain('aria-label="All read-only tools"');
     setLocale("ja");
-    expect(installedPage("ab12")).toContain('aria-label="変更するツールすべて"');
-    expect(installedPage("ab12")).toContain('aria-label="読み取り専用のツールすべて"');
+    expect(installedPage("ab12", { toolsKind: "write" })).toContain('aria-label="変更するツールすべて"');
+    expect(installedPage("ab12", { toolsKind: "read" })).toContain('aria-label="読み取り専用のツールすべて"');
   });
 
-  test("ends with that service's own latest actions, by tool, and the note that no content is kept", () => {
-    const html = installedPage("ab12", { audit: [...AUDIT, { ...AUDIT[0], id: 2, server: "Files", tool: "list" }] });
-    const audit = html.slice(html.indexOf("最近的動作"));
-    expect(audit).toContain("Notion / create_page");
-    expect(audit).not.toContain("Files / list");
-    expect(audit).toContain("自動執行");
-    expect(audit).toContain("只記錄時間、工具和結果，不記錄內容。");
-    expect(installedPage("cu1")).not.toContain("最近的動作"); // none of its own
-    expect(installedPage("ab12", { audit: [] })).not.toContain("最近的動作");
-    expect(audit).not.toMatch(/T[0-3]\b/);
+  test("「試試看」 is the primary button, for a service of the store that has things to say", () => {
+    expect(dialog(installedPage("ab12"))).toMatch(/<button type="button" class="btn pri" data-conn="try" data-id="ab12" data-k="cs-try">試試看<\/button>/);
+    expect(examplePrompt(CATALOG[0])).toBe("跟Notion說一");
+    setLocale("en");
+    expect(examplePrompt(CATALOG[0])).toBe("Tell Notion one");
+    expect(examplePrompt(undefined)).toBeNull();
+    expect(examplePrompt({ ...CATALOG[0], examples: { "zh-TW": [], en: [], ja: [] } })).toBeNull();
+    // a server of the user's own has nothing to try
+    expect(dialog(installedPage("cu1"))).not.toContain('data-conn="try"');
+  });
+
+  test("ends with what is done less often, small bordered buttons after the rest, and a disconnect that asks twice", () => {
+    const d = dialog(installedPage("ab12"));
+    const acts = d.slice(d.indexOf('class="cs-acts"'));
+    expect(d.indexOf('class="cs-acts"')).toBeGreaterThan(d.indexOf('data-conn="try"'));
+    expect(acts).toMatch(/class="btn sm" data-conn="relogin" data-id="ab12"[^>]*>重新登入</);
+    expect(acts).toMatch(/class="btn sm" data-conn="refresh" data-id="ab12"[^>]*>重新讀取工具</);
+    expect(acts).toMatch(/class="btn sm" data-conn="disconnect" data-id="ab12"[^>]*>中斷連線</);
+    expect(installedPage("ab12", { confirmingDisconnect: "ab12" })).toMatch(/class="btn sm danger" data-conn="disconnect"[^>]*>確定中斷？</);
+    // a service with no login has none to do again
+    expect(dialog(installedPage("cu1"))).not.toContain('data-conn="relogin"');
+  });
+
+  test("a login that ran out is said at the top with its button; while it is open, every sign-in waits", () => {
+    const out = dialog(installedPage("ab12", { groups: [{ ...notes, status: "error", error: "auth" }] }));
+    expect(out).toContain("需要重新登入");
+    expect(out).toMatch(/<div class="ca-alert">.*data-conn="relogin" data-id="ab12" data-k="cs-relogin-top"/);
+    expect(out.match(/data-conn="relogin"/g)).toHaveLength(1);
+    const waiting = installedPage("ab12", { groups: [{ ...notes, status: "error", error: "auth" }], login: { target: "ab12", name: "Notion" } });
+    expect(waiting).toMatch(/data-conn="relogin"[^>]*disabled[^>]*>請在瀏覽器登入…/);
+  });
+
+  test("has that service's own latest actions, folded under a row that counts them, and the note that no content is kept", () => {
+    const audit = [...AUDIT, { ...AUDIT[0], id: 2, server: "Files", tool: "list" }];
+    const folded = dialog(installedPage("ab12", { audit }));
+    expect(folded).toMatch(/<button type="button" class="btn gr" data-conn="audit" aria-expanded="false" data-k="cs-audit"><span class="gt">最近的動作<em class="num">1<\/em>/);
+    expect(folded).not.toContain("自動執行");
+    const open = dialog(installedPage("ab12", { audit, auditOpen: true }));
+    expect(open).toContain('aria-expanded="true"');
+    expect(open).toContain("Create page");
+    expect(open).not.toContain(">List<");
+    expect(open).toContain("自動執行");
+    expect(open).toContain("只記錄時間、工具和結果，不記錄內容。");
+    expect(dialog(installedPage("cu1"))).not.toContain("最近的動作"); // none of its own
+    expect(dialog(installedPage("ab12", { audit: [] }))).not.toContain("最近的動作");
+    expect(open).not.toMatch(/T[0-3]\b/);
   });
 
   test("has no levels, no review step and no word about pending tools", () => {
-    for (const html of [installedPage("ab12", { unfolded: { write: true, read: true } }), connectionsHTML(view()), storePage("linear")]) {
+    for (const html of [installedPage("ab12", { toolsKind: "write" }), installedPage("ab12"), connectionsHTML(view()), storePage("linear")]) {
       expect(html).not.toMatch(/T[0-3]\b|決定權限|先問我|按住確認|待決定|conn-tier|conn-draft|conn-all|review/);
     }
   });
 
   test("a server that changed its tools shows them all the same, new ones on", () => {
     const grown: ConnectionGroup = { ...notes, tools: [...notes.tools, { name: "fresh", description: "New.", enabled: true, kind: "read" }], tool_count: 4, read_count: 2, enabled_count: 3 };
-    const html = installedPage("ab12", { groups: [grown], unfolded: { write: false, read: true } });
-    expect(html).toContain("共 4 個工具（2 個會改動、2 個只讀取）");
+    expect(installedPage("ab12", { groups: [grown] })).toContain("共 4 個工具（2 個會改動、2 個只讀取）");
+    const html = installedPage("ab12", { groups: [grown], toolsKind: "read" });
     expect(html).toMatch(/aria-checked="true" aria-label="開啟工具 Fresh"/);
     expect(html).not.toMatch(/>新<|待決定/);
   });
 
-  test("a disconnect asks twice, and a login that ran out is said at the top with a button", () => {
-    expect(installedPage("ab12")).toContain(">中斷連線<");
-    expect(installedPage("ab12")).not.toContain("確定中斷？");
-    expect(installedPage("ab12", { confirmingDisconnect: "ab12" })).toContain("確定中斷？");
-    const out = installedPage("ab12", { groups: [{ ...notes, status: "error", error: "auth" }] });
-    expect(out).toContain("需要重新登入");
-    expect(out).toContain('data-conn="relogin"');
-  });
-
-  test("a server of the user's own has no store words: no publisher, the command, the names of its secrets", () => {
-    const html = installedPage("cu1");
-    expect(html).toContain("自訂伺服器");
-    expect(html).not.toContain("由 ");
-    expect(html).toContain("npx");
-    expect(html).toContain("API_KEY");
-    expect(html).toContain("共 1 個工具（0 個會改動、1 個只讀取）");
+  test("a server of the user's own has no store words: the command and the names of its secrets", () => {
+    const d = dialog(installedPage("cu1"));
+    expect(d).toContain('<p class="cs-desc">自訂伺服器</p>');
+    expect(d).not.toContain("由 ");
+    expect(d).toContain("npx");
+    expect(d).toContain("API_KEY");
+    expect(d).toContain("共 1 個工具（0 個會改動、1 個只讀取）");
   });
 
   test("tools not read yet say how to read them", () => {
-    expect(installedPage("cu1", { groups: [{ ...custom, tools: [], tool_count: 0, status: "unchecked" }] })).toContain("重新讀取工具");
+    expect(installedPage("cu1", { groups: [{ ...custom, tools: [], tool_count: 0, status: "unchecked" }] })).toContain("按「重新讀取工具」");
   });
 
-  test("a page whose service is gone is the list again", () => {
-    expect(installedPage("nope")).toContain("data-cs-body");
+  test("a dialog whose service is gone is the list alone", () => {
+    const html = installedPage("nope");
+    expect(html).toContain("data-cs-body");
+    expect(html).not.toContain("cs-scrim");
   });
 });
 
 describe("商店", () => {
   const html = connectionsHTML(view({ tab: "store" }));
 
-  test("has 熱門, then 全部 for the rest, as two columns of cards", () => {
+  test("has 熱門, then 全部 for the rest, as two columns of cards whose rows come in once", () => {
     expect(html).toContain("<h2>熱門</h2>");
     expect(html).toContain("<h2>全部</h2>");
     const popular = html.slice(html.indexOf("<h2>熱門</h2>"), html.indexOf("<h2>全部</h2>"));
@@ -267,15 +328,19 @@ describe("商店", () => {
     const all = html.slice(html.indexOf("<h2>全部</h2>"));
     expect([...all.matchAll(/class="nm">([^<]+)</g)].map((m) => m[1])).toEqual(["Sentry"]); // the rest, by name, none twice
     expect(html.match(/class="cs-grid"/g)).toHaveLength(2);
+    expect(html).toContain('class="cs-grid" data-stagger="store:hot"');
+    expect(html).toContain('class="cs-grid" data-stagger="store:all"');
   });
 
   test("a card is a container with the button that opens the page and, inside it, the button that adds, or 已安裝; no button is in a button", () => {
     const cards = html.split('<div class="cs-card">').slice(1);
     const card = cards.find((c) => c.includes('data-id="linear"'))!;
-    expect(card).toMatch(/class="btn cs-main" data-conn="open-store" data-id="linear"/);
+    expect(card).toMatch(/class="btn cs-main" data-conn="open-store" data-id="linear" data-k="cs-store:linear"/);
     expect(card).toContain("Linear的一句話");
     // the container holds both, and nothing is nested
     expect(html).toMatch(/<div class="cs-card"><button[^>]*cs-main[^>]*>(?:(?!<\/button>).)*<\/button><button[^>]*data-conn="join"/);
+    // the mark sits bare in its own slot, as in the list
+    expect(card).toMatch(/<span class="ic"><span class="mono md logo-mono"/);
     for (const c of cards) expect(c.match(/<button/g)!.length).toBeLessThanOrEqual(2);
     expect(html).not.toMatch(/<button(?:(?!<\/button>).)*<button/);
     expect(card).toMatch(/<button[^>]*class="btn sm" data-conn="join" data-id="linear"[^>]*>.*加入<\/button>/);
@@ -404,7 +469,9 @@ describe("the rules for this tab", () => {
     connectionsHTML(view()),
     connectionsHTML(view({ tab: "store" })),
     connectionsHTML(view({ tab: "store", login: { target: "linear", name: "Linear" } })),
-    installedPage("ab12", { unfolded: { write: true, read: true }, confirmingDisconnect: "ab12" }),
+    installedPage("ab12", { confirmingDisconnect: "ab12", auditOpen: true }),
+    installedPage("ab12", { toolsKind: "write" }),
+    installedPage("ab12", { toolsKind: "read" }),
     installedPage("ab12", { groups: [{ ...notes, status: "error", error: "auth" }] }),
     storePage("linear", { loginError: { target: "linear", kind: "denied" } }),
     connectionsHTML(view({ form: form({ pairs: [{ name: "TOKEN", value: "x" }] }) })),
@@ -412,7 +479,9 @@ describe("the rules for this tab", () => {
 
   test("everything that does something is a button or a switch with a shape, and every choice is a dropdown", () => {
     const all = pages().join("");
-    const acts = [...all.matchAll(/<(\w+)[^>]*data-conn="/g)].map((m) => m[1]);
+    // A row of the list and the dimmed part around a dialog take a click too, each beside a real
+    // button that does the same (the row's name, the dialog's ×).
+    const acts = [...all.matchAll(/<(\w+)[^>]*data-conn="(\w+)"/g)].filter((m) => !(m[1] === "div" && (m[2] === "open" || m[2] === "scrim"))).map((m) => m[1]);
     expect(acts.length).toBeGreaterThan(30);
     expect(new Set(acts)).toEqual(new Set(["button"]));
     for (const tag of all.match(/<button[^>]*>/g)!) expect(tag).toMatch(/class="(btn[ "]|sel[ "]|tg|tab")/);
@@ -422,10 +491,16 @@ describe("the rules for this tab", () => {
     expect(all).not.toContain("onclick");
   });
 
-  test("the segmented buttons are real bordered buttons, not clickable text", () => {
+  test("the tabs are real buttons, not clickable text", () => {
     const tabs = connectionsHTML(view()).match(/<button[^>]*role="tab"[^>]*>/g)!;
     expect(tabs).toHaveLength(2);
     for (const tag of tabs) expect(tag).toContain('class="tab"');
+  });
+
+  test("the icon-only buttons (close, back) are named in their label and tooltip", () => {
+    for (const html of [installedPage("ab12"), installedPage("ab12", { toolsKind: "write" })]) {
+      for (const tag of html.match(/<button[^>]*class="btn icon"[^>]*>/g)!) expect(tag).toMatch(/aria-label="[^"]+" title="[^"]+"/);
+    }
   });
 
   test.each(["en", "ja"] as const)("is in one language at a time (%s)", (locale) => {
@@ -438,6 +513,7 @@ describe("the rules for this tab", () => {
       expect(all).toContain("Sign in in your browser…");
       expect(all).toContain("Contains 3 tools (2 write, 1 read)");
       expect(all).toContain("Tell Linear one");
+      expect(all).toContain(">Try it<");
       expect(all).not.toMatch(CJK);
     } else {
       expect(all).toContain("インストール済み");
@@ -450,9 +526,13 @@ describe("the rules for this tab", () => {
 });
 
 describe("what the tab does", () => {
-  const host = { visible: () => true, redraw: vi.fn() };
+  const host = { visible: () => true, redraw: vi.fn(), tryPrompt: vi.fn() };
   const button = (conn: string, extra: Record<string, string> = {}): Element =>
     ({ closest: () => ({ dataset: { conn, ...extra } }) }) as unknown as Element;
+  const key = (k: string): KeyboardEvent => {
+    const e = { key: k, target: null, defaultPrevented: false, preventDefault: vi.fn(() => void (e.defaultPrevented = true)) };
+    return e as unknown as KeyboardEvent;
+  };
   const input = (id: string, value: string): HTMLInputElement => ({ id, value }) as HTMLInputElement;
   const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -466,6 +546,7 @@ describe("what the tab does", () => {
     api.integrationsDisconnect.mockResolvedValue({ removed: true, revoked: true });
     api.integrationsConnectCancel.mockResolvedValue({ cancelled: true });
     host.redraw.mockReset();
+    host.tryPrompt.mockReset();
   });
 
   test("reads the services, the store and the latest actions, and starts on 已安裝", async () => {
@@ -503,7 +584,7 @@ describe("what the tab does", () => {
     expect(c.view().catalog).toEqual(CATALOG);
   });
 
-  test("changes view, opens a page and goes back; a page whose service is gone closes", async () => {
+  test("changes view, opens a page or a dialog and goes back; one whose service is gone closes", async () => {
     const c = createConnections(host);
     await c.load();
     c.click(button("tab", { id: "store" }));
@@ -520,12 +601,14 @@ describe("what the tab does", () => {
     expect(c.view().open).toBeNull();
   });
 
-  test("a store page opens the page of the service it was added as", async () => {
+  test("a store page opens the dialog of the service it was added as, over 已安裝", async () => {
     const c = createConnections(host);
     await c.load();
+    c.click(button("tab", { id: "store" }));
     c.click(button("open-store", { id: "notion" }));
     c.click(button("manage", { id: "ab12" }));
     expect(c.view().open).toEqual({ tab: "installed", id: "ab12" });
+    expect(c.view().tab).toBe("installed");
   });
 
   test("a group switch sets every tool of its list in one call: all off when all are on, all on otherwise", async () => {
@@ -543,14 +626,59 @@ describe("what the tab does", () => {
     expect(api.integrationsSetToolEnabled).not.toHaveBeenCalled();
   });
 
-  test("unfolds and folds the two lists of tools", async () => {
+  test("the dialog opens a list of tools and goes back to its summary, and unfolds the latest actions", async () => {
     const c = createConnections(host);
     await c.load();
     c.click(button("open", { id: "ab12" }));
-    c.click(button("fold", { kind: "write" }));
-    expect(c.view().unfolded).toEqual({ write: true, read: false });
-    c.click(button("fold", { kind: "write" }));
-    expect(c.view().unfolded.write).toBe(false);
+    expect(c.view()).toMatchObject({ toolsKind: null, auditOpen: false });
+    c.click(button("tools", { kind: "read" }));
+    expect(c.view().toolsKind).toBe("read");
+    c.click(button("tools-back"));
+    expect(c.view().toolsKind).toBeNull();
+    c.click(button("audit"));
+    expect(c.view().auditOpen).toBe(true);
+    // opening it again starts at the summary, folded
+    c.click(button("close"));
+    c.click(button("open", { id: "ab12" }));
+    expect(c.view()).toMatchObject({ open: { tab: "installed", id: "ab12" }, toolsKind: null, auditOpen: false });
+  });
+
+  test("the dialog closes with its ×, with Esc, and with a click on the dimmed part around it, not inside it", async () => {
+    const c = createConnections(host);
+    await c.load();
+    c.click(button("open", { id: "ab12" }));
+    c.click(button("close"));
+    expect(c.view().open).toBeNull();
+    c.click(button("open", { id: "ab12" }));
+    const esc = key("Escape");
+    expect(c.key(esc)).toBe(true);
+    expect(esc.preventDefault).toHaveBeenCalled();
+    expect(c.view().open).toBeNull();
+    // Esc with no dialog is the panel's (it closes the settings)
+    expect(c.key(key("Escape"))).toBe(false);
+    c.click(button("open", { id: "ab12" }));
+    const scrim: { dataset: { conn: string }; closest?: () => unknown } = { dataset: { conn: "scrim" } };
+    scrim.closest = () => scrim;
+    // a click inside the dialog on no control finds the dimmed part around it, and does nothing
+    expect(c.click({ closest: () => scrim } as unknown as Element)).toBe(true);
+    expect(c.view().open).not.toBeNull();
+    // a click on the dimmed part itself closes it
+    expect(c.click(scrim as unknown as Element)).toBe(true);
+    expect(c.view().open).toBeNull();
+  });
+
+  test("「試試看」 hands the service's first example, in the window's language, to the 拉斐爾 page", async () => {
+    const c = createConnections(host);
+    await c.load();
+    c.click(button("open", { id: "ab12" }));
+    c.click(button("try", { id: "ab12" }));
+    expect(host.tryPrompt).toHaveBeenCalledWith("跟Notion說一");
+    setLocale("ja");
+    c.click(button("try", { id: "ab12" }));
+    expect(host.tryPrompt).toHaveBeenLastCalledWith("Notionに一");
+    // a server of the user's own has none
+    c.click(button("try", { id: "cu1" }));
+    expect(host.tryPrompt).toHaveBeenCalledTimes(2);
   });
 
   test("the search filters what is under the bar without drawing the page again", async () => {
@@ -695,7 +823,7 @@ describe("what the tab does", () => {
     });
   });
 
-  test("a service whose login ran out signs in again from its row, and stays where it was", async () => {
+  test("a service whose login ran out signs in again from its dialog, which stays open", async () => {
     api.toolsetsList.mockResolvedValue({ groups: [{ ...notes, status: "error", error: "auth" }, custom] });
     api.integrationsConnect.mockResolvedValue({ connected: true, server: { id: "ab12" } });
     const c = createConnections(host);
@@ -799,7 +927,7 @@ describe("what the tab does", () => {
     c.input(input("conn-pair-name", "TOKEN"));
     c.input(input("conn-pair-value", "TOPSECRET"));
     c.reset();
-    expect(c.view()).toMatchObject({ tab: "installed", open: null, form: null, confirmingDisconnect: null, search: "" });
+    expect(c.view()).toMatchObject({ tab: "installed", open: null, toolsKind: null, auditOpen: false, form: null, confirmingDisconnect: null, search: "" });
     expect(c.view().login).not.toBeNull();
     expect(JSON.stringify(c.view())).not.toContain("TOPSECRET");
   });

@@ -62,6 +62,8 @@ export interface HistoryQuery {
 
 export const historyList = (q: HistoryQuery): Promise<{ items: HistoryItem[] }> => core("history.list", q);
 export const historyDelete = (id: number): Promise<{ deleted: boolean }> => core("history.delete", { id });
+/** Deletes the whole dictation history (Settings › 資料); says how many items went. */
+export const historyClear = (): Promise<{ deleted: number }> => core("history.clear");
 
 // ---------- conversations with Raphael ----------
 

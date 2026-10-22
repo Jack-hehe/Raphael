@@ -46,9 +46,42 @@ describe("buttons", () => {
     expect(bad).toEqual([]);
   });
 
-  test("no clickable text: the old borderless icon button and the link look are gone", () => {
+  test("no clickable text: the old icon-btn class and the link look are gone", () => {
     const all = [...sources, ...i18nFiles, ...mainFiles.filter((f) => f.endsWith(".css"))].map(read).join("\n");
     expect(all).not.toMatch(/icon-btn|class="link"|class="quiet"/);
+  });
+
+  // A text button has a border; an icon-only button (trash, ×, chevron, search, settings, sliders)
+  // has none, only a fill under the pointer and the focus ring. The rule changed from "every button
+  // is bordered": the border is what tells a button with words in it.
+  test("icon-only buttons are borderless: a fill under the pointer and a focus ring, never an edge", () => {
+    const strip = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const styles = strip(read(join(MAIN, "styles.css")));
+    const base = /(?:^|\n)\.btn\.icon\s*\{([^}]*)\}/.exec(styles)?.[1] ?? "";
+    expect(base).toMatch(/border-color:\s*transparent/);
+    expect(base).toMatch(/background:\s*transparent/);
+    expect(styles).toMatch(/\.btn\.icon:hover:not\(:disabled\)\s*\{[^}]*background:\s*var\(--hover\)[^}]*border-color:\s*transparent/);
+    expect(styles).toMatch(/\.btn\.icon:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--focus\)/);
+    // No other rule gives one an edge back. The exceptions: a primary one is filled with the accent
+    // (its edge is its fill), and one that grows words while it asks again (確定清除？) is a text button.
+    const bad: string[] = [];
+    for (const file of mainFiles.filter((f) => f.endsWith(".css"))) {
+      for (const [, selector, body] of strip(read(file)).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        const icon = selector.split(",").filter((s) => /\.btn(\.[\w-]+)*\.icon\b/.test(s) && !/\.pri\b|\.is-confirm\b/.test(s));
+        if (!icon.length) continue;
+        const edge = /(^|;)\s*border(-top|-right|-bottom|-left)?(-color)?\s*:\s*(?!\s|transparent|0\b|none)[^;]+/.exec(body);
+        if (edge) bad.push(`${rel(file)}: ${icon.join(",").trim()} { ${edge[0].trim()} }`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  test("the icon-only buttons are made by iconButton / iconBtn, which say what they do in their label and tooltip", () => {
+    const ui = read(join(MAIN, "ui.ts"));
+    expect(ui).toMatch(/export const iconButton = [\s\S]*?class="btn icon\$\{[\s\S]*?aria-label="\$\{esc\(label\)\}" title="\$\{esc\(label\)\}"/);
+    // nothing else writes the class by hand
+    const byHand = sources.filter((f) => rel(f) !== "ui.ts" && /class="btn icon/.test(read(f))).map(rel);
+    expect(byHand).toEqual([]);
   });
 });
 
