@@ -144,6 +144,7 @@ export const sttIsLocal = (v: SettingsView): boolean => sttEngine(v) === "local"
 export const localView = (v: SettingsView): LocalView => ({
   models: v.localModels,
   active: sttIsLocal(v) ? sttLocalModel(v) : null,
+  fallback: sttIsLocal(v) ? null : (v.brain?.stt_local_model ?? null),
   download: v.localDownload,
 });
 export const cleanupModel = (v: SettingsView): string => v.brain?.cleanup_model ?? DEFAULT_MODELS.cleanup;

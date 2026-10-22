@@ -178,6 +178,54 @@ describe("deleting a model", () => {
   });
 });
 
+describe("the model that backs up the cloud", () => {
+  const backup = view({ active: null, fallback: "qwen3-asr" });
+
+  test("is called the fallback, not downloaded", () => {
+    expect(localState(qwen, backup).kind).toBe("fallback");
+    expect(localState(paraformer, backup).kind).toBe("ready");
+    expect(stateText({ kind: "fallback" })).toBe("備援");
+    setLocale("en");
+    expect(stateText({ kind: "fallback" })).toBe("Fallback");
+    setLocale("ja");
+    expect(stateText({ kind: "fallback" })).toBe("予備");
+  });
+
+  test("a fallback that is not on disk is just absent", () => {
+    expect(localState(sense, view({ active: null, fallback: "sensevoice" })).kind).toBe("absent");
+  });
+
+  test("shows the word in its row, and can still be deleted", () => {
+    const row = rowOf(localListHTML(backup, null), "qwen3-asr");
+    expect(row).toContain("備援");
+    expect(row).not.toContain("已下載");
+    expect(row).toContain('data-act="delete"');
+  });
+
+  test("asks about deleting it with half a sentence more: another model takes over", () => {
+    const row = rowOf(localListHTML(backup, { kind: "delete", name: "qwen3-asr" }), "qwen3-asr");
+    expect(row).toContain("刪除 Qwen3-ASR（釋出 879 MB）？之後改由 Paraformer 備援。");
+  });
+
+  test("or the cloud has nothing to fall back on", () => {
+    const only = view({ active: null, fallback: "qwen3-asr", models: [qwen, sense] });
+    const row = rowOf(localListHTML(only, { kind: "delete", name: "qwen3-asr" }), "qwen3-asr");
+    expect(row).toContain("刪除 Qwen3-ASR（釋出 879 MB）？之後雲端失敗時無法改用本機。");
+    setLocale("en");
+    expect(rowOf(localListHTML(only, { kind: "delete", name: "qwen3-asr" }), "qwen3-asr")).toContain("Delete Qwen3-ASR (frees 879 MB)? A cloud failure then cannot fall back to local.");
+    expect(rowOf(localListHTML(backup, { kind: "delete", name: "qwen3-asr" }), "qwen3-asr")).toContain("Paraformer will be the fallback.");
+    setLocale("ja");
+    expect(rowOf(localListHTML(only, { kind: "delete", name: "qwen3-asr" }), "qwen3-asr")).toContain("以後クラウドが失敗してもローカルに切り替わりません。");
+    expect(rowOf(localListHTML(backup, { kind: "delete", name: "qwen3-asr" }), "qwen3-asr")).toContain("以後はParaformerが予備になります。");
+  });
+
+  test("the question about another model has no such half sentence", () => {
+    const row = rowOf(localListHTML(backup, { kind: "delete", name: "paraformer-zh" }), "paraformer-zh");
+    expect(row).toContain("刪除 Paraformer（釋出 227 MB）？");
+    expect(row).not.toContain("備援");
+  });
+});
+
 describe("a download", () => {
   const busy = view({ download: { name: "sensevoice", done: 41_000_000, total: 163_002_883 } });
 

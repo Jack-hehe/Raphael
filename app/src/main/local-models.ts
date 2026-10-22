@@ -1,7 +1,7 @@
 // The local tab of the speech-to-text picker (model-picker.ts): the catalogue of the speech models
 // that run on this computer (`models.local`), none downloaded until the user chooses it. Each row
 // has the model's name, the languages it knows, its size, a line on what it is for and its state:
-// 未下載, 下載中 42%, 已下載 or 使用中. Choosing a model that is not downloaded asks first, in the
+// 未下載, 下載中 42%, 已下載, 備援 (the model behind the cloud) or 使用中. Choosing a model that is not downloaded asks first, in the
 // row, with its size; a downloaded one that is not in use can be deleted, also after asking.
 //
 // This file only draws and counts. The picker keeps the open tab and the question being asked,
@@ -17,6 +17,8 @@ export interface LocalView {
   models: LocalModel[] | "loading" | "failed";
   /** The model of the speech-to-text in use; null while the cloud is in use. */
   active: string | null;
+  /** The model that backs up the cloud, while the cloud is in use; null when there is none. */
+  fallback?: string | null;
   /** The download under way: bytes done of bytes in all (0 while the size is not known). */
   download: { name: string; done: number; total: number } | null;
 }
@@ -32,6 +34,7 @@ export type LocalState =
   | { kind: "downloading"; percent: number }
   | { kind: "installing" }
   | { kind: "ready" }
+  | { kind: "fallback" }
   | { kind: "active" };
 
 const MB = 1_000_000;
@@ -75,6 +78,7 @@ export function localState(model: LocalModel, view: LocalView): LocalState {
     return download.total > 0 && download.done >= download.total ? { kind: "installing" } : { kind: "downloading", percent: percentOf(download.done, download.total) };
   }
   if (model.name === view.active) return { kind: "active" };
+  if (model.ready && model.name === view.fallback) return { kind: "fallback" };
   return model.ready ? { kind: "ready" } : { kind: "absent" };
 }
 
@@ -89,6 +93,8 @@ export function stateText(state: LocalState): string {
       return t("local.stateInstalling");
     case "ready":
       return t("local.stateReady");
+    case "fallback":
+      return t("local.stateFallback");
     case "active":
       return t("local.stateActive");
   }
@@ -108,13 +114,21 @@ export function tabsHTML(open: "cloud" | "local"): string {
   return `<div class="mp-tabs" role="tablist" aria-label="${esc(t("picker.tabs"))}">${tab("cloud", t("picker.tabCloud"))}${tab("local", t("picker.tabLocal"))}</div>`;
 }
 
+/** The question before a deletion; the fallback's adds who backs up the cloud afterwards, if anyone. */
+function deleteQuestion(model: LocalModel, view: LocalView): string {
+  const ask = t("local.confirmDelete", { p0: model.title, p1: formatSize(model.size) });
+  if (model.name !== view.fallback || view.models === "loading" || view.models === "failed") return ask;
+  const next = view.models.find((other) => other.ready && other.name !== model.name);
+  return `${ask}${next ? t("local.afterNext", { p0: next.title }) : t("local.afterNone")}`;
+}
+
 function rowHTML(model: LocalModel, view: LocalView, confirm: LocalConfirm | null): string {
   const state = localState(model, view);
   const busy = view.download !== null;
   const size = formatSize(model.size);
   const open = `<div class="lm-row" data-name="${esc(model.name)}">`;
   if (confirm?.name === model.name) {
-    const text = confirm.kind === "download" ? t("local.confirmDownload", { p0: model.title, p1: size }) : t("local.confirmDelete", { p0: model.title, p1: size });
+    const text = confirm.kind === "download" ? t("local.confirmDownload", { p0: model.title, p1: size }) : deleteQuestion(model, view);
     return (
       `${open}<div class="lm-confirm" role="group" aria-label="${esc(text)}"><span class="lm-ask">${esc(text)}</span>` +
       btn(esc(confirm.kind === "download" ? t("local.download") : t("local.delete")), "pri sm", ` data-act="confirm" data-name="${esc(model.name)}"`) +

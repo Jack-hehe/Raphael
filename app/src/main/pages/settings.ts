@@ -459,7 +459,10 @@ export function createSettings(app: AppContext): SettingsPage {
     const mine = loads;
     let next: LocalModel[] | "failed";
     try {
-      next = (await api.modelsLocal()).models;
+      const listing = await api.modelsLocal();
+      next = listing.models;
+      // With the cloud in use the core says which model backs it up, which a failed delete may have changed.
+      if (brain && brain.stt_engine !== "local" && listing.fallback !== undefined) brain = { ...brain, stt_local_model: listing.fallback };
     } catch {
       next = Array.isArray(localModels) ? localModels : "failed";
     }
@@ -512,7 +515,9 @@ export function createSettings(app: AppContext): SettingsPage {
 
   async function deleteLocal(name: string): Promise<void> {
     try {
-      await api.modelsLocalDelete(name);
+      const reply = await api.modelsLocalDelete(name);
+      // Deleting the model that backed up the cloud names another, or none, in its place.
+      if (brain && reply.fallback !== undefined) brain = { ...brain, stt_local_model: reply.fallback };
     } catch {
       toaster.info(t("local.deleteFailed", { p0: localTitle(name) }));
     }

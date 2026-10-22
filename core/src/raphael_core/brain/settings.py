@@ -107,6 +107,10 @@ def _checked(key: str, value: Any) -> Any:
     raise TypeError(f"Setting {key!r} must be a {expected.__name__}, not {type(value).__name__}")
 
 
+# The settings that may also be None: the local model, when there is none to fall back on.
+_NULLABLE = ("stt_local_model",)
+
+
 def _allowed(key: str, value: Any) -> Any:
     """`value`, or ValueError if the key has a list of choices and `value` is not on it."""
     choices = _CHOICES.get(key)
@@ -168,6 +172,8 @@ def checked(key: str, value: Any) -> tuple[str, Any]:
     raises for them (see there). Nothing is saved."""
     if key == "languages":
         return key, checked_languages(key, value)
+    if value is None and key in _NULLABLE:
+        return key, None
     value = _allowed(key, _checked(key, value))
     if key in _TRIMMED:
         value = _trimmed(key, value)
@@ -209,6 +215,10 @@ class SettingsStore:
         saved = self._saved(key)
         if key == "model_favorites":
             return _read_favorites(saved)
+        if saved is None and key in _NULLABLE and self._conn.execute(
+            "SELECT 1 FROM settings WHERE key = ?", (key,)
+        ).fetchone():
+            return None  # saved as "none", which is not the same as never saved
         return default if saved is None else saved
 
     def set(self, key: str, value: Any) -> None:
@@ -220,6 +230,10 @@ class SettingsStore:
         saves `languages`.
         """
         key, value = checked(key, value)
+        if key == "stt_engine" and value == "local" and self.get("stt_local_model") is None:
+            raise ValueError("Setting 'stt_local_model' must name a model for the local engine")
+        if key == "stt_local_model" and value is None and self.get("stt_engine") == "local":
+            raise ValueError("Setting 'stt_local_model' must name a model while the engine is local")
         encoded = json.dumps(value, allow_nan=False)
         with self._conn:
             self._conn.execute(
