@@ -23,10 +23,12 @@ def test_the_store_has_the_services_that_log_in_with_nothing_registered():
     assert not ids & {"google", "slack", "figma"}
 
 
-def test_github_is_not_in_the_store_until_its_client_id_is_filled_in():
-    assert catalog.GITHUB_CLIENT_ID == ""
-    assert find("github") is None
-    assert all(service.auth != "device" for service in SERVICES)
+def test_github_is_in_the_store_with_raphaels_client_id():
+    entry = find("github")
+    assert entry is not None and entry.device is not None
+    assert entry.device.client_id == catalog.GITHUB_CLIENT_ID
+    assert re.fullmatch(r"Ov23li[A-Za-z0-9]{14}", catalog.GITHUB_CLIENT_ID)
+    assert [service.id for service in SERVICES if service.auth == "device"] == ["github"]
 
 
 def test_github_is_a_device_login_entry_once_it_has_a_client_id():

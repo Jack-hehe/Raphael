@@ -596,9 +596,9 @@ SERVICES: tuple[Service, ...] = (
     ),
 )
 
-# The client id of Raphael's OAuth App on GitHub (public; the device flow has no secret). While it is
-# empty the app is not registered yet, and GitHub is not in the store.
-GITHUB_CLIENT_ID = ""
+# The client id of Raphael's OAuth App on GitHub (public; the device flow has no secret). Were it
+# empty, GitHub would be left out of the store.
+GITHUB_CLIENT_ID = "Ov23liGLo9BDamTP6cM9"
 
 
 def github_service(client_id: str) -> Service:
