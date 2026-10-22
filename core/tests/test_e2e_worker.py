@@ -115,7 +115,7 @@ def test_a_task_is_handed_over_carried_out_by_the_worker_and_reported(spawn):
     )  # fmt: skip
     wait_for(core, lambda: reports(core))
     [report] = reports(core)
-    assert report["state"] == "done" and report["prefix"] == "Notice"
+    assert report["state"] == "done" and report["prefix"] == "Notice", core.log()
     assert report["text"] == "The scripted task saw 2 results."
 
     # The conversation shows the report where the handoff was, with the worker's steps; nothing

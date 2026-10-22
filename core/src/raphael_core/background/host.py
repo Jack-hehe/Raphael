@@ -44,6 +44,8 @@ IDLE_S = 600.0
 # How long a worker that was told to stop gets before it is ended.
 GRACE_S = 5.0
 HELLO_TIMEOUT_S = 20.0
+# How long the end of a worker's output is waited for once the worker has exited.
+PIPES_END_S = 5.0
 CRASH_LIMIT = 3
 CRASH_WINDOW_S = 600.0
 # Longer than any message the core gets from the worker (asyncio's default is 64 KiB a line).
@@ -210,7 +212,16 @@ class ProcessLink:
                 self.process.kill()
 
     async def _finish(self) -> None:
+        """Let go of the pipes of a worker that has exited. Its output is read to the end first:
+        asyncio closes the process's transport only once both pipes have reached their end, and a
+        transport left open when the core's loop closes is a "Exception ignored ... unclosed
+        transport" traceback on the way out. The process is over, so the end comes at once; on a
+        busy machine it can come after the exit has been seen. The readers are stopped only if it
+        does not come within `PIPES_END_S`."""
         self.peer.close()
+        pending = [task for task in self._tasks if not task.done()]
+        if pending:
+            await asyncio.wait(pending, timeout=PIPES_END_S)
         for task in self._tasks:
             if not task.done():
                 task.cancel()
