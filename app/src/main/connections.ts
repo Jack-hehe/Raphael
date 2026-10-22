@@ -16,11 +16,14 @@ import { dayLabel, describeError, formatClock } from "./format";
 import { getLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 import { SERVICE_ICONS, type ServiceIconId, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
-import type { AuditEntry, ConnectionGroup, ConnectionTool, NewConnection, StoreService, Words } from "./types";
-import { type Choice, btn, esc, fieldHTML, ico, row, st, tg, toaster } from "./ui";
+import type { AuditEntry, ConnectionGroup, ConnectionTool, MainEvent, NewConnection, StoreService, Words } from "./types";
+import { type Choice, btn, copyText, esc, fieldHTML, ico, row, st, tg, toaster } from "./ui";
 
 /** `t` for a key that is chosen at run time (its placeholders, if any, are none). */
 const tr = t as unknown as (key: MessageKey) => string;
+
+/** Where a service that is signed in to with a code keeps the list of the apps it has let in. */
+const GRANTS_URL: Record<string, string> = { github: "https://github.com/settings/applications" };
 
 /** How long 「中斷連線」 waits for its second press. */
 const DISCONNECT_CONFIRM_MS = 5000;
@@ -60,6 +63,13 @@ export interface Login {
   name: string;
 }
 
+/** The code of a device login that is waiting for the user to type it at the service. */
+export interface DeviceCode {
+  catalog_id: string;
+  user_code: string;
+  verification_uri: string;
+}
+
 export interface ConnectionsView {
   /** The connected services: being read, read, or not to be had. */
   groups: ConnectionGroup[] | "loading" | "failed";
@@ -78,6 +88,8 @@ export interface ConnectionsView {
   /** The services a call is under way for. */
   busy: ReadonlySet<string>;
   login: Login | null;
+  /** The code to type, while a device login waits for it. */
+  device: DeviceCode | null;
   /** What went wrong with the latest login, for the page of the entry it was for. */
   loginError: { target: string; kind: string } | null;
   form: ConnectionForm | null;
@@ -95,6 +107,7 @@ export const emptyConnectionsView = (): ConnectionsView => ({
   confirmingDisconnect: null,
   busy: new Set(),
   login: null,
+  device: null,
   loginError: null,
   form: null,
   now: Date.now(),
@@ -152,7 +165,7 @@ function entryOf(g: ConnectionGroup, v: ConnectionsView): StoreService | undefin
 }
 
 /** The login of a service ran out or was never finished: it asks to sign in again. */
-export const needsLogin = (g: ConnectionGroup): boolean => g.auth === "oauth" && g.status === "error" && g.error === "auth";
+export const needsLogin = (g: ConnectionGroup): boolean => g.auth !== "none" && g.status === "error" && g.error === "auth";
 
 const isIcon = (id: string | null | undefined): id is ServiceIconId => !!id && (id in SERVICE_ICONS || hasLogo(id as ServiceIconId));
 
@@ -341,6 +354,7 @@ function serviceHTML(g: ConnectionGroup, v: ConnectionsView): string {
     `<div class="cs-acts">` +
     btn(`${ico("refresh")}${esc(busy ? t("conn.refreshing") : t("conn.refresh"))}`, "", ` data-conn="refresh"${id}${busy ? " disabled" : ""}`) +
     btn(esc(v.confirmingDisconnect === g.id ? t("conn.disconnectConfirm") : t("conn.disconnect")), "", ` data-conn="disconnect"${id}${busy ? " disabled" : ""}`) +
+    (g.auth === "device" && g.catalog_id && GRANTS_URL[g.catalog_id] ? btn(esc(t("conn.revokeOpen", { p0: g.name })), "", ` data-conn="open-grants"${id}`) : "") +
     `</div>`;
   return backHTML() + head + (about ? `<p class="cs-desc">${esc(about)}</p>` : "") + meta + relogin + tools + acts + auditHTML(v, g.name);
 }
@@ -468,12 +482,27 @@ function pageHTML(v: ConnectionsView): string | null {
   return s ? storePageHTML(s, v) : null;
 }
 
+// ---------- the code of a device login ----------
+
+/** The code in keycaps, the one button that copies it and opens the service's page, and a cancel button. */
+function deviceHTML(v: ConnectionsView): string {
+  const d = v.device;
+  if (!d || !v.login) return "";
+  const name = (Array.isArray(v.catalog) ? v.catalog.find((s) => s.id === d.catalog_id)?.name : undefined) ?? v.login.name;
+  const caps = [...d.user_code].map((ch) => (ch === "-" ? '<span class="cs-dash">-</span>' : `<span class="cs-cap">${esc(ch)}</span>`)).join("");
+  return (
+    `<div class="cs-device" role="group" aria-label="${esc(name)}"><p class="cs-device-hint">${esc(t("conn.device.hint"))}</p>` +
+    `<div class="cs-code" aria-label="${esc(d.user_code)}">${caps}</div>` +
+    `<div class="cs-device-acts">${btn(esc(t("conn.device.open", { p0: name })), "pri", ' data-conn="device-open"')}${btn(esc(t("conn.cancel")), "", ' data-conn="cancel-login"')}</div></div>`
+  );
+}
+
 /** The tab, below its name and purpose. */
 export function connectionsHTML(v: ConnectionsView): string {
   if (v.form) return `<div class="cs cs-form">${formHTML(v.form)}</div>`;
   const page = pageHTML(v);
-  if (page) return `<div class="cs cs-page">${page}</div>`;
-  return `<div class="cs">${barHTML(v)}<div class="cs-body" data-cs-body>${bodyHTML(v)}</div></div>`;
+  if (page) return `<div class="cs cs-page">${deviceHTML(v)}${page}</div>`;
+  return `<div class="cs">${deviceHTML(v)}${barHTML(v)}<div class="cs-body" data-cs-body>${bodyHTML(v)}</div></div>`;
 }
 
 // ---------- doing ----------
@@ -508,6 +537,8 @@ export interface Connections {
   key(e: KeyboardEvent): boolean;
   /** The menu of a dropdown of this tab, by its `data-k`. */
   menuFor(k: string): ConnectionMenu | null;
+  /** An event of the main window: the code of a device login. */
+  followEvent(event: MainEvent): void;
   /** The panel is closed or leaves the tab: drop what must not stay (an unsent form, a pending disconnect). */
   reset(): void;
 }
@@ -524,6 +555,7 @@ export function createConnections(host: ConnectionsHost): Connections {
   let confirmTimer: ReturnType<typeof setTimeout> | undefined;
   const busy = new Set<string>();
   let login: Login | null = null;
+  let device: DeviceCode | null = null;
   let loginError: ConnectionsView["loginError"] = null;
   let form: ConnectionForm | null = null;
   let loads = 0;
@@ -534,7 +566,7 @@ export function createConnections(host: ConnectionsHost): Connections {
   };
 
   const view = (): ConnectionsView => ({
-    groups, catalog, audit, tab, search, open, unfolded: { ...unfolded }, confirmingDisconnect: confirming, busy, login, loginError, form, now: Date.now(),
+    groups, catalog, audit, tab, search, open, unfolded: { ...unfolded }, confirmingDisconnect: confirming, busy, login, device, loginError, form, now: Date.now(),
   });
 
   /** Draws only what is under the bar (the search box keeps its focus and its input method). */
@@ -595,7 +627,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     void act(id, async () => {
       await api.integrationsDisconnect(id);
       if (open?.id === id) open = null;
-      if (group) toaster.info(t(group.auth === "oauth" ? "conn.disconnectedLogin" : "conn.disconnected", { p0: group.name }));
+      if (group) toaster.info(t(group.auth !== "none" ? "conn.disconnectedLogin" : "conn.disconnected", { p0: group.name }));
     });
   }
 
@@ -614,6 +646,7 @@ export function createConnections(host: ConnectionsHost): Connections {
       result = { connected: false, error: "cancelled" };
     }
     login = null;
+    device = null;
     if (result.connected) {
       toaster.info(t(again ? "conn.relogged" : "conn.connected", { p0: name }));
       if (!again) {
@@ -625,6 +658,24 @@ export function createConnections(host: ConnectionsHost): Connections {
       toaster.info(loginFailure(result.error));
     }
     await load();
+  }
+
+  function followEvent(event: MainEvent): void {
+    if (event.type !== "DeviceCode" || !login) return;
+    device = { catalog_id: event.catalog_id, user_code: event.user_code, verification_uri: event.verification_uri };
+    redraw();
+  }
+
+  /** Puts the code on the clipboard, so that it is pasted at the page that opens, and opens the page. */
+  async function openDevicePage(): Promise<void> {
+    const d = device;
+    if (!d) return;
+    try {
+      await copyText(d.user_code);
+      await api.openLink(d.verification_uri);
+    } catch (err) {
+      toaster.info(describeError(err));
+    }
   }
 
   function addPair(f: ConnectionForm): boolean {
@@ -767,6 +818,14 @@ export function createConnections(host: ConnectionsHost): Connections {
         if (group) void signIn({ id }, group.name, true);
         break;
       }
+      case "device-open":
+        void openDevicePage();
+        break;
+      case "open-grants": {
+        const url = GRANTS_URL[groupById(id)?.catalog_id ?? ""];
+        if (url) void api.openLink(url).catch((err) => toaster.info(describeError(err)));
+        break;
+      }
       case "cancel-login":
         void api.integrationsConnectCancel().catch((err) => toaster.info(describeError(err)));
         break;
@@ -882,8 +941,9 @@ export function createConnections(host: ConnectionsHost): Connections {
     search = "";
     tab = "installed";
     loginError = null;
+    device = null;
     loads++;
   }
 
-  return { view, load, click, input, key, menuFor, reset };
+  return { view, load, click, input, key, menuFor, followEvent, reset };
 }
