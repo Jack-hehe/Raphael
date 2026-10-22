@@ -21,7 +21,7 @@ from raphael_core.brain.openrouter import OpenRouterError
 from raphael_core.brain.settings import SettingsStore
 from raphael_core.protocol import INVALID_PARAMS, RpcError
 
-from .conftest import ARGUMENT, RESULT, TASK_TEXT, call, report, turn, until
+from .conftest import ARGUMENT, RESULT, TASK_TEXT, Links, call, report, turn, until
 
 
 async def look_twice_then_report(rig):
@@ -292,12 +292,44 @@ async def test_a_worker_that_does_not_answer_in_time_is_ended_by_the_core_alone(
         def kill(self):
             self.killed = True
 
-    host = Stuck()
+    host = Stuck(hello_timeout_s=0.1)
     rig = make_rig(limits=RunLimits(seconds=0.2), host=host)
     rig.submit()
     [done] = await rig.wait_for_reports()
     assert done["state"] == "limit" and done["text"] == phrase("en", "worker_limit_time", steps="0")
     assert host.killed is True
+
+
+async def test_a_worker_that_is_slow_to_start_is_waited_for_as_long_as_its_hello(
+    make_rig, monkeypatch
+):
+    # A worker that takes longer to start than the task's time and the net under it, but not
+    # longer than its hello is given: the core does not give up on it and end it half-started.
+    # The task's time is counted from when it was handed to the host, start included, so this one
+    # has run out by then: the worker reports that, and it is kept for the next task.
+    import raphael_core.background.service as module
+
+    monkeypatch.setattr(module, "TIME_NET_S", 0.3)
+
+    class SlowStart(WorkerHost):
+        killed = 0
+
+        async def _ensure(self):
+            await asyncio.sleep(0.8)  # well within the hello it is given
+            return await super()._ensure()
+
+        def kill(self):
+            self.killed += 1
+            super().kill()
+
+    links = Links()
+    host = SlowStart(connect=links, grace_s=0.3, hello_timeout_s=2.0)
+    rig = make_rig(limits=RunLimits(seconds=0.2), host=host, links=links)
+    rig.submit()
+    [done] = await rig.wait_for_reports()
+    assert done["state"] == "limit"
+    assert host.killed == 0  # the core did not end it on its own
+    assert len(links.made) == 1 and host.running  # it started, said hello, and stays
 
 
 # --- when the model fails -------------------------------------------------------------------------

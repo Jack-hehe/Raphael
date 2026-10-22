@@ -43,7 +43,10 @@ logger = logging.getLogger(__name__)
 IDLE_S = 600.0
 # How long a worker that was told to stop gets before it is ended.
 GRACE_S = 5.0
-HELLO_TIMEOUT_S = 20.0
+# How long a worker that was started is given to answer `worker.hello`. It runs below normal
+# priority (`_WINDOWS_FLAGS`), and loading Python and its libraries can take a busy machine (a
+# build, a game, a scan) far longer than the few seconds it takes an idle one.
+HELLO_TIMEOUT_S = 60.0
 # How long the end of a worker's output is waited for once the worker has exited.
 PIPES_END_S = 5.0
 CRASH_LIMIT = 3
@@ -287,6 +290,12 @@ class WorkerHost:
     @property
     def running(self) -> bool:
         return self._link is not None and not self._link.peer.closed
+
+    @property
+    def start_s(self) -> float:
+        """The longest the start of a worker may take inside `run` before the task is given up
+        on: the wait for its hello. Whoever waits for `run` leaves room for it."""
+        return self._hello_timeout_s
 
     # --- starting -------------------------------------------------------------------------------
 

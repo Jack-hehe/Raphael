@@ -10,6 +10,7 @@ import sys
 import pytest
 
 from raphael_core.background.host import (
+    HELLO_TIMEOUT_S,
     WorkerCrashed,
     WorkerHost,
     WorkerStopped,
@@ -218,6 +219,13 @@ async def test_a_task_that_ran_out_of_time_is_ended_with_its_worker(hosts, rig):
     with pytest.raises(WorkerStopped):
         await asyncio.wait_for(waiting, 10)
     await host.aclose()
+
+
+def test_a_worker_is_given_a_minute_to_say_hello():
+    # It starts below normal priority: on a busy machine that takes a while.
+    assert HELLO_TIMEOUT_S == 60.0
+    assert WorkerHost().start_s == HELLO_TIMEOUT_S
+    assert WorkerHost(hello_timeout_s=3.0).start_s == 3.0
 
 
 async def test_a_worker_that_never_says_hello_is_unavailable_and_counts_as_a_crash(hosts, rig):

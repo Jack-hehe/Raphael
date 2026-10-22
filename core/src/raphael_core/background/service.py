@@ -76,7 +76,8 @@ logger = logging.getLogger(__name__)
 MAX_QUEUED = 3
 # How many turns of the conversation a task is shown.
 CONTEXT_TURNS = 3
-# The core waits this much longer than the task's own time for the worker to say it is done.
+# The core waits this much longer than the task's own time, and the start of the worker
+# (`WorkerHost.start_s`), for the worker to say it is done.
 TIME_NET_S = 20.0
 # The assistant's history calls a task by the status of a turn.
 _TURN_STATUS = {"done": "done", "cancelled": "denied"}
@@ -533,8 +534,12 @@ class BackgroundService:
         }
         try:
             try:
+                # A worker that has to be started first may take its time to say hello: the net is
+                # never shorter than that wait, so a worker still starting is not ended half-way.
+                # (The task's own time, which `run` enforces, counts from now, start included.)
                 reply = await asyncio.wait_for(
-                    self._host.run(run, spec), self._limits.seconds + TIME_NET_S
+                    self._host.run(run, spec),
+                    self._limits.seconds + self._host.start_s + TIME_NET_S,
                 )
             except TimeoutError:
                 run.timed_out = True
