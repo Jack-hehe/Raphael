@@ -35,7 +35,7 @@ FORMAT_VERSION = 2
 _OLD_BLOCK = "block"
 TRANSPORTS = ("stdio", "http")
 # How a server is signed in to: none (headers, if any), or a login in the browser (OAuth).
-AUTH_KINDS = ("none", "oauth")
+AUTH_KINDS = ("none", "oauth", "device")
 
 MAX_SERVERS = 20
 MAX_NAME_CHARS = 40
@@ -88,7 +88,7 @@ class ServerConfig:
     tools: list[ToolRecord] = field(default_factory=list)
     tools_checked_at_ms: int | None = None
     disabled_tools: set[str] = field(default_factory=set)  # the names of the tools turned off
-    auth: str = "none"  # "oauth": signed in to with a login in the browser; the tokens are in the vault
+    auth: str = "none"  # "oauth": a login in the browser, "device": a code typed at the service; tokens are in the vault
     catalog_id: str = ""  # the entry of the store this was added from, if it was
     revocation_url: str = ""  # where the login's token is revoked when the server is disconnected
 

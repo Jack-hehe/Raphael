@@ -58,8 +58,9 @@ pub fn timeout_for(method: &str) -> Duration {
         // Starts the plugin (a program that may first have to be fetched), reads its tools.
         "integrations.refresh" => 40,
         // Waits for the user to log in in the browser: up to five minutes (the core ends it at
-        // 330 s with a kind of failure), and then reads the tools.
-        "integrations.connect" => 360,
+        // 330 s with a kind of failure), or, for a login with a code (GitHub), until the code
+        // runs out: 900 s at most, and the core ends it at 930 s. Then reads the tools.
+        "integrations.connect" => 960,
         // Downloads speech models.
         "models.ensure" | "models.local_use" => 3600,
         "secrets.set_openrouter_key" | "status.check_openrouter" => 15,
@@ -810,7 +811,7 @@ mod tests {
         assert_eq!(timeout_for("integrations.refresh"), Duration::from_secs(40));
         assert_eq!(
             timeout_for("integrations.connect"),
-            Duration::from_secs(360)
+            Duration::from_secs(960)
         );
         for method in [
             "secrets.set_openrouter_key",
