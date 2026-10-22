@@ -11,15 +11,15 @@ import logging
 import pytest
 
 from raphael_core.brain.catalog import ROLE_OF_SETTING, ROLES, parse_catalog
-from raphael_core.brain.openrouter import CLEANUP_MODEL_CHOICES
 from raphael_core.brain.pricing import PRICING_TTL_MS, PricingService
 from raphael_core.brain.secrets import MemoryKeyStore
 from raphael_core.brain.service import Brain
-from raphael_core.brain.settings import DEFAULTS, MODEL_SETTINGS, STT_CLOUD_MODELS, SettingsStore
+from raphael_core.brain.settings import DEFAULTS, MODEL_SETTINGS, SettingsStore
 from raphael_core.protocol import INVALID_PARAMS, RpcError
 from raphael_core.router import Router
 
 from .test_catalog import (
+    DEFAULT_LANGUAGE_MODELS,
     LANGUAGE_MODELS,
     NOW_MS,
     RECORDED,
@@ -62,7 +62,7 @@ async def refused(router, key, model) -> str:
 # --- the roles ----------------------------------------------------------------------------------
 
 
-def test_each_setting_of_a_model_is_a_role_with_its_default_among_its_own_models():
+def test_each_setting_of_a_model_is_a_role_with_its_default():
     assert [(role.name, role.setting, role.kind) for role in ROLES] == [
         ("cleanup", "cleanup_model", "llm"),
         ("answer", "agent_model", "llm"),
@@ -71,7 +71,6 @@ def test_each_setting_of_a_model_is_a_role_with_its_default_among_its_own_models
     assert set(ROLE_OF_SETTING) == set(MODEL_SETTINGS)
     for role in ROLES:
         assert role.default == DEFAULTS[role.setting]
-        assert role.default == role.curated[0]
 
 
 # --- the method ---------------------------------------------------------------------------------
@@ -87,12 +86,12 @@ async def test_the_catalog_is_fetched_once_and_then_kept_for_the_day(router, cli
     assert client.calls == 1
 
 
-async def test_without_the_list_the_answer_is_raphaels_own_models(router, client):
+async def test_without_the_list_the_answer_is_the_models_raphael_calls(router, client):
     client.error = network_down()
     view = await router.call("models.catalog", {})
     assert (view["source"], view["fetched_at_ms"], view["replaced"]) == ("builtin", None, [])
-    assert [m["id"] for m in view["llm"]] == CLEANUP_MODEL_CHOICES
-    assert [m["id"] for m in view["stt"]] == list(STT_CLOUD_MODELS)
+    assert [m["id"] for m in view["llm"]] == DEFAULT_LANGUAGE_MODELS
+    assert [m["id"] for m in view["stt"]] == [DEFAULTS["stt_cloud_model"]]
 
 
 async def test_models_catalog_needs_no_key(conn, client, clock):
@@ -174,18 +173,22 @@ async def test_the_assistant_can_ask_what_the_catalog_says_without_a_fetch(conn,
     assert client.calls == 1
 
 
-async def test_before_the_list_is_read_only_raphaels_own_models_can_be_chosen(router, client):
-    # No call to models.catalog yet: nothing is known, and settings.set fetches nothing.
+async def test_before_the_list_is_read_only_the_builtin_models_can_be_chosen(router, client):
+    # No call to models.catalog yet: nothing is known, and settings.set fetches nothing. The
+    # choice is checked against the builtin table, which is what the page shows then.
     assert await choose(router, "cleanup_model", "anthropic/claude-haiku-5.5") == (
         "anthropic/claude-haiku-5.5"
     )
-    assert await choose(router, "stt_cloud_model", "qwen/qwen3-asr-1.7b") == "qwen/qwen3-asr-1.7b"
     message = await refused(router, "cleanup_model", "tencent/hunyuan-a13b-instruct")
-    assert "Raphael's own" in message
+    assert "OpenRouter lists" in message
+    await refused(router, "stt_cloud_model", "qwen/qwen3-asr-1.7b")
     assert client.calls == 0
+    # Once the list has been read, every transcription model it lists can be.
+    await router.call("models.catalog", {})
+    assert await choose(router, "stt_cloud_model", "qwen/qwen3-asr-1.7b") == "qwen/qwen3-asr-1.7b"
 
 
-async def test_when_the_list_cannot_be_had_the_curated_models_can_be_chosen(router, client):
+async def test_when_the_list_cannot_be_had_the_builtin_models_can_be_chosen(router, client):
     client.error = network_down()
     assert (await router.call("models.catalog", {}))["source"] == "builtin"
     assert await choose(router, "agent_model", "google/gemini-3.1-flash-lite") == (

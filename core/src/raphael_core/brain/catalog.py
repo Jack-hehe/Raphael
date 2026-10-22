@@ -7,6 +7,10 @@ and keeps for a day. This module reads it. Two kinds of model are kept:
 - `llm`: text in, text out. A model that also writes images or audio is not one.
 - `stt`: speech to text, the models whose output is a transcription.
 
+The kind is what the list says a model reads and writes: its `input_modalities` and
+`output_modalities`, or, for an entry that lacks those, its `modality` ("audio->transcription").
+Nothing else decides it: Raphael keeps no list of models of his own.
+
 Every other kind (embeddings, images, speech, video, reranking, decisions) is left out: no role can
 use one. So is a `:batch` variant, which runs on OpenRouter's batch API, whose answers come within a
 day: never in time for anything Raphael does. Jev, which sorts the assistant's requests, is a fixed
@@ -58,8 +62,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .openrouter import CLEANUP_MODEL_CHOICES, STT_MODELS_WITH_HINTS
-from .settings import AGENT_TEXT_MAX_CHARS, DEFAULTS, STT_CLOUD_MODELS
+from .openrouter import STT_MODELS_WITH_HINTS
+from .settings import AGENT_TEXT_MAX_CHARS, DEFAULTS
 
 LLM = "llm"
 STT = "stt"
@@ -97,7 +101,6 @@ class Role:
     name: str  # "cleanup", "answer" or "stt"
     setting: str  # the setting that holds the chosen model
     kind: str  # the kind of model it takes
-    curated: tuple[str, ...]  # what the settings page offered before it offered every model
     # What it needs of a model, in the order it is checked: a capability, and the reason given for
     # a model without it.
     needs: tuple[tuple[str, str], ...]
@@ -116,10 +119,9 @@ _JSON_WITHOUT_REASONING = (
     ("max_tokens", "no_max_tokens"),
 )
 ROLES = (
-    Role("cleanup", "cleanup_model", LLM, tuple(CLEANUP_MODEL_CHOICES), _JSON_WITHOUT_REASONING),
-    # The settings page offered the cleanup models for the answers too.
-    Role("answer", "agent_model", LLM, tuple(CLEANUP_MODEL_CHOICES), _JSON_WITHOUT_REASONING),
-    Role("stt", "stt_cloud_model", STT, STT_CLOUD_MODELS, ()),
+    Role("cleanup", "cleanup_model", LLM, _JSON_WITHOUT_REASONING),
+    Role("answer", "agent_model", LLM, _JSON_WITHOUT_REASONING),
+    Role("stt", "stt_cloud_model", STT, ()),
 )
 ROLE_OF_SETTING = {role.setting: role for role in ROLES}
 
@@ -171,21 +173,19 @@ def find(entries: Iterable[CatalogEntry], kind: str, model_id: object) -> Catalo
 
 
 def choice_problem(
-    role: Role, model_id: str, entries: Sequence[CatalogEntry] | None, current: object
+    role: Role, model_id: str, entries: Sequence[CatalogEntry], current: object
 ) -> str | None:
     """Why `model_id` cannot be chosen for `role`; None when it can.
 
-    `entries` is the catalog OpenRouter gave last, however old, or None when it never gave one.
-    With it, any model it lists that the role can use may be chosen; otherwise the problem is
-    "not_listed", or why the role cannot use it (`refusal`). Without it, only the models the role
-    offered all along may be ("not_curated"). The model that is chosen now (`current`) may always
-    be chosen again, which changes nothing, and so may the default, which is what the setting
-    reads as anyway.
+    `entries` is the catalog the settings page shows: the one OpenRouter gave last, however old,
+    or, when it never gave one, the builtin table (pricing.builtin_catalog). Any model it lists
+    that the role can use may be chosen; otherwise the problem is "not_listed", or why the role
+    cannot use it (`refusal`). The model that is chosen now (`current`) may always be chosen
+    again, which changes nothing, and so may the default, which is what the setting reads as
+    anyway.
     """
     if model_id in (current, role.default):
         return None
-    if entries is None:
-        return None if model_id in role.curated else "not_curated"
     entry = find(entries, role.kind, model_id)
     return "not_listed" if entry is None else refusal(entry, role)
 
@@ -243,13 +243,6 @@ def stt_price(pricing: Mapping) -> ModelPrice:
     return ModelPrice(per_minute=per_minute if per_minute <= _MAX_PER_MINUTE else None)
 
 
-# Raphael's own models, by kind: what one of them is when the list does not say.
-_CURATED_KINDS = {
-    **{model_id: LLM for model_id in CLEANUP_MODEL_CHOICES},
-    **{model_id: STT for model_id in STT_CLOUD_MODELS},
-}
-
-
 def _modalities(architecture: object, key: str) -> list[str] | None:
     values = architecture.get(key) if isinstance(architecture, dict) else None
     if isinstance(values, list) and all(isinstance(value, str) for value in values):
@@ -257,14 +250,33 @@ def _modalities(architecture: object, key: str) -> list[str] | None:
     return None
 
 
+def _modality(architecture: object) -> tuple[list[str], list[str]] | None:
+    """What a model reads and what it writes, from the list's one-line `modality` of it:
+    (["text", "image"], ["text"]) for "text+image->text". None when it has none, or not of that
+    shape."""
+    value = architecture.get("modality") if isinstance(architecture, dict) else None
+    if not isinstance(value, str):
+        return None
+    reads, arrow, writes = value.partition("->")
+    inputs = [part.strip() for part in reads.split("+") if part.strip()]
+    outputs = [part.strip() for part in writes.split("+") if part.strip()]
+    if not arrow or not inputs or not outputs:
+        return None
+    return inputs, outputs
+
+
 def kind_of(model: Mapping) -> str | None:
-    """LLM, STT, or None for a kind no role uses, by what the model reads and writes. A model whose
-    modalities the list does not give is of no kind, unless it is one of Raphael's own."""
+    """LLM, STT, or None for a kind no role uses, by what the model reads and writes: the list's
+    `input_modalities` and `output_modalities` of it, or its `modality` when it lacks those. A
+    model of which the list says neither is of no kind."""
     architecture = model.get("architecture")
     inputs = _modalities(architecture, "input_modalities")
     outputs = _modalities(architecture, "output_modalities")
     if inputs is None or outputs is None:
-        return _CURATED_KINDS.get(str(model.get("id")))
+        read = _modality(architecture)
+        if read is None:
+            return None
+        inputs, outputs = read
     if "transcription" in outputs:
         return STT
     if set(outputs) == {"text"} and "text" in inputs:

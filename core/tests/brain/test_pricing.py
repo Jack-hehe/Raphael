@@ -16,18 +16,25 @@ import pytest
 
 from raphael_core.brain import pricing
 from raphael_core.brain.catalog import ModelPrice, parse_catalog
-from raphael_core.brain.openrouter import CLEANUP_MODEL_CHOICES, OpenRouterError
+from raphael_core.brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
 from raphael_core.brain.pricing import BUILTIN_PRICES, CACHE_READING, PRICING_TTL_MS, PricingService
 from raphael_core.brain.secrets import MemoryKeyStore
 from raphael_core.brain.service import Brain
-from raphael_core.brain.settings import STT_CLOUD_MODELS, SettingsStore
+from raphael_core.brain.settings import DEFAULTS, SettingsStore
 from raphael_core.router import Router
 
 FIXTURE = Path(__file__).parent / "fixtures" / "openrouter_models.json"
 RECORDED: list[dict] = json.loads(FIXTURE.read_text(encoding="utf-8"))["data"]
 NOW_MS = 1_792_300_000_000
 HOUR_MS = 3_600_000
-OFFERED = {*CLEANUP_MODEL_CHOICES, *STT_CLOUD_MODELS}
+# The models Raphael calls when nobody chose another: the defaults of the roles, and the fallbacks
+# of the language models. They are the builtin table.
+CALLED = {
+    DEFAULTS["cleanup_model"],
+    DEFAULTS["agent_model"],
+    DEFAULTS["stt_cloud_model"],
+    *CLEANUP_FALLBACKS,
+}
 
 
 class FakeModelsClient:
@@ -130,14 +137,18 @@ def test_a_per_second_price_that_cannot_be_one_is_read_per_hour_not_shown_as_six
 @pytest.mark.parametrize(("listed", "per_minute"), [("0.36", 0.006), ("60", 1.0), ("61", None)])
 def test_a_price_read_per_hour_is_still_unknown_when_it_is_too_dear_even_so(listed, per_minute):
     # MAI-Transcribe 1.5 is "0.36" (US$0.36 an hour). Over US$1 a minute even per hour is no price.
-    model = {"id": "microsoft/mai-transcribe-2", "pricing": {"prompt": listed, "completion": "0"}}
+    model = {
+        "id": "microsoft/mai-transcribe-2",
+        "architecture": {"modality": "audio->transcription"},
+        "pricing": {"prompt": listed, "completion": "0"},
+    }
     assert prices([model])["microsoft/mai-transcribe-2"].per_minute == per_minute
 
 
-def test_every_model_of_the_recorded_list_is_read_raphaels_own_among_them():
+def test_every_model_of_the_recorded_list_is_read_the_ones_raphael_calls_among_them():
     listed = prices(RECORDED)
     assert set(listed) == {model["id"] for model in RECORDED}
-    assert OFFERED <= set(listed)
+    assert CALLED <= set(listed)
 
 
 def test_a_model_the_list_does_not_have_is_left_out():
@@ -193,8 +204,8 @@ def test_entries_that_are_not_models_are_skipped():
     assert set(prices(models)) == set(prices(RECORDED))
 
 
-def test_the_builtin_table_covers_every_model_raphael_offers_and_equals_the_recorded_prices():
-    assert set(BUILTIN_PRICES) == OFFERED
+def test_the_builtin_table_is_the_models_raphael_calls_at_the_recorded_prices():
+    assert set(BUILTIN_PRICES) == CALLED == set(pricing.builtin_kinds())
     recorded = prices(RECORDED)
     for model_id, builtin in BUILTIN_PRICES.items():
         assert builtin == recorded[model_id], model_id
@@ -210,8 +221,8 @@ def test_the_builtin_table_names_each_model_as_the_recorded_list_does():
             recorded[entry.id].kind,
             recorded[entry.id].price,
         )
-        # Raphael's own models were tried live: every role of their kind can use them, and the
-        # language models take tools.
+        # The models Raphael calls were tried live: every role of their kind can use them, and
+        # the language models take tools.
         assert entry.capabilities == recorded[entry.id].capabilities, entry.id
         assert ("tool_calling" in entry.capabilities) == (entry.kind == "llm")
 
@@ -351,8 +362,11 @@ async def test_without_a_cache_a_network_failure_gives_the_builtin_prices(servic
     client.error = network_down()
     entries, fetched_at_ms, source = await service.catalog()
     assert (source, fetched_at_ms) == ("builtin", None)
-    assert [e.id for e in entries if e.kind == "llm"] == CLEANUP_MODEL_CHOICES
-    assert [e.id for e in entries if e.kind == "stt"] == list(STT_CLOUD_MODELS)
+    assert [e.id for e in entries if e.kind == "llm"] == [
+        DEFAULTS["cleanup_model"],
+        *CLEANUP_FALLBACKS,
+    ]
+    assert [e.id for e in entries if e.kind == "stt"] == [DEFAULTS["stt_cloud_model"]]
     listed = {entry.id: entry.price for entry in entries}
     luna = listed["openai/gpt-6-luna"]
     assert (luna.input_per_mtok, luna.output_per_mtok) == (0.1, 0.5)

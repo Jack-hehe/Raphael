@@ -73,18 +73,6 @@ AGENT_TEXT_MAX_CHARS = 100
 FAVORITE_ROLES = ("cleanup", "answer", "stt")
 MAX_FAVORITES = 50
 STT_ENGINES = ("cloud", "local")
-# The OpenRouter transcription models the settings page offered before it offered every one, the
-# default first. All are listed in OpenRouter's speech-to-text collection, each with an endpoint
-# (checked 2026-10-18).
-STT_CLOUD_MODELS = (
-    "elevenlabs/scribe-v2",
-    "openai/gpt-transcribe",
-    "microsoft/mai-transcribe-2",
-    "assemblyai/universal-3-6-pro",
-    "qwen/qwen3-asr-1.7b",
-    "google/gemini-3.5-transcribe",
-    "openai/whisper-large-v3-turbo",
-)
 # What one background task may cost, as the settings page offers it.
 WORKER_COST_CAPS = (0.10, 0.20, 0.50, 1.00)
 _CHOICES: dict[str, tuple[Any, ...]] = {

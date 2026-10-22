@@ -65,7 +65,8 @@ from raphael_core.brain.cleanup import (
     suspicion,
 )
 from raphael_core.brain.openrouter import (
-    CLEANUP_MODEL_CHOICES,
+    CLEANUP_FALLBACKS,
+    DEFAULT_CLEANUP_MODEL,
     OpenRouterClient,
     OpenRouterError,
 )
@@ -483,9 +484,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--cases", type=Path, default=Path("../eval/cleanup_cases.jsonl"))
     parser.add_argument(
         "--models",
-        default=",".join(CLEANUP_MODEL_CHOICES),
-        help="comma-separated OpenRouter model ids (default: Raphael's own cleanup models, the"
-        " default and its two fallbacks)",
+        default=",".join([DEFAULT_CLEANUP_MODEL, *CLEANUP_FALLBACKS]),
+        help="comma-separated OpenRouter model ids (default: the cleanup model Raphael"
+        " uses when nobody chose another, then its two fallbacks)",
     )
     parser.add_argument("--report", type=Path, default=Path("../eval/data/cleanup_report.md"))
     parser.add_argument(

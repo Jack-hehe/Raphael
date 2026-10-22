@@ -25,7 +25,8 @@ handler below; what a handler alone does not show is here:
   after a minute, without making a dictation wait for that check.
 - A model is chosen (`settings.set` of `cleanup_model`, `agent_model` or `stt_cloud_model`) from
   the catalog OpenRouter gave last, as `models.catalog` showed it: any model it lists that the
-  role can use, or, before any list could be had, one of Raphael's own (catalog.choice_problem).
+  role can use (catalog.choice_problem). Before any list could be had, the catalog is the builtin
+  table of the models Raphael calls when nobody chose another (pricing.builtin_catalog).
   Choosing fetches nothing. When `models.catalog` finds a chosen model gone from OpenRouter's
   list, the setting goes back to its default, and the answer's `replaced` says so for the app to
   tell the user, as it tells of a setting it could not change.
@@ -54,7 +55,7 @@ from .cloud_stt import CloudTranscriber
 from .dictionary import DictionaryStore, Learned
 from .history import HistoryItem, HistoryStore
 from .openrouter import KeyInfo, OpenRouterClient, OpenRouterError
-from .pricing import PricingService
+from .pricing import PricingService, builtin_catalog
 from .secrets import KeyStore
 from .settings import SettingsStore, checked
 from .spend import SpendTracker
@@ -90,8 +91,6 @@ _DAY_MS = 86_400_000
 # problem is a reason the role cannot use the model.
 _MODEL_PROBLEMS = {
     "not_listed": "Setting {key!r} must be a model that OpenRouter lists",
-    "not_curated": "Setting {key!r} must be one of Raphael's own models until OpenRouter's list"
-    " of models has been read",
 }
 _MODEL_UNUSABLE = "Setting {key!r} must be a model it can use, and this one cannot: {reason}"
 # SQLite stores integers in 64 bits and refuses to bind a larger one.
@@ -561,10 +560,13 @@ class Brain:
 
     def _check_model(self, role: Role, value: Any) -> None:
         """ValueError (or the store's TypeError) if `value` cannot be chosen for `role`, by the
-        catalog OpenRouter gave last (catalog.choice_problem)."""
+        catalog OpenRouter gave last, or the builtin one if it never gave one: the catalog the
+        settings page showed (catalog.choice_problem)."""
         _, model_id = checked(role.setting, value)
         current = self._settings.get(role.setting)
-        problem = choice_problem(role, model_id, self._pricing.known(), current)
+        known = self._pricing.known()
+        listed = builtin_catalog() if known is None else known
+        problem = choice_problem(role, model_id, listed, current)
         if problem is not None:
             message = _MODEL_PROBLEMS.get(problem, _MODEL_UNUSABLE)
             raise ValueError(message.format(key=role.setting, reason=problem))

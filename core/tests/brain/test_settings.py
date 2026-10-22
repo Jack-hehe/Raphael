@@ -2,7 +2,6 @@ import pytest
 
 from raphael_core.brain.settings import (
     DEFAULTS,
-    STT_CLOUD_MODELS,
     STT_ENGINES,
     SettingsStore,
 )
@@ -123,7 +122,6 @@ def test_speech_to_text_is_in_the_cloud_with_scribe_by_default(conn):
     assert s.get("stt_engine") == "cloud"
     assert s.get("stt_cloud_model") == "elevenlabs/scribe-v2"
     assert STT_ENGINES == ("cloud", "local")
-    assert STT_CLOUD_MODELS[0] == "elevenlabs/scribe-v2"
 
 
 def test_the_engine_can_be_local_or_cloud_and_nothing_else(conn):
@@ -138,8 +136,18 @@ def test_the_engine_can_be_local_or_cloud_and_nothing_else(conn):
     assert s.get("stt_engine") == "cloud"
 
 
-@pytest.mark.parametrize("model", STT_CLOUD_MODELS)
-def test_every_listed_cloud_model_can_be_chosen(conn, model):
+@pytest.mark.parametrize(
+    "model",
+    [
+        "elevenlabs/scribe-v2",
+        "openai/gpt-transcribe",
+        "qwen/qwen3-asr-1.7b",
+        "deepgram/nova-3",
+        "some-new-maker/a-model-of-next-year",
+    ],
+)
+def test_any_cloud_model_id_can_be_saved(conn, model):
+    # The store keeps no list of models: whatever OpenRouter lists can be chosen.
     s = SettingsStore(conn)
     s.set("stt_cloud_model", model)
     assert s.get("stt_cloud_model") == model
