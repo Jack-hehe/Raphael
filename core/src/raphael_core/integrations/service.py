@@ -10,12 +10,16 @@ The window manages the plugins with:
   opens the browser for the login and waits for the user (up to five minutes, which is why it is not
   a job like the others). It answers `{connected: true, server, tools}`, or `{connected: false, error}`
   with the kind of what went wrong (`denied` for a login the user refused, `cancelled`, `timeout`...);
-  `integrations.connect_cancel` ends the wait. The tokens go to the vault and nowhere else;
+  `integrations.connect_cancel` ends the wait. The tokens go to the vault and nowhere else. A service
+  with the device flow (GitHub) opens no browser: when the code is issued the core sends the
+  notification `integrations.device_code {catalog_id, user_code, verification_uri, expires_in}`,
+  the window shows it, and the call waits for the user to type it at the service;
 - `integrations.add {name, transport, command, args, env, url, headers}` connect a server of the
   user's own. The values of `env` and `headers` are secrets: they go to the vault at once and are
   never sent back, logged or kept anywhere else; the list shows only their names;
 - `integrations.set_enabled {id, enabled}` the whole service on or off; `integrations.disconnect {id}`
-  revokes the login if the server takes revocations, forgets the secrets and removes the server;
+  revokes the login if the server takes revocations (a device login has no revocation: the user
+  takes it back on the service's page), forgets the secrets and removes the server;
 - `integrations.refresh {id}` connect, read the tool list, keep it; `integrations.tools {id}` the
   tools kept, each on or off and a `kind` (`write` or `read`, for the screen only);
 - `integrations.set_tool_enabled {id, tool, enabled}` the user's decision about one tool. Every tool
@@ -116,6 +120,7 @@ class IntegrationsService:
         call_timeout_s: float = CALL_TOTAL_S,
         open_browser: OpenBrowser = open_in_browser,
         login_timeout_s: float = LOGIN_TIMEOUT_S,
+        notify: Callable[[str, dict], None] | None = None,
     ) -> None:
         self._config = ConfigStore(directory)
         self._vault = vault
@@ -128,6 +133,7 @@ class IntegrationsService:
         self._locks: dict[str, asyncio.Lock] = {}
         self._open_browser = open_browser
         self._login_timeout_s = login_timeout_s
+        self._notify = notify
         # The login that is under way (one at a time: there is one browser and one user).
         self._login: asyncio.Task | None = None
         self._login_for = ""  # the id of the server it signs in to
@@ -232,7 +238,7 @@ class IntegrationsService:
         ident = params.get("id")
         if ident is not None:
             server = self._server(params)
-            if server.auth != "oauth":
+            if server.auth not in ("oauth", "device"):
                 raise _invalid("This plugin does not use a login")
             new = False
         else:
@@ -254,7 +260,9 @@ class IntegrationsService:
             # A public server: there is no login, so the browser stays shut and the tools are read at once.
             job = self._join_public(server)
         else:
-            job = self._connector.login(server, self._open_browser, timeout_s=self._login_timeout_s)
+            job = self._connector.login(
+                server, self._open_browser, timeout_s=self._login_timeout_s, on_code=self._code_sender(server)
+            )
         self._login = asyncio.create_task(job)
         self._login_for = server.id
         try:
@@ -285,6 +293,23 @@ class IntegrationsService:
             raise _not_saved(exc) from None
         self._failure.pop(server.id, None)
         return {"connected": True, "server": self._view(server), "tools": self._tool_views(server)}
+
+    def _code_sender(self, server: ServerConfig) -> Any:
+        """What tells the window the code of a device login (nothing is logged)."""
+
+        async def send(code: Any) -> None:
+            if self._notify is not None:
+                self._notify(
+                    "integrations.device_code",
+                    {
+                        "catalog_id": server.catalog_id,
+                        "user_code": code.user_code,
+                        "verification_uri": code.verification_uri,
+                        "expires_in": code.expires_in,
+                    },
+                )
+
+        return send
 
     async def _join_public(self, server: ServerConfig) -> LoginResult:
         return LoginResult(await self._connector.list_tools(server))
@@ -371,7 +396,7 @@ class IntegrationsService:
         self._failure.pop(server.id, None)
         self._locks.pop(server.id, None)
         revoked = False
-        if server.auth == "oauth":
+        if server.auth in ("oauth", "device"):
             storage = VaultTokenStorage(self._vault, server.id)
             revoked = await revoke(storage, server.revocation_url) if server.revocation_url else False
             try:

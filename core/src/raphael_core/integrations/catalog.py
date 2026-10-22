@@ -4,7 +4,10 @@ The catalog is code in the repository, versioned with the app. Nothing is fetche
 there is no remote path by which a service could be added, and the store works offline. Each entry
 is a service whose official MCP server lets a client sign a user in with no app registered
 beforehand (the server accepts dynamic client registration, RFC 7591, with PKCE and a public
-client); anything that needs a client id from the user (GitHub, Slack, Figma, Google) is not here.
+client), or one that can be signed in to with the device flow (RFC 8628) and a public client id that
+is built in: the user types a short code once at the service's own page, and no secret exists
+anywhere (GitHub). Anything else that needs a client id or a secret from the user (Slack, Figma,
+Google) is not here. An entry whose client id is not filled in yet is left out of the store.
 
 The words are kept in the languages of the window (`zh-TW`, `en`, `ja`), and the window picks.
 """
@@ -16,9 +19,20 @@ from .config import checked_url
 LANGUAGES = ("zh-TW", "en", "ja")
 CATEGORIES = ("docs", "projects", "developer", "payments", "automation", "design", "crm", "analytics")
 # The marks the window has (`service-icons.ts`, `service-logos/`): every entry shows its brand's own.
-ICONS = ("notion", "linear", "atlassian", "cloudflare", "todoist", "sentry", "stripe", "zapier", "paypal", "monday", "webflow", "wix", "netlify", "neon", "prisma", "airtable", "jam", "fireflies", "close", "calendly", "attio", "granola", "posthog", "postman", "klaviyo", "sanity", "apify", "jotform", "bitly", "context7", "deepwiki", "mslearn", "aws", "huggingface", "exa")
+ICONS = ("notion", "linear", "atlassian", "cloudflare", "todoist", "sentry", "stripe", "zapier", "paypal", "monday", "webflow", "wix", "netlify", "neon", "prisma", "airtable", "jam", "fireflies", "close", "calendly", "attio", "granola", "posthog", "postman", "klaviyo", "sanity", "apify", "jotform", "bitly", "context7", "deepwiki", "mslearn", "aws", "huggingface", "exa", "github")
 # Entries the store shows first, in this order.
 POPULAR = ("notion", "linear", "atlassian", "todoist", "stripe")
+
+
+@dataclass(frozen=True)
+class DeviceLogin:
+    """How a service is signed in to with the device flow: the public client id of Raphael's app
+    there (no secret exists), what is asked for, and the two endpoints."""
+
+    client_id: str
+    scopes: tuple[str, ...]
+    device_endpoint: str
+    token_endpoint: str
 
 
 @dataclass(frozen=True)
@@ -32,7 +46,8 @@ class Service:
     summary: dict[str, str]
     about: dict[str, str]
     examples: dict[str, tuple[str, ...]]
-    auth: str = "oauth"  # "none": a public server, added with no login
+    auth: str = "oauth"  # "none": a public server, added with no login; "device": the device flow
+    device: DeviceLogin | None = None  # with auth "device"
 
 
 def _service(
@@ -46,6 +61,7 @@ def _service(
     about: tuple[str, str, str],
     examples: tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]],
     auth: str = "oauth",
+    device: DeviceLogin | None = None,
 ) -> Service:
     return Service(
         id=ident,
@@ -58,6 +74,7 @@ def _service(
         about=dict(zip(LANGUAGES, about, strict=True)),
         examples=dict(zip(LANGUAGES, examples, strict=True)),
         auth=auth,
+        device=device,
     )
 
 
@@ -578,6 +595,38 @@ SERVICES: tuple[Service, ...] = (
         auth="none",
     ),
 )
+
+# The client id of Raphael's OAuth App on GitHub (public; the device flow has no secret). While it is
+# empty the app is not registered yet, and GitHub is not in the store.
+GITHUB_CLIENT_ID = ""
+
+
+def github_service(client_id: str) -> Service:
+    return _service(
+        "github", "GitHub", "GitHub", "https://api.githubcopilot.com/mcp/", "developer", "github",
+        ("你的程式庫、議題、PR 和通知", "Your repositories, issues, pull requests and notifications", "リポジトリ、Issue、PR、通知"),
+        (
+            "讓拉斐爾搜尋程式碼、閱讀和整理議題與 PR，也能查看你的通知。",
+            "Lets Raphael search code, read and manage issues and pull requests, and check your notifications.",
+            "コードの検索、Issue や PR の閲覧・整理、通知の確認ができます。",
+        ),
+        (
+            ("我有哪些待處理的 PR", "在這個程式庫開一個議題", "看一下我的 GitHub 通知"),
+            ("Which pull requests are waiting for me", "Open an issue in this repository", "Check my GitHub notifications"),
+            ("自分宛ての PR を教えて", "このリポジトリに Issue を作って", "GitHub の通知を確認して"),
+        ),
+        auth="device",
+        device=DeviceLogin(
+            client_id=client_id,
+            scopes=("repo", "read:org", "read:user", "notifications"),
+            device_endpoint="https://github.com/login/device/code",
+            token_endpoint="https://github.com/login/oauth/access_token",
+        ),
+    )
+
+
+if GITHUB_CLIENT_ID:
+    SERVICES = SERVICES + (github_service(GITHUB_CLIENT_ID),)
 
 _BY_ID = {service.id: service for service in SERVICES}
 
