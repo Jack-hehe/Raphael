@@ -56,6 +56,8 @@ const REFRESH_DELAY_MS = 150;
 const CLEAR_CONFIRM_MS = 4000;
 /** The search waits for the typing to pause this long. */
 const SEARCH_DELAY_MS = 200;
+/** The longest words the search takes (the core's and the app's limit for `agent.history.search`). */
+const SEARCH_MAX_CHARS = 200;
 /** The most a typed question may hold, an attached file included (the app's own limit is the same). */
 export const TYPED_MAX_CHARS = 100_000;
 /** The composer grows with its text up to this many lines, then scrolls. */
@@ -121,7 +123,7 @@ export function createAgent(app: AppContext): Page {
     iconButton("sliders", t("agent.settings"), ' data-act="settings"', "ra-tool") +
     `</div></div>` +
     `<div class="ra-find" hidden><span class="ra-find-ic">${ico("search")}</span>` +
-    `<input type="search" class="ra-find-input" autocomplete="off" spellcheck="false">` +
+    `<input type="search" class="ra-find-input" autocomplete="off" spellcheck="false" maxlength="${SEARCH_MAX_CHARS}">` +
     `<span class="ra-find-count num" aria-live="polite"></span>` +
     iconButton("x", t("agent.searchClose"), ' data-act="search-close"', "ra-tool") +
     `</div>` +
@@ -219,8 +221,6 @@ export function createAgent(app: AppContext): Page {
   let searching = false;
   let query = "";
   let found: AgentTurn[] | null = null;
-  /** Whether the core can search the history (`agent.history.search`); unknown until it is tried. */
-  let coreSearch: boolean | null = null;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let searches = 0;
   /** What each line of the thread was drawn from, so that a line whose HTML is the same stays as it is. */
@@ -708,20 +708,23 @@ export function createAgent(app: AppContext): Page {
     }
   }
 
-  /** Looks for the words: in the whole history when the core can (`agent.history.search`), else in what is loaded. */
+  /**
+   * Looks for the words in the whole history (`agent.history.search`): the turns found show in the
+   * thread under their days, however far behind the loaded ones they are. When the core cannot
+   * answer this time (it is starting again, say), the loaded turns are looked through instead, and
+   * the next search asks the core again.
+   */
   async function runSearch(): Promise<void> {
     const mine = ++searches;
     const words = query.trim();
     found = null;
-    if (words !== "" && coreSearch !== false) {
+    if (words !== "") {
       try {
         const turnsFound = (await api.agentHistorySearch(words)).turns;
         if (mine !== searches) return;
-        coreSearch = true;
         found = turnsFound;
       } catch {
         if (mine !== searches) return;
-        coreSearch = coreSearch === true; // a core that searched before failed this once; one without the method never did
       }
     }
     render(true);
@@ -791,7 +794,8 @@ export function createAgent(app: AppContext): Page {
   /** Opens or closes what a turn did, where it is: the box slides, nothing else is drawn again. */
   function toggleSteps(button: HTMLElement): void {
     const id = Number(button.closest<HTMLElement>(".tn")?.dataset.id);
-    const turn = turns.find((candidate) => candidate.id === id);
+    // A turn the search found may be one that is not loaded.
+    const turn = turns.find((candidate) => candidate.id === id) ?? found?.find((candidate) => candidate.id === id);
     const box = button.closest<HTMLElement>(".steps");
     const steps = box?.querySelector<HTMLElement>(".steps-body");
     if (!turn || !box || !steps) return;

@@ -83,7 +83,7 @@ export const agentHistoryClear = (): Promise<{ deleted: number }> => core("agent
 export const workerCancel = (taskId: number): Promise<{ cancelled: boolean }> => core("worker.cancel", { task_id: taskId });
 /** Runs a task that did not finish again, as a new task; its id. */
 export const workerRerun = (taskId: number): Promise<{ task_id: number }> => core("worker.rerun", { task_id: taskId });
-/** The turns whose words hold `query`, newest first, over the whole history (a core that has the method). */
+/** The answered turns whose words hold `query`, best first, over the whole history, in the shape of `agentHistoryList`. */
 export const agentHistorySearch = (query: string): Promise<{ turns: AgentTurn[] }> => core("agent.history.search", { query, limit: 100 });
 
 /**

@@ -162,6 +162,27 @@ describe("coming back to the page", () => {
   });
 });
 
+describe("the search", () => {
+  test("shows what the core found in the whole history, and what a found turn did opens", async () => {
+    vi.useFakeTimers();
+    api.agentHistoryList.mockResolvedValueOnce({ turns: page(200, 50) }).mockResolvedValue({ turns: [] });
+    const step = { kind: "tool", tool: "search", server: "Raphael", outcome: "ok", ms: 800, reason: null, at_ms: 0 };
+    api.agentHistorySearch.mockResolvedValue({ turns: [turn(3, { question: "出差的行程", steps: [step] })] });
+    mount();
+    await flush();
+    document.querySelector<HTMLElement>('[data-act="search"]')!.click();
+    const field = document.querySelector<HTMLInputElement>(".ra-find-input")!;
+    field.value = "出差";
+    field.dispatchEvent(new Event("input"));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(api.agentHistorySearch).toHaveBeenCalledWith("出差");
+    expect(shownIds()).toEqual([3]); // far behind the loaded page
+    const open = document.querySelector<HTMLElement>('.tn[data-id="3"] [data-act="steps"]')!;
+    open.click();
+    expect(open.closest<HTMLElement>(".steps")!.dataset.open).toBe("true");
+  });
+});
+
 describe("a question said aloud", () => {
   test("its 「正在辨識」 line goes after the longest wait even when nothing more comes from the core", async () => {
     vi.useFakeTimers();
