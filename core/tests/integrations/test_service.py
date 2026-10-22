@@ -1,5 +1,6 @@
 """Tests for the plugins' RPC methods and the hub the assistant calls tools through."""
 
+import asyncio
 import json
 import logging
 
@@ -10,6 +11,7 @@ from raphael_core.integrations import service as service_module
 from raphael_core.integrations.client import McpConnector
 from raphael_core.integrations.service import IntegrationsService
 from raphael_core.integrations.vault import secret_name
+from . import fake_server
 from raphael_core.protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from raphael_core.router import Router
 
@@ -565,3 +567,104 @@ def test_the_service_works_with_the_connector_it_makes_itself(conn, tmp_path, va
     assert isinstance(
         IntegrationsService(conn, tmp_path, vault)._connector, McpConnector
     )
+
+
+async def test_removing_a_server_closes_the_connections_kept_for_it(service, rpc, servers, connector):
+    from raphael_core.integrations.pool import McpPool
+
+    server_id = await add(rpc, servers)
+    server = service._config.get(server_id)
+    pool = McpPool()
+    await connector.call_tool(server, "look", {"topic": "a"}, pool=pool)
+    assert pool.open_count == 1
+    await rpc.call("integrations.disconnect", {"id": server_id})
+    for _ in range(100):
+        if pool.open_count == 0:
+            break
+        await asyncio.sleep(0.02)
+    assert pool.open_count == 0
+    await pool.aclose()
+
+
+async def test_a_refresh_closes_the_connections_kept_for_the_server(service, rpc, servers, connector):
+    from raphael_core.integrations.pool import McpPool
+
+    server_id = await add(rpc, servers)
+    server = service._config.get(server_id)
+    pool = McpPool()
+    await connector.call_tool(server, "look", {"topic": "a"}, pool=pool)
+    assert pool.open_count == 1
+    await rpc.call("integrations.refresh", {"id": server_id})
+    for _ in range(100):
+        if pool.open_count == 0:
+            break
+        await asyncio.sleep(0.02)
+    assert pool.open_count == 0
+    await pool.aclose()
+
+
+async def test_a_parameter_renamed_between_two_tasks_is_saved_by_the_first_call_of_the_next(
+    service, rpc, servers
+):
+    from raphael_core.integrations.pool import McpPool
+
+    server_id = await add(rpc, servers)
+    key = f"mcp:{server_id}/look"
+    old = McpPool()
+    assert (await service.call(key, {"topic": "a"}, approver="auto", pool=old)).ok
+    await old.aclose()
+    servers.by_name["Notes"] = fake_server.build(renamed=True)  # the server was updated meanwhile
+    new = McpPool()
+    await service.call(key, {"topic": "a"}, approver="auto", pool=new)  # the old name: it is refused
+    look = next(t for t in service._config.get(server_id).tools if t.name == "look")
+    assert "query" in look.input_schema["properties"]  # but the new schema was kept
+    assert (await service.call(key, {"query": "b"}, approver="auto", pool=new)).ok
+    await new.aclose()
+
+
+async def test_only_a_tool_the_server_says_reads_is_read_only_for_a_rerun(service, rpc, servers):
+    server_id = await add(rpc, servers)
+    assert service.kind_of("Notes", "look") == "read"  # annotated readOnlyHint
+    assert service.kind_of("Notes", "note") == "write"
+    assert service.kind_of("Notes", "unknown") == "write"
+    server = service._config.get(server_id)
+    from raphael_core.integrations.config import tool_record
+
+    server.tools.append(tool_record("get_or_create_page", "", {}, None, None, None))
+    server.tools.append(tool_record("resolve_ticket", "", {}, None, None, None))
+    assert service.kind_of("Notes", "get_or_create_page") == "write"  # its name only sounds like a read
+    assert service.kind_of("Notes", "resolve_ticket") == "write"
+    server.tools.append(tool_record("fetch_it", "", {}, True, True, None))
+    assert service.kind_of("Notes", "fetch_it") == "write"  # also said to destroy
+
+
+async def test_a_call_cut_off_by_a_refresh_is_not_a_blocked_one(service, rpc, servers, calls):
+    import asyncio as aio
+
+    from raphael_core.integrations.pool import McpPool
+
+    server_id = await add(rpc, servers)
+    pool = McpPool()
+    running = aio.ensure_future(
+        service.call(f"mcp:{server_id}/slow", {}, approver="auto", pool=pool)
+    )
+    for _ in range(200):
+        if "slow" in calls:
+            break
+        await aio.sleep(0.02)
+    await rpc.call("integrations.refresh", {"id": server_id})
+    result = await running
+    assert (result.ok, result.kind) == (False, "cancelled")
+    await pool.aclose()
+
+
+async def test_a_changed_tool_other_than_the_one_called_first_is_saved_too(service, rpc, servers):
+    from raphael_core.integrations.pool import McpPool
+
+    server_id = await add(rpc, servers)
+    servers.by_name["Notes"] = fake_server.build(renamed=True)
+    pool = McpPool()
+    await service.call(f"mcp:{server_id}/note", {"text": "x"}, approver="auto", pool=pool)
+    look = next(t for t in service._config.get(server_id).tools if t.name == "look")
+    assert "query" in look.input_schema["properties"]
+    await pool.aclose()

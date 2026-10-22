@@ -33,7 +33,7 @@ REPEAT_LIMIT = 3
 
 # The tags the prompts are built from. A text that holds one is changed so that it does not close,
 # or open, what it is inside of.
-_TAGS = re.compile(r"<(/?)\s*(tool_result|task|question|conversation)\b", re.IGNORECASE)
+_TAGS = re.compile(r"<(/?)\s*(tool_result|task|question|conversation|previous_attempt|background_tasks)\b", re.IGNORECASE)
 
 
 def neutralize(text: str) -> str:

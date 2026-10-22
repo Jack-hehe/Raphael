@@ -32,7 +32,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from http import HTTPStatus
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ..brain.catalog import LLM, TOOL_CALLING, CatalogEntry, find
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
@@ -41,6 +41,9 @@ from .failure import AgentFailure, failure_kind
 from .history import Turn
 from .ledger import Ledger
 from .policy import PLUGIN_PREFIX, Tier
+
+if TYPE_CHECKING:
+    from ..integrations.pool import McpPool
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +108,13 @@ class PluginHub(Protocol):
         *,
         approver: str,
         task_id: int | None = None,
+        pool: "McpPool | None" = None,
     ) -> PluginResult:
         """Call a tool and write the audit. `approver` is "auto" for a call that needs no yes, and
         "user" for one the user said yes to; a call at T2 or T3 is refused without "user".
-        `task_id` is the background task that makes the call, if one does (the audit says so)."""
+        `task_id` is the background task that makes the call, if one does (the audit says so).
+        `pool` keeps the connection to the tool's server open for the next call (none: one is made
+        for this call alone)."""
         ...
 
     def record_unrun(self, key: str, *, outcome: str, task_id: int | None = None) -> None:

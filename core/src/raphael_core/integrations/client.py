@@ -1,10 +1,12 @@
 """Talking to an MCP server: connect when there is something to do, list its tools, call one.
 
 A connection is made for each job and closed when the job is done (a stdio server is started for
-it and stopped after it; an HTTP server is called with a request client of its own). There is
-nothing to keep alive, and so nothing that can be left running when the app closes. The price is
+it and stopped after it; an HTTP server is called with a request client of its own). The price is
 the time a server takes to start, which is the reason the lists of tools are cached
-(`config.ToolRecord`) and the assistant plans from the cache.
+(`config.ToolRecord`) and the assistant plans from the cache. The calls of a tool can be given a
+pool (`pool.McpPool`) instead: one connection for each server, kept for the calls of a background
+task or for a couple of minutes of the assistant's, and closed with the pool, so that nothing is
+left running when the task or the app ends.
 
 - Every job has a time limit that covers the connection too. A stdio server is started with the
   environment the user gave it on top of the few variables a program needs (the SDK's list), not
@@ -30,15 +32,19 @@ import contextlib
 import json
 import logging
 import os
+import weakref
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .. import __version__
 from .config import ServerConfig, ToolRecord, tool_record
 from .vault import SecretVault, secret_name
+
+if TYPE_CHECKING:
+    from .pool import McpPool
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +80,7 @@ KINDS = (
     "missing_secret",
     "denied",
     "gone",
+    "cancelled",  # the call was sent and the connection ended: it may have been made
     "error",
 )
 
@@ -108,6 +115,8 @@ class CallOutcome:
     truncated: bool = False
     # The tool as its server describes it now, when that is not what the caller expected.
     fresh: ToolRecord | None = None
+    # The whole list the connection read for this call, to be compared with the saved one.
+    listed: list[ToolRecord] | None = None
 
 
 @dataclass
@@ -226,6 +235,8 @@ class McpConnector:
     def __init__(self, vault: SecretVault, opener: Opener = open_client) -> None:
         self._vault = vault
         self._opener = opener
+        # The pools that hold connections made with this connector's secrets.
+        self._pools: "weakref.WeakSet[McpPool]" = weakref.WeakSet()
 
     def _secrets(self, server: ServerConfig, *, signing_in: bool = False) -> Secrets:
         secrets = Secrets()
@@ -250,6 +261,13 @@ class McpConnector:
             if not secrets.oauth.storage.has_tokens():
                 raise McpFailure("auth")  # never signed in, or the tokens are gone: sign in again
         return secrets
+
+    def invalidate(self, server_id: str) -> None:
+        """The secrets of a server changed (a login again, a removal): the connections the pools
+        hold for it were made with the old ones, so they are closed. Calls under way on them fail;
+        the next call opens a connection with the new secrets."""
+        for pool in list(self._pools):
+            pool.evict(server_id)
 
     def _oauth(self, server: ServerConfig, **login: Any) -> Any:
         from .oauth import OAuthAccess, VaultTokenStorage
@@ -328,20 +346,35 @@ class McpConnector:
         *,
         expected: str | None = None,
         timeout_s: float = CALL_TOTAL_S,
+        pool: "McpPool | None" = None,
     ) -> CallOutcome:
         """Call `tool` of `server`. McpFailure (of a kind) when it cannot be called, `gone` when the
         server has no such tool any more; a tool that ran and said it failed is a CallOutcome with
         `is_error`. When the tool is not the one with fingerprint `expected` (the server describes
-        it differently now) it is called all the same and the outcome has the new description."""
+        it differently now) it is called all the same and the outcome has the new description.
+        With a `pool` the call goes through the connection the pool keeps for the server (opened if
+        there is none, with the tool list read then); without one the connection is made for this
+        call alone and closed after it."""
         secrets = self._secrets(server)
         try:
             async with asyncio.timeout(timeout_s):
                 await self._ready()
-                async with self._opener(server, secrets) as client:
-                    current = next((t for t in await self._list(client) if t.name == tool), None)
-                    if current is None:
-                        raise McpFailure("gone")
-                    result = await client.call_tool(tool, arguments)
+                if pool is not None:
+                    self._pools.add(pool)
+                    result, current, listed = await pool.call(
+                        server.id,
+                        lambda: self._opener(server, secrets),
+                        self._list,
+                        tool,
+                        arguments,
+                    )
+                else:
+                    async with self._opener(server, secrets) as client:
+                        listed = await self._list(client)
+                        current = next((t for t in listed if t.name == tool), None)
+                        if current is None:
+                            raise McpFailure("gone")
+                        result = await client.call_tool(tool, arguments)
         except Exception as exc:
             raise _failure("tool call", exc) from None
         text, truncated = render_result(result)
@@ -349,7 +382,12 @@ class McpConnector:
             text=text,
             is_error=bool(getattr(result, "is_error", False)),
             truncated=truncated,
-            fresh=current if expected is not None and current.fingerprint != expected else None,
+            # The list read for this call is given back to be saved; the list of a pooled
+            # connection that has been open for other calls may be older than the one saved.
+            fresh=current
+            if listed is not None and expected is not None and current.fingerprint != expected
+            else None,
+            listed=listed,
         )
 
 

@@ -80,6 +80,7 @@ def build_user_message(
     context: Sequence[Turn],
     tools: Sequence[ToolResult],
     language: str,
+    background: str = "",
 ) -> str:
     """What the model is shown: the date and time, the conversation so far (oldest first), the
     results of the tools, the question in tags, which mark it as the user's words, and last the
@@ -95,6 +96,8 @@ def build_user_message(
         parts.append("Conversation so far (oldest first):\n" + "\n".join(lines))
     if tools:
         parts.append("Tool results:\n" + "\n".join(_tool_line(result) for result in tools))
+    if background:  # the block of the tasks in the background (`background.brief`), as data
+        parts.append(background)
     parts.append(f"<question>\n{question}\n</question>")
     parts.append(language_reminder(language))
     return "\n\n".join(parts)
@@ -165,6 +168,7 @@ class Voice:
         tools: Sequence[ToolResult],
         moment: Mapping[str, str],
         ledger: Ledger,
+        background: str = "",
     ) -> Reply:
         """What Raphael says to `question` on `route` ("answer", "discuss" or "chat"), in
         `language`. AgentFailure (of a kind) if the model fails or says nothing."""
@@ -174,7 +178,7 @@ class Voice:
                     model=model,
                     fallbacks=CLEANUP_FALLBACKS,
                     system=system_prompt(language, route),
-                    user=build_user_message(question, moment, context, tools, language),
+                    user=build_user_message(question, moment, context, tools, language, background),
                     schema=reply_schema(language),
                     schema_name="raphael_reply",
                     timeout_s=self._timeout_s,

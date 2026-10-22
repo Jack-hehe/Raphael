@@ -159,7 +159,17 @@ SCHEMA_V11 = {
         "reason TEXT",
     ],
 }
-LATEST = 11
+# Schema v12 adds what a rerun and an interrupted task's report need: whether the report was
+# said yet and the task a rerun came from.
+SCHEMA_V12 = {
+    **SCHEMA_V11,
+    "worker_tasks": [
+        *SCHEMA_V11["worker_tasks"],
+        "announced INTEGER NOT NULL DEFAULT 1",
+        "rerun_of INTEGER",
+    ],
+}
+LATEST = 12
 
 
 def schema_names(conn, kind):
@@ -183,7 +193,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V11)
+    assert schema_names(conn, "table") == set(SCHEMA_V12)
     assert {
         "history_created",
         "agent_turns_created",
@@ -194,7 +204,7 @@ def test_connect_creates_the_latest_schema(conn):
         "agent_steps_turn",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V11.items():
+    for table, columns in SCHEMA_V12.items():
         assert describe_columns(conn, table) == columns
 
 
@@ -416,7 +426,7 @@ def assert_has_the_latest_schema(migrated, fresh):
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert schema_names(migrated, "table") == schema_names(fresh, "table")
     assert schema_names(migrated, "index") == schema_names(fresh, "index")
-    for table in SCHEMA_V11:
+    for table in SCHEMA_V12:
         assert describe_columns(migrated, table) == describe_columns(fresh, table)
     assert migrated.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
     assert HistoryStore(migrated).latest().text == "A"

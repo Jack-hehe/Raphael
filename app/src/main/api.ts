@@ -76,6 +76,8 @@ export const agentHistoryList = (q: AgentHistoryQuery = {}): Promise<{ turns: Ag
 export const agentHistoryClear = (): Promise<{ deleted: number }> => core("agent.history.clear");
 /** Stops the background task `taskId` (the one that runs, or one that waits); says whether there was one to stop. */
 export const workerCancel = (taskId: number): Promise<{ cancelled: boolean }> => core("worker.cancel", { task_id: taskId });
+/** Runs a task that did not finish again, as a new task; its id. */
+export const workerRerun = (taskId: number): Promise<{ task_id: number }> => core("worker.rerun", { task_id: taskId });
 
 // ---------- dictionary ----------
 

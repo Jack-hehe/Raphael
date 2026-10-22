@@ -3,7 +3,7 @@ import { zhTW } from "./zh-TW";
 
 /** Localize known Rust command errors at the UI boundary without changing the Rust contract. */
 const exact = [
-  "backend.limit", "backend.retention", "backend.language", "backend.stt", "backend.model",
+  "backend.limit", "backend.retention", "backend.language", "backend.stt", "backend.workerCap", "backend.model",
   "backend.micTimeout", "backend.emptyDictation", "backend.emptyPaste", "backend.duplicateDictation",
   "backend.duplicatePaste", "backend.conflictingKeys", "backend.invalidKeys", "backend.emptyAgent",
   "backend.duplicateAgent", "backend.conflictingDictationAgent", "backend.conflictingPasteAgent",

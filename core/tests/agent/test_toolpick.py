@@ -63,7 +63,7 @@ class Hub:
     def tier_of(self, key):
         return Tier.T0 if any(t.key == key for t in self.tools) else None
 
-    async def call(self, key, arguments, *, approver, task_id=None):
+    async def call(self, key, arguments, *, approver, task_id=None, pool=None):
         self.made.append((key, dict(arguments)))
         return PluginResult(True, None, "found")
 

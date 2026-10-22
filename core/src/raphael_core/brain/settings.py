@@ -59,6 +59,8 @@ DEFAULTS: dict[str, Any] = {
     "agent_model": "openai/gpt-6-luna",
     # Where the weather is looked up when the user does not say.
     "agent_city": "台北",
+    # The most one background task may spend, in US$ (one of WORKER_COST_CAPS).
+    "worker_cost_cap_usd": 0.20,
     # The models the user starred in the pickers, per role (the page's names for them), in the order
     # they were added. The page shows the ones the catalog still has at the top of its list; the
     # others stay here, in case the catalog gets them back.
@@ -83,7 +85,10 @@ STT_CLOUD_MODELS = (
     "google/gemini-3.5-transcribe",
     "openai/whisper-large-v3-turbo",
 )
-_CHOICES: dict[str, tuple[str, ...]] = {
+# What one background task may cost, as the settings page offers it.
+WORKER_COST_CAPS = (0.10, 0.20, 0.50, 1.00)
+_CHOICES: dict[str, tuple[Any, ...]] = {
+    "worker_cost_cap_usd": WORKER_COST_CAPS,
     "stt_engine": STT_ENGINES,
     "stt_local_model": tuple(entry.name for entry in LOCAL_STT_MODELS),
     "language": LEGACY_LANGUAGES,
@@ -111,7 +116,7 @@ def _allowed(key: str, value: Any) -> Any:
     """`value`, or ValueError if the key has a list of choices and `value` is not on it."""
     choices = _CHOICES.get(key)
     if choices is not None and value not in choices:
-        raise ValueError(f"Setting {key!r} must be one of {', '.join(choices)}")
+        raise ValueError(f"Setting {key!r} must be one of {', '.join(str(c) for c in choices)}")
     return value
 
 

@@ -1638,6 +1638,8 @@ mod app {
 
         let notifications = core.as_ref().map(|core| core.subscribe());
         let background_notifications = core.as_ref().map(|core| core.subscribe());
+        let announce_notifications = core.as_ref().map(|core| core.subscribe());
+        let announce_core = core.clone();
         let overlay = Arc::new(MaybeOverlay(overlay));
         let controller = match core {
             Some(core) => {
@@ -1666,6 +1668,10 @@ mod app {
         // tray follows whether a task runs.
         if let (Some(controller), Some(notifications)) = (&controller, background_notifications) {
             crate::background::spawn(app, Arc::new(controller.clone()), notifications);
+            // ... and only now that they have a listener, the core says the ones from before.
+            if let (Some(core), Some(announce)) = (announce_core, announce_notifications) {
+                crate::background::announce_pending(core, announce);
+            }
         }
         let inputs = Inputs {
             hotkey_events,
