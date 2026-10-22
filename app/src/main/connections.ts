@@ -299,9 +299,12 @@ function toolGroupHTML(g: ConnectionGroup, kind: ToolKind, v: ConnectionsView): 
   const on = tools.filter((tool) => tool.enabled).length;
   const state = on === tools.length ? "true" : on === 0 ? "false" : "mixed";
   const head =
-    `<div class="ghead"><button type="button" class="btn ghfold" aria-expanded="${open}" data-conn="fold" data-kind="${kind}">` +
-    `<span class="gt">${esc(t(kind === "write" ? "conn.group.write" : "conn.group.read"))}<small>${esc(t("conn.group.count", { p0: tools.length }))}</small></span>` +
-    `${ico(open ? "down" : "right")}</button>` +
+    `<div class="ghead">` +
+    btn(
+      `<span class="gt">${esc(t(kind === "write" ? "conn.group.write" : "conn.group.read"))}<small>${esc(t("conn.group.count", { p0: tools.length }))}</small></span>${ico(open ? "down" : "right")}`,
+      "ghfold",
+      ` aria-expanded="${open}" data-conn="fold" data-kind="${kind}"`,
+    ) +
     // a checkbox role, not a switch: only that one has a "mixed" state
     `<button type="button" class="tg" role="checkbox" aria-checked="${state}" aria-label="${esc(t(kind === "write" ? "conn.groupSwitch.write" : "conn.groupSwitch.read"))}" data-conn="group" data-id="${esc(g.id)}" data-kind="${kind}"${v.busy.has(g.id) ? " disabled" : ""}></button></div>`;
   return `<div class="slist cs-tools-list">${head}${open ? tools.map((tool) => toolRow(g, tool, v.busy.has(g.id))).join("") : ""}</div>`;
@@ -356,8 +359,12 @@ function cardHTML(s: StoreService, v: ConnectionsView): string {
   const here = v.login?.target === s.id;
   const line = here ? t(s.auth === "none" ? "conn.connecting" : "conn.loggingIn") : words(s.summary);
   return (
-    `<div class="cs-card"><button type="button" class="btn cs-main" data-conn="open-store" data-id="${esc(s.id)}" title="${esc(`${s.name}: ${words(s.summary)}`)}">` +
-    `${entryIcon(s, "md")}<span class="tx"><span class="nm">${esc(s.name)}</span><span class="sub${here ? " wait" : ""}">${esc(line)}</span></span></button>` +
+    `<div class="cs-card">` +
+    btn(
+      `${entryIcon(s, "md")}<span class="tx"><span class="nm">${esc(s.name)}</span><span class="sub${here ? " wait" : ""}">${esc(line)}</span></span>`,
+      "cs-main",
+      ` data-conn="open-store" data-id="${esc(s.id)}" title="${esc(`${s.name}: ${words(s.summary)}`)}"`,
+    ) +
     `${joinControl(s, v)}</div>`
   );
 }

@@ -58,9 +58,9 @@ export function createDictionary(app: AppContext): DictionaryPage {
     }) +
     t("dictionary.009") +
     `<div class="addword card" hidden>${fieldHTML(t("dictionary.010"), "", { id: "nw-word", get label() { return t("dictionary.011"); } })}` +
-    `<div class="addword-actions">${btn(t("dictionary.014"), "pri", ' data-act="add"')}${btn(t("onboarding.031"), "", ' data-act="new-cancel"')}</div></div>` +
+    `<div class="addword-actions">${btn(t("dictionary.014"), "pri", ' data-act="add"')}${btn(t("common.cancel"), "", ' data-act="new-cancel"')}</div></div>` +
     `<div class="importbox card" role="status" hidden><span class="importmsg"></span>` +
-    `<div class="addword-actions">${btn(t("dictionary.025"), "pri", ' data-act="import-go"')}${btn(t("onboarding.031"), "", ' data-act="import-cancel"')}</div></div>` +
+    `<div class="addword-actions">${btn(t("dictionary.025"), "pri", ' data-act="import-go"')}${btn(t("common.cancel"), "", ' data-act="import-cancel"')}</div></div>` +
     `<input type="file" accept=".csv,.txt,text/csv,text/plain" hidden data-import-file aria-label="${esc(t("dictionary.034"))}">` +
     `<div class="tools">` +
     tabs(FILTERS.map((f) => ({ id: f.id, label: f.name, attrs: ` data-filter="${f.id}"` })), "all", { label: t("common.filter"), kind: "filter" }) +
@@ -294,12 +294,12 @@ export function createDictionary(app: AppContext): DictionaryPage {
     importFile.setAttribute("aria-label", t("dictionary.034"));
     el.querySelector('[data-act="import"]')!.textContent = t("dictionary.025");
     importBox.querySelector('[data-act="import-go"]')!.textContent = t("dictionary.025");
-    importBox.querySelector('[data-act="import-cancel"]')!.textContent = t("onboarding.031");
+    importBox.querySelector('[data-act="import-cancel"]')!.textContent = t("common.cancel");
     renderImport();
     searchInput.placeholder = t("dictionary.016");
     searchInput.setAttribute("aria-label", t("dictionary.016"));
     addBox.querySelector('[data-act="add"]')!.textContent = t("dictionary.014");
-    addBox.querySelector('[data-act="new-cancel"]')!.textContent = t("onboarding.031");
+    addBox.querySelector('[data-act="new-cancel"]')!.textContent = t("common.cancel");
     render();
   });
 

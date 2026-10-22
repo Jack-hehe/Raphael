@@ -598,7 +598,7 @@ export function createSettings(app: AppContext): SettingsPage {
       if (result.valid) {
         hasKey = true;
         replacingKey = false;
-        toaster.info(t("onboarding.046"));
+        toaster.info(t("common.keySaved"));
         await readStatus();
       } else {
         keyError = () => keyReasonText(result.reason);
@@ -655,7 +655,7 @@ export function createSettings(app: AppContext): SettingsPage {
     } catch {
       // the webview does not let the page read the clipboard: the field takes Ctrl+V
       input?.focus();
-      toaster.info(t("onboarding.047"));
+      toaster.info(t("common.keyPasteHint"));
     }
   }
 
@@ -663,7 +663,7 @@ export function createSettings(app: AppContext): SettingsPage {
     const limit = parseLimit(input.value);
     if (limit === null) {
       limitDraft = input.value;
-      limitError = () => t("onboarding.049");
+      limitError = () => t("common.limitInvalid");
       render();
       return;
     }

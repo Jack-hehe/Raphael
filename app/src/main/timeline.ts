@@ -245,16 +245,22 @@ export function stepsHTML(turn: AgentTurn, state: TimelineState): string {
   const words = [lead, time, failed ? t("agent.stepsFailed", { p0: failed }) : ""].filter(Boolean).join(" · ");
   const mark = live ? (task!.state === "queued" ? ico("clock") : SPINNER) : task && TASK_ENDS[task.state] ? ico("stop") : ico("steps");
   const summary =
-    `<button type="button" class="btn sm steps-sum" data-act="steps" aria-expanded="${open}" aria-controls="${id}" aria-label="${esc(words)}" title="${esc(words)}">` +
-    `<span class="steps-lead">${mark}${live ? "" : `<span class="num">${count}</span>`}</span>` +
-    (time ? `<span class="steps-time num"${since}>${esc(time)}</span>` : "") +
-    (failed ? `<span class="steps-bad">${pic("cross")}<span class="num">${failed}</span></span>` : "") +
-    `<span class="steps-chev">${ico("down")}</span>` +
-    `</button>`;
+    btn(
+      `<span class="steps-lead">${mark}${live ? "" : `<span class="num">${count}</span>`}</span>` +
+        (time ? `<span class="steps-time num"${since}>${esc(time)}</span>` : "") +
+        (failed ? `<span class="steps-bad">${pic("cross")}<span class="num">${failed}</span></span>` : "") +
+        `<span class="steps-chev">${ico("down")}</span>`,
+      "sm steps-sum",
+      ` data-act="steps" aria-expanded="${open}" aria-controls="${id}" aria-label="${esc(words)}" title="${esc(words)}"`,
+    );
   const stopping = live && state.stopping.has(task!.id);
   const stopLabel = esc(stopping ? t("agent.stopping") : t("agent.stop"));
   const stop = live
-    ? `<button type="button" class="btn sm icon stop" data-act="stop" data-task="${esc(task!.id)}" aria-label="${stopLabel}" title="${stopLabel}"${stopping ? " disabled" : ""}>${stopping ? SPINNER : pic("stop")}</button>`
+    ? btn(
+        stopping ? SPINNER : pic("stop"),
+        "sm icon stop",
+        ` data-act="stop" data-task="${esc(task!.id)}" aria-label="${stopLabel}" title="${stopLabel}"${stopping ? " disabled" : ""}`,
+      )
     : "";
   const rows = steps.map((step, index) => stepHTML(step, !state.seen.has(stepKey(turn, index)))).join("") + (live ? liveStepHTML(task!, state.nowMs) : "");
   return (

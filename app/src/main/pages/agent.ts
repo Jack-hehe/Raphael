@@ -29,7 +29,7 @@ import {
   wantsRefresh,
 } from "../timeline";
 import type { AgentTurn, AppContext, Page } from "../types";
-import { esc, ico, iconButton, keys, toaster } from "../ui";
+import { btn, esc, ico, iconButton, keys, toaster } from "../ui";
 import "../agent.css";
 
 /** How many turns one load brings. */
@@ -53,7 +53,7 @@ export function createAgent(app: AppContext): Page {
   el.hidden = true;
   el.innerHTML =
     `<div class="page-head"><h1>${esc(t("agent.title"))}</h1><div class="ra-tools">` +
-    `<button type="button" class="btn icon ra-clear" data-act="clear" hidden></button>` +
+    btn("", "icon ra-clear", ' data-act="clear" hidden') +
     iconButton("sliders", t("agent.settings"), ' data-act="settings"') +
     `</div></div>` +
     `<div class="agent-body" hidden>` +

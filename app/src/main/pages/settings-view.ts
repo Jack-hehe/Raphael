@@ -33,7 +33,8 @@ import { runOutDay } from "../report";
 import { WARN_FROM, spendVisual, spentShare } from "../spend";
 import type { HotkeyField } from "../hotkey-recording";
 import type { AudioDevices, BrainSettings, DeviceSettings, LocalModel, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
-import { type Choice, type IconName, btn, esc, fieldHTML, keys, meter, note, row, sel, st, tg } from "../ui";
+import { keyEntryRow, limitRow, micRow } from "../setup-rows";
+import { type Choice, type IconName, btn, esc, fieldHTML, keys, note, row, sel, st, tg } from "../ui";
 
 /** The models the core reads when none is chosen (brain/settings.py), shown while it does not answer. */
 const DEFAULT_MODELS = { cleanup: "openai/gpt-6-luna", answer: "openai/gpt-6-luna", stt: "elevenlabs/scribe-v2" } as const;
@@ -170,7 +171,7 @@ export function microphoneChoices(v: SettingsView): Choice[] {
   ];
   const saved = v.device.microphone;
   if (saved === null || choices.some((c) => c.value === saved)) return choices;
-  return [...choices, { value: saved, label: t("onboarding.006", { p0: saved }), short: microphoneText("onboarding.006", saved, DROPDOWN_ROOM) }];
+  return [...choices, { value: saved, label: t("mic.disconnected", { p0: saved }), short: microphoneText("mic.disconnected", saved, DROPDOWN_ROOM) }];
 }
 
 /** The bars of the microphone's meter: 3 px wide and about 2 px apart across its dropdown, as the short meter's are. */
@@ -262,22 +263,24 @@ function keyRow(v: SettingsView): string {
   const attrs = ' data-row="openrouter-key"';
   if (v.hasKey && !v.replacingKey) {
     return row(
-      t("onboarding.022"),
+      t("common.apiKey"),
       keyStatus(v),
-      btn(v.checkingOpenrouter ? t("onboarding.011") : t("settings.046"), "", ` data-act="or-check"${v.checkingOpenrouter ? " disabled" : ""}`) +
+      btn(v.checkingOpenrouter ? t("common.checking") : t("settings.046"), "", ` data-act="or-check"${v.checkingOpenrouter ? " disabled" : ""}`) +
         btn(t("home.018"), "", ' data-act="key-replace" data-k="key"') +
         btn(v.confirmingKeyRemoval ? t("settings.keyRemoveConfirm") : t("settings.keyRemove"), "", ' data-act="key-remove"'),
       { attrs, cls: "row-key" },
     );
   }
-  return row(
-    t("onboarding.022"),
-    t("settings.039"),
-    fieldHTML("sk-or-v1-…", "", { w: 200, get label() { return t("onboarding.029"); }, id: "key-input", type: "password", invalid: v.keyError !== null }) +
-      btn(v.keyBusy ? t("onboarding.011") : t("onboarding.030"), "pri", ` data-act="key-paste"${v.keyBusy ? " disabled" : ""}`) +
-      (v.hasKey ? btn(t("onboarding.031"), "", ` data-act="key-cancel"${v.keyBusy ? " disabled" : ""}`) : ""),
-    { attrs, cls: "row-key" },
-  );
+  return keyEntryRow({
+    desc: t("settings.039"),
+    fieldWidth: 200,
+    inputId: "key-input",
+    hook: (name) => ` data-act="${name}"`,
+    busy: v.keyBusy,
+    invalid: v.keyError !== null,
+    canCancel: v.hasKey,
+    row: { attrs, cls: "row-key" },
+  });
 }
 
 /** This month's spend against the limit, and when it will run out at this pace. */
@@ -335,7 +338,7 @@ const section = (title: string, rows: string[], foot = ""): string =>
  */
 function shortcutRow(name: string, bindings: readonly string[], change?: { act: string; field: HotkeyField }): string {
   const caps = bindings.length > 0
-    ? bindings.map((binding) => keys(bindingLabels(binding))).join(t("onboarding.009"))
+    ? bindings.map((binding) => keys(bindingLabels(binding))).join(t("common.or"))
     : `<span class="val">${esc(t("home.noKeys"))}</span>`;
   return row(
     name,
@@ -386,7 +389,7 @@ function dictationHTML(v: SettingsView): string {
       shortcutRow(t("home.020"), d.dictation_keys, { act: "rec", field: "dictation_keys" }),
       ...altgrNote(v, d.dictation_keys),
       ...(d.paste_last_keys.length ? [shortcutRow(t("home.021"), d.paste_last_keys)] : []),
-      shortcutRow(t("onboarding.031"), ["Escape"]),
+      shortcutRow(t("common.cancel"), ["Escape"]),
       row(t("settings.055"), "", sel(DICTATION_MODES, d.dictation_mode, t("settings.055"), ' data-k="mode"')),
     ]) +
     section(t("settings.groupListen"), [
@@ -398,12 +401,13 @@ function dictationHTML(v: SettingsView): string {
       ),
       // The meter under the dropdown, as wide as it, moves with the microphone's loudness while
       // this tab is open.
-      row(
-        t("onboarding.021"),
-        "",
-        `<span class="mic-ctl">${sel(microphoneChoices(v), d.microphone ?? AUTO_MICROPHONE, t("onboarding.021"), ' data-k="mic"')}${meter(MIC_METER_SEGMENTS)}</span>`,
-        { cls: "row-mic" },
-      ),
+      micRow({
+        choices: microphoneChoices(v),
+        current: d.microphone ?? AUTO_MICROPHONE,
+        selAttrs: ' data-k="mic"',
+        meter: { place: "after", segments: MIC_METER_SEGMENTS },
+        row: { cls: "row-mic" },
+      }),
     ])
   );
 }
@@ -445,11 +449,7 @@ function usageHTML(v: SettingsView): string {
       keyRow(v),
       ...(v.keyError ? [note(st("err", v.keyError()), ' role="alert"')] : []),
       spendRow(v),
-      row(
-        t("onboarding.032"),
-        t("onboarding.033"),
-        fieldHTML("", limitShown, { w: 110, pre: "US$", get label() { return t("onboarding.032"); }, num: true, id: "limit-input", invalid: v.limitError !== null, disabled: v.brain === null }),
-      ),
+      limitRow({ text: limitShown, fieldWidth: 110, id: "limit-input", invalid: v.limitError !== null, disabled: v.brain === null }),
       ...(v.limitError ? [note(st("err", v.limitError()), ' role="alert"')] : []),
       usageRow(v),
     ], esc(t("settings.usageDifference"))) +
