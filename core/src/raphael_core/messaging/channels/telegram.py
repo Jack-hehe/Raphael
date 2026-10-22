@@ -181,14 +181,13 @@ def _incoming(update: dict) -> Incoming | None:
             continue
         mime = item.get("mime_type") if isinstance(item.get("mime_type"), str) else None
         is_voice = field_name == "voice" or (mime is not None and mime.lower() in _VOICE_MIMES)
-        size, duration = item.get("file_size"), item.get("duration")
+        size = item.get("file_size")
         attachments.append(
             Attachment(
                 "voice" if is_voice else "other",
                 item["file_id"],
                 mime,
                 size if type(size) is int else None,
-                float(duration) if type(duration) in (int, float) else None,
             )
         )
     return Incoming(

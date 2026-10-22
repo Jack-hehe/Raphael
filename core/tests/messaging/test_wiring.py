@@ -119,7 +119,7 @@ async def test_a_voice_message_is_heard_with_the_dictation_engine_and_normalized
         def flush(self):
             return []
 
-    monkeypatch.setattr(voice, "decode", lambda audio: np.zeros(1600, dtype="float32"))
+    monkeypatch.setattr(voice, "decoded_blocks", lambda audio: iter([np.zeros(1600, dtype="float32")]))
     monkeypatch.setattr(app, "_dictation_engine", lambda: Engine())
     app._kit = __import__("concurrent.futures").futures.Future()
     app._kit.set_result(SimpleNamespace(Segmenter=Segmenter))

@@ -27,13 +27,12 @@ class ChannelError(Exception):
 @dataclass
 class Attachment:
     """Something besides text in a message. `ref` is what the channel needs to fetch it. `size` is
-    in bytes and `duration` in seconds, as the sender's app reports them (None when it does not)."""
+    in bytes, as the sender's app reports it (None when it does not)."""
 
     kind: str  # "voice" (a recorded message) or "other"
     ref: str
     mime: str | None = None
     size: int | None = None
-    duration: float | None = None
 
 
 @dataclass

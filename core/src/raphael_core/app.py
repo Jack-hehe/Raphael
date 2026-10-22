@@ -1093,12 +1093,11 @@ class App(Router):
         cloud = self._stt_engine == "cloud"
 
         def hear() -> str:
-            samples = voice.decode(audio)
             engine = self._dictation_engine()
             path = self.manager.dir(VAD_MODEL) / REGISTRY[VAD_MODEL].files[0]
             seconds = CLOUD_SEGMENT_SECONDS if cloud else DICTATION_SEGMENT_SECONDS
             segmenter = self._kit.result().Segmenter(path, max_segment_s=seconds)
-            return voice.transcribe_clip(samples, engine, segmenter, hints)
+            return voice.transcribe_voice(audio, engine, segmenter, hints)
 
         heard = await asyncio.to_thread(hear)
         if not heard.strip():

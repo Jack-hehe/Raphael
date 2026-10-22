@@ -1,59 +1,75 @@
 """A voice message as text: decode the audio, find the speech, hand it to a speech engine.
 
 Voice messages come as Ogg/Opus, which libsndfile (through soundfile) reads from memory; nothing is
-written to disk. The speech is found by a segmenter of its own: the one that dictation uses is not
-safe to share with it. The engine is whichever one dictation would use, so a cloud engine falls back
-to the local one by itself.
+written to disk. A message has no limit of length, so it is never decoded whole: a few seconds at a
+time are decoded, made mono and 16 kHz, and given to the segmenter, and each stretch of speech it
+finds is transcribed as soon as it ends. What is held is the downloaded file (`MAX_VOICE_BYTES` at
+most), one block, the stretch under way and the words so far. The speech is found by a segmenter of
+its own: the one that dictation uses is not safe to share with it. The engine is whichever one
+dictation would use.
 
 Runs on a worker thread (`asyncio.to_thread`); the audio and the text are never logged.
 """
 
 import io
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import numpy as np
 
 from ..textjoin import join_segments
-from .core import MAX_VOICE_SECONDS, VoiceTooLong
+from .core import VoiceTooLarge
 
 SAMPLE_RATE = 16_000
-# The length the sender's app says may be a little off.
-_SLACK_S = 5
-# A voice message is mono or stereo; more channels are refused. The decoded audio may take this much.
+# A voice message is mono or stereo; more channels are refused before anything is read.
 MAX_CHANNELS = 2
-MAX_DECODED_BYTES = 128 * 1024 * 1024
+# How much is decoded at a time: at 48 kHz in stereo, under 4 MB.
+BLOCK_SECONDS = 10
 
 
-def decode(data: bytes) -> np.ndarray:
-    """The audio as mono float32 at 16 kHz. VoiceTooLong when it is longer than a message may be.
-    Anything libsndfile cannot read raises (soundfile.LibsndfileError)."""
+def decoded_blocks(data: bytes) -> Iterator[np.ndarray]:
+    """The audio as mono float32 at 16 kHz, `BLOCK_SECONDS` at a time. VoiceTooLarge when it has
+    more than two channels. Anything libsndfile cannot read raises (soundfile.LibsndfileError)."""
     import soundfile
     import soxr
 
     with soundfile.SoundFile(io.BytesIO(data)) as clip:
+        if clip.channels > MAX_CHANNELS:
+            raise VoiceTooLarge
         rate = clip.samplerate
-        # What reading allocates is frames x channels x 4 bytes: bound it before reading.
-        if (
-            clip.channels > MAX_CHANNELS
-            or clip.frames > rate * (MAX_VOICE_SECONDS + _SLACK_S)
-            or clip.frames * clip.channels * 4 > MAX_DECODED_BYTES
-        ):
-            raise VoiceTooLong
-        audio = clip.read(dtype="float32", always_2d=True)
-    mono = np.ascontiguousarray(audio.mean(axis=1), dtype=np.float32)
-    if rate != SAMPLE_RATE:
-        mono = soxr.resample(mono, rate, SAMPLE_RATE).astype(np.float32, copy=False)
-    return mono
+        resampler = (
+            None if rate == SAMPLE_RATE else soxr.ResampleStream(rate, SAMPLE_RATE, 1, dtype="float32")
+        )
+        for block in clip.blocks(blocksize=rate * BLOCK_SECONDS, dtype="float32", always_2d=True):
+            mono = np.ascontiguousarray(block.mean(axis=1), dtype=np.float32)
+            if resampler is not None:
+                mono = resampler.resample_chunk(mono)
+            if mono.size:
+                yield mono
+        if resampler is not None:
+            rest = resampler.resample_chunk(np.zeros(0, dtype=np.float32), last=True)
+            if rest.size:
+                yield rest
 
 
-def transcribe_clip(
-    samples: np.ndarray, engine: Any, segmenter: Any, hints: Sequence[str] = ()
-) -> str:
-    """The words in `samples` (16 kHz mono): the speech the segmenter finds, each stretch through
-    the engine, joined. Empty when there is no speech."""
-    segments = [*segmenter.accept(samples), *segmenter.flush()]
-    texts = [str(engine.transcribe(segment, hints=list(hints))).strip() for segment in segments]
+def decode(data: bytes) -> np.ndarray:
+    """The whole audio as mono float32 at 16 kHz, for a clip known to be short (the self-check)."""
+    blocks = list(decoded_blocks(data))
+    return np.concatenate(blocks) if blocks else np.zeros(0, dtype=np.float32)
+
+
+def transcribe_voice(data: bytes, engine: Any, segmenter: Any, hints: Sequence[str] = ()) -> str:
+    """The words of a voice message (`data`, as downloaded): the speech the segmenter finds, each
+    stretch through the engine as soon as it ends, joined. Empty when there is no speech."""
+    texts: list[str] = []
+
+    def hear(segments: Sequence[np.ndarray]) -> None:
+        for segment in segments:
+            texts.append(str(engine.transcribe(segment, hints=list(hints))).strip())
+
+    for block in decoded_blocks(data):
+        hear(segmenter.accept(block))
+    hear(segmenter.flush())
     return join_segments(texts)
 
 
