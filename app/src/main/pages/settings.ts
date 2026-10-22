@@ -842,7 +842,12 @@ export function createSettings(app: AppContext): SettingsPage {
     render();
     app.undo.begin({
       message: what === "dictation" ? t("data.dictationCleared") : t("data.conversationCleared"),
-      commit: async () => void (what === "dictation" ? await api.historyClear() : await api.agentHistoryClear()),
+      commit: async () => {
+        if (what === "dictation") await api.historyClear();
+        else await api.agentHistoryClear();
+        // The history or the 拉斐爾 page under the panel loaded what is gone now: they drop it.
+        app.cleared.say(what);
+      },
       restore: () => {}, // nothing was taken off the screen here
       failure: (err) => t("undo.001", { p0: () => describeError(err) }),
     });

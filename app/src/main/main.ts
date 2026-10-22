@@ -26,6 +26,7 @@ import { installWindowChrome, labelWindowControls, showMaximized } from "./windo
 import type { AgentDraft, AppContext, DeviceSettings, MainEvent, Page, PageId, SettingsPane } from "./types";
 import { spendMini } from "./spend";
 import { Undoable } from "./undo";
+import { Cleared } from "./cleared";
 import { type IconName, esc, ico, leave, toaster } from "./ui";
 import "./styles.css";
 
@@ -133,6 +134,7 @@ async function start(): Promise<void> {
       return () => void listeners.delete(handler);
     },
     undo: new Undoable(toaster),
+    cleared: new Cleared(),
     closeSettings: () => closeSettings(),
     rerunGuide: () => startGuide("rerun"),
   };

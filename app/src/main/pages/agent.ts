@@ -723,13 +723,7 @@ export function createAgent(app: AppContext): Page {
       message: t("agent.cleared"),
       commit: async () => {
         await api.agentHistoryClear();
-        turns = [];
-        state.stopping.clear();
-        forgetReruns(state, turns);
-        clearedUpTo = 0;
-        canLoadEarlier = false;
-        newestDrawn = 0;
-        if (visible) render();
+        forgetTurns();
       },
       restore: () => {
         clearedUpTo = 0;
@@ -738,6 +732,30 @@ export function createAgent(app: AppContext): Page {
       failure: (err) => t("undo.001", { p0: () => describeError(err) }),
     });
   }
+
+  /** The conversation is gone in the core: the page drops every turn it loaded and shows the empty page. */
+  function forgetTurns(): void {
+    turns = [];
+    state.stopping.clear();
+    forgetReruns(state, turns);
+    clearedUpTo = 0;
+    canLoadEarlier = false;
+    newestDrawn = 0;
+    if (visible) render();
+  }
+
+  // Settings › 資料 emptied the conversation while the page had it loaded (under the panel, or
+  // before it was left): a load already under way brings nothing back, and nothing waits to be cleared.
+  app.cleared.on("conversation", () => {
+    loads++;
+    pending = false;
+    loadingEarlier = false;
+    failure = null;
+    clearTimeout(clearTimer);
+    confirmingClear = false;
+    drawClear();
+    forgetTurns();
+  });
 
   // ---------- what a turn shows ----------
 
