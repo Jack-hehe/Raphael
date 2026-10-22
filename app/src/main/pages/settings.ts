@@ -12,7 +12,9 @@ import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
 import "../settings-polish.css";
 import "../connections.css";
+import "../messaging.css";
 import { createConnections } from "../connections";
+import { createMessaging } from "../messaging";
 import { DICTATION_MODES, isDictationMode } from "../dictation";
 import { describeError, keyReasonText, parseLimit } from "../format";
 import { wireKeyField } from "../keyfield";
@@ -23,7 +25,7 @@ import {
   languageSummary,
   toggleTranscriptionLanguage,
 } from "../languages";
-import { KeyRecorder, bindingClash, bindingFromCodes, bindingLabels, keyLabel, validateCodes } from "../keys";
+import { createHotkeyRecording } from "../hotkey-recording";
 import { type ModelPicker, mountModelPicker, replacementNotices, withFavorite } from "../model-picker";
 import { MonitorSwitch } from "../monitor";
 import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, LocalModel, MainEvent, ModelCatalog, ModelRole, Page, SettingsPane, Status } from "../types";
@@ -34,7 +36,6 @@ import {
   esc,
   ico,
   iconBtn,
-  keys,
   menuIsOpenFor,
   openMenu,
   openMenuOnArrow,
@@ -48,13 +49,12 @@ import {
   APPEARANCES,
   AUTO_MICROPHONE,
   HOTKEY_ROWS,
-  type HotkeyField,
+  agentCity,
   MODEL_ROWS,
   PANES,
   SIZES,
   type SettingsView,
   UI_LANGUAGES,
-  agentCity,
   languagesOf,
   loadingHTML,
   microphoneChoices,
@@ -89,16 +89,6 @@ export function trapSettingsFocus(
     event.preventDefault();
     first.focus();
   }
-}
-
-interface Recording {
-  recorder: KeyRecorder;
-  /** Which shortcut is being recorded. */
-  field: HotkeyField;
-  /** The key caps of the row, which show the keys while they are held. The 「變更」 button stays, with the focus. */
-  cell: HTMLElement;
-  /** The combination is complete and being saved: further keys are not part of it. */
-  finishing: boolean;
 }
 
 /** A dropdown's menu: what it offers, what is chosen, what choosing does, small print above the choices and actions below them. */
@@ -157,7 +147,10 @@ export function createSettings(app: AppContext): SettingsPage {
   /** The same for the weather city. */
   let cityDraft: string | null = null;
   let cityError: (() => string) | null = null;
-  let recording: Recording | null = null;
+  /** A shortcut being recorded (「變更」): the row is drawn again when it is over. */
+  const recording = createHotkeyRecording(app, () => {
+    if (visible) render();
+  });
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
   let languageGroups: LanguageGroup[] | null = null;
   let languagePanel: HTMLElement | null = null;
@@ -168,6 +161,8 @@ export function createSettings(app: AppContext): SettingsPage {
   let loads = 0;
   /** The 「連接」 tab: it keeps its own state and asks to be drawn again. */
   const connections = createConnections({ visible: () => visible && pane === "connections", redraw: () => render() });
+  /** Telegram, in the 「拉斐爾」 tab: it keeps its own state too. */
+  const messaging = createMessaging({ visible: () => visible && pane === "agent", redraw: () => render() });
 
   // ---------- drawing ----------
 
@@ -175,7 +170,7 @@ export function createSettings(app: AppContext): SettingsPage {
   const view = (): SettingsView => ({
     pane, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
     replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
-    connections: connections.view(), localModels, localDownload,
+    connections: connections.view(), messaging: messaging.view(), localModels, localDownload,
   });
 
   /** The item at the foot of the microphones' menu that looks for them again. */
@@ -262,7 +257,6 @@ export function createSettings(app: AppContext): SettingsPage {
     const focusedId = active?.id;
     const keyDraft = el.querySelector<HTMLInputElement>("#key-input")?.value;
     const activeLimit = focusedId === "limit-input" ? el.querySelector<HTMLInputElement>("#limit-input")?.value : undefined;
-    const activeCity = focusedId === "agent-city" ? el.querySelector<HTMLInputElement>("#agent-city")?.value : undefined;
     // A menu that is open stays open when the page is drawn again (a status that came in, say).
     const openK = openAnchorKey();
     const scroll = body.scrollTop;
@@ -274,8 +268,6 @@ export function createSettings(app: AppContext): SettingsPage {
     if (keyInput && keyDraft !== undefined) keyInput.value = keyDraft;
     const limitInput = el.querySelector<HTMLInputElement>("#limit-input");
     if (limitInput && activeLimit !== undefined) limitInput.value = activeLimit;
-    const cityInput = el.querySelector<HTMLInputElement>("#agent-city");
-    if (cityInput && activeCity !== undefined) cityInput.value = activeCity;
     body.scrollTop = scroll;
     el.querySelectorAll<HTMLElement>("[data-pane]").forEach((b) => b.setAttribute("aria-current", b.dataset.pane === pane ? "page" : "false"));
 
@@ -701,98 +693,6 @@ export function createSettings(app: AppContext): SettingsPage {
     void changeBrain("agent_city", city);
   }
 
-  // ---------- recording a hotkey ----------
-
-  function onKeyDown(e: KeyboardEvent): void {
-    if (!recording || !e.code || e.code === "Unidentified") return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (recording.finishing) return;
-    const result = recording.recorder.keyDown(e.code, { altGraph: e.getModifierState("AltGraph") });
-    if (result.type === "cancel") void endRecording();
-    else if (result.type === "progress") recording.cell.innerHTML = keys(result.codes.map(keyLabel));
-  }
-
-  function onKeyUp(e: KeyboardEvent): void {
-    if (!recording) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (recording.finishing) return;
-    const result = recording.recorder.keyUp(e.code);
-    if (result?.type === "done") void finishRecording(result.codes);
-  }
-
-  /** Stops listening and lets the hotkeys work again. */
-  async function endRecording(): Promise<void> {
-    if (!recording) return;
-    recording = null;
-    document.removeEventListener("keydown", onKeyDown, true);
-    document.removeEventListener("keyup", onKeyUp, true);
-    window.removeEventListener("blur", cancelRecording);
-    try {
-      await api.hotkeysPause(false);
-    } catch (err) {
-      toaster.info(describeError(err));
-    }
-    if (visible) render();
-  }
-
-  /** The window lost focus: the key-up events would not arrive, so the recording is dropped. */
-  function cancelRecording(): void {
-    void endRecording();
-  }
-
-  async function finishRecording(codes: string[]): Promise<void> {
-    if (!recording || recording.finishing) return;
-    recording.finishing = true;
-    const problem = validateCodes(codes);
-    const field = recording.field;
-    if (problem) {
-      toaster.info(problem);
-    } else {
-      try {
-        const binding = bindingFromCodes(codes);
-        const taken = shortcutTakenBy(field, binding);
-        if (taken) {
-          toaster.info(t("settings.keyTaken", { p0: taken }));
-        } else {
-          await app.setDevice({ [field]: [binding] });
-          toaster.info(t("settings.083", { p0: () => bindingLabels(binding).join(" + ") }));
-        }
-      } catch (err) {
-        toaster.info(describeError(err));
-      }
-    }
-    await endRecording();
-  }
-
-  /** The name of the other shortcut that already has `binding`, if one has: no two actions share their keys. */
-  function shortcutTakenBy(field: HotkeyField, binding: string): string | null {
-    const d = app.device();
-    const others: Array<readonly [string, readonly string[]]> = [];
-    if (field !== "dictation_keys") others.push([t("home.020"), d.dictation_keys]);
-    if (field !== "agent_keys") others.push([t("settings.agentKeys"), d.agent_keys ?? []]);
-    others.push([t("home.021"), d.paste_last_keys]);
-    return bindingClash(binding, others);
-  }
-
-  async function startRecording(field: HotkeyField): Promise<void> {
-    if (recording) return;
-    const cell = el.querySelector<HTMLElement>(`[data-row="${HOTKEY_ROWS[field]}"] .caps`);
-    if (!cell) return;
-    try {
-      await api.hotkeysPause(true);
-    } catch (err) {
-      toaster.info(describeError(err));
-      return;
-    }
-    recording = { recorder: new KeyRecorder(), field, cell, finishing: false };
-    cell.innerHTML = t("settings.084");
-    document.addEventListener("keydown", onKeyDown, true);
-    document.addEventListener("keyup", onKeyUp, true);
-    window.addEventListener("blur", cancelRecording);
-  }
-
   // ---------- the microphone and its level ----------
 
   // After a core restart the app switches the new core's monitoring back on by itself.
@@ -885,6 +785,8 @@ export function createSettings(app: AppContext): SettingsPage {
       pane = paneButton.dataset.pane as SettingsPane;
       if (pane === "connections") void connections.load();
       else connections.reset();
+      if (pane === "agent") void messaging.load();
+      else messaging.reset();
       syncMonitor();
       body.scrollTop = 0;
       render();
@@ -907,7 +809,7 @@ export function createSettings(app: AppContext): SettingsPage {
       return;
     }
 
-    if (connections.click(target)) return;
+    if (connections.click(target) || messaging.click(target)) return;
 
     if (target.closest('.tg[data-k="autostart"]')) {
       void changeDevice({ autostart: !app.device().autostart });
@@ -919,16 +821,18 @@ export function createSettings(app: AppContext): SettingsPage {
       return;
     }
 
-    switch (target.closest<HTMLElement>("[data-act]")?.dataset.act) {
+    const act = target.closest<HTMLElement>("[data-act]")?.dataset.act;
+    switch (act) {
       case "close":
         app.closeSettings();
         break;
       case "rec":
-        void startRecording("dictation_keys");
+      case "rec-agent": {
+        const field = act === "rec" ? "dictation_keys" : "agent_keys";
+        const cell = el.querySelector<HTMLElement>(`[data-row="${HOTKEY_ROWS[field]}"] .caps`);
+        if (cell) void recording.start(field, cell);
         break;
-      case "rec-agent":
-        void startRecording("agent_keys");
-        break;
+      }
       case "key-replace":
         replacingKey = true;
         keyError = null;
@@ -967,17 +871,17 @@ export function createSettings(app: AppContext): SettingsPage {
   });
   el.addEventListener("input", (e) => {
     const input = e.target as HTMLInputElement;
-    if (connections.input(input)) return;
+    if (connections.input(input) || messaging.input(input)) return;
     if (input.id === "limit-input") limitDraft = input.value;
     else if (input.id === "agent-city") cityDraft = input.value;
   });
-  el.addEventListener("keydown", (e) => void connections.key(e));
+  el.addEventListener("keydown", (e) => void (connections.key(e) || messaging.key(e)));
   // Menus consume their own Escape; the panel and native window controls share one Tab loop.
   const settingsKey = (e: KeyboardEvent): void => {
     const chrome = document.getElementById("window-chrome");
     if (!visible || !(e.target instanceof Node) || (!el.contains(e.target) && !chrome?.contains(e.target))) return;
     if (openMenuOnArrow(e)) return;
-    if (e.key === "Escape" && !recording && !e.defaultPrevented) {
+    if (e.key === "Escape" && !recording.active() && !e.defaultPrevented) {
       e.preventDefault();
       app.closeSettings();
     } else if (e.key === "Tab") {
@@ -1014,7 +918,9 @@ export function createSettings(app: AppContext): SettingsPage {
       // the first tab, unless the way in knows better (the report that says there is no key goes to the key)
       pane = PANES.some((p) => p.id === open) ? open! : "general";
       connections.reset();
+      messaging.reset();
       if (pane === "connections") void connections.load();
+      if (pane === "agent") void messaging.load();
       body.scrollTop = 0;
       closeMenu();
       render();
@@ -1069,11 +975,12 @@ export function createSettings(app: AppContext): SettingsPage {
     hide() {
       visible = false;
       connections.reset();
+      messaging.reset();
       document.removeEventListener("keydown", settingsKey);
       loading = false;
       loads++;
       closeMenu();
-      void endRecording();
+      void recording.cancel();
       stopEvents?.();
       stopEvents = null;
       syncMonitor();

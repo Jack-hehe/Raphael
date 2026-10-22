@@ -81,7 +81,7 @@ describe("the marks of well-known programs", () => {
       for (const surface of surfaces) expect(ratio(colour, surface), `${id} on ${surface}`).toBeGreaterThanOrEqual(3);
     }
     // the ones that would not read are left to the colour of the text
-    for (const id of ["notion", "github", "spotify", "obsidian", "atlassian", "cloudflare", "sentry", "paypal"] as const) expect(BRAND_COLORS[id]).toBeUndefined();
+    for (const id of ["notion", "github", "spotify", "obsidian", "atlassian", "cloudflare", "sentry", "paypal", "telegram"] as const) expect(BRAND_COLORS[id]).toBeUndefined();
   });
 
   test("the brand colour is given to the wrapper as a variable, and only for the marks that have one", () => {

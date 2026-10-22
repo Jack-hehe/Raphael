@@ -18,7 +18,8 @@ finished. When it did not (a limit, the user's stop, a worker that died, a model
 fixed line of the persona with the number of tool calls made, and nothing more is spent for it.
 
 RPC methods, for the app: `worker.list {limit?}`, `worker.get {id}` (with the steps; never an
-argument or a result) and `worker.cancel {task_id?}` (the task that runs, or the one named).
+argument or a result) and `worker.cancel {task_id?}` (the task that runs, or the one named). The
+assistant's history shows each task with the turn that handed it over (`tasks_for_turns`).
 
 Everything runs on the event loop, which owns the database. Nothing here logs what a task is, or
 what it said: only ids, states, counts and costs.
@@ -56,7 +57,7 @@ from .host import WorkerCrashed, WorkerHost, WorkerStopped, WorkerUnavailable
 from .run import RunLimits, TaskRun
 from ..agent.toolpick import ToolPicker
 from .snapshot import refine, take_snapshot
-from .tasks import QUEUED, RUNNING, Refused, Task, TaskStore
+from .tasks import QUEUED, RUNNING, Refused, Step, Task, TaskStore
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,19 @@ def _wall_clock_ms() -> int:
 
 def _invalid(message: str) -> RpcError:
     return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
+
+
+def _step_view(step: Step) -> dict[str, Any]:
+    """A step of a task as the conversation view shows it: the same fields as a turn's own."""
+    return {
+        "kind": step.kind,
+        "tool": step.tool,
+        "server": step.server,
+        "outcome": step.outcome,
+        "ms": step.ms,
+        "reason": step.reason,
+        "at_ms": step.at_ms,
+    }
 
 
 def report_from(final: str, language: str) -> Reply | None:
@@ -236,9 +250,43 @@ class BackgroundService:
         except sqlite3.Error as exc:
             logger.warning("Could not clear the background tasks: %s", type(exc).__name__)
 
+    def task(self, task_id: int) -> Task | None:
+        """A task as it is written down (for what reports it elsewhere), or None."""
+        try:
+            return self._store.get(task_id)
+        except sqlite3.Error:
+            return None
+
     @property
     def running(self) -> bool:
         return self._run is not None
+
+    def tasks_for_turns(self, turn_ids: Sequence[int]) -> dict[int, tuple[dict, list[dict]]]:
+        """For each of `turn_ids` that handed a task over: how the task stands, without what was
+        said, and its steps as the conversation view shows them. Empty when it cannot be read."""
+        try:
+            found = self._store.for_turns(turn_ids)
+            return {
+                turn_id: (self._brief(task), [_step_view(s) for s in self._store.steps(task.id)])
+                for turn_id, task in found.items()
+            }
+        except sqlite3.Error as exc:
+            logger.warning("Could not read the tasks of the turns: %s", type(exc).__name__)
+            return {}
+
+    @staticmethod
+    def _brief(task: Task) -> dict[str, Any]:
+        return {
+            "id": task.id,
+            "state": task.state,
+            "created_at_ms": task.created_at_ms,
+            "started_at_ms": task.started_at_ms,
+            "finished_at_ms": task.finished_at_ms,
+            "reason": task.reason,
+            "model_calls": task.model_calls,
+            "tool_calls": task.tool_calls,
+            "cost_usd": task.cost_usd,
+        }
 
     # --- running them ---------------------------------------------------------------------------
 
@@ -548,6 +596,17 @@ class BackgroundService:
                 )
             return {"cancelled": True}
         return {"cancelled": False}
+
+    async def cancel_session(self, session_id: str) -> bool:
+        """Stop the task of this session that runs and take its queued ones out of the queue; the
+        tasks of other sessions are left alone. Whether anything was stopped."""
+        stopped = False
+        run = self._run
+        for task_id in [*([run.task_id] if run is not None else []), *self._queue]:
+            task = self.task(task_id)
+            if task is not None and task.session_id == session_id:
+                stopped = bool((await self._cancel({"task_id": task_id}))["cancelled"]) or stopped
+        return stopped
 
     # --- closing --------------------------------------------------------------------------------
 

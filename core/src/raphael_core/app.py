@@ -79,6 +79,9 @@ from .brain.settings import SettingsStore
 from .device.models import LOCAL_STT_MODELS, REGISTRY, ModelDownloadError, ModelManager, local_model
 from .integrations.service import IntegrationsService
 from .integrations.vault import CredentialVault, MemoryVault, SecretVault
+from .messaging.config import MessagingStore
+from .messaging.service import MessagingService
+from .messaging.telegram import SESSION_PREFIX, compose, words
 from .protocol import (
     BUSY,
     INVALID_PARAMS,
@@ -699,7 +702,7 @@ class App(Router):
         # The background worker: tasks the assistant hands over, carried out in a process of their
         # own that has no key, no database and no plugin (raphael_core.worker).
         self.background = BackgroundService(
-            self._conn, self.client, self.gate, Tools(self.client), notify=self.notify
+            self._conn, self.client, self.gate, Tools(self.client), notify=self._worker_notice
         )
         self.background.register(self)
         self.agent = AgentService(
@@ -711,8 +714,18 @@ class App(Router):
             models=self.brain.known_models,
             gate=self.gate,
             background=self.background,
+            notify=self.notify,
         )
         self.agent.register(self)
+        # Messaging apps (Telegram): messages reach the assistant like a spoken question.
+        self.messaging = MessagingService(
+            MessagingStore(data_dir),
+            self.vault,
+            ask=self._ask_from_messaging,
+            stop=self._stop_from_messaging,
+            language=lambda: self.agent.language,
+        )
+        self.messaging.register(self)
 
         self._speech = SpeechModels(
             self.manager, make_segmenter=self._make_segmenter, make_engine=self._make_engine
@@ -894,6 +907,7 @@ class App(Router):
             ("cancel the dictation", close_dictation),
             ("close the level meter", close_meter),
             ("stop the account usage refresh", self.brain.aclose),
+            ("end the messaging connections", self.messaging.aclose),
             ("end the background tasks", self.background.aclose),
             ("end the assistant's requests", self.agent.aclose),
             ("close the HTTP client", self.client.aclose),
@@ -996,7 +1010,52 @@ class App(Router):
 
     # --- core -----------------------------------------------------------------------------------
 
+    async def _ask_from_messaging(self, session_id: str, text: str, language: str) -> str:
+        """A message from a messaging app, through the same entry as a spoken question. Whatever
+        needs a yes is refused on the spot: a yes is given at this computer, never from a message."""
+        reply = await self.call(
+            "agent.ask",
+            {"session_id": session_id, "text": text, "ui_language": language, "source": "telegram"},
+        )
+        if reply.get("status") == "confirm":
+            question = reply["confirm"]
+            await self.call("agent.confirm", {"id": question["id"], "approved": False})
+            asked = compose(question["prefix"], question["text"], None)
+            return f"{asked}\n{words(language, 'confirm')}"
+        detail = None
+        turn_id = reply.get("turn_id")
+        if turn_id:
+            turn = self.agent.turn(turn_id)
+            detail = None if turn is None else turn.detail
+        return compose(reply.get("prefix", ""), reply.get("text", ""), detail)
+
+    async def _stop_from_messaging(self, session_id: str) -> bool:
+        """Stop what this chat has under way: a request that still thinks and its background
+        tasks, never those of the computer or of another chat."""
+        thinking = self.agent.stop_session(session_id)
+        return await self.background.cancel_session(session_id) or thinking
+
+    def _worker_notice(self, method: str, params: dict) -> None:
+        """The background worker's notifications go to the app, and the report of a task that a
+        messaging chat handed over goes back to that chat."""
+        self.notify(method, params)
+        if method != "worker.report" or type(params.get("task_id")) is not int:
+            return
+        task = self.background.task(params["task_id"])
+        if task is None or not task.session_id.startswith(SESSION_PREFIX):
+            return
+        if task.report_text is None:
+            return
+        text = compose(task.report_prefix or "", task.report_text, task.report_detail)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        sent = loop.create_task(self.messaging.report(task.session_id, text))
+        sent.add_done_callback(lambda t: t.cancelled() or t.exception())
+
     async def _hello(self, params: dict) -> dict:
+        self.messaging.start()  # a Telegram bot that was left on polls again
         self.agent.prewarm()  # the app is up: read the Start menu now, not at the first "open"
         return {"protocol": PROTOCOL_VERSION, "version": __version__}
 

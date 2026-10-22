@@ -16,6 +16,7 @@ import { DICTATION_MODES } from "../dictation";
 import { formatClock, formatUsd } from "../format";
 import { type LanguageGroup, languageSelectHTML, normalizeLanguages } from "../languages";
 import { bindingLabels } from "../keys";
+import { type MessagingView, messagingHTML } from "../messaging";
 import {
   DROPDOWN_ROOM,
   MENU_ROOM,
@@ -30,6 +31,7 @@ import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } fr
 import { pricingNote } from "../pricing";
 import { runOutDay } from "../report";
 import { WARN_FROM, spendVisual, spentShare } from "../spend";
+import type { HotkeyField } from "../hotkey-recording";
 import type { AudioDevices, BrainSettings, DeviceSettings, LocalModel, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
 import { type Choice, type IconName, btn, esc, fieldHTML, keys, meter, note, row, sel, st, tg } from "../ui";
 
@@ -81,8 +83,7 @@ export const paneTitle = (id: SettingsPane): string => PANES.find((p) => p.id ==
 /** The group of rows that OpenRouter's name heads: a brand, the same in every language. */
 const OPENROUTER = "OpenRouter";
 
-/** The shortcuts that can be recorded here, and the row of each. */
-export type HotkeyField = "dictation_keys" | "agent_keys";
+/** The shortcuts recorded here, and the row of each. */
 export const HOTKEY_ROWS: Record<HotkeyField, string> = { dictation_keys: "hotkey", agent_keys: "agent-hotkey" };
 
 /** Everything a tab is drawn from: what the panel has read, and what is being typed or done. */
@@ -111,9 +112,12 @@ export interface SettingsView {
   /** What was typed in the limit field while it is not a limit, and what is wrong with it. */
   limitDraft: string | null;
   limitError: (() => string) | null;
-  /** The same for the weather city. */
+  /** What is typed in the weather city while it is not saved, and what is wrong with it. */
   cityDraft: string | null;
   cityError: (() => string) | null;
+  /** Telegram, in the 拉斐爾 tab. */
+  messaging: MessagingView;
+  /** The same for the weather city. */
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
   languageGroups: LanguageGroup[] | null;
   /** The time the forecasts and the age of the prices are told from. */
@@ -321,7 +325,7 @@ function usageRow(v: SettingsView): string {
 
 /** A group of settings: a short name, then its rows on one card. */
 const section = (title: string, rows: string[], foot = ""): string =>
-  `<section class="sgroup"><h2>${esc(title)}</h2><div class="slist">${rows.join("")}</div>` +
+  `<section class="sgroup">${title ? `<h2>${esc(title)}</h2>` : ""}<div class="slist">${rows.join("")}</div>` +
   (foot ? `<p class="foot">${foot}</p>` : "") +
   `</section>`;
 
@@ -404,7 +408,7 @@ function dictationHTML(v: SettingsView): string {
   );
 }
 
-/** 拉斐爾: the key that asks her and the city of the weather. The model that answers is with the other models. */
+/** 拉斐爾: the key that asks her, the city of the weather, then Telegram. The model that answers is with the other models. */
 function agentHTML(v: SettingsView): string {
   const cityShown = v.cityDraft ?? agentCity(v);
   // an app from before the question key has none yet
@@ -412,18 +416,17 @@ function agentHTML(v: SettingsView): string {
   return (
     headingHTML(v) +
     coreNote(v) +
-    section(t("settings.groupStart"), [
+    section("", [
       shortcutRow(t("settings.agentKeys"), agentKeys, { act: "rec-agent", field: "agent_keys" }),
       ...altgrNote(v, agentKeys),
-    ]) +
-    section(t("settings.groupAnswers"), [
       row(
         t("settings.agentCity"),
-        t("settings.agentCityDesc"),
+        "",
         fieldHTML(t("settings.agentCityHint"), cityShown, { w: 200, get label() { return t("settings.agentCity"); }, id: "agent-city", invalid: v.cityError !== null, disabled: v.brain === null }),
       ),
       ...(v.cityError ? [note(st("err", v.cityError()), ' role="alert"')] : []),
-    ])
+    ]) +
+    messagingHTML(v.messaging)
   );
 }
 

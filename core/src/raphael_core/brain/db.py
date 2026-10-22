@@ -201,6 +201,26 @@ PRAGMA user_version = 10;
 COMMIT;
 """
 
+# v11: what the conversation view shows of a turn. `agent_turns.source` is where the request came
+# from ("voice", or a chat app such as "telegram") and `model` the model that answered, if one did.
+# `agent_steps` is one row for each thing the fast tier did for a turn (a lookup, a plugin's tool, a
+# command for this computer): which tool of which server, how it ended, how long it took and, when
+# it failed, a short classified reason (`agent.steps.REASONS`). `worker_steps.reason` is the same
+# for the background worker. Like the audit, never an argument or a result, nor an error message,
+# which a service may write with what it was given in it.
+_MIGRATION_V11 = """
+BEGIN;
+ALTER TABLE agent_turns ADD COLUMN source TEXT NOT NULL DEFAULT 'voice';
+ALTER TABLE agent_turns ADD COLUMN model TEXT;
+ALTER TABLE worker_steps ADD COLUMN reason TEXT;
+CREATE TABLE agent_steps (id INTEGER PRIMARY KEY, turn_id INTEGER NOT NULL, n INTEGER NOT NULL,
+  at_ms INTEGER NOT NULL, kind TEXT NOT NULL, tool TEXT NOT NULL, server TEXT,
+  outcome TEXT NOT NULL, ms INTEGER NOT NULL DEFAULT 0, reason TEXT);
+CREATE INDEX agent_steps_turn ON agent_steps(turn_id, n);
+PRAGMA user_version = 11;
+COMMIT;
+"""
+
 _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_V1,
     2: _MIGRATION_V2,
@@ -212,6 +232,7 @@ _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     8: _MIGRATION_V8,
     9: _MIGRATION_V9,
     10: _MIGRATION_V10,
+    11: _MIGRATION_V11,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 
