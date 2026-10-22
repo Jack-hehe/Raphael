@@ -561,3 +561,82 @@ async def test_the_shell_refusing_keys_it_cannot_be_sure_of_tells_the_model_why(
     # the run goes on: the model is told why, and looks again
     assert told in everything_the_model_saw(model)
     assert final.status == "done"
+
+
+async def test_typing_into_an_element_without_a_name_goes_to_it(make_run, shell):
+    rows = [
+        element(1, "Window", "Sign up", depth=0, actions=[]),
+        element(2, "Edit", "", actions=["value"]),
+        element(3, "Edit", "Password", focused=True, password=True, actions=["value"]),
+    ]
+    answering(shell, always=True, look=calculator(elements=rows))
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, element=2, action="type", text="cats", final=False)),
+        reply(content="已輸入。"),
+    )
+    asked, final = await drive(make_run(model))
+    assert asked == [] and final.kind == "done"
+    assert dict(shell.requests)["act"] == {"window": 7, "element": 2, "action": "type", "text": "cats"}
+
+
+async def test_enter_with_no_element_on_a_look_without_a_focus_asks_first(make_run, shell):
+    rows = [element(1, "Window", "Chat", depth=0, actions=[]), element(2, "Button", "Send")]
+    answering(shell, always=True, look=calculator(elements=rows))
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, action="keys", keys="enter", final=False)),
+    )
+    asked, final = await drive(make_run(model), [(False, False)])
+    assert [q.text for q in asked] == ["是否按下 Enter？"]
+    assert "act" not in shell.ops() and final.status == "denied"
+
+
+# --- opening apps is limited, and a run without the watch on the owner's input does not go on -----
+
+
+async def test_opening_apps_counts_as_steps_and_is_capped(make_run, shell):
+    answering(shell, always=True)
+    opened = []
+
+    async def open_app(name):
+        opened.append(name)
+        return name
+
+    model = FakeModel(*[reply(call("computer_open", name=f"App {n}")) for n in range(21)], reply(content="好。"))
+    run = make_run(model, open_app=open_app)
+    await drive(run)
+    assert opened == ["App 0", "App 1", "App 2"]
+    assert run.actions == 3
+    assert "No more apps may be opened in this run" in everything_the_model_saw(model)
+
+
+async def test_opening_an_app_is_a_step_under_the_runs_limit(make_run, shell):
+    answering(shell, always=True)
+    opened = []
+
+    async def open_app(name):
+        opened.append(name)
+        return name
+
+    model = FakeModel(*[reply(call("computer_open", name=f"App {n}")) for n in range(3)])
+    _, final = await drive(make_run(model, open_app=open_app, limits=RunLimits(actions=2)))
+    assert opened == ["App 0", "App 1"]
+    assert final.kind == "limit"
+
+
+@pytest.mark.parametrize("language, line", [
+    ("zh-TW", "無法監看鍵盤與滑鼠，為安全起見不操作電腦。"),
+    ("en", "The keyboard and the mouse cannot be watched, so the computer is not operated."),
+    ("ja", "キーボードとマウスを監視できないため、コンピューターを操作しません。"),
+])  # fmt: skip
+async def test_a_run_whose_input_watch_did_not_start_ends_at_once(make_run, shell, language, line):
+    answering(shell, always=True)
+    shell.handlers["apps"] = "watch"
+    model = FakeModel(reply(call("computer_apps")), *LOOK_AND_PRESS_SEVEN[1:])
+    _, final = await drive(make_run(model, language=language))
+    assert (final.text, final.status) == (line, "error")
+    assert shell.ops() == ["apps"]
+    assert shell.states[-1][0] == "end"

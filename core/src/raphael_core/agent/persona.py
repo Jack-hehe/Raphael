@@ -124,6 +124,7 @@ class Phrases:
     computer_handoff: str  # a password, a sign-in, a payment, an administrator's prompt
     computer_away: str  # a request from elsewhere (a phone) cannot operate this computer
     computer_unavailable: str  # the shell cannot reach the desktop now
+    computer_watch: str  # the shell cannot watch the owner's own mouse and keys: no run
     computer_refused_app: str  # an app Raphael never operates (a terminal, a password manager)
     computer_limit: str  # a run used all its actions, time or money: {steps}
     computer_done: str  # the run ended and the model said nothing
@@ -181,6 +182,7 @@ PHRASES: dict[str, Phrases] = {
         computer_handoff="這一步需要主人親自操作。",
         computer_away="操作電腦只能在這台電腦前下達指示。",
         computer_unavailable="目前無法操作電腦。",
+        computer_watch="無法監看鍵盤與滑鼠，為安全起見不操作電腦。",
         computer_refused_app="此 App 不在可操作的範圍內。",
         computer_limit="已達操作上限。停在第 {steps} 步。",
         computer_done="操作完成。",
@@ -252,6 +254,7 @@ PHRASES: dict[str, Phrases] = {
         computer_handoff="This step needs the Master to do it in person.",
         computer_away="The computer can be operated only from the computer itself.",
         computer_unavailable="The computer cannot be operated at this time.",
+        computer_watch="The keyboard and the mouse cannot be watched, so the computer is not operated.",
         computer_refused_app="That app is outside what I may operate.",
         computer_limit="The operation limit was reached. Stopped at step {steps}.",
         computer_done="Done.",
@@ -303,6 +306,7 @@ PHRASES: dict[str, Phrases] = {
         computer_handoff="この手順はマスターご自身で操作してください。",
         computer_away="コンピューターの操作は、そのコンピューターの前でのみ指示できます。",
         computer_unavailable="現在コンピューターを操作できません。",
+        computer_watch="キーボードとマウスを監視できないため、コンピューターを操作しません。",
         computer_refused_app="このアプリは操作の対象外です。",
         computer_limit="操作の上限に達しました。{steps} 手目で停止しました。",
         computer_done="操作を完了しました。",

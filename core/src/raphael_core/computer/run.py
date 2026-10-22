@@ -33,8 +33,9 @@ While a question is open the run waits on it (`Question` events, answered with `
 `AgentService` hands the question to the shell as the reply of `agent.ask` or `agent.confirm`, and
 the answer comes back with the next `agent.confirm`. The run ends with a `Final` event.
 
-Limits (`RunLimits`): 20 steps, 30 model calls, 40 looks, three minutes of work (questions not
-counted) and US$0.20, and the month's limit. Nothing here logs what the screen showed, what was
+Limits (`RunLimits`): 20 steps (an app opened is one, and a run opens three at most), 30 model
+calls, 40 looks, three minutes of work (questions not counted) and US$0.20, and the month's limit.
+A run the shell cannot watch the owner's own input for (its hooks did not go in) ends at once. Nothing here logs what the screen showed, what was
 typed, a window's title or the request: only kinds, counts and timings.
 """
 
@@ -108,6 +109,9 @@ LOOK_FIRST = (
 ONE_STEP = "One step per reply: look at the result of the previous step first, then call again."
 NO_ELEMENT = "There is no element with that id in the latest look at this window."
 NEEDS_ELEMENT = "This action needs an element of the latest look."
+NO_MORE_OPENS = "No more apps may be opened in this run. Use the windows that are open."
+# The shell could not start its watch on the owner's own mouse and keys: nothing may be done.
+WATCH = "watch"
 _LANGUAGE_NAMES = {
     "zh-TW": "Traditional Chinese as written in Taiwan (never Simplified characters)",
     "en": "English",
@@ -117,9 +121,11 @@ _LANGUAGE_NAMES = {
 
 @dataclass(frozen=True)
 class RunLimits:
-    """What one run may use: 20 steps, 30 model calls, 40 looks, 180 s of work, US$0.20."""
+    """What one run may use: 20 steps (an app opened is one), 3 apps opened, 30 model calls, 40
+    looks, 180 s of work, US$0.20."""
 
     actions: int = 20
+    opens: int = 3
     model_calls: int = 30
     looks: int = 40
     seconds: float = 180.0
@@ -281,6 +287,7 @@ class ComputerRun:
         self.written = False
         self.context: Any = None
         self.actions = 0
+        self.opens = 0
         self.model_calls = 0
         self.looks = 0
         self._client = client
@@ -428,6 +435,8 @@ class ComputerRun:
             return Final("negative", phrase(language, "budget"), "error", "limit")
         if reason == UNAVAILABLE:
             return Final("negative", phrase(language, "computer_unavailable"), "error", "unavailable")
+        if reason == WATCH:
+            return Final("negative", phrase(language, "computer_watch"), "error", "unavailable")
         kind = reason.partition(":")[2] or "error"
         return Final("negative", phrase(language, kind), "error", "failed")
 
@@ -538,6 +547,8 @@ class ComputerRun:
                 raise _Stopped(UNAVAILABLE) from None
             if error.kind == REVOKED:
                 raise _Stopped("revoked") from None
+            if error.kind == WATCH:
+                raise _Stopped(WATCH) from None
             raise
 
     def _state(self, phase: str, line: str | None = None) -> None:
@@ -660,7 +671,15 @@ class ComputerRun:
         wanted = clean_text(arguments.get("name"), 80)
         if not wanted:
             return wrap_untrusted(name, BAD_ARGUMENTS, ok=False)
+        # An app opened is a step of the run, counted before it is launched: within the run's
+        # steps, and within its few opens.
+        if self.actions >= self.limits.actions:
+            raise _Stopped("limit_actions")
+        if self.opens >= self.limits.opens:
+            return wrap_untrusted(name, NO_MORE_OPENS, ok=False)
         self._pass_gate(Action(name, {"name": wanted}))
+        self.actions += 1
+        self.opens += 1
         self._line("open", app=words.target(self.language, wanted))
         began = time.perf_counter()
         try:
@@ -749,8 +768,9 @@ class ComputerRun:
                 "field, not the label or the pane around it), or none for the one with the focus."
             ),
             "unconfirmed": (
-                "Those keys would delete what is selected there, which needs the owner's yes. "
-                "Look at the window again, and take the step with final set to true."
+                "What has the focus now, those keys or that text would send, submit or delete, "
+                "which needs the owner's yes. Look at the window again, and take the step with "
+                "final set to true if it is meant to."
             ),
         }.get(error.kind, "The step failed.")
         return wrap_untrusted(name, told, ok=False)
@@ -812,6 +832,7 @@ class ComputerRun:
             focused_role="" if focused is None else focused.role,
             focused_password=focused is not None and focused.password,
             focused_actions=frozenset() if focused is None else focused.actions,
+            targeted=element is not None,
         )
         if verdict == safety.HANDOFF:
             self._step(action, window.app, "blocked", time.perf_counter(), "handoff")

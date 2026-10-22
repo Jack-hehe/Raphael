@@ -35,8 +35,10 @@ A failure is `BridgeError` with one word: the shell's own (`gone`, `stale`, `pas
 `elevated`, `refused_app`, `own_window`, `bad_request`, `failed`, `keys_not_allowed`, `stopped`:
 the run is over for the shell, `handoff`: the element the keys or the text would reach is a
 sign-in, a payment or a code, `focus`: the element named could not be given the keyboard focus,
-or the live focus is elsewhere, so nothing was pressed, `unconfirmed`: keys that delete what is
-selected would reach no text field, in a step the owner did not say yes to), or `unavailable` (no
+or the live focus is elsewhere, so nothing was pressed, `unconfirmed`: the live focus makes the
+step one that sends or deletes (Enter on a Send button or in a message box, Delete on a file), in
+a step the owner did not say yes to, `watch`: the shell could not start its watch on the owner's
+own input, so the run is revoked and nothing is done for it), or `unavailable` (no
 shell to ask, or it did not answer in time). Nothing here logs an argument or a result: they hold
 what is on the owner's screen.
 """
@@ -75,6 +77,7 @@ KINDS = frozenset(
         "keys_not_allowed",
         "focus",
         "unconfirmed",
+        "watch",
         REVOKED,
         HANDOFF,
         UNAVAILABLE,

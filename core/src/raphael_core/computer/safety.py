@@ -11,8 +11,9 @@ about the element it named (`snapshot.Element`):
   model declares it (`final` on `computer_act`); the element's name (clicked, or pressed with Enter
   or Space), a key chord that sends (Ctrl+Enter) or deletes for good (Shift+Delete), a key that
   deletes what is selected away from a text field (`deletes_items`: Delete in File Explorer or a
-  mail list), Enter in a message box and a line break in typed text (which the shell presses as
-  Enter) say it too. Any one of them is enough: the owner is asked every time.
+  mail list), Enter in a message box, Enter or Space where the look knows no focus, and a line
+  break in typed text (which the shell presses as Enter) say it too. Any one of them is enough: the
+  owner is asked every time.
 - **Keys** (`check_keys`): the chords a step may press, from an allowlist. No Windows key at all
   (Win+L, Win+R...), nothing that switches or closes windows (Alt+Tab, Alt+F4), nothing of the
   system's (Ctrl+Alt+Del, Ctrl+Shift+Esc, Ctrl+Esc), and no bare letters: typing is `type`. The
@@ -51,7 +52,9 @@ _HANDOFF_CJK = (
 )  # fmt: skip
 
 # The words that make a step one the owner says yes to first: it sends, submits, publishes,
-# deletes, buys or orders.
+# deletes, buys or orders. The shell judges the live element with the focus by the same words, and
+# by those of a message box below, before it presses Enter or Space there
+# (`app/src-tauri/src/computer/policy.rs`; a test holds them together).
 _CONFIRM_EN = (
     "send", "send now", "submit", "post", "publish", "share", "tweet", "reply all", "forward",
     "delete", "remove", "erase", "discard", "uninstall", "empty recycle bin", "permanently",
@@ -252,6 +255,7 @@ def judge(
     focused_role: str = "",
     focused_password: bool = False,
     focused_actions: Iterable[str] = (),
+    targeted: bool | None = None,
 ) -> str | None:
     """What a step needs before it is taken: `HANDOFF` (the owner's), `CONFIRM` (a yes first) or
     None (it runs).
@@ -260,7 +264,10 @@ def judge(
     model said it sends, submits, deletes or buys, `chord` the keys it presses and `text` what it
     types. `name`, `role`, `password` and `actions` are what the latest snapshot said about the
     element it acts on (empty for a step on no element); the `focused_*` ones about the element
-    that has the keyboard focus, which keys and typing reach when no element is named.
+    that has the keyboard focus, which keys and typing reach when no element is named. `targeted`
+    says whether the step names an element; left out, an element is named when it has a name or
+    a role (every element of a snapshot has a role, an unnamed search box included: an element
+    without a name is still the step's target, never the old focus).
 
     Keys and typing are judged by the element they reach: the one named (the shell gives it the
     focus first), else the one with the focus. A sign-in, a payment or a code there is the
@@ -268,18 +275,23 @@ def judge(
     Enter or Space on a button that sends, deletes or buys asks first, as a click on it would, and
     so does Enter in a message box. A key that deletes what is selected (`deletes_items`) asks
     first unless what it reaches is a field whose text it only edits (`edits_text`); when the
-    snapshot holds no element with the focus, nothing says it is one. A line break in typed text is
-    pressed as Enter, so it asks first wherever it is typed: the field may be a chat's, or a form's
-    that Enter submits. (The shell checks the live element with the focus once more before it
-    presses anything: it must be the element named, if one is, and no deleting key reaches
-    anything but a text field without the owner's yes. It types no line break that was not asked
-    about.)
+    snapshot holds no element with the focus, nothing says it is one. Enter or Space on no element
+    named, when the snapshot holds no element with the focus (a window looked at in the
+    background, whose focus comes back once it is in front), asks first too: it may press Send. A
+    line break in typed text is pressed as Enter, so it asks first wherever it is typed: the field
+    may be a chat's, or a form's that Enter submits. (The shell checks the live element with the
+    focus once more before it presses anything: it must be the element named, if one is; Enter,
+    Space and the chords that send go to nothing called like Send or a message box, and no
+    deleting key reaches anything but a text field, without the owner's yes. It types no line
+    break that was not asked about.)
     """
-    if name:
+    if targeted is None:
+        targeted = bool(name or role)
+    if targeted:
         target_name, target_role, target_actions = name, role, frozenset(actions)
     else:
         target_name, target_role, target_actions = focused_name, focused_role, frozenset(focused_actions)
-    if password or (action in ("type", "keys") and focused_password and not name):
+    if password or (action in ("type", "keys") and focused_password and not targeted):
         return HANDOFF
     if action == "click" and name and handoff_by_name(name):
         return HANDOFF
@@ -297,6 +309,8 @@ def judge(
         if confirm_by_keys(chord):
             return CONFIRM
         if chord in _PRESS and target_name and confirm_by_name(target_name):
+            return CONFIRM
+        if chord in _PRESS and not targeted and not focused_role:
             return CONFIRM
         if chord == ("enter",) and is_message_box(target_name, target_role):
             return CONFIRM

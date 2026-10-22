@@ -236,3 +236,44 @@ def test_the_shell_refuses_the_same_deleting_keys_away_from_a_text_field():
     assert all(safety.deletes_items(chord) for chord in DELETING)
     for chord in [("alt", "delete"), ("alt", "backspace"), ("ctrl", "shift", "d"), ("alt", "d"), ("enter",)]:
         assert not safety.deletes_items(chord), chord
+
+
+# --- what the keys reach when the look knows no focus, and an element with no name ----------------
+
+
+@pytest.mark.parametrize("chord", [("enter",), ("space",)])
+def test_enter_or_space_with_no_element_and_no_known_focus_asks_first(chord):
+    # a window looked at in the background: once it comes to the front, the focus may be on Send
+    assert judge(action="keys", declared_final=False, chord=chord) == CONFIRM
+    # with a focus the look knows, it is judged by that
+    assert judge(action="keys", declared_final=False, chord=chord, focused_name="七", focused_role="Button") is None
+    # other keys with no known focus run as before
+    assert judge(action="keys", declared_final=False, chord=("ctrl", "s")) is None
+    assert judge(action="keys", declared_final=False, chord=("tab",)) is None
+
+
+def test_an_element_named_without_a_name_is_still_the_target():
+    # a plain search box with no accessible name, while the look's focus is on a password field
+    unnamed = {"name": "", "role": "Edit", "actions": EDITABLE}
+    elsewhere = {"focused_name": "Password", "focused_role": "Edit", "focused_password": True}
+    assert judge(action="type", declared_final=False, text="cats", **unnamed, **elsewhere) is None
+    assert judge(action="keys", declared_final=False, chord=("ctrl", "a"), **unnamed, **elsewhere) is None
+    assert judge(action="keys", declared_final=False, chord=("delete",), **unnamed, **elsewhere) is None
+    # and is judged as itself: an unnamed list item takes Delete only with a yes
+    assert judge(action="keys", declared_final=False, chord=("delete",), name="", role="ListItem",
+                 focused_name="Search", focused_role="Edit", focused_actions=EDITABLE) == CONFIRM  # fmt: skip
+
+
+def test_the_shell_judges_the_live_focus_by_the_same_send_words():
+    policy = Path(__file__).resolve().parents[3] / "app" / "src-tauri" / "src" / "computer" / "policy.rs"
+    source = policy.read_text(encoding="utf-8")
+
+    def rust_list(name):
+        body = re.search(rf"const {name}: &\[&str\] = &\[(.*?)\];", source, re.S)
+        assert body, name
+        return tuple(re.findall(r'"([^"]*)"', body.group(1)))
+
+    assert rust_list("CONFIRM_EN") == safety._CONFIRM_EN
+    assert rust_list("CONFIRM_CJK") == safety._CONFIRM_CJK
+    assert rust_list("MESSAGE_EN") == safety._MESSAGE_EN
+    assert rust_list("MESSAGE_CJK") == safety._MESSAGE_CJK
