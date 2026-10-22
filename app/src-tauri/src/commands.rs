@@ -6,6 +6,11 @@
 //!   the conversations (`agent.history.`), and stop one background task it names
 //!   (`worker.cancel {task_id}`) or run one that did not finish again (`worker.rerun {task_id}`), the
 //!   way the tray stops the one that runs.
+//! - `agent_ask_text`, `agent_question_open` and `agent_question_answer` are the 拉斐爾 page's own
+//!   way to Raphael, through the dictation controller rather than the core
+//!   ([`crate::dictation::Desk`]): a question typed in its composer (some text, of a bounded
+//!   length), and the YES/NO question that is open, which the page shows on a card and may answer
+//!   by its id, as the overlay's buttons do, while the window has the focus.
 //! - `device_settings_get` and `device_settings_set` read and change `device.json`
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
 //!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
@@ -46,11 +51,11 @@ use crate::core_process::{CORE_RESTARTED, CoreApi, CoreProcess};
 use crate::device_settings::{
     self, Appearance, DeviceSettings, DeviceStore, DictationMode, FILE_NAME, Subtitles,
 };
-use crate::dictation::ModeCell;
+use crate::dictation::{DeskHandle, ModeCell, QuestionNews};
 use crate::hotkey::{Bindings, HotkeyEvent, HotkeyService, WindowHotkey};
 use crate::mic_access::{self, MicAccess};
 use crate::notices::LanguageCell;
-use crate::overlay::Overlay;
+use crate::overlay::{AskPrompt, ConfirmSender, Confirmation, Overlay};
 use crate::rpc::{CORE_EXITED, Notification, RpcError, TIMEOUT};
 
 /// What `core_call` says when there is no core to call.
@@ -174,6 +179,24 @@ pub enum MainEvent {
     /// A dictation (`agent: false`) or a question to Raphael (`agent: true`) moved on. Only the
     /// phase: what was said stays in the core.
     Dictation { phase: DictationPhase, agent: bool },
+    /// Raphael asks a YES/NO question, which the overlay shows: the 拉斐爾 page shows it on its card
+    /// too and may answer it (`agent_question_answer`). Its words are shown, never logged.
+    AgentQuestion(AskPrompt),
+    /// The question `id` was answered (on the overlay or the page), ran out, or was dropped with
+    /// its session: the card goes.
+    AgentQuestionClosed { id: String },
+    /// The microphone's loudness, 0 to 1, while a question to Raphael is recorded: the ring around
+    /// the person's picture in the 拉斐爾 page's voice mode follows it. Never a dictation's.
+    VoiceLevel { value: f32 },
+}
+
+impl From<QuestionNews> for MainEvent {
+    fn from(news: QuestionNews) -> Self {
+        match news {
+            QuestionNews::Open(prompt) => Self::AgentQuestion(prompt),
+            QuestionNews::Closed(id) => Self::AgentQuestionClosed { id },
+        }
+    }
 }
 
 /// The most events kept for a main window that has not subscribed yet.
@@ -405,6 +428,99 @@ pub async fn core_call(
         MONITORING.store(on, Ordering::Relaxed);
     }
     Ok(result)
+}
+
+// ---------- questions to Raphael from the window ----------
+
+/// The longest question the composer may send, in characters (`TYPED_MAX_CHARS` of
+/// pages/agent.ts, which counts an attached file too). The core takes any length; this only keeps
+/// one message between the window and the app within reason.
+pub const TYPED_MAX_CHARS: usize = 100_000;
+
+/// "拉斐爾現在無法回答問題": there is no controller (the core did not start) or it is gone.
+const AGENT_OFF: &str = "拉斐爾現在無法回答問題";
+
+/// A typed question as it is asked: its words without the blanks around them, or why it is not
+/// asked (nothing to ask, or too long).
+pub fn typed_question(text: &str) -> Result<&str, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("沒有要問的內容".to_owned());
+    }
+    if text.chars().count() > TYPED_MAX_CHARS {
+        return Err("問題太長了".to_owned());
+    }
+    Ok(text)
+}
+
+/// Whether `id` may be the id of one of the core's questions (a UUID today): a short word of
+/// letters, digits, `-` and `_`. Anything else never reaches the controller.
+pub fn is_question_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+/// Asks Raphael a question typed in the composer of the 拉斐爾 page. It goes the way a spoken one
+/// goes once its words are heard (`agent.ask` with the source `app`; the overlay shows the answer
+/// and any YES/NO question), and the call settles when the turn is over, its answer in the history
+/// or its failure shown. Refused while Raphael is busy with a recording or another question.
+#[tauri::command]
+pub async fn agent_ask_text(app: AppHandle, webview: Webview, text: String) -> Result<(), String> {
+    require_main(&webview)?;
+    let text = typed_question(&text)?;
+    let desk = app
+        .try_state::<DeskHandle>()
+        .map(|desk| desk.inner().clone())
+        .ok_or(AGENT_OFF)?;
+    let turn = desk
+        .0
+        .ask_typed(text)
+        .map_err(|_| "拉斐爾正在忙，請稍後再問".to_owned())?;
+    // The page waits for the turn, so that it knows when to stop waiting for its answer.
+    if let Err(err) = turn.await {
+        log::warn!("a typed question's task ended badly: {err}");
+    }
+    Ok(())
+}
+
+/// The YES/NO question that waits for its answer now, if one does (the page's card when the page
+/// opens after it was asked), with the time it has left as its `timeout_ms`.
+#[tauri::command]
+pub fn agent_question_open(app: AppHandle, webview: Webview) -> Result<Option<AskPrompt>, String> {
+    require_main(&webview)?;
+    Ok(app
+        .try_state::<DeskHandle>()
+        .and_then(|desk| desk.0.open_question()))
+}
+
+/// The page's card answers the question `id` (YES when `approved`), as the overlay's buttons do:
+/// the controller takes it only for the question that is open now, and the YES to one that cannot
+/// be undone only after the long press. The window must have the focus: the person clicked in it.
+#[tauri::command]
+pub fn agent_question_answer(
+    app: AppHandle,
+    webview: Webview,
+    id: String,
+    approved: bool,
+) -> Result<(), String> {
+    require_main(&webview)?;
+    if !is_question_id(&id) {
+        return Err("這個問題已經結束了".to_owned());
+    }
+    if !webview.window().is_focused().unwrap_or(false) {
+        return Err("請先回到拉斐爾的視窗再回答".to_owned());
+    }
+    let answers = app.try_state::<ConfirmSender>().ok_or(AGENT_OFF)?;
+    answers
+        .0
+        .send(Confirmation {
+            id,
+            approved,
+            in_app: true,
+        })
+        .map_err(|_| AGENT_OFF.to_owned())
 }
 
 // ---------- events ----------
@@ -1129,6 +1245,9 @@ mod tests {
         assert_eq!(
             checked,
             [
+                "agent_ask_text",
+                "agent_question_answer",
+                "agent_question_open",
                 "core_call",
                 "device_settings_get",
                 "device_settings_set",
@@ -1140,6 +1259,52 @@ mod tests {
                 "open_link",
                 "window_hotkey",
             ]
+        );
+    }
+
+    // ---- the window's own way to Raphael ----
+
+    #[test]
+    fn a_typed_question_has_words_and_a_bounded_length() {
+        assert_eq!(typed_question("  明天會下雨嗎？\n"), Ok("明天會下雨嗎？"));
+        assert!(typed_question("").is_err());
+        assert!(typed_question(" \n\t ").is_err());
+        let longest = "字".repeat(TYPED_MAX_CHARS);
+        assert_eq!(typed_question(&longest), Ok(longest.as_str()));
+        assert!(typed_question(&format!("{longest}字")).is_err());
+    }
+
+    #[test]
+    fn a_question_is_answered_only_by_an_id_that_could_be_one() {
+        for id in ["c-1", "6f1c2a9e-4b7d-4c1e-9f3a-2d5b8e7c0a11", "a_b"] {
+            assert!(is_question_id(id), "{id}");
+        }
+        for id in ["", "a b", "../x", "c-1\n", "問", &"a".repeat(65), "x;y"] {
+            assert!(!is_question_id(id), "{id:?}");
+        }
+    }
+
+    #[test]
+    fn the_window_hears_a_question_open_and_close() {
+        let prompt = AskPrompt {
+            id: "c-1".to_owned(),
+            tier: crate::overlay::Tier::T3,
+            prefix: "問".to_owned(),
+            text: "要寄出這封信嗎？".to_owned(),
+            yes: "寄出".to_owned(),
+            no: "取消".to_owned(),
+            timeout_ms: 30_000,
+        };
+        assert_eq!(
+            serde_json::to_value(MainEvent::from(QuestionNews::Open(prompt))).unwrap(),
+            json!({
+                "type": "AgentQuestion", "id": "c-1", "tier": "T3", "prefix": "問",
+                "text": "要寄出這封信嗎？", "yes": "寄出", "no": "取消", "timeout_ms": 30_000,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(MainEvent::from(QuestionNews::Closed("c-1".to_owned()))).unwrap(),
+            json!({ "type": "AgentQuestionClosed", "id": "c-1" })
         );
     }
 

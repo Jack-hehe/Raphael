@@ -2,6 +2,7 @@
 //! allows only one running copy.
 
 mod agent;
+mod avatar;
 mod background;
 mod commands;
 mod core_process;
@@ -107,6 +108,8 @@ pub fn run() {
                 .build(),
         )
         .plugin(log_plugin())
+        // The file dialog of 頭像 (avatar.rs). Used from Rust only: no page may open it.
+        .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| {
             // The app lives in the tray, so closing the main window only hides it.
             // "Quit" in the tray menu is the way out.
@@ -135,6 +138,13 @@ pub fn run() {
             commands::hotkeys_practice,
             commands::mic_access,
             commands::main_events,
+            commands::agent_ask_text,
+            commands::agent_question_open,
+            commands::agent_question_answer,
+            avatar::avatar_pick,
+            avatar::avatar_save,
+            avatar::avatar_get,
+            avatar::avatar_clear,
         ])
         .setup(move |app| {
             // Tauri keeps only the last `setup` call, so each part of the app starts in its own
@@ -162,6 +172,12 @@ pub fn run() {
                     Ok(decorated) => log::info!("Main window native decorations: {decorated}"),
                     Err(error) => log::warn!("could not inspect the main window frame: {error}"),
                 }
+            }
+
+            // ---- Raphael's picture ----
+            // Kept in the local data folder, which only Windows has (avatar.rs).
+            if let Some(roots) = data_layout::Roots::from_env() {
+                app.manage(std::sync::Arc::new(avatar::AvatarStore::new(&roots.local)));
             }
 
             // ---- Tray ----
