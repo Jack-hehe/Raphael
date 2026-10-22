@@ -7,8 +7,9 @@ tone for the app the text goes to. Whatever goes wrong while it runs, the user g
 
 A dictation may be as long as the user speaks. One that is longer than CLEANUP_CHUNK_CHARS is cut
 at the ends of its sentences into pieces (`split_for_cleanup`), which are cleaned side by side and
-joined again in order, so no reply has to be longer than a model can write. A piece whose cleanup
-fails keeps its raw text, and the others stay cleaned.
+joined again in order, each followed by the spaces or line breaks it was cut at (`join_parts`), so
+no reply has to be longer than a model can write and no paragraph runs into the next. A piece whose
+cleanup fails keeps its raw text, and the others stay cleaned.
 
 Nothing here logs the dictated text, the model's reply, the dictionary or a key. A failure is
 logged by its kind and status (an OpenRouterError) or by the name of its type (anything else),
@@ -27,7 +28,6 @@ from dataclasses import dataclass
 from importlib import resources
 
 from ..languages import DEFAULT_LANGUAGES, display_name
-from ..textjoin import join_segments
 from .dictionary import DictionaryStore
 from .openrouter import CLEANUP_FALLBACKS, Completion, OpenRouterClient, OpenRouterError
 from .settings import SettingsStore
@@ -110,8 +110,13 @@ def _pieces(text: str, limit: int, level: int = 0) -> list[str]:
 
 def split_for_cleanup(text: str, limit: int = CLEANUP_CHUNK_CHARS) -> list[str]:
     """`text` as the pieces the cleanup is given, in order: sentences put together into pieces of
-    at most `limit` characters each (see CLEANUP_CHUNK_CHARS). A text within the limit is one piece,
-    itself. `join_segments` puts the pieces back together as they were."""
+    at most `limit` characters each (see CLEANUP_CHUNK_CHARS), besides the spaces and line breaks
+    a piece ends with. A text within the limit is one piece, itself.
+
+    Nothing is lost: joined, the pieces are `text` again. What a piece was cut at (the space after
+    a full stop, the break between two paragraphs) stays at its end, so that the pieces can be
+    joined as they were after they are cleaned (`join_parts`). No piece starts with a space or is
+    nothing but spaces."""
     if len(text) <= limit:
         return [text]
     chunks: list[str] = []
@@ -122,7 +127,23 @@ def split_for_cleanup(text: str, limit: int = CLEANUP_CHUNK_CHARS) -> list[str]:
             current = ""
         current += piece
     chunks.append(current)
-    return [chunk.strip() for chunk in chunks if chunk.strip()]
+    pieces: list[str] = []
+    lead = ""  # the spaces the text starts with, until its first words
+    for chunk in chunks:
+        words = chunk.lstrip()
+        space = chunk[: len(chunk) - len(words)]
+        if pieces:
+            pieces[-1] += space  # spaces at the start of a piece end the one before
+        else:
+            lead += space
+        if words:
+            pieces.append(words if pieces else lead + words)
+    return pieces or [text]
+
+
+def separator_after(piece: str) -> str:
+    """The spaces and line breaks `piece` ends with: what it was cut at."""
+    return piece[len(piece.rstrip()) :]
 
 
 def build_user_message(raw: str) -> str:
@@ -413,6 +434,15 @@ class CleanedPart:
 
     text: str  # the piece as the model cleaned it, or its raw text when its call fell back
     cleaned: bool
+    # The spaces or line breaks that followed the piece in the dictation, where it was cut: the
+    # joined text keeps them (`join_parts`). Empty after the last piece.
+    after: str = ""
+
+
+def join_parts(parts: Sequence[CleanedPart]) -> str:
+    """The parts of a dictation as one text: each followed by what it was cut at, so that a
+    paragraph break, or the space between two sentences, is where it was."""
+    return "".join(part.text + part.after for part in parts).strip()
 
 
 @dataclass
@@ -428,6 +458,24 @@ class CleanupResult:
     # A dictation cleaned in pieces, when some were: each piece, in order (`text` is them joined).
     # Empty when it was one piece, or when nothing of it was cleaned.
     parts: tuple[CleanedPart, ...] = ()
+
+
+def _bodies(chunks: Sequence[tuple[str, str]]) -> list[tuple[str, str, str]]:
+    """The pieces of a long dictation as (raw, heard, after): the raw and heard text without the
+    spaces around them, which is what the model is given and what a fallback keeps, and what the
+    piece was cut at (`separator_after` of the raw text), which the join puts back. A piece with
+    nothing to clean is left out; when it is only spaces, they go to the piece before."""
+    bodies: list[tuple[str, str, str]] = []
+    for raw, heard in chunks:
+        if raw.strip() and heard.strip():
+            bodies.append((raw.strip(), heard.strip(), separator_after(raw)))
+        elif bodies and not raw.strip():
+            last_raw, last_heard, after = bodies[-1]
+            bodies[-1] = (last_raw, last_heard, after + raw)
+    if bodies:  # the end of the dictation is the end of the text, not a separator
+        last_raw, last_heard, _ = bodies[-1]
+        bodies[-1] = (last_raw, last_heard, "")
+    return bodies
 
 
 def _fallback(
@@ -506,8 +554,10 @@ class CleanupService:
         the text goes to, named in the system prompt so that the tone can follow it.
 
         A long dictation comes as `chunks`: the (raw, heard) of each of its pieces, in order, as
-        `split_for_cleanup` cut it. Each piece is a call of its own, CLEANUP_CONCURRENCY at a time,
-        judged and paid for by itself, and the pieces are joined again in order (`join_segments`).
+        `split_for_cleanup` cut it, each with what it was cut at at its end. Each piece is a call
+        of its own, CLEANUP_CONCURRENCY at a time, judged and paid for by itself; the model is
+        given it without the spaces around it, and the pieces are joined again in order, each
+        followed by what it was cut at (`join_parts`).
         A piece whose call falls back keeps its raw text, and the others stay cleaned: the result
         is then `cleaned`, its `parts` say which piece is which, and `fallback_reason` is the
         reason of the first piece that fell back. If none of them was cleaned, the result is the
@@ -526,7 +576,7 @@ class CleanupService:
         """
         if not raw.strip():
             return _fallback(raw, "empty")
-        pieces = [(r, h) for r, h in (chunks or ()) if r.strip() and h.strip()]
+        pieces = _bodies(chunks or ())
         try:
             return await self._clean(
                 raw, raw if heard is None else heard, audio_seconds, target_app, pieces
@@ -541,7 +591,7 @@ class CleanupService:
         heard: str,
         audio_seconds: float,
         target_app: str | None,
-        pieces: Sequence[tuple[str, str]],
+        pieces: Sequence[tuple[str, str, str]],
     ) -> CleanupResult:
         if not self._has_key():
             return _fallback(raw, "no_key")
@@ -561,13 +611,13 @@ class CleanupService:
     async def _clean_pieces(
         self,
         raw: str,
-        pieces: Sequence[tuple[str, str]],
+        pieces: Sequence[tuple[str, str, str]],
         system: str,
         audio_seconds: float,
     ) -> CleanupResult:
         """A long dictation, piece by piece (see `clean`). Each piece is waited for as long as its
         share of the speech would be on its own."""
-        total = sum(len(heard) for _, heard in pieces)
+        total = sum(len(heard) for _, heard, _ in pieces)
         gate = asyncio.Semaphore(CLEANUP_CONCURRENCY)
 
         async def one(piece_raw: str, piece_heard: str) -> CleanupResult:
@@ -581,7 +631,7 @@ class CleanupService:
                     return _unexpected(piece_raw, exc)
 
         started = time.perf_counter()
-        results = await asyncio.gather(*(one(r, h) for r, h in pieces))
+        results = await asyncio.gather(*(one(r, h) for r, h, _ in pieces))
         llm_ms = _elapsed_ms(started)
         cost_usd = _usable_cost(sum(result.cost_usd for result in results))
         models = [result.model for result in results if result.model is not None]
@@ -597,9 +647,12 @@ class CleanupService:
                 cost_usd=cost_usd,
                 llm_ms=llm_ms,
             )
-        parts = tuple(CleanedPart(result.text, result.cleaned) for result in results)
+        parts = tuple(
+            CleanedPart(result.text, result.cleaned, after)
+            for result, (_, _, after) in zip(results, pieces, strict=True)
+        )
         return CleanupResult(
-            text=join_segments([part.text for part in parts]),
+            text=join_parts(parts),
             cleaned=True,
             fallback_reason=failed[0] if failed else None,
             model=next(result.model for result in results if result.cleaned),

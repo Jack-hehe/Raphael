@@ -1,9 +1,10 @@
-"""Joining pieces of text the way they were spoken: the segments of a dictation, which speech-to-text
-heard one at a time, and the pieces of a long dictation, which the cleanup tidies one at a time.
+"""Joining pieces of text the way they were spoken: the stretches of speech that speech-to-text
+heard one at a time, in a dictation or a voice message. (The pieces of a long dictation that the
+cleanup tidies one at a time are joined by what they were cut at instead: `cleanup.join_parts`.)
 
 Chinese and Japanese are not written with spaces, so two pieces that meet between CJK characters
 are joined with nothing; any other join takes one space. Nothing here needs more than the standard
-library, so the brain and the device side can both use it.
+library, so the device side and the messaging can both use it.
 """
 
 from collections.abc import Sequence

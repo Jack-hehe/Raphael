@@ -99,9 +99,23 @@ def sentences(count: int, words: int = 30) -> list[str]:
     return [f"s{n} " + " ".join(f"word{n}x{w}" for w in range(words)) + "." for n in range(count)]
 
 
+def with_spaces(pieces: list[str]) -> list[str]:
+    """`pieces` as `split_for_cleanup` gives them when they were sentences with a space between
+    them: each but the last keeps the space that followed it."""
+    return [piece + " " for piece in pieces[:-1]] + pieces[-1:]
+
+
 def as_chunks(pieces: list[str]) -> list[tuple[str, str]]:
-    """The (raw, heard) of each piece, alike: these tests have no OpenCC to tell them apart."""
-    return [(piece, piece) for piece in pieces]
+    """The (raw, heard) of each piece of `pieces`, sentences with a space between them, as the
+    brain gives them (see `with_spaces`); raw and heard alike: these tests have no OpenCC to tell
+    them apart."""
+    return [(piece, piece) for piece in with_spaces(pieces)]
+
+
+def spaced_parts(texts: list[str], cleaned: list[bool]) -> tuple[CleanedPart, ...]:
+    """The parts of a dictation of sentences with a space between them."""
+    afters = [" "] * (len(texts) - 1) + [""]
+    return tuple(CleanedPart(t, c, a) for t, c, a in zip(texts, cleaned, afters, strict=True))
 
 
 def spend_rows(conn):
@@ -127,9 +141,10 @@ def test_a_long_english_text_is_cut_after_sentences():
     pieces = split_for_cleanup(text)
     assert len(pieces) > 1
     assert all(len(piece) <= CLEANUP_CHUNK_CHARS for piece in pieces)
-    assert all(piece.endswith(".") for piece in pieces)  # never inside a sentence
+    assert all(piece.endswith(". ") for piece in pieces[:-1])  # never inside a sentence
+    assert pieces[-1].endswith(".")
     assert all(piece.split()[0].startswith("s") for piece in pieces)  # each starts one
-    assert join_segments(pieces) == text
+    assert "".join(pieces) == text
 
 
 def test_a_long_chinese_text_is_cut_after_sentences_and_joined_without_spaces():
@@ -139,7 +154,7 @@ def test_a_long_chinese_text_is_cut_after_sentences_and_joined_without_spaces():
     assert len(pieces) > 1
     assert all(len(piece) <= CLEANUP_CHUNK_CHARS for piece in pieces)
     assert all(piece.endswith("。") for piece in pieces)
-    assert join_segments(pieces) == text
+    assert "".join(pieces) == text
 
 
 def test_a_sentence_too_long_for_a_piece_is_cut_after_a_clause():
@@ -162,8 +177,36 @@ def test_text_with_no_place_to_cut_is_cut_at_the_limit():
 def test_a_decimal_point_is_no_end_of_sentence():
     text = "pi is 3.14159 and e is 2.71828 " * 100
     pieces = split_for_cleanup(text.strip())
-    assert not any(piece.endswith(("3.", "2.")) for piece in pieces)
-    assert join_segments(pieces) == text.strip()
+    assert not any(piece.rstrip().endswith(("3.", "2.")) for piece in pieces)
+    assert "".join(pieces) == text.strip()
+
+
+def paragraphs(first_chars: int) -> tuple[str, str]:
+    """Two English paragraphs, the first of about `first_chars` characters, each of sentences."""
+    first = " ".join(sentences(first_chars // 250 + 1, words=30))[:first_chars].rstrip() + "."
+    second = "p2 " + " ".join(f"next{w}" for w in range(40)) + "."
+    return first, second
+
+
+def test_a_cut_at_a_paragraph_break_keeps_the_break_with_the_piece_before():
+    first, second = paragraphs(1471)
+    text = first + "\n\n" + second
+    assert split_for_cleanup(text) == [first + "\n\n", second]
+
+
+def test_whatever_a_piece_was_cut_at_stays_with_it():
+    lines = [f"line{n} " + "word " * 20 + "end." for n in range(40)]
+    text = "\n".join(lines[:20]) + "\n\n\n" + "  ".join(lines[20:])
+    pieces = split_for_cleanup(text)
+    assert len(pieces) > 1 and "".join(pieces) == text
+    assert all(not piece[0].isspace() for piece in pieces)  # a piece starts with its words
+
+
+def test_a_text_that_is_all_breaks_after_the_limit_loses_none_of_them():
+    text = "字" * CLEANUP_CHUNK_CHARS + "\n" * (CLEANUP_CHUNK_CHARS + 3) + "完。"
+    pieces = split_for_cleanup(text)
+    assert "".join(pieces) == text
+    assert all(piece.strip() for piece in pieces)  # no piece is only breaks
 
 
 # --- one piece: as it always was -----------------------------------------------------------------
@@ -196,7 +239,9 @@ async def test_the_pieces_are_cleaned_side_by_side_and_joined_in_order(svc, clie
     result = await svc.clean(raw, audio_seconds=80.0, chunks=as_chunks(pieces))
     assert result.cleaned and result.fallback_reason is None
     assert result.text == join_segments([piece.upper() for piece in pieces])
-    assert result.parts == tuple(CleanedPart(piece.upper(), True) for piece in pieces)
+    assert result.parts == spaced_parts([piece.upper() for piece in pieces], [True] * 8)
+    # The model is given each piece without the space that followed it.
+    assert sorted(transcript_of(call["user"]) for call in client.calls) == sorted(pieces)
     assert len(client.calls) == 8
     assert client.most_running == CLEANUP_CONCURRENCY  # bounded, and more than one at a time
     # Every call is paid for, and the result's cost is the sum.
@@ -237,8 +282,8 @@ async def test_a_piece_whose_reply_is_no_cleanup_keeps_its_raw_text(svc, client)
     client.answer = {"s1"}
     result = await svc.clean(join_segments(pieces), audio_seconds=40.0, chunks=as_chunks(pieces))
     assert result.cleaned and result.fallback_reason == "suspicious"
-    assert result.parts[1] == CleanedPart(pieces[1], False)
-    assert result.parts[0] == CleanedPart(pieces[0].upper(), True)
+    assert result.parts[1] == CleanedPart(pieces[1], False, " ")
+    assert result.parts[0] == CleanedPart(pieces[0].upper(), True, " ")
     assert result.cost_usd == pytest.approx(0.004)  # the answer was paid for too
 
 
@@ -321,7 +366,7 @@ async def test_a_long_dictation_through_the_brain_is_cleaned_in_pieces_and_saved
     pieces[3] = "s3 the, the " + pieces[3][3:]  # a stutter, in the piece whose cleanup fails
     client.fail = {"s3 ": OpenRouterError(503, "server", "upstream down")}
     raw = join_segments(pieces)
-    assert split_for_cleanup(raw) == pieces
+    assert split_for_cleanup(raw) == with_spaces(pieces)
     try:
         result = await router.call(
             "brain.finalize_dictation",
@@ -341,3 +386,49 @@ async def test_a_long_dictation_through_the_brain_is_cleaned_in_pieces_and_saved
     assert result["raw_text"] == raw
     assert len(items) == 1 and items[0]["text"] == result["text"]
     assert items[0]["cost_usd"] == pytest.approx(0.004)
+
+
+async def test_paragraphs_cut_apart_are_joined_with_their_break(conn, client):
+    # The first piece ends at a paragraph break: the break is not lost to the join, whether the
+    # pieces were cleaned or one of them kept its raw text.
+    keys = MemoryKeyStore()
+    keys.set("sk-or-v1-test")
+    brain = Brain(conn, client, keys, now_ms=lambda: NOW_MS)
+    router = Router()
+    brain.register(router)
+    first, second = paragraphs(1471)
+    raw = first + "\n\n" + second
+    try:
+        cleaned = await router.call(
+            "brain.finalize_dictation",
+            {"raw_text": raw, "audio_seconds": 300.0, "stt_ms": 10, "target_app": None},
+        )
+        client.fail = {"p2 ": OpenRouterError(503, "server", "upstream down")}
+        half = await router.call(
+            "brain.finalize_dictation",
+            {"raw_text": raw, "audio_seconds": 300.0, "stt_ms": 10, "target_app": None},
+        )
+    finally:
+        await brain.aclose()
+    assert sorted(transcript_of(call["user"]) for call in client.calls[:2]) == sorted(
+        [first, second]
+    )
+    assert cleaned["text"] == first.upper() + "\n\n" + second.upper()
+    assert half["text"] == first.upper() + "\n\n" + second
+    assert half["fallback_reason"] == "error:server"
+
+
+async def test_chinese_paragraphs_cut_apart_keep_their_break(svc, client):
+    sentence = "今天下午我們要討論新產品的上市計畫以及預算的分配問題。"
+    text = sentence * 55 + "\n" + sentence * 50  # the first paragraph fills a piece
+    pieces = split_for_cleanup(text)
+    assert len(pieces) == 2 and pieces[0].endswith("。\n")
+    result = await svc.clean(text, audio_seconds=120.0, chunks=[(p, p) for p in pieces])
+    assert result.text == text  # capitals change no Chinese: the text comes back as it was
+
+
+async def test_a_piece_cut_inside_a_word_is_joined_with_nothing(svc, client):
+    text = "a" * (CLEANUP_CHUNK_CHARS + 10)
+    pieces = split_for_cleanup(text)
+    result = await svc.clean(text, audio_seconds=60.0, chunks=[(p, p) for p in pieces])
+    assert result.text == text.upper()

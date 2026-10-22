@@ -42,7 +42,7 @@ import logging
 import sqlite3
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import tzinfo
 from typing import Any
 
@@ -50,9 +50,8 @@ from ..clock import wall_clock_ms
 from ..languages import chinese_variant, language_groups
 from ..protocol import INTERNAL_ERROR, RpcError, invalid_params
 from ..router import Router
-from ..textjoin import join_segments
 from .catalog import ROLE_OF_SETTING, ROLES, CatalogEntry, Role, catalog_view, choice_problem, find
-from .cleanup import CleanupService, split_for_cleanup
+from .cleanup import CleanupService, join_parts, split_for_cleanup
 from .cloud_stt import CloudTranscriber
 from .dictionary import DictionaryStore, Learned
 from .history import HistoryItem, HistoryStore
@@ -355,12 +354,16 @@ class Brain:
             # The model answered, so the time it took is a round trip to OpenRouter.
             self._openrouter.latency_ms = result.llm_ms
         if result.parts:
-            # Cleaned in pieces, some of which fell back: each is finished as it would be alone.
-            text = join_segments(
+            # Cleaned in pieces, some of which may have fallen back: each is finished as it would
+            # be alone, and they are joined with what they were cut at: a paragraph break, a space.
+            text = join_parts(
                 [
-                    finish_cleaned_text(part.text, rules, chinese=chinese)
-                    if part.cleaned
-                    else remove_stutters(part.text)
+                    replace(
+                        part,
+                        text=finish_cleaned_text(part.text, rules, chinese=chinese)
+                        if part.cleaned
+                        else remove_stutters(part.text),
+                    )
                     for part in result.parts
                 ]
             )
