@@ -145,27 +145,28 @@ describe("the list", () => {
   });
 });
 
-describe("choosing a model that is not downloaded", () => {
-  test("asks first, with the size, and has a button to download and one to cancel", () => {
-    const row = rowOf(localListHTML(view(), { kind: "download", name: "sensevoice" }), "sensevoice");
-    expect(row).toContain("下載 SenseVoice（163 MB）？");
-    expect(row).toMatch(/<button type="button" class="btn pri sm" data-act="confirm"[^>]*>下載<\/button>/);
-    expect(row).toMatch(/<button type="button" class="btn sm" data-act="dismiss"[^>]*>取消<\/button>/);
-    expect(row).not.toContain('data-act="use"');
+describe("a model that is not downloaded", () => {
+  test("has a button that downloads it at once, named with the size, and no question", () => {
+    const row = rowOf(localListHTML(view(), null), "sensevoice");
+    expect(row).toMatch(/<button type="button" class="btn sm" data-act="download" data-name="sensevoice" aria-label="下載 SenseVoice（163 MB）">下載<\/button>/);
+    expect(row).toContain('data-act="use"');
+    expect(row).not.toContain('data-act="confirm"');
   });
 
-  test("asks in the language of the window", () => {
+  test("the button speaks the language of the window", () => {
     setLocale("en");
-    const row = rowOf(localListHTML(view(), { kind: "download", name: "breeze-asr-25" }), "breeze-asr-25");
-    expect(row).toContain("Download Breeze-ASR-25 (1.8 GB)?");
-    expect(row).toContain(">Download</button>");
-    expect(row).toContain(">Cancel</button>");
+    const row = rowOf(localListHTML(view(), null), "breeze-asr-25");
+    expect(row).toContain('aria-label="Download Breeze-ASR-25 (1.8 GB)">Download</button>');
   });
 
-  test("only the row asked about asks", () => {
-    const html = localListHTML(view(), { kind: "download", name: "sensevoice" });
-    expect(rowOf(html, "breeze-asr-25")).toContain('data-act="use"');
-    expect(html.match(/data-act="confirm"/g)).toHaveLength(1);
+  test("a downloaded model has no download button", () => {
+    expect(rowOf(localListHTML(view(), null), "paraformer-zh")).not.toContain('data-act="download"');
+  });
+
+  test("while another model downloads, nothing else can be downloaded", () => {
+    const html = localListHTML(view({ download: { name: "breeze-asr-25", done: 1, total: 4 } }), null);
+    expect(html).not.toContain('data-act="download"');
+    expect(rowOf(html, "breeze-asr-25")).toMatch(/data-act="cancel"[^>]*>取消<\/button>/);
   });
 });
 

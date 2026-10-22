@@ -1,8 +1,9 @@
 // The local tab of the speech-to-text picker (model-picker.ts): the catalogue of the speech models
 // that run on this computer (`models.local`), none downloaded until the user chooses it. Each row
 // has the model's name, the languages it knows, its size, a line on what it is for and its state:
-// 未下載, 下載中 42%, 已下載, 備援 (the model behind the cloud) or 使用中. Choosing a model that is not downloaded asks first, in the
-// row, with its size; a downloaded one that is not in use can be deleted, also after asking.
+// 未下載, 下載中 42%, 已下載, 備援 (the model behind the cloud) or 使用中. A model that is not downloaded has a 下載
+// button that starts at once (the row shows its size, and 取消 takes over while it downloads); a
+// downloaded one that is not in use can be deleted, after asking in the row.
 //
 // This file only draws and counts. The picker keeps the open tab and the question being asked,
 // and the settings page does the downloading and holds the progress of it.
@@ -25,7 +26,7 @@ export interface LocalView {
 
 /** A question the row of `name` asks before it does anything. */
 export interface LocalConfirm {
-  kind: "download" | "delete";
+  kind: "delete";
   name: string;
 }
 
@@ -128,10 +129,10 @@ function rowHTML(model: LocalModel, view: LocalView, confirm: LocalConfirm | nul
   const size = formatSize(model.size);
   const open = `<div class="lm-row" data-name="${esc(model.name)}">`;
   if (confirm?.name === model.name) {
-    const text = confirm.kind === "download" ? t("local.confirmDownload", { p0: model.title, p1: size }) : deleteQuestion(model, view);
+    const text = deleteQuestion(model, view);
     return (
       `${open}<div class="lm-confirm" role="group" aria-label="${esc(text)}"><span class="lm-ask">${esc(text)}</span>` +
-      btn(esc(confirm.kind === "download" ? t("local.download") : t("local.delete")), "pri sm", ` data-act="confirm" data-name="${esc(model.name)}"`) +
+      btn(esc(t("local.delete")), "pri sm", ` data-act="confirm" data-name="${esc(model.name)}"`) +
       btn(esc(t("local.cancel")), "sm", ` data-act="dismiss" data-name="${esc(model.name)}"`) +
       `</div></div>`
     );
@@ -152,6 +153,8 @@ function rowHTML(model: LocalModel, view: LocalView, confirm: LocalConfirm | nul
   let action = "";
   if (fetching) {
     action = btn(esc(t("local.cancel")), "sm", ` data-act="cancel" aria-label="${esc(t("local.cancelDownload", { p0: model.title }))}"`);
+  } else if (!model.ready && !busy) {
+    action = btn(esc(t("local.download")), "sm", ` data-act="download" data-name="${esc(model.name)}" aria-label="${esc(t("local.downloadLabel", { p0: model.title, p1: size }))}"`);
   } else if (model.ready && state.kind !== "active" && !busy) {
     const text = t("local.deleteLabel", { p0: model.title });
     action = `<button type="button" class="lm-del" data-act="delete" data-name="${esc(model.name)}" aria-label="${esc(text)}" title="${esc(text)}">${ico("trash")}</button>`;
