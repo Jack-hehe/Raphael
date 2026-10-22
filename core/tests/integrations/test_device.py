@@ -201,7 +201,8 @@ def github_server():
 
 @pytest.fixture
 def github_in_store(monkeypatch):
-    services = catalog.SERVICES + (catalog.github_service("Iv-test"),)
+    others = tuple(s for s in catalog.SERVICES if s.id != "github")
+    services = others + (catalog.github_service("Iv-test"),)
     monkeypatch.setattr(catalog, "SERVICES", services)
     monkeypatch.setattr(catalog, "_BY_ID", {s.id: s for s in services})
 
