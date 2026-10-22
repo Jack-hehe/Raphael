@@ -686,6 +686,8 @@ export const ja = {
   "mem.edit": "「{p0}」を表示・編集",
   "mem.delete": "「{p0}」を削除",
   "mem.body": "「{p0}」の内容",
+  "mem.descLabel": "「{p0}」のタイトル",
+  "mem.descEmpty": "タイトルを入力してください",
   "mem.save": "保存",
   "mem.saved": "記憶を保存しました",
   "mem.deleted": "記憶を1件削除しました",

@@ -1,7 +1,8 @@
 // Raphael's memory, in the 拉斐爾 tab of Settings: what he keeps about the person, one note a line.
 // It is drawn with the rows of every other tab. Closed, it is one row: 「記憶」 and how many notes
 // there are, with a chevron. Open, a row for each note (its type and its one line), each with a pencil
-// that opens its text in a box to read and change, and a trash can that deletes it after the 10 s of
+// that opens its title (that one line, which the index Raphael always reads is made of) on a line
+// and its text in a box, to read and change, and a trash can that deletes it after the 10 s of
 // 「復原」 that every delete has; then the summary of the conversation, if there is one, with
 // 「清除」; and under the card 「全部清除」, which asks for a second press like 中斷連線.
 //
@@ -31,11 +32,14 @@ export interface MemoryList {
   summary: { text: string; updated_at_ms: number } | null;
 }
 
-/** The note whose text is open: as it was read, then as it is being typed. */
+/** The note that is open: its text and its title (its line in the index Raphael always reads), as
+ * they were read, then as they are being typed. `body` is null while the note is read. */
 export interface MemoryEditor {
   name: string;
   body: string | null;
   draft: string;
+  description: string;
+  descDraft: string;
   saving: boolean;
   error: string | null;
 }
@@ -57,6 +61,8 @@ export const emptyMemoryView = (): MemoryView => ({
 
 /** The most a note's text holds (the core's limit). */
 export const MEMORY_BODY_MAX = 1200;
+/** The most a note's title holds (the core's limit, and the shell's). */
+export const MEMORY_DESCRIPTION_MAX = 80;
 
 /** The word for each type of note, as the catalogue spells it. */
 const TYPE_KEYS: Record<string, MessageKey> = {
@@ -77,6 +83,7 @@ function editorHTML(v: MemoryView, item: MemoryItem): string {
   const off = e.saving ? " disabled" : "";
   return (
     `<div class="mem-edit" data-mem-editor>` +
+    `<input id="mem-title" class="mem-title" type="text" maxlength="${MEMORY_DESCRIPTION_MAX}" aria-label="${esc(t("mem.descLabel", { p0: item.description }))}" value="${esc(e.descDraft)}"${off}>` +
     `<textarea id="mem-body" class="mem-body" rows="5" maxlength="${MEMORY_BODY_MAX}" aria-label="${esc(t("mem.body", { p0: item.description }))}"${off}>${esc(e.draft)}</textarea>` +
     (e.error ? note(st("err", esc(e.error)), ' role="alert"') : "") +
     `<div class="mem-edit-actions">${btn(esc(t("common.cancel")), "sm", ` data-mem="cancel"${off}`)}${btn(esc(t("mem.save")), "sm pri", ` data-mem="save"${off}`)}</div>` +
@@ -190,12 +197,12 @@ export function createMemory(host: MemoryHost): MemoryPanel {
       redraw();
       return;
     }
-    editing = { name, body: null, draft: "", saving: false, error: null };
+    editing = { name, body: null, draft: "", description: "", descDraft: "", saving: false, error: null };
     redraw();
     try {
       const memory = await core<MemoryNote>("memory.get", { name });
       if (editing?.name !== name) return;
-      editing = { ...editing, body: memory.body, draft: memory.body };
+      editing = { ...editing, body: memory.body, draft: memory.body, description: memory.description, descDraft: memory.description };
     } catch (err) {
       if (editing?.name !== name) return;
       editing = null;
@@ -209,7 +216,15 @@ export function createMemory(host: MemoryHost): MemoryPanel {
   async function save(): Promise<void> {
     const e = editing;
     if (!e || e.body === null || e.saving) return;
-    if (e.draft === e.body) {
+    // The title is one line, as the index shows it; the core keeps it at one line too.
+    const description = e.descDraft.split(/\s+/).filter(Boolean).join(" ");
+    if (!description) {
+      editing = { ...e, error: t("mem.descEmpty") };
+      redraw();
+      return;
+    }
+    const titled = description !== e.description;
+    if (e.draft === e.body && !titled) {
       editing = null;
       redraw();
       return;
@@ -217,7 +232,8 @@ export function createMemory(host: MemoryHost): MemoryPanel {
     editing = { ...e, saving: true, error: null };
     redraw();
     try {
-      await core<MemoryNote>("memory.update", { name: e.name, body: e.draft });
+      // The text always goes (the shell asks for it); the title only when it changed.
+      await core<MemoryNote>("memory.update", titled ? { name: e.name, body: e.draft, description } : { name: e.name, body: e.draft });
       editing = null;
       toaster.info(t("mem.saved"));
       await load();
@@ -320,9 +336,9 @@ export function createMemory(host: MemoryHost): MemoryPanel {
   }
 
   function input(el: HTMLTextAreaElement | HTMLInputElement): boolean {
-    if (el.id !== "mem-body" || !editing) return false;
+    if ((el.id !== "mem-body" && el.id !== "mem-title") || !editing) return false;
     // Kept as it is typed, not drawn again: a redraw would take the caret out of the box.
-    editing = { ...editing, draft: el.value };
+    editing = el.id === "mem-body" ? { ...editing, draft: el.value } : { ...editing, descDraft: el.value };
     if (editing.error) {
       editing = { ...editing, error: null };
       el.closest("[data-mem-editor]")?.querySelectorAll(".note[role=alert]").forEach((n) => n.remove());
@@ -332,7 +348,8 @@ export function createMemory(host: MemoryHost): MemoryPanel {
 
   function key(e: KeyboardEvent): boolean {
     const target = e.target as HTMLElement | null;
-    if (target?.id !== "mem-body" || !editing) return false;
+    const field = target?.id;
+    if ((field !== "mem-body" && field !== "mem-title") || !editing) return false;
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -340,7 +357,8 @@ export function createMemory(host: MemoryHost): MemoryPanel {
       redraw();
       return true;
     }
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    // Enter saves from the title, which is one line; the text takes Enter as a new line.
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey || (field === "mem-title" && !e.isComposing))) {
       e.preventDefault();
       void save();
       return true;

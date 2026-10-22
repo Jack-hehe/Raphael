@@ -51,7 +51,7 @@ describe("the memory's rows", () => {
   });
 
   test("every action is a real button; the icon-only ones are named in their label and tooltip", () => {
-    const html = memoryHTML(view({ expanded: true, editing: { name: "user-city", body: "x", draft: "x", saving: false, error: null } }));
+    const html = memoryHTML(view({ expanded: true, editing: { name: "user-city", body: "x", draft: "x", description: "主人住在台北", descDraft: "主人住在台北", saving: false, error: null } }));
     for (const tag of buttons(html)) {
       expect(tag).toMatch(/^<button type="button" class="btn/);
       if (/class="btn icon/.test(tag)) {
@@ -62,9 +62,11 @@ describe("the memory's rows", () => {
     expect(html).toContain('aria-label="刪除「主人住在台北」" title="刪除「主人住在台北」"');
   });
 
-  test("an open note is its text in a box, with 取消 and 儲存", () => {
-    const html = memoryHTML(view({ expanded: true, editing: { name: "user-city", body: "主人住在台北市。", draft: "主人住在<台北>。", saving: false, error: null } }));
-    expect(html).toContain('<textarea id="mem-body" class="mem-body" rows="5" maxlength="1200" aria-label="「主人住在台北」的內容">主人住在&lt;台北&gt;。</textarea>');
+  test("an open note is its title on one line and its text in a box, with 取消 and 儲存", () => {
+    const html = memoryHTML(view({ expanded: true, editing: { name: "user-city", body: "主人住在台北市。", draft: "主人住在<台北>。", description: "主人住在台北", descDraft: "主人住在&台北", saving: false, error: null } }));
+    const title = '<input id="mem-title" class="mem-title" type="text" maxlength="80" aria-label="「主人住在台北」的標題" value="主人住在&amp;台北">';
+    const text = '<textarea id="mem-body" class="mem-body" rows="5" maxlength="1200" aria-label="「主人住在台北」的內容">主人住在&lt;台北&gt;。</textarea>';
+    expect(html).toContain(title + text);
     expect(html).toContain('data-mem="edit" data-name="user-city" aria-expanded="true"');
     expect(html).toContain('data-mem="cancel"');
     expect(html).toContain('data-mem="save"');
@@ -113,6 +115,7 @@ describe("the controller", () => {
     return c.click({ closest: () => b } as unknown as Element);
   };
   const box = (value: string) => ({ id: "mem-body", value, closest: () => null }) as unknown as HTMLTextAreaElement;
+  const line = (value: string) => ({ id: "mem-title", value, closest: () => null }) as unknown as HTMLInputElement;
   const keyOn = (key: string, extra: Partial<KeyboardEvent> = {}) =>
     ({ key, target: { id: "mem-body" }, preventDefault: vi.fn(), stopPropagation: vi.fn(), ctrlKey: false, metaKey: false, ...extra }) as unknown as KeyboardEvent;
 
@@ -160,6 +163,54 @@ describe("the controller", () => {
     expect(api.core).toHaveBeenCalledWith("memory.update", { name: "user-city", body: "主人住在台北市大安區。" });
     expect(toaster.info).toHaveBeenCalledWith("已儲存記憶");
     await vi.waitFor(() => expect(api.core.mock.calls.filter(([m]) => m === "memory.list")).toHaveLength(2));
+  });
+
+  test("the title is read with the text, and 儲存 sends it when it was changed", async () => {
+    const c = make();
+    await c.load();
+    click(c, "edit", "user-city");
+    await vi.waitFor(() => expect(c.view().editing?.descDraft).toBe("主人住在台北"));
+    expect(c.input(line("  主人住在高雄 "))).toBe(true);
+    c.input(box("主人住在高雄市。"));
+    click(c, "save");
+    await vi.waitFor(() => expect(c.view().editing).toBeNull());
+    expect(api.core).toHaveBeenCalledWith("memory.update", { name: "user-city", body: "主人住在高雄市。", description: "主人住在高雄" });
+  });
+
+  test("a title changed alone is sent with the text as it was", async () => {
+    const c = make();
+    await c.load();
+    click(c, "edit", "user-city");
+    await vi.waitFor(() => expect(c.view().editing?.body).not.toBeNull());
+    c.input(line("主人住在高雄"));
+    click(c, "save");
+    await vi.waitFor(() => expect(c.view().editing).toBeNull());
+    expect(api.core).toHaveBeenCalledWith("memory.update", { name: "user-city", body: "主人住在台北市。", description: "主人住在高雄" });
+  });
+
+  test("an empty title is not sent, and says so", async () => {
+    const c = make();
+    await c.load();
+    click(c, "edit", "user-city");
+    await vi.waitFor(() => expect(c.view().editing?.body).not.toBeNull());
+    c.input(line("   "));
+    click(c, "save");
+    expect(c.view().editing?.error).toBe("標題不能空白");
+    expect(api.core).not.toHaveBeenCalledWith("memory.update", expect.anything());
+  });
+
+  test("Enter in the title saves, and Escape there closes the note", async () => {
+    const c = make();
+    await c.load();
+    click(c, "edit", "user-city");
+    await vi.waitFor(() => expect(c.view().editing?.body).not.toBeNull());
+    expect(c.key(keyOn("Escape", { target: { id: "mem-title" } as unknown as EventTarget }))).toBe(true);
+    expect(c.view().editing).toBeNull();
+    click(c, "edit", "user-city");
+    await vi.waitFor(() => expect(c.view().editing?.body).not.toBeNull());
+    c.input(line("主人住在高雄"));
+    expect(c.key(keyOn("Enter", { target: { id: "mem-title" } as unknown as EventTarget }))).toBe(true);
+    await vi.waitFor(() => expect(api.core).toHaveBeenCalledWith("memory.update", expect.objectContaining({ description: "主人住在高雄" })));
   });
 
   test("儲存 with nothing changed closes the note and sends nothing", async () => {

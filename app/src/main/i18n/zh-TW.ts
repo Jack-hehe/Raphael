@@ -685,6 +685,8 @@ export const zhTW = {
   "mem.edit": "查看與編輯「{p0}」",
   "mem.delete": "刪除「{p0}」",
   "mem.body": "「{p0}」的內容",
+  "mem.descLabel": "「{p0}」的標題",
+  "mem.descEmpty": "標題不能空白",
   "mem.save": "儲存",
   "mem.saved": "已儲存記憶",
   "mem.deleted": "已刪除 1 條記憶",

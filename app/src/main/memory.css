@@ -13,9 +13,10 @@
 .mem-type { flex: none; min-width: 3.2em; font-size: var(--fs-xs); color: var(--text-3); }
 .mem-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--text); }
 .mem-tag { flex: none; padding: 0 6px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-xs); }
-/* a note's text, open under its row */
+/* a note, open under its row: its title on one line, then its text */
 .mem-edit { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); padding: var(--sp-2) var(--sp-4) var(--sp-3) var(--sp-6); border-top: 1px solid var(--line); }
 .mem-body { width: 100%; min-height: 96px; resize: vertical; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--panel); font-size: var(--fs-sm); line-height: 1.6; }
-.mem-body:focus { outline: 0; border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-ring); }
+.mem-title { width: 100%; min-height: 32px; padding: 6px 10px; border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--panel); font-size: var(--fs-sm); }
+.mem-body:focus, .mem-title:focus { outline: 0; border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-ring); }
 .mem-edit-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); }
 .mem-foot { margin: 10px 0 0 4px; }

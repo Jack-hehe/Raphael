@@ -686,6 +686,8 @@ export const en = {
   "mem.edit": "View and edit “{p0}”",
   "mem.delete": "Delete “{p0}”",
   "mem.body": "Text of “{p0}”",
+  "mem.descLabel": "Title of “{p0}”",
+  "mem.descEmpty": "The title can't be empty",
   "mem.save": "Save",
   "mem.saved": "Memory saved",
   "mem.deleted": "1 memory deleted",
