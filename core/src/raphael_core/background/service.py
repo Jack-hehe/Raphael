@@ -597,6 +597,17 @@ class BackgroundService:
             return {"cancelled": True}
         return {"cancelled": False}
 
+    async def cancel_session(self, session_id: str) -> bool:
+        """Stop the task of this session that runs and take its queued ones out of the queue; the
+        tasks of other sessions are left alone. Whether anything was stopped."""
+        stopped = False
+        run = self._run
+        for task_id in [*([run.task_id] if run is not None else []), *self._queue]:
+            task = self.task(task_id)
+            if task is not None and task.session_id == session_id:
+                stopped = bool((await self._cancel({"task_id": task_id}))["cancelled"]) or stopped
+        return stopped
+
     # --- closing --------------------------------------------------------------------------------
 
     async def aclose(self) -> None:

@@ -1563,3 +1563,31 @@ async def test_a_bug_in_the_router_is_a_failure_too_and_a_command_is_still_found
     assert (await rig.ask("靜音"))["prefix"] == "了"
     assert actions.calls == [("press_key", "volume_mute", 1)]
     assert (await rig.ask("你好"))["prefix"] == "否"
+
+
+async def test_a_message_from_a_messaging_app_leaves_the_question_at_the_computer_alone(
+    rig, client, actions
+):
+    rig.seed("q", "a")
+    asked = await ask_to_copy(rig, client)
+    client.decisions.append(decision("chat"))
+    client.replies.append(spoken("答", "好。"))
+    await rig.call(
+        "agent.ask",
+        {"session_id": "telegram:42", "text": "你好", "ui_language": "zh-TW", "source": "telegram"},
+    )
+    assert (await rig.confirm(asked["confirm"]["id"], True))["prefix"] == "了"
+    assert not any(t["status"] == "denied" for t in await rig.turns())
+
+
+async def test_stopping_a_session_ends_its_request_and_denies_its_question_only(rig, client, actions):
+    rig.seed("q", "a")
+    asked = await ask_to_copy(rig, client)
+    assert rig.service.stop_session("telegram:42") is False
+    assert rig.service.stop_session("s1") is True
+    assert (await rig.turns())[0]["status"] == "denied"
+    assert (await rig.confirm(asked["confirm"]["id"], True))["prefix"] == "否"
+    # unlike Esc, it leaves no memory that would cancel the session's next request
+    client.decisions.append(decision("chat"))
+    client.replies.append(spoken("答", "好。"))
+    assert (await rig.ask("你好"))["text"] == "好。"

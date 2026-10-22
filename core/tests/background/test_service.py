@@ -721,3 +721,40 @@ async def test_closing_the_service_interrupts_the_task_that_runs_and_the_ones_th
     assert rig.reports() == []  # nobody is left to report to
     assert rig.host.running is False and rig.service.running is False
     await rig.service.aclose()  # safe twice
+
+
+async def test_stopping_a_session_stops_only_its_own_tasks(make_rig):
+    rig = make_rig()
+    started = asyncio.Event()
+
+    async def slow(**kwargs):
+        started.set()
+        await asyncio.sleep(30)
+
+    rig.client.replies = [slow]
+    mine = rig.submit(session="other")
+    queued = rig.submit(session="telegram:42")
+    await asyncio.wait_for(started.wait(), 5)
+    assert await rig.service.cancel_session("telegram:42") is True  # the queued one only
+    [gone] = await rig.wait_for_reports()
+    assert (gone["task_id"], gone["state"]) == (queued, "cancelled")
+    assert rig.service.running and rig.task(mine).state == "running"
+    assert await rig.service.cancel_session("telegram:42") is False
+    assert await rig.service.cancel_session("other") is True
+    await rig.wait_for_reports(2)
+
+
+async def test_stopping_a_session_stops_the_task_that_runs_when_it_is_the_sessions(make_rig):
+    rig = make_rig()
+    started = asyncio.Event()
+
+    async def slow(**kwargs):
+        started.set()
+        await asyncio.sleep(30)
+
+    rig.client.replies = [slow]
+    task_id = rig.submit(session="telegram:42")
+    await asyncio.wait_for(started.wait(), 5)
+    assert await rig.service.cancel_session("telegram:42") is True
+    [done] = await rig.wait_for_reports()
+    assert (done["task_id"], done["state"]) == (task_id, "cancelled")

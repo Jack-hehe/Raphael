@@ -1030,7 +1030,10 @@ class App(Router):
         return compose(reply.get("prefix", ""), reply.get("text", ""), detail)
 
     async def _stop_from_messaging(self, session_id: str) -> bool:
-        return bool((await self.call("worker.cancel", {})).get("cancelled"))
+        """Stop what this chat has under way: a request that still thinks and its background
+        tasks, never those of the computer or of another chat."""
+        thinking = self.agent.stop_session(session_id)
+        return await self.background.cancel_session(session_id) or thinking
 
     def _worker_notice(self, method: str, params: dict) -> None:
         """The background worker's notifications go to the app, and the report of a task that a
