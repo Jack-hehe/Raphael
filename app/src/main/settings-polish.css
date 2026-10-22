@@ -9,7 +9,6 @@
 .skeleton-row i:last-child { width: 28%; height: var(--h-ctl-sm); }
 .about-brand { display: flex; align-items: center; gap: var(--sp-4); margin: 30px 0 28px; }
 .about-name { font: 650 28px/1.2 var(--display); letter-spacing: -0.025em; }
-.onboarding-brand { display: flex; align-items: center; gap: 10px; margin: 8px 0 18px; font: 650 17px/1.2 var(--display); }
 .lang-panel .lang-head { flex: none; }
 .lang-panel .lang-list { min-height: 0; }
 .lang-panel .lang-foot { flex: none; line-height: 1.55; }

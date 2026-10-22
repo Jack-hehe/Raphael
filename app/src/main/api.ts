@@ -21,6 +21,7 @@ import type {
   KeyCheck,
   LocalModels,
   MainEvent,
+  MicAccess,
   ModelCatalog,
   ModelsStatus,
   Status,
@@ -173,6 +174,14 @@ export const keyboardHasAltgr = (): Promise<boolean> => invoke("keyboard_has_alt
 /** Pauses the global hotkeys while the page records a new one. */
 export const hotkeysPause = (paused: boolean): Promise<void> =>
   withWindowHotkeyPause(paused, () => invoke("hotkeys_pause", { paused }));
+
+/**
+ * Practises the keys: while on, they are reported as `Hotkey` events and start no dictation and no
+ * question (a lesson that shows the key being pressed). Always switch it off again.
+ */
+export const hotkeysPractice = (on: boolean): Promise<void> => invoke("hotkeys_practice", { on });
+/** Whether the privacy settings of Windows let desktop apps use the microphone. */
+export const micAccess = (): Promise<MicAccess> => invoke("mic_access");
 
 /** Starts hearing the events of the core. Call once; a page that calls again replaces the first. */
 export async function subscribeMainEvents(handler: (event: MainEvent) => void): Promise<void> {

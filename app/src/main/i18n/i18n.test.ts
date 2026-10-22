@@ -144,7 +144,7 @@ describe("main window translations", () => {
     // backend.ts, ...), so each key in use is written out as a string somewhere.
     const root = path.resolve(import.meta.dirname, "..");
     const catalogues = new Set(["zh-TW.ts", "en.ts", "ja.ts"]);
-    const files = [root, path.join(root, "pages"), path.join(root, "i18n")].flatMap((dir) =>
+    const files = [root, path.join(root, "pages"), path.join(root, "onboarding"), path.join(root, "i18n")].flatMap((dir) =>
       readdirSync(dir)
         .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && !(dir.endsWith("i18n") && catalogues.has(f)))
         .map((f) => path.join(dir, f)),
@@ -163,7 +163,7 @@ describe("main window translations", () => {
 
   test("main-window source has no hard-coded CJK UI literals outside the catalogue", () => {
     const root = path.resolve(import.meta.dirname, "..");
-    const files = [root, path.join(root, "pages")].flatMap((dir) =>
+    const files = [root, path.join(root, "pages"), path.join(root, "onboarding")].flatMap((dir) =>
       readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts")).map((f) => path.join(dir, f)),
     );
     expect(cjkLiterals(files)).toEqual([]);
