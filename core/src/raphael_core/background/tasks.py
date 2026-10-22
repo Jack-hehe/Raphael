@@ -264,6 +264,17 @@ class TaskStore:
                 )
         return [task for task in (self.get(row["id"]) for row in rows) if task is not None]
 
+    def for_brief(self, since_ms: int, limit: int) -> list[Task]:
+        """The newest tasks that are queued or running, or that ended at `since_ms` or later, with
+        something said (a cleared task keeps nothing)."""
+        rows = self._conn.execute(
+            f"SELECT {_TASK_COLUMNS} FROM worker_tasks WHERE text != ''"
+            " AND (state IN ('queued', 'running') OR finished_at_ms >= ?)"
+            " ORDER BY id DESC LIMIT ?",
+            (since_ms, limit),
+        )
+        return [Task(**dict(row)) for row in rows]
+
     def unannounced(self) -> list[Task]:
         """The interrupted tasks whose report has not been said, newest first."""
         rows = self._conn.execute(

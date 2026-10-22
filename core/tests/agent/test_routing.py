@@ -59,9 +59,11 @@ def test_the_criteria_of_the_routes_are_these():
         "website, app or Windows settings page (or search on a site), change the volume, pause or "
         "play media, lock the screen.",
         "answer": "A question Raphael can answer in a few sentences, possibly after one quick "
-        "lookup (weather, time, a web search, a definition, a calculation).",
+        "lookup (weather, time, a web search, a definition, a calculation), including how a "
+        "background task is going or what it did (state.background lists them).",
         "delegate": "A multi-step task, or one that needs a connected service such as email, "
-        "calendar, Notion or GitHub, or that will take more than a few seconds.",
+        "calendar, Notion or GitHub, or that will take more than a few seconds. Not a question "
+        "about a task that was already handed over.",
         "discuss": "The speaker wants to think something through together or plan, an "
         "open-ended conversation rather than one answer.",
         "chat": "Small talk, a greeting or thanks, needing no action and no facts.",
@@ -100,6 +102,35 @@ def test_the_questions_do_not_change_between_requests():
 
 def test_the_state_is_the_utterance():
     assert build_state("打開 YouTube") == {"utterance": "打開 YouTube"}
+
+
+def test_the_state_has_one_line_about_the_background_when_there_is_something_to_say():
+    assert build_state("好了嗎", "1 running (step 4)") == {
+        "utterance": "好了嗎",
+        "background": "1 running (step 4)",
+    }
+    assert build_state("好了嗎", "") == {"utterance": "好了嗎"}
+    assert build_state("好了嗎", None) == {"utterance": "好了嗎"}
+
+
+async def test_jev_is_told_about_the_background_in_the_state_and_asked_nothing_more(
+    router, client, ledger
+):
+    client.decisions.append(decision("answer"))
+    await router.classify("寄出去了嗎", "m", ledger, background="1 done 3 min ago")
+    [call] = client.decide_calls
+    assert call["state"] == {"utterance": "寄出去了嗎", "background": "1 done 3 min ago"}
+    assert list(call["questions"]) == list(build_questions())  # no new question, no new call
+
+
+async def test_the_language_model_reads_the_background_too_as_data(router, client, ledger):
+    client.decisions.extend([Decision(answers={}, cost_usd=0.0, latency_ms=1)])
+    client.replies.append(completion(classification(route="answer")))
+    await router.classify("寄出去了嗎", "m", ledger, background="1 done 3 min ago")
+    assert "<background>\n1 done 3 min ago\n</background>" in client.json_calls[0]["user"]
+    client.replies.append(completion(classification(route="answer")))
+    await router.ask_luna("寄出去了嗎", "m", ledger)  # nothing to say: nothing is added
+    assert "background" not in client.json_calls[1]["user"]
 
 
 # --- reading Jev's answers --------------------------------------------------------------------------

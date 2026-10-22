@@ -61,6 +61,7 @@ from ..brain.spend import SpendTracker
 from ..protocol import BUSY, INVALID_PARAMS, NOT_FOUND, RpcError
 from ..router import Router
 from ..worker.guards import neutralize
+from .brief import BRIEF_WINDOW_MS, TaskBrief, ToolUse
 from .host import WorkerCrashed, WorkerHost, WorkerStopped, WorkerUnavailable
 from .run import RunLimits, TaskRun
 from ..agent.toolpick import ToolPicker
@@ -84,6 +85,8 @@ _FINAL_FENCE = "```"
 # again, and one that is not over is still running.
 RERUNNABLE = ("interrupted", "cancelled", "limit", "failed")
 # How a step of an earlier attempt ended, as the new attempt is told.
+# How a tool call of a task is told to the fast tier.
+_BRIEF_OUTCOME = {"ok": "ok", "cancelled": "cut_off", "timeout": "timeout"}
 _EARLIER_OUTCOME = {
     "ok": "ok",
     "cancelled": "cut off, may have run",
@@ -207,6 +210,7 @@ class BackgroundService:
         self._host = host if host is not None else WorkerHost()
         self._limits = limits
         self._clock = clock
+        self._now_ms = now_ms
         self._store = TaskStore(conn, now_ms)
         self._history = AgentHistory(conn, now_ms)
         self._settings = SettingsStore(conn)
@@ -289,6 +293,44 @@ class BackgroundService:
             self._history.resolve(turn_id, prefix=prefix or "", text=text or "", status="error")
         except sqlite3.Error as exc:
             logger.warning("Could not complete the turn of a task: %s", type(exc).__name__)
+
+    def brief_for_assistant(self, limit: int = 3) -> list[TaskBrief]:
+        """The newest `limit` tasks that run, wait or ended in the last half hour, as a few facts
+        for the fast tier: what the user asked, how it stands, the step it is at, the tools it used
+        and how each ended, and its report. Empty when they cannot be read."""
+        since = self._now_ms() - BRIEF_WINDOW_MS
+        try:
+            tasks = self._store.for_brief(since, limit)
+            briefs = []
+            for task in tasks:
+                steps = self._store.steps(task.id)
+                tools = tuple(
+                    ToolUse(
+                        step.server or BUILTIN_SERVER,
+                        step.tool,
+                        _BRIEF_OUTCOME.get(step.outcome, "failed"),
+                    )
+                    for step in steps
+                    if step.kind == "tool" and step.tool
+                )
+                ended = task.finished_at_ms
+                briefs.append(
+                    TaskBrief(
+                        id=task.id,
+                        text=task.text,
+                        state=task.state,
+                        step=len(steps),
+                        tools=tools,
+                        report=task.report_text if ended is not None else None,
+                        ended_min_ago=None
+                        if ended is None
+                        else max(self._now_ms() - ended, 0) // 60_000,
+                    )
+                )
+            return briefs
+        except sqlite3.Error as exc:
+            logger.warning("Could not read the tasks for the assistant: %s", type(exc).__name__)
+            return []
 
     def announce_pending(self) -> None:
         """Say the report of an interrupted task, once. Called after the app says hello, when the

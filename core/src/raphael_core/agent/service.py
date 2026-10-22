@@ -64,6 +64,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from ..background.brief import background_block, background_line
 from ..background.tasks import Refused
 from ..brain.catalog import CatalogEntry
 from ..brain.openrouter import OpenRouterClient
@@ -437,7 +438,9 @@ class AgentService:
         failure = blocked
         if blocked is None:
             try:
-                decision = await self._decider.classify(ask.text, settings.model, ledger)
+                decision = await self._decider.classify(
+                    ask.text, settings.model, ledger, background_line(self._briefs())
+                )
             except AgentFailure as error:
                 failure = error.kind
             except Exception as exc:  # a bug in the router must not become an RPC error
@@ -497,6 +500,17 @@ class AgentService:
         return self._finish(ask, "unclear", "negative", phrase(ask.language, "unclear"), ledger)
 
     # --- the background ---------------------------------------------------------------------------
+
+    def _briefs(self) -> list:
+        """The tasks in the background as a few facts (running, waiting, or ended in the last half
+        hour), for the router and the answer. Empty when there is no worker or it cannot say."""
+        if self._background is None:
+            return []
+        try:
+            return list(self._background.brief_for_assistant())
+        except Exception as exc:  # what the background knows must not stop a request
+            logger.warning("Could not read the background for a request: %s", type(exc).__name__)
+            return []
 
     def _hand_over(self, ask: _Ask, settings: _Settings, ledger: Ledger) -> dict:
         """A task for the background worker: it is queued, and Raphael says 《了。》 at once. The
@@ -583,6 +597,7 @@ class AgentService:
             tools=results,
             moment=self._moment(),
             ledger=ledger,
+            background=background_block(self._briefs()),
         )
         return self._finish(ask, "answer", reply.prefix, reply.text, ledger, detail=reply.detail)
 
@@ -785,6 +800,7 @@ class AgentService:
                 tools=[*followup.results, result],
                 moment=self._moment(),
                 ledger=ledger,
+                background=background_block(self._briefs()),
             )
         except AgentFailure:
             # It was done, and Raphael cannot say more than that.
