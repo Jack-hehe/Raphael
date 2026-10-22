@@ -28,22 +28,21 @@ const visible = (html: string): string =>
   html.replace(/<span class="sr">.*?<\/span>/g, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
 describe("the setup", () => {
-  test("three marks of the steps (said in their tooltips), one line, BotFather and a token field", () => {
+  test("two rows like the other settings: Telegram with BotFather, then the token with 連接; one line under them", () => {
     const html = messagingHTML(view());
-    expect(html.match(/<li title="/g)).toHaveLength(3);
-    expect(html).toContain('title="在 Telegram 找 @BotFather，傳 /newbot。"');
-    expect(html.match(/class="ra-line"/g)).toHaveLength(1);
-    expect(html).toContain('data-msg="botfather"');
+    expect(html).toMatch(/^<section class="sgroup msg" data-msg-section aria-label="Telegram"><div class="slist">/);
+    expect(html.match(/<div class="row /g)).toHaveLength(2);
+    expect(html).toContain('data-msg="botfather" title="在 Telegram 找 @BotFather，傳 /newbot。"');
     expect(html).toContain('id="msg-token"');
     expect(html).toContain('type="password"');
     expect(html).toContain('data-msg="connect"');
-    // the words a reader sees: the name, the step numbers, the one line, BotFather and 連接
-    expect(visible(html)).toBe("Telegram 1 2 3 在 BotFather 建立機器人，把權杖貼在這裡。 BotFather 連接");
+    expect(html.match(/<p class="foot">/g)).toHaveLength(1);
+    expect(visible(html)).toBe("Telegram BotFather 機器人權杖 連接 在 BotFather 建立機器人，把權杖貼在這裡。");
   });
 
-  test("the row carries Telegram's mark and a dot that says it is not connected", () => {
+  test("the first row carries Telegram's mark and a dot that says it is not connected", () => {
     const html = messagingHTML(view());
-    expect(html).toMatch(/class="ra-ic tg-mark" aria-hidden="true"><svg/);
+    expect(html).toMatch(/class="mono md logo-mono msg-mark" aria-hidden="true"><svg/);
     expect(html).toContain('class="dot idle" role="img" aria-label="尚未連接"');
   });
 
@@ -90,16 +89,16 @@ describe("when connected", () => {
     expect(html).toContain('data-msg="disconnect"');
   });
 
-  test("a waiting code opens it, with ✓ and ✗ named for the code", () => {
+  test("a waiting code opens it on a row of its own, with ✓ and ✗ named for the code", () => {
     const html = messagingHTML(view({ status: status({ allowed: [{ user_id: 1, name: "Bo" }], pending: [{ code: "AB3DEF", name: "Ann", expires_in_s: 540 }] }) }));
     expect(html).toContain('data-msg="expand" aria-expanded="true"');
-    expect(html).toContain("AB3DEF");
+    expect(html).toMatch(/<div class="row msg-sub">.*AB3DEF/);
     expect(html).toContain('aria-label="核准 AB3DEF" title="核准 AB3DEF" data-msg="approve" data-code="AB3DEF"');
     expect(html).toContain('aria-label="拒絕 AB3DEF" title="拒絕 AB3DEF" data-msg="reject" data-code="AB3DEF"');
-    expect(html).toContain('class="ra-badge num"');
+    expect(html).toContain('class="msg-badge num"');
   });
 
-  test("the people who may talk to her, each with a remove button named for them", () => {
+  test("the people who may talk to her, each on a row with a remove button named for them", () => {
     const html = messagingHTML(view({ status: status({ allowed: [{ user_id: 42, name: "Ann <b>" }] }), expanded: true }));
     expect(html).toContain('aria-label="移除 Ann &lt;b&gt;"');
     expect(html).toContain('data-msg="remove" data-user="42"');

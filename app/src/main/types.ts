@@ -333,7 +333,7 @@ export type TrayAction = "add-word";
 export type PageId = "home" | "agent" | "history" | "dictionary" | "settings";
 
 /** The tabs of the settings panel. */
-export type SettingsPane = "general" | "dictation" | "connections" | "usage" | "about";
+export type SettingsPane = "general" | "dictation" | "agent" | "connections" | "usage" | "about";
 
 /** One of the five pages of the main window. */
 export interface Page {

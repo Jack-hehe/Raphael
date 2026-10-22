@@ -4,7 +4,8 @@
 // along while it is open: a turn written or completed (`AgentTurn`) and a background task that took
 // a step (`WorkerChanged`) bring the newest turns again, and a task under way can be stopped here.
 // The conversations are had by voice or in a chat app: this page only shows them. Raphael's own
-// settings (her key, the weather city, Telegram) open in a sheet from the sliders button at the top.
+// settings (her key, the weather city, Telegram) are the 拉斐爾 tab of Settings, which the sliders
+// button at the top opens.
 
 import { onLocaleChange, t } from "../i18n";
 
@@ -27,9 +28,8 @@ import {
   timelineHTML,
   wantsRefresh,
 } from "../timeline";
-import { createRaphaelSheet, iconButton } from "../raphael-sheet";
 import type { AgentTurn, AppContext, Page } from "../types";
-import { esc, ico, keys, toaster } from "../ui";
+import { esc, ico, iconButton, keys, toaster } from "../ui";
 import "../agent.css";
 
 /** How many turns one load brings. */
@@ -41,6 +41,11 @@ const REFRESH_DELAY_MS = 150;
 /** How long 「清除對話」 waits for its second press. */
 const CLEAR_CONFIRM_MS = 4000;
 
+/** The sliders button: Settings, open on the 拉斐爾 tab, as the sidebar's 設定 opens it on its first. */
+export function openRaphaelSettings(app: Pick<AppContext, "go">): void {
+  app.go("settings", "agent");
+}
+
 export function createAgent(app: AppContext): Page {
   const el = document.createElement("div");
   el.className = "page page-agent";
@@ -49,7 +54,7 @@ export function createAgent(app: AppContext): Page {
   el.innerHTML =
     `<div class="page-head"><h1>${esc(t("agent.title"))}</h1><div class="ra-tools">` +
     `<button type="button" class="btn icon ra-clear" data-act="clear" hidden></button>` +
-    iconButton("sliders", t("agent.settings"), ' data-act="settings" aria-haspopup="dialog"') +
+    iconButton("sliders", t("agent.settings"), ' data-act="settings"') +
     `</div></div>` +
     `<div class="agent-body" hidden>` +
     `<nav class="sess-pane"><div class="sess-list"></div><div class="more" hidden>${iconButton("down", t("agent.earlier"), ' data-act="earlier"')}</div></nav>` +
@@ -68,8 +73,6 @@ export function createAgent(app: AppContext): Page {
   const wait = el.querySelector<HTMLElement>(".agent-wait")!;
   const empty = el.querySelector<HTMLElement>(".empty")!;
   const settingsButton = el.querySelector<HTMLElement>('[data-act="settings"]')!;
-  const sheet = createRaphaelSheet(app, () => settingsButton);
-  el.append(sheet.el);
 
   /** What is loaded, newest first. */
   let turns: AgentTurn[] = [];
@@ -328,7 +331,7 @@ export function createAgent(app: AppContext): Page {
         clearAll();
         break;
       case "settings":
-        sheet.open();
+        openRaphaelSettings(app);
         break;
       case "earlier":
         void load(true);
@@ -390,7 +393,6 @@ export function createAgent(app: AppContext): Page {
     },
     hide() {
       visible = false;
-      sheet.close();
       clearTimeout(clearTimer);
       confirmingClear = false;
       drawClear();
