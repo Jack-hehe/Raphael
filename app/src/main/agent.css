@@ -142,6 +142,8 @@
 .page-agent .btn.cmp-voice { flex: none; width: 36px; min-height: 36px; padding: 0; border: 0; border-radius: 50%; background: transparent; transition: transform 0.16s ease; }
 .page-agent .btn.cmp-voice:hover:not(:disabled) { background: transparent; transform: scale(1.08); }
 .page-agent .btn.cmp-voice:active:not(:disabled) { background: transparent; transform: scale(0.96); }
+/* while its picture is up (voice-mode.ts) the button stays, and keeps the focus; only its picture is hidden */
+.vm-away > * { visibility: hidden; }
 .cmp-file { padding: 2px 4px 0 8px; }
 .cmp-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 4px 2px 9px; border-radius: var(--r-pill); background: var(--surface-2); font-size: var(--fs-xs); color: var(--text-2); }
 .cmp-chip > .i { width: 13px; height: 13px; }

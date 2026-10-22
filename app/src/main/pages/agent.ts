@@ -199,6 +199,8 @@ export function createAgent(app: AppContext): Page {
   let sent = 0;
   /** A question said aloud is being answered: since when, and the newest turn there was then. */
   let hearing: { since: number; after: number } | null = null;
+  /** Ends `hearing` at `HEARING_MAX_MS` when neither its turn nor any other word of the core comes. */
+  let hearingTimer: ReturnType<typeof setTimeout> | undefined;
   /** The file attached to the next typed question. */
   let attached: { name: string; text: string } | null = null;
   /** The YES/NO question that waits for an answer, and whether an answer is on its way. */
@@ -436,7 +438,12 @@ export function createAgent(app: AppContext): Page {
       const before = earlier ? oldestId(turns) : undefined;
       got = (await api.agentHistoryList({ limit: PAGE_SIZE, ...(before === undefined ? {} : { before_id: before }) })).turns;
     } catch (err) {
-      if (mine !== loads) return;
+      // A newer load of the newest turns took over: what this one shows does not count, but an
+      // earlier page that failed must still let the reader page up again.
+      if (mine !== loads) {
+        if (earlier) loadingEarlier = false;
+        return;
+      }
       if (earlier) loadingEarlier = false;
       else pending = false;
       if (turns.length === 0) {
@@ -480,7 +487,29 @@ export function createAgent(app: AppContext): Page {
     const sinceSent = (sent: Outgoing): AgentTurn | undefined =>
       turns.find((turn) => sourceOf(turn) === TYPED && turn.question.trim() === sent.text.trim() && turn.created_at_ms >= sent.sentAt - 5_000);
     outgoing = outgoing.filter((sent) => sinceSent(sent) === undefined);
-    if (hearing && (turns.some((turn) => turn.id > hearing!.after && sourceOf(turn) === VOICE) || Date.now() - hearing.since > HEARING_MAX_MS)) hearing = null;
+    if (hearing && (turns.some((turn) => turn.id > hearing!.after && sourceOf(turn) === VOICE) || Date.now() - hearing.since > HEARING_MAX_MS)) stopHearing();
+  }
+
+  /**
+   * A question said aloud is being answered: its line shows until its turn comes, a last phase of
+   * the dictation says it ended, or `HEARING_MAX_MS` has passed. That last one is a timer of its
+   * own, because a core that crashed or restarted sends neither a turn nor a phase, and no history
+   * load would come to settle it.
+   */
+  function startHearing(): void {
+    hearing = { since: Date.now(), after: newestId() };
+    clearTimeout(hearingTimer);
+    hearingTimer = setTimeout(() => {
+      hearingTimer = undefined;
+      if (!hearing) return;
+      hearing = null;
+      if (visible) render();
+    }, HEARING_MAX_MS);
+  }
+  function stopHearing(): void {
+    hearing = null;
+    clearTimeout(hearingTimer);
+    hearingTimer = undefined;
   }
 
   function scheduleRefresh(): void {
@@ -833,14 +862,28 @@ export function createAgent(app: AppContext): Page {
   });
   voiceButton.addEventListener("pointerup", voiceUp);
   voiceButton.addEventListener("pointercancel", voiceUp);
+  // A key held on the button is let go wherever the focus is by then: the release is heard on the
+  // whole page, for the key that pressed it, once; a window that loses the focus lets it go too.
+  // (The button stays where it is while the picture is up, but the focus may still move: the
+  // approval card can take the composer's place.)
+  let heldKey: string | null = null;
+  const releaseKey = (): void => {
+    heldKey = null;
+    voiceUp();
+  };
   voiceButton.addEventListener("keydown", (e) => {
     if ((e.key === "Enter" || e.key === " ") && !e.repeat) {
       e.preventDefault();
+      if (heldKey !== null) return;
+      heldKey = e.key;
       voiceDown();
     }
   });
-  voiceButton.addEventListener("keyup", (e) => {
-    if (e.key === "Enter" || e.key === " ") voiceUp();
+  document.addEventListener("keyup", (e) => {
+    if (heldKey !== null && e.key === heldKey) releaseKey();
+  });
+  window.addEventListener("blur", () => {
+    if (heldKey !== null) releaseKey();
   });
 
   yesButton.addEventListener("pointerdown", (e) => {
@@ -900,10 +943,10 @@ export function createAgent(app: AppContext): Page {
         listening = false;
         voice.down();
         if (event.phase === "processing") {
-          hearing = { since: Date.now(), after: newestId() };
+          startHearing();
           if (visible) render(true);
         } else if (hearing) {
-          hearing = null;
+          stopHearing();
           if (visible) render();
         }
       }
