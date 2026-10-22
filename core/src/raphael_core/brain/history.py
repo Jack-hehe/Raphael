@@ -104,6 +104,13 @@ class HistoryStore:
             cursor = self._conn.execute("DELETE FROM history WHERE id = ?", (id,))
         return cursor.rowcount > 0
 
+    def clear(self) -> int:
+        """Delete every item; return how many went. What was spent is kept in the spend table,
+        which this does not touch, so clearing the history loses no record of the money."""
+        with self._conn:
+            cursor = self._conn.execute("DELETE FROM history")
+        return cursor.rowcount
+
     def latest(self) -> HistoryItem | None:
         row = self._conn.execute(
             f"SELECT {_COLUMNS} FROM history {_NEWEST_FIRST} LIMIT 1"

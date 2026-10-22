@@ -278,6 +278,7 @@ class Brain:
             "history.list": self._history_list,
             "history.latest": self._history_latest,
             "history.delete": self._history_delete,
+            "history.clear": self._history_clear,
             "dictionary.list": self._dictionary_list,
             "dictionary.add": self._dictionary_add,
             "dictionary.import": self._dictionary_import,
@@ -450,6 +451,11 @@ class Brain:
         item_id = _int(params, "id")
         with _store_call():
             return {"deleted": self._history.delete(item_id)}
+
+    async def _history_clear(self, params: dict) -> dict:
+        """Delete the whole dictation history: Settings › 資料, once its 10 seconds of 復原 ran out."""
+        with _store_call():
+            return {"deleted": self._history.clear()}
 
     # --- dictionary -----------------------------------------------------------------------------
 
