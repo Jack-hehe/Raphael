@@ -16,6 +16,7 @@ import { DICTATION_MODES } from "../dictation";
 import { formatClock, formatUsd } from "../format";
 import { type LanguageGroup, languageSelectHTML, normalizeLanguages } from "../languages";
 import { bindingLabels } from "../keys";
+import { type MessagingView, messagingHTML } from "../messaging";
 import {
   DROPDOWN_ROOM,
   MENU_ROOM,
@@ -30,6 +31,7 @@ import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } fr
 import { pricingNote } from "../pricing";
 import { runOutDay } from "../report";
 import { WARN_FROM, spendVisual, spentShare } from "../spend";
+import type { HotkeyField } from "../hotkey-recording";
 import type { AudioDevices, BrainSettings, DeviceSettings, LocalModel, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
 import { type Choice, type IconName, btn, esc, fieldHTML, keys, meter, note, row, sel, st, tg } from "../ui";
 
@@ -62,10 +64,18 @@ const PRICES_LOADING = () => t("settings.026");
 export const PANES: { id: SettingsPane; icon: IconName; title: () => string; purpose: (d: DeviceSettings) => string }[] = [
   { id: "general", icon: "gear", title: () => t("settings.paneGeneral"), purpose: () => t("settings.purposeGeneral") },
   { id: "dictation", icon: "mic", title: () => t("settings.paneDictation"), purpose: () => t("settings.purposeDictation") },
+  { id: "agent", icon: "sparkle", title: () => t("settings.paneAgent"), purpose: agentPurpose },
   { id: "connections", icon: "link", title: () => t("settings.paneConnections"), purpose: () => t("settings.purposeConnections") },
   { id: "usage", icon: "wallet", title: () => t("settings.paneUsage"), purpose: () => t("settings.purposeUsage") },
   { id: "about", icon: "info", title: () => t("common.about"), purpose: () => t("settings.purposeAbout") },
 ];
+
+/** 「按 右 Alt + Space 問拉斐爾」: the line names the keys that are set, so that it stays true when they change. */
+function agentPurpose(d: DeviceSettings): string {
+  // an app from before the question key has none yet
+  const binding = d.agent_keys?.[0];
+  return binding ? t("settings.purposeAgent", { p0: bindingLabels(binding).join(" + ") }) : t("settings.purposeAgentNoKeys");
+}
 
 /** The name of a tab, in the language of the window. */
 export const paneTitle = (id: SettingsPane): string => PANES.find((p) => p.id === id)!.title();
@@ -73,8 +83,8 @@ export const paneTitle = (id: SettingsPane): string => PANES.find((p) => p.id ==
 /** The group of rows that OpenRouter's name heads: a brand, the same in every language. */
 const OPENROUTER = "OpenRouter";
 
-/** The shortcut recorded here (Raphael's own key is on the 拉斐爾 page), and its row. */
-export const HOTKEY_ROWS: Record<"dictation_keys", string> = { dictation_keys: "hotkey" };
+/** The shortcuts recorded here, and the row of each. */
+export const HOTKEY_ROWS: Record<HotkeyField, string> = { dictation_keys: "hotkey", agent_keys: "agent-hotkey" };
 
 /** Everything a tab is drawn from: what the panel has read, and what is being typed or done. */
 export interface SettingsView {
@@ -102,6 +112,11 @@ export interface SettingsView {
   /** What was typed in the limit field while it is not a limit, and what is wrong with it. */
   limitDraft: string | null;
   limitError: (() => string) | null;
+  /** What is typed in the weather city while it is not saved, and what is wrong with it. */
+  cityDraft: string | null;
+  cityError: (() => string) | null;
+  /** Telegram, in the 拉斐爾 tab. */
+  messaging: MessagingView;
   /** The same for the weather city. */
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
   languageGroups: LanguageGroup[] | null;
@@ -133,6 +148,7 @@ export const localView = (v: SettingsView): LocalView => ({
 });
 export const cleanupModel = (v: SettingsView): string => v.brain?.cleanup_model ?? DEFAULT_MODELS.cleanup;
 export const agentModel = (v: SettingsView): string => v.brain?.agent_model ?? DEFAULT_MODELS.answer;
+export const agentCity = (v: SettingsView): string => v.brain?.agent_city ?? "";
 /** The catalog once it is read. */
 const catalogOf = (v: SettingsView): ModelCatalog | null => (typeof v.catalog === "object" ? v.catalog : null);
 
@@ -309,7 +325,7 @@ function usageRow(v: SettingsView): string {
 
 /** A group of settings: a short name, then its rows on one card. */
 const section = (title: string, rows: string[], foot = ""): string =>
-  `<section class="sgroup"><h2>${esc(title)}</h2><div class="slist">${rows.join("")}</div>` +
+  `<section class="sgroup">${title ? `<h2>${esc(title)}</h2>` : ""}<div class="slist">${rows.join("")}</div>` +
   (foot ? `<p class="foot">${foot}</p>` : "") +
   `</section>`;
 
@@ -317,7 +333,7 @@ const section = (title: string, rows: string[], foot = ""): string =>
  * A shortcut: its keys as caps and, for one that can be changed here, a 「變更」 button that records
  * new ones (`change` names the button for the click handler and the focus).
  */
-function shortcutRow(name: string, bindings: readonly string[], change?: { act: string; field: keyof typeof HOTKEY_ROWS }): string {
+function shortcutRow(name: string, bindings: readonly string[], change?: { act: string; field: HotkeyField }): string {
   const caps = bindings.length > 0
     ? bindings.map((binding) => keys(bindingLabels(binding))).join(t("onboarding.009"))
     : `<span class="val">${esc(t("home.noKeys"))}</span>`;
@@ -392,6 +408,28 @@ function dictationHTML(v: SettingsView): string {
   );
 }
 
+/** 拉斐爾: the key that asks her, the city of the weather, then Telegram. The model that answers is with the other models. */
+function agentHTML(v: SettingsView): string {
+  const cityShown = v.cityDraft ?? agentCity(v);
+  // an app from before the question key has none yet
+  const agentKeys = v.device.agent_keys ?? [];
+  return (
+    headingHTML(v) +
+    coreNote(v) +
+    section("", [
+      shortcutRow(t("settings.agentKeys"), agentKeys, { act: "rec-agent", field: "agent_keys" }),
+      ...altgrNote(v, agentKeys),
+      row(
+        t("settings.agentCity"),
+        "",
+        fieldHTML(t("settings.agentCityHint"), cityShown, { w: 200, get label() { return t("settings.agentCity"); }, id: "agent-city", invalid: v.cityError !== null, disabled: v.brain === null }),
+      ),
+      ...(v.cityError ? [note(st("err", v.cityError()), ' role="alert"')] : []),
+    ]) +
+    messagingHTML(v.messaging)
+  );
+}
+
 /** 連接: the services Raphael is connected to and the store that adds them, under the heading. */
 function connectionsTabHTML(v: SettingsView): string {
   return headingHTML(v) + connectionsHTML(v.connections);
@@ -439,6 +477,8 @@ export function paneHTML(v: SettingsView): string {
       return generalHTML(v);
     case "dictation":
       return dictationHTML(v);
+    case "agent":
+      return agentHTML(v);
     case "connections":
       return connectionsTabHTML(v);
     case "usage":

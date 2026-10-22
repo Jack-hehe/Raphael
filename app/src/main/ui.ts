@@ -117,6 +117,10 @@ export function sel(options: Choice[], current: string, label: string, attrs = "
 export const btn = (label: string, kind = "", attrs = ""): string =>
   `<button type="button" class="btn${kind ? " " + kind : ""}"${attrs}>${label}</button>`;
 
+/** A bordered button with an icon only: what it does is its label and its tooltip. */
+export const iconButton = (name: IconName, label: string, attrs = "", cls = ""): string =>
+  `<button type="button" class="btn icon${cls ? " " + cls : ""}" aria-label="${esc(label)}" title="${esc(label)}"${attrs}>${ico(name)}</button>`;
+
 export const iconBtn = (name: IconName, label: string, attrs = ""): string =>
   `<button type="button" class="icon-btn" aria-label="${esc(label)}" title="${esc(label)}"${attrs}>${ico(name)}</button>`;
 

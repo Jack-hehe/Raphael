@@ -163,72 +163,9 @@
 
 /* ---------- the tools at the top: clear, and Raphael's settings ---------- */
 .ra-tools { display: flex; align-items: center; gap: 8px; }
-.page-agent .btn.icon, .ra-sheet .btn.icon { width: 34px; min-height: 34px; padding: 0; }
-.page-agent .btn.icon .i, .ra-sheet .btn.icon .i { width: 16px; height: 16px; }
+.page-agent .btn.icon { width: 34px; min-height: 34px; padding: 0; }
+.page-agent .btn.icon .i { width: 16px; height: 16px; }
 .btn.icon.ra-clear { transition: width 0.2s ease, color 0.15s ease; }
 .btn.icon.ra-clear.is-confirm { width: auto; padding: 0 12px 0 10px; color: var(--err); border-color: var(--err); }
 .sess-pane .more .btn.icon { width: 30px; min-height: 30px; }
 .tn-more.btn.sm.icon { width: 30px; min-height: 28px; padding: 0; }
-
-/* ---------- the sheet ---------- */
-.ra-sheet-wrap { position: fixed; inset: 0; z-index: 80; pointer-events: none; }
-.ra-scrim { position: absolute; inset: 0; background: var(--scrim); opacity: 0; transition: opacity 0.24s ease; }
-.ra-sheet-wrap[data-open="true"] { pointer-events: auto; }
-.ra-sheet-wrap[data-open="true"] .ra-scrim { opacity: 1; }
-.ra-sheet { position: absolute; top: 0; right: 0; bottom: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); width: 400px; max-width: 100%; background: var(--panel); border-left: 1px solid var(--edge); box-shadow: var(--pop); transform: translateX(104%); visibility: hidden; transition: transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1), visibility 0s linear 0.3s; }
-.ra-sheet[data-open="true"] { transform: none; visibility: visible; transition: transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1); }
-.ra-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: calc(var(--window-controls-height) + 10px) 18px 12px 22px; border-bottom: 1px solid var(--line); }
-.ra-sheet-head h2 { display: flex; align-items: center; gap: 10px; margin: 0; font: 650 16px/1.3 var(--display); color: var(--text); }
-.ra-sheet-head h2 .i { width: 18px; height: 18px; color: var(--accent-text); }
-.ra-sheet-head h2:focus { outline: none; }
-.ra-sheet-head h2:focus-visible { outline: none; } /* it is never tabbed to: it only holds the focus when the sheet opens */
-.ra-sheet-body { min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 8px 18px 32px 22px; }
-.ra-sheet .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-
-.ra-group { padding: 10px 0 14px; }
-.ra-group + .ra-group { border-top: 1px solid var(--line); }
-.ra-row { display: flex; align-items: center; gap: 12px; min-height: 52px; }
-.ra-ic { display: grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-text); }
-.ra-ic .i { width: 16px; height: 16px; }
-.ra-ic.tg-mark { background: transparent; color: #26a5e4; }
-.ra-ic.tg-mark .logo { width: 26px; height: 26px; display: block; }
-.ra-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: var(--text); }
-.ra-tg-head .ra-t { font-weight: 600; }
-.ra-grow { flex: 1; min-width: 0; }
-.ra-row .caps { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; font-size: 12px; color: var(--text-3); }
-.ra-none { color: var(--text-3); }
-.ra-row .field { flex: none; max-width: 100%; }
-.ra-group > .note { padding: 0 0 8px 42px; }
-.ra-tg-head .dot { flex: none; }
-.ra-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 600; }
-.ra-more .i { transition: transform 0.22s ease; }
-.ra-more[aria-expanded="true"] .i { transform: rotate(180deg); }
-
-.ra-line { margin: 2px 0 12px 42px; font-size: 13px; line-height: 1.6; color: var(--text-2); text-wrap: pretty; }
-.ra-tg-setup, .ra-tg-detail { animation: agent-enter 0.24s ease-out both; }
-.ra-steps { position: relative; display: flex; justify-content: space-between; max-width: 220px; margin: 6px 0 14px 42px; padding: 0; list-style: none; }
-.ra-steps::before { content: ""; position: absolute; left: 16px; right: 16px; top: 15px; height: 1px; background: var(--line); }
-.ra-steps li { position: relative; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--edge); background: var(--panel); color: var(--accent-text); }
-.ra-steps li .i { width: 15px; height: 15px; }
-.ra-step-n { position: absolute; top: -5px; right: -5px; display: grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; background: var(--accent); color: var(--on-accent); font: 700 9.5px/1 var(--ui); }
-.ra-tg-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 10px 42px; }
-.ra-tg-row .btn .i { width: 14px; height: 14px; }
-.ra-tg-token .field { flex: 1 1 160px; min-width: 0; }
-.ra-tg-setup > .note { padding: 0 0 6px 42px; }
-
-.ra-tg-detail { margin-left: 42px; }
-.ra-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; margin-bottom: 8px; }
-.ra-item { display: flex; align-items: center; gap: 10px; min-height: 44px; }
-.ra-item .ra-who { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--text); }
-.ra-mins { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--text-3); }
-.ra-mins .i { width: 12px; height: 12px; }
-.ra-pend .msg-code { font: 650 16px/1 var(--ui); letter-spacing: 0.14em; color: var(--text); }
-.ra-avatar { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-text); font: 700 13px/1 var(--display); }
-.ra-sheet .btn.icon.pri .i { color: var(--on-accent); }
-.ra-sheet .btn.icon.ra-no { color: var(--text-2); }
-.ra-tg-foot { margin-top: 6px; }
-.btn.sm.danger { color: var(--err); border-color: var(--err); }
-
-@container main (max-width: 520px) {
-  .ra-sheet { width: 100%; }
-}

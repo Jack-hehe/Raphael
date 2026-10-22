@@ -12,7 +12,9 @@ import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
 import "../settings-polish.css";
 import "../connections.css";
+import "../messaging.css";
 import { createConnections } from "../connections";
+import { createMessaging } from "../messaging";
 import { DICTATION_MODES, isDictationMode } from "../dictation";
 import { describeError, keyReasonText, parseLimit } from "../format";
 import { wireKeyField } from "../keyfield";
@@ -47,6 +49,7 @@ import {
   APPEARANCES,
   AUTO_MICROPHONE,
   HOTKEY_ROWS,
+  agentCity,
   MODEL_ROWS,
   PANES,
   SIZES,
@@ -141,7 +144,10 @@ export function createSettings(app: AppContext): SettingsPage {
   /** What was typed in the limit field while it is not a limit, and what is wrong with it. */
   let limitDraft: string | null = null;
   let limitError: (() => string) | null = null;
-  /** The dictation keys being recorded (「變更」): the row is drawn again when it is over. */
+  /** The same for the weather city. */
+  let cityDraft: string | null = null;
+  let cityError: (() => string) | null = null;
+  /** A shortcut being recorded (「變更」): the row is drawn again when it is over. */
   const recording = createHotkeyRecording(app, () => {
     if (visible) render();
   });
@@ -155,14 +161,16 @@ export function createSettings(app: AppContext): SettingsPage {
   let loads = 0;
   /** The 「連接」 tab: it keeps its own state and asks to be drawn again. */
   const connections = createConnections({ visible: () => visible && pane === "connections", redraw: () => render() });
+  /** Telegram, in the 「拉斐爾」 tab: it keeps its own state too. */
+  const messaging = createMessaging({ visible: () => visible && pane === "agent", redraw: () => render() });
 
   // ---------- drawing ----------
 
   /** What the tabs are drawn from, as the panel knows it now. */
   const view = (): SettingsView => ({
     pane, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
-    replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, languageGroups, now: Date.now(),
-    connections: connections.view(), localModels, localDownload,
+    replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
+    connections: connections.view(), messaging: messaging.view(), localModels, localDownload,
   });
 
   /** The item at the foot of the microphones' menu that looks for them again. */
@@ -668,6 +676,23 @@ export function createSettings(app: AppContext): SettingsPage {
     void changeBrain("monthly_limit_usd", limit);
   }
 
+  function commitCity(input: HTMLInputElement): void {
+    const city = input.value.trim();
+    if (city === "") {
+      cityDraft = input.value;
+      cityError = () => t("settings.agentCityEmpty");
+      render();
+      return;
+    }
+    cityDraft = null;
+    cityError = null;
+    if (city === agentCity(view())) {
+      render();
+      return;
+    }
+    void changeBrain("agent_city", city);
+  }
+
   // ---------- the microphone and its level ----------
 
   // After a core restart the app switches the new core's monitoring back on by itself.
@@ -760,6 +785,8 @@ export function createSettings(app: AppContext): SettingsPage {
       pane = paneButton.dataset.pane as SettingsPane;
       if (pane === "connections") void connections.load();
       else connections.reset();
+      if (pane === "agent") void messaging.load();
+      else messaging.reset();
       syncMonitor();
       body.scrollTop = 0;
       render();
@@ -782,7 +809,7 @@ export function createSettings(app: AppContext): SettingsPage {
       return;
     }
 
-    if (connections.click(target)) return;
+    if (connections.click(target) || messaging.click(target)) return;
 
     if (target.closest('.tg[data-k="autostart"]')) {
       void changeDevice({ autostart: !app.device().autostart });
@@ -794,13 +821,16 @@ export function createSettings(app: AppContext): SettingsPage {
       return;
     }
 
-    switch (target.closest<HTMLElement>("[data-act]")?.dataset.act) {
+    const act = target.closest<HTMLElement>("[data-act]")?.dataset.act;
+    switch (act) {
       case "close":
         app.closeSettings();
         break;
-      case "rec": {
-        const cell = el.querySelector<HTMLElement>(`[data-row="${HOTKEY_ROWS.dictation_keys}"] .caps`);
-        if (cell) void recording.start("dictation_keys", cell);
+      case "rec":
+      case "rec-agent": {
+        const field = act === "rec" ? "dictation_keys" : "agent_keys";
+        const cell = el.querySelector<HTMLElement>(`[data-row="${HOTKEY_ROWS[field]}"] .caps`);
+        if (cell) void recording.start(field, cell);
         break;
       }
       case "key-replace":
@@ -837,13 +867,15 @@ export function createSettings(app: AppContext): SettingsPage {
   el.addEventListener("change", (e) => {
     const input = e.target as HTMLInputElement;
     if (input.id === "limit-input") commitLimit(input);
+    else if (input.id === "agent-city") commitCity(input);
   });
   el.addEventListener("input", (e) => {
     const input = e.target as HTMLInputElement;
-    if (connections.input(input)) return;
+    if (connections.input(input) || messaging.input(input)) return;
     if (input.id === "limit-input") limitDraft = input.value;
+    else if (input.id === "agent-city") cityDraft = input.value;
   });
-  el.addEventListener("keydown", (e) => void connections.key(e));
+  el.addEventListener("keydown", (e) => void (connections.key(e) || messaging.key(e)));
   // Menus consume their own Escape; the panel and native window controls share one Tab loop.
   const settingsKey = (e: KeyboardEvent): void => {
     const chrome = document.getElementById("window-chrome");
@@ -886,7 +918,9 @@ export function createSettings(app: AppContext): SettingsPage {
       // the first tab, unless the way in knows better (the report that says there is no key goes to the key)
       pane = PANES.some((p) => p.id === open) ? open! : "general";
       connections.reset();
+      messaging.reset();
       if (pane === "connections") void connections.load();
+      if (pane === "agent") void messaging.load();
       body.scrollTop = 0;
       closeMenu();
       render();
@@ -916,6 +950,8 @@ export function createSettings(app: AppContext): SettingsPage {
       keyError = null;
       limitDraft = null;
       limitError = null;
+      cityDraft = null;
+      cityError = null;
       loading = false;
       render();
       if (!el.contains(document.activeElement)) el.querySelector<HTMLElement>("#set-title")?.focus();
@@ -939,6 +975,7 @@ export function createSettings(app: AppContext): SettingsPage {
     hide() {
       visible = false;
       connections.reset();
+      messaging.reset();
       document.removeEventListener("keydown", settingsKey);
       loading = false;
       loads++;
