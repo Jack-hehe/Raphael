@@ -9,6 +9,7 @@
 // sidebar's 拉斐爾, the composer's voice button, the approval card, the voice-mode flyer and the
 // settings row. They draw again when `onAvatarChange` says the picture changed.
 
+import { pictureStyle } from "../overlay/emblem";
 import { esc } from "./ui";
 import "./avatar.css";
 
@@ -147,12 +148,8 @@ export async function loadAvatar(get: () => Promise<unknown>): Promise<void> {
   }
 }
 
-/** The style that cuts the picture as `crop` says, inside a square box (see `AvatarCrop`). */
-export function cropStyle(crop: AvatarCrop): string {
-  const x = `${Math.round(crop.x * 1000) / 10}%`;
-  const y = `${Math.round(crop.y * 1000) / 10}%`;
-  return `object-position:${x} ${y};transform-origin:${x} ${y};transform:scale(${Math.round(crop.zoom * 1000) / 1000})`;
-}
+/** The style that cuts the picture as `crop` says, inside a square box (see `AvatarCrop`); the overlay's moving picture uses the same. */
+export const cropStyle = (crop: AvatarCrop): string => pictureStyle(crop);
 
 export interface AvatarOptions {
   /** The diameter in CSS pixels. */
