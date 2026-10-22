@@ -45,6 +45,7 @@ const DEFAULT_DEVICE: DeviceSettings = {
   ui_language: "zh-TW",
   autostart: true,
   onboarded: false,
+  computer_apps: [],
 };
 
 /** A page that comes on screen again within this time of the last time is not loaded again. */

@@ -356,6 +356,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 /* A row the search jumped to is lit for a moment. */
 .slist > .row { transition: background-color 0.4s ease, box-shadow 0.4s ease; }
 .slist > .row.found { background: var(--accent-soft); box-shadow: calc(-1 * var(--slist-pad)) 0 0 var(--accent-soft), var(--slist-pad) 0 0 var(--accent-soft); }
+.slist.found > .row { background: var(--accent-soft); }
 /* A tab whose name has actions beside it (連接's 新增). */
 .set-head { display: flex; align-items: center; gap: var(--sp-3); padding-right: var(--sp-6); }
 .set-head h1 { flex: 1; min-width: 0; padding-right: 0; }

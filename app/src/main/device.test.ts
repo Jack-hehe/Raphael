@@ -14,6 +14,7 @@ const base: DeviceSettings = {
   ui_language: "zh-TW",
   autostart: true,
   onboarded: false,
+  computer_apps: [],
 };
 
 /** A promise that is settled by hand, so a test decides which call answers first. */

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { setLocale } from "./i18n";
+import { ico } from "./ui";
 import {
   type TurnLook,
   dayHTML,
@@ -9,6 +10,9 @@ import {
   noteTaskEnds,
   pendingTurnHTML,
   stepToolTip,
+  stepPlace,
+  stepHTML,
+  shownSteps,
   toolAccess,
   reasonText,
   requestStop,
@@ -365,5 +369,62 @@ describe("a turn", () => {
   test("a day heading", () => {
     expect(dayHTML("今天")).toBe('<li class="day"><span>今天</span></li>');
     expect(dayHTML("<x>")).toContain("&lt;x&gt;");
+  });
+});
+
+describe("Raphael operating an app", () => {
+  const computer = (tool: string | null, over: Partial<AgentStep> = {}): AgentStep =>
+    step({ kind: "computer", tool, server: "Calculator", ...over });
+
+  test("each action has its title, in each language", () => {
+    const titles: Record<string, [string, string, string]> = {
+      apps: ["電腦：查看視窗", "Computer: windows", "コンピューター：ウィンドウ一覧"],
+      look: ["電腦：查看畫面", "Computer: look", "コンピューター：画面を確認"],
+      open: ["電腦：開啟 App", "Computer: open app", "コンピューター：アプリを開く"],
+      focus: ["電腦：切換視窗", "Computer: switch window", "コンピューター：ウィンドウ切替"],
+      click: ["電腦：點擊", "Computer: click", "コンピューター：クリック"],
+      type: ["電腦：輸入", "Computer: type", "コンピューター：入力"],
+      keys: ["電腦：按鍵", "Computer: keys", "コンピューター：キー操作"],
+      scroll: ["電腦：捲動", "Computer: scroll", "コンピューター：スクロール"],
+      something_new: ["電腦：操作", "Computer: action", "コンピューター：操作"],
+    };
+    for (const [tool, [zh, en, ja]] of Object.entries(titles)) {
+      setLocale("zh-TW");
+      expect(stepTitle(computer(tool)), tool).toBe(zh);
+      setLocale("en");
+      expect(stepTitle(computer(tool)), tool).toBe(en);
+      setLocale("ja");
+      expect(stepTitle(computer(tool)), tool).toBe(ja);
+    }
+  });
+
+  test("the tooltip is the app's name, or blank; the place is this PC; the picture is the monitor", () => {
+    expect(stepToolTip(computer("click"))).toBe("Calculator");
+    expect(stepToolTip(computer("click", { server: null }))).toBe("");
+    expect(stepPlace(computer("click"))).toBe("這台電腦");
+    const html = stepHTML(computer("click"), false);
+    expect(html).toContain('aria-label="這台電腦"');
+    expect(html).toContain('<span class="step-t" title="Calculator">電腦：點擊</span>');
+    expect(html).toContain(ico("monitor"));
+  });
+
+  test("looking at the windows or the screen is bookkeeping when it went well, and shown when it failed", () => {
+    const steps = [computer("apps"), computer("look"), computer("click"), computer("look", { outcome: "error", reason: "error" }), computer("apps", { outcome: "blocked", reason: "refused_app" })];
+    const shown = shownSteps(turn(7, { steps }));
+    expect(shown.map((s) => `${s.tool}:${s.outcome}`)).toEqual(["click:ok", "look:error", "apps:blocked"]);
+    // find_tools stays bookkeeping, and a look of anything else is no bookkeeping
+    expect(shownSteps(turn(8, { steps: [step({ tool: "find_tools" }), step({ kind: "tool", tool: "look", server: "X" })] }))).toHaveLength(1);
+  });
+
+  test("the reasons of a refusal have words in each language", () => {
+    const why = (reason: string): string => reasonText(computer("click", { outcome: "error", reason }));
+    expect(["password", "handoff", "refused_app", "interrupted", "denied"].map(why)).toEqual(["密碼欄位", "需主人操作", "不允許的 App", "主人中斷", "未允許"]);
+    setLocale("en");
+    expect(["password", "handoff", "refused_app", "interrupted", "denied"].map(why)).toEqual(["Password field", "Needs you to take over", "App not allowed", "Interrupted by you", "Not allowed"]);
+    setLocale("ja");
+    expect(["password", "handoff", "refused_app", "interrupted", "denied"].every((reason) => why(reason) !== "")).toBe(true);
+    // a service's refused login keeps its own words
+    setLocale("zh-TW");
+    expect(reasonText(step({ outcome: "error", reason: "denied" }))).toBe("登入被拒");
   });
 });

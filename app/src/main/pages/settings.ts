@@ -69,6 +69,7 @@ import {
   modelPickerLook,
   paneHTML,
   paneListHTML,
+  computerAppsWithout,
   localView,
   priceTexts,
   retentionChoices,
@@ -388,7 +389,15 @@ export function createSettings(app: AppContext): SettingsPage {
     if (pane !== hit.pane) return;
     const rows = Array.from(body.querySelectorAll<HTMLElement>(".row"));
     const found = rows.find((r) => r.querySelector(":scope > .lbl > .t")?.textContent?.trim() === hit.text);
-    if (!found) return;
+    if (!found) {
+      // A hit that names a whole section (電腦操作) brings its heading into view and lights its list.
+      const list = Array.from(body.querySelectorAll<HTMLElement>(".sgroup")).find((g) => g.querySelector(":scope > h2")?.textContent?.trim() === hit.text)?.querySelector<HTMLElement>(":scope > .slist");
+      if (!list) return;
+      list.scrollIntoView({ block: "center" });
+      list.classList.add("found");
+      setTimeout(() => list.classList.remove("found"), FOUND_MS);
+      return;
+    }
     const control = found.querySelector<HTMLElement>(":scope > .ctl :is(button, input):not([disabled])");
     control?.focus({ preventScroll: true });
     found.scrollIntoView({ block: "center" });
@@ -1027,6 +1036,12 @@ export function createSettings(app: AppContext): SettingsPage {
       case "or-check":
         void checkOpenrouter();
         break;
+      case "computer-remove": {
+        // the always-allowed apps that remain are the patch: the app keeps the list whole
+        const exe = target.closest<HTMLElement>("[data-exe]")?.dataset.exe;
+        if (exe !== undefined) void changeDevice({ computer_apps: computerAppsWithout(app.device(), exe) });
+        break;
+      }
       case "clear-dictation":
         clear("dictation");
         break;
