@@ -132,6 +132,7 @@ async function start(): Promise<void> {
     },
     undo: new Undoable(toaster),
     closeSettings: () => closeSettings(),
+    rerunGuide: () => startGuide("rerun"),
   };
 
   const history = createHistory(ctx);
@@ -284,20 +285,37 @@ async function start(): Promise<void> {
     console.warn("main: no events from the app", err);
   });
 
-  // Until the first-run guide is done it takes the place of the pages. (Settings that could not be
-  // read are no reason to start a guide for someone who has been through it.)
-  if (deviceRead && !device.get().onboarded) {
+  /**
+   * The guide takes the place of the pages: on a first run until it is done, and from the settings
+   * (`rerun`) until it is done or left. A rerun never clears `onboarded`.
+   */
+  function startGuide(mode: "first" | "rerun"): void {
+    if (!guide.hidden) return;
+    closeSettings(false);
     document.documentElement.dataset.windowLayout = "onboarding";
+    document.querySelector<HTMLElement>(".wbody")!.hidden = true;
     guide.hidden = false;
     mountOnboarding(
       guide,
-      () => {
-        guide.hidden = true;
-        showPages();
-        go("home");
+      {
+        mode,
+        onDone: (result) => {
+          guide.hidden = true;
+          showPages();
+          if (mode === "first" || !current) go("home");
+          if (result.toSettings) go("settings", "usage");
+          // The speech models that the guide did not wait for come on in the background.
+          void resumeModels({ status: api.modelsStatus, ensure: api.modelsEnsure }, (message) => console.warn("main:", message));
+        },
       },
       ctx,
     );
+  }
+
+  // Until the first-run guide is done it takes the place of the pages. (Settings that could not be
+  // read are no reason to start a guide for someone who has been through it.)
+  if (deviceRead && !device.get().onboarded) {
+    startGuide("first");
   } else {
     showPages();
     go("home");

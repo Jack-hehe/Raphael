@@ -103,7 +103,7 @@ describe("tabs", () => {
 
 describe("translations", () => {
   test("onboarding.* keys are used by the guide alone", () => {
-    const bad = sources.filter((f) => rel(f) !== "onboarding.ts" && /["'`]onboarding\./.test(read(f))).map(rel);
+    const bad = sources.filter((f) => !rel(f).startsWith("onboarding/") && /["'`]onboarding\./.test(read(f))).map(rel);
     expect(bad).toEqual([]);
   });
 
@@ -116,8 +116,6 @@ describe("translations", () => {
   // The strings that still carry markup. Structure belongs in code; this list only shrinks (docs/ui.md, backlog).
   const MARKUP_ALLOWLIST = new Set([
     "languages.007", "languages.008", "main.004", "main.005", "common.or",
-    "onboarding.010", "onboarding.013", "onboarding.014", "onboarding.019", "onboarding.035", "onboarding.036", "onboarding.037",
-    "onboarding.038", "onboarding.039", "onboarding.040", "onboarding.043", "onboarding.044",
     "dictionary.004", "dictionary.005", "dictionary.008", "dictionary.009", "dictionary.018", "dictionary.019",
     "history.005", "history.006", "history.010", "history.011", "history.013",
     "home.017", "home.025", "home.026", "settings.082", "settings.084", "history.dayEmpty",

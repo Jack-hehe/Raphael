@@ -843,6 +843,9 @@ export function createSettings(app: AppContext): SettingsPage {
       case "close":
         app.closeSettings();
         break;
+      case "rerun-guide":
+        app.rerunGuide();
+        break;
       case "rec":
       case "rec-agent": {
         const field = act === "rec" ? "dictation_keys" : "agent_keys";

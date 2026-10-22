@@ -385,6 +385,7 @@ function generalHTML(v: SettingsView): string {
     ]) +
     section(t("settings.groupStartup"), [
       row(t("settings.073"), "", tg(d.autostart, t("settings.073"), ' data-k="autostart"')),
+      row(t("settings.rerunGuide"), "", btn(esc(t("settings.rerunGuideButton")), "", ' data-act="rerun-guide"')),
     ])
   );
 }
