@@ -133,7 +133,7 @@ class _Connection:
             result = await client.call_tool(item.tool, item.arguments)
         except asyncio.CancelledError:
             if not item.future.done():
-                item.future.set_exception(McpFailure("gone"))
+                item.future.set_exception(McpFailure("cancelled"))  # it was sent
             raise
         except Exception as error:
             # It may have broken the connection: it is closed after this.
@@ -154,11 +154,13 @@ class _Connection:
         self._on_end(self)
         if not self.ready.done():
             self.ready.set_exception(McpFailure("gone"))
-        waiting = list(self._calls)
+        # A call that was being made may have been made; one that was waiting was not sent.
+        for item in list(self._calls):
+            if not item.future.done():
+                item.future.set_exception(McpFailure("cancelled"))
         while not self.inbox.empty():
-            waiting.append(self.inbox.get_nowait())
-        for item in waiting:
-            if item is not _IDLE and not item.future.done():
+            item = self.inbox.get_nowait()
+            if item is not _IDLE and item is not _STOP and not item.future.done():
                 item.future.set_exception(McpFailure("gone"))
 
     def close(self) -> None:
@@ -210,11 +212,12 @@ class McpPool:
         list_tools: ListTools,
         tool: str,
         arguments: dict[str, Any],
-    ) -> tuple[Any, ToolRecord, bool]:
+    ) -> tuple[Any, ToolRecord, list[ToolRecord] | None]:
         """Call `tool` of the server `key` through its connection (opened if there is none): the
-        client's result, the tool as the server described it when the connection was opened, and
-        whether this is the first call of the connection (so that the description was read for it,
-        and is not older than anything saved).
+        client's result, the tool as the server described it when the connection was opened, and,
+        for the first call of the connection only, the whole list read when it opened (it was read
+        for this call, so it is not older than anything saved; the list of a connection that has
+        been open for other calls may be).
         `McpFailure("gone")` for a tool the server does not have. Whatever ends the call early (a
         cancel, a time-out) closes the connection."""
         if self._closed:
@@ -229,7 +232,7 @@ class McpPool:
             connection.served += 1
             future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
             connection.inbox.put_nowait(_Call(tool, arguments, future))
-            return await future, current, first
+            return await future, current, list(connection.tools) if first else None
         except asyncio.CancelledError:
             connection.close()
             with contextlib.suppress(Exception, asyncio.CancelledError):

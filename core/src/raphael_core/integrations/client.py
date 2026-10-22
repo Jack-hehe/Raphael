@@ -80,6 +80,7 @@ KINDS = (
     "missing_secret",
     "denied",
     "gone",
+    "cancelled",  # the call was sent and the connection ended: it may have been made
     "error",
 )
 
@@ -114,6 +115,8 @@ class CallOutcome:
     truncated: bool = False
     # The tool as its server describes it now, when that is not what the caller expected.
     fresh: ToolRecord | None = None
+    # The whole list the connection read for this call, to be compared with the saved one.
+    listed: list[ToolRecord] | None = None
 
 
 @dataclass
@@ -358,7 +361,7 @@ class McpConnector:
                 await self._ready()
                 if pool is not None:
                     self._pools.add(pool)
-                    result, current, first = await pool.call(
+                    result, current, listed = await pool.call(
                         server.id,
                         lambda: self._opener(server, secrets),
                         self._list,
@@ -366,9 +369,9 @@ class McpConnector:
                         arguments,
                     )
                 else:
-                    first = True
                     async with self._opener(server, secrets) as client:
-                        current = next((t for t in await self._list(client) if t.name == tool), None)
+                        listed = await self._list(client)
+                        current = next((t for t in listed if t.name == tool), None)
                         if current is None:
                             raise McpFailure("gone")
                         result = await client.call_tool(tool, arguments)
@@ -381,7 +384,10 @@ class McpConnector:
             truncated=truncated,
             # The list read for this call is given back to be saved; the list of a pooled
             # connection that has been open for other calls may be older than the one saved.
-            fresh=current if first and expected is not None and current.fingerprint != expected else None,
+            fresh=current
+            if listed is not None and expected is not None and current.fingerprint != expected
+            else None,
+            listed=listed,
         )
 
 

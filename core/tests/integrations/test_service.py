@@ -636,3 +636,35 @@ async def test_only_a_tool_the_server_says_reads_is_read_only_for_a_rerun(servic
     assert service.kind_of("Notes", "resolve_ticket") == "write"
     server.tools.append(tool_record("fetch_it", "", {}, True, True, None))
     assert service.kind_of("Notes", "fetch_it") == "write"  # also said to destroy
+
+
+async def test_a_call_cut_off_by_a_refresh_is_not_a_blocked_one(service, rpc, servers, calls):
+    import asyncio as aio
+
+    from raphael_core.integrations.pool import McpPool
+
+    server_id = await add(rpc, servers)
+    pool = McpPool()
+    running = aio.ensure_future(
+        service.call(f"mcp:{server_id}/slow", {}, approver="auto", pool=pool)
+    )
+    for _ in range(200):
+        if "slow" in calls:
+            break
+        await aio.sleep(0.02)
+    await rpc.call("integrations.refresh", {"id": server_id})
+    result = await running
+    assert (result.ok, result.kind) == (False, "cancelled")
+    await pool.aclose()
+
+
+async def test_a_changed_tool_other_than_the_one_called_first_is_saved_too(service, rpc, servers):
+    from raphael_core.integrations.pool import McpPool
+
+    server_id = await add(rpc, servers)
+    servers.by_name["Notes"] = fake_server.build(renamed=True)
+    pool = McpPool()
+    await service.call(f"mcp:{server_id}/note", {"text": "x"}, approver="auto", pool=pool)
+    look = next(t for t in service._config.get(server_id).tools if t.name == "look")
+    assert "query" in look.input_schema["properties"]
+    await pool.aclose()

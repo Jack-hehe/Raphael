@@ -167,7 +167,7 @@ async def test_closing_the_pool_gives_the_call_under_way_a_failure_at_once(
     await mine.aclose()
     with pytest.raises(McpFailure) as failure:
         await running
-    assert failure.value.kind == "gone"
+    assert failure.value.kind == "cancelled"  # the call had been sent
     assert asyncio.get_running_loop().time() - began < 5
 
 
@@ -218,8 +218,20 @@ async def test_cancelling_one_call_closes_the_connection_and_fails_the_others_un
         await slow
     with pytest.raises(McpFailure) as failure:
         await other
-    assert failure.value.kind == "gone"
+    assert failure.value.kind == "cancelled"  # the call had been sent
     assert servers.active == 0
+
+
+async def test_a_call_already_sent_when_its_connection_is_closed_is_cut_off_not_gone(
+    connector, servers, notes, pool, calls
+):
+    mine = pool()
+    running = asyncio.ensure_future(connector.call_tool(notes, "slow", {}, timeout_s=30, pool=mine))
+    await until(lambda: "slow" in calls)
+    connector.invalidate(notes.id)
+    with pytest.raises(McpFailure) as failure:
+        await running
+    assert failure.value.kind == "cancelled"  # it may have been made
 
 
 async def test_a_login_or_a_removal_closes_the_connections_kept_for_the_server(

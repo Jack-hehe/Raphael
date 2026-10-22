@@ -603,17 +603,25 @@ class IntegrationsService:
         except McpFailure as failure:
             if failure.kind == "gone":
                 return end("blocked", PluginResult(False, failure.kind))
+            if failure.kind == "cancelled":  # sent, and the connection ended: not known to have failed
+                return end("error", PluginResult(False, failure.kind))
             self._failure[server.id] = failure.kind
             result = PluginResult(False, failure.kind)
             return end("timeout" if failure.kind == "timeout" else "error", result)
         self._failure.pop(server.id, None)
-        if outcome.fresh is not None and self._config.get(server.id) is server:
-            # The server describes the tool differently now: it is kept as it is (and stays on).
-            server.tools = [outcome.fresh if t.name == tool.name else t for t in server.tools]
-            try:
-                self._config.save()
-            except OSError as exc:
-                logger.warning("Could not save the plugins: %s", type(exc).__name__)
+        if self._config.get(server.id) is server:
+            # The server describes tools differently now: they are kept as they are (and stay on).
+            # The whole list read for this call is compared, not only the tool that was called.
+            newest = {t.name: t for t in outcome.listed or []}
+            if outcome.fresh is not None:
+                newest[outcome.fresh.name] = outcome.fresh
+            changed = [t for t in server.tools if t.name in newest and newest[t.name].fingerprint != t.fingerprint]
+            if changed:
+                server.tools = [newest[t.name] if t in changed else t for t in server.tools]
+                try:
+                    self._config.save()
+                except OSError as exc:
+                    logger.warning("Could not save the plugins: %s", type(exc).__name__)
         if outcome.is_error:
             result = PluginResult(False, "tool_error", outcome.text, outcome.truncated)
             return end("error", result)

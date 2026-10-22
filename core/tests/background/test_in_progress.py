@@ -159,3 +159,10 @@ async def test_a_failure_after_the_call_was_sent_is_not_known_to_have_failed(mak
         assert lines[sure].endswith(": failed"), lines[sure]
     for unsure in ("c_network", "d_timeout", "e_gone", "f_protocol", "g_unknown"):
         assert "unknown whether it ran" in lines[unsure] or "may have run" in lines[unsure], lines[unsure]
+
+
+def test_a_plugin_call_cut_off_by_the_connection_is_a_cancelled_step():
+    from raphael_core.agent.plugins import PluginResult
+    from raphael_core.background.run import _outcome_of
+
+    assert _outcome_of(PluginResult(False, "cancelled")) == "cancelled"
