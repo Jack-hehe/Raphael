@@ -459,7 +459,10 @@ export function createSettings(app: AppContext): SettingsPage {
     const mine = loads;
     let next: LocalModel[] | "failed";
     try {
-      next = (await api.modelsLocal()).models;
+      const listing = await api.modelsLocal();
+      next = listing.models;
+      // With the cloud in use the core says which model backs it up, which a failed delete may have changed.
+      if (brain && brain.stt_engine !== "local" && listing.fallback !== undefined) brain = { ...brain, stt_local_model: listing.fallback };
     } catch {
       next = Array.isArray(localModels) ? localModels : "failed";
     }

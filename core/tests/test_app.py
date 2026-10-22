@@ -2838,3 +2838,54 @@ async def test_setting_no_local_model_directly_takes_effect_at_the_next_dictatio
         await app.call("dictation.stop", {"session_id": "s1", "target_app": "notepad.exe"})
     assert caught.value.code == NO_LOCAL_MODEL
     assert await app.call("models.status") == {"models": [{"name": "silero-vad", "ready": True}]}
+
+
+async def test_a_fallback_that_is_not_downloaded_cuts_the_dictation_short_like_none(
+    make_app, openrouter_mock
+):
+    kit = make_kit()
+    app = make_app(kit, fake_llm=False, ready=("silero-vad",))  # qwen3-asr is named, not there
+    heard = []
+
+    def first_then_fail(request):
+        heard.append(1)
+        if len(heard) == 1:
+            return httpx.Response(200, json={"text": "one", "usage": {"seconds": 0.5, "cost": 0.0}})
+        return httpx.Response(500)
+
+    openrouter_mock(app, first_then_fail)
+    result = await dictate(app)
+    assert result["text"] == "one" and result["incomplete"] is True
+
+
+async def test_deletes_that_overlap_never_leave_the_fallback_on_a_deleted_model(
+    make_app, tmp_path
+):
+    app = make_app(ready=(*APP_MODELS, "sensevoice", "paraformer-zh"))
+    first, second = await asyncio.gather(
+        app.call("models.local_delete", {"name": "qwen3-asr"}),
+        app.call("models.local_delete", {"name": "sensevoice"}),
+    )
+    assert first["deleted"] and second["deleted"]
+    models_dir = tmp_path / "data" / "models"
+    assert not (models_dir / "qwen3-asr").exists() and not (models_dir / "sensevoice").exists()
+    assert (await app.call("settings.get"))["settings"]["stt_local_model"] == "paraformer-zh"
+    assert (await app.call("models.local"))["fallback"] == "paraformer-zh"
+
+
+async def test_a_delete_that_breaks_the_model_keeps_the_replacement(make_app, monkeypatch):
+    app = make_app(ready=(*APP_MODELS, "sensevoice"))
+
+    def breaks_then_locked(path, *args, **kwargs):
+        for file in path.rglob("*"):
+            if file.is_file():
+                file.unlink()
+        raise PermissionError("in use by another process")
+
+    monkeypatch.setattr(app_module.shutil, "rmtree", breaks_then_locked)
+    monkeypatch.setattr(app_module, "DELETE_RETRY_S", 0.001)
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_delete", {"name": "qwen3-asr"})
+    assert caught.value.code == INTERNAL_ERROR
+    assert (await app.call("settings.get"))["settings"]["stt_local_model"] == "sensevoice"
+    assert (await app.call("models.local"))["fallback"] == "sensevoice"

@@ -770,6 +770,7 @@ class App(Router):
         self._stt_engine = "local"  # the stt_engine setting, as read at the latest dictation.start
         self._local_download: str | None = None  # the model that models.local_use is fetching
         self._local_cancel = threading.Event()
+        self._models_lock = asyncio.Lock()  # one change of the chosen local model at a time
         self._stt_warned: set[str] = set()  # kinds of cloud failure already logged as warnings
         self._loop: asyncio.AbstractEventLoop | None = None
         self._threads: list[threading.Thread] = []
@@ -985,8 +986,18 @@ class App(Router):
         from .device.cloud_stt import CloudSttEngine  # numpy: the kit has loaded it already
 
         return CloudSttEngine(
-            self._call_from_thread, fallback=self._speech.engine, warned=self._stt_warned
+            self._call_from_thread, fallback=self._fallback_engine, warned=self._stt_warned
         )
+
+    def _fallback_engine(self) -> Any:
+        """The local engine behind the cloud. One that is not downloaded, or cannot be loaded, is
+        as good as none: RpcError(NO_LOCAL_MODEL)."""
+        try:
+            return self._speech.engine()
+        except RpcError:
+            raise
+        except Exception as exc:
+            raise RpcError(NO_LOCAL_MODEL, "There is no usable local speech model") from exc
 
     def _call_from_thread(self, method: str, params: dict, timeout: float) -> Any:
         """`self.call(method, params)` on the event loop, from a worker thread; waits `timeout`
@@ -1215,9 +1226,10 @@ class App(Router):
             raise RpcError(INTERNAL_ERROR, str(exc)) from exc
         finally:
             self._local_download = None
-        await self.call("settings.set", {"key": "stt_local_model", "value": name})
-        reply = await self.call("settings.set", {"key": "stt_engine", "value": "local"})
-        self._speech.select_engine(name)
+        async with self._models_lock:
+            await self.call("settings.set", {"key": "stt_local_model", "value": name})
+            reply = await self.call("settings.set", {"key": "stt_engine", "value": "local"})
+            self._speech.select_engine(name)
         self._load_models_in_background()  # built beside the engine in use, which serves until then
         return {"ok": True, "settings": reply["settings"]}
 
@@ -1228,6 +1240,10 @@ class App(Router):
         return {"cancelled": True}
 
     async def _models_local_delete(self, params: dict) -> dict:
+        async with self._models_lock:  # so that no two deletes choose each other's model
+            return await self._delete_local(params)
+
+    async def _delete_local(self, params: dict) -> dict:
         """Delete a downloaded model of the catalogue that is not in use. The detector is not one
         of them. While the cloud is the engine the local model is only the fallback, and that can
         be deleted too (not during a dictation): it is unloaded first, and another downloaded
@@ -1278,7 +1294,8 @@ class App(Router):
         try:
             deleted = await asyncio.to_thread(delete)
         except BaseException:
-            if retire:  # the files are still there: so is the fallback
+            # Some files may be gone: the old fallback comes back only if it still works.
+            if retire and self.manager.is_ready(name):
                 await self.call("settings.set", {"key": "stt_local_model", "value": name})
                 self._speech.select_engine(name)
             raise
