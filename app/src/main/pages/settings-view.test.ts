@@ -182,9 +182,15 @@ describe("一般", () => {
   test("has the interface language, the theme and the emblem's size as dropdowns, the subtitles and the start as switches", () => {
     const html = tab("general");
     expect(groups(html)).toEqual(["外觀", "啟動"]);
-    expect(names(html)).toEqual(["介面語言", "主題", "桌面圖案大小", "字幕", "開機時自動啟動"]);
+    expect(names(html)).toEqual(["介面語言", "主題", "桌面圖案大小", "字幕", "開機時自動啟動", "重新導覽"]);
     for (const k of ["ui-language", "appearance", "size"]) expect(html).toMatch(new RegExp(`<button type="button" class="sel"[^>]*data-k="${k}"`));
     for (const k of ["subtitles", "autostart"]) expect(html).toMatch(new RegExp(`class="tg" role="switch"[^>]*data-k="${k}"`));
+  });
+
+  test("starts the guide again with a real bordered button, not a switch or a link", () => {
+    const html = tab("general");
+    expect(html).toMatch(/<button type="button" class="btn"[^>]*data-act="rerun-guide"/);
+    expect(html.match(/data-act="rerun-guide"/g)).toHaveLength(1);
   });
 
   test("offers light, dark, or as Windows is, in that order", () => {

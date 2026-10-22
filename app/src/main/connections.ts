@@ -170,7 +170,8 @@ function groupIcon(g: ConnectionGroup, v: ConnectionsView, size: "md" | "xl"): s
   return iconHTML(g.name, known, size);
 }
 
-const entryIcon = (s: StoreService, size: "md" | "xl"): string => iconHTML(s.name, isIcon(s.icon) ? s.icon : null, size);
+/** The picture of a service of the store (the first-run guide draws it too). */
+export const entryIcon = (s: StoreService, size: "md" | "xl"): string => iconHTML(s.name, isIcon(s.icon) ? s.icon : null, size);
 
 /** Where a service of the user's own is reached, in a few words. */
 function where(g: ConnectionGroup): string {

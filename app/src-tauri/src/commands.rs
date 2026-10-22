@@ -10,9 +10,12 @@
 //!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
 //!   is the file written. (A dictation that is under way finishes in the mode it began in.)
 //! - `keyboard_has_altgr` and `hotkeys_pause` are small helpers of the settings page.
+//! - `hotkeys_practice` lets the first-run guide's lessons hear the keys without a dictation
+//!   starting; `mic_access` says whether the privacy settings let desktop apps use the microphone.
 //! - `main_events` is the channel on which the main window hears the core and the app (the
 //!   microphone's loudness, a model's download, a turn of the conversations written or completed, a
-//!   background task that moved on, learning that is limited, the tray's pages).
+//!   background task that moved on, learning that is limited, the tray's pages, the hotkeys that
+//!   were pressed and where a dictation is).
 //! - `window_hotkey` hands the hotkeys that the main window sees while it has the focus, and the
 //!   keyboard hook may not, to the hotkey service, which treats them as the hook's.
 //!
@@ -43,7 +46,8 @@ use crate::device_settings::{
     self, Appearance, DeviceSettings, DeviceStore, DictationMode, FILE_NAME, Subtitles,
 };
 use crate::dictation::ModeCell;
-use crate::hotkey::{Bindings, HotkeyService, WindowHotkey};
+use crate::hotkey::{Bindings, HotkeyEvent, HotkeyService, WindowHotkey};
+use crate::mic_access::{self, MicAccess};
 use crate::notices::LanguageCell;
 use crate::overlay::Overlay;
 use crate::rpc::{CORE_EXITED, Notification, RpcError, TIMEOUT};
@@ -55,6 +59,10 @@ const CORE_NOT_RUNNING: &str = "Raphael's core is not running";
 /// successful `audio.monitor` from the page. When the core restarts it is switched on again in
 /// the new core ([`restore_core`]), so the page need not know about restarts.
 static MONITORING: AtomicBool = AtomicBool::new(false);
+/// Whether the first-run guide is practising: the keys are reported to the page (`MainEvent::Hotkey`)
+/// but start no dictation and no question. Set by `hotkeys_practice`; a page that subscribes again
+/// (it was reloaded) ends it, so that a lesson that was lost cannot leave the keys dead.
+static PRACTICE: AtomicBool = AtomicBool::new(false);
 /// The task that passes the core's notifications on to the page that last called `main_events`.
 static FORWARDER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
@@ -74,6 +82,47 @@ pub enum TrayPage {
 pub enum TrayAction {
     /// The dictionary's fields for a new word open, with the cursor in the word.
     AddWord,
+}
+
+/// A key of Raphael that was pressed, as the first-run guide hears of it (`MainEvent::Hotkey`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HotkeyKind {
+    DictationDown,
+    DictationUp,
+    AgentDown,
+    AgentUp,
+    PasteLast,
+    Cancel,
+}
+
+impl From<HotkeyEvent> for HotkeyKind {
+    fn from(event: HotkeyEvent) -> Self {
+        match event {
+            HotkeyEvent::DictationDown => Self::DictationDown,
+            HotkeyEvent::DictationUp => Self::DictationUp,
+            HotkeyEvent::AgentDown => Self::AgentDown,
+            HotkeyEvent::AgentUp => Self::AgentUp,
+            HotkeyEvent::PasteLast => Self::PasteLast,
+            HotkeyEvent::Cancel => Self::Cancel,
+        }
+    }
+}
+
+/// Where a dictation or a question is, as the first-run guide hears of it (`MainEvent::Dictation`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DictationPhase {
+    /// The microphone is open.
+    Listening,
+    /// The key was released and the text is being made.
+    Processing,
+    /// The text reached the window that had the focus.
+    Pasted,
+    /// The person cancelled it.
+    Cancelled,
+    /// It ended without text in the window: an error, silence, or a copy only.
+    Failed,
 }
 
 /// What the main window is told about the core, and about the app's own side of learning and
@@ -110,6 +159,12 @@ pub enum MainEvent {
         state: String,
         running: bool,
     },
+    /// A key of Raphael went down or up, from the global hook or from the window itself. Sent for
+    /// every key event, whether or not the guide is practising; the keys are never named.
+    Hotkey { kind: HotkeyKind },
+    /// A dictation (`agent: false`) or a question to Raphael (`agent: true`) moved on. Only the
+    /// phase: what was said stays in the core.
+    Dictation { phase: DictationPhase, agent: bool },
 }
 
 /// The most events kept for a main window that has not subscribed yet.
@@ -161,6 +216,25 @@ pub fn tell_main_window(event: MainEvent) {
     PAGE.lock()
         .unwrap_or_else(PoisonError::into_inner)
         .deliver(event);
+}
+
+/// Whether the guide is practising the keys (see [`PRACTICE`]).
+pub fn practising() -> bool {
+    PRACTICE.load(Ordering::SeqCst)
+}
+
+/// What the dictation task does with a key event: tells the main window about it, and says whether
+/// the controller is to act on it. While the guide practises, the keys that would start or end a
+/// dictation, a question or a paste are only reported; Esc always goes on, so that nothing can get
+/// stuck.
+pub fn report_hotkey(event: HotkeyEvent) -> bool {
+    tell_main_window(MainEvent::Hotkey { kind: event.into() });
+    acts_on(event, practising())
+}
+
+/// Whether the controller acts on `event` while the guide `practising` or not.
+fn acts_on(event: HotkeyEvent, practising: bool) -> bool {
+    !practising || matches!(event, HotkeyEvent::Cancel)
 }
 
 // ---------- who may call ----------
@@ -368,6 +442,8 @@ pub async fn main_events(
     channel: Channel<MainEvent>,
 ) -> Result<(), String> {
     require_main(&webview)?;
+    // A page that subscribes is a new page: a practice of the one before is over.
+    PRACTICE.store(false, Ordering::SeqCst);
     PAGE.lock()
         .unwrap_or_else(PoisonError::into_inner)
         .subscribe(channel.clone());
@@ -701,9 +777,37 @@ pub fn hotkeys_pause(app: AppHandle, webview: Webview, paused: bool) -> Result<(
     Ok(())
 }
 
+/// Starts (`true`) or ends (`false`) the first-run guide's practice of the keys: they are reported
+/// as `MainEvent::Hotkey` and start nothing, so that a lesson can show a key being pressed without
+/// recording a thing. Unlike `hotkeys_pause` the keys are still heard.
+#[tauri::command]
+pub fn hotkeys_practice(webview: Webview, on: bool) -> Result<(), String> {
+    require_main(&webview)?;
+    PRACTICE.store(on, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Whether the privacy settings of Windows let desktop apps use the microphone, and if not, which
+/// switch is off (`system`, `user` or `desktop_apps`). Always allowed off Windows.
+#[tauri::command]
+pub fn mic_access(webview: Webview) -> Result<MicAccess, String> {
+    require_main(&webview)?;
+    #[cfg(windows)]
+    {
+        Ok(mic_access::microphone_access(&mic_access::WindowsConsent))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(MicAccess {
+            allowed: true,
+            blocked_by: None,
+        })
+    }
+}
+
 /// The few addresses the main window may open in the browser: the page is not trusted with a
-/// general "open this link".
-const OPENABLE_LINKS: [&str; 1] = ["https://t.me/BotFather"];
+/// general "open this link". The second is the microphone page of the privacy settings.
+const OPENABLE_LINKS: [&str; 2] = ["https://t.me/BotFather", "ms-settings:privacy-microphone"];
 
 fn is_openable_link(url: &str) -> bool {
     OPENABLE_LINKS.contains(&url)
@@ -992,8 +1096,10 @@ mod tests {
                 "device_settings_get",
                 "device_settings_set",
                 "hotkeys_pause",
+                "hotkeys_practice",
                 "keyboard_has_altgr",
                 "main_events",
+                "mic_access",
                 "open_link",
                 "window_hotkey",
             ]
@@ -1081,9 +1187,14 @@ mod tests {
     }
 
     #[test]
-    fn only_the_botfather_link_may_be_opened() {
+    fn only_the_botfather_and_microphone_links_may_be_opened() {
         assert!(is_openable_link("https://t.me/BotFather"));
+        assert!(is_openable_link("ms-settings:privacy-microphone"));
         for url in [
+            "ms-settings:privacy-camera",
+            "ms-settings:privacy-microphone ",
+            "ms-settings:",
+            "MS-SETTINGS:privacy-microphone",
             "https://t.me/BotFather/",
             "http://t.me/BotFather",
             "https://t.me/other",
@@ -1451,6 +1562,84 @@ mod tests {
             .unwrap(),
             r#"{"type":"TrayOpen","page":"history"}"#
         );
+    }
+
+    #[test]
+    fn the_keys_and_the_phases_of_a_dictation_have_the_shape_the_guide_expects() {
+        assert_eq!(
+            serde_json::to_string(&MainEvent::Hotkey {
+                kind: HotkeyKind::AgentDown
+            })
+            .unwrap(),
+            r#"{"type":"Hotkey","kind":"agent_down"}"#
+        );
+        for (phase, name) in [
+            (DictationPhase::Listening, "listening"),
+            (DictationPhase::Processing, "processing"),
+            (DictationPhase::Pasted, "pasted"),
+            (DictationPhase::Cancelled, "cancelled"),
+            (DictationPhase::Failed, "failed"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&MainEvent::Dictation {
+                    phase,
+                    agent: false
+                })
+                .unwrap(),
+                format!(r#"{{"type":"Dictation","phase":"{name}","agent":false}}"#)
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&MainEvent::Dictation {
+                phase: DictationPhase::Listening,
+                agent: true
+            })
+            .unwrap(),
+            r#"{"type":"Dictation","phase":"listening","agent":true}"#
+        );
+    }
+
+    #[test]
+    fn every_hotkey_event_has_a_kind() {
+        for (event, kind) in [
+            (HotkeyEvent::DictationDown, HotkeyKind::DictationDown),
+            (HotkeyEvent::DictationUp, HotkeyKind::DictationUp),
+            (HotkeyEvent::AgentDown, HotkeyKind::AgentDown),
+            (HotkeyEvent::AgentUp, HotkeyKind::AgentUp),
+            (HotkeyEvent::PasteLast, HotkeyKind::PasteLast),
+            (HotkeyEvent::Cancel, HotkeyKind::Cancel),
+        ] {
+            assert_eq!(HotkeyKind::from(event), kind);
+        }
+    }
+
+    #[test]
+    fn practising_reports_the_keys_but_starts_nothing_except_cancel() {
+        for event in [
+            HotkeyEvent::DictationDown,
+            HotkeyEvent::DictationUp,
+            HotkeyEvent::AgentDown,
+            HotkeyEvent::AgentUp,
+            HotkeyEvent::PasteLast,
+        ] {
+            assert!(acts_on(event, false), "{event:?} acts when not practising");
+            assert!(
+                !acts_on(event, true),
+                "{event:?} is only reported while practising"
+            );
+        }
+        assert!(acts_on(HotkeyEvent::Cancel, true));
+        assert!(acts_on(HotkeyEvent::Cancel, false));
+    }
+
+    #[test]
+    fn the_practice_flag_is_off_until_a_lesson_turns_it_on() {
+        // The only test that touches the flag, so that parallel tests cannot see it change.
+        assert!(!practising());
+        PRACTICE.store(true, Ordering::SeqCst);
+        assert!(practising());
+        PRACTICE.store(false, Ordering::SeqCst);
+        assert!(!practising());
     }
 
     // ---- events of the app itself ----

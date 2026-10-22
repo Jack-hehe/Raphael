@@ -13,6 +13,7 @@ mod holdtap;
 mod hotkey;
 mod learn;
 mod media;
+mod mic_access;
 mod notices;
 mod overlay;
 mod paste;
@@ -123,6 +124,8 @@ pub fn run() {
             commands::open_link,
             commands::hotkeys_pause,
             commands::window_hotkey,
+            commands::hotkeys_practice,
+            commands::mic_access,
             commands::main_events,
         ])
         .setup(move |app| {

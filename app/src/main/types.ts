@@ -320,7 +320,21 @@ export type MainEvent =
   /** A turn of the conversations was written or completed. */
   | { type: "AgentTurn"; turn_id: number }
   /** A background task moved on: a step, a start or an end. */
-  | { type: "WorkerChanged"; task_id: number; state: string; running: boolean };
+  | { type: "WorkerChanged"; task_id: number; state: string; running: boolean }
+  /** A key of Raphael went down or up (from the hook or from the window itself), whether or not the guide practises. */
+  | { type: "Hotkey"; kind: HotkeyKind }
+  /** A dictation (`agent` false) or a question to Raphael (`agent` true) moved on. */
+  | { type: "Dictation"; phase: DictationPhase; agent: boolean };
+
+export type HotkeyKind = "dictation_down" | "dictation_up" | "agent_down" | "agent_up" | "paste_last" | "cancel";
+export type DictationPhase = "listening" | "processing" | "pasted" | "cancelled" | "failed";
+
+/** What `mic_access` answers: whether the privacy settings of Windows let desktop apps use the microphone. */
+export interface MicAccess {
+  allowed: boolean;
+  /** The first switch that is off: the device, the person, or the one for desktop apps. */
+  blocked_by: "system" | "user" | "desktop_apps" | null;
+}
 
 /** The pages the tray's menu can open. */
 export type TrayPage = "home" | "history" | "dictionary" | "settings";
@@ -363,6 +377,8 @@ export interface AppContext {
   undo: Undoable;
   /** Closes the settings panel (it opens with `go("settings")`). */
   closeSettings(): void;
+  /** Opens the first-run guide again over the window (the settings close first); it does not clear `onboarded`. */
+  rerunGuide(): void;
 }
 
 // ---------- connections (the plugins of the core and the store) ----------
