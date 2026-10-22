@@ -1,0 +1,123 @@
+"""The rules a step on the owner's desktop is judged by: hand-off, a yes first, and the keys."""
+
+import pytest
+
+from raphael_core.computer import safety
+from raphael_core.computer.safety import CONFIRM, HANDOFF, KeysRefused, judge, parse_chord
+
+
+@pytest.mark.parametrize(
+    "text, chord",
+    [
+        ("ctrl+s", ("ctrl", "s")),
+        ("Ctrl+Shift+Tab", ("ctrl", "shift", "tab")),
+        ("shift+ctrl+tab", ("ctrl", "shift", "tab")),
+        ("enter", ("enter",)),
+        ("Esc", ("escape",)),
+        ("alt+f", ("alt", "f")),
+        ("ctrl+1", ("ctrl", "1")),
+        ("PgDn", ("pagedown",)),
+        ("F5", ("f5",)),
+        ("shift+tab", ("shift", "tab")),
+        ("control+z", ("ctrl", "z")),
+    ],
+)
+def test_a_chord_of_the_allowlist_is_read_in_one_spelling(text, chord):
+    assert parse_chord(text) == chord
+
+
+@pytest.mark.parametrize(
+    "text, why",
+    [
+        ("win+l", "windows"),
+        ("Win+R", "windows"),
+        ("meta+d", "windows"),
+        ("ctrl+win+right", "windows"),
+        ("alt+tab", "system"),
+        ("alt+shift+tab", "system"),
+        ("alt+f4", "system"),
+        ("ctrl+alt+delete", "system"),
+        ("ctrl+shift+esc", "system"),
+        ("ctrl+esc", "system"),
+        ("alt+space", "system"),
+        ("ctrl+alt+t", "system"),
+        ("a", "typing"),
+        ("shift+a", "typing"),
+        ("7", "typing"),
+        ("", "bad"),
+        ("ctrl+", "bad"),
+        ("ctrl", "bad"),
+        ("ctrl+ctrl+s", "bad"),
+        ("ctrl+f13", "bad"),
+        ("hyper+s", "bad"),
+        ("printscreen", "bad"),
+        (None, "bad"),
+        (42, "bad"),
+        ("ctrl+" * 20 + "s", "bad"),
+    ],
+)
+def test_a_chord_outside_the_allowlist_is_refused_and_says_why(text, why):
+    with pytest.raises(KeysRefused) as refused:
+        parse_chord(text)
+    assert refused.value.why == why
+
+
+def test_a_chord_is_written_the_way_the_owner_reads_it():
+    assert safety.chord_text(("ctrl", "shift", "tab")) == "Ctrl+Shift+Tab"
+    assert safety.chord_text(("ctrl", "s")) == "Ctrl+S"
+    assert safety.chord_text(("enter",)) == "Enter"
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Send", "傳送", "送出", "刪除", "削除", "Buy now", "購買", "注文する", "Publish", "回覆全部",
+     "Delete permanently", "ＳＥＮＤ", "Place order", "Uninstall", "Submit form"],
+)  # fmt: skip
+def test_a_button_that_sends_deletes_or_buys_asks_first(name):
+    assert judge(action="click", declared_final=False, name=name, role="Button") == CONFIRM
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Sign in", "登入", "ログイン", "Pay now", "付款", "結帳", "お支払い", "Card number", "卡號",
+     "CVV", "安全碼", "Verification code", "驗證碼", "Forgot password", "密碼"],
+)  # fmt: skip
+def test_a_sign_in_a_payment_or_a_code_is_the_owners(name):
+    assert judge(action="click", declared_final=False, name=name, role="Button") == HANDOFF
+    assert judge(action="type", declared_final=False, name=name, role="Edit") == HANDOFF
+
+
+@pytest.mark.parametrize("name", ["七", "Seven", "Sender list", "Paypal", "Postcode", "清除", "Open"])
+def test_an_ordinary_button_runs(name):
+    assert judge(action="click", declared_final=False, name=name, role="Button") is None
+
+
+def test_a_password_field_is_the_owners_whatever_it_is_called():
+    assert judge(action="type", declared_final=False, name="Box", role="Edit", password=True) == HANDOFF
+    assert judge(action="click", declared_final=True, name="x", role="Edit", password=True) == HANDOFF
+    # typing or keys with no element reach the focused field
+    assert judge(action="type", declared_final=False, focused_password=True) == HANDOFF
+    assert judge(action="keys", declared_final=False, chord=("ctrl", "v"), focused_password=True) == HANDOFF
+
+
+def test_what_the_model_declares_final_asks_first():
+    assert judge(action="click", declared_final=True, name="七", role="Button") == CONFIRM
+    assert judge(action="keys", declared_final=True, chord=("tab",)) == CONFIRM
+
+
+def test_keys_that_send_or_delete_for_good_ask_first():
+    assert judge(action="keys", declared_final=False, chord=("ctrl", "enter")) == CONFIRM
+    assert judge(action="keys", declared_final=False, chord=("shift", "delete")) == CONFIRM
+    assert judge(action="keys", declared_final=False, chord=("ctrl", "s")) is None
+
+
+def test_enter_in_a_message_box_sends_and_asks_first():
+    assert (
+        judge(action="keys", declared_final=False, chord=("enter",), focused_name="輸入訊息",
+              focused_role="Edit")  # fmt: skip
+        == CONFIRM
+    )
+    assert judge(action="keys", declared_final=False, chord=("enter",), name="Message", role="Edit") == CONFIRM
+    # Enter in a box that is no message box, or on a button, runs
+    assert judge(action="keys", declared_final=False, chord=("enter",), focused_name="檔名", focused_role="Edit") is None
+    assert judge(action="keys", declared_final=False, chord=("enter",), focused_name="Message", focused_role="Button") is None

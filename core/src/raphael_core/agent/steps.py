@@ -21,7 +21,10 @@ from dataclasses import dataclass
 # a tool of the task). gone: the tool is no longer there. tool_error: the service said it failed.
 # protocol: it answered with something that is not an answer. cancelled: the user stopped it.
 # not_made: the turn could ask about one call only, so this one was not made. credits, budget,
-# no_key: the model could not be paid for. error: anything else.
+# no_key: the model could not be paid for. On the owner's desktop (`raphael_core.computer`):
+# password: a password field, which only the owner fills; handoff: a step that is the owner's (a
+# sign-in, a payment, an administrator's prompt); refused_app: an app Raphael never operates;
+# interrupted: the owner's own mouse or keys stopped the run. error: anything else.
 REASONS = frozenset(
     {
         "bad_arguments",
@@ -40,6 +43,10 @@ REASONS = frozenset(
         "credits",
         "budget",
         "no_key",
+        "password",
+        "handoff",
+        "refused_app",
+        "interrupted",
         "error",
     }
 )
@@ -52,6 +59,12 @@ _ALIASES = {
     "rate_limit": "network",
     "bad_response": "protocol",
     "changed": "blocked",
+    "stale": "not_found",
+    "elevated": "handoff",
+    "own_window": "blocked",
+    "keys_not_allowed": "blocked",
+    "unavailable": "network",
+    "failed": "error",
 }
 
 # The reason of a step that failed with no kind, by how it ended.
@@ -73,8 +86,10 @@ def reason_of(outcome: str, kind: str | None) -> str | None:
 @dataclass(frozen=True)
 class Step:
     """One step of a turn. `kind` is "tool" (a lookup or a plugin's tool), "command" (something
-    done to this computer) or "model" (a model call of the worker); `server` is the plugin's name,
-    "Raphael" for Raphael's own lookups, None for a command; `at_ms` is when it ended."""
+    done to this computer), "computer" (a step of a run on the owner's desktop: `tool` is the
+    action, `server` the name of the app) or "model" (a model call of the worker); `server` is the
+    plugin's name, "Raphael" for Raphael's own lookups, None for a command; `at_ms` is when it
+    ended."""
 
     kind: str
     tool: str

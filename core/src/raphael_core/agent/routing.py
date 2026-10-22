@@ -1,8 +1,8 @@
 """The router: what kind of request was spoken, and what it needs.
 
 Jev (`typesafe/jev-1.14`, OpenRouter's decisions endpoint) classifies in about half a second for a
-fraction of a cent. One request asks everything at once: the `route` (command, answer, delegate,
-discuss, chat or unclear), which fixed `command` it is if it is one, and whether answering needs
+fraction of a cent. One request asks everything at once: the `route` (command, answer, operate,
+delegate, discuss, chat or unclear), which fixed `command` it is if it is one, and whether answering needs
 the weather, a web search or the time. The language model (the `agent_model` setting) answers the
 same questions as JSON when Jev fails or is unsure. Jev is always asked first: there is no setting
 to skip it, since the language model alone is slower and costs more for the same decision.
@@ -50,9 +50,11 @@ _RETRIED = ("timeout", "server")
 # The failures Jev and the language model share: a second try with the model would fail alike.
 _SHARED_FAILURES = ("auth", "credits")
 
-ROUTES = ("command", "answer", "delegate", "discuss", "chat", "unclear")
+ROUTES = ("command", "answer", "operate", "delegate", "discuss", "chat", "unclear")
 # What each route means, as it was worded for Jev and verified live (zh and ja requests route right
-# with these).
+# with these). `operate` came later, with the run on the owner's desktop (`raphael_core.computer`),
+# and has not been checked against Jev live yet: a request Jev is unsure of goes to the language
+# model, which reads the same words.
 ROUTE_CRITERIA = {
     "command": "A one-step action on this computer that a fixed command covers: open any "
     "website, app or Windows settings page (or search on a site), change the volume, pause or "
@@ -60,9 +62,13 @@ ROUTE_CRITERIA = {
     "answer": "A question Raphael can answer in a few sentences, possibly after one quick lookup "
     "(weather, time, a web search, a definition, a calculation), including how a background "
     "task is going or what it did (state.background lists them).",
+    "operate": "A task done by using a desktop app on this computer's screen: clicking, typing "
+    "or choosing inside an app such as Calculator, Excel, File Explorer or the Settings app (for "
+    "example: compute something in Calculator, type a line into a document, turn on a switch in "
+    "Settings), which no fixed command covers.",
     "delegate": "A multi-step task, or one that needs a connected service such as email, "
-    "calendar, Notion or GitHub, or that will take more than a few seconds. Not a question "
-    "about a task that was already handed over.",
+    "calendar, Notion or GitHub, or that will take more than a few seconds, and that is not done "
+    "by operating an app on the screen. Not a question about a task that was already handed over.",
     "discuss": "The speaker wants to think something through together or plan, an open-ended "
     "conversation rather than one answer.",
     "chat": "Small talk, a greeting or thanks, needing no action and no facts.",

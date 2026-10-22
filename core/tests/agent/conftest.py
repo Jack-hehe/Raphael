@@ -112,7 +112,8 @@ class FakeOpenRouter:
     """Stands in for the OpenRouter client, which the assistant uses four ways.
 
     The answers are queued by kind (`decisions`, `replies` for complete_json, `texts` for
-    chat_text, `plans` for plan_tools); each call takes the first of its queue. An answer that is
+    chat_text, `plans` for plan_tools, `chats` for chat_tools, which a run on the desktop uses);
+    each call takes the first of its queue. An answer that is
     an exception is raised, and one that is a function is called with the keyword arguments of the
     call (and awaited, if it is a coroutine function: a call that hangs is one that sleeps). A call
     with nothing queued fails the test. `delay` is how long each call takes, in seconds, and the
@@ -125,7 +126,9 @@ class FakeOpenRouter:
         self.replies = []
         self.texts = []
         self.plans = []
+        self.chats = []
         self.decide_calls = []
+        self.chat_calls = []
         self.json_calls = []
         self.text_calls = []
         self.plan_calls = []
@@ -156,6 +159,9 @@ class FakeOpenRouter:
 
     async def plan_tools(self, **kwargs):
         return await self._answer(self.plans, self.plan_calls, kwargs, "plan_tools")
+
+    async def chat_tools(self, **kwargs):
+        return await self._answer(self.chats, self.chat_calls, kwargs, "chat_tools")
 
     @property
     def calls(self):

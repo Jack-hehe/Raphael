@@ -113,6 +113,21 @@ class Phrases:
     worker_limit_time: str  # ... all its time: {steps}
     worker_limit_cost: str  # ... all the money one task may spend: {steps}
     worker_limit_month: str  # this month's limit was reached while the task ran: {steps}
+    # Operating the owner's desktop (`raphael_core.computer`). The four questions ask for a yes;
+    # `computer_handoff` is the one fixed line that names the owner, in the words the owner chose
+    # for it: the step is theirs.
+    computer_ask_app: str  # may Raphael operate this app: {app}
+    computer_confirm_click: str  # click an element that sends, deletes or buys: {target}
+    computer_confirm_keys: str  # press keys that send or delete: {keys}
+    computer_confirm_step: str  # take a step that sends, deletes or buys (the words kept)
+    computer_stopped: str  # the owner stopped the run (Esc, Right Alt, the mouse or the keys)
+    computer_handoff: str  # a password, a sign-in, a payment, an administrator's prompt
+    computer_away: str  # a request from elsewhere (a phone) cannot operate this computer
+    computer_unavailable: str  # the shell cannot reach the desktop now
+    computer_refused_app: str  # an app Raphael never operates (a terminal, a password manager)
+    computer_limit: str  # a run used all its actions, time or money: {steps}
+    computer_done: str  # the run ended and the model said nothing
+    computer_model: str  # the answer model takes no tools, so nothing can be operated
 
 
 # Each phrase states the fact and, for a refusal, the reason or the one thing to do next, in the
@@ -158,6 +173,18 @@ PHRASES: dict[str, Phrases] = {
         worker_limit_time="已達時間上限。任務停在此處。已執行 {steps} 次工具呼叫。",
         worker_limit_cost="已達單一任務的費用上限。任務停在此處。已執行 {steps} 次工具呼叫。",
         worker_limit_month="本月額度已用盡。任務停在此處。已執行 {steps} 次工具呼叫。",
+        computer_ask_app="是否允許操作「{app}」？",
+        computer_confirm_click="是否點擊「{target}」？",
+        computer_confirm_keys="是否按下 {keys}？",
+        computer_confirm_step="是否執行這一步？",
+        computer_stopped="已停止。",
+        computer_handoff="這一步需要主人親自操作。",
+        computer_away="操作電腦只能在這台電腦前下達指示。",
+        computer_unavailable="目前無法操作電腦。",
+        computer_refused_app="此 App 不在可操作的範圍內。",
+        computer_limit="已達操作上限。停在第 {steps} 步。",
+        computer_done="操作完成。",
+        computer_model="目前的模型不支援呼叫工具。無法操作電腦。",
     ),
     "en": Phrases(
         unclear="The instruction could not be recognized. Please repeat it.",
@@ -217,6 +244,18 @@ PHRASES: dict[str, Phrases] = {
         worker_limit_month=(
             "This month's limit has been reached. The task stops here. Tool calls made: {steps}."
         ),
+        computer_ask_app="Allow me to operate {app}?",
+        computer_confirm_click="Click {target}?",
+        computer_confirm_keys="Press {keys}?",
+        computer_confirm_step="Take this step?",
+        computer_stopped="Stopped.",
+        computer_handoff="This step needs the Master to do it in person.",
+        computer_away="The computer can be operated only from the computer itself.",
+        computer_unavailable="The computer cannot be operated at this time.",
+        computer_refused_app="That app is outside what I may operate.",
+        computer_limit="The operation limit was reached. Stopped at step {steps}.",
+        computer_done="Done.",
+        computer_model="The current model cannot call tools. The computer cannot be operated.",
     ),
     "ja": Phrases(
         unclear="指示を認識できませんでした。もう一度お願いします。",
@@ -256,6 +295,18 @@ PHRASES: dict[str, Phrases] = {
         worker_limit_time="時間の上限に達したため停止。ツール呼び出し {steps} 回。",
         worker_limit_cost="一件の費用上限に達したため停止。ツール呼び出し {steps} 回。",
         worker_limit_month="今月の上限に達したため停止。ツール呼び出し {steps} 回。",
+        computer_ask_app="「{app}」の操作を許可しますか？",
+        computer_confirm_click="「{target}」をクリックしますか？",
+        computer_confirm_keys="{keys} を押しますか？",
+        computer_confirm_step="この操作を実行しますか？",
+        computer_stopped="停止しました。",
+        computer_handoff="この手順はマスターご自身で操作してください。",
+        computer_away="コンピューターの操作は、そのコンピューターの前でのみ指示できます。",
+        computer_unavailable="現在コンピューターを操作できません。",
+        computer_refused_app="このアプリは操作の対象外です。",
+        computer_limit="操作の上限に達しました。{steps} 手目で停止しました。",
+        computer_done="操作を完了しました。",
+        computer_model="現在のモデルはツールを呼び出せません。操作できません。",
     ),
 }
 
