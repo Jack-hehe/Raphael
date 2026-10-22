@@ -73,6 +73,18 @@ async def test_a_rerun_of_a_rerun_still_knows_what_the_first_attempt_did(make_ri
     assert rig.task(result["task_id"]).rerun_of == second
 
 
+async def test_a_custom_service_called_raphael_is_still_told_to_the_next_attempt(make_rig):
+    rig = make_rig()
+    store = rig.service._store
+    first = store.create(session_id="s1", language="en", text=TASK_TEXT)
+    store.add_step(first, kind="tool", tool="send_email", server="Raphael", outcome="ok")
+    store.add_step(first, kind="tool", tool="weather", server="Raphael", outcome="ok", tier="T0")
+    store.finish(first, "failed", prefix="告", text="x", detail=None, reason="failed")
+    second = store.create(session_id="s1", language="en", text=TASK_TEXT, rerun_of=first)
+    lines = rig.service._earlier_attempt(rig.task(second))
+    assert lines == ["Raphael / send_email: ok"]
+
+
 async def test_a_loop_in_the_chain_of_reruns_ends(make_rig):
     rig = make_rig()
     store = rig.service._store

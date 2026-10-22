@@ -45,7 +45,7 @@ from typing import Any
 
 from ..agent.answers import Reply, parse_reply
 from ..agent.failure import KINDS, AgentFailure
-from ..agent.gate import ToolGate
+from ..agent.gate import WEB_TOOLS, ToolGate
 from ..agent.history import VOICE, AgentHistory, Turn
 from ..agent.ledger import Ledger
 from ..agent.persona import (
@@ -83,6 +83,7 @@ _FINAL_FENCE = "```"
 
 # The states of a task that can be run again: it did not finish. A task that is done is not run
 # again, and one that is not over is still running.
+BUILTIN_TOOLS = (*WEB_TOOLS, "find_tools")
 # The most attempts of one task that are looked back on.
 MAX_CHAIN = 20
 RERUNNABLE = ("interrupted", "cancelled", "limit", "failed")
@@ -144,6 +145,13 @@ def report_from(final: str, language: str) -> Reply | None:
         return parse_reply(data, language)
     except AgentFailure:
         return None
+
+
+def _is_builtin(step: Step) -> bool:
+    """Whether a step is one of Raphael's own lookups. A step keeps the display name of the
+    server, which the user chose for a service of their own, so the name alone is not enough: the
+    lookups are told by their names and their tier too (a service's tool has no tier T0 here)."""
+    return step.server == BUILTIN_SERVER and step.tool in BUILTIN_TOOLS and step.tier == "T0"
 
 
 def _interrupted_report(language: str, steps: int) -> tuple[str, str]:
@@ -601,7 +609,7 @@ class BackgroundService:
         return [
             f"{step.server} / {step.tool}: {_EARLIER_OUTCOME.get(step.outcome, 'failed')}"
             for step in steps
-            if step.kind == "tool" and step.tool and step.server != BUILTIN_SERVER
+            if step.kind == "tool" and step.tool and not _is_builtin(step)
         ]
 
     def _context(self, task: Task) -> list[Turn]:

@@ -300,12 +300,12 @@ class TaskStore:
         return [task for task in (self.get(row["id"]) for row in rows) if task is not None]
 
     def for_brief(self, since_ms: int, limit: int) -> list[Task]:
-        """The newest tasks that are queued or running, or that ended at `since_ms` or later, with
-        something said (a cleared task keeps nothing)."""
+        """The tasks that run, then the newest of those that are queued or ended at `since_ms` or
+        later, with something said (a cleared task keeps nothing)."""
         rows = self._conn.execute(
             f"SELECT {_TASK_COLUMNS} FROM worker_tasks WHERE text != ''"
             " AND (state IN ('queued', 'running') OR finished_at_ms >= ?)"
-            " ORDER BY id DESC LIMIT ?",
+            " ORDER BY CASE WHEN state = 'running' THEN 0 ELSE 1 END, id DESC LIMIT ?",
             (since_ms, limit),
         )
         return [Task(**dict(row)) for row in rows]

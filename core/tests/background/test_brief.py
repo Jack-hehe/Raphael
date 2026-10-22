@@ -66,6 +66,14 @@ def test_queued_and_running_tasks_and_the_ones_ended_in_the_last_half_hour_not_o
     assert BRIEF_WINDOW_MS == 30 * MINUTE
 
 
+def test_a_running_task_is_always_told_even_behind_many_queued_ones(make_rig):
+    rig = make_rig()
+    running = make(rig, "running")
+    queued = [make(rig, f"queued {n}", state="queued") for n in range(3)]
+    briefs = rig.service.brief_for_assistant(limit=3)
+    assert [b.id for b in briefs] == [running, queued[2], queued[1]]
+
+
 def test_only_the_newest_few_are_told(make_rig):
     rig = make_rig()
     ids = [make(rig, f"task {n}", state="done", ago_min=1, report="r") for n in range(5)]

@@ -22,6 +22,7 @@ import {
   isLive,
   listMove,
   markSeen,
+  forgetReruns,
   requestRerun,
   requestStop,
   sessionListHTML,
@@ -231,6 +232,7 @@ export function createAgent(app: AppContext): Page {
     }
     // A task that ended is no longer being stopped.
     for (const turn of turns) if (turn.task && !isLive(turn.task)) state.stopping.delete(turn.task.id);
+    forgetReruns(state, turns);
     failure = null;
     pending = false;
     render();
@@ -278,6 +280,8 @@ export function createAgent(app: AppContext): Page {
       commit: async () => {
         await api.agentHistoryClear();
         turns = [];
+        state.stopping.clear();
+        forgetReruns(state, turns);
         clearedUpTo = 0;
         canLoadEarlier = false;
         if (visible) render();

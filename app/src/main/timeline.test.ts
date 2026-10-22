@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { setLocale } from "./i18n";
 import { groupSessions, sessionDays } from "./conversation";
 import {
+  forgetReruns,
   formatDuration,
   listMove,
   markSeen,
@@ -95,6 +96,16 @@ describe("running a task that did not finish again", () => {
     for (const task of [running({ id: 52, state: "done", finished_at_ms: T0 + 5_000 }), running({ id: 52 }), running({ id: 52, state: "queued" }), null]) {
       expect(stepsHTML(turn(5, { task, steps: [step()] }), emptyTimelineState())).not.toContain("rerun");
     }
+  });
+
+  test("a mark is dropped when its task is no longer shown, so a reused id starts fresh", () => {
+    const state = emptyTimelineState();
+    state.rerunning.add(52);
+    state.rerunning.add(7);
+    forgetReruns(state, [ended("failed")]);
+    expect([...state.rerunning]).toEqual([52]);
+    forgetReruns(state, []);
+    expect(state.rerunning.size).toBe(0);
   });
 
   test("in the language of the window", () => {

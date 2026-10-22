@@ -173,6 +173,20 @@ async def test_closing_the_pool_gives_the_call_under_way_a_failure_at_once(
     assert asyncio.get_running_loop().time() - began < 5
 
 
+async def test_a_pool_closed_in_the_same_turn_as_the_first_call_fails_it_at_once(
+    connector, servers, notes, pool
+):
+    mine = pool()
+    began = asyncio.get_running_loop().time()
+    call = asyncio.ensure_future(connector.call_tool(notes, "look", {"topic": "a"}, timeout_s=30, pool=mine))
+    await asyncio.sleep(0)  # the call has made its connection, whose owner has not run yet
+    closing = asyncio.ensure_future(mine.aclose())
+    with pytest.raises(McpFailure):
+        await call
+    await closing
+    assert asyncio.get_running_loop().time() - began < 5 and servers.active == 0
+
+
 async def test_a_closed_pool_makes_no_new_connection(connector, servers, notes, pool):
     mine = pool()
     await mine.aclose()

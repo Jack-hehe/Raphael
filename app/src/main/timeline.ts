@@ -299,6 +299,15 @@ export async function requestStop(
 }
 
 /**
+ * Takes the mark off the tasks that are not among `turns` any more: after the history is cleared
+ * the core numbers tasks from 1 again, and a new task must not be taken for the old one.
+ */
+export function forgetReruns(state: TimelineState, turns: readonly AgentTurn[]): void {
+  const shown = new Set(turns.flatMap((turn) => (turn.task ? [turn.task.id] : [])));
+  for (const id of [...state.rerunning]) if (!shown.has(id)) state.rerunning.delete(id);
+}
+
+/**
  * 「重新執行」: the task is marked at once, so its button is off, and the core starts it again as a
  * new task. When that fails the mark comes off; otherwise it stays, so that one task is not started
  * twice.

@@ -72,6 +72,8 @@ class _Connection:
         self.closed = False
         self._current: _Call | None = None  # the call being made
         self.task = asyncio.ensure_future(self._own())
+        # A task cancelled before it first ran never reaches its `finally`.
+        self.task.add_done_callback(lambda _task: self._settle())
 
     async def _own(self) -> None:
         loop = asyncio.get_running_loop()
@@ -119,16 +121,21 @@ class _Connection:
             if not self.ready.done():
                 self.ready.set_exception(error)
         finally:
-            self.closed = True
-            self._on_end(self)
-            if not self.ready.done():
-                self.ready.set_exception(McpFailure("gone"))
-            waiting = [self._current] if self._current is not None else []
-            while not self.inbox.empty():
-                waiting.append(self.inbox.get_nowait())
-            for item in waiting:
-                if item is not _IDLE and not item.future.done():
-                    item.future.set_exception(McpFailure("gone"))
+            self._settle()
+
+    def _settle(self) -> None:
+        """The connection is over: whoever waits for it, or for a call on it, is told. Safe to
+        run more than once."""
+        self.closed = True
+        self._on_end(self)
+        if not self.ready.done():
+            self.ready.set_exception(McpFailure("gone"))
+        waiting = [self._current] if self._current is not None else []
+        while not self.inbox.empty():
+            waiting.append(self.inbox.get_nowait())
+        for item in waiting:
+            if item is not _IDLE and not item.future.done():
+                item.future.set_exception(McpFailure("gone"))
 
     def close(self) -> None:
         """Ask the owner to end; it closes the client in its own task."""
