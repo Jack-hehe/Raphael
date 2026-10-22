@@ -321,7 +321,7 @@ export const zhTW = {
   "local.stateReady": "已下載",
   "local.stateActive": "使用中",
   "local.stateFallback": "備援",
-  "local.confirmDownload": "下載 {p0}（{p1}）？",
+  "local.downloadLabel": "下載 {p0}（{p1}）",
   "local.confirmDelete": "刪除 {p0}（釋出 {p1}）？",
   "local.afterNone": "之後雲端失敗時無法改用本機。",
   "local.afterNext": "之後改由 {p0} 備援。",

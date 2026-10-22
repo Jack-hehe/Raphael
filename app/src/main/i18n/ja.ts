@@ -322,7 +322,7 @@ export const ja = {
   "local.stateReady": "ダウンロード済み",
   "local.stateActive": "使用中",
   "local.stateFallback": "予備",
-  "local.confirmDownload": "{p0}（{p1}）をダウンロードしますか？",
+  "local.downloadLabel": "{p0}（{p1}）をダウンロード",
   "local.confirmDelete": "{p0}を削除しますか？（{p1}を解放）",
   "local.afterNone": "以後クラウドが失敗してもローカルに切り替わりません。",
   "local.afterNext": "以後は{p0}が予備になります。",

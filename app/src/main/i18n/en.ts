@@ -322,7 +322,7 @@ export const en = {
   "local.stateReady": "Downloaded",
   "local.stateActive": "In use",
   "local.stateFallback": "Fallback",
-  "local.confirmDownload": "Download {p0} ({p1})?",
+  "local.downloadLabel": "Download {p0} ({p1})",
   "local.confirmDelete": "Delete {p0} (frees {p1})?",
   "local.afterNone": " A cloud failure then cannot fall back to local.",
   "local.afterNext": " {p0} will be the fallback.",
