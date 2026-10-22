@@ -12,7 +12,7 @@ import { LearnHints, editorName } from "../learn-hint";
 import { loadingHTML } from "../loading";
 import type { AppContext, DictionaryEntry, Page } from "../types";
 import { Deletions } from "../undo";
-import { btn, esc, fieldHTML, ico, iconBtn, st, toaster } from "../ui";
+import { btn, esc, fieldHTML, ico, iconBtn, st, tabs, toaster } from "../ui";
 
 type Filter = "all" | "auto" | "manual";
 const FILTERS: { id: Filter; name: string }[] = [
@@ -62,9 +62,9 @@ export function createDictionary(app: AppContext): DictionaryPage {
     `<div class="importbox card" role="status" hidden><span class="importmsg"></span>` +
     `<div class="addword-actions">${btn(t("dictionary.025"), "pri", ' data-act="import-go"')}${btn(t("onboarding.031"), "", ' data-act="import-cancel"')}</div></div>` +
     `<input type="file" accept=".csv,.txt,text/csv,text/plain" hidden data-import-file aria-label="${esc(t("dictionary.034"))}">` +
-    t("dictionary.015") +
-    FILTERS.map((f) => `<button type="button" data-filter="${f.id}" aria-pressed="${f.id === "all"}">${f.name}</button>`).join("") +
-    `</div><span class="count num"></span>` +
+    `<div class="tools">` +
+    tabs(FILTERS.map((f) => ({ id: f.id, label: f.name, attrs: ` data-filter="${f.id}"` })), "all", { label: t("common.filter"), kind: "filter" }) +
+    `<span class="count num"></span>` +
     `<div class="dsearch">${fieldHTML(t("dictionary.016"), "", { icon: "search", get label() { return t("dictionary.016"); }, id: "dict-q" })}</div></div>` +
     `<div class="learn-hint" hidden></div>` +
     `<div class="wgrid"></div><div class="empty" hidden></div>`;

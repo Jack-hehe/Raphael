@@ -13,7 +13,7 @@ import { dayBounds, dayLabel, describeError, formatClock, formatRetention, KEEP_
 import { bindingLabels } from "../keys";
 import type { AppContext, HistoryItem, Page } from "../types";
 import { Deletions, debounce } from "../undo";
-import { type Choice, btn, closeMenu, copyText, esc, fieldHTML, ico, iconBtn, menuIsOpenFor, openMenu, openMenuOnArrow, row, sel, toaster } from "../ui";
+import { type Choice, btn, closeMenu, copyText, esc, fieldHTML, ico, iconBtn, menuIsOpenFor, openMenu, openMenuOnArrow, row, sel, tabs, toaster } from "../ui";
 
 /** The search waits this long after the last key. */
 const SEARCH_DELAY_MS = 200;
@@ -79,9 +79,9 @@ export function createHistory(app: AppContext): HistoryPage {
   el.innerHTML =
     t("history.006") +
     `<section class="card hist-top"></section>` +
-    t("dictionary.015") +
-    FILTERS.map((f) => `<button type="button" data-filter="${f.id}" aria-pressed="${f.id === "all"}">${f.name}</button>`).join("") +
-    `</div>${fieldHTML(t("history.007"), "", { icon: "search", get label() { return t("history.008"); }, id: "hist-q" })}</div>` +
+    `<div class="tools">` +
+    tabs(FILTERS.map((f) => ({ id: f.id, label: f.name, attrs: ` data-filter="${f.id}"` })), "all", { label: t("common.filter"), kind: "filter" }) +
+    `${fieldHTML(t("history.007"), "", { icon: "search", get label() { return t("history.008"); }, id: "hist-q" })}</div>` +
     `<div class="day-row" hidden></div>` +
     `<div class="days"></div>` +
     `<div class="more" hidden>${btn(t("history.009"), "", ' data-act="more"')}</div>` +

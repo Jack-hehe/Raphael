@@ -891,7 +891,7 @@ class MountedPicker implements ModelPicker {
 
   private clicked(e: MouseEvent): void {
     const target = e.target as Element;
-    const tab = target.closest<HTMLElement>(".mp-tab");
+    const tab = target.closest<HTMLElement>(".mp-panel .tab");
     if (tab) {
       this.setTab(tab.dataset.tab === "local" ? "local" : "cloud", false);
       return;
@@ -945,7 +945,7 @@ class MountedPicker implements ModelPicker {
       return;
     }
     const target = e.target as HTMLElement;
-    if (target.closest(".mp-tab") && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+    if (target.closest(".mp-panel .tab") && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
       e.preventDefault();
       this.setTab(e.key === "ArrowLeft" || e.key === "Home" ? "cloud" : "local", true);
       return;

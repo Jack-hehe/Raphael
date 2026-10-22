@@ -77,8 +77,8 @@ describe("the two views", () => {
     const html = connectionsHTML(view());
     const bar = html.slice(html.indexOf('class="cs-bar"'), html.indexOf("data-cs-body"));
     expect(bar).toContain('role="tablist"');
-    expect(bar).toMatch(/<button[^>]*class="btn seg"[^>]*role="tab"[^>]*aria-selected="true"[^>]*data-id="installed"[^>]*>已安裝<span class="n">2<\/span>/);
-    expect(bar).toMatch(/<button[^>]*class="btn seg"[^>]*role="tab"[^>]*aria-selected="false"[^>]*data-id="store"[^>]*>商店</);
+    expect(bar).toMatch(/<button[^>]*class="tab"[^>]*role="tab"[^>]*aria-selected="true"[^>]*data-id="installed"[^>]*>已安裝<span class="n">2<\/span>/);
+    expect(bar).toMatch(/<button[^>]*class="tab"[^>]*role="tab"[^>]*aria-selected="false"[^>]*data-id="store"[^>]*>商店</);
     expect(bar).toContain('id="conn-search"');
     expect(bar).toMatch(/<button[^>]*class="sel"[^>]*data-k="conn-add"[^>]*><span>新增<\/span>/);
     expect(connectionsHTML(view({ tab: "store" }))).toMatch(/aria-selected="true"[^>]*data-id="store"/);
@@ -415,7 +415,7 @@ describe("the rules for this tab", () => {
     const acts = [...all.matchAll(/<(\w+)[^>]*data-conn="/g)].map((m) => m[1]);
     expect(acts.length).toBeGreaterThan(30);
     expect(new Set(acts)).toEqual(new Set(["button"]));
-    for (const tag of all.match(/<button[^>]*>/g)!) expect(tag).toMatch(/class="(btn[ "]|sel[ "]|tg)/);
+    for (const tag of all.match(/<button[^>]*>/g)!) expect(tag).toMatch(/class="(btn[ "]|sel[ "]|tg|tab")/);
     expect(all).not.toMatch(/<a[ >]/);
     expect(all).not.toContain("<select");
     expect(all).not.toContain('type="radio"');
@@ -425,7 +425,7 @@ describe("the rules for this tab", () => {
   test("the segmented buttons are real bordered buttons, not clickable text", () => {
     const tabs = connectionsHTML(view()).match(/<button[^>]*role="tab"[^>]*>/g)!;
     expect(tabs).toHaveLength(2);
-    for (const tag of tabs) expect(tag).toContain('class="btn seg"');
+    for (const tag of tabs) expect(tag).toContain('class="tab"');
   });
 
   test.each(["en", "ja"] as const)("is in one language at a time (%s)", (locale) => {

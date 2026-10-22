@@ -156,7 +156,7 @@ describe("the rules for every tab, in every language", () => {
       for (const id of IDS) {
         for (const over of [{}, { hasKey: false }, { brain: null }, { altgr: true }]) {
           const html = tab(id, over);
-          for (const tag of buttons(html)) expect(tag).toMatch(/class="(btn[ "]|sel[ "]|tg|ca-item[ "])/);
+          for (const tag of buttons(html)) expect(tag).toMatch(/class="(btn[ "]|sel[ "]|tg|tab"|ca-item[ "])/);
           expect(html).not.toMatch(/quiet|class="link"|<a\b/);
         }
       }

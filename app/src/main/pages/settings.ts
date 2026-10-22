@@ -114,7 +114,7 @@ export function createSettings(app: AppContext): SettingsPage {
     PANES.map((p) => `<button type="button" class="nav" data-pane="${p.id}" aria-current="false">${ico(p.icon)}<span>${esc(p.title())}</span></button>`).join("") +
     `</nav>` +
     `<div class="modal-body"></div>` +
-    `${iconBtn("x", t("common.close"), ' data-act="close"').replace('class="icon-btn"', 'class="icon-btn modal-x"')}` +
+    `${iconBtn("x", t("common.close"), ' data-act="close"', "modal-x")}` +
     `</div>`;
   const body = el.querySelector<HTMLElement>(".modal-body")!;
   let pane: SettingsPane = "general";

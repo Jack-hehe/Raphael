@@ -273,7 +273,6 @@ export const zhTW = {
   "dictionary.010": "新增詞，例如：轉生史萊姆",
   "dictionary.011": "新增詞",
   "dictionary.014": "新增",
-  "dictionary.015": "<div class=\"tools\"><div class=\"tabs\" role=\"group\" aria-label=\"篩選\">",
   "dictionary.016": "搜尋字典",
   "dictionary.017": "{p0} 個詞",
   "dictionary.018": "<div class=\"say\">《告。字典還是空的。》</div>按「新增單字」加入常用詞，讓下次聽寫更準確。",

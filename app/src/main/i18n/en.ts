@@ -274,7 +274,6 @@ export const en = {
   "dictionary.010": "New term, e.g. Tensura",
   "dictionary.011": "New term",
   "dictionary.014": "Add",
-  "dictionary.015": "<div class=\"tools\"><div class=\"tabs\" role=\"group\" aria-label=\"Filter\">",
   "dictionary.016": "Search dictionary",
   "dictionary.017": "{p0} terms",
   "dictionary.018": "<div class=\"say\">《Notice. Your dictionary is empty.》</div>Choose “Add word” to add common terms and improve future dictation.",
