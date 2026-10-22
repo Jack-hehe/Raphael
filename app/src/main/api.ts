@@ -135,7 +135,7 @@ export const telegramSetEnabled = (enabled: boolean): Promise<TelegramStatus> =>
 export const telegramApprove = (code: string): Promise<{ approved: boolean; status: TelegramStatus }> =>
   core("messaging.telegram.approve", { code });
 export const telegramReject = (code: string): Promise<TelegramStatus> => core("messaging.telegram.reject", { code });
-export const telegramRemoveUser = (user_id: number): Promise<TelegramStatus> => core("messaging.telegram.remove_user", { user_id });
+export const telegramRemoveUser = (user_id: string): Promise<TelegramStatus> => core("messaging.telegram.remove_user", { user_id });
 /** Deletes the token from the vault and forgets who was allowed. */
 export const telegramDisconnect = (): Promise<TelegramStatus> => core("messaging.telegram.disconnect");
 

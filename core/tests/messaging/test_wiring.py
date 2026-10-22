@@ -22,7 +22,7 @@ async def test_the_telegram_methods_are_registered(app):
 
 
 async def test_a_message_is_asked_like_a_spoken_question_and_lands_in_the_history(app):
-    text = await app._ask_from_messaging("telegram:42", "你好", "zh-TW")
+    text = await app._ask_from_messaging("telegram:42", "你好", "zh-TW", "telegram")
     assert text.strip()
     turns = (await app.call("agent.history.list", {}))["turns"]
     assert [t["session_id"] for t in turns] == ["telegram:42"]
@@ -45,7 +45,7 @@ async def test_a_question_that_needs_a_yes_is_refused_not_left_open(app, monkeyp
         return await real(method, params)
 
     monkeypatch.setattr(app, "call", call)
-    text = await app._ask_from_messaging("telegram:42", "open it", "en")
+    text = await app._ask_from_messaging("telegram:42", "open it", "en", "telegram")
     assert "confirmation" in text.lower()
     assert calls == ["agent.ask", "agent.confirm"]
 
@@ -95,3 +95,35 @@ async def test_stop_from_a_chat_stops_that_chats_tasks_and_turn_only(app, monkey
     monkeypatch.setattr(app.agent, "stop_session", lambda s: stopped.append(("agent", s)) or True)
     assert await app._stop_from_messaging("telegram:42") is True
     assert stopped == [("agent", "telegram:42"), ("worker", "telegram:42")]
+
+
+async def test_a_voice_message_is_heard_with_the_dictation_engine_and_normalized(app, monkeypatch):
+    import numpy as np
+
+    from raphael_core.messaging import voice
+
+    heard = []
+
+    class Engine:
+        def transcribe(self, samples, hints=()):
+            heard.append((samples.size, list(hints)))
+            return "你好"
+
+    class Segmenter:
+        def __init__(self, path, max_segment_s):
+            self.max = max_segment_s
+
+        def accept(self, samples):
+            return [samples]
+
+        def flush(self):
+            return []
+
+    monkeypatch.setattr(voice, "decode", lambda audio: np.zeros(1600, dtype="float32"))
+    monkeypatch.setattr(app, "_dictation_engine", lambda: Engine())
+    app._kit = __import__("concurrent.futures").futures.Future()
+    app._kit.set_result(SimpleNamespace(Segmenter=Segmenter))
+    await app.call("dictionary.add", {"word": "Raphael"})
+    text = await app._transcribe_from_messaging(b"opus", "en")
+    assert text == "你好"
+    assert heard == [(1600, ["Raphael"])]

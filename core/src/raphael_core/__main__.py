@@ -14,6 +14,9 @@ starts it that way for the tasks it hands over. The branch is the first thing `m
 app module (OpenCC, ONNX Runtime) is imported, so a worker starts in a fraction of a second and has
 none of the core's libraries in it.
 
+`--check-voice-decoder` decodes a small Opus clip that is built in and exits 0 if it works: the
+packaging smoke test uses it to see that the bundle carries the audio decoder of voice messages.
+
 stdout is taken for the protocol (`claim_stdout`) before anything native is imported: the app
 module brings in OpenCC, and its start-up thread ONNX Runtime and PortAudio. Whatever they write to
 fd 1 goes to stderr, with the log.
@@ -36,6 +39,10 @@ def main() -> None:
 
         worker_main()
         return
+    if "--check-voice-decoder" in sys.argv[1:]:
+        from raphael_core.messaging.voice import self_check  # the packaging smoke test runs this
+
+        sys.exit(self_check())
     logging.basicConfig(
         stream=sys.stderr, level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )

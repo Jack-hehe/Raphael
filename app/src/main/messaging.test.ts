@@ -57,7 +57,7 @@ describe("the setup", () => {
   });
 
   test("every action is a real button, and every icon-only one is named in its label and tooltip", () => {
-    for (const v of [view(), view({ status: status({ pending: [{ code: "AB3DEF", name: "Ann", expires_in_s: 540 }], allowed: [{ user_id: 7, name: "Bo" }] }) })]) {
+    for (const v of [view(), view({ status: status({ pending: [{ code: "AB3DEF", name: "Ann", expires_in_s: 540 }], allowed: [{ user_id: "7", name: "Bo" }] }) })]) {
       const html = messagingHTML(v);
       for (const m of html.matchAll(/data-msg="[^"]+"/g)) {
         const tag = html.slice(html.lastIndexOf("<", m.index), m.index! + m[0].length);
@@ -73,7 +73,7 @@ describe("the setup", () => {
 
 describe("when connected", () => {
   test("one row: the bot, a dot for its state, the switch and a button that opens the rest", () => {
-    const html = messagingHTML(view({ status: status({ allowed: [{ user_id: 1, name: "Ann" }] }) }));
+    const html = messagingHTML(view({ status: status({ allowed: [{ user_id: "1", name: "Ann" }] }) }));
     expect(html).toContain("@raph_bot");
     expect(html).toContain('class="dot ok" role="img" aria-label="已連接"');
     expect(html).toContain('role="switch" aria-checked="true"');
@@ -90,7 +90,7 @@ describe("when connected", () => {
   });
 
   test("a waiting code opens it on a row of its own, with ✓ and ✗ named for the code", () => {
-    const html = messagingHTML(view({ status: status({ allowed: [{ user_id: 1, name: "Bo" }], pending: [{ code: "AB3DEF", name: "Ann", expires_in_s: 540 }] }) }));
+    const html = messagingHTML(view({ status: status({ allowed: [{ user_id: "1", name: "Bo" }], pending: [{ code: "AB3DEF", name: "Ann", expires_in_s: 540 }] }) }));
     expect(html).toContain('data-msg="expand" aria-expanded="true"');
     expect(html).toMatch(/<div class="row msg-sub">.*AB3DEF/);
     expect(html).toContain('aria-label="核准 AB3DEF" title="核准 AB3DEF" data-msg="approve" data-code="AB3DEF"');
@@ -99,7 +99,7 @@ describe("when connected", () => {
   });
 
   test("the people who may talk to her, each on a row with a remove button named for them", () => {
-    const html = messagingHTML(view({ status: status({ allowed: [{ user_id: 42, name: "Ann <b>" }] }), expanded: true }));
+    const html = messagingHTML(view({ status: status({ allowed: [{ user_id: "42", name: "Ann <b>" }] }), expanded: true }));
     expect(html).toContain('aria-label="移除 Ann &lt;b&gt;"');
     expect(html).toContain('data-msg="remove" data-user="42"');
     expect(html).toContain("Ann &lt;b&gt;");
@@ -163,7 +163,7 @@ describe("the controller", () => {
     api.telegramStatus.mockResolvedValue(status({ pending: [{ code: "AB3DEF", name: "Ann", expires_in_s: 500 }] }));
     const c = make();
     await c.load();
-    api.telegramApprove.mockResolvedValue({ approved: true, status: status({ allowed: [{ user_id: 1, name: "Ann" }] }) });
+    api.telegramApprove.mockResolvedValue({ approved: true, status: status({ allowed: [{ user_id: "1", name: "Ann" }] }) });
     click(c, "approve", { code: "AB3DEF" });
     await vi.waitFor(() => expect(c.view().busy).toBe(false));
     expect(api.telegramApprove).toHaveBeenCalledWith("AB3DEF");
@@ -171,8 +171,20 @@ describe("the controller", () => {
     c.reset();
   });
 
+  test("removing a person sends the id as the text it is, however large", async () => {
+    const big = "1234567890123456789";
+    api.telegramStatus.mockResolvedValue(status({ allowed: [{ user_id: big, name: "Ann" }] }));
+    const c = make();
+    await c.load();
+    api.telegramRemoveUser.mockResolvedValue(status());
+    click(c, "remove", { user: big });
+    await vi.waitFor(() => expect(c.view().busy).toBe(false));
+    expect(api.telegramRemoveUser).toHaveBeenCalledWith(big);
+    c.reset();
+  });
+
   test("the row opens and closes on the reader's word", async () => {
-    api.telegramStatus.mockResolvedValue(status({ allowed: [{ user_id: 1, name: "Ann" }] }));
+    api.telegramStatus.mockResolvedValue(status({ allowed: [{ user_id: "1", name: "Ann" }] }));
     const c = make();
     await c.load();
     expect(c.view().expanded).toBeNull();

@@ -136,3 +136,14 @@ def test_the_smoke_fails_when_the_bundle_cannot_start_a_worker(smoke, launcher, 
         smoke.smoke_with_the_fake_llm(launcher)
     with pytest.raises(RuntimeError, match="The worker"):
         smoke.smoke_the_worker(launcher, {"PYTHONPATH": str(shadow)})
+
+
+def test_the_voice_pass_decodes_an_opus_clip(report):
+    assert report["voice_pass"]["passed"] is True
+
+
+def test_the_voice_pass_fails_when_the_decoder_does_not_work(smoke, tmp_path):
+    broken = tmp_path / "broken-core.cmd"
+    broken.write_text("@echo off\r\necho voice decoder failed\r\nexit /b 1\r\n", encoding="ascii")
+    with pytest.raises(RuntimeError, match="audio decoder"):
+        smoke.smoke_the_voice_decoder(broken)

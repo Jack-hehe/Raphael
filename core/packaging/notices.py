@@ -13,6 +13,7 @@ import sys
 from importlib.metadata import distribution
 from pathlib import Path
 
+import soundfile
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
@@ -39,6 +40,8 @@ def installed_versions() -> dict[str, str]:
         "libmpdec": decimal.__libmpdec_version__,
         "opencc": distribution("opencc").version,
         "soxr": distribution("soxr").version,
+        "soundfile": distribution("soundfile").version,
+        "libsndfile": soundfile.__libsndfile_version__,
     }
 
 
@@ -154,6 +157,8 @@ def write_notices(target: Path) -> None:
         "The release notice includes the upstream ONNX Runtime 1.28.2 third-party notices.",
         "PortAudio's upstream license is included; the wheel's PortAudio README is preserved in _internal.",
         "NumPy and python-soxr wheel licenses include their bundled native dependency notices.",
+        "soundfile's libsndfile_x64.dll links libsndfile, libopus, libvorbis, libogg, libFLAC, LAME and mpg123",
+        "statically; the wheel's licensing/license_notes.md lists their copyrights and sources.",
         "", "Upstream sources:",
         "- https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.8/LICENSE",
         "- https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.8/cmake/onnxruntime-win-x64.cmake",
