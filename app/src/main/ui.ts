@@ -139,6 +139,9 @@ export function tabs(items: TabItem[], selected: string, o: { label: string; kin
   return `<div class="${cls}" role="${nav ? "tablist" : "group"}" aria-label="${esc(o.label)}">${items.map(one).join("")}</div>`;
 }
 
+/** How long 「中斷連線」 (of a connection or a messaging app) waits for its second press. */
+export const DISCONNECT_CONFIRM_MS = 5000;
+
 export const btn = (label: string, kind = "", attrs = ""): string =>
   `<button type="button" class="btn${kind ? " " + kind : ""}"${attrs}>${label}</button>`;
 

@@ -9,7 +9,7 @@ import {
   PANES,
   type SettingsView,
   loadingHTML,
-  microphoneChoices,
+  settingsMicrophones,
   modelPickerLook,
   paneHTML,
   priceTexts,
@@ -241,7 +241,7 @@ describe("聽寫", () => {
     // the meter of small bars, under the dropdown and inside its box, which is as wide as the dropdown
     expect(row).toContain(`<span class="meter" aria-hidden="true">${"<i></i>".repeat(46)}</span></span>`);
     expect(buttons(row)).toHaveLength(1); // the search for microphones is an item of its menu
-    const choices = microphoneChoices(view());
+    const choices = settingsMicrophones(view());
     expect(choices.map((c) => c.label)).toEqual(["自動偵測（目前：麥克風排列）", REALTEK]);
     expect(choices.map((c) => c.short)).toEqual(["自動（麥克風排列）", "麥克風排列"]);
     expect(choices[0].title).toBe(`自動偵測（目前：${REALTEK}）`);
@@ -253,7 +253,7 @@ describe("聽寫", () => {
     const row = rowOf(tab("dictation", { devices }), "麥克風");
     expect(row).toContain("<span>自動（HyperX Cloud II…）</span>");
     expect(row).toContain(`title="自動偵測（目前：${cut}）"`);
-    const choices = microphoneChoices(view({ devices }));
+    const choices = settingsMicrophones(view({ devices }));
     expect(choices.map((c) => c.label)).toEqual(["自動偵測（目前：HyperX Cloud II Core Wi…）", cut, REALTEK]);
     expect(choices.map((c) => c.short)).toEqual(["自動（HyperX Cloud II…）", "HyperX Cloud II Core Wi…", "麥克風排列"]);
     const chosen = rowOf(tab("dictation", { devices, device: { ...device, microphone: cut } }), "麥克風");
@@ -262,7 +262,7 @@ describe("聽寫", () => {
   });
 
   test("keeps a chosen microphone that is not plugged in, said so", () => {
-    const choices = microphoneChoices(view({ device: { ...device, microphone: "USB Mic (C-Media)" } }));
+    const choices = settingsMicrophones(view({ device: { ...device, microphone: "USB Mic (C-Media)" } }));
     expect(choices[choices.length - 1]).toEqual({ value: "USB Mic (C-Media)", label: "USB Mic (C-Media)（未連接）", short: "USB Mic（未連接）" });
   });
 

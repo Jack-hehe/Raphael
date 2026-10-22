@@ -13,10 +13,8 @@ import { describeError } from "./format";
 import { t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 import { monogram, serviceIconSVG } from "./service-icons";
-import { btn, esc, fieldHTML, ico, iconButton, note, row, st, tg, toaster } from "./ui";
+import { DISCONNECT_CONFIRM_MS, btn, esc, fieldHTML, ico, iconButton, note, row, st, tg, toaster } from "./ui";
 
-/** How long 「中斷連線」 waits for its second press. */
-const DISCONNECT_CONFIRM_MS = 5000;
 /** How often a connected bot is asked who is waiting to pair. */
 const POLL_MS = 3000;
 /** The only link this section opens (commands.rs lets nothing else through). */

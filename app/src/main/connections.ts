@@ -17,7 +17,7 @@ import { getLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 import { SERVICE_ICONS, type ServiceIconId, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import type { AuditEntry, ConnectionGroup, ConnectionTool, MainEvent, NewConnection, StoreService, Words } from "./types";
-import { type Choice, btn, copyText, esc, fieldHTML, ico, row, st, tabs, tg, toaster } from "./ui";
+import { DISCONNECT_CONFIRM_MS, type Choice, btn, copyText, esc, fieldHTML, ico, row, st, tabs, tg, toaster } from "./ui";
 
 /** `t` for a key that is chosen at run time (its placeholders, if any, are none). */
 const tr = t as unknown as (key: MessageKey) => string;
@@ -25,8 +25,6 @@ const tr = t as unknown as (key: MessageKey) => string;
 /** Where a service that is signed in to with a code keeps the list of the apps it has let in. */
 const GRANTS_URL: Record<string, string> = { github: "https://github.com/settings/applications" };
 
-/** How long 「中斷連線」 waits for its second press. */
-const DISCONNECT_CONFIRM_MS = 5000;
 /** How many of the latest actions are shown under the list. */
 const AUDIT_SHOWN = 5;
 /** How many of the latest actions are read, to find each service's own among them. */

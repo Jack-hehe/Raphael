@@ -18,18 +18,14 @@ and the user can clear it. Nothing here logs a question or an answer.
 from __future__ import annotations
 
 import sqlite3
-import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 
+from ..clock import wall_clock_ms
 from .steps import Step
 
 # Where a turn came from when nobody says: the hotkey and the overlay.
 VOICE = "voice"
-
-
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
 
 
 @dataclass
@@ -64,7 +60,7 @@ class AgentHistory:
     """The `agent_turns` table. Use it on the thread that owns `conn`."""
 
     def __init__(
-        self, conn: sqlite3.Connection, now_ms: Callable[[], int] = _wall_clock_ms
+        self, conn: sqlite3.Connection, now_ms: Callable[[], int] = wall_clock_ms
     ) -> None:
         self._conn = conn
         self._now_ms = now_ms

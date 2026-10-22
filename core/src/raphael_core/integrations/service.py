@@ -42,14 +42,14 @@ import asyncio
 import json
 import logging
 import secrets
-import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult, PluginTool, clean_arguments, tool_key
 from ..agent.policy import PLUGIN_PREFIX, Tier
-from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
+from ..clock import wall_clock_ms
+from ..protocol import INTERNAL_ERROR, RpcError, invalid_params
 from ..router import Router
 from . import catalog
 from .audit import LIST_DEFAULT, AuditLog
@@ -75,14 +75,6 @@ logger = logging.getLogger(__name__)
 ON_TIER = Tier.T1
 
 
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
-
-
-def _invalid(message: str) -> RpcError:
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
-
-
 def _not_saved(exc: OSError) -> RpcError:
     """The error for a change that could not be written to the file. Only the type is logged and
     nothing of the message goes on: it holds the file's path."""
@@ -93,7 +85,7 @@ def _not_saved(exc: OSError) -> RpcError:
 def _str(params: dict, name: str) -> str:
     value = params.get(name)
     if not isinstance(value, str) or not value:
-        raise _invalid(f"{name} must be a non-empty string")
+        raise invalid_params(f"{name} must be a non-empty string")
     return value
 
 
@@ -119,7 +111,7 @@ class IntegrationsService:
         vault: SecretVault,
         *,
         connector: McpConnector | None = None,
-        now_ms: Callable[[], int] = _wall_clock_ms,
+        now_ms: Callable[[], int] = wall_clock_ms,
         call_timeout_s: float = CALL_TOTAL_S,
         open_browser: OpenBrowser = open_in_browser,
         login_timeout_s: float = LOGIN_TIMEOUT_S,
@@ -205,7 +197,7 @@ class IntegrationsService:
     def _server(self, params: dict) -> ServerConfig:
         server = self._config.get(_str(params, "id"))
         if server is None:
-            raise _invalid("There is no such plugin")
+            raise invalid_params("There is no such plugin")
         return server
 
     def _save(self) -> None:
@@ -233,19 +225,19 @@ class IntegrationsService:
         """Sign in to a service of the store, or to a server again. Waits for the user in the
         browser, so it can take minutes; `connect_cancel` ends it."""
         if self._login is not None and not self._login.done():
-            raise _invalid("A login is under way already")
+            raise invalid_params("A login is under way already")
         ident = params.get("id")
         if ident is not None:
             server = self._server(params)
             if server.auth not in ("oauth", "device"):
-                raise _invalid("This plugin does not use a login")
+                raise invalid_params("This plugin does not use a login")
             new = False
         else:
             entry = catalog.find(_str(params, "catalog_id"))
             if entry is None:
-                raise _invalid("There is no such service in the store")
+                raise invalid_params("There is no such service in the store")
             if any(s.catalog_id == entry.id for s in self._config.servers()):
-                raise _invalid("This service is added already")
+                raise invalid_params("This service is added already")
             server = ServerConfig(
                 id=secrets.token_hex(6),
                 name=self._unused_name(entry.name),
@@ -289,7 +281,7 @@ class IntegrationsService:
         except (ValueError, OSError) as exc:
             self._wipe_login(server, True)
             if isinstance(exc, ValueError):  # too many plugins
-                raise _invalid(str(exc)) from None
+                raise invalid_params(str(exc)) from None
             raise _not_saved(exc) from None
         self._failure.pop(server.id, None)
         self._connector.invalidate(server.id)  # the connections of before used the old login
@@ -340,7 +332,7 @@ class IntegrationsService:
         try:
             new = parse_new_server(params, [s.name for s in self._config.servers()])
         except ValueError as exc:  # says what is wrong, never a value
-            raise _invalid(str(exc)) from None
+            raise invalid_params(str(exc)) from None
         server = new.config
         stored: list[str] = []
         try:
@@ -353,10 +345,10 @@ class IntegrationsService:
             self._config.add(server)
         except SecretTooLong as exc:
             self._forget(stored)
-            raise _invalid(str(exc)) from None
+            raise invalid_params(str(exc)) from None
         except ValueError as exc:  # too many plugins
             self._forget(stored)
-            raise _invalid(str(exc)) from None
+            raise invalid_params(str(exc)) from None
         except OSError as exc:
             self._forget(stored)
             raise _not_saved(exc) from None
@@ -378,7 +370,7 @@ class IntegrationsService:
         server = self._server(params)
         enabled = params.get("enabled")
         if type(enabled) is not bool:
-            raise _invalid("enabled must be true or false")
+            raise invalid_params("enabled must be true or false")
         server.enabled = enabled
         self._save()
         return {"server": self._view(server)}
@@ -451,10 +443,10 @@ class IntegrationsService:
         name = _str(params, "tool")
         enabled = params.get("enabled")
         if type(enabled) is not bool:
-            raise _invalid("enabled must be true or false")
+            raise invalid_params("enabled must be true or false")
         tool = server.tool(name)
         if tool is None:
-            raise _invalid("There is no such tool")
+            raise invalid_params("There is no such tool")
         (server.disabled_tools.discard if enabled else server.disabled_tools.add)(name)
         self._save()
         return {"tool": self._tool_view(server, tool)}
@@ -466,16 +458,16 @@ class IntegrationsService:
         names = params.get("tools")
         enabled = params.get("enabled")
         if type(enabled) is not bool:
-            raise _invalid("enabled must be true or false")
+            raise invalid_params("enabled must be true or false")
         if not isinstance(names, list) or not names:
-            raise _invalid("tools must be a list of names")
+            raise invalid_params("tools must be a list of names")
         tools = []
         for name in names:
             if not isinstance(name, str) or not name:
-                raise _invalid("tools must be a list of names")
+                raise invalid_params("tools must be a list of names")
             tool = server.tool(name)
             if tool is None:
-                raise _invalid("There is no such tool")
+                raise invalid_params("There is no such tool")
             tools.append(tool)
         for tool in tools:
             (server.disabled_tools.discard if enabled else server.disabled_tools.add)(tool.name)
@@ -491,7 +483,7 @@ class IntegrationsService:
     async def _audit_list(self, params: dict) -> dict:
         limit = params.get("limit", LIST_DEFAULT)
         if type(limit) is not int:
-            raise _invalid("limit must be a whole number")
+            raise invalid_params("limit must be a whole number")
         return {
             "entries": [
                 {

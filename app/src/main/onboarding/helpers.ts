@@ -2,13 +2,8 @@
 // microphones to choose from, how the model bar reads, and asking the core again for what it has
 // not written yet. All pure (the wait is given), so each is tested on its own.
 
-import { t } from "../i18n";
-
 import { parseLimit } from "../format";
-import { automaticMicrophoneLabel } from "../microphone";
 import { type ModelPhase } from "../models";
-import type { AudioDevices } from "../types";
-import type { Choice } from "../ui";
 
 export type LimitAction = { kind: "keep" } | { kind: "save"; value: number } | { kind: "invalid" };
 
@@ -19,18 +14,6 @@ export function limitAction(text: string, current: number): LimitAction {
   return value === current ? { kind: "keep" } : { kind: "save", value };
 }
 
-/** The value of the automatic choice in the microphone menu. */
-export const AUTO_MICROPHONE = "";
-
-/** The microphones to choose from: the automatic choice, those found, and the saved one even if it is gone. */
-export function micChoices(devices: AudioDevices | null, saved: string | null): Choice[] {
-  const choices: Choice[] = [
-    { value: AUTO_MICROPHONE, get label() { return automaticMicrophoneLabel(devices); } },
-    ...(devices?.devices ?? []).map((d) => ({ value: d.name, label: d.name })),
-  ];
-  if (saved !== null && !choices.some((c) => c.value === saved)) choices.push({ value: saved, get label() { return t("mic.disconnected", { p0: saved }); } });
-  return choices;
-}
 
 /** How loud the microphone has to be, and for how long, before the guide says it hears the person. */
 export const HEARD_LEVEL = 0.05;

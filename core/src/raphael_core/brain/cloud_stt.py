@@ -27,7 +27,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..languages import STT_CODES, stt_languages
-from ..protocol import BUDGET_EXCEEDED, INTERNAL_ERROR, INVALID_PARAMS, NOT_CONFIGURED, RpcError
+from ..protocol import BUDGET_EXCEEDED, INTERNAL_ERROR, NOT_CONFIGURED, RpcError, invalid_params
 from .openrouter import OpenRouterClient, OpenRouterError
 from .settings import SettingsStore
 from .spend import SpendTracker
@@ -51,10 +51,6 @@ def timeout_for(audio_seconds: float) -> float:
     return min(30.0, 5.0 + audio_seconds)
 
 
-def _invalid(message: str) -> RpcError:
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
-
-
 def _refusal(code: int, kind: str, message: str) -> RpcError:
     return RpcError(code, message, {"kind": kind})
 
@@ -63,17 +59,17 @@ def _audio_seconds(params: dict) -> tuple[str, float]:
     """The base64 audio of `params` and how long it is, or INVALID_PARAMS."""
     audio = params.get("audio")
     if not isinstance(audio, str) or not audio:
-        raise _invalid("audio must be a WAV file in base64")
+        raise invalid_params("audio must be a WAV file in base64")
     if len(audio) > MAX_AUDIO_BYTES * 4 // 3 + 4:
-        raise _invalid("audio is larger than 25 MB")
+        raise invalid_params("audio is larger than 25 MB")
     try:
         data = base64.b64decode(audio, validate=True)
         with wave.open(io.BytesIO(data), "rb") as reader:
             frames, rate = reader.getnframes(), reader.getframerate()
     except (binascii.Error, ValueError, wave.Error, EOFError):
-        raise _invalid("audio must be a WAV file in base64") from None
+        raise invalid_params("audio must be a WAV file in base64") from None
     if rate < 1:
-        raise _invalid("audio must be a WAV file in base64")
+        raise invalid_params("audio must be a WAV file in base64")
     return audio, frames / rate
 
 
@@ -82,14 +78,14 @@ def _hints(params: dict) -> list[str]:
     if hints is None:
         return []
     if not isinstance(hints, list) or not all(isinstance(h, str) for h in hints):
-        raise _invalid("hints must be a list of strings")
+        raise invalid_params("hints must be a list of strings")
     return hints
 
 
 def _language(params: dict) -> str | None:
     language = params.get("language", "auto")
     if not isinstance(language, str) or language not in LANGUAGES:
-        raise _invalid(f"language must be one of {', '.join(LANGUAGES)}")
+        raise invalid_params(f"language must be one of {', '.join(LANGUAGES)}")
     return LANGUAGES[language]
 
 

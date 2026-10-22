@@ -46,7 +46,7 @@ from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterEr
 from ..brain.pricing import builtin_catalog
 from ..brain.spend import SpendTracker
 from ..integrations.pool import McpPool
-from ..protocol import INVALID_PARAMS, WORKER_STOPPED, RpcError
+from ..protocol import WORKER_STOPPED, RpcError, invalid_params
 from .snapshot import BUILTIN, FIND, MCP, Snapshot, ToolRef
 from .tasks import TaskStore
 
@@ -99,10 +99,6 @@ def stopped(kind: str, detail: str | None = None) -> RpcError:
     """The answer to a call the task may not make: it ends the task. `kind` is one of
     `worker.loop.Stop`'s kinds."""
     return RpcError(WORKER_STOPPED, "The task may not go on", {"stop": kind, "detail": detail})
-
-
-def _invalid(message: str) -> RpcError:
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
 
 
 def _outcome_of(result: PluginResult) -> str:
@@ -278,9 +274,9 @@ class TaskRun:
         snapshot."""
         messages = params.get("messages")
         if not isinstance(messages, list) or not all(isinstance(m, dict) for m in messages):
-            raise _invalid("messages must be a list of messages")
+            raise invalid_params("messages must be a list of messages")
         if not messages:
-            raise _invalid("messages is empty")
+            raise invalid_params("messages is empty")
         request_chars = len(json.dumps(messages, ensure_ascii=False))
         async with self._turn:
             # A conversation grown past what is sent is a task that has used what it was given.
@@ -361,7 +357,7 @@ class TaskRun:
         """The result of a call of a tool of the snapshot."""
         name, arguments = params.get("name"), params.get("arguments")
         if not isinstance(name, str) or not isinstance(arguments, dict):
-            raise _invalid("name must be a string and arguments an object")
+            raise invalid_params("name must be a string and arguments an object")
         async with self._turn:
             return await self._tool(name, arguments)
 

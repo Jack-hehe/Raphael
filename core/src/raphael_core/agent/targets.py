@@ -10,9 +10,9 @@ here logs a name or an address.
 """
 
 import sqlite3
-import time
 from collections.abc import Callable
 
+from ..clock import wall_clock_ms
 from .opening import validate_url
 
 # The names kept; when there are more, the one used longest ago goes.
@@ -20,15 +20,11 @@ MAX_TARGETS = 500
 _MAX_NAME_CHARS = 60
 
 
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
-
-
 class OpenTargets:
     """The `open_targets` table. Use it on the thread that owns `conn`."""
 
     def __init__(
-        self, conn: sqlite3.Connection, now_ms: Callable[[], int] = _wall_clock_ms
+        self, conn: sqlite3.Connection, now_ms: Callable[[], int] = wall_clock_ms
     ) -> None:
         self._conn = conn
         self._now_ms = now_ms

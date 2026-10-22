@@ -59,7 +59,8 @@ from ..agent.tools import Tools
 from ..brain.openrouter import OpenRouterClient
 from ..brain.settings import DEFAULTS, SettingsStore
 from ..brain.spend import SpendTracker
-from ..protocol import BUSY, INVALID_PARAMS, NOT_FOUND, RpcError
+from ..clock import wall_clock_ms
+from ..protocol import BUSY, NOT_FOUND, RpcError, invalid_params
 from ..router import Router
 from ..worker.guards import neutralize
 from .brief import BRIEF_WINDOW_MS, TaskBrief, ToolUse
@@ -114,14 +115,6 @@ def _earlier_outcome(step: Step) -> str:
     if step.outcome == "blocked" or step.reason in _REFUSED_REASONS:
         return "failed"
     return "failed, unknown whether it ran"
-
-
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
-
-
-def _invalid(message: str) -> RpcError:
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
 
 
 def _step_view(step: Step) -> dict[str, Any]:
@@ -229,7 +222,7 @@ class BackgroundService:
         notify: Callable[[str, dict], None],
         host: WorkerHost | None = None,
         limits: RunLimits = RunLimits(),
-        now_ms: Callable[[], int] = _wall_clock_ms,
+        now_ms: Callable[[], int] = wall_clock_ms,
         tz: tzinfo | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -764,12 +757,12 @@ class BackgroundService:
         what the first did, but it is told what that was."""
         task_id = params.get("task_id")
         if type(task_id) is not int:
-            raise _invalid("task_id must be a whole number")
+            raise invalid_params("task_id must be a whole number")
         old = self._store.get(task_id)
         if old is None:
             raise RpcError(NOT_FOUND, "There is no such task")
         if old.state not in RERUNNABLE or not old.text.strip():
-            raise _invalid("only a task that did not finish can run again")
+            raise invalid_params("only a task that did not finish can run again")
         model = self._settings.get("agent_model")
         try:
             new_id = self.submit(
@@ -803,7 +796,7 @@ class BackgroundService:
         Esc does not do this: the cancel key of the assistant leaves the background alone."""
         task_id = params.get("task_id")
         if task_id is not None and type(task_id) is not int:
-            raise _invalid("task_id must be a whole number or null")
+            raise invalid_params("task_id must be a whole number or null")
         run = self._run
         if run is not None and task_id in (None, run.task_id):
             self._host.cancel(run)

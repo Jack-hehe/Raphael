@@ -19,9 +19,10 @@ Use it on the thread that owns `conn` (the event loop). Nothing here logs a task
 """
 
 import sqlite3
-import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+
+from ..clock import wall_clock_ms
 
 QUEUED, RUNNING = "queued", "running"
 FINAL_STATES = ("done", "failed", "limit", "cancelled", "interrupted")
@@ -34,10 +35,6 @@ class Refused(Exception):
     def __init__(self, kind: str) -> None:
         super().__init__(kind)
         self.kind = kind
-
-
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
 
 
 @dataclass
@@ -89,7 +86,7 @@ class TaskStore:
     """The `worker_tasks` and `worker_steps` tables."""
 
     def __init__(
-        self, conn: sqlite3.Connection, now_ms: Callable[[], int] = _wall_clock_ms
+        self, conn: sqlite3.Connection, now_ms: Callable[[], int] = wall_clock_ms
     ) -> None:
         self._conn = conn
         self._now_ms = now_ms

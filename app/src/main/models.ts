@@ -5,7 +5,7 @@
 
 import { t } from "./i18n";
 
-import { describeError } from "./format";
+import { GB, MB, describeError } from "./format";
 import type { MainEvent, ModelsStatus } from "./types";
 
 /** What the core is asked. */
@@ -56,9 +56,6 @@ export function downloadPhase(names: string[], seen: ReadonlyMap<string, Seen>):
   if (names.length > 0 && fetched === names.length) return { kind: "installing" };
   return { kind: "downloading", done, total };
 }
-
-const MB = 1_000_000;
-const GB = 1_000_000_000;
 
 /** `380 MB of 880 MB` as the row shows it: one unit for both numbers. */
 export function formatProgress(done: number, total: number): string {

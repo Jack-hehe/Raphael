@@ -85,13 +85,13 @@ from .messaging.service import MessagingService
 from .messaging.words import compose, words
 from .protocol import (
     BUSY,
-    INVALID_PARAMS,
     INTERNAL_ERROR,
+    NOT_CONFIGURED,
     NO_LOCAL_MODEL,
     NO_MICROPHONE,
-    NOT_CONFIGURED,
     PROTOCOL_VERSION,
     RpcError,
+    invalid_params,
 )
 from .router import Router
 
@@ -674,10 +674,6 @@ def _import_kit() -> SimpleNamespace:
     )
 
 
-def _invalid(message: str) -> RpcError:
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
-
-
 class App(Router):
     """The Router of the whole core. `start()` begins loading the speech side; `aclose()` closes
     what the app opened (the microphone, the HTTP client, the database).
@@ -1194,12 +1190,12 @@ class App(Router):
     async def _models_ensure(self, params: dict) -> dict:
         names = params.get("names")
         if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
-            raise _invalid("names must be a list of model names")
+            raise invalid_params("names must be a list of model names")
         engine = self._speech.engine_name
         allowed = {VAD_MODEL} if engine is None else {VAD_MODEL, engine}
         unknown = [n for n in names if n not in allowed]
         if unknown:
-            raise _invalid(f"not a model the app downloads: {', '.join(unknown)}")
+            raise invalid_params(f"not a model the app downloads: {', '.join(unknown)}")
         loop = asyncio.get_running_loop()
 
         def download() -> None:
@@ -1217,11 +1213,11 @@ class App(Router):
         """The model of the catalogue that `params` name."""
         name = params.get("name")
         if not isinstance(name, str):
-            raise _invalid("name must be a model name")
+            raise invalid_params("name must be a model name")
         try:
             return local_model(name).name
         except ValueError:
-            raise _invalid(f"not a model of the catalogue: {name}") from None
+            raise invalid_params(f"not a model of the catalogue: {name}") from None
 
     async def _models_local(self, params: dict) -> dict:
         """The catalogue: each model with its size and whether it is on disk, the one the local
@@ -1357,7 +1353,7 @@ class App(Router):
     async def _audio_devices(self, params: dict) -> dict:
         refresh = params.get("refresh", True)
         if type(refresh) is not bool:
-            raise _invalid("refresh must be true or false")
+            raise invalid_params("refresh must be true or false")
         kit = await self._wait_for(self._kit)
         # Listing reads the devices again, so that a headset plugged in since shows up, and that is
         # not done while a stream is open. The settings meter's stream is the one that usually is:
@@ -1381,7 +1377,7 @@ class App(Router):
     async def _audio_set_device(self, params: dict) -> dict:
         name = params.get("name")
         if name is not None and not isinstance(name, str):
-            raise _invalid("name must be a string or null")
+            raise invalid_params("name must be a string or null")
         name = name if name is not None and name.strip() else None  # blank: the default
         changed = name != self._device_name
         self._device_name = name
@@ -1392,7 +1388,7 @@ class App(Router):
     async def _audio_monitor(self, params: dict) -> dict:
         on = params.get("on")
         if type(on) is not bool:
-            raise _invalid("on must be true or false")
+            raise invalid_params("on must be true or false")
         if not on and self._monitor is None:
             return {}
         monitor = await self._get_monitor()

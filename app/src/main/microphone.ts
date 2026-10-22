@@ -1,5 +1,6 @@
 import { t } from "./i18n";
 import type { AudioDevices } from "./types";
+import type { Choice } from "./ui";
 
 // The word Windows names a plain microphone by in its display languages. A name that is only this
 // word says nothing about which microphone it is; the device in brackets after it does.
@@ -79,14 +80,47 @@ export function microphoneText(key: MicrophoneKey, name: string, room?: number):
 
 /**
  * The automatic choice: 「自動偵測（目前：麥克風排列 (Realtek(R) Audio)）」, with the microphone detection
- * resolved to, or just 「自動偵測」 before detection or with an older core, which omits it. Given a
+ * resolved to, or just 「自動偵測」 before detection, when there is none yet. Given a
  * `room`, the microphone goes by its short name, cut to fit.
  */
 export function automaticMicrophoneLabel(devices: AudioDevices | null, room?: number): string {
   return devices?.automatic_device ? microphoneText("mic.automaticCurrent", devices.automatic_device, room) : t("mic.autoDetect");
 }
 
-/** The automatic choice on a closed dropdown: 「自動（HyperX Cloud II…）」, or just 「自動偵測」 before detection or with an older core. */
+/** The automatic choice on a closed dropdown: 「自動（HyperX Cloud II…）」, or just 「自動偵測」 before detection. */
 export function automaticMicrophoneShort(devices: AudioDevices | null): string {
   return devices?.automatic_device ? microphoneText("mic.automaticShort", devices.automatic_device, DROPDOWN_ROOM) : t("mic.autoDetect");
+}
+
+/** The value of the automatic choice in a microphone menu: no microphone is named. */
+export const AUTO_MICROPHONE = "";
+
+/**
+ * The microphones to choose from: automatic first, then each one found, and `saved` (the one chosen
+ * before) if it is not plugged in now, said so. With `fit` (the settings page) the list has their
+ * whole names and the automatic choice the short name of the one it uses; the closed dropdown has
+ * short names cut to fit it, and the tooltips the whole ones. Without (the guide, whose menu is
+ * wider) every choice has its whole name.
+ */
+export function microphoneChoices(devices: AudioDevices | null, saved: string | null, fit = false): Choice[] {
+  const found = devices?.devices ?? [];
+  const choices: Choice[] = fit
+    ? [
+        {
+          value: AUTO_MICROPHONE,
+          get label() { return automaticMicrophoneLabel(devices, MENU_ROOM); },
+          get short() { return automaticMicrophoneShort(devices); },
+          get title() { return automaticMicrophoneLabel(devices); },
+        },
+        ...found.map((d) => ({ value: d.name, label: d.name, short: cutToFit(shortMicrophoneName(d.name), DROPDOWN_ROOM) })),
+      ]
+    : [
+        { value: AUTO_MICROPHONE, get label() { return automaticMicrophoneLabel(devices); } },
+        ...found.map((d) => ({ value: d.name, label: d.name })),
+      ];
+  if (saved === null || choices.some((c) => c.value === saved)) return choices;
+  const gone: Choice = fit
+    ? { value: saved, label: t("mic.disconnected", { p0: saved }), short: microphoneText("mic.disconnected", saved, DROPDOWN_ROOM) }
+    : { value: saved, get label() { return t("mic.disconnected", { p0: saved }); } };
+  return [...choices, gone];
 }

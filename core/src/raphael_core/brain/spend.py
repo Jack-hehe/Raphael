@@ -8,18 +8,15 @@ although it is still the old month in UTC.
 
 import math
 import sqlite3
-import time
 from bisect import bisect_right
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta, tzinfo
 
+from ..clock import wall_clock_ms
+
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _ONE_DAY = timedelta(days=1)
 _ONE_MS = timedelta(milliseconds=1)
-
-
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
 
 
 def _day_start_ms(day: date, zone: tzinfo) -> int:
@@ -52,7 +49,7 @@ class SpendTracker:
     def __init__(
         self,
         conn: sqlite3.Connection,
-        now_ms: Callable[[], int] = _wall_clock_ms,
+        now_ms: Callable[[], int] = wall_clock_ms,
         tz: tzinfo | None = None,
     ) -> None:
         self._conn = conn

@@ -45,9 +45,9 @@ import {
   setMeter,
   toaster,
 } from "../ui";
+import { AUTO_MICROPHONE } from "../microphone";
 import {
   APPEARANCES,
-  AUTO_MICROPHONE,
   HOTKEY_ROWS,
   agentCity,
   WORKER_COST_CAPS,
@@ -59,7 +59,7 @@ import {
   UI_LANGUAGES,
   languagesOf,
   loadingHTML,
-  microphoneChoices,
+  settingsMicrophones,
   modelPickerLook,
   paneHTML,
   localView,
@@ -196,7 +196,7 @@ export function createSettings(app: AppContext): SettingsPage {
       case "mic": {
         const anchor = el.querySelector<HTMLElement>('.sel[data-k="mic"]');
         return {
-          choices: microphoneChoices(v),
+          choices: settingsMicrophones(v),
           current: d.microphone ?? AUTO_MICROPHONE,
           pick: (value) => void changeDevice({ microphone: value === AUTO_MICROPHONE ? null : value }),
           actions: anchor ? [searchAction(anchor)] : [],
@@ -758,9 +758,9 @@ export function createSettings(app: AppContext): SettingsPage {
       return; // the list there was stays
     }
     if (mine !== microphoneReads || !visible) return;
-    const before = JSON.stringify(microphoneChoices(view()));
+    const before = JSON.stringify(settingsMicrophones(view()));
     devices = fresh;
-    const choices = microphoneChoices(view());
+    const choices = settingsMicrophones(view());
     if (JSON.stringify(choices) === before) return;
     const current = app.device().microphone ?? AUTO_MICROPHONE;
     const label = anchor.querySelector("span");

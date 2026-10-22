@@ -17,15 +17,7 @@ import { formatClock, formatUsd } from "../format";
 import { type LanguageGroup, languageSelectHTML, normalizeLanguages } from "../languages";
 import { bindingLabels } from "../keys";
 import { type MessagingView, messagingHTML } from "../messaging";
-import {
-  DROPDOWN_ROOM,
-  MENU_ROOM,
-  automaticMicrophoneLabel,
-  automaticMicrophoneShort,
-  cutToFit,
-  microphoneText,
-  shortMicrophoneName,
-} from "../microphone";
+import { AUTO_MICROPHONE, microphoneChoices } from "../microphone";
 import type { LocalView } from "../local-models";
 import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
 import { pricingNote } from "../pricing";
@@ -56,7 +48,6 @@ export const SIZES: Choice[] = [
   { value: "150", get label() { return t("settings.019"); }, get desc() { return t("settings.020"); } },
   { value: "194", get label() { return t("settings.021"); }, get desc() { return t("settings.022"); } },
 ];
-export const AUTO_MICROPHONE = "";
 export const UI_LANGUAGES: Choice[] = [
   { value: "zh-TW", get label() { return t("settings.023"); } },
   { value: "en", get label() { return t("locale.english"); } },
@@ -163,26 +154,8 @@ export const workerCostCap = (v: SettingsView): string => String(v.brain?.worker
 /** The catalog once it is read. */
 const catalogOf = (v: SettingsView): ModelCatalog | null => (typeof v.catalog === "object" ? v.catalog : null);
 
-/**
- * The microphones: automatic first, then each one found, and the one chosen before if it is not
- * plugged in now. The list has their whole names, and the automatic choice the short name of the
- * one it uses; the closed dropdown has short names cut to fit it, and the tooltips the whole ones.
- */
-export function microphoneChoices(v: SettingsView): Choice[] {
-  const { devices } = v;
-  const choices: Choice[] = [
-    {
-      value: AUTO_MICROPHONE,
-      get label() { return automaticMicrophoneLabel(devices, MENU_ROOM); },
-      get short() { return automaticMicrophoneShort(devices); },
-      get title() { return automaticMicrophoneLabel(devices); },
-    },
-    ...(devices?.devices ?? []).map((d) => ({ value: d.name, label: d.name, short: cutToFit(shortMicrophoneName(d.name), DROPDOWN_ROOM) })),
-  ];
-  const saved = v.device.microphone;
-  if (saved === null || choices.some((c) => c.value === saved)) return choices;
-  return [...choices, { value: saved, label: t("mic.disconnected", { p0: saved }), short: microphoneText("mic.disconnected", saved, DROPDOWN_ROOM) }];
-}
+/** The microphones of the settings page, fitted to its dropdown. */
+export const settingsMicrophones = (v: SettingsView): Choice[] => microphoneChoices(v.devices, v.device.microphone, true);
 
 /** The bars of the microphone's meter: 3 px wide and about 2 px apart across its dropdown, as the short meter's are. */
 const MIC_METER_SEGMENTS = 46;
@@ -413,7 +386,7 @@ function dictationHTML(v: SettingsView): string {
       // The meter under the dropdown, as wide as it, moves with the microphone's loudness while
       // this tab is open.
       micRow({
-        choices: microphoneChoices(v),
+        choices: settingsMicrophones(v),
         current: d.microphone ?? AUTO_MICROPHONE,
         selAttrs: ' data-k="mic"',
         meter: { place: "after", segments: MIC_METER_SEGMENTS },

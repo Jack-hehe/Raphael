@@ -23,10 +23,10 @@ from __future__ import annotations
 import enum
 import json
 import sqlite3
-import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
+from ..clock import wall_clock_ms
 from .mishearing import may_become_rule
 from .textnorm import apply_replacements, replacement_key
 
@@ -38,10 +38,6 @@ _SOURCES = ("manual", "suggested", "learned")
 _PENDING, _RULE, _BLOCKED = "pending", "rule", "blocked"
 # A pair that is fit for it becomes a replacement rule when it is seen for the second time.
 RULE_AFTER_SIGHTINGS = 2
-
-
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
 
 
 @dataclass
@@ -119,7 +115,7 @@ def _keeps_replacements_working(
 
 class DictionaryStore:
     def __init__(
-        self, conn: sqlite3.Connection, now_ms: Callable[[], int] = _wall_clock_ms
+        self, conn: sqlite3.Connection, now_ms: Callable[[], int] = wall_clock_ms
     ) -> None:
         self._conn = conn
         self._now_ms = now_ms

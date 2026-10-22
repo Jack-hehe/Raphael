@@ -22,10 +22,10 @@ Nothing here logs a name, an argument or a result.
 
 import logging
 import sqlite3
-import time
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
+from ..clock import wall_clock_ms
 from ..integrations.audit import AuditLog
 from .commands import COMMANDS
 from .plugins import PluginHub, PluginResult
@@ -41,10 +41,6 @@ WEB_TOOLS = ("weather", "web_search", "local_time")
 BUILTIN_SERVER = "Raphael"
 
 
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
-
-
 class ToolGate:
     """The registry of tiers and the door to the plugins' tools. Built once for the app and shared
     by the fast tier and the background worker.
@@ -58,7 +54,7 @@ class ToolGate:
         plugins: PluginHub | None = None,
         *,
         conn: sqlite3.Connection | None = None,
-        now_ms: Callable[[], int] = _wall_clock_ms,
+        now_ms: Callable[[], int] = wall_clock_ms,
     ) -> None:
         self._plugins = plugins
         self._registry = ToolRegistry(

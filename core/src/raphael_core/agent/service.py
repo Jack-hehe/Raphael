@@ -66,12 +66,13 @@ import httpx
 from ..background.brief import background_block, background_line
 from ..background.tasks import Refused
 from ..brain.catalog import CatalogEntry
+from ..clock import wall_clock_ms
 from ..integrations.pool import McpPool
 from ..brain.openrouter import OpenRouterClient
 from ..brain.secrets import KeyStore
 from ..brain.settings import DEFAULTS, SettingsStore
 from ..brain.spend import SpendTracker
-from ..protocol import INVALID_PARAMS, RpcError
+from ..protocol import invalid_params
 from ..router import Router as RpcRouter
 from .answers import Voice
 from .cities import cities_in
@@ -204,10 +205,6 @@ def _copy_text(turn: Turn) -> str:
     return f"{text}\n{detail}"
 
 
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
-
-
 def _prefix(language: str, which: str) -> str:
     """The prefix of `language` that `which` names ("understood", "negative", ...); `which` itself
     when it is a prefix already, as the model wrote it."""
@@ -219,14 +216,10 @@ def _text_or(value: Any, default: str) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else default
 
 
-def _invalid(message: str) -> RpcError:
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
-
-
 def _str(params: dict, name: str, *, blank: bool = False) -> str:
     value = params.get(name)
     if not isinstance(value, str) or (not blank and not value):
-        raise _invalid(f"{name} must be {'a string' if blank else 'a non-empty string'}")
+        raise invalid_params(f"{name} must be {'a string' if blank else 'a non-empty string'}")
     return value
 
 
@@ -235,7 +228,7 @@ def _opt_int(params: dict, name: str) -> int | None:
     if value is None:
         return None
     if type(value) is not int:
-        raise _invalid(f"{name} must be a whole number")
+        raise invalid_params(f"{name} must be a whole number")
     return value
 
 
@@ -291,7 +284,7 @@ class AgentService:
         keys: KeyStore,
         *,
         actions: DeviceActions,
-        now_ms: Callable[[], int] = _wall_clock_ms,
+        now_ms: Callable[[], int] = wall_clock_ms,
         tz: tzinfo | None = None,
         clock: Callable[[], float] = time.monotonic,
         http: httpx.AsyncClient | None = None,
@@ -400,11 +393,11 @@ class AgentService:
         source = params.get("source")
         if source is not None:
             if not isinstance(source, str) or not _SOURCE.fullmatch(source):
-                raise _invalid("source must be a short lower-case word")
+                raise invalid_params("source must be a short lower-case word")
             ask.source = source
         target_app = params.get("target_app")  # for the apps to come; not used yet
         if target_app is not None and not isinstance(target_app, str):
-            raise _invalid("target_app must be a string or null")
+            raise invalid_params("target_app must be a string or null")
         self._last_language = ask.language
         if self._was_cancelled(ask.session_id):
             # Esc came first: the request is answered as cancelled and nothing runs or is kept.
@@ -991,7 +984,7 @@ class AgentService:
         confirm_id = _str(params, "id")
         approved = params.get("approved")
         if type(approved) is not bool:
-            raise _invalid("approved must be true or false")
+            raise invalid_params("approved must be true or false")
         self._expire(self._confirmations.sweep())
         resolution = self._confirmations.resolve(confirm_id, approved)
         pending = resolution.pending

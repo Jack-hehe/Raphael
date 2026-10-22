@@ -46,8 +46,9 @@ from dataclasses import asdict, dataclass
 from datetime import tzinfo
 from typing import Any
 
+from ..clock import wall_clock_ms
 from ..languages import chinese_variant, language_groups
-from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
+from ..protocol import INTERNAL_ERROR, RpcError, invalid_params
 from ..router import Router
 from ..textjoin import join_segments
 from .catalog import ROLE_OF_SETTING, ROLES, CatalogEntry, Role, catalog_view, choice_problem, find
@@ -102,42 +103,33 @@ _SPEND_DAYS = 30
 PRUNE_INTERVAL_MS = _DAY_MS
 
 
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
-
-
 # --- params -------------------------------------------------------------------------------------
-
-
-def _invalid(message: str) -> RpcError:
-    """An INVALID_PARAMS error. `message` names a param, never a value: it may be the key."""
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
 
 
 def _required(params: dict, name: str) -> Any:
     if name not in params:
-        raise _invalid(f"{name} is required")
+        raise invalid_params(f"{name} is required")
     return params[name]
 
 
 def _str(params: dict, name: str) -> str:
     value = _required(params, name)
     if not isinstance(value, str):
-        raise _invalid(f"{name} must be a string")
+        raise invalid_params(f"{name} must be a string")
     return value
 
 
 def _opt_str(params: dict, name: str) -> str | None:
     value = params.get(name)
     if value is not None and not isinstance(value, str):
-        raise _invalid(f"{name} must be a string")
+        raise invalid_params(f"{name} must be a string")
     return value
 
 
 def _whole(value: Any, name: str) -> int:
     # `type is int`, not isinstance: True is an int to Python, but it is no id and no time.
     if type(value) is not int or not (-_SQLITE_MAX_INT - 1 <= value <= _SQLITE_MAX_INT):
-        raise _invalid(f"{name} must be a whole number")
+        raise invalid_params(f"{name} must be a whole number")
     return value
 
 
@@ -153,7 +145,7 @@ def _opt_int(params: dict, name: str) -> int | None:
 def _non_negative(params: dict, name: str) -> float:
     value = _required(params, name)
     if type(value) not in (int, float) or value < 0:
-        raise _invalid(f"{name} must be a number, 0 or more")
+        raise invalid_params(f"{name} must be a number, 0 or more")
     return value
 
 
@@ -161,7 +153,7 @@ def _milliseconds(params: dict, name: str) -> int:
     """A duration in ms. Any number is taken, since a float is a fair way to say 312.6 ms."""
     value = _non_negative(params, name)
     if value > _SQLITE_MAX_INT:
-        raise _invalid(f"{name} is too large")
+        raise invalid_params(f"{name} is too large")
     return round(value)
 
 
@@ -170,7 +162,7 @@ def _opt_strings(params: dict, name: str) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, list) or not all(isinstance(text, str) for text in value):
-        raise _invalid(f"{name} must be a list of strings")
+        raise invalid_params(f"{name} must be a list of strings")
     return value
 
 
@@ -180,9 +172,9 @@ def _store_call() -> Iterator[None]:
     try:
         yield
     except KeyError as exc:
-        raise _invalid(f"unknown key {exc.args[0]!r}" if exc.args else "unknown key") from exc
+        raise invalid_params(f"unknown key {exc.args[0]!r}" if exc.args else "unknown key") from exc
     except (ValueError, TypeError) as exc:
-        raise _invalid(str(exc)) from exc
+        raise invalid_params(str(exc)) from exc
 
 
 # --- the key and the status ---------------------------------------------------------------------
@@ -225,7 +217,7 @@ class Brain:
         conn: sqlite3.Connection,
         client: OpenRouterClient,
         keys: KeyStore,
-        now_ms: Callable[[], int] = _wall_clock_ms,
+        now_ms: Callable[[], int] = wall_clock_ms,
         *,
         key_check_timeout_s: float = KEY_CHECK_TIMEOUT_S,
         tz: tzinfo | None = None,
@@ -477,10 +469,10 @@ class Brain:
         letter case) or repeats is skipped, a blank one is invalid, and a word the user had
         dismissed is added all the same. Only the counts are logged."""
         if _required(params, "words") is None:
-            raise _invalid("words must be a list of strings")
+            raise invalid_params("words must be a list of strings")
         words = _opt_strings(params, "words")
         if len(words) > IMPORT_MAX:
-            raise _invalid(f"words takes at most {IMPORT_MAX} entries")
+            raise invalid_params(f"words takes at most {IMPORT_MAX} entries")
         with _store_call():
             added, skipped, invalid = self._dictionary.import_words(words)
         logger.info(
@@ -530,11 +522,11 @@ class Brain:
         logged, only how many."""
         corrections = _required(params, "corrections")
         if not isinstance(corrections, list):
-            raise _invalid("corrections must be a list")
+            raise invalid_params("corrections must be a list")
         pairs: list[tuple[str, str]] = []
         for correction in corrections:
             if not isinstance(correction, dict):
-                raise _invalid("corrections must be a list of objects")
+                raise invalid_params("corrections must be a list of objects")
             pairs.append((_str(correction, "word").strip(), _str(correction, "misheard").strip()))
         learned: list[str] = []
         rules: list[str] = []
