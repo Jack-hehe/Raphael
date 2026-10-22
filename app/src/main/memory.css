@@ -10,7 +10,7 @@
 /* the notes sit under the row of the memory, set in as its own */
 .slist > .row.mem-sub > .lbl { padding-left: var(--sp-6); min-width: 0; }
 .mem-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.mem-type { flex: none; font-size: var(--fs-xs); color: var(--text-3); }
+.mem-type { flex: none; min-width: 3.2em; font-size: var(--fs-xs); color: var(--text-3); }
 .mem-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--text); }
 .mem-tag { flex: none; padding: 0 6px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-xs); }
 /* a note's text, open under its row */
