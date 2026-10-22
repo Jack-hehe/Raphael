@@ -2781,7 +2781,7 @@ async def test_the_start_up_copes_with_no_local_model(tmp_path):
         await app.aclose()
 
 
-async def test_a_later_segment_that_fails_with_no_local_model_is_not_a_silent_cut(
+async def test_a_later_segment_that_fails_with_no_local_model_keeps_the_first_part_and_says_so(
     make_app, openrouter_mock
 ):
     kit = make_kit()
@@ -2797,10 +2797,14 @@ async def test_a_later_segment_that_fails_with_no_local_model_is_not_a_silent_cu
     openrouter_mock(app, first_then_fail)
     await wait_until(lambda: kit.engines)
     await app.call("models.local_delete", {"name": "qwen3-asr"})
-    await app.call("dictation.start", {"session_id": "s1"})
-    with pytest.raises(RpcError) as caught:
-        await app.call("dictation.stop", {"session_id": "s1", "target_app": "notepad.exe"})
-    assert caught.value.code == NO_LOCAL_MODEL
+    result = await dictate(app)
+    assert result["text"] == "one" and result["incomplete"] is True
+    assert (await app.call("history.latest"))["item"]["text"] == "one"
+
+
+async def test_a_complete_dictation_is_not_marked_incomplete(make_app):
+    app = make_app(make_kit())
+    assert (await dictate(app))["incomplete"] is False
 
 
 async def test_a_delete_that_fails_puts_the_fallback_back(make_app, tmp_path, monkeypatch):

@@ -689,9 +689,13 @@ class DictationService:
         assert session.recorder is not None and session.segmenter is not None
         mic_failed = session.recorder.error is not None or session.stalled
         text = join_segments(session.texts)
-        # Text with a stretch missing because the cloud failed and nothing backs it up is not
-        # pasted as if it were whole.
-        if session.failure is not None and (not text or _is_no_local_model(session.failure)):
+        # With no text at all the failure is the answer. A dictation whose later stretches the
+        # cloud could not hear, with no local model behind it, still delivers the first part and
+        # says `incomplete`; an agent's transcript is not delivered in pieces.
+        cut_short = session.failure is not None and _is_no_local_model(session.failure)
+        if session.failure is not None and (
+            not text or (cut_short and session.purpose == PURPOSE_AGENT)
+        ):
             raise _failure_as_error(session.failure)
         # The segmenter's own count, but not if it never heard this recording: a segmenter that is
         # used again still reports the last dictation until its first frames come.
@@ -747,7 +751,13 @@ class DictationService:
             self._cleaning.pop(session.id, None)
         if session.cancelled:  # while the brain cleaned the text: it has not kept it
             raise RpcError(NOT_FOUND, f"The dictation session {session_id!r} was cancelled")
-        return {**result, "audio_seconds": speech, "stt_ms": stt_ms, "silent": False}
+        return {
+            **result,
+            "audio_seconds": speech,
+            "stt_ms": stt_ms,
+            "silent": False,
+            "incomplete": cut_short,
+        }
 
     async def _agent_transcript(self, session: _Session, text: str, speech: float) -> dict:
         """The stop of an agent session: the transcript, normalized by the brain. Nothing is asked

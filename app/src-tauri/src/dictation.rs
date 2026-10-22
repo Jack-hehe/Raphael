@@ -647,8 +647,17 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             let delivery = this
                 .deliver(text.to_owned(), target.clone(), Some(&id))
                 .await;
+            let incomplete = reply
+                .get("incomplete")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             this.finish(&id, |this| {
-                let fallback = this.first_time(notices::notice_for_fallback(reason.as_deref()));
+                // Said every time: the end of what was said is missing.
+                let fallback = if incomplete {
+                    Some(notices::INCOMPLETE)
+                } else {
+                    this.first_time(notices::notice_for_fallback(reason.as_deref()))
+                };
                 this.report(delivery.as_ref(), fallback, true);
                 this.learn_after_paste(text, target.as_ref(), delivery);
             });
@@ -1778,7 +1787,7 @@ mod tests {
     use crate::hotkey::{CancelSwitch, HotkeyEvent};
     use crate::notices::{
         ASK_FAILED, BUDGET, CORE_DOWN, ELEVATED, FOCUS_CHANGED, GREETING, NO_MIC, NO_SOUND,
-        NO_LOCAL_MODEL as NO_LOCAL_NOTICE, NOT_READY, OFFLINE, WAITING,
+        INCOMPLETE, NO_LOCAL_MODEL as NO_LOCAL_NOTICE, NOT_READY, OFFLINE, WAITING,
     };
     use crate::overlay::{Mode, OverlayApi, OverlayEvent, Progress, takes_clicks};
     use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
@@ -3106,6 +3115,22 @@ mod tests {
         run(&c, HotkeyEvent::DictationDown, 0).await;
         run(&c, HotkeyEvent::DictationUp, 900).await;
         ends_with_notice(&c, NO_LOCAL_NOTICE.zh);
+        assert_eq!(c.phase(), Phase::Idle);
+    }
+
+    #[tokio::test]
+    async fn an_incomplete_result_is_pasted_and_then_says_so() {
+        let c = controller(
+            FakeCore::with(
+                "dictation.stop",
+                json!({"text": "前半段", "fallback_reason": null, "incomplete": true}),
+            ),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, HotkeyEvent::DictationDown, 0).await;
+        run(&c, HotkeyEvent::DictationUp, 900).await;
+        assert_eq!(c.paster().delivered(), vec!["前半段"]);
+        ends_with_notice(&c, INCOMPLETE.zh);
         assert_eq!(c.phase(), Phase::Idle);
     }
 
