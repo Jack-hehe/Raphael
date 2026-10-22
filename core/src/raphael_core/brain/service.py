@@ -49,8 +49,9 @@ from typing import Any
 from ..languages import chinese_variant, language_groups
 from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from ..router import Router
+from ..textjoin import join_segments
 from .catalog import ROLE_OF_SETTING, ROLES, CatalogEntry, Role, catalog_view, choice_problem, find
-from .cleanup import CleanupService
+from .cleanup import CleanupService, split_for_cleanup
 from .cloud_stt import CloudTranscriber
 from .dictionary import DictionaryStore, Learned
 from .history import HistoryItem, HistoryStore
@@ -334,6 +335,17 @@ class Brain:
         # The model reads the text as speech-to-text heard it, with the replacements but without
         # OpenCC: s2twp would hand it errors such as 隻要 for 只要, which it then keeps. The
         # normalized text is what is saved, and what is pasted when there is no cleanup.
+        # A long dictation is cleaned in pieces (cleanup.CLEANUP_CHUNK_CHARS), cut where
+        # speech-to-text ended a sentence, each made ready the way the whole is.
+        pieces = split_for_cleanup(raw_text)
+        chunks = (
+            [
+                (normalize_transcript(piece, rules, chinese=chinese), apply_replacements(piece, rules))
+                for piece in pieces
+            ]
+            if len(pieces) > 1
+            else None
+        )
         if session_id is not None:
             self._cleaning[session_id] = False
         try:
@@ -342,6 +354,7 @@ class Brain:
                 audio_seconds=audio_seconds,
                 heard=apply_replacements(raw_text, rules),
                 target_app=target_app,
+                chunks=chunks,
             )
         finally:
             # Taken in the same breath as the text is saved, so that no cancel comes in between.
@@ -349,7 +362,17 @@ class Brain:
         if result.model is not None and self._openrouter.state == "ok":
             # The model answered, so the time it took is a round trip to OpenRouter.
             self._openrouter.latency_ms = result.llm_ms
-        if result.cleaned:
+        if result.parts:
+            # Cleaned in pieces, some of which fell back: each is finished as it would be alone.
+            text = join_segments(
+                [
+                    finish_cleaned_text(part.text, rules, chinese=chinese)
+                    if part.cleaned
+                    else remove_stutters(part.text)
+                    for part in result.parts
+                ]
+            )
+        elif result.cleaned:
             text = finish_cleaned_text(result.text, rules, chinese=chinese)
         else:
             # A fallback is the normalized text already; doing it twice could repeat a replacement.

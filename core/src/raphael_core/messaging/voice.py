@@ -14,7 +14,7 @@ from typing import Any
 
 import numpy as np
 
-from ..device.dictation import join_segments
+from ..textjoin import join_segments
 from .core import MAX_VOICE_SECONDS, VoiceTooLong
 
 SAMPLE_RATE = 16_000

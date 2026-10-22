@@ -28,7 +28,7 @@ from typing import Any
 
 import numpy as np
 
-from raphael_core.device.dictation import join_segments
+from raphael_core.textjoin import join_segments
 from raphael_core.protocol import BUDGET_EXCEEDED, NO_LOCAL_MODEL, NOT_CONFIGURED, RpcError
 
 logger = logging.getLogger(__name__)
