@@ -11,17 +11,18 @@ and to the assistant's history, and told to the app:
 - `worker.report {task_id, state, prefix, text}`: Raphael's report, a line to be said on the
   overlay when the user is not in the middle of something (the shell waits for that);
 - `worker.changed {task_id, state, running, model_calls, tool_calls, cost_usd}`: the task moved on.
-  `running` is whether a task is under way, which the tray's "stop the background task" follows.
+  `running` is whether a task is under way, which the tray's "stop the background task" follows;
+  the window reads the conversation again, which shows the task's steps.
 
 A report is the model's own (`告。` and a line, with a longer version for the history) when the task
 finished. When it did not (a limit, the user's stop, a worker that died, a model that failed) it is a
 fixed line of the persona with the number of tool calls made, and nothing more is spent for it.
 
-RPC methods, for the app: `worker.list {limit?}`, `worker.get {id}` (with the steps; never an
-argument or a result), `worker.cancel {task_id?}` (the task that runs, or the one named) and
+RPC methods, for the app: `worker.cancel {task_id?}` (the task that runs, or the one named),
 `worker.rerun {task_id}` (a task that was interrupted, stopped, ran out of a limit or failed, run
-again as a new task). The assistant's history shows each task with the turn that handed it over
-(`tasks_for_turns`).
+again as a new task) and `worker.announce_pending`. The tasks themselves are read with the
+conversation: the assistant's history shows each task with the turn that handed it over
+(`tasks_for_turns`), with its steps but never an argument or a result.
 
 A task that was queued or running when the core ended (or when it started again after a crash) is
 interrupted with a report, and its turn of the history is completed with it, so that the
@@ -261,8 +262,6 @@ class BackgroundService:
 
     def register(self, router: Router) -> None:
         for method, handler in {
-            "worker.list": self._list,
-            "worker.get": self._get,
             "worker.cancel": self._cancel,
             "worker.rerun": self._rerun,
             "worker.announce_pending": self._announce_pending,
@@ -758,57 +757,6 @@ class BackgroundService:
         )
 
     # --- the methods of the app -----------------------------------------------------------------
-
-    @staticmethod
-    def _view(task: Task) -> dict[str, Any]:
-        return {
-            "id": task.id,
-            "created_at_ms": task.created_at_ms,
-            "started_at_ms": task.started_at_ms,
-            "finished_at_ms": task.finished_at_ms,
-            "state": task.state,
-            "text": task.text,
-            "report": None
-            if task.report_text is None
-            else {
-                "prefix": task.report_prefix,
-                "text": task.report_text,
-                "detail": task.report_detail,
-            },
-            "reason": task.reason,
-            "model_calls": task.model_calls,
-            "tool_calls": task.tool_calls,
-            "cost_usd": task.cost_usd,
-        }
-
-    async def _list(self, params: dict) -> dict:
-        limit = params.get("limit", 20)
-        if type(limit) is not int:
-            raise _invalid("limit must be a whole number")
-        return {"tasks": [self._view(task) for task in self._store.list(limit)]}
-
-    async def _get(self, params: dict) -> dict:
-        task_id = params.get("id")
-        if type(task_id) is not int:
-            raise _invalid("id must be a whole number")
-        task = self._store.get(task_id)
-        if task is None:
-            raise RpcError(NOT_FOUND, "There is no such task")
-        steps = [
-            {
-                "n": step.n,
-                "at_ms": step.at_ms,
-                "kind": step.kind,
-                "tool": step.tool,
-                "server": step.server,
-                "tier": step.tier,
-                "outcome": step.outcome,
-                "cost_usd": step.cost_usd,
-                "ms": step.ms,
-            }
-            for step in self._store.steps(task_id)
-        ]
-        return {"task": {**self._view(task), "steps": steps}}
 
     async def _rerun(self, params: dict) -> dict:
         """Run a task that did not finish again, as a new task, with a new turn in the history that

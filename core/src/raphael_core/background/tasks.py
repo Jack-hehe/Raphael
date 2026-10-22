@@ -18,20 +18,13 @@ user said, so tasks are pruned with the assistant's history and go with its "cle
 Use it on the thread that owns `conn` (the event loop). Nothing here logs a task.
 """
 
-# Postponed annotations: TaskStore has a method called `list`, which would otherwise hide the builtin
-# in the annotations of the methods defined after it.
-from __future__ import annotations
-
 import sqlite3
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 QUEUED, RUNNING = "queued", "running"
-ACTIVE_STATES = (QUEUED, RUNNING)
 FINAL_STATES = ("done", "failed", "limit", "cancelled", "interrupted")
-LIST_DEFAULT = 20
-LIST_MAX = 100
 
 
 class Refused(Exception):
@@ -126,9 +119,6 @@ class TaskStore:
                 (self._now_ms(), task_id),
             )
 
-    def set_state(self, task_id: int, state: str) -> None:
-        with self._conn:
-            self._conn.execute("UPDATE worker_tasks SET state = ? WHERE id = ?", (state, task_id))
 
     def progress(self, task_id: int, *, model_calls: int, tool_calls: int, cost_usd: float) -> None:
         """What a running task has used so far."""
@@ -227,13 +217,6 @@ class TaskStore:
         ).fetchone()
         return None if row is None else Task(**dict(row))
 
-    def list(self, limit: int = LIST_DEFAULT) -> list[Task]:
-        """Newest first."""
-        limit = min(max(limit, 1), LIST_MAX)
-        rows = self._conn.execute(
-            f"SELECT {_TASK_COLUMNS} FROM worker_tasks ORDER BY id DESC LIMIT ?", (limit,)
-        )
-        return [Task(**dict(row)) for row in rows]
 
     def for_turns(self, turn_ids: Iterable[int]) -> dict[int, Task]:
         """The task each of `turn_ids` handed over, if it handed one over (the newest, should
@@ -260,10 +243,6 @@ class TaskStore:
         )
         return [Step(**dict(row)) for row in rows]
 
-    def count_state(self, state: str) -> int:
-        return self._conn.execute(
-            "SELECT count(*) FROM worker_tasks WHERE state = ?", (state,)
-        ).fetchone()[0]
 
     def interrupt_unfinished(
         self,

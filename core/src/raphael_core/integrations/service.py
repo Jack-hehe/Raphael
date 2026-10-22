@@ -2,8 +2,9 @@
 
 The window manages the plugins with:
 
-- `integrations.list` the servers: name, how to reach it, whether it is on, how it is doing, how many
-  tools it has and how many are on;
+- `toolsets.list` the servers of the 「連接」 tab (`toolsets.py` groups their tools): for each, its
+  name, how to reach it, whether it is on, how it is doing, how many tools it has and how many are
+  on, and the tools kept, each on or off and a `kind` (`write` or `read`, for the screen only);
 - `integrations.catalog` the store (`catalog`): every service that can be added with one login, and
   the server each is added as, if it is;
 - `integrations.connect {catalog_id}` add a service of the store, or `{id}` sign in to a server again:
@@ -20,14 +21,13 @@ The window manages the plugins with:
 - `integrations.set_enabled {id, enabled}` the whole service on or off; `integrations.disconnect {id}`
   revokes the login if the server takes revocations (a device login has no revocation: the user
   takes it back on the service's page), forgets the secrets and removes the server;
-- `integrations.refresh {id}` connect, read the tool list, keep it; `integrations.tools {id}` the
-  tools kept, each on or off and a `kind` (`write` or `read`, for the screen only);
+- `integrations.refresh {id}` connect, read the tool list, keep it, and answer with the server and
+  its tools;
 - `integrations.set_tool_enabled {id, tool, enabled}` the user's decision about one tool. Every tool
   is on until the user turns it off, new ones and ones described differently later included;
   `integrations.set_tools_enabled {id, tools, enabled}` does the same for a list of tools at once,
   all or none, with one write of the file;
-- `integrations.audit {limit}` the latest calls;
-- `toolsets.list` the servers of the 「連接」 tab with their tools (`toolsets.py`).
+- `integrations.audit {limit}` the latest calls.
 
 The assistant reaches the tools through `PluginHub` (`agent.plugins`): `offered`, `tier_of`,
 `call` and `record_unrun`, by way of the one gate (`agent.gate`). A tool that is on has the tier
@@ -143,7 +143,6 @@ class IntegrationsService:
 
     def register(self, router: Router) -> None:
         methods = {
-            "integrations.list": self._list,
             "integrations.catalog": self._catalog,
             "integrations.connect": self._connect,
             "integrations.connect_cancel": self._connect_cancel,
@@ -151,7 +150,6 @@ class IntegrationsService:
             "integrations.set_enabled": self._set_enabled,
             "integrations.disconnect": self._disconnect,
             "integrations.refresh": self._refresh,
-            "integrations.tools": self._tools,
             "integrations.set_tool_enabled": self._set_tool_enabled,
             "integrations.set_tools_enabled": self._set_tools_enabled,
             "integrations.audit": self._audit_list,
@@ -218,8 +216,6 @@ class IntegrationsService:
 
     # --- the methods of the window --------------------------------------------------------------
 
-    async def _list(self, params: dict) -> dict:
-        return {"servers": [self._view(server) for server in self._config.servers()]}
 
     async def _catalog(self, params: dict) -> dict:
         added = {s.catalog_id: s.id for s in self._config.servers() if s.catalog_id}
@@ -449,8 +445,6 @@ class IntegrationsService:
     def _tool_views(self, server: ServerConfig) -> list[dict[str, Any]]:
         return [self._tool_view(server, tool) for tool in server.tools]
 
-    async def _tools(self, params: dict) -> dict:
-        return {"tools": self._tool_views(self._server(params))}
 
     async def _set_tool_enabled(self, params: dict) -> dict:
         server = self._server(params)

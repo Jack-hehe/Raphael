@@ -45,7 +45,6 @@ METHODS = [
     "dictionary.import",
     "dictionary.delete",
     "dictionary.auto_add",
-    "dictionary.dismiss",
     "dictionary.learn",
     "settings.get",
     "settings.set",
@@ -196,6 +195,12 @@ def seed_history(conn, count, start_ms=1_000):
     store = HistoryStore(conn)
     for i in range(count):
         store.add(item(created_at_ms=start_ms + i, text=f"第{i}句", raw_text=f"原{i}"))
+
+
+def dismiss(conn, word):
+    """Dismiss `word` the one way the user can: by deleting it after it was learned."""
+    store = DictionaryStore(conn)
+    store.delete(store.add(word, source="learned").id)
 
 
 def assert_no_traceback_logged(caplog):
@@ -690,9 +695,7 @@ BAD_PARAMS = [
     ("dictionary.learn", {"corrections": [{"word": "x"}]}, "dictionary.learn: no misheard"),
     ("dictionary.learn", {"corrections": [{"word": 1, "misheard": "y"}]}, "learn: word number"),
     ("dictionary.learn", {"corrections": ["x"]}, "dictionary.learn: item str"),
-    ("dictionary.dismiss", {}, "dictionary.dismiss: no word"),
-    ("dictionary.dismiss", {"word": 5}, "dictionary.dismiss: word number"),
-    ("dictionary.dismiss", {"word": " "}, "dictionary.dismiss: blank word"),
+
     ("settings.set", {}, "settings.set: nothing"),
     ("settings.set", {"key": "language"}, "settings.set: no value"),
     ("settings.set", {"value": "ja"}, "settings.set: no key"),
@@ -823,8 +826,8 @@ async def test_dictionary_learn_adds_the_corrected_words(router):
     }
 
 
-async def test_dictionary_learn_reports_only_what_changed(router):
-    await router.call("dictionary.dismiss", {"word": "Typeless"})
+async def test_dictionary_learn_reports_only_what_changed(router, conn):
+    dismiss(conn, "Typeless")
     await router.call("dictionary.add", {"word": "手機", "misheard": ["首機"]})
     learned = await router.call(
         "dictionary.learn",
@@ -970,7 +973,7 @@ async def test_auto_add_skips_known_words_in_any_letter_case(router, conn):
 
 async def test_auto_add_skips_a_word_the_user_dismissed(router, conn):
     seed_mentions(conn, "OpenRouter", 3, NOW_MS - DAY_MS)
-    DictionaryStore(conn).dismiss("OpenRouter")
+    dismiss(conn, "OpenRouter")
     assert await auto_added(router) == []
 
 
@@ -1718,7 +1721,7 @@ async def test_import_counts_blank_words_as_invalid(router):
 
 
 async def test_import_takes_a_word_the_user_dismissed_and_forgets_the_dismissal(router, conn):
-    DictionaryStore(conn).dismiss("OpenRouter")
+    dismiss(conn, "OpenRouter")
     assert await imported(router, ["openrouter"]) == {"added": 1, "skipped": 0, "invalid": 0}
     assert DictionaryStore(conn).dismissed() == set()
 

@@ -291,7 +291,7 @@ class Brain:
             "dictionary.import": self._dictionary_import,
             "dictionary.delete": self._dictionary_delete,
             "dictionary.auto_add": self._dictionary_auto_add,
-            "dictionary.dismiss": self._dictionary_dismiss,
+
             "dictionary.learn": self._dictionary_learn,
             "settings.get": self._settings_get,
             "settings.set": self._settings_set,
@@ -514,11 +514,6 @@ class Brain:
             logger.info("Added %d words to the dictionary by themselves", len(words))
         return {"words": words}
 
-    async def _dictionary_dismiss(self, params: dict) -> dict:
-        word = _str(params, "word")
-        with _store_call():
-            self._dictionary.dismiss(word)
-        return {}
 
     async def _dictionary_learn(self, params: dict) -> dict:
         """`{corrections: [{word, misheard}]}` from the app's correction watch: the user replaced

@@ -116,21 +116,6 @@ def test_replacements_list_every_form_and_skip_words_without_any(conn):
     assert d.replacements() == [("open router", "OpenRouter"), ("open rooter", "OpenRouter")]
 
 
-def test_dismiss_remembers_words(conn):
-    d = DictionaryStore(conn)
-    assert d.dismissed() == set()
-    d.dismiss("Tailscale")
-    d.dismiss("  Tailscale ")
-    d.dismiss("GPT-SoVITS")
-    assert d.dismissed() == {"Tailscale", "GPT-SoVITS"}
-
-
-def test_dismissing_an_empty_word_is_rejected(conn):
-    d = DictionaryStore(conn)
-    with pytest.raises(ValueError, match="empty"):
-        d.dismiss("  ")
-    assert d.dismissed() == set()
-
 
 def test_unknown_source_is_rejected(conn):
     d = DictionaryStore(conn)
@@ -307,7 +292,7 @@ def test_the_users_own_rules_are_not_judged(conn):
 
 def test_learn_skips_a_dismissed_word_in_any_letter_case(conn):
     d = DictionaryStore(conn)
-    d.dismiss("tailscale")
+    d.delete(d.add("tailscale", source="learned").id)  # deleted, so dismissed
     assert learn(d, "Tailscale", "tail scale") is False
     assert d.list() == []
 

@@ -375,14 +375,7 @@ class DictionaryStore:
         """
         return _rules(self.list())
 
-    def dismiss(self, word: str) -> None:
-        """Remember that the user does not want `word` suggested again."""
-        word = _clean_word(word)
-        with self._conn:
-            self._conn.execute(
-                "INSERT OR IGNORE INTO dismissed_suggestions (word) VALUES (?)", (word,)
-            )
-
     def dismissed(self) -> set[str]:
+        """The words the user does not want added again: the learned words they deleted."""
         rows = self._conn.execute("SELECT word FROM dismissed_suggestions")
         return {row["word"] for row in rows}

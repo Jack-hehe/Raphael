@@ -19,7 +19,7 @@ from raphael_core.background.service import MAX_QUEUED, report_from
 from raphael_core.background.tasks import Refused
 from raphael_core.brain.openrouter import OpenRouterError
 from raphael_core.brain.settings import SettingsStore
-from raphael_core.protocol import INVALID_PARAMS, NOT_FOUND, RpcError
+from raphael_core.protocol import INVALID_PARAMS, RpcError
 
 from .conftest import ARGUMENT, RESULT, TASK_TEXT, call, report, turn, until
 
@@ -530,28 +530,21 @@ async def test_tasks_left_unfinished_by_the_last_process_are_interrupted_when_th
     assert second.client.chat_calls == [] and second.notifications == []  # nothing was started again
 
 
-async def test_the_app_lists_the_tasks_and_reads_one_with_its_steps_and_never_its_arguments(make_rig):
+async def test_the_conversation_shows_a_task_with_its_steps_and_never_its_arguments(make_rig):
     rig = make_rig()
     await look_twice_then_report(rig)
     task_id = rig.submit()
     await rig.wait_for_reports()
-    listed = (await rig.rpc.call("worker.list", {}))["tasks"]
-    assert [t["id"] for t in listed] == [task_id] and listed[0]["state"] == "done"
-    assert listed[0]["report"] == {"prefix": "Notice", "text": "All looked up.", "detail": "Two things were found."}
-    got = (await rig.rpc.call("worker.get", {"id": task_id}))["task"]
-    assert [(s["n"], s["kind"], s["tool"], s["tier"], s["outcome"]) for s in got["steps"]] == [
-        (1, "model", None, None, "ok"),
-        (2, "tool", "look", "T1", "ok"),
-        (3, "model", None, None, "ok"),
+    rig.service.attach_turn(task_id, 7)
+    brief, steps = rig.service.tasks_for_turns([7, 8])[7]
+    assert (brief["id"], brief["state"], brief["tool_calls"]) == (task_id, "done", 1)
+    assert [(s["kind"], s["tool"], s["server"], s["outcome"]) for s in steps] == [
+        ("model", None, None, "ok"),
+        ("tool", "look", "Notes", "ok"),
+        ("model", None, None, "ok"),
     ]
-    assert ARGUMENT not in json.dumps(got) and RESULT not in json.dumps(got)
-    with pytest.raises(RpcError) as error:
-        await rig.rpc.call("worker.get", {"id": 999})
-    assert error.value.code == NOT_FOUND
-    for method, params in (("worker.get", {"id": "1"}), ("worker.list", {"limit": "3"})):
-        with pytest.raises(RpcError) as error:
-            await rig.rpc.call(method, params)
-        assert error.value.code == INVALID_PARAMS
+    shown = json.dumps([brief, steps])
+    assert ARGUMENT not in shown and RESULT not in shown and TASK_TEXT not in shown
 
 
 async def test_old_tasks_are_pruned_and_cleared_but_one_that_runs_is_kept(make_rig):

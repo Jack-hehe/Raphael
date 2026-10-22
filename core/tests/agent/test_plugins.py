@@ -84,8 +84,7 @@ class Plugins:
             "integrations.add", {"name": name, "transport": "stdio", "command": "unused"}
         )
         server_id = added["server"]["id"]
-        await self.rpc.call("integrations.refresh", {"id": server_id})
-        tools = (await self.rpc.call("integrations.tools", {"id": server_id}))["tools"]
+        tools = (await self.rpc.call("integrations.refresh", {"id": server_id}))["tools"]
         for tool in tools:
             await self.set_on(server_id, tool["name"], only.get(tool["name"]) is not None)
         # a tier above the one of a tool that is on: the tool asks first
@@ -500,7 +499,7 @@ async def test_a_new_request_replaces_the_question_and_that_is_a_no(rig, plugins
 
 async def test_a_yes_for_a_tool_the_user_took_back_runs_nothing(rig, plugins, client, calls):
     asked = await ask_for_note(rig, plugins, client)
-    [server] = (await plugins.rpc.call("integrations.list"))["servers"]
+    [server] = (await plugins.rpc.call("toolsets.list"))["groups"]
     await plugins.set_on(server["id"], "note", False)
     done = await rig.confirm(asked["confirm"]["id"], True)
     assert (done["prefix"], done["text"]) == ("否", phrase("zh-TW", "failed"))
@@ -518,7 +517,7 @@ async def test_a_yes_to_t2_does_not_cover_a_tool_made_t3_meanwhile(rig, plugins,
 
 async def test_a_yes_to_t3_still_covers_a_tool_made_t2_meanwhile(rig, plugins, client, calls):
     asked = await ask_for_note(rig, plugins, client, "T3")
-    [server] = (await plugins.rpc.call("integrations.list"))["servers"]
+    [server] = (await plugins.rpc.call("toolsets.list"))["groups"]
     plugins.hub.strict["note"] = Tier.T2
     client.replies.append(spoken("了", "記下了。"))
     assert (await rig.confirm(asked["confirm"]["id"], True))["prefix"] == "了"

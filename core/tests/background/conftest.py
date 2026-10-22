@@ -230,8 +230,7 @@ class Plugins:
             "integrations.add", {"name": name, "transport": "stdio", "command": "unused"}
         )
         server_id = added["server"]["id"]
-        await self.rpc.call("integrations.refresh", {"id": server_id})
-        tools = (await self.rpc.call("integrations.tools", {"id": server_id}))["tools"]
+        tools = (await self.rpc.call("integrations.refresh", {"id": server_id}))["tools"]
         for tool in tools:
             await self.set_on(server_id, tool["name"], only.get(tool["name"]) is not None)
         # a tier above the one of a tool that is on: the tool would have to ask

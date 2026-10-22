@@ -224,7 +224,7 @@ def smoke_without_a_key(executable: Path) -> dict:
             # The plugins are part of the bundle too, with the MCP SDK and what it imports. A server
             # whose program does not exist makes the SDK load and fail the one way that proves it:
             # "not_found". A bundle that left a module of the SDK out fails another way ("error").
-            require(rpc.call("integrations.list") == {"servers": []}, "The plugins did not start empty")
+            require(rpc.call("toolsets.list") == {"groups": []}, "The plugins did not start empty")
             added = rpc.call("integrations.add", {"name": "Smoke", "transport": "stdio",
                                                   "command": "raphael-smoke-no-such-program"})["server"]
             refreshed = rpc.call("integrations.refresh", {"id": added["id"]})["server"]
@@ -291,7 +291,8 @@ def smoke_with_the_fake_llm(executable: Path) -> dict:
             task = rpc.wait_for_notification("worker.report", timeout=90)
             require(task["state"] == "done" and task["text"] == "The scripted task saw 1 results.",
                     f"The background worker did not carry the task out: {task['state']}")
-            steps = rpc.call("worker.get", {"id": task["task_id"]})["task"]["steps"]
+            turns = rpc.call("agent.history.list")["turns"]
+            steps = next(turn for turn in turns if turn["route"] == "delegate")["steps"]
             require([step["kind"] for step in steps] == ["model", "tool", "model"],
                     "The background worker's steps were not written down")
             returncode = shut_down(rpc, root)

@@ -1090,7 +1090,6 @@ EXPECTED_METHODS = {
     "dictionary.import",
     "dictionary.delete",
     "dictionary.auto_add",
-    "dictionary.dismiss",
     "settings.get",
     "settings.set",
     "secrets.status",
@@ -1098,7 +1097,6 @@ EXPECTED_METHODS = {
     "secrets.clear_openrouter_key",
     "status.get",
     "status.check_openrouter",
-    "integrations.list",
     "integrations.catalog",
     "integrations.connect",
     "integrations.connect_cancel",
@@ -1106,10 +1104,10 @@ EXPECTED_METHODS = {
     "integrations.set_enabled",
     "integrations.disconnect",
     "integrations.refresh",
-    "integrations.tools",
     "integrations.set_tool_enabled",
     "integrations.set_tools_enabled",
     "integrations.audit",
+    "toolsets.list",
 }
 
 
@@ -1230,7 +1228,7 @@ async def test_the_plugins_are_there_and_keep_their_secrets_in_memory_with_the_f
     make_app, memory_keyring, tmp_path
 ):
     app = make_app()
-    assert await app.call("integrations.list") == {"servers": []}
+    assert await app.call("toolsets.list") == {"groups": []}
     added = await app.call(
         "integrations.add",
         {
@@ -2087,7 +2085,7 @@ async def test_closing_the_app_ends_the_assistants_requests_before_closing_the_c
 
 # --- the background worker --------------------------------------------------------------------
 
-WORKER_METHODS = {"worker.list", "worker.get", "worker.cancel"}
+WORKER_METHODS = {"worker.cancel", "worker.rerun", "worker.announce_pending"}
 
 
 async def test_the_workers_methods_are_on_the_app_from_the_start(make_app):
@@ -2117,10 +2115,11 @@ async def test_a_task_for_the_background_goes_through_the_whole_app_with_the_fak
     assert (turn["route"], turn["prefix"], turn["text"], turn["status"]) == (
         "delegate", "Notice", "The scripted task saw 1 results.", "done",
     )  # fmt: skip
-    task = (await app.call("worker.get", {"id": report["task_id"]}))["task"]
-    assert [(step["kind"], step["tool"], step["tier"]) for step in task["steps"]] == [
+    # The conversation shows the task with the turn, and the worker's steps.
+    assert (turn["task"]["id"], turn["task"]["state"]) == (report["task_id"], "done")
+    assert [(step["kind"], step["tool"], step["server"]) for step in turn["steps"]] == [
         ("model", None, None),
-        ("tool", "local_time", "T0"),
+        ("tool", "local_time", "Raphael"),
         ("model", None, None),
     ]
     audit = (await app.call("integrations.audit", {}))["entries"]
@@ -2129,7 +2128,7 @@ async def test_a_task_for_the_background_goes_through_the_whole_app_with_the_fak
     ]
     assert (await app.call("status.get"))["spend"]["month_usd"] == 0
     assert await app.call("agent.history.clear", {}) == {"deleted": 1}
-    assert (await app.call("worker.list", {}))["tasks"] == []  # the tasks go with the history
+    assert app.background.task(report["task_id"]) is None  # the tasks go with the history
 
 
 async def test_closing_the_app_ends_the_background_tasks_and_the_worker_before_the_client(make_app):

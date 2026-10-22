@@ -64,7 +64,6 @@ pub fn timeout_for(method: &str) -> Duration {
         "integrations.connect" => 960,
         // Downloads speech models.
         "models.ensure" | "models.local_use" => 3600,
-        "secrets.set_openrouter_key" | "status.check_openrouter" => 15,
         _ => 15,
     };
     Duration::from_secs(seconds)
@@ -840,7 +839,6 @@ mod tests {
             "history.list",
             "agent.cancel",
             "agent.history.list",
-            "integrations.list",
             "integrations.add",
             "integrations.connect_cancel",
             "integrations.catalog",

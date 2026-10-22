@@ -72,12 +72,6 @@ def test_a_step_has_no_column_for_an_argument_or_a_result(conn):
     ]  # fmt: skip
 
 
-def test_the_newest_task_comes_first_and_the_list_is_limited(store):
-    ids = [make(store, f"task {n}") for n in range(5)]
-    assert [t.id for t in store.list(3)] == ids[::-1][:3]
-    assert len(store.list(1000)) == 5
-    assert len(store.list(0)) == 1  # a limit is clamped, not obeyed to the letter
-
 
 def test_tasks_left_unfinished_by_the_last_process_are_interrupted_and_the_rest_are_not(store):
     queued, running, done = make(store), make(store), make(store)

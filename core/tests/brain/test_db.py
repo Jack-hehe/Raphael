@@ -698,7 +698,7 @@ def test_every_write_the_stores_make_is_committed(tmp_path):
     assert [word for word, _ in dictionary_words()] == ["甲", "拉斐爾"]
     dictionary.delete(extra.id)
     assert [word for word, _ in dictionary_words()] == ["拉斐爾"]
-    dictionary.dismiss("Tailscale")
+    dictionary.delete(dictionary.add("Tailscale", source="learned").id)  # dismissed with it
     assert DictionaryStore(reader).dismissed() == {"Tailscale"}
 
     seen = DictionaryStore(reader)
