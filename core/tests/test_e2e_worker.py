@@ -77,6 +77,17 @@ def reports(core):
     return [n["params"] for n in core.notifications if n["method"] == "worker.report"]
 
 
+def tool_call_under_way(core):
+    """Whether the task has sent a tool call to its plugin. The task is "running" from the moment
+    the core takes it, before its worker has started (which takes a while on a busy machine), so
+    the running state alone says neither that a worker exists nor that the slow tool was called."""
+    return any(
+        n["params"]["state"] == "running" and n["params"]["tool_calls"] >= 1
+        for n in core.notifications
+        if n["method"] == "worker.changed"
+    )
+
+
 def worker_pids(core):
     return [int(pid) for pid in PID.findall(bytes(core.stderr))]
 
@@ -107,31 +118,33 @@ def test_a_task_is_handed_over_carried_out_by_the_worker_and_reported(spawn):
     assert report["state"] == "done" and report["prefix"] == "Notice"
     assert report["text"] == "The scripted task saw 2 results."
 
-    task = result(core, "worker.get", {"id": report["task_id"]})["task"]
-    assert [(s["kind"], s["tool"], s["server"], s["tier"], s["outcome"]) for s in task["steps"]] == [
-        ("model", None, None, None, "ok"),
-        ("tool", "look", "Notes", "T1", "ok"),
-        ("model", None, None, None, "ok"),
-        ("tool", "look", "Notes", "T1", "ok"),
-        ("model", None, None, None, "ok"),
+    # The conversation shows the report where the handoff was, with the worker's steps; nothing
+    # was spent.
+    [turn] = result(core, "agent.history.list")["turns"]
+    assert (turn["route"], turn["prefix"], turn["text"]) == ("delegate", "Notice", report["text"])
+    assert [(s["kind"], s["tool"], s["server"], s["outcome"]) for s in turn["steps"]] == [
+        ("model", None, None, "ok"),
+        ("tool", "look", "Notes", "ok"),
+        ("model", None, None, "ok"),
+        ("tool", "look", "Notes", "ok"),
+        ("model", None, None, "ok"),
     ]
-    assert task["cost_usd"] == 0 and task["tool_calls"] == 2
+    task = turn["task"]
+    assert (task["id"], task["cost_usd"], task["tool_calls"]) == (report["task_id"], 0, 2)
     # Two audit rows, both the worker's, none with an argument or a result.
     audit = result(core, "integrations.audit", {})["entries"]
     assert [(e["tool"], e["tier"], e["approver"], e["outcome"], e["task_id"]) for e in audit] == [
         ("look", None, "auto", "ok", report["task_id"]),
         ("look", None, "auto", "ok", report["task_id"]),
     ]
-    assert "alpha" not in json.dumps(audit) and "found" not in json.dumps(task)
-    # The conversation shows the report where the handoff was; nothing was spent.
-    [turn] = result(core, "agent.history.list")["turns"]
-    assert (turn["route"], turn["prefix"], turn["text"]) == ("delegate", "Notice", report["text"])
+    assert "alpha" not in json.dumps(audit) and "found" not in json.dumps(turn["steps"])
     assert result(core, "status.get")["spend"]["month_usd"] == 0
     changes = [n["params"] for n in core.notifications if n["method"] == "worker.changed"]
     assert [c["running"] for c in changes][0] is False and any(c["running"] for c in changes)
     assert changes[-1]["running"] is False and changes[-1]["state"] == "done"
 
     # The worker was a process of its own, and it goes when the core does.
+    wait_for(core, lambda: worker_pids(core))
     [pid] = worker_pids(core)
     assert pid != core.proc.pid and is_alive(pid)
     assert server
@@ -144,7 +157,7 @@ def test_the_fast_tier_goes_on_while_a_task_runs(spawn):
     core = spawn()
     connect_the_fake_server(core, slow="T0")
     ask(core, "[delegate] this one is slow")
-    wait_for(core, lambda: result(core, "worker.list")["tasks"][0]["state"] == "running")
+    wait_for(core, lambda: tool_call_under_way(core))
     started = time.monotonic()
     answer = ask(core, "hello there")  # small talk, while the worker is under way
     assert (answer["prefix"], answer["text"]) == ("Answer", "hello there")
@@ -158,8 +171,7 @@ def test_a_task_the_user_stops_is_reported_as_stopped_and_the_worker_stays_for_t
     core = spawn()
     connect_the_fake_server(core, look="T0", slow="T0")
     ask(core, "[delegate] this one is slow")
-    wait_for(core, lambda: result(core, "worker.list")["tasks"][0]["state"] == "running")
-    time.sleep(2.0)  # the slow tool is under way
+    wait_for(core, lambda: tool_call_under_way(core))  # the slow tool is under way
     assert result(core, "worker.cancel", {}) == {"cancelled": True}
     wait_for(core, lambda: reports(core))
     [stopped] = reports(core)
@@ -178,8 +190,7 @@ def test_a_worker_that_is_killed_interrupts_its_task_and_the_core_goes_on(spawn)
     core = spawn()
     connect_the_fake_server(core, slow="T0")
     ask(core, "[delegate] this one is slow")
-    wait_for(core, lambda: result(core, "worker.list")["tasks"][0]["state"] == "running")
-    time.sleep(1.0)
+    wait_for(core, lambda: tool_call_under_way(core) and worker_pids(core))
     [pid] = worker_pids(core)
     subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=True)
     wait_for(core, lambda: reports(core))
@@ -196,8 +207,7 @@ def test_a_worker_whose_core_dies_ends_by_itself(spawn):
     core = spawn()
     connect_the_fake_server(core, slow="T0")
     ask(core, "[delegate] this one is slow")
-    wait_for(core, lambda: result(core, "worker.list")["tasks"][0]["state"] == "running")
-    time.sleep(1.0)
+    wait_for(core, lambda: tool_call_under_way(core) and worker_pids(core))
     [pid] = worker_pids(core)
     core.kill()  # the core is gone, as if the app crashed (nothing closes its stdin politely)
     assert wait_gone(pid), "the worker outlived its core"
