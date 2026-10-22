@@ -26,8 +26,8 @@ TOOL_NAME_CHARS = 40
 
 @dataclass(frozen=True)
 class ToolUse:
-    """A tool the task called and how that ended: ok, failed, timeout or cut_off (the call was cut
-    off: it is not known whether it ran)."""
+    """A tool the task called and how that ended: ok, failed, timeout, running (sent, not back yet)
+    or cut_off (the call was cut off: it is not known whether it ran)."""
 
     server: str
     tool: str

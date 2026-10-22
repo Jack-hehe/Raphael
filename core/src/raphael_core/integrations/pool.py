@@ -98,6 +98,11 @@ class _Connection:
                     self._current = item
                     try:
                         result = await client.call_tool(item.tool, item.arguments)
+                    except asyncio.CancelledError:
+                        # The caller is told before `_current` is cleared below.
+                        if not item.future.done():
+                            item.future.set_exception(McpFailure("gone"))
+                        raise
                     except Exception as error:
                         # It may have broken the connection: it is closed after this.
                         self.closed = True

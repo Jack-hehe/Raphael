@@ -159,6 +159,20 @@ async def test_closing_the_pool_ends_a_call_that_is_under_way(connector, servers
     assert servers.active == 0 and mine.open_count == 0
 
 
+async def test_closing_the_pool_gives_the_call_under_way_a_failure_at_once(
+    connector, servers, notes, pool, calls
+):
+    mine = pool()
+    running = asyncio.ensure_future(connector.call_tool(notes, "slow", {}, timeout_s=60, pool=mine))
+    await until(lambda: "slow" in calls)
+    began = asyncio.get_running_loop().time()
+    await mine.aclose()
+    with pytest.raises(McpFailure) as failure:
+        await running
+    assert failure.value.kind == "gone"
+    assert asyncio.get_running_loop().time() - began < 5
+
+
 async def test_a_closed_pool_makes_no_new_connection(connector, servers, notes, pool):
     mine = pool()
     await mine.aclose()

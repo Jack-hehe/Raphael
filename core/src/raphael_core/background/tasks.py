@@ -151,6 +151,7 @@ class TaskStore:
     ) -> None:
         if state not in FINAL_STATES:
             raise ValueError(f"{state!r} is not a state a task ends in")
+        self.settle_in_progress(task_id)
         with self._conn:
             self._conn.execute(
                 "UPDATE worker_tasks SET state = ?, finished_at_ms = ?, report_prefix = ?,"
@@ -170,9 +171,11 @@ class TaskStore:
         cost_usd: float = 0.0,
         ms: int = 0,
         reason: str | None = None,
-    ) -> None:
+    ) -> int:
+        """Write a step; its id. A step with the outcome "in_progress" is a call that was sent and
+        has not come back; `update_step` ends it, and `settle_in_progress` does when nobody can."""
         with self._conn:
-            self._conn.execute(
+            cursor = self._conn.execute(
                 "INSERT INTO worker_steps (task_id, n, at_ms, kind, tool, server, tier, outcome,"
                 " cost_usd, ms, reason) VALUES (?, (SELECT COALESCE(MAX(n), 0) + 1 FROM"
                 " worker_steps WHERE task_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -189,6 +192,33 @@ class TaskStore:
                     ms,
                     reason,
                 ),
+            )
+        assert cursor.lastrowid is not None
+        return cursor.lastrowid
+
+    def update_step(
+        self,
+        step_id: int,
+        *,
+        outcome: str,
+        tier: str | None = None,
+        ms: int = 0,
+        reason: str | None = None,
+    ) -> None:
+        """End a step that was written as "in_progress"."""
+        with self._conn:
+            self._conn.execute(
+                "UPDATE worker_steps SET outcome = ?, tier = ?, ms = ?, reason = ? WHERE id = ?",
+                (outcome, tier, ms, reason, step_id),
+            )
+
+    def settle_in_progress(self, task_id: int) -> None:
+        """A call still "in_progress" when its task is over was cut off: it may have been made."""
+        with self._conn:
+            self._conn.execute(
+                "UPDATE worker_steps SET outcome = 'cancelled', reason = 'cancelled'"
+                " WHERE task_id = ? AND outcome = 'in_progress'",
+                (task_id,),
             )
 
     def get(self, task_id: int) -> Task | None:
@@ -249,6 +279,11 @@ class TaskStore:
                 "SELECT id, language FROM worker_tasks WHERE state IN ('queued', 'running')"
             ).fetchall()
             for row in rows:
+                self._conn.execute(
+                    "UPDATE worker_steps SET outcome = 'cancelled', reason = 'cancelled'"
+                    " WHERE task_id = ? AND outcome = 'in_progress'",
+                    (row["id"],),
+                )
                 if report is None:
                     self._conn.execute(
                         "UPDATE worker_tasks SET state = 'interrupted', finished_at_ms = ?,"
@@ -288,6 +323,7 @@ class TaskStore:
 
     def finish_interrupted(self, task_id: int, *, prefix: str, text: str, reason: str) -> None:
         """End a task that was interrupted while it ran, with a report nobody has heard yet."""
+        self.settle_in_progress(task_id)
         with self._conn:
             self._conn.execute(
                 "UPDATE worker_tasks SET state = 'interrupted', finished_at_ms = ?, reason = ?,"

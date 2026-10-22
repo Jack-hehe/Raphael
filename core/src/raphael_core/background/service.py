@@ -83,10 +83,17 @@ _FINAL_FENCE = "```"
 
 # The states of a task that can be run again: it did not finish. A task that is done is not run
 # again, and one that is not over is still running.
+# The most attempts of one task that are looked back on.
+MAX_CHAIN = 20
 RERUNNABLE = ("interrupted", "cancelled", "limit", "failed")
 # How a step of an earlier attempt ended, as the new attempt is told.
 # How a tool call of a task is told to the fast tier.
-_BRIEF_OUTCOME = {"ok": "ok", "cancelled": "cut_off", "timeout": "timeout"}
+_BRIEF_OUTCOME = {
+    "ok": "ok",
+    "cancelled": "cut_off",
+    "timeout": "timeout",
+    "in_progress": "running",
+}
 _EARLIER_OUTCOME = {
     "ok": "ok",
     "cancelled": "cut off, may have run",
@@ -235,6 +242,7 @@ class BackgroundService:
             "worker.get": self._get,
             "worker.cancel": self._cancel,
             "worker.rerun": self._rerun,
+            "worker.announce_pending": self._announce_pending,
         }.items():
             router.register(method, handler)
 
@@ -332,10 +340,17 @@ class BackgroundService:
             logger.warning("Could not read the tasks for the assistant: %s", type(exc).__name__)
             return []
 
+    async def _announce_pending(self, params: dict) -> dict:
+        """`worker.announce_pending`: the shell asks for the reports to be said once it listens
+        for them (a report sent before is lost, and it is said only once)."""
+        self.announce_pending()
+        return {}
+
     def announce_pending(self) -> None:
-        """Say the report of an interrupted task, once. Called after the app says hello, when the
-        overlay and the messaging chats can take it. Of several tasks interrupted together only
-        the newest is said; the others are in the conversation view."""
+        """Say the report of an interrupted task, once. Called when the shell says it listens
+        (`worker.announce_pending`), so that the overlay and the messaging chats can take it. Of
+        several tasks interrupted together only the newest is said; the others are in the
+        conversation view."""
         try:
             pending = self._store.unannounced()
             self._store.mark_announced()
@@ -396,7 +411,10 @@ class BackgroundService:
         try:
             found = self._store.for_turns(turn_ids)
             return {
-                turn_id: (self._brief(task), [_step_view(s) for s in self._store.steps(task.id)])
+                turn_id: (
+                    self._brief(task),
+                    [_step_view(s) for s in self._store.steps(task.id) if s.outcome != "in_progress"],
+                )
                 for turn_id, task in found.items()
             }
         except sqlite3.Error as exc:
@@ -568,8 +586,16 @@ class BackgroundService:
         ended (never what it was given: that is not kept), or None for a first attempt."""
         if task.rerun_of is None:
             return None
+        # Every earlier attempt, the oldest first: a call the first attempt made is still made
+        # when the second one stopped before it.
+        chain: list[int] = []
         try:
-            steps = self._store.steps(task.rerun_of)
+            parent: int | None = task.rerun_of
+            while parent is not None and parent not in chain and len(chain) < MAX_CHAIN:
+                chain.append(parent)
+                earlier = self._store.get(parent)
+                parent = None if earlier is None else earlier.rerun_of
+            steps = [step for task_id in reversed(chain) for step in self._store.steps(task_id)]
         except sqlite3.Error:
             return []
         return [
