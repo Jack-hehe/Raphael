@@ -253,6 +253,7 @@ class IntegrationsService:
                 catalog_id=entry.id,
             )
             new = True
+        self._connector.invalidate(server.id)  # a login again: the old one is not to be used
         if server.auth == "none":
             # A public server: there is no login, so the browser stays shut and the tools are read at once.
             job = self._join_public(server)
@@ -287,6 +288,7 @@ class IntegrationsService:
                 raise _invalid(str(exc)) from None
             raise _not_saved(exc) from None
         self._failure.pop(server.id, None)
+        self._connector.invalidate(server.id)  # the connections of before used the old login
         return {"connected": True, "server": self._view(server), "tools": self._tool_views(server)}
 
     async def _join_public(self, server: ServerConfig) -> LoginResult:
@@ -373,6 +375,7 @@ class IntegrationsService:
             return {"removed": False, "revoked": False}
         self._failure.pop(server.id, None)
         self._locks.pop(server.id, None)
+        self._connector.invalidate(server.id)
         revoked = False
         if server.auth == "oauth":
             storage = VaultTokenStorage(self._vault, server.id)

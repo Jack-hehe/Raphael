@@ -1,5 +1,6 @@
 """Tests for the plugins' RPC methods and the hub the assistant calls tools through."""
 
+import asyncio
 import json
 import logging
 
@@ -565,3 +566,20 @@ def test_the_service_works_with_the_connector_it_makes_itself(conn, tmp_path, va
     assert isinstance(
         IntegrationsService(conn, tmp_path, vault)._connector, McpConnector
     )
+
+
+async def test_removing_a_server_closes_the_connections_kept_for_it(service, rpc, servers, connector):
+    from raphael_core.integrations.pool import McpPool
+
+    server_id = await add(rpc, servers)
+    server = service._config.get(server_id)
+    pool = McpPool()
+    await connector.call_tool(server, "look", {"topic": "a"}, pool=pool)
+    assert pool.open_count == 1
+    await rpc.call("integrations.disconnect", {"id": server_id})
+    for _ in range(100):
+        if pool.open_count == 0:
+            break
+        await asyncio.sleep(0.02)
+    assert pool.open_count == 0
+    await pool.aclose()

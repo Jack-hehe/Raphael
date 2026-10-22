@@ -10,9 +10,15 @@ pool it does it once.
   call to the next (`TaskRun` runs each in a task of its own so that it can be cancelled). So a
   connection is owned by a task of its own that opens the client, reads the tool list once, serves
   the calls that arrive in its inbox, and closes the client when it ends.
+- **Calls are made at the same time.** MCP takes several requests over one session, so each call
+  is a task of its own inside the owner's scope and a slow call does not make the ones after it
+  wait (the time-out of a call is its own).
 - **A call that is cancelled or times out closes the whole connection.** Nobody can say what state a
   server is in after a call was given up on, and a tool may still be running in it. The next call
-  opens another connection. (The server is not told to cancel the call: closing it is the cancel.)
+  opens another connection, and the other calls under way on this one fail with `gone`. (The server
+  is not told to cancel the call: closing it is the cancel.)
+- **A connection is closed when the secrets it was made with change** (`evict`, which the
+  connector calls on a login again or a removal).
 - **A connection is closed** when its pool is (`aclose`: the task is over, cancelled, timed out or
   the core is closing), when it has been idle for `idle_s` (the pool of the fast tier keeps one
   for two minutes, so that a second question about the same service is quick), and when a call on
@@ -37,12 +43,13 @@ from .config import ToolRecord
 
 # What the owner of a connection is told in its inbox besides a call.
 _IDLE = object()
+_STOP = object()
 
 OpenClient = Callable[[], AbstractAsyncContextManager[Any]]
 ListTools = Callable[[Any], Awaitable[list[ToolRecord]]]
 
 
-@dataclass
+@dataclass(eq=False)
 class _Call:
     tool: str
     arguments: dict[str, Any]
@@ -70,7 +77,7 @@ class _Connection:
         self.ready.add_done_callback(lambda f: f.cancelled() or f.exception())
         self.tools: list[ToolRecord] = []
         self.closed = False
-        self._current: _Call | None = None  # the call being made
+        self._calls: set[_Call] = set()  # the calls being made
         self.task = asyncio.ensure_future(self._own())
         # A task cancelled before it first ran never reaches its `finally`.
         self.task.add_done_callback(lambda _task: self._settle())
@@ -81,40 +88,36 @@ class _Connection:
             async with self._open() as client:
                 self.tools = await self._list(client)
                 self.ready.set_result(None)
-                while True:
-                    timer = None
-                    if self._idle_s is not None:
-                        timer = loop.call_later(self._idle_s, self.inbox.put_nowait, _IDLE)
-                    try:
-                        item = await self.inbox.get()
-                    finally:
-                        if timer is not None:
-                            timer.cancel()
-                    if item is _IDLE:
-                        if not self.inbox.empty():
-                            continue  # a call came just now: not idle after all
-                        self.closed = True  # from here on a call opens another connection
-                        break
-                    if item.future.done():
-                        continue  # the caller gave up before it was its turn
-                    self._current = item
-                    try:
-                        result = await client.call_tool(item.tool, item.arguments)
-                    except asyncio.CancelledError:
-                        # The caller is told before `_current` is cleared below.
-                        if not item.future.done():
-                            item.future.set_exception(McpFailure("gone"))
-                        raise
-                    except Exception as error:
-                        # It may have broken the connection: it is closed after this.
-                        self.closed = True
-                        if not item.future.done():
-                            item.future.set_exception(error)
-                        break
-                    finally:
-                        self._current = None
-                    if not item.future.done():
-                        item.future.set_result(result)
+                making: set[asyncio.Task[None]] = set()
+                try:
+                    while True:
+                        timer = None
+                        if self._idle_s is not None:
+                            timer = loop.call_later(self._idle_s, self.inbox.put_nowait, _IDLE)
+                        try:
+                            item = await self.inbox.get()
+                        finally:
+                            if timer is not None:
+                                timer.cancel()
+                        if item is _STOP:
+                            break
+                        if item is _IDLE:
+                            if making or not self.inbox.empty():
+                                continue  # a call is under way or came just now: not idle
+                            self.closed = True  # from here on a call opens another connection
+                            break
+                        if item.future.done():
+                            continue  # the caller gave up before it was its turn
+                        self._calls.add(item)
+                        made = asyncio.ensure_future(self._make(client, item))
+                        making.add(made)
+                        made.add_done_callback(making.discard)
+                finally:
+                    # The calls under way end before the client does, in the task that owns it.
+                    for made in list(making):
+                        made.cancel()
+                    if making:
+                        await asyncio.wait(making)
         except asyncio.CancelledError:
             raise
         except BaseException as error:  # the SDK's task groups wrap what went wrong
@@ -123,6 +126,26 @@ class _Connection:
         finally:
             self._settle()
 
+    async def _make(self, client: Any, item: _Call) -> None:
+        """One call, in a task of its own."""
+        try:
+            result = await client.call_tool(item.tool, item.arguments)
+        except asyncio.CancelledError:
+            if not item.future.done():
+                item.future.set_exception(McpFailure("gone"))
+            raise
+        except Exception as error:
+            # It may have broken the connection: it is closed after this.
+            self.closed = True
+            if not item.future.done():
+                item.future.set_exception(error)
+            self.inbox.put_nowait(_STOP)
+        else:
+            if not item.future.done():
+                item.future.set_result(result)
+        finally:
+            self._calls.discard(item)
+
     def _settle(self) -> None:
         """The connection is over: whoever waits for it, or for a call on it, is told. Safe to
         run more than once."""
@@ -130,7 +153,7 @@ class _Connection:
         self._on_end(self)
         if not self.ready.done():
             self.ready.set_exception(McpFailure("gone"))
-        waiting = [self._current] if self._current is not None else []
+        waiting = list(self._calls)
         while not self.inbox.empty():
             waiting.append(self.inbox.get_nowait())
         for item in waiting:
@@ -157,6 +180,13 @@ class McpPool:
     def open_count(self) -> int:
         """How many connections are open or being opened."""
         return sum(1 for c in self._connections.values() if not c.closed)
+
+    def evict(self, key: str) -> None:
+        """Close the connection kept for the server `key`, if there is one (its calls under way
+        fail). The next call opens another."""
+        connection = self._connections.get(key)
+        if connection is not None:
+            connection.close()
 
     def _ended(self, connection: _Connection) -> None:
         for key, held in list(self._connections.items()):

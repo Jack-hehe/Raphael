@@ -65,6 +65,13 @@ def build(*, describe: str = "Look something up.") -> MCPServer:
         return str(len(os.environ.get(name, "")))
 
     @server.tool()
+    async def nap(seconds: float) -> str:
+        """Answers after a while."""
+        CALLS.append("nap")
+        await asyncio.sleep(seconds)
+        return "rested"
+
+    @server.tool()
     def pid() -> str:
         """The id of the process this server runs in."""
         CALLS.append("pid")

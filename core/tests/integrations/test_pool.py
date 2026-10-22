@@ -187,6 +187,57 @@ async def test_a_pool_closed_in_the_same_turn_as_the_first_call_fails_it_at_once
     assert asyncio.get_running_loop().time() - began < 5 and servers.active == 0
 
 
+async def test_calls_at_the_same_time_are_made_at_the_same_time(connector, servers, notes, pool):
+    mine = pool()
+    began = asyncio.get_running_loop().time()
+    outcomes = await asyncio.gather(
+        *(connector.call_tool(notes, "nap", {"seconds": 1.0}, timeout_s=10, pool=mine) for _ in range(3))
+    )
+    assert [o.text for o in outcomes] == ["rested"] * 3
+    assert asyncio.get_running_loop().time() - began < 2.5  # not three seconds one after the other
+    assert len(servers.opened) == 1
+
+
+async def test_a_call_that_waited_for_no_one_does_not_time_out_for_the_sake_of_another(
+    connector, servers, notes, pool
+):
+    mine = pool()
+    outcomes = await asyncio.gather(
+        *(connector.call_tool(notes, "nap", {"seconds": 0.7}, timeout_s=1.2, pool=mine) for _ in range(3))
+    )
+    assert all(o.text == "rested" for o in outcomes)
+
+
+async def test_cancelling_one_call_closes_the_connection_and_fails_the_others_under_way(
+    connector, servers, notes, pool, calls
+):
+    mine = pool()
+    slow = asyncio.ensure_future(connector.call_tool(notes, "slow", {}, timeout_s=30, pool=mine))
+    other = asyncio.ensure_future(connector.call_tool(notes, "nap", {"seconds": 5}, timeout_s=30, pool=mine))
+    await until(lambda: "slow" in calls and "nap" in calls)
+    slow.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await slow
+    with pytest.raises(McpFailure) as failure:
+        await other
+    assert failure.value.kind == "gone"
+    assert servers.active == 0
+
+
+async def test_a_login_or_a_removal_closes_the_connections_kept_for_the_server(
+    connector, servers, notes, pool
+):
+    mine, theirs = pool(), pool(idle_s=120)
+    for each in (mine, theirs):
+        await connector.call_tool(notes, "look", {"topic": "a"}, pool=each)
+    assert servers.active == 2
+    connector.invalidate(notes.id)
+    await until(lambda: servers.active == 0)
+    assert mine.open_count == 0 and theirs.open_count == 0
+    await connector.call_tool(notes, "look", {"topic": "b"}, pool=mine)  # the next call opens a new one
+    assert len(servers.opened) == 3
+
+
 async def test_a_closed_pool_makes_no_new_connection(connector, servers, notes, pool):
     mine = pool()
     await mine.aclose()

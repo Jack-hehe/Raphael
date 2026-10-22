@@ -32,6 +32,7 @@ import contextlib
 import json
 import logging
 import os
+import weakref
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
@@ -231,6 +232,8 @@ class McpConnector:
     def __init__(self, vault: SecretVault, opener: Opener = open_client) -> None:
         self._vault = vault
         self._opener = opener
+        # The pools that hold connections made with this connector's secrets.
+        self._pools: "weakref.WeakSet[McpPool]" = weakref.WeakSet()
 
     def _secrets(self, server: ServerConfig, *, signing_in: bool = False) -> Secrets:
         secrets = Secrets()
@@ -255,6 +258,13 @@ class McpConnector:
             if not secrets.oauth.storage.has_tokens():
                 raise McpFailure("auth")  # never signed in, or the tokens are gone: sign in again
         return secrets
+
+    def invalidate(self, server_id: str) -> None:
+        """The secrets of a server changed (a login again, a removal): the connections the pools
+        hold for it were made with the old ones, so they are closed. Calls under way on them fail;
+        the next call opens a connection with the new secrets."""
+        for pool in list(self._pools):
+            pool.evict(server_id)
 
     def _oauth(self, server: ServerConfig, **login: Any) -> Any:
         from .oauth import OAuthAccess, VaultTokenStorage
@@ -347,6 +357,7 @@ class McpConnector:
             async with asyncio.timeout(timeout_s):
                 await self._ready()
                 if pool is not None:
+                    self._pools.add(pool)
                     result, current = await pool.call(
                         server.id,
                         lambda: self._opener(server, secrets),
