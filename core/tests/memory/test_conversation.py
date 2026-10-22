@@ -247,3 +247,35 @@ async def test_a_long_backlog_is_folded_from_its_newest_turns(conversation, hist
     assert "turn283 " in user and "turn0 " not in user
     assert estimate_tokens(user) < 20_000
     assert conversation.summary().through_turn_id == 300 - KEEP_TURNS
+
+
+async def test_a_fold_that_was_waiting_when_the_conversation_was_cleared_writes_nothing(conversation, history, conn, clock):
+    # The first fold (the summary covers no turn yet) waits for the model when the owner clears
+    # the conversation: the ids of the turns start again from 1, and the summary's progress is 0
+    # before and after, so only a count of the clears can tell that the fold is stale.
+    seed(history, 31)
+
+    def clear_while_waiting(**_):
+        history.clear()
+        conversation.clear_summary()
+        seed(history, 3)  # the new conversation, from turn 1
+        return {"summary": "Context:\n- what was cleared"}
+
+    conversation._client.replies.append(clear_while_waiting)
+    assert await conversation.fold("m", Ledger(SpendTracker(conn, clock.ms))) is False
+    assert conversation.summary() == conversation_module.Summary("", 0, 0)
+    assert [t.question for t in conversation.context().turns] == ["第 0 句", "第 1 句", "第 2 句"]
+    # The call was made, and paid for: it is in the spend all the same.
+    assert conn.execute("SELECT COUNT(*) FROM spend").fetchone()[0] == 1
+
+
+async def test_clearing_the_summary_while_a_fold_waits_keeps_it_cleared(conversation, history, conn, clock):
+    seed(history, 31)
+
+    def clear_while_waiting(**_):
+        conversation.clear_summary()
+        return {"summary": "Context:\n- forgotten"}
+
+    conversation._client.replies.append(clear_while_waiting)
+    assert await conversation.fold("m", Ledger(SpendTracker(conn, clock.ms))) is False
+    assert conversation.summary().text == ""

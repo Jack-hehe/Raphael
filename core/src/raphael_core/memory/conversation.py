@@ -23,6 +23,12 @@ the next, for the provider's prompt cache):
   dropped, which works better than summarising it (DeepSeek's "discard-all" result).
 - A fold that fails keeps the summary as it was and folds nothing; the next turn tries again after a
   pause that grows (60 s, 5 min, 15 min).
+- A fold waits for the model for seconds, and the summary may be cleared meanwhile (the owner
+  cleared the conversation, or only its summary). Each clear is counted (`_clears`), and a fold that
+  began before one writes nothing: the turns it read may be gone, and since the ids of the turns
+  start again from 1 once the conversation is cleared, the summary's own progress
+  (`through_turn_id`, 0 both before and after a clear during the first fold) cannot tell. Its call
+  is in the spend all the same, since it was paid for.
 - The quick routes (an answer, small talk) read the summary and only the last QUICK_TURNS turns: a
   quick answer stays cheap.
 
@@ -230,6 +236,8 @@ class Conversation:
         self._folding: asyncio.Task[None] | None = None
         self._failures = 0
         self._paused_until = 0.0
+        # How many times the summary was cleared: a fold that began at another count is stale.
+        self._clears = 0
 
     # --- the summary -----------------------------------------------------------------------------
 
@@ -253,7 +261,8 @@ class Conversation:
 
     def clear_summary(self) -> bool:
         """Forget the summary; whether there was one. The turns stay, and are read again from the
-        start within the limits."""
+        start within the limits. A fold that waits for the model meanwhile will write nothing."""
+        self._clears += 1
         with self._conn:
             cursor = self._conn.execute("DELETE FROM agent_summary")
         return cursor.rowcount > 0
@@ -359,6 +368,7 @@ class Conversation:
             return False
         folded, through = due
         summary = self.summary()
+        clears = self._clears
         if not folded:  # only turns that say nothing: the summary covers them as it is
             self._save(summary.text, through)
             return True
@@ -412,8 +422,9 @@ class Conversation:
         if not isinstance(text, str) or not text.strip():
             self._failed("empty")
             return False
-        # The turns may have changed while the model wrote: the summary covers what it was given.
-        if self.summary().through_turn_id != summary.through_turn_id:
+        # The turns may have changed while the model wrote: the summary covers what it was given,
+        # and nothing at all when it was cleared meanwhile (with the conversation, maybe).
+        if self._clears != clears or self.summary().through_turn_id != summary.through_turn_id:
             return False
         self._save(cap_summary(text), through)
         self._failures = 0
