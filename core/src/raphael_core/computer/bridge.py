@@ -3,7 +3,7 @@
 The shell is the JSON-RPC client and the core the server, so the core cannot send it a request.
 It sends a notification instead, and the shell answers with a request of its own:
 
-    core  → shell   computer.request {id, op, args}      a notification
+    core  → shell   computer.request {id, op, args, run}  a notification
     shell → core    computer.reply   {id, ok, result | error}
 
 `ShellBridge.request` sends the first and waits for the second, for at most the time it is given.
@@ -13,19 +13,28 @@ arguments again:
 
 - `apps` → `{windows: [...]}`: the top-level windows of the apps on the desktop;
 - `look {window}` → a snapshot of one window (`snapshot.parse_snapshot`);
-- `act {window, element, action, text, keys, direction}` → `{method}`: one step;
+- `act {window, element, action, text, keys, direction, confirmed}` → `{method}`: one step
+  (`confirmed` when the owner said yes to it: only then does the shell type a line break, as
+  Enter);
 - `focus {window}` → `{}`: the window is brought to the front;
 - `allow {exe, name}` → `{}`: the app joins the always-allowed list of the device settings.
 
-What the shell should show while a run goes on is told with `computer.state {phase, line}`, a
-notification nobody answers: `begin` and `step` put the overlay's 「操作中」 line up (and arm the
+What the shell should show while a run goes on is told with `computer.state {phase, line, run}`,
+a notification nobody answers: `begin` and `step` put the overlay's 「操作中」 line up (and arm the
 watch on the owner's own input), `pause` takes the watch off while a question is on screen, `end`
 takes everything down (with a line to say when the run was stopped by Esc, which hid the overlay).
 The shell tells the core that the owner touched the mouse or the keyboard with `computer.interrupt`.
 
+`run` is the id of the run (`ComputerRun.run_id`) that a request or a state is for. `begin` makes
+it the shell's run and `end` revokes it at once: a request that was asked for before, still queued
+for the desktop or under way there, takes no step after that (the shell checks the id just before
+everything it presses, clicks or sets), and one for a run that is not the shell's fails with
+`stopped`. A late `end` of a run that a newer one replaced changes nothing.
+
 A failure is `BridgeError` with one word: the shell's own (`gone`, `stale`, `password`,
-`elevated`, `refused_app`, `own_window`, `bad_request`, `failed`, `keys_not_allowed`), or
-`unavailable` (no shell to ask, or it did not answer in time). Nothing here logs an argument or a
+`elevated`, `refused_app`, `own_window`, `bad_request`, `failed`, `keys_not_allowed`, `stopped`:
+the run is over for the shell, `handoff`: the element the keys or the text would reach is a
+sign-in, a payment or a code), or `unavailable` (no shell to ask, or it did not answer in time). Nothing here logs an argument or a
 result: they hold what is on the owner's screen.
 """
 
@@ -47,6 +56,8 @@ REPLY = "computer.reply"
 INTERRUPT = "computer.interrupt"
 
 UNAVAILABLE = "unavailable"
+REVOKED = "stopped"
+HANDOFF = "handoff"
 # The words a failure of the shell may be: anything else is read as "failed".
 KINDS = frozenset(
     {
@@ -59,6 +70,8 @@ KINDS = frozenset(
         "bad_request",
         "failed",
         "keys_not_allowed",
+        REVOKED,
+        HANDOFF,
         UNAVAILABLE,
     }
 )
@@ -97,16 +110,19 @@ class ShellBridge:
         """How many requests wait for their reply."""
         return len(self._waiting)
 
-    async def request(self, op: str, args: dict[str, Any], timeout_s: float) -> dict:
-        """Ask the shell to do `op` and wait for its reply, for at most `timeout_s`. The reply's
-        result, an object; BridgeError if the shell failed, or did not answer in time."""
+    async def request(
+        self, op: str, args: dict[str, Any], timeout_s: float, *, run: str | None = None
+    ) -> dict:
+        """Ask the shell to do `op` for the run `run` and wait for its reply, for at most
+        `timeout_s`. The reply's result, an object; BridgeError if the shell failed, or did not
+        answer in time."""
         if self._notify is None:
             raise BridgeError(UNAVAILABLE)
         request_id = uuid.uuid4().hex
         future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
         self._waiting[request_id] = future
         try:
-            self._notify(REQUEST, {"id": request_id, "op": op, "args": args})
+            self._notify(REQUEST, {"id": request_id, "op": op, "args": args, "run": run})
             return await asyncio.wait_for(future, timeout_s)
         except TimeoutError:
             logger.warning("The shell did not answer a computer request (%s) in time", op)
@@ -114,13 +130,13 @@ class ShellBridge:
         finally:
             self._waiting.pop(request_id, None)
 
-    def state(self, phase: str, line: str | None = None) -> None:
-        """Tell the shell where the run is (`PHASES`), with the line the overlay shows. Never
-        raises: the run goes on whether the overlay heard or not."""
+    def state(self, phase: str, line: str | None = None, *, run: str | None = None) -> None:
+        """Tell the shell where the run `run` is (`PHASES`), with the line the overlay shows.
+        Never raises: the run goes on whether the overlay heard or not."""
         if self._notify is None or phase not in PHASES:
             return
         try:
-            self._notify(STATE, {"phase": phase, "line": line})
+            self._notify(STATE, {"phase": phase, "line": line, "run": run})
         except Exception as exc:
             logger.warning("Could not tell the shell where the run is: %s", type(exc).__name__)
 

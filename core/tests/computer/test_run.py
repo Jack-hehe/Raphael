@@ -384,3 +384,121 @@ async def test_nothing_of_the_screen_is_logged(make_run, shell, caplog):
     logged = caplog.text
     for secret in ("私人帳本", "七", "傳送", "hunter2", "在小算盤按七", "Calculator"):
         assert secret not in logged
+
+
+# --- a run is revocable, a line break asks, hand-offs follow the focus, the looks are capped --------
+
+
+async def test_every_request_and_state_says_its_run_and_two_runs_differ(make_run, shell):
+    answering(shell)
+    first = make_run(FakeModel(*LOOK_AND_PRESS_SEVEN))
+    await drive(first, [(True, False)])
+    (run_id,) = set(shell.request_runs) | set(shell.state_runs)
+    assert run_id == first.run_id and len(run_id) == 32 and int(run_id, 16) >= 0
+    second = make_run(FakeModel(*LOOK_AND_PRESS_SEVEN))
+    assert second.run_id != first.run_id
+
+
+async def test_the_shell_saying_the_run_is_over_stops_it(make_run, shell):
+    # the shell revokes a run on the owner's own input before the core hears of it
+    answering(shell, always=True, act="stopped")
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, element=3, action="click", final=False)),
+    )
+    _, final = await drive(make_run(model))
+    assert (final.text, final.kind) == ("已停止。", "stopped")
+
+
+@pytest.mark.parametrize("approved", [True, False])
+async def test_text_with_a_line_break_asks_first_and_goes_confirmed(make_run, shell, approved):
+    answering(shell, always=True)
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, element=6, action="type", text="第一行\n第二行", final=False)),
+        reply(content="已輸入。"),
+    )
+    asked, final = await drive(make_run(model), [(approved, False)])
+    assert [q.text for q in asked] == ["是否執行這一步？"]
+    acts = [args for op, args in shell.requests if op == "act"]
+    if approved:
+        assert acts == [{"window": 7, "element": 6, "action": "type", "text": "第一行\n第二行", "confirmed": True}]
+    else:
+        assert acts == [] and final.status == "denied"
+
+
+async def test_a_step_that_runs_by_itself_never_goes_confirmed(make_run, shell):
+    answering(shell, always=True)
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, element=6, action="type", text="一行", final=False)),
+        reply(content="已輸入。"),
+    )
+    asked, _ = await drive(make_run(model))
+    assert asked == []
+    assert "confirmed" not in dict(shell.requests)["act"]
+
+
+@pytest.mark.parametrize("act", [
+    {"action": "keys", "keys": "enter"},
+    {"action": "type", "text": "4111 1111 1111 1111"},
+])  # fmt: skip
+async def test_keys_or_typing_on_the_focused_sign_in_or_card_field_hand_over(make_run, shell, act):
+    rows = [
+        element(1, "Window", "Checkout", depth=0, actions=[]),
+        element(2, "Edit", "Card number", focused=True, actions=["value"]),
+        element(3, "Button", "Sign in"),
+    ]
+    answering(shell, always=True, look=calculator(elements=rows))
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, final=False, **act)),
+    )
+    run = make_run(model)
+    _, final = await drive(run)
+    assert final.kind == "handoff"
+    assert "act" not in shell.ops()
+    assert run.take_steps()[-1].reason == "handoff"
+
+
+async def test_the_shell_saying_the_live_focus_is_the_owners_hands_over(make_run, shell):
+    answering(shell, always=True, act="handoff")
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, action="keys", keys="enter", final=True)),
+    )
+    _, final = await drive(make_run(model), [(True, False)])
+    assert final.kind == "handoff"
+
+
+async def test_the_looks_after_the_steps_count_toward_the_limit(make_run, shell):
+    answering(shell, always=True)
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, element=3, action="click", final=False)),
+        # the look after this step would be the third
+        reply(call("computer_act", window=7, element=3, action="click", final=False)),
+    )
+    _, final = await drive(make_run(model, limits=RunLimits(looks=2)))
+    assert final.kind == "limit"
+    assert shell.ops().count("look") == 2
+    assert shell.ops().count("act") == 1
+
+
+async def test_a_step_that_could_not_be_looked_at_after_is_never_taken(make_run, shell):
+    answering(shell, always=True)
+    model = FakeModel(
+        reply(call("computer_apps")),
+        reply(call("computer_look", window=7)),
+        reply(call("computer_act", window=7, element=3, action="click", final=False)),
+    )
+    run = make_run(model, limits=RunLimits(looks=1))
+    _, final = await drive(run)
+    assert final.kind == "limit"
+    assert "act" not in shell.ops() and run.looks == 1

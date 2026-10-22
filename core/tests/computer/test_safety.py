@@ -1,5 +1,8 @@
 """The rules a step on the owner's desktop is judged by: hand-off, a yes first, and the keys."""
 
+import re
+from pathlib import Path
+
 import pytest
 
 from raphael_core.computer import safety
@@ -80,11 +83,25 @@ def test_a_button_that_sends_deletes_or_buys_asks_first(name):
 @pytest.mark.parametrize(
     "name",
     ["Sign in", "登入", "ログイン", "Pay now", "付款", "結帳", "お支払い", "Card number", "卡號",
-     "CVV", "安全碼", "Verification code", "驗證碼", "Forgot password", "密碼"],
+     "CVV", "安全碼", "Verification code", "驗證碼", "Forgot password", "密碼", "One-time code",
+     "one_time code"],
 )  # fmt: skip
 def test_a_sign_in_a_payment_or_a_code_is_the_owners(name):
     assert judge(action="click", declared_final=False, name=name, role="Button") == HANDOFF
     assert judge(action="type", declared_final=False, name=name, role="Edit") == HANDOFF
+
+
+def test_the_shell_checks_the_live_focus_against_the_same_hand_off_words():
+    policy = Path(__file__).resolve().parents[3] / "app" / "src-tauri" / "src" / "computer" / "policy.rs"
+    source = policy.read_text(encoding="utf-8")
+
+    def rust_list(name):
+        body = re.search(rf"const {name}: &\[&str\] = &\[(.*?)\];", source, re.S)
+        assert body, name
+        return tuple(re.findall(r'"([^"]*)"', body.group(1)))
+
+    assert rust_list("HANDOFF_EN") == safety._HANDOFF_EN
+    assert rust_list("HANDOFF_CJK") == safety._HANDOFF_CJK
 
 
 @pytest.mark.parametrize("name", ["七", "Seven", "Sender list", "Paypal", "Postcode", "清除", "Open"])
@@ -121,3 +138,42 @@ def test_enter_in_a_message_box_sends_and_asks_first():
     # Enter in a box that is no message box, or on a button, runs
     assert judge(action="keys", declared_final=False, chord=("enter",), focused_name="檔名", focused_role="Edit") is None
     assert judge(action="keys", declared_final=False, chord=("enter",), focused_name="Message", focused_role="Button") is None
+
+
+@pytest.mark.parametrize("text", ["hi\nthere", "hi\r\n", "line\rline", "a b", "a b", "end\x0b", "a\x85b"])
+def test_typing_a_line_break_may_press_enter_and_asks_first(text):
+    # the shell types a line break as Enter, which sends a chat message or a form
+    assert judge(action="type", declared_final=False, text=text) == CONFIRM
+    assert judge(action="type", declared_final=False, name="檔名", role="Edit", text=text) == CONFIRM
+    assert judge(action="type", declared_final=False, focused_name="Body", focused_role="Document", text=text) == CONFIRM
+
+
+def test_typing_on_one_line_runs():
+    assert judge(action="type", declared_final=False, name="Search", role="Edit", text="12*34\tok") is None
+
+
+@pytest.mark.parametrize("name", ["Sign in", "Pay now", "Card number", "驗證碼", "ログイン"])
+@pytest.mark.parametrize("chord", [("enter",), ("space",), ("ctrl", "v"), ("backspace",)])
+def test_keys_on_the_focused_sign_in_payment_or_code_are_the_owners(name, chord):
+    assert judge(action="keys", declared_final=False, chord=chord, focused_name=name, focused_role="Button") == HANDOFF
+    # the element named is the one the keys reach (the shell focuses it first)
+    assert judge(action="keys", declared_final=False, chord=chord, name=name, role="Edit") == HANDOFF
+
+
+@pytest.mark.parametrize("name", ["Card number", "Verification code", "安全碼", "Sign in"])
+def test_typing_into_the_focused_payment_field_or_code_is_the_owners(name):
+    assert judge(action="type", declared_final=False, focused_name=name, focused_role="Edit", text="4111") == HANDOFF
+
+
+@pytest.mark.parametrize("chord", [("tab",), ("shift", "tab"), ("escape",)])
+def test_keys_that_only_move_away_from_a_sign_in_run(chord):
+    assert judge(action="keys", declared_final=False, chord=chord, focused_name="Sign in", focused_role="Button") is None
+
+
+@pytest.mark.parametrize("chord", [("enter",), ("space",)])
+@pytest.mark.parametrize("name", ["Send", "傳送", "Delete", "Buy now", "購入"])
+def test_enter_or_space_on_the_focused_button_that_sends_deletes_or_buys_asks_first(chord, name):
+    assert judge(action="keys", declared_final=False, chord=chord, focused_name=name, focused_role="Button") == CONFIRM
+    assert judge(action="keys", declared_final=False, chord=chord, name=name, role="Button") == CONFIRM
+    # other keys on it change nothing
+    assert judge(action="keys", declared_final=False, chord=("tab",), focused_name=name, focused_role="Button") is None

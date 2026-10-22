@@ -42,6 +42,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -67,7 +68,7 @@ from ..brain.openrouter import CLEANUP_FALLBACKS, ChatTurn, OpenRouterClient, Op
 from ..clock import wall_clock_ms
 from ..worker.guards import MAX_ARGUMENT_CHARS, canonical, elide_old, neutralize, wrap_untrusted
 from . import safety, tools, words
-from .bridge import UNAVAILABLE, BridgeError, ShellBridge
+from .bridge import HANDOFF, REVOKED, UNAVAILABLE, BridgeError, ShellBridge
 from .snapshot import (
     App,
     Element,
@@ -161,8 +162,8 @@ class _Answer:
 
 class _Stopped(Exception):
     """The run stops: `reason` is "cancelled" (Esc), "interrupted" (the owner's own input),
-    "replaced" (a newer request), "closing", "limit_*", "budget", "unavailable", or
-    "failed:<kind>"."""
+    "replaced" (a newer request), "revoked" (the shell says the run is over for it), "closing",
+    "limit_*", "budget", "unavailable", or "failed:<kind>"."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -240,6 +241,10 @@ class ComputerRun:
     says whether the month's limit is reached. `open_app` opens an app of the Start menu by its
     name and returns the name it goes by, or None when there is none (the assistant's own `open`
     command). `clock` is a monotonic clock in seconds.
+
+    `run_id` names the run to the shell: every request and every state says it, and the shell
+    takes no step for a run that has ended (its `end` revokes the id at once, before any job that
+    was asked for earlier reaches the desktop).
     """
 
     def __init__(
@@ -260,6 +265,7 @@ class ComputerRun:
         now_ms: Callable[[], int] = wall_clock_ms,
     ) -> None:
         self.session_id = session_id
+        self.run_id = uuid.uuid4().hex
         self.language = language
         self.request = request
         self.model = model
@@ -353,7 +359,7 @@ class ComputerRun:
     async def _main(self) -> None:
         final: Final
         try:
-            self._bridge.state("begin", words.step_line(self.language, "start"))
+            self._state("begin", words.step_line(self.language, "start"))
             final = await self._loop()
         except _Finished as finished:
             final = finished.final
@@ -373,7 +379,7 @@ class ComputerRun:
         line = None
         if reason == "cancelled":
             line = words.wrapped(self.language, phrase(self.language, "computer_stopped"), "understood")
-        self._bridge.state("end", line)
+        self._state("end", line)
         self.final = final
         self._events.put_nowait(final)
         logger.info(
@@ -413,7 +419,7 @@ class ComputerRun:
 
     def _stopped(self, reason: str) -> Final:
         language = self.language
-        if reason in ("cancelled", "interrupted", "replaced", "closing"):
+        if reason in ("cancelled", "interrupted", "replaced", "revoked", "closing"):
             return Final("understood", phrase(language, "computer_stopped"), "denied", "stopped")
         if reason.startswith("limit_"):
             text = phrase(language, "computer_limit", steps=str(self.actions))
@@ -519,19 +525,26 @@ class ComputerRun:
     # --- the shell ----------------------------------------------------------------------------
 
     async def _shell(self, op: str, args: dict[str, Any], timeout: float) -> dict:
-        """One request to the shell, given up when the run stops. BridgeError if it fails; one the
-        shell cannot be reached for ends the run."""
+        """One request to the shell, for this run, given up when the run stops. BridgeError if it
+        fails; one the shell cannot be reached for, or that the shell says is for a run that is
+        over (it saw the owner's own input before the core did), ends the run."""
+        request = self._bridge.request(op, args, timeout, run=self.run_id)
         try:
-            return await self._until(self._bridge.request(op, args, timeout), timeout + 1.0)
+            return await self._until(request, timeout + 1.0)
         except TimeoutError:
             raise _Stopped(UNAVAILABLE) from None
         except BridgeError as error:
             if error.kind == UNAVAILABLE:
                 raise _Stopped(UNAVAILABLE) from None
+            if error.kind == REVOKED:
+                raise _Stopped("revoked") from None
             raise
 
+    def _state(self, phase: str, line: str | None = None) -> None:
+        self._bridge.state(phase, line, run=self.run_id)
+
     def _line(self, step: str, **fields: str) -> None:
-        self._bridge.state("step", words.step_line(self.language, step, **fields))
+        self._state("step", words.step_line(self.language, step, **fields))
 
     def _step(
         self, tool: str, app: App | str | None, outcome: str, began: float, kind: str | None = None
@@ -563,7 +576,7 @@ class ComputerRun:
         pending = self._confirmations.open(self.session_id, 0, action, Tier.T2, self.language)
         future: asyncio.Future[_Answer] = asyncio.get_running_loop().create_future()
         self._waiting = (pending.id, future)
-        self._bridge.state("pause")
+        self._state("pause")
         asked_at = self._clock()
         self._events.put_nowait(Question(pending.id, Tier.T2, text, stored, always))
         try:
@@ -676,8 +689,7 @@ class ComputerRun:
             return wrap_untrusted(name, UNKNOWN_WINDOW, ok=False)
         await self._permit(window)
         self._pass_gate(Action(name, {"window": window.id}))
-        if self.looks >= self.limits.looks:
-            raise _Stopped("limit_looks")
+        self._check_looks()
         self._line("look", app=words.target(self.language, window.app.name))
         try:
             snapshot = await self._snapshot(window)
@@ -685,9 +697,15 @@ class ComputerRun:
             return self._shell_failure(name, error)
         return wrap_untrusted(name, describe(snapshot), ok=True)
 
+    def _check_looks(self) -> None:
+        """The run stops when it has had all its looks (`RunLimits.looks`)."""
+        if self.looks >= self.limits.looks:
+            raise _Stopped("limit_looks")
+
     async def _snapshot(self, window: Window) -> Snapshot:
-        """Look at `window` (one of the run's looks) and keep what it showed. BridgeError if the
-        shell could not."""
+        """Look at `window` (one of the run's looks, within their limit) and keep what it showed.
+        BridgeError if the shell could not."""
+        self._check_looks()
         self.looks += 1
         began = time.perf_counter()
         try:
@@ -713,7 +731,7 @@ class ComputerRun:
     def _shell_failure(self, name: str, error: BridgeError) -> str:
         """A failure of the shell, as the model is told it; the ones that are the owner's or are
         refused for good end the run."""
-        if error.kind in ("password", "elevated"):
+        if error.kind in ("password", "elevated", HANDOFF):
             raise _Finished(self._handoff())
         if error.kind == "refused_app":
             raise _Finished(
@@ -754,11 +772,12 @@ class ComputerRun:
             "action": action,
         }
         chord: tuple[str, ...] | None = None
+        text = ""
         if action == "type":
-            text = arguments.get("text")
-            if not isinstance(text, str) or not text or len(text) > tools.MAX_TEXT_CHARS:
+            typed = arguments.get("text")
+            if not isinstance(typed, str) or not typed or len(typed) > tools.MAX_TEXT_CHARS:
                 return wrap_untrusted(name, BAD_ARGUMENTS, ok=False)
-            request["text"] = text
+            request["text"] = text = typed
         elif action == "keys":
             try:
                 chord = safety.parse_chord(arguments.get("keys"))
@@ -778,6 +797,7 @@ class ComputerRun:
             role="" if element is None else element.role,
             password=element is not None and element.password,
             chord=chord,
+            text=text,
             focused_name="" if focused is None else focused.name,
             focused_role="" if focused is None else focused.role,
             focused_password=focused is not None and focused.password,
@@ -787,6 +807,8 @@ class ComputerRun:
             raise _Finished(self._handoff())
         if self.actions >= self.limits.actions:
             raise _Stopped("limit_actions")
+        # A step is shown to the model with the look after it: one that could not be is not taken.
+        self._check_looks()
         await self._permit(window)
         if verdict == safety.CONFIRM:
             asked = Action(ACT_FINAL, dict(request))
@@ -798,6 +820,8 @@ class ComputerRun:
                 self._step(action, window.app, "blocked", time.perf_counter(), "denied")
                 raise
             self._pass_gate(asked, answer.approval)
+            # The shell types a line break (as Enter) only in a step the owner said yes to.
+            request["confirmed"] = True
         else:
             self._pass_gate(Action(name, request))
         self._say_step(action, element, chord)

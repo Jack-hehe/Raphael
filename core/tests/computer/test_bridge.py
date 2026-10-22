@@ -67,12 +67,30 @@ async def test_the_state_of_a_run_is_a_notification_nobody_answers():
     bridge = ShellBridge(lambda method, params: sent.append((method, params)))
     bridge.state("step", "《告。操作中：點擊「七」》")
     bridge.state("nonsense", "x")
-    assert sent == [("computer.state", {"phase": "step", "line": "《告。操作中：點擊「七」》"})]
+    assert sent == [("computer.state", {"phase": "step", "line": "《告。操作中：點擊「七」》", "run": None})]
 
     def broken(method, params):
         raise RuntimeError("the pipe is gone")
 
     ShellBridge(broken).state("end")  # never raises
+
+
+async def test_a_request_and_a_state_say_the_run_they_are_for():
+    sent = []
+    bridge = ShellBridge(lambda method, params: sent.append((method, params)))
+    run = "ab" * 16
+    asking = asyncio.ensure_future(bridge.request("act", {"window": 7}, 5, run=run))
+    await asyncio.sleep(0)
+    bridge.state("end", None, run=run)
+    (_, request), (_, state) = sent
+    assert request["run"] == run and request["args"] == {"window": 7}
+    assert state == {"phase": "end", "line": None, "run": run}
+    await bridge._reply({"id": request["id"], "ok": False, "error": "stopped"})
+    with pytest.raises(BridgeError) as failed:
+        await asking
+    assert failed.value.kind == "stopped"
+    # the shell's re-check of the live focus is a kind of its own
+    assert BridgeError("handoff").kind == "handoff"
 
 
 async def test_the_shell_reaches_the_reply_and_the_interrupt_through_the_router():

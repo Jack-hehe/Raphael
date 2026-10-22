@@ -4,12 +4,14 @@ Three rules, each a pure function of what the model asked for and of what the la
 about the element it named (`snapshot.Element`):
 
 - **Hand-off** (`HANDOFF`): a password field, a field of a payment form (a card number, a security
-  code), a one-time code, a sign-in button, a payment button. Raphael never touches those: the run
-  stops and the owner is told the step is theirs.
+  code), a one-time code, a sign-in button, a payment button. Raphael never touches those, with a
+  click, typed text or keys (which reach the element named, or else the one with the focus): the
+  run stops and the owner is told the step is theirs.
 - **Confirm** (`CONFIRM`, T2): a step that sends, submits, publishes, deletes, buys or orders. The
-  model declares it (`final` on `computer_act`); the element's name, a key chord that sends (Ctrl+
-  Enter) or deletes for good (Shift+Delete), and Enter in a message box say it too. Any one of them
-  is enough: the owner is asked every time.
+  model declares it (`final` on `computer_act`); the element's name (clicked, or pressed with Enter
+  or Space), a key chord that sends (Ctrl+Enter) or deletes for good (Shift+Delete), Enter in a
+  message box and a line break in typed text (which the shell presses as Enter) say it too. Any one
+  of them is enough: the owner is asked every time.
 - **Keys** (`check_keys`): the chords a step may press, from an allowlist. No Windows key at all
   (Win+L, Win+R...), nothing that switches or closes windows (Alt+Tab, Alt+F4), nothing of the
   system's (Ctrl+Alt+Del, Ctrl+Shift+Esc, Ctrl+Esc), and no bare letters: typing is `type`. The
@@ -32,6 +34,8 @@ CONFIRM = "confirm"
 
 # The words that make an element a step of the owner's: signing in, paying, a payment form's
 # fields, one-time codes. (Password fields are told by UI Automation itself, not by their names.)
+# The shell checks the live element with the focus against the same words, word for word
+# (`app/src-tauri/src/computer/policy.rs`; a test holds the two together).
 _HANDOFF_EN = (
     "sign in", "signin", "log in", "login", "log on", "logon",
     "card number", "credit card", "debit card", "cvv", "cvc", "security code", "expiry",
@@ -75,7 +79,10 @@ def _normal(text: str) -> str:
 
 
 def _english(words: Iterable[str]) -> re.Pattern[str]:
-    alternatives = "|".join(re.escape(word) for word in sorted(words, key=len, reverse=True))
+    # The words are matched the way the names are written out (`_normal`): "one-time code" is
+    # "one time code" by then.
+    normal = sorted({_normal(word) for word in words}, key=len, reverse=True)
+    alternatives = "|".join(re.escape(word) for word in normal)
     return re.compile(rf"(?<![a-z0-9])(?:{alternatives})(?![a-z0-9])")
 
 
@@ -185,6 +192,19 @@ def confirm_by_keys(chord: tuple[str, ...]) -> bool:
 
 # --- one step, judged ------------------------------------------------------------------------------
 
+# What breaks a line, as `str.splitlines` reads it: the shell types a line break as Enter, and an
+# app may take a carriage return or a separator typed as a character for one too.
+_LINE_BREAK = re.compile(r"[\n\r\x0b\x0c\x1c\x1d\x1e\x85  ]")
+# Keys that only move away from the element with the focus: they enter, press and send nothing.
+_MOVE_AWAY = frozenset({("tab",), ("shift", "tab"), ("escape",)})
+# Keys that press the button with the focus.
+_PRESS = frozenset({("enter",), ("space",)})
+
+
+def breaks_lines(text: str) -> bool:
+    """Whether typing `text` would break a line, which the shell does with Enter."""
+    return bool(_LINE_BREAK.search(text))
+
 
 def judge(
     *,
@@ -194,6 +214,7 @@ def judge(
     role: str = "",
     password: bool = False,
     chord: tuple[str, ...] | None = None,
+    text: str = "",
     focused_name: str = "",
     focused_role: str = "",
     focused_password: bool = False,
@@ -202,24 +223,40 @@ def judge(
     None (it runs).
 
     `action` is the step ("click", "type", "keys", "scroll", "focus"), `declared_final` whether the
-    model said it sends, submits, deletes or buys. `name`, `role` and `password` are what the latest
-    snapshot said about the element it acts on (empty for a step on no element); the `focused_*`
-    ones about the element that has the keyboard focus, which keys and typing reach when no element
-    is named.
+    model said it sends, submits, deletes or buys, `chord` the keys it presses and `text` what it
+    types. `name`, `role` and `password` are what the latest snapshot said about the element it
+    acts on (empty for a step on no element); the `focused_*` ones about the element that has the
+    keyboard focus, which keys and typing reach when no element is named.
+
+    Keys and typing are judged by the element they reach: the one named (the shell gives it the
+    focus first), else the one with the focus. A sign-in, a payment or a code there is the
+    owner's whatever the keys, except the ones that only move away from it (Tab, Shift+Tab, Esc);
+    Enter or Space on a button that sends, deletes or buys asks first, as a click on it would, and
+    so does Enter in a message box. A line break in typed text is pressed as Enter, so it asks
+    first wherever it is typed: the field may be a chat's, or a form's that Enter submits. (The
+    shell checks the live element with the focus once more before it presses anything, and types
+    no line break that was not asked about.)
     """
+    target_name, target_role = (name, role) if name else (focused_name, focused_role)
     if password or (action in ("type", "keys") and focused_password and not name):
         return HANDOFF
-    if action in ("click", "type") and name and handoff_by_name(name):
+    if action == "click" and name and handoff_by_name(name):
+        return HANDOFF
+    if action == "type" and target_name and handoff_by_name(target_name):
+        return HANDOFF
+    if action == "keys" and chord not in _MOVE_AWAY and target_name and handoff_by_name(target_name):
         return HANDOFF
     if declared_final:
         return CONFIRM
     if action == "click" and name and confirm_by_name(name):
         return CONFIRM
+    if action == "type" and breaks_lines(text):
+        return CONFIRM
     if action == "keys" and chord is not None:
         if confirm_by_keys(chord):
             return CONFIRM
-        if chord == ("enter",):
-            box_name, box_role = (name, role) if name else (focused_name, focused_role)
-            if is_message_box(box_name, box_role):
-                return CONFIRM
+        if chord in _PRESS and target_name and confirm_by_name(target_name):
+            return CONFIRM
+        if chord == ("enter",) and is_message_box(target_name, target_role):
+            return CONFIRM
     return None

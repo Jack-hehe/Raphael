@@ -46,22 +46,27 @@ def windows(*, always=False, title="計算機 - 私人帳本"):
 class FakeShell:
     """The shell as the bridge sees it. `handlers` maps an operation to what it answers: a dict
     (the result), a str (the kind of a failure), or a function of the arguments returning either.
-    An operation with no handler is never answered. Every request and every state are kept."""
+    An operation with no handler is never answered. Every request and every state are kept, and
+    the run each said it was for (`request_runs`, `state_runs`)."""
 
     def __init__(self):
         self.handlers = {}
         self.requests = []  # (op, args)
         self.states = []  # (phase, line)
+        self.request_runs = []
+        self.state_runs = []
         self.bridge = ShellBridge(self.notify)
         self._tasks = set()
 
     def notify(self, method, params):
         if method == "computer.state":
             self.states.append((params["phase"], params["line"]))
+            self.state_runs.append(params.get("run"))
             return
         assert method == "computer.request", method
         json.dumps(params)  # it must cross the pipe
         self.requests.append((params["op"], params["args"]))
+        self.request_runs.append(params.get("run"))
         handler = self.handlers.get(params["op"])
         if handler is None:
             return
