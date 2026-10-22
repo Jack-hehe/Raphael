@@ -124,6 +124,26 @@ impl Identity {
         }
         env
     }
+
+    /// This identity's folder of the files that stay on this PC (Raphael's picture): the folder
+    /// of `appDirectoriesOverride`'s `localData`, `%LOCALAPPDATA%\Raphael` for the release and
+    /// `%LOCALAPPDATA%\Raphael Dev` for a development build, so that a development build that
+    /// changes or resets its picture never touches the release's. `data_dir` is the value of
+    /// `RAPHAEL_DATA_DIR` as the caller set it, read before [`use_own_data`] sets it for a
+    /// development build: a run kept apart by it (the tests, the end-to-end runs) keeps these
+    /// files under it too, as it does the rest of its data. `local_appdata` is the value of
+    /// `LOCALAPPDATA`. `None` when neither is set (not Windows).
+    pub fn local_dir(
+        &self,
+        data_dir: Option<OsString>,
+        local_appdata: Option<OsString>,
+    ) -> Option<PathBuf> {
+        if let Some(dir) = data_dir.filter(|dir| !dir.is_empty()) {
+            return Some(PathBuf::from(dir));
+        }
+        let local = local_appdata.filter(|dir| !dir.is_empty())?;
+        Some(Path::new(&local).join(self.folder))
+    }
 }
 
 /// Gives this process the data folder of its identity (see [`Identity::data_env`]). The core
@@ -266,6 +286,33 @@ mod tests {
                 PathBuf::from("C:/u/Roaming/Raphael Dev")
             )]
         );
+    }
+
+    #[test]
+    fn each_build_keeps_its_local_files_in_its_own_folder() {
+        let local = || Some(OsString::from("C:/u/Local"));
+        // The picture of a development build is never the release's.
+        assert_eq!(
+            DEVELOPMENT.local_dir(None, local()),
+            Some(PathBuf::from("C:/u/Local/Raphael Dev"))
+        );
+        assert_eq!(
+            RELEASE.local_dir(None, local()),
+            Some(PathBuf::from("C:/u/Local/Raphael"))
+        );
+        assert_eq!(
+            DEVELOPMENT.local_dir(Some("".into()), local()),
+            Some(PathBuf::from("C:/u/Local/Raphael Dev"))
+        );
+        // A run kept apart by RAPHAEL_DATA_DIR keeps them under it, whichever build it is.
+        for identity in [&DEVELOPMENT, &RELEASE] {
+            assert_eq!(
+                identity.local_dir(Some("D:/scratch".into()), local()),
+                Some(PathBuf::from("D:/scratch"))
+            );
+        }
+        assert_eq!(DEVELOPMENT.local_dir(None, None), None);
+        assert_eq!(DEVELOPMENT.local_dir(None, Some("".into())), None);
     }
 
     #[test]
