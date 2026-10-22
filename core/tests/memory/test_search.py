@@ -91,6 +91,15 @@ def test_since_keeps_the_newer_turns(history, clock):
     assert questions(history.search("會議", since_ms=cutoff)) == ["新的會議"]
 
 
+def test_the_turns_left_out_are_left_out_before_the_limit(history):
+    old = add_turn(history, "舊的會議")
+    recent = [add_turn(history, f"會議 {n}") for n in range(12)]
+    assert questions(history.search("會議", exclude=recent)) == ["舊的會議"]
+    assert {t.id for t in history.search("會議", limit=2, exclude=recent[:11])} == {recent[11], old}
+    # The pairs a long run of Chinese falls back to leave them out too.
+    assert questions(history.search("上次說的會議", exclude=recent)) == ["舊的會議"]
+
+
 def test_a_resolved_turn_is_found_by_its_final_words_and_a_cleared_one_is_not(history):
     turn = add_turn(history, "要寄信嗎", "是否寄出？", status="confirm")
     assert history.search("寄出") == []  # not answered yet

@@ -65,6 +65,20 @@ def _to_turn(row: sqlite3.Row) -> Turn:
     return Turn(**dict(row))
 
 
+def _filters(since_ms: int | None, exclude: Sequence[int]) -> tuple[str, list[object]]:
+    """The conditions of a search besides its words, as SQL to add to its WHERE, and their params:
+    the turns made from `since_ms` on, and none of the ids of `exclude`."""
+    where, params = "", []
+    if since_ms is not None:
+        where += " AND t.created_at_ms >= ?"
+        params.append(since_ms)
+    ids = sorted({turn for turn in exclude if type(turn) is int})
+    if ids:
+        where += f" AND t.id NOT IN ({', '.join('?' * len(ids))})"
+        params += ids
+    return where, params
+
+
 class AgentHistory:
     """The `agent_turns` table. Use it on the thread that owns `conn`."""
 
@@ -243,65 +257,74 @@ class AgentHistory:
         (found,) = self._conn.execute("SELECT COALESCE(MAX(id), 0) FROM agent_turns").fetchone()
         return int(found)
 
-    def search(self, query: str, *, limit: int = 5, since_ms: int | None = None) -> list[Turn]:
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        since_ms: int | None = None,
+        exclude: Sequence[int] = (),
+    ) -> list[Turn]:
         """The answered turns that hold the words of `query`, best first (BM25, then the newest),
         at most `limit` (and SEARCH_MAX). Each word is looked for as it is written, a word of two
         Chinese characters too (`memory.terms`), and a turn that holds any of them is found. A word
         that is a long run of Chinese and is not found as it is written is looked for by its pairs
-        of characters. `since_ms` keeps the turns made from then on."""
+        of characters. `since_ms` keeps the turns made from then on. The turns of `exclude` (the
+        ones the model already reads) are left out by the query itself, before the limit, so that
+        the older turns behind them are found however many of them match."""
         words = query_words(query)
         limit = max(1, min(limit, SEARCH_MAX))
         if not words:
             return []
-        found = self._find(words, limit, since_ms)
+        where, params = _filters(since_ms, exclude)
+        found = self._find(words, limit, where, params)
         if not found and any(len(word.pairs) > 1 for word in words):
             pairs = dict.fromkeys(pair for word in words for pair in word.pairs)
-            found = self._find([QueryWord(pair, (pair,)) for pair in pairs], limit, since_ms)
+            found = self._find([QueryWord(pair, (pair,)) for pair in pairs], limit, where, params)
         return found
 
-    def _find(self, words: Sequence[QueryWord], limit: int, since_ms: int | None) -> list[Turn]:
+    def _find(
+        self, words: Sequence[QueryWord], limit: int, where: str, params: Sequence[object]
+    ) -> list[Turn]:
         if not self._has_fts():
-            return self._search_like(words, limit, since_ms)
+            return self._search_like(words, limit, where, params)
         match = " OR ".join(
             f"chars : {fts_quote(word.char)}"
             if word.char
             else "pairs : " + fts_quote(" ".join(word.pairs))
             for word in words
         )
-        return self._match(match, limit, since_ms)
+        return self._match(match, limit, where, params)
 
-    def _match(self, match: str, limit: int, since_ms: int | None) -> list[Turn]:
-        since = "" if since_ms is None else " AND t.created_at_ms >= ?"
-        params: list[object] = [match, *([] if since_ms is None else [since_ms]), limit]
+    def _match(self, match: str, limit: int, where: str, params: Sequence[object]) -> list[Turn]:
         rows = self._conn.execute(
             f"SELECT {_TURN_COLUMNS} FROM agent_turns_fts JOIN agent_turns t"
             " ON t.id = agent_turns_fts.rowid"
-            f" WHERE agent_turns_fts MATCH ? AND t.status = 'done'{since}"
+            f" WHERE agent_turns_fts MATCH ? AND t.status = 'done'{where}"
             " ORDER BY bm25(agent_turns_fts), t.id DESC LIMIT ?",
-            params,
+            [match, *params, limit],
         ).fetchall()
         return [_to_turn(row) for row in rows]
 
     def _search_like(
-        self, words: Sequence[QueryWord], limit: int, since_ms: int | None
+        self, words: Sequence[QueryWord], limit: int, where: str, params: Sequence[object]
     ) -> list[Turn]:
         """The search where this SQLite has no FTS5: the same terms, read with LIKE, newest first.
         The table holds a few thousand turns a year, so a scan takes milliseconds."""
-        conditions, params = [], []
+        conditions: list[str] = []
+        terms: list[object] = []
         for word in words:
             if word.char:
                 conditions.append("f.chars LIKE ?")
-                params.append(f"%{word.char}%")
+                terms.append(f"%{word.char}%")
             else:
                 conditions.append("(' ' || f.pairs || ' ') LIKE ?")
-                params.append(f"% {' '.join(word.pairs)} %")
-        since = "" if since_ms is None else " AND t.created_at_ms >= ?"
-        params += [*([] if since_ms is None else [since_ms]), limit]
+                terms.append(f"% {' '.join(word.pairs)} %")
         rows = self._conn.execute(
             f"SELECT {_TURN_COLUMNS} FROM agent_turns_fts f JOIN agent_turns t ON t.id = f.rowid"
-            f" WHERE ({' OR '.join(conditions)}) AND t.status = 'done'{since}"
+            f" WHERE ({' OR '.join(conditions)}) AND t.status = 'done'{where}"
             " ORDER BY t.id DESC LIMIT ?",
-            params,
+            [*terms, *params, limit],
         ).fetchall()
         return [_to_turn(row) for row in rows]
 

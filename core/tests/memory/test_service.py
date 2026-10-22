@@ -143,6 +143,15 @@ def test_search_gives_the_turns_with_their_dates_cut_short(memory, history):
     assert memory.search("會議", exclude=[old]).data["turns"][0]["turn"] == long
 
 
+def test_search_finds_an_older_turn_behind_the_recent_ones_it_leaves_out(memory, history):
+    # The turns already in the context are left out; twelve of them match best (the newest come
+    # first), more than the most a search gives, and the older match must still be found.
+    old = add_turn(history, "上次的會議在哪裡", "在三樓。")
+    recent = [add_turn(history, f"會議 {n}", "好。") for n in range(12)]
+    found = memory.search("會議", exclude=recent).data["turns"]
+    assert [t["turn"] for t in found] == [old]
+
+
 def test_what_the_owner_said_is_written_as_said_and_its_turn_is_noted(memory):
     applied = memory.apply_said([Action("ADD", "user-tea", "user", SECRET_WORDS, "烏龍茶。", None, "inferred")], 0)
     assert applied.written == ["user-tea"] and memory.store.get("user-tea").origin == "said"

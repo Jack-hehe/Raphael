@@ -223,18 +223,16 @@ class MemoryService:
 
     def search(self, query: str, *, limit: int = 5, exclude: Sequence[int] = ()) -> ToolResult:
         """`history_search`: the past turns that hold the words of `query`, best first, each as its
-        date, the question and Raphael's answer, cut short. No model call."""
+        date, the question and Raphael's answer, cut short. No model call. The turns of `exclude`
+        (the ones in the context already) are left out by the search itself, before its limit."""
         try:
-            turns = self._history.search(query, limit=limit + len(exclude))
+            turns = self._history.search(query, limit=limit, exclude=exclude)
         except sqlite3.Error as exc:
             logger.warning("Could not search the conversation: %s", type(exc).__name__)
             return ToolResult("history_search", False, None, "error")
         words = [w.casefold() for w in query.split()]
-        skip = set(exclude)
         found = []
         for turn in turns:
-            if turn.id in skip:
-                continue
             when = datetime.fromtimestamp(turn.created_at_ms / 1000).strftime("%Y-%m-%d %H:%M")
             answer = turn.detail if turn.detail and len(turn.detail) > len(turn.text) else turn.text
             found.append(
