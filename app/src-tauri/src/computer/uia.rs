@@ -14,13 +14,24 @@
 //!   the control view one level at a time (`FindAllBuildCache` with `TreeScope_Children`), within
 //!   the caps and four seconds ([`tree::build`]). The elements are kept until the next look at the
 //!   window, or the end of the run.
-//! - A step checks the element again first (a password field is refused, whatever the look said),
-//!   brings the window to the front, and uses UI Automation's patterns; a click at the element's
-//!   centre only when there is none, and only when the point is the window's (nothing, the overlay
-//!   least of all, covers it). Typing into an edit field sets its value; elsewhere the text is typed
-//!   at the caret, as Unicode, after the field with the focus is checked once more. Every input it
-//!   sends carries Raphael's marker (`handy_keys::RAPHAEL_INPUT_MARKER`) and is injected, so the
-//!   watch on the owner's input and the hotkeys never take it for the owner's.
+//! - A step checks the element again first (a password field is refused, whatever the look said,
+//!   and so is a click on or text for an element now called like a sign-in, a payment field or a
+//!   code), brings the window to the front, and uses UI Automation's patterns; a click at the
+//!   element's centre only when there is none, and only when the point is the window's (nothing,
+//!   the overlay least of all, covers it). Typing into an edit field sets its value; elsewhere the
+//!   text is typed at the caret, as Unicode, in batches, each after the element with the focus is
+//!   read once more (it must be in the window, and neither a password field nor a sign-in, a
+//!   payment field or a code); a line break is Enter, typed only in a step the owner said yes to.
+//!   Keys go the same way. Every input it sends carries Raphael's marker
+//!   (`handy_keys::RAPHAEL_INPUT_MARKER`) and is injected, so the watch on the owner's input and
+//!   the hotkeys never take it for the owner's.
+//! - The window is in front only when the window Windows has in front is the step's own, or one
+//!   it owns (a dialog of its): another window of the same process (a second Chrome window) is
+//!   not, and the step brings its own to the front first.
+//! - Every job is for a run ([`Ticket`]): one whose run is over by the time it comes up does
+//!   nothing, and one under way checks again just before each change it makes (the window
+//!   brought to the front, a pattern called, a value set, each batch of input sent), so that once
+//!   the run is stopped nothing more reaches the desktop.
 //!
 //! Nothing here logs a title, a name, a value or what is typed.
 
@@ -64,7 +75,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, EnumWindows, GA_ROOT, GWL_EXSTYLE, GetAncestor, GetClassNameW,
+    EnumChildWindows, EnumWindows, GA_ROOT, GA_ROOTOWNER, GWL_EXSTYLE, GetAncestor, GetClassNameW,
     GetForegroundWindow, GetSystemMetrics, GetWindowLongW, GetWindowTextW,
     GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, SM_CXVIRTUALSCREEN,
     SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_RESTORE, SetForegroundWindow,
@@ -72,9 +83,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, BSTR, HSTRING, Interface, PCWSTR, PWSTR, w};
 
-use super::keys::Chord;
+use super::keys::{self, Chord, Typed};
 use super::tree::{self, Caps, Entry, Props, UiNode};
-use super::{Action, Desktop, Direction, Failure, Step, WindowInfo, policy};
+use super::{Action, Desktop, Direction, Failure, Step, Ticket, WindowInfo, breaks_lines, policy};
 
 /// How long one job of the desktop's thread may take before its caller gives up on it.
 const JOB_TIMEOUT: Duration = Duration::from_secs(12);
@@ -157,22 +168,24 @@ impl Desktop for UiaDesktop {
         self.run(move |state| state.window(id)).flatten()
     }
 
-    fn look(&self, id: i64) -> Result<(Vec<Entry>, bool), Failure> {
-        self.run(move |state| state.look(id))
+    fn look(&self, id: i64, ticket: &Ticket) -> Result<(Vec<Entry>, bool), Failure> {
+        let ticket = ticket.clone();
+        self.run(move |state| state.look(id, &ticket))
             .unwrap_or(Err(Failure::Failed))
     }
 
-    fn act(&self, step: &Step) -> Result<&'static str, Failure> {
-        let step = step.clone();
-        self.run(move |state| state.act(&step))
+    fn act(&self, step: &Step, ticket: &Ticket) -> Result<&'static str, Failure> {
+        let (step, ticket) = (step.clone(), ticket.clone());
+        self.run(move |state| state.act(&step, &ticket))
             .unwrap_or(Err(Failure::Failed))
     }
 
-    fn focus(&self, id: i64) -> Result<(), Failure> {
+    fn focus(&self, id: i64, ticket: &Ticket) -> Result<(), Failure> {
+        let ticket = ticket.clone();
         self.run(move |state| {
+            ticket.check()?;
             let hwnd = state.hwnd(id)?;
-            bring_to_front(hwnd);
-            Ok(())
+            bring_to_front(hwnd, &ticket)
         })
         .unwrap_or(Err(Failure::Failed))
     }
@@ -331,7 +344,7 @@ impl State {
             .clone()
     }
 
-    fn look(&mut self, id: i64) -> Result<(Vec<Entry>, bool), Failure> {
+    fn look(&mut self, id: i64, ticket: &Ticket) -> Result<(Vec<Entry>, bool), Failure> {
         let hwnd = self.hwnd(id)?;
         // SAFETY: COM calls on this thread's objects.
         let root = unsafe {
@@ -352,6 +365,9 @@ impl State {
             Caps::default(),
             || began.elapsed() > LOOK_BUDGET,
         );
+        // A run that ended while the look walked the tree keeps nothing: its elements were
+        // forgotten, and must stay so.
+        ticket.check()?;
         let elements = shot.nodes.into_iter().map(|node| node.element).collect();
         self.looks.insert(id, elements);
         log::debug!(
@@ -375,51 +391,75 @@ impl State {
         // Asked again, now: the look may be old, and the element gone or changed.
         // SAFETY: COM calls on this thread's objects.
         match unsafe { element.CurrentIsPassword() } {
-            Ok(password) if password.as_bool() => Err(Failure::Password),
-            Ok(_) => Ok(Some(element)),
-            Err(_) => Err(Failure::Stale),
+            Ok(password) if password.as_bool() => return Err(Failure::Password),
+            Ok(_) => {}
+            Err(_) => return Err(Failure::Stale),
         }
+        // A click on it or text for it: the element is the step's target (keys are checked on
+        // the element with the focus, which they reach).
+        if matches!(step.action, Action::Click | Action::Type(_)) && handoff(&element) {
+            return Err(Failure::Handoff);
+        }
+        Ok(Some(element))
     }
 
-    fn act(&mut self, step: &Step) -> Result<&'static str, Failure> {
+    fn act(&mut self, step: &Step, ticket: &Ticket) -> Result<&'static str, Failure> {
+        // A job that waited behind another (a slow look) for a run that ended meanwhile.
+        ticket.check()?;
         let hwnd = self.hwnd(step.window)?;
         let element = self.element(step)?;
-        bring_to_front(hwnd);
+        bring_to_front(hwnd, ticket)?;
         // SAFETY: COM calls on this thread's objects, and input sent with SendInput.
         unsafe {
             match (&step.action, element) {
-                (Action::Click, Some(element)) => click(&element, hwnd),
-                (Action::Focus, Some(element)) => element
-                    .SetFocus()
-                    .map(|()| "focus")
-                    .map_err(|_| Failure::Failed),
-                (Action::Scroll(direction), Some(element)) => {
-                    self.scroll(&element, *direction, hwnd)
+                (Action::Click, Some(element)) => click(&element, hwnd, ticket),
+                (Action::Focus, Some(element)) => {
+                    ticket.check()?;
+                    element
+                        .SetFocus()
+                        .map(|()| "focus")
+                        .map_err(|_| Failure::Failed)
                 }
-                (Action::Type(text), element) => self.type_text(element.as_ref(), text, hwnd),
+                (Action::Scroll(direction), Some(element)) => {
+                    self.scroll(&element, *direction, hwnd, ticket)
+                }
+                (Action::Type(text), element) => {
+                    self.type_text(element.as_ref(), text, step.confirmed, hwnd, ticket)
+                }
                 (Action::Keys(chord), element) => {
                     if let Some(element) = element {
+                        ticket.check()?;
                         let _ = element.SetFocus();
                     }
-                    self.check_focus(hwnd)?;
-                    send(&chord_inputs(*chord)).map(|()| "keyboard")
+                    self.check_focus(hwnd, chord.moves_away())?;
+                    send(ticket, &chord_inputs(*chord)).map(|()| "keyboard")
                 }
                 _ => Err(Failure::BadRequest),
             }
         }
     }
 
-    /// The field with the keyboard focus must be in the window and no password field.
-    fn check_focus(&self, hwnd: HWND) -> Result<(), Failure> {
+    /// What keys or typed text would reach, read live, just before they are sent: the window in
+    /// front must be the step's, and the element with the focus no password field, nor (unless
+    /// the keys only move away from it) a sign-in, a payment field or a code. An element with the
+    /// focus that cannot be read is no element the keys may go to.
+    fn check_focus(&self, hwnd: HWND, moving_away: bool) -> Result<(), Failure> {
         if !in_front(hwnd) {
             return Err(Failure::Failed);
         }
         // SAFETY: COM calls on this thread's objects.
         unsafe {
-            if let Ok(focused) = self.automation.GetFocusedElement()
-                && focused.CurrentIsPassword().is_ok_and(|p| p.as_bool())
-            {
-                return Err(Failure::Password);
+            let focused = self
+                .automation
+                .GetFocusedElement()
+                .map_err(|_| Failure::Failed)?;
+            match focused.CurrentIsPassword() {
+                Ok(password) if password.as_bool() => return Err(Failure::Password),
+                Ok(_) => {}
+                Err(_) => return Err(Failure::Failed),
+            }
+            if !moving_away && handoff(&focused) {
+                return Err(Failure::Handoff);
             }
         }
         Ok(())
@@ -429,27 +469,50 @@ impl State {
         &self,
         element: Option<&IUIAutomationElement>,
         text: &str,
+        confirmed: bool,
         hwnd: HWND,
+        ticket: &Ticket,
     ) -> Result<&'static str, Failure> {
         // SAFETY: COM calls on this thread's objects.
         unsafe {
             if let Some(element) = element {
                 let role = element.CurrentControlType().map(|c| c.0).unwrap_or(0);
-                // An edit field takes the text as its value; a document gets it at the caret.
+                // An edit field takes the text as its value (a line break in it is no Enter); a
+                // document gets it at the caret.
                 if (role == UIA_EditControlTypeId.0 || role == UIA_ComboBoxControlTypeId.0)
                     && let Ok(value) =
                         element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
                     && value.CurrentIsReadOnly().is_ok_and(|r| !r.as_bool())
-                    && value.SetValue(&BSTR::from(text)).is_ok()
                 {
-                    return Ok("value");
+                    ticket.check()?;
+                    if value.SetValue(&BSTR::from(text)).is_ok() {
+                        return Ok("value");
+                    }
                 }
+            }
+            // Typed keys press Enter for a line break, which may send a message or a form: only
+            // in a step the owner said yes to.
+            if breaks_lines(text) && !confirmed {
+                return Err(Failure::BadRequest);
+            }
+            if let Some(element) = element {
+                ticket.check()?;
                 let _ = element.SetFocus();
                 std::thread::sleep(SETTLE);
             }
         }
-        self.check_focus(hwnd)?;
-        send(&text_inputs(text)).map(|()| "keyboard")
+        for batch in keys::typing(text) {
+            self.check_focus(hwnd, false)?;
+            match batch {
+                Typed::Units(units) => inject(ticket, &unit_inputs(&units))?,
+                Typed::Enter => {
+                    inject(ticket, &enter_inputs())?;
+                    std::thread::sleep(SETTLE);
+                }
+            }
+        }
+        std::thread::sleep(SETTLE);
+        Ok("keyboard")
     }
 
     unsafe fn scroll(
@@ -457,6 +520,7 @@ impl State {
         element: &IUIAutomationElement,
         direction: Direction,
         hwnd: HWND,
+        ticket: &Ticket,
     ) -> Result<&'static str, Failure> {
         let (horizontal, vertical): (ScrollAmount, ScrollAmount) = match direction {
             Direction::Up => (ScrollAmount_NoAmount, ScrollAmount_LargeDecrement),
@@ -472,9 +536,11 @@ impl State {
                     let Some(here) = current.take() else { break };
                     if let Ok(pattern) =
                         here.GetCurrentPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId)
-                        && pattern.Scroll(horizontal, vertical).is_ok()
                     {
-                        return Ok("scroll");
+                        ticket.check()?;
+                        if pattern.Scroll(horizontal, vertical).is_ok() {
+                            return Ok("scroll");
+                        }
                     }
                     current = walker.GetParentElement(&here).ok();
                 }
@@ -492,7 +558,7 @@ impl State {
             };
             let mut inputs = vec![mouse_move(point)];
             inputs.push(mouse(flags, amount as u32, 0, 0));
-            send(&inputs).map(|()| "wheel")
+            send(ticket, &inputs).map(|()| "wheel")
         }
     }
 }
@@ -617,8 +683,13 @@ impl UiNode for Node<'_> {
     }
 }
 
-/// A click: the element's pattern for it if it has one, else the mouse at its centre.
-unsafe fn click(element: &IUIAutomationElement, hwnd: HWND) -> Result<&'static str, Failure> {
+/// A click: the element's pattern for it if it has one, else the mouse at its centre. The run's
+/// ticket is checked before each pattern is called.
+unsafe fn click(
+    element: &IUIAutomationElement,
+    hwnd: HWND,
+    ticket: &Ticket,
+) -> Result<&'static str, Failure> {
     // A pattern call that ran into UI Automation's time bound was made: the app is busy with it
     // (a button that opens a modal dialog does not return until the dialog closes).
     let made = |result: windows::core::Result<()>| match result {
@@ -629,25 +700,32 @@ unsafe fn click(element: &IUIAutomationElement, hwnd: HWND) -> Result<&'static s
     unsafe {
         if let Ok(invoke) =
             element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
-            && made(invoke.Invoke())
         {
-            return Ok("invoke");
+            ticket.check()?;
+            if made(invoke.Invoke()) {
+                return Ok("invoke");
+            }
         }
         if let Ok(toggle) =
             element.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
-            && made(toggle.Toggle())
         {
-            return Ok("toggle");
+            ticket.check()?;
+            if made(toggle.Toggle()) {
+                return Ok("toggle");
+            }
         }
         if let Ok(item) = element
             .GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
-            && made(item.Select())
         {
-            return Ok("select");
+            ticket.check()?;
+            if made(item.Select()) {
+                return Ok("select");
+            }
         }
         if let Ok(expand) = element
             .GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(UIA_ExpandCollapsePatternId)
         {
+            ticket.check()?;
             let collapsed = expand
                 .CurrentExpandCollapseState()
                 .is_ok_and(|s| s == ExpandCollapseState_Collapsed);
@@ -664,11 +742,14 @@ unsafe fn click(element: &IUIAutomationElement, hwnd: HWND) -> Result<&'static s
         if !point_is_windows(point, hwnd) {
             return Err(Failure::Failed);
         }
-        send(&[
-            mouse_move(point),
-            mouse(MOUSEEVENTF_LEFTDOWN, 0, 0, 0),
-            mouse(MOUSEEVENTF_LEFTUP, 0, 0, 0),
-        ])
+        send(
+            ticket,
+            &[
+                mouse_move(point),
+                mouse(MOUSEEVENTF_LEFTDOWN, 0, 0, 0),
+                mouse(MOUSEEVENTF_LEFTUP, 0, 0, 0),
+            ],
+        )
         .map(|()| "mouse")
     }
 }
@@ -696,7 +777,15 @@ fn point_is_windows(point: POINT, hwnd: HWND) -> bool {
     }
 }
 
-/// Whether the window in front is `hwnd`'s (or one of its own, a dialog).
+/// Whether the window in front is `target` itself or one it owns (a dialog of its), from the
+/// window in front, its top-level ancestor and the owner at the root of its owners (handles as
+/// numbers, 0 for none). Another top-level window of the same process (a second Chrome window)
+/// is not the target's, whatever process it is of.
+fn fronts(front: isize, front_root: isize, front_root_owner: isize, target: isize) -> bool {
+    front != 0 && target != 0 && [front, front_root, front_root_owner].contains(&target)
+}
+
+/// Whether the window in front is `hwnd` (or one it owns, a dialog).
 fn in_front(hwnd: HWND) -> bool {
     // SAFETY: plain queries.
     unsafe {
@@ -704,27 +793,38 @@ fn in_front(hwnd: HWND) -> bool {
         if front.is_invalid() {
             return false;
         }
-        let (mut theirs, mut ours) = (0u32, 0u32);
-        GetWindowThreadProcessId(front, Some(&raw mut theirs));
-        GetWindowThreadProcessId(hwnd, Some(&raw mut ours));
-        GetAncestor(front, GA_ROOT) == GetAncestor(hwnd, GA_ROOT) || (theirs != 0 && theirs == ours)
+        let handle = |hwnd: HWND| hwnd.0 as isize;
+        fronts(
+            handle(front),
+            handle(GetAncestor(front, GA_ROOT)),
+            handle(GetAncestor(front, GA_ROOTOWNER)),
+            handle(GetAncestor(hwnd, GA_ROOT)),
+        )
     }
 }
 
 /// Brings `hwnd` to the front, restored if it was minimized. Windows lets a process do that only
 /// when it made the last input, so a press of a key that no app takes (0xE8, which pasting
 /// already sends for the same kind of reason) comes first. Windows may refuse all the same; the
-/// step then finds out (`in_front`), and a pattern needs no front anyway.
-fn bring_to_front(hwnd: HWND) {
+/// step then finds out (`in_front`), and a pattern needs no front anyway. `Stopped`, with nothing
+/// done, once the run is over.
+fn bring_to_front(hwnd: HWND, ticket: &Ticket) -> Result<(), Failure> {
     /// A virtual key no app answers to.
     const UNASSIGNED: u16 = 0xE8;
     if in_front(hwnd) {
-        return;
+        return Ok(());
     }
-    let _ = send(&[
-        key(UNASSIGNED, 0, KEYBD_EVENT_FLAGS::default()),
-        key(UNASSIGNED, 0, KEYEVENTF_KEYUP),
-    ]);
+    let pressed = inject(
+        ticket,
+        &[
+            key(UNASSIGNED, 0, KEYBD_EVENT_FLAGS::default()),
+            key(UNASSIGNED, 0, KEYEVENTF_KEYUP),
+        ],
+    );
+    if pressed == Err(Failure::Stopped) {
+        return pressed;
+    }
+    ticket.check()?;
     // SAFETY: plain window calls.
     unsafe {
         if IsIconic(hwnd).as_bool() {
@@ -733,17 +833,33 @@ fn bring_to_front(hwnd: HWND) {
         let _ = SetForegroundWindow(hwnd);
     }
     std::thread::sleep(SETTLE);
+    Ok(())
 }
 
-fn send(inputs: &[INPUT]) -> Result<(), Failure> {
+/// Sends `inputs` at once, if the run of `ticket` is still under way.
+fn inject(ticket: &Ticket, inputs: &[INPUT]) -> Result<(), Failure> {
+    ticket.check()?;
     // SAFETY: `inputs` are initialized inputs of the size given.
     let sent = unsafe { SendInput(inputs, size_of::<INPUT>() as i32) };
     if sent as usize == inputs.len() {
-        std::thread::sleep(SETTLE);
         Ok(())
     } else {
         Err(Failure::Failed)
     }
+}
+
+/// Sends `inputs`, if the run of `ticket` is still under way, and gives the app a moment.
+fn send(ticket: &Ticket, inputs: &[INPUT]) -> Result<(), Failure> {
+    inject(ticket, inputs)?;
+    std::thread::sleep(SETTLE);
+    Ok(())
+}
+
+/// Whether the live element is called like a sign-in, a payment field or a code. A name that
+/// cannot be read is no such name: the element's other checks still hold.
+fn handoff(element: &IUIAutomationElement) -> bool {
+    // SAFETY: a COM call on an object of the desktop's thread, which this runs on.
+    unsafe { element.CurrentName() }.is_ok_and(|name| policy::is_handoff_name(&name.to_string()))
 }
 
 fn key(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
@@ -828,19 +944,25 @@ fn chord_inputs(chord: Chord) -> Vec<INPUT> {
     inputs
 }
 
-/// Text as Unicode key presses; a line break is Enter.
-fn text_inputs(text: &str) -> Vec<INPUT> {
-    let mut inputs = Vec::new();
-    for unit in text.replace("\r\n", "\n").encode_utf16() {
-        if unit == u16::from(b'\n') {
-            inputs.push(key(0x0D, 0, KEYBD_EVENT_FLAGS::default()));
-            inputs.push(key(0x0D, 0, KEYEVENTF_KEYUP));
-        } else {
-            inputs.push(key(0, unit, KEYEVENTF_UNICODE));
-            inputs.push(key(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
-        }
-    }
-    inputs
+/// UTF-16 units as Unicode key presses, each pressed and released.
+fn unit_inputs(units: &[u16]) -> Vec<INPUT> {
+    units
+        .iter()
+        .flat_map(|&unit| {
+            [
+                key(0, unit, KEYEVENTF_UNICODE),
+                key(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP),
+            ]
+        })
+        .collect()
+}
+
+/// Enter, pressed and released: a line break of typed text.
+fn enter_inputs() -> [INPUT; 2] {
+    [
+        key(0x0D, 0, KEYBD_EVENT_FLAGS::default()),
+        key(0x0D, 0, KEYEVENTF_KEYUP),
+    ]
 }
 
 unsafe extern "system" fn collect_window(hwnd: HWND, found: LPARAM) -> BOOL {
@@ -1015,14 +1137,36 @@ mod tests {
 
     #[test]
     fn text_is_typed_as_unicode_and_a_line_break_is_enter() {
-        let inputs = text_inputs("七\n");
-        assert_eq!(inputs.len(), 4);
+        let units: Vec<u16> = "七".encode_utf16().collect();
+        let inputs = unit_inputs(&units);
+        assert_eq!(inputs.len(), 2);
         // SAFETY: keyboard inputs.
         let first = unsafe { inputs[0].Anonymous.ki };
         assert_eq!(first.wScan, '七' as u16);
         assert_ne!(first.dwFlags.0 & KEYEVENTF_UNICODE.0, 0);
-        assert_eq!(vk(&inputs[2]), (0x0D, false));
+        assert!(vk(&inputs[1]).1);
+        let enter = enter_inputs();
+        assert_eq!(
+            [vk(&enter[0]), vk(&enter[1])],
+            [(0x0D, false), (0x0D, true)]
+        );
         // a character beyond the basic plane is two units, each pressed and released
-        assert_eq!(text_inputs("𠮷").len(), 4);
+        let units: Vec<u16> = "𠮷".encode_utf16().collect();
+        assert_eq!(unit_inputs(&units).len(), 4);
+    }
+
+    #[test]
+    fn another_window_of_the_same_process_in_front_is_not_the_steps() {
+        let (target, other_chrome, dialog) = (0x100, 0x200, 0x300);
+        // the step's own window in front, or a dialog it owns
+        assert!(fronts(target, target, target, target));
+        assert!(fronts(dialog, dialog, target, target));
+        // a second window of the same browser in front: a window of its own, owned by none
+        assert!(!fronts(other_chrome, other_chrome, other_chrome, target));
+        // a dialog of that other window
+        assert!(!fronts(dialog, dialog, other_chrome, target));
+        // nothing in front, or no target
+        assert!(!fronts(0, 0, 0, target));
+        assert!(!fronts(0, 0, 0, 0));
     }
 }

@@ -8,6 +8,9 @@
 //! - No bare letter or digit, nor one with Shift alone: that is typing, which `type` does.
 //!
 //! A chord is written `Ctrl+Shift+Tab`: modifiers first, then one key, any case.
+//!
+//! Text that a step types where no field takes it as its value goes as Unicode characters, in
+//! batches ([`typing`]) between which the run's ticket is checked again; a line break is Enter.
 
 /// A key a chord may end in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +103,60 @@ pub struct Chord {
     pub shift: bool,
     pub alt: bool,
     pub key: Key,
+}
+
+impl Chord {
+    /// Whether the chord only moves away from the element with the focus (Tab, Shift+Tab, Esc):
+    /// it enters, presses and sends nothing there.
+    pub fn moves_away(self) -> bool {
+        !self.ctrl
+            && !self.alt
+            && match self.key {
+                Key::Tab => true,
+                Key::Escape => !self.shift,
+                _ => false,
+            }
+    }
+}
+
+/// A piece of typed text, as it is sent: characters (UTF-16 units, a few at a time), or a line
+/// break, which is Enter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Typed {
+    Units(Vec<u16>),
+    Enter,
+}
+
+/// The most UTF-16 units sent in one batch: the run's ticket is checked between batches, so a
+/// run that is stopped halfway through a long text types no more of it.
+pub const TYPED_BATCH_UNITS: usize = 64;
+
+/// `text` as the batches it is typed in. A line break (`\r\n`, `\r` or `\n`) is Enter; a
+/// character beyond the basic plane is never split between two batches.
+pub fn typing(text: &str) -> Vec<Typed> {
+    let mut batches = Vec::new();
+    let mut units: Vec<u16> = Vec::new();
+    let flush = |units: &mut Vec<u16>, batches: &mut Vec<Typed>| {
+        if !units.is_empty() {
+            batches.push(Typed::Units(std::mem::take(units)));
+        }
+    };
+    let normal = text.replace("\r\n", "\n").replace('\r', "\n");
+    for c in normal.chars() {
+        if c == '\n' {
+            flush(&mut units, &mut batches);
+            batches.push(Typed::Enter);
+            continue;
+        }
+        let mut buffer = [0u16; 2];
+        let encoded = c.encode_utf16(&mut buffer);
+        if units.len() + encoded.len() > TYPED_BATCH_UNITS {
+            flush(&mut units, &mut batches);
+        }
+        units.extend_from_slice(encoded);
+    }
+    flush(&mut units, &mut batches);
+    batches
 }
 
 /// Why a chord is not pressed.
@@ -267,5 +324,46 @@ mod tests {
         assert_eq!(Key::F(12).virtual_key(), (0x7B, false));
         assert_eq!(Key::Delete.virtual_key(), (0x2E, true));
         assert_eq!(Key::Enter.virtual_key(), (0x0D, false));
+    }
+
+    #[test]
+    fn only_tab_shift_tab_and_esc_move_away() {
+        for text in ["Tab", "Shift+Tab", "Esc"] {
+            assert!(parse_chord(text).unwrap().moves_away(), "{text}");
+        }
+        for text in [
+            "Enter",
+            "Space",
+            "Ctrl+V",
+            "Ctrl+Tab",
+            "Backspace",
+            "Shift+Esc",
+        ] {
+            assert!(!parse_chord(text).unwrap().moves_away(), "{text}");
+        }
+    }
+
+    #[test]
+    fn text_is_typed_in_batches_and_a_line_break_is_enter() {
+        let units = |text: &str| Typed::Units(text.encode_utf16().collect());
+        assert_eq!(typing("七"), [units("七")]);
+        for text in ["一\n二", "一\r\n二", "一\r二"] {
+            assert_eq!(
+                typing(text),
+                [units("一"), Typed::Enter, units("二")],
+                "{text:?}"
+            );
+        }
+        assert_eq!(typing("\n"), [Typed::Enter]);
+        // a long text goes in batches, and a character beyond the basic plane is never split
+        let long = format!("{}𠮷", "a".repeat(TYPED_BATCH_UNITS - 1));
+        let batches = typing(&long);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[1], units("𠮷"));
+        for batch in &batches {
+            if let Typed::Units(units) = batch {
+                assert!(units.len() <= TYPED_BATCH_UNITS);
+            }
+        }
     }
 }
