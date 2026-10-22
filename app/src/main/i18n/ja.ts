@@ -570,6 +570,7 @@ export const ja = {
   "settings.searchShortcut": "ショートカット ホットキー キー",
   "settings.searchModel": "モデル",
   "settings.searchHistory": "履歴 削除",
+  "settings.searchAvatar": "アイコン アバター 画像 写真 プロフィール",
   "data.groupDictation": "音声入力の履歴",
   "data.retention": "音声入力の履歴の保存期間",
   "data.clearDictation": "音声入力の履歴を消去",

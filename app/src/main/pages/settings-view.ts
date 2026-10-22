@@ -147,6 +147,7 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "agent", label: "settings.agentKeys", also: "settings.searchShortcut" },
   { pane: "agent", label: "settings.agentCity" },
   { pane: "agent", label: "settings.workerCostCap" },
+  { pane: "agent", label: "settings.avatar", also: "settings.searchAvatar" },
   { pane: "messaging", words: ["Telegram"] },
   { pane: "usage", label: "common.apiKey", words: ["OpenRouter"] },
   { pane: "usage", label: "settings.050" },

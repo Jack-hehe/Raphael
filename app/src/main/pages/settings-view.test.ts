@@ -539,6 +539,16 @@ describe("搜尋設定", () => {
     expect(where("ショートカット")).toEqual(shortcuts);
   });
 
+  test("finds Raphael's picture by what people call it, in any of the languages", () => {
+    for (const query of ["頭像", "大頭貼", "avatar", "Picture", "photo", "アイコン", "アバター"]) {
+      expect(where(query), query).toEqual(["agent:頭像"]);
+    }
+    setLocale("en");
+    expect(where("頭像")).toEqual(["agent:Picture"]);
+    setLocale("ja");
+    expect(where("avatar")).toEqual(["agent:アイコン"]);
+  });
+
   test("finds a tab by its name, before its rows, and a brand by its name; case does not matter", () => {
     expect(where("連接")[0]).toBe("connections:連接");
     expect(where("telegram")).toEqual(["messaging:訊息平台"]);

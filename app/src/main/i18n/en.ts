@@ -570,6 +570,7 @@ export const en = {
   "settings.searchShortcut": "shortcut hotkey keyboard keys",
   "settings.searchModel": "model",
   "settings.searchHistory": "history delete",
+  "settings.searchAvatar": "avatar picture photo image profile",
   "data.groupDictation": "Dictation history",
   "data.retention": "Keep dictation history",
   "data.clearDictation": "Clear dictation history",

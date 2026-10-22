@@ -569,6 +569,7 @@ export const zhTW = {
   "settings.searchShortcut": "快捷鍵 熱鍵 按鍵",
   "settings.searchModel": "模型",
   "settings.searchHistory": "歷史紀錄 刪除",
+  "settings.searchAvatar": "頭像 大頭貼 照片 圖片 avatar",
   "data.groupDictation": "聽寫紀錄",
   "data.retention": "保留聽寫紀錄",
   "data.clearDictation": "清除聽寫紀錄",
