@@ -16,7 +16,9 @@
 //!   window, or the end of the run.
 //! - A step checks the element again first (a password field is refused, whatever the look said,
 //!   and so is a click on or text for an element now called like a sign-in, a payment field or a
-//!   code), brings the window to the front, and uses UI Automation's patterns; a click at the
+//!   code; a click on one now called like Send, Delete or Buy, renamed since the look, goes only
+//!   with the owner's yes, `unconfirmed` otherwise), brings the window to the front, and uses UI
+//!   Automation's patterns; a click at the
 //!   element's centre only when there is none, and only when the point is the window's (nothing,
 //!   the overlay least of all, covers it). Typing into an edit field sets its value; elsewhere the
 //!   text is typed at the caret, as Unicode, in batches, each after the element with the focus is
@@ -425,7 +427,16 @@ impl State {
         // SAFETY: COM calls on this thread's objects, and input sent with SendInput.
         unsafe {
             match (&step.action, element) {
-                (Action::Click, Some(element)) => click(&element, hwnd, ticket),
+                (Action::Click, Some(element)) => {
+                    // The name now, not the look's: a page may have renamed the same button
+                    // (Next became Delete) since. A name that cannot be read is no such name.
+                    let name = element
+                        .CurrentName()
+                        .map(|name| name.to_string())
+                        .unwrap_or_default();
+                    policy::may_click(&name, step.confirmed)?;
+                    click(&element, hwnd, ticket)
+                }
                 (Action::Focus, Some(element)) => {
                     ticket.check()?;
                     element

@@ -24,6 +24,8 @@
 //!   is selected (Delete, Backspace, Ctrl+D) reach no live focus but a text field unless the step
 //!   is `confirmed` (`unconfirmed` otherwise).
 //! - `focus {window}`: the window is brought to the front.
+//! - `check`: nothing is done; it fails as any request of the run would (`stopped`, `watch`), so
+//!   that the core opens an app itself only for a run the shell has taken.
 //! - `allow {exe, name}`: the app joins the always-allowed list of the device settings.
 //!
 //! What may never be touched is refused here whatever the core asks ([`policy`], [`Service`]): a
@@ -343,11 +345,12 @@ impl<D: Desktop> Service<D> {
         allowed: &[String],
         ticket: &Ticket,
     ) -> Result<Value, Failure> {
-        if !matches!(op, "apps" | "look" | "act" | "focus") {
+        if !matches!(op, "apps" | "look" | "act" | "focus" | "check") {
             return Err(Failure::BadRequest);
         }
         ticket.check()?;
         match op {
+            "check" => Ok(json!({})),
             "apps" => Ok(self.apps(allowed)),
             "look" => {
                 let window = self.checked(window_arg(args)?)?;
@@ -934,6 +937,30 @@ mod tests {
         assert!(desktop.looks.lock().unwrap().is_empty());
         assert!(desktop.focused.lock().unwrap().is_empty());
         assert_eq!(Failure::Stopped.kind(), "stopped");
+    }
+
+    #[test]
+    fn a_check_says_whether_the_run_is_the_shells_and_does_nothing() {
+        let service = service();
+        let runs = Runs::new();
+        runs.begin(RUN);
+        assert_eq!(
+            service.handle("check", &json!({}), &[], &runs.ticket(Some(RUN))),
+            Ok(json!({}))
+        );
+        assert_eq!(
+            service.handle("check", &json!({}), &[], &runs.ticket(Some(OTHER_RUN))),
+            Err(Failure::Stopped)
+        );
+        runs.refuse(RUN);
+        assert_eq!(
+            service.handle("check", &json!({}), &[], &runs.ticket(Some(RUN))),
+            Err(Failure::Watch)
+        );
+        let desktop = service.desktop();
+        assert!(desktop.steps.lock().unwrap().is_empty());
+        assert!(desktop.looks.lock().unwrap().is_empty());
+        assert!(desktop.focused.lock().unwrap().is_empty());
     }
 
     #[test]

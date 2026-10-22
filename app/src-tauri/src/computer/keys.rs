@@ -3,8 +3,9 @@
 //!
 //! - No Windows key at all (Win+L locks, Win+R runs, Win+D hides everything).
 //! - Nothing that switches or closes windows, or opens the system's own: Alt+Tab, Alt+F4,
-//!   Alt+Space, Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc, Ctrl+F4. Ctrl and Alt are never held together
-//!   (that is AltGr, or the system's: Ctrl+Alt+Del).
+//!   Alt+Space, Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc, Ctrl+F4, and nothing that closes a tab, a
+//!   window or the app (Ctrl+W, Ctrl+Shift+W, Ctrl+Q, Ctrl+Shift+Q). Ctrl and Alt are never held
+//!   together (that is AltGr, or the system's: Ctrl+Alt+Del).
 //! - No bare letter or digit, nor one with Shift alone: that is typing, which `type` does.
 //!
 //! A chord is written `Ctrl+Shift+Tab`: modifiers first, then one key, any case.
@@ -205,6 +206,12 @@ pub enum Refused {
 /// The longest a chord may be written, in characters.
 const MAX_CHARS: usize = 40;
 
+/// Letters that, with Ctrl (and Shift or not), close a tab, a window or the app: Ctrl+W and
+/// Ctrl+Shift+W (a browser's tab and window, File Explorer), Ctrl+Q and Ctrl+Shift+Q (quitting).
+/// Never pressed: Raphael closes nothing. The core's `_CLOSE_LETTERS`, held to this by a test of
+/// the core's.
+const CLOSE_LETTERS: &[char] = &['w', 'q'];
+
 /// Reads a chord and checks it against the allowlist.
 pub fn parse_chord(text: &str) -> Result<Chord, Refused> {
     if text.trim().is_empty() || text.chars().count() > MAX_CHARS {
@@ -250,6 +257,7 @@ pub fn check(chord: Chord) -> Result<(), Refused> {
     let system = match chord.key {
         Key::Tab | Key::Space => chord.alt,
         Key::F(4) | Key::Escape => chord.alt || chord.ctrl,
+        Key::Char(letter) => chord.ctrl && CLOSE_LETTERS.contains(&letter),
         _ => false,
     };
     if system || (chord.ctrl && chord.alt) {
@@ -312,6 +320,12 @@ mod tests {
             "Ctrl+Shift+Esc",
             "Ctrl+Alt+Delete",
             "Ctrl+Alt+T",
+            // closing a tab, a window or the app
+            "Ctrl+W",
+            "Ctrl+Shift+W",
+            "Ctrl+Shift+F4",
+            "Ctrl+Q",
+            "Ctrl+Shift+Q",
         ] {
             assert_eq!(parse_chord(text), Err(Refused::System), "{text}");
         }

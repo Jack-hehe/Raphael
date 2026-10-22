@@ -376,6 +376,17 @@ pub fn may_reach(reach: Reach, press: Press, confirmed: bool) -> Result<(), Fail
     }
 }
 
+/// Whether a click may go to an element called `name` now, read live just before: the look the
+/// core judged may be older than a page that renamed the same button (Next became Submit or
+/// Delete). Without the owner's yes, nothing called like an element that sends, submits, deletes
+/// or buys is clicked (`unconfirmed`: the core asks, and the model looks again).
+pub fn may_click(name: &str, confirmed: bool) -> Result<(), Failure> {
+    if !confirmed && is_confirm_name(name) {
+        return Err(Failure::Unconfirmed);
+    }
+    Ok(())
+}
+
 /// An executable's file name as the lists keep it: the last part of `path`, in lower case.
 pub fn exe_of(path: &str) -> String {
     path.rsplit(['\\', '/'])
@@ -570,6 +581,17 @@ mod tests {
                 );
                 assert_eq!(may_reach(reach, keys(text), true), Ok(()), "{text}");
             }
+        }
+    }
+
+    #[test]
+    fn a_button_renamed_to_send_or_delete_since_the_look_is_clicked_only_with_a_yes() {
+        for name in ["Submit", "Delete", "傳送", "購入", "Place order"] {
+            assert_eq!(may_click(name, false), Err(Failure::Unconfirmed), "{name}");
+            assert_eq!(may_click(name, true), Ok(()), "{name}");
+        }
+        for name in ["Next", "七", "", "Settings"] {
+            assert_eq!(may_click(name, false), Ok(()), "{name}");
         }
     }
 
