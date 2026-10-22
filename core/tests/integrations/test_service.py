@@ -11,6 +11,7 @@ from raphael_core.integrations import service as service_module
 from raphael_core.integrations.client import McpConnector
 from raphael_core.integrations.service import IntegrationsService
 from raphael_core.integrations.vault import secret_name
+from . import fake_server
 from raphael_core.protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from raphael_core.router import Router
 
@@ -600,3 +601,38 @@ async def test_a_refresh_closes_the_connections_kept_for_the_server(service, rpc
         await asyncio.sleep(0.02)
     assert pool.open_count == 0
     await pool.aclose()
+
+
+async def test_a_parameter_renamed_between_two_tasks_is_saved_by_the_first_call_of_the_next(
+    service, rpc, servers
+):
+    from raphael_core.integrations.pool import McpPool
+
+    server_id = await add(rpc, servers)
+    key = f"mcp:{server_id}/look"
+    old = McpPool()
+    assert (await service.call(key, {"topic": "a"}, approver="auto", pool=old)).ok
+    await old.aclose()
+    servers.by_name["Notes"] = fake_server.build(renamed=True)  # the server was updated meanwhile
+    new = McpPool()
+    await service.call(key, {"topic": "a"}, approver="auto", pool=new)  # the old name: it is refused
+    look = next(t for t in service._config.get(server_id).tools if t.name == "look")
+    assert "query" in look.input_schema["properties"]  # but the new schema was kept
+    assert (await service.call(key, {"query": "b"}, approver="auto", pool=new)).ok
+    await new.aclose()
+
+
+async def test_only_a_tool_the_server_says_reads_is_read_only_for_a_rerun(service, rpc, servers):
+    server_id = await add(rpc, servers)
+    assert service.kind_of("Notes", "look") == "read"  # annotated readOnlyHint
+    assert service.kind_of("Notes", "note") == "write"
+    assert service.kind_of("Notes", "unknown") == "write"
+    server = service._config.get(server_id)
+    from raphael_core.integrations.config import tool_record
+
+    server.tools.append(tool_record("get_or_create_page", "", {}, None, None, None))
+    server.tools.append(tool_record("resolve_ticket", "", {}, None, None, None))
+    assert service.kind_of("Notes", "get_or_create_page") == "write"  # its name only sounds like a read
+    assert service.kind_of("Notes", "resolve_ticket") == "write"
+    server.tools.append(tool_record("fetch_it", "", {}, True, True, None))
+    assert service.kind_of("Notes", "fetch_it") == "write"  # also said to destroy

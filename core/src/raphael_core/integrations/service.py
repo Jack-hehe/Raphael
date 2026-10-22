@@ -409,13 +409,16 @@ class IntegrationsService:
         return {"server": self._view(server), "tools": self._tool_views(server)}
 
     def kind_of(self, server_name: str, tool_name: str) -> str:
-        """`"read"` for a tool that only looks, `"write"` for one that changes something or that is
-        not known (the safe guess)."""
+        """`"read"` for a tool its server says only reads (`readOnlyHint` true and not destructive),
+        `"write"` for any other, one not known too. The screen groups by a guess from the name as
+        well (`toolsets.tool_kind`); here a guess would let a task repeat a call that changed
+        something, so only the server's own word counts."""
         for server in self._config.servers():
             if server.name == server_name:
                 for tool in server.tools:
                     if tool.name == tool_name:
-                        return tool_kind(tool)
+                        said = tool.read_only_hint is True and tool.destructive_hint is not True
+                        return "read" if said else "write"
         return "write"
 
     def _tool_views(self, server: ServerConfig) -> list[dict[str, Any]]:

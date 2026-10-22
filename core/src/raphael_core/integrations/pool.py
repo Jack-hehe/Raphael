@@ -78,6 +78,7 @@ class _Connection:
         self.tools: list[ToolRecord] = []
         self.closed = False
         self._calls: set[_Call] = set()  # the calls being made
+        self.served = 0  # the calls given to this connection
         self.task = asyncio.ensure_future(self._own())
         # A task cancelled before it first ran never reaches its `finally`.
         self.task.add_done_callback(lambda _task: self._settle())
@@ -209,9 +210,11 @@ class McpPool:
         list_tools: ListTools,
         tool: str,
         arguments: dict[str, Any],
-    ) -> tuple[Any, ToolRecord]:
+    ) -> tuple[Any, ToolRecord, bool]:
         """Call `tool` of the server `key` through its connection (opened if there is none): the
-        client's result and the tool as the server described it when the connection was opened.
+        client's result, the tool as the server described it when the connection was opened, and
+        whether this is the first call of the connection (so that the description was read for it,
+        and is not older than anything saved).
         `McpFailure("gone")` for a tool the server does not have. Whatever ends the call early (a
         cancel, a time-out) closes the connection."""
         if self._closed:
@@ -222,9 +225,11 @@ class McpPool:
             current = next((t for t in connection.tools if t.name == tool), None)
             if current is None:
                 raise McpFailure("gone")
+            first = connection.served == 0
+            connection.served += 1
             future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
             connection.inbox.put_nowait(_Call(tool, arguments, future))
-            return await future, current
+            return await future, current, first
         except asyncio.CancelledError:
             connection.close()
             with contextlib.suppress(Exception, asyncio.CancelledError):

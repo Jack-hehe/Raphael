@@ -358,7 +358,7 @@ class McpConnector:
                 await self._ready()
                 if pool is not None:
                     self._pools.add(pool)
-                    result, current = await pool.call(
+                    result, current, first = await pool.call(
                         server.id,
                         lambda: self._opener(server, secrets),
                         self._list,
@@ -366,6 +366,7 @@ class McpConnector:
                         arguments,
                     )
                 else:
+                    first = True
                     async with self._opener(server, secrets) as client:
                         current = next((t for t in await self._list(client) if t.name == tool), None)
                         if current is None:
@@ -378,11 +379,9 @@ class McpConnector:
             text=text,
             is_error=bool(getattr(result, "is_error", False)),
             truncated=truncated,
-            # A pooled connection knows the list as it was when it opened, which may be older than
-            # the one saved: it is not given back to be saved over it.
-            fresh=current
-            if pool is None and expected is not None and current.fingerprint != expected
-            else None,
+            # The list read for this call is given back to be saved; the list of a pooled
+            # connection that has been open for other calls may be older than the one saved.
+            fresh=current if first and expected is not None and current.fingerprint != expected else None,
         )
 
 

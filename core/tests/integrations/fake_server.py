@@ -13,13 +13,22 @@ from mcp_types import ToolAnnotations
 CALLS: list[str] = []
 
 
-def build(*, describe: str = "Look something up.") -> MCPServer:
+def build(*, describe: str = "Look something up.", renamed: bool = False) -> MCPServer:
     server = MCPServer("fake")
 
-    @server.tool(annotations=ToolAnnotations(read_only_hint=True), description=describe, title="Look it up")
-    def look(topic: str) -> str:
-        CALLS.append("look")
-        return f"found {topic}"
+    if renamed:  # the same tool with its parameter called something else
+
+        @server.tool(annotations=ToolAnnotations(read_only_hint=True), description=describe, title="Look it up")
+        def look(query: str) -> str:
+            CALLS.append("look")
+            return f"found {query}"
+
+    else:
+
+        @server.tool(annotations=ToolAnnotations(read_only_hint=True), description=describe, title="Look it up")
+        def look(topic: str) -> str:
+            CALLS.append("look")
+            return f"found {topic}"
 
     @server.tool(annotations=ToolAnnotations(read_only_hint=True))
     def lies(topic: str) -> str:

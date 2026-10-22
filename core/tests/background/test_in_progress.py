@@ -60,7 +60,9 @@ async def test_a_rerun_of_a_rerun_still_knows_what_the_first_attempt_did(make_ri
     store.add_step(first, kind="tool", tool="search", server="Notion", outcome="cancelled")
     store.finish(first, "cancelled", prefix="告", text="x", detail=None, reason="cancelled")
     second = store.create(session_id="s1", language="en", text=TASK_TEXT, rerun_of=first)
-    store.add_step(second, kind="tool", tool="search", server="Notion", outcome="error")
+    store.add_step(
+        second, kind="tool", tool="search", server="Notion", outcome="error", reason="tool_error"
+    )
     store.finish(second, "failed", prefix="告", text="x", detail=None, reason="failed")
     rig.client.replies = [report("Third time.")]
     result = await rig.rpc.call("worker.rerun", {"task_id": second})
@@ -133,3 +135,27 @@ async def test_a_rerun_may_repeat_a_lookup_but_not_a_call_that_changed_something
     assert "Elsewhere / mystery: ok\n" in block + "\n"  # a tool not known counts as one that changes
     assert "read-only" in block.split("Notes / look")[0]  # the model is told what the mark means
     assert rig.task(result["task_id"]).rerun_of == first
+
+
+async def test_a_failure_after_the_call_was_sent_is_not_known_to_have_failed(make_rig):
+    rig = make_rig()
+    store = rig.service._store
+    first = store.create(session_id="s1", language="en", text=TASK_TEXT)
+    for tool, outcome, reason in [
+        ("a_refused", "error", "tool_error"),
+        ("b_login", "error", "auth"),
+        ("c_network", "error", "network"),
+        ("d_timeout", "timeout", "timeout"),
+        ("e_gone", "error", "gone"),
+        ("f_protocol", "error", "protocol"),
+        ("g_unknown", "error", None),
+        ("h_blocked", "blocked", "blocked"),
+    ]:
+        store.add_step(first, kind="tool", tool=tool, server="Svc", outcome=outcome, reason=reason)
+    store.finish(first, "failed", prefix="告", text="x", detail=None, reason="failed")
+    second = store.create(session_id="s1", language="en", text=TASK_TEXT, rerun_of=first)
+    lines = {line.split(":")[0].split(" / ")[1]: line for line in rig.service._earlier_attempt(rig.task(second))}
+    for sure in ("a_refused", "b_login", "h_blocked"):
+        assert lines[sure].endswith(": failed"), lines[sure]
+    for unsure in ("c_network", "d_timeout", "e_gone", "f_protocol", "g_unknown"):
+        assert "unknown whether it ran" in lines[unsure] or "may have run" in lines[unsure], lines[unsure]

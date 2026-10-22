@@ -100,6 +100,19 @@ _EARLIER_OUTCOME = {
     "cancelled": "cut off, may have run",
     "timeout": "timed out, may have run",
 }
+# A call that failed for one of these reasons was refused before it did anything, or by the tool
+# itself; any other failure came after the call was sent, so it may have been made.
+_REFUSED_REASONS = frozenset(
+    {"tool_error", "auth", "bad_arguments", "blocked", "missing_secret", "not_found", "denied"}
+)
+
+
+def _earlier_outcome(step: Step) -> str:
+    if step.outcome in _EARLIER_OUTCOME:
+        return _EARLIER_OUTCOME[step.outcome]
+    if step.outcome == "blocked" or step.reason in _REFUSED_REASONS:
+        return "failed"
+    return "failed, unknown whether it ran"
 
 
 def _wall_clock_ms() -> int:
@@ -619,7 +632,7 @@ class BackgroundService:
             return " [read-only]" if read else ""
 
         return [
-            f"{step.server} / {step.tool}: {_EARLIER_OUTCOME.get(step.outcome, 'failed')}{mark(step)}"
+            f"{step.server} / {step.tool}: {_earlier_outcome(step)}{mark(step)}"
             for step in steps
             if step.kind == "tool" and step.tool and not _is_builtin(step)
         ]
