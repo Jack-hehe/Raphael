@@ -1565,6 +1565,24 @@ async def test_a_message_from_a_messaging_app_leaves_the_question_at_the_compute
     assert not any(t["status"] == "denied" for t in await rig.turns())
 
 
+async def test_a_question_typed_in_the_app_is_asked_at_the_computer_and_replaces_the_one_that_waits(
+    rig, client, actions
+):
+    rig.seed("q", "a")
+    asked = await ask_to_copy(rig, client)
+    client.decisions.append(decision("chat"))
+    client.replies.append(spoken("答", "好。"))
+    reply = await rig.call(
+        "agent.ask",
+        {"session_id": "app-1", "text": "你好", "ui_language": "zh-TW", "source": "app"},
+    )
+    assert reply["text"] == "好。"
+    assert (await rig.confirm(asked["confirm"]["id"], True))["prefix"] == "否"
+    turns = await rig.turns()
+    assert turns[0]["source"] == "app" and turns[0]["question"] == "你好"
+    assert any(t["status"] == "denied" for t in turns)
+
+
 async def test_stopping_a_session_ends_its_request_and_denies_its_question_only(rig, client, actions):
     rig.seed("q", "a")
     asked = await ask_to_copy(rig, client)

@@ -328,7 +328,25 @@ export type MainEvent =
   /** A key of Raphael went down or up (from the hook or from the window itself), whether or not the guide practises. */
   | { type: "Hotkey"; kind: HotkeyKind }
   /** A dictation (`agent` false) or a question to Raphael (`agent` true) moved on. */
-  | { type: "Dictation"; phase: DictationPhase; agent: boolean };
+  | { type: "Dictation"; phase: DictationPhase; agent: boolean }
+  /** Raphael asks a YES/NO question (the overlay shows it too): the 拉斐爾 page's card answers it as well. */
+  | ({ type: "AgentQuestion" } & AgentQuestion)
+  /** The question `id` was answered (here or on the overlay), ran out or was dropped. */
+  | { type: "AgentQuestionClosed"; id: string }
+  /** The microphone's loudness, 0 to 1, while a question to Raphael is recorded (never a dictation's). */
+  | { type: "VoiceLevel"; value: number };
+
+/** A YES/NO question of Raphael's that waits for its answer (`AgentQuestion`, `agent_question_open`). */
+export interface AgentQuestion {
+  id: string;
+  /** 問, or its word in the language of the window. */
+  prefix: string;
+  text: string;
+  /** `T2` is answered by a click; `T3`, which cannot be undone, by a YES that is held first. */
+  tier: "T2" | "T3";
+  /** How long the question waits for an answer in all, in ms. */
+  timeout_ms: number;
+}
 
 export type HotkeyKind = "dictation_down" | "dictation_up" | "agent_down" | "agent_up" | "paste_last" | "cancel";
 export type DictationPhase = "listening" | "processing" | "pasted" | "cancelled" | "failed";

@@ -40,7 +40,7 @@ and, when it failed, why in one word. `agent.history.list` gives each turn its s
 that handed a task to the worker, the task and the worker's steps, so the app can show what happened
 between the question and the answer. `agent.turn {turn_id}` tells the app a turn was written or
 completed. `agent.ask` takes an optional `source`, where the request came from ("voice", the
-default, or a chat app such as "telegram").
+default; "app", typed in the conversation page of the app; or a chat app such as "telegram").
 
 `agent.cancel {session_id}` ends a request that is still being thought about and denies the
 question that session is waiting on. A new request replaces any question that waits.
@@ -123,8 +123,12 @@ HISTORY_DEFAULT_LIMIT = 50
 # and the request can cross on the pipe), and it is then answered as cancelled, with nothing run.
 CANCELLED_MEMORY_S = 60.0
 HISTORY_MAX_LIMIT = 200
-# Where a request may come from: a short lower-case word ("voice", "telegram").
+# Where a request may come from: a short lower-case word ("voice", "app", "telegram").
 _SOURCE = re.compile(r"[a-z]{1,20}")
+# A question typed in the app's conversation page: asked at this computer, like a spoken one.
+TYPED = "app"
+# The sources of the requests made at this computer: a new one replaces every question that waits.
+_AT_THIS_COMPUTER = frozenset({VOICE, TYPED})
 # How many turns of the conversation each route is shown.
 CONTEXT_TURNS = {"discuss": 10, "answer": 3, "chat": 3}
 # A connection to a plugin's server that nobody uses is closed after this long.
@@ -404,7 +408,7 @@ class AgentService:
             return self._done(0, ask.language, "understood", phrase(ask.language, "denied"))
         # The questions that ran out are expired, and a new request replaces those that still wait.
         self._expire(self._confirmations.sweep())
-        if ask.source == VOICE:
+        if ask.source in _AT_THIS_COMPUTER:
             self._deny(self._confirmations.cancel_all())
         else:  # a message from a messaging app leaves a question asked at this computer alone
             self._deny(self._confirmations.cancel_session(ask.session_id))

@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { setLocale } from "./i18n";
 import {
-  SESSION_GAP_MS,
-  groupSessions,
+  TYPED,
+  VOICE,
   hasDetail,
+  highlightHTML,
   mergeTurns,
   miniTurnHTML,
   oldestId,
-  sessionBusy,
-  sessionDays,
-  sessionTitle,
-  sessionWith,
+  sourceOf,
+  threadItems,
+  turnMatches,
   turnStamp,
 } from "./conversation";
 import type { AgentTurn } from "./types";
@@ -45,86 +45,57 @@ const NEWEST_FIRST = [
   turn(1, "2025-12-31T12:00:00+08:00"),
 ];
 
-describe("conversations", () => {
-  test("each press of the key has its own session id, so spoken turns close together are one conversation", () => {
-    const sessions = groupSessions([
-      turn(3, "2026-10-20T09:20:00+08:00"),
-      turn(2, "2026-10-20T09:05:00+08:00"),
-      turn(1, "2026-10-20T09:00:00+08:00"),
+describe("one thread", () => {
+  test("every turn in one thread, oldest first, whatever its source; each day under its heading", () => {
+    const items = threadItems(
+      [
+        turn(4, "2026-10-19T23:58:00+08:00", { source: "telegram", session_id: "chat-7" }),
+        ...NEWEST_FIRST.filter((t) => t.id !== 4),
+        turn(6, "2026-10-20T09:30:00+08:00", { source: "app" }),
+      ],
+      now,
+    );
+    expect(items.map((item) => (item.kind === "day" ? item.label : item.turn.id))).toEqual([
+      "2025 年 12 月 31 日", 1, "10 月 17 日", 2, "昨天", 3, 4, "今天", 5, 6,
     ]);
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0].turns.map((t) => t.id)).toEqual([1, 2, 3]); // oldest first, as it was said
-    expect(sessions[0].source).toBe("voice");
+    // the keys say which line is which across draws
+    expect(items.filter((item) => item.kind === "turn").map((item) => item.key)).toEqual(["turn:1", "turn:2", "turn:3", "turn:4", "turn:5", "turn:6"]);
+    expect(items[0].key).toBe("day:2025 年 12 月 31 日");
   });
 
-  test("half an hour of silence starts a new conversation, and the newest is listed first", () => {
-    const sessions = groupSessions([
-      turn(3, "2026-10-20T10:00:01+08:00"),
-      turn(2, "2026-10-20T09:30:00+08:00"),
-      turn(1, "2026-10-20T09:00:00+08:00"),
-    ]);
-    // 09:00 -> 09:30 is exactly the gap: still the same conversation; 09:30 -> 10:00:01 is not.
-    expect(SESSION_GAP_MS).toBe(30 * 60_000);
-    expect(sessions.map((s) => s.turns.map((t) => t.id))).toEqual([[3], [1, 2]]);
-  });
-
-  test("a chat app's turns are a conversation of their own chat, apart from the spoken ones", () => {
-    const sessions = groupSessions([
-      turn(4, "2026-10-20T09:04:00+08:00", { source: "telegram", session_id: "chat-7" }),
-      turn(3, "2026-10-20T09:03:00+08:00", { source: "telegram", session_id: "chat-9" }),
-      turn(2, "2026-10-20T09:02:00+08:00"),
-      turn(1, "2026-10-20T09:01:00+08:00", { source: "telegram", session_id: "chat-7" }),
-    ]);
-    expect(sessions.map((s) => [s.source, s.turns.map((t) => t.id)])).toEqual([
-      ["telegram", [1, 4]],
-      ["telegram", [3]],
-      ["voice", [2]],
-    ]);
+  test("turns of the same moment keep the order they were written in, and the list given is not changed", () => {
+    const copy = [...NEWEST_FIRST];
+    const same = threadItems([turn(9, "2026-10-20T09:00:00+08:00"), turn(8, "2026-10-20T09:00:00+08:00")], now);
+    expect(same.flatMap((item) => (item.kind === "turn" ? [item.turn.id] : []))).toEqual([8, 9]);
+    threadItems(NEWEST_FIRST, now);
+    expect(NEWEST_FIRST).toEqual(copy);
+    expect(threadItems([], now)).toEqual([]);
   });
 
   test("a turn from a core that keeps no source is a spoken one", () => {
     const old = { ...turn(1, "2026-10-20T09:00:00+08:00") };
     delete old.source;
-    delete old.session_id;
-    expect(groupSessions([old])[0].source).toBe("voice");
+    expect(sourceOf(old)).toBe(VOICE);
+    expect(sourceOf(turn(2, "2026-10-20T09:00:00+08:00", { source: "app" }))).toBe(TYPED);
+  });
+});
+
+describe("the search", () => {
+  test("a turn holds the words in what was asked, answered or said at length; width and case do not matter", () => {
+    const t1 = turn(1, "2026-10-20T09:00:00+08:00", { question: "台北天氣", text: "Rainy in TAIPEI", detail: "帶傘" });
+    expect(turnMatches(t1, "台北")).toBe(true);
+    expect(turnMatches(t1, "taipei")).toBe(true);
+    expect(turnMatches(t1, "ＴＡＩＰＥＩ")).toBe(true);
+    expect(turnMatches(t1, "傘")).toBe(true);
+    expect(turnMatches(t1, "高雄")).toBe(false);
+    expect(turnMatches(t1, "  ")).toBe(true);
   });
 
-  test("a conversation keeps its key when turns are added at its end", () => {
-    const first = groupSessions([turn(1, "2026-10-20T09:00:00+08:00")])[0].key;
-    const later = groupSessions([turn(2, "2026-10-20T09:10:00+08:00"), turn(1, "2026-10-20T09:00:00+08:00")])[0].key;
-    expect(later).toBe(first);
-  });
-
-  test("the list is grouped by the day of each conversation's last turn: today, yesterday, then dates", () => {
-    const days = sessionDays(groupSessions(NEWEST_FIRST), now);
-    expect(days.map((d) => d.label)).toEqual(["今天", "昨天", "10 月 17 日", "2025 年 12 月 31 日"]);
-    // 23:58 and 09:00 of yesterday are far apart: two conversations under the same day
-    expect(days[1].sessions.map((s) => s.turns.map((t) => t.id))).toEqual([[4], [3]]);
-  });
-
-  test("a conversation is called by its first question; one that was not heard has a word for it", () => {
-    const [session] = groupSessions([turn(2, "2026-10-20T09:01:00+08:00"), turn(1, "2026-10-20T09:00:00+08:00", { question: "  幫我\n查   天氣 " })]);
-    expect(sessionTitle(session)).toBe("幫我 查 天氣");
-    const [silent] = groupSessions([turn(1, "2026-10-20T09:00:00+08:00", { question: " " })]);
-    expect(sessionTitle(silent)).toBe("（沒有聽清楚的問題）");
-  });
-
-  test("the conversation of a turn is found by the turn, and one with a task under way says so", () => {
-    const sessions = groupSessions([
-      turn(2, "2026-10-20T09:01:00+08:00", { task: { id: 7, state: "running", started_at_ms: 1, finished_at_ms: null } }),
-      turn(1, "2026-10-19T09:00:00+08:00"),
-    ]);
-    expect(sessionWith(sessions, 1)?.turns[0].id).toBe(1);
-    expect(sessionWith(sessions, 99)).toBeUndefined();
-    expect(sessionBusy(sessions[0])).toBe(true);
-    expect(sessionBusy(sessions[1])).toBe(false);
-  });
-
-  test("nothing makes no conversations, and the list that was given is not changed", () => {
-    const copy = [...NEWEST_FIRST];
-    groupSessions(NEWEST_FIRST);
-    expect(NEWEST_FIRST).toEqual(copy);
-    expect(groupSessions([])).toEqual([]);
+  test("the words are marked where they are, and everything else is escaped", () => {
+    expect(highlightHTML("「台北下雨，台北好冷」", "台北")).toBe("「<mark>台北</mark>下雨，<mark>台北</mark>好冷」");
+    expect(highlightHTML("Rain in Taipei <b>", "TAIPEI")).toBe("Rain in <mark>Taipei</mark> &lt;b&gt;");
+    expect(highlightHTML("<i>x</i>", "")).toBe("&lt;i&gt;x&lt;/i&gt;");
+    expect(highlightHTML("a<b>c", "<b>")).toBe("a<mark>&lt;b&gt;</mark>c");
   });
 });
 
