@@ -7,7 +7,10 @@ tool an alias is stays here in the core. The snapshot holds:
   change something there: the user turned off what a task must not use, and a tool that is on runs
   without asking, for a task as for the assistant. (A tool that needed a yes would be left out: the
   worker cannot ask at the overlay yet. None does, today.)
-- Raphael's own lookups on the web: the weather, a web search and the time.
+- Raphael's own lookups on the web: the weather, a web search and the time;
+- and, when there is a memory, its two tools that only read (`memory_read`, `history_search`): a
+  task may read a note or look up what was said before. It never writes one: a task reads what
+  services return, and a memory is written only from the owner's own words.
 
 Not the commands for this computer (open a site, the volume, lock the screen, copy): those stay with
 the fast tier, which the user speaks to; a task in the background must not open a page or lock the
@@ -24,7 +27,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from ..agent.gate import WEB_TOOLS
+from ..agent.gate import MEMORY_READ_TOOLS, WEB_TOOLS
 from ..agent.history import Turn
 from ..agent.ledger import Ledger
 from ..agent.plugins import MAX_OFFERED, Offer, PluginHub, make_offer
@@ -87,6 +90,30 @@ _DEFINITIONS: dict[str, dict[str, Any]] = {
     "local_time": {
         "description": "[Raphael] The date and the time on the user's computer.",
         "parameters": {"type": "object", "properties": {}},
+    },
+    "memory_read": {
+        "description": (
+            "[Raphael] Read Raphael's notes about the user in full, by their names (the names in "
+            "the index of notes you were given)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "names": {"type": "array", "items": {"type": "string"}, "description": "Names."}
+            },
+            "required": ["names"],
+        },
+    },
+    "history_search": {
+        "description": (
+            "[Raphael] Search what the user and Raphael said in earlier conversations, by a few "
+            "words. Returns the matching turns with their dates."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "A few words."}},
+            "required": ["query"],
+        },
     },
 }
 
@@ -152,14 +179,17 @@ class Snapshot:
         return added, lines
 
 
-def take_snapshot(plugins: PluginHub | None, question: str = "") -> Snapshot:
-    """The tools a task starting now may use. A plugin that fails to list its tools is left out.
-    When the plugins have more tools than fit, the task is shown the ones that share the most words
-    with `question` (`refine` chooses with the model) and can find the rest."""
+def take_snapshot(
+    plugins: PluginHub | None, question: str = "", *, memory: bool = False
+) -> Snapshot:
+    """The tools a task starting now may use: with `memory`, the memory's tools that read too. A
+    plugin that fails to list its tools is left out. When the plugins have more tools than fit, the
+    task is shown the ones that share the most words with `question` (`refine` chooses with the
+    model) and can find the rest."""
     refs: dict[str, ToolRef] = {}
     definitions: list[dict[str, Any]] = []
     pool: Offer | None = None
-    for name in WEB_TOOLS:
+    for name in (*WEB_TOOLS, *(MEMORY_READ_TOOLS if memory else ())):
         refs[name] = ToolRef(BUILTIN, name, BUILTIN_SERVER, name, Tier.T0)
         definitions.append({"type": "function", "function": {"name": name, **_DEFINITIONS[name]}})
     snapshot = Snapshot(refs, definitions)
@@ -169,7 +199,7 @@ def take_snapshot(plugins: PluginHub | None, question: str = "") -> Snapshot:
         except Exception:  # a plugin that breaks leaves its tools out, not the task
             tools = []
         pool = make_offer(tools)
-        taken = set(WEB_TOOLS) | {"find_tools"} | PRESENCE_TOOLS
+        taken = set(WEB_TOOLS) | set(MEMORY_READ_TOOLS) | {"find_tools"} | PRESENCE_TOOLS
         clash = set(pool.by_alias) & taken
         if clash:  # a plugin's tool never takes the name of one of Raphael's own
             pool = make_offer([tool for alias, tool in pool.by_alias.items() if alias not in clash])

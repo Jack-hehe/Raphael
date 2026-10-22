@@ -19,7 +19,7 @@ import { onLocaleChange, t } from "../i18n";
 import { replyLine } from "../../shared/anime";
 import * as api from "../api";
 import { avatarHTML, onAvatarChange } from "../avatar";
-import { TYPED, VOICE, mergeTurns, oldestId, sourceOf, threadItems, turnMatches } from "../conversation";
+import { TYPED, VOICE, mergeTurns, oldestId, refreshTurns, sourceOf, threadItems, turnMatches } from "../conversation";
 import { describeError } from "../format";
 import { loadingHTML } from "../loading";
 import {
@@ -56,6 +56,8 @@ const REFRESH_DELAY_MS = 150;
 const CLEAR_CONFIRM_MS = 4000;
 /** The search waits for the typing to pause this long. */
 const SEARCH_DELAY_MS = 200;
+/** The longest words the search takes (the core's and the app's limit for `agent.history.search`). */
+const SEARCH_MAX_CHARS = 200;
 /** The most a typed question may hold, an attached file included (the app's own limit is the same). */
 export const TYPED_MAX_CHARS = 100_000;
 /** The composer grows with its text up to this many lines, then scrolls. */
@@ -145,7 +147,7 @@ export function createAgent(app: AppContext): Page {
     iconButton("sliders", t("agent.settings"), ' data-act="settings"', "ra-tool") +
     `</div></div>` +
     `<div class="ra-find" hidden><span class="ra-find-ic">${ico("search")}</span>` +
-    `<input type="search" class="ra-find-input" autocomplete="off" spellcheck="false">` +
+    `<input type="search" class="ra-find-input" autocomplete="off" spellcheck="false" maxlength="${SEARCH_MAX_CHARS}">` +
     `<span class="ra-find-count num" aria-live="polite"></span>` +
     iconButton("x", t("agent.searchClose"), ' data-act="search-close"', "ra-tool") +
     `</div>` +
@@ -234,6 +236,8 @@ export function createAgent(app: AppContext): Page {
   let sent = 0;
   /** A question said aloud is being answered: since when, and the newest turn there was then. */
   let hearing: { since: number; after: number } | null = null;
+  /** Ends `hearing` at `HEARING_MAX_MS` when neither its turn nor any other word of the core comes. */
+  let hearingTimer: ReturnType<typeof setTimeout> | undefined;
   /** The file attached to the next typed question. */
   let attached: { name: string; text: string } | null = null;
   /** The YES/NO question that waits for an answer, and whether an answer is on its way. */
@@ -243,8 +247,6 @@ export function createAgent(app: AppContext): Page {
   let searching = false;
   let query = "";
   let found: AgentTurn[] | null = null;
-  /** Whether the core can search the history (`agent.history.search`); unknown until it is tried. */
-  let coreSearch: boolean | null = null;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let searches = 0;
   /** What each line of the thread was drawn from, so that a line whose HTML is the same stays as it is. */
@@ -480,7 +482,12 @@ export function createAgent(app: AppContext): Page {
       const before = earlier ? oldestId(turns) : undefined;
       got = (await api.agentHistoryList({ limit: PAGE_SIZE, ...(before === undefined ? {} : { before_id: before }) })).turns;
     } catch (err) {
-      if (mine !== loads) return;
+      // A newer load of the newest turns took over: what this one shows does not count, but an
+      // earlier page that failed must still let the reader page up again.
+      if (mine !== loads) {
+        if (earlier) loadingEarlier = false;
+        return;
+      }
       if (earlier) loadingEarlier = false;
       else pending = false;
       if (turns.length === 0) {
@@ -503,11 +510,11 @@ export function createAgent(app: AppContext): Page {
       canLoadEarlier = got.length === PAGE_SIZE;
     } else {
       pending = false;
-      // The newest page replaces what it covers; what was paged back to beyond it stays.
-      const floor = oldestId(got);
-      const kept = floor === undefined ? [] : turns.filter((turn) => turn.id < floor);
-      canLoadEarlier = kept.length > 0 ? canLoadEarlier : got.length === PAGE_SIZE;
-      turns = mergeTurns(got, kept);
+      // The newest page replaces what it covers; what was paged back to beyond it stays while it
+      // joins the page, and is dropped when more came meanwhile than a page holds (refreshTurns).
+      const next = refreshTurns(turns, got, PAGE_SIZE);
+      canLoadEarlier = next.keptOlder ? canLoadEarlier : got.length === PAGE_SIZE;
+      turns = next.turns;
     }
     // A task that ended is no longer being stopped.
     for (const turn of turns) if (turn.task && !isLive(turn.task)) state.stopping.delete(turn.task.id);
@@ -524,7 +531,29 @@ export function createAgent(app: AppContext): Page {
     const sinceSent = (sent: Outgoing): AgentTurn | undefined =>
       turns.find((turn) => sourceOf(turn) === TYPED && turn.question.trim() === sent.text.trim() && turn.created_at_ms >= sent.sentAt - 5_000);
     outgoing = outgoing.filter((sent) => sinceSent(sent) === undefined);
-    if (hearing && (turns.some((turn) => turn.id > hearing!.after && sourceOf(turn) === VOICE) || Date.now() - hearing.since > HEARING_MAX_MS)) hearing = null;
+    if (hearing && (turns.some((turn) => turn.id > hearing!.after && sourceOf(turn) === VOICE) || Date.now() - hearing.since > HEARING_MAX_MS)) stopHearing();
+  }
+
+  /**
+   * A question said aloud is being answered: its line shows until its turn comes, a last phase of
+   * the dictation says it ended, or `HEARING_MAX_MS` has passed. That last one is a timer of its
+   * own, because a core that crashed or restarted sends neither a turn nor a phase, and no history
+   * load would come to settle it.
+   */
+  function startHearing(): void {
+    hearing = { since: Date.now(), after: newestId() };
+    clearTimeout(hearingTimer);
+    hearingTimer = setTimeout(() => {
+      hearingTimer = undefined;
+      if (!hearing) return;
+      hearing = null;
+      if (visible) render();
+    }, HEARING_MAX_MS);
+  }
+  function stopHearing(): void {
+    hearing = null;
+    clearTimeout(hearingTimer);
+    hearingTimer = undefined;
   }
 
   function scheduleRefresh(): void {
@@ -716,20 +745,23 @@ export function createAgent(app: AppContext): Page {
     }
   }
 
-  /** Looks for the words: in the whole history when the core can (`agent.history.search`), else in what is loaded. */
+  /**
+   * Looks for the words in the whole history (`agent.history.search`): the turns found show in the
+   * thread under their days, however far behind the loaded ones they are. When the core cannot
+   * answer this time (it is starting again, say), the loaded turns are looked through instead, and
+   * the next search asks the core again.
+   */
   async function runSearch(): Promise<void> {
     const mine = ++searches;
     const words = query.trim();
     found = null;
-    if (words !== "" && coreSearch !== false) {
+    if (words !== "") {
       try {
         const turnsFound = (await api.agentHistorySearch(words)).turns;
         if (mine !== searches) return;
-        coreSearch = true;
         found = turnsFound;
       } catch {
         if (mine !== searches) return;
-        coreSearch = coreSearch === true; // a core that searched before failed this once; one without the method never did
       }
     }
     render(true);
@@ -760,13 +792,7 @@ export function createAgent(app: AppContext): Page {
       message: t("agent.cleared"),
       commit: async () => {
         await api.agentHistoryClear();
-        turns = [];
-        state.stopping.clear();
-        forgetReruns(state, turns);
-        clearedUpTo = 0;
-        canLoadEarlier = false;
-        newestDrawn = 0;
-        if (visible) render();
+        forgetTurns();
       },
       restore: () => {
         clearedUpTo = 0;
@@ -776,12 +802,37 @@ export function createAgent(app: AppContext): Page {
     });
   }
 
+  /** The conversation is gone in the core: the page drops every turn it loaded and shows the empty page. */
+  function forgetTurns(): void {
+    turns = [];
+    state.stopping.clear();
+    forgetReruns(state, turns);
+    clearedUpTo = 0;
+    canLoadEarlier = false;
+    newestDrawn = 0;
+    if (visible) render();
+  }
+
+  // Settings › 資料 emptied the conversation while the page had it loaded (under the panel, or
+  // before it was left): a load already under way brings nothing back, and nothing waits to be cleared.
+  app.cleared.on("conversation", () => {
+    loads++;
+    pending = false;
+    loadingEarlier = false;
+    failure = null;
+    clearTimeout(clearTimer);
+    confirmingClear = false;
+    drawClear();
+    forgetTurns();
+  });
+
   // ---------- what a turn shows ----------
 
   /** Opens or closes what a turn did, where it is: the box slides, nothing else is drawn again. */
   function toggleSteps(button: HTMLElement): void {
     const id = Number(button.closest<HTMLElement>(".tn")?.dataset.id);
-    const turn = turns.find((candidate) => candidate.id === id);
+    // A turn the search found may be one that is not loaded.
+    const turn = turns.find((candidate) => candidate.id === id) ?? found?.find((candidate) => candidate.id === id);
     const box = button.closest<HTMLElement>(".steps");
     const steps = box?.querySelector<HTMLElement>(".steps-body");
     if (!turn || !box || !steps) return;
@@ -903,14 +954,28 @@ export function createAgent(app: AppContext): Page {
   });
   voiceButton.addEventListener("pointerup", voiceUp);
   voiceButton.addEventListener("pointercancel", voiceUp);
+  // A key held on the button is let go wherever the focus is by then: the release is heard on the
+  // whole page, for the key that pressed it, once; a window that loses the focus lets it go too.
+  // (The button stays where it is while the picture is up, but the focus may still move: the
+  // approval card can take the composer's place.)
+  let heldKey: string | null = null;
+  const releaseKey = (): void => {
+    heldKey = null;
+    voiceUp();
+  };
   voiceButton.addEventListener("keydown", (e) => {
     if ((e.key === "Enter" || e.key === " ") && !e.repeat) {
       e.preventDefault();
+      if (heldKey !== null) return;
+      heldKey = e.key;
       voiceDown();
     }
   });
-  voiceButton.addEventListener("keyup", (e) => {
-    if (e.key === "Enter" || e.key === " ") voiceUp();
+  document.addEventListener("keyup", (e) => {
+    if (heldKey !== null && e.key === heldKey) releaseKey();
+  });
+  window.addEventListener("blur", () => {
+    if (heldKey !== null) releaseKey();
   });
 
   yesButton.addEventListener("pointerdown", (e) => {
@@ -970,10 +1035,10 @@ export function createAgent(app: AppContext): Page {
         listening = false;
         voice.down();
         if (event.phase === "processing") {
-          hearing = { since: Date.now(), after: newestId() };
+          startHearing();
           if (visible) render(true);
         } else if (hearing) {
-          hearing = null;
+          stopHearing();
           if (visible) render();
         }
       }

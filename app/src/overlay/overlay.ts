@@ -11,7 +11,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { replyLine } from "../shared/anime";
-import { Emblem, canvasSize, loadGlyphTexture, type Mode, type Phase, type PictureCrop } from "./emblem";
+import { Emblem, canvasSize, loadGlyphTexture, pictureStyle, type Mode, type Phase, type PictureCrop } from "./emblem";
 import { noticeDurationMs } from "./notice";
 import type { ProgressReport, Stage } from "./progress";
 import { ProgressArc } from "./progress";
@@ -850,7 +850,11 @@ export function pictureOf(value: unknown): { url: string; crop: PictureCrop } | 
   return { url, crop: { x: num(crop?.x, 0.5, 0, 1), y: num(crop?.y, 0.5, 0, 1), zoom: num(crop?.zoom, 1, 1, 4) } };
 }
 
-/** Asks the app for Raphael's picture and draws it in the emblem's place; the emblem when there is none. */
+/**
+ * Asks the app for Raphael's picture and draws it in the emblem's place; the emblem when there is
+ * none. The picture goes both to the canvas (its first frame, under reduced motion) and to the
+ * `#picture` layer over it, whose `<img>` plays a GIF or WebP that moves (see `Emblem.setPicture`).
+ */
 async function showPicture(emblem: Emblem): Promise<void> {
   let chosen: { url: string; crop: PictureCrop } | null = null;
   try {
@@ -858,8 +862,11 @@ async function showPicture(emblem: Emblem): Promise<void> {
   } catch (err) {
     pageLog("warn", `the picture could not be read: ${describeError(err)}`);
   }
+  const layer = document.getElementById("picture");
+  const layerImage = layer?.querySelector("img") ?? null;
   if (!chosen) {
     emblem.setPicture(null);
+    layerImage?.removeAttribute("src");
     return;
   }
   const image = new Image();
@@ -870,9 +877,14 @@ async function showPicture(emblem: Emblem): Promise<void> {
   } catch {
     pageLog("warn", "the picture could not be decoded; the emblem stays");
     emblem.setPicture(null);
+    layerImage?.removeAttribute("src");
     return;
   }
-  emblem.setPicture(image, chosen.crop);
+  if (layer && layerImage) {
+    layerImage.src = chosen.url;
+    layerImage.setAttribute("style", pictureStyle(chosen.crop));
+  }
+  emblem.setPicture(image, chosen.crop, layer && layerImage ? layer : null);
 }
 
 // Only in the overlay page (the tests import this file in Node).

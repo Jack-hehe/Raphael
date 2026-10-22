@@ -6,7 +6,8 @@
 //!   gets the picture back as a data URL for its crop dialog, never the path: the page has no way
 //!   to name a file of this PC.
 //! - `avatar_save {crop}` writes the picture last picked to `%LOCALAPPDATA%\Raphael\avatar\` (this
-//!   PC only), with the crop the person chose ([`Crop`]); the file may move or go afterwards, and
+//!   PC only; `Raphael Dev` for a development build, under `RAPHAEL_DATA_DIR` for a run kept apart
+//!   by it), with the crop the person chose ([`Crop`]); the file may move or go afterwards, and
 //!   Raphael's picture stays. The bytes are kept as they are, so a moving GIF or WebP keeps moving.
 //! - `avatar_get` gives the picture and its crop as a data URL, to the main window and to the
 //!   overlay; `avatar_clear` deletes it, and Raphael is his emblem again.
@@ -159,7 +160,9 @@ pub struct AvatarStore {
 }
 
 impl AvatarStore {
-    /// The store in `local` (`%LOCALAPPDATA%\Raphael`): the picture goes in its `avatar` folder.
+    /// The store in `local` (this build's local folder, `Identity::local_dir`: `%LOCALAPPDATA%\Raphael`
+    /// for the release, `Raphael Dev` for a development build): the picture goes in its `avatar`
+    /// folder.
     pub fn new(local: &Path) -> Self {
         Self {
             dir: local.join(DIR),

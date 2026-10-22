@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { emptyConnectionsView } from "../connections";
 import { emptyMessagingView } from "../messaging";
+import { emptyMemoryView } from "../memory-view";
 import { setLocale, t } from "../i18n";
 import type { LanguageGroup } from "../languages";
 import type { BrainSettings, CatalogModel, DeviceSettings, LocalModel, ModelCatalog, SettingsPane, Status } from "../types";
@@ -96,6 +97,15 @@ const view = (over: Partial<SettingsView> = {}): SettingsView => ({
 test("Telegram is in the 訊息平台 tab, and only there", () => {
   expect(tab("messaging")).toContain("data-msg-section");
   for (const id of ["general", "dictation", "agent", "connections", "usage", "data", "about"] as const) expect(tab(id)).not.toContain("data-msg");
+});
+
+test("the memory is in the 拉斐爾 tab, after its settings, and only there", () => {
+  const memory = { ...emptyMemoryView(), status: { memories: [], summary: null } };
+  const agent = tab("agent", { memory });
+  expect(agent).toContain("data-mem-section");
+  expect(agent.indexOf("data-mem-section")).toBeGreaterThan(agent.indexOf('data-k="worker-cap"'));
+  expect(agent.indexOf("data-mem-section")).toBeGreaterThan(agent.indexOf("data-avatar"));
+  for (const id of ["general", "dictation", "connections", "messaging", "usage", "data", "about"] as const) expect(tab(id, { memory })).not.toContain("data-mem");
 });
 
 const tab = (pane: SettingsPane, over: Partial<SettingsView> = {}): string => paneHTML(view({ pane, ...over }));
@@ -554,6 +564,16 @@ describe("搜尋設定", () => {
     expect(where("avatar")).toEqual(["agent:アイコン"]);
   });
 
+  test("finds Raphael's memory by its name and by what one asks him to do, in any of the languages", () => {
+    for (const query of ["記憶", "記住", "memory", "Remember", "メモリ", "覚える"]) {
+      expect(where(query), query).toEqual(["agent:記憶"]);
+    }
+    setLocale("en");
+    expect(where("記憶")).toEqual(["agent:Memory"]);
+    setLocale("ja");
+    expect(where("memory")).toEqual(["agent:記憶"]);
+  });
+
   test("finds a tab by its name, before its rows, and a brand by its name; case does not matter", () => {
     expect(where("連接")[0]).toBe("connections:連接");
     expect(where("telegram")).toEqual(["messaging:訊息平台"]);
@@ -580,7 +600,7 @@ describe("搜尋設定", () => {
         if (!entry.label) continue;
         const name = (t as unknown as (key: string) => string)(entry.label).replace("&", "&amp;");
         // a row's name, or the name of a section (電腦操作 is found as a whole)
-        const html = tab(entry.pane);
+        const html = tab(entry.pane, { memory: emptyMemoryView() });
         const headings = [...html.matchAll(/<h2>(.*?)<\/h2>/g)].map((m) => m[1]);
         expect([...names(html), ...headings], `${locale} ${entry.label}`).toContain(name);
       }

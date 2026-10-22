@@ -257,6 +257,17 @@ export function createHome(app: AppContext): Page {
     }
   }
 
+  // Settings › 資料 emptied the dictations or the conversation: Raphael's latest words go at once,
+  // and the page, if it is on screen under the panel, reads its numbers again.
+  app.cleared.on("conversation", () => {
+    if (latest !== null) latest = [];
+    paintTurns();
+    if (visible) void load(false);
+  });
+  app.cleared.on("dictation", () => {
+    if (visible) void load(false);
+  });
+
   async function retry(): Promise<void> {
     try {
       await api.statusCheckOpenrouter();

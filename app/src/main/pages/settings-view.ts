@@ -24,6 +24,7 @@ import { KEEP_FOREVER_DAYS, formatClock, formatRetention, formatUsd } from "../f
 import { type LanguageGroup, languageSelectHTML, normalizeLanguages } from "../languages";
 import { bindingLabels } from "../keys";
 import { type MessagingView, messagingHTML } from "../messaging";
+import { type MemoryView, memoryHTML } from "../memory-view";
 import { AUTO_MICROPHONE, microphoneChoices } from "../microphone";
 import type { LocalView } from "../local-models";
 import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
@@ -148,6 +149,7 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "agent", label: "settings.agentCity" },
   { pane: "agent", label: "settings.workerCostCap" },
   { pane: "agent", label: "settings.avatar", also: "settings.searchAvatar" },
+  { pane: "agent", label: "mem.title", also: "settings.searchMemory" },
   { pane: "agent", label: "settings.computerUse" },
   { pane: "messaging", words: ["Telegram"] },
   { pane: "usage", label: "common.apiKey", words: ["OpenRouter"] },
@@ -272,6 +274,8 @@ export interface SettingsView {
   messaging: MessagingView;
   /** In 資料, the clear that was pressed once and waits for its second press. */
   confirmingClear: "dictation" | "conversation" | null;
+  /** Raphael's memory, in the 拉斐爾 tab, after its settings (none: not drawn). */
+  memory?: MemoryView;
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
   languageGroups: LanguageGroup[] | null;
   /** The time the forecasts and the age of the prices are told from. */
@@ -575,7 +579,7 @@ function computerRows(v: SettingsView): string[] {
   );
 }
 
-/** 拉斐爾: Raphael's picture, the key that asks Raphael, the city of the weather, what a background task may spend, and the apps he may always operate. The model that answers is with the other models. */
+/** 拉斐爾: Raphael's picture, the key that asks Raphael, the city of the weather, what a background task may spend, then Raphael's memory and the apps he may always operate. The model that answers is with the other models. */
 function agentHTML(v: SettingsView): string {
   const cityShown = v.cityDraft ?? agentCity(v);
   // an app from before the question key has none yet
@@ -595,6 +599,7 @@ function agentHTML(v: SettingsView): string {
       ...(v.cityError ? [note(st("err", v.cityError()), ' role="alert"')] : []),
       row(t("settings.workerCostCap"), "", sel(WORKER_COST_CAPS, workerCostCap(v), t("settings.workerCostCap"), ` data-k="worker-cap"${v.brain === null ? " disabled" : ""}`)),
     ]) +
+    (v.memory ? memoryHTML(v.memory) : "") +
     section(t("settings.computerUse"), computerRows(v))
   );
 }

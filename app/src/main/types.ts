@@ -1,6 +1,7 @@
 // What the core and the Rust side send to the main window. Type-only: this file has no code.
 
 import type { Undoable } from "./undo";
+import type { Cleared } from "./cleared";
 
 /** `status.get` */
 export interface Status {
@@ -430,6 +431,11 @@ export interface AppContext {
   onEvent(handler: (event: MainEvent) => void): () => void;
   /** Things that happen only after 10 seconds, with 「復原」. */
   undo: Undoable;
+  /**
+   * The dictation history or the conversation was emptied from Settings › 資料: the pages that
+   * show it listen here and drop what they loaded.
+   */
+  cleared: Cleared;
   /** Closes the settings panel (it opens with `go("settings")`). */
   closeSettings(): void;
   /** Opens the first-run guide again over the window (the settings close first); it does not clear `onboarded`. */

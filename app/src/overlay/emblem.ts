@@ -548,6 +548,16 @@ export function pictureRect(w: number, h: number, side: number, crop: PictureCro
   return { x: at(crop.x, width - side), y: at(crop.y, height - side), w: width * crop.zoom, h: height * crop.zoom };
 }
 
+/**
+ * The same cut in CSS, for an `<img>` with `object-fit: cover` that fills a square box: the main
+ * window's faces (`cropStyle` of avatar.ts) and the overlay's moving picture (`setPicture`).
+ */
+export function pictureStyle(crop: PictureCrop): string {
+  const x = `${Math.round(crop.x * 1000) / 10}%`;
+  const y = `${Math.round(crop.y * 1000) / 10}%`;
+  return `object-position:${x} ${y};transform-origin:${x} ${y};transform:scale(${Math.round(crop.zoom * 1000) / 1000})`;
+}
+
 /** The thin ring around the picture: this bright when quiet, up to 1 at full voice while listening. */
 export const PICTURE_RING_REST = 0.35;
 
@@ -627,8 +637,11 @@ export class Emblem {
   private steps = 0;
   /** The extra light on the glyph ring at the last tick: only a recording has any. */
   private shownBoost = 0;
-  /** The person's picture, drawn in a circle in the emblem's place, or null for the emblem. */
-  private picture: { image: HTMLImageElement; crop: PictureCrop } | null = null;
+  /**
+   * The person's picture, in a circle in the emblem's place, or null for the emblem. `layer`, when
+   * there is one, shows the picture itself over the canvas (see `setPicture`).
+   */
+  private picture: { image: HTMLImageElement; crop: PictureCrop; layer: HTMLElement | null } | null = null;
 
   constructor(canvas: HTMLCanvasElement, sizePx: number, opts: EmblemOptions = {}) {
     this.canvas = canvas;
@@ -686,9 +699,17 @@ export class Emblem {
    * Shows the person's picture in a circle instead of the emblem (null: the emblem again). The
    * circle grows in and shrinks away where the emblem appears and vanishes, and while listening a
    * thin ring around it brightens with the voice instead of the emblem's own movement.
+   *
+   * A canvas paints only the first frame of a GIF or WebP that moves. So with `layer` (an element
+   * laid over the canvas's circle, holding the picture as an `<img>` cut with `pictureStyle`) the
+   * picture is shown there, grown and faded as the circle would be, and the canvas draws only the
+   * ring. With reduced motion the layer stays hidden and the canvas draws the first frame: nothing moves.
    */
-  setPicture(image: HTMLImageElement | null, crop: PictureCrop = { x: 0.5, y: 0.5, zoom: 1 }): void {
-    this.picture = image ? { image, crop } : null;
+  setPicture(image: HTMLImageElement | null, crop: PictureCrop = { x: 0.5, y: 0.5, zoom: 1 }, layer: HTMLElement | null = null): void {
+    const before = this.picture?.layer;
+    if (before && before !== layer) before.hidden = true;
+    this.picture = image ? { image, crop, layer } : null;
+    if (!image && layer) layer.hidden = true;
     this.dirty = true;
     wake();
   }
@@ -819,23 +840,38 @@ export class Emblem {
     });
   }
 
-  /** The person's picture in its circle, with the thin ring around it, centred on the canvas. */
-  private drawPicture(ctx: CanvasRenderingContext2D, picture: { image: HTMLImageElement; crop: PictureCrop }): void {
+  /**
+   * The person's picture in its circle, with the thin ring around it, centred on the canvas; or,
+   * with a layer and motion allowed, the layer grown and faded as that circle and only the ring.
+   */
+  private drawPicture(ctx: CanvasRenderingContext2D, picture: { image: HTMLImageElement; crop: PictureCrop; layer: HTMLElement | null }): void {
     const scale = pictureScale(this._phase, this.pt);
-    const { image, crop } = picture;
-    if (scale <= 0 || !image.complete || image.naturalWidth === 0) return;
+    const { image, crop, layer } = picture;
+    const alpha = Math.min(1, scale * 1.4);
+    const live = layer !== null && !this.reduce;
+    if (layer) {
+      layer.hidden = !live || scale <= 0;
+      if (live) {
+        layer.style.transform = `scale(${Math.round(scale * 1000) / 1000})`;
+        layer.style.opacity = String(Math.round(alpha * 1000) / 1000);
+      }
+    }
+    if (scale <= 0) return;
+    if (!live && (!image.complete || image.naturalWidth === 0)) return;
     const r = (this.diameter / 2) * scale;
     const listening = (this._phase === "appear" ? this.mode : this._phase) === "listening";
+    if (!live) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, TAU);
+      ctx.clip();
+      const box = pictureRect(image.naturalWidth, image.naturalHeight, 2 * r, crop);
+      ctx.drawImage(image, box.x - r, box.y - r, box.w, box.h);
+      ctx.restore();
+    }
     ctx.save();
-    ctx.globalAlpha = Math.min(1, scale * 1.4);
-    ctx.beginPath();
-    ctx.arc(0, 0, r, 0, TAU);
-    ctx.clip();
-    const box = pictureRect(image.naturalWidth, image.naturalHeight, 2 * r, crop);
-    ctx.drawImage(image, box.x - r, box.y - r, box.w, box.h);
-    ctx.restore();
-    ctx.save();
-    ctx.globalAlpha = pictureRingAlpha(this._lvl, listening) * Math.min(1, scale * 1.4);
+    ctx.globalAlpha = pictureRingAlpha(this._lvl, listening) * alpha;
     ctx.strokeStyle = "#ffffff"; // the white of the emblem's own listening ring
     ctx.lineWidth = Math.max(1.5, this.diameter / 80);
     ctx.beginPath();

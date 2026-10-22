@@ -10,6 +10,16 @@ pool it does it once.
   call to the next (`TaskRun` runs each in a task of its own so that it can be cancelled). So a
   connection is owned by a task of its own that opens the client, reads the tool list once, serves
   the calls that arrive in its inbox, and closes the client when it ends.
+- **The owner is stopped through an anyio cancel scope, never with `Task.cancel()`.** The SDK stops
+  a stdio server (closes its stdin, waits for it, kills it, closes its output) in a scope shielded
+  from anyio's cancellation, and drains the server's output in another until that output is
+  closed. A plain `Task.cancel()` is not held off by those shields: one that lands while the SDK
+  is stopping the server breaks the stop off before the server's stdin is closed, the server
+  stays, and the drain, the owner and everyone who waits for it (`aclose`, the background tasks
+  queued behind) wait for ever. A connection is closed twice in the ordinary course of things (a
+  cancelled call closes it, and the pool is closed right after), so the second close would come
+  while the first one's stop is under way. The scope's cancel waits for the shield, and asking
+  for it again is harmless.
 - **Calls are made at the same time.** MCP takes several requests over one session, so each call
   is a task of its own inside the owner's scope and a slow call does not make the ones after it
   wait (the time-out of a call is its own).
@@ -37,6 +47,8 @@ from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Any
+
+import anyio  # the SDK's own (`mcp` depends on it): its cancel scopes are what its shields hold off
 
 from .client import McpFailure
 from .config import ToolRecord
@@ -79,46 +91,22 @@ class _Connection:
         self.closed = False
         self._calls: set[_Call] = set()  # the calls being made
         self.served = 0  # the calls given to this connection
+        # How `close` stops the owner (see the module): the owner's cancel scope, once it runs, and
+        # whether it was asked to stop before it did.
+        self._scope: anyio.CancelScope | None = None
+        self._stop_asked = False
         self.task = asyncio.ensure_future(self._own())
-        # A task cancelled before it first ran never reaches its `finally`.
+        # A task cancelled before it first ran (the core closing) never reaches its `finally`.
         self.task.add_done_callback(lambda _task: self._settle())
 
     async def _own(self) -> None:
-        loop = asyncio.get_running_loop()
         try:
-            async with self._open() as client:
-                self.tools = await self._list(client)
-                self.ready.set_result(None)
-                making: set[asyncio.Task[None]] = set()
-                try:
-                    while True:
-                        timer = None
-                        if self._idle_s is not None:
-                            timer = loop.call_later(self._idle_s, self.inbox.put_nowait, _IDLE)
-                        try:
-                            item = await self.inbox.get()
-                        finally:
-                            if timer is not None:
-                                timer.cancel()
-                        if item is _STOP:
-                            break
-                        if item is _IDLE:
-                            if making or not self.inbox.empty():
-                                continue  # a call is under way or came just now: not idle
-                            self.closed = True  # from here on a call opens another connection
-                            break
-                        if item.future.done():
-                            continue  # the caller gave up before it was its turn
-                        self._calls.add(item)
-                        made = asyncio.ensure_future(self._make(client, item))
-                        making.add(made)
-                        made.add_done_callback(making.discard)
-                finally:
-                    # The calls under way end before the client does, in the task that owns it.
-                    for made in list(making):
-                        made.cancel()
-                    if making:
-                        await asyncio.wait(making)
+            # A cancel of this scope (`close`) ends the owner wherever it is, except inside the
+            # SDK's shielded stop of the server, which it lets finish; the scope swallows it.
+            with anyio.CancelScope() as self._scope:
+                if self._stop_asked:
+                    return  # closed before it began: no server is started
+                await self._serve()
         except asyncio.CancelledError:
             raise
         except BaseException as error:  # the SDK's task groups wrap what went wrong
@@ -126,6 +114,47 @@ class _Connection:
                 self.ready.set_exception(error)
         finally:
             self._settle()
+
+    async def _serve(self) -> None:
+        """Open the client, read its tools, and make the calls of the inbox until told to stop or
+        idle long enough; the client is closed on the way out."""
+        loop = asyncio.get_running_loop()
+        async with self._open() as client:
+            self.tools = await self._list(client)
+            self.ready.set_result(None)
+            making: set[asyncio.Task[None]] = set()
+            try:
+                while True:
+                    timer = None
+                    if self._idle_s is not None:
+                        timer = loop.call_later(self._idle_s, self.inbox.put_nowait, _IDLE)
+                    try:
+                        item = await self.inbox.get()
+                    finally:
+                        if timer is not None:
+                            timer.cancel()
+                    if item is _STOP:
+                        break
+                    if item is _IDLE:
+                        if making or not self.inbox.empty():
+                            continue  # a call is under way or came just now: not idle
+                        self.closed = True  # from here on a call opens another connection
+                        break
+                    if item.future.done():
+                        continue  # the caller gave up before it was its turn
+                    self._calls.add(item)
+                    made = asyncio.ensure_future(self._make(client, item))
+                    making.add(made)
+                    made.add_done_callback(making.discard)
+            finally:
+                # The calls under way end before the client does, in the task that owns it. (A
+                # cancelled scope cancels every wait in it again and again: this one is shielded,
+                # and the calls, cancelled once, end at once.)
+                for made in list(making):
+                    made.cancel()
+                if making:
+                    with anyio.CancelScope(shield=True):
+                        await asyncio.wait(making)
 
     async def _make(self, client: Any, item: _Call) -> None:
         """One call, in a task of its own."""
@@ -164,9 +193,12 @@ class _Connection:
                 item.future.set_exception(McpFailure("gone"))
 
     def close(self) -> None:
-        """Ask the owner to end; it closes the client in its own task."""
+        """Ask the owner to end; it closes the client in its own task. Safe to call again while
+        it does (see the module: never `Task.cancel()`)."""
         self.closed = True
-        self.task.cancel()
+        self._stop_asked = True
+        if self._scope is not None:
+            self._scope.cancel()
 
 
 class McpPool:

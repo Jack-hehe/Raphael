@@ -187,6 +187,17 @@ export function createHistory(app: AppContext): HistoryPage {
     render();
   }
 
+  // Settings › 資料 emptied the history: what is loaded goes, and a load already under way brings nothing back.
+  app.cleared.on("dictation", () => {
+    loads++;
+    items = [];
+    expanded.clear();
+    canLoadMore = false;
+    failure = null;
+    pending = false;
+    render();
+  });
+
   function remove(id: number): void {
     deleting.add(id);
     render();

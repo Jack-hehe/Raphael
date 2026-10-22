@@ -171,7 +171,10 @@ def test_a_task_the_user_stops_is_reported_as_stopped_and_the_worker_stays_for_t
     core = spawn()
     connect_the_fake_server(core, look="T0", slow="T0")
     ask(core, "[delegate] this one is slow")
-    wait_for(core, lambda: tool_call_under_way(core))  # the slow tool is under way
+    # The slow tool is under way: its call was written down as sent, and its server may still be
+    # starting (on a busy machine it takes a second or more) or have the call already. The stop
+    # lands in either, and either way the next task must not wait behind the stopped one's server.
+    wait_for(core, lambda: tool_call_under_way(core))
     assert result(core, "worker.cancel", {}) == {"cancelled": True}
     wait_for(core, lambda: reports(core))
     [stopped] = reports(core)

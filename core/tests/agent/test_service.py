@@ -39,6 +39,7 @@ METHODS = [
     "agent.confirm",
     "agent.history.clear",
     "agent.history.list",
+    "agent.history.search",
 ]
 GEOCODING = {
     "results": [
@@ -180,7 +181,7 @@ def rig(make_rig):
 # --- the contract ----------------------------------------------------------------------------------
 
 
-def test_the_five_methods_of_the_assistant_are_registered(rig):
+def test_the_six_methods_of_the_assistant_are_registered(rig):
     assert rig.rpc.methods() == METHODS
 
 
@@ -789,21 +790,21 @@ async def test_an_answer_is_worded_in_the_ui_language(rig, client):
     assert "Reply ONLY in English" in client.json_calls[0]["system"]
 
 
-async def test_an_answer_is_given_the_last_three_turns_as_context(rig, client):
-    for n in range(5):
+async def test_an_answer_is_given_the_last_six_turns_as_context(rig, client):
+    for n in range(8):
         rig.seed(f"question {n}", f"answer {n}")
     client.decisions.append(decision("answer"))
     client.replies.append(spoken())
     await rig.ask("那明天呢")
     user = client.json_calls[0]["user"]
-    assert "question 2" in user and "question 4" in user and "question 1" not in user
+    assert "question 2" in user and "question 7" in user and "question 1" not in user
 
 
 # --- discussion and small talk -----------------------------------------------------------------------
 
 
-async def test_a_discussion_is_given_the_last_ten_turns_as_context(rig, client):
-    for n in range(12):
+async def test_a_discussion_is_given_every_turn_after_the_summary_as_context(rig, client):
+    for n in range(32):
         rig.seed(f"question {n}", f"answer {n}")
     client.decisions.append(decision("discuss"))
     client.replies.append(spoken("答", "先從預算開始。", "展開說明。"))
@@ -812,8 +813,9 @@ async def test_a_discussion_is_given_the_last_ten_turns_as_context(rig, client):
     call = client.json_calls[0]
     assert "think something through" in call["system"]
     user = call["user"]
-    assert "question 2" in user and "question 11" in user and "question 1\n" not in user
-    assert user.index("question 2") < user.index("question 11")  # oldest first
+    # With no summary, the last 30 turns (the most the context holds), oldest first.
+    assert "question 2\n" in user and "question 31" in user and "question 1\n" not in user
+    assert user.index("question 2\n") < user.index("question 31")
     assert client.text_calls == [] and rig.meteo.requests == []
     assert (await rig.turns())[0]["route"] == "discuss"
 
@@ -1430,6 +1432,41 @@ async def test_the_history_gives_fifty_turns_by_default_and_at_most_two_hundred(
     assert len(await rig.turns(limit=-5)) == 1
 
 
+async def test_the_history_search_finds_turns_of_the_whole_history_in_the_shape_of_the_list(rig):
+    # The 拉斐爾 page shows only the newest fifty turns; the search must reach behind them.
+    old = rig.seed("下週的出差行程", "排好了。")
+    for n in range(80):
+        rig.seed(f"q{n}", "a")
+    rig.seed("出差要帶什麼", "護照。")
+    found = (await rig.call("agent.history.search", {"query": "出差", "limit": 100}))["turns"]
+    assert {t["question"] for t in found} == {"下週的出差行程", "出差要帶什麼"}
+    assert old in {t["id"] for t in found}
+    listed = (await rig.turns(limit=1))[0]
+    assert set(found[0]) == set(listed)  # the page draws and opens them like any turn
+    # A long run of Chinese that is not found as it is written is looked for by its pairs.
+    assert [t["id"] for t in (await rig.call("agent.history.search", {"query": "上次說的出差行程"}))["turns"]][:1] == [old]
+    assert (await rig.call("agent.history.search", {"query": "找不到的字串"}))["turns"] == []
+
+
+async def test_the_history_search_gives_up_to_a_hundred_turns(rig):
+    for n in range(120):
+        rig.seed(f"會議 {n}", "好。")
+    assert len((await rig.call("agent.history.search", {"query": "會議"}))["turns"]) == 50
+    assert len((await rig.call("agent.history.search", {"query": "會議", "limit": 1000}))["turns"]) == 100
+    assert len((await rig.call("agent.history.search", {"query": "會議", "limit": 0}))["turns"]) == 1
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{}, {"query": ""}, {"query": "   "}, {"query": 5}, {"query": "x" * 201},
+     {"query": "會議", "limit": "5"}, {"query": "會議", "limit": True}, {"query": "會議", "limit": 2.5}],
+)  # fmt: skip
+async def test_the_history_search_checks_its_params(rig, params):
+    with pytest.raises(RpcError) as e:
+        await rig.call("agent.history.search", params)
+    assert e.value.code == INVALID_PARAMS
+
+
 async def test_clearing_the_history_deletes_every_turn_and_counts_them(rig):
     for n in range(4):
         rig.seed(f"q{n}", "a")
@@ -1447,15 +1484,16 @@ async def test_a_cleared_history_is_no_context(rig, client):
     assert "secret" not in client.json_calls[0]["user"]
 
 
-async def test_the_turns_older_than_the_retention_are_deleted(rig, client):
+async def test_the_turns_are_kept_past_the_retention_of_the_dictations(rig, client):
+    # One continuous conversation: the retention setting is the dictations' alone.
     rig.settings.set("history_retention_days", 7)
     old = rig.seed("old", "a")
-    rig.wall.now += 8 * 86_400_000
+    rig.wall.now += 400 * 86_400_000
     fresh = rig.seed("fresh", "a")
     client.decisions.append(decision("command", "volume_mute"))
     await rig.ask("靜音")
     questions = [t["question"] for t in await rig.turns()]
-    assert "old" not in questions and "fresh" in questions and old != fresh
+    assert "old" in questions and "fresh" in questions and old != fresh
 
 
 async def test_a_question_that_died_with_the_last_process_is_expired_when_the_core_starts(

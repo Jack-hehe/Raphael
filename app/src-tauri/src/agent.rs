@@ -141,10 +141,29 @@ pub fn say_hold_ms(text: &str) -> u64 {
         .min(SAY_MAX_MS)
 }
 
+/// Whether the reply of `agent.ask` says that Raphael also wrote down a memory, which the overlay
+/// tells after the answer ([`crate::notices::REMEMBERED`]): `"notice": "remembered"`.
+pub fn remembered(reply: &Value) -> bool {
+    reply.get("notice").and_then(Value::as_str) == Some("remembered")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_reply_says_when_a_memory_was_written_beside_the_answer() {
+        let done = json!({"status": "done", "prefix": "答", "text": "好。", "turn_id": 3});
+        assert!(!remembered(&done));
+        let mut noted = done.clone();
+        noted["notice"] = json!("remembered");
+        assert!(remembered(&noted));
+        for other in [json!("REMEMBERED"), json!(true), json!(null), json!("x")] {
+            noted["notice"] = other;
+            assert!(!remembered(&noted));
+        }
+    }
 
     fn confirm(extra: Value) -> Value {
         let mut confirm = json!({

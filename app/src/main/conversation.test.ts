@@ -8,6 +8,7 @@ import {
   mergeTurns,
   miniTurnHTML,
   oldestId,
+  refreshTurns,
   sourceOf,
   threadItems,
   turnMatches,
@@ -120,6 +121,23 @@ describe("paging back", () => {
     expect(oldestId(NEWEST_FIRST)).toBe(1);
     expect(oldestId([NEWEST_FIRST[0], NEWEST_FIRST[2]])).toBe(3);
     expect(oldestId([])).toBeUndefined();
+  });
+
+  test("the newest page brought again keeps the older turns only when it reaches back to them", () => {
+    const span = (from: number, to: number): AgentTurn[] =>
+      Array.from({ length: to - from + 1 }, (_, i) => turn(to - i, "2026-10-20T09:00:00+08:00"));
+    const ids = (turns: AgentTurn[]): number[] => turns.map((t) => t.id);
+    // 1..50 loaded, 51..60 written meanwhile: the page 11..60 overlaps them, so 1..10 stay
+    const joined = refreshTurns(span(1, 50), span(11, 60), 50);
+    expect(ids(joined.turns)).toEqual(ids(span(1, 60)));
+    expect(joined.keptOlder).toBe(true);
+    // 1..50 loaded, 51..150 written meanwhile: 101..150 do not reach 1..50, which would leave a gap
+    const apart = refreshTurns(span(1, 50), span(101, 150), 50);
+    expect(ids(apart.turns)).toEqual(ids(span(101, 150)));
+    expect(apart.keptOlder).toBe(false);
+    // a page shorter than a page is the whole history; an empty one is no history
+    expect(refreshTurns(span(1, 50), span(40, 60), 50)).toEqual({ turns: span(40, 60), keptOlder: false });
+    expect(refreshTurns(span(1, 50), [], 50)).toEqual({ turns: [], keptOlder: false });
   });
 });
 
