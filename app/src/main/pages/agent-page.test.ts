@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("../api", () => api);
 
+import { Cleared } from "../cleared";
 import { createAgent } from "./agent";
 
 function turn(id: number, more: Partial<AgentTurn> = {}): AgentTurn {
@@ -57,6 +58,7 @@ function mount() {
       return () => {};
     },
     undo: { begin: vi.fn() },
+    cleared: new Cleared(),
   } as unknown as AppContext;
   const agent = createAgent(app);
   document.body.append(agent.el);
