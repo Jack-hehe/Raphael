@@ -6,11 +6,38 @@ import { BRAND_COLORS, LOGO_IDS, SERVICE_ICONS, brandStyle, hasLogo, monogram, s
 import { iconHTML } from "./connections";
 import { ico } from "./ui";
 import { providerMark } from "./provider-marks";
+import providerKinds from "./fixtures/provider-kinds.json";
+
+test("the provider-kinds fixture covers the local registry", () => {
+  const presets = readFileSync("../core/src/raphael_core/brain/providers/presets.py", "utf8");
+  const kinds = [...presets.matchAll(/^\s*(?:preset\(|\()"([^"]+)",/gm)].map((match) => match[1]);
+  expect([...providerKinds].sort()).toEqual(kinds.sort());
+});
+
+test.each(providerKinds)("provider kind %s resolves to installed artwork or its own generic icon", (kind) => {
+  const html = providerMark(kind);
+  if (["openai_compatible", "koboldcpp", "text_generation_webui"].includes(kind)) {
+    expect(html).toContain(ico("plug"));
+  } else {
+    expect(html).not.toContain(ico("plug"));
+    expect(html).toMatch(/logo-(?:art|mono)/);
+    expect(html).not.toContain('src=""');
+  }
+  const base = kind.replace(/_cn$/, "");
+  expect(providerMark(`${base}_cn`)).toBe(providerMark(base));
+});
+
+test.each([
+  ["bedrock", "aws"], ["amazon_bedrock", "aws"], ["ollama_cloud", "ollama"], ["vertex", "vertex"],
+] as const)("%s uses the installed %s mark", (kind, mark) => {
+  expect(hasLogo(mark)).toBe(true);
+  expect(providerMark(kind)).toContain(serviceLogoHTML(mark));
+});
 
 test("new provider artwork is reserved and regional variants share the base mark", () => {
   for (const id of ["vertex", "bedrock", "xai", "moonshot", "dashscope", "minimax", "vllm", "text_generation_webui", "inference_net"] as const) {
     expect(LOGO_IDS).toContain(id);
-    if (!hasLogo(id)) expect(providerMark(id)).toContain(ico("plug"));
+    if (!hasLogo(id)) expect(iconHTML(id, id, "md")).toContain(ico("plug"));
   }
   for (const id of ["moonshot", "dashscope", "minimax"]) expect(providerMark(`${id}_cn`)).toBe(providerMark(id));
 });

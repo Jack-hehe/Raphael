@@ -127,15 +127,17 @@ export function providersHTML(v: ProvidersView): string {
     btn(`<span class="ic">${providerMark(p.kind)}</span><span class="tx"><span class="nm">${esc(p.name)}</span><span class="ds">${esc(statusNote(p))}</span></span><span class="chev" aria-hidden="true">${ico("right")}</span>`, "cs-open", ` data-pv="open" data-id="${esc(p.id)}" data-k="pv-open:${esc(p.id)}" aria-haspopup="dialog"`) +
     tg(p.enabled, t("providers.switch", { p0: p.name }), ` data-pv="toggle" data-id="${esc(p.id)}" data-k="pv-toggle:${esc(p.id)}"${v.busy ? " disabled" : ""}`) +
     `</div>`).join("");
+  const add = btn(`<span class="ic">${ico("plus")}</span><span class="tx"><span class="nm">${esc(t("providers.add"))}</span><span class="ds">${esc(t("providers.addNote"))}</span></span>`, "pv-card pv-create", ` data-pv="directory" data-k="pv-directory" aria-haspopup="dialog"${v.state === "ready" && !v.busy ? "" : " disabled"}`);
   return `<section class="sgroup pv"><h2>${esc(t("models.providers"))}</h2>` +
-    (v.state === "ready" ? rows ? `<div class="pv-grid">${rows}</div>` : `<p class="note">${esc(t("providers.empty"))}</p>` : `<p class="note" role="status">${esc(t(v.state === "failed" ? "providers.error" : "providers.loading"))}</p>`) +
+    (v.state === "ready" ? "" : `<p class="note" role="status">${esc(t(v.state === "failed" ? "providers.error" : "providers.loading"))}</p>`) +
+    `<div class="pv-grid">${v.state === "ready" ? rows : ""}${add}</div>` +
     (v.error && !v.open && !v.adding ? `<p class="note" role="alert">${esc(errorText(v.error))}</p>` : "") +
     (v.state === "failed" ? btn(esc(t("providers.retry")), "", ' data-pv="retry" data-k="pv-retry"') : "") +
     `</section>`;
 }
 
 export function providersAddHTML(v: ProvidersView): string {
-  return `<div class="models-add">${btn(ico("plus") + esc(t("providers.add")), "", ` data-pv="directory" data-k="pv-directory" aria-haspopup="dialog"${v.state === "ready" && !v.busy ? "" : " disabled"}`)}</div>` + dialogHTML(v);
+  return dialogHTML(v);
 }
 
 export interface ProvidersHost { root: HTMLElement; visible(): boolean; redraw(): void; }

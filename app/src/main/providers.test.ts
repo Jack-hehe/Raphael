@@ -45,6 +45,36 @@ beforeEach(() => {
   api.openLink.mockResolvedValue(undefined);
 });
 
+test.each(["zh-TW", "en", "ja"] as const)("%s: the add button is the last provider card and closes back to that card", async (locale) => {
+  setLocale(locale);
+  const panel = mount(); await panel.load();
+  const grid = root.querySelector(".pv > .pv-grid")!;
+  const add = root.querySelector<HTMLButtonElement>('button.pv-card[data-pv="directory"]');
+  expect(add).not.toBeNull();
+  expect(grid.lastElementChild).toBe(add);
+  expect(grid.children).toHaveLength(2);
+  expect(add?.querySelector(".nm")?.textContent).toBe(t("providers.add"));
+  expect(add?.querySelector(".ic .i")).not.toBeNull();
+  expect(add?.querySelector(".ds")?.textContent).toContain("OpenAI");
+  if (locale === "zh-TW") expect(add?.querySelector(".ds")?.textContent).toBe("OpenAI、Claude、Ollama…等 60 家");
+  expect(providersAddHTML(panel.view())).toBe("");
+  click('[data-pv="directory"]');
+  expect(root.querySelector('[role="dialog"]')).not.toBeNull();
+  root.querySelector<HTMLElement>("#pv-kind-search")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(document.activeElement).toBe(root.querySelector('button.pv-card[data-pv="directory"]'));
+});
+
+test("with no connected providers the grid contains only the add card", async () => {
+  api.providersList.mockResolvedValue({ providers: [] });
+  const panel = mount(); await panel.load();
+  const grid = root.querySelector(".pv > .pv-grid")!;
+  expect(grid).not.toBeNull();
+  expect(grid.children).toHaveLength(1);
+  expect(grid.firstElementChild).toBe(root.querySelector('button[data-pv="directory"]'));
+  click('[data-pv="directory"]');
+  expect(root.querySelectorAll(".pv-add")).toHaveLength(kinds.length);
+});
+
 test("connecting a kind saves its fields once and clears the password before awaiting the core", async () => {
   const panel = mount(); await panel.load();
   connect('[data-pv="add"][data-id="openai"]');
@@ -243,7 +273,8 @@ test("removing a provider asks a second time before removing the connection", as
   click('[data-pv="remove"]'); await flush();
   expect(api.providersRemove).toHaveBeenCalledWith("p3");
   expect(root.querySelector('[role="dialog"]')).toBeNull();
-  expect(root.textContent).toContain("No providers connected");
+  expect(root.querySelectorAll(".pv > .pv-grid > .pv-card")).toHaveLength(1);
+  expect(root.querySelector(".pv > .pv-grid > .pv-card")?.getAttribute("data-pv")).toBe("directory");
 });
 
 test("provider changes refresh the connected rows and discovered models without exposing a typed replacement key", async () => {

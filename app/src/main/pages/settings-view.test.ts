@@ -433,7 +433,8 @@ describe("Models", () => {
     const html = tab("models");
     expect(groups(html)).toEqual(["供應商", "使用的模型"]);
     expect(names(html)).toEqual(["拉斐爾的回答", "整理文字", "語音轉文字"]);
-    expect(html.indexOf('data-pv="directory"')).toBeGreaterThan(html.indexOf('data-row="stt-model"'));
+    expect(html.indexOf('data-pv="directory"')).toBeGreaterThanOrEqual(0);
+    expect(html.indexOf('data-pv="directory"')).toBeLessThan(html.indexOf('data-row="stt-model"'));
     expect(html).not.toContain('data-row="raphael-spend"');
     expect(html).not.toContain("data-usage-host");
     expect(html).not.toContain("data-fallback");

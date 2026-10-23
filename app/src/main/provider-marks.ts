@@ -4,11 +4,11 @@ import { LOGO_IDS, type ServiceIconId, type LogoIconId } from "./service-icons";
 
 const MARKS: Record<string, ServiceIconId> = {
   openrouter: "openrouter", openai: "openai", anthropic: "anthropic", google: "googlegemini",
-  azure_openai: "azure", bedrock: "bedrock", litellm: "litellm", portkey: "portkey", nebius: "nebius",
+  azure_openai: "azure", bedrock: "aws", litellm: "litellm", portkey: "portkey", nebius: "nebius",
   bifrost: "bifrost", groq: "groq", ollama: "ollama", vercel: "vercel", lmstudio: "lmstudio",
   deepseek: "deepseek", mistral: "mistral", googlegemini: "googlegemini", googlecloud: "googlecloud",
   google_gemini: "googlegemini", google_cloud: "googlecloud", lm_studio: "lmstudio", azure: "azure",
-  amazon_bedrock: "aws",
+  amazon_bedrock: "aws", ollama_cloud: "ollama", vertex: "vertex",
 };
 
 /** An unrecognised custom connection, or artwork not installed yet, gets a plug. */

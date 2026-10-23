@@ -86,7 +86,7 @@ export const en = {
   "providers.local": "Local",
   "providers.connect": "Connect",
   "providers.soon": "Coming soon",
-  "providers.empty": "No providers connected. Add a provider to begin.",
+  "providers.addNote": "OpenAI, Claude, Ollama… 60 providers",
   "providers.loading": "Loading providers…",
   "providers.error": "Could not complete this. Please try again.",
   "providers.auth": "Invalid key",

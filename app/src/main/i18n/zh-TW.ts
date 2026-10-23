@@ -85,7 +85,7 @@ export const zhTW = {
   "providers.local": "本機",
   "providers.connect": "連接",
   "providers.soon": "即將推出",
-  "providers.empty": "尚未連接供應商。新增供應商即可開始。",
+  "providers.addNote": "OpenAI、Claude、Ollama…等 60 家",
   "providers.loading": "正在讀取供應商…",
   "providers.error": "無法完成，請再試一次。",
   "providers.auth": "金鑰無效",

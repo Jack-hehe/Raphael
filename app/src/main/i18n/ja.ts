@@ -86,7 +86,7 @@ export const ja = {
   "providers.local": "ローカル",
   "providers.connect": "接続",
   "providers.soon": "近日公開",
-  "providers.empty": "接続済みのプロバイダーはありません。プロバイダーを追加して始めましょう。",
+  "providers.addNote": "OpenAI、Claude、Ollama…など60社",
   "providers.loading": "プロバイダーを読み込み中…",
   "providers.error": "完了できませんでした。もう一度お試しください。",
   "providers.auth": "無効なキー",

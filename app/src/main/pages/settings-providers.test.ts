@@ -188,6 +188,7 @@ test("provider search focuses the Models add action and opens its searchable dia
   click('.set-hit[data-hit="0"]'); await flush();
   expect(page.pane()).toBe("models");
   expect((document.activeElement as HTMLElement).dataset.pv).toBe("directory");
+  expect(document.activeElement).toBe(page.el.querySelector(".pv > .pv-grid")?.lastElementChild);
   click('[data-pv="directory"]');
   expect(page.el.querySelector('[role="dialog"] #pv-kind-search')).not.toBeNull();
   click('[data-pv="add"]');
