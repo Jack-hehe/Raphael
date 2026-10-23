@@ -47,7 +47,22 @@ const COMMAND_TITLES: Record<string, MessageKey> = {
   lock_screen: "agent.cmd.lock",
   copy_text: "agent.cmd.copy",
 };
+/** The titles of what Raphael did on the owner's PC (a step of kind `computer`, its `tool`). */
+const COMPUTER_TITLES: Record<string, MessageKey> = {
+  apps: "agent.computer.apps",
+  look: "agent.computer.look",
+  open: "agent.computer.open",
+  focus: "agent.computer.focus",
+  click: "agent.computer.click",
+  type: "agent.computer.type",
+  keys: "agent.computer.keys",
+  scroll: "agent.computer.scroll",
+};
 const REASONS: Record<string, MessageKey> = {
+  password: "agent.reason.password",
+  handoff: "agent.reason.handoff",
+  refused_app: "agent.reason.refused_app",
+  interrupted: "agent.reason.interrupted",
   bad_arguments: "agent.reason.bad_arguments",
   auth: "agent.reason.auth",
   missing_secret: "agent.reason.missing_secret",
@@ -114,6 +129,7 @@ export function stepTitle(step: AgentStep): string {
   if (step.kind === "model") return t("agent.stepThinking");
   if (!step.tool) return t("agent.stepUnknown");
   if (step.kind === "command") return plain(COMMAND_TITLES[step.tool] ?? "agent.cmd.other");
+  if (step.kind === "computer") return plain(COMPUTER_TITLES[step.tool] ?? "agent.computer.other");
   if (step.server === RAPHAEL && BUILTIN_TITLES[step.tool]) return plain(BUILTIN_TITLES[step.tool]);
   const service = !step.server || step.server === RAPHAEL ? t("agent.title") : step.server;
   return t(toolAccess(step.tool, step.server ?? "") === "read" ? "agent.tool.read" : "agent.tool.write", { p0: service });
@@ -123,12 +139,14 @@ export function stepTitle(step: AgentStep): string {
 export function stepToolTip(step: AgentStep): string {
   if (step.kind === "model" || !step.tool) return "";
   if (step.kind === "command") return COMMAND_TITLES[step.tool] ? "" : step.tool;
+  // an app Raphael operated: the app's name, which the title leaves out
+  if (step.kind === "computer") return step.server ?? "";
   return step.server === RAPHAEL && BUILTIN_TITLES[step.tool] ? "" : step.tool;
 }
 
 /** Where a step happened: the service, Raphael, or this PC. */
 export function stepPlace(step: AgentStep): string {
-  if (step.kind === "command") return t("agent.thisPc");
+  if (step.kind === "command" || step.kind === "computer") return t("agent.thisPc");
   if (step.kind === "model" || step.server === RAPHAEL || !step.server) return t("agent.title");
   return step.server;
 }
@@ -136,6 +154,8 @@ export function stepPlace(step: AgentStep): string {
 /** Why a step failed, in a few words; empty for one that went well. */
 export function reasonText(step: AgentStep): string {
   if (step.outcome === "ok") return "";
+  // On the owner's PC a refusal is Raphael not being allowed to touch an app; `denied` elsewhere is a login that was refused.
+  if (step.kind === "computer" && step.reason === "denied") return t("agent.reason.notAllowed");
   const key = REASONS[step.reason ?? ""] ?? (step.outcome === "timeout" ? REASONS.timeout : step.outcome === "blocked" ? REASONS.blocked : REASONS.error);
   return plain(key);
 }
@@ -158,8 +178,16 @@ export const shortModel = (model: string): string => model.slice(model.lastIndex
 /** The steps a reader is shown: everything but the model calls that went well, which are the thinking between them. */
 export const shownSteps = (turn: AgentTurn): AgentStep[] => (turn.steps ?? []).filter((step) => (step.kind !== "model" || step.outcome !== "ok") && !bookkeeping(step));
 
-/** A background task looking through the tools it was given: no service is called, so it is no step to the reader. */
-const bookkeeping = (step: AgentStep): boolean => step.server === RAPHAEL && step.tool === "find_tools" && step.outcome === "ok";
+/**
+ * Steps that are no step to the reader: a background task looking through the tools it was given (no
+ * service is called), and Raphael looking at the windows or the screen of the PC (nothing is done to
+ * them). Only when they went well: a failed one is shown.
+ */
+const bookkeeping = (step: AgentStep): boolean =>
+  step.outcome === "ok" &&
+  ((step.server === RAPHAEL && step.tool === "find_tools") ||
+    // looking at the windows or at the screen of an app is not something Raphael did to it
+    (step.kind === "computer" && (step.tool === "apps" || step.tool === "look")));
 
 export const isLive = (task: AgentTask | null | undefined): boolean => task?.state === "running" || task?.state === "queued";
 
@@ -225,7 +253,7 @@ export function noteTaskEnds(turns: readonly AgentTurn[], state: TimelineState):
 function stepIcon(step: AgentStep): string {
   const place = esc(stepPlace(step));
   const named = `role="img" aria-label="${place}" title="${place}"`;
-  if (step.kind === "command") return `<span class="step-ic" ${named}>${ico("monitor")}</span>`;
+  if (step.kind === "command" || step.kind === "computer") return `<span class="step-ic" ${named}>${ico("monitor")}</span>`;
   if (step.kind === "model") return `<span class="step-ic" ${named}>${ico("sparkle")}</span>`;
   if (!step.server || step.server === RAPHAEL) {
     const own = step.tool === "weather" ? ico("cloud") : step.tool === "web_search" ? ico("globe") : step.tool === "local_time" ? ico("clock") : ico("search");

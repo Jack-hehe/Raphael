@@ -52,7 +52,19 @@ export type OverlayEvent =
   | { type: "notice"; text: string }
   | { type: "learned"; text: string }
   | { type: "say"; prefix: string; text: string }
-  | { type: "ask"; id: string; tier: AskTier; prefix: string; text: string; yes: string; no: string; timeout_ms: number }
+  /**
+   * `always`: the label of a third answer, 「一律允許」, in the interface language. Only a question
+   * about letting Raphael operate an app has it (the other questions have two answers); such a
+   * question is always T2.
+   */
+  | { type: "ask"; id: string; tier: AskTier; prefix: string; text: string; yes: string; no: string; always?: string; timeout_ms: number }
+  /**
+   * Raphael operates an app on the owner's PC. `line` is complete and already wrapped in 《》 in the
+   * interface language (《告。操作中：點擊「七」》): it stands in the caption's place, still, until
+   * another event replaces it. An open question goes from the screen without an answer (the app
+   * already has it).
+   */
+  | { type: "operate"; line: string }
   | { type: "complete" }
   | { type: "hide" }
   | { type: "settings"; px: number; subtitles: string; language: string }
@@ -75,10 +87,12 @@ export interface EmblemControl {
 /** How far a pointer hold on the YES of a T3 question has come. */
 export type HoldState = "idle" | "holding" | "armed";
 
-/** What the two buttons of a question say, and how strict the question is. */
+/** What the buttons of a question say, and how strict the question is. */
 export interface AskButtons {
   yes: string;
   no: string;
+  /** The label of the third button (the answer YES, always); absent when the question has two answers. */
+  always?: string;
   tier: AskTier;
   language: UiLanguage;
 }
@@ -94,12 +108,12 @@ export interface OverlayView {
   showProgress(percent: number | null): void;
   /** The waiting line of a question being thought about, in the progress caption's place; null hides it. */
   showWaiting(text: string | null, language: UiLanguage): void;
-  /** The two buttons come in under the line. */
+  /** The buttons (two, or three with `always`) come in under the line. */
   showAsk(buttons: AskButtons): void;
   /** The filling underline of the YES button of a T3 question. */
   setHold(state: HoldState): void;
-  /** An answer was sent: both buttons stop taking clicks and the chosen one stays pressed; null takes it back. */
-  setChoice(choice: "yes" | "no" | null): void;
+  /** An answer was sent: the buttons stop taking clicks and the chosen one stays pressed; null takes it back. */
+  setChoice(choice: "yes" | "no" | "always" | null): void;
   hideAsk(): void;
 }
 
@@ -129,17 +143,22 @@ interface Ask {
   line: string;
   yes: string;
   no: string;
+  /** The label of the third answer, or null for a question with two. */
+  always: string | null;
   timeoutMs: number;
   /** The words and the buttons are on screen (the appear animation has played). */
   shown: boolean;
   hold: HoldState;
   /** The answer that was sent while the app has not yet replaced the question. */
-  chosen: "yes" | "no" | null;
+  chosen: "yes" | "no" | "always" | null;
 }
 
 export interface ControllerOptions {
-  /** Sends the person's answer to the app (the `overlay_confirm` command). */
-  confirm?: (id: string, approved: boolean) => Promise<unknown>;
+  /**
+   * Sends the person's answer to the app (the `overlay_confirm` command). `always` is passed only
+   * with the third answer (YES, and keep allowing); the other two answers leave it out.
+   */
+  confirm?: (id: string, approved: boolean, always?: boolean) => Promise<unknown>;
   /** Where a problem is reported (the app's log). It never gets the words on screen. */
   log?: PageLog;
   /** Picks the waiting lines: a number from 0 up to but not including 1. Math.random if left out. */
@@ -171,6 +190,8 @@ export class OverlayController {
   private waitingLines: string[] = [];
   /** The line on screen now, so that the next one is another. */
   private waitingLine: string | null = null;
+  /** Raphael's `operate` line is in the caption's place (static, with no rotation) until something replaces it. */
+  private operating = false;
 
   constructor(
     private readonly emblem: EmblemControl,
@@ -243,6 +264,9 @@ export class OverlayController {
       case "ask":
         this.startAsk(event);
         break;
+      case "operate":
+        this.operate(words(event.line));
+        break;
       case "hide":
         this.activeShow = false;
         this.cancelNotices();
@@ -269,11 +293,16 @@ export class OverlayController {
     return ask && ask.shown && ask.chosen === null ? ask : null;
   }
 
-  /** A click on a button. The YES of a T3 question is answered by `holdEnd`, never by a click. */
-  clickAsk(button: "yes" | "no"): void {
+  /**
+   * A click on a button. The YES of a T3 question is answered by `holdEnd`, never by a click. The
+   * `always` button exists only on a question that has the label (always T2); without it a click
+   * on it is ignored.
+   */
+  clickAsk(button: "yes" | "no" | "always"): void {
     const ask = this.open();
     if (!ask || (button === "yes" && ask.tier === "T3")) return;
-    this.choose(ask, button === "yes");
+    if (button === "always" && ask.always === null) return;
+    this.choose(ask, button !== "no", button === "always");
   }
 
   /** The pointer went down on the YES button: for a T3 question the hold begins (true). */
@@ -321,7 +350,7 @@ export class OverlayController {
   }
 
   /** Sends the answer. The buttons stay (pressed, and dead) until the app replaces the question. */
-  private choose(ask: Ask, approved: boolean): void {
+  private choose(ask: Ask, approved: boolean, always = false): void {
     // A hold that was still going (NO was clicked meanwhile) must not arm a button that is dead now.
     clearTimeout(this.holdTimer);
     this.holdTimer = undefined;
@@ -329,11 +358,11 @@ export class OverlayController {
       ask.hold = "idle";
       this.view.setHold("idle");
     }
-    ask.chosen = approved ? "yes" : "no";
+    ask.chosen = always ? "always" : approved ? "yes" : "no";
     this.view.setChoice(ask.chosen);
     let sent: Promise<unknown>;
     try {
-      sent = Promise.resolve(this.options.confirm?.(ask.id, approved));
+      sent = Promise.resolve(always ? this.options.confirm?.(ask.id, true, true) : this.options.confirm?.(ask.id, approved));
     } catch (err) {
       sent = Promise.reject(err);
     }
@@ -356,13 +385,16 @@ export class OverlayController {
     this.activeShow = false;
     // The words, buttons and progress of before go; learned words that wait stay.
     this.cancelNotices();
+    const always = words(event.always) || null;
     const ask: Ask = {
       id: event.id,
-      // What is not plainly a T2 question is asked the strict way.
-      tier: event.tier === "T2" ? "T2" : "T3",
+      // What is not plainly a T2 question is asked the strict way; a question with the third
+      // answer (letting Raphael operate an app) is never held.
+      tier: event.tier === "T2" || always !== null ? "T2" : "T3",
       line: replyLine(words(event.prefix), words(event.text)),
       yes: words(event.yes) || "✓",
       no: words(event.no) || "✕",
+      always,
       timeoutMs: Number.isFinite(event.timeout_ms) && event.timeout_ms > 0 ? event.timeout_ms : DEFAULT_ASK_TIMEOUT_MS,
       shown: false,
       hold: "idle",
@@ -376,7 +408,13 @@ export class OverlayController {
     this.timer = setTimeout(() => {
       ask.shown = true;
       this.view.showLine(ask.line, this.language);
-      this.view.showAsk({ yes: ask.yes, no: ask.no, tier: ask.tier, language: this.language });
+      this.view.showAsk({
+        yes: ask.yes,
+        no: ask.no,
+        ...(ask.always !== null ? { always: ask.always } : {}),
+        tier: ask.tier,
+        language: this.language,
+      });
       this.emblem.speak(noticeDurationMs(ask.line) / 1000);
     }, this.emblem.appearLeft * 1000);
     // The app answers a question that was not answered in time. If it does not, the page lets go.
@@ -500,11 +538,28 @@ export class OverlayController {
     this.view.showWaiting(this.waitingLine, this.language);
   }
 
+  /**
+   * Raphael operates an app: the emblem shows (it appears if hidden) in the `operating` mode and
+   * `line` stands in the caption's place, still. Like his answers it is written whatever the
+   * subtitles setting says. A question on screen goes without an answer being sent, and the
+   * reports that waited go too, as with a dictation that starts.
+   */
+  private operate(line: string): void {
+    if (line === "") return;
+    this.cancelNotices();
+    this.activeShow = true;
+    this.appearIfHidden();
+    this.setMode("operating");
+    this.operating = true;
+    this.view.showWaiting(line, this.language);
+  }
+
   /** The waiting lines go: the thinking is over, or something else takes the caption. */
   private stopWaiting(): void {
-    if (this.waitingTimer === undefined) return;
+    if (this.waitingTimer === undefined && !this.operating) return;
     clearInterval(this.waitingTimer);
     this.waitingTimer = undefined;
+    this.operating = false;
     this.waitingLine = null;
     this.waitingLines = [];
     this.view.showWaiting(null, this.language);
@@ -580,6 +635,7 @@ class DomView implements OverlayView {
     private readonly question: HTMLElement,
     private readonly yes: HTMLButtonElement,
     private readonly no: HTMLButtonElement,
+    private readonly always: HTMLButtonElement,
   ) {}
 
   layout(px: number): void {
@@ -613,9 +669,11 @@ class DomView implements OverlayView {
     this.progress.lang = language;
   }
 
-  showAsk({ yes, no, tier, language }: AskButtons): void {
+  showAsk({ yes, no, always, tier, language }: AskButtons): void {
     this.yes.querySelector(".ask-label")!.textContent = yes;
     this.no.textContent = no;
+    this.always.textContent = always ?? "";
+    this.always.hidden = always === undefined;
     this.question.lang = language;
     this.question.dataset.tier = tier;
     this.setHold("idle");
@@ -630,9 +688,9 @@ class DomView implements OverlayView {
     this.yes.dataset.hold = state;
   }
 
-  setChoice(choice: "yes" | "no" | null): void {
+  setChoice(choice: "yes" | "no" | "always" | null): void {
     this.question.dataset.choice = choice ?? "";
-    this.yes.disabled = this.no.disabled = choice !== null;
+    this.yes.disabled = this.no.disabled = this.always.disabled = choice !== null;
   }
 
   hideAsk(): void {
@@ -681,10 +739,16 @@ function onButton(button: HTMLElement, event: PointerEvent): boolean {
 }
 
 /** The pointer on the buttons of a question, handed to the controller. */
-function wireQuestion(controller: OverlayController, yes: HTMLButtonElement, no: HTMLButtonElement): void {
+function wireQuestion(
+  controller: OverlayController,
+  yes: HTMLButtonElement,
+  no: HTMLButtonElement,
+  always: HTMLButtonElement,
+): void {
   yes.style.setProperty("--hold-ms", `${HOLD_MS}ms`);
   yes.addEventListener("click", () => controller.clickAsk("yes"));
   no.addEventListener("click", () => controller.clickAsk("no"));
+  always.addEventListener("click", () => controller.clickAsk("always"));
   yes.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || !controller.holdStart()) return;
     // A hold goes on if the pointer strays; where it ends is decided on release. (A click is not
@@ -710,9 +774,10 @@ async function start(): Promise<void> {
   const question = document.getElementById("ask");
   const yes = document.getElementById("ask-yes");
   const no = document.getElementById("ask-no");
+  const always = document.getElementById("ask-always");
   if (
     !(canvas instanceof HTMLCanvasElement) || !box || !line || !progress || !question ||
-    !(yes instanceof HTMLButtonElement) || !(no instanceof HTMLButtonElement)
+    !(yes instanceof HTMLButtonElement) || !(no instanceof HTMLButtonElement) || !(always instanceof HTMLButtonElement)
   ) {
     throw new Error("overlay.html is missing the emblem canvas, subtitles, progress, or question");
   }
@@ -720,14 +785,16 @@ async function start(): Promise<void> {
   // The window takes the mouse while a question is up: no menu of the browser (Back, Refresh...) over it.
   document.addEventListener("contextmenu", (event) => event.preventDefault());
 
-  const view = new DomView(document.documentElement, box, line, progress, question, yes, no);
+  const view = new DomView(document.documentElement, box, line, progress, question, yes, no, always);
   view.layout(DEFAULT_PX);
   const emblem = new Emblem(canvas, DEFAULT_PX, { surface: "transparent" });
   const controller = new OverlayController(emblem, view, {
-    confirm: (id, approved) => invoke("overlay_confirm", { id, approved }),
+    // `always` goes only with the third answer; the other two are sent as they have always been.
+    confirm: (id, approved, always) =>
+      invoke("overlay_confirm", always ? { id, approved, always: true } : { id, approved }),
     log: pageLog,
   });
-  wireQuestion(controller, yes, no);
+  wireQuestion(controller, yes, no, always);
   const frames = new FrameWatch(() => emblem.frames, () => document.visibilityState, pageLog, {
     canvas,
     expected: () => controller.expectsPaint,
@@ -759,7 +826,7 @@ async function start(): Promise<void> {
     if (away && phase() === "appear") entrance.start();
     if (
       event.type === "show" || event.type === "notice" || event.type === "learned" || event.type === "complete" ||
-      event.type === "say" || event.type === "ask"
+      event.type === "say" || event.type === "ask" || event.type === "operate"
     ) {
       frames.expectFrames(event.type);
     }

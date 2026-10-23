@@ -14,6 +14,7 @@ const base: DeviceSettings = {
   ui_language: "zh-TW",
   autostart: true,
   onboarded: false,
+  computer_apps: [],
 };
 
 /** A promise that is settled by hand, so a test decides which call answers first. */
@@ -32,6 +33,7 @@ function state(source: Partial<DeviceSource>, initial = base) {
   const full: DeviceSource = {
     get: () => Promise.resolve(initial),
     set: () => Promise.reject(new Error("no set")),
+    removeComputerApp: () => Promise.reject(new Error("no removal")),
     ...source,
   };
   return { s: new DeviceState(initial, full, changed), changed };
@@ -40,7 +42,7 @@ function state(source: Partial<DeviceSource>, initial = base) {
 describe("DeviceState", () => {
   test("persists the UI language and restores it in a newly opened window", async () => {
     let saved = { ...base };
-    const source: DeviceSource = {
+    const source: Partial<DeviceSource> = {
       get: async () => ({ ...saved }),
       set: async (patch) => (saved = { ...saved, ...patch }),
     };
@@ -140,5 +142,36 @@ describe("DeviceState", () => {
     });
     await expect(s.set({ emblem_size: 194 })).rejects.toThrow("cannot save");
     expect(s.get()).toEqual(base);
+  });
+
+  test("two always-allowed apps removed quickly are both gone: each removal names one app", async () => {
+    // A list computed from the settings the window had would put the first app back.
+    const A = { exe: "a.exe", name: "A" };
+    const B = { exe: "b.exe", name: "B" };
+    const C = { exe: "c.exe", name: "C" };
+    const first = later<DeviceSettings>();
+    const second = later<DeviceSettings>();
+    const removeComputerApp = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const set = vi.fn(() => Promise.reject(new Error("no whole list")));
+    const { s, changed } = state({ removeComputerApp, set }, { ...base, computer_apps: [A, B, C] });
+    const a = s.removeComputerApp("a.exe");
+    const b = s.removeComputerApp("b.exe");
+    expect(removeComputerApp.mock.calls).toEqual([["a.exe"], ["b.exe"]]);
+    expect(set).not.toHaveBeenCalled();
+    first.resolve({ ...base, computer_apps: [B, C] });
+    second.resolve({ ...base, computer_apps: [C] });
+    await Promise.all([a, b]);
+    expect(s.get().computer_apps).toEqual([C]);
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
+
+  test("a failed removal rejects, and the settings are read again", async () => {
+    const now = { ...base, computer_apps: [] };
+    const { s } = state({
+      removeComputerApp: () => Promise.reject(new Error("cannot save")),
+      get: () => Promise.resolve(now),
+    }, { ...base, computer_apps: [{ exe: "a.exe", name: "A" }] });
+    await expect(s.removeComputerApp("a.exe")).rejects.toThrow("cannot save");
+    expect(s.get()).toEqual(now);
   });
 });

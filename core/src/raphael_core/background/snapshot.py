@@ -14,7 +14,9 @@ tool an alias is stays here in the core. The snapshot holds:
 
 Not the commands for this computer (open a site, the volume, lock the screen, copy): those stay with
 the fast tier, which the user speaks to; a task in the background must not open a page or lock the
-screen while the user is typing.
+screen while the user is typing. Nor the tools that operate the owner's desktop
+(`computer.tools.PRESENCE_TOOLS`, which `needs_presence`): no task is offered them, no plugin's
+tool takes one of their names, and the gate refuses them to the worker in any case.
 
 A snapshot is the offer, not the permission. Every call is judged again by the gate when it is made
 (`agent.gate`), against the tier the tool has then, so a tool whose tier was raised, taken away or
@@ -30,6 +32,7 @@ from ..agent.history import Turn
 from ..agent.ledger import Ledger
 from ..agent.plugins import MAX_OFFERED, Offer, PluginHub, make_offer
 from ..agent.policy import Tier
+from ..computer.tools import PRESENCE_TOOLS
 from ..agent.toolpick import (
     PICK_MAX,
     ToolPicker,
@@ -196,7 +199,7 @@ def take_snapshot(
         except Exception:  # a plugin that breaks leaves its tools out, not the task
             tools = []
         pool = make_offer(tools)
-        taken = set(WEB_TOOLS) | set(MEMORY_READ_TOOLS) | {"find_tools"}
+        taken = set(WEB_TOOLS) | set(MEMORY_READ_TOOLS) | {"find_tools"} | PRESENCE_TOOLS
         clash = set(pool.by_alias) & taken
         if clash:  # a plugin's tool never takes the name of one of Raphael's own
             pool = make_offer([tool for alias, tool in pool.by_alias.items() if alias not in clash])

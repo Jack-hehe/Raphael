@@ -186,7 +186,11 @@ export interface AgentTurn {
 
 /** One thing Raphael did for a turn. Never what a tool was given or what it returned. */
 export interface AgentStep {
-  /** `tool` (a lookup or a connected service's tool), `command` (something done to this PC) or `model` (a model call of a background task). */
+  /**
+   * `tool` (a lookup or a connected service's tool), `command` (something done to this PC), `computer`
+   * (Raphael operating an app: `tool` is `apps`, `look`, `open`, `focus`, `click`, `type`, `keys` or
+   * `scroll`, `server` the app's name) or `model` (a model call of a background task).
+   */
   kind: string;
   /** The tool's name on its server; null for a call the task was not given. */
   tool: string | null;
@@ -310,6 +314,13 @@ export interface DeviceSettings {
   ui_language: "zh-TW" | "en" | "ja";
   autostart: boolean;
   onboarded: boolean;
+  /**
+   * The apps Raphael may always operate on this PC (the 一律允許 answer of a question), by the
+   * executable's file name in lower case (`excel.exe`) and the name to show (`Microsoft Excel`).
+   * Settings written before the feature lack it: read it with `computerApps`. An app is taken off
+   * it one at a time, with `device_computer_app_remove`, never with a whole list computed here.
+   */
+  computer_apps: { exe: string; name: string }[];
 }
 
 /** What commands.rs sends on the `main_events` channel (`MainEvent`). */
@@ -347,6 +358,14 @@ export interface AgentQuestion {
   tier: "T2" | "T3";
   /** How long the question waits for an answer in all, in ms. */
   timeout_ms: number;
+  /** The words of the two plain answers, in the language of the window; the page has its own 是 and 否 when they are absent. */
+  yes?: string;
+  no?: string;
+  /**
+   * The label of a third answer, 「一律允許」 (YES, and keep allowing): only the question about letting
+   * Raphael operate an app has it. Such a question is always T2.
+   */
+  always?: string;
 }
 
 export type HotkeyKind = "dictation_down" | "dictation_up" | "agent_down" | "agent_up" | "paste_last" | "cancel";
@@ -406,6 +425,8 @@ export interface AppContext {
   refreshDevice(): Promise<DeviceSettings>;
   /** Changes some device settings; rejects with the reason. */
   setDevice(patch: Partial<DeviceSettings>): Promise<DeviceSettings>;
+  /** Takes one app off the always-allowed list (`device_computer_app_remove`); rejects with the reason. */
+  removeComputerApp(exe: string): Promise<DeviceSettings>;
   /** Hears the events of the core (microphone level, model download). Returns how to stop hearing. */
   onEvent(handler: (event: MainEvent) => void): () => void;
   /** Things that happen only after 10 seconds, with 「復原」. */

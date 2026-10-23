@@ -37,6 +37,15 @@ ui_language, target_app}`. The router (Jev, and the language model when Jev fail
   like a command at that tier, one to a turn, made when the yes comes. Every call of a tool goes
   through the one gate (`gate`), the worker's too. A tool that is off is never offered, and a
   model that takes no tools (`plugins.ToolSupport`) leaves the plugins out of the request;
+- a task done by operating an app on the screen (`operate`) is a run on the owner's desktop
+  (`raphael_core.computer`), and only for a request made at this computer, spoken or typed: the
+  model looks at the app's window and acts one step at a time through the shell, asking the owner
+  before it uses an app for the first time and before every step that sends, deletes or buys. Its
+  questions are the replies of `agent.ask` and `agent.confirm` like any other, so one turn can ask
+  several in a row (`agent.confirm {id, approved, always}`, `always` for 「一律允許」), and its
+  steps are the turn's. A run reads the conversation as a quick answer does (the summary, the last
+  turns) and the memory's index, as data, but never writes a note: what it saw on the screen is
+  untrusted;
 - a task for the background (`delegate`: several steps, or a connected service) is handed to the
   background worker (`raphael_core.background`) and answered at once with 《了。》; the worker does
   it step by step through the same gate, and reports on the overlay when it is done;
@@ -57,7 +66,8 @@ completed. `agent.ask` takes an optional `source`, where the request came from (
 default; "app", typed in the conversation page of the app; or a chat app such as "telegram").
 
 `agent.cancel {session_id}` ends a request that is still being thought about and denies the
-question that session is waiting on. A new request replaces any question that waits.
+question that session is waiting on, and stops its run on the desktop. A new request replaces any
+question that waits, and any run.
 
 Threads: this runs on the event loop, which owns the database. The device actions (a key, a page, the
 clipboard, PowerShell) run on worker threads. Nothing here logs what the user said, what Raphael
@@ -81,6 +91,8 @@ from ..background.brief import background_block, background_line
 from ..background.tasks import Refused
 from ..brain.catalog import CatalogEntry
 from ..clock import wall_clock_ms
+from ..computer.run import ComputerRun, ComputerRuns, Final, Question, conversation_block
+from ..computer.words import answers as answer_labels
 from ..integrations.pool import McpPool
 from ..brain.openrouter import OpenRouterClient
 from ..brain.secrets import KeyStore
@@ -303,9 +315,10 @@ class AgentService:
     is told whether the answer model takes tools. `gate` is the one gate every tool call goes
     through, shared with the background worker (one is made when none is given), and `background`
     is the worker that takes the tasks of the `delegate` route. `notify` sends a notification to
-    the app (`agent.turn`). `memory` is Raphael's memory (`memory.service`), which also keeps the
-    conversation's summary; without one there is no memory, and the conversation is read without
-    a summary (its last turns, within the same limits).
+    the app (`agent.turn`). `computer` holds the run on the owner's desktop (the `operate` route);
+    without it nothing on the desktop is operated. `memory` is Raphael's memory (`memory.service`),
+    which also keeps the conversation's summary; without one there is no memory, and the
+    conversation is read without a summary (its last turns, within the same limits).
     """
 
     def __init__(
@@ -326,9 +339,13 @@ class AgentService:
         gate: ToolGate | None = None,
         background: "BackgroundService",
         notify: Callable[[str, dict], None] | None = None,
+        computer: ComputerRuns | None = None,
         memory: "MemoryService | None" = None,
     ) -> None:
         self._keys = keys
+        self._client = client
+        # The run on the owner's desktop, through the shell; None where there is no shell to ask.
+        self._computer = computer
         self._memory = memory
         self._conversation = (
             memory.conversation
@@ -421,6 +438,8 @@ class AgentService:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._inflight.clear()
+        if self._computer is not None:
+            await self._computer.aclose()
         await self._pool.aclose()
         await self._tools.aclose()
 
@@ -448,6 +467,8 @@ class AgentService:
         self._expire(self._confirmations.sweep())
         if ask.source in _AT_THIS_COMPUTER:
             self._deny(self._confirmations.cancel_all())
+            if self._computer is not None:
+                self._computer.stop_all("replaced")
         else:  # a message from a messaging app leaves a question asked at this computer alone
             self._deny(self._confirmations.cancel_session(ask.session_id))
         self._prune_if_due()
@@ -529,6 +550,8 @@ class AgentService:
             return await self._command(ask, decision, settings, ledger)
         if route == "answer":
             return await self._answer_with_tools(ask, decision, settings, ledger, self._offer())
+        if route == "operate":
+            return await self._operate(ask, settings, ledger)
         if route == "delegate":
             return self._hand_over(ask, settings, ledger)
         if route in ("discuss", "chat"):
@@ -678,6 +701,166 @@ class AgentService:
         if applied is not None and applied.written and self._memory is not None:
             self._memory.note_turn(applied.written, result["turn_id"])
         return result
+
+    # --- the owner's desktop ----------------------------------------------------------------------
+
+    async def _operate(self, ask: _Ask, settings: _Settings, ledger: Ledger) -> dict:
+        """A run on the owner's desktop (`raphael_core.computer.run`). Only for a request made at
+        this computer: a message from a phone is a 否 reply, as is a shell that cannot be reached
+        and a model that takes no tools. The reply is the run's first question or how it ended."""
+        language = ask.language
+        if ask.source not in _AT_THIS_COMPUTER:
+            return self._finish(ask, "operate", "negative", phrase(language, "computer_away"), ledger)
+        if self._computer is None:
+            return self._finish(
+                ask, "operate", "negative", phrase(language, "computer_unavailable"), ledger
+            )
+        if self._tool_support.supports(settings.model) is False:
+            return self._finish(ask, "operate", "negative", phrase(language, "computer_model"), ledger)
+        limit = settings.limit_usd
+        run = ComputerRun(
+            session_id=ask.session_id,
+            language=language,
+            request=ask.text,
+            model=settings.model,
+            client=self._client,
+            bridge=self._computer.bridge,
+            gate=self._gate,
+            ledger=ledger,
+            over_budget=lambda: self._over_budget(limit),
+            open_app=self._open_for_run,
+            background=self._before_run(),
+            clock=self._clock,
+            now_ms=self._now_ms,
+        )
+        run.context = ask
+        self._computer.begin(run)
+        assert run.task is not None
+        run.task.add_done_callback(lambda _done, run=run: self._settle_unheard(run))
+        return await self._next_from_run(run)
+
+    def _before_run(self) -> str:
+        """What a run is told of what came before its request: the memory's index, and the
+        conversation as a quick answer reads it (the summary and the last few turns). A run
+        writes no note, now or later: its turn holds what the model read on the screen, which is
+        untrusted, and a note is written only from the owner's own words (see `_remember`, and the
+        reflection pass, which reads only the owner's question of an `operate` turn)."""
+        context = self._conversation.context(quick=True)
+        index = "" if self._memory is None else self._memory.index()
+        return conversation_block(context.summary, context.turns, index)
+
+    async def _next_from_run(self, run: ComputerRun) -> dict:
+        """What the run says next, as the reply of `agent.ask` or `agent.confirm`: its question
+        (the turn waits for a yes), or how it ended (the turn is complete). The turn is written
+        when the run first asks or ends, and brought up to date after. A wait that is given up
+        (Esc, a newer request) stops the run, whose end is then written by itself, as is the end
+        of a run stopped while its question waited, which nobody waits for either."""
+        run.listening = True
+        try:
+            event = await run.next_event()
+        except asyncio.CancelledError:
+            run.listening = False
+            run.stop("cancelled")
+            self._settle_unheard(run)
+            raise
+        run.listening = False
+        steps = run.take_steps()
+        if isinstance(event, Final):
+            return self._write_final(run, event, steps)
+        return self._run_question(run, event, steps)
+
+    def _run_question(self, run: ComputerRun, question: Question, steps: list[Step]) -> dict:
+        ask: _Ask = run.context
+        language = ask.language
+        prefix = PREFIXES[language].question
+        if run.turn_id is None:
+            ask.steps.extend(steps)
+            run.turn_id = self._record(ask, "operate", prefix, question.stored, "confirm", None, run.ledger)
+            run.recorded_cost = run.ledger.total
+        else:
+            self._update_run_turn(run, steps, prefix=prefix, text=question.stored, status="confirm")
+        confirm = {
+            "id": question.id,
+            "tier": question.tier.name,
+            "prefix": prefix,
+            "text": question.text,
+            "yes": phrase(language, "yes"),
+            "no": phrase(language, "no"),
+            "timeout_ms": CONFIRM_TIMEOUT_MS,
+        }
+        if question.always:
+            labels = answer_labels(language)
+            confirm.update(yes=labels["once"], no=labels["deny"], always=labels["always"])
+        return {"status": "confirm", "turn_id": run.turn_id, "confirm": confirm}
+
+    def _write_final(self, run: ComputerRun, final: Final, steps: list[Step]) -> dict:
+        """Complete the turn of a run that ended, and answer with what Raphael says."""
+        ask: _Ask = run.context
+        run.written = True
+        if run.turn_id is None:
+            ask.steps.extend(steps)
+            reply = self._finish(
+                ask, "operate", final.which, final.text, run.ledger,
+                detail=final.detail, status=final.status,
+            )  # fmt: skip
+            run.turn_id = reply["turn_id"]
+            return reply
+        prefix = _prefix(ask.language, final.which)
+        self._update_run_turn(
+            run, steps, prefix=prefix, text=final.text, status=final.status, detail=final.detail
+        )
+        return self._done(run.turn_id, ask.language, final.which, final.text)
+
+    def _update_run_turn(
+        self,
+        run: ComputerRun,
+        steps: list[Step],
+        *,
+        prefix: str,
+        text: str,
+        status: str,
+        detail: str | None = None,
+    ) -> None:
+        turn_id = run.turn_id
+        if not turn_id:
+            return
+        cost, run.recorded_cost = run.ledger.total - run.recorded_cost, run.ledger.total
+        if steps:
+            self._write(lambda: self._history.add_steps(turn_id, steps))
+        self._write(
+            lambda: self._history.resolve(
+                turn_id, prefix=prefix, text=text, status=status, detail=detail,
+                cost_usd=cost, model=run.ledger.model,
+            )
+        )  # fmt: skip
+        self._turn_changed(turn_id)
+
+    def _settle_unheard(self, run: ComputerRun) -> None:
+        """A run that ended while nobody waited for it (its request was cancelled, or it was
+        stopped while its question waited) has its turn written here."""
+        if not run.listening and not run.written and run.final is not None:
+            self._write_final(run, run.final, run.take_steps())
+
+    def _over_budget(self, limit_usd: float) -> bool:
+        try:
+            return self._spend.is_over(limit_usd)
+        except sqlite3.Error as exc:
+            logger.warning("Could not read the month's spend: %s", type(exc).__name__)
+            return False
+
+    async def _open_for_run(self, name: str) -> str | None:
+        """Open the app of the Start menu that `name` names, for a run, through the gate like the
+        `open` command: the name it goes by, or None when there is none."""
+        app = await self._catalog.find(name, loose=False) or await self._catalog.lookup(name)
+        if app is None:
+            app = await self._catalog.find(name)
+        if app is None:
+            return None
+        command = COMMANDS["open"]
+        args = {"target_kind": "app", "target": app.app_id}
+        self._gate.check(Action(command.name, args), None)
+        await run_command(command, args, self._actions)
+        return app.name
 
     # --- the background ---------------------------------------------------------------------------
 
@@ -1162,6 +1345,14 @@ class AgentService:
         approved = params.get("approved")
         if type(approved) is not bool:
             raise invalid_params("approved must be true or false")
+        always = params.get("always", False)
+        if type(always) is not bool:
+            raise invalid_params("always must be true or false")
+        run = None if self._computer is None else self._computer.for_question(confirm_id)
+        if run is not None:
+            # A question of a run on the desktop: the run goes on, and says what comes next.
+            run.answer(confirm_id, approved, always)
+            return await self._next_from_run(run)
         self._expire(self._confirmations.sweep())
         resolution = self._confirmations.resolve(confirm_id, approved)
         pending = resolution.pending
@@ -1256,6 +1447,8 @@ class AgentService:
         task = self._inflight.get(session_id)
         if task is not None:
             task.cancel()
+        if self._computer is not None:
+            self._computer.stop_session(session_id)
         self._expire(self._confirmations.sweep())
         self._deny(self._confirmations.cancel_session(session_id))
         return {}

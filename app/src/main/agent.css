@@ -148,9 +148,9 @@
 .ask-card { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 14px 12px 12px; border: 1px solid var(--rg-edge); background: var(--rg-bg); border-radius: 16px; box-shadow: 0 0 0 3px var(--rg-glow), 0 10px 30px var(--rg-glow); }
 .ask-face { display: block; width: 30px; height: 30px; }
 .ask-q { margin: 0; font: 600 14.5px/1.6 var(--voice); color: var(--rg-ink); overflow-wrap: anywhere; }
-.ask-row { display: flex; gap: 8px; }
-.page-agent .btn.ask-no { min-height: 32px; padding: 4px 14px; border-color: var(--rg-edge); background: transparent; color: var(--rg-ink); font-weight: 600; }
-.page-agent .btn.ask-no:hover:not(:disabled) { background: var(--rg-glow); border-color: var(--rg-edge); }
+.ask-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.page-agent .btn.ask-no, .page-agent .btn.ask-always { min-height: 32px; padding: 4px 14px; border-color: var(--rg-edge); background: transparent; color: var(--rg-ink); font-weight: 600; }
+.page-agent .btn.ask-no:hover:not(:disabled), .page-agent .btn.ask-always:hover:not(:disabled) { background: var(--rg-glow); border-color: var(--rg-edge); }
 .page-agent .btn.ask-yes { position: relative; overflow: hidden; min-height: 32px; padding: 4px 16px; border-color: var(--rg-btn); background: var(--rg-btn); color: var(--rg-on); font-weight: 650; }
 .page-agent .btn.ask-yes:hover:not(:disabled) { background: var(--rg-btn); border-color: var(--rg-btn); filter: brightness(1.05); }
 .ask-yes-t { position: relative; z-index: 1; }

@@ -31,6 +31,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from ..clock import wall_clock_ms
+from ..computer.tools import GATE_TIERS as COMPUTER_TIERS
 from ..integrations.audit import AuditLog
 from .commands import COMMANDS
 from .plugins import PluginHub, PluginResult
@@ -71,6 +72,9 @@ class ToolGate:
         )
         for name in (*WEB_TOOLS, *MEMORY_READ_TOOLS):
             self._registry.register(name, Tier.T0)
+        # The steps of a run on the owner's desktop (`raphael_core.computer`).
+        for name, tier in COMPUTER_TIERS.items():
+            self._registry.register(name, tier)
         for name in MEMORY_WRITE_TOOLS:
             self._registry.register(name, Tier.T1)
         self._audit = None if conn is None else AuditLog(conn, now_ms)
@@ -99,9 +103,10 @@ class ToolGate:
     def check(self, action: Action, approval: Approval | None, *, worker: bool = False) -> None:
         """Let `action` through: UnknownTool if it has no tier, NotApproved if it is at T2 or above
         without a yes for this very action that has not been used, and NotApproved for a command
-        for this computer (opening anything, the volume, the lock...) when `worker` is true: those
-        are for the user at the keyboard, never for a task that runs while they are away."""
-        if worker and action.tool in COMMANDS:
+        for this computer (opening anything, the volume, the lock...) or a step of a run on the
+        desktop when `worker` is true: those are for the user at the keyboard, never for a task
+        that runs while they are away."""
+        if worker and (action.tool in COMMANDS or action.tool in COMPUTER_TIERS):
             raise NotApproved(action.tool)
         self._registry.check(action, approval)
 

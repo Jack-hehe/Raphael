@@ -94,8 +94,12 @@ export const agentHistorySearch = (query: string): Promise<{ turns: AgentTurn[] 
 export const agentAskText = (text: string): Promise<void> => invoke("agent_ask_text", { text });
 /** The YES/NO question that waits for an answer now, if one does. */
 export const agentQuestionOpen = (): Promise<AgentQuestion | null> => invoke("agent_question_open");
-/** Answers the question `id` from the page, as the overlay's buttons do; the window must have the focus. */
-export const agentQuestionAnswer = (id: string, approved: boolean): Promise<void> => invoke("agent_question_answer", { id, approved });
+/**
+ * Answers the question `id` from the page, as the overlay's buttons do; the window must have the
+ * focus. `always` (with `approved`) is the third answer, 「一律允許」, and is sent only when true.
+ */
+export const agentQuestionAnswer = (id: string, approved: boolean, always = false): Promise<void> =>
+  invoke("agent_question_answer", always ? { id, approved, always: true } : { id, approved });
 /** The question key pressed (`down`) or let go (`up`) from the page's voice button: the same path as the key itself. */
 export const agentVoice = (edge: "down" | "up"): Promise<void> => invoke("window_hotkey", { kind: edge === "down" ? "agent_down" : "agent_up" });
 
@@ -201,6 +205,9 @@ export const openLink = (url: string): Promise<void> => invoke("open_link", { ur
 export const deviceSettingsGet = (): Promise<DeviceSettings> => invoke("device_settings_get");
 export const deviceSettingsSet = (patch: Partial<DeviceSettings>): Promise<DeviceSettings> =>
   invoke("device_settings_set", { patch });
+/** Takes one app off the always-allowed list of 電腦操作, under the app's lock on the settings. */
+export const deviceComputerAppRemove = (exe: string): Promise<DeviceSettings> =>
+  invoke("device_computer_app_remove", { exe });
 /** Whether the keyboard layout has an AltGr key (Right Alt types characters). */
 export const keyboardHasAltgr = (): Promise<boolean> => invoke("keyboard_has_altgr");
 /** Pauses the global hotkeys while the page records a new one. */

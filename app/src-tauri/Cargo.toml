@@ -57,8 +57,9 @@ webview2-com = "0.39"
 # whether the person can see it: cloaking, virtual desktops; and what happens to the screen: the
 # display's power, the session), pasting (clipboard, focus), the core process (Job Object), the
 # settings page's AltGr check (keyboard layouts), learning from corrections (UI Automation, COM,
-# the Chinese word breaker) and pausing the media that plays during a recording (the media
-# controls). `Data_Text` and `Media_Control` bring `Foundation` with them, and the lists their
+# the Chinese word breaker), pausing the media that plays during a recording (the media
+# controls) and operating the desktop (UI Automation, input, the version resource that names an
+# app). `Data_Text` and `Media_Control` bring `Foundation` with them, and the lists their
 # calls return come from windows-collections, which `windows` always uses.
 windows = { version = "0.62", features = [
   "Data_Text",
@@ -67,6 +68,7 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
   "Win32_Security",
+  "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_DataExchange",
   "Win32_System_JobObjects",

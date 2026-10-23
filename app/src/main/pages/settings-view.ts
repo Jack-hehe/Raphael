@@ -34,7 +34,7 @@ import { WARN_FROM, spendVisual, spentShare } from "../spend";
 import type { HotkeyField } from "../hotkey-recording";
 import type { AudioDevices, BrainSettings, DeviceSettings, LocalModel, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
 import { keyEntryRow, limitRow, micRow } from "../setup-rows";
-import { type Choice, type IconName, btn, esc, fieldHTML, ico, keys, note, row, sel, st, tg } from "../ui";
+import { type Choice, type IconName, btn, esc, fieldHTML, ico, iconBtn, keys, note, row, sel, st, tg } from "../ui";
 
 /** The models the core reads when none is chosen (brain/settings.py), shown while it does not answer. */
 const DEFAULT_MODELS = { cleanup: "openai/gpt-6-luna", answer: "openai/gpt-6-luna", stt: "elevenlabs/scribe-v2" } as const;
@@ -150,6 +150,7 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "agent", label: "settings.workerCostCap" },
   { pane: "agent", label: "settings.avatar", also: "settings.searchAvatar" },
   { pane: "agent", label: "mem.title", also: "settings.searchMemory" },
+  { pane: "agent", label: "settings.computerUse" },
   { pane: "messaging", words: ["Telegram"] },
   { pane: "usage", label: "common.apiKey", words: ["OpenRouter"] },
   { pane: "usage", label: "settings.050" },
@@ -559,7 +560,26 @@ function dictationHTML(v: SettingsView): string {
   );
 }
 
-/** 拉斐爾: Raphael's picture, the key that asks Raphael, the city of the weather, what a background task may spend, then Raphael's memory. The model that answers is with the other models. */
+/**
+ * The apps Raphael may always operate, from the device settings. Settings written before the
+ * feature have none of them: that is no app.
+ */
+export const computerApps = (device: DeviceSettings): readonly { exe: string; name: string }[] => device.computer_apps ?? [];
+
+/**
+ * 電腦操作: one row per app Raphael may always operate (its name, and a borderless trash button
+ * that takes it away), or a single muted row when there is none. The apps are put there by the
+ * answer 「一律允許」 of the question that asks before Raphael first uses an app.
+ */
+function computerRows(v: SettingsView): string[] {
+  const apps = computerApps(v.device);
+  if (apps.length === 0) return [row(`<span class="val">${esc(t("settings.computerNone"))}</span>`)];
+  return apps.map((app) =>
+    row(esc(app.name), "", iconBtn("trash", t("settings.computerRemove"), ` data-act="computer-remove" data-exe="${esc(app.exe)}"`)),
+  );
+}
+
+/** 拉斐爾: Raphael's picture, the key that asks Raphael, the city of the weather, what a background task may spend, then Raphael's memory and the apps he may always operate. The model that answers is with the other models. */
 function agentHTML(v: SettingsView): string {
   const cityShown = v.cityDraft ?? agentCity(v);
   // an app from before the question key has none yet
@@ -579,7 +599,8 @@ function agentHTML(v: SettingsView): string {
       ...(v.cityError ? [note(st("err", v.cityError()), ' role="alert"')] : []),
       row(t("settings.workerCostCap"), "", sel(WORKER_COST_CAPS, workerCostCap(v), t("settings.workerCostCap"), ` data-k="worker-cap"${v.brain === null ? " disabled" : ""}`)),
     ]) +
-    (v.memory ? memoryHTML(v.memory) : "")
+    (v.memory ? memoryHTML(v.memory) : "") +
+    section(t("settings.computerUse"), computerRows(v))
   );
 }
 

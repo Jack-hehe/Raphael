@@ -1,3 +1,6 @@
+/// <reference types="node" />
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { emptyConnectionsView } from "../connections";
 import { emptyMessagingView } from "../messaging";
@@ -10,6 +13,7 @@ import {
   PANES,
   RETENTIONS,
   SEARCH_INDEX,
+  computerApps,
   type SettingsView,
   loadingHTML,
   settingsMicrophones,
@@ -39,6 +43,7 @@ const device: DeviceSettings = {
   ui_language: "zh-TW",
   autostart: false,
   onboarded: true,
+  computer_apps: [],
 };
 const brain: BrainSettings = {
   monthly_limit_usd: 10,
@@ -594,7 +599,10 @@ describe("搜尋設定", () => {
       for (const entry of SEARCH_INDEX) {
         if (!entry.label) continue;
         const name = (t as unknown as (key: string) => string)(entry.label).replace("&", "&amp;");
-        expect(names(tab(entry.pane, { memory: emptyMemoryView() })), `${locale} ${entry.label}`).toContain(name);
+        // a row's name, or the name of a section (電腦操作 is found as a whole)
+        const html = tab(entry.pane, { memory: emptyMemoryView() });
+        const headings = [...html.matchAll(/<h2>(.*?)<\/h2>/g)].map((m) => m[1]);
+        expect([...names(html), ...headings], `${locale} ${entry.label}`).toContain(name);
       }
     }
   });
@@ -629,5 +637,65 @@ describe("while the core does not answer", () => {
     const usage = tab("usage", down);
     expect(rowOf(usage, "每月上限")).toContain("disabled");
     for (const name of ["語音轉文字", "整理文字", "拉斐爾的回答"]) expect(rowOf(usage, name)).toMatch(/data-k="[\w-]+" disabled>/);
+  });
+});
+
+describe("電腦操作", () => {
+  const EXCEL = { exe: "excel.exe", name: "Microsoft Excel" };
+  const CALC = { exe: "calculatorapp.exe", name: "Calculator" };
+  const withApps = (apps: DeviceSettings["computer_apps"]) => tab("agent", { device: { ...device, computer_apps: apps } });
+
+  test("is the last section of 拉斐爾: a row per always-allowed app with a borderless trash button", () => {
+    const html = withApps([EXCEL, CALC]);
+    expect(html).toContain("<h2>電腦操作</h2>");
+    expect(html.lastIndexOf("<h2>")).toBe(html.indexOf("<h2>電腦操作</h2>"));
+    expect(names(html).slice(-2)).toEqual(["Microsoft Excel", "Calculator"]);
+    const excel = rowOf(html, "Microsoft Excel");
+    expect(excel).toContain('data-act="computer-remove"');
+    expect(excel).toContain('data-exe="excel.exe"');
+    expect(excel).toContain('aria-label="移除"');
+    // a trash icon only: no word beside it, no helper text anywhere
+    expect(excel.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()).toBe("Microsoft Excel");
+    expect(described(html)).toEqual([]);
+    expect(buttons(html).filter((b) => b.includes("computer-remove"))).toHaveLength(2);
+  });
+
+  test("with no app: one muted row, nothing else", () => {
+    for (const apps of [[], undefined as unknown as DeviceSettings["computer_apps"]]) {
+      const html = withApps(apps);
+      expect(html).toContain('<span class="val">沒有一律允許的 App</span>');
+      expect(html).not.toContain("computer-remove");
+    }
+    setLocale("en");
+    expect(withApps([])).toContain("No apps are always allowed");
+    setLocale("ja");
+    expect(withApps([])).toContain("常に許可されたアプリはありません");
+  });
+
+  test("an app name is escaped", () => {
+    const html = withApps([{ exe: 'x".exe', name: "<b>Evil</b>" }]);
+    expect(html).not.toContain("<b>Evil</b>");
+    expect(html).toContain("&lt;b&gt;Evil&lt;/b&gt;");
+    expect(html).toContain('data-exe="x&quot;.exe"');
+  });
+
+  test("settings from before the feature have no always-allowed app", () => {
+    const old = { ...device } as Partial<DeviceSettings>;
+    delete old.computer_apps;
+    expect(computerApps(old as DeviceSettings)).toEqual([]);
+  });
+
+  test("the settings wire the button to the removal of that one app, never a whole list", () => {
+    // two apps removed quickly must not compute both lists from the settings the window had
+    const source = readFileSync(path.resolve(import.meta.dirname, "settings.ts"), "utf8");
+    expect(source).toContain('case "computer-remove"');
+    expect(source).toContain("removeComputerApp(exe)");
+    expect(source).not.toContain("computer_apps: computerAppsWithout");
+  });
+
+  test("the search finds the section by its name in any language", () => {
+    expect(searchSettings("電腦操作").map((hit) => `${hit.pane}:${hit.text}`)).toEqual(["agent:電腦操作"]);
+    expect(searchSettings("computer use").map((hit) => hit.pane)).toEqual(["agent"]);
+    expect(searchSettings("コンピューター").map((hit) => hit.pane)).toEqual(["agent"]);
   });
 });

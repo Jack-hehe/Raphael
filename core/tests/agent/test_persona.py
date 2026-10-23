@@ -142,7 +142,18 @@ _LINES = [
     for field in dataclasses.fields(persona.Phrases)
     if field.name not in ("sources", "yes", "no")
 ]
-_QUESTIONS = ("copy_last", "copy_quote", "confirm_action", "confirm_plugin")
+_QUESTIONS = (
+    "copy_last",
+    "copy_quote",
+    "confirm_action",
+    "confirm_plugin",
+    "computer_ask_app",
+    "computer_confirm_click",
+    "computer_confirm_keys",
+    "computer_confirm_step",
+)
+# The one fixed line that names the owner: the owner chose its words (the step is theirs).
+_ADDRESSES_THE_OWNER = ("computer_handoff",)
 
 
 def test_raphael_never_exclaims():
@@ -168,9 +179,17 @@ def test_the_fixed_lines_leave_the_address_to_the_greeting_and_the_model():
     # 主人, マスター and Master are words of weight: no fixed reply spends them.
     for language, phrases in PHRASES.items():
         for field in dataclasses.fields(phrases):
+            if field.name in _ADDRESSES_THE_OWNER:
+                continue
             text = getattr(phrases, field.name)
             for address in persona.ADDRESS.values():
                 assert address not in text, (language, field.name)
+
+
+def test_the_hand_off_names_the_owner_in_the_word_of_its_language():
+    for language in LANGUAGES:
+        assert persona.ADDRESS[language] in phrase(language, "computer_handoff")
+    assert phrase("zh-TW", "computer_handoff") == "這一步需要主人親自操作。"
 
 
 @pytest.mark.parametrize("language", LANGUAGES)

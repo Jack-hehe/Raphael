@@ -71,6 +71,30 @@ const LISTEN_WAIT_MS = 1500;
 /** The placeholder of the composer: the same words in every language of the window. */
 export const COMPOSER_PLACEHOLDER = "Ask Raphael";
 
+/**
+ * The question as the card keeps it: what the app sent, with the strictness it really has. A
+ * question with the third answer (letting Raphael operate an app) is always T2, never held.
+ */
+export function openQuestion(q: AgentQuestion): AgentQuestion {
+  const always = typeof q.always === "string" && q.always !== "" ? q.always : undefined;
+  return { ...q, always, tier: always ? "T2" : q.tier };
+}
+
+/**
+ * What the card's buttons say: the question's own words for the two plain answers when it brings
+ * them (the question about an app says 「允許一次」 and 「不要」), else the page's 是 and 否; `always`
+ * is the third button's label, null when the question has two answers.
+ */
+export function askLabels(q: AgentQuestion | null): { yes: string; no: string; always: string | null } {
+  const always = q?.always ? q.always : null;
+  return {
+    // The question's own words are used only with a third answer: the plain questions keep 是 and 否.
+    yes: (always !== null && q?.yes) || t("agent.yes"),
+    no: (always !== null && q?.no) || t("agent.no"),
+    always,
+  };
+}
+
 /** The sliders button: Settings, open on the 拉斐爾 tab, as the sidebar's 設定 opens it on its first. */
 export function openRaphaelSettings(app: Pick<AppContext, "go">): void {
   app.go("settings", "agent");
@@ -180,10 +204,12 @@ export function createAgent(app: AppContext): Page {
   askCard.innerHTML =
     `<span class="ask-face"></span><p class="ask-q"></p>` +
     `<div class="ask-row"><button type="button" class="btn ask-no" data-act="no"></button>` +
+    `<button type="button" class="btn ask-always" data-act="always" hidden></button>` +
     `<button type="button" class="btn ask-yes" data-act="yes"><span class="ask-yes-t"></span><i class="ask-fill" aria-hidden="true"></i></button></div>`;
   const askFace = askCard.querySelector<HTMLElement>(".ask-face")!;
   const askText = askCard.querySelector<HTMLElement>(".ask-q")!;
   const noButton = askCard.querySelector<HTMLButtonElement>(".ask-no")!;
+  const alwaysButton = askCard.querySelector<HTMLButtonElement>(".ask-always")!;
   const yesButton = askCard.querySelector<HTMLButtonElement>(".ask-yes")!;
 
   // ---------- what the page keeps ----------
@@ -280,8 +306,7 @@ export function createAgent(app: AppContext): Page {
     findInput.placeholder = t("agent.search");
     findInput.setAttribute("aria-label", t("agent.search"));
     hi.textContent = greetingLine();
-    noButton.textContent = t("agent.no");
-    askCard.querySelector<HTMLElement>(".ask-yes-t")!.textContent = t("agent.yes");
+    drawAskLabels();
     askCard.setAttribute("aria-label", t("agent.asking"));
     drawFile();
     drawClear();
@@ -294,6 +319,15 @@ export function createAgent(app: AppContext): Page {
       ? `<span class="cmp-chip">${ico("attach")}<span class="cmp-chip-t">${esc(attached.name)}</span>` +
         `<button type="button" class="chip-x" data-act="unattach" aria-label="${esc(t("agent.unattach"))}" title="${esc(t("agent.unattach"))}">${ico("x")}</button></span>`
       : "";
+  }
+
+  /** The words of the card's buttons: the page's own 是 and 否, or the question's (and its third button, if it has one). */
+  function drawAskLabels(): void {
+    const labels = askLabels(question);
+    noButton.textContent = labels.no;
+    askCard.querySelector<HTMLElement>(".ask-yes-t")!.textContent = labels.yes;
+    alwaysButton.textContent = labels.always ?? "";
+    alwaysButton.hidden = labels.always === null;
   }
 
   /** The composer or, while Raphael asks, the card in its place; under the thread, or under Raphael on the empty page. */
@@ -314,8 +348,9 @@ export function createAgent(app: AppContext): Page {
     askCard.dataset.id = q.id;
     askCard.dataset.tier = q.tier;
     askText.textContent = replyLine(q.prefix, q.text);
+    drawAskLabels();
     answering = false;
-    noButton.disabled = yesButton.disabled = false;
+    noButton.disabled = alwaysButton.disabled = yesButton.disabled = false;
     yesButton.dataset.hold = "idle";
   }
 
@@ -654,15 +689,17 @@ export function createAgent(app: AppContext): Page {
 
   // ---------- the approval card ----------
 
-  async function answer(approved: boolean): Promise<void> {
+  /** `always` is the third answer: YES, and keep allowing (only a question that has the button). */
+  async function answer(approved: boolean, always = false): Promise<void> {
     if (!question || answering) return;
+    if (always && !question.always) return;
     answering = true;
-    noButton.disabled = yesButton.disabled = true;
+    noButton.disabled = alwaysButton.disabled = yesButton.disabled = true;
     try {
-      await api.agentQuestionAnswer(question.id, approved);
+      await (always ? api.agentQuestionAnswer(question.id, true, true) : api.agentQuestionAnswer(question.id, approved));
     } catch (err) {
       answering = false;
-      noButton.disabled = yesButton.disabled = false;
+      noButton.disabled = alwaysButton.disabled = yesButton.disabled = false;
       toaster.info(describeError(err));
     }
   }
@@ -885,6 +922,9 @@ export function createAgent(app: AppContext): Page {
       case "no":
         void answer(false);
         break;
+      case "always":
+        void answer(true, true);
+        break;
       case "yes":
         if (question?.tier !== "T3") void answer(true);
         break;
@@ -978,7 +1018,7 @@ export function createAgent(app: AppContext): Page {
   app.onEvent((event) => {
     if (wantsRefresh(event)) scheduleRefresh();
     if (event.type === "AgentQuestion") {
-      question = { id: event.id, prefix: event.prefix, text: event.text, tier: event.tier, timeout_ms: event.timeout_ms };
+      question = openQuestion(event);
       drawDock();
     } else if (event.type === "AgentQuestionClosed") {
       if (question?.id === event.id) {
@@ -1036,7 +1076,7 @@ export function createAgent(app: AppContext): Page {
       void api
         .agentQuestionOpen()
         .then((open) => {
-          question = open;
+          question = open && openQuestion(open);
           drawDock();
           refocus();
         })

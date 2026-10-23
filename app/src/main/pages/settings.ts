@@ -420,7 +420,15 @@ export function createSettings(app: AppContext): SettingsPage {
     if (pane !== hit.pane) return;
     const rows = Array.from(body.querySelectorAll<HTMLElement>(".row"));
     const found = rows.find((r) => r.querySelector(":scope > .lbl > .t")?.textContent?.trim() === hit.text);
-    if (!found) return;
+    if (!found) {
+      // A hit that names a whole section (電腦操作) brings its heading into view and lights its list.
+      const list = Array.from(body.querySelectorAll<HTMLElement>(".sgroup")).find((g) => g.querySelector(":scope > h2")?.textContent?.trim() === hit.text)?.querySelector<HTMLElement>(":scope > .slist");
+      if (!list) return;
+      list.scrollIntoView({ block: "center" });
+      list.classList.add("found");
+      setTimeout(() => list.classList.remove("found"), FOUND_MS);
+      return;
+    }
     const control = found.querySelector<HTMLElement>(":scope > .ctl :is(button, input):not([disabled])");
     control?.focus({ preventScroll: true });
     found.scrollIntoView({ block: "center" });
@@ -766,6 +774,15 @@ export function createSettings(app: AppContext): SettingsPage {
     render();
   }
 
+  async function removeComputerApp(exe: string): Promise<void> {
+    try {
+      await app.removeComputerApp(exe);
+    } catch (err) {
+      toaster.info(describeError(err));
+    }
+    render();
+  }
+
   async function submitKey(text: string): Promise<void> {
     const key = text.trim();
     if (!key || keyBusy) return;
@@ -1064,6 +1081,13 @@ export function createSettings(app: AppContext): SettingsPage {
       case "or-check":
         void checkOpenrouter();
         break;
+      case "computer-remove": {
+        // one app at a time, taken off under the app's own lock: a list computed from the
+        // settings the window has would put back an app another quick removal takes away
+        const exe = target.closest<HTMLElement>("[data-exe]")?.dataset.exe;
+        if (exe !== undefined) void removeComputerApp(exe);
+        break;
+      }
       case "clear-dictation":
         clear("dictation");
         break;

@@ -47,8 +47,8 @@ def spend_rows(conn):
 # --- the questions ---------------------------------------------------------------------------------
 
 
-def test_the_six_routes_are_these():
-    assert ROUTES == ("command", "answer", "delegate", "discuss", "chat", "unclear")
+def test_the_seven_routes_are_these():
+    assert ROUTES == ("command", "answer", "operate", "delegate", "discuss", "chat", "unclear")
     assert JEV_MODEL == "typesafe/jev-1.14"
     assert CONFIDENCE_FLOOR == 0.55
 
@@ -61,9 +61,13 @@ def test_the_criteria_of_the_routes_are_these():
         "answer": "A question Raphael can answer in a few sentences, possibly after one quick "
         "lookup (weather, time, a web search, a definition, a calculation), including how a "
         "background task is going or what it did (state.background lists them).",
+        "operate": "A task done by using a desktop app on this computer's screen: clicking, typing "
+        "or choosing inside an app such as Calculator, Excel, File Explorer or the Settings app (for "
+        "example: compute something in Calculator, type a line into a document, turn on a switch in "
+        "Settings), which no fixed command covers.",
         "delegate": "A multi-step task, or one that needs a connected service such as email, "
-        "calendar, Notion or GitHub, or that will take more than a few seconds. Not a question "
-        "about a task that was already handed over.",
+        "calendar, Notion or GitHub, or that will take more than a few seconds, and that is not done "
+        "by operating an app on the screen. Not a question about a task that was already handed over.",
         "discuss": "The speaker wants to think something through together or plan, an "
         "open-ended conversation rather than one answer.",
         "chat": "Small talk, a greeting or thanks, needing no action and no facts.",

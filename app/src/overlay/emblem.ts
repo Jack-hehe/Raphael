@@ -9,8 +9,11 @@
 const TAU = Math.PI * 2;
 const clamp = (x: number, a = 0, b = 1): number => Math.max(a, Math.min(b, x));
 
-/** What the emblem shows while it is on screen. */
-export type Mode = "listening" | "thinking" | "steady";
+/**
+ * What the emblem shows while it is on screen. `operating` is Raphael working an app on the
+ * owner's PC: it looks like `thinking`, but the glyph ring turns `OPERATING_SPEEDUP` times faster.
+ */
+export type Mode = "listening" | "thinking" | "operating" | "steady";
 /** `hidden` draws nothing; `appear` and `vanish` are the two animations from the anime. */
 export type Phase = "hidden" | "appear" | "vanish" | Mode;
 
@@ -36,6 +39,8 @@ export const tick = (t: number): number => Math.floor(t * 24 + 1e-6) / 24;
 
 /** The glyph ring turns clockwise, in radians per second (3.55 degrees). */
 export const RATE = (3.55 * Math.PI) / 180;
+/** How much faster the glyph ring turns while Raphael operates an app (the `operating` mode). */
+export const OPERATING_SPEEDUP = 2.5;
 /** Half the texture's size in units of R. */
 const TEX_HALF = 104 / 97;
 const RING_R = 0.6;
@@ -86,7 +91,7 @@ export interface Params {
 /**
  * The look of the emblem `pt` seconds into `phase`; `lvl` (0 to 1) is the loudness that sets the
  * white ring's width. Returns null when nothing is drawn. Every phase that is not `hidden`,
- * `appear` or `vanish` looks the same (the modes differ in rotation speed, brightness and in
+ * `appear` or `vanish` looks the same, `operating` included (the modes differ in rotation speed, brightness and in
  * where `lvl` comes from, see `Emblem`).
  */
 export function params(phase: Phase, pt: number, lvl: number): Params | null {
@@ -784,7 +789,11 @@ export class Emblem {
       this.pt = 0;
       this.dirty = true;
     }
-    if (this._phase !== "hidden" && !this.reduce) this._rot += dt * RATE;
+    if (this._phase !== "hidden" && !this.reduce) {
+      // While appearing, the ring already turns at the pace of the mode it is appearing into.
+      const turning = this._phase === "appear" ? this.mode : this._phase;
+      this._rot += dt * RATE * (turning === "operating" ? OPERATING_SPEEDUP : 1);
+    }
     const tk = Math.floor(this.clock * 24);
     if (tk === this.lastTick) return false;
     this.lastTick = tk;

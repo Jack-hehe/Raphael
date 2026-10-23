@@ -65,6 +65,8 @@ from .agent.gate import ToolGate
 from .agent.service import AgentService
 from .agent.tools import Tools
 from .background.service import BackgroundService
+from .computer.bridge import ShellBridge
+from .computer.run import ComputerRuns
 from .brain import textnorm
 from .brain.db import connect
 from .memory.service import MemoryService
@@ -749,6 +751,11 @@ class App(Router):
             self._conn, self.client, self.gate, Tools(self.client), notify=self._worker_notice
         )
         self.background.register(self)
+        # The run on the owner's desktop: the core asks the shell, which reaches UI Automation
+        # (`computer.request`, answered with `computer.reply`; `computer.interrupt` stops it).
+        self.computer_bridge = ShellBridge(self.notify)
+        self.computer_bridge.register(self)
+        self.computer = ComputerRuns(self.computer_bridge)
         # Raphael's memory: the notes on this PC, the summary of the conversation, the reflection.
         self.memory = MemoryService(
             self._conn,
@@ -768,6 +775,7 @@ class App(Router):
             gate=self.gate,
             background=self.background,
             notify=self.notify,
+            computer=self.computer,
             memory=self.memory,
         )
         self.agent.register(self)

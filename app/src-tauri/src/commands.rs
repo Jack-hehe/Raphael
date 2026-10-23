@@ -18,6 +18,8 @@
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
 //!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
 //!   is the file written. (A dictation that is under way finishes in the mode it began in.)
+//!   `device_computer_app_remove` takes one app off the always-allowed list of 電腦操作, from the
+//!   list as it is under the settings' lock.
 //! - `keyboard_has_altgr` and `hotkeys_pause` are small helpers of the settings page.
 //! - `hotkeys_practice` lets the first-run guide's lessons hear the keys without a dictation
 //!   starting; `mic_access` says whether the privacy settings let desktop apps use the microphone.
@@ -599,6 +601,7 @@ pub fn agent_question_answer(
     webview: Webview,
     id: String,
     approved: bool,
+    always: Option<bool>,
 ) -> Result<(), String> {
     require_main(&webview)?;
     if !is_question_id(&id) {
@@ -614,6 +617,7 @@ pub fn agent_question_answer(
             id,
             approved,
             in_app: true,
+            always: approved && always == Some(true),
         })
         .map_err(|_| AGENT_OFF.to_owned())
 }
@@ -820,10 +824,22 @@ pub async fn set_device_settings<E: Effects>(
     effects: &E,
     patch: &Value,
 ) -> Result<DeviceSettings, String> {
+    change_device_settings(store, effects, |_| Ok(patch.clone())).await
+}
+
+/// Changes the device settings by the patch `make` writes from them as they are, while they are
+/// locked: two changes that each build on the settings (an app added to the always-allowed list,
+/// another taken off) never undo each other, as a patch computed from an older read would.
+async fn change_device_settings<E: Effects>(
+    store: &DeviceStore,
+    effects: &E,
+    make: impl FnOnce(&DeviceSettings) -> Result<Value, String>,
+) -> Result<DeviceSettings, String> {
     let mut current = store.lock().await;
     let old = current.clone();
+    let patch = make(&old)?;
     let mut new = old.clone();
-    new.apply_patch(patch)?;
+    new.apply_patch(&patch)?;
     if new == old {
         return Ok(new);
     }
@@ -847,6 +863,66 @@ pub async fn set_microphone(app: &AppHandle, name: Option<&str>) -> Result<(), S
     let effects = AppEffects { app: app.clone() };
     set_device_settings(&store, &effects, &json!({ "microphone": name })).await?;
     Ok(())
+}
+
+/// Adds an app to the ones Raphael may always operate (the 「一律允許」 of the question about it),
+/// as the settings page would with `device_settings_set`, for the shell's half of a run
+/// (`computer`). An app that is on the list already is left as it is.
+pub async fn allow_computer_app(app: &AppHandle, exe: &str, name: &str) -> Result<(), String> {
+    let entry = crate::device_settings::ComputerApp {
+        exe: exe.to_owned(),
+        name: crate::computer::policy::clean(name, 60),
+    };
+    if !entry.is_valid() {
+        return Err("this app cannot be kept".to_owned());
+    }
+    let store = app
+        .try_state::<DeviceStore>()
+        .ok_or("the device settings are not loaded")?;
+    let effects = AppEffects { app: app.clone() };
+    change_device_settings(&store, &effects, |now| {
+        let mut apps = now.computer_apps.clone();
+        if apps.iter().any(|known| known.exe == entry.exe) {
+            return Ok(json!({}));
+        }
+        apps.push(entry);
+        Ok(json!({ "computer_apps": apps }))
+    })
+    .await?;
+    Ok(())
+}
+
+/// Takes the app `exe` off the ones Raphael may always operate, from the list as it is when the
+/// settings are locked (an app that is not on it changes nothing), and returns the settings.
+pub async fn remove_computer_app<E: Effects>(
+    store: &DeviceStore,
+    effects: &E,
+    exe: &str,
+) -> Result<DeviceSettings, String> {
+    change_device_settings(store, effects, |now| {
+        let apps: Vec<_> = now
+            .computer_apps
+            .iter()
+            .filter(|known| known.exe != exe)
+            .cloned()
+            .collect();
+        Ok(json!({ "computer_apps": apps }))
+    })
+    .await
+}
+
+/// Takes one app off the always-allowed list of 電腦操作 (its trash button) and returns all the
+/// device settings afterwards. One app at a time, under the settings' lock: a whole list the page
+/// computed could put back an app that another quick removal took away.
+#[tauri::command]
+pub async fn device_computer_app_remove(
+    app: AppHandle,
+    webview: Webview,
+    store: State<'_, DeviceStore>,
+    exe: String,
+) -> Result<DeviceSettings, String> {
+    require_main(&webview)?;
+    remove_computer_app(&store, &AppEffects { app }, &exe).await
 }
 
 /// The device settings as they are now.
@@ -1344,6 +1420,7 @@ mod tests {
                 "agent_question_answer",
                 "agent_question_open",
                 "core_call",
+                "device_computer_app_remove",
                 "device_settings_get",
                 "device_settings_set",
                 "hotkeys_pause",
@@ -1382,6 +1459,7 @@ mod tests {
     #[test]
     fn the_window_hears_a_question_open_and_close() {
         let prompt = AskPrompt {
+            always: None,
             id: "c-1".to_owned(),
             tier: crate::overlay::Tier::T3,
             prefix: "問".to_owned(),
@@ -2652,6 +2730,35 @@ mod tests {
             changed(json!({"ui_language": "en", "microphone": "x", "autostart": false}));
         assert!(apply_changes(&fake, &old, &new).await.is_err());
         assert!(!fake.done().contains(&"tray_menu".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn always_allowed_apps_removed_at_once_are_all_gone() {
+        let app = |exe: &str| crate::device_settings::ComputerApp {
+            exe: exe.to_owned(),
+            name: exe.trim_end_matches(".exe").to_owned(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("device.json");
+        let settings = DeviceSettings {
+            computer_apps: vec![app("a.exe"), app("b.exe"), app("c.exe")],
+            ..DeviceSettings::default()
+        };
+        let store = DeviceStore::new(path.clone(), settings);
+        let fake = Fake::default();
+        // two quick removals: each takes its app off the list as it is when it runs
+        let (first, second) = tokio::join!(
+            remove_computer_app(&store, &fake, "a.exe"),
+            remove_computer_app(&store, &fake, "b.exe"),
+        );
+        assert!(first.is_ok() && second.is_ok());
+        assert_eq!(store.get().await.computer_apps, [app("c.exe")]);
+        assert_eq!(DeviceSettings::load(&path).computer_apps, [app("c.exe")]);
+        // an app that is not on the list changes nothing
+        let same = remove_computer_app(&store, &fake, "nothing.exe")
+            .await
+            .unwrap();
+        assert_eq!(same.computer_apps, [app("c.exe")]);
     }
 
     #[tokio::test]

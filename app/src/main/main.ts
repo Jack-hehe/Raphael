@@ -47,6 +47,7 @@ const DEFAULT_DEVICE: DeviceSettings = {
   ui_language: "zh-TW",
   autostart: true,
   onboarded: false,
+  computer_apps: [],
 };
 
 /** A page that comes on screen again within this time of the last time is not loaded again. */
@@ -66,7 +67,7 @@ const prefersDark = matchMedia("(prefers-color-scheme: dark)");
 /** The device settings, kept right when reads and writes overlap. */
 const device = new DeviceState(
   DEFAULT_DEVICE,
-  { get: api.deviceSettingsGet, set: api.deviceSettingsSet },
+  { get: api.deviceSettingsGet, set: api.deviceSettingsSet, removeComputerApp: api.deviceComputerAppRemove },
   () => {
     applyTheme();
     setLocale(device.get().ui_language);
@@ -130,6 +131,7 @@ async function start(): Promise<void> {
     device: () => device.get(),
     refreshDevice: () => device.refresh(),
     setDevice: (patch) => device.set(patch),
+    removeComputerApp: (exe) => device.removeComputerApp(exe),
     onEvent(handler) {
       listeners.add(handler);
       return () => void listeners.delete(handler);
