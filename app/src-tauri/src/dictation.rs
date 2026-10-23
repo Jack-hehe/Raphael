@@ -1848,6 +1848,15 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> ReportStage
     fn try_say(&self, prefix: &str, text: &str) -> Option<Duration> {
         self.say_in_background(prefix, text)
     }
+
+    /// The notice of a question of the background goes to the overlay only when the 拉斐爾 page
+    /// is not in front ([`AppFront`]): the page shows the question's card itself.
+    fn try_notice(&self, prefix: &str, text: &str) -> Option<Duration> {
+        if self.app_shows_question() {
+            return Some(Duration::ZERO);
+        }
+        self.say_in_background(prefix, text)
+    }
 }
 
 impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Desk
