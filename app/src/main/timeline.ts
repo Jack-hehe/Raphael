@@ -717,7 +717,7 @@ export function mediaCardHTML(payload: MediaPayload, query: string, seq?: number
     const player = ytEmbed
       ? `<div class="media-player"><iframe class="media-iframe" src="${esc(ytEmbed)}" title="${esc(title || site || "Video")}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>`
       : safeUrl
-        ? `<div class="media-player"><video class="media-video" controls preload="metadata"${thumb ? ` poster="${esc(thumb)}"` : ""} src="${esc(safeUrl)}"></video></div>`
+        ? `<div class="media-player"><video class="media-video" controls preload="${thumb ? "none" : "metadata"}"${thumb ? ` poster="${esc(thumb)}"` : ""} src="${esc(safeUrl)}"></video></div>`
         : "";
     return (
       `<div class="media-card media-video-card" data-media-type="video"${seqAttr}>` +
@@ -743,10 +743,10 @@ export function mediaCardHTML(payload: MediaPayload, query: string, seq?: number
   return (
     `<div class="media-card media-link" data-media-type="link"${seqAttr}>` +
     `<div class="media-link-main">` +
-    `<div class="media-meta">${metaHTML}</div>` +
     (thumb ? `<img class="media-thumb" src="${esc(thumb)}" alt="${esc(title || site)}" loading="lazy">` : "") +
-    `</div>` +
+    `<div class="media-meta">${metaHTML}</div>` +
     `<div class="media-foot">${openBtn}</div>` +
+    `</div>` +
     `</div>`
   );
 }
