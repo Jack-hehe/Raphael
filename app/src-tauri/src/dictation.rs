@@ -26,6 +26,8 @@
 //! A recording has no time limit. It ends when the key stops it, when Esc cancels it, or by
 //! itself when the core has heard no speech in it for ten seconds: the core says so
 //! (`dictation.silence`) and the recording is stopped as the key would stop it ([`on_silence`]).
+//! The core never says so of a question to Raphael: only the key or Esc ends it, unless what
+//! listens has failed.
 //! The wait for the core's `dictation.stop` grows with the length of the recording
 //! ([`dictation_stop_timeout`]).
 //!
