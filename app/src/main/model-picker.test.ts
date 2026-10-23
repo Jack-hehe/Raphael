@@ -28,18 +28,33 @@ import type { CatalogModel, ModelCatalog } from "./types";
 
 afterEach(() => setLocale("zh-TW"));
 
-test("provider groups put OpenRouter first and choose connection-qualified refs including model ids with colons", () => {
+test("the current model is pinned before direct provider groups and OpenRouter comes last", () => {
   const local = llm("llama3.1:8b", { name: "Llama", provider: "Meta", provider_id: "p4", provider_name: "Ollama", input_per_mtok: 0 });
   const direct = llm("gpt-5.1", { name: "GPT", provider: "OpenAI", provider_id: "p3", provider_name: "OpenAI" });
   const catalog = { ...CATALOG, llm: [local, direct, LUNA] };
   const list = new PickerList("answer", modelsFor(catalog, "answer"), "openai/gpt-6-luna");
   expect(list.rows.map((r) => r.model.id)).toEqual(["openai/gpt-6-luna", "@p4:llama3.1:8b", "@p3:gpt-5.1"]);
   const html = listHTML(list);
-  expect(html.indexOf("OpenRouter")).toBeLessThan(html.indexOf("Ollama"));
+  expect(html.indexOf("mp-group")).toBeLessThan(html.indexOf("Ollama"));
   expect(html).toContain("mp-provider-mark");
   list.point("@p4:llama3.1:8b");
   expect(list.chosen()).toBe("@p4:llama3.1:8b");
   expect(modelPickerHTML({ role: "answer", current: "@p4:llama3.1:8b", catalog, label: "Model" })).toContain("Llama");
+});
+
+test("direct connections stay grouped with favourites inside each group and OpenRouter last", () => {
+  const direct = llm("gpt-5", { name: "GPT-5", provider_id: "p3", provider_name: "OpenAI" });
+  const local = llm("llama:8b", { name: "Llama", provider_id: "p4", provider_name: "Ollama" });
+  const list = new PickerList("answer", [OLD, direct, local, LUNA], "missing", {}, [OLD.id]);
+  expect(list.rows.map((r) => r.model.id)).toEqual(["@p4:llama:8b", "@p3:gpt-5", "openai/gpt-5", "openai/gpt-6-luna"]);
+});
+
+test("all-provider search ranks exact and prefix names across connections before substring matches", () => {
+  const direct = llm("gpt-5", { name: "GPT-5", provider_id: "p3", provider_name: "OpenAI", input_per_mtok: 99 });
+  const prefix = llm("gpt-5-mini", { name: "GPT-5 Mini", provider_id: "p3", provider_name: "OpenAI" });
+  const tail = llm("other/gpt-5", { name: "Something GPT-5", free: true });
+  const list = new PickerList("answer", [tail, prefix, OLD, direct], tail.id, { query: "gpt-5" }, [tail.id]);
+  expect(list.rows.map((r) => r.model.id)).toEqual(["@p3:gpt-5", OLD.id, "@p3:gpt-5-mini", tail.id]);
 });
 
 const DAY = 86_400_000;
@@ -246,7 +261,7 @@ describe("the maker", () => {
 describe("the rows a role cannot use", () => {
   test("come last, under a heading, greyed with the reason in plain words", () => {
     const html = listHTML(new PickerList("cleanup", LLMS, "openai/gpt-6-luna"));
-    const heading = html.indexOf('class="mp-group"');
+    const heading = html.indexOf("無法用來整理聽寫");
     expect(heading).toBeGreaterThan(html.indexOf('data-id="odd/model"'));
     expect(html.slice(heading)).toContain("無法用來整理聽寫");
     expect(html).toMatch(/data-id="google\/gemini-3\.8-flash" aria-selected="false" aria-disabled="true"/);
@@ -299,9 +314,9 @@ describe("the keys", () => {
     const list = new PickerList("cleanup", LLMS, "openai/gpt-6-luna");
     expect(list.activeId()).toBe("openai/gpt-6-luna");
     expect(list.move("ArrowDown")).toBe(true);
-    expect(list.chosen()).toBe("openai/gpt-5");
+    expect(list.chosen()).toBe("nvidia/nemotron:free");
     expect(list.move("ArrowUp") && list.move("ArrowUp")).toBe(true);
-    expect(list.chosen()).toBe("~openai/gpt-luna-latest");
+    expect(list.chosen()).toBeNull();
     expect(list.move("x")).toBe(false);
   });
 
@@ -358,7 +373,7 @@ describe("the chosen model", () => {
 });
 
 describe("favourites", () => {
-  const list = (favorites: string[], state = {}, current = "openai/gpt-6-luna") => new PickerList("cleanup", LLMS, current, state, favorites);
+  const list = (favorites: string[], state = {}, current = "openai/gpt-6-luna") => new PickerList("cleanup", LLMS, current, { connection: "openrouter", ...state }, favorites);
 
   test("none at all: the list is as it was, with no heading", () => {
     const html = listHTML(list([]));

@@ -34,7 +34,7 @@ import {
 } from "./local-models";
 import { formatPerMinute, formatPerMtok, pricingNote } from "./pricing";
 import { providerMark } from "./provider-marks";
-import type { CatalogModel, ModelCatalog, ModelRole } from "./types";
+import type { CatalogModel, ModelCatalog, ModelRole, ModelProvider } from "./types";
 import { CHECK, closeMenu, esc, ico, menuIsOpenFor, openPopover, placeMenu } from "./ui";
 
 // ---------- what the list shows ----------
@@ -48,9 +48,11 @@ export interface PickerState {
   sort: PickerSort;
   /** A maker, or "" for all of them. */
   provider: string;
+  /** A connected provider id, or "" for every enabled connection. */
+  connection?: string;
 }
 
-export const DEFAULT_PICKER_STATE: PickerState = { query: "", sort: "price", provider: "" };
+export const DEFAULT_PICKER_STATE: PickerState = { query: "", sort: "price", provider: "", connection: "" };
 
 /**
  * What a picker chooses a model for: a role of the core's catalog, or `vision`, the model that looks
@@ -233,27 +235,37 @@ const byDate = (a: CatalogModel, b: CatalogModel): number =>
 const ORDERS: Record<PickerSort, (a: CatalogModel, b: CatalogModel) => number> = { price: byPrice, name: byName, newest: byDate };
 
 /**
- * The rows of the list: the models that answer the search and are of the maker, in the order chosen.
- * The favourites come first, then the other models; in each, those the role can use before those it
- * cannot. A favourite that the catalog lacks is no row.
+ * Filter by connection, maker and search. All connections pin the current model when not searching;
+ * searches rank exact and prefix names first. Direct connections precede OpenRouter, with favourites,
+ * role compatibility and the chosen order retained inside each connection and relevance tier.
  */
-export function pickerRows(models: CatalogModel[], role: PickerRole, state: PickerState, favorites: readonly string[] = []): PickerRow[] {
+export function pickerRows(models: CatalogModel[], role: PickerRole, state: PickerState, favorites: readonly string[] = [], current?: string): PickerRow[] {
   const matches = matcher(state.query);
   const starred = new Set(favorites);
   const rows = models
-    .filter((model) => (state.provider === "" || model.provider === state.provider) && matches(searched(model)))
+    .filter((model) => (!state.connection || connectionId(model) === state.connection) && (state.provider === "" || model.provider === state.provider) && matches(searched(model)))
     .sort(ORDERS[state.sort])
     .map((model) => ({ model: { ...model, id: modelRef(model) }, usable: usableFor(model, role), favorite: starred.has(modelRef(model)) }));
-  const usableFirst = (own: PickerRow[]): PickerRow[] => {
-    const groups = new Map<string, PickerRow[]>();
-    for (const row of own) {
-      const id = connectionId(row.model);
-      groups.set(id, [...(groups.get(id) ?? []), row]);
-    }
-    const ids = [...groups.keys()].sort((a, b) => a === "openrouter" ? -1 : b === "openrouter" ? 1 : collator.compare(connectionName(groups.get(a)![0].model), connectionName(groups.get(b)![0].model)));
-    return ids.flatMap((id) => { const group = groups.get(id)!; return [...group.filter((r) => r.usable), ...group.filter((r) => !r.usable)]; });
+  const query = squeeze(state.query.trim().toLowerCase());
+  const searching = state.query.trim() !== "";
+  const rank = (model: CatalogModel): number => {
+    const name = squeeze(model.name.toLowerCase());
+    return name === query ? 0 : name.startsWith(query) ? 1 : 2;
   };
-  return [...usableFirst(rows.filter((row) => row.favorite)), ...usableFirst(rows.filter((row) => !row.favorite))];
+  return rows.sort((a, b) => {
+    if (!state.connection && !searching) {
+      const pinned = Number(b.model.id === current) - Number(a.model.id === current);
+      if (pinned) return pinned;
+    }
+    if (!state.connection && searching && query) {
+      const relevance = rank(a.model) - rank(b.model);
+      if (relevance) return relevance;
+    }
+    const ac = connectionId(a.model), bc = connectionId(b.model);
+    if (ac !== bc) return ac === "openrouter" ? 1 : bc === "openrouter" ? -1 :
+      collator.compare(connectionName(a.model), connectionName(b.model)) || collator.compare(ac, bc);
+    return Number(b.favorite) - Number(a.favorite) || Number(b.usable) - Number(a.usable);
+  });
 }
 
 export interface PickerChoice {
@@ -326,6 +338,7 @@ export class PickerList {
     public favorites: readonly string[] = [],
     /** The choice above every model, if the picker has one (`PickerLead`). */
     private readonly lead: PickerLead | null = null,
+    private readonly connectionsInfo: readonly ModelProvider[] = [],
   ) {
     this.state = { ...DEFAULT_PICKER_STATE, ...state };
     this.refresh(current);
@@ -353,9 +366,34 @@ export class PickerList {
     this.refresh(this.activeId());
   }
 
+  setConnection(connection: string): void {
+    this.state = { ...this.state, connection, provider: "" };
+    this.refresh(this.current);
+  }
+
+  connections(): PickerChoice[] {
+    const groups = new Map<string, CatalogModel[]>();
+    for (const model of this.models) {
+      const id = connectionId(model);
+      const group = groups.get(id) ?? [];
+      group.push(model); groups.set(id, group);
+    }
+    for (const provider of this.connectionsInfo) {
+      if (provider.enabled && !groups.has(provider.id)) groups.set(provider.id, []);
+    }
+    const name = (id: string, models: CatalogModel[]) => this.connectionsInfo.find((p) => p.id === id)?.name ?? connectionName(models[0]);
+    return [{ value: "", label: t("picker.allConnections"), detail: String(this.models.length) },
+      ...[...groups].sort(([a, am], [b, bm]) => a === "openrouter" ? 1 : b === "openrouter" ? -1 : collator.compare(name(a, am), name(b, bm)))
+        .map(([value, models]) => ({ value, label: name(value, models), detail: String(models.length) }))];
+  }
+
+  mark(id: string, fallback: string): string {
+    return providerMark(this.connectionsInfo.find((p) => p.id === id)?.kind ?? fallback);
+  }
+
   /** The makers to narrow the list to. */
   providers(): PickerChoice[] {
-    return providerChoices(this.models);
+    return providerChoices(this.models.filter((model) => !this.state.connection || connectionId(model) === this.state.connection));
   }
 
   activeId(): string | null {
@@ -388,7 +426,7 @@ export class PickerList {
   }
 
   private refresh(keep: string | null): void {
-    const models = pickerRows(this.models, this.role, this.state, this.favorites);
+    const models = pickerRows(this.models, this.role, this.state, this.favorites, this.current);
     const lead = this.lead && matcher(this.state.query)(this.lead.name) ? [leadRow(this.lead)] : [];
     this.rows = [...lead, ...models];
     const kept = keep === null ? -1 : this.rows.findIndex((row) => row.model.id === keep);
@@ -429,7 +467,7 @@ function optionHTML(row: PickerRow, index: number, list: PickerList): string {
     `<button type="button" class="mp-opt" role="option" id="mp-o-${index}" tabindex="-1" data-id="${esc(model.id)}" aria-selected="false"` +
     `${row.usable ? "" : ' aria-disabled="true"'}${chosen ? " data-current" : ""} aria-label="${esc(heard.join(", "))}" title="${esc(model.id)}">` +
     `<span class="ck">${chosen ? CHECK : ""}</span>` +
-    `<span class="mp-main"><span class="mp-line"><span class="mp-name">${esc(model.name)}</span>` +
+    `<span class="mp-main"><span class="mp-line"><span class="mp-row-mark" aria-hidden="true">${list.mark(connectionId(model), connectionName(model))}</span><span class="mp-name">${esc(model.name)}</span>` +
     `<span class="mp-price num">${esc(price)}</span></span>` +
     (details.length ? `<span class="mp-sub">${esc(details.join(" · "))}</span>` : "") +
     `</span></button>` +
@@ -455,24 +493,26 @@ function leadHTML(id: string, name: string, index: number, chosen: boolean): str
 const headingHTML = (text: string): string => `<div class="mp-group" aria-hidden="true">${esc(text)}</div>`;
 
 /**
- * The rows of the list. With favourites, 我的最愛 heads the list and 所有模型 the rest; the models
- * the role cannot use are under a heading of their own, which says why. A lead is above them all,
- * under no heading.
+ * The pinned choice, provider groups and their favourites each have a heading. Search relevance can
+ * split a provider into more than one group. Unusable models retain their reason and section heading.
  */
 export function listHTML(list: PickerList): string {
   const { rows } = list;
-  const starred = rows.findIndex((row) => row.favorite);
-  const others = starred < 0 ? -1 : rows.findIndex((row) => !row.favorite && !row.lead);
-  const unusable = rows.findIndex((row) => !row.usable && !row.favorite && !row.lead);
+  const pinned = !list.state.connection && !list.state.query.trim();
   return rows
     .map((row, index) => {
       let heading = "";
-      if (index === starred) heading = headingHTML(t("picker.favorites"));
-      if (index === unusable) heading = headingHTML(UNUSABLE[list.role]());
-      else if (index === others) heading = headingHTML(t("picker.others"));
       const previous = rows[index - 1];
-      if (!row.lead && (!previous || previous.lead || previous.favorite !== row.favorite || connectionId(previous.model) !== connectionId(row.model))) {
-        heading += `<div class="mp-provider"><span class="mp-provider-mark" aria-hidden="true">${providerMark(connectionName(row.model))}</span><span>${esc(connectionName(row.model))}</span></div>`;
+      const isPinned = pinned && row.model.id === list.current;
+      const newGroup = !previous || previous.lead || pinned && previous.model.id === list.current || connectionId(previous.model) !== connectionId(row.model);
+      if (!row.lead && isPinned) heading = headingHTML(t("picker.current"));
+      else if (!row.lead && newGroup) {
+        heading += `<div class="mp-provider"><span class="mp-provider-mark" aria-hidden="true">${list.mark(connectionId(row.model), connectionName(row.model))}</span><span>${esc(connectionName(row.model))}</span></div>`;
+      }
+      if (!row.lead && !isPinned) {
+        if (row.favorite && (newGroup || !previous?.favorite)) heading += headingHTML(t("picker.favorites"));
+        else if (!row.favorite && !row.usable && (newGroup || previous?.favorite || previous?.usable)) heading += headingHTML(UNUSABLE[list.role]());
+        else if (!row.favorite && previous?.favorite && !newGroup) heading += headingHTML(t("picker.others"));
       }
       return heading + optionHTML(row, index, list);
     })
@@ -510,6 +550,7 @@ function panelHTML(list: PickerList, label: string, tab: "cloud" | "local" | nul
   const search = t("picker.search");
   const cloud =
     `<div class="mp-pane" id="mp-pane-cloud"${tab ? ` role="tabpanel" aria-labelledby="mp-tab-cloud"${tab === "cloud" ? "" : " hidden"}` : ""}>` +
+    `<div class="mp-connections" role="group" aria-label="${esc(t("picker.connections"))}">${connectionsHTML(list)}</div>` +
     `<div class="mp-head">` +
     `<label class="field mp-search">${ico("search")}<input id="mp-search" type="text" role="combobox" aria-autocomplete="list" aria-expanded="true" ` +
     `aria-controls="mp-list" aria-label="${esc(search)}" placeholder="${esc(search)}" autocomplete="off" spellcheck="false"></label>` +
@@ -530,6 +571,12 @@ function panelHTML(list: PickerList, label: string, tab: "cloud" | "local" | nul
     `<div class="mp-scroll"><div class="lm-list" id="mp-locallist" aria-label="${esc(label)}"></div></div>` +
     `<p class="mp-foot">${esc(t("local.intro"))}</p></div>`
   );
+}
+
+function connectionsHTML(list: PickerList): string {
+  return list.connections().map((c) => `<button type="button" class="btn mp-connection" data-connection="${esc(c.value)}" aria-pressed="${c.value === (list.state.connection ?? "")}">` +
+    (c.value ? `<span class="mp-row-mark" aria-hidden="true">${list.mark(c.value, c.label)}</span>` : "") +
+    `<span>${esc(c.label)}</span><span class="num">${esc(c.detail)}</span></button>`).join("");
 }
 
 /** The small print under the list: how many models it shows, and where their prices are from. */
@@ -560,6 +607,8 @@ export interface ModelPickerOptions {
   current: string;
   /** The catalog (`models.catalog`), or null while it is being read (`loading`) or when it cannot be had. */
   catalog: ModelCatalog | null;
+  /** Public connection metadata includes enabled connections with no models for this role. */
+  providers?: readonly ModelProvider[];
   loading?: boolean;
   /** What the control is called: the title of its row. It names the button and the list for a screen reader. */
   label: string;
@@ -719,11 +768,19 @@ class MountedPicker implements ModelPicker {
   // ---------- drawing ----------
 
   private models(): CatalogModel[] {
-    return this.o.catalog ? modelsFor(this.o.catalog, this.o.role) : [];
+    return this.o.catalog ? modelsFor(this.o.catalog, this.o.role).filter((m) => this.o.providers?.find((p) => p.id === connectionId(m))?.enabled !== false) : [];
   }
 
   private newList(state: Partial<PickerState>): PickerList {
-    return new PickerList(this.o.role, this.models(), this.o.current, state, this.o.favorites ?? [], this.o.lead ?? null);
+    let connection = state.connection;
+    if (connection === undefined) {
+      try { connection = localStorage.getItem(`raphael.picker.connection.${this.o.role}`) ?? ""; }
+      catch { connection = ""; }
+    }
+    const models = this.models();
+    const list = new PickerList(this.o.role, models, this.o.current, { ...state, connection }, this.o.favorites ?? [], this.o.lead ?? null, this.o.providers ?? []);
+    if (connection && !list.connections().some((c) => c.value === connection)) list.setConnection("");
+    return list;
   }
 
   private paintButton(): void {
@@ -807,6 +864,12 @@ class MountedPicker implements ModelPicker {
 
   private paintFilters(): void {
     if (!this.panel || !this.list) return;
+    const focused = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.connection : undefined;
+    this.panel.querySelector(".mp-connections")!.innerHTML = connectionsHTML(this.list);
+    if (focused !== undefined) {
+      const chips = [...this.panel.querySelectorAll<HTMLElement>("[data-connection]")];
+      (chips.find((el) => el.dataset.connection === focused) ?? chips.find((el) => el.getAttribute("aria-pressed") === "true"))?.focus({ preventScroll: true });
+    }
     const shown = { sort: sortLabel(this.list.state.sort), provider: providerLabel(this.list.state.provider) };
     const labels = { sort: t("picker.sort"), provider: t("picker.provider") };
     for (const which of ["sort", "provider"] as const) {
@@ -993,6 +1056,11 @@ class MountedPicker implements ModelPicker {
 
   private clicked(e: MouseEvent): void {
     const target = e.target as Element;
+    const connection = target.closest<HTMLElement>("[data-connection]");
+    if (connection) {
+      this.pickConnection(connection.dataset.connection ?? "");
+      return;
+    }
     const tab = target.closest<HTMLElement>(".mp-panel .tab");
     if (tab) {
       this.setTab(tab.dataset.tab === "local" ? "local" : "cloud", false);
@@ -1047,6 +1115,16 @@ class MountedPicker implements ModelPicker {
       return;
     }
     const target = e.target as HTMLElement;
+    if (target.matches("[data-connection]")) {
+      const chips = [...this.panel!.querySelectorAll<HTMLButtonElement>("[data-connection]")];
+      const at = chips.indexOf(target as HTMLButtonElement);
+      const next = e.key === "ArrowRight" ? (at + 1) % chips.length : e.key === "ArrowLeft" ? (at + chips.length - 1) % chips.length :
+        e.key === "Home" ? 0 : e.key === "End" ? chips.length - 1 : null;
+      if (next !== null) {
+        e.preventDefault(); this.pickConnection(chips[next].dataset.connection ?? "");
+      }
+      return;
+    }
     if (target.closest(".mp-panel .tab") && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
       e.preventDefault();
       this.setTab(e.key === "ArrowLeft" || e.key === "Home" ? "cloud" : "local", true);
@@ -1134,7 +1212,7 @@ class MountedPicker implements ModelPicker {
     const inside =
       this.tab === "local"
         ? Array.from(this.panel.querySelectorAll<HTMLElement>("#mp-pane-local button:not(:disabled)"))
-        : [this.search(), this.activeStar(), ...Array.from(this.panel.querySelectorAll<HTMLElement>(".mp-dd"))];
+        : [...Array.from(this.panel.querySelectorAll<HTMLElement>("[data-connection]")), this.search(), this.activeStar(), ...Array.from(this.panel.querySelectorAll<HTMLElement>(".mp-dd"))];
     const stops = [open, ...inside].filter((s): s is HTMLElement => s !== null);
     const at = Math.max(0, stops.indexOf(from as HTMLElement));
     stops[(at + (back ? stops.length - 1 : 1)) % stops.length]?.focus();
@@ -1190,6 +1268,16 @@ class MountedPicker implements ModelPicker {
     this.paintFilters();
     // The highlighted model stays highlighted where it went, if it is still listed.
     this.paintList("nearest");
+  }
+
+  private pickConnection(id: string): void {
+    if (!this.list) return;
+    this.closeDropdown(false);
+    this.list.setConnection(id);
+    try { localStorage.setItem(`raphael.picker.connection.${this.o.role}`, id); } catch { /* Storage may be unavailable. */ }
+    this.paintFilters(); this.paintList("top");
+    const chip = [...this.panel!.querySelectorAll<HTMLElement>("[data-connection]")].find((el) => el.dataset.connection === id);
+    chip?.focus(); chip?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
   /** Stars the model of `id`, or takes it out of the favourites if it is one. `scroll` is where the list goes: with the focus, when it is on a star, else nowhere. */

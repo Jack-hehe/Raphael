@@ -233,9 +233,25 @@ test("provider dropdowns and local JSON fields work through settings event deleg
   expect(choice).toBeDefined(); choice.click();
   const area = page.el.querySelector<HTMLTextAreaElement>('textarea')!;
   area.value = '{"client_email":"test@example.com","private_key":"secret"}'; area.dispatchEvent(new Event("input", { bubbles: true }));
-  page.el.querySelector<HTMLInputElement>('[id$="-project"]')!.value = "project";
+  const project = page.el.querySelector<HTMLInputElement>('[id$="-project"]')!;
+  project.value = "project"; project.dispatchEvent(new Event("input", { bubbles: true }));
   api.providersAdd.mockRejectedValue(new Error("failed")); click('[data-pv="save"]'); await flush();
   expect(api.providersAdd).toHaveBeenCalledWith({ kind: "vertex", name: "Vertex", location: "asia-east1", project: "project", service_account: '{"client_email":"test@example.com","private_key":"secret"}' });
+});
+
+test("pickers opened outside Models include enabled connections with zero models for their role", async () => {
+  api.modelsCatalog.mockResolvedValue(direct);
+  api.providersList.mockResolvedValue({ providers: [{ id: "p9", kind: "ollama", name: "Empty server", enabled: true, has_key: false, base_url: "http://localhost:11434/v1", status: "unknown", models: 0 }] });
+  api.servicesStatus.mockResolvedValue({
+    search: { enabled: true, service: "openrouter", options: [] }, read: { enabled: true, service: "builtin", options: [] },
+    pdf: { enabled: true, service: "builtin", options: [] }, voice: { enabled: false, service: "fish", options: [] },
+    vision: { enabled: true, model: "", resolved_model: "example", supports_images: true },
+  });
+  await mount("agent");
+  click('button[data-svc="open"][data-id="vision"]');
+  click('button[data-svc="service"][data-service="model"]');
+  click('[data-model-picker="vision"] .mp-trigger');
+  expect(document.querySelector('[data-connection="p9"]')?.textContent).toBe("Empty server0");
 });
 
 test("vision keeps its primary image picker without fallback controls", async () => {

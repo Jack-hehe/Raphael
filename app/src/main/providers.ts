@@ -21,6 +21,8 @@ export interface ProvidersView {
   fieldValues?: Partial<Record<"region" | "location", string>>;
   confirming: boolean;
   dirty: boolean;
+  canSave?: boolean;
+  testing?: boolean;
 }
 export const emptyProvidersView = (): ProvidersView => ({ providers: [], kinds: [], state: "loading", busy: false, open: null, error: null, result: null, models: [], query: "", confirming: false, dirty: false });
 
@@ -40,6 +42,7 @@ const FIELD_CHOICES = {
 const choicesFor = (field: "region" | "location") => FIELD_CHOICES[field].map((value) => ({ value, label: value }));
 const GROUP_TITLES = { official: () => t("providers.official"), gateway: () => t("providers.gateway"), local: () => t("providers.local") };
 const POPULAR = ["openrouter", "litellm", "portkey", "vercel"];
+const allowsMultiple = (kind: ProviderKind): boolean => kind.group === "local" || ["openai_compatible", "litellm", "bifrost"].includes(kind.kind);
 function description(kind: ProviderKind): string {
   if (kind.kind === "openai_compatible") return t("providers.compatibleNote");
   if (kind.group === "official") return t("providers.officialAPI", { p0: kind.name });
@@ -58,8 +61,10 @@ function directoryHTML(v: ProvidersView): string {
     count += kinds.length;
     return kinds.length ? `<section class="sgroup"><h3>${esc(GROUP_TITLES[group]())}</h3><div class="pv-grid">` + kinds.map((k) => {
       const note = description(k);
-      return `<div class="pv-card pv-add"><span class="ic">${providerMark(k.kind)}</span><span class="tx"><span class="nm">${esc(k.name)}</span><span class="ds" title="${esc(note)}">${esc(note)}</span></span>` +
-        btn(esc(t("providers.connect")), "", ` data-pv="add" data-id="${esc(k.kind)}" data-k="pv-add:${esc(k.kind)}" aria-label="${esc(t("providers.connect") + " " + k.name)}"${k.available ? "" : ` title="${esc(t("providers.soon"))}"`}${k.available && !v.busy ? "" : " disabled"}`) + `</div>`;
+      const connected = v.providers.some((p) => p.kind === k.kind);
+      const action = t(connected ? "providers.manage" : "providers.connect");
+      return `<div class="pv-card pv-add"><span class="ic">${providerMark(k.kind)}</span><span class="tx"><span class="pv-kind-title"><span class="nm">${esc(k.name)}</span>${connected ? `<span class="pv-connected">${esc(t("providers.connected"))}</span>` : ""}</span><span class="ds" title="${esc(note)}">${esc(note)}</span></span>` +
+        btn(esc(action), "", ` data-pv="add" data-id="${esc(k.kind)}" data-k="pv-add:${esc(k.kind)}" aria-label="${esc(action + " " + k.name)}"${k.available ? "" : ` title="${esc(t("providers.soon"))}"`}${(k.available || connected) && !v.busy ? "" : " disabled"}`) + `</div>`;
     }).join("") + `</div></section>` : "";
   }).join("");
   return `<div class="cs-scrim" data-pv="scrim" data-dialog="provider:add"><div class="cs-dialog pv-dialog pv-catalog" id="pv-dialog" role="dialog" aria-modal="true" aria-labelledby="pv-title" tabindex="-1" data-trap>` +
@@ -95,18 +100,29 @@ function dialogHTML(v: ProvidersView): string {
         : fieldHTML(title, value, { id: inputId(v, field), type: secret(field) ? "password" : "text", disabled: v.busy });
     return `<div class="pv-field"><label class="pv-label" for="${esc(inputId(v, field))}">${esc(title)}</label><div class="svc-line">${control}</div></div>`;
   }).join("");
-  return `<div class="cs-scrim" data-pv="scrim" data-dialog="provider:${esc(v.adding ? "add" : v.open.id ?? kind.kind)}"><div class="cs-dialog pv-dialog${v.adding ? " pv-catalog" : ""}" id="pv-dialog" role="dialog" aria-modal="true" aria-labelledby="pv-title" tabindex="-1" data-trap>` +
-    `<div class="cs-dlg-head">${v.adding ? iconButton("left", t("providers.back"), ` data-pv="back" data-k="pv-back"${disabled}`) : ""}<span class="ic">${providerMark(kind.kind)}</span><h2 id="pv-title">${esc(provider?.name ?? kind.name)}</h2><span class="sp"></span>${iconButton("x", t("providers.close"), ' data-pv="close" data-k="pv-close"')}</div><div class="pv-setup">` +
+  return `<div class="cs-scrim" data-pv="scrim" data-dialog="provider:${esc(v.adding ? "add" : v.open.id ?? kind.kind)}"><div class="cs-dialog pv-dialog pv-editor${v.adding ? " pv-catalog" : ""}" id="pv-dialog" role="dialog" aria-modal="true" aria-labelledby="pv-title" tabindex="-1" data-trap>` +
+    `<div class="cs-dlg-head"><span class="ic">${providerMark(kind.kind)}</span><h2 id="pv-title">${esc(provider?.name ?? kind.name)}</h2><span class="sp"></span>${iconButton("x", t("providers.close"), ' data-pv="close" data-k="pv-close"')}</div><div class="pv-body"><div class="pv-setup">` +
     (kind.local_context_hint ? `<p class="note">${esc(t("providers.contextHint"))}</p>` : "") +
-    fields + (kind.docs_url ? btn(esc(t("providers.getKey")), "", ` data-pv="docs" data-k="pv-docs"${disabled}`) : "") + (v.error ? `<p class="note" role="alert">${esc(errorText(v.error))}</p>` : "") +
-    `<div class="svc-acts">${btn(esc(t("providers.save")), "pri", ` data-pv="save" data-k="pv-save"${disabled}`)}` +
-    btn(esc(t("providers.test")), "", ` data-pv="test" data-k="pv-test"${v.busy || !v.open.id || v.dirty ? " disabled" : ""}`) +
-    (v.open.id ? btn(esc(t(v.confirming ? "providers.confirmRemove" : "providers.remove")), v.confirming ? "danger" : "", ` data-pv="remove" data-k="pv-remove"${disabled}`) : "") + `</div>` +
-    (v.dirty || !v.open.id ? `<p class="note">${esc(t("providers.saveFirst"))}</p>` : "") +
-    (v.result ? `<p class="note" role="status">${esc(v.result.ok ? t("providers.count", { p0: v.result.models }) : t(v.result.kind === "auth" ? "providers.auth" : v.result.kind === "offline" ? "providers.offline" : "providers.error"))}</p>` : "") +
+    fields + (kind.docs_url ? btn(esc(t("providers.getKey")), "", ` data-pv="docs" data-k="pv-docs"${disabled}`) : "") +
+    (provider && allowsMultiple(kind) ? btn(esc(t("providers.another")), "", ` data-pv="another" data-k="pv-another"${disabled}`) : "") + (v.error ? `<p class="note" role="alert">${esc(errorText(v.error))}</p>` : "") +
     `<section class="pv-models"><h3>${esc(t("providers.models"))}</h3>` +
     (Array.isArray(v.models) && v.models.length > 10 ? fieldHTML(t("providers.search"), v.query, { id: "pv-model-search", icon: "search" }) : "") +
-    `<div class="pv-model-list">${modelsHTML(v)}</div></section></div></div></div>`;
+    `<div class="pv-model-list">${modelsHTML(v)}</div></section></div></div>` +
+    `<div class="pv-feedback">${feedbackHTML(v)}</div>` +
+    `<div class="pv-footer">` +
+    (v.open.id ? btn(esc(t(v.confirming ? "providers.confirmRemove" : "providers.remove")), "danger", ` data-pv="remove" data-k="pv-remove"${disabled}`) :
+      btn(`${ico("left")}${esc(t("providers.back"))}`, "", ` data-pv="back" data-k="pv-back"${disabled}`)) +
+    `<div class="pv-footer-actions">${btn(esc(t("providers.test")), "", ` data-pv="test" data-k="pv-test"${v.busy || !v.open.id || v.dirty ? " disabled" : ""}`)}` +
+    btn(esc(t("providers.save")), "pri", ` data-pv="save" data-k="pv-save"${v.busy || !v.canSave ? " disabled" : ""}`) + `</div></div></div></div>`;
+}
+
+function feedbackHTML(v: ProvidersView): string {
+  if (v.testing || v.result) {
+    const text = v.testing ? t("providers.testing") : v.result!.ok ? t("providers.testConnected", { p0: v.result!.models }) :
+      t(v.result!.kind === "auth" ? "providers.auth" : v.result!.kind === "offline" ? "providers.offline" : "providers.error");
+    return `<p class="pv-test-status note${v.testing ? "" : v.result!.ok ? " is-ok" : " is-error"}" role="status">${ico(v.testing ? "refresh" : v.result!.ok ? "check" : "x")}<span title="${esc(text)}">${esc(text)}</span></p>`;
+  }
+  return v.dirty || !v.open?.id ? `<p class="note">${esc(t("providers.saveFirst"))}</p>` : "";
 }
 
 function modelsHTML(v: ProvidersView): string {
@@ -148,18 +164,56 @@ export function createProviders(host: ProvidersHost) {
   let accountDraft: string | null = null;
   let accountReads = 0;
   let confirmTimer: ReturnType<typeof setTimeout> | null = null;
+  function syncForm() {
+    const kind = kindOf(state), open = state.open;
+    if (!kind || !open) return;
+    const provider = providerOf(state);
+    let valid = true, changed = open.replacing;
+    for (const field of ["name", ...kind.fields] as (ProviderField | "name")[]) {
+      const input = host.root.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement>(`#${CSS.escape(inputId(state, field))}`);
+      if (!input) {
+        if (field === "service_account" && state.accountSet) changed = true;
+        continue;
+      }
+      const value = (input.dataset.pvField ? input.dataset.value ?? "" : input.value).trim();
+      if (field === "service_account") {
+        if (!validAccount(value)) valid = false;
+        if (value) changed = true;
+        continue;
+      }
+      const required = field === "name" || field === "base_url" || !open.id || open.replacing && secret(field);
+      if (required && !value && !(field === "key" && kind.kind === "openai_compatible")) valid = false;
+      if (field === "base_url" && value) {
+        try { if (!["http:", "https:"].includes(new URL(value).protocol)) valid = false; } catch { valid = false; }
+      }
+      if (field === "name" || field === "base_url") {
+        if (value !== (provider?.[field] ?? (field === "name" ? kind.name : kind.default_base_url ?? ""))) changed = true;
+      } else if (value) changed = true;
+    }
+    state.dirty = changed;
+    state.canSave = valid && (!open.id || changed);
+    const save = host.root.querySelector<HTMLButtonElement>('[data-pv="save"]');
+    if (save) save.disabled = state.busy || !state.canSave;
+    const test = host.root.querySelector<HTMLButtonElement>('[data-pv="test"]');
+    if (test) test.disabled = state.busy || !open.id || state.dirty;
+    const feedback = host.root.querySelector(".pv-feedback");
+    if (feedback) feedback.innerHTML = feedbackHTML(state);
+  }
   const redraw = () => {
     if (!host.visible()) return;
     // Carry input drafts between DOM drawings, never into page state or HTML attributes.
     const inputs = [...host.root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('.pv-field input:not([type="file"]), .pv-field textarea')];
     const drafts = new Map(inputs.map((input) => [input.id, input.value]));
     const active = document.activeElement as HTMLElement | null;
+    const scroll = host.root.querySelector(".pv-body")?.scrollTop;
     const selection = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement ? [active.selectionStart, active.selectionEnd] : null;
     host.redraw();
     for (const input of host.root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('.pv-field input:not([type="file"]), .pv-field textarea')) {
       if (drafts.has(input.id)) input.value = drafts.get(input.id)!;
       if (active?.id === input.id) { input.focus(); if (selection) input.setSelectionRange(selection[0], selection[1]); }
     }
+    syncForm();
+    if (scroll !== undefined) { const body = host.root.querySelector(".pv-body"); if (body) body.scrollTop = scroll; }
     if (active && host.root.querySelector("#pv-dialog")) {
       const fresh = [...host.root.querySelectorAll<HTMLElement>("[id], [data-k]")].find((el) => active.id ? el.id === active.id : active.dataset.k && el.dataset.k === active.dataset.k);
       (fresh && !(fresh instanceof HTMLButtonElement && fresh.disabled) ? fresh : host.root.querySelector<HTMLElement>("#pv-dialog"))?.focus();
@@ -179,7 +233,7 @@ export function createProviders(host: ProvidersHost) {
     clearConfirmation();
     accountDraft = null; accountReads++;
     modelLoads++;
-    state = { ...state, adding: id === null, open: { kind, id, replacing: false }, error: null, result: null, models: [], query: "", dirty: false, accountSet: false, fieldValues: {} };
+    state = { ...state, adding: id === null, open: { kind, id, replacing: false }, error: null, result: null, testing: false, canSave: false, models: [], query: "", dirty: false, accountSet: false, fieldValues: {} };
     redraw(); host.root.querySelector<HTMLElement>("#pv-dialog")?.focus();
     if (id) void loadModels(id);
   }
@@ -234,19 +288,21 @@ export function createProviders(host: ProvidersHost) {
   async function testConnection() {
     const open = state.open;
     if (!open?.id || state.busy || state.dirty) return;
-    state.busy = true; state.result = null; state.error = null; redraw();
+    state.busy = true; state.testing = true; state.result = null; state.error = null; redraw();
     try {
       const result = await api.providersTest(open.id);
       if (state.open === open) state.result = result;
       await load();
       if (state.open === open) await loadModels(open.id);
-    } catch { if (state.open === open) state.error = "error"; }
-    finally { state.busy = false; redraw(); }
+    } catch { if (state.open === open) state.result = { ok: false, kind: "error", models: 0 }; }
+    finally { state.busy = false; state.testing = false; redraw(); }
   }
   async function save() {
     const open = state.open;
     const kind = kindOf(state);
     if (!open || !kind || state.busy) return;
+    syncForm();
+    if (!state.canSave) return;
     const patch: ProviderPatch = {};
     let valid = true;
     for (const field of ["name", ...kind.fields] as (ProviderField | "name")[]) {
@@ -299,7 +355,11 @@ export function createProviders(host: ProvidersHost) {
       if (button.dataset.pv !== "remove") clearConfirmation();
       if (button.dataset.pv === "directory" || button.dataset.pv === "back") directory();
       if (button.dataset.pv === "toggle") void toggle(button.dataset.id!);
-      if (button.dataset.pv === "add" && state.kinds.some((k) => k.kind === button.dataset.id && k.available)) show(button.dataset.id!, null);
+      if (button.dataset.pv === "add") {
+        const existing = state.providers.find((p) => p.kind === button.dataset.id);
+        if (existing || state.kinds.some((k) => k.kind === button.dataset.id && k.available)) show(button.dataset.id!, existing?.id ?? null);
+      }
+      if (button.dataset.pv === "another" && kindOf(state) && allowsMultiple(kindOf(state)!)) show(state.open!.kind, null);
       if (button.dataset.pv === "open") {
         const provider = state.providers.find((p) => p.id === button.dataset.id);
         if (provider) show(provider.kind, provider.id);
@@ -339,7 +399,9 @@ export function createProviders(host: ProvidersHost) {
           accountDraft = target.value.trim(); accountReads++; target.value = "";
           state.accountSet = true; state.dirty = true; state.error = null; state.result = null; redraw(); return;
         }
-        if (!state.dirty) { state.dirty = true; state.result = null; redraw(); }
+        state.result = null; state.error = null;
+        host.root.querySelector('.pv-body [role="alert"]')?.remove();
+        syncForm();
         return;
       }
       if (!(target instanceof HTMLInputElement) || target.id !== "pv-model-search") return;
