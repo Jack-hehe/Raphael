@@ -12,7 +12,7 @@ no reply has to be longer than a model can write and no paragraph runs into the 
 cleanup fails keeps its raw text, and the others stay cleaned.
 
 Nothing here logs the dictated text, the model's reply, the dictionary or a key. A failure is
-logged by its kind and status (an OpenRouterError) or by the name of its type (anything else),
+logged by its model, kind and status (only model and kind for truncated output), or its type,
 never with its message, its cause or a traceback: those could hold anything, the text of the key
 store included.
 """
@@ -24,7 +24,7 @@ import math
 import re
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import resources
 
 from ..languages import DEFAULT_LANGUAGES, display_name
@@ -549,6 +549,7 @@ class CleanupService:
         heard: str | None = None,
         target_app: str | None = None,
         chunks: Sequence[tuple[str, str]] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
     ) -> CleanupResult:
         """The cleaned text, or the raw text with the reason why it is all there is.
 
@@ -575,15 +576,18 @@ class CleanupService:
         with it (`suspicion`); that is "suspicious". Anything else that goes wrong is
         "error:unexpected".
 
-        An answer is paid for, so it is recorded in the spend whatever it holds. A cancellation
-        passes through.
+        The provider router supplies one fallback for every model failure, including suspicious
+        output. The first attempt gets at most 60% of this piece's timeout; the retry gets the
+        remaining time. `is_cancelled` prevents a new retry after the owner's cancellation RPC,
+        while allowing the already-paid request to finish. Task cancellation passes through.
+        An answer is recorded in the spend whatever it holds.
         """
         if not raw.strip():
             return _fallback(raw, "empty")
         pieces = _bodies(chunks or ())
         try:
             return await self._clean(
-                raw, raw if heard is None else heard, audio_seconds, target_app, pieces
+                raw, raw if heard is None else heard, audio_seconds, target_app, pieces, is_cancelled
             )
         except Exception as exc:
             # Whatever broke, speech was understood: it is better pasted as it is than lost.
@@ -596,6 +600,7 @@ class CleanupService:
         audio_seconds: float,
         target_app: str | None,
         pieces: Sequence[tuple[str, str, str]],
+        is_cancelled: Callable[[], bool] | None,
     ) -> CleanupResult:
         if not self._has_key():
             return _fallback(raw, "no_key")
@@ -607,8 +612,8 @@ class CleanupService:
             languages=self._settings.get("languages"),
         )
         if len(pieces) <= 1:
-            return await self._clean_one(raw, heard, system, self._timeout_fn(audio_seconds))
-        return await self._clean_pieces(raw, pieces, system, audio_seconds)
+            return await self._clean_one(raw, heard, system, self._timeout_fn(audio_seconds), is_cancelled)
+        return await self._clean_pieces(raw, pieces, system, audio_seconds, is_cancelled)
 
     async def _clean_pieces(
         self,
@@ -616,6 +621,7 @@ class CleanupService:
         pieces: Sequence[tuple[str, str, str]],
         system: str,
         audio_seconds: float,
+        is_cancelled: Callable[[], bool] | None,
     ) -> CleanupResult:
         """A long dictation, piece by piece (see `clean`). Each piece is waited for as long as its
         share of the speech would be on its own."""
@@ -627,7 +633,7 @@ class CleanupService:
                 seconds = audio_seconds * len(piece_heard) / total
                 try:
                     return await self._clean_one(
-                        piece_raw, piece_heard, system, self._timeout_fn(seconds)
+                        piece_raw, piece_heard, system, self._timeout_fn(seconds), is_cancelled
                     )
                 except Exception as exc:  # one piece that breaks leaves the others cleaned
                     return _unexpected(piece_raw, exc)
@@ -663,13 +669,35 @@ class CleanupService:
             parts=parts,
         )
 
-    async def _clean_one(self, raw: str, heard: str, system: str, timeout: float) -> CleanupResult:
-        """One call to the model: the cleanup of `heard`, or `raw` with the reason."""
+    async def _clean_one(
+        self, raw: str, heard: str, system: str, timeout: float,
+        is_cancelled: Callable[[], bool] | None,
+    ) -> CleanupResult:
+        """Reserve retry time inside the existing deadline for this piece of dictation."""
         started = time.perf_counter()
         model = self._settings.get("cleanup_model")
+        select_fallback = getattr(self._client, "cleanup_fallback", None)
+        fallback = select_fallback(model) if callable(select_fallback) else None
+        remaining = max(0.0, timeout - (time.perf_counter() - started))
+        first_timeout = min(timeout * 0.6, remaining) if fallback else timeout
+        first = await self._clean_attempt(raw, heard, system, model, first_timeout)
+        if first.cleaned or fallback is None or (is_cancelled is not None and is_cancelled()):
+            return first
+        remaining = max(0.0, timeout - (time.perf_counter() - started))
+        second = await self._clean_attempt(raw, heard, system, fallback, remaining)
+        return replace(
+            second, cost_usd=_usable_cost(first.cost_usd + second.cost_usd),
+            llm_ms=_elapsed_ms(started),
+        )
+
+    async def _clean_attempt(
+        self, raw: str, heard: str, system: str, model: str, timeout: float,
+    ) -> CleanupResult:
+        started = time.perf_counter()
+        complete = getattr(self._client, "complete_json_once", self._client.complete_json)
         try:
             completion = await asyncio.wait_for(
-                self._client.complete_json(
+                complete(
                     model=model,
                     fallbacks=CLEANUP_FALLBACKS,
                     system=system,
@@ -682,13 +710,14 @@ class CleanupService:
                 timeout,
             )
         except TimeoutError:
-            logger.warning("Cleanup timed out after %.1f s, using the raw text", timeout)
+            logger.warning("Cleanup timed out after %.1f s", timeout)
             self._notify(OpenRouterError(0, "timeout", "Cleanup timed out"), model=model)
             return _fallback(raw, "timeout", llm_ms=_elapsed_ms(started))
         except OpenRouterError as error:
-            logger.warning(
-                "Cleanup failed, using the raw text: kind=%s status=%s", error.kind, error.status
-            )
+            if error.kind == "truncated":
+                logger.warning("Cleanup failed: model=%s kind=%s", model, error.kind)
+            else:
+                logger.warning("Cleanup failed: model=%s kind=%s status=%s", model, error.kind, error.status)
             self._notify(error, model=model)
             return _fallback(raw, f"error:{error.kind}", llm_ms=_elapsed_ms(started))
         except Exception as exc:  # anything else the client lets out
@@ -704,7 +733,7 @@ class CleanupService:
         text = text.strip() if isinstance(text, str) else ""
         if is_suspicious_reply(heard, text):
             logger.warning(
-                "Cleanup reply is no cleanup (empty, too long or unrelated), using the raw text:"
+                "Cleanup reply is no cleanup (empty, too long or unrelated):"
                 " reply %d characters, dictation %d",
                 len(text),
                 len(heard),

@@ -19,7 +19,7 @@ from ...protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from ..catalog import CatalogEntry, ModelPrice
 from ..openrouter import OpenRouterError
 from ..secrets import KeyStore
-from ..settings import SettingsStore
+from ..settings import DEFAULTS, SettingsStore
 from .base import ModelProvider
 from .presets import BY_KIND, KINDS, OPTIONAL_KEY_KINDS
 from .clients import AnthropicProvider, CompatibleProvider, is_transcription, model_info, validate_base_url
@@ -29,6 +29,7 @@ from .secrets import ProviderCredentialStore
 
 CONFIG_KEY = "providers.config.v1"
 MODELS_KEY = "providers.models.v1"
+SUCCESSES_KEY = "providers.successful_models.v1"
 logger = logging.getLogger(__name__)
 
 
@@ -62,7 +63,20 @@ class ProviderRegistry:
         self._notify = lambda method, params: None
         self._configs = self._load(CONFIG_KEY, {})
         self._models = self._load(MODELS_KEY, {})
+        self._successful_models = self._load(SUCCESSES_KEY, {})
         self.settings = SettingsStore(conn)
+
+    def record_success(self, reference):
+        """Remember only models that actually answered, never model-list discoveries."""
+        pid, model = self.resolve(reference)
+        models = self._successful_models.get(pid, [])
+        models = models if isinstance(models, list) else []
+        if model in models:
+            return
+        self._successful_models[pid] = [*models[-19:], model]
+        with self._conn:
+            self._conn.execute("INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                               (SUCCESSES_KEY, json.dumps(self._successful_models)))
 
     def _load(self, key, default):
         row = self._conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
@@ -428,6 +442,10 @@ class ProviderRouter:
 
     def available(self, model):
         references = [self.model_for(model), *self.registry.settings.get(self.purpose + "_fallbacks")]
+        if self.purpose == "cleanup":
+            fallback = self.cleanup_fallback(model)
+            if fallback:
+                references.append(fallback)
         unreadable = False
         for reference in references:
             try:
@@ -438,6 +456,30 @@ class ProviderRouter:
         if unreadable:
             raise OpenRouterError(0, "auth", "Could not read provider credential") from None
         return False
+
+    def cleanup_fallback(self, primary):
+        """The mandatory cleanup retry follows the owner's provider preference order."""
+        candidates = [DEFAULTS["cleanup_model"], self.registry.settings.get("agent_model"),
+                      *self.registry.settings.get("cleanup_fallbacks")]
+        for pid in self.registry.ids():
+            models = self.registry._successful_models.get(pid, [])
+            if isinstance(models, list):
+                candidates.extend(model if pid == "openrouter" else f"@{pid}:{model}"
+                                  for model in models if isinstance(model, str))
+        # Prefer a different working model; retry the primary only when it is the
+        # sole configured option (transient failures can still recover on retry).
+        candidates = [ref for ref in candidates if ref != primary] + [primary]
+        for reference in dict.fromkeys(candidates):
+            try:
+                if self.registry.available(reference):
+                    return reference
+            except Exception:
+                continue  # An unreadable credential must not hide a usable alternative.
+        return None
+
+    async def complete_json_once(self, **kwargs):
+        """Cleanup owns its two-attempt deadline; do not nest the generic fallback chain."""
+        return await self._attempt("complete_json", kwargs)
 
     async def _call(self, method, kwargs):
         reference = self.model_for(kwargs["model"])
@@ -490,6 +532,11 @@ class ProviderRouter:
         self.registry.record_result(pid)
         if pid != "openrouter":
             result = replace(result, model=f"@{pid}:{result.model}")
+        if method != "transcribe":
+            try:
+                self.registry.record_success(reference)
+            except Exception as error:
+                logger.warning("Could not remember successful model: %s", type(error).__name__)
         return result
 
     async def complete_json(self, **kwargs):

@@ -180,6 +180,7 @@ class OpenRouterError(Exception):
     - timeout: no answer in time (httpx timeout, or 408)
     - network: no connection
     - bad_response: a reply that is not what the API sends
+    - truncated: empty output, or an output limit reached before usable JSON
     """
 
     def __init__(self, status: int, kind: str, message: str) -> None:
@@ -340,8 +341,15 @@ def _to_completion(reply: _Reply, requested_model: str) -> Completion:
     try:
         data = json.loads(content)
     except (TypeError, ValueError) as exc:  # not a string, or not JSON
+        empty = isinstance(message, dict) and (content is None or isinstance(content, str) and not content.strip())
+        if empty or choice.get("finish_reason") == "length":
+            logger.warning("Completion failed: model=%s kind=truncated", requested_model)
+            raise OpenRouterError(reply.status, "truncated", "Incomplete JSON response") from None
         raise _failure(reply.status, "bad_response", "The reply is not valid JSON") from exc
     if not isinstance(data, dict):
+        if choice.get("finish_reason") == "length":
+            logger.warning("Completion failed: model=%s kind=truncated", requested_model)
+            raise OpenRouterError(reply.status, "truncated", "Incomplete JSON response") from None
         raise _failure(reply.status, "bad_response", "The reply is JSON but not an object")
 
     raw_usage = body.get("usage")

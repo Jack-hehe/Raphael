@@ -374,6 +374,7 @@ class Brain:
                 heard=apply_replacements(raw_text, rules),
                 target_app=target_app,
                 chunks=chunks,
+                is_cancelled=lambda: self._cleaning.get(session_id, False),
             )
         finally:
             # Taken in the same breath as the text is saved, so that no cancel comes in between.
@@ -442,7 +443,8 @@ class Brain:
 
     async def _cancel_dictation(self, params: dict) -> dict:
         """`{session_id}`: the app cancelled that dictation. If its text is being cleaned, the
-        cleanup goes on (it is paid for) but the text is not saved. A session that is not being
+        current request goes on (it is paid for), without a retry, but the text is not saved.
+        A session that is not being
         cleaned, or no longer is, is no matter."""
         session_id = _str(params, "session_id")
         if session_id in self._cleaning:

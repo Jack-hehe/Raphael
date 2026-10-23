@@ -184,12 +184,25 @@ class CompatibleProvider(OpenRouterClient):
 
     async def _request(self, method, path, key, timeout_s, body=None, **kwargs):
         if body is not None:
+            effort = body.get("reasoning", {}).get("effort", "none")
             body = {k: v for k, v in body.items() if k not in ("provider", "models", "reasoning")}
             if body.pop("plugins", None):
                 raise OpenRouterError(0, "unsupported", "OpenRouter plugins require OpenRouter")
             model = body.get("model", "")
             if self.kind in ("openai", "azure_openai") and model.startswith(("gpt-5", "gpt-6", "o1", "o3", "o4")):
-                body["max_completion_tokens"] = body.pop("max_tokens")
+                # Only the original GPT-5 family advertises minimal effort. Unknown/new
+                # families use low rather than sending an unsupported effort value.
+                minimal = re.fullmatch(r"gpt-5(?:-(?:mini|nano))?(?:-\d{4}-\d{2}-\d{2})?", model)
+                body["reasoning_effort"] = ("minimal" if minimal else "low") if effort in ("none", "minimal") else effort
+                content_budget = body.pop("max_tokens")
+                body["max_completion_tokens"] = max(content_budget, min(content_budget + 2048, 32768))
+            if self.kind == "google" and model.startswith(("gemini-2.5-", "gemini-3")):
+                # Only 2.5 Flash permits thinking to be disabled; Pro and 3 require it.
+                disabled = effort == "none" and model.startswith("gemini-2.5-flash")
+                body["reasoning_effort"] = "none" if disabled else "low" if effort in ("none", "minimal") else effort
+                if not disabled:
+                    content_budget = body["max_tokens"]
+                    body["max_tokens"] = max(content_budget, min(content_budget + 2048, 32768))
             schema = body.get("response_format", {}).get("json_schema")
             if schema and (self.kind == "deepseek" or model.startswith(("gpt-3.5", "gpt-4-turbo"))):
                 body["response_format"] = {"type": "json_object"}
@@ -395,6 +408,17 @@ class AnthropicProvider(CompatibleProvider):
             else:
                 messages.append({"role": role, "content": content})
         native = {"model": body["model"], "messages": messages, "max_tokens": body["max_tokens"]}
+        effort = body.get("reasoning", {}).get("effort", "none")
+        if effort != "none":
+            if re.match(r"claude-[a-z]+-(?:4[.-][6-9]|[5-9](?:[.-]|$))", body["model"]):
+                native["thinking"] = {"type": "adaptive"}
+                native["output_config"] = {"effort": effort if effort in ("low", "medium", "high") else
+                                          "low" if effort == "minimal" else "high"}
+                native["max_tokens"] += 2048
+            else:
+                budget = {"minimal": 1024, "low": 1024, "medium": 2048, "high": 4096}.get(effort, 4096)
+                native["thinking"] = {"type": "enabled", "budget_tokens": budget}
+                native["max_tokens"] += budget
         if system:
             native["system"] = system[0]["text"] if len(system) == 1 else system
         tools = [{"name": t["function"]["name"], "description": t["function"].get("description", ""),
@@ -402,7 +426,8 @@ class AnthropicProvider(CompatibleProvider):
         structured = body.get("response_format", {}).get("json_schema")
         if structured:
             tools = [{"name": structured["name"], "input_schema": structured["schema"]}]
-            native["tool_choice"] = {"type": "tool", "name": structured["name"]}
+            native["tool_choice"] = ({"type": "auto"} if "thinking" in native else
+                                     {"type": "tool", "name": structured["name"]})
         if tools:
             native["tools"] = tools
         reply = await self._send("POST", "/v1/messages", timeout_s, body=native)

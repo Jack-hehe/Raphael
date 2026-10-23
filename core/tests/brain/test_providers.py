@@ -380,7 +380,8 @@ async def test_json_object_dialects_include_the_schema_in_the_prompt(kind, model
 async def test_modern_openai_models_use_completion_token_limit(kind):
     def handler(request):
         body = json.loads(request.content)
-        assert "max_tokens" not in body and body["max_completion_tokens"] == 100
+        assert "max_tokens" not in body and body["max_completion_tokens"] == 2148
+        assert body["reasoning_effort"] == "low"
         return reply()
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = CompatibleProvider(kind, "https://example.com/v1", lambda: "secret", http=http)
@@ -400,6 +401,8 @@ async def test_other_provider_auth_failure_does_not_change_openrouter_status():
             return httpx.Response(200, json={"data": {"label": "legacy"}})
         if request.method == "GET":
             return httpx.Response(200, json={"data": [{"id": "gpt-4o"}]})
+        if request.url.host == "openrouter.ai":
+            return reply('{"text":"Hello."}')
         return httpx.Response(401, json={"error": "wrong key"})
     conn, keys, other = connect(":memory:"), MemoryKeyStore(), MemoryKeyStore()
     keys.set("legacy-secret")

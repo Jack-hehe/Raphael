@@ -539,7 +539,6 @@ BAD_REPLIES = {
     "choice without a message": lambda: httpx.Response(
         200, json={"choices": [{"finish_reason": "stop"}]}
     ),
-    "content is null": lambda: chat_reply(None),
     "content is not json": lambda: chat_reply("Sure! Here is the cleaned text."),
     "content is cut off": lambda: chat_reply('{"text": "明天'),
     "content is json but not an object": lambda: chat_reply("[1, 2]"),
@@ -551,6 +550,12 @@ async def test_a_reply_that_is_not_a_usable_completion_is_a_bad_response(client_
     with pytest.raises(OpenRouterError) as e:
         await complete(client_with(lambda r: reply()))
     assert (e.value.status, e.value.kind) == (200, "bad_response")
+
+
+async def test_empty_completion_is_truncated(client_with):
+    with pytest.raises(OpenRouterError) as caught:
+        await complete(client_with(lambda _: chat_reply(None)))
+    assert (caught.value.status, caught.value.kind) == (200, "truncated")
 
 
 @pytest.mark.parametrize("content", ['{"text": "par', '{"text": "fine"}'], ids=["cut off", "valid"])
