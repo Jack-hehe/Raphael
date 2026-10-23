@@ -81,6 +81,8 @@ class Phrases:
     unclear: str  # the request was too garbled or incomplete to act on
 
     cannot: str  # a request for an action Raphael has no command for
+    vision_off: str  # an image came, and the owner turned off reading images
+    pdf_off: str  # a PDF came, and the owner turned off reading PDFs
     no_key: str  # no OpenRouter key is stored
     auth: str  # OpenRouter does not accept the key
     budget: str  # this month's limit is used up
@@ -165,6 +167,8 @@ PHRASES: dict[str, Phrases] = {
         unclear="無法辨識指示。請再說一次。",
 
         cannot="目前無法執行此操作。",
+        vision_off="看圖片已關閉，無法讀取這張圖片。",
+        pdf_off="讀 PDF 已關閉，無法讀取這份檔案。",
         no_key="未設定 OpenRouter 金鑰。",
         auth="OpenRouter 金鑰無法使用。",
         budget="本月額度已用盡。",
@@ -230,6 +234,8 @@ PHRASES: dict[str, Phrases] = {
         unclear="The instruction could not be recognized. Please repeat it.",
 
         cannot="That action is not yet within my capabilities.",
+        vision_off="Reading images is turned off, so I cannot read this image.",
+        pdf_off="Reading PDFs is turned off, so I cannot read this file.",
         no_key="No OpenRouter key is set.",
         auth="The OpenRouter key cannot be used.",
         budget="This month's limit has been reached.",
@@ -315,6 +321,8 @@ PHRASES: dict[str, Phrases] = {
         unclear="指示を認識できませんでした。もう一度お願いします。",
 
         cannot="その操作は現在の機能では実行できません。",
+        vision_off="画像の読み取りがオフのため、この画像は読めません。",
+        pdf_off="PDF の読み取りがオフのため、このファイルは読めません。",
         no_key="OpenRouter のキーが未設定です。",
         auth="OpenRouter のキーを使用できません。",
         budget="今月の上限に達しました。",

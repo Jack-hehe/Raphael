@@ -763,6 +763,7 @@ class BackgroundService:
             attachments=bool(files),
             speaker=speaker,
             team=team,
+            turned_off=self._tools.turned_off(),
         )
         # With more tools than fit, the task is shown the ones it needs, not the first few.
         await refine(snapshot, self._picker, task.text, context, model=model, ledger=ledger)

@@ -35,7 +35,7 @@ A snapshot is the offer, not the permission. Every call is judged again by the g
 changed since the snapshot is refused.
 """
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -230,6 +230,7 @@ def take_snapshot(
     team: Sequence[str] = (),
     max_tier: Tier = SNAPSHOT_MAX_TIER,
     interactive: bool = False,
+    turned_off: Collection[str] = (),
 ) -> Snapshot:
     """The tools a task starting now may use: with `memory`, the memory's tools that read too, and
     with `attachments` (the task came with files) the tool that reads them. A
@@ -237,14 +238,16 @@ def take_snapshot(
     task is shown the ones that share the most words with `question` (`refine` chooses with the
     model) and can find the rest. Every speaker shares the enabled tools and connections;
     `team` are the team tools allowed by the request's depth and cycle guards
-    (`agent.team`: asking another member, adding one), T1 like the plugins' tools that are on."""
+    (`agent.team`: asking another member, adding one), T1 like the plugins' tools that are on.
+    `turned_off` are the tools of Raphael's own that the owner switched off (`Tools.turned_off`):
+    they are not offered, whatever the task or the speaker."""
     refs: dict[str, ToolRef] = {}
     definitions: list[dict[str, Any]] = []
     pool: Offer | None = None
     builtin = (
-        *(name for name in WEB_TOOLS if speaker.uses(name)),
+        *(name for name in WEB_TOOLS if speaker.uses(name) and name not in turned_off),
         *(MEMORY_READ_TOOLS if memory else ()),
-        *(ATTACHMENT_TOOLS if attachments else ()),
+        *(name for name in ATTACHMENT_TOOLS if attachments and name not in turned_off),
     )
     for name in builtin:
         refs[name] = ToolRef(BUILTIN, name, BUILTIN_SERVER, name, Tier.T0)

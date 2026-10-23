@@ -19,13 +19,12 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => api);
 
 import { createDetails, draftSchedule, newRoutineDraft, routineDraft } from "./member-details";
-import { toolChoices } from "./members";
 
 const member = (id: number, more: Partial<Member> = {}): Member => ({
   id, name: `成員${id}`, role: "", instructions: "", avatar: "", group_id: null, model: "", tools: null, position: id, created: 0, unread: false, waiting: false, preview: "", last_at: null, ...more,
 });
 const LIST: MembersList = {
-  members: [member(0, { name: "拉斐爾" }), member(3, { name: "日文老師", role: "N2 嚴格版", group_id: 20, instructions: "每天出 10 題", tools: ["web_search"] }), member(4, { name: "行程管家" })],
+  members: [member(0, { name: "拉斐爾" }), member(3, { name: "日文老師", role: "N2 嚴格版", group_id: 20, instructions: "每天出 10 題" }), member(4, { name: "行程管家" })],
   groups: [{ id: 20, name: "學習", position: 0, sources: [{ kind: "github", ref: "example/app" }] }, { id: 21, name: "專案", position: 1, sources: [] }],
 };
 const ROUTINE: Routine = { id: 9, member_id: 3, title: "每天的單字", prompt: "出題", schedule: { kind: "daily", time: "08:00" }, enabled: true, last_run: null, next_run: null };
@@ -42,7 +41,6 @@ function mount() {
     member: () => LIST.members.find((m) => m.id === current)!,
     list: () => LIST,
     presets: () => [],
-    tools: () => toolChoices([{ id: "notion", name: "Notion", enabled: true } as never]),
     catalog: async () => null,
     update: vi.fn(async (_id: number, _patch: MemberPatch) => true),
     setPicture: vi.fn(async () => {}),
@@ -77,7 +75,7 @@ describe("a member's panel", () => {
     expect(panel.el.querySelector<HTMLInputElement>("#mb-det-name")!.value).toBe("日文老師");
     expect(panel.el.querySelector<HTMLInputElement>("#mb-det-role")!.value).toBe("N2 嚴格版");
     expect(panel.el.querySelector(".mb-avbtn .mb-av-letter")!.textContent).toBe("日");
-    expect([...panel.el.querySelectorAll(".mb-tabs .tab")].map((b) => b.textContent)).toEqual(["詳細資訊", "記憶", "工具"]);
+    expect([...panel.el.querySelectorAll(".mb-tabs .tab")].map((b) => b.textContent)).toEqual(["詳細資訊", "記憶"]);
   });
 
   test("the name is saved when it loses the focus; a blank or a taken one goes back", async () => {
@@ -169,19 +167,6 @@ describe("a member's panel", () => {
     expect(api.routinesCreate).not.toHaveBeenCalled();
   });
 
-  test("工具: a checklist; unticking one saves the rest", async () => {
-    const panel = mount();
-    await flush();
-    panel.el.querySelector<HTMLElement>('[data-tab="tools"]')!.click();
-    const boxes = [...panel.el.querySelectorAll<HTMLInputElement>("[data-tool]")];
-    expect(boxes.map((b) => [b.dataset.tool, b.checked])).toEqual([
-      ["web_search", true], ["web_read", false], ["weather", false], ["local_time", false], ["notion", false],
-    ]);
-    boxes[4].checked = true;
-    boxes[4].dispatchEvent(new Event("change", { bubbles: true }));
-    expect(host.update).toHaveBeenCalledWith(3, { tools: ["web_search", "notion"] });
-  });
-
   test("記憶: 共同記憶 and the member's own, each read with its space", async () => {
     const panel = mount();
     await flush();
@@ -270,7 +255,7 @@ describe("a member's panel", () => {
 });
 
 describe("Raphael's panel", () => {
-  test("his picture and his name only, his routines, and all his tools, which are not unticked here", async () => {
+  test("his picture and his name only, and his routines", async () => {
     current = 0;
     const panel = mount();
     await flush();
@@ -280,9 +265,6 @@ describe("Raphael's panel", () => {
     expect(panel.el.querySelector("#mb-det-instr")).toBeNull();
     expect(panel.el.querySelector('[data-det="group"]')).toBeNull();
     expect(api.routinesList).toHaveBeenCalledWith(0);
-    panel.el.querySelector<HTMLElement>('[data-tab="tools"]')!.click();
-    const boxes = [...panel.el.querySelectorAll<HTMLInputElement>("[data-tool]")];
-    expect(boxes.every((b) => b.checked && b.disabled)).toBe(true);
   });
 
   test("his picture is changed here: from the PC, nothing of presets", async () => {

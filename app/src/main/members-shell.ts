@@ -28,7 +28,7 @@ import {
   offerRoutine,
   openNewMember,
 } from "./member-dialogs";
-import { RAPHAEL_ID, type ToolChoice, faceHTML, memberOf, memberSections, raphaelOf, toolChoices } from "./members";
+import { RAPHAEL_ID, faceHTML, memberOf, memberSections, raphaelOf } from "./members";
 import type { AppContext, AvatarPreset, Member, MemberPatch, MembersList, ModelCatalog, WireAttachment } from "./types";
 import { type Choice, closeMenu, esc, ico, leave, openMenu, toaster } from "./ui";
 
@@ -85,8 +85,6 @@ export function createMembers(host: MembersHost): MembersShell {
   let fresh = new Set<number>();
   let presets: AvatarPreset[] = [];
   let presetsRead = false;
-  let connections: ToolChoice[] = toolChoices([]);
-  let toolsRead = false;
   let catalog: Promise<ModelCatalog | null> | null = null;
   let loads = 0;
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -115,7 +113,6 @@ export function createMembers(host: MembersHost): MembersShell {
     member,
     list: () => list,
     presets: () => presets,
-    tools: () => connections,
     catalog: () => (catalog ??= api.modelsCatalog().then((read) => read, () => null)),
     update,
     setPicture,
@@ -194,31 +191,6 @@ export function createMembers(host: MembersHost): MembersShell {
               presets = answer.presets;
               presetsRead = true;
             }
-          },
-          () => {},
-        );
-    }
-    if (!toolsRead) {
-      // the core's own list of what a member may be given, or, from a core without it, the connections
-      void Promise.resolve()
-        .then(() => api.membersToolChoices())
-        .then(
-          (answer) => {
-            if (answer && (Array.isArray(answer.connections) || Array.isArray(answer.tools))) toolsRead = true;
-            return toolChoices(answer?.connections ?? [], answer?.tools);
-          },
-          () =>
-            Promise.resolve()
-              .then(() => api.toolsetsList())
-              .then((answer) => {
-                if (Array.isArray(answer?.groups)) toolsRead = true;
-                return toolChoices(answer?.groups ?? []);
-              }),
-        )
-        .then(
-          (choices) => {
-            connections = choices;
-            details.draw();
           },
           () => {},
         );
@@ -344,7 +316,6 @@ export function createMembers(host: MembersHost): MembersShell {
       groups: [...(list?.groups ?? [])].sort((a, b) => a.position - b.position),
       groupId,
       presets,
-      tools: connections,
       taken: (list?.members ?? []).map((m) => m.name),
       async create({ member: made, picture }) {
         let answer: Awaited<ReturnType<typeof api.membersCreate>>;

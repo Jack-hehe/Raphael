@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
   agentVoice: vi.fn(),
   workerCancel: vi.fn(),
   workerRerun: vi.fn(),
+  openLink: vi.fn(),
   core: vi.fn(),
 }));
 vi.mock("../api", () => api);
@@ -256,5 +257,74 @@ describe("a continuous typed turn", () => {
     card!.querySelector<HTMLButtonElement>(".ask-yes")!.click();
     await flush();
     expect(api.agentQuestionAnswer).toHaveBeenCalledWith("inline-q", true);
+  });
+
+  test("clicking the thinking header expands and collapses the thinking block, and media actions open lightbox, expand PDF, and call openLink", async () => {
+    api.openLink.mockResolvedValue(undefined);
+    api.agentHistoryList.mockResolvedValue({
+      turns: [
+        turn(1, {
+          source: "app",
+          status: "done",
+          text: "完成",
+          messages: [
+            { seq: 1, kind: "thinking", text: "先分析使用者的問題。", at_ms: 1000 },
+            {
+              seq: 2,
+              kind: "media",
+              text: JSON.stringify({
+                type: "image",
+                url: "https://example.com/photo.png",
+                title: "東京鐵塔",
+                site: "NHK",
+              }),
+              at_ms: 2000,
+            },
+            {
+              seq: 3,
+              kind: "media",
+              text: JSON.stringify({
+                type: "pdf",
+                url: "https://example.com/doc.pdf",
+                title: "報告.pdf",
+                site: "NHK",
+              }),
+              at_ms: 3000,
+            },
+            { seq: 4, kind: "reply", text: "這是你要的圖片與報告。", at_ms: 4000 },
+          ],
+        }),
+      ],
+    });
+    mount();
+    await flush();
+
+    // Thinking block starts collapsed on a done turn, and expands on click
+    const thinkBtn = document.querySelector<HTMLButtonElement>('[data-act="thinking"]')!;
+    const thinkBody = document.querySelector<HTMLElement>(".think-body")!;
+    expect(thinkBtn.getAttribute("aria-expanded")).toBe("false");
+    expect(thinkBody.hidden).toBe(true);
+    thinkBtn.click();
+    expect(thinkBtn.getAttribute("aria-expanded")).toBe("true");
+    expect(thinkBody.hidden).toBe(false);
+    thinkBtn.click();
+    expect(thinkBody.hidden).toBe(true);
+
+    // Clicking image opens in-app lightbox, Escape closes it
+    document.querySelector<HTMLButtonElement>('[data-act="lightbox"]')!.click();
+    expect(document.querySelector(".media-lightbox")).not.toBeNull();
+    expect(document.querySelector<HTMLImageElement>(".media-lightbox .lb-img")!.src).toBe("https://example.com/photo.png");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector(".media-lightbox")).toBeNull();
+
+    // Clicking PDF expand toggles .is-expanded
+    const pdfBtn = document.querySelector<HTMLButtonElement>('[data-act="pdf-expand"]')!;
+    pdfBtn.click();
+    expect(document.querySelector(".media-pdf")?.classList.contains("is-expanded")).toBe(true);
+    expect(pdfBtn.getAttribute("aria-expanded")).toBe("true");
+
+    // Clicking 在網站開啟 calls api.openLink with the validated http(s) URL
+    document.querySelector<HTMLButtonElement>('[data-act="open-url"]')!.click();
+    expect(api.openLink).toHaveBeenCalledWith("https://example.com/photo.png");
   });
 });

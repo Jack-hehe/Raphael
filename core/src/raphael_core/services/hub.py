@@ -3,8 +3,9 @@ and the `services.*` methods of the settings page.
 
 `ServiceHub` reads the choices from the settings at each call (`web_search_service`,
 `web_read_service`, `pdf_service`, `vision_model`, `searxng_url`, `tts_service`, `tts_fish_voice`,
-`tts_fish_model`), so a change the owner makes
-takes effect with the next request, and it holds the keys (`keys.ServiceKeys`), the HTTP client the
+`tts_fish_model`) and whether each capability is on at all (`web_search_enabled`,
+`web_read_enabled`, `vision_enabled`, `pdf_enabled`, `tts_enabled`: `enabled`), so a change the
+owner makes takes effect with the next request, and it holds the keys (`keys.ServiceKeys`), the HTTP client the
 services are called with, the safe fetch of the built-in page reader (`fetch.PageFetcher`) and the
 model that sees (`vision.Vision`). The fast tier (`agent.tools.Tools`) and the background worker's
 tools reach the services through it alone.
@@ -12,14 +13,15 @@ tools reach the services through it alone.
 RPC methods (the choice itself is `settings.set`, like any other setting):
 
 - `services.status` -> `{search, read, pdf, vision, voice}`. `search`, `read` and `pdf` are each
-  `{service, options: [{id, needs_key, has_key, key_optional}]}`: the service chosen, and each one
+  `{enabled, service, options: [{id, needs_key, has_key, key_optional}]}`: whether the capability
+  is on (a capability that is off is not used at all), the service chosen, and each one
   that could be, with whether it needs a key of the owner's, whether one is stored and whether a key
   is optional (Jina's: it works without one, with lower limits). SearXNG's option also has
-  `url_set`, whether its address is set. `vision` is `{model, resolved_model, supports_images}`:
+  `url_set`, whether its address is set. `vision` is `{enabled, model, resolved_model, supports_images}`:
   the setting ("" for the answer model), the model that reads images in the end, and whether
   OpenRouter's list says it reads them (null when the list does not say). `voice` is Raphael's
-  voice: `{service, options, fish_voice_set}`, with `service` and `options` as above ("none" or
-  "fish", which needs a key) and whether the owner has filled in the Fish Audio voice id (the id
+  voice: `{enabled, service, options, fish_voice_set}`, with `enabled`, `service` and `options` as
+  above (only "fish", which needs a key) and whether the owner has filled in the Fish Audio voice id (the id
   itself is a setting, `tts_fish_voice`). A key is never in it.
 - `services.set_key {service, key}` -> `{ok: true}`: the key of a keyed service, without the
   spaces around it, 1 to 512 characters with no space or control character inside, stored in the
@@ -77,7 +79,16 @@ READ_OPTIONS = (
     Option("tavily", needs_key=True),
 )
 PDF_OPTIONS = (Option("builtin"), Option("openrouter"))
-TTS_OPTIONS = (Option("none"), Option("fish", needs_key=True))
+TTS_OPTIONS = (Option("fish", needs_key=True),)
+
+# The capabilities that can be turned off, and the setting that holds the switch of each.
+CAPABILITIES = {
+    "search": "web_search_enabled",
+    "read": "web_read_enabled",
+    "vision": "vision_enabled",
+    "pdf": "pdf_enabled",
+    "voice": "tts_enabled",
+}
 
 
 def _setting(settings: SettingsStore, key: str, choices: Sequence[Option]) -> str:
@@ -150,8 +161,20 @@ class ServiceHub:
         return _setting(self._settings, "pdf_service", PDF_OPTIONS)
 
     def tts_service(self) -> str:
-        """Who speaks Raphael's answers aloud: "none" (silence) or "fish"."""
+        """Who speaks Raphael's answers aloud: "fish". Whether he speaks at all is `enabled("voice")`."""
         return _setting(self._settings, "tts_service", TTS_OPTIONS)
+
+    def enabled(self, capability: str) -> bool:
+        """Whether the owner has `capability` ("search", "read", "vision", "pdf" or "voice") on. A
+        capability that is off is not used at all, whatever service is chosen for it. A setting
+        that cannot be read is its default."""
+        key = CAPABILITIES[capability]
+        try:
+            value = self._settings.get(key)
+        except sqlite3.Error as exc:
+            logger.warning("Could not read the setting %s: %s", key, type(exc).__name__)
+            value = DEFAULTS[key]
+        return value is True
 
     def vision_model(self) -> tuple[str, bool | None]:
         """The model that reads images (the `vision_model` setting, or the answer model when it is
@@ -201,9 +224,9 @@ class ServiceHub:
     def tts_ready(self) -> bool:
         """Whether Raphael can be heard: a voice service is chosen and has what it needs (for
         Fish Audio, a key and the owner's voice id). Nothing is requested to tell."""
-        service = self.tts_service()
-        if service == "none":
+        if not self.enabled("voice"):
             return False
+        service = self.tts_service()
         if service in KEYED_SERVICES and not self._keys.has(service):
             return False
         return service != "fish" or bool(self._text("tts_fish_voice"))
@@ -232,10 +255,14 @@ class ServiceHub:
         sees it (`{text}`), a PDF read with the PDF service chosen (`{pages, text, truncated}`).
         ServiceError of a kind."""
         if attachment.is_pdf:
+            service = self.pdf_service()
+            # The scanned pages of a PDF are read as images, so with the images off they stay
+            # unread; "openrouter" reads the whole file and needs the model whatever that switch says.
+            sees = service == "openrouter" or self.enabled("vision")
             found = await pdf.read_pdf(
                 attachment,
-                service=self.pdf_service(),
-                vision=self.vision,
+                service=service,
+                vision=self.vision if sees else None,
                 question=question,
                 ledger=ledger,
             )
@@ -266,15 +293,29 @@ class ServiceHub:
     def status(self) -> dict[str, Any]:
         model, sees = self.vision_model()
         return {
-            "search": {"service": self.search_service(), "options": self._options(SEARCH_OPTIONS)},
-            "read": {"service": self.read_service(), "options": self._options(READ_OPTIONS)},
-            "pdf": {"service": self.pdf_service(), "options": self._options(PDF_OPTIONS)},
+            "search": {
+                "enabled": self.enabled("search"),
+                "service": self.search_service(),
+                "options": self._options(SEARCH_OPTIONS),
+            },
+            "read": {
+                "enabled": self.enabled("read"),
+                "service": self.read_service(),
+                "options": self._options(READ_OPTIONS),
+            },
+            "pdf": {
+                "enabled": self.enabled("pdf"),
+                "service": self.pdf_service(),
+                "options": self._options(PDF_OPTIONS),
+            },
             "vision": {
+                "enabled": self.enabled("vision"),
                 "model": self._text("vision_model"),
                 "resolved_model": model,
                 "supports_images": sees,
             },
             "voice": {
+                "enabled": self.enabled("voice"),
                 "service": self.tts_service(),
                 "options": self._options(TTS_OPTIONS),
                 "fish_voice_set": bool(self._text("tts_fish_voice")),

@@ -168,9 +168,9 @@ class Speaker:
     async def say(self, prefix: str, text: str) -> None:
         """Speak a line of Raphael's (see the module), replacing what was being said. Returns when
         the sound begins, when it cannot (the voice failed), or after FIRST_AUDIO_WAIT_S, whichever
-        is first; at once when no voice service is chosen or there is nothing to say."""
+        is first; at once when the owner has Raphael's voice off or there is nothing to say."""
         self.stop()
-        if self._hub.tts_service() == "none":
+        if not self._hub.enabled("voice"):
             return
         spoken = line(prefix, text)
         if not spoken:

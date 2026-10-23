@@ -66,6 +66,7 @@ _ALIASES = {
     "rate_limit": "network",
     "bad_response": "protocol",
     "changed": "blocked",
+    "disabled": "blocked",  # the owner turned the capability off (Settings › 服務)
     "stale": "not_found",
     "elevated": "handoff",
     "own_window": "blocked",

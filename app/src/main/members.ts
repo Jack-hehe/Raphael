@@ -1,8 +1,8 @@
 // The members of the 拉斐爾 page, as data: Raphael (member 0, who is no row of the core) and the
 // members the owner made, in their groups. Everything here is pure, so its rules can be tested
 // without a browser: which members the column lists under which group for a search, what a row's
-// preview says, how a routine's schedule is said, what a member's picture is, which tools the 工具
-// tab lists, and what a group's 看的地方 are made of.
+// preview says, how a routine's schedule is said, what a member's picture is, and what a group's
+// 看的地方 are made of.
 //
 // A member's picture is the image the core hands as a `data:image/...` URL (`avatar_url`, the way
 // Raphael's own picture comes from `avatar_get`), and only that: anything else is the neutral
@@ -12,7 +12,7 @@
 import { avatarHTML } from "./avatar";
 import { catalogs, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
-import type { ConnectionGroup, Member, MemberGroup, MemberSource, MembersList, RoutineSchedule } from "./types";
+import type { Member, MemberGroup, MemberSource, MembersList, RoutineSchedule } from "./types";
 import { esc } from "./ui";
 
 /** Raphael's id among the members: member 0 everywhere in the core's API. */
@@ -172,49 +172,4 @@ export function sourceLabel(source: MemberSource): string {
   const last = path.split("/").filter(Boolean).pop() ?? source.ref;
   const words = last.replace(/-?[0-9a-f]{32}$/i, "").replace(/-/g, " ").trim();
   return words || "Notion";
-}
-
-// ---------- tools ----------
-
-/** The words for Raphael's own tools a member may be given, by the core's ids (`members.tool_choices`). */
-const TOOL_NAMES: Record<string, () => string> = {
-  web_search: () => t("agent.tool.webSearch"),
-  web_read: () => t("services.read"),
-  weather: () => t("agent.tool.weather"),
-  local_time: () => t("agent.tool.time"),
-};
-/** Raphael's own tools, as the core names them (`BUILTIN_TOOL_IDS`), before `members.tool_choices` is read. */
-export const BUILTIN_TOOLS: readonly string[] = Object.keys(TOOL_NAMES);
-
-/** A line of the 工具 checklist: a tool of Raphael's or a connected service, by the id `tools` keeps. */
-export interface ToolChoice {
-  id: string;
-  label: string;
-  /** A connected service rather than one of Raphael's own tools. */
-  plugin: boolean;
-}
-
-/**
- * What the 工具 tab lists: Raphael's own tools (the ids the core lists, `members.tool_choices`, or
- * the ones this app knows), then every connected service that is on.
- */
-export function toolChoices(connections: readonly Pick<ConnectionGroup, "id" | "name" | "enabled">[], builtin?: readonly string[]): ToolChoice[] {
-  const own = (builtin ?? BUILTIN_TOOLS).map((id) => ({ id, label: TOOL_NAMES[id]?.() ?? id }));
-  return [
-    ...own.map((tool) => ({ ...tool, plugin: false })),
-    ...connections.filter((group) => group.enabled).map((group) => ({ id: group.id, label: group.name, plugin: true })),
-  ];
-}
-
-/** The ids a member may use: the ones it keeps, or every choice when it keeps none (the core's default). */
-export const allowedTools = (tools: readonly string[] | null | undefined, choices: readonly ToolChoice[]): string[] =>
-  tools == null ? choices.map((choice) => choice.id) : choices.map((choice) => choice.id).filter((id) => tools.includes(id));
-
-/** What the closed tools dropdown of the new member says: all of them, how many, or none. */
-export function toolsSummary(chosen: readonly string[], choices: readonly ToolChoice[]): string {
-  const count = choices.filter((choice) => chosen.includes(choice.id)).length;
-  if (count === choices.length) return t("members.toolsAll");
-  if (count === 0) return t("members.toolsNone");
-  if (count <= 3) return choices.filter((choice) => chosen.includes(choice.id)).map((choice) => choice.label).join(t("members.daysJoin"));
-  return t("members.toolsSome", { p0: count });
 }

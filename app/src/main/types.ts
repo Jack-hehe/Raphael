@@ -161,10 +161,29 @@ export interface HistoryItem {
   stt: string | null;
 }
 
+export type TurnMessageKind = "thinking" | "progress" | "reply" | "event" | "media";
+
+export interface TurnMessage {
+  seq: number;
+  kind: TurnMessageKind;
+  text: string;
+  at_ms: number;
+}
+
+export interface MediaPayload {
+  type: "link" | "image" | "video" | "pdf";
+  url: string;
+  title?: string;
+  site?: string;
+  description?: string;
+  thumbnail?: string | null;
+  embed?: string | null;
+}
+
 /** A turn of the conversation with Raphael (`agent.history.list`, newest first). */
 export interface AgentTurn {
   /** Ordered public lines; older cores and turns may have none. Text includes Raphael's framing. */
-  messages?: { seq: number; kind: "progress" | "reply" | "event" | "thinking" | "media"; text: string; at_ms: number }[];
+  messages?: TurnMessage[];
   id: number;
   created_at_ms: number;
   /** What the person said, as the speech recognition heard it. */
@@ -293,7 +312,14 @@ export interface BrainSettings {
   pdf_service?: string;
   /** The address of the owner's own SearXNG, `http(s)`; "" while there is none. */
   searxng_url?: string;
-  /** Who speaks Raphael's answers aloud: `none` or `fish` (Fish Audio). */
+  /** Whether each capability of the tools is used at all (the switch of its row in 服務): the first four are on until turned off. */
+  web_search_enabled?: boolean;
+  web_read_enabled?: boolean;
+  vision_enabled?: boolean;
+  pdf_enabled?: boolean;
+  /** Whether Raphael speaks his answers aloud: off until the owner turns it on. */
+  tts_enabled?: boolean;
+  /** Who speaks Raphael's answers aloud: `fish` (Fish Audio), the one voice service; "no voice" is `tts_enabled` off. */
   tts_service?: string;
   /** The id of the owner's Fish Audio voice model: 32 hexadecimal characters, or "" while none is set. Not a secret. */
   tts_fish_voice?: string;
@@ -316,6 +342,8 @@ export interface ServiceOption {
 
 /** A capability's services: the one chosen and the ones it could use. */
 export interface ServiceChoice {
+  /** The owner has the capability on (a capability that is off is not used at all). */
+  enabled: boolean;
   service: string;
   options: ServiceOption[];
 }
@@ -325,9 +353,11 @@ export interface ServicesStatus {
   search: ServiceChoice;
   read: ServiceChoice;
   pdf: ServiceChoice;
-  /** Raphael's voice: `none` or `fish` (which needs a key), and whether the voice model id is filled in. */
+  /** Raphael's voice: `fish` (which needs a key), and whether the voice model id is filled in. */
   voice: ServiceChoice & { fish_voice_set: boolean };
   vision: {
+    /** The owner has reading images on. */
+    enabled: boolean;
     /** The `vision_model` setting: "" is the model that answers. */
     model: string;
     /** The model that will look: `model`, or the answer model when it is "". */

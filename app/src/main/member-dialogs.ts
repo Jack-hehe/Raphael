@@ -1,5 +1,5 @@
 // The small windows of the 拉斐爾 page's members: 新增成員 (the mockup's `new-member`: picture, name,
-// role, instructions, group and tools, with 「取消」 and 「建立」), the routine the core offers with a
+// role, instructions and group, with 「取消」 and 「建立」), the routine the core offers with a
 // new member of a group with places to look (taken only with 「加入」), the question before a member
 // or a group is deleted, a group's name, a group's 看的地方, and the popover that changes a picture
 // (the presets, if the owner has any, and 「從電腦選…」).
@@ -15,7 +15,6 @@ import {
   INSTRUCTIONS_MAX,
   NAME_MAX,
   ROLE_MAX,
-  type ToolChoice,
   cleanName,
   faceHTML,
   initialOf,
@@ -23,7 +22,6 @@ import {
   parseSource,
   scheduleText,
   sourceLabel,
-  toolsSummary,
 } from "./members";
 import type { AvatarPreset, MemberGroup, MemberSource, NewMember, RoutineOffer, WireAttachment } from "./types";
 import { btn, closeMenu, esc, ico, iconButton, openMenu, openPopover, sel, toaster } from "./ui";
@@ -390,7 +388,6 @@ export interface NewMemberOptions {
   /** The group it starts in (the one the menu was opened from), null for 未分組. */
   groupId: number | null;
   presets: readonly AvatarPreset[];
-  tools: readonly ToolChoice[];
   /** The names already taken (the names are unique). */
   taken: readonly string[];
   /** Makes the member; true when it was made and the dialog may close. */
@@ -410,7 +407,6 @@ export const groupChoices = (groups: readonly MemberGroup[]): { value: string; l
 /** 新增成員, the mockup's `new-member`. */
 export function openNewMember(o: NewMemberOptions): Dialog {
   let groupId = o.groupId;
-  let tools = o.tools.map((tool) => tool.id);
   let avatar = "";
   let picture: WireAttachment | null = null;
   let pictureUrl: string | null = null;
@@ -426,8 +422,7 @@ export function openNewMember(o: NewMemberOptions): Dialog {
       field("mb-new-role", t("members.role"), "", ROLE_MAX) +
       `<label class="mb-frow mb-frow-top" for="mb-new-instr"><span>${esc(t("members.instructions"))}</span>` +
       `<textarea id="mb-new-instr" class="mb-fin mb-ta" rows="3" maxlength="${INSTRUCTIONS_MAX}"></textarea></label>` +
-      `<div class="mb-frow"><span>${esc(t("members.group"))}</span><span class="mb-new-group"></span></div>` +
-      `<div class="mb-frow"><span>${esc(t("members.tools"))}</span><span class="mb-new-tools"></span></div>`,
+      `<div class="mb-frow"><span>${esc(t("members.group"))}</span><span class="mb-new-group"></span></div>`,
     actions: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"') + btn(esc(t("members.create")), "pri", ' data-dlg="create"'),
     canClose: () => !busy,
     onEnter: () => void create(),
@@ -441,7 +436,7 @@ export function openNewMember(o: NewMemberOptions): Dialog {
           groupId = groupFromValue(value);
           draw();
         });
-      } else if (act === "tools") toolsMenu(target);
+      }
     },
   });
   const nameInput = dialog.el.querySelector<HTMLInputElement>("#mb-new-name")!;
@@ -460,9 +455,6 @@ export function openNewMember(o: NewMemberOptions): Dialog {
       t("members.group"),
       ' data-dlg="group"',
     );
-    dialog.el.querySelector<HTMLElement>(".mb-new-tools")!.innerHTML =
-      `<button type="button" class="sel" data-dlg="tools" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(t("members.tools"))}">` +
-      `<span>${esc(toolsSummary(tools, o.tools))}</span>${ico("down")}</button>`;
   }
 
   function avatarMenu(anchor: HTMLElement): void {
@@ -487,31 +479,6 @@ export function openNewMember(o: NewMemberOptions): Dialog {
     });
   }
 
-  /** The tools as a checklist in a popover: every one is ticked to begin with, as the core's default is. */
-  function toolsMenu(anchor: HTMLElement): void {
-    const el = openPopover(
-      anchor,
-      o.tools
-        .map(
-          (tool) =>
-            `<button type="button" role="checkbox" tabindex="-1" class="mb-check" data-tool="${esc(tool.id)}" aria-checked="${tools.includes(tool.id)}">` +
-            `<span class="ck">${tools.includes(tool.id) ? ico("check") : ""}</span><span class="mt">${esc(tool.label)}</span></button>`,
-        )
-        .join(""),
-      { className: "menu mb-toolpop", role: "menu", label: t("members.tools") },
-    );
-    el.addEventListener("click", (e) => {
-      const item = (e.target as Element).closest<HTMLElement>("[data-tool]");
-      if (!item) return;
-      const id = item.dataset.tool!;
-      tools = tools.includes(id) ? tools.filter((other) => other !== id) : [...tools, id];
-      item.setAttribute("aria-checked", String(tools.includes(id)));
-      item.querySelector(".ck")!.innerHTML = tools.includes(id) ? ico("check") : "";
-      anchor.querySelector("span")!.textContent = toolsSummary(tools, o.tools);
-    });
-    el.querySelector<HTMLElement>("button")?.focus();
-  }
-
   async function create(): Promise<void> {
     if (busy) return;
     const name = cleanName(nameInput.value);
@@ -532,8 +499,6 @@ export function openNewMember(o: NewMemberOptions): Dialog {
       instructions: dialog.el.querySelector<HTMLTextAreaElement>("#mb-new-instr")!.value.trim(),
       group_id: group ? group.id : null,
       ...(avatar ? { avatar } : {}),
-      // every tool ticked is the core's default: nothing to send then
-      ...(tools.length === o.tools.length ? {} : { tools }),
     };
     busy = true;
     dialog.el.querySelectorAll<HTMLButtonElement>(".mb-dlg-act .btn").forEach((button) => (button.disabled = true));

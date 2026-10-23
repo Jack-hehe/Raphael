@@ -52,6 +52,7 @@ async def test_the_status_says_what_is_chosen_and_what_each_service_needs(rig):
     status = await rig.call("services.status")
     assert status == {
         "search": {
+            "enabled": True,
             "service": "openrouter",
             "options": [
                 {"id": "openrouter", "needs_key": False, "has_key": False, "key_optional": False},
@@ -63,6 +64,7 @@ async def test_the_status_says_what_is_chosen_and_what_each_service_needs(rig):
             ],
         },
         "read": {
+            "enabled": True,
             "service": "builtin",
             "options": [
                 {"id": "builtin", "needs_key": False, "has_key": False, "key_optional": False},
@@ -72,17 +74,23 @@ async def test_the_status_says_what_is_chosen_and_what_each_service_needs(rig):
             ],
         },
         "pdf": {
+            "enabled": True,
             "service": "builtin",
             "options": [
                 {"id": "builtin", "needs_key": False, "has_key": False, "key_optional": False},
                 {"id": "openrouter", "needs_key": False, "has_key": False, "key_optional": False},
             ],
         },
-        "vision": {"model": "", "resolved_model": "openai/gpt-6-luna", "supports_images": True},
+        "vision": {
+            "enabled": True,
+            "model": "",
+            "resolved_model": "openai/gpt-6-luna",
+            "supports_images": True,
+        },
         "voice": {
-            "service": "none",
+            "enabled": False,
+            "service": "fish",
             "options": [
-                {"id": "none", "needs_key": False, "has_key": False, "key_optional": False},
                 {"id": "fish", "needs_key": True, "has_key": False, "key_optional": False},
             ],
             "fish_voice_set": False,
@@ -101,6 +109,7 @@ async def test_the_status_follows_the_settings(rig, conn):
     assert option(status["search"], "searxng")["url_set"] is True
     assert (status["read"]["service"], status["pdf"]["service"]) == ("tavily", "openrouter")
     assert status["vision"] == {
+        "enabled": True,
         "model": "anthropic/claude-haiku-5.5",
         "resolved_model": "anthropic/claude-haiku-5.5",
         "supports_images": True,
@@ -216,9 +225,9 @@ async def test_the_status_of_the_voice_follows_the_settings_without_giving_the_v
     assert FISH_VOICE not in str(voice)
 
 
-async def test_a_voice_service_that_cannot_be_read_back_reads_as_none(conn):
+async def test_a_voice_service_that_cannot_be_read_back_reads_as_the_default(conn):
     conn.execute("INSERT INTO settings (key, value) VALUES ('tts_service', '\"edge\"')")
-    assert Rig(conn).hub.tts_service() == "none"
+    assert Rig(conn).hub.tts_service() == "fish"
 
 
 async def test_a_key_for_fish_with_a_space_in_it_is_refused_by_a_kind_and_never_echoed(rig):

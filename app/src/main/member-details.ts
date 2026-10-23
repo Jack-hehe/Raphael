@@ -10,10 +10,9 @@
 //   changed in the group's menu).
 // - 記憶: 「共同記憶」, which every agent shares, and 「<name> 的記憶」, the agent's own, with the list of
 //   Settings › 拉斐爾 › 記憶 (memory-view.ts); a note's 「more」 moves it from one to the other.
-// - 工具: a checklist of Raphael's tools and the connected services it may use.
 //
 // Raphael's panel has his picture (changed here and nowhere else: from the PC, cut in the crop
-// dialog of avatar-settings.ts, or 還原 to his emblem), his routines, his memory and all his tools.
+// dialog of avatar-settings.ts, or 還原 to his emblem), his routines and his memory.
 // His name and role are not changed, and he has no group, model or instructions here.
 //
 // The panel draws itself again from the host's data after each change; what is being typed is kept
@@ -35,8 +34,6 @@ import {
   ROLE_MAX,
   ROUTINE_PROMPT_MAX,
   ROUTINE_TITLE_MAX,
-  type ToolChoice,
-  allowedTools,
   cleanName,
   dayName,
   faceHTML,
@@ -49,7 +46,7 @@ import { type ModelPicker, mountModelPicker } from "./model-picker";
 import type { AppContext, AvatarPreset, Member, MemberPatch, MembersList, ModelCatalog, Routine, RoutineSchedule, WireAttachment } from "./types";
 import { btn, esc, iconButton, openMenu, sel, tabs, tg, toaster } from "./ui";
 
-export type DetailsTab = "details" | "memory" | "tools";
+export type DetailsTab = "details" | "memory";
 
 /** The routine being written: a new one (`id` null) or one being changed. */
 export interface RoutineDraft {
@@ -92,8 +89,6 @@ export interface DetailsHost {
   member(): Member;
   list(): MembersList | null;
   presets(): readonly AvatarPreset[];
-  /** The 工具 checklist: Raphael's tools and the connected services that are on. */
-  tools(): readonly ToolChoice[];
   /** The catalog of the model picker, read the first time the panel needs it. */
   catalog(): Promise<ModelCatalog | null>;
   /** Changes the member and reads the list again; false (with a toast) when the core refused. */
@@ -144,8 +139,6 @@ export function createDetails(host: DetailsHost): DetailsPanel {
   const shared = createMemory({ ...memoryHost, space: "shared", onMoved: () => void own.load() });
   const own = createMemory({ ...memoryHost, space: "own", onMoved: () => void shared.load() });
   const memories = [shared, own];
-
-  const isRaphael = (): boolean => host.member().id === RAPHAEL_ID;
 
   // ---------- drawing ----------
 
@@ -232,23 +225,6 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     );
   }
 
-  function toolsHTML(member: Member): string {
-    const choices = host.tools();
-    const raphael = member.id === RAPHAEL_ID;
-    const on = raphael ? choices.map((choice) => choice.id) : allowedTools(member.tools, choices);
-    return (
-      `<div class="mb-tools" role="group" aria-label="${esc(t("members.tools"))}">` +
-      choices
-        .map(
-          (choice) =>
-            `<label class="mb-tool-row"><input type="checkbox" data-tool="${esc(choice.id)}"${on.includes(choice.id) ? " checked" : ""}${raphael ? " disabled" : ""}>` +
-            `<span>${esc(choice.label)}</span></label>`,
-        )
-        .join("") +
-      `</div>`
-    );
-  }
-
   /** The fields being typed in keep what they hold when the panel draws again. */
   function keepTyping(): void {
     if (!draft) return;
@@ -284,7 +260,6 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       [
         { id: "details", label: t("members.details"), attrs: ' data-det="tab" data-tab="details"' },
         { id: "memory", label: t("mem.title"), attrs: ' data-det="tab" data-tab="memory"' },
-        { id: "tools", label: t("members.tools"), attrs: ' data-det="tab" data-tab="tools"' },
       ],
       tab,
       { label: t("members.panel"), kind: "nav", plain: true, fill: true },
@@ -294,8 +269,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     keepTyping();
     picker?.close();
     picker = null;
-    body.innerHTML =
-      tab === "details" ? detailsHTML(member) : tab === "memory" ? memoryHTML(shared.view()) + memoryHTML(own.view()) : toolsHTML(member);
+    body.innerHTML = tab === "details" ? detailsHTML(member) : memoryHTML(shared.view()) + memoryHTML(own.view());
     if (tab === "details" && member.id !== RAPHAEL_ID) mountPicker(member);
     if (sameMember && typingIn && typingIn !== "mb-det-name" && typingIn !== "mb-det-role") el.querySelector<HTMLElement>(`#${CSS.escape(typingIn)}`)?.focus();
     else if (sameMember && focusKey) el.querySelector<HTMLElement>(`[data-k="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
@@ -554,12 +528,6 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
       if (["mb-det-name", "mb-det-role", "mb-det-instr"].includes(target.id)) void saveField(target);
     }
-  });
-  el.addEventListener("change", (e) => {
-    const target = e.target as HTMLInputElement;
-    if (!target.matches("[data-tool]") || isRaphael()) return;
-    const chosen = Array.from(body.querySelectorAll<HTMLInputElement>("[data-tool]")).filter((box) => box.checked).map((box) => box.dataset.tool!);
-    void host.update(host.member().id, { tools: chosen });
   });
 
   return {
