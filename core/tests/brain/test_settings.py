@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from raphael_core.brain.settings import (
@@ -40,7 +42,12 @@ def test_the_defaults_are_the_documented_ones():
         "vision_model": "",
         "pdf_service": "builtin",
         "searxng_url": "",
-        "tts_service": "none",
+        "web_search_enabled": True,
+        "web_read_enabled": True,
+        "vision_enabled": True,
+        "pdf_enabled": True,
+        "tts_enabled": False,
+        "tts_service": "fish",
         "tts_fish_voice": "",
         "tts_fish_model": "s2.1-pro-free",
     }
@@ -422,16 +429,59 @@ def test_the_local_engine_needs_a_local_model(conn):
     assert s.get("stt_local_model") == "sensevoice"
 
 
-def test_raphaels_voice_is_none_or_fish(conn):
+def test_raphaels_voice_provider_is_fish_and_no_voice_is_not_a_provider(conn):
     settings = SettingsStore(conn)
-    assert settings.get("tts_service") == "none"
+    assert settings.get("tts_service") == "fish" and settings.get("tts_enabled") is False
     settings.set("tts_service", "fish")
     assert settings.get("tts_service") == "fish"
-    for bad in ("elevenlabs", "Fish", ""):
+    for bad in ("elevenlabs", "Fish", "", "none"):
         with pytest.raises(ValueError):
             settings.set("tts_service", bad)
     with pytest.raises(TypeError):
         settings.set("tts_service", 1)
+
+
+ENABLED = ("web_search_enabled", "web_read_enabled", "vision_enabled", "pdf_enabled", "tts_enabled")
+
+
+def test_the_switches_are_on_or_off_and_nothing_else(conn):
+    settings = SettingsStore(conn)
+    assert [settings.get(key) for key in ENABLED] == [True, True, True, True, False]
+    for key in ENABLED:
+        settings.set(key, not DEFAULTS[key])
+        assert settings.get(key) is (not DEFAULTS[key])
+        for bad in (1, 0, "true", None):
+            with pytest.raises(TypeError):
+                settings.set(key, bad)
+
+
+def _save_raw(conn, key, value):
+    conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, json.dumps(value)))
+
+
+def test_a_saved_none_voice_reads_as_the_default_provider_with_the_voice_off(conn):
+    _save_raw(conn, "tts_service", "none")
+    settings = SettingsStore(conn)
+    assert settings.get("tts_service") == "fish" and settings.get("tts_enabled") is False
+    everything = settings.all()
+    assert everything["tts_service"] == "fish" and everything["tts_enabled"] is False
+
+
+def test_a_saved_fish_voice_with_an_id_reads_as_on_and_without_one_as_off(conn):
+    _save_raw(conn, "tts_service", "fish")
+    settings = SettingsStore(conn)
+    assert settings.get("tts_enabled") is False  # fish, but no voice id: it could not speak
+    settings.set("tts_fish_voice", "0123456789abcdef0123456789abcdef")
+    assert settings.get("tts_enabled") is True and settings.all()["tts_enabled"] is True
+
+
+def test_a_saved_switch_wins_over_what_the_older_voice_setting_says(conn):
+    _save_raw(conn, "tts_service", "fish")
+    _save_raw(conn, "tts_fish_voice", "0123456789abcdef0123456789abcdef")
+    settings = SettingsStore(conn)
+    assert settings.get("tts_enabled") is True
+    settings.set("tts_enabled", False)
+    assert settings.get("tts_enabled") is False and settings.all()["tts_enabled"] is False
 
 
 def test_the_fish_voice_is_32_hexadecimal_characters_or_none_and_is_not_in_the_defaults(conn):

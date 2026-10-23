@@ -74,6 +74,7 @@ class Rig:
 
     def set_up(self, key=KEY, voice=VOICE):
         self.settings.set("tts_service", "fish")
+        self.settings.set("tts_enabled", True)
         self.settings.set("tts_fish_voice", voice)
         if key:
             self.keys.set("fish", key)
@@ -249,12 +250,12 @@ async def test_the_stop_method_stops_and_a_stop_with_nothing_playing_is_harmless
     await until(lambda: rig.player.interrupted == [True])
 
 
-async def test_saying_with_the_service_set_to_none_still_stops_what_was_playing(rig):
+async def test_saying_with_the_voice_turned_off_still_stops_what_was_playing(rig):
     rig.player.hold = True
     rig.set_up()
     rig.speaker.say("答", "好。")
     await until(lambda: rig.player.played)
-    rig.settings.set("tts_service", "none")
+    rig.settings.set("tts_enabled", False)
     rig.speaker.say("答", "不出聲。")
     await until(lambda: rig.player.interrupted == [True])
     assert len(rig.requests) == 1

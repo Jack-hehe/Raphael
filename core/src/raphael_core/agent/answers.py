@@ -56,7 +56,7 @@ from .persona import (
     system_prompt,
 )
 from .speaker import RAPHAEL, Speaker
-from .tools import ToolResult
+from .tools import DISABLED, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +148,9 @@ def _tool_line(result: ToolResult) -> str:
     data = "" if result.data is None else f" {json.dumps(result.data, ensure_ascii=False)}"
     if result.ok:
         return f"{name}:{data}"
+    if result.error == DISABLED:
+        # The owner turned this ability off: say so briefly, then answer from what is known.
+        return f"{name}: turned off by the owner; say briefly that you cannot do this now, and answer only from what you know"
     return f"{name}: unavailable ({result.error}){data}"
 
 

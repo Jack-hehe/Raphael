@@ -680,6 +680,10 @@ class AgentService:
         ledger = Ledger(self._spend)
         if not ask.text.strip():
             return self._finish(ask, "unclear", "negative", phrase(ask.language, "unclear"), ledger)
+        off = self._files_off(ask)
+        if off is not None:
+            # A file of a kind the owner turned off is refused in one line, before any model is asked.
+            return self._finish(ask, "chat", "negative", phrase(ask.language, off), ledger)
         settings = self._read_settings(ask.speaker)
         blocked = self._blocked(settings)
         decision: RouteDecision | None = None
@@ -2227,6 +2231,18 @@ class AgentService:
             city=_text_or(city, DEFAULTS["agent_city"]),
             limit_usd=self._settings.get("monthly_limit_usd"),
         )
+
+    def _files_off(self, ask: _Ask) -> str | None:
+        """The phrase that refuses the files of `ask` when one is an image and reading images is
+        off ("vision_off"), or a PDF and reading PDFs is off ("pdf_off"); None otherwise."""
+        services = self._tools.services
+        if services is None:
+            return None
+        if any(a.is_image for a in ask.attachments) and not services.enabled("vision"):
+            return "vision_off"
+        if any(a.is_pdf for a in ask.attachments) and not services.enabled("pdf"):
+            return "pdf_off"
+        return None
 
     def _blocked(self, settings: _Settings) -> str | None:
         """Why no model may be asked: "no_key", "auth" (the key store failed), "budget", or None."""

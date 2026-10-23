@@ -122,9 +122,9 @@ class Speaker:
 
     def say(self, prefix: str, text: str) -> None:
         """Speak a line of Raphael's (see the module), replacing what was being said. Returns at
-        once; does nothing when no voice service is chosen or there is nothing to say."""
+        once; does nothing when the owner has Raphael's voice off or there is nothing to say."""
         self.stop()
-        if self._hub.tts_service() == "none":
+        if not self._hub.enabled("voice"):
             return
         spoken = line(prefix, text)
         if not spoken:
