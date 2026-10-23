@@ -34,3 +34,16 @@ async def test_a_member_made_by_rpc_answers_in_its_thread(make_app):  # noqa: F8
     listed = {m["id"]: m for m in (await app.call("members.list", {}))["members"]}
     assert listed[member["id"]]["unread"] is True
     assert await app.call("members.delete", {"id": member["id"]}) == {"deleted": True}
+
+
+async def test_the_background_names_the_members_and_tells_which_threads_wait(make_app, monkeypatch):  # noqa: F811
+    app = make_app()
+    member = (await app.call("members.create", {"name": "進度官", "role": "看進度"}))["member"]
+    # The overlay's notice of a question names the member whose thread holds it.
+    assert app.background._notice("zh-TW", member["id"]) == "進度官 等你處理。"
+    assert app.background._notice("zh-TW", 0) == "有一件事等你處理。"
+    assert app.members.name_of(member["id"] + 1) is None
+    # A question the background waits on makes that thread `waiting` in the member column.
+    monkeypatch.setattr(app.background, "waiting_questions", lambda: [{"member_id": member["id"]}])
+    listed = {m["id"]: m["waiting"] for m in (await app.call("members.list", {}))["members"]}
+    assert listed == {0: False, member["id"]: True}

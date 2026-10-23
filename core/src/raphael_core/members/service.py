@@ -53,8 +53,9 @@ Unread. A turn written or completed in a thread that is not on screen (`members.
 unread, unless the owner heard it said (`source` "voice").
 
 Waiting. A thread is waiting while a question for a yes waits in it: a turn with the status
-"confirm", and whatever the background adds (`add_waiting_source`, the seam of the safety rules'
-questions from the background).
+"confirm" (a question of the fast tier), or a question that a background task of that member waits
+on (`add_waiting_source`, which the app gives `BackgroundService.waiting_members`), answered in the
+app alone.
 
 Nothing here logs a name, a role, an instruction, a routine's title or prompt, or a result.
 """
@@ -309,6 +310,16 @@ class MembersService:
 
     def member_exists(self, member_id: int) -> bool:
         return self.store.exists(member_id)
+
+    def name_of(self, member_id: int) -> str | None:
+        """What the member `member_id` is called (for the overlay's notice of a question that waits
+        in its thread); None for one that is not there."""
+        try:
+            speaker = self.store.speaker(member_id)
+        except sqlite3.Error as exc:
+            logger.warning("Could not read a member: %s", type(exc).__name__)
+            return None
+        return None if speaker is None else speaker.name
 
     # --- unread and waiting --------------------------------------------------------------------------
 

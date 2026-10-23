@@ -829,6 +829,10 @@ class App(Router):
         )
         self.agent.register(self)
         self.background.use_team(self.members, self.agent.team_tool)
+        # The questions the background waits on: a thread one waits in is `waiting` in the member
+        # column, and the overlay's notice of one names the member whose thread holds it.
+        self.members.add_waiting_source(self.background.waiting_members)
+        self.background.use_member_names(self.members.name_of)
         # Messaging apps (Telegram): messages reach the assistant like a spoken question.
         self.messaging = MessagingService(
             MessagingStore(data_dir),
