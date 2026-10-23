@@ -27,8 +27,8 @@ ui_language, target_app}`. The router (Jev, and the language model when Jev fail
   owner's own turn: a reply that was shown what the web or a connected service returned writes
   nothing. The reply may also ask to read a note in full or to search the past turns (`memory_read`,
   `history_search`, T0) before it answers, which it then does with what was found. A request to
-  remember that the router took for a task or a command, or could not place, is answered as small
-  talk, where the note is written;
+  remember that the router took for a task or a command is answered as small talk, where the
+  note is written; an unclear request goes to the narrated harness, which can write it too;
 - when the user has connected plugins (`integrations`), an answer may use the tools that are on:
   one call to the language model picks the tools it needs from those alone (`plugins`), the
   program makes the calls, and the results are given to the call that words the answer as data,
@@ -55,7 +55,9 @@ ui_language, target_app}`. The router (Jev, and the language model when Jev fail
 - a task for the background (`delegate`: several steps, or a connected service) is handed to the
   background worker (`raphael_core.background`) and answered at once with 《了。》; the worker does
   it step by step through the same gate, and reports on the overlay when it is done;
-- a request that is too garbled to act on gets a fixed 否 reply.
+- a voice request the router cannot place, or could not route, goes to the narrated harness
+  with the conversation, just as a typed request does. Routing and answering together have a
+  45-second deadline while the overlay waits; an empty request gets a fixed negative reply.
 
 Whatever goes wrong is answered, never raised: no key, the monthly limit reached, no network, a
 model that fails each get a short 否 reason in the user's language, and the commands still work (a
@@ -154,7 +156,7 @@ from .narration import NarratedLoop
 from .cities import cities_in
 from .commands import COMMANDS, AppCatalog, run_command
 from .device import DeviceActions
-from .failure import AgentFailure
+from .failure import AgentFailure, failure_kind
 from .gate import BUILTIN_SERVER, ToolGate
 from .history import VOICE, AgentHistory, Turn
 from .ledger import Ledger
@@ -245,6 +247,8 @@ _SOURCE = re.compile(r"[a-z]{1,20}")
 TYPED = "app"
 # The sources of the requests made at this computer: a new one replaces every question that waits.
 _AT_THIS_COMPUTER = frozenset({VOICE, TYPED})
+# Routing and answering share this deadline while the voice overlay waits.
+VOICE_TURN_TIMEOUT_S = 45.0
 # The statuses of a turn that ended with a denial or a question that ran out: Raphael does not say
 # these aloud, as the owner knows (a "no", an Esc) or was not there.
 _UNSPOKEN = ("denied", "expired")
@@ -698,7 +702,7 @@ class AgentService:
         earlier = self._inflight.pop(ask.session_id, None)
         if earlier is not None:
             earlier.cancel()
-        task = asyncio.ensure_future(self._answer(ask))
+        task = asyncio.ensure_future(self._voice_answer(ask) if ask.source == VOICE else self._answer(ask))
         self._inflight[ask.session_id] = task
         try:
             result = await task
@@ -718,6 +722,13 @@ class AgentService:
             if self._inflight.get(ask.session_id) is task:
                 del self._inflight[ask.session_id]
             self._release(ask.held)  # a turn announced late must never be left unannounced
+
+    async def _voice_answer(self, ask: _Ask) -> dict:
+        """Bound the whole voice turn, including routing and any harness tool rounds."""
+        try:
+            return await asyncio.wait_for(self._answer(ask), VOICE_TURN_TIMEOUT_S)
+        except TimeoutError:
+            return self._failed(ask, "answer", "timeout", ask.ledger or Ledger(self._spend))
 
     async def _answer(self, ask: _Ask) -> dict:
         """One request, from the router to the reply. Never raises for a failure of the world."""
@@ -742,7 +753,7 @@ class AgentService:
                 return self._failed(ask, "answer", error.kind, ledger)
             except Exception as exc:
                 logger.warning("The typed harness failed: %s", type(exc).__name__)
-                return self._failed(ask, "answer", "error", ledger)
+                return self._failed(ask, "answer", failure_kind(exc), ledger)
         decision: RouteDecision | None = None
         failure = blocked
         if blocked is None:
@@ -759,23 +770,26 @@ class AgentService:
         if decision is None:
             # No model could say what it is: a plain command needs none.
             decision = match_command(ask.text)
-            if decision is None:
-                return self._failed(ask, "unclear", failure or "error", ledger)
-            logger.info("A command was found by its words: no model could route (%s)", failure)
+            if decision is None and blocked is not None:
+                return self._failed(ask, "unclear", blocked, ledger)
+            if decision is not None:
+                logger.info("A command was found by its words: no model could route (%s)", failure)
+        route = "answer" if decision is None or decision.route == "unclear" else decision.route
+        source = decision.source if decision is not None else "harness"
         try:
-            if decision.route == "unclear" and self._conversation_of(ask.speaker.id).context(quick=True).turns:
+            if decision is None or decision.route == "unclear":
                 self._record(ask, "answer", "", "", "running", None, ledger)
                 return await self._narrated(ask, settings, ledger)
             result = await self._route(ask, decision, settings, ledger)
         except AgentFailure as error:
-            result = self._failed(ask, decision.route, error.kind, ledger)
+            result = self._failed(ask, route, error.kind, ledger)
         except Exception as exc:  # the shell shows no raw errors: this too is a 否 reply
-            logger.warning("The %s route failed unexpectedly: %s", decision.route, type(exc).__name__)
-            result = self._failed(ask, decision.route, "error", ledger)
+            logger.warning("The %s route failed unexpectedly: %s", route, type(exc).__name__)
+            result = self._failed(ask, route, failure_kind(exc), ledger)
         logger.info(
             "Agent turn: route=%s source=%s status=%s cost=%.5f ms=%d",
-            decision.route,
-            decision.source,
+            route,
+            source,
             result["status"],
             ledger.total,
             round((time.perf_counter() - began) * 1000),
@@ -1231,7 +1245,7 @@ class AgentService:
     async def _narrated(
         self, ask: _Ask, settings: _Settings, ledger: Ledger, loop: NarratedLoop | None = None
     ) -> dict:
-        """A live typed turn, sharing the fast tier's safety gate and permission cards."""
+        """A narrated turn, sharing the fast tier's safety gate and permission cards."""
         if loop is None:
             context = self._conversation_of(ask.speaker.id).context(quick=False)
             index = None if self._memory is None else self._memory.index(ask.speaker.id)

@@ -87,7 +87,8 @@ class Phrases:
     auth: str  # OpenRouter does not accept the key
     budget: str  # this month's limit is used up
     credits: str  # OpenRouter says the account has no credit left
-    offline: str  # the network cannot be reached, or too slow
+    offline: str  # the network cannot be reached
+    timeout: str  # the request took too long
     error: str  # anything else that went wrong
     denied: str  # the user said no, or cancelled
     expired: str  # nobody answered the question in time
@@ -174,6 +175,7 @@ PHRASES: dict[str, Phrases] = {
         budget="本月額度已用盡。",
         credits="OpenRouter 餘額不足。",
         offline="無法連線至網路。",
+        timeout="回應時間過長，請再試一次。",
         error="處理過程中發生異常。請再試一次。",
         denied="已取消。",
         expired="逾時未獲回應。未執行。",
@@ -241,6 +243,7 @@ PHRASES: dict[str, Phrases] = {
         budget="This month's limit has been reached.",
         credits="The OpenRouter account has no credit left.",
         offline="The network is unreachable.",
+        timeout="The request took too long. Please try again.",
         error="An error occurred during processing. Please try again.",
         denied="Cancelled.",
         expired="No response in time. Nothing was executed.",
@@ -328,6 +331,7 @@ PHRASES: dict[str, Phrases] = {
         budget="今月の上限に達しました。",
         credits="OpenRouter の残高が不足しています。",
         offline="ネットワークに接続できません。",
+        timeout="応答に時間がかかりすぎました。もう一度お試しください。",
         error="処理中に異常が発生しました。再度お試しください。",
         denied="取り消しました。",
         expired="応答がないため、実行を見送りました。",
@@ -608,6 +612,11 @@ _RAPHAEL_PERSONA = """\
 You are Raphael, the analytical intelligence that serves your master, the user, on their Windows \
 computer. You speak through a single caption beside an emblem in the corner of the screen, so \
 every word must earn its place.
+
+Voice at this computer
+- You have a voice. Your replies to your master at this computer are spoken aloud in Japanese.
+- When your master wants to hear a sentence, pronunciation or example, put it in your reply; \
+the voice reads your reply. Never claim that you cannot play audio or speak.
 
 Character
 - Calm, logical and precise. State conclusions, not impressions: the result first, then at most \

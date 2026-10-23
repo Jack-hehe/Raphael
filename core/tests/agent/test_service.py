@@ -21,7 +21,7 @@ from raphael_core.agent.history import AgentHistory
 from raphael_core.agent.policy import Tier
 from raphael_core.agent.routing import Router as Decider
 from raphael_core.agent.service import AgentService
-from raphael_core.brain.openrouter import OpenRouterError, TextCompletion
+from raphael_core.brain.openrouter import ChatTurn, OpenRouterError, TextCompletion
 from raphael_core.brain.secrets import MemoryKeyStore
 from raphael_core.brain.settings import SettingsStore
 from raphael_core.brain.spend import SpendTracker
@@ -849,12 +849,13 @@ async def test_the_context_holds_only_what_was_answered(rig, client):
 # --- fixed refusals --------------------------------------------------------------------------------
 
 
-async def test_a_request_too_garbled_to_act_on_gets_the_fixed_reply_with_no_model(rig, client):
+async def test_an_unclear_request_is_answered_by_the_harness(rig, client):
     client.decisions.append(decision("unclear"))
-    result = await rig.ask("呃那個")
-    assert (result["prefix"], result["text"]) == ("否", "無法辨識指示。請再說一次。")
+    client.chats.append(ChatTurn('{"prefix":"Question","text":"Which example should I explain?"}', [], "fake/model", 0, 0, 0, 0))
+    result = await rig.ask("An unclear example", language="en")
+    assert (result["prefix"], result["text"]) == ("Question", "Which example should I explain?")
     assert client.json_calls == []
-    assert (await rig.turns())[0]["route"] == "unclear"
+    assert (await rig.turns())[0]["route"] == "answer"
 
 
 
@@ -942,6 +943,7 @@ async def test_offline_the_commands_still_work_and_the_rest_is_refused_with_the_
     network = OpenRouterError(0, "network", "offline")
     client.decisions.extend([network, network])
     client.replies.extend([network, network])
+    client.chats.append(network)
     assert (await rig.ask("打開 youtube.com"))["prefix"] == "了"  # by the list of words
     assert did(actions) == [("open_url", "https://youtube.com/")]
     result = await rig.ask("台北天氣如何")
@@ -966,8 +968,9 @@ async def test_a_key_store_that_fails_is_a_key_that_does_not_work(rig, client, c
     assert client.calls == 0 and KEY not in caplog.text
 
 
-async def test_a_key_openrouter_refuses_is_said_so_and_the_model_is_not_asked_twice(rig, client):
+async def test_a_key_openrouter_refuses_is_still_auth_after_the_harness_attempt(rig, client):
     client.decisions.append(OpenRouterError(401, "auth", "bad key"))
+    client.chats.append(OpenRouterError(401, "auth", "bad key"))
     result = await rig.ask("你好")
     assert result["text"] == "OpenRouter 金鑰無法使用。" and client.json_calls == []
 
@@ -978,7 +981,7 @@ async def test_a_model_that_fails_after_jev_decided_is_a_failure_but_jev_is_paid
     client.decisions.append(decision("answer", cost=0.00004))
     client.replies.append(OpenRouterError(0, "timeout", "slow"))
     result = await rig.ask("什麼是量子糾纏")
-    assert (result["prefix"], result["text"]) == ("否", "無法連線至網路。")
+    assert (result["prefix"], result["text"]) == ("否", "回應時間過長，請再試一次。")
     (turn,) = await rig.turns()
     assert turn["status"] == "error" and turn["route"] == "answer"
     assert rig.spent() == [("agent", "typesafe/jev-1.14", 0.00004)]
