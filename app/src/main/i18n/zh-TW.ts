@@ -669,6 +669,7 @@ export const zhTW = {
   "settings.keyTaken": "這組按鍵已經是「{p0}」的快捷鍵",
   "agent.more": "全部",
   "home.activeDays": "活躍 {p0} 天",
+  "home.estimated": "部分統計包含依用量紀錄估算的約 {p0} 字；原始聽寫已不在歷史中。",
   "home.streak": "連續 {p0} 天",
   "home.longest": "最長 {p0} 天",
   "home.less": "較少",

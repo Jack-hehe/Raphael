@@ -23,6 +23,15 @@ const stats: StatsSummary = {
 const page = (s: StatsSummary = stats): string => homeHTML().replace('<div class="usage"></div>', `<div class="usage">${usageHTML(s)}</div>`);
 
 describe("the main column of the home page", () => {
+  test.each(["zh-TW", "en", "ja"] as const)("estimated totals have a quiet localized tooltip in %s", (locale) => {
+    setLocale(locale);
+    const html = usageHTML({ ...stats, estimated_words: 5000, estimated_dictations: 50 });
+    const tip = html.match(/class="icards" title="([^"]*)"/)?.[1];
+    expect(tip).toContain("5,000");
+    expect(tip).toContain({ "zh-TW": "估算", en: "estimated", ja: "推定" }[locale]);
+    expect(usageHTML(stats)).toContain('<div class="icards">');
+  });
+
   test("is the four numbers, then the activity grid", () => {
     const html = page();
     const numbers = html.indexOf('class="icards"');

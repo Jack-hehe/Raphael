@@ -241,7 +241,7 @@ class Brain:
         # The dictations whose text is being cleaned, by session; True once one was cancelled.
         self._cleaning: dict[str, bool] = {}
         self._pruned_at_ms: int | None = None
-        self._history = HistoryStore(conn)
+        self._history = HistoryStore(conn, tz=tz)
         self._dictionary = DictionaryStore(conn, now_ms)
         self._settings = SettingsStore(conn)
         self._spend = SpendTracker(conn, now_ms, tz)

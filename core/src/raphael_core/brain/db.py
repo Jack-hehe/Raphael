@@ -439,6 +439,30 @@ def _migrate_v16(conn: sqlite3.Connection) -> None:
     conn.execute("COMMIT")
 
 
+def _migrate_v20(conn: sqlite3.Connection) -> None:
+    from dataclasses import asdict
+    from .stats_recovery import estimate_recovery
+
+    conn.execute("BEGIN")
+    conn.execute(
+        "CREATE TABLE dictation_daily (day TEXT PRIMARY KEY NOT NULL,"
+        " dictations INTEGER NOT NULL DEFAULT 0, words INTEGER NOT NULL DEFAULT 0,"
+        " audio_seconds REAL NOT NULL DEFAULT 0, processing_ms INTEGER NOT NULL DEFAULT 0,"
+        " estimated INTEGER NOT NULL DEFAULT 0, estimated_words INTEGER NOT NULL DEFAULT 0,"
+        " estimated_dictations INTEGER NOT NULL DEFAULT 0)"
+    )
+    plan = estimate_recovery(conn)
+    conn.executemany(
+        "INSERT INTO dictation_daily (day, dictations, words, audio_seconds, processing_ms,"
+        " estimated, estimated_words, estimated_dictations) VALUES"
+        " (:day, :dictations, :words, :audio_seconds, :processing_ms,"
+        " :estimated, :estimated_words, :estimated_dictations)",
+        [asdict(day) for day in plan.days.values()],
+    )
+    conn.execute("PRAGMA user_version = 20")
+    conn.commit()
+
+
 _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_V1,
     2: _MIGRATION_V2,
@@ -491,6 +515,7 @@ ALTER TABLE members ADD COLUMN personality TEXT NOT NULL DEFAULT '';
 PRAGMA user_version = 19;
 COMMIT;
 """,
+    20: _migrate_v20,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

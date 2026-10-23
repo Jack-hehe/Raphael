@@ -6,6 +6,7 @@ in-memory database.
 """
 
 import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
@@ -29,9 +30,9 @@ def at(y, m, d, h=12, minute=0, second=0):
     return int(datetime(y, m, d, h, minute, second, tzinfo=TPE).timestamp() * 1000)
 
 
-def say(conn, when_ms, text, *, audio=2.0, stt_ms=0, llm_ms=0, kind="dictation"):
+def say(conn, when_ms, text, *, audio=2.0, stt_ms=0, llm_ms=0, kind="dictation", tz=TPE):
     """A dictation of `text` in the history."""
-    HistoryStore(conn).add(
+    return HistoryStore(conn, tz=tz).add(
         item(
             created_at_ms=when_ms,
             text=text,
@@ -247,17 +248,16 @@ def test_the_words_are_counted_in_the_pasted_text_not_the_raw_text(conn):
     assert store_at(conn, NOW).summary()["all"]["words"] == 2
 
 
-def test_the_zone_decides_which_day_a_dictation_belongs_to(conn):
+@pytest.mark.parametrize("zone", [TPE, timezone(timedelta(hours=-4))])
+def test_the_capture_zone_decides_a_dictations_permanent_local_day(conn, zone):
     # 20:00 UTC on the 13th is 04:00 on the 14th in Taipei, 16:00 on the 13th in New York (UTC-4).
     moment = int(datetime(2026, 10, 13, 20, tzinfo=UTC).timestamp() * 1000)
-    say(conn, moment, "你好")
-    new_york = timezone(timedelta(hours=-4))
+    say(conn, moment, "你好", tz=zone)
     now = moment + 3_600_000
-    assert store_at(conn, now, tz=TPE).summary()["today"]["dictations"] == 1
-    assert store_at(conn, now, tz=new_york).summary()["today"]["dictations"] == 1
-    later = at(2026, 10, 14, 23)
-    assert store_at(conn, later, tz=TPE).summary()["today"]["dictations"] == 1
-    assert store_at(conn, later, tz=new_york).summary()["today"]["dictations"] == 0
+    assert store_at(conn, now, tz=zone).summary()["today"]["dictations"] == 1
+    tomorrow = store_at(conn, now + 86_400_000, tz=zone).summary()
+    assert tomorrow["today"]["dictations"] == 0
+    assert tomorrow["by_day"][-2]["dictations"] == 1
 
 
 def test_without_a_zone_the_machines_zone_is_used(conn):
@@ -502,6 +502,8 @@ async def test_stats_summary_is_a_method_of_the_brain(conn):
         "time_saved_seconds",
         "active_days",
         "longest_streak_days",
+        "estimated_words",
+        "estimated_dictations",
     }
     assert summary["today"]["dictations"] == 1
     assert summary["today"]["words"] == 4
@@ -511,10 +513,45 @@ async def test_stats_summary_is_a_method_of_the_brain(conn):
     assert summary["speed_wpm"] == pytest.approx(120.0)
 
 
-async def test_stats_summary_only_sees_what_the_history_keeps(conn):
+async def test_stats_summary_survives_startup_history_retention(conn):
     # Retention is 30 days by default: the Brain prunes older rows when it starts.
     say(conn, NOW - 40 * 86_400_000, "老的一句話")
     say(conn, NOW - 1 * 86_400_000, "新的")
     summary = await brain_with(conn, NOW, tz=TPE).call("stats.summary", {})
-    assert summary["all"]["dictations"] == 1
-    assert summary["all"]["words"] == 2
+    assert summary["all"]["dictations"] == 2
+    assert summary["all"]["words"] == 7
+
+
+@pytest.mark.parametrize("action", ["delete", "clear", "prune"])
+def test_history_removal_preserves_every_home_statistic(conn, action):
+    first = say(conn, NOW - 86_400_000, "你好", audio=2, stt_ms=300, llm_ms=200)
+    say(conn, NOW, "hello world", audio=1, stt_ms=100, llm_ms=100)
+    before = store_at(conn, NOW).summary()
+    history = HistoryStore(conn)
+    if action == "delete":
+        assert history.delete(first)
+    elif action == "clear":
+        assert history.clear() == 2
+    else:
+        assert history.prune(NOW) == 1
+    assert store_at(conn, NOW).summary() == before
+
+
+def test_a_failed_aggregate_write_rolls_back_the_history_row_too(conn):
+    conn.execute("CREATE TRIGGER reject_stats BEFORE INSERT ON dictation_daily BEGIN SELECT RAISE(ABORT, 'test'); END")
+    with pytest.raises(sqlite3.IntegrityError):
+        say(conn, NOW, "hello")
+    assert HistoryStore(conn).list() == []
+    assert store_at(conn, NOW).summary()["all"]["dictations"] == 0
+
+
+async def test_a_finalized_dictation_increments_lasting_stats_once_and_clear_does_not_reset_them(conn):
+    router = brain_with(conn, NOW, tz=TPE)
+    result = await router.call("brain.finalize_dictation", {"raw_text": "你好世界", "audio_seconds": 1, "stt_ms": 200})
+    assert result["id"] is not None
+    before = await router.call("stats.summary", {})
+    assert before["today"] == period(1, 4, 1.0)
+    assert before["time_saved_seconds"] == pytest.approx(4.8)
+    await router.call("history.clear", {})
+    assert (await router.call("history.list", {}))["items"] == []
+    assert await router.call("stats.summary", {}) == before

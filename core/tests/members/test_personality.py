@@ -38,7 +38,7 @@ def test_v18_members_migrate_with_empty_personality_and_keep_existing_data(tmp_p
         conn.close()
     conn = db.connect(path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.LATEST_VERSION
         store = MemberStore(conn)
         migrated = store.member(original_id)
         assert migrated.personality == "" and migrated.instructions == "Teach N1."

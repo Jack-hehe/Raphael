@@ -670,6 +670,7 @@ export const en = {
   "settings.keyTaken": "This shortcut is already used for {p0}",
   "agent.more": "All",
   "home.activeDays": "{p0} active days",
+  "home.estimated": "Includes approximately {p0} words estimated from usage records after dictation history was removed.",
   "home.streak": "{p0}-day streak",
   "home.longest": "Longest streak: {p0} days",
   "home.less": "Less",
