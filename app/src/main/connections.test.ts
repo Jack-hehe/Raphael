@@ -235,8 +235,8 @@ describe("the dialog of a connected service", () => {
     expect(installedPage("ab12", { toolsKind: "read" })).toContain('aria-label="読み取り専用のツールすべて"');
   });
 
-  test("「試試看」 is the primary button, for a service of the store that has things to say", () => {
-    expect(dialog(installedPage("ab12"))).toMatch(/<button type="button" class="btn pri" data-conn="try" data-id="ab12" data-k="cs-try">試試看<\/button>/);
+  test("「Try it」 is the primary button, in English in every language, for a service of the store that has things to say", () => {
+    expect(dialog(installedPage("ab12"))).toMatch(/<button type="button" class="btn pri" data-conn="try" data-id="ab12" data-k="cs-try">Try it<\/button>/);
     expect(examplePrompt(CATALOG[0])).toBe("跟Notion說一");
     setLocale("en");
     expect(examplePrompt(CATALOG[0])).toBe("Tell Notion one");

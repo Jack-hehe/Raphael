@@ -764,7 +764,7 @@ export const zhTW = {
   "conn.form.willStore": "連接時存進認證管理員",
   "conn.form.trustTitle": "只接你信任的程式。",
   "conn.form.trustBody": "它拿得到你給它的密碼，也能在電腦上執行；工具的說明是它自己寫的，不一定可靠。",
-  "conn.tryIt": "試試看",
+  "conn.tryIt": "Try it",
   // Raphael's memory (memory-view.ts) and the shell's refusals of its params
   "mem.title": "記憶",
   "mem.empty": "尚無記憶",

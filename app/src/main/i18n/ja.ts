@@ -765,7 +765,7 @@ export const ja = {
   "conn.form.willStore": "接続時に資格情報マネージャーへ保存",
   "conn.form.trustTitle": "信頼できるプログラムだけを接続してください。",
   "conn.form.trustBody": "渡したパスワードを使い、パソコン上で動作できます。ツールの説明はサーバー自身が書いたもので、正しいとは限りません。",
-  "conn.tryIt": "試してみる",
+  "conn.tryIt": "Try it",
   // Raphael's memory (memory-view.ts) and the shell's refusals of its params
   "mem.title": "記憶",
   "mem.empty": "まだありません",
