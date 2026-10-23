@@ -5,6 +5,12 @@ final version of a self-correction, adds punctuation, paragraphs and numbered li
 tone for the app the text goes to. Whatever goes wrong while it runs, the user gets the raw text:
 `clean` lets nothing out but a cancellation.
 
+A dictation may be as long as the user speaks. One that is longer than CLEANUP_CHUNK_CHARS is cut
+at the ends of its sentences into pieces (`split_for_cleanup`), which are cleaned side by side and
+joined again in order, each followed by the spaces or line breaks it was cut at (`join_parts`), so
+no reply has to be longer than a model can write and no paragraph runs into the next. A piece whose
+cleanup fails keeps its raw text, and the others stay cleaned.
+
 Nothing here logs the dictated text, the model's reply, the dictionary or a key. A failure is
 logged by its kind and status (an OpenRouterError) or by the name of its type (anything else),
 never with its message, its cause or a traceback: those could hold anything, the text of the key
@@ -40,14 +46,104 @@ CLEANUP_SCHEMA = {
 
 def timeout_for(audio_seconds: float) -> float:
     """Seconds to wait for the cleanup of `audio_seconds` of speech: 10, plus 1 for every 3 of
-    audio, and 90 at most.
+    audio, with no ceiling.
 
-    Every dictation is meant to be cleaned, however long: the limit is only
-    there for a model that hangs. The reply grows with what was said, and a slow provider writes
-    a few dozen tokens a second, so a long dictation needs many seconds; a tight limit (3 s, plus 1
-    for every 20 s of audio) would paste long dictations raw. dictation.stop leaves room for this in
-    the shell's wait (core_process.rs)."""
-    return min(90.0, 10.0 + audio_seconds / 3.0)
+    Every dictation is meant to be cleaned, however long: the limit is only there for a model that
+    hangs. The reply grows with what was said, and a slow provider writes a few dozen tokens a
+    second, so a long dictation needs many seconds; a tight limit (3 s, plus 1 for every 20 s of
+    audio) would paste long dictations raw, and so would a ceiling (it was 90 s, which a dictation
+    of a few minutes outgrows). dictation.stop leaves room for this in the shell's wait, which
+    grows with the recording the same way (core_process.rs `dictation_stop_timeout`)."""
+    return 10.0 + audio_seconds / 3.0
+
+
+# The longest piece of a dictation that one cleanup call is given; a longer dictation is cut into
+# pieces of at most this many characters, which are cleaned side by side and joined again. A
+# reply may be 1.5 times what it cleans and 20 characters more (`reply_length_limit`), and the call
+# allows twice the characters in tokens (`max_tokens_for`): 3064 tokens for 1500 characters, where
+# a character of Chinese is about one token and one of English a quarter of one. That is inside
+# what any model the user may choose writes in one reply (many of OpenRouter's stop at 4096 or 8192
+# tokens; gpt-6-luna and the fallbacks write 65,536 to 128,000), so no reply is cut off for its
+# length; the pieces are also cleaned side by side, so an hour of speech does not wait for one
+# reply of tens of thousands of tokens. A piece is still long enough for the model to see what it
+# is about: five minutes of Chinese, or ten of English. A dictation up to that length is one piece,
+# cleaned in one call as it always was.
+CLEANUP_CHUNK_CHARS = 1500
+# How many pieces of one dictation are cleaned at a time: an hour of speech is a dozen or more, and
+# OpenRouter should not get them all at once from one user.
+CLEANUP_CONCURRENCY = 4
+
+# Where a dictation may be cut, best first: after the end of a sentence (and a closing quote or
+# bracket), after a clause, at a space. A piece that none of them cuts short enough is cut at the
+# limit itself. Whatever follows a cut (the spaces after a full stop) stays with the piece before.
+_CUTS = (
+    re.compile(r"(?:[。！？!?…\n]+|\.(?=\s))[」』）)\"'”’]*\s*"),
+    re.compile(r"[，、,;；：:]\s*"),
+    re.compile(r"\s+"),
+)
+
+
+def _cut_after(text: str, pattern: re.Pattern[str]) -> list[str]:
+    """`text` cut after each match of `pattern`; nothing is lost."""
+    parts: list[str] = []
+    start = 0
+    for match in pattern.finditer(text):
+        if match.end() > start:
+            parts.append(text[start : match.end()])
+            start = match.end()
+    if start < len(text):
+        parts.append(text[start:])
+    return parts
+
+
+def _pieces(text: str, limit: int, level: int = 0) -> list[str]:
+    """`text` as pieces of at most `limit` characters, cut at the best place there is (`_CUTS`)."""
+    if len(text) <= limit:
+        return [text]
+    if level == len(_CUTS):
+        return [text[start : start + limit] for start in range(0, len(text), limit)]
+    pieces: list[str] = []
+    for part in _cut_after(text, _CUTS[level]):
+        pieces += _pieces(part, limit, level + 1)
+    return pieces
+
+
+def split_for_cleanup(text: str, limit: int = CLEANUP_CHUNK_CHARS) -> list[str]:
+    """`text` as the pieces the cleanup is given, in order: sentences put together into pieces of
+    at most `limit` characters each (see CLEANUP_CHUNK_CHARS), besides the spaces and line breaks
+    a piece ends with. A text within the limit is one piece, itself.
+
+    Nothing is lost: joined, the pieces are `text` again. What a piece was cut at (the space after
+    a full stop, the break between two paragraphs) stays at its end, so that the pieces can be
+    joined as they were after they are cleaned (`join_parts`). No piece starts with a space or is
+    nothing but spaces."""
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for piece in _pieces(text, limit):
+        if current and len(current) + len(piece) > limit:
+            chunks.append(current)
+            current = ""
+        current += piece
+    chunks.append(current)
+    pieces: list[str] = []
+    lead = ""  # the spaces the text starts with, until its first words
+    for chunk in chunks:
+        words = chunk.lstrip()
+        space = chunk[: len(chunk) - len(words)]
+        if pieces:
+            pieces[-1] += space  # spaces at the start of a piece end the one before
+        else:
+            lead += space
+        if words:
+            pieces.append(words if pieces else lead + words)
+    return pieces or [text]
+
+
+def separator_after(piece: str) -> str:
+    """The spaces and line breaks `piece` ends with: what it was cut at."""
+    return piece[len(piece.rstrip()) :]
 
 
 def build_user_message(raw: str) -> str:
@@ -332,14 +428,54 @@ def build_system_prompt(
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], _prompt_template())
 
 
+@dataclass(frozen=True)
+class CleanedPart:
+    """One piece of a dictation that was cleaned in pieces."""
+
+    text: str  # the piece as the model cleaned it, or its raw text when its call fell back
+    cleaned: bool
+    # The spaces or line breaks that followed the piece in the dictation, where it was cut: the
+    # joined text keeps them (`join_parts`). Empty after the last piece.
+    after: str = ""
+
+
+def join_parts(parts: Sequence[CleanedPart]) -> str:
+    """The parts of a dictation as one text: each followed by what it was cut at, so that a
+    paragraph break, or the space between two sentences, is where it was."""
+    return "".join(part.text + part.after for part in parts).strip()
+
+
 @dataclass
 class CleanupResult:
     text: str  # what to paste: the cleaned text, or the raw text when cleanup fell back
-    cleaned: bool
-    fallback_reason: str | None  # None when cleaned, else why the raw text is used
+    cleaned: bool  # some or all of it was cleaned
+    # None when all of it was cleaned, else why the raw text is used (for all of it, or, when
+    # `cleaned`, for the pieces whose cleanup fell back: the reason of the first of them).
+    fallback_reason: str | None
     model: str | None  # the model that answered; None when none did
-    cost_usd: float  # always a number the history can store: 0 or more, and finite
+    cost_usd: float  # always a number the history can store: 0 or more, and finite; all calls
     llm_ms: int  # how long the model was waited for; 0 when it was not asked
+    # A dictation cleaned in pieces, when some were: each piece, in order (`text` is them joined).
+    # Empty when it was one piece, or when nothing of it was cleaned.
+    parts: tuple[CleanedPart, ...] = ()
+
+
+def _bodies(chunks: Sequence[tuple[str, str]]) -> list[tuple[str, str, str]]:
+    """The pieces of a long dictation as (raw, heard, after): the raw and heard text without the
+    spaces around them, which is what the model is given and what a fallback keeps, and what the
+    piece was cut at (`separator_after` of the raw text), which the join puts back. A piece with
+    nothing to clean is left out; when it is only spaces, they go to the piece before."""
+    bodies: list[tuple[str, str, str]] = []
+    for raw, heard in chunks:
+        if raw.strip() and heard.strip():
+            bodies.append((raw.strip(), heard.strip(), separator_after(raw)))
+        elif bodies and not raw.strip():
+            last_raw, last_heard, after = bodies[-1]
+            bodies[-1] = (last_raw, last_heard, after + raw)
+    if bodies:  # the end of the dictation is the end of the text, not a separator
+        last_raw, last_heard, _ = bodies[-1]
+        bodies[-1] = (last_raw, last_heard, "")
+    return bodies
 
 
 def _fallback(
@@ -408,6 +544,7 @@ class CleanupService:
         audio_seconds: float,
         heard: str | None = None,
         target_app: str | None = None,
+        chunks: Sequence[tuple[str, str]] | None = None,
     ) -> CleanupResult:
         """The cleaned text, or the raw text with the reason why it is all there is.
 
@@ -415,6 +552,16 @@ class CleanupService:
         speech-to-text result before OpenCC, so that the model is not fed conversion errors such
         as 隻要 for 只要; it is `raw` unless given. `target_app` is the process name of the window
         the text goes to, named in the system prompt so that the tone can follow it.
+
+        A long dictation comes as `chunks`: the (raw, heard) of each of its pieces, in order, as
+        `split_for_cleanup` cut it, each with what it was cut at at its end. Each piece is a call
+        of its own, CLEANUP_CONCURRENCY at a time, judged and paid for by itself; the model is
+        given it without the spaces around it, and the pieces are joined again in order, each
+        followed by what it was cut at (`join_parts`).
+        A piece whose call falls back keeps its raw text, and the others stay cleaned: the result
+        is then `cleaned`, its `parts` say which piece is which, and `fallback_reason` is the
+        reason of the first piece that fell back. If none of them was cleaned, the result is the
+        raw text, as for a dictation of one piece. With no `chunks`, or one, there is one call.
 
         The first of these that applies decides the reason: blank text is "empty", no key is
         "no_key", the monthly limit reached is "budget". Then the model is asked, and the raw text
@@ -429,16 +576,22 @@ class CleanupService:
         """
         if not raw.strip():
             return _fallback(raw, "empty")
+        pieces = _bodies(chunks or ())
         try:
             return await self._clean(
-                raw, raw if heard is None else heard, audio_seconds, target_app
+                raw, raw if heard is None else heard, audio_seconds, target_app, pieces
             )
         except Exception as exc:
             # Whatever broke, speech was understood: it is better pasted as it is than lost.
             return _unexpected(raw, exc)
 
     async def _clean(
-        self, raw: str, heard: str, audio_seconds: float, target_app: str | None
+        self,
+        raw: str,
+        heard: str,
+        audio_seconds: float,
+        target_app: str | None,
+        pieces: Sequence[tuple[str, str, str]],
     ) -> CleanupResult:
         if not self._has_key():
             return _fallback(raw, "no_key")
@@ -451,7 +604,65 @@ class CleanupService:
             target_app,
             languages=self._settings.get("languages"),
         )
-        timeout = self._timeout_fn(audio_seconds)
+        if len(pieces) <= 1:
+            return await self._clean_one(raw, heard, system, self._timeout_fn(audio_seconds))
+        return await self._clean_pieces(raw, pieces, system, audio_seconds)
+
+    async def _clean_pieces(
+        self,
+        raw: str,
+        pieces: Sequence[tuple[str, str, str]],
+        system: str,
+        audio_seconds: float,
+    ) -> CleanupResult:
+        """A long dictation, piece by piece (see `clean`). Each piece is waited for as long as its
+        share of the speech would be on its own."""
+        total = sum(len(heard) for _, heard, _ in pieces)
+        gate = asyncio.Semaphore(CLEANUP_CONCURRENCY)
+
+        async def one(piece_raw: str, piece_heard: str) -> CleanupResult:
+            async with gate:
+                seconds = audio_seconds * len(piece_heard) / total
+                try:
+                    return await self._clean_one(
+                        piece_raw, piece_heard, system, self._timeout_fn(seconds)
+                    )
+                except Exception as exc:  # one piece that breaks leaves the others cleaned
+                    return _unexpected(piece_raw, exc)
+
+        started = time.perf_counter()
+        results = await asyncio.gather(*(one(r, h) for r, h, _ in pieces))
+        llm_ms = _elapsed_ms(started)
+        cost_usd = _usable_cost(sum(result.cost_usd for result in results))
+        models = [result.model for result in results if result.model is not None]
+        failed = [result.fallback_reason for result in results if not result.cleaned]
+        logger.info(
+            "A long dictation was cleaned in %d pieces; %d fell back", len(results), len(failed)
+        )
+        if len(failed) == len(results):
+            return _fallback(
+                raw,
+                failed[0] or "error:unexpected",
+                model=models[0] if models else None,
+                cost_usd=cost_usd,
+                llm_ms=llm_ms,
+            )
+        parts = tuple(
+            CleanedPart(result.text, result.cleaned, after)
+            for result, (_, _, after) in zip(results, pieces, strict=True)
+        )
+        return CleanupResult(
+            text=join_parts(parts),
+            cleaned=True,
+            fallback_reason=failed[0] if failed else None,
+            model=next(result.model for result in results if result.cleaned),
+            cost_usd=cost_usd,
+            llm_ms=llm_ms,
+            parts=parts,
+        )
+
+    async def _clean_one(self, raw: str, heard: str, system: str, timeout: float) -> CleanupResult:
+        """One call to the model: the cleanup of `heard`, or `raw` with the reason."""
         started = time.perf_counter()
         try:
             completion = await asyncio.wait_for(

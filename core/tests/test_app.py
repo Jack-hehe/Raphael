@@ -126,12 +126,14 @@ class FakeWav:
 
 
 class FakeSegmenter:
-    """One segment per chunk. `speech_seconds` starts again at the first chunk after a flush."""
+    """One segment per chunk. `speech_seconds` starts again at the first chunk after a flush.
+    Every chunk is speech, so `silence_seconds` stays at 0 unless a test sets it."""
 
     def __init__(self, kit, path, **kwargs):
         self.path = path
         self.kwargs = kwargs
         self.speech_seconds = 0.0
+        self.silence_seconds = 0.0
         self.flushes = 0
         self._flushed = False
         self.calls_from: set[int] = set()
@@ -1087,8 +1089,6 @@ EXPECTED_METHODS = {
     "dictionary.add",
     "dictionary.import",
     "dictionary.delete",
-    "dictionary.auto_add",
-    "dictionary.dismiss",
     "settings.get",
     "settings.set",
     "secrets.status",
@@ -1096,7 +1096,6 @@ EXPECTED_METHODS = {
     "secrets.clear_openrouter_key",
     "status.get",
     "status.check_openrouter",
-    "integrations.list",
     "integrations.catalog",
     "integrations.connect",
     "integrations.connect_cancel",
@@ -1104,10 +1103,10 @@ EXPECTED_METHODS = {
     "integrations.set_enabled",
     "integrations.disconnect",
     "integrations.refresh",
-    "integrations.tools",
     "integrations.set_tool_enabled",
     "integrations.set_tools_enabled",
     "integrations.audit",
+    "toolsets.list",
 }
 
 
@@ -1228,7 +1227,7 @@ async def test_the_plugins_are_there_and_keep_their_secrets_in_memory_with_the_f
     make_app, memory_keyring, tmp_path
 ):
     app = make_app()
-    assert await app.call("integrations.list") == {"servers": []}
+    assert await app.call("toolsets.list") == {"groups": []}
     added = await app.call(
         "integrations.add",
         {
@@ -1729,7 +1728,22 @@ async def test_a_stop_that_ends_while_a_new_start_makes_way_does_not_reopen_the_
     assert kit.mics[-1].open and sum(mic.open for mic in kit.mics) == 1  # the meter is back
 
 
+async def test_a_silent_dictation_is_told_of_through_the_whole_app(make_app, notes):
+    kit = make_kit()
+    app = make_app(kit)
+    listen(app, notes)
+    await dictate(app)  # the first dictation has the detector built
+    assert notes.methods("dictation.silence") == []  # it heard speech
+    kit.segmenters[-1].silence_seconds = dictation.SILENCE_STOP_SECONDS
+    await app.call("dictation.start", {"session_id": "s2"})
+    await wait_until(lambda: notes.methods("dictation.silence"))
+    assert notes.methods("dictation.silence") == [{"session_id": "s2"}]
+    result = await app.call("dictation.stop", {"session_id": "s2", "target_app": None})
+    assert result["text"] == WORDS + WORDS  # the stop the app makes delivers what was heard
+
+
 async def test_the_meter_comes_back_after_a_session_nobody_stopped(make_app, monkeypatch):
+    monkeypatch.setattr(dictation, "SILENCE_STOP_SECONDS", 0.0)  # silent at once
     monkeypatch.setattr(dictation, "LOST_SESSION_SECONDS", 0.3)
     kit = make_kit()
     app = make_app(kit)
@@ -1760,7 +1774,7 @@ async def test_a_dictation_goes_through_the_whole_app(make_app, notes):
     app = make_app(kit)
     listen(app, notes)
     await app.call("dictionary.add", {"word": "拉斐爾"})
-    await app.call("settings.set", {"key": "language", "value": "zh"})
+    await app.call("settings.set", {"key": "languages", "value": ["zh-TW"]})
     result = await dictate(app)
     assert result["text"] == WORDS + WORDS  # joined without a space: CJK on both sides
     assert result["cleaned"] is True and result["fallback_reason"] is None
@@ -1937,6 +1951,7 @@ ASSISTANT_METHODS = {
     "agent.confirm",
     "agent.cancel",
     "agent.history.list",
+    "agent.history.search",
     "agent.history.clear",
 }
 
@@ -2070,7 +2085,7 @@ async def test_closing_the_app_ends_the_assistants_requests_before_closing_the_c
 
 # --- the background worker --------------------------------------------------------------------
 
-WORKER_METHODS = {"worker.list", "worker.get", "worker.cancel"}
+WORKER_METHODS = {"worker.cancel", "worker.rerun", "worker.announce_pending"}
 
 
 async def test_the_workers_methods_are_on_the_app_from_the_start(make_app):
@@ -2100,10 +2115,11 @@ async def test_a_task_for_the_background_goes_through_the_whole_app_with_the_fak
     assert (turn["route"], turn["prefix"], turn["text"], turn["status"]) == (
         "delegate", "Notice", "The scripted task saw 1 results.", "done",
     )  # fmt: skip
-    task = (await app.call("worker.get", {"id": report["task_id"]}))["task"]
-    assert [(step["kind"], step["tool"], step["tier"]) for step in task["steps"]] == [
+    # The conversation shows the task with the turn, and the worker's steps.
+    assert (turn["task"]["id"], turn["task"]["state"]) == (report["task_id"], "done")
+    assert [(step["kind"], step["tool"], step["server"]) for step in turn["steps"]] == [
         ("model", None, None),
-        ("tool", "local_time", "T0"),
+        ("tool", "local_time", "Raphael"),
         ("model", None, None),
     ]
     audit = (await app.call("integrations.audit", {}))["entries"]
@@ -2112,7 +2128,7 @@ async def test_a_task_for_the_background_goes_through_the_whole_app_with_the_fak
     ]
     assert (await app.call("status.get"))["spend"]["month_usd"] == 0
     assert await app.call("agent.history.clear", {}) == {"deleted": 1}
-    assert (await app.call("worker.list", {}))["tasks"] == []  # the tasks go with the history
+    assert app.background.task(report["task_id"]) is None  # the tasks go with the history
 
 
 async def test_closing_the_app_ends_the_background_tasks_and_the_worker_before_the_client(make_app):
@@ -2482,15 +2498,24 @@ CLOUD_KEY = "sk-or-v1-test"
 async def openrouter_mock():
     """`openrouter_mock(app, transcription)` sends the app's OpenRouter requests to a mock.
 
-    `transcription(request)` answers POST /audio/transcriptions; every cleanup call fails with a
-    500, so the cleanup falls back to the text as heard. `requests` keeps the bodies, by path.
+    `transcription(request)` answers POST /audio/transcriptions; GET /models is OpenRouter's
+    model list as recorded (tests/brain/fixtures/openrouter_catalog.json); every cleanup call fails
+    with a 500, so the cleanup falls back to the text as heard. `requests` keeps the bodies, by
+    path.
     """
     opened: list[httpx.AsyncClient] = []
+    listed = json.loads(
+        (Path(__file__).parent / "brain" / "fixtures" / "openrouter_catalog.json").read_text(
+            encoding="utf-8"
+        )
+    )
 
     def install(app, transcription):
         requests: dict[str, list] = {"transcriptions": [], "chat": []}
 
         def handler(request):
+            if request.method == "GET" and request.url.path.endswith("/models"):
+                return httpx.Response(200, json=listed)
             body = json.loads(request.content) if request.content else None
             if request.url.path.endswith("/audio/transcriptions"):
                 requests["transcriptions"].append(body)
@@ -2515,12 +2540,20 @@ def cloud_says(text="cloud words", cost=0.0001):
     )
 
 
+async def choose_from_the_list(app, key, model):
+    """Choose `model` for `key` as the settings page does: from OpenRouter's list of models, which
+    `models.catalog` reads first."""
+    catalog = await app.call("models.catalog")
+    assert catalog["source"] == "live"
+    await app.call("settings.set", {"key": key, "value": model})
+
+
 async def test_speech_to_text_is_in_the_cloud_by_default(make_app, openrouter_mock):
     kit = make_kit()
     app = make_app(kit, fake_llm=False)
     requests = openrouter_mock(app, cloud_says())
-    await app.call("settings.set", {"key": "language", "value": "zh"})
-    await app.call("settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"})
+    await app.call("settings.set", {"key": "languages", "value": ["zh-TW"]})
+    await choose_from_the_list(app, "stt_cloud_model", "openai/gpt-transcribe")
     result = await dictate(app)
     assert result["text"] == "cloud words cloud words"
     assert kit.transcriptions == []  # the local engine heard nothing
@@ -2544,7 +2577,7 @@ async def test_several_languages_go_to_gpt_transcribe_as_the_ones_to_detect_amon
     requests = openrouter_mock(app, cloud_says())
     languages = ["zh-HK", "en-GB", "ja-JP"]
     await app.call("settings.set", {"key": "languages", "value": languages})
-    await app.call("settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"})
+    await choose_from_the_list(app, "stt_cloud_model", "openai/gpt-transcribe")
     await dictate(app)
     body = requests["transcriptions"][0]
     assert body["provider"]["options"]["openai"]["languages"] == ["zh", "en", "ja"]

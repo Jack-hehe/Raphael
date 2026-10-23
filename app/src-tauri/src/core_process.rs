@@ -46,9 +46,10 @@ const PROTOCOL_VERSION: u64 = 1;
 /// How long a call to `method` may take before it fails with `TIMEOUT`.
 pub fn timeout_for(method: &str) -> Duration {
     let seconds = match method {
-        // The last chunk of speech-to-text, then the cleanup request to the LLM, which may take
-        // up to 90 s for a long dictation (cleanup.timeout_for). The first dictation after launch
-        // also waits for the speech engine to load (about 31 s).
+        // The last stretch of speech-to-text (the rest was transcribed while the recording went
+        // on), then the cleanup request to the LLM. The first dictation after launch also waits
+        // for the speech engine to load (about 31 s). The controller gives a long recording more
+        // ([`dictation_stop_timeout`]): its cleanup takes longer.
         "dictation.stop" => 150,
         // The router and then the model that words the answer, and perhaps a web search or the
         // weather in between. Nobody waits for it longer than that: Esc stops it earlier.
@@ -63,10 +64,19 @@ pub fn timeout_for(method: &str) -> Duration {
         "integrations.connect" => 960,
         // Downloads speech models.
         "models.ensure" | "models.local_use" => 3600,
-        "secrets.set_openrouter_key" | "status.check_openrouter" => 15,
         _ => 15,
     };
     Duration::from_secs(seconds)
+}
+
+/// How long the `dictation.stop` of a recording that lasted `recorded` may take: the method's
+/// usual time, which covers a recording of a few minutes, and a second more for every 3 s it
+/// lasted. A recording has no limit, and its speech is transcribed while it goes on, so at the stop
+/// only the last stretch is left to transcribe whatever its length; but the cleanup of the whole
+/// text is given 10 s and a second for every 3 s of speech (`cleanup.timeout_for`, with no
+/// ceiling), and that wait has to fit in this one.
+pub fn dictation_stop_timeout(recorded: Duration) -> Duration {
+    timeout_for("dictation.stop") + recorded / 3
 }
 
 /// What to run to start the core.
@@ -648,6 +658,15 @@ impl CoreApi for CoreProcess {
             .call(method, params, timeout_for(method))
             .await
     }
+
+    async fn call_within(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, RpcError> {
+        self.shared.rpc.call(method, params, timeout).await
+    }
 }
 
 #[cfg(test)]
@@ -820,7 +839,6 @@ mod tests {
             "history.list",
             "agent.cancel",
             "agent.history.list",
-            "integrations.list",
             "integrations.add",
             "integrations.connect_cancel",
             "integrations.catalog",
@@ -828,6 +846,17 @@ mod tests {
         ] {
             assert_eq!(timeout_for(method), Duration::from_secs(15), "{method}");
         }
+    }
+
+    #[test]
+    fn the_stop_of_a_long_recording_is_given_time_for_its_cleanup() {
+        let stop = |seconds| dictation_stop_timeout(Duration::from_secs(seconds));
+        // A short dictation: the method's usual time.
+        assert_eq!(stop(0), Duration::from_secs(150));
+        assert_eq!(stop(30), Duration::from_secs(160));
+        // An hour: the cleanup alone is given 10 s + 3600 / 3 (cleanup.timeout_for), which fits.
+        assert_eq!(stop(3600), Duration::from_secs(1350));
+        assert!(stop(3600) > Duration::from_secs(10 + 3600 / 3));
     }
 
     // ---- how often the core may be restarted ----

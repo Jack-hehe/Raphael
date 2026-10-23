@@ -8,7 +8,50 @@ import threading
 import pytest
 
 from raphael_core.agent.commands import NONE
+from raphael_core.background.tasks import Refused
 from raphael_core.brain.openrouter import Completion, Decision, ToolCall, ToolPlan
+
+
+class FakeBackground:
+    """A background worker that notes how it is called and carries nothing out. Every assistant has
+    a worker (the app always gives it one); this is the tests'. `refuse` makes `submit` refuse with
+    that phrase's kind, `fail` makes it raise, and `briefs` is what it tells the assistant."""
+
+    def __init__(self):
+        self.submitted = []
+        self.attached = []
+        self.cleared = 0
+        self.refuse = None
+        self.fail = None
+        self.briefs = []
+
+    def submit(self, *, session_id, text, language, model):
+        if self.refuse:
+            raise Refused(self.refuse)
+        if self.fail:
+            raise self.fail
+        self.submitted.append((session_id, text, language, model))
+        return len(self.submitted)
+
+    def brief_for_assistant(self, limit=3):
+        return list(self.briefs)
+
+    def attach_turn(self, task_id, turn_id):
+        self.attached.append((task_id, turn_id))
+
+    def clear(self):
+        self.cleared += 1
+
+    def tasks_for_turns(self, turn_ids):
+        # Each task as the history shows it with the turn that handed it over.
+        brief = {"id": 0, "state": "running", "started_at_ms": 5}
+        step = {"kind": "tool", "tool": "look", "server": "Notes", "outcome": "ok", "ms": 12,
+                "reason": None, "at_ms": 6}  # fmt: skip
+        return {
+            turn_id: ({**brief, "id": task_id}, [step])
+            for task_id, turn_id in self.attached
+            if turn_id in turn_ids
+        }
 
 
 class FakeActions:

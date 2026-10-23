@@ -8,6 +8,7 @@
 // This file only draws and counts. The picker keeps the open tab and the question being asked,
 // and the settings page does the downloading and holds the progress of it.
 
+import { GB, MB } from "./format";
 import { t } from "./i18n";
 import type { LocalModel } from "./types";
 import { CHECK, btn, esc, ico, tabs } from "./ui";
@@ -37,9 +38,6 @@ export type LocalState =
   | { kind: "ready" }
   | { kind: "fallback" }
   | { kind: "active" };
-
-const MB = 1_000_000;
-const GB = 1_000_000_000;
 
 /** A download's size as it is announced: `163 MB`, `1.8 GB`. */
 export function formatSize(bytes: number): string {

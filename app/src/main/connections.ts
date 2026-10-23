@@ -1,11 +1,18 @@
-// The 「連接」 tab of the settings: the services Raphael can use, in two views. 「已安裝」 is one row for
-// each connected service (a switch for the whole service, and a button that opens its tools, each with
-// a switch of its own); 「商店」 is the services that can be added with one login in the browser, as cards
-// in two columns, each opening a page that says what it is for. A server of the user's own is added
-// from the 「新增」 menu. `connectionsHTML` draws the tab from a snapshot (pure, so the rules of the tab
-// can be tested without a browser); `createConnections` holds the state and does what the buttons say,
-// through the core. Nothing secret is kept here: the login happens in the browser and its tokens stay in
-// the core's vault; the values of a variable or a header are typed, sent to the vault once and dropped;
+// The 「連接」 tab of the settings, drawn like Codex's page of plugins: the services Raphael can use, in
+// two views under one bar, 「已安裝」 and 「商店」, with a search. 「已安裝」 is one rounded list, a row for
+// each connected service: its mark, its name, a line about it, a switch for the whole service and a
+// chevron. A click on a row opens the service's dialog over the settings: its switch, what it is,
+// how many tools it has, a row for the tools that change something and one for those that only read
+// (each opening, in the dialog, the tools with a switch each and one for the whole list), 「試試看」,
+// and at the foot what is done less often (sign in again, read the tools again, disconnect) and the
+// latest actions, folded. 「商店」 is the services that can be added with one login in the browser,
+// as cards in two columns, each opening a page that says what it is for. A server of the user's own
+// is added from the 「新增」 menu beside the tab's name.
+//
+// `connectionsHTML` draws the tab from a snapshot (pure, so the rules of the tab can be tested
+// without a browser); `createConnections` holds the state and does what the buttons say, through the
+// core. Nothing secret is kept here: the login happens in the browser and its tokens stay in the
+// core's vault; the values of a variable or a header are typed, sent to the vault once and dropped;
 // only their names are ever shown.
 //
 // A tool is on until the user turns it off, and one that is on runs without asking. There are no
@@ -17,7 +24,7 @@ import { getLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 import { SERVICE_ICONS, type ServiceIconId, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import type { AuditEntry, ConnectionGroup, ConnectionTool, MainEvent, NewConnection, StoreService, Words } from "./types";
-import { type Choice, btn, copyText, esc, fieldHTML, ico, row, st, tabs, tg, toaster } from "./ui";
+import { DISCONNECT_CONFIRM_MS, type Choice, btn, copyText, esc, fieldHTML, ico, iconButton, leave, row, st, tabs, tg, toaster } from "./ui";
 
 /** `t` for a key that is chosen at run time (its placeholders, if any, are none). */
 const tr = t as unknown as (key: MessageKey) => string;
@@ -25,12 +32,12 @@ const tr = t as unknown as (key: MessageKey) => string;
 /** Where a service that is signed in to with a code keeps the list of the apps it has let in. */
 const GRANTS_URL: Record<string, string> = { github: "https://github.com/settings/applications" };
 
-/** How long 「中斷連線」 waits for its second press. */
-const DISCONNECT_CONFIRM_MS = 5000;
-/** How many of the latest actions are shown under the list. */
+/** How many of the latest actions the dialog of a service lists. */
 const AUDIT_SHOWN = 5;
 /** How many of the latest actions are read, to find each service's own among them. */
 const AUDIT_READ = 50;
+/** How long the dialog of a service takes to go (styles.css: the way out of `.cs-scrim`). */
+const DIALOG_OUT_MS = 140;
 
 // ---------- what the tab is drawn from ----------
 
@@ -79,10 +86,12 @@ export interface ConnectionsView {
   tab: Tab;
   /** What was typed in the search box. */
   search: string;
-  /** The page that is open instead of the list: a connected service's tools, or a store entry. */
+  /** What is open: the dialog of a connected service over the list, or the page of a store entry in its place. */
   open: { tab: Tab; id: string } | null;
-  /** Which of the two lists of tools are unfolded on the open service. */
-  unfolded: Record<ToolKind, boolean>;
+  /** In the dialog of a service, the list of tools that is shown in place of its summary. */
+  toolsKind: ToolKind | null;
+  /** The dialog's latest actions are unfolded. */
+  auditOpen: boolean;
   /** The service whose 「中斷連線」 was pressed once. */
   confirmingDisconnect: string | null;
   /** The services a call is under way for. */
@@ -103,7 +112,8 @@ export const emptyConnectionsView = (): ConnectionsView => ({
   tab: "installed",
   search: "",
   open: null,
-  unfolded: { write: false, read: false },
+  toolsKind: null,
+  auditOpen: false,
   confirmingDisconnect: null,
   busy: new Set(),
   login: null,
@@ -167,6 +177,12 @@ function entryOf(g: ConnectionGroup, v: ConnectionsView): StoreService | undefin
 /** The login of a service ran out or was never finished: it asks to sign in again. */
 export const needsLogin = (g: ConnectionGroup): boolean => g.auth !== "none" && g.status === "error" && g.error === "auth";
 
+/** The first thing to say to 拉斐爾 with a service of the store, in the language of the window: what 「試試看」 puts in the composer. */
+export function examplePrompt(s: StoreService | undefined): string | null {
+  if (!s) return null;
+  return (s.examples[getLocale()] ?? s.examples.en ?? [])[0] ?? null;
+}
+
 const isIcon = (id: string | null | undefined): id is ServiceIconId => !!id && (id in SERVICE_ICONS || hasLogo(id as ServiceIconId));
 
 /** The picture of a service: its mark, bare, or a letter. */
@@ -212,59 +228,43 @@ const matches = (query: string, ...texts: string[]): boolean => {
   return !q || texts.some((text) => text.toLowerCase().includes(q));
 };
 
-// ---------- the bar: the two views, the search, the menu that adds ----------
+// ---------- the bar: the two views and the search; the menu that adds, beside the tab's name ----------
+
+/** 「新增 ▾」, the menu beside the tab's name that adds a server of the user's own (settings-view.ts puts it there). */
+export const connectionsAddHTML = (): string =>
+  `<button type="button" class="sel cs-add" aria-haspopup="menu" aria-expanded="false" data-k="conn-add">` +
+  `<span>${esc(t("conn.addMenu"))}</span>${ico("down")}</button>`;
 
 function barHTML(v: ConnectionsView): string {
   const installed = Array.isArray(v.groups) ? v.groups.length : 0;
-  const tab = (id: Tab, label: string, count = 0) => ({ id, label, count, attrs: ` data-conn="tab" data-id="${id}" data-k="conn-tab:${id}"` });
-  const add =
-    `<button type="button" class="sel" aria-haspopup="menu" aria-expanded="false" data-k="conn-add">` +
-    `<span>${esc(t("conn.addMenu"))}</span>${ico("down")}</button>`;
+  const store = Array.isArray(v.catalog) ? v.catalog.length : 0;
+  const tab = (id: Tab, label: string, count: number) => ({ id, label, count, attrs: ` data-conn="tab" data-id="${id}" data-k="conn-tab:${id}"` });
   return (
     `<div class="cs-bar">` +
-    tabs([tab("installed", t("conn.tab.installed"), installed), tab("store", t("conn.tab.store"))], v.tab, { label: t("conn.tabs"), kind: "nav" }) +
-    `<div class="cs-tools">${fieldHTML(t("conn.search"), v.search, { id: "conn-search", icon: "search", label: t("conn.search") })}${add}</div></div>`
+    tabs([tab("installed", t("conn.tab.installed"), installed), tab("store", t("conn.tab.store"), store)], v.tab, { label: t("conn.tabs"), kind: "nav", plain: true }) +
+    `<div class="cs-find">${fieldHTML(t("conn.search"), v.search, { id: "conn-search", icon: "search", label: t("conn.search") })}</div></div>`
   );
 }
 
-// ---------- 已安裝: one row for each service ----------
+// ---------- 已安裝: one list, a row for each service ----------
 
-function installedRow(g: ConnectionGroup, v: ConnectionsView): string {
+/**
+ * A row of the list. The row itself opens the dialog (a click on its chevron, or anywhere but the
+ * switch); its name is a real button for the keyboard; the switch is the whole service's.
+ */
+function itemHTML(g: ConnectionGroup, v: ConnectionsView): string {
   const busy = v.busy.has(g.id) || v.login?.target === g.id;
-  const id = ` data-id="${esc(g.id)}"`;
-  const relogin = needsLogin(g)
-    ? btn(esc(v.login?.target === g.id ? t("conn.loggingIn") : t("conn.relogin")), "sm", ` data-conn="relogin"${id}${busy || v.login ? " disabled" : ""}`)
-    : "";
-  const control =
-    relogin +
-    tg(g.enabled, t("conn.switch", { p0: g.name }), ` data-conn="enable"${id}${busy ? " disabled" : ""}`) +
-    btn(ico("right"), "icon", ` data-conn="open"${id} aria-label="${esc(t("conn.open", { p0: g.name }))}" title="${esc(t("conn.open", { p0: g.name }))}"`);
-  return row(`${esc(g.name)}`, lineOf(g, v), control, { cls: "cs-row" }).replace(
-    `<div class="lbl">`,
-    `<span class="ic">${groupIcon(g, v, "md")}</span><div class="lbl">`,
+  const id = esc(g.id);
+  return (
+    `<div class="cs-item" data-conn="open" data-id="${id}">` +
+    btn(
+      `<span class="ic">${groupIcon(g, v, "md")}</span><span class="tx"><span class="nm">${esc(g.name)}</span><span class="ds">${lineOf(g, v)}</span></span>`,
+      "cs-open",
+      ` data-conn="open" data-id="${id}" data-k="cs-open:${id}" aria-haspopup="dialog" title="${esc(t("conn.open", { p0: g.name }))}"`,
+    ) +
+    tg(g.enabled, t("conn.switch", { p0: g.name }), ` data-conn="enable" data-id="${id}" data-k="cs-enable:${id}"${busy ? " disabled" : ""}`) +
+    `<span class="chev" aria-hidden="true">${ico("right")}</span></div>`
   );
-}
-
-function auditHTML(v: ConnectionsView, server: string): string {
-  const entries = v.audit.filter((e) => e.server === server).slice(0, AUDIT_SHOWN);
-  if (!entries.length) return "";
-  const outcomes: Record<AuditEntry["outcome"], { kind: "ok" | "warn" | "err" | "idle"; key: MessageKey }> = {
-    ok: { kind: "ok", key: "conn.audit.ok" },
-    error: { kind: "err", key: "conn.audit.error" },
-    timeout: { kind: "warn", key: "conn.audit.timeout" },
-    denied: { kind: "idle", key: "conn.audit.denied" },
-    expired: { kind: "idle", key: "conn.audit.expired" },
-    blocked: { kind: "warn", key: "conn.audit.blocked" },
-  };
-  const approvers: Record<AuditEntry["approver"], MessageKey> = { auto: "conn.audit.auto", user: "conn.audit.user", none: "conn.audit.none" };
-  const rows = entries.map((e) => {
-    const when = `${dayLabel(e.at_ms, v.now)} ${formatClock(e.at_ms)}`;
-    const outcome = outcomes[e.outcome] ?? outcomes.error;
-    return row(`${esc(e.server)} / ${esc(e.tool)}`, esc(`${when} · ${tr(approvers[e.approver] ?? approvers.none)}`), st(outcome.kind, tr(outcome.key)), {
-      cls: "conn-audit",
-    });
-  });
-  return `<div class="sgroup cs-audit"><h2>${esc(t("conn.audit.title"))}</h2><div class="slist audit">${rows.join("")}</div><p class="foot">${esc(t("conn.audit.foot"))}</p></div>`;
 }
 
 function installedHTML(v: ConnectionsView): string {
@@ -273,12 +273,10 @@ function installedHTML(v: ConnectionsView): string {
   const shown = v.groups.filter((g) => matches(v.search, g.name, entryOf(g, v) ? words(entryOf(g, v)!.summary) : where(g)));
   if (!v.groups.length) return `<p class="cs-none">${esc(t("conn.emptyInstalled"))}</p>`;
   if (!shown.length) return `<p class="cs-none">${esc(t("conn.noMatch"))}</p>`;
-  return `<div class="slist cs-list">${shown.map((g) => installedRow(g, v)).join("")}</div>`;
+  return `<div class="cs-list" data-stagger="installed">${shown.map((g) => itemHTML(g, v)).join("")}</div>`;
 }
 
-// ---------- the page of a connected service ----------
-
-const backHTML = (): string => `<div class="cs-back">${btn(`${ico("left")}${esc(t("conn.back"))}`, "", ' data-conn="back"')}</div>`;
+// ---------- the dialog of a connected service ----------
 
 /**
  * The name of a tool for the screen: the title its server gives it, else its name made readable (the
@@ -298,66 +296,136 @@ export function toolLabel(tool: ConnectionTool, service = ""): string {
 
 function toolRow(g: ConnectionGroup, tool: ConnectionTool, busy: boolean): string {
   return row(
-    `<span class="tn" title="${esc(tool.name)}">${esc(toolLabel(tool, g.name))}</span>`,
+    `<span class="tool-name" title="${esc(tool.name)}">${esc(toolLabel(tool, g.name))}</span>`,
     esc(tool.description),
-    tg(tool.enabled, t("conn.toolSwitch", { p0: toolLabel(tool, g.name) }), ` data-conn="tool" data-id="${esc(g.id)}" data-tool="${esc(tool.name)}"${busy ? " disabled" : ""}`),
+    tg(
+      tool.enabled,
+      t("conn.toolSwitch", { p0: toolLabel(tool, g.name) }),
+      ` data-conn="tool" data-id="${esc(g.id)}" data-tool="${esc(tool.name)}" data-k="cs-tool:${esc(tool.name)}"${busy ? " disabled" : ""}`,
+    ),
     { cls: "conn-tool" },
   );
 }
 
-function toolGroupHTML(g: ConnectionGroup, kind: ToolKind, v: ConnectionsView): string {
-  const tools = g.tools.filter((tool) => tool.kind === kind);
-  if (!tools.length) return "";
-  const open = v.unfolded[kind];
-  // The switch of the list sits beside the fold button, not in it: a button cannot hold another control.
-  const on = tools.filter((tool) => tool.enabled).length;
-  const state = on === tools.length ? "true" : on === 0 ? "false" : "mixed";
-  const head =
-    `<div class="ghead">` +
-    btn(
-      `<span class="gt">${esc(t(kind === "write" ? "conn.group.write" : "conn.group.read"))}<small>${esc(t("conn.group.count", { p0: tools.length }))}</small></span>${ico(open ? "down" : "right")}`,
-      "ghfold",
-      ` aria-expanded="${open}" data-conn="fold" data-kind="${kind}"`,
-    ) +
-    // a checkbox role, not a switch: only that one has a "mixed" state
-    `<button type="button" class="tg" role="checkbox" aria-checked="${state}" aria-label="${esc(t(kind === "write" ? "conn.groupSwitch.write" : "conn.groupSwitch.read"))}" data-conn="group" data-id="${esc(g.id)}" data-kind="${kind}"${v.busy.has(g.id) ? " disabled" : ""}></button></div>`;
-  return `<div class="slist cs-tools-list">${head}${open ? tools.map((tool) => toolRow(g, tool, v.busy.has(g.id))).join("") : ""}</div>`;
+const kindName = (kind: ToolKind): string => t(kind === "write" ? "conn.group.write" : "conn.group.read");
+
+/** The dialog's close button, the same in both of its views. */
+const closeButton = (): string => iconButton("x", t("common.close"), ' data-conn="close" data-k="cs-close"');
+
+/** The latest actions of one service, folded under a row that says how many there are. */
+function auditHTML(v: ConnectionsView, server: string): string {
+  const entries = v.audit.filter((e) => e.server === server).slice(0, AUDIT_SHOWN);
+  if (!entries.length) return "";
+  const outcomes: Record<AuditEntry["outcome"], { kind: "ok" | "warn" | "err" | "idle"; key: MessageKey }> = {
+    ok: { kind: "ok", key: "conn.audit.ok" },
+    error: { kind: "err", key: "conn.audit.error" },
+    timeout: { kind: "warn", key: "conn.audit.timeout" },
+    denied: { kind: "idle", key: "conn.audit.denied" },
+    expired: { kind: "idle", key: "conn.audit.expired" },
+    blocked: { kind: "warn", key: "conn.audit.blocked" },
+  };
+  const approvers: Record<AuditEntry["approver"], MessageKey> = { auto: "conn.audit.auto", user: "conn.audit.user", none: "conn.audit.none" };
+  const head = btn(
+    `<span class="gt">${esc(t("conn.audit.title"))}<em class="num">${entries.length}</em></span>${ico(v.auditOpen ? "down" : "right")}`,
+    "gr",
+    ` data-conn="audit" aria-expanded="${v.auditOpen}" data-k="cs-audit"`,
+  );
+  if (!v.auditOpen) return `<div class="cs-grp cs-audit">${head}</div>`;
+  const rows = entries.map((e) => {
+    const when = `${dayLabel(e.at_ms, v.now)} ${formatClock(e.at_ms)}`;
+    const outcome = outcomes[e.outcome] ?? outcomes.error;
+    return row(esc(toolLabel({ name: e.tool, description: "", enabled: true, kind: "read" }, e.server)), esc(`${when} · ${tr(approvers[e.approver] ?? approvers.none)}`), st(outcome.kind, tr(outcome.key)), {
+      cls: "conn-audit",
+    });
+  });
+  return `<div class="cs-grp cs-audit">${head}<div class="audit">${rows.join("")}<p class="foot">${esc(t("conn.audit.foot"))}</p></div></div>`;
 }
 
-function serviceHTML(g: ConnectionGroup, v: ConnectionsView): string {
+/** The dialog's first view: what the service is and holds, what to try, and the rarer actions. */
+function summaryHTML(g: ConnectionGroup, v: ConnectionsView): string {
   const busy = v.busy.has(g.id);
   const id = ` data-id="${esc(g.id)}"`;
   const entry = entryOf(g, v);
-  const by = entry ? t("conn.by", { p0: entry.publisher }) : t("conn.customServer");
+  const loggingIn = v.login?.target === g.id;
   const head =
-    `<div class="cs-head">${groupIcon(g, v, "xl")}<div class="tx"><h2 class="big">${esc(g.name)}</h2><div class="by">${esc(by)}</div></div>` +
-    tg(g.enabled, t("conn.switch", { p0: g.name }), ` data-conn="enable"${id}${busy ? " disabled" : ""}`) +
-    `</div>`;
-  const about = entry ? words(entry.about) : "";
+    `<div class="cs-dlg-head">${groupIcon(g, v, "xl")}<span class="sp"></span>` +
+    tg(g.enabled, t("conn.switch", { p0: g.name }), ` data-conn="enable"${id} data-k="cs-dlg-enable"${busy ? " disabled" : ""}`) +
+    closeButton() +
+    `</div><h2 class="cs-dlg-name" id="cs-dlg-title">${esc(g.name)}</h2>`;
+  const about = `<p class="cs-desc">${esc(entry ? words(entry.about) : t("conn.customServer"))}</p>`;
   const secrets = [...g.env, ...g.headers];
-  const meta =
-    `<div class="cs-meta"><span>${ico("link")}<span class="code">${esc(g.transport === "http" ? g.url : g.command)}</span></span>` +
-    (secrets.length ? `<span>${ico("lock")}<span class="code">${esc(secrets.join(", "))}</span></span>` : "") +
-    `</div>`;
-  const relogin = needsLogin(g)
+  // A server of the user's own says where it is and which secrets it was given, by name.
+  const meta = entry
+    ? ""
+    : `<div class="cs-meta"><span>${ico("link")}<span class="code">${esc(g.transport === "http" ? g.url : g.command)}</span></span>` +
+      (secrets.length ? `<span>${ico("lock")}<span class="code">${esc(secrets.join(", "))}</span></span>` : "") +
+      `</div>`;
+  const alert = needsLogin(g)
     ? `<div class="ca-alert">${ico("info")}<span class="msg">${esc(t("conn.status.relogin"))}</span>` +
-      btn(esc(v.login?.target === g.id ? t("conn.loggingIn") : t("conn.relogin")), "sm", ` data-conn="relogin"${id}${busy || v.login ? " disabled" : ""}`) +
+      btn(esc(loggingIn ? t("conn.loggingIn") : t("conn.relogin")), "sm", ` data-conn="relogin"${id} data-k="cs-relogin-top"${busy || v.login ? " disabled" : ""}`) +
       `</div>`
     : g.status === "error"
       ? `<div class="ca-alert">${ico("info")}<span class="msg">${esc(t("conn.status.error", { p0: failureText(g.error) }))}</span></div>`
       : "";
+  const kinds = (["write", "read"] as const).filter((kind) => g.tools.some((tool) => tool.kind === kind));
   const tools = g.tools.length
     ? `<p class="cs-count">${esc(t("conn.tools.summary", { p0: g.tool_count, p1: g.write_count, p2: g.read_count }))}</p>` +
-      toolGroupHTML(g, "write", v) +
-      toolGroupHTML(g, "read", v)
-    : `<div class="slist"><div class="note conn-empty">${esc(t("conn.noTools"))}</div></div>`;
+      `<div class="cs-grp">${kinds
+        .map((kind) =>
+          btn(
+            `<span class="gt">${esc(kindName(kind))}<em class="num">${g.tools.filter((tool) => tool.kind === kind).length}</em></span>${ico("right")}`,
+            "gr",
+            ` data-conn="tools" data-kind="${kind}" data-k="cs-kind:${kind}"`,
+          ),
+        )
+        .join("")}</div>`
+    : `<p class="cs-count conn-empty">${esc(t("conn.noTools"))}</p>`;
+  const example = examplePrompt(entry);
+  const tryIt = example ? `<div class="cs-try">${btn(esc(t("conn.tryIt")), "pri", ` data-conn="try"${id} data-k="cs-try"`)}</div>` : "";
   const acts =
     `<div class="cs-acts">` +
-    btn(`${ico("refresh")}${esc(busy ? t("conn.refreshing") : t("conn.refresh"))}`, "", ` data-conn="refresh"${id}${busy ? " disabled" : ""}`) +
-    btn(esc(v.confirmingDisconnect === g.id ? t("conn.disconnectConfirm") : t("conn.disconnect")), "", ` data-conn="disconnect"${id}${busy ? " disabled" : ""}`) +
-    (g.auth === "device" && g.catalog_id && GRANTS_URL[g.catalog_id] ? btn(esc(t("conn.revokeOpen", { p0: g.name })), "", ` data-conn="open-grants"${id}`) : "") +
+    (g.auth !== "none" && !needsLogin(g)
+      ? btn(esc(loggingIn ? t("conn.loggingIn") : t("conn.relogin")), "sm", ` data-conn="relogin"${id} data-k="cs-relogin"${busy || v.login ? " disabled" : ""}`)
+      : "") +
+    btn(esc(busy ? t("conn.refreshing") : t("conn.refresh")), "sm", ` data-conn="refresh"${id} data-k="cs-refresh"${busy ? " disabled" : ""}`) +
+    btn(
+      esc(v.confirmingDisconnect === g.id ? t("conn.disconnectConfirm") : t("conn.disconnect")),
+      v.confirmingDisconnect === g.id ? "sm danger" : "sm",
+      ` data-conn="disconnect"${id} data-k="cs-disconnect"${busy ? " disabled" : ""}`,
+    ) +
+    (g.auth === "device" && g.catalog_id && GRANTS_URL[g.catalog_id] ? btn(esc(t("conn.revokeOpen", { p0: g.name })), "sm", ` data-conn="open-grants"${id}`) : "") +
     `</div>`;
-  return backHTML() + head + (about ? `<p class="cs-desc">${esc(about)}</p>` : "") + meta + relogin + tools + acts + auditHTML(v, g.name);
+  return head + about + meta + alert + (loggingIn ? deviceHTML(v) : "") + tools + tryIt + acts + auditHTML(v, g.name);
+}
+
+/** The dialog's second view: the tools of one kind, each with its switch, and one switch for them all. */
+function toolsViewHTML(g: ConnectionGroup, kind: ToolKind, v: ConnectionsView): string {
+  const tools = g.tools.filter((tool) => tool.kind === kind);
+  const busy = v.busy.has(g.id);
+  const on = tools.filter((tool) => tool.enabled).length;
+  const state = on === tools.length ? "true" : on === 0 ? "false" : "mixed";
+  const head =
+    `<div class="cs-dlg-head sub">` +
+    iconButton("left", t("conn.back"), ' data-conn="tools-back" data-k="cs-back"') +
+    `<h2 class="cs-dlg-name" id="cs-dlg-title">${esc(kindName(kind))}<em class="num">${tools.length}</em></h2>` +
+    // a checkbox role, not a switch: only that one has a "mixed" state
+    `<button type="button" class="tg" role="checkbox" aria-checked="${state}" aria-label="${esc(t(kind === "write" ? "conn.groupSwitch.write" : "conn.groupSwitch.read"))}" data-conn="group" data-id="${esc(g.id)}" data-kind="${kind}" data-k="cs-group"${busy ? " disabled" : ""}></button>` +
+    closeButton() +
+    `</div>`;
+  return head + `<div class="cs-tool-list" data-stagger="tools:${kind}">${tools.map((tool) => toolRow(g, tool, busy)).join("")}</div>`;
+}
+
+/**
+ * The dialog of a connected service, over the settings with the page under it dimmed. It grows in
+ * when it opens (`data-dialog`, ui.ts `swapHTML`), not each time it is drawn again; a click on the
+ * dimmed part closes it, as Esc and its × do.
+ */
+function dialogHTML(g: ConnectionGroup, v: ConnectionsView): string {
+  const inner = v.toolsKind && g.tools.some((tool) => tool.kind === v.toolsKind) ? toolsViewHTML(g, v.toolsKind, v) : summaryHTML(g, v);
+  return (
+    `<div class="cs-scrim" data-conn="scrim" data-dialog="${esc(g.id)}">` +
+    `<div class="cs-dialog" id="cs-dialog" role="dialog" aria-modal="true" aria-labelledby="cs-dlg-title" tabindex="-1" data-trap>${inner}</div></div>`
+  );
 }
 
 // ---------- 商店: the services that can be added ----------
@@ -376,9 +444,9 @@ function cardHTML(s: StoreService, v: ConnectionsView): string {
   return (
     `<div class="cs-card">` +
     btn(
-      `${entryIcon(s, "md")}<span class="tx"><span class="nm">${esc(s.name)}</span><span class="sub${here ? " wait" : ""}">${esc(line)}</span></span>`,
+      `<span class="ic">${entryIcon(s, "md")}</span><span class="tx"><span class="nm">${esc(s.name)}</span><span class="sub${here ? " wait" : ""}">${esc(line)}</span></span>`,
       "cs-main",
-      ` data-conn="open-store" data-id="${esc(s.id)}" title="${esc(`${s.name}: ${words(s.summary)}`)}"`,
+      ` data-conn="open-store" data-id="${esc(s.id)}" data-k="cs-store:${esc(s.id)}" title="${esc(`${s.name}: ${words(s.summary)}`)}"`,
     ) +
     `${joinControl(s, v)}</div>`
   );
@@ -389,13 +457,15 @@ function storeHTML(v: ConnectionsView): string {
   if (v.catalog === "failed") return `<div class="alert core-note">${st("err", t("conn.loadFailed"))}</div>`;
   const found = v.catalog.filter((s) => matches(v.search, s.name, s.publisher, words(s.summary)));
   if (!found.length) return `<p class="cs-none">${esc(t("conn.noMatch"))}</p>`;
-  const section = (title: string, list: StoreService[]): string =>
-    list.length ? `<section class="cs-sec"><h2>${esc(title)}</h2><div class="cs-grid">${list.map((s) => cardHTML(s, v)).join("")}</div></section>` : "";
+  const section = (key: string, title: string, list: StoreService[]): string =>
+    list.length ? `<section class="cs-sec"><h2>${esc(title)}</h2><div class="cs-grid" data-stagger="store:${key}">${list.map((s) => cardHTML(s, v)).join("")}</div></section>` : "";
   // The popular ones first; 「全部」 is the rest, by name. A search lists what it finds under 「全部」 alone.
   const popular = v.search.trim() ? [] : found.filter((s) => s.popular);
   const rest = found.filter((s) => !popular.includes(s)).sort((a, b) => a.name.localeCompare(b.name));
-  return section(t("conn.hot"), popular) + section(t("conn.all"), rest);
+  return section("hot", t("conn.hot"), popular) + section("all", t("conn.all"), rest);
 }
+
+const backHTML = (): string => `<div class="cs-back">${btn(`${ico("left")}${esc(t("conn.back"))}`, "", ' data-conn="back"')}</div>`;
 
 function storePageHTML(s: StoreService, v: ConnectionsView): string {
   const here = v.login?.target === s.id;
@@ -469,24 +539,6 @@ function formHTML(f: ConnectionForm): string {
   );
 }
 
-// ---------- the tab ----------
-
-/** What is under the bar: the list, or the store. */
-export function bodyHTML(v: ConnectionsView): string {
-  return v.tab === "installed" ? installedHTML(v) : storeHTML(v);
-}
-
-function pageHTML(v: ConnectionsView): string | null {
-  const open = v.open;
-  if (!open) return null;
-  if (open.tab === "installed") {
-    const g = Array.isArray(v.groups) ? v.groups.find((x) => x.id === open.id) : undefined;
-    return g ? serviceHTML(g, v) : null;
-  }
-  const s = Array.isArray(v.catalog) ? v.catalog.find((x) => x.id === open.id) : undefined;
-  return s ? storePageHTML(s, v) : null;
-}
-
 // ---------- the code of a device login ----------
 
 /** The code in keycaps, the one button that copies it and opens the service's page, and a cancel button. */
@@ -502,18 +554,35 @@ function deviceHTML(v: ConnectionsView): string {
   );
 }
 
-/** The tab, below its name and purpose. */
+// ---------- the tab ----------
+
+/** What is under the bar: the list, or the store. */
+export function bodyHTML(v: ConnectionsView): string {
+  return v.tab === "installed" ? installedHTML(v) : storeHTML(v);
+}
+
+/** The connected service whose dialog is open, if it is still there. */
+const openGroup = (v: ConnectionsView): ConnectionGroup | undefined =>
+  v.open?.tab === "installed" && Array.isArray(v.groups) ? v.groups.find((x) => x.id === v.open!.id) : undefined;
+
+/** The tab, below its name and purpose: the form, a store page, or the bar and its view (with a service's dialog over it). */
 export function connectionsHTML(v: ConnectionsView): string {
   if (v.form) return `<div class="cs cs-form">${formHTML(v.form)}</div>`;
-  const page = pageHTML(v);
-  if (page) return `<div class="cs cs-page">${deviceHTML(v)}${page}</div>`;
-  return `<div class="cs">${deviceHTML(v)}${barHTML(v)}<div class="cs-body" data-cs-body>${bodyHTML(v)}</div></div>`;
+  if (v.open?.tab === "store") {
+    const s = Array.isArray(v.catalog) ? v.catalog.find((x) => x.id === v.open!.id) : undefined;
+    if (s) return `<div class="cs cs-page">${deviceHTML(v)}${storePageHTML(s, v)}</div>`;
+  }
+  const g = openGroup(v);
+  // A device login started from a service's dialog shows its code there instead.
+  const device = g && v.login?.target === g.id ? "" : deviceHTML(v);
+  return `<div class="cs">${device}${barHTML(v)}<div class="cs-body" data-cs-body>${bodyHTML(v)}</div></div>` + (g ? dialogHTML(g, v) : "");
 }
 
 // ---------- doing ----------
 
-const focusId = (id: string): void => {
-  if (typeof document !== "undefined") document.getElementById(id)?.focus();
+/** Focuses the element `selector` names, if the page is there (not in a test without one). */
+const focusOn = (selector: string): void => {
+  if (typeof document !== "undefined") document.querySelector<HTMLElement>(selector)?.focus();
 };
 
 /** A dropdown's menu, as the settings panel opens it. */
@@ -528,6 +597,8 @@ export interface ConnectionsHost {
   visible(): boolean;
   /** Draws the page again. */
   redraw(): void;
+  /** 「試試看」: closes the settings and puts `text` in the composer of the 拉斐爾 page. */
+  tryPrompt(text: string): void;
 }
 
 export interface Connections {
@@ -538,7 +609,7 @@ export interface Connections {
   click(target: Element): boolean;
   /** Something typed in one of this tab's fields; false for any other input. */
   input(input: HTMLInputElement): boolean;
-  /** Enter in one of the form's fields; false for any other key. */
+  /** Enter in one of the form's fields, or Esc with a service's dialog open; false for any other key. */
   key(e: KeyboardEvent): boolean;
   /** The menu of a dropdown of this tab, by its `data-k`. */
   menuFor(k: string): ConnectionMenu | null;
@@ -555,7 +626,8 @@ export function createConnections(host: ConnectionsHost): Connections {
   let tab: Tab = "installed";
   let search = "";
   let open: ConnectionsView["open"] = null;
-  const unfolded: Record<ToolKind, boolean> = { write: false, read: false };
+  let toolsKind: ToolKind | null = null;
+  let auditOpen = false;
   let confirming: string | null = null;
   let confirmTimer: ReturnType<typeof setTimeout> | undefined;
   const busy = new Set<string>();
@@ -565,13 +637,15 @@ export function createConnections(host: ConnectionsHost): Connections {
   let form: ConnectionForm | null = null;
   let loads = 0;
   let firstLoad = true;
+  /** The dialog is on its way out (140 ms): a second close waits for the first. */
+  let closing = false;
 
   const redraw = (): void => {
     if (host.visible()) host.redraw();
   };
 
   const view = (): ConnectionsView => ({
-    groups, catalog, audit, tab, search, open, unfolded: { ...unfolded }, confirmingDisconnect: confirming, busy, login, device, loginError, form, now: Date.now(),
+    groups, catalog, audit, tab, search, open, toolsKind, auditOpen, confirmingDisconnect: confirming, busy, login, device, loginError, form, now: Date.now(),
   });
 
   /** Draws only what is under the bar (the search box keeps its focus and its input method). */
@@ -614,6 +688,39 @@ export function createConnections(host: ConnectionsHost): Connections {
     }
     busy.delete(id);
     await load();
+  }
+
+  /** Opens the dialog of a connected service, at its summary, with the focus in it. */
+  function openDialog(id: string): void {
+    open = { tab: "installed", id };
+    toolsKind = null;
+    auditOpen = false;
+    clearTimeout(confirmTimer);
+    confirming = null;
+    redraw();
+    focusOn("#cs-dialog");
+  }
+
+  /**
+   * Closes the dialog: it shrinks and fades away (140 ms), then the list is drawn without it and the
+   * focus goes back to the row it was opened from.
+   */
+  function closeDialog(): void {
+    if (!open || open.tab !== "installed" || closing) return;
+    const id = open.id;
+    closing = true;
+    const scrim = typeof document !== "undefined" ? document.querySelector<HTMLElement>(".cs-scrim") : null;
+    leave(scrim, DIALOG_OUT_MS, () => {
+      closing = false;
+      if (open?.tab !== "installed" || open.id !== id) return;
+      open = null;
+      toolsKind = null;
+      auditOpen = false;
+      clearTimeout(confirmTimer);
+      confirming = null;
+      redraw();
+      focusOn(`[data-k="cs-open:${typeof CSS !== "undefined" ? CSS.escape(id) : id}"]`);
+    });
   }
 
   function disconnect(id: string): void {
@@ -762,18 +869,46 @@ export function createConnections(host: ConnectionsHost): Connections {
         if (id === "installed" || id === "store") show(id);
         break;
       case "open":
-        open = { tab: "installed", id };
-        unfolded.write = false;
-        unfolded.read = false;
+        if (groupById(id)) openDialog(id);
+        break;
+      case "scrim":
+        // the dimmed part around the dialog closes it; a click inside it (on no control) does nothing
+        if (target === button) closeDialog();
+        break;
+      case "close":
+        closeDialog();
+        break;
+      case "tools": {
+        toolsKind = button.dataset.kind === "read" ? "read" : "write";
+        redraw();
+        focusOn("#cs-dialog");
+        break;
+      }
+      case "tools-back": {
+        const kind = toolsKind;
+        toolsKind = null;
+        redraw();
+        focusOn(`[data-k="cs-kind:${kind}"]`);
+        break;
+      }
+      case "audit":
+        auditOpen = !auditOpen;
         redraw();
         break;
+      case "try": {
+        const group = groupById(id);
+        const text = group ? examplePrompt(entryOf(group, view())) : null;
+        if (text) host.tryPrompt(text);
+        break;
+      }
       case "open-store":
         open = { tab: "store", id };
         redraw();
         break;
       case "manage":
-        open = { tab: "installed", id };
-        redraw();
+        tab = "installed";
+        search = "";
+        openDialog(id);
         break;
       case "back":
         clearTimeout(confirmTimer);
@@ -796,12 +931,6 @@ export function createConnections(host: ConnectionsHost): Connections {
         const tools = groupById(id)?.tools.filter((x) => x.kind === kind) ?? [];
         // all on turns all off; off or mixed turns all on
         if (tools.length) void act(id, async () => void (await api.integrationsSetToolsEnabled(id, tools.map((x) => x.name), !tools.every((x) => x.enabled))));
-        break;
-      }
-      case "fold": {
-        const kind = button.dataset.kind === "read" ? "read" : "write";
-        unfolded[kind] = !unfolded[kind];
-        redraw();
         break;
       }
       case "refresh":
@@ -842,7 +971,7 @@ export function createConnections(host: ConnectionsHost): Connections {
         if (form) {
           addPair(form);
           redraw();
-          focusId("conn-pair-name");
+          focusOn("#conn-pair-name");
         }
         break;
       case "pair-drop":
@@ -893,13 +1022,18 @@ export function createConnections(host: ConnectionsHost): Connections {
   }
 
   function key(e: KeyboardEvent): boolean {
+    if (e.key === "Escape" && open?.tab === "installed" && !e.defaultPrevented) {
+      e.preventDefault();
+      closeDialog();
+      return true;
+    }
     const el = e.target as HTMLElement | null;
     if (e.key !== "Enter" || !form || !el?.id?.startsWith("conn-")) return false;
     e.preventDefault();
     if (el.id.startsWith("conn-pair")) {
       addPair(form);
       redraw();
-      focusId("conn-pair-name");
+      focusOn("#conn-pair-name");
     } else void connectCustom();
     return true;
   }
@@ -912,9 +1046,10 @@ export function createConnections(host: ConnectionsHost): Connections {
           current: "", // nothing is checked: it is an act, not a state
           pick: (value) => {
             if (value !== "custom" || form?.busy) return;
+            open = null;
             form = emptyForm();
             redraw();
-            focusId("conn-name");
+            focusOn("#conn-name");
           },
         };
       case "conn-type":
@@ -943,6 +1078,9 @@ export function createConnections(host: ConnectionsHost): Connections {
     confirming = null;
     form = null;
     open = null;
+    toolsKind = null;
+    auditOpen = false;
+    closing = false;
     search = "";
     tab = "installed";
     loginError = null;

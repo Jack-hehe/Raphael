@@ -29,10 +29,10 @@ import json
 import logging
 import sqlite3
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar
 
 from ..agent.failure import failure_kind
 from ..agent.gate import ToolGate
@@ -46,7 +46,7 @@ from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterEr
 from ..brain.pricing import builtin_catalog
 from ..brain.spend import SpendTracker
 from ..integrations.pool import McpPool
-from ..protocol import INVALID_PARAMS, WORKER_STOPPED, RpcError
+from ..protocol import WORKER_STOPPED, RpcError, invalid_params
 from .snapshot import BUILTIN, FIND, MCP, Snapshot, ToolRef
 from .tasks import TaskStore
 
@@ -101,10 +101,6 @@ def stopped(kind: str, detail: str | None = None) -> RpcError:
     return RpcError(WORKER_STOPPED, "The task may not go on", {"stop": kind, "detail": detail})
 
 
-def _invalid(message: str) -> RpcError:
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
-
-
 def _outcome_of(result: PluginResult) -> str:
     """How a call of a plugin's tool ended, as the audit and the steps say it."""
     if result.ok:
@@ -149,7 +145,9 @@ class TaskRun:
         city: Callable[[], str],
         changed: Callable[[], None] = lambda: None,
         clock: Callable[[], float] = time.monotonic,
+        memory: "MemoryReader | None" = None,
     ) -> None:
+        self._memory = memory
         self.task_id = task_id
         self.language = language
         self.model = model
@@ -278,9 +276,9 @@ class TaskRun:
         snapshot."""
         messages = params.get("messages")
         if not isinstance(messages, list) or not all(isinstance(m, dict) for m in messages):
-            raise _invalid("messages must be a list of messages")
+            raise invalid_params("messages must be a list of messages")
         if not messages:
-            raise _invalid("messages is empty")
+            raise invalid_params("messages is empty")
         request_chars = len(json.dumps(messages, ensure_ascii=False))
         async with self._turn:
             # A conversation grown past what is sent is a task that has used what it was given.
@@ -361,7 +359,7 @@ class TaskRun:
         """The result of a call of a tool of the snapshot."""
         name, arguments = params.get("name"), params.get("arguments")
         if not isinstance(name, str) or not isinstance(arguments, dict):
-            raise _invalid("name must be a string and arguments an object")
+            raise invalid_params("name must be a string and arguments an object")
         async with self._turn:
             return await self._tool(name, arguments)
 
@@ -486,6 +484,8 @@ class TaskRun:
                 return await self._guarded(
                     self._tools.web_search(query.strip(), self.model, self.ledger)
                 )
+            if name in ("memory_read", "history_search"):
+                return self._read_memory(name, arguments)
             return self._tools.local_time()
         except RpcError:
             raise
@@ -494,6 +494,29 @@ class TaskRun:
         except Exception as exc:
             logger.warning("The %s lookup failed unexpectedly: %s", name, type(exc).__name__)
             return ToolResult(name, False, None, "error")
+
+
+    def _read_memory(self, name: str, arguments: dict) -> ToolResult:
+        """A note read or the past turns searched; never a write."""
+        if self._memory is None:
+            return ToolResult(name, False, None, "blocked")
+        if name == "memory_read":
+            names = arguments.get("names")
+            if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+                return ToolResult(name, False, None, "bad_arguments")
+            return self._memory.read(names)
+        query = arguments.get("query")
+        if not isinstance(query, str) or not query.strip():
+            return ToolResult(name, False, None, "bad_arguments")
+        return self._memory.search(query.strip())
+
+
+class MemoryReader(Protocol):
+    """What a task may do with the memory (`memory.service.MemoryService`): read and search."""
+
+    def read(self, names: Sequence[str]) -> ToolResult: ...
+
+    def search(self, query: str, *, limit: int = 5, exclude: Sequence[int] = ()) -> ToolResult: ...
 
 
 def _ms(began: float) -> int:

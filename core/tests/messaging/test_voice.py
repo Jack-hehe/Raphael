@@ -1,5 +1,6 @@
-"""Voice messages: decoding Ogg/Opus in memory, the limits, and the way a transcript is answered.
-The Bot API is the fake of test_telegram; the speech engine and the voice detector are fakes."""
+"""Voice messages: decoding Ogg/Opus in memory a block at a time, the size limit, and the way a
+transcript is answered. The Bot API is the fake of test_telegram; the speech engine and the voice
+detector are fakes."""
 
 import io
 
@@ -9,7 +10,7 @@ import pytest
 import soundfile
 
 from raphael_core.messaging import voice
-from raphael_core.messaging.core import MAX_VOICE_BYTES, MAX_VOICE_SECONDS, VoiceTooLong
+from raphael_core.messaging.core import MAX_VOICE_BYTES, VoiceTooLarge
 from raphael_core.messaging.words import HEARD_CHARS, heard
 
 from .test_telegram import OWNER, FakeTelegram, make_gateway, run_until
@@ -40,9 +41,14 @@ def test_stereo_is_averaged_to_mono():
     assert samples.ndim == 1 and abs(samples.size - 8000) <= 400
 
 
-def test_a_clip_that_holds_too_much_speech_is_refused_before_it_is_decoded():
-    with pytest.raises(VoiceTooLong):
-        voice.decode(opus(MAX_VOICE_SECONDS + 20, rate=8000))
+def test_a_long_message_is_decoded_a_block_at_a_time_and_whole():
+    # Five minutes, far more than the two minutes that used to be the limit: every block is a few
+    # seconds of 16 kHz mono, and together they are the whole message.
+    blocks = list(voice.decoded_blocks(opus(300.0, rate=8000)))
+    assert len(blocks) > 1
+    assert max(block.size for block in blocks) <= (voice.BLOCK_SECONDS + 1) * voice.SAMPLE_RATE
+    assert abs(sum(block.size for block in blocks) - 300 * voice.SAMPLE_RATE) <= 400
+    assert all(block.dtype == np.float32 and block.ndim == 1 for block in blocks)
 
 
 def test_bytes_that_are_no_audio_raise():
@@ -51,12 +57,15 @@ def test_bytes_that_are_no_audio_raise():
 
 
 class Segmenter:
+    """Finds the stretches it is given once, in the first block it is fed."""
+
     def __init__(self, found):
         self.found, self.heard = found, []
 
     def accept(self, samples):
         self.heard.append(samples.size)
-        return self.found
+        found, self.found = self.found, []
+        return found
 
     def flush(self):
         return []
@@ -74,13 +83,19 @@ class Engine:
 def test_each_stretch_of_speech_goes_through_the_engine_with_the_hints_and_is_joined():
     stretch = np.zeros(1600, dtype="float32")
     engine = Engine("你好", "world")
-    text = voice.transcribe_clip(np.zeros(16000, "float32"), engine, Segmenter([stretch, stretch]), ["Raphael"])
+    text = voice.transcribe_voice(opus(1.0), engine, Segmenter([stretch, stretch]), ["Raphael"])
     assert text == "你好 world"
     assert engine.calls == [(1600, ["Raphael"])] * 2
 
 
+def test_a_long_message_is_fed_to_the_segmenter_a_block_at_a_time():
+    segmenter = Segmenter([])
+    voice.transcribe_voice(opus(30.0, rate=8000), Engine(), segmenter)
+    assert len(segmenter.heard) >= 3 and max(segmenter.heard) <= (voice.BLOCK_SECONDS + 1) * voice.SAMPLE_RATE
+
+
 def test_no_speech_is_no_text():
-    assert voice.transcribe_clip(np.zeros(100, "float32"), Engine(), Segmenter([]), []) == ""
+    assert voice.transcribe_voice(opus(0.2), Engine(), Segmenter([]), []) == ""
 
 
 # --- answering a voice message ---
@@ -147,13 +162,23 @@ async def test_a_voice_message_is_heard_asked_and_answered_in_text(files, files_
     assert files.sent == [(OWNER, heard("en", "what is the weather") + "\n\n《答》好")]
 
 
-async def test_a_voice_message_that_is_too_long_or_too_large_is_never_downloaded(files, files_http):
-    files.message(OWNER, None, voice={"file_id": "long", "duration": MAX_VOICE_SECONDS + 1})
+async def test_a_voice_message_that_is_too_large_is_never_downloaded(files, files_http):
     files.message(OWNER, None, voice={"file_id": "big", "duration": 5, "file_size": MAX_VOICE_BYTES + 1})
     gateway = make_gateway(files, files_http, transcribe=transcriber())
-    await run_until(gateway, lambda: len(files.sent) == 2)
+    await run_until(gateway, lambda: files.sent)
     assert files.get_files == [] and files.downloads == [] and gateway.asked == []
-    assert all("too long" in text for _, text in files.sent)
+    assert files.sent[0][1] == "That voice message is too large (the limit is 20 MB)."
+
+
+async def test_a_long_voice_message_is_heard_whole(files, files_http):
+    # Telegram says how long it is; however long, it is downloaded and heard, and all of what was
+    # heard is asked.
+    files.files["v1"] = b"ogg bytes"
+    files.message(OWNER, None, voice={"file_id": "v1", "duration": 3 * 3600, "file_size": 9})
+    said = "word " * 2000
+    gateway = make_gateway(files, files_http, transcribe=transcriber(said))
+    await run_until(gateway, lambda: files.sent)
+    assert gateway.asked == [(f"telegram:{OWNER}", said.strip(), "en", "telegram")]
 
 
 async def test_a_file_the_bot_api_reports_as_too_large_is_not_downloaded(files, files_http):
@@ -172,12 +197,12 @@ async def test_silence_gets_a_fixed_reply_and_asks_nothing(files, files_http):
     assert files.sent[0][1] == "I didn't hear anything." and gateway.asked == []
 
 
-async def test_a_clip_that_decodes_too_long_is_declined_like_a_long_one(files, files_http):
+async def test_a_clip_that_decodes_too_large_is_declined_like_a_large_one(files, files_http):
     files.files["v1"] = b"ogg"
     files.message(OWNER, None, voice={"file_id": "v1", "duration": 1})
-    gateway = make_gateway(files, files_http, transcribe=transcriber(VoiceTooLong()))
+    gateway = make_gateway(files, files_http, transcribe=transcriber(VoiceTooLarge()))
     await run_until(gateway, lambda: files.sent)
-    assert "too long" in files.sent[0][1] and gateway.asked == []
+    assert "too large" in files.sent[0][1] and gateway.asked == []
 
 
 async def test_a_failure_to_hear_gets_a_plain_reply_without_details(files, files_http):
@@ -234,5 +259,5 @@ def test_a_clip_with_many_channels_is_refused_before_it_is_read():
     audio = np.zeros((8000, 6), dtype="float32")
     buffer = io.BytesIO()
     soundfile.write(buffer, audio, 8000, format="OGG", subtype="VORBIS")
-    with pytest.raises(VoiceTooLong):
+    with pytest.raises(VoiceTooLarge):
         voice.decode(buffer.getvalue())

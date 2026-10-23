@@ -24,6 +24,8 @@ tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
 tauri-plugin-autostart = "2.7"
 tauri-plugin-window-state = "2.5"
 tauri-plugin-log = "2"
+# The file dialog of 頭像 (Settings › 拉斐爾): opened from Rust, never from a page.
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"

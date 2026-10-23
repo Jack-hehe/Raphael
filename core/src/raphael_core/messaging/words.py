@@ -15,7 +15,7 @@ _WORDS: dict[str, dict[str, str]] = {
         "failed": "這次沒有成功，請再試一次。",
         "heard": "聽到：「{text}」",
         "voice_empty": "沒有聽到內容。",
-        "voice_long": "這則語音太長了（上限 {seconds} 秒）。",
+        "voice_large": "這則語音太大了（上限 {mb} MB）。",
     },
     "en": {
         "intro": "I'm Raphael. Send me a message and I'll answer as I would at your computer. Send /stop to interrupt a background task.",
@@ -28,7 +28,7 @@ _WORDS: dict[str, dict[str, str]] = {
         "failed": "That did not work. Please try again.",
         "heard": "Heard: “{text}”",
         "voice_empty": "I didn't hear anything.",
-        "voice_long": "That voice message is too long (the limit is {seconds} seconds).",
+        "voice_large": "That voice message is too large (the limit is {mb} MB).",
     },
     "ja": {
         "intro": "ラファエルです。メッセージを送ってください。パソコンの前と同じように答えます。/stop でバックグラウンドの作業を止められます。",
@@ -41,7 +41,7 @@ _WORDS: dict[str, dict[str, str]] = {
         "failed": "うまくいきませんでした。もう一度お試しください。",
         "heard": "聞き取り：「{text}」",
         "voice_empty": "何も聞こえませんでした。",
-        "voice_long": "この音声メッセージは長すぎます（上限 {seconds} 秒）。",
+        "voice_large": "この音声メッセージは大きすぎます（上限 {mb} MB）。",
     },
 }
 

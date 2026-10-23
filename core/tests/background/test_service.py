@@ -19,9 +19,9 @@ from raphael_core.background.service import MAX_QUEUED, report_from
 from raphael_core.background.tasks import Refused
 from raphael_core.brain.openrouter import OpenRouterError
 from raphael_core.brain.settings import SettingsStore
-from raphael_core.protocol import INVALID_PARAMS, NOT_FOUND, RpcError
+from raphael_core.protocol import INVALID_PARAMS, RpcError
 
-from .conftest import ARGUMENT, RESULT, TASK_TEXT, call, report, turn, until
+from .conftest import ARGUMENT, RESULT, TASK_TEXT, Links, call, report, turn, until
 
 
 async def look_twice_then_report(rig):
@@ -292,12 +292,44 @@ async def test_a_worker_that_does_not_answer_in_time_is_ended_by_the_core_alone(
         def kill(self):
             self.killed = True
 
-    host = Stuck()
+    host = Stuck(hello_timeout_s=0.1)
     rig = make_rig(limits=RunLimits(seconds=0.2), host=host)
     rig.submit()
     [done] = await rig.wait_for_reports()
     assert done["state"] == "limit" and done["text"] == phrase("en", "worker_limit_time", steps="0")
     assert host.killed is True
+
+
+async def test_a_worker_that_is_slow_to_start_is_waited_for_as_long_as_its_hello(
+    make_rig, monkeypatch
+):
+    # A worker that takes longer to start than the task's time and the net under it, but not
+    # longer than its hello is given: the core does not give up on it and end it half-started.
+    # The task's time is counted from when it was handed to the host, start included, so this one
+    # has run out by then: the worker reports that, and it is kept for the next task.
+    import raphael_core.background.service as module
+
+    monkeypatch.setattr(module, "TIME_NET_S", 0.3)
+
+    class SlowStart(WorkerHost):
+        killed = 0
+
+        async def _ensure(self, run=None):
+            await asyncio.sleep(0.8)  # well within the hello it is given
+            return await super()._ensure(run)
+
+        def kill(self):
+            self.killed += 1
+            super().kill()
+
+    links = Links()
+    host = SlowStart(connect=links, grace_s=0.3, hello_timeout_s=2.0)
+    rig = make_rig(limits=RunLimits(seconds=0.2), host=host, links=links)
+    rig.submit()
+    [done] = await rig.wait_for_reports()
+    assert done["state"] == "limit"
+    assert host.killed == 0  # the core did not end it on its own
+    assert len(links.made) == 1 and host.running  # it started, said hello, and stays
 
 
 # --- when the model fails -------------------------------------------------------------------------
@@ -530,42 +562,35 @@ async def test_tasks_left_unfinished_by_the_last_process_are_interrupted_when_th
     assert second.client.chat_calls == [] and second.notifications == []  # nothing was started again
 
 
-async def test_the_app_lists_the_tasks_and_reads_one_with_its_steps_and_never_its_arguments(make_rig):
+async def test_the_conversation_shows_a_task_with_its_steps_and_never_its_arguments(make_rig):
     rig = make_rig()
     await look_twice_then_report(rig)
     task_id = rig.submit()
     await rig.wait_for_reports()
-    listed = (await rig.rpc.call("worker.list", {}))["tasks"]
-    assert [t["id"] for t in listed] == [task_id] and listed[0]["state"] == "done"
-    assert listed[0]["report"] == {"prefix": "Notice", "text": "All looked up.", "detail": "Two things were found."}
-    got = (await rig.rpc.call("worker.get", {"id": task_id}))["task"]
-    assert [(s["n"], s["kind"], s["tool"], s["tier"], s["outcome"]) for s in got["steps"]] == [
-        (1, "model", None, None, "ok"),
-        (2, "tool", "look", "T1", "ok"),
-        (3, "model", None, None, "ok"),
+    rig.service.attach_turn(task_id, 7)
+    brief, steps = rig.service.tasks_for_turns([7, 8])[7]
+    assert (brief["id"], brief["state"], brief["tool_calls"]) == (task_id, "done", 1)
+    assert [(s["kind"], s["tool"], s["server"], s["outcome"]) for s in steps] == [
+        ("model", None, None, "ok"),
+        ("tool", "look", "Notes", "ok"),
+        ("model", None, None, "ok"),
     ]
-    assert ARGUMENT not in json.dumps(got) and RESULT not in json.dumps(got)
-    with pytest.raises(RpcError) as error:
-        await rig.rpc.call("worker.get", {"id": 999})
-    assert error.value.code == NOT_FOUND
-    for method, params in (("worker.get", {"id": "1"}), ("worker.list", {"limit": "3"})):
-        with pytest.raises(RpcError) as error:
-            await rig.rpc.call(method, params)
-        assert error.value.code == INVALID_PARAMS
+    shown = json.dumps([brief, steps])
+    assert ARGUMENT not in shown and RESULT not in shown and TASK_TEXT not in shown
 
 
-async def test_old_tasks_are_pruned_and_cleared_but_one_that_runs_is_kept(make_rig):
+async def test_old_tasks_are_kept_and_go_when_the_history_is_cleared(make_rig):
     rig = make_rig()
     rig.client.replies = [report("one"), report("two")]
     first = rig.submit()
     await rig.wait_for_reports()
-    rig.wall.now += 60_000
+    rig.wall.now += 400 * 86_400_000
     second = rig.submit()
     await rig.wait_for_reports(2)
-    rig.service.prune(rig.task(second).created_at_ms)
-    assert rig.task(first) is None and rig.task(second) is not None
+    assert not hasattr(rig.service, "prune")  # part of the one conversation: never pruned by age
+    assert rig.task(first) is not None and rig.task(second) is not None
     rig.service.clear()
-    assert rig.task(second) is None
+    assert rig.task(first) is None and rig.task(second) is None
 
 
 async def test_the_tray_is_told_a_task_runs_while_another_one_waits(make_rig):

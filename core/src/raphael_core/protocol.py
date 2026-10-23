@@ -42,6 +42,12 @@ class RpcError(Exception):
         return f"[{self.code}] {self.message}"
 
 
+def invalid_params(message: str) -> RpcError:
+    """An INVALID_PARAMS error. `message` names a param, never a value: a value may be a key, or
+    what the user said."""
+    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
+
+
 def request(id: int | str, method: str, params: dict | None) -> dict:
     msg: dict[str, Any] = {"jsonrpc": "2.0", "id": id, "method": method}
     if params is not None:

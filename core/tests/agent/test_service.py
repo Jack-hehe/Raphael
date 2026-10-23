@@ -28,7 +28,7 @@ from raphael_core.brain.spend import SpendTracker
 from raphael_core.protocol import INVALID_PARAMS, RpcError
 from raphael_core.router import Router as RpcRouter
 
-from .conftest import classification, completion, decision
+from .conftest import FakeBackground, classification, completion, decision
 
 KEY = "sk-or-v1-test"
 NOW_MS = int(datetime(2026, 10, 20, 6, 5, tzinfo=timezone.utc).timestamp() * 1000)
@@ -39,6 +39,7 @@ METHODS = [
     "agent.confirm",
     "agent.history.clear",
     "agent.history.list",
+    "agent.history.search",
 ]
 GEOCODING = {
     "results": [
@@ -123,6 +124,7 @@ class Rig:
             "http": self.meteo.http,
             "now": lambda: LOCAL_NOW,
             "decider": Decider(client, jev_total_s=1.0, jev_first_s=0.6, luna_s=1.0),
+            "background": FakeBackground(),
         }
         self.service = AgentService(conn, client, self.keys, **{**kwargs, **service_kwargs})
         self.rpc = RpcRouter()
@@ -179,7 +181,7 @@ def rig(make_rig):
 # --- the contract ----------------------------------------------------------------------------------
 
 
-def test_the_five_methods_of_the_assistant_are_registered(rig):
+def test_the_six_methods_of_the_assistant_are_registered(rig):
     assert rig.rpc.methods() == METHODS
 
 
@@ -788,21 +790,21 @@ async def test_an_answer_is_worded_in_the_ui_language(rig, client):
     assert "Reply ONLY in English" in client.json_calls[0]["system"]
 
 
-async def test_an_answer_is_given_the_last_three_turns_as_context(rig, client):
-    for n in range(5):
+async def test_an_answer_is_given_the_last_six_turns_as_context(rig, client):
+    for n in range(8):
         rig.seed(f"question {n}", f"answer {n}")
     client.decisions.append(decision("answer"))
     client.replies.append(spoken())
     await rig.ask("那明天呢")
     user = client.json_calls[0]["user"]
-    assert "question 2" in user and "question 4" in user and "question 1" not in user
+    assert "question 2" in user and "question 7" in user and "question 1" not in user
 
 
 # --- discussion and small talk -----------------------------------------------------------------------
 
 
-async def test_a_discussion_is_given_the_last_ten_turns_as_context(rig, client):
-    for n in range(12):
+async def test_a_discussion_is_given_every_turn_after_the_summary_as_context(rig, client):
+    for n in range(32):
         rig.seed(f"question {n}", f"answer {n}")
     client.decisions.append(decision("discuss"))
     client.replies.append(spoken("答", "先從預算開始。", "展開說明。"))
@@ -811,8 +813,9 @@ async def test_a_discussion_is_given_the_last_ten_turns_as_context(rig, client):
     call = client.json_calls[0]
     assert "think something through" in call["system"]
     user = call["user"]
-    assert "question 2" in user and "question 11" in user and "question 1\n" not in user
-    assert user.index("question 2") < user.index("question 11")  # oldest first
+    # With no summary, the last 30 turns (the most the context holds), oldest first.
+    assert "question 2\n" in user and "question 31" in user and "question 1\n" not in user
+    assert user.index("question 2\n") < user.index("question 31")
     assert client.text_calls == [] and rig.meteo.requests == []
     assert (await rig.turns())[0]["route"] == "discuss"
 
@@ -848,31 +851,6 @@ async def test_a_request_too_garbled_to_act_on_gets_the_fixed_reply_with_no_mode
     assert client.json_calls == []
     assert (await rig.turns())[0]["route"] == "unclear"
 
-
-async def test_a_request_to_do_a_task_in_the_background_is_refused_honestly(rig, client):
-    client.decisions.append(decision("delegate"))
-    result = await rig.ask("幫我整理本週的信件並回覆")
-    assert result["prefix"] == "否"
-    assert result["text"] == "背景任務與外部服務尚未開放。此項目前無法執行。"
-    assert client.json_calls == []
-    assert (await rig.turns())[0]["route"] == "delegate"
-
-
-@pytest.mark.parametrize(
-    ("language", "text"),
-    [
-        (
-            "en",
-            "Background tasks and connected services are not yet available. "
-            "This cannot be done now.",
-        ),
-        ("ja", "バックグラウンド処理と外部サービスは未対応です。現時点では実行できません。"),
-    ],
-)
-async def test_the_refusal_is_in_the_ui_language(rig, client, language, text):
-    client.decisions.append(decision("delegate"))
-    result = await rig.ask("x", language=language)
-    assert result["text"] == text
 
 
 @pytest.mark.parametrize("text", ["", "   ", "\n"])
@@ -1410,6 +1388,15 @@ async def test_a_second_request_of_a_session_replaces_the_first_that_is_still_go
     assert actions.calls == [("lock_screen",)]  # once
 
 
+async def test_a_long_question_is_taken_whole(rig, client):
+    # However long the user spoke: nothing of what was asked is cut off.
+    question = "請把聲音關掉，" + "因為我正在開一個很長的會議，" * 200
+    assert len(question) > 2000
+    client.decisions.append(decision("command", "volume_mute"))
+    await rig.ask(question)
+    assert [t["question"] for t in await rig.turns()] == [question]
+
+
 # --- the history -------------------------------------------------------------------------------------
 
 
@@ -1445,6 +1432,41 @@ async def test_the_history_gives_fifty_turns_by_default_and_at_most_two_hundred(
     assert len(await rig.turns(limit=-5)) == 1
 
 
+async def test_the_history_search_finds_turns_of_the_whole_history_in_the_shape_of_the_list(rig):
+    # The 拉斐爾 page shows only the newest fifty turns; the search must reach behind them.
+    old = rig.seed("下週的出差行程", "排好了。")
+    for n in range(80):
+        rig.seed(f"q{n}", "a")
+    rig.seed("出差要帶什麼", "護照。")
+    found = (await rig.call("agent.history.search", {"query": "出差", "limit": 100}))["turns"]
+    assert {t["question"] for t in found} == {"下週的出差行程", "出差要帶什麼"}
+    assert old in {t["id"] for t in found}
+    listed = (await rig.turns(limit=1))[0]
+    assert set(found[0]) == set(listed)  # the page draws and opens them like any turn
+    # A long run of Chinese that is not found as it is written is looked for by its pairs.
+    assert [t["id"] for t in (await rig.call("agent.history.search", {"query": "上次說的出差行程"}))["turns"]][:1] == [old]
+    assert (await rig.call("agent.history.search", {"query": "找不到的字串"}))["turns"] == []
+
+
+async def test_the_history_search_gives_up_to_a_hundred_turns(rig):
+    for n in range(120):
+        rig.seed(f"會議 {n}", "好。")
+    assert len((await rig.call("agent.history.search", {"query": "會議"}))["turns"]) == 50
+    assert len((await rig.call("agent.history.search", {"query": "會議", "limit": 1000}))["turns"]) == 100
+    assert len((await rig.call("agent.history.search", {"query": "會議", "limit": 0}))["turns"]) == 1
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{}, {"query": ""}, {"query": "   "}, {"query": 5}, {"query": "x" * 201},
+     {"query": "會議", "limit": "5"}, {"query": "會議", "limit": True}, {"query": "會議", "limit": 2.5}],
+)  # fmt: skip
+async def test_the_history_search_checks_its_params(rig, params):
+    with pytest.raises(RpcError) as e:
+        await rig.call("agent.history.search", params)
+    assert e.value.code == INVALID_PARAMS
+
+
 async def test_clearing_the_history_deletes_every_turn_and_counts_them(rig):
     for n in range(4):
         rig.seed(f"q{n}", "a")
@@ -1462,15 +1484,16 @@ async def test_a_cleared_history_is_no_context(rig, client):
     assert "secret" not in client.json_calls[0]["user"]
 
 
-async def test_the_turns_older_than_the_retention_are_deleted(rig, client):
+async def test_the_turns_are_kept_past_the_retention_of_the_dictations(rig, client):
+    # One continuous conversation: the retention setting is the dictations' alone.
     rig.settings.set("history_retention_days", 7)
     old = rig.seed("old", "a")
-    rig.wall.now += 8 * 86_400_000
+    rig.wall.now += 400 * 86_400_000
     fresh = rig.seed("fresh", "a")
     client.decisions.append(decision("command", "volume_mute"))
     await rig.ask("靜音")
     questions = [t["question"] for t in await rig.turns()]
-    assert "old" not in questions and "fresh" in questions and old != fresh
+    assert "old" in questions and "fresh" in questions and old != fresh
 
 
 async def test_a_question_that_died_with_the_last_process_is_expired_when_the_core_starts(
@@ -1578,6 +1601,24 @@ async def test_a_message_from_a_messaging_app_leaves_the_question_at_the_compute
     )
     assert (await rig.confirm(asked["confirm"]["id"], True))["prefix"] == "了"
     assert not any(t["status"] == "denied" for t in await rig.turns())
+
+
+async def test_a_question_typed_in_the_app_is_asked_at_the_computer_and_replaces_the_one_that_waits(
+    rig, client, actions
+):
+    rig.seed("q", "a")
+    asked = await ask_to_copy(rig, client)
+    client.decisions.append(decision("chat"))
+    client.replies.append(spoken("答", "好。"))
+    reply = await rig.call(
+        "agent.ask",
+        {"session_id": "app-1", "text": "你好", "ui_language": "zh-TW", "source": "app"},
+    )
+    assert reply["text"] == "好。"
+    assert (await rig.confirm(asked["confirm"]["id"], True))["prefix"] == "否"
+    turns = await rig.turns()
+    assert turns[0]["source"] == "app" and turns[0]["question"] == "你好"
+    assert any(t["status"] == "denied" for t in turns)
 
 
 async def test_stopping_a_session_ends_its_request_and_denies_its_question_only(rig, client, actions):

@@ -3,13 +3,18 @@ import { zhTW } from "./zh-TW";
 
 /** Localize known Rust command errors at the UI boundary without changing the Rust contract. */
 const exact = [
-  "backend.limit", "backend.retention", "backend.language", "backend.stt", "backend.workerCap", "backend.model",
+  "backend.limit", "backend.retention", "backend.stt", "backend.workerCap", "backend.model",
   "backend.micTimeout", "backend.emptyDictation", "backend.emptyPaste", "backend.duplicateDictation",
   "backend.duplicatePaste", "backend.conflictingKeys", "backend.invalidKeys", "backend.emptyAgent",
   "backend.duplicateAgent", "backend.conflictingDictationAgent", "backend.conflictingPasteAgent",
-  "backend.hotkeysOff", "backend.hotkeysOffChange", "keys.004", "keys.005", "keys.006",
+  "backend.hotkeysOff", "backend.hotkeysOffChange", "backend.memoryBody", "backend.memoryDescription",
+  "keys.004", "keys.005", "keys.006",
+  "backend.agentBusy", "backend.agentEmpty", "backend.agentTooLong", "backend.agentOff", "backend.questionGone",
+  "backend.questionUnfocused", "backend.avatarKind", "backend.avatarSize", "backend.avatarNone",
 ] as const;
-const detailed = ["backend.save", "backend.autostartEnable", "backend.autostartDisable", "backend.microphone"] as const;
+const detailed = [
+  "backend.save", "backend.autostartEnable", "backend.autostartDisable", "backend.microphone", "backend.avatarRead", "backend.avatarSave",
+] as const;
 
 export function backendMessage(text: string): string {
   for (const key of exact) if (text === zhTW[key]) return t(key);

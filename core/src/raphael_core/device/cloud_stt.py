@@ -1,5 +1,5 @@
 """Cloud speech-to-text on the device side: a stretch of speech goes to the brain's
-`stt.transcribe`, and the local engine takes over whenever that does not work.
+`stt.transcribe`, and the local engine, when there is one, takes over whenever that does not work.
 
 `CloudSttEngine` has the interface of the local engines (`transcribe(samples, hints=, language=)`),
 so the dictation service uses it like any of them. It runs on the dictation's worker thread and
@@ -10,9 +10,9 @@ A refusal that passes (too many requests, a server error) is tried again after a
 other failure (no key, the monthly limit, no network, a timeout, an error), or one that does not
 pass, makes the segment go to the local engine, and the rest of that dictation too: a dictation
 should not wait for a cloud that has just failed once per segment. Without a local engine the next
-segment goes to the cloud again, since there is nothing else to hear it. Each kind of failure is logged as a warning once per process (the
-app passes the same `warned` set to every engine), at debug level after that. Neither the audio nor
-the text is ever logged.
+segment goes to the cloud again, since there is nothing else to hear it. Each kind of failure is
+logged as a warning once per process (the app passes the same `warned` set to every engine), at
+debug level after that. Neither the audio nor the text is ever logged.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from typing import Any
 
 import numpy as np
 
-from raphael_core.device.dictation import join_segments
+from raphael_core.textjoin import join_segments
 from raphael_core.protocol import BUDGET_EXCEEDED, NO_LOCAL_MODEL, NOT_CONFIGURED, RpcError
 
 logger = logging.getLogger(__name__)

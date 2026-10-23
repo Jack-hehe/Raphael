@@ -1,19 +1,21 @@
-/* The 「連接」 tab of the settings: 「已安裝」 and 「商店」, a page for one service. Colours are the app's tokens. */
-.cs { margin-top: 20px; }
+/* The 「連接」 tab of the settings, drawn like Codex's page of plugins: quiet tabs and a search, one
+   rounded list of the connected services, a dialog for each over the settings, and the store as cards
+   in two columns. Colours are the app's tokens. */
+.cs { margin-top: 18px; }
 .cs h2.big { margin: 0; font: 650 18px/1.3 var(--display); }
 .cs h2 { margin: 0 0 10px 2px; font-size: var(--fs-md); font-weight: 650; }
 .cs h3 { margin: 0 0 8px 2px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
 
-/* The bar: the two views as bordered segments, the search, the menu that adds */
-.cs-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-bottom: 20px; }
-.cs-tools { display: flex; align-items: center; gap: var(--sp-2); margin-left: auto; min-width: 0; }
-.cs-tools .field { width: 220px; }
-.cs-tools .sel { flex: none; }
+/* The bar: 已安裝 N and 商店 N as quiet tabs, the search on the right */
+.cs-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-bottom: 14px; }
+.cs-find { display: flex; margin-left: auto; min-width: 0; }
+.cs-find .field { width: 220px; height: 32px; }
+.cs-find .field .i { color: var(--text-3); }
 .cs-none { margin: 28px 4px; font-size: var(--fs-sm); line-height: 1.6; color: var(--text-3); text-align: center; text-wrap: pretty; }
 
 /* The picture of a service: its mark bare, or a letter. Marks are in the text colour, or the brand's where it reads on both themes. */
 .mono { display: inline-grid; place-items: center; flex: none; width: 28px; height: var(--h-ctl-sm); color: var(--text); font: 700 20px/1 var(--display); }
-.mono.xl { width: 44px; height: 44px; font-size: 34px; }
+.mono.xl { width: 40px; height: 40px; font-size: 30px; }
 .mono .logo { width: 100%; height: 100%; display: block; }
 .logo-mono[style] { color: var(--brand); }
 /* A brand's own full-colour logo: a picture, with a light twin for the dark theme where the official one is dark. */
@@ -22,73 +24,102 @@
 :root[data-theme="dark"] .logo-art .lg-d { display: block; }
 :root[data-theme="dark"] .logo-art .lg-d ~ .lg-l, :root[data-theme="dark"] .logo-art .lg-l:has(+ .lg-d) { display: none; }
 
-/* 已安裝: a row for each service */
-.cs-list > .row { align-items: center; gap: 14px; flex-wrap: nowrap; min-height: 68px; }
-.cs-row > .ic { display: inline-grid; place-items: center; width: 28px; flex: none; }
-.cs-row .t { font-weight: 600; font-size: var(--fs-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cs-row .d { display: block; max-width: none; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cs-row > .ctl { gap: var(--sp-3); }
-.btn.icon { min-height: 32px; width: 32px; padding: 0; }
-.btn.icon .i { width: 14px; height: 14px; }
+/* 已安裝: one rounded list; a row is the mark, the name and its line, the switch and a chevron, none of them boxed */
+.cs-list { border: 1px solid var(--edge); border-radius: var(--r-lg); background: var(--panel); overflow: hidden; }
+.cs-item { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto 18px; align-items: center; gap: 12px; padding-right: 14px; cursor: pointer; }
+.cs-item + .cs-item { border-top: 1px solid var(--line); }
+.cs-item:hover { background: var(--hover); }
+.cs-item .btn.cs-open { justify-content: flex-start; gap: 12px; min-width: 0; min-height: 60px; padding: 10px 0 10px 14px; border: 0; border-radius: 0; background: transparent; text-align: left; white-space: normal; }
+.cs-item .btn.cs-open:hover:not(:disabled), .cs-item .btn.cs-open:active:not(:disabled) { background: transparent; }
+.cs-item .btn.cs-open:focus-visible { outline: none; }
+.cs-item:has(.cs-open:focus-visible) { box-shadow: inset 0 0 0 2px var(--focus); }
+.cs-item .ic, .cs-card .ic { display: inline-grid; place-items: center; width: 30px; flex: none; }
+.cs-open .tx, .cs-main .tx { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-width: 0; }
+.cs-open .nm, .cs-main .nm { font-size: var(--fs-md); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-open .ds { margin-top: 1px; font-size: 12.5px; line-height: 1.45; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-open .ds .st { font-size: 12.5px; }
+.cs-item .chev { display: inline-flex; align-items: center; justify-content: center; color: var(--text-3); }
 
-/* A page: back, the head, what it is, what it holds */
+/* The dialog of a service: over the settings' tab, with the tab dimmed, its own close and switch at the top */
+.cs-scrim { position: absolute; top: 0; right: 0; bottom: 0; left: var(--set-nav); z-index: 5; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; padding: 24px; background: var(--scrim); }
+.cs-scrim:not(.again) { animation: scrim-in 0.2s ease-out; }
+.cs-scrim:not(.again) > .cs-dialog { animation: dialog-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.cs-scrim.leaving { animation: scrim-out 0.14s ease-in forwards; pointer-events: none; }
+.cs-scrim.leaving > .cs-dialog { animation: dialog-out 0.14s ease-in forwards; }
+.cs-dialog { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; width: min(440px, 100%); max-height: 100%; overflow-x: hidden; overflow-y: auto; padding: 18px; border-radius: 16px; background: var(--panel); box-shadow: var(--pop); }
+.cs-dialog:focus { outline: none; }
+.cs-dlg-head { display: flex; align-items: center; gap: var(--sp-2); }
+.cs-dlg-head .sp { flex: 1; }
+.cs-dlg-head .tg { margin-right: 2px; }
+.cs-dlg-head.sub .cs-dlg-name { flex: 1; min-width: 0; font-size: 16px; }
+.cs-dlg-name { margin: 0; font: 650 18px/1.3 var(--display); overflow-wrap: anywhere; }
+.cs-dialog em.num, .cs-grp em.num { margin-left: 6px; font-style: normal; font-weight: 500; color: var(--text-3); }
+.cs-dialog .cs-desc { margin: 0; font-size: var(--fs-sm); line-height: 1.6; color: var(--text-2); text-wrap: pretty; }
+.cs-dialog .cs-meta { margin: 0; }
+.cs-dialog .ca-alert, .cs-dialog .cs-device { margin: 0; }
+.cs-count { margin: 0; font-size: 12.5px; color: var(--text-3); }
+/* 會改動 and 只讀取: two rows on one rounded card, each opening its tools */
+.cs-grp { border: 1px solid var(--edge); border-radius: 12px; overflow: hidden; }
+.cs-grp > .btn.gr { width: 100%; justify-content: space-between; min-height: 44px; padding: 10px 12px; border: 0; border-radius: 0; background: transparent; font-size: 13.5px; text-align: left; }
+.cs-grp > .btn.gr + .btn.gr { border-top: 1px solid var(--line); }
+.cs-grp > .btn.gr:hover:not(:disabled) { background: var(--hover); }
+.cs-grp > .btn.gr:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+.cs-grp .gt { flex: 1; min-width: 0; }
+.cs-grp .btn.gr .i { color: var(--text-3); }
+.cs-try { display: flex; justify-content: flex-end; }
+/* What is done less often, at the foot: small bordered buttons after a line */
+.cs-acts { display: flex; flex-wrap: wrap; gap: var(--sp-2); padding-top: 12px; border-top: 1px solid var(--line); }
+.cs-audit .audit { padding: 0 12px 10px; border-top: 1px solid var(--line); }
+.cs-audit .audit > .row { min-height: 44px; padding: 6px 0; }
+.cs-audit .audit > .row + .row::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--line); }
+.cs-audit .foot { margin: 4px 0 0; }
+.conn-audit .t { overflow-wrap: anywhere; font-size: 13.5px; }
+.conn-audit .d { margin-top: 0; font-size: var(--fs-xs); }
+/* The tools of one kind: a row each, its switch on the right */
+.cs-tool-list { --slist-pad: 14px; padding: 0 var(--slist-pad); border: 1px solid var(--edge); border-radius: 12px; overflow: hidden; }
+.cs-tool-list > .row { min-height: 52px; padding: 8px 0; }
+.cs-tool-list > .row + .row::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--line); }
+.cs-tool-list > .row > .lbl { min-width: 0; }
+.cs-tool-list .row .t { font-size: 13.5px; }
+.cs-tool-list .row .t .tool-name { color: var(--text); overflow-wrap: anywhere; }
+.cs-tool-list .row .d { margin-top: 2px; font-size: var(--fs-xs); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: var(--fs-xs); }
+.cs-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 14px; font-size: 12.5px; color: var(--text-3); }
+.cs-meta > span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.cs-key { color: var(--text-2); }
+
+/* A notice that something waits for the user */
+.ca-alert { display: flex; align-items: center; gap: var(--sp-3); padding: 10px 10px 10px 14px; border-radius: 12px; background: var(--warn-soft); border: 1px solid var(--warn-edge); font-size: var(--fs-sm); }
+.ca-alert > .i { color: var(--warn); }
+.ca-alert .msg { flex: 1; min-width: 0; }
+
+/* A store page: back, the head, what to say, what it is */
 .cs-back { margin-bottom: var(--sp-4); }
 .cs-head { display: flex; align-items: center; gap: 14px; }
 .cs-head .tx { flex: 1; min-width: 0; }
 .cs-head .by { margin-top: 2px; font-size: var(--fs-sm); color: var(--text-3); }
-.cs-head .tg { flex: none; }
 .cs-join { display: flex; align-items: center; gap: 10px; flex: none; }
 .cs-state { display: inline-flex; align-items: center; }
 .cs-wait { font-size: var(--fs-sm); color: var(--accent-text); }
 .cs-desc { margin: 14px 0 0; font-size: 13.5px; line-height: 1.6; color: var(--text-2); text-wrap: pretty; }
-.cs-count { margin: 16px 2px 10px; font-size: var(--fs-sm); color: var(--text-3); }
-.cs-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 14px; font-size: 12.5px; color: var(--text-3); }
-.cs-meta > span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
-.cs-meta .i { width: 13px; height: 13px; flex: none; }
-.cs-key { color: var(--text-2); }
-.cs-acts { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: 22px; }
 .cs .note { margin-top: 14px; }
 .cs .ca-alert { margin-top: 14px; }
 .cs-sec { margin-top: 22px; }
+.cs-sec:first-child { margin-top: 0; }
 .cs-say { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
 .cs-say li { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--r-md); border: 1px solid var(--edge); background: var(--panel); font-size: 13.5px; line-height: 1.5; }
-.cs-say .i { width: 15px; height: 15px; flex: none; color: var(--text-3); }
+.cs-say .i { color: var(--text-3); }
 
-/* A notice that something waits for the user */
-.ca-alert { display: flex; align-items: center; gap: var(--sp-3); padding: 10px 10px 10px 14px; border-radius: 12px; background: var(--warn-soft); border: 1px solid var(--warn-edge); font-size: var(--fs-sm); }
-.ca-alert > .i { width: 16px; height: 16px; flex: none; color: var(--warn); }
-.ca-alert .msg { flex: 1; min-width: 0; }
-
-/* The two lists of tools: a bordered head that unfolds, then a switch for each tool */
-.cs-tools-list { padding: 0 16px 0; }
-.cs-tools-list + .cs-tools-list { margin-top: 10px; }
-.cs-tools-list > .ghead { display: flex; align-items: center; gap: var(--sp-2); margin: 6px 0; }
-.cs-tools-list > .ghead > .ghfold { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; min-height: var(--h-row); padding: 0 12px; border-radius: 9px; }
-.cs-tools-list > .ghead > .tg { margin-right: 0; }
-.cs-tools-list > .ghead .gt { font-size: 13.5px; font-weight: 600; }
-.cs-tools-list > .ghead .gt small { margin-left: var(--sp-2); font-weight: 400; font-size: var(--fs-xs); color: var(--text-3); }
-.cs-tools-list > .ghead .i { width: 14px; height: 14px; color: var(--text-2); }
-.cs-tools-list > .row { min-height: 56px; padding: 8px 0; flex-wrap: nowrap; }
-.cs-tools-list > .row::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--line); }
-.cs-tools-list > .row > .ctl { flex: none; margin-left: 0; }
-.cs-tools-list > .row > .lbl { flex: 1 1 8em; min-width: 0; }
-.cs-tools-list .row .t { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 13.5px; }
-.cs-tools-list .row .t .tn { color: var(--text); overflow-wrap: anywhere; }
-.cs-tools-list .row .d { margin-top: 2px; font-size: var(--fs-xs); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.conn-empty { padding: 12px 0; position: relative; }
-.code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: var(--fs-xs); }
-
-/* 商店: cards in two columns, each a bordered button that opens the page and a button that adds */
-.cs-sec:first-child { margin-top: 0; }
-.cs-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
-.cs-card { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; min-height: 64px; padding-right: 10px; border: 1px solid var(--btn-edge); border-radius: 12px; background: var(--panel); }
-.cs-card:hover { border-color: var(--text-3); }
-.cs-card .btn.cs-main { flex: 1; min-width: 0; justify-content: flex-start; gap: var(--sp-3); align-self: stretch; min-height: 62px; padding: 8px 4px 8px 12px; border: 0; border-radius: 11px; background: transparent; text-align: left; white-space: normal; }
-.cs-card .btn.cs-main:hover:not(:disabled) { background: transparent; }
-.cs-card:has(.cs-main:focus-visible) { box-shadow: 0 0 0 3px var(--accent-ring); border-color: var(--focus); }
-.cs-main .tx { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-width: 0; }
-.cs-main .nm { font-size: 13.5px; font-weight: 600; }
-.cs-main .sub { font-size: var(--fs-xs); line-height: 1.4; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 商店: cards in two columns in the list's style, each a button that opens the page and one that adds */
+.cs-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.cs-card { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; min-height: 64px; padding-right: 12px; border: 1px solid var(--edge); border-radius: var(--r-lg); background: var(--panel); }
+.cs-card:hover { background: var(--hover); }
+.cs-card .btn.cs-main { flex: 1; min-width: 0; justify-content: flex-start; gap: 12px; align-self: stretch; min-height: 62px; padding: 8px 4px 8px 14px; border: 0; border-radius: 13px; background: transparent; text-align: left; white-space: normal; }
+.cs-card .btn.cs-main:hover:not(:disabled), .cs-card .btn.cs-main:active:not(:disabled) { background: transparent; }
+.cs-card .btn.cs-main:focus-visible { outline: none; }
+.cs-card:has(.cs-main:focus-visible) { box-shadow: inset 0 0 0 2px var(--focus); }
+.cs-main .nm { font-size: 13.5px; }
+.cs-main .sub { font-size: 12.5px; line-height: 1.45; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cs-main .sub.wait { color: var(--accent-text); }
 .cs-card > .btn { flex: none; padding-inline: 10px; }
 .cs-card > .cs-state { flex: none; font-size: var(--fs-xs); }
@@ -107,29 +138,23 @@
 .secret-row { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 4px 4px 4px 12px; border-radius: var(--r-sm); background: var(--surface-2); font-size: var(--fs-sm); }
 .secret-row .nm { font-weight: 600; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12.5px; overflow-wrap: anywhere; }
 .secret-row .where { flex: 1; min-width: 0; color: var(--text-3); font-size: var(--fs-xs); display: inline-flex; align-items: center; gap: 5px; }
-.secret-row .where .i { width: 12px; height: 12px; flex: none; }
 .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: var(--sp-2); }
 .trust { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--r-md); background: var(--warn-soft); border: 1px solid var(--warn-edge); font-size: 12.5px; line-height: 1.55; color: var(--text-2); }
-.trust > .i { width: 15px; height: 15px; flex: none; color: var(--warn); margin-top: 2px; }
+.trust > .i { color: var(--warn); margin-top: 2px; }
 .trust b { color: var(--text); font-weight: 600; }
-
-/* The record of actions */
-.cs-audit { margin-top: 28px; }
-.audit > .row { min-height: var(--h-row); padding: 6px 0; }
-.conn-audit .t { overflow-wrap: anywhere; font-size: 13.5px; }
-.conn-audit .d { font-size: var(--fs-xs); }
 
 @media (max-width: 720px) {
   .cs-grid { grid-template-columns: minmax(0, 1fr); }
-  .cs-tools { margin-left: 0; width: 100%; }
-  .cs-tools .field { flex: 1; width: auto; }
+  .cs-find { margin-left: 0; width: 100%; }
+  .cs-find .field { flex: 1; width: auto; }
   .add-grid .two { grid-template-columns: minmax(0, 1fr); }
   .cs-head { flex-wrap: wrap; }
   .cs-join { width: 100%; }
+  .cs-scrim { padding: 16px; }
 }
 
 /* The code of a device login: large monospace keycaps and the one button that copies it and opens the page */
-.cs-device { display: flex; flex-direction: column; align-items: center; gap: 14px; margin-bottom: 20px; padding: 20px 16px; border: 1px solid var(--btn-edge); border-radius: 12px; background: var(--panel); }
+.cs-device { display: flex; flex-direction: column; align-items: center; gap: 14px; margin-bottom: 20px; padding: 20px 16px; border: 1px solid var(--edge); border-radius: var(--r-lg); background: var(--panel); }
 .cs-device-hint { margin: 0; font-size: 13px; color: var(--text-2); text-align: center; text-wrap: pretty; }
 .cs-code { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px; user-select: text; }
 .cs-cap { display: inline-grid; place-items: center; width: 36px; height: 46px; border: 1px solid var(--key-edge); border-bottom-width: 3px; border-radius: 8px; background: var(--key); color: var(--text); font: 600 24px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; }

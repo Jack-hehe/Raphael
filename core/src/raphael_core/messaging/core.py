@@ -22,8 +22,10 @@ from .words import heard, words
 logger = logging.getLogger(__name__)
 
 MAX_INCOMING_CHARS = 4000
-# A voice message longer than this, or larger, is declined without being downloaded.
-MAX_VOICE_SECONDS = 120
+# A voice message larger than this is declined without being downloaded. It is the most a bot may
+# download from Telegram (getFile), so no message the bot could fetch is turned away for its size;
+# the bound only keeps what a message holds in memory in check. A voice message has no limit of
+# length: one of any length is heard whole.
 MAX_VOICE_BYTES = 20 * 1024 * 1024
 
 # ask(session_id, text, language, source) -> the text to send back. stop(session_id) ends what the
@@ -33,8 +35,9 @@ Stop = Callable[[str], Awaitable[bool]]
 Transcribe = Callable[[bytes, str], Awaitable[str]]
 
 
-class VoiceTooLong(Exception):
-    """A voice message that holds more speech than a message may."""
+class VoiceTooLarge(Exception):
+    """A voice message that would take more memory to hear than a message may: a file larger than
+    `MAX_VOICE_BYTES`, or audio of more than two channels."""
 
 
 def session_id(kind: str, chat: str) -> str:
@@ -201,22 +204,22 @@ class Switchboard:
             await self._reply(chat, prefix + answer)
 
     async def _hear(self, voice: Attachment, language: str) -> str:
-        """The words of a voice message. Declined before it is downloaded when it is too long or
-        too large; the audio is held in memory only, for as long as this takes."""
+        """The words of a voice message, however long it is. Declined before it is downloaded when
+        it is too large; the audio is held in memory only, for as long as this takes."""
         assert self._transcribe is not None
-        too_long = words(language, "voice_long", seconds=str(MAX_VOICE_SECONDS))
-        if (voice.duration or 0) > MAX_VOICE_SECONDS or (voice.size or 0) > MAX_VOICE_BYTES:
-            raise _Say(too_long)
+        too_large = words(language, "voice_large", mb=str(MAX_VOICE_BYTES // (1024 * 1024)))
+        if (voice.size or 0) > MAX_VOICE_BYTES:
+            raise _Say(too_large)
         data = await self._channel.fetch(voice, MAX_VOICE_BYTES)
         try:
             transcript = await self._transcribe(data, language)
-        except VoiceTooLong:
-            raise _Say(too_long) from None
+        except VoiceTooLarge:
+            raise _Say(too_large) from None
         finally:
             del data
         if not transcript.strip():
             raise _Say(words(language, "voice_empty"))
-        return transcript.strip()[:MAX_INCOMING_CHARS]
+        return transcript.strip()
 
     async def _reply(self, chat: str, text: str) -> None:
         await self._channel.send(chat, text)

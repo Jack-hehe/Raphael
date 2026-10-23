@@ -2,18 +2,21 @@
 
 `build_app` makes an `App`, a Router with every method of the core on it: the brain's
 (raphael_core.brain), the dictation service's (`dictation.*`, raphael_core.device), the voice
-assistant's (`agent.*`, raphael_core.agent), the plugins' (`integrations.*`,
-raphael_core.integrations) and the few that belong to none of them (`core.*`, `models.*`,
-`audio.*`). `__main__` serves it on stdio.
+assistant's (`agent.*`, raphael_core.agent), the background worker's (`worker.*`,
+raphael_core.background), the plugins' (`integrations.*` and `toolsets.list`,
+raphael_core.integrations), the messaging apps' (`messaging.<app>.*`, raphael_core.messaging) and
+the few that belong to none of them (`core.*`, `models.*`, `audio.*`). `__main__` serves it on
+stdio.
 
 Start-up. The app's first calls come within seconds of the process starting (`core.hello`, the
 saved microphone, the settings page's questions), so the models, which take tens of seconds to
 load, are never waited for: the first sherpa-onnx object of a process pays about 15 s of ONNX
 Runtime start-up and the engine a few more. A worker thread imports the speech libraries (the
-"kit": numpy, sherpa-onnx, PortAudio), builds the dictation service and then loads the two models.
-A dictation started before they are loaded still records: the audio queues up, and
-`dictation.stop` waits for the models. `dictation.*` and the methods that need
-the kit wait for them instead of failing.
+"kit": numpy, sherpa-onnx, PortAudio), builds the dictation service and then loads the models that
+are downloaded: the voice activity detector and the local speech engine, if the user has one (with
+the cloud engine there need not be any). A dictation started before they are loaded still records:
+the audio queues up, and `dictation.stop` waits for the models. `dictation.*` and the methods that
+need the kit wait for them instead of failing.
 
 The libraries themselves are imported before the core reads its first request (`__main__` calls
 `wait_for_libraries`). On Windows, numpy's DLLs hang while they load if another thread is blocked
@@ -25,9 +28,10 @@ else heavy imported at run time (PyTorch for TTS, say) is exposed to the same tr
 
 Speech-to-text. The `stt_engine` setting, read at each `dictation.start`, picks the engine for that
 dictation: "local" is the engine on this computer; "cloud" sends each stretch of speech to the
-brain's `stt.transcribe` (OpenRouter) and falls back to the local engine, which still loads at
-start-up so the fallback costs no wait. Cloud stretches are cut at 30 s, not 10: the model hears
-more context, and it is fast enough that the last stretch is no long tail.
+brain's `stt.transcribe` (OpenRouter) and falls back to the local engine when there is one, which
+then loads at start-up so the fallback costs no wait (without one, the next stretch goes to the
+cloud again: device/cloud_stt.py). Cloud stretches are cut at 30 s, not 10: the model hears more
+context, and it is fast enough that the last stretch is no long tail.
 
 Threads. The event loop runs the brain and the router; the SQLite connection is used on it only.
 Everything that blocks (downloading a model, opening the microphone, loading a model) runs on a
@@ -63,6 +67,7 @@ from .agent.tools import Tools
 from .background.service import BackgroundService
 from .brain import textnorm
 from .brain.db import connect
+from .memory.service import MemoryService
 from .brain.openrouter import (
     ChatToolCall,
     ChatTurn,
@@ -85,13 +90,13 @@ from .messaging.service import MessagingService
 from .messaging.words import compose, words
 from .protocol import (
     BUSY,
-    INVALID_PARAMS,
     INTERNAL_ERROR,
+    NOT_CONFIGURED,
     NO_LOCAL_MODEL,
     NO_MICROPHONE,
-    NOT_CONFIGURED,
     PROTOCOL_VERSION,
     RpcError,
+    invalid_params,
 )
 from .router import Router
 
@@ -110,8 +115,10 @@ VAD_MODEL = "silero-vad"
 ENGINE_MODEL = "qwen3-asr"
 APP_MODELS = (VAD_MODEL, ENGINE_MODEL)
 
-# Speech without a pause is cut into pieces of at most this long and transcribed while the key is
-# still held, so there is no long tail to wait for after the release (the engine takes 20 s).
+# Speech without a pause is cut into pieces of at most this long and transcribed while the
+# recording goes on, so there is no long tail to wait for after the stop (the engine takes 20 s).
+# It is the size of one request, not a limit on the dictation, which may run as long as the user
+# speaks.
 DICTATION_SEGMENT_SECONDS = 10.0
 # The same for cloud speech-to-text: longer, so the model gets context (OpenRouter's upstream limit
 # is 60 s a request).
@@ -195,6 +202,10 @@ class EchoClient:
             data = {"prefix": "", "text": question.group(1) if question else "", "detail": ""}
         elif schema_name == "raphael_app":
             data = {"app": ""}
+        elif schema_name == "raphael_summary":  # the conversation folded into its summary
+            data = {"summary": "(the fake LLM keeps no summary)"}
+        elif schema_name == "raphael_memory":  # the reflection pass: nothing to change
+            data = {"actions": []}
         else:  # the cleanup
             text = user
             if text.startswith(_TRANSCRIPT_OPEN) and text.endswith(_TRANSCRIPT_CLOSE):
@@ -241,7 +252,7 @@ class EchoClient:
         def calling(name: str, arguments: dict) -> ChatTurn:
             raw = json.dumps(arguments)
             call = ChatToolCall(id=f"call_{seen}", name=name, arguments=arguments, raw_arguments=raw)
-            return ChatTurn("", [call], "tool_calls", "fake/echo", 0.0, 0, 0, 0)
+            return ChatTurn("", [call], "fake/echo", 0.0, 0, 0, 0)
 
         look = next((name for name in sorted(offered) if name.endswith("__look")), None)
         slow = next((name for name in sorted(offered) if name.endswith("__slow")), None)
@@ -252,7 +263,7 @@ class EchoClient:
         if look is None and "local_time" in offered and seen == 0:
             return calling("local_time", {})
         report = {"prefix": "告", "text": f"The scripted task saw {seen} results.", "detail": ""}
-        return ChatTurn(json.dumps(report), [], "stop", "fake/echo", 0.0, 0, 0, 0)
+        return ChatTurn(json.dumps(report), [], "fake/echo", 0.0, 0, 0, 0)
 
     async def chat_text(self, **kwargs: Any) -> TextCompletion:
         return TextCompletion(
@@ -328,6 +339,11 @@ class _SharedSegmenter:
     def speech_seconds(self) -> float:
         segmenter = self._speech.built_segmenter()
         return 0.0 if segmenter is None else segmenter.speech_seconds
+
+    @property
+    def silence_seconds(self) -> float:
+        segmenter = self._speech.built_segmenter()
+        return 0.0 if segmenter is None else segmenter.silence_seconds
 
 
 class SpeechModels:
@@ -667,10 +683,6 @@ def _import_kit() -> SimpleNamespace:
     )
 
 
-def _invalid(message: str) -> RpcError:
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
-
-
 class App(Router):
     """The Router of the whole core. `start()` begins loading the speech side; `aclose()` closes
     what the app opened (the microphone, the HTTP client, the database).
@@ -680,7 +692,8 @@ class App(Router):
     microphone; with `fake_llm`, an in-process client returns the transcript unchanged, the key and
     the plugins' secrets are kept in memory, and the voice assistant does nothing to this computer.
     `agent_actions` is what the assistant does to it otherwise (Windows, by default). `load_kit` is
-    for tests.
+    for tests. `memory_dir` is where Raphael's long-term memory is kept (`paths.memory_dir`, which
+    goes with `data_dir`, by default).
     """
 
     def __init__(
@@ -693,6 +706,7 @@ class App(Router):
         manager: ModelManager | None = None,
         load_kit: Callable[[], Any] | None = None,
         agent_actions: DeviceActions | None = None,
+        memory_dir: Path | None = None,
     ) -> None:
         super().__init__()
         self._fake_audio = fake_audio
@@ -735,6 +749,15 @@ class App(Router):
             self._conn, self.client, self.gate, Tools(self.client), notify=self._worker_notice
         )
         self.background.register(self)
+        # Raphael's memory: the notes on this PC, the summary of the conversation, the reflection.
+        self.memory = MemoryService(
+            self._conn,
+            paths.memory_dir(data_dir) if memory_dir is None else memory_dir,
+            self.client,
+            self.keys,
+        )
+        self.memory.register(self)
+        self.background.use_memory(self.memory)
         self.agent = AgentService(
             self._conn,
             self.client,
@@ -745,6 +768,7 @@ class App(Router):
             gate=self.gate,
             background=self.background,
             notify=self.notify,
+            memory=self.memory,
         )
         self.agent.register(self)
         # Messaging apps (Telegram): messages reach the assistant like a spoken question.
@@ -942,6 +966,7 @@ class App(Router):
             ("end the messaging connections", self.messaging.aclose),
             ("end the background tasks", self.background.aclose),
             ("end the assistant's requests", self.agent.aclose),
+            ("end the memory's background pass", self.memory.aclose),
             ("close the HTTP client", self.client.aclose),
             ("wait for the start-up threads", join_threads),
             ("let go of the speech models", close_speech),
@@ -1079,9 +1104,9 @@ class App(Router):
         return compose(reply.get("prefix", ""), reply.get("text", ""), detail)
 
     async def _transcribe_from_messaging(self, audio: bytes, language: str) -> str:
-        """The words of a voice message, heard by the engine that dictation uses (the cloud with
-        the local one behind it, or the local one), with the user's dictionary and the same
-        normalising. The audio stays in memory."""
+        """The words of a voice message, heard by the engine that dictation uses (the cloud, with
+        the local one behind it if there is one, or the local one), with the user's dictionary and
+        the same normalising. The audio stays in memory."""
         from .device.dictation import dictionary_hints  # numpy: after the start-up
         from .messaging import voice
 
@@ -1090,12 +1115,11 @@ class App(Router):
         cloud = self._stt_engine == "cloud"
 
         def hear() -> str:
-            samples = voice.decode(audio)
             engine = self._dictation_engine()
             path = self.manager.dir(VAD_MODEL) / REGISTRY[VAD_MODEL].files[0]
             seconds = CLOUD_SEGMENT_SECONDS if cloud else DICTATION_SEGMENT_SECONDS
             segmenter = self._kit.result().Segmenter(path, max_segment_s=seconds)
-            return voice.transcribe_clip(samples, engine, segmenter, hints)
+            return voice.transcribe_voice(audio, engine, segmenter, hints)
 
         heard = await asyncio.to_thread(hear)
         if not heard.strip():
@@ -1135,6 +1159,7 @@ class App(Router):
     async def _hello(self, params: dict) -> dict:
         self.messaging.start()  # a Telegram bot that was left on polls again
         self.agent.prewarm()  # the app is up: read the Start menu now, not at the first "open"
+        self.memory.start()  # and look for turns the reflection pass has not read, soon
         return {"protocol": PROTOCOL_VERSION, "version": __version__}
 
     async def _shutdown(self, params: dict) -> dict:
@@ -1187,12 +1212,12 @@ class App(Router):
     async def _models_ensure(self, params: dict) -> dict:
         names = params.get("names")
         if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
-            raise _invalid("names must be a list of model names")
+            raise invalid_params("names must be a list of model names")
         engine = self._speech.engine_name
         allowed = {VAD_MODEL} if engine is None else {VAD_MODEL, engine}
         unknown = [n for n in names if n not in allowed]
         if unknown:
-            raise _invalid(f"not a model the app downloads: {', '.join(unknown)}")
+            raise invalid_params(f"not a model the app downloads: {', '.join(unknown)}")
         loop = asyncio.get_running_loop()
 
         def download() -> None:
@@ -1210,11 +1235,11 @@ class App(Router):
         """The model of the catalogue that `params` name."""
         name = params.get("name")
         if not isinstance(name, str):
-            raise _invalid("name must be a model name")
+            raise invalid_params("name must be a model name")
         try:
             return local_model(name).name
         except ValueError:
-            raise _invalid(f"not a model of the catalogue: {name}") from None
+            raise invalid_params(f"not a model of the catalogue: {name}") from None
 
     async def _models_local(self, params: dict) -> dict:
         """The catalogue: each model with its size and whether it is on disk, the one the local
@@ -1350,7 +1375,7 @@ class App(Router):
     async def _audio_devices(self, params: dict) -> dict:
         refresh = params.get("refresh", True)
         if type(refresh) is not bool:
-            raise _invalid("refresh must be true or false")
+            raise invalid_params("refresh must be true or false")
         kit = await self._wait_for(self._kit)
         # Listing reads the devices again, so that a headset plugged in since shows up, and that is
         # not done while a stream is open. The settings meter's stream is the one that usually is:
@@ -1374,7 +1399,7 @@ class App(Router):
     async def _audio_set_device(self, params: dict) -> dict:
         name = params.get("name")
         if name is not None and not isinstance(name, str):
-            raise _invalid("name must be a string or null")
+            raise invalid_params("name must be a string or null")
         name = name if name is not None and name.strip() else None  # blank: the default
         changed = name != self._device_name
         self._device_name = name
@@ -1385,7 +1410,7 @@ class App(Router):
     async def _audio_monitor(self, params: dict) -> dict:
         on = params.get("on")
         if type(on) is not bool:
-            raise _invalid("on must be true or false")
+            raise invalid_params("on must be true or false")
         if not on and self._monitor is None:
             return {}
         monitor = await self._get_monitor()

@@ -5,53 +5,10 @@ is tested in tests/background."""
 import pytest
 
 from raphael_core.agent.persona import PHRASES, phrase
-from raphael_core.background.tasks import Refused
 
-from .conftest import decision
+from .conftest import FakeBackground, decision
 from .test_plugin_model import Catalog, llm  # noqa: F401
 from .test_service import make_rig, spoken  # noqa: F401
-
-
-class FakeBackground:
-    def __init__(self):
-        self.submitted = []
-        self.attached = []
-        self.pruned = []
-        self.cleared = 0
-        self.refuse = None
-        self.fail = None
-        self.briefs = []
-
-    def submit(self, *, session_id, text, language, model):
-        if self.refuse:
-            raise Refused(self.refuse)
-        if self.fail:
-            raise self.fail
-        self.submitted.append((session_id, text, language, model))
-        return len(self.submitted)
-
-    def brief_for_assistant(self, limit=3):
-        return list(self.briefs)
-
-    def attach_turn(self, task_id, turn_id):
-        self.attached.append((task_id, turn_id))
-
-    def prune(self, older_than_ms):
-        self.pruned.append(older_than_ms)
-
-    def clear(self):
-        self.cleared += 1
-
-    def tasks_for_turns(self, turn_ids):
-        # Each task as the history shows it with the turn that handed it over.
-        brief = {"id": 0, "state": "running", "started_at_ms": 5}
-        step = {"kind": "tool", "tool": "look", "server": "Notes", "outcome": "ok", "ms": 12,
-                "reason": None, "at_ms": 6}  # fmt: skip
-        return {
-            turn_id: ({**brief, "id": task_id}, [step])
-            for task_id, turn_id in self.attached
-            if turn_id in turn_ids
-        }
 
 
 @pytest.fixture
@@ -182,16 +139,12 @@ async def test_esc_does_not_stop_the_background(rig, client, background):
     assert background.submitted and background.attached  # nothing was taken back
 
 
-async def test_the_old_tasks_go_with_the_history_when_it_is_pruned_and_cleared(rig, client, background):
+async def test_the_tasks_go_with_the_history_when_it_is_cleared_and_are_never_pruned(
+    rig, client, background
+):
     client.decisions.append(decision("delegate"))
     await rig.ask("do it", language="en")
     assert await rig.call("agent.history.clear") == {"deleted": 1}
     assert background.cleared == 1
-    assert background.pruned  # the retention was applied when the service started
-
-
-async def test_without_a_worker_the_route_is_answered_as_before(make_rig, client):
-    rig = make_rig()
-    client.decisions.append(decision("delegate"))
-    result = await rig.ask("do it", language="en")
-    assert result["text"] == phrase("en", "delegate")
+    # The tasks are part of the one conversation, which the retention of the dictations leaves be.
+    assert not hasattr(background, "pruned")

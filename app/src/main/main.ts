@@ -8,6 +8,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { loadGlyphTexture } from "../overlay/emblem";
 import * as api from "./api";
+import { avatarHTML, loadAvatar, onAvatarChange } from "./avatar";
 import { createAgent } from "./pages/agent";
 import { createDictionary } from "./pages/dictionary";
 import { createHistory } from "./pages/history";
@@ -18,14 +19,16 @@ import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
 import { Navigation, type Place, samePage } from "./nav-history";
 import { installNavInput } from "./nav-input";
+import { labelNavItem, navItemHTML } from "./nav-items";
 import { brandIcon } from "./brand";
 import { installWindowHotkeys } from "./window-hotkeys";
 import { followTray } from "./tray-open";
 import { installWindowChrome, labelWindowControls, showMaximized } from "./window-chrome";
-import type { AppContext, DeviceSettings, MainEvent, Page, PageId, SettingsPane } from "./types";
+import type { AgentDraft, AppContext, DeviceSettings, MainEvent, Page, PageId, SettingsPane } from "./types";
 import { spendMini } from "./spend";
 import { Undoable } from "./undo";
-import { type IconName, ico, toaster } from "./ui";
+import { Cleared } from "./cleared";
+import { type IconName, esc, ico, leave, toaster } from "./ui";
 import "./styles.css";
 
 /** The glyph ring texture (app/public/brand/glyph-ring.png); if it fails to load the emblem draws a plain ring. */
@@ -49,9 +52,10 @@ const DEFAULT_DEVICE: DeviceSettings = {
 /** A page that comes on screen again within this time of the last time is not loaded again. */
 const RESHOW_MS = 1000;
 
-const NAV: { id: Exclude<PageId, "settings">; name: string; icon: IconName }[] = [
+/** The pages of the sidebar. 拉斐爾's picture is Raphael's face (avatar.ts), not an icon. */
+const NAV: { id: Exclude<PageId, "settings">; name: string; icon: IconName | "face" }[] = [
   { id: "home", get name() { return t("main.001"); }, icon: "home" },
-  { id: "agent", get name() { return t("nav.agent"); }, icon: "chat" },
+  { id: "agent", get name() { return t("nav.agent"); }, icon: "face" },
   { id: "history", get name() { return t("main.002"); }, icon: "clock" },
   { id: "dictionary", get name() { return t("main.003"); }, icon: "book" },
 ];
@@ -131,6 +135,7 @@ async function start(): Promise<void> {
       return () => void listeners.delete(handler);
     },
     undo: new Undoable(toaster),
+    cleared: new Cleared(),
     closeSettings: () => closeSettings(),
     rerunGuide: () => startGuide("rerun"),
   };
@@ -145,8 +150,8 @@ async function start(): Promise<void> {
   const nav = document.getElementById("nav")!;
   const main = document.getElementById("main")!;
   const guide = document.getElementById("ob")!;
-  const button = (id: PageId, name: string, icon: IconName): string =>
-    `<button type="button" class="nav" data-go="${id}" aria-current="false">${ico(icon)}<span>${name}</span></button>`;
+  const face = (): string => avatarHTML({ size: 18, cls: "nav-face" });
+  const button = (id: PageId, name: string, icon: IconName | "face"): string => navItemHTML(id, name, icon === "face" ? face() : ico(icon));
   nav.innerHTML =
     `<div class="brand" data-window-drag>${brandIcon()}<span>Raphael</span></div>` +
     NAV.map((item) => button(item.id, item.name, item.icon)).join("") +
@@ -154,9 +159,23 @@ async function start(): Promise<void> {
     `<button type="button" class="usage-box" data-go="settings" data-pane="usage" hidden></button>` +
     t("main.004", { p0: ico("gear") });
   const usageBox = nav.querySelector<HTMLElement>(".usage-box")!;
+  const agentItem = nav.querySelector<HTMLElement>('.nav[data-go="agent"]')!;
+  // 拉斐爾 shows Raphael's face, the person's picture once there is one.
+  onAvatarChange(() => agentItem.querySelector(".av")?.replaceWith(document.createRange().createContextualFragment(face())));
+  void loadAvatar(api.avatarGet);
+  /** A gold dot on 拉斐爾 while one of his YES/NO questions waits for its answer. */
+  let waitingQuestion: string | null = null;
+  const markQuestion = (id: string | null): void => {
+    waitingQuestion = id;
+    agentItem.classList.toggle("is-asking", id !== null);
+    agentItem.querySelector(".nav-dot")?.remove();
+    if (id !== null) agentItem.insertAdjacentHTML("beforeend", `<span class="nav-dot" role="img" aria-label="${esc(t("agent.asking"))}"></span>`);
+  };
+  void api.agentQuestionOpen().then((open) => markQuestion(open?.id ?? null), () => {});
   function translateNavigation(): void {
     nav.setAttribute("aria-label", t("nav.pages"));
-    for (const item of NAV) nav.querySelector<HTMLElement>(`[data-go="${item.id}"] span`)!.textContent = item.name;
+    markQuestion(waitingQuestion);
+    for (const item of NAV) labelNavItem(nav, item.id, item.name);
     nav.querySelector<HTMLElement>(".nav-bottom span")!.textContent = t("nav.settings");
   }
   translateNavigation();
@@ -210,15 +229,22 @@ async function start(): Promise<void> {
   });
   installNavInput(window, (step) => navigation.step(step));
 
-  /** Goes to a page, or opens the settings panel over the one on screen (at `pane`, if given). */
-  function go(id: PageId, pane?: SettingsPane): void {
+  /**
+   * Goes to a page, or opens the settings panel over the one on screen (at the tab `arg` names, if
+   * any). The 拉斐爾 page is handed a draft for its composer the same way.
+   */
+  function go(id: PageId, arg?: SettingsPane | AgentDraft): void {
     navigation.visit(() => {
-      if (id === "settings") openSettings(pane);
-      else showPage(id);
+      if (id === "settings") openSettings(arg?.startsWith("draft:") ? undefined : (arg as SettingsPane | undefined));
+      else showPage(id, arg?.startsWith("draft:") ? arg : undefined);
     });
   }
 
-  function showPage(id: Exclude<PageId, "settings">): void {
+  /**
+   * Shows a page in place of the one on screen. A page that comes on screen fades in and rises a
+   * little (styles.css, on its becoming visible); the same page shown again stands still.
+   */
+  function showPage(id: Exclude<PageId, "settings">, arg?: SettingsPane | AgentDraft): void {
     if (settingsOpen) closeSettings(false);
     if (current && current !== id) pages[current].hide();
     current = id;
@@ -228,13 +254,18 @@ async function start(): Promise<void> {
     );
     main.scrollTop = 0;
     shownAt = performance.now();
-    void pages[id].show();
+    void pages[id].show(arg);
     void refreshUsage();
   }
+
+  /** Stops the settings' way out (`closeSettings`) when they are opened again before it is over. */
+  let stopLeaving: (() => void) | null = null;
 
   function openSettings(pane?: SettingsPane): void {
     if (settingsOpen) return;
     settingsOpen = true;
+    stopLeaving?.();
+    stopLeaving = null;
     document.documentElement.dataset.windowModal = "true";
     opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     settings.el.hidden = false;
@@ -242,12 +273,19 @@ async function start(): Promise<void> {
     void settings.show(pane);
   }
 
+  /**
+   * Closes the settings at once for everything but the eye: the page under them works again, and the
+   * panel shrinks and fades away (140 ms) before it is hidden, letting clicks through meanwhile.
+   */
   function closeSettings(restoreFocus = true): void {
     if (!settingsOpen) return;
     settingsOpen = false;
     delete document.documentElement.dataset.windowModal;
     settings.hide();
-    settings.el.hidden = true;
+    stopLeaving = leave(settings.el, 140, () => {
+      settings.el.hidden = true;
+      stopLeaving = null;
+    });
     document.querySelector<HTMLElement>(".wbody")!.inert = false;
     if (restoreFocus) opener?.focus();
     opener = null;
@@ -276,6 +314,11 @@ async function start(): Promise<void> {
   window.addEventListener("focus", comeBack);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) comeBack();
+  });
+
+  ctx.onEvent((event) => {
+    if (event.type === "AgentQuestion") markQuestion(event.id);
+    else if (event.type === "AgentQuestionClosed" && event.id === waitingQuestion) markQuestion(null);
   });
 
   // The tray's menu asks for a page. Rust sends this before it shows the window.

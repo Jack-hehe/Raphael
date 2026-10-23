@@ -34,7 +34,6 @@ DEFAULT_CLEANUP_MODEL: str = DEFAULTS["cleanup_model"]
 # Tried in this order when the chosen model fails. All three models can run with reasoning off,
 # which google/gemini-3.8-flash cannot.
 CLEANUP_FALLBACKS = ["anthropic/claude-haiku-5.5", "google/gemini-3.1-flash-lite"]
-CLEANUP_MODEL_CHOICES = [DEFAULT_CLEANUP_MODEL, *CLEANUP_FALLBACKS]
 
 # Sent with every request: OpenRouter lists them as the name of the app that made the call.
 _APP_HEADERS = {"HTTP-Referer": "http://localhost/raphael", "X-OpenRouter-Title": "Raphael"}
@@ -130,7 +129,6 @@ class ChatTurn:
 
     content: str
     calls: list[ChatToolCall]
-    finish_reason: str | None
     model: str  # the model that answered, which can be one of the fallbacks
     cost_usd: float  # always a number the spend can store: 0 or more, and finite
     prompt_tokens: int
@@ -507,11 +505,9 @@ def _to_chat_turn(reply: _Reply, requested_model: str) -> ChatTurn:
         )
     usage = _usage_of(body)
     answered_by = body.get("model")
-    finish = choice.get("finish_reason")
     return ChatTurn(
         content=_content_text(message.get("content")),
         calls=calls,
-        finish_reason=finish if isinstance(finish, str) else None,
         model=answered_by if isinstance(answered_by, str) and answered_by else requested_model,
         cost_usd=_usage_cost(usage),
         prompt_tokens=_usage_count(usage, "prompt_tokens"),

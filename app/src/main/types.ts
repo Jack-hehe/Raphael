@@ -1,6 +1,7 @@
 // What the core and the Rust side send to the main window. Type-only: this file has no code.
 
 import type { Undoable } from "./undo";
+import type { Cleared } from "./cleared";
 
 /** `status.get` */
 export interface Status {
@@ -123,10 +124,10 @@ export interface StatsSummary {
   streak_days: number;
   /** The last 14 days (or as many as asked for), oldest first, today last. */
   by_day: { date: string; dictations: number; words: number }[];
-  /** Days with at least one dictation, in all the history (absent from older cores). */
-  active_days?: number;
-  /** The most days in a row with a dictation, ever (absent from older cores). */
-  longest_streak_days?: number;
+  /** Days with at least one dictation, in all the history. */
+  active_days: number;
+  /** The most days in a row with a dictation, ever. */
+  longest_streak_days: number;
   /** Words per minute of speech; null before there is enough to tell. */
   speed_wpm: number | null;
   /** How much longer typing the same words would have taken. */
@@ -150,8 +151,8 @@ export interface HistoryItem {
   llm_ms: number;
   model: string | null;
   cost_usd: number;
-  /** The speech-to-text that heard it: a cloud model's slug or the local engine's name ("a+b" when the cloud fell back midway). Absent from older cores. */
-  stt?: string | null;
+  /** The speech-to-text that heard it: a cloud model's slug or the local engine's name ("a+b" when the cloud fell back midway); null when it is not known. */
+  stt: string | null;
 }
 
 /** A turn of the conversation with Raphael (`agent.history.list`, newest first). */
@@ -219,8 +220,8 @@ export interface DictionaryEntry {
   id: number;
   word: string;
   misheard: string[];
-  /** The core uses "learned" for corrections; "auto" is also accepted. Absent: typed. */
-  source?: "manual" | "suggested" | "learned" | "auto";
+  /** "manual" for a word the user typed or imported, "suggested" for one taken from a suggestion of an earlier version, "learned" for one Raphael added by itself after the user corrected it in a pasted dictation. */
+  source: "manual" | "suggested" | "learned";
 }
 
 /** `settings.get`: the settings of the brain. */
@@ -229,10 +230,8 @@ export interface BrainSettings {
   cleanup_model: string;
   /** The languages the speech recognition listens for: locale ids such as "zh-TW", one to five. */
   languages: string[];
-  /** Legacy language setting, derived from `languages` by the core. */
-  language?: string;
   history_retention_days: number;
-  /** "cloud" (OpenRouter, the local engine as fallback) or "local". */
+  /** "cloud" (OpenRouter, the local engine as fallback when there is one) or "local". */
   stt_engine: string;
   /** Which model of the catalogue the local engine is. */
   stt_local_model?: string | null;
@@ -330,7 +329,25 @@ export type MainEvent =
   /** A key of Raphael went down or up (from the hook or from the window itself), whether or not the guide practises. */
   | { type: "Hotkey"; kind: HotkeyKind }
   /** A dictation (`agent` false) or a question to Raphael (`agent` true) moved on. */
-  | { type: "Dictation"; phase: DictationPhase; agent: boolean };
+  | { type: "Dictation"; phase: DictationPhase; agent: boolean }
+  /** Raphael asks a YES/NO question (the overlay shows it too): the 拉斐爾 page's card answers it as well. */
+  | ({ type: "AgentQuestion" } & AgentQuestion)
+  /** The question `id` was answered (here or on the overlay), ran out or was dropped. */
+  | { type: "AgentQuestionClosed"; id: string }
+  /** The microphone's loudness, 0 to 1, while a question to Raphael is recorded (never a dictation's). */
+  | { type: "VoiceLevel"; value: number };
+
+/** A YES/NO question of Raphael's that waits for its answer (`AgentQuestion`, `agent_question_open`). */
+export interface AgentQuestion {
+  id: string;
+  /** 問, or its word in the language of the window. */
+  prefix: string;
+  text: string;
+  /** `T2` is answered by a click; `T3`, which cannot be undone, by a YES that is held first. */
+  tier: "T2" | "T3";
+  /** How long the question waits for an answer in all, in ms. */
+  timeout_ms: number;
+}
 
 export type HotkeyKind = "dictation_down" | "dictation_up" | "agent_down" | "agent_up" | "paste_last" | "cancel";
 export type DictationPhase = "listening" | "processing" | "pasted" | "cancelled" | "failed";
@@ -353,22 +370,34 @@ export type TrayAction = "add-word";
 export type PageId = "home" | "agent" | "history" | "dictionary" | "settings";
 
 /** The tabs of the settings panel. */
-export type SettingsPane = "general" | "dictation" | "agent" | "connections" | "usage" | "about";
+export type SettingsPane = "general" | "dictation" | "agent" | "connections" | "messaging" | "usage" | "data" | "about";
+
+/**
+ * What the 拉斐爾 page is to put in its composer when it opens, ready to be sent or changed: the
+ * 「試試看」 of a connected service (Settings › 連接) goes there with one of its example questions.
+ */
+export type AgentDraft = `draft:${string}`;
 
 /** One of the five pages of the main window. */
 export interface Page {
   readonly id: PageId;
   readonly el: HTMLElement;
-  /** The page comes on screen (or the window comes back): load what it shows. The settings open at the tab given. */
-  show(pane?: SettingsPane): void | Promise<void>;
+  /**
+   * The page comes on screen (or the window comes back): load what it shows. The settings open at
+   * the tab given; the 拉斐爾 page may be given a draft for its composer.
+   */
+  show(arg?: SettingsPane | AgentDraft): void | Promise<void>;
   /** The page goes off screen (or the window goes away): stop what runs for it. */
   hide(): void;
 }
 
 /** What main.ts gives the pages. */
 export interface AppContext {
-  /** Goes to a page. The settings panel opens at `pane` if one is given (the key and the limit are in "usage"). */
-  go(page: PageId, pane?: SettingsPane): void;
+  /**
+   * Goes to a page. The settings panel opens at `arg` if a tab is given (the key and the limit are in
+   * "usage"); the 拉斐爾 page takes a draft for its composer (the settings close on the way).
+   */
+  go(page: PageId, arg?: SettingsPane | AgentDraft): void;
   /** Opens the history at one day, `2026-10-14`: its dictations only, with a way back to all of them. */
   showDay(date: string): void;
   /** The device settings as they are now. */
@@ -381,6 +410,11 @@ export interface AppContext {
   onEvent(handler: (event: MainEvent) => void): () => void;
   /** Things that happen only after 10 seconds, with 「復原」. */
   undo: Undoable;
+  /**
+   * The dictation history or the conversation was emptied from Settings › 資料: the pages that
+   * show it listen here and drop what they loaded.
+   */
+  cleared: Cleared;
   /** Closes the settings panel (it opens with `go("settings")`). */
   closeSettings(): void;
   /** Opens the first-run guide again over the window (the settings close first); it does not clear `onboarded`. */

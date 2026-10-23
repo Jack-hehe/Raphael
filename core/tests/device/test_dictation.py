@@ -19,8 +19,8 @@ import pytest
 from raphael_core.device import audio, dictation
 from raphael_core.device.audio import NoMicrophoneError
 from raphael_core.device.dictation import (
-    MAX_RECORDING_SECONDS,
     MIC_STALL_SECONDS,
+    SILENCE_STOP_SECONDS,
     SILENT_PEAK,
     DictationService,
     join_segments,
@@ -143,11 +143,18 @@ class FakeRecorder:
 
 class FakeSegmenter:
     """One segment per chunk. `speech_seconds` is the speech of the current dictation only: it
-    starts again at the first accept() after a flush(), like the real Segmenter's."""
+    starts again at the first accept() after a flush(), like the real Segmenter's.
+
+    With `emit_nothing` it hears no speech at all, and `silence_seconds` grows by every chunk;
+    otherwise every chunk is speech, and the silence starts again at each. `silences` holds the
+    sizes, in samples, of the chunks to take as silence all the same (a pause that is only a
+    pause: no segment comes of it)."""
 
     def __init__(self) -> None:
         self.emit_nothing = False
+        self.silences: set[int] = set()
         self.speech_seconds = 0.0
+        self.silence_seconds = 0.0
         self.accepted_samples = 0
         self.accept_calls = 0
         self.flush_calls = 0
@@ -165,11 +172,14 @@ class FakeSegmenter:
                 raise RuntimeError("the detector failed")
             if self._flushed:
                 self.speech_seconds = 0.0
+                self.silence_seconds = 0.0
                 self._flushed = False
             self.accept_calls += 1
             self.accepted_samples += frames.size
-            if self.emit_nothing:
+            if self.emit_nothing or frames.size in self.silences:
+                self.silence_seconds += frames.size / RATE
                 return []
+            self.silence_seconds = 0.0
             self.speech_seconds += frames.size / RATE
             return [frames]
         finally:
@@ -893,10 +903,13 @@ async def test_the_service_is_idle_while_the_brain_cleans_the_text(rig, router, 
     assert await start(router, "s2") == {}
 
 
-async def test_one_worker_thread_per_session_and_it_ends(rig, router):
+async def test_two_threads_per_session_and_they_end(rig, router):
     rig.recorder.chunks = [chunk(1.0)]
     await start(router)
-    assert len(our_threads()) == 1
+    assert sorted(t.name for t in our_threads()) == [
+        "raphael-dictation-s1-listen",
+        "raphael-dictation-s1-transcribe",
+    ]
     await stop(router)
     await wait_until(lambda: not our_threads())
     await start(router, "s2")
@@ -1046,17 +1059,20 @@ async def test_progress_follows_segments_that_are_transcribed_after_the_stop(
     await start(router)
     await rig.recorder.fed(3)
     assert await asyncio.to_thread(rig.engine.entered.wait, 5)  # inside the first segment
+    await wait_until(lambda: rig.segmenter.accept_calls == 3)  # cut while the engine is busy
     stopping = asyncio.ensure_future(stop(router))
-    await wait_until(lambda: progress(notifications) != [])
-    assert progress(notifications) == [("transcribing", 0, 2)]
+    # Three stretches and the one the segmenter may still hold; then the flush finds none more,
+    # while the engine is still inside the first.
+    await wait_until(lambda: len(progress(notifications)) >= 2)
+    assert progress(notifications) == [("transcribing", 0, 4), ("transcribing", 0, 3)]
     rig.engine.gate.set()
     await stopping
     steps = progress(notifications)
     assert steps == [
-        ("transcribing", 0, 2),
-        ("transcribing", 1, 2),
+        ("transcribing", 0, 4),
+        ("transcribing", 0, 3),
+        ("transcribing", 1, 3),
         ("transcribing", 2, 3),
-        ("transcribing", 3, 4),
         ("transcribing", 3, 3),
         ("cleaning", 3, 3),
     ]
@@ -1667,66 +1683,327 @@ async def test_a_cancelled_session_leaves_the_segmenter_flushed(rig, router):
     assert rig.segmenter.flush_calls == 1
 
 
-# --- the 300 s cap -------------------------------------------------------------------------------
+# --- no limit on the length ----------------------------------------------------------------------
 
 
-def test_the_cap_is_five_minutes():
-    assert MAX_RECORDING_SECONDS == 300
+def test_there_is_no_cap_on_a_recording():
+    assert not hasattr(dictation, "MAX_RECORDING_SECONDS")
     assert dictation.SAMPLE_RATE == audio.SAMPLE_RATE
 
 
-async def test_a_recording_is_capped_at_five_minutes(rig, router, caplog):
-    rig.recorder.chunks = [chunk(100.5, 0.0)] * 3  # 301.5 s
+async def test_a_recording_of_over_five_minutes_is_transcribed_whole(rig, router, brain, caplog):
+    rig.recorder.chunks = [chunk(100.5)] * 4  # 402 s of speech
     with caplog.at_level(logging.WARNING, logger=LOGGER):
         await start(router)
-        await rig.recorder.fed(3)
+        await rig.recorder.fed(4)
         r = await stop(router)
-    assert rig.segmenter.accepted_samples == 300 * RATE
-    assert [call["samples"] for call in rig.engine.calls] == [
-        round(100.5 * RATE),
-        round(100.5 * RATE),
-        300 * RATE - 2 * round(100.5 * RATE),
-    ]
-    assert r["audio_seconds"] == pytest.approx(300.0)
-    assert r["text"]  # what was kept is still transcribed
-    limit = [record for record in caplog.records if "limit" in record.getMessage()]
-    assert len(limit) == 1 and limit[0].levelno == logging.WARNING
+    assert rig.segmenter.accepted_samples == 4 * round(100.5 * RATE)
+    assert [call["samples"] for call in rig.engine.calls] == [round(100.5 * RATE)] * 4
+    assert r["audio_seconds"] == pytest.approx(402.0)
+    assert brain.finalize_params[-1]["raw_text"] == "text0 text1 text2 text3"
+    assert not caplog.records
 
 
-async def test_a_recording_that_ends_exactly_at_the_cap_loses_nothing(rig, router, caplog):
-    rig.recorder.chunks = [chunk(100.0, 0.0)] * 3
-    with caplog.at_level(logging.WARNING, logger=LOGGER):
-        await start(router)
-        await rig.recorder.fed(3)
-        r = await stop(router)
-    assert rig.segmenter.accepted_samples == 300 * RATE
-    assert r["audio_seconds"] == pytest.approx(300.0)
-    assert not [record for record in caplog.records if "limit" in record.getMessage()]
-
-
-async def test_after_the_cap_the_recording_goes_on_but_nothing_more_is_kept(
-    rig, router, monkeypatch, caplog
-):
-    monkeypatch.setattr(dictation, "MAX_RECORDING_SECONDS", 5)
-    rig.engine.texts = ["一", "二", "三", "四", "五", "六", "七", "八"]
-    rig.recorder.chunks = [chunk(1.0)] * 8
-    with caplog.at_level(logging.WARNING, logger=LOGGER):
-        await start(router)
-        await rig.recorder.fed(8)
-        assert rig.service.active  # still recording: the stop decides when it ends
-        r = await stop(router)
-    assert r["text"] == "一二三四五" and r["audio_seconds"] == pytest.approx(5.0)
-    assert len(rig.engine.calls) == 5
-    assert sum("limit" in record.getMessage() for record in caplog.records) == 1
-
-
-async def test_a_stop_after_the_cap_is_not_slowed_by_the_queue(rig, router, monkeypatch):
-    monkeypatch.setattr(dictation, "MAX_RECORDING_SECONDS", 2)
-    rig.recorder.chunks = [chunk(1.0)] * 50
+async def test_an_hour_of_dictation_keeps_being_transcribed(rig, router, brain, notifications):
+    rig.recorder.chunks = [chunk(1.0)] * 3600
     await start(router)
-    await rig.recorder.fed(50)
+    await rig.recorder.fed(3600)
+    assert rig.service.active  # still recording: nothing but the stop or a silence ends it
     r = await stop(router)
-    assert r["audio_seconds"] == pytest.approx(2.0)
+    assert len(rig.engine.calls) == 3600
+    assert r["audio_seconds"] == pytest.approx(3600.0)
+    assert brain.finalize_params[-1]["raw_text"].split() == [f"text{n}" for n in range(3600)]
+    assert silences(notifications) == []
+
+
+async def test_the_audio_is_let_go_once_the_segmenter_has_it(rig, router):
+    rig.engine.gate = threading.Event()  # the engine is slow: the first segment holds it up
+    rig.recorder.chunks = [chunk(1.0)] * 3
+    await start(router)
+    await rig.recorder.fed(3)
+    await wait_until(rig.engine.entered.is_set)
+    session = rig.service._session
+    await wait_until(lambda: rig.segmenter.accept_calls == 3)
+    assert session.queue.qsize() == 0  # the listener has heard it all, whatever the engine does
+    assert not any(isinstance(value, np.ndarray) for value in vars(session).values())
+    rig.engine.gate.set()
+    assert (await stop(router))["text"] == "text0 text1 text2"
+
+
+# --- the stop after ten seconds of silence -------------------------------------------------------
+
+
+def silences(seen: list) -> list:
+    return [params for method, params in seen if method == "dictation.silence"]
+
+
+def test_the_silence_that_ends_a_recording_is_ten_seconds():
+    assert SILENCE_STOP_SECONDS == 10.0
+
+
+async def test_ten_seconds_with_no_speech_from_the_start_tell_the_app_once(
+    rig, router, brain, notifications
+):
+    rig.segmenter.emit_nothing = True
+    rig.recorder.chunks = [chunk(1.0)] * 15
+    await start(router)
+    await rig.recorder.fed(15)
+    await wait_until(lambda: rig.segmenter.accept_calls == 15)
+    await wait_until(lambda: silences(notifications))
+    await asyncio.sleep(0.05)
+    assert silences(notifications) == [{"session_id": "s1"}]  # once, however long it goes on
+    assert rig.service.active  # the app stops it, as the key would
+    r = await stop(router)
+    assert r["text"] == "" and r["fallback_reason"] == "empty"  # nothing was said
+    assert r["silent"] is False  # the microphone heard sound, only no speech
+    assert brain.finalize_calls == 0
+
+
+async def test_less_than_ten_seconds_of_silence_is_not_the_end(rig, router, notifications):
+    rig.segmenter.emit_nothing = True
+    rig.recorder.chunks = [chunk(1.0)] * 9 + [chunk(0.9)]
+    await start(router)
+    await rig.recorder.fed(10)
+    await wait_until(lambda: rig.segmenter.accept_calls == 10)
+    await asyncio.sleep(0.05)
+    assert silences(notifications) == []
+    await stop(router)
+    assert silences(notifications) == []
+
+
+async def test_speech_starts_the_count_again(rig, router, notifications):
+    quiet, words = chunk(3.0), chunk(0.5)
+    rig.segmenter.silences = {quiet.size}
+    rig.recorder.chunks = [quiet, quiet, quiet, words, quiet, quiet, quiet, words, quiet, quiet]
+    await start(router)
+    await rig.recorder.fed(10)
+    await wait_until(lambda: rig.segmenter.accept_calls == 10)
+    await asyncio.sleep(0.05)
+    assert silences(notifications) == []  # never more than 9 s without a word
+    r = await stop(router)
+    assert r["text"] == "text0 text1"
+
+
+async def test_silence_after_speech_ends_the_recording_and_keeps_what_was_said(
+    rig, router, brain, notifications
+):
+    quiet = chunk(2.5)
+    rig.segmenter.silences = {quiet.size}
+    rig.engine.texts = ["明天開會"]
+    rig.recorder.chunks = [chunk(1.0)] + [quiet] * 3
+    await start(router)
+    await rig.recorder.fed(4)
+    await wait_until(lambda: rig.segmenter.accept_calls == 4)
+    await asyncio.sleep(0.05)
+    assert silences(notifications) == []  # 7.5 s since the words
+    rig.recorder.on_frames(quiet)  # 10 s
+    await wait_until(lambda: silences(notifications))
+    r = await stop(router)  # what the app does when it is told
+    assert r["text"] == "明天開會" and brain.finalize_calls == 1
+
+
+async def test_an_agent_question_ends_after_ten_seconds_of_silence_too(rig, router, notifications):
+    rig.segmenter.emit_nothing = True
+    rig.recorder.chunks = [chunk(5.0)] * 2
+    await router.call("dictation.start", {"session_id": "a1", "purpose": "agent"})
+    await wait_until(lambda: silences(notifications))
+    assert silences(notifications) == [{"session_id": "a1"}]
+    r = await stop(router, "a1")
+    assert r["purpose"] == "agent" and r["text"] == ""
+
+
+async def test_each_session_counts_its_own_silence(rig, router, notifications):
+    rig.segmenter.emit_nothing = True
+    rig.recorder.chunks = [chunk(6.0)]
+    await start(router, "s1")
+    await rig.recorder.fed(1)
+    await wait_until(lambda: rig.segmenter.accept_calls == 1)
+    await stop(router, "s1")
+    await start(router, "s2")  # 6 s more of silence, but in a new recording
+    await rig.recorder.fed(1)
+    await wait_until(lambda: rig.segmenter.accept_calls == 2)
+    await asyncio.sleep(0.05)
+    assert silences(notifications) == []
+    rig.recorder.on_frames(chunk(4.0))
+    await wait_until(lambda: silences(notifications))
+    assert silences(notifications) == [{"session_id": "s2"}]
+
+
+async def test_silence_heard_after_the_stop_began_is_not_told(rig, router, notifications):
+    rig.segmenter.emit_nothing = True
+    rig.recorder.chunks = [chunk(5.0)]
+    rig.recorder.tail = chunk(6.0)  # the last frames, which come with the stop
+    await start(router)
+    await rig.recorder.fed(1)
+    await stop(router)
+    await asyncio.sleep(0.05)
+    assert rig.segmenter.accepted_samples == round(11.0 * RATE)
+    assert silences(notifications) == []
+
+
+async def test_a_session_cancelled_before_its_silence_reaches_the_loop_is_not_told_of(
+    rig, router, notifications
+):
+    rig.segmenter.emit_nothing = True
+    rig.recorder.chunks = [chunk(5.0)]
+    await start(router)
+    await rig.recorder.fed(1)
+    session = rig.service._session
+    await router.call("dictation.cancel", {"session_id": "s1"})
+    rig.service._tell_silence(session)  # the worker had asked the loop to, before the cancel
+    await wait_until(lambda: not our_threads())
+    assert silences(notifications) == []
+
+
+async def test_a_microphone_that_delivers_nothing_is_silence_too(make_rig, router, notifications):
+    clock = FakeClock()
+    rig = make_rig(clock=clock)
+    await start(router)  # not a single frame arrives
+    clock.advance(SILENCE_STOP_SECONDS - 0.5)
+    await wait_until(lambda: rig.recorder.stop_count >= 1)  # the stall closed it before
+    await asyncio.sleep(0.3)
+    assert silences(notifications) == []
+    clock.advance(1.0)
+    await wait_until(lambda: silences(notifications))
+    assert silences(notifications) == [{"session_id": "s1"}]
+    with pytest.raises(RpcError) as e:  # the stop says what became of the microphone
+        await stop(router)
+    assert e.value.code == NO_MICROPHONE
+
+
+async def test_a_microphone_that_keeps_delivering_is_not_taken_for_silence(
+    make_rig, router, notifications
+):
+    clock = FakeClock()
+    rig = make_rig(clock=clock)
+    await start(router)
+    on_frames = rig.recorder.on_frames
+    for _ in range(30):  # 30 s of speech, a second at a time
+        clock.advance(1.0)
+        on_frames(chunk(1.0))
+        await asyncio.sleep(0.02)
+    await wait_until(lambda: rig.segmenter.accept_calls == 30)
+    assert silences(notifications) == []
+    assert (await stop(router))["audio_seconds"] == pytest.approx(30.0)
+
+
+
+async def test_silence_is_heard_while_the_engine_is_busy_with_a_stretch(
+    rig, router, brain, notifications
+):
+    # The first stretch takes the engine longer than the silence that follows it: the silence is
+    # still heard as the audio comes, not once the engine is done.
+    quiet = chunk(2.5)
+    rig.segmenter.silences = {quiet.size}
+    rig.engine.gate = threading.Event()
+    rig.engine.texts = ["明天開會"]
+    rig.recorder.chunks = [chunk(1.0)] + [quiet] * 5  # 12.5 s of silence after the words
+    await start(router)
+    await rig.recorder.fed(6)
+    assert await asyncio.to_thread(rig.engine.entered.wait, 5)
+    await wait_until(lambda: silences(notifications))
+    assert not rig.engine.gate.is_set()  # still inside the engine
+    assert silences(notifications) == [{"session_id": "s1"}]
+    session = rig.service._session
+    assert session.queue.qsize() == 0  # every frame was heard: none waits behind the engine
+    rig.engine.gate.set()
+    r = await stop(router)
+    assert r["text"] == "明天開會" and brain.finalize_calls == 1
+
+
+async def test_silence_is_heard_while_the_engine_is_still_loading(rig, router, notifications):
+    quiet = chunk(2.5)
+    rig.segmenter.silences = {quiet.size}
+    rig.provider_gate = threading.Event()  # the engine takes a long time to load
+    rig.recorder.chunks = [chunk(1.0)] + [quiet] * 5
+    await start(router)
+    await rig.recorder.fed(6)
+    await wait_until(lambda: rig.provider_calls == 1)
+    await wait_until(lambda: silences(notifications))
+    assert rig.engine.calls == []  # nothing transcribed yet
+    rig.provider_gate.set()
+    assert (await stop(router))["text"] == "text0"
+
+
+async def test_stretches_are_transcribed_in_order_behind_a_slow_one(rig, router):
+    rig.engine.gate = threading.Event()
+    rig.engine.texts = ["一", "二", "三", "四"]
+    rig.recorder.chunks = [chunk(1.0), chunk(0.5), chunk(0.25), chunk(0.75)]
+    await start(router)
+    await rig.recorder.fed(4)
+    await wait_until(lambda: rig.segmenter.accept_calls == 4)  # all cut while the first waits
+    assert len(rig.engine.calls) == 1
+    rig.engine.gate.set()
+    r = await stop(router)
+    assert [call["samples"] for call in rig.engine.calls] == [
+        round(seconds * RATE) for seconds in (1.0, 0.5, 0.25, 0.75)
+    ]
+    assert r["text"] == "一二三四"
+
+
+async def test_progress_never_goes_backwards_with_two_threads(rig, router, notifications):
+    rig.recorder.chunks = [chunk(0.1)] * 40
+    rig.recorder.tail = chunk(0.1)
+    rig.segmenter.flush_segments = [chunk(0.2)] * 5
+    await start(router)
+    await rig.recorder.fed(40)
+    await stop(router)
+    seen = [(done, total) for stage, done, total in progress(notifications) if stage != "cleaning"]
+    assert seen == sorted(seen)
+    assert seen[-1][0] == seen[-1][1] == 46
+
+
+# --- a session that can hear no more -------------------------------------------------------------
+
+
+async def test_an_engine_that_cannot_be_had_asks_the_app_to_stop_at_once(
+    rig, router, brain, notifications
+):
+    rig.provider_error = RpcError(NOT_CONFIGURED, "A speech model is not downloaded")
+    rig.recorder.chunks = [chunk(1.0)] * 3
+    await start(router)
+    await rig.recorder.fed(3)
+    # No silence will ever be counted (the user goes on talking), but the app is told all the
+    # same: nothing more can be heard.
+    await wait_until(lambda: silences(notifications))
+    assert silences(notifications) == [{"session_id": "s1"}]
+    with pytest.raises(RpcError) as e:  # the stop the app makes answers with the error
+        await stop(router)
+    assert e.value.code == NOT_CONFIGURED
+    assert not rig.service.active and brain.finalize_calls == 0
+
+
+async def test_a_detector_that_fails_asks_the_app_to_stop_at_once(rig, router, notifications):
+    rig.segmenter.fail_on_accept = True
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await wait_until(lambda: silences(notifications))
+    session = rig.service._session
+    for _ in range(50):  # the microphone keeps delivering; none of it is kept
+        rig.recorder.on_frames(chunk(0.1))
+    assert session.queue.qsize() == 0
+    with pytest.raises(RpcError) as e:
+        await stop(router)
+    assert e.value.code == INTERNAL_ERROR
+
+
+async def test_a_failed_session_nobody_stops_is_cancelled_however_much_audio_comes(
+    make_rig, router, brain, notifications
+):
+    clock = FakeClock()
+    rig = make_rig(clock=clock, stall_seconds=1e6)
+    rig.provider_error = RuntimeError("out of memory")
+    await start(router)
+    on_frames = rig.recorder.on_frames
+    on_frames(chunk(1.0))
+    await wait_until(lambda: silences(notifications))
+    for _ in range(int(dictation.LOST_SESSION_SECONDS) + 5):  # a microphone that keeps going
+        clock.advance(1.0)
+        on_frames(chunk(0.01))
+    await wait_until(lambda: not rig.service.active)
+    assert rig.recorder.stop_count == 1  # the microphone is closed
+    await wait_until(lambda: not our_threads())
+    assert brain.finalize_calls == 0
 
 
 # --- the microphone watchdog ---------------------------------------------------------------------
@@ -1861,8 +2138,16 @@ async def test_the_tail_of_a_watchdog_close_is_kept_once(make_rig, router):
 # --- a session nobody stops ------------------------------------------------------------------
 
 
-def test_a_lost_session_is_given_a_minute_over_the_recording_cap():
-    assert dictation.LOST_SESSION_SECONDS == MAX_RECORDING_SECONDS + 60 == 360
+async def go_silent(rig, clock) -> None:
+    """No frames for SILENCE_STOP_SECONDS: the app is told of the silence, and, in these tests,
+    does nothing about it."""
+    session = rig.service._session
+    clock.advance(SILENCE_STOP_SECONDS + 0.1)
+    await wait_until(lambda: session.silence_told_at is not None)
+
+
+def test_a_lost_session_is_given_a_minute_after_its_silence():
+    assert dictation.LOST_SESSION_SECONDS == 60.0
 
 
 async def test_a_session_nobody_stops_is_cancelled(make_rig, router, brain, caplog):
@@ -1872,6 +2157,7 @@ async def test_a_session_nobody_stops_is_cancelled(make_rig, router, brain, capl
     with caplog.at_level(logging.WARNING, logger=LOGGER):
         await start(router, "s1")
         await rig.recorder.fed(1)
+        await go_silent(rig, clock)
         clock.advance(dictation.LOST_SESSION_SECONDS - 5)
         await asyncio.sleep(0.4)  # a few checks
         assert rig.service.active and rig.recorder.stop_count == 0  # not yet
@@ -1893,6 +2179,7 @@ async def test_a_session_that_is_stopped_in_time_is_left_alone(make_rig, router,
     rig.recorder.chunks = [chunk(1.0)]
     await start(router)
     await rig.recorder.fed(1)
+    await go_silent(rig, clock)
     clock.advance(dictation.LOST_SESSION_SECONDS - 5)
     r = await stop(router)
     assert r["text"] == "text0" and brain.finalize_calls == 1
@@ -1901,16 +2188,36 @@ async def test_a_session_that_is_stopped_in_time_is_left_alone(make_rig, router,
     assert rig.recorder.stop_count == 1  # only the stop's own
 
 
-async def test_the_limit_is_counted_from_the_start_of_each_session(make_rig, router):
+async def test_the_limit_is_counted_from_the_silence_of_each_session(make_rig, router):
     clock = FakeClock()
     rig = make_rig(clock=clock, stall_seconds=1e6)
     await start(router, "s1")
+    await go_silent(rig, clock)
     clock.advance(dictation.LOST_SESSION_SECONDS - 5)
     await router.call("dictation.cancel", {"session_id": "s1"})
-    await start(router, "s2")  # a new timer
+    await start(router, "s2")  # a new recording, not silent yet
     clock.advance(dictation.LOST_SESSION_SECONDS - 5)
     await asyncio.sleep(0.4)
     assert rig.service.active
+
+
+async def test_a_session_in_which_the_user_goes_on_speaking_is_never_lost(
+    make_rig, router, notifications
+):
+    clock = FakeClock()
+    rig = make_rig(clock=clock, stall_seconds=1e6)
+    await start(router)
+    on_frames = rig.recorder.on_frames
+    for second in range(20 * 60):  # twenty minutes of speech
+        clock.advance(1.0)
+        on_frames(chunk(0.01))
+        if second % 60 == 0:
+            await asyncio.sleep(0.03)  # the watchdog looks
+    await wait_until(lambda: rig.segmenter.accept_calls == 20 * 60)
+    await asyncio.sleep(0.3)
+    assert rig.service.active and rig.recorder.stop_count == 0
+    assert silences(notifications) == []
+    assert len((await stop(router))["text"].split()) == 20 * 60
 
 
 async def test_a_session_whose_microphone_stalled_is_still_cancelled_at_the_limit(
@@ -1927,7 +2234,8 @@ async def test_a_session_whose_microphone_stalled_is_still_cancelled_at_the_limi
         await asyncio.sleep(0.8)  # the watchdog goes on looking, but says it once
     assert len([r for r in caplog.records if "No audio" in r.getMessage()]) == 1
     assert rig.service.active
-    clock.advance(dictation.LOST_SESSION_SECONDS)
+    await go_silent(rig, clock)
+    clock.advance(dictation.LOST_SESSION_SECONDS + 1)
     await wait_until(lambda: not rig.service.active)
     assert rig.recorder.stop_count == 1 and brain.finalize_calls == 0
 
@@ -1952,6 +2260,7 @@ async def test_a_stop_during_the_lost_session_cancel_gets_not_found(make_rig, ro
     rig.recorder.chunks = [chunk(1.0)]
     await start(router)
     await rig.recorder.fed(1)
+    await go_silent(rig, clock)
     gate = rig.recorder.stop_gate = threading.Event()  # closing the microphone takes a while
     clock.advance(dictation.LOST_SESSION_SECONDS + 1)
     await wait_until(rig.recorder.stop_entered.is_set)
@@ -1997,6 +2306,7 @@ async def test_cancel_while_the_watchdog_is_cancelling_a_lost_session(make_rig, 
     rig.recorder.chunks = [chunk(1.0)]
     await start(router)
     await rig.recorder.fed(1)
+    await go_silent(rig, clock)
     gate = rig.recorder.stop_gate = threading.Event()
     clock.advance(dictation.LOST_SESSION_SECONDS + 1)
     await wait_until(rig.recorder.stop_entered.is_set)  # the watchdog is cancelling the session
@@ -2127,6 +2437,7 @@ async def test_on_idle_follows_a_session_nobody_stopped(make_rig, router):
     calls: list[int] = []
     rig = make_rig(clock=clock, stall_seconds=1e6, on_idle=lambda: calls.append(1))
     await start(router)
+    await go_silent(rig, clock)
     clock.advance(dictation.LOST_SESSION_SECONDS + 1)
     await wait_until(lambda: not rig.service.active)
     assert calls == [1]

@@ -137,7 +137,12 @@ def cleanup_log(caplog):
 
 
 def test_timeout_scales_with_length():
-    assert timeout_for(0) == 10.0 and timeout_for(60) == 30.0 and timeout_for(600) == 90.0
+    assert timeout_for(0) == 10.0 and timeout_for(60) == 30.0 and timeout_for(600) == 210.0
+
+
+def test_an_hour_of_dictation_is_given_time_to_be_cleaned_too():
+    # No ceiling: the wait grows with what was said, however long the dictation.
+    assert timeout_for(3600) == 1210.0
 
 
 def test_a_long_dictation_is_given_time_to_be_cleaned():

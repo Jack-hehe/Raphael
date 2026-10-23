@@ -119,11 +119,17 @@ def test_clear_deletes_every_turn_and_counts_them(history, clock):
     assert history.clear() == 0
 
 
-def test_prune_deletes_the_turns_before_a_time(history, clock):
-    for i in range(4):
-        add(history, clock, f"q{i}", advance=10)  # at 1010, 1020, 1030, 1040
-    assert history.prune(1_030) == 2
-    assert [t.question for t in history.list()] == ["q3", "q2"]
+def test_the_turns_are_never_pruned_by_age(history):
+    # One continuous conversation: the turns stay until the user clears them.
+    assert not hasattr(history, "prune")
+
+
+def test_after_gives_the_turns_after_one_oldest_first_whatever_their_status(history, clock):
+    ids = [add(history, clock, f"q{i}", status="confirm" if i == 2 else "done") for i in range(5)]
+    assert [t.question for t in history.after(ids[1])] == ["q2", "q3", "q4"]
+    assert [t.question for t in history.after(0, limit=2)] == ["q3", "q4"]
+    assert history.after(ids[-1]) == [] and history.after(0, limit=0) == []
+    assert history.last_id() == ids[-1]
 
 
 def test_a_confirmation_that_died_with_the_process_is_expired(history, clock):
@@ -193,10 +199,10 @@ def test_resolve_keeps_the_model_unless_a_new_one_answered(history, clock):
     assert history.get(turn_id).model == "b/second"
 
 
-def test_clear_and_prune_take_the_steps_with_their_turns(history, clock, conn):
+def test_clear_takes_the_steps_and_the_search_with_the_turns(history, clock, conn):
     old = add(history, clock, advance=10, steps=[Step("tool", "weather", "Raphael", "ok", 1)])
     new = add(history, clock, advance=10, steps=[Step("tool", "web_search", "Raphael", "ok", 1)])
-    history.prune(1_015)
-    assert set(history.steps([old, new])) == {new}
+    assert set(history.steps([old, new])) == {old, new}
     history.clear()
     assert conn.execute("SELECT count(*) FROM agent_steps").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM agent_turns_fts").fetchone()[0] == 0

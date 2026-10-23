@@ -4,6 +4,7 @@
 
 import { t } from "./i18n";
 
+import { WARN_FROM, spentShare } from "./spend";
 import type { Status } from "./types";
 
 export interface Report {
@@ -17,8 +18,6 @@ const SET_KEY = { get label() { return t("report.001"); }, target: "settings" } 
 const RETRY = { get label() { return t("report.002"); }, target: "retry" } as const;
 const ADJUST_LIMIT = { get label() { return t("report.003"); }, target: "settings" } as const;
 
-/** From this share of the monthly limit on, the report warns. */
-const WARN_FROM = 0.8;
 
 /** The report for a `status.get` result. First that applies: no key, OpenRouter does not work, the budget is used up or nearly, all well. */
 export function buildReport(s: Status, nowMs: number): Report {
@@ -35,8 +34,9 @@ export function buildReport(s: Status, nowMs: number): Report {
   // As in the core: being at the limit is being over it.
   if (month >= limit) return { text: t("report.limitReached"), action: ADJUST_LIMIT };
 
-  const p = Math.round((month / limit) * 100);
-  if (month / limit >= WARN_FROM) {
+  const share = spentShare(month, limit);
+  const p = Math.round(share * 100);
+  if (share >= WARN_FROM) {
     const { m, d } = runOutDay(month, limit, nowMs);
     return { text: t("report.limitSoon", { p0: p, p1: m, p2: d }), action: ADJUST_LIMIT };
   }

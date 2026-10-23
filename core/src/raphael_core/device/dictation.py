@@ -1,10 +1,17 @@
 """The dictation service: the microphone and the speech-to-text engine behind three RPC methods.
 
 `dictation.start` opens the microphone, `dictation.stop` turns what was said into text and has the
-brain clean it, `dictation.cancel` throws everything away. While the key is held the audio is cut
-into stretches of speech as it comes in, and each stretch is transcribed at once, so a long
-dictation is mostly done by the time the key is released and only the last stretch is left to wait
-for.
+brain clean it, `dictation.cancel` throws everything away. While the recording lasts the audio is
+cut into stretches of speech as it comes in, and each stretch is transcribed at once, so a long
+dictation is mostly done by the time it is stopped and only the last stretch is left to wait for.
+The audio of a stretch is let go once it has been transcribed, so an hour of dictation holds no
+more of it than a minute does.
+
+There is no limit on how long a recording may last or how much may be said in it. What ends one
+by itself is silence: when the voice activity detector has heard no speech for
+SILENCE_STOP_SECONDS (from the start of the recording, or from the last speech), the service sends
+`dictation.silence` with the session's id, once, and the app stops the session as if the user had
+pressed the key: `dictation.stop` as ever, which delivers what was said, or nothing if nothing was.
 
 A session has a purpose, given to `dictation.start`: "dictation" (the default) or "agent", the voice
 assistant's question. It records and transcribes in the same way, but what its stop returns is not
@@ -19,12 +26,21 @@ for any cancelled session.
 
 Threads. The recorder calls `_on_frames` on the audio thread (and once more, from the thread that
 calls `stop()`, with the last few milliseconds): it only counts the frames, puts them on a
-`queue.SimpleQueue` and, now and then, reports the level. One worker thread per session takes the
-frames off the queue, feeds the segmenter and transcribes every stretch that ends. Everything else
-runs on the event loop: the calls to the brain (the stores are used on the loop thread only), the
-state of the session, the microphone watchdog. Whatever can block for long (opening the
-microphone, building a segmenter, getting the engine, which may still be loading) runs on a worker
-thread, never on the loop. Thread to loop goes through `loop.call_soon_threadsafe`.
+`queue.SimpleQueue` and, now and then, reports the level. Two threads per session do the rest. The
+listener takes the frames off that queue as they come, feeds the segmenter and looks at how long it
+has heard no speech; each stretch that ends goes on a second queue, in order, to the transcriber,
+which gets the engine (it may still be loading) and transcribes the stretches one after another.
+So the silence is heard however long the engine takes over a stretch, and the audio waits only as
+stretches of speech that are still to be transcribed, never as frames. Everything else runs on the
+event loop: the calls to the brain (the stores are used on the loop thread only), the state of the
+session, the microphone watchdog. Whatever can block for long (opening the microphone, building a
+segmenter, getting the engine) runs on a thread of its own, never on the loop. Thread to loop goes
+through `loop.call_soon_threadsafe`.
+
+A session whose listening or transcribing has broken down for good (the voice activity detector
+failed, or there is no engine) cannot hear anything more, so it does not wait for a silence that
+will never be counted: the app is sent `dictation.silence` at once, stops the session as the key
+would, and its stop answers with the error, as it would have when the user stopped it.
 
 The service is handed what it uses and builds none of it, so the app can load the engine and the
 voice activity model once, at start-up, which takes tens of seconds (ONNX Runtime). The segmenter
@@ -41,7 +57,7 @@ import logging
 import queue
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
@@ -57,6 +73,7 @@ from raphael_core.protocol import (
     RpcError,
 )
 from raphael_core.router import Router
+from raphael_core.textjoin import join_segments
 
 if TYPE_CHECKING:
     from raphael_core.device.audio import Recorder
@@ -66,8 +83,10 @@ logger = logging.getLogger(__name__)
 
 # The format of the frames a recorder delivers (audio.SAMPLE_RATE).
 SAMPLE_RATE = 16_000
-# A safety net against a key that is held for hours: after this long the audio is no longer kept.
-MAX_RECORDING_SECONDS = 300
+# A recording in which the voice activity detector has heard no speech for this long, from its start
+# or from the last words, is over: the app is told (`dictation.silence`) and stops it, as the key
+# would. It is the only thing that ends a recording by itself.
+SILENCE_STOP_SECONDS = 10.0
 # Less speech than this is a cough or a tap, not a dictation.
 MIN_SPEECH_SECONDS = 0.3
 # A recording whose loudest block (root-mean-square amplitude, 1.0 being full scale) stayed below
@@ -79,11 +98,12 @@ SILENT_PEAK = 0.003
 # Windows MME may never tell us that a microphone was unplugged: the frames just stop. A recording
 # that gets no frames for this long is treated like one whose recorder reported an error.
 MIC_STALL_SECONDS = 2.0
-# A session still recording this long after its start has been forgotten: the controller should
-# have stopped or cancelled it long since (the audio stops being kept at MAX_RECORDING_SECONDS). It
-# is cancelled and the microphone closed, so the service does not stay busy, and the microphone
-# open, for good.
-LOST_SESSION_SECONDS = MAX_RECORDING_SECONDS + 60
+# A session still recording this long after the app was told to stop it (`dictation.silence`)
+# has been forgotten: the controller stops a silent session at once, and would have done so long
+# since. It is cancelled and the microphone closed, so the service does not stay busy, and the
+# microphone open, for good. Counted from the silence, never from the start: a recording in which
+# the user goes on speaking is never lost, however long it lasts.
+LOST_SESSION_SECONDS = 60.0
 
 # What a session can be for (the `purpose` of `dictation.start`).
 PURPOSE_DICTATION, PURPOSE_AGENT = "dictation", "agent"
@@ -93,53 +113,31 @@ _LEVEL_METHOD = "audio.level"
 # After the stop: how far the transcription of what is left has come, then that the brain is
 # cleaning the text. The app draws it on the emblem. The stop's reply is the end of it.
 _PROGRESS_METHOD = "dictation.progress"
+# The recording has heard no speech for SILENCE_STOP_SECONDS, or can hear nothing more because
+# what listens or transcribes has failed: the app stops it.
+_SILENCE_METHOD = "dictation.silence"
 
-# What goes on a session's queue besides frames.
+# What goes on a session's queues besides frames and stretches of speech: the last item of each.
 _FLUSH = object()  # the recording is over: finish and transcribe what is left
 _CANCEL = object()  # throw it all away
-_CAPPED = object()  # the recording passed MAX_RECORDING_SECONDS: say so (not on the audio thread)
+# The threads of a session: the listener and the transcriber.
+_THREADS = 2
 
 
 class SegmenterLike(Protocol):
     """What the service needs of `vad.Segmenter`.
 
-    `speech_seconds` is the length of the speech found in the current dictation: it starts again
-    at the first `accept` after a `flush`.
+    `speech_seconds` is the length of the speech found in the current dictation, and
+    `silence_seconds` how long the current dictation has gone without speech (from its start, or
+    from the last speech heard): both start again at the first `accept` after a `flush`.
     """
 
     speech_seconds: float
+    silence_seconds: float
 
     def accept(self, frames: np.ndarray) -> list[np.ndarray]: ...
 
     def flush(self) -> list[np.ndarray]: ...
-
-
-def _is_cjk(ch: str) -> bool:
-    """Han, kana, and the punctuation that goes with them (CJK and full-width forms)."""
-    code = ord(ch)
-    return (
-        0x3000 <= code <= 0x30FF  # CJK symbols and punctuation, hiragana, katakana
-        or 0x31F0 <= code <= 0x31FF  # katakana phonetic extensions
-        or 0x3400 <= code <= 0x4DBF  # Han, extension A
-        or 0x4E00 <= code <= 0x9FFF  # Han
-        or 0xF900 <= code <= 0xFAFF  # Han, compatibility ideographs
-        or 0xFF00 <= code <= 0xFFEF  # full-width and half-width forms
-        or 0x20000 <= code <= 0x2FA1F  # Han, extension B onwards
-    )
-
-
-def join_segments(texts: Sequence[str]) -> str:
-    """The texts of the segments as one: no separator where both sides of the join are CJK (Chinese
-    and Japanese are not written with spaces), one space everywhere else."""
-    joined = ""
-    for text in texts:
-        piece = text.strip()
-        if not piece:
-            continue
-        if joined and not (_is_cjk(joined[-1]) and _is_cjk(piece[0])):
-            joined += " "
-        joined += piece
-    return joined
 
 
 async def dictionary_hints(call: Callable[[str, dict], Any]) -> list[str]:
@@ -167,7 +165,6 @@ class _Session:
         session_id: str,
         loop: asyncio.AbstractEventLoop,
         now: float,
-        max_samples: int,
         purpose: str = PURPOSE_DICTATION,
     ) -> None:
         self.id = session_id
@@ -178,53 +175,64 @@ class _Session:
         self.state = "starting"
         self.cancelled = False
         self.ready = asyncio.Event()  # set when the start has finished, well or not
-        self.done: asyncio.Future[None] = loop.create_future()  # set when the worker has exited
+        self.done: asyncio.Future[None] = loop.create_future()  # set when both threads have exited
 
         self.recorder: Recorder | None = None
         self.recorder_open = False
         self.segmenter: SegmenterLike | None = None
-        self.worker: threading.Thread | None = None
-        self.worker_told = False
+        self.listener: threading.Thread | None = None
+        self.transcriber: threading.Thread | None = None
+        self.listener_told = False
         self.watch: asyncio.Task[None] | None = None
         self.watch_busy = False  # the watchdog is closing the recorder or cancelling the session
         self.started_at = now  # when the recording began, on the service's clock
         self.stalled = False
+        # When the app was told to stop the recording (`dictation.silence`: it has gone silent, or
+        # cannot hear any more), on the service's clock; None until then. The loop's.
+        self.silence_told_at: float | None = None
         self.close_lock = asyncio.Lock()
         self.hints: list[str] = []
 
-        # The audio thread's, under `lock`. `queue` is thread-safe by itself.
+        # The audio thread's, under `lock`. The queues are thread-safe by themselves: `queue` takes
+        # the frames to the listener, `segments` the stretches of speech to the transcriber.
         self.queue: queue.SimpleQueue[Any] = queue.SimpleQueue()
+        self.segments: queue.SimpleQueue[Any] = queue.SimpleQueue()
         self.lock = threading.Lock()
         self.closed = False  # the recorder is closed: late frames are dropped
         self.levels_on = True
         self.received = 0
         self.peak = 0.0  # the loudest block so far, as an RMS amplitude (audio.rms)
-        self.max_samples = max_samples
-        self.capped = False
         self.last_frame_at = now
         self.last_level_at = -float("inf")
-        # The segments the segmenter has cut and how many of them have been transcribed (or given
-        # up on), and whether the last stretch has been cut (the segmenter was flushed). Written
-        # by the worker, read by the loop for `dictation.progress`, which goes out once the stop
-        # has asked for it (`reporting`).
+        # The segments the segmenter has cut (the listener's count) and how many of them have been
+        # transcribed or given up on (the transcriber's), and whether the last stretch has been cut
+        # (the segmenter was flushed). Under `lock`; read by the loop for `dictation.progress`,
+        # which goes out once the stop has asked for it (`reporting`).
         self.found = 0
         self.finished = 0
         self.flushed = False
         self.reporting = False
         self.last_progress: tuple[str, int, int] | None = None  # the loop's
 
-        # The worker's; the loop reads them once `done` is set.
+        # The threads that have not exited yet, under `lock`: the last one sets `done`.
+        self.threads_left = _THREADS
+
+        # The loop reads these once `done` is set. The transcriber's:
         self.engine: SttEngine | None = None
         self.texts: list[str] = []
         self.stt_used: list[str] = []  # the model that heard each segment, in order
+        # The listener's:
         self.fed_any = False
+        self.heard_silence = False  # the segmenter has gone SILENCE_STOP_SECONDS without speech
+        # Either thread's, under `lock`:
         self.failure: Exception | None = None  # the first thing that went wrong
         self.fatal = False  # ... and it was one that ends the session's work
 
     def fail(self, error: Exception, *, fatal: bool) -> None:
-        if self.failure is None or _is_no_local_model(error):
-            self.failure = error
-        self.fatal = self.fatal or fatal
+        with self.lock:
+            if self.failure is None or _is_no_local_model(error):
+                self.failure = error
+            self.fatal = self.fatal or fatal
 
 
 def _is_no_local_model(error: Exception) -> bool:
@@ -269,9 +277,10 @@ class DictationService:
     `router` is how the service reaches the brain (`dictionary.list`, `brain.finalize_dictation`,
     `brain.normalize_transcript` for the assistant's question, and `brain.cancel_dictation` for a
     cancel that comes while the text is being cleaned) and where it sends its notifications:
-    `audio.level` while recording, `dictation.progress` after the stop (`stage` "transcribing" with
-    the segments `done` of `total`, then "cleaning" right before the brain is asked; the reply
-    means done).
+    `audio.level` while recording, `dictation.silence` (`{session_id}`, once a session) when the
+    recording has heard no speech for SILENCE_STOP_SECONDS, `dictation.progress` after the stop
+    (`stage` "transcribing" with the segments `done` of `total`, then "cleaning" right before the
+    brain is asked; the reply means done).
     `recorder_factory` makes a recorder that delivers its frames to the function it is given.
     `segmenter_factory` and `engine_provider` are called off the loop; `engine_provider` may block
     until the engine has loaded, and is first called when the first stretch of speech has been
@@ -318,7 +327,8 @@ class DictationService:
         self._clock = clock
         self._on_idle = on_idle
         self._session: _Session | None = None
-        # Cancelled sessions whose worker has not exited yet (it may be inside the engine).
+        # Cancelled sessions whose threads have not exited yet (the transcriber may be inside the
+        # engine).
         self._retiring: list[_Session] = []
         # Sessions that were stopped and whose text the brain is cleaning, by id. The service is
         # idle by then, but a cancel for one of them still has something to cancel.
@@ -351,13 +361,7 @@ class DictationService:
         purpose = _purpose(params)
         if self._session is not None:
             raise RpcError(BUSY, "A dictation is already in progress")
-        session = _Session(
-            session_id,
-            asyncio.get_running_loop(),
-            self._clock(),
-            int(MAX_RECORDING_SECONDS * SAMPLE_RATE),
-            purpose,
-        )
+        session = _Session(session_id, asyncio.get_running_loop(), self._clock(), purpose)
         self._session = session
         try:
             await self._set_up(session)
@@ -393,10 +397,20 @@ class DictationService:
         session.recorder_open = True
         session.started_at = session.last_frame_at = self._clock()
         self._check_not_cancelled(session)
-        session.worker = threading.Thread(
-            target=self._run, args=(session,), name=f"raphael-dictation-{session.id}", daemon=True
+        session.listener = threading.Thread(
+            target=self._run,
+            args=(session, self._listen),
+            name=f"raphael-dictation-{session.id}-listen",
+            daemon=True,
         )
-        session.worker.start()
+        session.transcriber = threading.Thread(
+            target=self._run,
+            args=(session, self._transcribe_all),
+            name=f"raphael-dictation-{session.id}-transcribe",
+            daemon=True,
+        )
+        session.listener.start()
+        session.transcriber.start()
         session.watch = asyncio.create_task(self._watchdog(session))
         session.state = "recording"
 
@@ -439,29 +453,19 @@ class DictationService:
         now = self._clock()
         with session.lock:
             session.last_frame_at = now
-            if session.closed or frames.size == 0:
+            # A session that can hear no more keeps nothing: it is about to be stopped.
+            if session.closed or session.fatal or frames.size == 0:
                 return
-            room = session.max_samples - session.received
-            hit_cap = (room <= 0 or frames.size > room) and not session.capped
-            if hit_cap:
-                session.capped = True
-            if room > 0:
-                frames = frames[:room]
-                session.received += frames.size
-                session.peak = max(session.peak, self._rms(frames))
-            keep = room > 0
-            send_level = (
-                keep and session.levels_on and now - session.last_level_at >= self._level_interval
-            )
+            session.received += frames.size
+            session.peak = max(session.peak, self._rms(frames))
+            send_level = session.levels_on and now - session.last_level_at >= self._level_interval
             if send_level:
                 session.last_level_at = now
-        if keep:
-            session.queue.put(frames)
-        if hit_cap:
-            session.queue.put(_CAPPED)
+        # The listener takes them off as they come, and lets them go once the segmenter has them.
+        session.queue.put(frames)
         if send_level:
-            # Here and not in the worker: that one can be inside the engine for seconds, and the
-            # ring that shows the level should keep moving while the user is still talking.
+            # Here and not on a session's thread: the listener may be waiting for the detector to
+            # load, and the ring that shows the level should keep moving while the user talks.
             self._call_on_loop(
                 session,
                 self._router.notify,
@@ -476,37 +480,49 @@ class DictationService:
         except RuntimeError:  # the loop is closed: the process is going down
             pass
 
-    # --- the worker thread ----------------------------------------------------------------------
+    # --- the listener and the transcriber -------------------------------------------------------
 
-    def _run(self, session: _Session) -> None:
+    def _run(self, session: _Session, work: Callable[[_Session], None]) -> None:
         try:
-            self._work(session)
+            work(session)
         except BaseException as exc:
-            logger.exception("The dictation worker failed")
-            session.fail(exc if isinstance(exc, Exception) else RuntimeError(str(exc)), fatal=True)
+            logger.exception("A dictation thread failed")
+            error = exc if isinstance(exc, Exception) else RuntimeError(str(exc))
+            self._fail_for_good(session, error)
         finally:
-            self._call_on_loop(session, self._set_done, session)
+            with session.lock:
+                session.threads_left -= 1
+                last = session.threads_left == 0
+            if last:
+                self._call_on_loop(session, self._set_done, session)
 
     @staticmethod
     def _set_done(session: _Session) -> None:
         if not session.done.done():
             session.done.set_result(None)
 
-    def _work(self, session: _Session) -> None:
-        while True:
-            item = session.queue.get()
-            if item is _FLUSH or item is _CANCEL:
-                break
-            if item is _CAPPED:
-                logger.warning(
-                    "The recording reached the limit of %g s; the rest of it is not kept",
-                    session.max_samples / SAMPLE_RATE,
-                )
-                continue
-            if session.cancelled or session.fatal:
-                continue  # drained, so the queue does not grow
-            self._feed(session, item)
-        self._finish(session, transcribe=item is _FLUSH)
+    def _fail_for_good(self, session: _Session, error: Exception) -> None:
+        """A failure that ends the session's work: what it hears from now on is thrown away, and
+        the app is asked to stop it (`_tell_silence`), so that its stop says what went wrong."""
+        session.fail(error, fatal=True)
+        self._call_on_loop(session, self._tell_silence, session, True)
+
+    def _listen(self, session: _Session) -> None:
+        """The listener: frames into the segmenter, as they come, until the recording is over."""
+        end: object = _CANCEL
+        try:
+            while True:
+                item = session.queue.get()
+                if item is _FLUSH or item is _CANCEL:
+                    end = item
+                    break
+                if session.cancelled or session.fatal:
+                    continue  # drained, so the queue does not grow
+                self._feed(session, item)
+            self._finish(session, transcribe=end is _FLUSH)
+        finally:
+            # Whatever happened, the transcriber is told that nothing more is coming.
+            session.segments.put(end)
 
     def _feed(self, session: _Session, frames: np.ndarray) -> None:
         assert session.segmenter is not None
@@ -515,13 +531,42 @@ class DictationService:
             segments = session.segmenter.accept(frames)
         except Exception as exc:
             logger.exception("The voice activity detector failed")
-            session.fail(exc, fatal=True)
+            self._fail_for_good(session, exc)
             return
         with session.lock:
             session.found += len(segments)
         for segment in segments:
-            self._transcribe(session, segment)
-            self._segment_done(session)
+            session.segments.put(segment)
+        self._look_for_silence(session)
+
+    def _look_for_silence(self, session: _Session) -> None:
+        """Tell the loop, once, that the segmenter has heard no speech for SILENCE_STOP_SECONDS.
+        The listener counts it from the audio as it comes, however long the transcriber takes."""
+        assert session.segmenter is not None
+        if session.heard_silence:
+            return
+        if float(session.segmenter.silence_seconds) >= SILENCE_STOP_SECONDS:
+            session.heard_silence = True
+            self._call_on_loop(session, self._tell_silence, session)
+
+    def _tell_silence(self, session: _Session, failed: bool = False) -> None:
+        """On the loop: `dictation.silence`, so the app stops the session as the key would, because
+        it has heard no speech for SILENCE_STOP_SECONDS or, if `failed`, because it can hear
+        nothing more. Once a session, and only while it is still the one recording: one that is
+        being stopped or was cancelled meanwhile has nothing to stop."""
+        if (
+            session.silence_told_at is not None
+            or session.state != "recording"
+            or session.cancelled
+            or self._session is not session
+        ):
+            return
+        session.silence_told_at = self._clock()
+        if failed:
+            logger.warning("The dictation can hear nothing more: it ends")
+        else:
+            logger.info("No speech for %g s: the dictation ends", SILENCE_STOP_SECONDS)
+        self._router.notify(_SILENCE_METHOD, {"session_id": session.id})
 
     def _finish(self, session: _Session, *, transcribe: bool) -> None:
         """The end of the recording: the speech that was still going on, and a segmenter that is
@@ -537,24 +582,35 @@ class DictationService:
             with session.lock:
                 session.found += len(rest)
                 session.flushed = True
-            self._report_from_worker(session)
+            self._report_progress(session)
             for segment in rest:
-                self._transcribe(session, segment)
-                self._segment_done(session)
+                session.segments.put(segment)
+
+    def _transcribe_all(self, session: _Session) -> None:
+        """The transcriber: each stretch of speech in the order it was cut, until the listener says
+        there is no more. A stretch is let go once it has been transcribed."""
+        while True:
+            segment = session.segments.get()
+            if segment is _FLUSH or segment is _CANCEL:
+                return
+            self._transcribe(session, segment)
+            del segment
+            self._segment_done(session)
 
     def _segment_done(self, session: _Session) -> None:
         with session.lock:
             session.finished += 1
-        self._report_from_worker(session)
+        self._report_progress(session)
 
-    def _report_from_worker(self, session: _Session) -> None:
+    def _report_progress(self, session: _Session) -> None:
         """Send the transcription's progress, if the stop has asked for it. The counts are taken
-        here, under the lock, so the messages go out in the order the work was done."""
+        and handed to the loop under the lock, so that the messages of the two threads go out in
+        the order the work was done."""
         with session.lock:
             if not session.reporting:
                 return
             counts = self._counts(session)
-        self._call_on_loop(session, self._send_progress, session, "transcribing", *counts)
+            self._call_on_loop(session, self._send_progress, session, "transcribing", *counts)
 
     @staticmethod
     def _counts(session: _Session) -> tuple[int, int, float]:
@@ -590,7 +646,7 @@ class DictationService:
                 session.engine = self._engine_provider()
             except Exception as exc:
                 logger.exception("The speech-to-text engine is not available")
-                session.fail(exc, fatal=True)
+                self._fail_for_good(session, exc)
                 return
         try:
             text = session.engine.transcribe(segment, hints=session.hints)
@@ -609,25 +665,33 @@ class DictationService:
     # --- the microphone watchdog ----------------------------------------------------------------
 
     async def _watchdog(self, session: _Session) -> None:
-        """Two things to look out for while a session is recording.
+        """Three things to look out for while a session is recording.
 
         A recorder that has gone quiet is closed. The session goes on, as for a recorder error: the
         stop uses the speech that was captured, or says there is no microphone.
 
-        A session that nobody has stopped or cancelled for LOST_SESSION_SECONDS is cancelled, the
-        way `dictation.cancel` would, and the microphone closed.
+        A recorder that has delivered nothing for SILENCE_STOP_SECONDS has heard no speech for that
+        long either, though the segmenter, which is given no audio, cannot say so: the app is told
+        of the silence (`dictation.silence`) all the same, and its stop says what became of the
+        microphone.
+
+        A session the app was told to stop (`dictation.silence`, for its silence or because it can
+        hear nothing more) and that nobody has stopped or cancelled for LOST_SESSION_SECONDS since
+        is cancelled, the way `dictation.cancel` would, and the
+        microphone closed.
         """
         while session.state == "recording" and not session.cancelled:
             await asyncio.sleep(self._watch_interval)
             if session.state != "recording" or session.cancelled:
                 return
             now = self._clock()
-            if now - session.started_at >= LOST_SESSION_SECONDS:
+            told = session.silence_told_at
+            if told is not None and now - told >= LOST_SESSION_SECONDS:
                 logger.warning(
-                    "The dictation session %r is lost: it has been recording for %g s with no "
-                    "stop or cancel; cancelling it and closing the microphone",
+                    "The dictation session %r is lost: the app was told to stop it and %g s later "
+                    "it has had no stop or cancel; cancelling it and closing the microphone",
                     session.id,
-                    now - session.started_at,
+                    now - told,
                 )
                 session.watch_busy = True
                 try:
@@ -635,7 +699,11 @@ class DictationService:
                 finally:
                     session.watch_busy = False
                 return
-            if not session.stalled and now - session.last_frame_at >= self._stall_seconds:
+            with session.lock:
+                last_frame_at = session.last_frame_at
+            if told is None and now - last_frame_at >= SILENCE_STOP_SECONDS:
+                self._tell_silence(session)
+            if not session.stalled and now - last_frame_at >= self._stall_seconds:
                 logger.warning(
                     "No audio from the microphone for %g s: taking it as gone and closing it",
                     self._stall_seconds,
@@ -682,7 +750,7 @@ class DictationService:
             await self._close_recorder(session)  # the last frames arrive before it returns
             with session.lock:
                 session.closed = True
-            self._tell_worker(session, _FLUSH)
+            self._tell_listener(session, _FLUSH)
             await asyncio.wait([session.done])
         except BaseException:
             self._abandon(session)
@@ -837,8 +905,8 @@ class DictationService:
             raise
         with session.lock:
             session.closed = True
-        self._tell_worker(session, _CANCEL)
-        if session.worker is not None and session not in self._retiring:
+        self._tell_listener(session, _CANCEL)
+        if session.listener is not None and session not in self._retiring:
             self._retiring.append(session)
         self._end(session)
 
@@ -859,10 +927,11 @@ class DictationService:
         except Exception:
             logger.exception("The microphone did not stop cleanly")
 
-    def _tell_worker(self, session: _Session, signal: object) -> None:
-        """Send the worker its last item. Only the first counts."""
-        if session.worker is not None and not session.worker_told:
-            session.worker_told = True
+    def _tell_listener(self, session: _Session, signal: object) -> None:
+        """Send the listener its last item, which it hands on to the transcriber. Only the first
+        counts."""
+        if session.listener is not None and not session.listener_told:
+            session.listener_told = True
             session.queue.put(signal)
 
     def _end(self, session: _Session) -> None:
@@ -882,7 +951,7 @@ class DictationService:
         await self._close_recorder(session)
         with session.lock:
             session.closed = True
-        self._tell_worker(session, _CANCEL)
+        self._tell_listener(session, _CANCEL)
         self._end(session)
 
     def _abandon(self, session: _Session) -> None:
@@ -899,7 +968,7 @@ class DictationService:
             # Fire and forget, like `_close_late`: the request that is being abandoned must not
             # hold up the loop for as long as the microphone takes to close.
             session.loop.run_in_executor(None, self._stop_recorder, session.recorder)
-        self._tell_worker(session, _CANCEL)
-        if session.worker is not None and session not in self._retiring:
+        self._tell_listener(session, _CANCEL)
+        if session.listener is not None and session not in self._retiring:
             self._retiring.append(session)
         self._end(session)

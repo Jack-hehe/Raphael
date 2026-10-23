@@ -20,6 +20,7 @@ from raphael_core.brain import cloud_stt
 from raphael_core.brain.openrouter import OpenRouterClient, OpenRouterError, Transcription
 from raphael_core.brain.secrets import MemoryKeyStore
 from raphael_core.brain.service import Brain
+from raphael_core.brain.settings import SettingsStore
 from raphael_core.protocol import (
     BUDGET_EXCEEDED,
     INTERNAL_ERROR,
@@ -326,6 +327,13 @@ async def test_nothing_of_the_audio_the_text_or_the_key_is_logged(router, fake_c
 # --- with the real client ---------------------------------------------------------------------
 
 
+def choose_gpt_transcribe(conn) -> None:
+    """Make gpt-transcribe the speech model, as a choice from OpenRouter's list would. These tests
+    have no list to choose from (test_model_choice.py has the choosing), so the id is saved as the
+    store keeps it."""
+    SettingsStore(conn).set("stt_cloud_model", "openai/gpt-transcribe")
+
+
 async def test_end_to_end_on_the_real_client_with_a_mock_transport(conn):
     seen = []
 
@@ -340,9 +348,7 @@ async def test_end_to_end_on_the_real_client_with_a_mock_transport(conn):
         Brain(conn, OpenRouterClient(keys.get, http=http), keys, now_ms=lambda: NOW_MS).register(
             router
         )
-        await router.call(
-            "settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"}
-        )
+        choose_gpt_transcribe(conn)
         result = await transcribe(router, language="zh", hints=["拉斐爾"])
     assert result == {"text": "早安", "model": "openai/gpt-transcribe", "cost_usd": 0.0002}
     body = seen[0]
@@ -366,9 +372,7 @@ async def test_gpt_transcribe_gets_a_single_selected_code_when_automatic(conn):
         Brain(conn, OpenRouterClient(keys.get, http=http), keys, now_ms=lambda: NOW_MS).register(
             router
         )
-        await router.call(
-            "settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"}
-        )
+        choose_gpt_transcribe(conn)
         await router.call("settings.set", {"key": "languages", "value": ["zh-TW"]})
         await transcribe(router, language="auto")
     assert seen[0]["provider"]["options"]["openai"]["languages"] == ["zh"]
@@ -389,9 +393,7 @@ async def test_gpt_transcribe_gets_every_chosen_language_when_automatic(conn):
         Brain(conn, OpenRouterClient(keys.get, http=http), keys, now_ms=lambda: NOW_MS).register(
             router
         )
-        await router.call(
-            "settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"}
-        )
+        choose_gpt_transcribe(conn)
         await router.call(
             "settings.set", {"key": "languages", "value": ["zh-TW", "en-US", "ja-JP"]}
         )

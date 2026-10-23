@@ -24,9 +24,9 @@ import { Stage } from "../stage";
 import { keyEntryRow, limitRow, micRow as micRowShared } from "../setup-rows";
 import type { AppContext, AudioDevices, MainEvent, MicAccess, StoreService } from "../types";
 import { btn, closeMenu, esc, group, menuIsOpenFor, note, openMenu, openMenuOnArrow, row, sel, setMeter, st, toaster } from "../ui";
-import { automaticMicrophoneLabel } from "../microphone";
+import { AUTO_MICROPHONE, automaticMicrophoneLabel, microphoneChoices } from "../microphone";
 import type { AbilityId, LessonId } from "./abilities";
-import { AUTO_MICROPHONE, heardAfter, limitAction, lookUp, micChoices, modelPercent } from "./helpers";
+import { heardAfter, limitAction, lookUp, modelPercent } from "./helpers";
 import {
   type FlowEvent,
   type FlowState,
@@ -163,7 +163,7 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
   function micRow(): string {
     const saved = device().microphone;
     return micRowShared({
-      choices: micChoices(devices, saved),
+      choices: microphoneChoices(devices, saved),
       current: saved ?? AUTO_MICROPHONE,
       selAttrs: ' data-ob="mic"',
       meter: { place: "before" },
@@ -704,7 +704,7 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
 
   function openMicrophoneMenu(anchor: HTMLElement): void {
     const current = device().microphone;
-    openMenu(anchor, micChoices(devices, current), current ?? AUTO_MICROPHONE, (value) => void pickMicrophone(value));
+    openMenu(anchor, microphoneChoices(devices, current), current ?? AUTO_MICROPHONE, (value) => void pickMicrophone(value));
   }
 
   /**
@@ -722,9 +722,9 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
     }
     if (destroyed || flow.step !== "mic" || mine !== microphoneReads) return;
     const saved = device().microphone;
-    const before = JSON.stringify(micChoices(devices, saved));
+    const before = JSON.stringify(microphoneChoices(devices, saved));
     devices = fresh;
-    if (JSON.stringify(micChoices(devices, saved)) === before) return;
+    if (JSON.stringify(microphoneChoices(devices, saved)) === before) return;
     const wasOpen = menuIsOpenFor(anchor);
     paintMicRow();
     const redrawn = root.querySelector<HTMLElement>('[data-ob="mic"]');

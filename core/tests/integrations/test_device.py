@@ -343,7 +343,7 @@ async def test_a_denied_code_adds_nothing(github):
     github.fake.answers[:] = [err("access_denied")]
     done = await github.router.call("integrations.connect", {"catalog_id": "github"})
     assert done == {"connected": False, "error": "denied"}
-    assert github.vault.names() == [] and (await github.router.call("integrations.list"))["servers"] == []
+    assert github.vault.names() == [] and (await github.router.call("toolsets.list"))["groups"] == []
 
 
 async def test_the_wait_can_be_cancelled(github):

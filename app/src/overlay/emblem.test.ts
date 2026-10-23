@@ -66,7 +66,7 @@ test("a hidden emblem draws nothing", () => {
 
 test("the white ring is about 1 px when quiet and 7 px when loud (R = 97)", () => {
   const quiet = params("listening", 0, 0)!;
-  const loud = params("speaking", 0, 1)!;
+  const loud = params("listening", 0, 1)!;
   expect(quiet.ringW * 97).toBeCloseTo(1.16, 1);
   expect(loud.ringW * 97).toBeCloseTo(7.18, 1);
 });
@@ -105,7 +105,7 @@ function recordingContext() {
 }
 
 test("every phase draws with finite numbers, with or without the glyph texture", () => {
-  const phases: Phase[] = ["appear", "vanish", "steady", "listening", "thinking", "speaking"];
+  const phases: Phase[] = ["appear", "vanish", "steady", "listening", "thinking"];
   for (const phase of phases) {
     const duration = phase === "appear" ? AP.dur : phase === "vanish" ? VA.dur : 1;
     for (let t = 0; t <= duration + 1e-9; t += 1 / 24) {
@@ -387,10 +387,10 @@ test("vanish does nothing to a hidden emblem", () => {
 test("a mode set during the appear animation is used when it ends", () => {
   const e = new Emblem(fakeCanvas(), 150);
   e.appear();
-  e.set("speaking");
+  e.set("thinking");
   expect(e.phase).toBe("appear");
   e.step(0.9);
-  expect(e.phase).toBe("speaking");
+  expect(e.phase).toBe("thinking");
 });
 
 test("set changes the phase of a visible emblem at once", () => {
@@ -400,7 +400,7 @@ test("set changes the phase of a visible emblem at once", () => {
 });
 
 test("the glyph ring turns clockwise at 3.55 degrees a second in every mode", () => {
-  for (const mode of ["steady", "listening", "thinking", "speaking"] as const) {
+  for (const mode of ["steady", "listening", "thinking"] as const) {
     const e = new Emblem(fakeCanvas(), 150, { visible: true, rot0: 0 });
     e.set(mode);
     e.step(1);
@@ -408,7 +408,7 @@ test("the glyph ring turns clockwise at 3.55 degrees a second in every mode", ()
   }
 });
 
-test("the ring follows the level only while listening or speaking", () => {
+test("the ring follows the level only while listening", () => {
   const e = new Emblem(fakeCanvas(), 150, { visible: true });
   e.set("listening");
   e.level = 0.8;
@@ -419,12 +419,8 @@ test("the ring follows the level only while listening or speaking", () => {
   e.step(1 / 24);
   expect(e.lvl).toBeCloseTo(0.05); // the quiet base width
 
-  e.set("speaking");
-  e.level = 0.5;
-  e.step(1 / 24);
-  expect(e.lvl).toBeCloseTo(0.5);
-
   e.set("steady");
+  e.level = 0.5;
   e.step(1 / 24);
   expect(e.lvl).toBeCloseTo(0.05);
 });

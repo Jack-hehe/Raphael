@@ -1,7 +1,9 @@
-// One conversation as the 拉斐爾 page shows it: the list of conversations on the left, and on the
-// right, for each question, what the person said, what Raphael did in between (a step for each tool,
-// lookup or command, under a summary that opens) and what Raphael answered. A background task shows
-// its steps as they come, with the time it has taken and a button that stops it.
+// A turn of the conversation as the 拉斐爾 page shows it: the person's words on the right, with a
+// small mark of where they were said; Raphael on the left, with his face, what he did in between
+// (one line, 「› 3 個動作 · 4 秒」, that opens on a step for each tool, lookup or command) and his
+// answer. A background task is a card instead of the line: its steps come in as they are taken,
+// the one under way has light passing over it, it has the time it has taken and 「停止」, and when
+// it is done its turning ring becomes a check.
 //
 // The functions make HTML from plain data; `TimelineState` says what is open and which steps are new,
 // so that the page can draw again at any time and only what changed moves. Every word that came from
@@ -11,23 +13,11 @@ import { t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 
 import { replyLine, userLine } from "../shared/anime";
-import { type Session, type SessionDay, VOICE, hasDetail, sessionBusy, sessionTitle } from "./conversation";
-import { dayLabel, formatClock, formatUsd } from "./format";
+import { TYPED, VOICE, hasDetail, highlightHTML, sourceOf } from "./conversation";
+import { formatClock, formatUsd } from "./format";
 import { SERVICE_ICONS, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import type { AgentStep, AgentTask, AgentTurn, MainEvent } from "./types";
 import { btn, esc, ico } from "./ui";
-
-// ---------- the pictures this page adds to the app's icons ----------
-
-const svg = (body: string, cls = "i"): string => `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true">${body}</svg>`;
-const PATHS = {
-  send: "M14 2 7.2 8.8M14 2l-4.3 12-2.5-5.2L2 6.3z",
-  cloud: "M4.8 12.6h6.8a2.8 2.8 0 0 0 .4-5.6 4 4 0 0 0-7.6-1A3.3 3.3 0 0 0 4.8 12.6z",
-  check: "M3.6 8.4 6.6 11.2 12.4 4.8",
-  cross: "M5 5l6 6M11 5l-6 6",
-  stop: "M5 5h6v6H5z",
-} as const;
-const pic = (name: keyof typeof PATHS): string => svg(`<path d="${PATHS[name]}"/>`);
 
 /** The small turning ring of something under way. */
 const SPINNER = `<span class="spin" aria-hidden="true"></span>`;
@@ -86,26 +76,54 @@ const TASK_ENDS: Record<string, MessageKey> = {
 };
 
 /**
- * A tool's name made readable, as the connections show it: the service's own name at the start taken
- * off, the dashes and underscores as spaces, a capital first.
+ * The words that, first in a tool's name, mean it only looks: `_READ_WORDS` of the core's
+ * `integrations/toolsets.py`, which groups the tools of 「連接」 the same way (a test of the core keeps
+ * the two lists one).
  */
-export function readableTool(name: string, service = ""): string {
+export const READ_WORDS: ReadonlySet<string> = new Set([
+  "get", "list", "search", "find", "read", "fetch", "query", "lookup", "describe", "show",
+  "view", "check", "count", "retrieve", "browse", "inspect", "export", "download", "preview",
+  "summarize", "who", "whoami", "status", "info", "history", "resolve", "explain", "analyze",
+]);
+/** A word of a tool's name: split at `_`, `-`, `.` and a change of case, as toolsets.py splits it. */
+const WORD = /[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])/g;
+
+/**
+ * Whether a service's tool only reads or may change something, by its name as toolsets.py guesses
+ * when a server says nothing: `read` when its first word is one of `READ_WORDS`, `write` for any
+ * other. The service's own name at the start (`notion-search`) is passed over first. A step keeps no
+ * more than the tool's name, so this is a guess for its words only: it decides nothing.
+ */
+export function toolAccess(name: string, service = ""): "read" | "write" {
   let rest = name;
   const prefix = service.trim().toLowerCase();
   if (prefix) {
-    for (const sep of ["-", "_"]) if (rest.toLowerCase().startsWith(prefix + sep) && rest.length > prefix.length + 1) rest = rest.slice(prefix.length + 1);
+    for (const sep of ["-", "_", "."]) if (rest.toLowerCase().startsWith(prefix + sep) && rest.length > prefix.length + 1) rest = rest.slice(prefix.length + 1);
   }
-  const spaced = rest.replace(/[-_]+/g, " ").trim();
-  return spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : name;
+  const first = rest.match(WORD)?.[0]?.toLowerCase();
+  return first !== undefined && READ_WORDS.has(first) ? "read" : "write";
 }
 
-/** What a step did, in the language of the window. */
+/**
+ * What a step did, in the language of the window. Raphael's own lookups and the commands for this PC
+ * have words of their own; a service's tool, whose name is the server's and in its language, is
+ * 「Notion：讀取」 or 「Notion：修改」 by whether it only reads (`toolAccess`). Its name is the step's
+ * tooltip (`stepToolTip`).
+ */
 export function stepTitle(step: AgentStep): string {
   if (step.kind === "model") return t("agent.stepThinking");
   if (!step.tool) return t("agent.stepUnknown");
-  if (step.kind === "command") return COMMAND_TITLES[step.tool] ? plain(COMMAND_TITLES[step.tool]) : readableTool(step.tool);
+  if (step.kind === "command") return plain(COMMAND_TITLES[step.tool] ?? "agent.cmd.other");
   if (step.server === RAPHAEL && BUILTIN_TITLES[step.tool]) return plain(BUILTIN_TITLES[step.tool]);
-  return readableTool(step.tool, step.server ?? "");
+  const service = !step.server || step.server === RAPHAEL ? t("agent.title") : step.server;
+  return t(toolAccess(step.tool, step.server ?? "") === "read" ? "agent.tool.read" : "agent.tool.write", { p0: service });
+}
+
+/** The tool's own name, for the tooltip of a step whose words do not name it (a service's tool); blank for one that has words of its own. */
+export function stepToolTip(step: AgentStep): string {
+  if (step.kind === "model" || !step.tool) return "";
+  if (step.kind === "command") return COMMAND_TITLES[step.tool] ? "" : step.tool;
+  return step.server === RAPHAEL && BUILTIN_TITLES[step.tool] ? "" : step.tool;
 }
 
 /** Where a step happened: the service, Raphael, or this PC. */
@@ -169,13 +187,39 @@ export interface TimelineState {
   stopping: Set<number>;
   /** Tasks the reader asked to run again; each is run again once. */
   rerunning: Set<number>;
+  /** Tasks that were seen under way: the draw that finds one ended shows its check coming in. */
+  live: Set<number>;
+  /** Tasks whose end this draw shows for the first time (`noteTaskEnds`): their check pops in. */
+  ended: Set<number>;
   nowMs: number;
 }
 
-export const emptyTimelineState = (): TimelineState => ({ open: new Map(), seen: new Set(), stopping: new Set(), rerunning: new Set(), nowMs: Date.now() });
+export const emptyTimelineState = (): TimelineState => ({
+  open: new Map(),
+  seen: new Set(),
+  stopping: new Set(),
+  rerunning: new Set(),
+  live: new Set(),
+  ended: new Set(),
+  nowMs: Date.now(),
+});
 
 /** Whether a turn's steps are open: as the reader left them, else open while its task runs and closed once it is done. */
 export const stepsOpen = (turn: AgentTurn, state: TimelineState): boolean => state.open.get(turn.id) ?? isLive(turn.task);
+
+/**
+ * Before a draw: a task seen under way that has ended since is `ended` for this draw (its check
+ * comes in with a small pop), and the ones under way now are remembered for the next.
+ */
+export function noteTaskEnds(turns: readonly AgentTurn[], state: TimelineState): void {
+  state.ended.clear();
+  for (const turn of turns) {
+    const task = turn.task;
+    if (!task) continue;
+    if (isLive(task)) state.live.add(task.id);
+    else if (state.live.delete(task.id)) state.ended.add(task.id);
+  }
+}
 
 /** The picture of a step: the service's mark, Raphael's own for a lookup, the PC for a command. It names the place in its label and tooltip. */
 function stepIcon(step: AgentStep): string {
@@ -184,7 +228,7 @@ function stepIcon(step: AgentStep): string {
   if (step.kind === "command") return `<span class="step-ic" ${named}>${ico("monitor")}</span>`;
   if (step.kind === "model") return `<span class="step-ic" ${named}>${ico("sparkle")}</span>`;
   if (!step.server || step.server === RAPHAEL) {
-    const own = step.tool === "weather" ? pic("cloud") : step.tool === "web_search" ? ico("globe") : step.tool === "local_time" ? ico("clock") : ico("search");
+    const own = step.tool === "weather" ? ico("cloud") : step.tool === "web_search" ? ico("globe") : step.tool === "local_time" ? ico("clock") : ico("search");
     return `<span class="step-ic" ${named}>${own}</span>`;
   }
   const mark = serviceIconOf({ name: step.server });
@@ -198,36 +242,41 @@ function stepIcon(step: AgentStep): string {
 export function stepHTML(step: AgentStep, isNew: boolean): string {
   const ok = step.outcome === "ok";
   const why = reasonText(step);
+  const tip = stepToolTip(step);
   return (
     `<li class="step ${ok ? "is-ok" : "is-bad"}${isNew ? " is-new" : ""}">` +
     stepIcon(step) +
-    `<span class="step-main"><span class="step-t">${esc(stepTitle(step))}</span>` +
+    `<span class="step-main"><span class="step-t"${tip ? ` title="${esc(tip)}"` : ""}>${esc(stepTitle(step))}</span>` +
     (ok ? "" : `<span class="step-why">${esc(why)}</span>`) +
     `</span>` +
     `<span class="step-end"><span class="step-ms num">${esc(formatDuration(step.ms))}</span>` +
-    `<span class="step-mark" role="img" aria-label="${esc(ok ? t("agent.ok") : why)}">${ok ? pic("check") : pic("cross")}</span></span>` +
+    `<span class="step-mark" role="img" aria-label="${esc(ok ? t("agent.ok") : why)}">${ok ? ico("check") : ico("x")}</span></span>` +
     `</li>`
   );
 }
 
-/** The line that says a task is still at work: the thinking between steps, with the time since it began. */
+/** The step a task is at now: its words with light passing over them, the time since it began. */
 function liveStepHTML(task: AgentTask, nowMs: number): string {
   const since = task.started_at_ms;
+  const words = task.state === "queued" ? t("agent.queued") : t("agent.thinking");
   return (
     `<li class="step is-live">` +
     `<span class="step-ic">${SPINNER}</span>` +
-    `<span class="step-main"><span class="think" role="img" aria-label="${esc(task.state === "queued" ? t("agent.queued") : t("agent.thinking"))}"><i></i><i></i></span></span>` +
+    `<span class="step-main"><span class="step-t shimmer">${esc(words)}</span></span>` +
     `<span class="step-end">${since ? `<span class="step-ms num" data-since="${since}">${esc(formatDuration(nowMs - since))}</span>` : ""}</span>` +
     `</li>`
   );
 }
 
-/** The words of the summary: how many things were done, how long it took, how many failed; or that it is under way. */
+/** How many things a turn did, in words: 「1 個動作」, 「3 個動作」. */
+const actionsText = (count: number): string => (count === 1 ? t("agent.stepsDoneOne") : t("agent.stepsDone", { p0: count }));
+
+/** The words of a summary: how many things were done, how long it took, how many failed; or that a task is under way. */
 export function summaryText(turn: AgentTurn, nowMs: number): { lead: string; time: string; failed: number } {
   const steps = shownSteps(turn).filter((step) => step.kind !== "model");
   const failed = shownSteps(turn).filter((step) => step.outcome !== "ok").length;
   const task = turn.task;
-  const done = steps.length === 1 ? t("agent.stepsDoneOne") : t("agent.stepsDone", { p0: steps.length });
+  const done = actionsText(steps.length);
   let lead = done;
   if (isLive(task)) lead = task!.state === "queued" ? t("agent.queued") : t("agent.working");
   else if (task && TASK_ENDS[task.state]) lead = `${plain(TASK_ENDS[task.state])} · ${done}`;
@@ -235,56 +284,84 @@ export function summaryText(turn: AgentTurn, nowMs: number): { lead: string; tim
   return { lead, time: ms > 0 || isLive(task) ? formatDuration(ms) : "", failed };
 }
 
-/** What Raphael did for a turn, under a summary that opens; nothing for a turn that did nothing. */
-export function stepsHTML(turn: AgentTurn, state: TimelineState): string {
-  const steps = shownSteps(turn);
-  const task = turn.task ?? null;
-  const live = isLive(task);
-  if (steps.length === 0 && !task) return "";
+/** The list of steps under a summary, which slides open; with the step a task is at last. */
+function stepsBodyHTML(turn: AgentTurn, state: TimelineState, open: boolean): string {
+  const live = isLive(turn.task);
+  const rows = shownSteps(turn).map((step, index) => stepHTML(step, !state.seen.has(stepKey(turn, index)))).join("") + (live ? liveStepHTML(turn.task!, state.nowMs) : "");
+  return (
+    `<div class="steps-body" id="steps-${esc(turn.id)}"${open ? "" : " inert"}><div class="steps-clip">` +
+    `<ol class="steps-list" aria-label="${esc(t("agent.stepsList"))}">${rows}</ol>` +
+    `</div></div>`
+  );
+}
+
+/** The one line of a turn that did something: 「› 3 個動作 · 2.4 秒」, and the steps when it is opened. */
+function stepsLineHTML(turn: AgentTurn, state: TimelineState): string {
   const open = stepsOpen(turn, state);
   const { lead, time, failed } = summaryText(turn, state.nowMs);
-  const id = `steps-${turn.id}`;
-  const since = live && task?.started_at_ms ? ` data-since="${task.started_at_ms}"` : "";
-  const count = steps.filter((step) => step.kind !== "model").length;
-  const words = [lead, time, failed ? t("agent.stepsFailed", { p0: failed }) : ""].filter(Boolean).join(" · ");
-  const mark = live ? (task!.state === "queued" ? ico("clock") : SPINNER) : task && TASK_ENDS[task.state] ? ico("stop") : ico("steps");
-  const summary =
-    btn(
-      `<span class="steps-lead">${mark}${live ? "" : `<span class="num">${count}</span>`}</span>` +
-        (time ? `<span class="steps-time num"${since}>${esc(time)}</span>` : "") +
-        (failed ? `<span class="steps-bad">${pic("cross")}<span class="num">${failed}</span></span>` : "") +
-        `<span class="steps-chev">${ico("down")}</span>`,
-      "sm steps-sum",
-      ` data-act="steps" aria-expanded="${open}" aria-controls="${id}" aria-label="${esc(words)}" title="${esc(words)}"`,
-    );
-  const stopping = live && state.stopping.has(task!.id);
-  const stopLabel = esc(stopping ? t("agent.stopping") : t("agent.stop"));
-  const stop = live
-    ? btn(
-        stopping ? SPINNER : pic("stop"),
-        "sm icon stop",
-        ` data-act="stop" data-task="${esc(task!.id)}" aria-label="${stopLabel}" title="${stopLabel}"${stopping ? " disabled" : ""}`,
-      )
-    : "";
-  const again =
-    task && RERUNNABLE.has(task.state)
-      ? `<button type="button" class="btn sm rerun" data-act="rerun" data-task="${esc(task.id)}"${state.rerunning.has(task.id) ? " disabled" : ""}>${esc(t("agent.rerun"))}</button>`
-      : "";
-  const rows = steps.map((step, index) => stepHTML(step, !state.seen.has(stepKey(turn, index)))).join("") + (live ? liveStepHTML(task!, state.nowMs) : "");
-  return (
-    `<div class="steps${live ? " is-live" : ""}" data-open="${open}">` +
-    `<div class="steps-bar">${summary}${stop}${again}</div>` +
-    `<div class="steps-body" id="${id}"${open ? "" : " inert"}><div class="steps-clip">` +
-    `<ol class="steps-list" aria-label="${esc(t("agent.stepsList"))}">${rows}</ol>` +
-    `</div></div></div>`
+  const bad = failed ? t("agent.stepsFailed", { p0: failed }) : "";
+  const words = [lead, time, bad].filter(Boolean).join(" · ");
+  const summary = btn(
+    `<span class="steps-chev">${ico("right")}</span><span>${esc(lead)}</span>` +
+      (time ? `<span class="num">· ${esc(time)}</span>` : "") +
+      (bad ? `<span class="steps-bad">· ${esc(bad)}</span>` : ""),
+    "steps-sum",
+    ` data-act="steps" aria-expanded="${open}" aria-controls="steps-${esc(turn.id)}" aria-label="${esc(words)}"`,
   );
+  return `<div class="steps" data-open="${open}">${summary}${stepsBodyHTML(turn, state, open)}</div>`;
+}
+
+/**
+ * A background task: a card whose head says how it stands (a turning ring and the time while it
+ * runs, a check once it is done) and opens its steps, with 「停止」 while it runs and 「重新執行」 for
+ * one that did not finish.
+ */
+function taskCardHTML(turn: AgentTurn, state: TimelineState): string {
+  const task = turn.task!;
+  const live = isLive(task);
+  const open = stepsOpen(turn, state);
+  const { lead, time, failed } = summaryText(turn, state.nowMs);
+  const bad = failed ? t("agent.stepsFailed", { p0: failed }) : "";
+  const words = [lead, time, bad].filter(Boolean).join(" · ");
+  const ended = state.ended.has(task.id);
+  const mark = live
+    ? task.state === "queued" ? ico("clock") : SPINNER
+    : task.state === "done" ? `<span class="task-check${ended ? " is-pop" : ""}">${ico("check")}</span>` : ico("stop");
+  const since = live && task.started_at_ms ? ` data-since="${task.started_at_ms}"` : "";
+  const summary = btn(
+    `<span class="task-mark">${mark}</span><span class="task-lead">${esc(lead)}</span>` +
+      (time ? `<span class="task-time num"${since}>${esc(time)}</span>` : "") +
+      (bad ? `<span class="steps-bad">${esc(bad)}</span>` : "") +
+      `<span class="steps-chev">${ico("down")}</span>`,
+    "task-sum",
+    ` data-act="steps" aria-expanded="${open}" aria-controls="steps-${esc(turn.id)}" aria-label="${esc(words)}"`,
+  );
+  const stopping = live && state.stopping.has(task.id);
+  const stop = live
+    ? `<button type="button" class="btn sm stop" data-act="stop" data-task="${esc(task.id)}"${stopping ? " disabled" : ""}>${esc(stopping ? t("agent.stopping") : t("agent.stop"))}</button>`
+    : "";
+  const again = RERUNNABLE.has(task.state)
+    ? `<button type="button" class="btn sm rerun" data-act="rerun" data-task="${esc(task.id)}"${state.rerunning.has(task.id) ? " disabled" : ""}>${esc(t("agent.rerun"))}</button>`
+    : "";
+  return (
+    `<div class="steps task${live ? " is-live" : ""}" data-open="${open}">` +
+    `<div class="task-head">${summary}${stop}${again}</div>` +
+    stepsBodyHTML(turn, state, open) +
+    `</div>`
+  );
+}
+
+/** What Raphael did for a turn: the card of its task, the line of its steps, or nothing for a turn that did nothing. */
+export function stepsHTML(turn: AgentTurn, state: TimelineState): string {
+  if (turn.task) return taskCardHTML(turn, state);
+  return shownSteps(turn).length === 0 ? "" : stepsLineHTML(turn, state);
 }
 
 /** Whether an event of the app changes what the conversations show: a turn, or a task's step. */
 export const wantsRefresh = (event: MainEvent): boolean => event.type === "AgentTurn" || event.type === "WorkerChanged";
 
 /**
- * 「中止」: the task is marked as stopping at once, so its button says so, and the core is asked to
+ * 「停止」: the task is marked as stopping at once, so its button says so, and the core is asked to
  * stop it. When that fails, or there was nothing to stop, the mark comes off again; otherwise it stays
  * until the task is seen to have ended.
  */
@@ -340,112 +417,84 @@ export function markSeen(turns: readonly AgentTurn[], state: TimelineState): voi
 
 // ---------- a turn ----------
 
-/** The quiet line under an answer: the model that worded it and what the turn cost. */
-function answerMeta(turn: AgentTurn): string {
+/** The picture of where a turn came from: a microphone, Telegram's mark, or a keyboard for one typed here. */
+export const sourceIcon = (source: string): string =>
+  source === VOICE
+    ? ico("mic")
+    : source === "telegram"
+      ? `<svg class="i tg-i" viewBox="0 0 24 24" aria-hidden="true"><path d="${SERVICE_ICONS.telegram.path}"/></svg>`
+      : source === TYPED
+        ? ico("keyboard")
+        : ico("send");
+
+/** Where a turn came from, in words. */
+export function sourceName(source: string): string {
+  if (source === VOICE) return t("agent.sourceVoice");
+  if (source === "telegram") return t("agent.sourceTelegram");
+  if (source === TYPED) return t("agent.sourceTyped");
+  return source.charAt(0).toUpperCase() + source.slice(1);
+}
+
+/** What a turn cost and what worded it, for the tooltip of Raphael's face: whether it waits, the model and the cost. */
+export function answerMeta(turn: AgentTurn): string {
   const parts: string[] = [];
   if (turn.status === "confirm") parts.push(t("agent.waiting"));
   if (turn.model) parts.push(shortModel(turn.model));
   if (turn.cost_usd && turn.cost_usd > 0) parts.push(formatUsd(turn.cost_usd));
-  return parts.length ? `<span class="tn-meta num">${parts.map(esc).join(" · ")}</span>` : "";
+  return parts.join(" · ");
+}
+
+/** How a turn is drawn besides its data. */
+export interface TurnLook {
+  /** Raphael's face for the turn: `loop` while he is at work on it (avatar.ts). */
+  face: (loop: boolean) => string;
+  /** The words being looked for, marked wherever they are; blank for none. */
+  query?: string;
 }
 
 /** One question and its answer, with what was done in between. */
-export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: boolean): string {
+export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: boolean, look: TurnLook): string {
   const id = esc(turn.id);
+  const query = look.query ?? "";
   const detail = hasDetail(turn);
   const asked = turn.question.trim() !== "";
-  const foot =
-    (detail ? btn(ico("down"), "sm icon tn-more", ` data-act="detail" aria-expanded="${detailOpen}" aria-controls="tn-detail-${id}" aria-label="${esc(t("agent.detail"))}" title="${esc(t("agent.detail"))}"`) : "") + answerMeta(turn);
+  const live = isLive(turn.task);
+  const source = sourceOf(turn);
+  const said = esc(`${sourceName(source)} · ${formatClock(turn.created_at_ms)}`);
+  const meta = esc(answerMeta(turn));
+  const more = detail
+    ? `<div class="tn-foot">${btn(ico("down"), "sm icon tn-more", ` data-act="detail" aria-expanded="${detailOpen}" aria-controls="tn-detail-${id}" aria-label="${esc(t("agent.detail"))}" title="${esc(t("agent.detail"))}"`)}</div>`
+    : "";
   return (
-    `<li class="tn" data-id="${id}" data-status="${esc(turn.status)}"${isLive(turn.task) ? ' data-live="true"' : ""}>` +
+    `<li class="tn" data-id="${id}" data-status="${esc(turn.status)}"${live ? ' data-live="true"' : ""}>` +
     (asked
-      ? `<div class="tn-q"><div class="tn-who"><span class="sr">${esc(t("agent.youSaid"))}</span><time class="num" datetime="${esc(new Date(turn.created_at_ms).toISOString())}">${esc(formatClock(turn.created_at_ms))}</time></div>` +
-        `<div class="bubble">${esc(userLine(turn.question))}</div></div>`
+      ? `<div class="me"><span class="me-src" role="img" aria-label="${said}" title="${said}">${sourceIcon(source)}</span>` +
+        `<div class="bubble">${highlightHTML(userLine(turn.question), query)}</div></div>`
       : "") +
+    `<div class="ra"><span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live)}</span><div class="ra-body">` +
     stepsHTML(turn, state) +
-    `<div class="tn-a"><p class="ans">${esc(replyLine(turn.prefix, turn.text))}</p>` +
-    (detail ? `<div class="tn-detail" id="tn-detail-${id}"${detailOpen ? "" : " hidden"}>${esc(turn.detail)}</div>` : "") +
-    (foot ? `<div class="tn-foot">${foot}</div>` : "") +
-    `</div></li>`
+    `<p class="ans">${highlightHTML(replyLine(turn.prefix, turn.text), query)}</p>` +
+    (detail ? `<div class="tn-detail" id="tn-detail-${id}"${detailOpen ? "" : " hidden"}>${highlightHTML(turn.detail, query)}</div>` : "") +
+    more +
+    `</div></div></li>`
   );
 }
 
-// ---------- the list of conversations ----------
-
-/** The picture of where a conversation came from. */
-export const sourceIcon = (source: string): string =>
-  source === VOICE ? ico("mic") : source === "telegram" ? `<svg class="i tg-i" viewBox="0 0 24 24" aria-hidden="true"><path d="${SERVICE_ICONS.telegram.path}"/></svg>` : pic("send");
-
-/** Where a conversation came from, in words. */
-export function sourceName(source: string): string {
-  if (source === VOICE) return t("agent.sourceVoice");
-  if (source === "telegram") return t("agent.sourceTelegram");
-  return source.charAt(0).toUpperCase() + source.slice(1);
-}
-
-
-/** One conversation in the list: a real button, the current one marked, only it in the tab order. */
-export function sessionButtonHTML(session: Session, current: boolean): string {
-  const busy = sessionBusy(session);
-  return (
-    `<button type="button" class="sess" data-act="session" data-key="${esc(session.key)}" aria-current="${current}" tabindex="${current ? 0 : -1}">` +
-    `<span class="sess-src" title="${esc(sourceName(session.source))}">${sourceIcon(session.source)}</span>` +
-    `<span class="sess-main"><span class="sess-title">${esc(sessionTitle(session))}</span>` +
-    `<span class="sess-meta"><span class="sr">${esc(sourceName(session.source))} · </span><span class="num">${esc(formatClock(session.endMs))}</span></span></span>` +
-    (busy ? `<span class="sess-busy" role="img" aria-label="${esc(t("agent.working"))}"></span>` : "") +
-    `</button>`
-  );
-}
+/** The heading of a day in the thread. */
+export const dayHTML = (label: string): string => `<li class="day"><span>${esc(label)}</span></li>`;
 
 /**
- * Where a key moves the focus in the list of `count` conversations from the one at `at`: the arrows
- * one up or down (stopping at the ends), Home and End to the ends. Null for any other key.
+ * A turn that is not in the history yet: what the person typed (or, for a question said aloud,
+ * a bubble with light passing over it until the words arrive) and Raphael thinking.
  */
-export function listMove(key: string, at: number, count: number): number | null {
-  const to = key === "ArrowDown" ? at + 1 : key === "ArrowUp" ? at - 1 : key === "Home" ? 0 : key === "End" ? count - 1 : null;
-  return to === null || count === 0 ? null : Math.max(0, Math.min(count - 1, to));
-}
-
-/** The conversations under their days. */
-export function sessionListHTML(days: readonly SessionDay[], currentKey: string | null): string {
-  return days
-    .map(
-      (day) =>
-        `<div class="sess-day"><h3>${esc(day.label)}</h3>` +
-        day.sessions.map((session) => sessionButtonHTML(session, session.key === currentKey)).join("") +
-        `</div>`,
-    )
-    .join("");
-}
-
-/** The head of a conversation: its first question, and where, when, how many and what it cost. */
-export function sessionHeadHTML(session: Session, nowMs: number): string {
-  const cost = session.turns.reduce((sum, turn) => sum + (turn.cost_usd ?? 0), 0);
-  const when = `${dayLabel(session.startMs, nowMs)} ${formatClock(session.startMs)}`;
-  const meta = [esc(when), ...(cost > 0 ? [esc(formatUsd(cost))] : [])];
-  const source = esc(sourceName(session.source));
+export function pendingTurnHTML(question: string | null, source: string, look: TurnLook): string {
+  const where = esc(sourceName(source));
+  const words = question === null ? `<span class="shimmer">${esc(t("agent.hearing"))}</span>` : esc(userLine(question));
   return (
-    `<header class="tl-head"><h2 class="tl-title">${esc(sessionTitle(session))}</h2>` +
-    `<div class="tl-meta"><span class="tl-src" role="img" aria-label="${source}" title="${source}">${sourceIcon(session.source)}</span>` +
-    meta.map((part, i) => `${i ? `<span class="dot-sep" aria-hidden="true">·</span>` : ""}<span class="num">${part}</span>`).join("") +
-    `</div></header>`
+    `<li class="tn is-pending">` +
+    `<div class="me"><span class="me-src" role="img" aria-label="${where}" title="${where}">${sourceIcon(source)}</span><div class="bubble">${words}</div></div>` +
+    `<div class="ra"><span class="ra-face">${look.face(true)}</span><div class="ra-body">` +
+    `<p class="ans thinking"><span class="think" role="img" aria-label="${esc(t("agent.thinking"))}"><i></i><i></i></span></p>` +
+    `</div></div></li>`
   );
 }
-
-/** A whole conversation: its head and its turns, oldest first. */
-export function timelineHTML(session: Session, state: TimelineState, details: ReadonlySet<number>): string {
-  return (
-    sessionHeadHTML(session, state.nowMs) +
-    `<ol class="tl" aria-label="${esc(sessionTitle(session))}">${session.turns.map((turn) => turnHTML(turn, state, details.has(turn.id))).join("")}</ol>`
-  );
-}
-
-/** The two bubbles of the empty page: drawn here so that they take the colours of the theme. */
-export const EMPTY_ART =
-  `<svg class="empty-art" viewBox="0 0 160 120" aria-hidden="true">` +
-  `<path class="b2" d="M86 26h32a14 14 0 0 1 14 14v11a14 14 0 0 1-14 14h-4l-8 7v-7H86a14 14 0 0 1-14-14V40a14 14 0 0 1 14-14Z"/>` +
-  `<path class="b1" d="M43 45h47a16 16 0 0 1 16 16v17a16 16 0 0 1-16 16H57l-12 9v-9h-2a16 16 0 0 1-16-16V61a16 16 0 0 1 16-16Z"/>` +
-  `<g class="wave"><rect x="48" y="66" width="3" height="7" rx="1.5"/><rect x="56" y="62" width="3" height="15" rx="1.5"/>` +
-  `<rect x="64" y="58" width="3" height="23" rx="1.5"/><rect x="72" y="63" width="3" height="13" rx="1.5"/><rect x="80" y="66" width="3" height="7" rx="1.5"/></g>` +
-  `<circle class="s1" cx="39" cy="29" r="2"/><circle class="s2" cx="126" cy="85" r="2.5"/><circle class="s3" cx="117" cy="98" r="1.5"/>` +
-  `</svg>`;

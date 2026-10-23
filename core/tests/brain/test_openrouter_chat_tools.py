@@ -165,7 +165,6 @@ async def test_the_words_and_the_calls_come_back_with_the_ids_and_the_arguments_
         500,
         30,
     )
-    assert result.finish_reason == "stop"
 
 
 async def test_a_call_whose_arguments_are_not_json_is_kept_with_none_so_the_model_can_be_told(

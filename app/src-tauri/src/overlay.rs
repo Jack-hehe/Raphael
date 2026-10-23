@@ -44,7 +44,8 @@ use tauri::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-/// What the emblem shows while it is on screen.
+/// What the emblem shows while it is on screen, as the shell sets it. The page has one more of its
+/// own, "steady", which it picks by itself for a notice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
@@ -52,18 +53,6 @@ pub enum Mode {
     Listening,
     /// Processing continues while its numeric percentage is shown.
     Thinking,
-    /// The white ring follows Raphael's voice.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Raphael has no voice (TTS) yet")
-    )]
-    Speaking,
-    /// Just there, with a thin ring (used for notices).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the overlay page picks it for a notice by itself")
-    )]
-    Steady,
 }
 
 /// How far a dictation has come after the key was released: the speech that is left is
@@ -181,6 +170,9 @@ pub enum OverlayEvent {
         subtitles: String,
         language: String,
     },
+    /// Raphael's picture changed (avatar.rs): the page asks for it again (`avatar_get`). A page
+    /// that loads asks for it anyway, so the event is not kept for one that has not.
+    Avatar,
 }
 
 /// How the rest of the app drives the overlay. Calls do not wait for the page and none of them
@@ -329,7 +321,8 @@ pub(crate) fn takes_clicks(event: &OverlayEvent) -> Option<bool> {
         | OverlayEvent::Level { .. }
         | OverlayEvent::Progress(_)
         | OverlayEvent::Learned { .. }
-        | OverlayEvent::Settings { .. } => None,
+        | OverlayEvent::Settings { .. }
+        | OverlayEvent::Avatar => None,
     }
 }
 
@@ -369,6 +362,7 @@ impl OverlayEvent {
             OverlayEvent::Complete => "complete",
             OverlayEvent::Hide => "hide",
             OverlayEvent::Settings { .. } => "settings",
+            OverlayEvent::Avatar => "avatar",
         }
     }
 }
@@ -397,6 +391,7 @@ impl Bus {
                 // Replayed to a new page as `self.settings`, and a loudness reading or a progress
                 // report is stale by the time a page could use it.
                 OverlayEvent::Settings { .. }
+                | OverlayEvent::Avatar
                 | OverlayEvent::Level { .. }
                 | OverlayEvent::Progress(_) => {}
                 _ => {
@@ -524,6 +519,11 @@ impl Overlay {
         });
         overlay.place_window();
         Ok(overlay)
+    }
+
+    /// Raphael's picture changed: the page asks for the new one.
+    pub fn avatar_changed(&self) {
+        self.publish(OverlayEvent::Avatar);
     }
 
     /// A new emblem size changes the window's size, so it is put in its corner again.
@@ -717,12 +717,14 @@ pub fn overlay_subscribe(
     Ok(())
 }
 
-/// The page's answer to the question on screen: whether the YES button (`approved`) or the NO
-/// button was clicked, for the question `id`.
+/// An answer to the question on screen: whether the YES button (`approved`) or the NO button was
+/// clicked, for the question `id`, on the overlay or (`in_app`) on the card of the main window's
+/// 拉斐爾 page (`agent_question_answer` in commands.rs).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Confirmation {
     pub id: String,
     pub approved: bool,
+    pub in_app: bool,
 }
 
 /// Where the page's answers go: the dictation controller's task takes them from the other end.
@@ -731,7 +733,9 @@ pub struct ConfirmSender(pub UnboundedSender<Confirmation>);
 
 /// The overlay page answers the question on screen: `approved` is true for its YES button. The
 /// answer goes to the controller, which takes it only for the question that is open (`id`). Only
-/// the overlay page may call it: nothing else may approve what Raphael was about to do.
+/// the overlay page may call it; the main window answers through its own command
+/// (`agent_question_answer`), which says so, and nothing else may approve what Raphael was about
+/// to do.
 ///
 /// It needs no capability: the commands of the app itself are not behind the capabilities (the
 /// build declares no app manifest), and the window is checked here, like `overlay_log` does.
@@ -748,7 +752,11 @@ pub fn overlay_confirm(
     };
     answers
         .0
-        .send(Confirmation { id, approved })
+        .send(Confirmation {
+            id,
+            approved,
+            in_app: false,
+        })
         .map_err(|_| "nothing is listening to the overlay's answers".to_owned())
 }
 
@@ -1113,22 +1121,7 @@ mod tests {
             }),
             r#"{"type":"mode","mode":"thinking"}"#
         );
-        assert_eq!(
-            json(OverlayEvent::Mode {
-                mode: Mode::Speaking,
-                quiet: false,
-                lines: Vec::new(),
-            }),
-            r#"{"type":"mode","mode":"speaking"}"#
-        );
-        assert_eq!(
-            json(OverlayEvent::Mode {
-                mode: Mode::Steady,
-                quiet: false,
-                lines: Vec::new(),
-            }),
-            r#"{"type":"mode","mode":"steady"}"#
-        );
+
         // a question being thought about: no progress caption, and the waiting lines in its place
         assert_eq!(
             json(OverlayEvent::Mode {
@@ -1483,14 +1476,14 @@ mod tests {
         bus.subscribe("a", a);
         bus.subscribe("b", b);
         bus.publish(OverlayEvent::Show {
-            mode: Mode::Steady,
+            mode: Mode::Listening,
             line: None,
         });
         bus.publish(OverlayEvent::Level { value: 1.0 });
         bus.publish(OverlayEvent::Hide);
         let expected = [
             SETTINGS_150_ON,
-            r#"{"type":"show","mode":"steady"}"#,
+            r#"{"type":"show","mode":"listening"}"#,
             r#"{"type":"level","value":1.0}"#,
             r#"{"type":"hide"}"#,
         ];
@@ -1575,11 +1568,11 @@ mod tests {
     fn every_event_has_its_kind_for_the_log() {
         let events = [
             OverlayEvent::Show {
-                mode: Mode::Steady,
+                mode: Mode::Listening,
                 line: None,
             },
             OverlayEvent::Mode {
-                mode: Mode::Steady,
+                mode: Mode::Thinking,
                 quiet: false,
                 lines: Vec::new(),
             },

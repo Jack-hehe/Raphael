@@ -1,20 +1,23 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { setLocale } from "./i18n";
-import { groupSessions, sessionDays } from "./conversation";
 import {
+  type TurnLook,
+  dayHTML,
   forgetReruns,
   formatDuration,
-  listMove,
   markSeen,
-  readableTool,
+  noteTaskEnds,
+  pendingTurnHTML,
+  stepToolTip,
+  toolAccess,
   reasonText,
   requestStop,
-  sessionListHTML,
+  sourceIcon,
+  sourceName,
   stepTitle,
   stepsHTML,
   stepsOpen,
   summaryText,
-  timelineHTML,
   turnHTML,
   wantsRefresh,
   workMs,
@@ -52,15 +55,56 @@ const visible = (html: string): string =>
 const running = (over: Partial<AgentTask> = {}): AgentTask => ({ id: 41, state: "running", started_at_ms: T0, finished_at_ms: null, ...over });
 
 describe("a step in words", () => {
-  test("Raphael's own lookups, commands and a service's tools get readable names", () => {
+  test("Raphael's own lookups and commands have words of their own, in the language of the window", () => {
     expect(stepTitle(step({ tool: "weather" }))).toBe("查天氣");
     expect(stepTitle(step({ tool: "web_search" }))).toBe("搜尋網路");
     expect(stepTitle(step({ kind: "command", tool: "volume_mute", server: null }))).toBe("靜音");
-    expect(stepTitle(step({ tool: "notion-create_page", server: "Notion" }))).toBe("Create page");
     expect(stepTitle(step({ tool: null, server: null, outcome: "blocked" }))).toBe("沒有提供的工具");
-    expect(readableTool("search_issues")).toBe("Search issues");
+    expect(stepToolTip(step({ tool: "weather" }))).toBe("");
+    expect(stepToolTip(step({ kind: "command", tool: "volume_mute", server: null }))).toBe("");
     setLocale("en");
     expect(stepTitle(step({ tool: "weather" }))).toBe("Weather");
+  });
+
+  test("a service's tool is the service and whether it read or changed, never its English name", () => {
+    const tools: [string, string, string][] = [
+      ["notion-create_page", "Notion", "Notion：修改"],
+      ["notion-search", "Notion", "Notion：讀取"],
+      ["list_issues", "GitHub", "GitHub：讀取"],
+      ["createPages", "Notion", "Notion：修改"],
+      ["getMe", "Telegram", "Telegram：讀取"],
+      ["create-event", "Google Calendar", "Google Calendar：修改"],
+      ["frobnicate", "Odd", "Odd：修改"], // a name that is no known verb is counted as one that changes things
+    ];
+    for (const [tool, server, title] of tools) {
+      expect(stepTitle(step({ tool, server })), tool).toBe(title);
+      expect(stepToolTip(step({ tool, server })), tool).toBe(tool);
+    }
+    // a command or a lookup with no words of its own says so in the window's language, its name in the tooltip
+    expect(stepTitle(step({ kind: "command", tool: "something_new", server: null }))).toBe("操作這台電腦");
+    expect(stepToolTip(step({ kind: "command", tool: "something_new", server: null }))).toBe("something_new");
+    expect(stepTitle(step({ tool: "get_news" }))).toBe("拉斐爾：讀取");
+    setLocale("en");
+    expect(stepTitle(step({ tool: "list_issues", server: "GitHub" }))).toBe("GitHub: read");
+    expect(stepTitle(step({ tool: "create_issue", server: "GitHub" }))).toBe("GitHub: change");
+    setLocale("ja");
+    expect(stepTitle(step({ tool: "list_issues", server: "GitHub" }))).toBe("GitHub：読み取り");
+  });
+
+  test("a step's line shows the words and keeps the tool's own name only in its tooltip", () => {
+    const html = stepsHTML(turn(9, { steps: [step({ tool: "list_issues", server: "GitHub" })] }), emptyTimelineState());
+    expect(html).toContain('<span class="step-t" title="list_issues">GitHub：讀取</span>');
+    expect(visible(html)).not.toContain("list_issues");
+    expect(visible(html)).not.toMatch(/List issues/i);
+  });
+
+  test("read or change is told by the name's first word, as the connections group them", () => {
+    expect(toolAccess("search_issues")).toBe("read");
+    expect(toolAccess("fetchPage")).toBe("read");
+    expect(toolAccess("HTTPGet")).toBe("write"); // the first word is HTTP
+    expect(toolAccess("update_page")).toBe("write");
+    expect(toolAccess("github.list_repos", "GitHub")).toBe("read");
+    expect(toolAccess("")).toBe("write");
   });
 
   test("a failure says why in a few words, from its kind; an unknown kind is a plain error", () => {
@@ -123,34 +167,44 @@ describe("running a task that did not finish again", () => {
 });
 
 describe("what a turn did", () => {
-  test("three steps, one failed: a closed summary with the count, the time and the failure", () => {
+  test("three steps, one failed: one closed line with the count, the time and the failure", () => {
     const t1 = turn(1, { steps: THREE });
     const state = emptyTimelineState();
     const html = stepsHTML(t1, state);
     expect(html).toContain('data-open="false"');
     expect(html).toContain('aria-expanded="false" aria-controls="steps-1"');
     expect(html).toContain('id="steps-1" inert'); // closed: out of the way of the keyboard
-    // the summary shows a mark, the count, the time and the failures; its words are its label
+    // 「› 3 個動作 · 2.4 秒」: a real button whose words are its label too
     const summary = /<button[^>]*steps-sum[^>]*>.*?<\/button>/.exec(html)![0];
-    expect(visible(summary)).toBe("3 2.4 秒 1");
-    expect(summary).toContain('aria-label="做了 3 件事 · 2.4 秒 · 1 件失敗"');
+    expect(summary).toContain('<button type="button" class="btn steps-sum"');
+    expect(visible(summary)).toBe("3 個動作 · 2.4 秒 · 1 件失敗");
+    expect(summary).toContain('aria-label="3 個動作 · 2.4 秒 · 1 件失敗"');
     expect(summaryText(t1, T0).time).toBe("2.4 秒"); // the first start (0.48 s) to the last end (2.9 s)
     expect(html.match(/class="step is-ok/g)).toHaveLength(2);
     expect(html).toContain("需要重新登入"); // a failure is said in words
-    // the service is the picture's name, not a word beside the tool
+    // the service is the picture's name, and its tool is said as the service and what it did
     expect(html).toContain('role="img" aria-label="Google Calendar" title="Google Calendar"');
-    expect(visible(html)).not.toContain("Google Calendar");
+    expect(visible(html)).toContain("Google Calendar：修改");
+    expect(visible(html)).not.toContain("create-event");
     expect(html).not.toContain('data-act="stop"');
+    expect(html).not.toContain('class="steps task');
   });
 
-  test("a turn that did nothing has no summary at all", () => {
+  test("one thing done is one action, in each language", () => {
+    expect(visible(stepsHTML(turn(1, { steps: [step()] }), emptyTimelineState()))).toMatch(/^1 個動作 · 0.4 秒/);
+    setLocale("en");
+    expect(visible(stepsHTML(turn(1, { steps: THREE }), emptyTimelineState()))).toMatch(/^3 actions · 2.4 ?s · 1 failed/);
+    expect(visible(stepsHTML(turn(1, { steps: [step()] }), emptyTimelineState()))).toMatch(/^1 action · /);
+  });
+
+  test("a turn that did nothing has no line at all", () => {
     expect(stepsHTML(turn(1), emptyTimelineState())).toBe("");
   });
 
   test("the model calls that went well are the thinking between steps: not rows, not counted", () => {
     const t1 = turn(1, { steps: [step({ kind: "model", tool: null, server: null }), step(), step({ kind: "model", tool: null, server: null, outcome: "error", reason: "network" })] });
     const html = stepsHTML(t1, emptyTimelineState());
-    expect(html).toContain("做了 1 件事");
+    expect(html).toContain("1 個動作");
     expect(html.match(/<li class="step/g)).toHaveLength(2); // the lookup, and the thinking that failed
     expect(html).toContain("連不上服務");
   });
@@ -159,7 +213,7 @@ describe("what a turn did", () => {
     const t1 = turn(1, { task: running({ state: "done", finished_at_ms: T0 + 9_000 }), steps: [step({ tool: "find_tools", ms: 3 }), step({ tool: "search_issues", server: "GitHub" })] });
     const html = stepsHTML(t1, emptyTimelineState());
     expect(html.match(/<li class="step/g)).toHaveLength(1);
-    expect(html).toContain("Search issues");
+    expect(html).toContain("GitHub：讀取");
   });
 
   test("the reader's choice beats the default, which is open while a task runs and closed once done", () => {
@@ -174,22 +228,22 @@ describe("what a turn did", () => {
     expect(stepsHTML(turn(1, { steps: THREE }), state)).not.toContain(" inert");
   });
 
-  test("a task under way: open, a turning summary, the time since it began, the thinking line and 中止", () => {
+  test("a task under way is a card: open, a turning ring, the time since it began, the step it is at and 停止", () => {
     const state = { ...emptyTimelineState(), nowMs: T0 + 42_000 };
     const html = stepsHTML(turn(3, { task: running(), steps: [step()] }), state);
-    expect(html).toContain('data-open="true"');
+    expect(html).toContain('<div class="steps task is-live" data-open="true">');
     expect(html).toContain('aria-label="進行中 · 42 秒"');
     expect(html).toContain(`data-since="${T0}"`);
-    expect(html).toContain('class="think" role="img" aria-label="思考中…"'); // a shimmer, no words
+    expect(html).toContain('<span class="step-t shimmer">思考中…</span>'); // the live step, with light passing over it
     expect(html).toContain('class="spin"');
-    expect(html).toContain('<button type="button" class="btn sm icon stop" data-act="stop" data-task="41" aria-label="中止" title="中止">');
-    expect(visible(html)).toBe("42 秒 查天氣 0.4 秒 42 秒");
+    expect(html).toContain('<button type="button" class="btn sm stop" data-act="stop" data-task="41">停止</button>');
+    expect(visible(html)).toBe("進行中 42 秒 停止 查天氣 0.4 秒 思考中… 42 秒");
   });
 
   test("a task that waits is queued, and one that was stopped says so with what it did", () => {
     expect(stepsHTML(turn(3, { task: running({ state: "queued", started_at_ms: null }) }), emptyTimelineState())).toContain("排隊中");
     const stopped = turn(3, { task: running({ state: "cancelled", finished_at_ms: T0 + 5_000 }), steps: [step()] });
-    expect(summaryText(stopped, T0).lead).toBe("已中止 · 做了 1 件事");
+    expect(summaryText(stopped, T0).lead).toBe("已中止 · 1 個動作");
     expect(workMs(stopped, T0 + 99_000)).toBe(5_000); // an ended task's time does not grow
   });
 
@@ -202,9 +256,25 @@ describe("what a turn did", () => {
     expect(html.match(/is-new/g)).toHaveLength(1);
     expect(html).toMatch(/<li class="step is-ok is-new">.*搜尋網路/);
   });
+
+  test("a task seen under way that is done now: its check pops in once", () => {
+    const state = emptyTimelineState();
+    const live = turn(3, { task: running(), steps: [step()] });
+    const done = turn(3, { task: running({ state: "done", finished_at_ms: T0 + 9_000 }), steps: [step()] });
+    noteTaskEnds([live], state);
+    expect(stepsHTML(live, state)).not.toContain("task-check");
+    noteTaskEnds([done], state);
+    expect(stepsHTML(done, state)).toContain('<span class="task-check is-pop">');
+    noteTaskEnds([done], state);
+    expect(stepsHTML(done, state)).toContain('<span class="task-check">');
+    // a task that was done before the page saw it does not pop
+    const fresh = emptyTimelineState();
+    noteTaskEnds([done], fresh);
+    expect(stepsHTML(done, fresh)).not.toContain("is-pop");
+  });
 });
 
-describe("中止", () => {
+describe("停止", () => {
   test("the button says it is stopping at once, and the task's id goes to the core", async () => {
     const state = emptyTimelineState();
     let finish!: (value: { cancelled: boolean }) => void;
@@ -212,7 +282,7 @@ describe("中止", () => {
     const asked = requestStop(state, 41, cancel);
     expect(cancel).toHaveBeenCalledWith(41);
     const html = stepsHTML(turn(3, { task: running() }), state);
-    expect(html).toContain('data-act="stop" data-task="41" aria-label="正在中止…" title="正在中止…" disabled>');
+    expect(html).toContain('data-act="stop" data-task="41" disabled>正在停止…</button>');
     finish({ cancelled: true });
     expect(await asked).toEqual({ cancelled: true });
     expect(state.stopping.has(41)).toBe(true); // until the task is seen to have ended
@@ -232,63 +302,68 @@ describe("中止", () => {
     expect(wantsRefresh({ type: "AgentTurn", turn_id: 3 })).toBe(true);
     expect(wantsRefresh({ type: "WorkerChanged", task_id: 41, state: "running", running: true })).toBe(true);
     expect(wantsRefresh({ type: "Level", value: 0.4 })).toBe(false);
+    expect(wantsRefresh({ type: "AgentQuestionClosed", id: "c-1" })).toBe(false);
   });
 });
 
-describe("a turn and a conversation", () => {
-  test("the person on the right in 「」 with the time, Raphael's answer in 《》 with the model and cost", () => {
-    const html = turnHTML(turn(5), emptyTimelineState(), false);
-    expect(html).toContain('<div class="tn-who"><span class="sr">你說</span><time class="num"'); // the side says who
-    expect(html).toContain(">09:00</time>");
+/** How the tests draw a turn: a face that says whether it moves. */
+const LOOK: TurnLook = { face: (loop) => `<i class="face${loop ? " loop" : ""}"></i>` };
+
+describe("a turn", () => {
+  test("the person on the right in 「」 with where and when; Raphael on the left with his face and 《》", () => {
+    const html = turnHTML(turn(5), emptyTimelineState(), false, LOOK);
+    expect(html).toContain('<span class="me-src" role="img" aria-label="語音 · 09:00" title="語音 · 09:00">');
     expect(html).toContain('<div class="bubble">「台北天氣如何，順便記到行事曆」</div>');
+    expect(html).toContain('<span class="ra-face" title="gpt-6-luna · US$0.0012"><i class="face"></i></span>');
     expect(html).toContain('<p class="ans">《答。台北現在 24 度。》</p>');
-    expect(html).toContain("gpt-6-luna · US$0.0012");
+    expect(html).not.toContain("tn-foot"); // nothing more to open
   });
 
-  test("a detail is closed behind a bordered button that says whether it is open", () => {
-    const closed = turnHTML(turn(5, { detail: "更多" }), emptyTimelineState(), false);
+  test("where it came from: a microphone, Telegram's mark or a keyboard, named", () => {
+    expect(turnHTML(turn(5, { source: "telegram" }), emptyTimelineState(), false, LOOK)).toContain('aria-label="Telegram · 09:00"');
+    const typed = turnHTML(turn(5, { source: "app" }), emptyTimelineState(), false, LOOK);
+    expect(typed).toContain('aria-label="打字 · 09:00"');
+    expect(sourceIcon("app")).toBe(sourceIcon("app"));
+    expect(new Set(["voice", "telegram", "app"].map(sourceIcon)).size).toBe(3);
+    setLocale("en");
+    expect(sourceName("app")).toBe("Typed");
+  });
+
+  test("while its task runs Raphael's face moves; a turn not asked aloud has no bubble", () => {
+    expect(turnHTML(turn(5, { task: running() }), emptyTimelineState(), false, LOOK)).toContain('<i class="face loop">');
+    expect(turnHTML(turn(5, { question: " " }), emptyTimelineState(), false, LOOK)).not.toContain("bubble");
+  });
+
+  test("a detail is closed behind a button that says whether it is open", () => {
+    const closed = turnHTML(turn(5, { detail: "更多" }), emptyTimelineState(), false, LOOK);
     expect(closed).toContain('class="btn sm icon tn-more" data-act="detail" aria-expanded="false" aria-controls="tn-detail-5" aria-label="詳細" title="詳細"');
     expect(closed).toContain('<div class="tn-detail" id="tn-detail-5" hidden>更多</div>');
-    expect(turnHTML(turn(5, { detail: "更多" }), emptyTimelineState(), true)).toContain('<div class="tn-detail" id="tn-detail-5">更多</div>');
+    expect(turnHTML(turn(5, { detail: "更多" }), emptyTimelineState(), true, LOOK)).toContain('<div class="tn-detail" id="tn-detail-5">更多</div>');
+  });
+
+  test("the words looked for are marked in the question, the answer and the detail", () => {
+    const html = turnHTML(turn(5, { detail: "台北晚上轉晴" }), emptyTimelineState(), true, { ...LOOK, query: "台北" });
+    expect(html.match(/<mark>台北<\/mark>/g)).toHaveLength(3);
   });
 
   test("everything that came from outside is escaped, steps too", () => {
     const evil = '<img src=x onerror="alert(1)">';
-    const html = turnHTML(turn(5, { question: evil, text: evil, detail: evil, model: evil, steps: [step({ tool: evil, server: evil, outcome: "error" })] }), emptyTimelineState(), true);
+    const html = turnHTML(turn(5, { question: evil, text: evil, detail: evil, model: evil, steps: [step({ tool: evil, server: evil, outcome: "error" })] }), emptyTimelineState(), true, { ...LOOK, query: "img" });
     expect(html).not.toContain("<img");
-    expect(html).toContain("&lt;img");
+    expect(html).toContain("&lt;");
   });
 
-  test("the list: days, a source mark, the current one marked and the only one in the tab order", () => {
-    const sessions = groupSessions([
-      turn(3, { created_at_ms: T0 + 3_600_000, source: "telegram", session_id: "chat-1", question: "明天要帶傘嗎" }),
-      turn(2, { created_at_ms: T0 + 60_000 }),
-      turn(1),
-    ]);
-    const html = sessionListHTML(sessionDays(sessions, T0 + 3_700_000), sessions[1].key);
-    expect(html).toContain("<h3>今天</h3>");
-    expect(html.match(/<button type="button" class="sess"/g)).toHaveLength(2);
-    expect(html).toContain('aria-current="true" tabindex="0"');
-    expect(html.match(/tabindex="-1"/g)).toHaveLength(1);
-    expect(html).toContain('title="Telegram"');
-    expect(html).not.toContain("則"); // the time is enough
+  test("a turn that is not in the history yet: the words typed, or a shimmer for words being heard, and Raphael thinking", () => {
+    const typed = pendingTurnHTML("明天會下雨嗎？", "app", LOOK);
+    expect(typed).toContain('<div class="bubble">「明天會下雨嗎？」</div>');
+    expect(typed).toContain('<i class="face loop">');
+    expect(typed).toContain('class="think" role="img" aria-label="思考中…"');
+    expect(pendingTurnHTML(null, "voice", LOOK)).toContain('<span class="shimmer">正在辨識…</span>');
+    expect(pendingTurnHTML("<b>", "app", LOOK)).toContain("「&lt;b&gt;」");
   });
 
-  test("the arrow keys walk the list and stop at its ends; Home and End jump; other keys do nothing", () => {
-    expect(listMove("ArrowDown", 0, 3)).toBe(1);
-    expect(listMove("ArrowDown", 2, 3)).toBe(2);
-    expect(listMove("ArrowUp", 0, 3)).toBe(0);
-    expect(listMove("Home", 2, 3)).toBe(0);
-    expect(listMove("End", 0, 3)).toBe(2);
-    expect(listMove("Enter", 1, 3)).toBeNull(); // the button's own: it opens the conversation
-    expect(listMove("ArrowDown", 0, 0)).toBeNull();
-  });
-
-  test("a conversation: its first question as the head, where and when, and its turns oldest first", () => {
-    const [session] = groupSessions([turn(2, { created_at_ms: T0 + 60_000, question: "再一次" }), turn(1)]);
-    const html = timelineHTML(session, { ...emptyTimelineState(), nowMs: T0 + 120_000 }, new Set());
-    expect(html).toContain('<h2 class="tl-title">台北天氣如何，順便記到行事曆</h2>');
-    expect(html).toContain("語音");
-    expect(html.indexOf('data-id="1"')).toBeLessThan(html.indexOf('data-id="2"'));
+  test("a day heading", () => {
+    expect(dayHTML("今天")).toBe('<li class="day"><span>今天</span></li>');
+    expect(dayHTML("<x>")).toContain("&lt;x&gt;");
   });
 });

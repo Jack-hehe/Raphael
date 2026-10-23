@@ -3,7 +3,8 @@
 `worker_tasks` is one row for each task: what was handed over, how it stands and the report it ended
 with. `worker_steps` is one row for each model call and each tool call: which tool, at which tier,
 how it ended and what it cost. A step holds no argument and no result. The text of a task is what the
-user said, so tasks are pruned with the assistant's history and go with its "clear".
+user said, so tasks go with the assistant's history when it is cleared; like the conversation they
+are part of, they are not pruned by age.
 
 `state` is one of:
 
@@ -18,20 +19,14 @@ user said, so tasks are pruned with the assistant's history and go with its "cle
 Use it on the thread that owns `conn` (the event loop). Nothing here logs a task.
 """
 
-# Postponed annotations: TaskStore has a method called `list`, which would otherwise hide the builtin
-# in the annotations of the methods defined after it.
-from __future__ import annotations
-
 import sqlite3
-import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
+from ..clock import wall_clock_ms
+
 QUEUED, RUNNING = "queued", "running"
-ACTIVE_STATES = (QUEUED, RUNNING)
 FINAL_STATES = ("done", "failed", "limit", "cancelled", "interrupted")
-LIST_DEFAULT = 20
-LIST_MAX = 100
 
 
 class Refused(Exception):
@@ -41,10 +36,6 @@ class Refused(Exception):
     def __init__(self, kind: str) -> None:
         super().__init__(kind)
         self.kind = kind
-
-
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
 
 
 @dataclass
@@ -96,7 +87,7 @@ class TaskStore:
     """The `worker_tasks` and `worker_steps` tables."""
 
     def __init__(
-        self, conn: sqlite3.Connection, now_ms: Callable[[], int] = _wall_clock_ms
+        self, conn: sqlite3.Connection, now_ms: Callable[[], int] = wall_clock_ms
     ) -> None:
         self._conn = conn
         self._now_ms = now_ms
@@ -126,9 +117,6 @@ class TaskStore:
                 (self._now_ms(), task_id),
             )
 
-    def set_state(self, task_id: int, state: str) -> None:
-        with self._conn:
-            self._conn.execute("UPDATE worker_tasks SET state = ? WHERE id = ?", (state, task_id))
 
     def progress(self, task_id: int, *, model_calls: int, tool_calls: int, cost_usd: float) -> None:
         """What a running task has used so far."""
@@ -227,13 +215,6 @@ class TaskStore:
         ).fetchone()
         return None if row is None else Task(**dict(row))
 
-    def list(self, limit: int = LIST_DEFAULT) -> list[Task]:
-        """Newest first."""
-        limit = min(max(limit, 1), LIST_MAX)
-        rows = self._conn.execute(
-            f"SELECT {_TASK_COLUMNS} FROM worker_tasks ORDER BY id DESC LIMIT ?", (limit,)
-        )
-        return [Task(**dict(row)) for row in rows]
 
     def for_turns(self, turn_ids: Iterable[int]) -> dict[int, Task]:
         """The task each of `turn_ids` handed over, if it handed one over (the newest, should
@@ -260,10 +241,6 @@ class TaskStore:
         )
         return [Step(**dict(row)) for row in rows]
 
-    def count_state(self, state: str) -> int:
-        return self._conn.execute(
-            "SELECT count(*) FROM worker_tasks WHERE state = ?", (state,)
-        ).fetchone()[0]
 
     def interrupt_unfinished(
         self,
@@ -352,21 +329,6 @@ class TaskStore:
                 " report_detail = NULL WHERE id = ?",
                 (task_id,),
             )
-
-    def prune(self, older_than_ms: int) -> int:
-        """Delete the finished tasks made before `older_than_ms`, with their steps."""
-        with self._conn:
-            self._conn.execute(
-                "DELETE FROM worker_steps WHERE task_id IN (SELECT id FROM worker_tasks"
-                " WHERE created_at_ms < ? AND state NOT IN ('queued', 'running'))",
-                (older_than_ms,),
-            )
-            cursor = self._conn.execute(
-                "DELETE FROM worker_tasks WHERE created_at_ms < ?"
-                " AND state NOT IN ('queued', 'running')",
-                (older_than_ms,),
-            )
-        return cursor.rowcount
 
     def clear(self) -> int:
         """Delete every finished task, with its steps; one that is not over stays."""

@@ -171,9 +171,3 @@ export const retry = (lesson: Lesson, now: number): Lesson => ({
   agentHeard: lesson.agentHeard,
 });
 
-// ---------- the sentences ----------
-
-/** What the lesson tells the person to say or do. */
-export type Prompt = "keyToggle" | "keyHold" | "dictate" | "cleanup" | "ask" | "act";
-
-export const promptFor = (id: LessonId, mode: DeviceSettings["dictation_mode"]): Prompt => (id === "key" ? (mode === "hold" ? "keyHold" : "keyToggle") : id);

@@ -15,7 +15,6 @@ import pytest
 from raphael_core.brain import openrouter
 from raphael_core.brain.openrouter import (
     CLEANUP_FALLBACKS,
-    CLEANUP_MODEL_CHOICES,
     DEFAULT_CLEANUP_MODEL,
     Completion,
     KeyInfo,
@@ -998,11 +997,8 @@ async def test_warm_up_leaves_a_client_it_was_given_alone():
 # --- models -----------------------------------------------------------------------------------
 
 
-def test_the_model_choices_are_the_default_then_its_fallbacks():
-    assert DEFAULTS["cleanup_model"] == DEFAULT_CLEANUP_MODEL
+def test_the_cleanup_model_is_the_default_and_the_fallbacks_are_the_other_two():
+    assert DEFAULTS["cleanup_model"] == DEFAULT_CLEANUP_MODEL == "openai/gpt-6-luna"
     assert CLEANUP_FALLBACKS == ["anthropic/claude-haiku-5.5", "google/gemini-3.1-flash-lite"]
-    assert CLEANUP_MODEL_CHOICES == [
-        "openai/gpt-6-luna",
-        "anthropic/claude-haiku-5.5",
-        "google/gemini-3.1-flash-lite",
-    ]
+    # No list of models to offer is kept here: the settings page takes them from OpenRouter.
+    assert not hasattr(openrouter, "CLEANUP_MODEL_CHOICES")

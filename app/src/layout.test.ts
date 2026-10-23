@@ -39,7 +39,7 @@ const ruleFor = (rules: Rule[], selector: string): Rule[] => rules.filter((r) =>
 
 describe("no sideways scrolling", () => {
   it("the page and every scrolling part of the main window clip sideways overflow", () => {
-    for (const selector of [".main", ".side", ".modal-nav", ".modal-body", ".menu", ".ob-body", ".lang-list", ".mp-scroll", ".mp-ddlist", ".sess-pane", ".tl-pane"]) {
+    for (const selector of [".main", ".side", ".modal-nav", ".modal-body", ".menu", ".ob-body", ".lang-list", ".mp-scroll", ".mp-ddlist", ".ra-scroll"]) {
       const found = ruleFor(mainRules, selector);
       expect(found.length, selector).toBeGreaterThan(0);
       expect(

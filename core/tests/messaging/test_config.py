@@ -1,15 +1,17 @@
-"""messaging.json: version 2, and the move from version 1."""
+"""messaging.json."""
 
 import json
 
 from raphael_core.messaging.config import AllowedUser, ChannelConfig, MessagingConfig, MessagingStore
 
-V1 = {
-    "version": 1,
-    "telegram": {
-        "enabled": True,
-        "bot": {"id": 999, "username": "raph_bot"},
-        "allowed": [{"user_id": 111, "name": "Ann"}, {"user_id": 222, "name": ""}],
+SAVED = {
+    "version": 2,
+    "channels": {
+        "telegram": {
+            "enabled": True,
+            "identity": {"id": "999", "name": "raph_bot"},
+            "allowed": [{"user": "111", "name": "Ann", "chat": "111"}, {"user": "222", "name": ""}],
+        }
     },
 }
 
@@ -23,17 +25,18 @@ def test_nothing_is_connected_without_a_file(tmp_path):
     assert config.channel("telegram").connected is False
 
 
-def test_version_1_is_read_as_telegram_with_string_ids(tmp_path):
-    write(tmp_path, V1)
+def test_a_saved_file_is_read_with_its_ids_as_text(tmp_path):
+    write(tmp_path, SAVED)
     telegram = MessagingStore(tmp_path).load().channel("telegram")
     assert (telegram.enabled, telegram.bot_id, telegram.bot_username) == (True, "999", "raph_bot")
+    # A user with no chat of their own is written to at their user id.
     assert [(u.user_id, u.name, u.chat) for u in telegram.allowed] == [("111", "Ann", "111"), ("222", "", "222")]
     assert telegram.is_allowed("111") and not telegram.is_allowed("333")
     assert telegram.chat_allowed("222")
 
 
-def test_version_1_is_written_as_version_2_the_next_time_something_changes(tmp_path):
-    write(tmp_path, V1)
+def test_what_is_read_is_written_back_the_same(tmp_path):
+    write(tmp_path, SAVED)
     store = MessagingStore(tmp_path)
     store.save(store.load())
     saved = json.loads((tmp_path / "messaging.json").read_text(encoding="utf-8"))
@@ -50,7 +53,6 @@ def test_version_1_is_written_as_version_2_the_next_time_something_changes(tmp_p
             }
         },
     }
-    assert store.load().channel("telegram").bot_id == "999"
 
 
 def test_ids_larger_than_a_javascript_number_survive_as_text(tmp_path):

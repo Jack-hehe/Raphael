@@ -166,8 +166,8 @@ COMMIT;
 """
 
 # v9: the background worker (raphael_core.background). `worker_tasks` is one row for each task:
-# what was handed over (`text`, which is what the user said, so it is pruned and cleared with the
-# assistant's history), how it stands (`state`: queued, running, done, failed, limit, cancelled or
+# what was handed over (`text`, which is what the user said, so it is cleared with the assistant's
+# history), how it stands (`state`: queued, running, done, failed, limit, cancelled or
 # interrupted) and the report it ended with. `worker_steps` is one row for each model call and each
 # tool call of a task: which tool, at which tier, how it ended and what it cost; never an
 # argument or a result. `tool_audit.task_id` ties a tool call to the task that made it.
@@ -232,6 +232,59 @@ PRAGMA user_version = 12;
 COMMIT;
 """
 
+def create_turn_search(conn: sqlite3.Connection) -> None:
+    """Create `agent_turns_fts`, the search over the assistant's turns, if it is not there.
+
+    It is an FTS5 table of two columns, `pairs` and `chars`, made in Python from the question and
+    the answer of each turn (`memory.terms.index_terms`), its rowid the turn's id. If this SQLite has
+    no FTS5 it is a plain table of the same columns instead, and the search reads it with LIKE
+    (`AgentHistory.search` tells the two apart by the table's SQL). Python's own SQLite has had FTS5
+    since 3.9; the plain table is for a build that left it out."""
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS agent_turns_fts USING fts5(pairs, chars,"
+            " tokenize = 'unicode61 remove_diacritics 0')"
+        )
+    except sqlite3.OperationalError:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agent_turns_fts (rowid INTEGER PRIMARY KEY,"
+            " pairs TEXT NOT NULL, chars TEXT NOT NULL)"
+        )
+
+
+def _migrate_v13(conn: sqlite3.Connection) -> None:
+    """v13: one continuous conversation with Raphael, and what it is searched by.
+
+    - `agent_summary` is the rolling summary of the conversation (`memory.conversation`): one row,
+      its text and the last turn it covers. The turns after it are the ones the model reads as
+      they were said.
+    - `memory_state` holds the few numbers the memory keeps between runs (the last turn the
+      reflection pass read, when the memory was last consolidated), by name.
+    - `agent_turns_fts` is the search over the turns (`create_turn_search`), filled here with the
+      turns there already are.
+
+    Like the others, one transaction with the version.
+    """
+    from ..memory.terms import index_terms  # the brain must not need the memory to import
+
+    conn.execute("BEGIN")
+    conn.execute(
+        "CREATE TABLE agent_summary (id INTEGER PRIMARY KEY CHECK (id = 1), text TEXT NOT NULL,"
+        " through_turn_id INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)"
+    )
+    conn.execute("CREATE TABLE memory_state (key TEXT PRIMARY KEY, value INTEGER NOT NULL)")
+    create_turn_search(conn)
+    rows = conn.execute("SELECT id, question, text, detail FROM agent_turns").fetchall()
+    for turn_id, question, text, detail in rows:
+        terms = index_terms(question, text, detail)
+        conn.execute(
+            "INSERT INTO agent_turns_fts (rowid, pairs, chars) VALUES (?, ?, ?)",
+            (turn_id, terms.pairs, terms.chars),
+        )
+    conn.execute("PRAGMA user_version = 13")
+    conn.execute("COMMIT")
+
+
 _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_V1,
     2: _MIGRATION_V2,
@@ -245,6 +298,7 @@ _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     10: _MIGRATION_V10,
     11: _MIGRATION_V11,
     12: _MIGRATION_V12,
+    13: _migrate_v13,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { setLocale } from "../i18n";
 import type { AgentTurn, HistoryItem, MainEvent } from "../types";
 import type { LessonId } from "./abilities";
-import { CONFLICT_MS, HOLD_MS, type Lesson, type PracticeContext, type PracticeEvent, conflictSuspected, feed, promptFor, retry, startLesson } from "./practice";
+import { CONFLICT_MS, HOLD_MS, type Lesson, type PracticeContext, type PracticeEvent, conflictSuspected, feed, retry, startLesson } from "./practice";
 
 afterEach(() => setLocale("zh-TW"));
 
@@ -30,6 +30,7 @@ const item = (over: Partial<HistoryItem> = {}): HistoryItem => ({
   llm_ms: 600,
   model: null,
   cost_usd: 0,
+  stt: null,
   ...over,
 });
 
@@ -265,10 +266,3 @@ describe("a key that another program holds", () => {
   });
 });
 
-describe("the words of a lesson", () => {
-  test("the key lesson follows the dictation mode", () => {
-    expect(promptFor("key", "toggle")).toBe("keyToggle");
-    expect(promptFor("key", "hold")).toBe("keyHold");
-    expect(promptFor("act", "hold")).toBe("act");
-  });
-});

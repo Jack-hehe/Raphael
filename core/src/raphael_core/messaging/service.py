@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 
 from ..integrations.vault import SecretVault
-from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
+from ..protocol import INTERNAL_ERROR, RpcError, invalid_params
 from ..router import Router
 from .channels import CHANNEL_TYPES
 from .channels.base import ChannelError, ChannelType
@@ -29,10 +29,6 @@ logger = logging.getLogger(__name__)
 def secret_name(kind: str, name: str) -> str:
     """The vault entry of a secret of a messaging app."""
     return f"messaging:{kind}:{name}"
-
-
-def _invalid(message: str) -> RpcError:
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
 
 
 @dataclass
@@ -201,7 +197,7 @@ class MessagingService:
         try:
             secrets = channel_type.read_secrets(params)
         except ValueError as error:
-            raise _invalid(str(error)) from None
+            raise invalid_params(str(error)) from None
         if secrets is None:
             return {"ok": False, "reason": "invalid_token"}
         try:
@@ -229,11 +225,11 @@ class MessagingService:
     async def _set_enabled(self, kind: str, params: dict) -> dict:
         enabled = params.get("enabled")
         if type(enabled) is not bool:
-            raise _invalid("enabled must be true or false")
+            raise invalid_params("enabled must be true or false")
         async with self._lock:
             config = self._config.channel(kind)
             if not config.connected:
-                raise _invalid(f"{kind} is not connected")
+                raise invalid_params(f"{kind} is not connected")
             config.enabled = enabled
             self._store.save(self._config)
             if enabled:
@@ -245,7 +241,7 @@ class MessagingService:
     async def _approve(self, kind: str, params: dict) -> dict:
         code = params.get("code")
         if not isinstance(code, str):
-            raise _invalid("code must be a string")
+            raise invalid_params("code must be a string")
         running = self._running.get(kind)
         pairing = None if running is None else running.switchboard.pairing.take(code)
         if running is None or pairing is None:
@@ -253,7 +249,7 @@ class MessagingService:
         config = self._config.channel(kind)
         if not config.is_allowed(pairing.user):
             if len(config.allowed) >= MAX_ALLOWED:
-                raise _invalid("too many people are allowed")
+                raise invalid_params("too many people are allowed")
             config.allowed.append(AllowedUser(pairing.user, pairing.name, pairing.chat))
             self._store.save(self._config)
         logger.info("%s: a pairing was approved, chat=%s", kind, chat_hash(pairing.chat))
@@ -264,7 +260,7 @@ class MessagingService:
     async def _reject(self, kind: str, params: dict) -> dict:
         code = params.get("code")
         if not isinstance(code, str):
-            raise _invalid("code must be a string")
+            raise invalid_params("code must be a string")
         running = self._running.get(kind)
         if running is not None:
             running.switchboard.pairing.take(code)
@@ -273,7 +269,7 @@ class MessagingService:
     async def _remove_user(self, kind: str, params: dict) -> dict:
         user_id = params.get("user_id")
         if not isinstance(user_id, str):
-            raise _invalid("user_id must be a string")
+            raise invalid_params("user_id must be a string")
         config = self._config.channel(kind)
         config.allowed = [u for u in config.allowed if u.user_id != user_id]
         self._store.save(self._config)

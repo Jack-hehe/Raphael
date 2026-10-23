@@ -84,8 +84,7 @@ class Plugins:
             "integrations.add", {"name": name, "transport": "stdio", "command": "unused"}
         )
         server_id = added["server"]["id"]
-        await self.rpc.call("integrations.refresh", {"id": server_id})
-        tools = (await self.rpc.call("integrations.tools", {"id": server_id}))["tools"]
+        tools = (await self.rpc.call("integrations.refresh", {"id": server_id}))["tools"]
         for tool in tools:
             await self.set_on(server_id, tool["name"], only.get(tool["name"]) is not None)
         # a tier above the one of a tool that is on: the tool asks first
@@ -150,7 +149,7 @@ async def test_without_plugins_nothing_is_asked_about_tools(make_rig, client):
 async def test_plugins_whose_tools_have_no_tier_are_not_asked_about_either(
     rig, plugins, client
 ):
-    await plugins.connect()  # connected and read, but the user gave nothing a tier
+    await plugins.connect()  # connected and read, but every tool is off
     route(client)
     client.replies.append(spoken("答", "好。"))
     assert (await rig.ask("你好嗎"))["text"] == "好。"
@@ -250,33 +249,6 @@ async def test_the_calls_a_model_picks_together_are_made_together(rig, plugins, 
     assert len(plugins.audit()) == 2
 
 
-async def test_a_task_for_a_connected_service_goes_to_the_tools_when_there_are_some(
-    rig, plugins, client, calls
-):
-    await plugins.connect(look="T0")
-    route(client, "delegate")
-    client.plans.append(tool_plan(("Notes__look", {"topic": "tea"})))
-    client.replies.append(spoken("答", "好。"))
-    result = await rig.ask("幫我在筆記裡查茶")
-    assert (result["status"], result["text"]) == ("done", "好。") and calls == ["look"]
-    assert (await rig.turns())[0]["route"] == "answer"
-
-
-async def test_a_task_for_a_connected_service_is_still_not_there_without_a_tool(rig, client):
-    route(client, "delegate")
-    result = await rig.ask("幫我寄信")
-    assert result["text"] == phrase("zh-TW", "delegate")
-    assert client.plan_calls == []
-
-
-async def test_a_task_that_no_tool_can_do_says_so(rig, plugins, client, calls):
-    await plugins.connect(look="T0")
-    route(client, "delegate")
-    client.plans.append(tool_plan())
-    result = await rig.ask("幫我寄信")
-    assert (result["prefix"], result["text"]) == ("否", phrase("zh-TW", "plugin_none"))
-    assert calls == [] and client.replies == []
-
 
 async def test_a_question_no_tool_is_needed_for_is_answered_as_before(rig, plugins, client, calls):
     await plugins.connect(look="T0")
@@ -297,16 +269,8 @@ async def test_a_model_that_fails_to_pick_does_not_fail_an_answer(rig, plugins, 
     assert (result["status"], result["text"]) == ("done", "好。") and calls == []
 
 
-async def test_a_model_that_fails_to_pick_fails_a_task_for_a_service(rig, plugins, client):
-    await plugins.connect(look="T0")
-    route(client, "delegate")
-    client.plans.append(OpenRouterError(0, "timeout", "slow"))
-    result = await rig.ask("幫我在筆記裡查茶")
-    assert (result["prefix"], result["text"]) == ("否", phrase("zh-TW", "offline"))
-
-
 async def test_a_name_the_model_was_not_offered_is_not_a_call(rig, plugins, client, calls):
-    await plugins.connect(look="T0")  # "wipe" has no tier, so it was not offered
+    await plugins.connect(look="T0")  # "wipe" is off, so it was not offered
     route(client)
     client.plans.append(tool_plan(("Notes__wipe", {}), ("Notes__made_up", {}), ("look", {})))
     client.replies.append(spoken("答", "好。"))
@@ -315,7 +279,7 @@ async def test_a_name_the_model_was_not_offered_is_not_a_call(rig, plugins, clie
 
 
 async def test_a_tool_is_never_called_on_the_word_of_its_server(rig, plugins, client, calls):
-    await plugins.connect()  # "lies" says it only reads, and has no tier
+    await plugins.connect()  # "lies" says it only reads, and is off
     route(client)
     client.plans.append(tool_plan(("Notes__lies", {"topic": "x"})))
     client.replies.append(spoken("答", "好。"))
@@ -500,7 +464,7 @@ async def test_a_new_request_replaces_the_question_and_that_is_a_no(rig, plugins
 
 async def test_a_yes_for_a_tool_the_user_took_back_runs_nothing(rig, plugins, client, calls):
     asked = await ask_for_note(rig, plugins, client)
-    [server] = (await plugins.rpc.call("integrations.list"))["servers"]
+    [server] = (await plugins.rpc.call("toolsets.list"))["groups"]
     await plugins.set_on(server["id"], "note", False)
     done = await rig.confirm(asked["confirm"]["id"], True)
     assert (done["prefix"], done["text"]) == ("否", phrase("zh-TW", "failed"))
@@ -518,7 +482,7 @@ async def test_a_yes_to_t2_does_not_cover_a_tool_made_t3_meanwhile(rig, plugins,
 
 async def test_a_yes_to_t3_still_covers_a_tool_made_t2_meanwhile(rig, plugins, client, calls):
     asked = await ask_for_note(rig, plugins, client, "T3")
-    [server] = (await plugins.rpc.call("integrations.list"))["servers"]
+    [server] = (await plugins.rpc.call("toolsets.list"))["groups"]
     plugins.hub.strict["note"] = Tier.T2
     client.replies.append(spoken("了", "記下了。"))
     assert (await rig.confirm(asked["confirm"]["id"], True))["prefix"] == "了"

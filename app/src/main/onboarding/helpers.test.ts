@@ -1,8 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { setLocale } from "../i18n";
 import type { ModelPhase } from "../models";
-import type { AudioDevices } from "../types";
-import { AUTO_MICROPHONE, HEARD_LEVEL, HEARD_MS, heardAfter, limitAction, lookUp, micChoices, modelPercent } from "./helpers";
+import { HEARD_LEVEL, HEARD_MS, heardAfter, limitAction, lookUp, modelPercent } from "./helpers";
 
 describe("limitAction", () => {
   test("the limit as it is stays as it is", () => {
@@ -17,35 +15,6 @@ describe("limitAction", () => {
 
   test("what is not a number of 0 or more is refused", () => {
     for (const text of ["", "abc", "-5", "1e999"]) expect(limitAction(text, 10)).toEqual({ kind: "invalid" });
-  });
-});
-
-describe("micChoices", () => {
-  const devices: AudioDevices = {
-    devices: [
-      { index: 0, name: "Headset", is_default: true },
-      { index: 1, name: "USB Mic", is_default: false },
-    ],
-    selected: null,
-  };
-
-  test("the automatic choice comes first, then each microphone", () => {
-    setLocale("zh-TW");
-    const choices = micChoices(devices, null);
-    expect(choices.map((c) => c.value)).toEqual([AUTO_MICROPHONE, "Headset", "USB Mic"]);
-  });
-
-  test("a saved microphone that is not plugged in is still offered, marked", () => {
-    setLocale("zh-TW");
-    const choices = micChoices(devices, "Old Mic");
-    const last = choices[choices.length - 1];
-    expect(last).toMatchObject({ value: "Old Mic" });
-    expect(last.label).toContain("Old Mic");
-    expect(last.label).not.toBe("Old Mic");
-  });
-
-  test("without a list of microphones only the automatic choice is there", () => {
-    expect(micChoices(null, null).map((c) => c.value)).toEqual([AUTO_MICROPHONE]);
   });
 });
 

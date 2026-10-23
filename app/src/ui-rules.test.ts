@@ -46,9 +46,42 @@ describe("buttons", () => {
     expect(bad).toEqual([]);
   });
 
-  test("no clickable text: the old borderless icon button and the link look are gone", () => {
+  test("no clickable text: the old icon-btn class and the link look are gone", () => {
     const all = [...sources, ...i18nFiles, ...mainFiles.filter((f) => f.endsWith(".css"))].map(read).join("\n");
     expect(all).not.toMatch(/icon-btn|class="link"|class="quiet"/);
+  });
+
+  // A text button has a border; an icon-only button (trash, ×, chevron, search, settings, sliders)
+  // has none, only a fill under the pointer and the focus ring. The rule changed from "every button
+  // is bordered": the border is what tells a button with words in it.
+  test("icon-only buttons are borderless: a fill under the pointer and a focus ring, never an edge", () => {
+    const strip = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const styles = strip(read(join(MAIN, "styles.css")));
+    const base = /(?:^|\n)\.btn\.icon\s*\{([^}]*)\}/.exec(styles)?.[1] ?? "";
+    expect(base).toMatch(/border-color:\s*transparent/);
+    expect(base).toMatch(/background:\s*transparent/);
+    expect(styles).toMatch(/\.btn\.icon:hover:not\(:disabled\)\s*\{[^}]*background:\s*var\(--hover\)[^}]*border-color:\s*transparent/);
+    expect(styles).toMatch(/\.btn\.icon:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--focus\)/);
+    // No other rule gives one an edge back. The exceptions: a primary one is filled with the accent
+    // (its edge is its fill), and one that grows words while it asks again (確定清除？) is a text button.
+    const bad: string[] = [];
+    for (const file of mainFiles.filter((f) => f.endsWith(".css"))) {
+      for (const [, selector, body] of strip(read(file)).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        const icon = selector.split(",").filter((s) => /\.btn(\.[\w-]+)*\.icon\b/.test(s) && !/\.pri\b|\.is-confirm\b/.test(s));
+        if (!icon.length) continue;
+        const edge = /(^|;)\s*border(-top|-right|-bottom|-left)?(-color)?\s*:\s*(?!\s|transparent|0\b|none)[^;]+/.exec(body);
+        if (edge) bad.push(`${rel(file)}: ${icon.join(",").trim()} { ${edge[0].trim()} }`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  test("the icon-only buttons are made by iconButton / iconBtn, which say what they do in their label and tooltip", () => {
+    const ui = read(join(MAIN, "ui.ts"));
+    expect(ui).toMatch(/export const iconButton = [\s\S]*?class="btn icon\$\{[\s\S]*?aria-label="\$\{esc\(label\)\}" title="\$\{esc\(label\)\}"/);
+    // nothing else writes the class by hand
+    const byHand = sources.filter((f) => rel(f) !== "ui.ts" && /class="btn icon/.test(read(f))).map(rel);
+    expect(byHand).toEqual([]);
   });
 });
 
@@ -131,5 +164,48 @@ describe("translations", () => {
       .map(([key]) => key)
       .filter((key) => !MARKUP_ALLOWLIST.has(key));
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("icons", () => {
+  // The icons are drawn on a 16 x 16 grid with a 1.5 stroke (ui.ts ICON): at 16 px one edge of each
+  // straight line falls on a whole pixel; at 12 to 15 px none does and they blur. So an icon is shown
+  // at 16 px, or 20 where a larger one is meant, and keeps its stroke. The window's own minimise,
+  // maximise and close are Windows' caption glyphs, drawn for 12 px: not icons of the set.
+  const SIZES = new Set(["16px", "20px"]);
+  const NOT_ICONS = new Set([".window-button svg"]);
+  const strip = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const cssFiles = [...mainFiles, ...walk(join(SRC, "overlay"))].filter((f) => f.endsWith(".css"));
+  const iconRules = (): { file: string; selector: string; body: string }[] =>
+    cssFiles.flatMap((file) =>
+      [...strip(read(file)).matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap(([, selectors, body]) =>
+        selectors
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => /(\.i|\bsvg)(?![\w-])/.test(s) && !NOT_ICONS.has(s))
+          .map((selector) => ({ file: rel(file), selector, body })),
+      ),
+    );
+
+  test("an icon is shown at 16 or 20 px, never 12 to 15", () => {
+    const bad = iconRules().flatMap(({ file, selector, body }) =>
+      [...body.matchAll(/(?:^|;)\s*(width|height)\s*:\s*([^;]+)/g)]
+        .filter(([, , value]) => !SIZES.has(value.trim()))
+        .map(([, prop, value]) => `${file}: ${selector} { ${prop}: ${value.trim()} }`),
+    );
+    expect(iconRules().length).toBeGreaterThan(10);
+    expect(bad).toEqual([]);
+  });
+
+  test("an icon keeps the 1.5 stroke it is drawn for", () => {
+    const bad = iconRules()
+      .filter(({ body }) => [...body.matchAll(/stroke-width\s*:\s*([^;]+)/g)].some(([, value]) => value.trim() !== "1.5"))
+      .map(({ file, selector }) => `${file}: ${selector}`);
+    expect(bad).toEqual([]);
+  });
+
+  test("no page keeps a copy of an icon: every 16 x 16 drawing comes from ui.ts", () => {
+    const copies = sources.filter((f) => rel(f) !== "ui.ts" && read(f).includes('viewBox="0 0 16 16"')).map(rel);
+    expect(copies).toEqual([]);
   });
 });

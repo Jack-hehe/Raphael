@@ -1,19 +1,19 @@
-// History: how long it is kept and that it stays on this computer, then a filter and search, and
-// the dictations grouped by day, each row its time, the cleaned text and the target program.
-// Hover for copy and delete; a click shows what the speech recognition heard. A day of
-// the activity grid on Home opens the page at that day (`setDay`): a chip says so and takes the
-// filter off, and the page shows all days again the next time it is opened.
+// History: a filter and search, then the dictations grouped by day, each row its time, the cleaned
+// text and the target program. Hover for copy and delete; a click shows what the speech recognition
+// heard. A day of the activity grid on Home opens the page at that day (`setDay`): a chip says so
+// and takes the filter off, and the page shows all days again the next time it is opened. How long
+// the history is kept, and clearing it all, are in Settings › 資料.
 
 import { onLocaleChange, t } from "../i18n";
 
 import * as api from "../api";
 import { historyEmptyHint } from "../dictation";
 import { loadingHTML } from "../loading";
-import { dayBounds, dayLabel, describeError, formatClock, formatRetention, KEEP_FOREVER_DAYS } from "../format";
+import { dayBounds, dayLabel, describeError, formatClock } from "../format";
 import { bindingLabels } from "../keys";
 import type { AppContext, HistoryItem, Page } from "../types";
 import { Deletions, debounce } from "../undo";
-import { type Choice, btn, closeMenu, copyText, esc, fieldHTML, ico, iconBtn, menuIsOpenFor, openMenu, openMenuOnArrow, row, sel, tabs, toaster } from "../ui";
+import { btn, closeMenu, copyText, esc, fieldHTML, ico, iconBtn, openMenuOnArrow, swapHTML, tabs, toaster } from "../ui";
 
 /** The search waits this long after the last key. */
 const SEARCH_DELAY_MS = 200;
@@ -35,12 +35,6 @@ export function historyQuery(query: string, day: string | null, cursor: number |
   if (cursor !== null) params.before_ms = cursor;
   return params;
 }
-
-/** At least a day (the core only checks that it is a number); "keep" is a hundred years. */
-export const RETENTIONS: Choice[] = [1, 7, 30, 365, KEEP_FOREVER_DAYS].map((days) => ({
-  value: String(days),
-  get label() { return formatRetention(days); },
-}));
 
 type Filter = "all" | "cleaned" | "raw";
 const FILTERS: { id: Filter; name: string }[] = [
@@ -78,7 +72,6 @@ export function createHistory(app: AppContext): HistoryPage {
   el.hidden = true;
   el.innerHTML =
     t("history.006") +
-    `<section class="card hist-top"></section>` +
     `<div class="tools">` +
     tabs(FILTERS.map((f) => ({ id: f.id, label: f.name, attrs: ` data-filter="${f.id}"` })), "all", { label: t("common.filter"), kind: "filter" }) +
     `${fieldHTML(t("history.007"), "", { icon: "search", get label() { return t("history.008"); }, id: "hist-q" })}</div>` +
@@ -87,7 +80,6 @@ export function createHistory(app: AppContext): HistoryPage {
     `<div class="more" hidden>${btn(t("history.009"), "", ' data-act="more"')}</div>` +
     `<div class="empty" hidden></div>`;
   const search = el.querySelector<HTMLInputElement>("#hist-q")!;
-  const top = el.querySelector<HTMLElement>(".hist-top")!;
   const dayRow = el.querySelector<HTMLElement>(".day-row")!;
   const days = el.querySelector<HTMLElement>(".days")!;
   const more = el.querySelector<HTMLElement>(".more")!;
@@ -104,7 +96,6 @@ export function createHistory(app: AppContext): HistoryPage {
   let canLoadMore = false;
   let failure: (() => string) | null = null;
   let loads = 0;
-  let retentionDays: number | null = null;
   let filter: Filter = "all";
   let pending = false;
   /** The one day shown, `2026-10-14`; null for all of them. */
@@ -126,7 +117,6 @@ export function createHistory(app: AppContext): HistoryPage {
     if (pending && items.length === 0) {
       days.innerHTML = loadingHTML();
       empty.hidden = more.hidden = true;
-      paintTop();
       return;
     }
     const shown = items.filter(
@@ -140,14 +130,21 @@ export function createHistory(app: AppContext): HistoryPage {
       if (last?.label === label) last.items.push(item);
       else groups.push({ label, items: [item] });
     }
-    days.innerHTML = groups
-      .map(
-        (g) =>
-          `<section class="group day"><h3>${esc(g.label)}</h3><div class="list card">` +
-          g.items.map((item) => itemHTML(item, expanded.has(item.id))).join("") +
-          `</div></section>`,
-      )
-      .join("");
+    // The days come in one after another when the list is new (a load, a search, a filter); drawn
+    // again after a delete or with more of it, they stand still (ui.ts `swapHTML`).
+    swapHTML(
+      days,
+      `<div data-stagger="${esc(`${query}|${filter}|${day ?? ""}`)}">` +
+        groups
+          .map(
+            (g) =>
+              `<section class="group day"><h3>${esc(g.label)}</h3><div class="list card">` +
+              g.items.map((item) => itemHTML(item, expanded.has(item.id))).join("") +
+              `</div></section>`,
+          )
+          .join("") +
+        `</div>`,
+    );
 
     more.hidden = !canLoadMore || shown.length === 0;
     empty.hidden = shown.length > 0;
@@ -164,27 +161,6 @@ export function createHistory(app: AppContext): HistoryPage {
         empty.innerHTML = t("history.013", { p0: esc(historyEmptyHint(app.device().dictation_mode, key)) });
       }
     }
-
-    paintTop();
-  }
-
-  /** The card at the top: how long the history is kept, and that it stays on this computer. */
-  function paintTop(): void {
-    const current = String(retentionDays ?? 30);
-    top.innerHTML =
-      row(
-        t("history.014", { p0: ico("clock") }),
-        retentionDays !== null && retentionDays >= KEEP_FOREVER_DAYS ? t("history.015") : t("history.016"),
-        retentionDays === null ? "" : sel(retentionChoices(), current, t("history.017"), ' data-k="retention"'),
-      ) + row(t("history.018", { p0: ico("lock") }), t("history.019"));
-  }
-
-  /** The choices, with the one in force too if it is none of them. */
-  function retentionChoices(): Choice[] {
-    const current = String(retentionDays ?? 30);
-    return RETENTIONS.some((c) => c.value === current)
-      ? RETENTIONS
-      : [...RETENTIONS, { value: current, label: formatRetention(Number(current)) }];
   }
 
   /** Loads the newest items (or, with `append`, the ones after what is loaded). */
@@ -211,24 +187,16 @@ export function createHistory(app: AppContext): HistoryPage {
     render();
   }
 
-  async function changeRetention(value: string): Promise<void> {
-    try {
-      retentionDays = (await api.settingsSet("history_retention_days", Number(value))).settings.history_retention_days;
-      void load(false);
-    } catch (err) {
-      toaster.info(describeError(err));
-    }
-    paintTop();
-  }
-
-  async function loadRetention(): Promise<void> {
-    try {
-      retentionDays = (await api.settingsGet()).settings.history_retention_days;
-    } catch {
-      retentionDays = null;
-    }
+  // Settings › 資料 emptied the history: what is loaded goes, and a load already under way brings nothing back.
+  app.cleared.on("dictation", () => {
+    loads++;
+    items = [];
+    expanded.clear();
+    canLoadMore = false;
+    failure = null;
+    pending = false;
     render();
-  }
+  });
 
   function remove(id: number): void {
     deleting.add(id);
@@ -290,12 +258,6 @@ export function createHistory(app: AppContext): HistoryPage {
 
   el.addEventListener("click", (e) => {
     const target = e.target as Element;
-    const choose = target.closest<HTMLElement>('.sel[data-k="retention"]');
-    if (choose) {
-      if (menuIsOpenFor(choose)) closeMenu();
-      else openMenu(choose, retentionChoices(), String(retentionDays ?? 30), (v) => void changeRetention(v));
-      return;
-    }
     const tab = target.closest<HTMLElement>("[data-filter]");
     if (tab) {
       filter = tab.dataset.filter as Filter;
@@ -336,7 +298,6 @@ export function createHistory(app: AppContext): HistoryPage {
     day: () => day,
     show() {
       void load(false);
-      void loadRetention();
     },
     hide() {
       closeMenu();

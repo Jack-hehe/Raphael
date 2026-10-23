@@ -1,7 +1,7 @@
 // Dictionary: words Raphael should spell right. A filter (all, learned by itself, typed), a search,
 // the words as a grid of chips (learned ones with a small sparkle), 「新增單字」 for a word of one's
-// own and 「匯入」 for many from a .csv or .txt, after a confirmation; words that keep coming up in
-// dictation join by themselves.
+// own and 「匯入」 for many from a .csv or .txt, after a confirmation. A word joins by itself only when
+// the user corrected it in a pasted dictation, never for being said often.
 
 import { onLocaleChange, t } from "../i18n";
 
@@ -21,8 +21,8 @@ const FILTERS: { id: Filter; name: string }[] = [
   { id: "manual", get name() { return t("dictionary.003"); } },
 ];
 
-/** The core uses "learned" for corrections; "auto" is also accepted. Other sources count as manual. */
-export const isAuto = (entry: DictionaryEntry): boolean => entry.source === "learned" || entry.source === "auto";
+/** A word Raphael added by itself, from the user's correction of a pasted dictation (the core's "learned"). The other sources count as manual. */
+export const isAuto = (entry: DictionaryEntry): boolean => entry.source === "learned";
 
 export function matches(entry: DictionaryEntry, filter: Filter, query: string): boolean {
   if (filter === "auto" && !isAuto(entry)) return false;
@@ -119,6 +119,11 @@ export function createDictionary(app: AppContext): DictionaryPage {
     const kept = entries.filter((entry) => !deleting.has(entry.id));
     const shown = kept.filter((entry) => matches(entry, filter, query));
     count.textContent = t("dictionary.017", { p0: shown.length });
+    // The words come in one after another when the list is new (a load, a filter, a search); drawn
+    // again for the same list (a word deleted or added), they stand still (styles.css `data-stagger`).
+    const list = `${filter}|${query}`;
+    grid.classList.toggle("again", grid.dataset.stagger === list);
+    grid.dataset.stagger = list;
     grid.innerHTML = shown.map(wordChip).join("");
     empty.hidden = shown.length > 0;
     empty.innerHTML =

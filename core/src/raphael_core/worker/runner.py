@@ -26,17 +26,13 @@ import threading
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
-from raphael_core.protocol import BUSY, INVALID_PARAMS, PROTOCOL_VERSION, WORKER_STOPPED, RpcError
+from raphael_core.protocol import BUSY, PROTOCOL_VERSION, WORKER_STOPPED, RpcError, invalid_params
 from raphael_core.stdio_server import _decoded_lines, claim_stdout
 
 from .channel import Peer
 from .loop import Call, Limits, Outcome, Stop, ToolOutcome, Turn, run_task
 
 logger = logging.getLogger(__name__)
-
-
-def _invalid(message: str) -> RpcError:
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
 
 
 class CoreHost:
@@ -132,11 +128,11 @@ class Worker:
         task_id, system, user = params.get("task_id"), params.get("system"), params.get("user")
         tools = params.get("tools")
         if type(task_id) is not int:
-            raise _invalid("task_id must be a whole number")
+            raise invalid_params("task_id must be a whole number")
         if not isinstance(system, str) or not isinstance(user, str):
-            raise _invalid("system and user must be strings")
+            raise invalid_params("system and user must be strings")
         if not isinstance(tools, list) or not all(_is_tool(tool) for tool in tools):
-            raise _invalid("tools must be a list of tools in the chat format")
+            raise invalid_params("tools must be a list of tools in the chat format")
         if self._task_id is not None:
             raise RpcError(BUSY, "A task is running")
         self._task_id = task_id

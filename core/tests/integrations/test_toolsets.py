@@ -3,10 +3,12 @@ that adds a service from it (against the fake service of `fake_oauth`)."""
 
 import asyncio
 import json
+import re
+from pathlib import Path
 
 import pytest
 
-from raphael_core.integrations import catalog
+from raphael_core.integrations import catalog, toolsets
 from raphael_core.integrations.client import McpConnector
 from raphael_core.integrations.config import ConfigStore, tool_record
 from raphael_core.integrations.service import IntegrationsService
@@ -62,6 +64,20 @@ def test_tools_are_grouped_by_their_hints_and_then_their_names(hints, name, kind
     assert tool_kind(tool) == kind
 
 
+def test_the_conversation_reads_the_names_with_the_same_words():
+    """The conversation words a service's step as 「Notion：讀取」 or 「Notion：修改」 by the same guess
+    from the name (`toolAccess` of the app's `timeline.ts`): its list of reading verbs and its way
+    of splitting a name are this module's."""
+    source = (Path(__file__).resolve().parents[3] / "app" / "src" / "main" / "timeline.ts").read_text(
+        encoding="utf-8"
+    )
+    listed = re.search(r"export const READ_WORDS[^=]*= new Set\(\[(.*?)\]\);", source, re.S)
+    assert listed is not None
+    assert set(re.findall(r'"(\w+)"', listed.group(1))) == toolsets._READ_WORDS
+    split = re.search(r"^const WORD = /(.*)/g;", source, re.M)
+    assert split is not None and split.group(1) == toolsets._WORD.pattern
+
+
 # --- the groups --------------------------------------------------------------------------------
 
 
@@ -77,41 +93,6 @@ async def test_the_groups_are_the_plugins_only(rpc, servers):
     assert {tool["kind"] for tool in group["tools"]} == {"read", "write"}
     assert group["enabled_count"] == group["tool_count"]
     assert group["env"] == ["API_KEY"] and SECRET not in json.dumps(groups)
-
-
-async def test_a_file_with_the_old_tiers_is_read_as_on_but_for_a_block(conn, tmp_path, vault, connector, servers):
-    servers.add("Notes")
-    tools = [tool_record(n, f"The {n}.", {"type": "object"}) for n in ("look", "note", "wipe", "fresh")]
-    old = {
-        "version": 1,
-        "servers": [
-            {
-                "id": "s1",
-                "name": "Notes",
-                "transport": "stdio",
-                "command": "npx",
-                "tools": [{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in tools],
-                "tools_checked_at_ms": 1,
-                "grants": {
-                    "look": {"tier": "T0", "fingerprint": tools[0].fingerprint},
-                    "note": {"tier": "T3", "fingerprint": tools[1].fingerprint},
-                    "wipe": {"tier": "block", "fingerprint": tools[2].fingerprint},
-                },
-            }
-        ],
-    }
-    (tmp_path / "integrations.json").write_text(json.dumps(old), encoding="utf-8")
-    service = IntegrationsService(conn, tmp_path, vault, connector=connector)
-    router = Router()
-    service.register(router)
-    [group] = (await router.call("toolsets.list"))["groups"]
-    assert {t["name"]: t["enabled"] for t in group["tools"]} == {
-        "look": True,
-        "note": True,  # any tier counts as on
-        "wipe": False,  # blocked on purpose
-        "fresh": True,  # never decided: on, like every tool
-    }
-    assert service.tier_of("mcp:s1/look") is not None and service.tier_of("mcp:s1/wipe") is None
 
 
 # --- the store ---------------------------------------------------------------------------------
@@ -181,7 +162,7 @@ async def test_what_the_login_gave_is_in_the_vault_and_nowhere_else(store, fake,
     assert "at-" in kept and "rt-" in kept  # they are in the vault
     everything = (tmp_path / "integrations.json").read_text(encoding="utf-8")
     everything += json.dumps([dict(r) for r in conn.execute("SELECT * FROM tool_audit")])
-    everything += json.dumps(await store.router.call("toolsets.list")) + json.dumps(await store.router.call("integrations.list"))
+    everything += json.dumps(await store.router.call("toolsets.list"))
     for secret in (*fake.access, *fake.refresh):
         assert secret not in everything
     assert "client-1" not in everything
@@ -205,7 +186,7 @@ async def test_a_login_the_user_refuses_adds_nothing(store, fake):
     fake.deny = True
     done = await store.router.call("integrations.connect", {"catalog_id": "notion"})
     assert done == {"connected": False, "error": "denied"}
-    assert (await store.router.call("integrations.list"))["servers"] == []
+    assert (await store.router.call("toolsets.list"))["groups"] == []
     assert store.vault.names() == []
 
 
@@ -217,7 +198,7 @@ async def test_a_login_that_is_not_finished_in_time_adds_nothing(store, fake):
     store._login_timeout_s = 0.3
     done = await store.router.call("integrations.connect", {"catalog_id": "notion"})
     assert done == {"connected": False, "error": "timeout"}
-    assert (await store.router.call("integrations.list"))["servers"] == [] and store.vault.names() == []
+    assert (await store.router.call("toolsets.list"))["groups"] == [] and store.vault.names() == []
 
 
 async def test_a_login_can_be_cancelled(store, fake):
@@ -232,7 +213,7 @@ async def test_a_login_can_be_cancelled(store, fake):
     await asyncio.wait_for(opened.wait(), 10)
     assert await store.router.call("integrations.connect_cancel") == {"cancelled": True}
     assert await asyncio.wait_for(login, 10) == {"connected": False, "error": "cancelled"}
-    assert (await store.router.call("integrations.list"))["servers"] == [] and store.vault.names() == []
+    assert (await store.router.call("toolsets.list"))["groups"] == [] and store.vault.names() == []
     assert await store.router.call("integrations.connect_cancel") == {"cancelled": False}  # nothing left to cancel
 
 
@@ -268,7 +249,7 @@ async def test_a_service_whose_login_ran_out_asks_for_a_new_one_and_keeps_its_se
     assert (again["server"]["status"], again["server"]["error"]) == ("ready", None)
     tools = {t["name"]: t["enabled"] for t in again["tools"]}
     assert tools == {"search": True, "create_page": True, "delete_page": False}  # the user's choice stays
-    assert len((await store.router.call("integrations.list"))["servers"]) == 1
+    assert len((await store.router.call("toolsets.list"))["groups"]) == 1
 
 
 async def test_a_new_login_that_fails_leaves_the_service_asking_for_a_login(store, fake):
@@ -277,7 +258,7 @@ async def test_a_new_login_that_fails_leaves_the_service_asking_for_a_login(stor
     fake.deny = True
     failed = await store.router.call("integrations.connect", {"id": server_id})
     assert failed == {"connected": False, "error": "denied"}
-    [server] = (await store.router.call("integrations.list"))["servers"]
+    [server] = (await store.router.call("toolsets.list"))["groups"]
     assert (server["status"], server["error"]) == ("error", "auth")
 
 
@@ -289,7 +270,7 @@ async def test_disconnecting_revokes_the_login_and_forgets_everything(store, fak
     assert gone == {"removed": True, "revoked": True}
     assert set(fake.revoked) >= set(tokens)
     assert store.vault.names() == []
-    assert (await store.router.call("integrations.list"))["servers"] == []
+    assert (await store.router.call("toolsets.list"))["groups"] == []
     assert ConfigStore(store._config._path.parent).servers() == []
     assert store.tier_of(f"mcp:{server_id}/search") is None
 
@@ -353,4 +334,4 @@ async def test_a_public_service_that_cannot_be_reached_adds_nothing(rpc, servers
     public_entry(monkeypatch)
     done = await rpc.call("integrations.connect", {"catalog_id": "openbook"})  # no server of that name
     assert done["connected"] is False
-    assert (await rpc.call("integrations.list"))["servers"] == []
+    assert (await rpc.call("toolsets.list"))["groups"] == []

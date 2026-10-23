@@ -1,4 +1,4 @@
-// Telegram, in the 拉斐爾 tab of Settings: Raphael can be reached from a phone. It is drawn with the
+// Telegram, in the 訊息平台 tab of Settings: Raphael can be reached from a phone. It is drawn with the
 // rows of every other tab, name on the left and controls on the right. Connected, it is one row (the
 // mark, the bot, a dot for its state, a switch) that opens on a row for each pairing code and each
 // person who may talk to her; before it is set up, a row with a way to BotFather and a row with the
@@ -13,10 +13,8 @@ import { describeError } from "./format";
 import { t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 import { monogram, serviceIconSVG } from "./service-icons";
-import { btn, esc, fieldHTML, ico, iconButton, note, row, st, tg, toaster } from "./ui";
+import { DISCONNECT_CONFIRM_MS, btn, esc, fieldHTML, ico, iconButton, note, row, st, tg, toaster } from "./ui";
 
-/** How long 「中斷連線」 waits for its second press. */
-const DISCONNECT_CONFIRM_MS = 5000;
 /** How often a connected bot is asked who is waiting to pair. */
 const POLL_MS = 3000;
 /** The only link this section opens (commands.rs lets nothing else through). */

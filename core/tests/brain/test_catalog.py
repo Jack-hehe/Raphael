@@ -27,9 +27,9 @@ from raphael_core.brain.catalog import (
     entry_to_json,
     parse_catalog,
 )
-from raphael_core.brain.openrouter import CLEANUP_MODEL_CHOICES, OpenRouterError
-from raphael_core.brain.pricing import PRICING_TTL_MS, PricingService
-from raphael_core.brain.settings import STT_CLOUD_MODELS
+from raphael_core.brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
+from raphael_core.brain.pricing import PRICING_TTL_MS, PricingService, builtin_catalog
+from raphael_core.brain.settings import DEFAULTS
 
 FIXTURE = Path(__file__).parent / "fixtures" / "openrouter_catalog.json"
 RECORDED: list[dict] = json.loads(FIXTURE.read_text(encoding="utf-8"))["data"]
@@ -62,6 +62,9 @@ SPEECH_MODELS = [
     "openai/gpt-4o-mini-transcribe",
     "deepgram/nova-3",
 ]
+# The models Raphael calls when nobody chose another: the default and the fallbacks of the language
+# models, and the default speech model.
+DEFAULT_LANGUAGE_MODELS = [DEFAULTS["cleanup_model"], *CLEANUP_FALLBACKS]
 LEFT_OUT = [
     "anthropic/claude-haiku-5.5:batch",  # answers within a day: never in time
     "google/gemini-3.1-flash-image",  # writes images too
@@ -156,14 +159,63 @@ def test_entries_that_are_no_models_and_ids_a_setting_could_not_hold_are_skipped
     assert [e.id for e in parse_catalog([*odd, luna, luna])] == ["openai/gpt-6-luna"]
 
 
-def test_a_model_without_modalities_is_of_no_kind_unless_it_is_one_of_raphaels():
+def test_a_model_without_modalities_is_of_no_kind_whoever_made_it():
+    # Raphael keeps no list of models of his own: not even his default is known without the list.
     models = [
         {"id": "openai/gpt-6-luna", "pricing": {"prompt": "0.0000001", "completion": "0.0000005"}},
         {"id": "elevenlabs/scribe-v2", "architecture": {"output_modalities": "transcription"}},
         {"id": "some/model", "pricing": {"prompt": "0.0000001", "completion": "0.0000005"}},
+        {"id": "other/model", "architecture": {"modality": "text"}},
+        {"id": "third/model", "architecture": {"modality": "->text"}},
+        {"id": "fourth/model", "architecture": {"modality": 5}},
     ]
-    kinds = {e.id: e.kind for e in parse_catalog(models)}
-    assert kinds == {"openai/gpt-6-luna": "llm", "elevenlabs/scribe-v2": "stt"}
+    assert parse_catalog(models) == []
+
+
+@pytest.mark.parametrize(
+    ("modality", "kind"),
+    [
+        ("audio->transcription", "stt"),
+        ("audio+text->transcription", "stt"),
+        ("text->text", "llm"),
+        ("text+image->text", "llm"),
+        ("text+image+file->text", "llm"),
+        ("text->text+image", None),  # writes images too
+        ("text->embeddings", None),
+        ("text->speech", None),
+        ("image->text", None),  # reads no text
+    ],
+)
+def test_a_model_that_only_has_the_one_line_modality_is_read_by_it(modality, kind):
+    # Some entries of the list give `modality` and not the two lists: what the model reads, then
+    # what it writes. It is read by the same rule.
+    model = {"id": "some/model", "architecture": {"modality": modality}}
+    assert catalog.kind_of(model) == kind
+    assert [e.kind for e in parse_catalog([model])] == ([] if kind is None else [kind])
+
+
+def test_the_two_lists_of_modalities_come_before_the_one_line_modality():
+    model = {
+        "id": "some/model",
+        "architecture": {
+            "modality": "audio->transcription",
+            "input_modalities": ["text"],
+            "output_modalities": ["text"],
+        },
+    }
+    assert catalog.kind_of(model) == "llm"
+
+
+def test_every_transcription_model_of_the_list_is_a_speech_model():
+    # Which models can transcribe is the list's to say: every one whose output is a transcription.
+    transcribing = [
+        m["id"]
+        for m in RECORDED
+        if "transcription" in m["architecture"]["output_modalities"]
+        and not m["id"].endswith(":batch")
+    ]
+    assert transcribing == SPEECH_MODELS
+    assert [e.id for e in parse_catalog(RECORDED) if e.kind == "stt"] == SPEECH_MODELS
 
 
 # --- names --------------------------------------------------------------------------------------
@@ -258,8 +310,8 @@ def usable(model_id, role, models=None) -> str | None:
 
 
 @pytest.mark.parametrize("role", ["cleanup_model", "agent_model"])
-def test_raphaels_own_language_models_serve_both_roles(role):
-    for model_id in CLEANUP_MODEL_CHOICES:
+def test_the_default_language_models_serve_both_roles(role):
+    for model_id in DEFAULT_LANGUAGE_MODELS:
         assert usable(model_id, role) is None
 
 
@@ -275,7 +327,7 @@ def test_tool_calling_is_not_needed(role):
 
 def test_a_model_that_takes_tools_and_the_choice_among_them_has_tool_calling():
     listed = entries_by_id()
-    for model_id in CLEANUP_MODEL_CHOICES:
+    for model_id in DEFAULT_LANGUAGE_MODELS:
         assert "tool_calling" in listed[model_id].capabilities
     for model_id in ("tencent/hunyuan-a13b-instruct", "moondream/moondream3-preview"):
         assert "tool_calling" not in listed[model_id].capabilities
@@ -467,6 +519,8 @@ BATCH_ENTRY = {
         {"reading": 3, "models": [BATCH_ENTRY]},
         # Reading 4 did not tell whether a model takes tools: every model read as taking none.
         {"reading": 4, "models": [{**BATCH_ENTRY, "id": "openai/gpt-6-luna", "name": "GPT-6 Luna"}]},
+        # Reading 5 left out a model of which the list gave only the one-line `modality`.
+        {"reading": 5, "models": [{**BATCH_ENTRY, "id": "openai/gpt-6-luna", "name": "GPT-6 Luna"}]},
     ],
 )
 async def test_a_cache_of_an_older_reading_is_fetched_again(conn, client, clock, old):
@@ -479,18 +533,18 @@ async def test_a_cache_of_an_older_reading_is_fetched_again(conn, client, clock,
     assert not any(entry.id.endswith(":batch") for entry in entries)
 
 
-async def test_without_the_list_the_catalog_is_raphaels_own_models(conn, client, clock):
+async def test_without_the_list_the_catalog_is_the_models_raphael_calls(conn, client, clock):
     client.error = network_down()
     entries, fetched_at_ms, source = await PricingService(conn, client, clock).catalog()
     assert (source, fetched_at_ms) == ("builtin", None)
     view = catalog_view(entries, fetched_at_ms, source)
-    assert [m["id"] for m in view["llm"]] == CLEANUP_MODEL_CHOICES
-    assert [m["id"] for m in view["stt"]] == list(STT_CLOUD_MODELS)
+    assert [m["id"] for m in view["llm"]] == DEFAULT_LANGUAGE_MODELS
+    assert [m["id"] for m in view["stt"]] == [DEFAULTS["stt_cloud_model"]]
     for model in [*view["llm"], *view["stt"]]:
         assert all(role["usable"] for role in model["roles"].values())
     luna = by_id(view["llm"])["openai/gpt-6-luna"]
     assert (luna["provider"], luna["name"], luna["input_per_mtok"]) == ("OpenAI", "GPT-6 Luna", 0.1)
-    assert by_id(view["stt"])["openai/gpt-transcribe"]["capabilities"]["dictionary_hints"] is True
+    assert by_id(view["stt"])["elevenlabs/scribe-v2"]["capabilities"]["dictionary_hints"] is False
 
 
 async def test_a_stale_catalog_is_the_answer_when_the_list_cannot_be_had(conn, client, clock):
@@ -516,12 +570,21 @@ async def test_what_is_known_is_read_without_a_fetch(conn, client, clock):
 # --- choosing -----------------------------------------------------------------------------------
 
 
-def test_a_choice_is_checked_against_the_catalog_or_without_one_against_raphaels_own_models():
+def test_a_choice_is_checked_against_the_catalog_the_page_shows():
     cleanup, stt = ROLE_OF_SETTING["cleanup_model"], ROLE_OF_SETTING["stt_cloud_model"]
     entries = parse_catalog(RECORDED)
-    assert choice_problem(cleanup, "tencent/hunyuan-a13b-instruct", None, "x") == "not_curated"
-    assert choice_problem(cleanup, "anthropic/claude-haiku-5.5", None, "x") is None
+    builtin = builtin_catalog()
+    # Without OpenRouter's list, the page shows the builtin table, and only its models go.
+    assert choice_problem(cleanup, "tencent/hunyuan-a13b-instruct", builtin, "x") == "not_listed"
+    assert choice_problem(cleanup, "anthropic/claude-haiku-5.5", builtin, "x") is None
+    assert choice_problem(stt, "openai/gpt-transcribe", builtin, "x") == "not_listed"
+    assert choice_problem(stt, "anthropic/claude-haiku-5.5", builtin, "x") == "not_listed"
+    # The current model and the default always go, listed or not.
+    assert choice_problem(stt, "openai/gpt-transcribe", builtin, "openai/gpt-transcribe") is None
+    assert choice_problem(stt, DEFAULTS["stt_cloud_model"], [], "x") is None
+    # With the list, any model it lists that the role can use.
     assert choice_problem(cleanup, "tencent/hunyuan-a13b-instruct", entries, "x") is None
+    assert choice_problem(stt, "openai/gpt-transcribe", entries, "x") is None
     assert choice_problem(cleanup, "google/gemini-3.8-flash", entries, "x") == "reasoning_required"
     assert choice_problem(cleanup, "nobody/model", entries, "x") == "not_listed"
     assert choice_problem(stt, "openai/gpt-6-luna", entries, "x") == "not_listed"

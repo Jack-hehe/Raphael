@@ -2,7 +2,8 @@
 
 A request can make several: Jev's decision, the language model's answer, a web search. Each is one
 row of the spend with the purpose "agent", so the monthly limit counts them, and the total is what
-the turn cost, for the history.
+the turn cost, for the history. The memory's own calls (folding the conversation into its summary,
+the reflection pass) are written the same way, with the purpose "memory".
 """
 
 import logging
@@ -18,8 +19,9 @@ PURPOSE = "agent"
 class Ledger:
     """One request's paid calls. Use it on the thread that owns the spend's database."""
 
-    def __init__(self, spend: SpendTracker) -> None:
+    def __init__(self, spend: SpendTracker, purpose: str = PURPOSE) -> None:
         self._spend = spend
+        self._purpose = purpose
         self.total = 0.0
         # The model of the latest paid call: the one that worded the answer, for the history.
         self.model: str | None = None
@@ -44,7 +46,7 @@ class Ledger:
             self.model = model
         try:
             self._spend.record(
-                purpose=PURPOSE,
+                purpose=self._purpose,
                 model=model,
                 cost_usd=cost_usd,
                 prompt_tokens=prompt_tokens,

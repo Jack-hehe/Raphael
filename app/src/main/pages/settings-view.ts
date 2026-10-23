@@ -7,25 +7,25 @@
 // in a row), an action is a button with a shape (`btn`, never a word that can be clicked), and a
 // line under a row's name only where the setting would otherwise be set wrong. Each tab opens with
 // its name and one line on what it is for, then its rows in a few named groups.
+//
+// The tabs sit on the left in three groups, as Codex's settings have them: the basics with no name
+// (一般, 聽寫, 拉斐爾), 「整合」 (連接, 訊息平台) and 「帳戶」 (模型與用量, 資料, 關於), under a
+// 「搜尋設定」 field that finds a row in any tab, by its name in any of the three languages, and jumps
+// to it (`SEARCH_INDEX`, `searchSettings`).
 
-import { t } from "../i18n";
+import { catalogs, t } from "../i18n";
+import type { MessageKey } from "../i18n/zh-TW";
 
+import { avatarRowHTML } from "../avatar-settings";
 import { brandIcon } from "../brand";
-import { type ConnectionsView, connectionsHTML } from "../connections";
+import { type ConnectionsView, connectionsAddHTML, connectionsHTML } from "../connections";
 import { DICTATION_MODES } from "../dictation";
-import { formatClock, formatUsd } from "../format";
+import { KEEP_FOREVER_DAYS, formatClock, formatRetention, formatUsd } from "../format";
 import { type LanguageGroup, languageSelectHTML, normalizeLanguages } from "../languages";
 import { bindingLabels } from "../keys";
 import { type MessagingView, messagingHTML } from "../messaging";
-import {
-  DROPDOWN_ROOM,
-  MENU_ROOM,
-  automaticMicrophoneLabel,
-  automaticMicrophoneShort,
-  cutToFit,
-  microphoneText,
-  shortMicrophoneName,
-} from "../microphone";
+import { type MemoryView, memoryHTML } from "../memory-view";
+import { AUTO_MICROPHONE, microphoneChoices } from "../microphone";
 import type { LocalView } from "../local-models";
 import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
 import { pricingNote } from "../pricing";
@@ -34,7 +34,7 @@ import { WARN_FROM, spendVisual, spentShare } from "../spend";
 import type { HotkeyField } from "../hotkey-recording";
 import type { AudioDevices, BrainSettings, DeviceSettings, LocalModel, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
 import { keyEntryRow, limitRow, micRow } from "../setup-rows";
-import { type Choice, type IconName, btn, esc, fieldHTML, keys, note, row, sel, st, tg } from "../ui";
+import { type Choice, type IconName, btn, esc, fieldHTML, ico, keys, note, row, sel, st, tg } from "../ui";
 
 /** The models the core reads when none is chosen (brain/settings.py), shown while it does not answer. */
 const DEFAULT_MODELS = { cleanup: "openai/gpt-6-luna", answer: "openai/gpt-6-luna", stt: "elevenlabs/scribe-v2" } as const;
@@ -56,27 +56,173 @@ export const SIZES: Choice[] = [
   { value: "150", get label() { return t("settings.019"); }, get desc() { return t("settings.020"); } },
   { value: "194", get label() { return t("settings.021"); }, get desc() { return t("settings.022"); } },
 ];
-export const AUTO_MICROPHONE = "";
 export const UI_LANGUAGES: Choice[] = [
   { value: "zh-TW", get label() { return t("settings.023"); } },
   { value: "en", get label() { return t("locale.english"); } },
   { value: "ja", get label() { return t("settings.024"); } },
 ];
 
+/** How long the dictation history is kept: at least a day (the core only checks that it is a number); "keep" is a hundred years. */
+export const RETENTIONS: Choice[] = [1, 7, 30, 365, KEEP_FOREVER_DAYS].map((days) => ({
+  value: String(days),
+  get label() { return formatRetention(days); },
+}));
+
 const PRICES_LOADING = () => t("settings.026");
 
+/** The groups of tabs: the basics have no name. */
+export type PaneGroup = "basics" | "integrations" | "account";
+
+/** The name of each group, over its tabs; the basics have none. */
+export const PANE_GROUPS: Record<PaneGroup, () => string> = {
+  basics: () => "",
+  integrations: () => t("settings.navIntegrations"),
+  account: () => t("settings.navAccount"),
+};
+
 /**
- * The tabs on the left of the panel, in order, each with the line under its name that says what it
- * is for. A tab to come (the integrations) is one more entry here and one more case in `paneHTML`.
+ * The tabs on the left of the panel, in order and in their groups, each with the line under its name
+ * that says what it is for. 拉斐爾's tab has Raphael's emblem for its icon, as the window's does.
  */
-export const PANES: { id: SettingsPane; icon: IconName; title: () => string; purpose: (d: DeviceSettings) => string }[] = [
-  { id: "general", icon: "gear", title: () => t("settings.paneGeneral"), purpose: () => t("settings.purposeGeneral") },
-  { id: "dictation", icon: "mic", title: () => t("settings.paneDictation"), purpose: () => t("settings.purposeDictation") },
-  { id: "agent", icon: "sparkle", title: () => t("settings.paneAgent"), purpose: agentPurpose },
-  { id: "connections", icon: "link", title: () => t("settings.paneConnections"), purpose: () => t("settings.purposeConnections") },
-  { id: "usage", icon: "wallet", title: () => t("settings.paneUsage"), purpose: () => t("settings.purposeUsage") },
-  { id: "about", icon: "info", title: () => t("common.about"), purpose: () => t("settings.purposeAbout") },
+export const PANES: { id: SettingsPane; group: PaneGroup; icon: IconName | "emblem"; title: () => string; purpose: (d: DeviceSettings) => string }[] = [
+  { id: "general", group: "basics", icon: "gear", title: () => t("settings.paneGeneral"), purpose: () => t("settings.purposeGeneral") },
+  { id: "dictation", group: "basics", icon: "mic", title: () => t("settings.paneDictation"), purpose: () => t("settings.purposeDictation") },
+  { id: "agent", group: "basics", icon: "emblem", title: () => t("settings.paneAgent"), purpose: agentPurpose },
+  { id: "connections", group: "integrations", icon: "plug", title: () => t("settings.paneConnections"), purpose: () => t("settings.purposeConnections") },
+  { id: "messaging", group: "integrations", icon: "send", title: () => t("settings.paneMessaging"), purpose: () => t("settings.purposeMessaging") },
+  { id: "usage", group: "account", icon: "wallet", title: () => t("settings.paneUsage"), purpose: () => t("settings.purposeUsage") },
+  { id: "data", group: "account", icon: "database", title: () => t("settings.paneData"), purpose: () => t("settings.purposeData") },
+  { id: "about", group: "account", icon: "info", title: () => t("common.about"), purpose: () => t("settings.purposeAbout") },
 ];
+
+/** Raphael's emblem at the size of a tab's icon, in the version for each theme (app/public/brand). */
+const NAV_EMBLEM =
+  `<span class="nav-em" aria-hidden="true"><img class="em-l" src="/brand/app-emblem-light-64.webp" alt="" width="18" height="18">` +
+  `<img class="em-d" src="/brand/app-emblem-dark-64.webp" alt="" width="18" height="18"></span>`;
+
+/** The button of a tab in the list on the left. */
+const paneButton = (p: (typeof PANES)[number]): string =>
+  `<button type="button" class="nav" data-pane="${p.id}" aria-current="false">${p.icon === "emblem" ? NAV_EMBLEM : ico(p.icon)}<span>${esc(p.title())}</span></button>`;
+
+/** The tabs in their groups, each group under its small grey name. */
+export const paneListHTML = (): string =>
+  (Object.keys(PANE_GROUPS) as PaneGroup[])
+    .map((group) => {
+      const name = PANE_GROUPS[group]();
+      return (name ? `<div class="nav-group">${esc(name)}</div>` : "") + PANES.filter((p) => p.group === group).map(paneButton).join("");
+    })
+    .join("");
+
+// ---------- 搜尋設定 ----------
+
+/**
+ * A row the search can find: its tab, the key of its name (found by that name in every language,
+ * and on the page by the name in the window's language) and, for a row whose name is not what one
+ * would type ("快捷鍵" for 聽寫's keys), a key of more words to find it by, or words that are the
+ * same in every language (a brand). A row with no `label` is the tab itself.
+ */
+export interface SearchEntry {
+  pane: SettingsPane;
+  label?: MessageKey;
+  also?: MessageKey;
+  words?: string[];
+}
+
+/**
+ * Everything 「搜尋設定」 can find: every tab, and the rows of each. A row added to a tab is one more
+ * entry here (its name's key), or the search does not know it.
+ */
+export const SEARCH_INDEX: readonly SearchEntry[] = [
+  ...PANES.map((p) => ({ pane: p.id })),
+  { pane: "general", label: "settings.059" },
+  { pane: "general", label: "settings.067", words: ["dark", "light"] },
+  { pane: "general", label: "settings.069" },
+  { pane: "general", label: "settings.071" },
+  { pane: "general", label: "settings.073" },
+  { pane: "general", label: "settings.rerunGuide" },
+  { pane: "dictation", label: "home.020", also: "settings.searchShortcut" },
+  { pane: "dictation", label: "home.021", also: "settings.searchShortcut" },
+  { pane: "dictation", label: "settings.055" },
+  { pane: "dictation", label: "transcription.title" },
+  { pane: "dictation", label: "common.microphone", words: ["mic"] },
+  { pane: "agent", label: "settings.agentKeys", also: "settings.searchShortcut" },
+  { pane: "agent", label: "settings.agentCity" },
+  { pane: "agent", label: "settings.workerCostCap" },
+  { pane: "agent", label: "settings.avatar", also: "settings.searchAvatar" },
+  { pane: "agent", label: "mem.title", also: "settings.searchMemory" },
+  { pane: "messaging", words: ["Telegram"] },
+  { pane: "usage", label: "common.apiKey", words: ["OpenRouter"] },
+  { pane: "usage", label: "settings.050" },
+  { pane: "usage", label: "common.monthlyLimit" },
+  { pane: "usage", label: "settings.usageMonthly" },
+  { pane: "usage", label: "settings.031", also: "settings.searchModel" },
+  { pane: "usage", label: "settings.035", also: "settings.searchModel" },
+  { pane: "usage", label: "settings.agentModel", also: "settings.searchModel" },
+  { pane: "data", label: "data.retention", also: "settings.searchHistory" },
+  { pane: "data", label: "data.clearDictation", also: "settings.searchHistory" },
+  { pane: "data", label: "data.clearConversation" },
+  { pane: "about", label: "settings.078" },
+  { pane: "about", label: "settings.079" },
+];
+
+/** A row the search found: where it is, and its name in the window's language. */
+export interface SearchHit {
+  pane: SettingsPane;
+  /** The key of the row's name; none for a tab itself. */
+  label?: MessageKey;
+  /** What the hit says: the row's name, or the tab's. */
+  text: string;
+}
+
+/** How many hits are listed at most. */
+const SEARCH_SHOWN = 12;
+
+/** `t` for a key chosen at run time, with no placeholders. */
+const tr = t as unknown as (key: MessageKey) => string;
+
+/** The texts of `key` in every language, for the search. */
+const allLanguages = (key: MessageKey): string[] => Object.values(catalogs).map((catalog) => catalog[key]);
+
+/** The keys of the tabs' names, in every language. */
+const PANE_TITLE_KEYS: Record<SettingsPane, MessageKey> = {
+  general: "settings.paneGeneral", dictation: "settings.paneDictation", agent: "settings.paneAgent", connections: "settings.paneConnections",
+  messaging: "settings.paneMessaging", usage: "settings.paneUsage", data: "settings.paneData", about: "common.about",
+};
+
+/**
+ * The rows and tabs whose name (in any of the three languages), extra words or brand contain
+ * `query`, ignoring case: the tabs first, then the rows, in the order of the tabs.
+ */
+export function searchSettings(query: string): SearchHit[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const found = SEARCH_INDEX.filter((entry) => {
+    const texts = [
+      ...allLanguages(entry.label ?? PANE_TITLE_KEYS[entry.pane]),
+      ...(entry.also ? allLanguages(entry.also) : []),
+      ...(entry.words ?? []),
+    ];
+    return texts.some((text) => text.toLowerCase().includes(q));
+  });
+  return found.slice(0, SEARCH_SHOWN).map((entry) => ({
+    pane: entry.pane,
+    label: entry.label,
+    text: entry.label ? tr(entry.label) : paneTitle(entry.pane),
+  }));
+}
+
+/** What the search found, as buttons in place of the tabs (each names its tab under it), or that it found nothing. */
+export function searchResultsHTML(hits: SearchHit[]): string {
+  if (!hits.length) return `<p class="set-none" role="status">${esc(t("settings.searchNone"))}</p>`;
+  return hits
+    .map(
+      (hit, i) =>
+        `<button type="button" class="nav set-hit" data-hit="${i}"><span class="hit-t">${esc(hit.text)}</span>` +
+        (hit.label ? `<span class="hit-p">${esc(paneTitle(hit.pane))}</span>` : "") +
+        `</button>`,
+    )
+    .join("");
+}
 
 /** 「按 右 Alt + Space 問拉斐爾」: the line names the keys that are set, so that it stays true when they change. */
 function agentPurpose(d: DeviceSettings): string {
@@ -123,9 +269,12 @@ export interface SettingsView {
   /** What is typed in the weather city while it is not saved, and what is wrong with it. */
   cityDraft: string | null;
   cityError: (() => string) | null;
-  /** Telegram, in the 拉斐爾 tab. */
+  /** Telegram, in the 訊息平台 tab. */
   messaging: MessagingView;
-  /** The same for the weather city. */
+  /** In 資料, the clear that was pressed once and waits for its second press. */
+  confirmingClear: "dictation" | "conversation" | null;
+  /** Raphael's memory, in the 拉斐爾 tab, after its settings (none: not drawn). */
+  memory?: MemoryView;
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
   languageGroups: LanguageGroup[] | null;
   /** The time the forecasts and the age of the prices are told from. */
@@ -163,26 +312,8 @@ export const workerCostCap = (v: SettingsView): string => String(v.brain?.worker
 /** The catalog once it is read. */
 const catalogOf = (v: SettingsView): ModelCatalog | null => (typeof v.catalog === "object" ? v.catalog : null);
 
-/**
- * The microphones: automatic first, then each one found, and the one chosen before if it is not
- * plugged in now. The list has their whole names, and the automatic choice the short name of the
- * one it uses; the closed dropdown has short names cut to fit it, and the tooltips the whole ones.
- */
-export function microphoneChoices(v: SettingsView): Choice[] {
-  const { devices } = v;
-  const choices: Choice[] = [
-    {
-      value: AUTO_MICROPHONE,
-      get label() { return automaticMicrophoneLabel(devices, MENU_ROOM); },
-      get short() { return automaticMicrophoneShort(devices); },
-      get title() { return automaticMicrophoneLabel(devices); },
-    },
-    ...(devices?.devices ?? []).map((d) => ({ value: d.name, label: d.name, short: cutToFit(shortMicrophoneName(d.name), DROPDOWN_ROOM) })),
-  ];
-  const saved = v.device.microphone;
-  if (saved === null || choices.some((c) => c.value === saved)) return choices;
-  return [...choices, { value: saved, label: t("mic.disconnected", { p0: saved }), short: microphoneText("mic.disconnected", saved, DROPDOWN_ROOM) }];
-}
+/** The microphones of the settings page, fitted to its dropdown. */
+export const settingsMicrophones = (v: SettingsView): Choice[] => microphoneChoices(v.devices, v.device.microphone, true);
 
 /** The bars of the microphone's meter: 3 px wide and about 2 px apart across its dropdown, as the short meter's are. */
 const MIC_METER_SEGMENTS = 46;
@@ -362,10 +493,15 @@ function shortcutRow(name: string, bindings: readonly string[], change?: { act: 
 const altgrNote = (v: SettingsView, bindings: readonly string[]): string[] =>
   v.altgr && bindings.some((binding) => binding.split("+").includes("AltRight")) ? [note(st("warn", t("settings.054")))] : [];
 
-/** The first lines of every tab: its name, which has the focus when the panel opens, and what the tab is for. */
-export const headingHTML = (v: SettingsView): string =>
-  `<h1 id="set-title" tabindex="-1">${esc(paneTitle(v.pane))}</h1>` +
-  `<p class="purpose">${esc(PANES.find((p) => p.id === v.pane)!.purpose(v.device))}</p>`;
+/**
+ * The first lines of every tab: its name, which has the focus when the panel opens, and what the tab
+ * is for. `actions` go beside the name (連接's 「新增」), which then shares a line with them.
+ */
+export const headingHTML = (v: SettingsView, actions = ""): string => {
+  const title = `<h1 id="set-title" tabindex="-1">${esc(paneTitle(v.pane))}</h1>`;
+  return (actions ? `<div class="set-head">${title}${actions}</div>` : title) +
+    `<p class="purpose">${esc(PANES.find((p) => p.id === v.pane)!.purpose(v.device))}</p>`;
+};
 
 /** What the tabs that need the core say when it does not answer. */
 const coreNote = (v: SettingsView): string => (v.brain === null ? `<div class="alert core-note">${st("err", t("settings.052"))}</div>` : "");
@@ -413,7 +549,7 @@ function dictationHTML(v: SettingsView): string {
       // The meter under the dropdown, as wide as it, moves with the microphone's loudness while
       // this tab is open.
       micRow({
-        choices: microphoneChoices(v),
+        choices: settingsMicrophones(v),
         current: d.microphone ?? AUTO_MICROPHONE,
         selAttrs: ' data-k="mic"',
         meter: { place: "after", segments: MIC_METER_SEGMENTS },
@@ -423,7 +559,7 @@ function dictationHTML(v: SettingsView): string {
   );
 }
 
-/** 拉斐爾: the key that asks her, the city of the weather, then Telegram. The model that answers is with the other models. */
+/** 拉斐爾: Raphael's picture, the key that asks Raphael, the city of the weather, what a background task may spend, then Raphael's memory. The model that answers is with the other models. */
 function agentHTML(v: SettingsView): string {
   const cityShown = v.cityDraft ?? agentCity(v);
   // an app from before the question key has none yet
@@ -432,6 +568,7 @@ function agentHTML(v: SettingsView): string {
     headingHTML(v) +
     coreNote(v) +
     section("", [
+      avatarRowHTML(),
       shortcutRow(t("settings.agentKeys"), agentKeys, { act: "rec-agent", field: "agent_keys" }),
       ...altgrNote(v, agentKeys),
       row(
@@ -442,13 +579,51 @@ function agentHTML(v: SettingsView): string {
       ...(v.cityError ? [note(st("err", v.cityError()), ' role="alert"')] : []),
       row(t("settings.workerCostCap"), "", sel(WORKER_COST_CAPS, workerCostCap(v), t("settings.workerCostCap"), ` data-k="worker-cap"${v.brain === null ? " disabled" : ""}`)),
     ]) +
-    messagingHTML(v.messaging)
+    (v.memory ? memoryHTML(v.memory) : "")
   );
 }
 
-/** 連接: the services Raphael is connected to and the store that adds them, under the heading. */
+/** 連接: the services Raphael is connected to and the store that adds them, under the heading and its 「新增」. */
 function connectionsTabHTML(v: SettingsView): string {
-  return headingHTML(v) + connectionsHTML(v.connections);
+  return headingHTML(v, connectionsAddHTML()) + connectionsHTML(v.connections);
+}
+
+/** 訊息平台: Telegram, where Raphael can be reached from a phone (Slack and Discord to come here too). */
+function messagingTabHTML(v: SettingsView): string {
+  return headingHTML(v) + messagingHTML(v.messaging);
+}
+
+/** The dictation history's retention: the choices, with the one in force too if it is none of them. */
+export function retentionChoices(v: SettingsView): Choice[] {
+  const current = retentionOf(v);
+  return RETENTIONS.some((c) => c.value === current) ? RETENTIONS : [...RETENTIONS, { value: current, label: formatRetention(Number(current)) }];
+}
+
+/** How long the dictation history is kept, as the value of its dropdown (30 days until the core says). */
+export const retentionOf = (v: SettingsView): string => String(v.brain?.history_retention_days ?? 30);
+
+/** A clear button of 資料: 「清除」, and 「確定清除？」 while it waits for the second press. */
+function clearButton(v: SettingsView, what: "dictation" | "conversation"): string {
+  const asking = v.confirmingClear === what;
+  return btn(esc(asking ? t("data.clearConfirm") : t("data.clear")), asking ? "danger" : "", ` data-act="clear-${what}" data-k="clear-${what}"`);
+}
+
+/**
+ * 資料: what is kept on this computer and how to get rid of it, gathered from where it was. How long
+ * the dictation history is kept (the row says it is the dictation history's), and a clear for the
+ * dictation history and one for the conversation with 拉斐爾, each asking twice and then giving 10
+ * seconds of 「復原」. There is no export: the app has no way to save a file where the user chooses yet.
+ */
+function dataHTML(v: SettingsView): string {
+  return (
+    headingHTML(v) +
+    coreNote(v) +
+    section(t("data.groupDictation"), [
+      row(t("data.retention"), "", sel(retentionChoices(v), retentionOf(v), t("data.retention"), ` data-k="retention"${v.brain === null ? " disabled" : ""}`)),
+      row(t("data.clearDictation"), "", clearButton(v, "dictation")),
+    ]) +
+    section(t("data.groupConversation"), [row(t("data.clearConversation"), "", clearButton(v, "conversation"))], esc(t("history.019")))
+  );
 }
 
 /** 模型與用量: the OpenRouter key and what this month has cost against the limit, then the models and their prices. */
@@ -493,8 +668,12 @@ export function paneHTML(v: SettingsView): string {
       return agentHTML(v);
     case "connections":
       return connectionsTabHTML(v);
+    case "messaging":
+      return messagingTabHTML(v);
     case "usage":
       return usageHTML(v);
+    case "data":
+      return dataHTML(v);
     case "about":
       return aboutHTML(v);
   }

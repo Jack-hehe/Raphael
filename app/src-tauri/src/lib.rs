@@ -2,6 +2,7 @@
 //! allows only one running copy.
 
 mod agent;
+mod avatar;
 mod background;
 mod commands;
 mod core_process;
@@ -77,8 +78,12 @@ fn panic_report(thread: Option<&str>, location: Option<&std::panic::Location<'_>
 pub fn run() {
     log_panics();
     let identity = identity::current();
+    // Read before `use_own_data` sets it for a development build: only a folder the caller chose
+    // keeps the local files (Raphael's picture) away from this build's own local folder.
+    let caller_data_dir = std::env::var_os("RAPHAEL_DATA_DIR");
     // SAFETY: no other thread runs yet.
     unsafe { identity::use_own_data(identity) };
+    let local_dir = identity.local_dir(caller_data_dir, std::env::var_os("LOCALAPPDATA"));
     let mut context = tauri::generate_context!();
     identity.apply(context.config_mut());
 
@@ -107,6 +112,8 @@ pub fn run() {
                 .build(),
         )
         .plugin(log_plugin())
+        // The file dialog of 頭像 (avatar.rs). Used from Rust only: no page may open it.
+        .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| {
             // The app lives in the tray, so closing the main window only hides it.
             // "Quit" in the tray menu is the way out.
@@ -135,6 +142,13 @@ pub fn run() {
             commands::hotkeys_practice,
             commands::mic_access,
             commands::main_events,
+            commands::agent_ask_text,
+            commands::agent_question_open,
+            commands::agent_question_answer,
+            avatar::avatar_pick,
+            avatar::avatar_save,
+            avatar::avatar_get,
+            avatar::avatar_clear,
         ])
         .setup(move |app| {
             // Tauri keeps only the last `setup` call, so each part of the app starts in its own
@@ -162,6 +176,13 @@ pub fn run() {
                     Ok(decorated) => log::info!("Main window native decorations: {decorated}"),
                     Err(error) => log::warn!("could not inspect the main window frame: {error}"),
                 }
+            }
+
+            // ---- Raphael's picture ----
+            // Kept in this build's own local data folder, which only Windows has (avatar.rs,
+            // `Identity::local_dir`): a development build never changes the release's picture.
+            if let Some(local) = &local_dir {
+                app.manage(std::sync::Arc::new(avatar::AvatarStore::new(local)));
             }
 
             // ---- Tray ----

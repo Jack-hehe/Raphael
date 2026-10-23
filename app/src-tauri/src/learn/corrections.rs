@@ -956,6 +956,22 @@ mod tests {
     }
 
     #[test]
+    fn a_word_selected_and_retyped_the_same_is_no_correction() {
+        // speech-to-text had it right: deleting 電池 and typing 電池 again teaches nothing
+        assert_eq!(
+            learned_after(PASTED, &[("電池", ""), ("漂亮，也", "漂亮，電池也")]),
+            NONE
+        );
+        assert_eq!(
+            learned_after(
+                "Please ask Alice about the release plan today.",
+                &[("ask Alice", "ask "), ("ask ", "ask Alice")]
+            ),
+            NONE
+        );
+    }
+
+    #[test]
     fn a_word_typed_over_in_one_go() {
         // straight from the wrong word to the right one: only 首 differs, too short for a term
         assert_eq!(learned_after(PASTED, &[("首機", "手機")]), NONE);

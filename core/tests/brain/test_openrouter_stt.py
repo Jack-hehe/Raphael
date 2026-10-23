@@ -11,15 +11,20 @@ import httpx
 import pytest
 
 from raphael_core.brain import openrouter
+from raphael_core.brain.catalog import STT, parse_catalog
 from raphael_core.brain.openrouter import (
     OpenRouterClient,
     OpenRouterError,
     Transcription,
     transcription_body,
 )
-from raphael_core.brain.settings import STT_CLOUD_MODELS
+
+from .test_catalog import RECORDED
 
 KEY = "sk-or-v1-test"
+# Every transcription model of the recorded list of OpenRouter's models, as the catalog reads it:
+# the models the settings page offers for speech-to-text.
+LISTED_STT_MODELS = [entry.id for entry in parse_catalog(RECORDED) if entry.kind == STT]
 AUDIO = base64.b64encode(b"RIFF....WAVEfmt fake").decode("ascii")
 
 
@@ -119,7 +124,7 @@ def test_gpt_transcribe_gets_the_languages_to_detect_among():
     assert one["provider"]["options"]["openai"]["languages"] == ["ja"]
 
 
-@pytest.mark.parametrize("model", [m for m in STT_CLOUD_MODELS if m != "openai/gpt-transcribe"])
+@pytest.mark.parametrize("model", [m for m in LISTED_STT_MODELS if m != "openai/gpt-transcribe"])
 def test_the_other_models_ignore_the_list_of_languages(model):
     body = transcription_body(model, AUDIO, "wav", language=None, languages=["zh", "en"], hints=[])
     assert "language" not in body and "languages" not in json.dumps(body)
@@ -145,7 +150,12 @@ def test_whisper_on_groq_gets_the_hints_as_a_prompt_and_a_top_level_language():
     assert "拉斐爾" in prompt and "Tauri" in prompt
 
 
-@pytest.mark.parametrize("model", [*STT_CLOUD_MODELS, "deepgram/nova-3", "openai/whisper-1"])
+def test_the_models_given_the_dictionary_are_among_the_ones_the_list_offers():
+    assert set(openrouter.STT_MODELS_WITH_HINTS) <= set(LISTED_STT_MODELS)
+    assert len(LISTED_STT_MODELS) > len(openrouter.STT_MODELS_WITH_HINTS)
+
+
+@pytest.mark.parametrize("model", [*LISTED_STT_MODELS, "openai/whisper-1"])
 def test_the_models_said_to_get_the_dictionary_are_the_ones_that_get_it(model):
     # The settings page tells the models with the dictionary from the others by this list.
     body = transcription_body(model, AUDIO, "wav", language=None, hints=["拉斐爾"])
@@ -153,7 +163,7 @@ def test_the_models_said_to_get_the_dictionary_are_the_ones_that_get_it(model):
     assert hinted == (model in openrouter.STT_MODELS_WITH_HINTS)
 
 
-@pytest.mark.parametrize("model", [m for m in STT_CLOUD_MODELS if m.split("/")[0] != "openai"])
+@pytest.mark.parametrize("model", [m for m in LISTED_STT_MODELS if m.split("/")[0] != "openai"])
 def test_other_models_get_the_language_at_the_top_level_and_no_options(model):
     body = transcription_body(model, AUDIO, "wav", language="en", hints=["Raphael"])
     assert body["language"] == "en"

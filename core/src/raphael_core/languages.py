@@ -69,15 +69,6 @@ CHINESE_VARIANTS = ("zh-TW", "zh-HK", "zh-CN", "yue-HK")
 _ISO_CODE = {language_id: language_id.split("-")[0] for language_id in LANGUAGE_IDS}
 STT_CODES: tuple[str, ...] = tuple(dict.fromkeys(_ISO_CODE.values()))
 
-# The values of the old `language` setting, and the selection each one becomes.
-_FROM_LEGACY = {
-    "auto": ["zh-TW", "en-US", "ja-JP"],  # the user mixes these three
-    "zh": ["zh-TW"],
-    "ja": ["ja-JP"],
-    "en": ["en-US"],
-}
-LEGACY_LANGUAGES = tuple(_FROM_LEGACY)
-
 
 def checked_languages(key: str, value: Any) -> list[str]:
     """`value` as a new list, if it is a valid selection.
@@ -139,20 +130,3 @@ def stt_languages(languages: Sequence[str]) -> list[str]:
 def chinese_variant(languages: Sequence[str]) -> str | None:
     """The Chinese written form chosen (at most one can be), or None."""
     return next((item for item in languages if item in CHINESE_VARIANTS), None)
-
-
-def from_legacy(language: Any) -> list[str]:
-    """The selection that the old `language` setting stands for; the default for anything else."""
-    selection = _FROM_LEGACY.get(language) if isinstance(language, str) else None
-    return list(selection or DEFAULT_LANGUAGES)
-
-
-def legacy_language(languages: Sequence[str]) -> str:
-    """The old `language` setting as derived from a selection: "zh", "ja" or "en" for one
-    Chinese, Japanese or English language, else "auto"."""
-    if len(languages) != 1:
-        return "auto"
-    code = iso_code(languages[0])
-    if code == "yue":
-        return "zh"
-    return code if code in _FROM_LEGACY else "auto"

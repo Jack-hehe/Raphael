@@ -20,6 +20,12 @@
 //!   the clock answer NO; then `agent.confirm` gives the answer. An agent session never pastes and
 //!   never touches the clipboard of the focused window.
 //!
+//! A recording has no time limit. It ends when the key stops it, when Esc cancels it, or by
+//! itself when the core has heard no speech in it for ten seconds: the core says so
+//! (`dictation.silence`) and the recording is stopped as the key would stop it ([`on_silence`]).
+//! The wait for the core's `dictation.stop` grows with the length of the recording
+//! ([`dictation_stop_timeout`]).
+//!
 //! Rules that keep it out of trouble with the real core, overlay and paster:
 //!
 //! - Overlay calls are made outside the state lock: they can wait for the main thread (placing
@@ -49,6 +55,15 @@
 //!   is idle ([`ReportStage`]): not over a recording, a question or an answer. It takes no part in a
 //!   session, so whatever begins next replaces it.
 //!
+//! The main window takes part in two ways ([`Desk`]). A question typed in its composer
+//! ([`DictationController::ask_typed`]) is an agent session without a recording: it goes to
+//! `agent.ask` with the source `app` and on from there as a spoken one does, the overlay showing the
+//! answer and any YES/NO question, but not the reports of the wait (the window shows its own). And
+//! the YES/NO question on screen is the window's too: it hears of every question that opens and
+//! closes ([`QuestionNews`]), and its card answers through [`DictationController::on_confirm_in_app`]
+//! as the overlay's buttons answer through [`on_confirm`]. Whichever answers first wins; the other
+//! finds nothing to answer.
+//!
 //! [`spawn`] builds the controller from the app state and runs it in a task that listens to the
 //! hotkeys, the core's notifications and the overlay's buttons.
 
@@ -62,6 +77,7 @@ use tokio::task::JoinHandle;
 use crate::agent::{self, Reply};
 use crate::background::ReportStage;
 use crate::commands::DictationPhase;
+use crate::core_process::dictation_stop_timeout;
 use crate::device_settings::DictationMode;
 use crate::holdtap::{Action, HoldTap};
 use crate::hotkey::{CancelSwitch, HotkeyEvent};
@@ -170,17 +186,66 @@ impl Session {
     }
 }
 
-/// The YES/NO question on screen. Whoever answers it (a button of the overlay, Esc, the clock)
-/// takes it out of the state and sends the answer: the first to do so wins, and the others find
-/// nothing to answer.
+/// The YES/NO question on screen. Whoever answers it (a button of the overlay, the card of the
+/// main window, Esc, the clock) takes it out of the state and sends the answer: the first to do so
+/// wins, and the others find nothing to answer.
 struct PendingAsk {
-    id: String,
-    /// How much the question matters: the YES to a `T3` one waits for the long press.
-    tier: Tier,
+    /// The question as the overlay shows it: its id, its tier (the YES to a `T3` one waits for the
+    /// long press), its words and how long it waits.
+    prompt: AskPrompt,
     /// When the question was put on screen.
     shown: tokio::time::Instant,
-    answer: oneshot::Sender<bool>,
+    answer: oneshot::Sender<Answer>,
 }
+
+/// The answer to a YES/NO question, and whether it came from the main window, which has the focus
+/// when it is clicked (the overlay never takes it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Answer {
+    approved: bool,
+    in_app: bool,
+}
+
+impl Answer {
+    /// Esc, the clock, or an answer that never came: NO, from no window.
+    const NO: Self = Self {
+        approved: false,
+        in_app: false,
+    };
+}
+
+/// A YES/NO question that opened or closed (answered, run out, or dropped with its session), as the
+/// main window hears of it: the card of the 拉斐爾 page shows it while it is open.
+#[derive(Clone, Debug, PartialEq)]
+pub enum QuestionNews {
+    Open(AskPrompt),
+    Closed(String),
+}
+
+/// Told of every YES/NO question that opens or closes (see [`QuestionNews`]).
+pub type QuestionReport = Arc<dyn Fn(QuestionNews) + Send + Sync>;
+
+/// Why a typed question was not taken: something else is under way (a recording, or another
+/// question that has not been answered yet).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Busy;
+
+/// What the main window may ask of the controller (commands.rs). Kept in the app state as a
+/// [`DeskHandle`], so that the commands need not know the controller's types.
+pub trait Desk: Send + Sync {
+    /// Asks Raphael `text`, typed in the composer (see [`DictationController::ask_typed`]).
+    fn ask_typed(&self, text: &str) -> Result<JoinHandle<()>, Busy>;
+    /// The YES/NO question that waits for its answer now, with the time it has left as its
+    /// `timeout_ms`.
+    fn open_question(&self) -> Option<AskPrompt>;
+}
+
+/// The controller as the main window's commands reach it.
+#[derive(Clone)]
+pub struct DeskHandle(pub Arc<dyn Desk>);
+
+/// The source of a question typed in the main window (`agent.ask {source}`).
+pub const TYPED_SOURCE: &str = "app";
 
 struct State {
     phase: Phase,
@@ -206,6 +271,8 @@ struct State {
     down_noticed: bool,
     /// Whether the media that was playing when the recording began is held paused.
     media: MediaHold,
+    /// Told of each YES/NO question that opens or closes: the main window shows it too.
+    questions: Option<QuestionReport>,
 }
 
 impl State {
@@ -223,14 +290,36 @@ impl State {
         self.holdtap.reset();
         self.agent_holdtap.reset();
         self.agent = None;
-        self.ask = None;
+        self.take_ask();
         self.session.take()
+    }
+
+    /// Puts a YES/NO question on screen, and tells the main window.
+    fn open_ask(&mut self, ask: PendingAsk) {
+        if let Some(report) = &self.questions {
+            report(QuestionNews::Open(ask.prompt.clone()));
+        }
+        self.ask = Some(ask);
+    }
+
+    /// Takes the question off the state, if one is open, and tells the main window it is closed.
+    /// A report is a channel send, so it may be made under the lock, like the cancel switch.
+    fn take_ask(&mut self) -> Option<PendingAsk> {
+        let ask = self.ask.take();
+        if let (Some(ask), Some(report)) = (&ask, &self.questions) {
+            report(QuestionNews::Closed(ask.prompt.id.clone()));
+        }
+        ask
     }
 }
 
 /// Told where a dictation (`agent` false) or a question to Raphael (`agent` true) is: the first-run
 /// guide's lessons follow it. Only the phase, never what was said.
 pub type PhaseReport = Arc<dyn Fn(DictationPhase, bool) + Send + Sync>;
+
+/// Told the microphone's loudness (0 to 1) while a question to Raphael is being recorded: the main
+/// window's voice mode lets the ring around the person's picture follow it, as the overlay does.
+pub type VoiceLevelReport = Arc<dyn Fn(f32) + Send + Sync>;
 
 /// The dictation controller. Cheap to clone: the clones share their state.
 pub struct DictationController<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> {
@@ -251,6 +340,8 @@ pub struct DictationController<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSw
     after_paste: Option<Arc<dyn AfterPaste>>,
     /// Told of each phase a session reaches (see [`PhaseReport`]).
     phase_report: Option<PhaseReport>,
+    /// Told the loudness while a question is recorded (see [`VoiceLevelReport`]).
+    voice_level: Option<VoiceLevelReport>,
 }
 
 impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Clone
@@ -268,6 +359,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Clone
             transitions: self.transitions.clone(),
             after_paste: self.after_paste.clone(),
             phase_report: self.phase_report.clone(),
+            voice_level: self.voice_level.clone(),
         }
     }
 }
@@ -301,16 +393,30 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 shown: Vec::new(),
                 down_noticed: false,
                 media: MediaHold::default(),
+                questions: None,
             })),
             transitions: Arc::new(Mutex::new(())),
             after_paste: None,
             phase_report: None,
+            voice_level: None,
         }
     }
 
     /// The controller, telling `report` where each session is.
     pub fn with_phase_report(mut self, report: PhaseReport) -> Self {
         self.phase_report = Some(report);
+        self
+    }
+
+    /// The controller, telling `report` the loudness while a question is recorded.
+    pub fn with_voice_level(mut self, report: VoiceLevelReport) -> Self {
+        self.voice_level = Some(report);
+        self
+    }
+
+    /// The controller, telling `report` of each YES/NO question that opens or closes.
+    pub fn with_question_report(self, report: QuestionReport) -> Self {
+        lock(&self.state).questions = Some(report);
         self
     }
 
@@ -380,7 +486,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                         state.question_stopped_ms = Some(now_ms);
                         drop(state);
                         log::info!("agent: stopping (dictation key)");
-                        return self.stop_agent();
+                        return self.stop_agent(now_ms);
                     }
                     state.holdtap.on_down(mode)
                 };
@@ -396,7 +502,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 match action {
                     Action::StopRecording => {
                         log::info!("agent: stopping");
-                        self.stop_agent()
+                        self.stop_agent(now_ms)
                     }
                     Action::StartRecording | Action::None => None,
                 }
@@ -414,11 +520,16 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
     }
 
-    /// The microphone's loudness, from 0 to 1. Shown only while recording.
+    /// The microphone's loudness, from 0 to 1. Shown only while recording; while a question is
+    /// recorded the main window hears it too.
     pub fn on_level(&self, level: f32) {
         let _transition = lock(&self.transitions);
         if self.phase() == Phase::Recording {
+            let question = lock(&self.state).kind() == Some(Kind::Agent);
             self.overlay.level(level);
+            if let (true, Some(report)) = (question, &self.voice_level) {
+                report(level);
+            }
         }
     }
 
@@ -441,6 +552,49 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         };
         if current {
             self.overlay.progress(progress);
+        }
+    }
+
+    /// The core's `dictation.silence`: the recording of the session it names has heard no speech
+    /// for ten seconds. If that session is the current one and still recording, it is stopped at
+    /// `now_ms` (on the clock of [`Self::on_hotkey`]) exactly as the key would stop it: what was
+    /// said is transcribed and pasted, or asked, and a recording in which nothing was said ends
+    /// as one does when the key stops it with nothing heard. Whatever the keys were in the middle
+    /// of is forgotten, as when Esc ends a recording: the release of a key that is still held
+    /// (hold mode), or the next press (toggle mode), is a new start, not a stop. A notification
+    /// about any other session (stopped or cancelled meanwhile, or from before a restart) is
+    /// dropped.
+    pub fn on_silence(&self, params: &Value, now_ms: u64) -> Option<JoinHandle<()>> {
+        let Some(session) = params.get("session_id").and_then(Value::as_str) else {
+            log::debug!("dictation.silence ignored: {params}");
+            return None;
+        };
+        let _transition = lock(&self.transitions);
+        let kind = {
+            let mut state = lock(&self.state);
+            let current = state.phase == Phase::Recording
+                && state
+                    .session
+                    .as_ref()
+                    .is_some_and(|current| current.id == session);
+            if !current {
+                log::debug!("dictation.silence ignored: not the session that is recording");
+                return None;
+            }
+            state.holdtap.reset();
+            state.agent_holdtap.reset();
+            state.kind()
+        };
+        match kind {
+            Some(Kind::Dictation) => {
+                log::info!("dictation: stopping (silence)");
+                self.stop(now_ms)
+            }
+            Some(Kind::Agent) => {
+                log::info!("agent: stopping (silence)");
+                self.stop_agent(now_ms)
+            }
+            None => None,
         }
     }
 
@@ -484,7 +638,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             }
             Action::StopRecording => {
                 log::info!("dictation: stopping");
-                self.stop()
+                self.stop(now_ms)
             }
             Action::None => None,
         }
@@ -586,8 +740,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }))
     }
 
-    fn stop(&self) -> Option<JoinHandle<()>> {
-        let session = {
+    /// Ends the recording of a dictation at `now_ms`, on the clock of [`Self::on_hotkey`]: the key
+    /// stopped it, or the core heard nothing more ([`Self::on_silence`]).
+    fn stop(&self, now_ms: u64) -> Option<JoinHandle<()>> {
+        let (session, wait) = {
             let mut state = lock(&self.state);
             if state.phase != Phase::Recording || state.kind() != Some(Kind::Dictation) {
                 return None;
@@ -595,7 +751,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             let session = state.session.clone()?;
             state.phase = Phase::Processing;
             state.media.end();
-            session
+            (session, stop_timeout(&state, now_ms))
         };
         // The window to paste into is the one that has focus when the key is released.
         let target = self.paster.foreground();
@@ -621,9 +777,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             let target_app = target.as_ref().map(|target| target.process_name.clone());
             let reply = this
                 .core
-                .call(
+                .call_within(
                     "dictation.stop",
                     json!({ "session_id": id, "target_app": target_app }),
+                    wait,
                 )
                 .await;
             if !this.is_current(&id) {
@@ -702,39 +859,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 this.report(delivery.as_ref(), fallback, true);
                 this.learn_after_paste(text, target.as_ref(), delivery);
             });
-            // After the paste, never before it: the text is on its way first.
-            this.auto_add_words().await;
         }))
-    }
-
-    /// Asks the core to add the words that keep coming up in the dictation to the dictionary, and
-    /// reports the ones it added. The report waits behind whatever is on the stage, like the words
-    /// learned from a correction. The words are never logged, only how many.
-    async fn auto_add_words(&self) {
-        let reply = match self.core.call("dictionary.auto_add", json!({})).await {
-            Ok(reply) => reply,
-            Err(err) => {
-                log::warn!("dictionary.auto_add failed: {err}");
-                return;
-            }
-        };
-        let words: Vec<String> = reply
-            .get("words")
-            .and_then(Value::as_array)
-            .map(|words| {
-                words
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default();
-        if words.is_empty() {
-            return;
-        }
-        log::info!("dictionary: {} word(s) added by themselves", words.len());
-        self.overlay
-            .learned_notice(&notices::auto_added(&words, &self.language.get()));
     }
 
     /// Esc. It ends the session, wherever it is: a dictation or a question to Raphael that is
@@ -749,11 +874,11 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             let stage = state.agent;
             if stage == Some(AgentStage::Asking) {
                 // The turn waits for this answer, and sends `agent.confirm` and shows the reply.
-                let pending = state.ask.take();
+                let pending = state.take_ask();
                 drop(state);
                 log::info!("agent: Esc denies the question");
                 if let Some(pending) = pending {
-                    let _ = pending.answer.send(false);
+                    let _ = pending.answer.send(Answer::NO);
                 }
                 return None;
             }
@@ -1054,14 +1179,15 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             }
             Action::StopRecording => {
                 log::info!("agent: stopping");
-                self.stop_agent()
+                self.stop_agent(now_ms)
             }
             Action::None => None,
         }
     }
 
-    fn stop_agent(&self) -> Option<JoinHandle<()>> {
-        let session = {
+    /// Ends the recording of a question at `now_ms`, as [`Self::stop`] does a dictation's.
+    fn stop_agent(&self, now_ms: u64) -> Option<JoinHandle<()>> {
+        let (session, wait) = {
             let mut state = lock(&self.state);
             if state.phase != Phase::Recording || state.kind() != Some(Kind::Agent) {
                 return None;
@@ -1070,7 +1196,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             state.phase = Phase::Processing;
             state.agent = Some(AgentStage::Transcribing);
             state.media.end();
-            session
+            (session, stop_timeout(&state, now_ms))
         };
         // The app the person was in when the key was released is the one the question is about.
         let target = self.paster.foreground();
@@ -1082,14 +1208,14 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
 
         let this = self.clone();
         Some(tokio::spawn(async move {
-            this.agent_turn(session, target).await;
+            this.agent_turn(session, target, wait).await;
         }))
     }
 
-    /// The rest of a question after the key was released: the core transcribes it, the agent
-    /// answers it, the overlay shows the answer. Never logs the words of the question or the
-    /// answer.
-    async fn agent_turn(&self, session: Session, target: Option<Target>) {
+    /// The rest of a question after the key was released (or the core heard nothing more): the
+    /// core transcribes it, within `wait`, the agent answers it, the overlay shows the answer.
+    /// Never logs the words of the question or the answer.
+    async fn agent_turn(&self, session: Session, target: Option<Target>, wait: Duration) {
         // Released before the core answered the start? Then wait, like a dictation does.
         if !session.start_succeeded().await {
             log::info!("dictation.start failed; no dictation.stop to send");
@@ -1103,9 +1229,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         let target_app = target.map(|target| target.process_name);
         let transcript = self
             .core
-            .call(
+            .call_within(
                 "dictation.stop",
                 json!({ "session_id": id, "target_app": target_app }),
+                wait,
             )
             .await;
         if !self.is_current(&id) {
@@ -1149,23 +1276,71 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         if !self.set_stage(&id, AgentStage::Thinking) {
             return;
         }
-        let answer = self
-            .core
-            .call(
-                "agent.ask",
-                json!({
-                    "session_id": id,
-                    "text": question,
-                    "ui_language": self.language.get(),
-                    "target_app": target_app,
-                }),
-            )
-            .await;
-        let Some((prompt, answer)) = self.show_reply(&id, answer, true) else {
+        self.converse(&id, question, target_app, None).await;
+    }
+
+    /// A question typed in the main window's composer: an agent session without a recording, which
+    /// goes to `agent.ask` at once with the source [`TYPED_SOURCE`] and on from there as a spoken
+    /// question does ([`Self::converse`]). The overlay shows its answer and any YES/NO question,
+    /// but not Raphael's reports while he thinks: the window shows its own, and the window is where
+    /// the person is. Esc cancels it as it cancels a spoken one.
+    ///
+    /// Refused ([`Busy`]) while a recording, a question or a dictation is under way; an answer that
+    /// is only being shown gives way, as it does to a key. Never logs the words. Returns the task
+    /// that runs the question, which ends when its turn is over.
+    pub fn ask_typed(&self, text: &str) -> Result<JoinHandle<()>, Busy> {
+        let _transition = lock(&self.transitions);
+        self.end_speaking();
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let mut state = lock(&self.state);
+            if state.phase != Phase::Idle {
+                log::info!("agent: a typed question is refused: something else is under way");
+                return Err(Busy);
+            }
+            // Nothing is recorded: the core has no dictation session to start, stop or cancel.
+            let (_, started) = watch::channel(Started::Yes);
+            state.phase = Phase::Processing;
+            state.session = Some(Session {
+                id: id.clone(),
+                kind: Kind::Agent,
+                started,
+            });
+            state.agent = Some(AgentStage::Thinking);
+            self.cancel.set(true);
+        }
+        log::info!("agent: a typed question");
+        let (this, text) = (self.clone(), text.to_owned());
+        Ok(tokio::spawn(async move {
+            this.converse(&id, &text, None, Some(TYPED_SOURCE)).await;
+        }))
+    }
+
+    /// The question `question` of the session `id` with the agent: `agent.ask` (with `source`
+    /// when it is not the voice, the core's default), the reply shown, and for a YES/NO question
+    /// its answer sent with `agent.confirm` and that reply shown. Never logs the words.
+    async fn converse(
+        &self,
+        id: &str,
+        question: &str,
+        target_app: Option<String>,
+        source: Option<&str>,
+    ) {
+        let mut params = json!({
+            "session_id": id,
+            "text": question,
+            "ui_language": self.language.get(),
+            "target_app": target_app,
+        });
+        if let Some(source) = source {
+            params["source"] = json!(source);
+        }
+        let answer = self.core.call("agent.ask", params).await;
+        let Some((prompt, answer)) = self.show_reply(id, answer, true) else {
             return;
         };
         // A question is on screen. Only YES goes through; everything else is a NO.
-        let Some(approved) = self.await_answer(&id, &prompt, answer).await else {
+        let Some(approved) = self.await_answer(id, &prompt, answer).await else {
             return;
         };
         let answer = self
@@ -1176,7 +1351,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             )
             .await;
         // The answer to an answer is never another question.
-        let _ = self.show_reply(&id, answer, false);
+        let _ = self.show_reply(id, answer, false);
     }
 
     /// Shows what the agent replied (to the question, or, with `may_ask` false, to its answer):
@@ -1188,7 +1363,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         id: &str,
         reply: Result<Value, RpcError>,
         may_ask: bool,
-    ) -> Option<(AskPrompt, oneshot::Receiver<bool>)> {
+    ) -> Option<(AskPrompt, oneshot::Receiver<Answer>)> {
         // All of it, the check that the session still exists included, is one transition: Esc
         // and the core's restarts cannot come in between.
         let _transition = lock(&self.transitions);
@@ -1234,6 +1409,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         match parsed {
             Ok(Reply::Say { prefix, text }) => {
                 self.speak(id, &prefix, &text);
+                if agent::remembered(&reply) {
+                    // The answer said something else: 《了。已記下。》 follows it.
+                    self.show(notices::REMEMBERED);
+                }
                 None
             }
             Ok(Reply::Ask(prompt)) => {
@@ -1241,9 +1420,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 {
                     let mut state = lock(&self.state);
                     state.agent = Some(AgentStage::Asking);
-                    state.ask = Some(PendingAsk {
-                        id: prompt.id.clone(),
-                        tier: prompt.tier,
+                    state.open_ask(PendingAsk {
+                        prompt: prompt.clone(),
                         shown: tokio::time::Instant::now(),
                         answer,
                     });
@@ -1265,30 +1443,34 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
     }
 
-    /// Waits for the answer to the question on screen: a button of the overlay ([`Self::on_confirm`]),
-    /// Esc, or the time the question was given. Returns whether it was approved, or `None` if the
-    /// session ended meanwhile.
+    /// Waits for the answer to the question on screen: a button of the overlay ([`Self::on_confirm`])
+    /// or of the main window's card ([`Self::on_confirm_in_app`]), Esc, or the time the question was
+    /// given. Returns whether it was approved, or `None` if the session ended meanwhile.
     async fn await_answer(
         &self,
         id: &str,
         prompt: &AskPrompt,
-        wait: oneshot::Receiver<bool>,
+        wait: oneshot::Receiver<Answer>,
     ) -> Option<bool> {
         // A click must not take the focus from the app the person is typing into. The overlay
         // cannot be activated, in theory; if it was in practice, the log says so.
         let before = self.paster.foreground();
-        let approved = tokio::select! {
-            answer = wait => answer.unwrap_or(false),
+        let answer = tokio::select! {
+            answer = wait => answer.unwrap_or(Answer::NO),
             () = tokio::time::sleep(Duration::from_millis(prompt.timeout_ms)) => {
                 log::info!("agent: the question timed out");
-                false
+                Answer::NO
             }
         };
-        if stole_focus(
-            before.as_ref(),
-            self.paster.foreground().as_ref(),
-            std::process::id(),
-        ) {
+        // An answer from the main window was given in it: the window has the focus because the
+        // person went there, and it stays theirs.
+        if !answer.in_app
+            && stole_focus(
+                before.as_ref(),
+                self.paster.foreground().as_ref(),
+                std::process::id(),
+            )
+        {
             // The click must leave the person where they were: the focus goes back.
             let refocused = before
                 .as_ref()
@@ -1310,37 +1492,62 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         {
             return None;
         }
-        state.ask = None;
+        state.take_ask();
         state.agent = Some(AgentStage::Confirming);
-        Some(approved)
+        Some(answer.approved)
     }
 
     /// The overlay's answer to the question on screen: its button was clicked (`overlay_confirm`).
     /// An answer to anything but the question that is open now (a second click, a late one, one for
     /// a question that is gone) is dropped.
     pub fn on_confirm(&self, id: &str, approved: bool) {
+        self.confirm(id, approved, false);
+    }
+
+    /// The main window's answer to the question on screen: a button of the card that mirrors the
+    /// overlay's question was clicked (`agent_question_answer`). Taken as the overlay's would be,
+    /// the long press of a `T3` YES included; the focus the window has is left with it.
+    pub fn on_confirm_in_app(&self, id: &str, approved: bool) {
+        self.confirm(id, approved, true);
+    }
+
+    fn confirm(&self, id: &str, approved: bool, in_app: bool) {
         let pending = {
             let mut state = lock(&self.state);
-            let Some(ask) = state.ask.as_ref().filter(|ask| ask.id == id) else {
+            let Some(ask) = state.ask.as_ref().filter(|ask| ask.prompt.id == id) else {
                 drop(state);
                 log::debug!("agent: an answer for no open question is dropped");
                 return;
             };
-            // The page arms the YES to a question that cannot be undone with a long press. A YES
+            // Both pages arm the YES to a question that cannot be undone with a long press. A YES
             // that comes sooner is not from a person holding the button: the question stays
             // open for the real one.
             let armed = ask.shown.elapsed() >= Duration::from_millis(agent::T3_ARMS_AFTER_MS);
-            if approved && ask.tier == Tier::T3 && !armed {
+            if approved && ask.prompt.tier == Tier::T3 && !armed {
                 drop(state);
                 log::warn!("agent: a YES to a question that cannot be undone came too early");
                 return;
             }
-            state.ask.take()
+            state.take_ask()
         };
         if let Some(pending) = pending {
-            log::info!("agent: the question was answered");
-            let _ = pending.answer.send(approved);
+            log::info!(
+                "agent: the question was answered ({})",
+                if in_app { "main window" } else { "overlay" }
+            );
+            let _ = pending.answer.send(Answer { approved, in_app });
         }
+    }
+
+    /// The YES/NO question that waits for its answer now, if one does, with the time it has left
+    /// as its `timeout_ms`.
+    pub fn open_question(&self) -> Option<AskPrompt> {
+        let state = lock(&self.state);
+        let ask = state.ask.as_ref()?;
+        let spent = u64::try_from(ask.shown.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut prompt = ask.prompt.clone();
+        prompt.timeout_ms = prompt.timeout_ms.saturating_sub(spent);
+        Some(prompt)
     }
 
     /// Shows Raphael's answer and keeps it on screen for as long as it takes to read. The session
@@ -1452,6 +1659,26 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> ReportStage
     fn try_say(&self, prefix: &str, text: &str) -> Option<Duration> {
         self.say_in_background(prefix, text)
     }
+}
+
+impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Desk
+    for DictationController<C, O, P, S>
+{
+    fn ask_typed(&self, text: &str) -> Result<JoinHandle<()>, Busy> {
+        DictationController::ask_typed(self, text)
+    }
+
+    fn open_question(&self) -> Option<AskPrompt> {
+        DictationController::open_question(self)
+    }
+}
+
+/// How long the `dictation.stop` of the recording in `state`, ended at `now_ms`, may take: longer
+/// the longer it lasted ([`dictation_stop_timeout`]).
+fn stop_timeout(state: &State, now_ms: u64) -> Duration {
+    dictation_stop_timeout(Duration::from_millis(
+        now_ms.saturating_sub(state.started_ms),
+    ))
 }
 
 /// The session id and what to show, from a `dictation.progress` notification's params
@@ -1573,7 +1800,7 @@ mod app {
     use tokio::sync::broadcast::{self, error::RecvError};
     use tokio::sync::mpsc::UnboundedReceiver;
 
-    use super::{DictationController, ModeCell};
+    use super::{DeskHandle, DictationController, ModeCell};
     use crate::core_process::{CORE_DOWN, CORE_RESTARTED, CoreProcess};
     use crate::hotkey::{CancelSwitch, HotkeyEvent, HotkeyService};
     use crate::learn::{Learner, UiaProbe};
@@ -1727,6 +1954,14 @@ mod app {
                             agent,
                         });
                     }))
+                    .with_question_report(Arc::new(|news| {
+                        crate::commands::tell_main_window(crate::commands::MainEvent::from(news));
+                    }))
+                    .with_voice_level(Arc::new(|value| {
+                        crate::commands::tell_main_window(crate::commands::MainEvent::VoiceLevel {
+                            value: value.clamp(0.0, 1.0),
+                        });
+                    }))
                     .with_after_paste(Arc::new(learner))
                     .with_media(Arc::new(WindowsMedia::start())),
                 )
@@ -1736,6 +1971,10 @@ mod app {
                 None
             }
         };
+        // The main window asks typed questions and answers the YES/NO ones through the controller.
+        if let Some(controller) = &controller {
+            app.manage(DeskHandle(Arc::new(controller.clone())));
+        }
         // The reports of the background worker are said by the controller when it is idle, and the
         // tray follows whether a task runs.
         if let (Some(controller), Some(notifications)) = (&controller, background_notifications) {
@@ -1798,7 +2037,7 @@ mod app {
                 notification = next_notification(&mut notifications) => {
                     let Some(controller) = &controller else { continue };
                     match notification {
-                        Ok(notification) => on_notification(controller, &notification),
+                        Ok(notification) => on_notification(controller, &notification, now_ms()),
                         Err(RecvError::Lagged(missed)) => {
                             // A core.restarted may have been among them.
                             log::warn!("missed {missed} notifications from the core; resetting the dictation");
@@ -1809,9 +2048,10 @@ mod app {
                     }
                 }
                 answer = next(&mut confirmations) => match answer {
-                    Some(Confirmation { id, approved }) => match &controller {
+                    Some(Confirmation { id, approved, in_app }) => match &controller {
+                        Some(controller) if in_app => controller.on_confirm_in_app(&id, approved),
                         Some(controller) => controller.on_confirm(&id, approved),
-                        None => log::info!("an answer from the overlay is dropped: the core is not running"),
+                        None => log::info!("an answer to a question is dropped: the core is not running"),
                     },
                     None => confirmations = None,
                 },
@@ -1819,7 +2059,7 @@ mod app {
         }
     }
 
-    fn on_notification(controller: &Controller, notification: &Notification) {
+    fn on_notification(controller: &Controller, notification: &Notification, now_ms: u64) {
         match notification.method.as_str() {
             "audio.level" => {
                 if let Some(level) = notification.params.get("level").and_then(Value::as_f64) {
@@ -1827,6 +2067,8 @@ mod app {
                 }
             }
             "dictation.progress" => controller.on_progress(&notification.params),
+            // The task runs by itself, like a key's; nothing waits for it.
+            "dictation.silence" => drop(controller.on_silence(&notification.params, now_ms)),
             CORE_RESTARTED => controller.on_core_restarted(),
             CORE_DOWN => controller.on_core_down(),
             _ => {}
@@ -1879,6 +2121,8 @@ mod tests {
         order: Mutex<Vec<String>>,
         /// Replies to this method wait until the gate is opened.
         gate: Option<(String, Arc<Notify>)>,
+        /// The calls made with a time of their own (`call_within`), and that time.
+        timeouts: Mutex<Vec<(String, Duration)>>,
     }
 
     impl FakeCore {
@@ -1944,6 +2188,32 @@ mod tests {
             }
             let scripted = self.results.lock().unwrap().get(method).cloned();
             scripted.unwrap_or_else(|| Ok(json!({})))
+        }
+
+        async fn call_within(
+            &self,
+            method: &str,
+            params: Value,
+            timeout: Duration,
+        ) -> Result<Value, RpcError> {
+            self.timeouts
+                .lock()
+                .unwrap()
+                .push((method.to_owned(), timeout));
+            self.call(method, params).await
+        }
+    }
+
+    impl FakeCore {
+        /// The time the last `method` call was given, if it was given one.
+        fn timeout(&self, method: &str) -> Option<Duration> {
+            self.timeouts
+                .lock()
+                .unwrap()
+                .iter()
+                .rev()
+                .find(|(m, _)| m == method)
+                .map(|(_, timeout)| *timeout)
         }
     }
 
@@ -2297,69 +2567,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn words_the_dictionary_added_by_itself_are_reported_after_the_paste() {
+    async fn a_word_said_again_and_again_never_reaches_the_dictionary() {
+        // Only a correction the user makes after the paste teaches the dictionary a word
+        // (`learn`). The dictation itself, however often a word comes up in it, asks nothing.
         let core = FakeCore::with("dictation.stop", stop_result("用 Tailscale 連回家。", None));
-        core.script(
-            "dictionary.auto_add",
-            Ok(json!({"words": ["Tailscale", "Kokoro"]})),
-        );
         let c = controller(core, FakePaster::pasting("Code.exe"));
-        run(&c, HotkeyEvent::DictationDown, 0).await;
-        run(&c, HotkeyEvent::DictationUp, 900).await;
-        assert_eq!(c.paster().delivered(), vec!["用 Tailscale 連回家。"]);
-        assert_eq!(
-            c.overlay().events(),
-            vec![
-                "show:listening".to_owned(),
-                "mode:thinking".to_owned(),
-                "hide".to_owned(),
-                notice("《了。已加入「Tailscale」、「Kokoro」至辭典。》"),
-            ]
+        for round in 0..10 {
+            let at = round * 2000;
+            run(&c, HotkeyEvent::DictationDown, at).await;
+            run(&c, HotkeyEvent::DictationUp, at + 900).await;
+        }
+        assert_eq!(c.paster().delivered().len(), 10);
+        assert!(
+            c.core()
+                .order()
+                .iter()
+                .all(|method| !method.starts_with("dictionary.")),
+            "{:?}",
+            c.core().order()
         );
-        // The paste comes first: the core is asked after the text was delivered.
-        let order = c.core().order();
-        assert!(position(&order, "dictation.stop") < position(&order, "dictionary.auto_add"));
-    }
-
-    #[tokio::test]
-    async fn no_notice_when_no_word_was_added() {
-        let core = FakeCore::with("dictation.stop", stop_result("明天開會。", None));
-        core.script("dictionary.auto_add", Ok(json!({"words": []})));
-        let c = controller(core, FakePaster::pasting("Code.exe"));
-        run(&c, HotkeyEvent::DictationDown, 0).await;
-        run(&c, HotkeyEvent::DictationUp, 900).await;
-        assert_eq!(c.core().count("dictionary.auto_add"), 1);
-        assert_eq!(
-            c.overlay().events(),
-            vec!["show:listening", "mode:thinking", "hide"]
-        );
-    }
-
-    #[tokio::test]
-    async fn a_failed_auto_add_is_silent() {
-        let core = FakeCore::with("dictation.stop", stop_result("明天開會。", None));
-        core.script(
-            "dictionary.auto_add",
-            Err(RpcError::new(-32603, "boom".to_owned())),
-        );
-        let c = controller(core, FakePaster::pasting("Code.exe"));
-        run(&c, HotkeyEvent::DictationDown, 0).await;
-        run(&c, HotkeyEvent::DictationUp, 900).await;
-        assert_eq!(
-            c.overlay().events(),
-            vec!["show:listening", "mode:thinking", "hide"]
-        );
-    }
-
-    #[tokio::test]
-    async fn nothing_is_added_when_there_was_no_text() {
-        let c = controller(
-            FakeCore::with("dictation.stop", stop_result("", None)),
-            FakePaster::pasting("Code.exe"),
-        );
-        run(&c, HotkeyEvent::DictationDown, 0).await;
-        run(&c, HotkeyEvent::DictationUp, 900).await;
-        assert_eq!(c.core().count("dictionary.auto_add"), 0);
     }
 
     // ---------- toggle mode: press to start, press again to stop ----------
@@ -2570,12 +2796,7 @@ mod tests {
         stop.await.unwrap();
         assert_eq!(
             c.core().order(),
-            vec![
-                "dictation.start",
-                "dictation.start:reply",
-                "dictation.stop",
-                "dictionary.auto_add"
-            ]
+            vec!["dictation.start", "dictation.start:reply", "dictation.stop"]
         );
         assert_eq!(c.paster().delivered(), vec!["好"]);
     }
@@ -3575,12 +3796,7 @@ mod tests {
         up.await.unwrap();
         assert_eq!(
             c.core().order(),
-            vec![
-                "dictation.start",
-                "dictation.start:reply",
-                "dictation.stop",
-                "dictionary.auto_add"
-            ]
+            vec!["dictation.start", "dictation.start:reply", "dictation.stop"]
         );
         assert_eq!(c.paster().delivered(), vec!["好"]);
         assert_eq!(
@@ -4780,6 +4996,256 @@ mod tests {
         assert!(c.paster().refocused.lock().unwrap().is_empty());
     }
 
+    // ---------- the main window: typed questions and the card of the YES/NO question ----------
+
+    /// A controller whose agent replies `reply` (and 了 to a confirmation), and the questions the
+    /// main window heard of.
+    fn questioning(reply: Value) -> (Ctl, Arc<Mutex<Vec<QuestionNews>>>) {
+        let core = agent_core(reply);
+        core.script("agent.confirm", Ok(answer("了", "已複製到剪貼簿。")));
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let sink = heard.clone();
+        let c = controller(core, FakePaster::pasting("chrome.exe"))
+            .with_question_report(Arc::new(move |news| sink.lock().unwrap().push(news)));
+        (c, heard)
+    }
+
+    /// The prompt of [`question`].
+    fn prompt(id: &str, timeout_ms: u64) -> AskPrompt {
+        AskPrompt {
+            id: id.to_owned(),
+            tier: Tier::T2,
+            prefix: "問".to_owned(),
+            text: "要複製到剪貼簿嗎？".to_owned(),
+            yes: "是".to_owned(),
+            no: "否".to_owned(),
+            timeout_ms,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_typed_question_goes_to_the_agent_from_the_app_with_no_recording() {
+        let c = agent(answer("答", "會，下午七成。"));
+        c.language().set("ja");
+        c.ask_typed("明天會下雨嗎？").unwrap().await.unwrap();
+        assert_eq!(c.core().count("dictation.start"), 0);
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        let asked = c.core().call_params("agent.ask");
+        assert_eq!(asked["text"], "明天會下雨嗎？");
+        assert_eq!(asked["source"], TYPED_SOURCE);
+        assert_eq!(asked["ui_language"], "ja");
+        assert_eq!(asked["target_app"], Value::Null);
+        assert!(
+            asked["session_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty())
+        );
+        // The overlay says the answer, without Raphael's reports of the wait: the window has its own.
+        assert_eq!(c.overlay().events(), vec!["say:答|會，下午七成。"]);
+        assert_eq!(c.agent_stage(), Some(AgentStage::Speaking));
+    }
+
+    #[tokio::test]
+    async fn a_spoken_question_names_no_source_and_the_core_takes_it_for_the_voice() {
+        let c = agent(answer("答", "好"));
+        ask_aloud(&c).await;
+        assert_eq!(c.core().call_params("agent.ask").get("source"), None);
+    }
+
+    #[tokio::test]
+    async fn a_typed_question_waits_for_nothing_else_but_an_answer_gives_way() {
+        let c = agent(answer("答", "好"));
+        run(&c, AgentDown, 0).await;
+        assert_eq!(
+            c.ask_typed("你好").err(),
+            Some(Busy),
+            "Raphael is listening"
+        );
+        run(&c, AgentUp, 900).await;
+        assert_eq!(c.agent_stage(), Some(AgentStage::Speaking));
+        // The answer on screen gives way, as it does to a key.
+        c.ask_typed("再問一次").unwrap().await.unwrap();
+        assert_eq!(c.core().count("agent.ask"), 2);
+
+        let c = controller(FakeCore::default(), FakePaster::pasting("chrome.exe"));
+        run(&c, DictationDown, 0).await;
+        assert_eq!(
+            c.ask_typed("你好").err(),
+            Some(Busy),
+            "a dictation is under way"
+        );
+    }
+
+    #[tokio::test]
+    async fn esc_cancels_a_typed_question_that_is_being_thought_about() {
+        let (core, gate) = agent_core(answer("答", "太晚了")).gated("agent.ask");
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let turn = c.ask_typed("你好").unwrap();
+        settle().await;
+        assert_eq!(c.cancel().last(), Some(true), "Esc is taken for it");
+        run(&c, Cancel, 10).await;
+        gate.notify_one();
+        turn.await.unwrap();
+        assert_eq!(c.phase(), Phase::Idle);
+        let id = c.core().call_params("agent.ask")["session_id"].clone();
+        assert_eq!(c.core().call_params("agent.cancel")["session_id"], id);
+        assert!(
+            !c.overlay()
+                .events()
+                .iter()
+                .any(|event| event.starts_with("say:"))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_main_window_hears_a_question_open_and_close_and_may_answer_it() {
+        let (c, heard) = questioning(question("c-1", 30_000));
+        let turn = c.ask_typed("幫我複製這句話").unwrap();
+        until_stage(&c, AgentStage::Asking).await;
+        assert_eq!(
+            *heard.lock().unwrap(),
+            [QuestionNews::Open(prompt("c-1", 30_000))]
+        );
+        assert_eq!(c.open_question(), Some(prompt("c-1", 30_000)));
+        c.on_confirm_in_app("c-1", true);
+        turn.await.unwrap();
+        assert_eq!(
+            *heard.lock().unwrap(),
+            [
+                QuestionNews::Open(prompt("c-1", 30_000)),
+                QuestionNews::Closed("c-1".to_owned())
+            ]
+        );
+        assert_eq!(c.open_question(), None);
+        assert_eq!(
+            c.core().call_params("agent.confirm"),
+            json!({"id": "c-1", "approved": true})
+        );
+        // The overlay's question is answered too: the reply takes its place.
+        assert_eq!(
+            c.overlay().events().last().unwrap(),
+            "say:了|已複製到剪貼簿。"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_open_question_says_how_long_it_has_left() {
+        let (c, _heard) = questioning(question("c-1", 30_000));
+        let _turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Asking).await;
+        tokio::time::advance(Duration::from_millis(12_000)).await;
+        assert_eq!(c.open_question().map(|open| open.timeout_ms), Some(18_000));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn whichever_answers_first_wins_and_the_other_finds_nothing() {
+        let (c, turn) = question_on_screen(30_000).await;
+        c.on_confirm("c-1", false);
+        c.on_confirm_in_app("c-1", true);
+        turn.await.unwrap();
+        assert_eq!(
+            c.core().all_params("agent.confirm"),
+            [json!({"id": "c-1", "approved": false})]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_answer_from_the_main_window_leaves_the_focus_with_it() {
+        let (c, turn) = question_on_screen(30_000).await;
+        // The person went to Raphael's window to answer: it is in front now.
+        *c.paster().stolen.lock().unwrap() = true;
+        c.on_confirm_in_app("c-1", true);
+        turn.await.unwrap();
+        assert!(c.paster().refocused.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_yes_from_the_main_window_to_what_cannot_be_undone_waits_for_the_long_press_too() {
+        let core = agent_core(question_of_tier("c-3", "T3", 30_000));
+        core.script("agent.confirm", Ok(answer("了", "好。")));
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Asking).await;
+        c.on_confirm_in_app("c-3", true);
+        settle().await;
+        assert_eq!(
+            c.agent_stage(),
+            Some(AgentStage::Asking),
+            "too early: still open"
+        );
+        tokio::time::advance(Duration::from_millis(agent::T3_ARMS_AFTER_MS)).await;
+        c.on_confirm_in_app("c-3", true);
+        turn.await.unwrap();
+        assert_eq!(
+            c.core().call_params("agent.confirm"),
+            json!({"id": "c-3", "approved": true})
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_question_that_runs_out_or_is_denied_by_esc_is_closed_for_the_window_too() {
+        let (c, heard) = questioning(question("c-1", 5_000));
+        let turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Asking).await;
+        tokio::time::advance(Duration::from_millis(5_001)).await;
+        turn.await.unwrap();
+        assert_eq!(
+            heard.lock().unwrap().last(),
+            Some(&QuestionNews::Closed("c-1".to_owned()))
+        );
+
+        let (c, heard) = questioning(question("c-2", 30_000));
+        let turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Asking).await;
+        run(&c, Cancel, 2_000).await;
+        turn.await.unwrap();
+        assert_eq!(
+            *heard.lock().unwrap(),
+            [
+                QuestionNews::Open(prompt("c-2", 30_000)),
+                QuestionNews::Closed("c-2".to_owned())
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_main_window_hears_the_loudness_of_a_question_only() {
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let sink = heard.clone();
+        let c = agent(answer("答", "好"))
+            .with_voice_level(Arc::new(move |level| sink.lock().unwrap().push(level)));
+        c.on_level(0.5); // nothing is recorded
+        run(&c, AgentDown, 0).await;
+        c.on_level(0.25);
+        run(&c, AgentUp, 900).await;
+        c.on_level(0.75); // the recording is over
+        assert_eq!(*heard.lock().unwrap(), [0.25]);
+
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let sink = heard.clone();
+        let c = controller(FakeCore::default(), FakePaster::pasting("chrome.exe"))
+            .with_voice_level(Arc::new(move |level| sink.lock().unwrap().push(level)));
+        run(&c, DictationDown, 0).await;
+        c.on_level(0.5);
+        assert!(
+            heard.lock().unwrap().is_empty(),
+            "a dictation's loudness is the overlay's alone"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_question_dropped_with_its_session_is_closed_for_the_window_too() {
+        let (c, heard) = questioning(question("c-1", 30_000));
+        let _turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Asking).await;
+        c.on_core_restarted();
+        assert_eq!(
+            heard.lock().unwrap().last(),
+            Some(&QuestionNews::Closed("c-1".to_owned()))
+        );
+        assert_eq!(c.open_question(), None);
+    }
+
     #[tokio::test]
     async fn the_question_is_about_the_app_in_front_when_the_key_is_released() {
         let c = controller(
@@ -4816,6 +5282,29 @@ mod tests {
         assert_eq!(
             c.overlay().events().last().unwrap(),
             "say:否|沒有設定金鑰。"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_memory_written_beside_the_answer_is_told_after_it_in_one_language() {
+        let mut reply = answer("答", "那就從高雄出發。");
+        reply["notice"] = json!("remembered");
+        let c = agent(reply);
+        ask_aloud(&c).await;
+        let events = c.overlay().events();
+        assert_eq!(
+            events[events.len() - 2..],
+            ["say:答|那就從高雄出發。", "notice:《了。已記下。》"]
+        );
+        // Without the notice, the answer is all.
+        let c = agent(answer("了", "已記下。"));
+        ask_aloud(&c).await;
+        assert_eq!(c.overlay().events().last().unwrap(), "say:了|已記下。");
+        assert!(
+            !c.overlay()
+                .events()
+                .iter()
+                .any(|e| e.starts_with("notice:"))
         );
     }
 
@@ -6784,5 +7273,250 @@ mod tests {
         run(&c, DictationDown, 0).await;
         settle().await;
         assert_eq!(seen.lock().unwrap().last(), Some(&(Phased::Failed, false)));
+    }
+
+    // ---------- ten seconds of silence stop the recording ----------
+
+    /// The id of the session the core was last asked to start.
+    fn started_id(c: &Ctl) -> String {
+        c.core().call_params("dictation.start")["session_id"]
+            .as_str()
+            .expect("a session id")
+            .to_owned()
+    }
+
+    /// The core's `dictation.silence` for `session`, at `now_ms`; the stop's task is awaited.
+    async fn silence(c: &Ctl, session: &str, now_ms: u64) -> bool {
+        match c.on_silence(&json!({ "session_id": session }), now_ms) {
+            Some(task) => {
+                task.await.unwrap();
+                true
+            }
+            None => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn silence_stops_the_dictation_as_the_key_would_and_pastes_it() {
+        for mode in BOTH_MODES {
+            let c = controller_in(
+                mode,
+                FakeCore::with("dictation.stop", stop_result("明天開會。", None)),
+                FakePaster::pasting("Code.exe"),
+            );
+            run(&c, DictationDown, 0).await;
+            if mode == DictationMode::Toggle {
+                run(&c, DictationUp, 200).await;
+            }
+            let id = started_id(&c);
+            assert!(silence(&c, &id, 12_000).await, "{mode:?}");
+            assert_eq!(c.paster().delivered(), vec!["明天開會。"], "{mode:?}");
+            assert_eq!(
+                c.overlay().events(),
+                vec!["show:listening", "mode:thinking", "hide"],
+                "{mode:?}: the overlay goes as for a stop by the key"
+            );
+            assert_eq!(c.phase(), Phase::Idle, "{mode:?}");
+            assert_eq!(c.cancel().last(), Some(false), "{mode:?}");
+            assert_eq!(c.core().call_params("dictation.stop")["session_id"], id);
+            assert_eq!(
+                c.core().call_params("dictation.stop")["target_app"],
+                "Code.exe"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn after_a_silence_the_keys_start_afresh() {
+        // Hold mode: the key is still down when the silence ends the recording. Its release is
+        // nobody's, and the next press starts a new dictation.
+        let c = controller_in(
+            DictationMode::Hold,
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("Code.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        assert!(silence(&c, &started_id(&c), 10_500).await);
+        run(&c, DictationUp, 11_000).await;
+        assert_eq!(
+            c.core().count("dictation.stop"),
+            1,
+            "the release stops nothing"
+        );
+        run(&c, DictationDown, 12_000).await;
+        assert_eq!(c.phase(), Phase::Recording);
+        assert_eq!(c.core().count("dictation.start"), 2);
+
+        // Toggle mode: the next press is a start, not a stop.
+        let c = controller_in(
+            DictationMode::Toggle,
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("Code.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        run(&c, DictationUp, 200).await;
+        assert!(silence(&c, &started_id(&c), 10_500).await);
+        run(&c, DictationDown, 12_000).await;
+        assert_eq!(c.phase(), Phase::Recording, "a fresh dictation");
+        assert_eq!(c.core().count("dictation.start"), 2);
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        run(&c, DictationUp, 12_200).await;
+        run(&c, DictationDown, 13_000).await;
+        assert_eq!(
+            c.core().count("dictation.stop"),
+            2,
+            "and its own next press stops it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_silence_in_which_nothing_was_said_ends_like_a_stop_that_heard_nothing() {
+        let c = controller(
+            FakeCore::with("dictation.stop", empty_result(false)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        assert!(silence(&c, &started_id(&c), 10_000).await);
+        assert!(c.paster().delivered().is_empty());
+        assert_eq!(c.overlay().events().last().unwrap(), "hide");
+        assert_eq!(c.phase(), Phase::Idle);
+
+        // And a microphone that gave no sound at all says so, as after the key.
+        let c = controller(
+            FakeCore::with("dictation.stop", empty_result(true)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        assert!(silence(&c, &started_id(&c), 10_000).await);
+        assert!(c.paster().delivered().is_empty());
+        assert_eq!(c.overlay().events().last().unwrap(), &notice(NO_SOUND.zh));
+    }
+
+    #[tokio::test]
+    async fn a_silence_of_another_session_is_ignored() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        // Nothing is recording.
+        assert!(!silence(&c, "old", 1_000).await);
+        run(&c, DictationDown, 2_000).await;
+        // Not the session that is recording: one that was cancelled, or from before a restart.
+        assert!(!silence(&c, "old", 12_000).await);
+        // Nor a notification without a session.
+        assert!(c.on_silence(&json!({}), 12_000).is_none());
+        assert!(c.on_silence(&json!({ "session_id": 7 }), 12_000).is_none());
+        assert_eq!(c.phase(), Phase::Recording);
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        // The key still stops it.
+        let id = started_id(&c);
+        run(&c, DictationUp, 13_000).await;
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        // A silence that comes after the stop is the stopped session's: nothing to do.
+        assert!(!silence(&c, &id, 13_100).await);
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        assert_eq!(c.paster().delivered(), vec!["好"]);
+    }
+
+    #[tokio::test]
+    async fn a_silence_while_the_stop_is_under_way_changes_nothing() {
+        let (core, gate) =
+            FakeCore::with("dictation.stop", stop_result("好", None)).gated("dictation.stop");
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        run(&c, DictationDown, 0).await;
+        let id = started_id(&c);
+        let stopping = c
+            .on_hotkey(DictationUp, 9_000)
+            .expect("the stop runs in a task");
+        settle().await;
+        assert!(
+            !silence(&c, &id, 10_000).await,
+            "the session is no longer recording"
+        );
+        gate.notify_one();
+        stopping.await.unwrap();
+        assert_eq!(c.core().count("dictation.stop"), 1);
+        assert_eq!(c.paster().delivered(), vec!["好"]);
+    }
+
+    #[tokio::test]
+    async fn a_silence_after_esc_is_ignored() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, DictationDown, 0).await;
+        let id = started_id(&c);
+        run(&c, Cancel, 5_000).await;
+        assert!(!silence(&c, &id, 10_000).await);
+        assert_eq!(c.core().count("dictation.stop"), 0);
+        assert!(c.paster().delivered().is_empty());
+    }
+
+    #[tokio::test]
+    async fn silence_ends_a_question_to_raphael_too() {
+        for mode in BOTH_MODES {
+            let c = controller_in(
+                mode,
+                agent_core(answer("答", "已複製。")),
+                FakePaster::pasting("chrome.exe"),
+            );
+            run(&c, AgentDown, 0).await;
+            if mode == DictationMode::Toggle {
+                run(&c, AgentUp, 200).await;
+            }
+            let id = started_id(&c);
+            assert!(silence(&c, &id, 10_000).await, "{mode:?}");
+            assert_eq!(c.core().call_params("dictation.stop")["session_id"], id);
+            assert_eq!(c.core().call_params("agent.ask")["text"], "幫我複製這句話");
+            assert_eq!(
+                c.overlay().events().last().unwrap(),
+                "say:答|已複製。",
+                "{mode:?}"
+            );
+            assert!(
+                c.paster().delivered().is_empty(),
+                "a question pastes nothing"
+            );
+            // The agent key's release, or its next press, starts nothing it should not.
+            match mode {
+                DictationMode::Hold => run(&c, AgentUp, 11_000).await,
+                DictationMode::Toggle => {}
+            }
+            assert_eq!(c.core().count("dictation.stop"), 1, "{mode:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_stop_of_a_long_recording_is_given_longer() {
+        let c = controller(
+            FakeCore::with("dictation.stop", stop_result("好", None)),
+            FakePaster::pasting("notepad.exe"),
+        );
+        run(&c, DictationDown, 1_000).await;
+        run(&c, DictationUp, 2_000).await;
+        assert_eq!(
+            c.core().timeout("dictation.stop"),
+            Some(dictation_stop_timeout(Duration::from_secs(1)))
+        );
+        // An hour of dictation, ended by its silence.
+        run(&c, DictationDown, 10_000).await;
+        assert!(silence(&c, &started_id(&c), 10_000 + 3_600_000).await);
+        assert_eq!(
+            c.core().timeout("dictation.stop"),
+            Some(dictation_stop_timeout(Duration::from_secs(3600)))
+        );
+        assert!(
+            c.core().timeout("dictation.stop").unwrap() > Duration::from_secs(10 + 3600 / 3),
+            "room for the cleanup of an hour of speech"
+        );
+        // A question is given the same.
+        let c = agent(answer("答", "好。"));
+        run(&c, AgentDown, 0).await;
+        run(&c, AgentUp, 600_000).await;
+        assert_eq!(
+            c.core().timeout("dictation.stop"),
+            Some(dictation_stop_timeout(Duration::from_secs(600)))
+        );
     }
 }

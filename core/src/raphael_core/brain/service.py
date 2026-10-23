@@ -25,7 +25,8 @@ handler below; what a handler alone does not show is here:
   after a minute, without making a dictation wait for that check.
 - A model is chosen (`settings.set` of `cleanup_model`, `agent_model` or `stt_cloud_model`) from
   the catalog OpenRouter gave last, as `models.catalog` showed it: any model it lists that the
-  role can use, or, before any list could be had, one of Raphael's own (catalog.choice_problem).
+  role can use (catalog.choice_problem). Before any list could be had, the catalog is the builtin
+  table of the models Raphael calls when nobody chose another (pricing.builtin_catalog).
   Choosing fetches nothing. When `models.catalog` finds a chosen model gone from OpenRouter's
   list, the setting goes back to its default, and the answer's `replaced` says so for the app to
   tell the user, as it tells of a setting it could not change.
@@ -41,25 +42,25 @@ import logging
 import sqlite3
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import tzinfo
 from typing import Any
 
+from ..clock import wall_clock_ms
 from ..languages import chinese_variant, language_groups
-from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
+from ..protocol import INTERNAL_ERROR, RpcError, invalid_params
 from ..router import Router
 from .catalog import ROLE_OF_SETTING, ROLES, CatalogEntry, Role, catalog_view, choice_problem, find
-from .cleanup import CleanupService
+from .cleanup import CleanupService, join_parts, split_for_cleanup
 from .cloud_stt import CloudTranscriber
 from .dictionary import DictionaryStore, Learned
 from .history import HistoryItem, HistoryStore
 from .openrouter import KeyInfo, OpenRouterClient, OpenRouterError
-from .pricing import PricingService
+from .pricing import PricingService, builtin_catalog
 from .secrets import KeyStore
 from .settings import SettingsStore, checked
 from .spend import SpendTracker
 from .stats import StatsStore
-from .suggest import suggest_words
 from .textnorm import (
     apply_replacements,
     finish_cleaned_text,
@@ -75,10 +76,6 @@ HISTORY_MAX_LIMIT = 200
 IMPORT_MAX = 5000
 # The most corrections `dictionary.learn` takes from one dictation.
 LEARN_MAX = 3
-# The dictionary adds words by itself from this many days of history,
-SUGGESTION_DAYS = 7
-# and at most this many in one go.
-AUTO_ADD_LIMIT = 5
 # How long a key check may take in all. The client's timeout applies to each stage of a request
 # (connect, send, wait, read), so by itself a check could outlast the 15 s the app waits for it.
 KEY_CHECK_TIMEOUT_S = 10.0
@@ -90,8 +87,6 @@ _DAY_MS = 86_400_000
 # problem is a reason the role cannot use the model.
 _MODEL_PROBLEMS = {
     "not_listed": "Setting {key!r} must be a model that OpenRouter lists",
-    "not_curated": "Setting {key!r} must be one of Raphael's own models until OpenRouter's list"
-    " of models has been read",
 }
 _MODEL_UNUSABLE = "Setting {key!r} must be a model it can use, and this one cannot: {reason}"
 # SQLite stores integers in 64 bits and refuses to bind a larger one.
@@ -102,42 +97,33 @@ _SPEND_DAYS = 30
 PRUNE_INTERVAL_MS = _DAY_MS
 
 
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
-
-
 # --- params -------------------------------------------------------------------------------------
-
-
-def _invalid(message: str) -> RpcError:
-    """An INVALID_PARAMS error. `message` names a param, never a value: it may be the key."""
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
 
 
 def _required(params: dict, name: str) -> Any:
     if name not in params:
-        raise _invalid(f"{name} is required")
+        raise invalid_params(f"{name} is required")
     return params[name]
 
 
 def _str(params: dict, name: str) -> str:
     value = _required(params, name)
     if not isinstance(value, str):
-        raise _invalid(f"{name} must be a string")
+        raise invalid_params(f"{name} must be a string")
     return value
 
 
 def _opt_str(params: dict, name: str) -> str | None:
     value = params.get(name)
     if value is not None and not isinstance(value, str):
-        raise _invalid(f"{name} must be a string")
+        raise invalid_params(f"{name} must be a string")
     return value
 
 
 def _whole(value: Any, name: str) -> int:
     # `type is int`, not isinstance: True is an int to Python, but it is no id and no time.
     if type(value) is not int or not (-_SQLITE_MAX_INT - 1 <= value <= _SQLITE_MAX_INT):
-        raise _invalid(f"{name} must be a whole number")
+        raise invalid_params(f"{name} must be a whole number")
     return value
 
 
@@ -153,7 +139,7 @@ def _opt_int(params: dict, name: str) -> int | None:
 def _non_negative(params: dict, name: str) -> float:
     value = _required(params, name)
     if type(value) not in (int, float) or value < 0:
-        raise _invalid(f"{name} must be a number, 0 or more")
+        raise invalid_params(f"{name} must be a number, 0 or more")
     return value
 
 
@@ -161,7 +147,7 @@ def _milliseconds(params: dict, name: str) -> int:
     """A duration in ms. Any number is taken, since a float is a fair way to say 312.6 ms."""
     value = _non_negative(params, name)
     if value > _SQLITE_MAX_INT:
-        raise _invalid(f"{name} is too large")
+        raise invalid_params(f"{name} is too large")
     return round(value)
 
 
@@ -170,7 +156,7 @@ def _opt_strings(params: dict, name: str) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, list) or not all(isinstance(text, str) for text in value):
-        raise _invalid(f"{name} must be a list of strings")
+        raise invalid_params(f"{name} must be a list of strings")
     return value
 
 
@@ -180,9 +166,9 @@ def _store_call() -> Iterator[None]:
     try:
         yield
     except KeyError as exc:
-        raise _invalid(f"unknown key {exc.args[0]!r}" if exc.args else "unknown key") from exc
+        raise invalid_params(f"unknown key {exc.args[0]!r}" if exc.args else "unknown key") from exc
     except (ValueError, TypeError) as exc:
-        raise _invalid(str(exc)) from exc
+        raise invalid_params(str(exc)) from exc
 
 
 # --- the key and the status ---------------------------------------------------------------------
@@ -225,7 +211,7 @@ class Brain:
         conn: sqlite3.Connection,
         client: OpenRouterClient,
         keys: KeyStore,
-        now_ms: Callable[[], int] = _wall_clock_ms,
+        now_ms: Callable[[], int] = wall_clock_ms,
         *,
         key_check_timeout_s: float = KEY_CHECK_TIMEOUT_S,
         tz: tzinfo | None = None,
@@ -286,12 +272,11 @@ class Brain:
             "history.list": self._history_list,
             "history.latest": self._history_latest,
             "history.delete": self._history_delete,
+            "history.clear": self._history_clear,
             "dictionary.list": self._dictionary_list,
             "dictionary.add": self._dictionary_add,
             "dictionary.import": self._dictionary_import,
             "dictionary.delete": self._dictionary_delete,
-            "dictionary.auto_add": self._dictionary_auto_add,
-            "dictionary.dismiss": self._dictionary_dismiss,
             "dictionary.learn": self._dictionary_learn,
             "settings.get": self._settings_get,
             "settings.set": self._settings_set,
@@ -335,6 +320,17 @@ class Brain:
         # The model reads the text as speech-to-text heard it, with the replacements but without
         # OpenCC: s2twp would hand it errors such as 隻要 for 只要, which it then keeps. The
         # normalized text is what is saved, and what is pasted when there is no cleanup.
+        # A long dictation is cleaned in pieces (cleanup.CLEANUP_CHUNK_CHARS), cut where
+        # speech-to-text ended a sentence, each made ready the way the whole is.
+        pieces = split_for_cleanup(raw_text)
+        chunks = (
+            [
+                (normalize_transcript(piece, rules, chinese=chinese), apply_replacements(piece, rules))
+                for piece in pieces
+            ]
+            if len(pieces) > 1
+            else None
+        )
         if session_id is not None:
             self._cleaning[session_id] = False
         try:
@@ -343,6 +339,7 @@ class Brain:
                 audio_seconds=audio_seconds,
                 heard=apply_replacements(raw_text, rules),
                 target_app=target_app,
+                chunks=chunks,
             )
         finally:
             # Taken in the same breath as the text is saved, so that no cancel comes in between.
@@ -350,7 +347,21 @@ class Brain:
         if result.model is not None and self._openrouter.state == "ok":
             # The model answered, so the time it took is a round trip to OpenRouter.
             self._openrouter.latency_ms = result.llm_ms
-        if result.cleaned:
+        if result.parts:
+            # Cleaned in pieces, some of which may have fallen back: each is finished as it would
+            # be alone, and they are joined with what they were cut at: a paragraph break, a space.
+            text = join_parts(
+                [
+                    replace(
+                        part,
+                        text=finish_cleaned_text(part.text, rules, chinese=chinese)
+                        if part.cleaned
+                        else remove_stutters(part.text),
+                    )
+                    for part in result.parts
+                ]
+            )
+        elif result.cleaned:
             text = finish_cleaned_text(result.text, rules, chinese=chinese)
         else:
             # A fallback is the normalized text already; doing it twice could repeat a replacement.
@@ -437,6 +448,11 @@ class Brain:
         with _store_call():
             return {"deleted": self._history.delete(item_id)}
 
+    async def _history_clear(self, params: dict) -> dict:
+        """Delete the whole dictation history: Settings › 資料, once its 10 seconds of 復原 ran out."""
+        with _store_call():
+            return {"deleted": self._history.clear()}
+
     # --- dictionary -----------------------------------------------------------------------------
 
     async def _dictionary_list(self, params: dict) -> dict:
@@ -455,10 +471,10 @@ class Brain:
         letter case) or repeats is skipped, a blank one is invalid, and a word the user had
         dismissed is added all the same. Only the counts are logged."""
         if _required(params, "words") is None:
-            raise _invalid("words must be a list of strings")
+            raise invalid_params("words must be a list of strings")
         words = _opt_strings(params, "words")
         if len(words) > IMPORT_MAX:
-            raise _invalid(f"words takes at most {IMPORT_MAX} entries")
+            raise invalid_params(f"words takes at most {IMPORT_MAX} entries")
         with _store_call():
             added, skipped, invalid = self._dictionary.import_words(words)
         logger.info(
@@ -473,30 +489,6 @@ class Brain:
         entry_id = _int(params, "id")
         with _store_call():
             return {"deleted": self._dictionary.delete(entry_id)}
-
-    async def _dictionary_auto_add(self, params: dict) -> dict:
-        """`{}` -> `{words: [word]}`: adds the names and terms that keep coming up in the last
-        seven days of dictation to the dictionary, as learned entries, and returns the ones it
-        added (at most AUTO_ADD_LIMIT). A word that is in the dictionary, or that the user
-        deleted or dismissed, is never added. The app calls it after a dictation is pasted. Only
-        the number of words is logged."""
-        texts = self._history.texts_since(self._now_ms() - SUGGESTION_DAYS * _DAY_MS)
-        known = set(self._dictionary.hint_words())
-        found = suggest_words(texts, known, self._dictionary.dismissed(), limit=AUTO_ADD_LIMIT)
-        words: list[str] = []
-        with _store_call():
-            for word, _count in found:
-                self._dictionary.add(word, source="learned")
-                words.append(word)
-        if words:
-            logger.info("Added %d words to the dictionary by themselves", len(words))
-        return {"words": words}
-
-    async def _dictionary_dismiss(self, params: dict) -> dict:
-        word = _str(params, "word")
-        with _store_call():
-            self._dictionary.dismiss(word)
-        return {}
 
     async def _dictionary_learn(self, params: dict) -> dict:
         """`{corrections: [{word, misheard}]}` from the app's correction watch: the user replaced
@@ -513,11 +505,11 @@ class Brain:
         logged, only how many."""
         corrections = _required(params, "corrections")
         if not isinstance(corrections, list):
-            raise _invalid("corrections must be a list")
+            raise invalid_params("corrections must be a list")
         pairs: list[tuple[str, str]] = []
         for correction in corrections:
             if not isinstance(correction, dict):
-                raise _invalid("corrections must be a list of objects")
+                raise invalid_params("corrections must be a list of objects")
             pairs.append((_str(correction, "word").strip(), _str(correction, "misheard").strip()))
         learned: list[str] = []
         rules: list[str] = []
@@ -561,10 +553,13 @@ class Brain:
 
     def _check_model(self, role: Role, value: Any) -> None:
         """ValueError (or the store's TypeError) if `value` cannot be chosen for `role`, by the
-        catalog OpenRouter gave last (catalog.choice_problem)."""
+        catalog OpenRouter gave last, or the builtin one if it never gave one: the catalog the
+        settings page showed (catalog.choice_problem)."""
         _, model_id = checked(role.setting, value)
         current = self._settings.get(role.setting)
-        problem = choice_problem(role, model_id, self._pricing.known(), current)
+        known = self._pricing.known()
+        listed = builtin_catalog() if known is None else known
+        problem = choice_problem(role, model_id, listed, current)
         if problem is not None:
             message = _MODEL_PROBLEMS.get(problem, _MODEL_UNUSABLE)
             raise ValueError(message.format(key=role.setting, reason=problem))

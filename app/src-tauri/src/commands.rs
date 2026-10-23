@@ -5,7 +5,15 @@
 //!   `agent.cancel`) are the controller's alone. The main window may read and clear the record of
 //!   the conversations (`agent.history.`), and stop one background task it names
 //!   (`worker.cancel {task_id}`) or run one that did not finish again (`worker.rerun {task_id}`), the
-//!   way the tray stops the one that runs.
+//!   way the tray stops the one that runs. It may list, read, edit and delete Raphael's memories and
+//!   clear the summary of the conversation (`memory.list`, `memory.get`, `memory.update`,
+//!   `memory.delete`, `memory.clear`, `memory.summary_clear`), each by its name and with its params
+//!   checked here first.
+//! - `agent_ask_text`, `agent_question_open` and `agent_question_answer` are the 拉斐爾 page's own
+//!   way to Raphael, through the dictation controller rather than the core
+//!   ([`crate::dictation::Desk`]): a question typed in its composer (some text, of a bounded
+//!   length), and the YES/NO question that is open, which the page shows on a card and may answer
+//!   by its id, as the overlay's buttons do, while the window has the focus.
 //! - `device_settings_get` and `device_settings_set` read and change `device.json`
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
 //!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
@@ -46,11 +54,11 @@ use crate::core_process::{CORE_RESTARTED, CoreApi, CoreProcess};
 use crate::device_settings::{
     self, Appearance, DeviceSettings, DeviceStore, DictationMode, FILE_NAME, Subtitles,
 };
-use crate::dictation::ModeCell;
+use crate::dictation::{DeskHandle, ModeCell, QuestionNews};
 use crate::hotkey::{Bindings, HotkeyEvent, HotkeyService, WindowHotkey};
 use crate::mic_access::{self, MicAccess};
 use crate::notices::LanguageCell;
-use crate::overlay::Overlay;
+use crate::overlay::{AskPrompt, ConfirmSender, Confirmation, Overlay};
 use crate::rpc::{CORE_EXITED, Notification, RpcError, TIMEOUT};
 
 /// What `core_call` says when there is no core to call.
@@ -174,6 +182,24 @@ pub enum MainEvent {
     /// A dictation (`agent: false`) or a question to Raphael (`agent: true`) moved on. Only the
     /// phase: what was said stays in the core.
     Dictation { phase: DictationPhase, agent: bool },
+    /// Raphael asks a YES/NO question, which the overlay shows: the 拉斐爾 page shows it on its card
+    /// too and may answer it (`agent_question_answer`). Its words are shown, never logged.
+    AgentQuestion(AskPrompt),
+    /// The question `id` was answered (on the overlay or the page), ran out, or was dropped with
+    /// its session: the card goes.
+    AgentQuestionClosed { id: String },
+    /// The microphone's loudness, 0 to 1, while a question to Raphael is recorded: the ring around
+    /// the person's picture in the 拉斐爾 page's voice mode follows it. Never a dictation's.
+    VoiceLevel { value: f32 },
+}
+
+impl From<QuestionNews> for MainEvent {
+    fn from(news: QuestionNews) -> Self {
+        match news {
+            QuestionNews::Open(prompt) => Self::AgentQuestion(prompt),
+            QuestionNews::Closed(id) => Self::AgentQuestionClosed { id },
+        }
+    }
 }
 
 /// The most events kept for a main window that has not subscribed yet.
@@ -282,7 +308,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 20] = [
+const ALLOWED_METHODS: [&str; 26] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -306,7 +332,92 @@ const ALLOWED_METHODS: [&str; 20] = [
     "worker.cancel",
     // ... and runs one that did not finish again, by its id.
     "worker.rerun",
+    // Raphael's memory, in the settings (`validate_core_call` checks the name and the text). Named
+    // one by one, like the messaging methods: a method added to the memory later stays closed.
+    "memory.list",
+    "memory.get",
+    "memory.update",
+    "memory.delete",
+    "memory.clear",
+    "memory.summary_clear",
 ];
+
+/// The types a memory's name starts with (the core's `memory.store.TYPES`).
+const MEMORY_TYPES: [&str; 5] = ["user", "preference", "person", "ongoing", "reference"];
+/// The longest name of a memory, and the most a memory's body and description may hold, in
+/// characters (the core's limits; it checks them again).
+const MEMORY_NAME_MAX: usize = 64;
+const MEMORY_BODY_MAX: usize = 1_200;
+const MEMORY_DESCRIPTION_MAX: usize = 80;
+
+/// Whether `name` is the name of a memory: its type, then an ASCII slug of lower-case letters and
+/// digits in words joined by single hyphens (`preference-answer-length`). Nothing else, so no name
+/// can reach outside the memory's folder.
+pub fn is_memory_name(name: &str) -> bool {
+    if name.len() > MEMORY_NAME_MAX {
+        return false;
+    }
+    let Some((kind, slug)) = name.split_once('-') else {
+        return false;
+    };
+    MEMORY_TYPES.contains(&kind)
+        && slug.split('-').all(|word| {
+            !word.is_empty()
+                && word
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
+}
+
+/// The longest words the search of the conversation takes, in characters (the core's limit too).
+const HISTORY_QUERY_MAX: usize = 200;
+
+/// The params of `agent.history.search`: a `query` of words (not blank, at most
+/// [`HISTORY_QUERY_MAX`] characters) and, if given, a `limit` that is a whole number of 0 or more
+/// (the core clamps it to its own range).
+fn validate_history_search(params: &Value) -> Result<(), String> {
+    let words = params.get("query").and_then(Value::as_str).map(str::trim);
+    if !words.is_some_and(|words| (1..=HISTORY_QUERY_MAX).contains(&words.chars().count())) {
+        return Err(format!(
+            "agent.history.search needs a query of 1 to {HISTORY_QUERY_MAX} characters"
+        ));
+    }
+    match params.get("limit") {
+        None | Some(Value::Null) => Ok(()),
+        Some(limit) if limit.as_u64().is_some() => Ok(()),
+        Some(_) => Err("agent.history.search takes a whole number as its limit".to_owned()),
+    }
+}
+
+/// The params of a memory method: `name` a memory's name where one is needed, and for
+/// `memory.update` a `body` of text within the limit and, if given, a `description` within its own.
+fn validate_memory_call(method: &str, params: &Value) -> Result<(), String> {
+    let needs_name = matches!(method, "memory.get" | "memory.update" | "memory.delete");
+    if needs_name
+        && !params
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(is_memory_name)
+    {
+        return Err(format!("{method} needs the name of a memory"));
+    }
+    if method != "memory.update" {
+        return Ok(());
+    }
+    let chars = |value: &Value| value.as_str().map(|text| text.chars().count());
+    match params.get("body").and_then(chars) {
+        Some(count) if count <= MEMORY_BODY_MAX => {}
+        Some(_) => return Err("記憶內容最多 1,200 字".to_owned()),
+        None => return Err("memory.update needs the body of the memory".to_owned()),
+    }
+    match params.get("description") {
+        None | Some(Value::Null) => Ok(()),
+        Some(value) => match chars(value) {
+            Some(count) if (1..=MEMORY_DESCRIPTION_MAX).contains(&count) => Ok(()),
+            _ => Err("記憶的說明最多 80 字".to_owned()),
+        },
+    }
+}
 
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
 /// settings (the `languages` setting too), the key, the status, the usage numbers, OpenRouter's
@@ -322,10 +433,12 @@ pub fn is_allowed_method(m: &str) -> bool {
 }
 
 /// Checks a few values of `settings.set` before the core sees them: a monthly limit of 0 or more
-/// and a history retention of at least one day, which the core only type-checks; and a language,
-/// a cleanup model and a speech-to-text engine, which the core checks as well (each model against
-/// OpenRouter's list), so that the settings page gets these refusals in its own words. `Err` says
-/// what is wrong. Calls other than `settings.set` pass.
+/// and a history retention of at least one day, which the core only type-checks; and a cleanup
+/// model, a background task's cost cap and a speech-to-text engine, which the core checks as well
+/// (each model against OpenRouter's list), so that the settings page gets these refusals in its
+/// own words. `Err` says what is wrong. The window's `worker.cancel` and `worker.rerun` must name
+/// their task, the memory's methods a memory by a name that is one, with a text within the
+/// limits, and the search of the conversation its words and a whole limit. Other calls pass.
 pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     if method == "worker.cancel" {
         // Without an id the core stops whichever task runs: the window stops only the one it shows.
@@ -340,6 +453,12 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
             None => Err("worker.rerun needs the task_id of the task to run again".to_owned()),
         };
     }
+    if method.starts_with("memory.") {
+        return validate_memory_call(method, params);
+    }
+    if method == "agent.history.search" {
+        return validate_history_search(params);
+    }
     if method != "settings.set" {
         return Ok(());
     }
@@ -352,9 +471,6 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     let fine = match key {
         "monthly_limit_usd" => value.as_f64().is_some_and(|limit| limit >= 0.0),
         "history_retention_days" => value.as_i64().is_some_and(|days| days >= 1),
-        "language" => value
-            .as_str()
-            .is_some_and(|language| ["auto", "zh", "ja", "en"].contains(&language)),
         "cleanup_model" => value.as_str().is_some_and(|model| !model.trim().is_empty()),
         "worker_cost_cap_usd" => value.as_f64().is_some_and(|cap| {
             [0.1, 0.2, 0.5, 1.0]
@@ -372,7 +488,6 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     Err(match key {
         "monthly_limit_usd" => "每月上限要是 0 以上的數字",
         "history_retention_days" => "歷史紀錄至少要保留 1 天",
-        "language" => "語言只能是 auto、zh、ja 或 en",
         "stt_engine" => "語音轉文字只能選雲端或本機",
         "worker_cost_cap_usd" => "背景任務的花費上限只能是 0.10、0.20、0.50 或 1.00 美元",
         _ => "沒有指定整理用的模型",
@@ -408,6 +523,99 @@ pub async fn core_call(
         MONITORING.store(on, Ordering::Relaxed);
     }
     Ok(result)
+}
+
+// ---------- questions to Raphael from the window ----------
+
+/// The longest question the composer may send, in characters (`TYPED_MAX_CHARS` of
+/// pages/agent.ts, which counts an attached file too). The core takes any length; this only keeps
+/// one message between the window and the app within reason.
+pub const TYPED_MAX_CHARS: usize = 100_000;
+
+/// "拉斐爾現在無法回答問題": there is no controller (the core did not start) or it is gone.
+const AGENT_OFF: &str = "拉斐爾現在無法回答問題";
+
+/// A typed question as it is asked: its words without the blanks around them, or why it is not
+/// asked (nothing to ask, or too long).
+pub fn typed_question(text: &str) -> Result<&str, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("沒有要問的內容".to_owned());
+    }
+    if text.chars().count() > TYPED_MAX_CHARS {
+        return Err("問題太長了".to_owned());
+    }
+    Ok(text)
+}
+
+/// Whether `id` may be the id of one of the core's questions (a UUID today): a short word of
+/// letters, digits, `-` and `_`. Anything else never reaches the controller.
+pub fn is_question_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+/// Asks Raphael a question typed in the composer of the 拉斐爾 page. It goes the way a spoken one
+/// goes once its words are heard (`agent.ask` with the source `app`; the overlay shows the answer
+/// and any YES/NO question), and the call settles when the turn is over, its answer in the history
+/// or its failure shown. Refused while Raphael is busy with a recording or another question.
+#[tauri::command]
+pub async fn agent_ask_text(app: AppHandle, webview: Webview, text: String) -> Result<(), String> {
+    require_main(&webview)?;
+    let text = typed_question(&text)?;
+    let desk = app
+        .try_state::<DeskHandle>()
+        .map(|desk| desk.inner().clone())
+        .ok_or(AGENT_OFF)?;
+    let turn = desk
+        .0
+        .ask_typed(text)
+        .map_err(|_| "拉斐爾正在忙，請稍後再問".to_owned())?;
+    // The page waits for the turn, so that it knows when to stop waiting for its answer.
+    if let Err(err) = turn.await {
+        log::warn!("a typed question's task ended badly: {err}");
+    }
+    Ok(())
+}
+
+/// The YES/NO question that waits for its answer now, if one does (the page's card when the page
+/// opens after it was asked), with the time it has left as its `timeout_ms`.
+#[tauri::command]
+pub fn agent_question_open(app: AppHandle, webview: Webview) -> Result<Option<AskPrompt>, String> {
+    require_main(&webview)?;
+    Ok(app
+        .try_state::<DeskHandle>()
+        .and_then(|desk| desk.0.open_question()))
+}
+
+/// The page's card answers the question `id` (YES when `approved`), as the overlay's buttons do:
+/// the controller takes it only for the question that is open now, and the YES to one that cannot
+/// be undone only after the long press. The window must have the focus: the person clicked in it.
+#[tauri::command]
+pub fn agent_question_answer(
+    app: AppHandle,
+    webview: Webview,
+    id: String,
+    approved: bool,
+) -> Result<(), String> {
+    require_main(&webview)?;
+    if !is_question_id(&id) {
+        return Err("這個問題已經結束了".to_owned());
+    }
+    if !webview.window().is_focused().unwrap_or(false) {
+        return Err("請先回到拉斐爾的視窗再回答".to_owned());
+    }
+    let answers = app.try_state::<ConfirmSender>().ok_or(AGENT_OFF)?;
+    answers
+        .0
+        .send(Confirmation {
+            id,
+            approved,
+            in_app: true,
+        })
+        .map_err(|_| AGENT_OFF.to_owned())
 }
 
 // ---------- events ----------
@@ -1132,6 +1340,9 @@ mod tests {
         assert_eq!(
             checked,
             [
+                "agent_ask_text",
+                "agent_question_answer",
+                "agent_question_open",
                 "core_call",
                 "device_settings_get",
                 "device_settings_set",
@@ -1143,6 +1354,52 @@ mod tests {
                 "open_link",
                 "window_hotkey",
             ]
+        );
+    }
+
+    // ---- the window's own way to Raphael ----
+
+    #[test]
+    fn a_typed_question_has_words_and_a_bounded_length() {
+        assert_eq!(typed_question("  明天會下雨嗎？\n"), Ok("明天會下雨嗎？"));
+        assert!(typed_question("").is_err());
+        assert!(typed_question(" \n\t ").is_err());
+        let longest = "字".repeat(TYPED_MAX_CHARS);
+        assert_eq!(typed_question(&longest), Ok(longest.as_str()));
+        assert!(typed_question(&format!("{longest}字")).is_err());
+    }
+
+    #[test]
+    fn a_question_is_answered_only_by_an_id_that_could_be_one() {
+        for id in ["c-1", "6f1c2a9e-4b7d-4c1e-9f3a-2d5b8e7c0a11", "a_b"] {
+            assert!(is_question_id(id), "{id}");
+        }
+        for id in ["", "a b", "../x", "c-1\n", "問", &"a".repeat(65), "x;y"] {
+            assert!(!is_question_id(id), "{id:?}");
+        }
+    }
+
+    #[test]
+    fn the_window_hears_a_question_open_and_close() {
+        let prompt = AskPrompt {
+            id: "c-1".to_owned(),
+            tier: crate::overlay::Tier::T3,
+            prefix: "問".to_owned(),
+            text: "要寄出這封信嗎？".to_owned(),
+            yes: "寄出".to_owned(),
+            no: "取消".to_owned(),
+            timeout_ms: 30_000,
+        };
+        assert_eq!(
+            serde_json::to_value(MainEvent::from(QuestionNews::Open(prompt))).unwrap(),
+            json!({
+                "type": "AgentQuestion", "id": "c-1", "tier": "T3", "prefix": "問",
+                "text": "要寄出這封信嗎？", "yes": "寄出", "no": "取消", "timeout_ms": 30_000,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(MainEvent::from(QuestionNews::Closed("c-1".to_owned()))).unwrap(),
+            json!({ "type": "AgentQuestionClosed", "id": "c-1" })
         );
     }
 
@@ -1159,7 +1416,11 @@ mod tests {
     #[test]
     fn the_main_window_reads_the_conversations_but_never_asks_raphael() {
         // The record of the conversations is the main window's to read and clear...
-        for method in ["agent.history.list", "agent.history.clear"] {
+        for method in [
+            "agent.history.list",
+            "agent.history.search",
+            "agent.history.clear",
+        ] {
             assert!(is_allowed_method(method), "{method}");
         }
         // ...and the questions are the controller's alone: the main window cannot ask, approve
@@ -1179,6 +1440,102 @@ mod tests {
             " agent.history.list",
         ] {
             assert!(!is_allowed_method(method), "{method:?}");
+        }
+    }
+
+    #[test]
+    fn the_main_window_reaches_the_memory_by_its_six_methods_only() {
+        for method in [
+            "memory.",
+            "memory",
+            "memory.write",
+            "memory.reflect",
+            "memory.listx",
+            "Memory.list",
+            " memory.list",
+            "xmemory.list",
+        ] {
+            assert!(!is_allowed_method(method), "{method:?}");
+        }
+    }
+
+    #[test]
+    fn a_memory_is_named_by_its_type_and_an_ascii_slug() {
+        for name in [
+            "user-city",
+            "preference-answer-length",
+            "ongoing-trip-2026",
+            "person-amy",
+        ] {
+            assert!(is_memory_name(name), "{name}");
+        }
+        let long = format!("user-{}", "a".repeat(60));
+        for name in [
+            "",
+            "user",
+            "user-",
+            "user--city",
+            "user-city-",
+            "-user-city",
+            "secret-city",
+            "User-city",
+            "user-City",
+            "user-台北",
+            "user-../raphael",
+            "user-a/b",
+            "user-a\\b",
+            "user-a.md",
+            "user-a b",
+            long.as_str(),
+        ] {
+            assert!(!is_memory_name(name), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn the_memory_methods_have_their_params_checked() {
+        let ok = |method: &str, params: Value| validate_core_call(method, &params).is_ok();
+        assert!(ok("memory.list", json!({})));
+        assert!(ok("memory.clear", json!({})));
+        assert!(ok("memory.summary_clear", json!({})));
+        assert!(ok("memory.get", json!({"name": "user-city"})));
+        assert!(ok("memory.delete", json!({"name": "user-city"})));
+        assert!(ok(
+            "memory.update",
+            json!({"name": "user-city", "body": "主人住在台北。"})
+        ));
+        assert!(ok(
+            "memory.update",
+            json!({"name": "user-city", "body": "", "description": "主人住在台北"})
+        ));
+        assert!(ok(
+            "memory.update",
+            json!({"name": "user-city", "body": "長".repeat(1200), "description": null})
+        ));
+        for (method, params) in [
+            ("memory.get", json!({})),
+            ("memory.get", json!({"name": "../raphael"})),
+            ("memory.delete", json!({"name": 3})),
+            ("memory.update", json!({"name": "user-city"})),
+            ("memory.update", json!({"name": "user-city", "body": 5})),
+            (
+                "memory.update",
+                json!({"name": "user-city", "body": "長".repeat(1201)}),
+            ),
+            (
+                "memory.update",
+                json!({"name": "user-city", "body": "x", "description": ""}),
+            ),
+            (
+                "memory.update",
+                json!({"name": "user-city", "body": "x", "description": "長".repeat(81)}),
+            ),
+            ("memory.update", json!({"name": "x", "body": "x"})),
+        ] {
+            assert!(
+                validate_core_call(method, &params).is_err(),
+                "{method} {params}"
+            );
         }
     }
 
@@ -1345,7 +1702,6 @@ mod tests {
             "dictionary.add",
             "dictionary.import",
             "dictionary.delete",
-            "dictionary.dismiss",
             "settings.get",
             "settings.set",
             "secrets.status",
@@ -1366,7 +1722,6 @@ mod tests {
             "languages.list",
             "agent.history.list",
             "agent.history.clear",
-            "integrations.list",
             "integrations.catalog",
             "integrations.connect",
             "integrations.connect_cancel",
@@ -1374,13 +1729,18 @@ mod tests {
             "integrations.set_enabled",
             "integrations.disconnect",
             "integrations.refresh",
-            "integrations.tools",
             "integrations.set_tool_enabled",
             "integrations.set_tools_enabled",
             "integrations.audit",
             "toolsets.list",
             "worker.cancel",
             "worker.rerun",
+            "memory.list",
+            "memory.get",
+            "memory.update",
+            "memory.delete",
+            "memory.clear",
+            "memory.summary_clear",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
@@ -1397,8 +1757,8 @@ mod tests {
             "brain.finalize_dictation",
             "integrations", // the prefix alone is no method
             "integrations.",
-            "Integrations.list",
-            "xintegrations.list",
+            "Integrations.catalog",
+            "xintegrations.catalog",
             "toolsets", // the prefix alone is no method
             "toolsets.",
             "Toolsets.list",
@@ -1490,12 +1850,7 @@ mod tests {
     }
 
     #[test]
-    fn the_language_and_the_model_are_checked_too() {
-        for language in ["auto", "zh", "ja", "en"] {
-            assert!(set("language", json!(language)).is_ok(), "{language}");
-        }
-        assert!(set("language", json!("de")).is_err());
-        assert!(set("language", json!(1)).is_err());
+    fn the_model_is_checked_too() {
         assert!(set("cleanup_model", json!("google/gemini-3.1-flash-lite")).is_ok());
         assert!(set("cleanup_model", json!("")).is_err());
         assert!(set("cleanup_model", json!(3)).is_err());
@@ -1520,6 +1875,26 @@ mod tests {
         // the core checks each model against OpenRouter's list
         assert!(set("stt_cloud_model", json!("openai/gpt-transcribe")).is_ok());
         assert!(set("stt_cloud_model", json!("deepgram/nova-3")).is_ok());
+    }
+
+    #[test]
+    fn the_search_of_the_conversation_takes_words_and_a_whole_limit() {
+        let search = |params: Value| validate_core_call("agent.history.search", &params);
+        assert!(search(json!({"query": "出差", "limit": 100})).is_ok());
+        assert!(search(json!({"query": "出差"})).is_ok());
+        assert!(search(json!({"query": "x".repeat(200)})).is_ok());
+        for params in [
+            json!({}),
+            json!({"query": ""}),
+            json!({"query": "   "}),
+            json!({"query": 5}),
+            json!({"query": "x".repeat(201)}),
+            json!({"query": "出差", "limit": "5"}),
+            json!({"query": "出差", "limit": 2.5}),
+            json!({"query": "出差", "limit": -1}),
+        ] {
+            assert!(search(params.clone()).is_err(), "{params}");
+        }
     }
 
     #[test]
