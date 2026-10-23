@@ -643,7 +643,7 @@ export function mountModelPicker(container: HTMLElement, options: ModelPickerOpt
 /** A key that types something: a letter, a digit, a mark (Space is no such key: it presses buttons). */
 const typing = (e: KeyboardEvent): boolean => e.key.length === 1 && e.key !== " " && !e.ctrlKey && !e.metaKey && !e.altKey;
 
-/** The picker whose list is open: a page drawn again hands that list to the new button of the role. */
+/** The picker whose list is open: a redraw hands its list to the same control. */
 let opened: { picker: MountedPicker; role: PickerRole; button: HTMLElement } | null = null;
 
 interface Dropdown {
@@ -778,10 +778,10 @@ class MountedPicker implements ModelPicker {
     input.setSelectionRange(caret, caret);
   }
 
-  /** The page was drawn again while this role's list was open on the button this one replaces: the list opens here, as it was. */
+  /** The page was drawn again while this control's list was open: the list opens here, as it was. */
   private takeOver(): void {
     const before = opened;
-    if (!before || before.role !== this.o.role || before.button.isConnected || !menuIsOpenFor(before.button)) return;
+    if (!before || before.role !== this.o.role || before.picker.o.key !== this.o.key || before.button.isConnected || !menuIsOpenFor(before.button)) return;
     const { list, panel } = before.picker;
     const caret = before.picker.search()?.selectionStart ?? undefined;
     const scroll = panel?.querySelector(".mp-scroll")?.scrollTop;

@@ -427,10 +427,10 @@ describe("拉斐爾", () => {
 });
 
 describe("模型與用量", () => {
-  test("is OpenRouter (the key, the spend, the limit), then the three models", () => {
+  test("is OpenRouter, the three primary models and the remaining purpose fallbacks", () => {
     const html = tab("usage");
-    expect(groups(html)).toEqual(["OpenRouter", "模型"]);
-    expect(names(html)).toEqual(["金鑰", "Raphael 本月花費", "OpenRouter 帳號本月用量", "語音轉文字", "整理文字", "拉斐爾的回答"]);
+    expect(groups(html)).toEqual(["OpenRouter", "模型", "其他用途的備援模型"]);
+    expect(names(html)).toEqual(["金鑰", "Raphael 本月花費", "OpenRouter 帳號本月用量", "語音轉文字", "整理文字", "拉斐爾的回答", "路由與快速工作", "閱讀 PDF", "記憶"]);
   });
 
   test("shows how OpenRouter took the key, with buttons to check again and to change it", () => {
@@ -474,12 +474,13 @@ describe("模型與用量", () => {
       expect(row).toContain(`data-row="${k}"`);
       expect(row).toContain(
         `<div class="d"><span class="price num" data-price="${k}">${price}</span></div></div>` +
-          `<div class="ctl"><span class="mp-slot" data-model-picker="${role}"><button type="button" class="sel mp-trigger" aria-haspopup="dialog"`,
+          `<div class="ctl"><div class="model-choices"><span class="mp-slot" data-model-picker="${role}"><button type="button" class="sel mp-trigger" aria-haspopup="dialog"`,
       );
       // The button names what is chosen and leaves its price to the line under the row's name.
       expect(row).toMatch(new RegExp(`data-k="${k}"><span class="mp-tname">${chosen}</span><svg`));
       expect(row).not.toContain("mp-tprice");
-      expect(buttons(row)).toHaveLength(1);
+      expect(buttons(row)).toHaveLength(2);
+      expect(row).toContain('data-fallback-act="add"');
     }
     expect(priceTexts(view()).note).toBe("價格來自 OpenRouter，今天更新。實際花費依 OpenRouter 選用的供應商而定。");
   });

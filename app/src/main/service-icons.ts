@@ -23,6 +23,10 @@ export const LOGO_IDS = [
   "huggingface", "exa", "tavily", "jina", "firecrawl", "fish",
   "openai", "azure", "litellm", "portkey", "nebius", "bifrost", "groq", "anthropic", "googlegemini", "googlecloud",
   "ollama", "vercel", "lmstudio", "deepseek", "mistral",
+  "xai", "fireworks", "novita", "deepinfra", "together", "perplexity", "cerebras", "sambanova", "hyperbolic", "nvidia",
+  "moonshot", "dashscope", "zai", "minimax", "stepfun", "arcee", "gmi", "ollama_cloud", "meta", "opencode_zen", "kilocode",
+  "chutes", "siliconflow", "baidu_qianfan", "volcengine_ark", "venice", "featherless", "inference_net", "lambda", "scaleway", "ovhcloud", "cohere", "ai21",
+  "vllm", "sglang", "llamacpp", "jan", "koboldcpp", "localai", "text_generation_webui", "vertex", "bedrock",
 ] as const;
 export type LogoIconId = (typeof LOGO_IDS)[number];
 

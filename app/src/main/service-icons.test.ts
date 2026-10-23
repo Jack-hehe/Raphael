@@ -5,6 +5,15 @@ import { readdirSync } from "node:fs";
 import { BRAND_COLORS, LOGO_IDS, SERVICE_ICONS, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import { iconHTML } from "./connections";
 import { ico } from "./ui";
+import { providerMark } from "./provider-marks";
+
+test("new provider artwork is reserved and regional variants share the base mark", () => {
+  for (const id of ["vertex", "bedrock", "xai", "moonshot", "dashscope", "minimax", "vllm", "text_generation_webui", "inference_net"] as const) {
+    expect(LOGO_IDS).toContain(id);
+    if (!hasLogo(id)) expect(providerMark(id)).toContain(ico("plug"));
+  }
+  for (const id of ["moonshot", "dashscope", "minimax"]) expect(providerMark(`${id}_cn`)).toBe(providerMark(id));
+});
 
 test("reserved provider brands with no installed artwork show the plug instead of a broken image or initial", () => {
   for (const id of ["openai", "azure", "litellm", "portkey", "nebius", "bifrost", "groq", "anthropic", "googlegemini", "googlecloud", "ollama", "vercel", "lmstudio", "deepseek", "mistral"] as const) {

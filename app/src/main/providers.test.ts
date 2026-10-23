@@ -5,6 +5,7 @@ import { setLocale } from "./i18n";
 const api = vi.hoisted(() => ({
   providersKinds: vi.fn(), providersList: vi.fn(), providersAdd: vi.fn(), providersUpdate: vi.fn(),
   providersRemove: vi.fn(), providersTest: vi.fn(), providersModels: vi.fn(),
+  openLink: vi.fn(),
 }));
 vi.mock("./api", () => api);
 
@@ -23,6 +24,7 @@ function mount() {
   root.addEventListener("click", (e) => panel.click(e.target as Element));
   root.addEventListener("input", (e) => panel.input(e.target as Element));
   root.addEventListener("keydown", (e) => panel.key(e));
+  root.addEventListener("change", (e) => void panel.change(e.target as Element));
   return panel;
 }
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
@@ -35,6 +37,7 @@ beforeEach(() => {
   api.providersKinds.mockResolvedValue({ kinds });
   api.providersList.mockResolvedValue({ providers: [connected] });
   api.providersModels.mockResolvedValue({ models: [] });
+  api.openLink.mockResolvedValue(undefined);
 });
 
 test("connecting a kind saves its fields once and clears the password before awaiting the core", async () => {
@@ -55,11 +58,99 @@ test("connecting a kind saves its fields once and clears the password before awa
 });
 afterEach(() => { root.remove(); setLocale("zh-TW"); vi.useRealTimers(); });
 
+test("the provider directory orders popular gateways first and searches names across three groups", async () => {
+  api.providersKinds.mockResolvedValue({ kinds: [
+    ...kinds,
+    ...["Zulu", "Vercel", "Alpha", "Portkey", "OpenRouter", "LiteLLM"].map((name) => ({ kind: name.toLowerCase(), name, group: "gateway", fields: ["key"], available: true })),
+  ] });
+  const panel = mount(); await panel.load();
+  const names = () => [...root.querySelectorAll('.pv-add .nm')].map((node) => node.textContent);
+  expect(names()).toEqual(["OpenAI", "Amazon Bedrock", "OpenRouter", "LiteLLM", "Portkey", "Vercel", "Alpha", "Custom", "Zulu", "Ollama"]);
+  const search = root.querySelector<HTMLInputElement>("#pv-kind-search")!;
+  expect(search).not.toBeNull();
+  search.value = "oPeN"; search.dispatchEvent(new Event("input", { bubbles: true }));
+  expect(names()).toEqual(["OpenAI", "OpenRouter"]);
+  expect(root.querySelectorAll(".pv-add .ds")).toHaveLength(2);
+});
+
+test("Bedrock credentials are passwords and region is a working dropdown; docs open from metadata", async () => {
+  api.providersKinds.mockResolvedValue({ kinds: [{ ...kinds[1], available: true, fields: ["region", "key_id", "secret", "api_version"], docs_url: "https://console.aws.amazon.com/bedrock/" }] });
+  const panel = mount(); await panel.load(); click('[data-pv="add"]');
+  expect(root.querySelectorAll('input[type="password"]')).toHaveLength(2);
+  click('[data-pv-field="region"]');
+  const choice = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find((node) => node.textContent?.includes("ap-northeast-1"));
+  expect(choice).toBeDefined(); choice!.click();
+  root.querySelector<HTMLInputElement>('[id$="-key_id"]')!.value = "access";
+  root.querySelector<HTMLInputElement>('[id$="-secret"]')!.value = "private";
+  root.querySelector<HTMLInputElement>('[id$="-api_version"]')!.value = "2024-01-01";
+  click('[data-pv="docs"]');
+  expect(api.openLink).toHaveBeenCalledWith("https://console.aws.amazon.com/bedrock/");
+  api.providersAdd.mockRejectedValue(new Error("private"));
+  click('[data-pv="save"]'); await flush();
+  expect(api.providersAdd).toHaveBeenCalledWith({ kind: "bedrock", name: "Amazon Bedrock", region: "ap-northeast-1", key_id: "access", secret: "private", api_version: "2024-01-01" });
+  expect(root.innerHTML).not.toContain("private");
+});
+
+test("Vertex accepts pasted or locally picked JSON without rendering credentials and rejects malformed accounts", async () => {
+  const vertex = { kind: "vertex", name: "Vertex AI", group: "official", available: true, fields: ["service_account", "project", "location"] };
+  api.providersKinds.mockResolvedValue({ kinds: [vertex] });
+  const panel = mount(); await panel.load(); click('[data-pv="add"]');
+  const area = root.querySelector<HTMLTextAreaElement>("textarea")!;
+  expect(area).not.toBeNull();
+  area.value = JSON.stringify({ client_email: "user@example.com", private_key: "private-account-key" });
+  area.dispatchEvent(new Event("input", { bubbles: true }));
+  expect(area.value).toBe("");
+  expect(root.querySelector('[role="dialog"]')?.textContent).toContain("Configured");
+  expect(root.innerHTML).not.toContain("private-account-key");
+  expect(JSON.stringify(panel.view())).not.toContain("private-account-key");
+  root.querySelector<HTMLInputElement>('[id$="-project"]')!.value = "my-project";
+  api.providersAdd.mockRejectedValue(new Error("private-account-key"));
+  click('[data-pv="save"]'); await flush();
+  expect(api.providersAdd).toHaveBeenCalledWith({ kind: "vertex", name: "Vertex AI", service_account: JSON.stringify({ client_email: "user@example.com", private_key: "private-account-key" }), project: "my-project", location: "us-central1" });
+  expect(root.querySelector('textarea')).not.toBeNull();
+  const fileInput = root.querySelector<HTMLInputElement>('input[type="file"]')!;
+  const choose = vi.spyOn(fileInput, "click"); click('[data-pv="file"]'); expect(choose).toHaveBeenCalledOnce();
+  Object.defineProperty(fileInput, "files", { configurable: true, value: [new File(['{"client_email":"missing-key"}'], "account.json", { type: "application/json" })] });
+  fileInput.dispatchEvent(new Event("change", { bubbles: true })); await flush();
+  expect(root.querySelector('[role="alert"]')?.textContent).toContain("client_email and private_key");
+  expect(root.innerHTML).not.toContain("missing-key");
+  const next = root.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(next, "files", { configurable: true, value: [new File(['{"client_email":"ok@example.com","private_key":"file-private-key"}'], "account.json")] });
+  next.dispatchEvent(new Event("change", { bubbles: true })); await flush();
+  expect(root.querySelector('[role="alert"]')).toBeNull();
+  expect(root.innerHTML).not.toContain("file-private-key");
+  expect(root.querySelector('[role="dialog"]')?.textContent).toContain("Configured");
+  click('[data-pv="save"]'); await flush();
+  expect(api.providersAdd).toHaveBeenLastCalledWith(expect.objectContaining({ service_account: '{"client_email":"ok@example.com","private_key":"file-private-key"}' }));
+});
+
+test("local kinds explain agent context and only flagged models carry a warning chip", async () => {
+  api.providersList.mockResolvedValue({ providers: [{ ...connected, kind: "ollama", name: "Ollama" }] });
+  api.providersKinds.mockResolvedValue({ kinds: [{ ...kinds[3], local_context_hint: true }] });
+  api.providersModels.mockResolvedValue({ models: [
+    { id: "small", name: "Small", context: 8192, context_warning: true },
+    { id: "large", name: "Large", context: 131072, context_warning: false },
+  ] });
+  const panel = mount(); await panel.load(); click('[data-pv="open"]'); await flush();
+  expect(root.querySelector('[role="dialog"]')?.textContent).toContain("at least 64K");
+  expect(root.querySelectorAll('.pv-context-warning')).toHaveLength(1);
+  expect(root.querySelector('.pv-context-warning')?.closest('li')?.textContent).toContain("Small");
+});
+
+test("editing a saved regional provider preserves unknown public configuration until explicitly changed", async () => {
+  api.providersKinds.mockResolvedValue({ kinds: [{ ...kinds[1], available: true, fields: ["region", "key_id", "secret"] }] });
+  api.providersList.mockResolvedValue({ providers: [{ ...connected, kind: "bedrock" }] });
+  api.providersUpdate.mockRejectedValue(new Error("failed"));
+  const panel = mount(); await panel.load(); click('[data-pv="open"]'); await flush();
+  click('[data-pv="save"]'); await flush();
+  expect(api.providersUpdate).toHaveBeenCalledWith({ id: "p3", name: "OpenAI" });
+});
+
 test("connected providers show a status, a switch, and real connect buttons grouped by kind", async () => {
   const panel = mount(); await panel.load();
   expect(root.textContent).toContain("42 models");
   expect(root.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
-  for (const title of ["Connected", "Add a provider", "Official", "Gateways and routers", "Local"]) expect(root.textContent).toContain(title);
+  for (const title of ["Connected", "Add a provider", "Official", "Gateways and cloud", "Local"]) expect(root.textContent).toContain(title);
   expect(root.querySelector<HTMLButtonElement>('[data-pv="add"][data-id="bedrock"]')?.disabled).toBe(true);
   expect(root.querySelector('[data-pv="open"] .ic')?.textContent).toBe("");
   click('[data-pv="toggle"]'); await flush();

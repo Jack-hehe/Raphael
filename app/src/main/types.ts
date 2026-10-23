@@ -52,8 +52,9 @@ export interface KeyInfo {
 
 /** What a model is chosen for: the dictation cleanup, Raphael's answers, speech to text (the core's brain/catalog.py). */
 export type ModelRole = "cleanup" | "answer" | "stt";
+export type ModelPurpose = "agent" | "cleanup" | "router" | "vision" | "pdf" | "stt" | "memory";
 
-export type ProviderField = "key" | "base_url" | "api_version" | "region" | "key_id";
+export type ProviderField = "key" | "base_url" | "api_version" | "region" | "key_id" | "secret" | "service_account" | "project" | "location";
 export interface ProviderKind {
   kind: string;
   name: string;
@@ -61,6 +62,9 @@ export interface ProviderKind {
   fields: ProviderField[];
   default_base_url: string | null;
   available: boolean;
+  docs_url?: string | null;
+  verified?: boolean;
+  local_context_hint?: boolean;
 }
 /** Public provider metadata. Secrets never come back from the core. */
 export interface ModelProvider {
@@ -80,6 +84,10 @@ export interface ProviderPatch {
   key_id?: string;
   region?: string;
   api_version?: string;
+  secret?: string;
+  service_account?: string;
+  project?: string;
+  location?: string;
   enabled?: boolean;
 }
 export interface ProviderTest {
@@ -91,6 +99,7 @@ export interface ProviderModel {
   id: string;
   name: string;
   context: number | null;
+  context_warning?: boolean;
   vision: boolean;
   tools: boolean;
   audio_in: boolean;
@@ -335,6 +344,13 @@ export interface DictionaryEntry {
 
 /** `settings.get`: the settings of the brain. */
 export interface BrainSettings {
+  agent_fallbacks?: string[];
+  cleanup_fallbacks?: string[];
+  router_fallbacks?: string[];
+  vision_fallbacks?: string[];
+  pdf_fallbacks?: string[];
+  stt_fallbacks?: string[];
+  memory_fallbacks?: string[];
   monthly_limit_usd: number;
   cleanup_model: string;
   /** The languages the speech recognition listens for: locale ids such as "zh-TW", one to five. */

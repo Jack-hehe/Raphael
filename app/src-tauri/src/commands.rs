@@ -1312,12 +1312,31 @@ fn is_openable_link(url: &str) -> bool {
     OPENABLE_LINKS.contains(&url)
 }
 
-/// Opens one of the fixed links in the default browser.
+/// Provider links must come from the core's registry, never from an arbitrary page address.
+fn is_provider_docs_link(url: &str, registry: &Value) -> bool {
+    if url.bytes().any(|c| c <= b' ' || c == 127) {
+        return false;
+    }
+    let Ok(parsed) = tauri::Url::parse(url) else { return false; };
+    parsed.scheme() == "https"
+        && parsed.host_str().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && registry.get("kinds").and_then(Value::as_array).is_some_and(|kinds| {
+            kinds.iter().any(|kind| kind.get("docs_url").and_then(Value::as_str) == Some(url))
+        })
+}
+
+/// Opens a fixed app link or an exact provider documentation URL in the default browser.
 #[tauri::command]
-pub fn open_link(webview: Webview, url: String) -> Result<(), String> {
+pub async fn open_link(app: AppHandle, webview: Webview, url: String) -> Result<(), String> {
     require_main(&webview)?;
     if !is_openable_link(&url) {
-        return Err("that link may not be opened".to_owned());
+        let core = app.try_state::<Arc<CoreProcess>>().ok_or(CORE_NOT_RUNNING)?;
+        let registry = core.call("providers.kinds", json!({})).await.map_err(|err| err.to_string())?;
+        if !is_provider_docs_link(&url, &registry) {
+            return Err("that link may not be opened".to_owned());
+        }
     }
     #[cfg(windows)]
     {
@@ -2007,6 +2026,24 @@ mod tests {
         ] {
             assert!(!is_openable_link(url), "{url:?}");
         }
+    }
+
+    #[test]
+    fn provider_docs_must_be_an_exact_https_address_from_the_core_registry() {
+        let kinds = json!({"kinds": [
+            {"kind": "vertex", "docs_url": "https://console.cloud.google.com/iam-admin/serviceaccounts"},
+            {"kind": "custom", "docs_url": "file:///C:/Windows/System32/calc.exe"}
+        ]});
+        assert!(is_provider_docs_link("https://console.cloud.google.com/iam-admin/serviceaccounts", &kinds));
+        for url in [
+            "https://evil.example/", "https://console.cloud.google.com/iam-admin/serviceaccounts?extra=1",
+            "http://console.cloud.google.com/iam-admin/serviceaccounts", "file:///C:/Windows/System32/calc.exe",
+            "javascript:alert(1)", "",
+        ] { assert!(!is_provider_docs_link(url, &kinds), "{url}"); }
+        for url in ["https://user:password@example.com/", "https://example.com/\n"] {
+            assert!(!is_provider_docs_link(url, &json!({"kinds": [{"docs_url": url}]})));
+        }
+        assert!(!is_provider_docs_link("https://example.com/", &json!({})));
     }
 
     #[test]
