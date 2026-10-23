@@ -46,6 +46,7 @@ from ..agent.plugins import MAX_OFFERED, Offer, PluginHub, make_offer
 from ..agent.policy import Tier
 from ..agent.speaker import RAPHAEL, Speaker
 from ..agent.team import TEAM_TIER, TEAM_TOOLS, worker_definition
+from ..agent.harness_tools import DEFINITIONS as HARNESS_DEFINITIONS, tool as harness_tool
 from ..computer.tools import PRESENCE_TOOLS
 from ..agent.toolpick import (
     PICK_MAX,
@@ -228,13 +229,14 @@ def take_snapshot(
     speaker: Speaker = RAPHAEL,
     team: Sequence[str] = (),
     max_tier: Tier = SNAPSHOT_MAX_TIER,
+    interactive: bool = False,
 ) -> Snapshot:
     """The tools a task starting now may use: with `memory`, the memory's tools that read too, and
     with `attachments` (the task came with files) the tool that reads them. A
     plugin that fails to list its tools is left out. When the plugins have more tools than fit, the
     task is shown the ones that share the most words with `question` (`refine` chooses with the
-    model) and can find the rest. A task of a member of the team (`speaker`) is offered only the
-    tools and connections the member was given; `team` are the team tools it is offered
+    model) and can find the rest. Every speaker shares the enabled tools and connections;
+    `team` are the team tools allowed by the request's depth and cycle guards
     (`agent.team`: asking another member, adding one), T1 like the plugins' tools that are on."""
     refs: dict[str, ToolRef] = {}
     definitions: list[dict[str, Any]] = []
@@ -252,6 +254,11 @@ def take_snapshot(
             refs[name] = ToolRef(BUILTIN, name, BUILTIN_SERVER, name, TEAM_TIER)
             definitions.append(worker_definition(name))
     snapshot = Snapshot(refs, definitions)
+    if interactive:
+        for name, item in HARNESS_DEFINITIONS.items():
+            native = harness_tool(name)
+            refs[name] = ToolRef(BUILTIN, name, BUILTIN_SERVER, name, native.tier)
+            definitions.append({"type": "function", "function": {"name": name, **item}})
     if plugins is not None:
         try:
             tools = [
@@ -269,6 +276,7 @@ def take_snapshot(
             | set(TEAM_TOOLS)
             | {"find_tools"}
             | PRESENCE_TOOLS
+            | set(HARNESS_DEFINITIONS)
         )
         clash = set(pool.by_alias) & taken
         if clash:  # a plugin's tool never takes the name of one of Raphael's own

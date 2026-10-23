@@ -12,7 +12,8 @@ from raphael_core.agent.history import AgentHistory
 from raphael_core.agent.safety import ALLOW, ASK, DENY, SafetyGuard, SafetyJudge, SafetyRules
 from raphael_core.brain.openrouter import Decision
 
-from .test_answering import Team, member, raphael_said, said
+from .test_answering import Team, member, raphael_said, live_said
+from agent.test_narration import chat
 
 
 @pytest.fixture
@@ -105,9 +106,8 @@ async def test_a_member_asked_for_what_needs_a_yes_hands_it_to_the_background(wi
     await plugins.connect(note="T2", look="T1")
     client.decisions.append(decision("answer"))  # Raphael's request
     client.plans.append(tool_plan(("Raphael__ask_member", {"member": "小行程", "request": "PRIVATE 記下明天的會"})))
-    client.decisions.append(decision("answer"))  # the member's flags
     # The member picks a call that runs at once and one that needs a yes: neither is made here.
-    client.plans.append(tool_plan(("Notes__look", {"topic": "x"}), ("Notes__note", {"text": "x"})))
+    client.chats.append(chat("先確認並儲存行程。", ("Notes__look", {"topic": "x"}), ("Notes__note", {"text": "x"})))
     client.replies.append(raphael_said("小行程的這件事在它的對話中等你處理。"))
     reply = await rig.ask("叫小行程記下明天的會")
     assert reply["text"] == "小行程的這件事在它的對話中等你處理。"
@@ -134,9 +134,8 @@ async def test_asking_another_member_is_never_judged(guarded, rules, client):
     rules.create("問別人事情", DENY)
     client.decisions.append(decision("answer"))  # Raphael's request
     client.plans.append(tool_plan(("Raphael__ask_member", {"member": "小行程", "request": "明天呢？"})))
-    client.decisions.append(decision("answer"))  # the member's flags
-    client.replies.append(said("明天九點開會。", memory=[]))
+    client.chats.append(live_said("明天九點開會。"))
     client.replies.append(raphael_said("小行程說明天九點開會。"))
     reply = await rig.ask("問小行程我明天有什麼行程")
     assert reply["text"] == "小行程說明天九點開會。"
-    assert len(client.decide_calls) == 2  # the two routes, and no judge
+    assert len(client.decide_calls) == 1  # the voice fast route, and no judge

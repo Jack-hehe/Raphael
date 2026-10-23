@@ -53,7 +53,10 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..agent.narration import NarratedLoop
 
 from ..agent.failure import failure_kind
 from ..agent.gate import ToolGate
@@ -208,7 +211,7 @@ class _Finished(Exception):
 def system_prompt(language: str) -> str:
     """What the model is told about a run. The same for every run in a language."""
     return (
-        "You are Raphael, operating apps on the owner's own Windows computer with the tools you "
+        "You operate apps on the owner's own Windows computer with the tools you "
         "are given, to carry out the request inside <task> tags. The owner is at the computer and "
         "watches every step.\n\n"
         "How to work:\n"
@@ -333,6 +336,7 @@ class ComputerRun:
         self.listening = False
         self.written = False
         self.context: Any = None
+        self.narration: "NarratedLoop | None" = None
         self.actions = 0
         self.opens = 0
         self.model_calls = 0

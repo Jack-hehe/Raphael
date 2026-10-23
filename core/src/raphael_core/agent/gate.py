@@ -44,6 +44,7 @@ from ..clock import wall_clock_ms
 from ..computer.tools import GATE_TIERS as COMPUTER_TIERS
 from ..integrations.audit import AuditLog
 from .commands import COMMANDS
+from .harness_tools import TIERS as HARNESS_TIERS
 from .plugins import PluginHub, PluginResult
 from .ledger import Ledger
 from .policy import Action, Approval, NotApproved, Tier, ToolRegistry, UnknownTool
@@ -100,6 +101,8 @@ class ToolGate:
         # The tools that reach the owner's team (`team`): asking a member, adding one.
         for name in TEAM_TOOLS:
             self._registry.register(name, TEAM_TIER)
+        for name, tier in HARNESS_TIERS.items():
+            self._registry.register(name, tier)
         self._audit = None if conn is None else AuditLog(conn, now_ms)
 
     @property
@@ -193,6 +196,9 @@ class ToolGate:
 
     def record_unrun(self, key: str, *, outcome: str, task_id: int | None = None) -> None:
         """The audit of a call that was asked about and not made ("denied" or "expired")."""
+        if key in HARNESS_TIERS or key in COMMANDS:
+            self.record_builtin(key, outcome=outcome, task_id=task_id, approver="none")
+            return
         if self._plugins is None:
             return
         try:
@@ -202,7 +208,8 @@ class ToolGate:
 
     # --- Raphael's own lookups ------------------------------------------------------------------
 
-    def record_builtin(self, name: str, *, outcome: str, task_id: int | None = None) -> None:
+    def record_builtin(self, name: str, *, outcome: str, task_id: int | None = None,
+                       approver: str = "auto") -> None:
         """The audit of one of Raphael's own lookups, made for a task. `outcome` is "ok", "error",
         "timeout" or "blocked"; it needs no yes (T0), so the approver is "auto" unless it was
         refused."""
@@ -213,7 +220,7 @@ class ToolGate:
             server=BUILTIN_SERVER,
             tool=name,
             tier=None if tier is None else tier.name,
-            approver="none" if outcome == "blocked" else "auto",
+            approver="none" if outcome == "blocked" else approver,
             outcome=outcome,
             task_id=task_id,
         )

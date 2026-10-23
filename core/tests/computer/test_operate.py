@@ -124,13 +124,15 @@ async def test_no_to_the_app_is_cancelled_and_nothing_is_read(operating, client,
 
 
 async def test_a_message_from_a_phone_cannot_operate_this_computer(operating, client, shell):
-    client.decisions.append(decision("operate"))
+    from agent.test_narration import chat
+    client.chats = [chat("確認操作限制。", ("computer", {"request": "按七"})), chat('{"prefix":"否","text":"操作電腦只能在這台電腦前下達指示。","detail":""}')]
     answer = await operating.call(
         "agent.ask",
         {"session_id": "t1", "text": "幫我按七", "ui_language": "zh-TW", "source": "telegram"},
     )
     assert (answer["prefix"], answer["text"]) == ("否", "操作電腦只能在這台電腦前下達指示。")
-    assert shell.requests == [] and client.chat_calls == []
+    assert shell.requests == []
+    assert "presence_required" in client.chat_calls[-1]["messages"][-1]["content"]
 
 
 async def test_without_a_shell_nothing_is_operated(rig, client):
@@ -267,7 +269,9 @@ def test_a_step_that_sends_does_not_pass_the_gate_without_its_yes(conn):
     ("ja", "コンピューターの操作は、そのコンピューターの前でのみ指示できます。"),
 ])  # fmt: skip
 async def test_the_refusals_are_in_the_owners_language(operating, client, language, away):
-    client.decisions.append(decision("operate"))
+    import json
+    from agent.test_narration import chat
+    client.chats = [chat("Checking presence.", ("computer", {"request": "x"})), chat(json.dumps({"text": away, "detail": ""}))]
     answer = await operating.call(
         "agent.ask",
         {"session_id": "t2", "text": "x", "ui_language": language, "source": "telegram"},

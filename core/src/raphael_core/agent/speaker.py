@@ -3,9 +3,9 @@
 A member is not a second assistant with paths of its own. It is a parameter of the one assistant:
 the same router, the same answer, the same gate and tiers, the same background worker, given a
 `Speaker` that says whose persona speaks (`name`, `role` and the owner's `instructions` for it),
-which of the tools and connections it may use (`tools`), which model answers (`model`, "" for the
-answer model) and whose conversation and memory are read (`id`). Raphael is the speaker with id 0:
-he is not a row of the members table, he has every tool, and nothing about him is changed here.
+which model answers (`model`, "" for the answer model) and whose conversation and memory are read
+(`id`). Every speaker has the same capabilities under the same safety gate. Stored `tools` lists
+are retained for compatibility and do not restrict tools. Raphael is the speaker with id 0.
 
 `depth` is how the speaker was reached, and `chain` who asked on the way. 0 is the owner (a message
 in its thread, a routine, a task handed to the background); 1 is another assistant asking it
@@ -23,9 +23,7 @@ from .policy import PLUGIN_PREFIX
 RAPHAEL_ID = 0
 # Raphael's name in each language: what `ask_member` takes for him, and what the member column shows.
 RAPHAEL_NAMES = {"zh-TW": "拉斐爾", "en": "Raphael", "ja": "ラファエル"}
-# The tools of Raphael's own that a member may be given or not, by id (the 工具 tab's checklist).
-# The memory's tools, reading the files the owner hands over and asking another member are not on
-# the list: a member always has its own memory, the owner's files, and the depth it was asked at.
+# Legacy tool ids retained for the stored member settings API.
 BUILTIN_TOOL_IDS = ("web_search", "web_read", "weather", "local_time")
 # How deep a chain of `ask_member` may go: the owner's assistant asks one (1), which may ask one
 # more (2), which asks nobody.
@@ -55,8 +53,7 @@ class Speaker:
     role: str = ""
     instructions: str = ""
     model: str = ""
-    # The tool ids (BUILTIN_TOOL_IDS) and the connection ids or plugin tool keys it may use; None
-    # for every one that is on, which is what Raphael and a member with no list of its own have.
+    # Compatibility data; capability decisions ignore this field.
     tools: frozenset[str] | None = None
     depth: int = 0
     # The ids of the assistants that asked on the way to this one (not this one itself).
@@ -67,17 +64,12 @@ class Speaker:
         return self.id == RAPHAEL_ID
 
     def uses(self, tool: str) -> bool:
-        """Whether it may use the tool of Raphael's own `tool` (a name of BUILTIN_TOOL_IDS); a tool
-        that is not on that list (the memory's, reading the owner's files) is always its own."""
-        return self.tools is None or tool not in BUILTIN_TOOL_IDS or tool in self.tools
+        """All speakers share the built-in tools; authorization belongs to the safety gate."""
+        return True  # Stored per-member tool lists are compatibility data, not capability gates.
 
     def uses_plugin(self, key: str) -> bool:
-        """Whether it may use the plugin tool `key`: every one, or the ones of a connection it was
-        given, or that tool by itself."""
-        if self.tools is None or key in self.tools:
-            return True
-        server = plugin_server(key)
-        return server is not None and server in self.tools
+        """All speakers may use enabled connections under the same tool tiers and approvals."""
+        return True
 
     @property
     def may_ask(self) -> bool:

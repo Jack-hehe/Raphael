@@ -117,12 +117,14 @@ class PageFetcher:
         max_seconds: float = MAX_SECONDS,
         max_bytes: int = MAX_BYTES,
         max_redirects: int = MAX_REDIRECTS,
+        media: bool = False,
     ) -> None:
         self._resolver = resolver
         self._transport = transport
         self._max_seconds = max_seconds
         self._max_bytes = max_bytes
         self._max_redirects = max_redirects
+        self._media = media
 
     async def fetch(self, url: str) -> Fetched:
         """The page at `url`, or ServiceError of a kind (`common.ServiceError`)."""
@@ -130,6 +132,15 @@ class PageFetcher:
             return await asyncio.wait_for(self._fetch(checked_url(url)), self._max_seconds)
         except TimeoutError:
             raise ServiceError("timeout") from None
+
+    async def public_url(self, url: str) -> str:
+        """Validate an outgoing card asset with the same public DNS policy, without fetching it."""
+        parsed = checked_url(url)
+        try:
+            await asyncio.wait_for(self._address(parsed), self._max_seconds)
+        except TimeoutError:
+            raise ServiceError("timeout") from None
+        return str(parsed)
 
     async def _fetch(self, url: httpx.URL) -> Fetched:
         async with httpx.AsyncClient(
@@ -187,7 +198,9 @@ class PageFetcher:
                 if reply.status_code >= 400:
                     raise ServiceError("http_error")
                 kind, charset = _content_type(reply.headers.get("content-type", ""))
-                if kind not in (*PAGE_TYPES, PDF_TYPE):
+                if kind not in (*PAGE_TYPES, PDF_TYPE) and not (
+                    self._media and kind in ("image/png", "image/jpeg", "image/gif", "image/webp", "image/avif")
+                ):
                     raise ServiceError("unsupported_type")
                 declared = reply.headers.get("content-length", "")
                 if declared.isdigit() and int(declared) > self._max_bytes:

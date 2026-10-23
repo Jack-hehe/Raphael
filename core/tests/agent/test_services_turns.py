@@ -267,10 +267,11 @@ async def test_a_command_makes_nothing_of_the_files(services_rig, client, action
 
 async def test_ask_takes_the_files_as_a_keyword(services_rig, client):
     from raphael_core.services.attachments import checked
+    from .test_narration import chat
 
     client.decisions.append(decision("chat"))
     client.texts.append(found("A dog."))
-    client.replies.append(spoken("答", "一隻狗。"))
+    client.chats = [chat("我來看看圖片。", ("read_attachment", {"index": 1})), chat('{"prefix":"答","text":"一隻狗。","detail":""}')]
     result = await services_rig.service.ask(
         "telegram:1", "", "zh-TW", "telegram", attachments=[checked("p.png", "image/png", PNG)]
     )

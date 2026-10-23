@@ -1615,8 +1615,8 @@ async def test_a_question_typed_in_the_app_is_asked_at_the_computer_and_replaces
 ):
     rig.seed("q", "a")
     asked = await ask_to_copy(rig, client)
-    client.decisions.append(decision("chat"))
-    client.replies.append(spoken("答", "好。"))
+    from .test_narration import chat
+    client.chats.append(chat('{"prefix":"答","text":"好。","detail":""}'))
     reply = await rig.call(
         "agent.ask",
         {"session_id": "app-1", "text": "你好", "ui_language": "zh-TW", "source": "app"},

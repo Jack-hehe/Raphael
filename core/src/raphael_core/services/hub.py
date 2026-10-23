@@ -115,6 +115,7 @@ class ServiceHub:
         self._transport = transport
         self._http: httpx.AsyncClient | None = None
         self.fetcher = PageFetcher(resolver=resolver, transport=transport)
+        self.media_fetcher = PageFetcher(resolver=resolver, transport=transport, media=True)
         self.vision = Vision(client, self.vision_model)
 
     def register(self, router: Router) -> None:

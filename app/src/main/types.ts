@@ -164,7 +164,7 @@ export interface HistoryItem {
 /** A turn of the conversation with Raphael (`agent.history.list`, newest first). */
 export interface AgentTurn {
   /** Ordered public lines; older cores and turns may have none. Text includes Raphael's framing. */
-  messages?: { seq: number; kind: "progress" | "reply" | "event"; text: string; at_ms: number }[];
+  messages?: { seq: number; kind: "progress" | "reply" | "event" | "thinking" | "media"; text: string; at_ms: number }[];
   id: number;
   created_at_ms: number;
   /** What the person said, as the speech recognition heard it. */

@@ -320,6 +320,17 @@ class Tools:
             return self._failed("web_search", error.kind, service)
         return ToolResult("web_search", True, found, untrusted=True, detail=service)
 
+    async def show(self, url: str) -> ToolResult:
+        from ..services.media import preview
+
+        if self.services is None:
+            return self._failed("show", "unavailable")
+        try:
+            data = await preview(url, self.services.media_fetcher)
+        except ServiceError as error:
+            return self._failed("show", error.kind)
+        return ToolResult("show", True, data, untrusted=True)
+
     async def web_read(self, url: str) -> ToolResult:
         """The page at `url` (`{url, title, text, truncated}`), read by the reader chosen. What it
         says is untrusted. "unavailable" without the services."""

@@ -707,6 +707,19 @@ class MembersService:
             raise RpcError(INVALID_PARAMS, "Invalid params: no such routine", {"kind": "not_found"})
         return routine_id
 
+    async def routine_tool(self, member_id: int, name: str, arguments: dict) -> dict:
+        """The same routine API, scoped to the calling speaker; tool data cannot select a peer."""
+        handlers = {"routine_list": self._routines_list, "routine_create": self._routine_create,
+                    "routine_update": self._routine_update, "routine_delete": self._routine_delete}
+        if name not in handlers:
+            raise invalid_params("unknown routine tool")
+        params = {**arguments, "member_id": member_id}
+        if name in ("routine_update", "routine_delete"):
+            routine_id = self._routine_id(params)
+            if self.store.routine(routine_id).member_id != member_id:
+                raise invalid_params("routine belongs to another speaker")
+        return await handlers[name](params)
+
     async def _routines_list(self, params: dict) -> dict:
         member_id = self._routine_member(params)
         return {"routines": [routine_view(r) for r in self.store.routines(member_id)]}

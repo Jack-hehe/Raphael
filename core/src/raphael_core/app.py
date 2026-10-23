@@ -271,6 +271,15 @@ class EchoClient:
             call = ChatToolCall(id=f"call_{seen}", name=name, arguments=arguments, raw_arguments=raw)
             return ChatTurn("", [call], "fake/echo", 0.0, 0, 0, 0)
 
+        if "routine_create" in offered and seen == 0:
+            # Exercise the interactive harness offline, including its explicit input tools.
+            from .services.urls import urls_in
+            if "read_attachment" in offered:
+                return calling("read_attachment", {"index": 1})
+            addresses = urls_in(task)
+            if addresses:
+                return calling("web_read", {"url": addresses[0]})
+
         look = next((name for name in sorted(offered) if name.endswith("__look")), None)
         slow = next((name for name in sorted(offered) if name.endswith("__slow")), None)
         if slow is not None and "slow" in task and seen == 0:

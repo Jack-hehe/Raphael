@@ -176,10 +176,10 @@ async def test_the_japanese_line_is_not_asked_for_with_no_speaker_at_all(make_ri
 
 
 async def test_the_japanese_line_is_not_asked_for_a_message_from_a_phone(rig, client, speaker):
-    client.decisions.append(decision("chat"))
-    client.replies.append(spoken("答", "好。"))
+    client.chats.append(chat('{"prefix":"答","text":"好。","detail":""}'))
     await ask_from(rig, "telegram")
-    assert "say_ja" not in client.json_calls[0]["schema"]["properties"]
+    assert "say_ja" not in client.chat_calls[0]["messages"][0]["content"]
+    assert speaker.said == []
 
 
 async def test_only_the_line_that_is_shown_is_kept_in_the_history(rig, client, speaker):
@@ -272,22 +272,19 @@ async def test_a_reply_that_is_a_note_taken_is_a_fixed_line_and_spoken_in_japane
 
 
 async def test_an_answer_to_a_request_typed_in_the_app_is_said_too(rig, client, speaker):
-    client.decisions.append(decision("chat"))
-    client.replies.append(with_japanese("答", "好。", say_ja="はい。"))
+    client.chats.append(chat('{"prefix":"答","text":"好。","detail":"","say_ja":"はい。"}'))
     await ask_from(rig, "app")
     assert speaker.said == [("解", "はい。")]
 
 
 async def test_a_message_from_a_phone_is_never_said(rig, client, speaker):
-    client.decisions.append(decision("chat"))
-    client.replies.append(spoken("答", "好。"))
+    client.chats.append(chat('{"prefix":"答","text":"好。","detail":""}'))
     result = await ask_from(rig, "telegram")
     assert result["status"] == "done" and speaker.said == []
 
 
 async def test_a_message_from_a_phone_does_not_stop_what_is_being_said(rig, client, speaker):
-    client.decisions.append(decision("chat"))
-    client.replies.append(spoken("答", "好。"))
+    client.chats.append(chat('{"prefix":"答","text":"好。","detail":""}'))
     await ask_from(rig, "telegram")
     assert speaker.stops == 0
 
@@ -496,10 +493,9 @@ async def test_with_no_voice_the_reply_and_its_announcement_do_not_wait(
 
 async def test_a_message_from_a_phone_is_announced_at_once(timed_rig, announced, client, speaker):
     speaker.gate = asyncio.Event()
-    client.decisions.append(decision("chat"))
-    client.replies.append(spoken("答", "好。"))
+    client.chats.append(chat('{"prefix":"答","text":"好。","detail":""}'))
     result = await asyncio.wait_for(ask_from(timed_rig, "telegram"), 2)
-    assert announced == [("agent.turn", {"turn_id": result["turn_id"], "member_id": 0})]
+    assert announced and all(note == ("agent.turn", {"turn_id": result["turn_id"], "member_id": 0}) for note in announced)
 
 
 async def test_a_question_for_a_yes_is_announced_at_once(timed_rig, announced, client, speaker):

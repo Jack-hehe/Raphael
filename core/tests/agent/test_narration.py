@@ -43,7 +43,7 @@ async def test_progress_is_persisted_and_notified_before_each_tool_round(make_ri
     assert [m["kind"] for m in turn["messages"]] == ["progress", "progress", "reply"]
     assert turn["messages"][-1]["text"] == "《Answer. It is Friday.》"
     assert len({data["turn_id"] for method, data in notes if method == "agent.turn"}) == 1
-    assert turn["cost_usd"] >= 0.9
+    assert turn["cost_usd"] == pytest.approx(0.9)
 
 
 async def test_a_permission_pauses_the_sequence_and_yes_continues_the_same_turn(make_rig, plugins, calls, client):
@@ -62,7 +62,7 @@ async def test_a_permission_pauses_the_sequence_and_yes_continues_the_same_turn(
     [turn] = await rig.turns()
     assert turn["status"] == "done"
     assert [m["kind"] for m in turn["messages"]] == ["progress", "progress", "reply"]
-    assert turn["cost_usd"] == pytest.approx(0.90004)
+    assert turn["cost_usd"] == pytest.approx(0.9)  # typed turns do not pay for routing
     assert [m["role"] for m in client.chat_calls[1]["messages"]][-2:] == ["tool", "tool"]
 
 

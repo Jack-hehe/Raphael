@@ -9,7 +9,7 @@
   C, C asks nobody) and has no cycle (`Speaker.can_ask`). The exchange is written in the two threads
   of the two who had it, as one line each (`route` "exchange"), and nowhere else.
 - `create_member {name, role, instructions, group?}` adds a member when the owner asks for one
-  (「幫我加一個管行程的成員」). Raphael's alone, at the owner's request (never at a member's).
+  (「幫我加一個管行程的成員」), through any directly addressed speaker.
 
 Both are T1 in the gate (`gate.TEAM_TOOLS`): they run at once, through the gate like every tool.
 Adding a member changes something, so the owner's safety rules judge it first, as they judge a
@@ -153,6 +153,9 @@ class Team(Protocol):
     def has_members(self) -> bool:
         ...
 
+    async def routine_tool(self, member_id: int, name: str, arguments: dict) -> dict:
+        ...
+
     def create(self, *, name: Any, role: Any, instructions: Any, group: Any) -> Speaker:
         """Add a member; `members.store.MemberError` when it cannot be added."""
         ...
@@ -162,8 +165,8 @@ def team_tools_for(
     team: Team | None, speaker: Speaker, text: str = "", *, always: bool = False
 ) -> list[str]:
     """The team tools `speaker` may be offered for the request `text`: `ask_member` when there is
-    someone it may ask (Raphael, for a member; another member), and `create_member` for Raphael at
-    the owner's request (not when he was asked by another). Without `always` (the fast tier) only
+    someone it may ask (Raphael, for a member; another member), and `create_member` for a speaker at
+    the owner's request (not when asked by another). Without `always` (the voice fast tier) only
     the ones the request is about: it names someone it may ask, or asks for a new member."""
     if team is None or not speaker.may_ask:
         return []
@@ -176,6 +179,6 @@ def team_tools_for(
         anyone = bool(named) or raphael
     if anyone:
         tools.append(ASK_MEMBER)
-    if speaker.is_raphael and speaker.depth == 0 and (always or asks_to_create_member(text)):
+    if speaker.depth == 0 and (always or asks_to_create_member(text)):
         tools.append(CREATE_MEMBER)
     return tools

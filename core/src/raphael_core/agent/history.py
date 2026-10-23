@@ -246,7 +246,7 @@ class AgentHistory:
 
     def add_message(self, turn_id: int, kind: str, text: str) -> None:
         """Commit one visible line immediately; cleared turns are never resurrected."""
-        if kind not in ("progress", "reply", "event"):
+        if kind not in ("progress", "reply", "event", "thinking", "media"):
             raise ValueError("unknown message kind")
         with self._conn:
             cursor = self._conn.execute(

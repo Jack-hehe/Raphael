@@ -33,6 +33,17 @@ answer directly in a single model reply.
 """
 
 NARRATION_RULES = PUBLIC_PROGRESS_RULES + """
+Before acting, write content as a JSON object with public fields "thinking" and "progress".
+"thinking" is one or two short sentences about the practical choice or next decision that helps
+the owner's goal. It is a public explanation, never private reasoning, chain of thought or tool
+names. "progress" is the short action sentence described above. After results, add thinking only
+when a finding changes the plan. Never request or expose hidden provider reasoning.
+Understand follow-ups using the conversation. Never reject a vague request as an unrecognized
+command: answer from context or ask one short clarifying question.
+Prefer show and replies inside this conversation. Only open a browser when the owner asks to
+open it. For a full article, read the page, provide its text in replies and show its link card.
+For the final JSON, text may be up to 2000 characters; messages may hold up to four such replies.
+Only lead within this owner-started turn or a routine run. Do not send unsolicited messages.
 When finished, stop calling tools and return the final reply as the JSON object specified above.
 Use memory_read and history_search as tools rather than writing a final JSON need request.
 For a member, messages may contain up to four replies: a correction, an example, and the next
@@ -46,17 +57,20 @@ class NarratedLoop:
         language: str, plain: bool, system: str, user: str, tools: Sequence[dict],
         progress: Callable[[str], None],
         execute: Callable[[str, str, dict], Awaitable[ToolOutcome]],
+        thinking: Callable[[str], None] = lambda text: None,
     ) -> None:
         self.client, self.model, self.ledger = client, model, ledger
         self.language, self.plain = language, plain
         self.system, self.user, self.tools = system + NARRATION_RULES, user, list(tools)
         self.progress, self.execute = progress, execute
+        self.thinking = thinking
         self.model_calls = self.tool_calls = 0
         self.remaining_s = 1800.0
         self.messages: list[dict] | None = None
         self.waiting_call: str | None = None
         self.response: dict | None = None
         self.seen: list[ToolResult] = []
+        self.batch_calls = []
 
     async def chat(self, messages: Sequence[dict], tools: Sequence[dict]) -> Turn:
         try:
@@ -81,8 +95,21 @@ class NarratedLoop:
         )
         if answer.calls and answer.content.strip():
             # This is the explicitly requested public narration, never a provider reasoning field.
-            text = " ".join(answer.content.split())
-            self.progress(text[:200])
+            content = answer.content.strip()
+            if content.startswith("```") and content.endswith("```"):
+                content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            try:
+                public = json.loads(content)
+            except ValueError:
+                public = None
+            if isinstance(public, dict):
+                for kind, emit, limit in (("thinking", self.thinking, 600), ("progress", self.progress, 200)):
+                    value = public.get(kind)
+                    if isinstance(value, str) and value.strip():
+                        emit(" ".join(value.split())[:limit])
+            else:
+                self.progress(" ".join(answer.content.split())[:200])
+        self.batch_calls = answer.calls
         return Turn(answer.content, [
             Call(call.id, call.name, call.arguments, call.raw_arguments) for call in answer.calls
         ])
@@ -130,4 +157,4 @@ class NarratedLoop:
             data = json.loads(text[start:end + 1] if start >= 0 and end > start else text)
         except ValueError:
             data = {"text": outcome.final, "detail": ""}
-        return parse_reply(data, self.language, plain=self.plain)
+        return parse_reply(data, self.language, plain=self.plain, long=True)

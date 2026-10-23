@@ -469,6 +469,22 @@ CREATE TABLE agent_messages (
 PRAGMA user_version = 17;
 COMMIT;
 """,
+    18: """
+BEGIN;
+ALTER TABLE agent_messages RENAME TO agent_messages_v17;
+CREATE TABLE agent_messages (
+    turn_id INTEGER NOT NULL REFERENCES agent_turns(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('progress', 'reply', 'event', 'thinking', 'media')),
+    text TEXT NOT NULL,
+    at_ms INTEGER NOT NULL,
+    PRIMARY KEY (turn_id, seq)
+);
+INSERT INTO agent_messages SELECT * FROM agent_messages_v17;
+DROP TABLE agent_messages_v17;
+PRAGMA user_version = 18;
+COMMIT;
+""",
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

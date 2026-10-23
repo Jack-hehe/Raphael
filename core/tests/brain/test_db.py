@@ -274,7 +274,7 @@ SCHEMA_V17 = {
     **SCHEMA_V16,
     "agent_messages": ["turn_id INTEGER PK NOT NULL", "seq INTEGER PK NOT NULL", "kind TEXT NOT NULL", "text TEXT NOT NULL", "at_ms INTEGER NOT NULL"],
 }
-LATEST = 17
+LATEST = 18
 
 
 def schema_names(conn, kind):
@@ -1003,3 +1003,26 @@ def test_the_v15_and_v16_migrations_can_run_again_on_a_current_database(conn):
     fresh = db.connect(":memory:")
     assert_same_schema(conn, fresh)
     fresh.close()
+
+
+def test_v18_preserves_live_messages_and_their_order_and_cascade(tmp_path):
+    path = tmp_path / "v17.db"
+    raw = sqlite3.connect(path)
+    for version in range(1, 18):
+        step = db._MIGRATIONS[version]
+        step(raw) if callable(step) else raw.executescript(step)
+    raw.execute("INSERT INTO agent_turns (session_id, question, route, prefix, text, status, created_at_ms) VALUES ('s', 'q', 'answer', '', '', 'done', 1)")
+    raw.execute("INSERT INTO agent_messages VALUES (1, 0, 'progress', 'Checking', 1)")
+    raw.execute("INSERT INTO agent_messages VALUES (1, 1, 'reply', 'Done', 2)")
+    raw.commit()
+    raw.close()
+    migrated = db.connect(path)
+    assert [tuple(row) for row in migrated.execute("SELECT seq, kind, text FROM agent_messages ORDER BY seq")] == [(0, "progress", "Checking"), (1, "reply", "Done")]
+    migrated.execute("INSERT INTO agent_messages VALUES (1, 2, 'thinking', 'A public decision', 3)")
+    migrated.execute("INSERT INTO agent_messages VALUES (1, 3, 'media', '{}', 4)")
+    migrated.execute("PRAGMA foreign_keys = ON")
+    migrated.commit()
+    migrated.execute("PRAGMA foreign_keys = ON")
+    migrated.execute("DELETE FROM agent_turns WHERE id = 1")
+    assert migrated.execute("SELECT COUNT(*) FROM agent_messages").fetchone()[0] == 0
+    migrated.close()

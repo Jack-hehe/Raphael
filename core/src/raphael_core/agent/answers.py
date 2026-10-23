@@ -288,7 +288,7 @@ def japanese_line(value: Any) -> str:
     return cut[: end + 1] if end > SAY_JA_MAX // 3 else cut
 
 
-def parse_reply(data: Any, language: str, *, plain: bool = False) -> Reply:
+def parse_reply(data: Any, language: str, *, plain: bool = False, long: bool = False) -> Reply:
     """The model's JSON as Raphael's words. AgentFailure if it says nothing (an empty text is
     taken only beside a note to write or delete, or a lookup to make).
 
@@ -308,9 +308,9 @@ def parse_reply(data: Any, language: str, *, plain: bool = False) -> Reply:
     items = data.get("messages")
     messages = (
         [text for item in items[:4] if (text := _plain_text(item))]
-        if plain and isinstance(items, list) else []
+        if (plain or long) and isinstance(items, list) else []
     )
-    full = _plain_text(data.get("text")) if plain else " ".join(_one_line_text(data.get("text")).split())
+    full = _plain_text(data.get("text")) if plain or long else " ".join(_one_line_text(data.get("text")).split())
     if messages:
         full = messages[-1]
     if not full and not (memory or read or search):
@@ -331,13 +331,14 @@ def parse_reply(data: Any, language: str, *, plain: bool = False) -> Reply:
             search=search,
             messages=messages,
         )
-    line, rest = fit_text(full, language)
+    line, rest = (full, "") if long else fit_text(full, language)
     detail = _one_line_text(data.get("detail")).strip()
     if rest and len(full) > len(detail):
         detail = full
     if language == "zh-TW":
         line = convert_leftover_simplified(line)
         detail = convert_leftover_simplified(detail)
+        messages = [convert_leftover_simplified(text) for text in messages]
     return Reply(
         prefix=canonical_prefix(data.get("prefix"), language, default=PREFIXES[language].answer),
         text=line,
@@ -346,6 +347,7 @@ def parse_reply(data: Any, language: str, *, plain: bool = False) -> Reply:
         read=read,
         search=search,
         say_ja=japanese_line(data.get("say_ja")),
+        messages=messages,
     )
 
 

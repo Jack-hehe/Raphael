@@ -88,12 +88,11 @@ conversation view. A request routed to `operate` or to a command makes nothing o
 
 The members of the owner's team (`raphael_core.members`) are a parameter of all this, not a path of
 their own (`speaker.Speaker`). `agent.ask` takes `member_id` (0, Raphael, by default): a message
-typed in a member's thread in the app (the voice and the chat apps always go to Raphael) is answered
-by the same router, answer, gate and worker, as the member: its persona, in plain sentences with no
-prefix; the tools and connections it was given; its model; its conversation and its memory. A
-member never acts on the desktop: a command or an `operate` request is answered that only Raphael
-does that. The team tools (`team`) are offered to the picking call when a request is about the team:
-any assistant asks any other (`ask_member`), and Raphael adds a member at the owner's request
+typed in the app or a chat connection is answered by the same narrated harness, gate and worker,
+as the chosen speaker: its persona, model, conversation and memory. Every member has the same
+tools as Raphael; desktop operations require the owner's local presence regardless of speaker.
+The voice alone may use the fast router, with recent conversation included. The team tools (`team`)
+let any assistant ask any other (`ask_member`) or add a member at the owner's request
 (`create_member`, 《了。已建立「…」。》). The one asked answers through `answer_for`, as itself and
 never on the desktop, within a chain at most two deep and with no cycle (`Speaker.can_ask`); the
 exchange is written in the two threads alone. Nobody waits at the overlay for such an answer, so
@@ -149,6 +148,7 @@ from ..services.urls import urls_in
 from ..services.urls import SeenUrls
 from ..messaging.words import compose
 from ..worker.loop import Stop, ToolOutcome, WAITING
+from ..worker.guards import MAX_ARGUMENT_CHARS, canonical
 from .answers import Reply, Voice, build_user_message
 from .narration import NarratedLoop
 from .cities import cities_in
@@ -158,6 +158,10 @@ from .failure import AgentFailure
 from .gate import BUILTIN_SERVER, ToolGate
 from .history import VOICE, AgentHistory, Turn
 from .ledger import Ledger
+from .harness_tools import (
+    DEFINITIONS as HARNESS_TOOLS, ROUTINE_TOOLS, HarnessToolError,
+    routine_event, tool as harness_tool,
+)
 from .local import extract_target, match_command
 from .opening import Opening, clean_target, match_settings, parse_domain, validate_url
 from .persona import (
@@ -665,8 +669,8 @@ class AgentService:
             if not isinstance(source, str) or not _SOURCE.fullmatch(source):
                 raise invalid_params("source must be a short lower-case word")
             ask.source = source
-        if not speaker.is_raphael and ask.source != TYPED:
-            raise invalid_params("only a message typed in the app goes to a member")
+        if not speaker.is_raphael and ask.source == VOICE:
+            raise invalid_params("voice requests go to Raphael")
         if len(ask.attachments) > MAX_ATTACHMENTS:
             raise RpcError(
                 INVALID_PARAMS, "Invalid params: attachments (count)", {"kind": "count"}
@@ -723,14 +727,24 @@ class AgentService:
             return self._finish(ask, "unclear", "negative", phrase(ask.language, "unclear"), ledger)
         settings = self._read_settings(ask.speaker)
         blocked = self._blocked(settings)
-        if blocked is None and ask.source == TYPED:
+        if ask.source != VOICE:
+            if blocked is not None:
+                return self._failed(ask, "answer", blocked, ledger)
             self._record(ask, "answer", "", "", "running", None, ledger)
+            try:
+                return await self._narrated(ask, settings, ledger)
+            except AgentFailure as error:
+                return self._failed(ask, "answer", error.kind, ledger)
+            except Exception as exc:
+                logger.warning("The typed harness failed: %s", type(exc).__name__)
+                return self._failed(ask, "answer", "error", ledger)
         decision: RouteDecision | None = None
         failure = blocked
         if blocked is None:
             try:
                 decision = await self._decider.classify(
-                    ask.text, settings.model, ledger, background_line(self._briefs())
+                    ask.text, settings.model, ledger, background_line(self._briefs()),
+                    context=self._before_run(ask.speaker),
                 )
             except AgentFailure as error:
                 failure = error.kind
@@ -744,6 +758,9 @@ class AgentService:
                 return self._failed(ask, "unclear", failure or "error", ledger)
             logger.info("A command was found by its words: no model could route (%s)", failure)
         try:
+            if decision.route == "unclear" and self._conversation_of(ask.speaker.id).context(quick=True).turns:
+                self._record(ask, "answer", "", "", "running", None, ledger)
+                return await self._narrated(ask, settings, ledger)
             result = await self._route(ask, decision, settings, ledger)
         except AgentFailure as error:
             result = self._failed(ask, decision.route, error.kind, ledger)
@@ -782,17 +799,8 @@ class AgentService:
         ):
             # 「幫我加一個管行程的成員」, 「問小行程明天的事」: answered where the team tools are offered.
             route = "answer"
-        if not ask.speaker.is_raphael and route in ("command", "operate"):
-            # A member never acts on the desktop: that is Raphael's alone.
-            return self._finish(
-                ask, route, "negative", phrase(ask.language, "member_desktop"), ledger
-            )
         if route == "command":
             return await self._command(ask, decision, settings, ledger)
-        if ask.source == TYPED and (
-            not ask.speaker.is_raphael or route in ("answer", "delegate")
-        ):
-            return await self._narrated(ask, settings, ledger)
         if route == "answer":
             return await self._answer_with_tools(ask, decision, settings, ledger, self._offer(ask))
         if route == "operate":
@@ -966,7 +974,8 @@ class AgentService:
 
     # --- the owner's desktop ----------------------------------------------------------------------
 
-    async def _operate(self, ask: _Ask, settings: _Settings, ledger: Ledger) -> dict:
+    async def _operate(self, ask: _Ask, settings: _Settings, ledger: Ledger, *,
+                       narration: NarratedLoop | None = None, request: str | None = None) -> dict:
         """A run on the owner's desktop (`raphael_core.computer.run`). Only for a request made at
         this computer: a message from a phone is a 否 reply, as is a shell that cannot be reached
         and a model that takes no tools. The reply is the run's first question or how it ended."""
@@ -983,7 +992,7 @@ class AgentService:
         run = ComputerRun(
             session_id=ask.session_id,
             language=language,
-            request=ask.text,
+            request=request or ask.text,
             model=settings.model,
             client=self._client,
             bridge=self._computer.bridge,
@@ -991,27 +1000,34 @@ class AgentService:
             ledger=ledger,
             over_budget=lambda: self._over_budget(limit),
             open_app=self._open_for_run,
-            background=self._before_run(),
+            background=self._before_run(ask.speaker),
             clock=self._clock,
             now_ms=self._now_ms,
         )
         run.context = ask
+        run.narration = narration
         self._computer.begin(run)
         assert run.task is not None
         run.task.add_done_callback(lambda _done, run=run: self._settle_unheard(run))
         return await self._next_from_run(run)
 
-    def _before_run(self) -> str:
+    def _before_run(self, speaker: Speaker = RAPHAEL) -> str:
         """What a run is told of what came before its request: the memory's index, and the
         conversation as a quick answer reads it (the summary and the last few turns). A run
         writes no note, now or later: its turn holds what the model read on the screen, which is
         untrusted, and a note is written only from the owner's own words (see `_remember`, and the
         reflection pass, which reads only the owner's question of an `operate` turn)."""
-        context = self._conversation.context(quick=True)
-        index = "" if self._memory is None else self._memory.index()
+        context = self._conversation_of(speaker.id).context(quick=True)
+        index = "" if self._memory is None else (
+            self._memory.index() if speaker.is_raphael else self._memory.index(speaker.id)
+        )
         if isinstance(index, MemoryIndex):  # the shared notes, then Raphael's own
             index = "\n".join(part for part in (index.shared, index.own) if part)
-        return conversation_block(context.summary, context.turns, index)
+        persona = "" if speaker.is_raphael else (
+            f"Speaker: {speaker.name}\nRole: {speaker.role}\n"
+            f"Owner's instructions: {speaker.instructions}\n\n"
+        )
+        return persona + conversation_block(context.summary, context.turns, index)
 
     async def _next_from_run(self, run: ComputerRun) -> dict:
         """What the run says next, as the reply of `agent.ask` or `agent.confirm`: its question
@@ -1037,7 +1053,10 @@ class AgentService:
         ask: _Ask = run.context
         language = ask.language
         prefix = PREFIXES[language].question
-        if run.turn_id is None:
+        if getattr(run, "narration", None) is not None:
+            ask.steps.extend(steps)
+            run.turn_id = self._record(ask, "answer", prefix if ask.speaker.is_raphael else "", question.stored, "confirm", None, run.ledger)
+        elif run.turn_id is None:
             ask.steps.extend(steps)
             run.turn_id = self._record(ask, "operate", prefix, question.stored, "confirm", None, run.ledger)
             run.recorded_cost = run.ledger.total
@@ -1061,6 +1080,9 @@ class AgentService:
         """Complete the turn of a run that ended, and answer with what Raphael says."""
         ask: _Ask = run.context
         run.written = True
+        if getattr(run, "narration", None) is not None:
+            ask.steps.extend(steps)
+            return {"status": final.status, "ok": final.status == "done", "text": final.text, "detail": final.detail}
         if run.turn_id is None:
             ask.steps.extend(steps)
             reply = self._finish(
@@ -1105,7 +1127,15 @@ class AgentService:
         """A run that ended while nobody waited for it (its request was cancelled, or it was
         stopped while its question waited) has its turn written here."""
         if not run.listening and not run.written and run.final is not None:
-            self._write_final(run, run.final, run.take_steps())
+            final = self._write_final(run, run.final, run.take_steps())
+            if getattr(run, "narration", None) is not None:
+                ask = run.context
+                turn = self._history.get(ask.turn_id) if ask.turn_id else None
+                if turn is not None and turn.status not in ("running", "confirm"):
+                    self._record(ask, turn.route, turn.prefix, turn.text, turn.status, turn.detail, run.ledger)
+                else:
+                    self._finish(ask, "answer", run.final.which, final["text"], run.ledger,
+                                 status=run.final.status, detail=run.final.detail)
 
     def _over_budget(self, limit_usd: float) -> bool:
         return False
@@ -1174,7 +1204,7 @@ class AgentService:
         """Publish only public words; each commit is visible before the next model/tool call."""
         if not ask.turn_id or not text.strip():
             return
-        line = compose(prefix, text, None) if ask.speaker.is_raphael else text
+        line = compose(prefix, text, None) if ask.speaker.is_raphael and kind in ("progress", "reply") else text
         self._write(lambda: self._history.add_message(ask.turn_id, kind, line))
         # Only the spoken final waits for its voice; progress and events remain live.
         self._turn_changed(ask.turn_id, ask.speaker.id,
@@ -1183,6 +1213,13 @@ class AgentService:
     @staticmethod
     def _loop_result(result: ToolResult) -> ToolOutcome:
         return ToolOutcome(result.ok, result.error, json.dumps(result.data, ensure_ascii=False))
+
+    def _computer_result(self, loop: NarratedLoop, result: dict) -> ToolOutcome:
+        """Screen-derived answers remain untrusted for memory and future tool input."""
+        tool = ToolResult("computer", result["ok"], {"text": result["text"]},
+                          None if result["ok"] else result["status"], untrusted=True)
+        loop.seen.append(tool)
+        return self._loop_result(tool)
 
     async def _narrated(
         self, ask: _Ask, settings: _Settings, ledger: Ledger, loop: NarratedLoop | None = None
@@ -1211,11 +1248,29 @@ class AgentService:
             snapshot = take_snapshot(
                 self._plugins, ask.text, memory=self._memory is not None,
                 attachments=bool(ask.attachments), speaker=ask.speaker,
-                team=self._team_tools(ask), max_tier=Tier.T3,
+                team=team_tools_for(self._team, ask.speaker, always=True), max_tier=Tier.T3,
+                interactive=True,
             )
-            urls = SeenUrls([ask.text])
+            urls = SeenUrls([ask.text, context.summary, *[
+                "\n".join([turn.question, turn.text, turn.detail or "", *turn.messages])
+                for turn in context.turns
+            ]])
+            checked_batch = None
+            screenings: dict[str, Screening] = {}
+
+            def plan(name: str, args: dict) -> PlannedCall | None:
+                if name not in snapshot.refs:
+                    return None
+                if snapshot.pool is not None and name in snapshot.pool.by_alias:
+                    return PlannedCall(snapshot.pool.by_alias[name], args)
+                if name in TEAM_TOOLS:
+                    return PlannedCall(team_tool(name), args)
+                if name in HARNESS_TOOLS and name not in ("show", "computer"):
+                    return PlannedCall(harness_tool(name), args)
+                return None
 
             async def execute(call_id: str, name: str, args: dict) -> ToolOutcome:
+                nonlocal checked_batch, screenings
                 assert loop is not None
                 ref = snapshot.refs.get(name)
                 if ref is None:
@@ -1223,19 +1278,47 @@ class AgentService:
                 # Include results supplied after a permission pause, as well as ordinary rounds.
                 if loop.seen:
                     urls.add_from(json.dumps(loop.seen[-1].data, ensure_ascii=False))
+                if ask.nested and checked_batch is not loop.batch_calls:
+                    # A handed-over request must not partially run and then restart in the worker.
+                    checked_batch = loop.batch_calls
+                    batch = [(call.id, planned) for call in loop.batch_calls
+                             if isinstance(call.arguments, dict)
+                             and len(canonical(call.arguments)) <= MAX_ARGUMENT_CHARS
+                             and (planned := plan(call.name, call.arguments)) is not None]
+                    judged = await asyncio.gather(*(
+                        self._screen_call(ask, planned, ledger) for _, planned in batch
+                    ))
+                    screenings = {key: screening for (key, _), screening in zip(batch, judged)}
+                    for screening in judged:
+                        if screening.verdict == DENY:
+                            loop.response = self._finish(ask, "answer", "negative", forbidden(ask.language, screening), ledger)
+                            raise Stop("finished")
+                    if any(needs_yes((self._tier_now(planned) or Tier.T0) >= Tier.T2, screening)
+                           for (_, planned), screening in zip(batch, judged)):
+                        loop.response = self.ask_in_background(ask, ledger)
+                        raise Stop("finished")
+                if name == "computer":
+                    self._gate.check(Action(name, args), None)
+                    if ask.source not in _AT_THIS_COMPUTER or ask.nested:
+                        return ToolOutcome(False, "presence_required")
+                    if self._computer is None or self._tool_support.supports(settings.model) is False:
+                        return ToolOutcome(False, "unavailable")
+                    request = args.get("request")
+                    if not isinstance(request, str) or not request.strip():
+                        return ToolOutcome(False, "bad_arguments")
+                    result = await self._operate(ask, settings, ledger, narration=loop, request=request)
+                    if result["status"] == "confirm":
+                        loop.response = result
+                        raise Stop(WAITING)
+                    return self._computer_result(loop, result)
                 if ref.kind == FIND:
                     definitions, lines = snapshot.find(str(args.get("query", "")))
                     loop.tools.extend(definitions)
                     return ToolOutcome(True, content="\n".join(lines), tools=definitions)
-                pool = snapshot.pool
-                if pool is not None and name in pool.by_alias:
-                    planned = PlannedCall(pool.by_alias[name], args)
-                elif name in TEAM_TOOLS:
-                    planned = PlannedCall(team_tool(name), args)
-                else:
-                    planned = None
+                planned = plan(name, args)
                 if planned is not None:
-                    outcome = await self._carry_out(ask, [planned], [], ledger)
+                    screened = [screenings[call_id]] if call_id in screenings else None
+                    outcome = await self._carry_out(ask, [planned], [], ledger, screenings=screened)
                     if isinstance(outcome, dict):
                         loop.response = outcome
                         if outcome["status"] == "confirm":
@@ -1254,11 +1337,14 @@ class AgentService:
                         if not isinstance(query, str) or not query.strip():
                             return ToolOutcome(False, "bad_arguments")
                         result = await self._tool(ask, self._tools.web_search(query, settings.model, ledger), name)
-                    elif name == "web_read":
+                    elif name in ("web_read", "show"):
                         url = args.get("url")
                         if not isinstance(url, str) or not urls.seen(url):
                             return ToolOutcome(False, "url_not_seen")
-                        result = await self._tool(ask, self._tools.web_read(url), name)
+                        operation = self._tools.show(url) if name == "show" else self._tools.web_read(url)
+                        result = await self._tool(ask, operation, name)
+                        if name == "show" and result.ok:
+                            self._message(ask, "media", json.dumps(result.data, ensure_ascii=False))
                     elif name == "read_attachment":
                         number = args.get("index")
                         if type(number) is not int or not 1 <= number <= len(ask.attachments):
@@ -1282,13 +1368,14 @@ class AgentService:
                 language=ask.language, plain=not ask.speaker.is_raphael,
                 system=system, user=user, tools=snapshot.definitions,
                 progress=lambda text: self._message(ask, "progress", text, PREFIXES[ask.language].notice),
+                thinking=lambda text: self._message(ask, "thinking", text),
                 execute=execute,
             )
         outcome = await loop.run()
         if loop.response is not None:
             return loop.response
         reply = loop.reply(outcome)
-        return self._finish_reply(ask, "answer", reply, loop.seen, ledger)
+        return self._finish_reply(ask, "exchange" if ask.nested else "answer", reply, loop.seen, ledger)
 
     async def _answer_with_tools(
         self,
@@ -1300,7 +1387,7 @@ class AgentService:
     ) -> dict:
         """An answer, with what it needs looked up first. With an `offer` (the plugin tools that may
         be used, and the team's), a model picks the tools the request needs while the lookups run.
-        A member of the team looks up only with the tools it was given."""
+        All speakers share the enabled lookup tools."""
         uses = ask.speaker.uses
         jobs = []
         if decision.needs_weather and uses("weather"):
@@ -1492,14 +1579,16 @@ class AgentService:
         return self._gate.tier_now(call.tool.key)
 
     async def _carry_out(
-        self, ask: _Ask, calls: list[PlannedCall], results: list[ToolResult], ledger: Ledger
+        self, ask: _Ask, calls: list[PlannedCall], results: list[ToolResult], ledger: Ledger,
+        *, screenings: list[Screening] | None = None,
     ) -> list[ToolResult] | dict:
         """Make the picked calls that need no yes, together, and add their results to `results`.
         If a call needs a yes the answer waits for it: that is the question to return instead, for
         the first such call; any others are not made (one question to a turn)."""
         # The owner's safety rules judge every call that changes something, together, before any is
         # made: one that a rule forbids ends the turn with Raphael saying so, and no call is made.
-        screenings = await asyncio.gather(*(self._screen_call(ask, c, ledger) for c in calls))
+        if screenings is None:
+            screenings = await asyncio.gather(*(self._screen_call(ask, c, ledger) for c in calls))
         for call, screening in zip(calls, screenings):
             if screening.verdict == DENY:
                 ask.steps.append(
@@ -1537,6 +1626,10 @@ class AgentService:
         """What the owner's safety rules say of a call of a plugin's tool or a team tool: PASS for a
         tool its server says only reads, and for `ask_member`, which are never judged."""
         tool = call.tool
+        if tool.key in HARNESS_TOOLS:
+            if tool.key in ("routine_list", "show", "computer"):
+                return PASS
+            return await self._gate.screen(Proposed(tool.key, tool.description, summarize(call.arguments)), language=ask.language, ledger=ledger)
         if tool.key in TEAM_TOOLS:
             # Asking another assistant changes nothing (what the one asked does is judged as it
             # does it); adding a member does, and is judged by its own name.
@@ -1562,9 +1655,64 @@ class AgentService:
         """Make a picked call: a team tool through `team_tool` (T1: it needs no yes of a tier), a
         plugin's tool through the gate with `approval`. A step of `steps` (the request's own when
         none is given), whatever came of it."""
+        if call.tool.key in HARNESS_TOOLS:
+            return await self._harness_call(ask, call, approval, action, steps=steps)
         if call.tool.key in TEAM_TOOLS:
             return await self._team_call(ask, call, ledger, steps=steps)
         return await self._plugin_call(call, approval, action, steps=ask.steps if steps is None else steps)
+
+    async def _harness_call(
+        self, ask: _Ask, call: PlannedCall, approval: Approval | None, action: Action | None,
+        *, steps: list[Step] | None = None,
+    ) -> ToolResult:
+        """Native writes use the same screening, approval and metadata-only audit as plugins."""
+        name, args = call.tool.key, call.arguments
+        began = time.perf_counter()
+        try:
+            self._gate.check(action or Action(name, args), approval)
+            if name in ROUTINE_TOOLS:
+                if self._team is None:
+                    raise HarnessToolError("unavailable")
+                data = await self._team.routine_tool(ask.speaker.id, name, args)
+                if name != "routine_list":
+                    self._message(ask, "event", routine_event(name, data, ask.language))
+            elif name in COMMANDS:
+                if ask.source not in _AT_THIS_COMPUTER or ask.nested:
+                    raise HarnessToolError("presence_required")
+                values = dict(args)
+                if name == "open":
+                    target = values.get("target")
+                    if not isinstance(target, str):
+                        raise ValueError("missing target")
+                    if values.get("target_kind") == "url":
+                        values["target"] = validate_url(target, allow_http=True)
+                        if values["target"] is None:
+                            raise ValueError("invalid URL")
+                    elif values.get("target_kind") == "app":
+                        app = await self._catalog.find(target, loose=False) or await self._catalog.lookup(target)
+                        if app is None:
+                            raise HarnessToolError("not_found")
+                        values["target"] = app.app_id
+                    elif values.get("target_kind") == "settings":
+                        values["target"] = match_settings(target, bare=True)
+                        if values["target"] is None:
+                            raise ValueError("unknown settings page")
+                await run_command(COMMANDS[name], values, self._actions)
+                data = {"done": name}
+            else:
+                raise HarnessToolError("unknown_tool")
+            result = ToolResult(name, True, data)
+        except HarnessToolError as error:
+            result = ToolResult(name, False, None, str(error))
+        except (ValueError, RpcError, NotApproved, UnknownTool):
+            result = ToolResult(name, False, None, "bad_arguments")
+        except Exception as exc:
+            logger.warning("A harness tool failed: %s", type(exc).__name__)
+            result = ToolResult(name, False, None, "error")
+        (ask.steps if steps is None else steps).append(self._step("tool", name, BUILTIN_SERVER, "ok" if result.ok else "error", began, result.error))
+        self._gate.record_builtin(name, outcome="ok" if result.ok else "error",
+                                  approver="auto" if approval is None else "user")
+        return result
 
     async def _plugin_call(
         self,
@@ -1731,7 +1879,7 @@ class AgentService:
         team = self._team
         if team is None or name not in TEAM_TOOLS or not speaker.may_ask:
             return ToolResult(name, False, None, "blocked")
-        if name == CREATE_MEMBER and (not speaker.is_raphael or speaker.depth):
+        if name == CREATE_MEMBER and speaker.depth:
             return ToolResult(name, False, None, "blocked")
         try:
             self._gate.check(Action(name, dict(arguments)), None)
@@ -1795,7 +1943,7 @@ class AgentService:
     ) -> tuple[bool, str]:
         """`target` answers `request`, which `asker` handed it (`ask_member`): whether it could,
         and what it said. It answers through the same path as a question of the owner's (the
-        router's flags, the tools it was given, its own conversation, its own memory and the shared
+        narrated harness, enabled tools, its own conversation, its own memory and the shared
         one, its persona), as an answer, one step deeper in the chain (it may ask one more only if
         the chain allows: `Speaker.can_ask`). It never acts on the desktop: a request that would is
         answered that the owner must ask for it directly. It writes no note (the request is not
@@ -1817,22 +1965,8 @@ class AgentService:
         result: dict | None = None
         if failure is None:
             try:
-                decision = await self._decider.classify(request, settings.model, ledger)
-            except Exception:  # the flags are a help here: without them it is answered as it is
-                decision = RouteDecision(route="answer", source="local")
-            try:
-                if decision.route == "operate" or (
-                    decision.route == "command" and COMMANDS.get(decision.command) is not None
-                ):
-                    # Nobody operates the desktop for another: the owner asks for that directly.
-                    which = "desktop_asked" if target.is_raphael else "member_desktop"
-                    result = self._finish(
-                        ask, "exchange", "negative", phrase(language, which), ledger
-                    )
-                else:
-                    result = await self._answer_with_tools(
-                        ask, decision, settings, ledger, self._offer(ask)
-                    )
+                self._record(ask, "exchange", "", "", "running", None, ledger)
+                result = await self._narrated(ask, settings, ledger)
             except AgentFailure as error:
                 failure = error.kind
             except Exception as exc:
@@ -2154,6 +2288,8 @@ class AgentService:
         if run is not None:
             # A question of a run on the desktop: the run goes on, and says what comes next.
             run.answer(confirm_id, approved, always)
+            if getattr(run, "narration", None) is not None:
+                return await self._resume_computer(run)
             return await self._next_from_run(run)
         self._expire(self._confirmations.sweep())
         resolution = self._confirmations.resolve(confirm_id, approved)
@@ -2190,6 +2326,39 @@ class AgentService:
         self._write(lambda: self._history.add_steps(pending.turn_id, [step]))
         done = _DONE_PHRASE.get(command.name)
         return self._outcome(pending, "understood", phrase(language, done) if done else "", "done")
+
+    async def _resume_computer(self, run: ComputerRun) -> dict:
+        """Keep desktop confirmation and the enclosing harness in one cancellable turn."""
+        ask: _Ask = run.context
+        loop = run.narration
+
+        async def resume():
+            result = await self._next_from_run(run)
+            if result["status"] == "confirm":
+                return result
+            loop.continue_with(self._computer_result(loop, result))
+            self._record(ask, "answer", "", "", "running", None, run.ledger)
+            try:
+                return await self._narrated(ask, self._read_settings(ask.speaker), run.ledger, loop)
+            except AgentFailure as error:
+                return self._failed(ask, "answer", error.kind, run.ledger)
+            except Exception as error:
+                logger.warning("The desktop harness failed: %s", type(error).__name__)
+                return self._failed(ask, "answer", "error", run.ledger)
+
+        task = asyncio.ensure_future(resume())
+        self._inflight[ask.session_id] = task
+        try:
+            return await task
+        except asyncio.CancelledError:
+            if not task.cancelled() or asyncio.current_task().cancelling():
+                raise
+            return _Silent({"status": "done", "turn_id": ask.turn_id, "prefix": "", "text": ""})
+        finally:
+            if task.cancelled():
+                self._finish(ask, "answer", "understood", phrase(ask.language, "denied"), run.ledger, status="denied")
+            if self._inflight.get(ask.session_id) is task:
+                del self._inflight[ask.session_id]
 
     async def _resume_narrated(
         self, pending: Pending, approval: Approval | None, followup: _Followup
@@ -2236,7 +2405,7 @@ class AgentService:
                 model=model,
             )
         )
-        if turn is not None and turn.source == TYPED and text:
+        if turn is not None and turn.source != VOICE and text:
             self._write(lambda: self._history.add_message(
                 pending.turn_id, "reply", compose(prefix, text, None)
             ))
@@ -2469,7 +2638,7 @@ class AgentService:
         prefix: it speaks in plain sentences."""
         prefix = _prefix(ask.language, which) if ask.speaker.is_raphael else ""
         turn_id = self._record(ask, route, prefix, text, status, detail, ledger)
-        if ask.source == TYPED and status != "confirm":
+        if ask.source != VOICE and status != "confirm":
             for line in ask.replies or [text]:
                 self._message(ask, "reply", line, prefix)
             ask.replies = []
