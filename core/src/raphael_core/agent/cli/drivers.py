@@ -6,6 +6,7 @@ reasoning blocks, command output and provider credentials never become UI messag
 
 import asyncio
 import json
+import os
 import logging
 from dataclasses import dataclass, field
 
@@ -62,14 +63,20 @@ class Driver:
                 if self.model:
                     command += ["--model", self.model]
             elif self.name == "codex":
-                command += ["app-server"]
+                # The thread's `config` is not applied to MCP servers: they are set when the server
+                # starts, the token passed through the environment, never on the command line.
+                command += ["app-server", "-c", f"mcp_servers.raphael.url={json.dumps(endpoint)}",
+                            "-c", 'mcp_servers.raphael.bearer_token_env_var="RAPHAEL_MCP_TOKEN"']
             elif self.name == "gemini":
                 command += ["--experimental-acp", "--approval-mode", "default", "--allowed-mcp-server-names", "raphael"]
                 if self.model:
                     command += ["--model", self.model]
             else:
                 raise ValueError("unknown_cli")
-            self.child = Child(command, environ=self.environ, cwd=cwd or str(files.path))
+            environ = dict(os.environ if self.environ is None else self.environ)
+            if self.name == "codex":
+                environ["RAPHAEL_MCP_TOKEN"] = token
+            self.child = Child(command, environ=environ, cwd=cwd or str(files.path))
             await self.child.start()
             if self.name == "claude":
                 await self.child.send({"type": "user", "message": {"role": "user", "content": user}})
@@ -218,6 +225,12 @@ class Driver:
                         kinds = ("allow_always", "allow_once") if decision == "always" else ("allow_once",) if decision == "once" else ("reject_once", "reject_always")
                         option = next((item for kind in kinds for item in params.get("options", []) if item.get("kind") == kind), None)
                         await response(packet["id"], {"outcome": {"outcome": "selected", "optionId": option["optionId"]} if option else {"outcome": "cancelled"}})
+                elif codex and method == "mcpServer/elicitation/request":
+                    # Codex asks before it calls an MCP tool. Raphael's own server screens every call
+                    # through the safety gate (and asks the owner when the rules say so), so a call to
+                    # it is accepted here; any other server is declined.
+                    await response(packet["id"], {"action": "accept", "content": {}} if params.get("serverName") == "raphael"
+                                   else {"action": "decline"})
                 else:
                     # No filesystem, terminal or arbitrary client-side RPC outside our gate.
                     await response(packet["id"], error={"code": -32601, "message": "Unsupported client capability"})
