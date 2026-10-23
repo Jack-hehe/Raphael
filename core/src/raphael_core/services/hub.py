@@ -27,6 +27,9 @@ RPC methods (the choice itself is `settings.set`, like any other setting):
   spaces around it, 1 to 512 characters with no space or control character inside, stored in the
   vault. The key is never echoed back, and a key that is refused is refused by a kind.
 - `services.clear_key {service}` -> `{ok: true}`: the key removed.
+- `links.preview {url}` -> `{url, site, title, description, thumbnail}` or null: public web
+  metadata for the chat. Successful results live for a day in a bounded memory cache; thumbnails
+  are safely fetched, capped raster data URLs. Failures are quiet and cached for five minutes.
 
 Nothing here logs a key, a query, an address, a file's name or a result.
 """
@@ -49,6 +52,7 @@ from . import pdf, tts, web
 from .attachments import Attachment
 from .common import ServiceError
 from .fetch import PageFetcher, Resolver, system_resolver
+from .links import LinkPreviews, THUMBNAIL_BYTES
 from .keys import KEYED_SERVICES, KeyRefused, ServiceKeys
 from .vision import Vision
 
@@ -127,6 +131,9 @@ class ServiceHub:
         self._http: httpx.AsyncClient | None = None
         self.fetcher = PageFetcher(resolver=resolver, transport=transport)
         self.media_fetcher = PageFetcher(resolver=resolver, transport=transport, media=True)
+        self.links = LinkPreviews(self.media_fetcher, PageFetcher(
+            resolver=resolver, transport=transport, media=True, max_bytes=THUMBNAIL_BYTES,
+        ))
         self.vision = Vision(client, self.vision_model)
 
     def register(self, router: Router) -> None:
@@ -134,10 +141,12 @@ class ServiceHub:
             "services.status": self._status,
             "services.set_key": self._set_key,
             "services.clear_key": self._clear_key,
+            "links.preview": self.links.handle,
         }.items():
             router.register(method, handler)
 
     async def aclose(self) -> None:
+        await self.links.aclose()
         http, self._http = self._http, None
         if http is not None:
             await http.aclose()

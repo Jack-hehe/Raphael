@@ -21,7 +21,7 @@ async def app(tmp_path):
 
 
 async def test_the_services_methods_are_registered(app):
-    assert {"services.status", "services.set_key", "services.clear_key"} <= set(app.methods())
+    assert {"services.status", "services.set_key", "services.clear_key", "links.preview"} <= set(app.methods())
     status = await app.call("services.status", {})
     assert status["search"]["service"] == "openrouter"
     await app.call("services.set_key", {"service": "brave", "key": "a-key"})

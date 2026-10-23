@@ -158,6 +158,40 @@
 .ans { margin: 0; font: var(--pa-fs-a)/var(--pa-lh-a) var(--voice); color: var(--text); overflow-wrap: anywhere; user-select: text; }
 .ra-body > .ans { justify-self: start; max-width: 100%; padding: var(--pa-bpy) calc(var(--pa-bpx) - 1px); border: 1px solid var(--edge); border-radius: calc(var(--pa-br) - 2px); background: var(--panel); white-space: pre-wrap; }
 .ans.progress { color: var(--text-2); }
+.chat-message { min-width: 0; max-width: 100%; position: relative; }
+.chat-message > .turn-event { width: fit-content; max-width: 100%; margin-inline: auto; }
+.owner-message { max-width: min(var(--pa-bw), 78%); }
+.owner-message .bubble { max-width: 100%; }
+.chat-message > .ans { padding: var(--pa-bpy) calc(var(--pa-bpx) - 1px); border: 1px solid var(--edge); border-radius: calc(var(--pa-br) - 2px); background: var(--panel); }
+.message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+[data-expandable] .message-text { white-space: normal; }
+[data-expandable]:not(.is-expanded) .message-text { max-height: calc(30 * var(--pa-lh-a)); overflow: hidden; }
+.message-text p { margin: 0 0 0.6em; }
+.message-text p:last-child { margin-bottom: 0; }
+.message-text ul, .message-text ol { margin: 0.5em 0; padding-inline-start: 1.6em; }
+.message-text li { padding-inline-start: 0.15em; }
+.message-text code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.88em; padding: 0.12em 0.3em; border-radius: var(--r-sm); background: var(--surface-2); }
+.message-code { position: relative; margin-block: 0.6em; min-width: 0; }
+.message-code pre { margin: 0; padding: 34px 12px 12px; overflow-x: auto; border-radius: var(--r-sm); background: var(--surface-2); white-space: pre; }
+.message-code pre code { padding: 0; background: transparent; }
+.message-code > .btn.icon { position: absolute; inset-block-start: 3px; inset-inline-end: 3px; }
+.message-link { overflow-wrap: anywhere; color: var(--accent-text); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+:root[data-keys] .message-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 2px; }
+.message-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; height: 28px; opacity: 0; }
+.message-actions time { color: var(--text-3); font: 12px/1.4 var(--ui); margin-inline-end: 5px; }
+.message-actions .btn.icon { width: 28px; height: 28px; min-height: 28px; padding: 6px; }
+.message-actions .i, .message-code .i { width: 16px; height: 16px; }
+.chat-message:hover > .message-actions, .chat-message:focus-within > .message-actions { opacity: 1; }
+.message-expand { margin-top: 6px; }
+.preview-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; }
+.page-agent .btn.preview-card { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; height: 112px; min-height: 112px; padding: 12px; text-align: start; white-space: normal; border-inline-start: 3px solid var(--accent-text); background: var(--surface-2); border-radius: var(--r-sm); overflow: hidden; }
+.preview-image { flex: none; width: 80px; height: 80px; object-fit: cover; border-radius: var(--r-sm); }
+.preview-meta { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; flex: 1; }
+.preview-site { font: 12px/1.5 var(--ui); color: var(--accent-text); }
+.preview-title { font: 600 15px/1.6 var(--ui); color: var(--text); }
+.preview-description { font: 13px/1.6 var(--ui); color: var(--text-2); }
+.preview-meta > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (hover: none) { .message-actions { opacity: 1; } }
 .turn-event { justify-self: center; display: flex; align-items: center; flex-wrap: wrap; gap: calc(6px + 2 * var(--pa-u)); padding: calc(3px + 2 * var(--pa-u)) calc(10px + 4 * var(--pa-u)); border-radius: var(--r-pill); background: var(--surface-2); color: var(--text-2); font: var(--pa-sys)/1.6 var(--ui); }
 .turn-event .i { flex: none; width: 16px; height: 16px; color: var(--text-3); }
 .turn-question { min-width: 0; }
@@ -365,6 +399,7 @@
    bubbles take more of the width and Raphael's lines all of it. */
 @container main (max-width: 760px) {
   .bubble { max-width: 86%; }
+  .owner-message { max-width: 86%; }
   .ra { max-width: 100%; }
   .ask-card { grid-template-columns: var(--pa-ask-face) minmax(0, 1fr); }
   .ask-row { grid-column: 1 / -1; justify-content: flex-end; }

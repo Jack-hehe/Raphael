@@ -335,7 +335,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 63] = [
+const ALLOWED_METHODS: [&str; 64] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -379,6 +379,7 @@ const ALLOWED_METHODS: [&str; 63] = [
     // The services of the tools, in the settings: what is chosen and whether each key is stored
     // (never a key), and a key put in or taken out of the vault. Named one by one as well.
     "services.status",
+    "links.preview",
     "services.set_key",
     "services.clear_key",
     // The members of the owner's team, their groups and their routines (the 拉斐爾 page's member
@@ -1339,10 +1340,35 @@ pub async fn open_link(app: AppHandle, webview: Webview, url: String) -> Result<
             return Err("that link may not be opened".to_owned());
         }
     }
+    launch_link(&url)
+}
+
+fn is_external_url(url: &str) -> bool {
+    if url.len() > 8192 || url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return false;
+    }
+    let Ok(parsed) = tauri::Url::parse(url) else { return false; };
+    matches!(parsed.scheme(), "http" | "https")
+        && parsed.host_str().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+}
+
+/// Chat links may open only a web address, and only at the main window's request.
+#[tauri::command]
+pub fn open_external_url(webview: Webview, url: String) -> Result<(), String> {
+    require_main(&webview)?;
+    if !is_external_url(&url) {
+        return Err("that link may not be opened".to_owned());
+    }
+    launch_link(&url)
+}
+
+fn launch_link(url: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
         std::process::Command::new("rundll32")
-            .args(["url.dll,FileProtocolHandler", &url])
+            .args(["url.dll,FileProtocolHandler", url])
             .spawn()
             .map(|_| ())
             .map_err(|err| err.to_string())
@@ -1624,6 +1650,7 @@ mod tests {
                 "keyboard_has_altgr",
                 "main_events",
                 "mic_access",
+                "open_external_url",
                 "open_link",
                 "window_hotkey",
             ]
@@ -2037,6 +2064,21 @@ mod tests {
             "",
         ] {
             assert!(!is_openable_link(url), "{url:?}");
+        }
+    }
+
+    #[test]
+    fn chat_links_are_only_bounded_web_addresses_without_credentials() {
+        for url in ["https://www.cwa.gov.tw/V8/C/P/Typhoon/TY_WARN.html?lang=zh-TW&full=1", "http://example.com/a#part"] {
+            assert!(is_external_url(url), "{url}");
+        }
+        for url in ["javascript:alert(1)", "file:///C:/Windows/System32/calc.exe", "ms-settings:privacy-microphone", "data:text/html,hello", "https://user:password@example.com/", "https://example.com/\n", "https://example.com/a b", ""] {
+            assert!(!is_external_url(url), "{url:?}");
+        }
+        assert!(!is_external_url(&format!("https://example.com/{}", "a".repeat(8192))));
+        assert!(is_allowed_method("links.preview"));
+        for method in ["links", "links.", "links.fetch", "Links.preview"] {
+            assert!(!is_allowed_method(method));
         }
     }
 

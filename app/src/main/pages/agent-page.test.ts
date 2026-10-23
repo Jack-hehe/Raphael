@@ -15,12 +15,14 @@ const api = vi.hoisted(() => ({
   workerCancel: vi.fn(),
   workerRerun: vi.fn(),
   openLink: vi.fn(),
+  openExternalUrl: vi.fn(),
   core: vi.fn(),
 }));
 vi.mock("../api", () => api);
 
 import { Cleared } from "../cleared";
 import { createAgent } from "./agent";
+import * as ui from "../ui";
 
 function turn(id: number, more: Partial<AgentTurn> = {}): AgentTurn {
   return {
@@ -77,6 +79,51 @@ beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset();
   api.agentQuestionOpen.mockResolvedValue(null);
   api.agentVoice.mockResolvedValue(undefined);
+});
+
+test("message links and preview cards use the safe opener with the full target; only replies get previews", async () => {
+  const url = "https://www.cwa.gov.tw/V8/C/P/Typhoon/TY_WARN.html?lang=zh-TW&full=1";
+  api.agentHistoryList.mockResolvedValue({ turns: [turn(1, { question: `看 ${url}（颱風）`, messages: [
+    { seq: 1, kind: "progress", text: `檢查 ${url}。`, at_ms: 1 },
+    { seq: 2, kind: "reply", text: `《答。${url}（颱風警報）》`, at_ms: 2 },
+  ] })] });
+  api.core.mockResolvedValue(null); api.openExternalUrl.mockResolvedValue(undefined);
+  const agent = mount(); await flush();
+  expect(document.querySelectorAll(".message-link")).toHaveLength(3);
+  expect(document.querySelectorAll(".preview-card")).toHaveLength(1);
+  document.querySelector<HTMLAnchorElement>(".bubble a")!.click();
+  expect(api.openExternalUrl).toHaveBeenLastCalledWith(url);
+  document.querySelector<HTMLButtonElement>(".preview-card")!.click();
+  expect(api.openExternalUrl).toHaveBeenLastCalledWith(url);
+  const middle = new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true });
+  document.querySelector(".bubble a")!.dispatchEvent(middle);
+  expect(middle.defaultPrevented).toBe(true);
+  expect(api.openExternalUrl).toHaveBeenCalledTimes(3);
+  expect(api.openExternalUrl).toHaveBeenLastCalledWith(url);
+  agent.hide();
+});
+
+test("messages copy plain text, code copies exactly, only the latest reply regenerates, and long replies expand", async () => {
+  const body = "**bold**\n\n```js\na < b\n```\n" + Array.from({ length: 35 }, (_, i) => `line ${i}`).join("\n");
+  api.agentHistoryList.mockResolvedValue({ turns: [turn(2, { text: body }), turn(1)] });
+  api.agentAskText.mockResolvedValue(undefined);
+  const copy = vi.spyOn(ui, "copyText").mockResolvedValue(undefined);
+  const agent = mount(); await flush();
+  const latest = document.querySelector<HTMLElement>('.tn[data-id="2"]')!;
+  expect(document.querySelectorAll('[data-act="regenerate"]')).toHaveLength(1);
+  latest.querySelector<HTMLButtonElement>('.owner-message [data-act="copy-message"]')!.click();
+  await flush(); expect(copy).toHaveBeenLastCalledWith("問題 2");
+  latest.querySelector<HTMLButtonElement>('.ra [data-act="copy-message"]')!.click();
+  await flush(); expect(copy.mock.lastCall?.[0]).toContain("bold\na < b\n");
+  expect(copy.mock.lastCall?.[0]).not.toContain("**");
+  latest.querySelector<HTMLButtonElement>('[data-act="copy-code"]')!.click();
+  await flush(); expect(copy).toHaveBeenLastCalledWith("a < b");
+  const expand = latest.querySelector<HTMLButtonElement>('[data-act="expand-message"]')!;
+  expect(expand.hidden).toBe(false); expand.click();
+  expect(document.querySelector('.tn[data-id="2"] .is-expanded')).not.toBeNull();
+  document.querySelector<HTMLButtonElement>('[data-act="regenerate"]')!.click();
+  await flush(); expect(api.agentAskText).toHaveBeenCalledExactlyOnceWith("問題 2");
+  copy.mockRestore(); agent.hide();
 });
 
 afterEach(() => {
@@ -259,8 +306,8 @@ describe("a continuous typed turn", () => {
     expect(api.agentQuestionAnswer).toHaveBeenCalledWith("inline-q", true);
   });
 
-  test("clicking the thinking header expands and collapses the thinking block, and media actions open lightbox, expand PDF, and call openLink", async () => {
-    api.openLink.mockResolvedValue(undefined);
+  test("clicking the thinking header expands and collapses the thinking block, and media actions open lightbox, expand PDF, and use the safe external opener", async () => {
+    api.openExternalUrl.mockResolvedValue(undefined);
     api.agentHistoryList.mockResolvedValue({
       turns: [
         turn(1, {
@@ -323,8 +370,8 @@ describe("a continuous typed turn", () => {
     expect(document.querySelector(".media-pdf")?.classList.contains("is-expanded")).toBe(true);
     expect(pdfBtn.getAttribute("aria-expanded")).toBe("true");
 
-    // Clicking 在網站開啟 calls api.openLink with the validated http(s) URL
+    // Clicking the site action passes the complete http(s) address to the safe opener.
     document.querySelector<HTMLButtonElement>('[data-act="open-url"]')!.click();
-    expect(api.openLink).toHaveBeenCalledWith("https://example.com/photo.png");
+    expect(api.openExternalUrl).toHaveBeenCalledWith("https://example.com/photo.png");
   });
 });

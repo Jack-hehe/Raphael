@@ -301,8 +301,10 @@ export const modelsEnsure = (names: string[]): Promise<{ ok: boolean }> => core(
 
 // ---------- commands of the app ----------
 
-/** Opens one of the few fixed links in the browser (commands.rs refuses any other). */
+/** Opens a fixed settings/login link or registered provider documentation. */
 export const openLink = (url: string): Promise<void> => invoke("open_link", { url });
+/** Opens a chat http(s) address through the shell's scheme and credential checks. */
+export const openExternalUrl = (url: string): Promise<void> => invoke("open_external_url", { url });
 
 
 export const deviceSettingsGet = (): Promise<DeviceSettings> => invoke("device_settings_get");

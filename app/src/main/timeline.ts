@@ -12,10 +12,12 @@ import type { MessageKey } from "./i18n/zh-TW";
 
 import { replyLine, userLine } from "../shared/anime";
 import { TYPED, VOICE, hasDetail, highlightHTML, sourceOf } from "./conversation";
+import { messageHTML } from "./message-content";
+import { previewCardsHTML } from "./link-previews";
 import { formatClock, formatUsd } from "./format";
 import { SERVICE_ICONS, brandStyle, hasLogo, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import type { AgentStep, AgentTask, AgentTurn, MainEvent, MediaPayload, TurnAttachment, TurnMessage } from "./types";
-import { btn, esc, ico } from "./ui";
+import { btn, esc, ico, iconBtn } from "./ui";
 
 /** The small turning ring of something under way. */
 const SPINNER = `<span class="spin" aria-hidden="true"></span>`;
@@ -221,6 +223,7 @@ export interface TimelineState {
   /** Tasks whose end this draw shows for the first time (`noteTaskEnds`): their check pops in. */
   ended: Set<number>;
   nowMs: number;
+  expandedMessages: Set<string>;
 }
 
 export const emptyTimelineState = (): TimelineState => ({
@@ -232,6 +235,7 @@ export const emptyTimelineState = (): TimelineState => ({
   live: new Set(),
   ended: new Set(),
   nowMs: Date.now(),
+  expandedMessages: new Set(),
 });
 
 /** Whether a turn's steps are open: as the reader left them, else open while its task runs and closed once it is done. */
@@ -484,6 +488,7 @@ export function answerMeta(turn: AgentTurn): string {
 
 /** How a turn is drawn besides its data. */
 export interface TurnLook {
+  regenerateTurnId?: number;
   /** The face of who answers (Raphael's, avatar.ts, or the member's): `loop` while at work on it. */
   face: (loop: boolean) => string;
   /** The words being looked for, marked wherever they are; blank for none. */
@@ -531,7 +536,7 @@ export function exchangeHTML(turn: AgentTurn, name: string, open: boolean, face 
       "sys sys-x",
       ` data-act="exchange" aria-expanded="${open}" aria-controls="tn-x-${id}"`,
     ) +
-    (open ? `<ol class="x-list" id="tn-x-${id}">` + messages.map((m) => `<li>${esc(m)}</li>`).join("") + `</ol>` : "") +
+    (open ? `<ol class="x-list" id="tn-x-${id}">` + messages.map((m) => `<li>${messageHTML(m)}</li>`).join("") + `</ol>` : "") +
     `</li>`
   );
 }
@@ -564,6 +569,20 @@ function taskActionsHTML(turn: AgentTurn, state: TimelineState): string {
 /** The person's bubble: their words (none when there were none) and the chips of the files under them. */
 function bubbleHTML(words: string, files: readonly TurnAttachment[] | undefined): string {
   return `<div class="bubble">${words}${filesHTML(files)}</div>`;
+}
+
+function messageActionsHTML(time: number, regenerate = false): string {
+  return `<div class="message-actions"><time datetime="${esc(new Date(time).toISOString())}">${esc(formatClock(time))}</time>` +
+    iconBtn("copy", t("chat.copy"), ' data-act="copy-message"') +
+    (regenerate ? iconBtn("refresh", t("chat.regenerate"), ' data-act="regenerate"') : "") + `</div>`;
+}
+
+function messageBlockHTML(turn: AgentTurn, key: string, text: string, time: number, query: string, state: TimelineState, reply: boolean, regenerate = false): string {
+  const expanded = state.expandedMessages.has(`${turn.id}:${key}`);
+  return `<div class="chat-message${expanded ? " is-expanded" : ""}" data-message="${esc(key)}"${reply ? ' data-expandable="true"' : ""}>` +
+    `<div class="ans${reply ? "" : " progress"}"><div class="message-text">${messageHTML(text, query, reply)}</div></div>` +
+    (reply ? btn(esc(t(expanded ? "chat.showLess" : "chat.showAll")), "sm message-expand", ` data-act="expand-message" aria-expanded="${expanded}"${text.split("\n").length > 30 || text.length > 3000 || expanded ? "" : " hidden"}`) : "") +
+    messageActionsHTML(time, regenerate) + (reply ? previewCardsHTML(text) : "") + `</div>`;
 }
 
 /** Validates an http(s) URL; returns null for any other scheme or invalid URL. */
@@ -673,7 +692,7 @@ function thinkingBlockHTML(turn: AgentTurn, thinkingMsgs: readonly TurnMessage[]
     "think-toggle",
     ` data-act="thinking" aria-expanded="${open}" aria-controls="${bodyId}"`,
   );
-  const lines = thinkingMsgs.map((m) => `<p class="think-line">${highlightHTML(m.text.trim(), query)}</p>`).join("");
+  const lines = thinkingMsgs.map((m) => `<div class="chat-message" data-message="${esc(m.seq)}"><p class="think-line">${messageHTML(m.text.trim(), query)}</p>${messageActionsHTML(m.at_ms)}</div>`).join("");
   return (
     `<div class="think-box${open ? " is-open" : ""}${running ? " is-live" : ""}" data-thinking-turn="${esc(turn.id)}">` +
     toggle +
@@ -752,10 +771,11 @@ export function mediaCardHTML(payload: MediaPayload, query: string, seq?: number
 }
 
 /** Renders all ordered items in `turn.messages` (thinking block, progress, media cards, event chips, replies). */
-function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, plain: boolean | undefined): string {
+function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, plain: boolean | undefined, regenerate: boolean): string {
   const ordered = [...(turn.messages ?? [])].sort((a, b) => a.seq - b.seq);
   const thinkingMsgs = ordered.filter((m) => m.kind === "thinking" && m.text.trim() !== "");
   let thinkingDrawn = false;
+  const lastReply = [...ordered].reverse().find(m => m.kind === "reply" && m.text.trim())?.seq;
   return ordered
     .map((message) => {
       const text = message.text.trim();
@@ -768,17 +788,17 @@ function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, 
       if (message.kind === "event") {
         const isRoutine = text.includes(t("members.routineLine")) || /routine/i.test(text);
         const icon = isRoutine ? ico("repeat") : ico("check");
-        return `<div class="turn-event" data-seq="${esc(message.seq)}">${icon}<span>${highlightHTML(text, query)}</span></div>`;
+        return `<div class="chat-message" data-message="${esc(message.seq)}"><div class="turn-event" data-seq="${esc(message.seq)}">${icon}<span>${messageHTML(text, query)}</span></div>${messageActionsHTML(message.at_ms)}</div>`;
       }
       if (message.kind === "media") {
         const media = parseMediaPayload(text);
-        return media ? mediaCardHTML(media, query, message.seq) : `<p class="ans" data-seq="${esc(message.seq)}">${highlightHTML(text, query)}</p>`;
+        return media ? `<div class="chat-message" data-message="${esc(message.seq)}">${mediaCardHTML(media, query, message.seq)}${messageActionsHTML(message.at_ms)}</div>` : messageBlockHTML(turn, String(message.seq), text, message.at_ms, query, state, false);
       }
       if (message.kind === "progress") {
-        return `<p class="ans progress" data-seq="${esc(message.seq)}">${highlightHTML(text, query)}</p>`;
+        return `<div data-seq="${esc(message.seq)}">${messageBlockHTML(turn, String(message.seq), text, message.at_ms, query, state, false)}</div>`;
       }
       const line = plain || text.startsWith("\u300a") ? text : replyLine(turn.prefix, text);
-      return `<p class="ans" data-seq="${esc(message.seq)}">${highlightHTML(line, query)}</p>`;
+      return `<div data-seq="${esc(message.seq)}">${messageBlockHTML(turn, String(message.seq), line, message.at_ms, query, state, true, regenerate && message.seq === lastReply)}</div>`;
     })
     .join("");
 }
@@ -812,22 +832,24 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
   const more = detail
     ? `<div class="tn-foot">${btn(ico("down"), "sm icon tn-more", ` data-act="detail" aria-expanded="${detailOpen}" aria-controls="tn-detail-${id}" aria-label="${esc(t("agent.detail"))}" title="${esc(t("agent.detail"))}"`)}</div>`
     : "";
+  const regenerate = !live && said && turn.id === look.regenerateTurnId;
   return (
     `<li class="tn${look.plain ? " tn-plain" : ""}" data-id="${id}" data-status="${esc(turn.status)}"${live ? ' data-live="true"' : ""}>` +
     (routine ? routineLineHTML(turn) : "") +
     (asked
       ? `<div class="me"><span class="me-src" role="img" aria-label="${where}" title="${where}">${sourceIcon(source)}</span>` +
-        bubbleHTML(said ? highlightHTML(turn.question.trim(), query) : "", turn.attachments) +
+        `<div class="chat-message owner-message" data-message="question">` +
+        bubbleHTML(said ? messageHTML(turn.question.trim(), query) : "", turn.attachments) + messageActionsHTML(turn.created_at_ms) + `</div>` +
         `</div>`
       : "") +
     `<div class="ra"><span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live)}</span><div class="ra-body">` +
     (hasMsgs
-      ? turnMessagesHTML(turn, state, query, look.plain)
+      ? turnMessagesHTML(turn, state, query, look.plain, regenerate)
       : (turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm")
-        ? "" : `<p class="ans">${highlightHTML(look.plain ? turn.text : replyLine(turn.prefix, turn.text), query)}</p>`) +
+        ? "" : turn.text.trim() ? messageBlockHTML(turn, "reply", look.plain ? turn.text : replyLine(turn.prefix, turn.text), turn.created_at_ms, query, state, true, regenerate) : "") +
     (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +
     (live ? typingHTML() : "") +
-    (detail ? `<div class="tn-detail" id="tn-detail-${id}"${detailOpen ? "" : " hidden"}>${highlightHTML(turn.detail, query)}</div>` : "") +
+    (detail ? `<div class="tn-detail" id="tn-detail-${id}"${detailOpen ? "" : " hidden"}>${messageHTML(turn.detail, query, true)}</div>` : "") +
     more +
     taskActionsHTML(turn, state) +
     `</div></div></li>`
@@ -845,7 +867,7 @@ export const dayHTML = (label: string): string => `<li class="day"><span>${esc(l
 export function pendingTurnHTML(question: string | null, source: string, look: TurnLook, files: readonly TurnAttachment[] = []): string {
   const where = esc(sourceName(source));
   const words =
-    question === null ? `<span class="shimmer">${esc(t("agent.hearing"))}</span>` : question.trim() === "" ? "" : esc(question.trim());
+    question === null ? `<span class="shimmer">${esc(t("agent.hearing"))}</span>` : question.trim() === "" ? "" : messageHTML(question.trim());
   return (
     `<li class="tn is-pending${look.plain ? " tn-plain" : ""}">` +
     `<div class="me"><span class="me-src" role="img" aria-label="${where}" title="${where}">${sourceIcon(source)}</span>${bubbleHTML(words, files)}</div>` +

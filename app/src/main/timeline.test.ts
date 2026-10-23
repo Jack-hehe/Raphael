@@ -377,7 +377,7 @@ describe("a turn", () => {
     expect(html).toContain('<span class="me-src" role="img" aria-label="語音 · 09:00" title="語音 · 09:00">');
     expect(html).toContain('<div class="bubble">台北天氣如何，順便記到行事曆</div>');
     expect(html).toContain('<span class="ra-face" title="gpt-6-luna · US$0.0012"><i class="face"></i></span>');
-    expect(html).toContain('<p class="ans">《答。台北現在 24 度。》</p>');
+    expect(html).toContain('<div class="ans"><div class="message-text"><p>《答。台北現在 24 度。》</p>');
     expect(html).not.toContain("tn-foot"); // nothing more to open
   });
 
@@ -399,8 +399,8 @@ describe("a turn", () => {
   test("a detail is closed behind a button that says whether it is open", () => {
     const closed = turnHTML(turn(5, { detail: "更多" }), emptyTimelineState(), false, LOOK);
     expect(closed).toContain('class="btn sm icon tn-more" data-act="detail" aria-expanded="false" aria-controls="tn-detail-5" aria-label="詳細" title="詳細"');
-    expect(closed).toContain('<div class="tn-detail" id="tn-detail-5" hidden>更多</div>');
-    expect(turnHTML(turn(5, { detail: "更多" }), emptyTimelineState(), true, LOOK)).toContain('<div class="tn-detail" id="tn-detail-5">更多</div>');
+    expect(closed).toContain('<div class="tn-detail" id="tn-detail-5" hidden><p>更多</p></div>');
+    expect(turnHTML(turn(5, { detail: "更多" }), emptyTimelineState(), true, LOOK)).toContain('<div class="tn-detail" id="tn-detail-5"><p>更多</p></div>');
   });
 
   test("the words looked for are marked in the question, the answer and the detail", () => {

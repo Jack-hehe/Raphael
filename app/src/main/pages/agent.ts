@@ -34,6 +34,8 @@ import { onLocaleChange, t } from "../i18n";
 
 import { replyLine } from "../../shared/anime";
 import * as api from "../api";
+import { createLinkPreviews, type LinkPreview } from "../link-previews";
+import { messagePlainText } from "../message-content";
 import { avatarHTML, onAvatarChange } from "../avatar";
 import "../background-questions.css";
 import type { BackgroundQuestions } from "../background-questions";
@@ -54,6 +56,7 @@ import {
   markSeen,
   noteTaskEnds,
   pendingTurnHTML,
+  parseMediaPayload,
   requestRerun,
   requestStop,
   safeHttpUrl,
@@ -63,7 +66,7 @@ import {
   wantsRefresh,
 } from "../timeline";
 import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, Page, SettingsPane, TurnAttachment, WireAttachment } from "../types";
-import { btn, esc, ico, iconButton, toaster } from "../ui";
+import { btn, copyText, esc, ico, iconButton, toaster } from "../ui";
 import { VoiceMode } from "../voice-mode";
 import "../agent.css";
 import "../members.css";
@@ -344,6 +347,9 @@ export function createAgent(app: AppContext): Page {
   let visible = false;
   const details = new Set<number>();
   const state: TimelineState = emptyTimelineState();
+  const previews = createLinkPreviews(scroller, url => api.core<LinkPreview | null>("links.preview", { url }));
+  const regenerating = new Set<number>();
+  const messageResize = typeof ResizeObserver === "function" ? new ResizeObserver(() => measureMessages()) : null;
   /** While the toast of 「清除全部」 waits: the turns up to this id are left out. */
   let clearedUpTo = 0;
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -393,7 +399,9 @@ export function createAgent(app: AppContext): Page {
     shownTurns().length === 0 && !outgoing.some((sent) => sent.member === memberId()) && (hearing === null || !inRaphael());
 
   const look = (): TurnLook => {
-    const shared = { query: searching ? query : "", openExchanges, memberName: members.nameOf, memberFace: (id: number) => members.faceOf(id, 18) };
+    const latest = shownTurns().filter(turn => turn.question.trim() && sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && turn.route !== "exchange" && (turn.text.trim() || turn.messages?.some(m => m.kind === "reply"))).reduce((id, turn) => Math.max(id, turn.id), 0);
+    const busy = regenerating.size > 0 || outgoing.some(sent => sent.member === memberId()) || shownTurns().some(turn => turn.status === "running" || isLive(turn.task));
+    const shared = { regenerateTurnId: busy ? undefined : latest, query: searching ? query : "", openExchanges, memberName: members.nameOf, memberFace: (id: number) => members.faceOf(id, 18) };
     if (inRaphael()) return { ...shared, face: (loop) => avatarHTML({ size: 26, loop }) };
     const member = members.member();
     return { ...shared, face: () => faceHTML(member, 26), plain: true };
@@ -604,7 +612,7 @@ export function createAgent(app: AppContext): Page {
         fresh.innerHTML = line.html;
         const made = fresh.content.firstElementChild as HTMLElement;
         made.dataset.key = line.key;
-        for (const control of made.querySelectorAll<HTMLElement>("[data-act]")) control.dataset.focus = `${control.dataset.act}:${control.dataset.task ?? line.key}`;
+        for (const control of made.querySelectorAll<HTMLElement>("[data-act]")) control.dataset.focus = `${control.dataset.act}:${control.dataset.task ?? line.key}:${control.closest<HTMLElement>("[data-message]")?.dataset.message ?? ""}:${control.dataset.url ?? ""}`;
         drawnHTML.set(made, line.html);
         // A turn that came after the newest one drawn, or a question just sent, comes in from below.
         const arrives = drewOnce && !node && (line.turnId === undefined ? !line.key.startsWith("day:") : line.turnId > newestDrawn && !droppedPending);
@@ -621,6 +629,18 @@ export function createAgent(app: AppContext): Page {
     if (focusKey) thread.querySelector<HTMLElement>(`[data-focus="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
     newestDrawn = Math.max(newestDrawn, ...wanted.map((line) => line.turnId ?? 0));
     drewOnce = true;
+    if (visible) previews.sync();
+    else previews.pause();
+    measureMessages();
+  }
+
+  /** Re-check wrapped lines when the window or the member details panel changes width. */
+  function measureMessages(): void {
+    for (const message of thread.querySelectorAll<HTMLElement>("[data-expandable]")) {
+      const text = message.querySelector<HTMLElement>(".message-text")!;
+      const toggle = message.querySelector<HTMLButtonElement>('[data-act="expand-message"]')!;
+      if (text.clientHeight > 0) toggle.hidden = !message.classList.contains("is-expanded") && text.scrollHeight <= text.clientHeight + 1;
+    }
   }
 
   function render(follow = false): void {
@@ -1321,7 +1341,61 @@ export function createAgent(app: AppContext): Page {
     if (visible) void load(false);
   }
 
+  function messageSource(control: HTMLElement): { turn: AgentTurn; key: string; text: string; markdown: boolean } | null {
+    const id = Number(control.closest<HTMLElement>(".tn[data-id]")?.dataset.id);
+    const turn = turns.find(item => item.id === id) ?? found?.find(item => item.id === id);
+    const key = control.closest<HTMLElement>("[data-message]")?.dataset.message;
+    if (!turn || !key) return null;
+    if (key === "question") return { turn, key, text: turn.question, markdown: false };
+    const message = turn.messages?.find(item => String(item.seq) === key);
+    if (key !== "reply" && !message) return null;
+    if (message?.kind === "media") {
+      const media = parseMediaPayload(message.text);
+      return { turn, key, text: media ? [media.title, media.description, media.url].filter(Boolean).join("\n") : message.text, markdown: false };
+    }
+    const markdown = key === "reply" || message?.kind === "reply";
+    const text = message?.text ?? turn.text;
+    return { turn, key, text: markdown && inRaphael() && !text.startsWith("《") ? replyLine(turn.prefix, text) : text, markdown };
+  }
+
+  async function copyMessage(control: HTMLElement): Promise<void> {
+    const source = messageSource(control);
+    if (!source) return;
+    try { await copyText(messagePlainText(source.text, source.markdown)); }
+    catch (err) { toaster.info(describeError(err)); }
+  }
+
+  async function regenerate(control: HTMLElement): Promise<void> {
+    const source = messageSource(control);
+    if (!source || look().regenerateTurnId !== source.turn.id) return;
+    const member = memberId(), turn = source.turn;
+    regenerating.add(turn.id);
+    const mine: Outgoing = { key: `out:${++sent}`, member, text: turn.question, sentAt: Date.now(), files: [] };
+    outgoing.push(mine); render(true);
+    askingMember = member;
+    try {
+      if (member === RAPHAEL_ID) await api.agentAskText(turn.question);
+      else await api.agentAskText(turn.question, [], member);
+      if (visible && memberId() === member) await load(false);
+      else members.changed();
+    } catch (err) { toaster.info(describeError(err)); }
+    finally {
+      if (askingMember === member) askingMember = null;
+      regenerating.delete(turn.id);
+      outgoing = outgoing.filter(item => item !== mine);
+      if (visible) render();
+    }
+  }
+
   // ---------- input ----------
+
+  el.addEventListener("auxclick", (e) => {
+    const link = (e.target as Element).closest<HTMLElement>('[data-act="open-url"]');
+    if (!link || e.button !== 1) return;
+    e.preventDefault();
+    const url = safeHttpUrl(link.dataset.url);
+    if (url) void api.openExternalUrl(url).catch(err => toaster.info(describeError(err)));
+  });
 
   el.addEventListener("click", (e) => {
     const act = (e.target as Element).closest<HTMLElement>("[data-act]");
@@ -1350,8 +1424,29 @@ export function createAgent(app: AppContext): Page {
         toggleThinking(act);
         break;
       case "open-url": {
+        e.preventDefault();
         const url = safeHttpUrl(act.dataset.url);
-        if (url) void api.openLink(url);
+        if (url) void api.openExternalUrl(url).catch(err => toaster.info(describeError(err)));
+        break;
+      }
+      case "copy-message":
+        void copyMessage(act);
+        break;
+      case "copy-code": {
+        const code = act.closest(".message-code")?.querySelector("code")?.textContent;
+        if (code !== undefined && code !== null) void copyText(code).catch(err => toaster.info(describeError(err)));
+        break;
+      }
+      case "regenerate":
+        void regenerate(act);
+        break;
+      case "expand-message": {
+        const source = messageSource(act);
+        if (!source) break;
+        const key = `${source.turn.id}:${source.key}`;
+        if (state.expandedMessages.has(key)) state.expandedMessages.delete(key);
+        else state.expandedMessages.add(key);
+        render();
         break;
       }
       case "lightbox":
@@ -1559,6 +1654,7 @@ export function createAgent(app: AppContext): Page {
     show(arg) {
       const wasVisible = visible;
       visible = true;
+      messageResize?.observe(scroller);
       void members.load();
       // A draft goes into the field at once; the composer may then move (the empty page has it
       // under Raphael, the thread under the turns) or give way to a question, which takes the
@@ -1585,6 +1681,8 @@ export function createAgent(app: AppContext): Page {
     },
     hide() {
       visible = false;
+      previews.pause();
+      messageResize?.disconnect();
       members.hide();
       clearTimeout(clearTimer);
       clearTimeout(holdTimer);

@@ -120,6 +120,15 @@ test("provider changes refresh the member model picker and its qualified model s
   expect(api.membersUpdate).toHaveBeenCalledWith(3, { model: "@p4:llama3.1:8b" });
 });
 
+test("regenerating the latest member reply asks the same question in that member's thread", async () => {
+  const agent = mount(); await flush(); await pick(3);
+  expect(document.querySelectorAll('[data-act="regenerate"]')).toHaveLength(1);
+  document.querySelector<HTMLButtonElement>('[data-act="regenerate"]')!.click();
+  await flush();
+  expect(api.agentAskText).toHaveBeenCalledExactlyOnceWith("問題 31", [], 3);
+  agent.hide();
+});
+
 test("routine notifications refresh the open panel immediately and keep the routine being edited", async () => {
   mount();
   await flush();
