@@ -43,6 +43,7 @@ stdout is the JSON-RPC channel (see stdio_server); everything this module says g
 from __future__ import annotations
 
 import asyncio
+import base64
 import concurrent.futures
 import functools
 import gc
@@ -52,7 +53,7 @@ import re
 import shutil
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -101,6 +102,7 @@ from .protocol import (
     invalid_params,
 )
 from .router import Router
+from .services.attachments import Attachment
 
 logger = logging.getLogger(__name__)
 
@@ -1091,14 +1093,33 @@ class App(Router):
     # --- core -----------------------------------------------------------------------------------
 
     async def _ask_from_messaging(
-        self, session_id: str, text: str, language: str, source: str
+        self,
+        session_id: str,
+        text: str,
+        language: str,
+        source: str,
+        /,
+        *,
+        attachments: Sequence[Attachment] = (),
     ) -> str:
         """A message from a messaging app, through the same entry as a spoken question. Whatever
-        needs a yes is refused on the spot: a yes is given at this computer, never from a message."""
-        reply = await self.call(
-            "agent.ask",
-            {"session_id": session_id, "text": text, "ui_language": language, "source": source},
-        )
+        needs a yes is refused on the spot: a yes is given at this computer, never from a message.
+
+        The images and PDFs the message came with (already checked by the switchboard) go as the
+        request's `attachments`, in the form `agent.ask` takes from the app: `{name, mime, data}`
+        with the bytes in base64. They stay in memory, for this request only."""
+        params: dict[str, Any] = {
+            "session_id": session_id,
+            "text": text,
+            "ui_language": language,
+            "source": source,
+        }
+        if attachments:
+            params["attachments"] = [
+                {"name": a.name, "mime": a.mime, "data": base64.b64encode(a.data).decode("ascii")}
+                for a in attachments
+            ]
+        reply = await self.call("agent.ask", params)
         if reply.get("status") == "confirm":
             question = reply["confirm"]
             await self.call("agent.confirm", {"id": question["id"], "approved": False})
