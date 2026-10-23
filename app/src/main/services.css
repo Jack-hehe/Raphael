@@ -5,8 +5,6 @@
 /* A capability is its icon bare, in the colour of the text */
 .svc-ic { display: inline-grid; place-items: center; width: 30px; flex: none; color: var(--text-2); }
 .svc-ic .i { width: 20px; height: 20px; }
-.svc-ic.xl { width: 40px; height: 40px; }
-.svc-ic.xl .i { width: 28px; height: 28px; }
 
 /* A row of the list: the row, the service in use in small muted words, the switch, the chevron */
 .svc-item { grid-template-columns: minmax(0, 1fr) auto auto 18px; }
