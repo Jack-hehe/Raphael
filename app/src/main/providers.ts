@@ -16,6 +16,7 @@ export interface ProvidersView {
   models: ProviderModel[] | "loading" | "failed";
   query: string;
   kindQuery?: string;
+  adding?: boolean;
   accountSet?: boolean;
   fieldValues?: Partial<Record<"region" | "location", string>>;
   confirming: boolean;
@@ -38,8 +39,34 @@ const FIELD_CHOICES = {
 };
 const choicesFor = (field: "region" | "location") => FIELD_CHOICES[field].map((value) => ({ value, label: value }));
 const GROUP_TITLES = { official: () => t("providers.official"), gateway: () => t("providers.gateway"), local: () => t("providers.local") };
-const GROUP_NOTES = { official: () => t("providers.officialNote"), gateway: () => t("providers.gatewayNote"), local: () => t("providers.localNote") };
 const POPULAR = ["openrouter", "litellm", "portkey", "vercel"];
+function description(kind: ProviderKind): string {
+  if (kind.kind === "openai_compatible") return t("providers.compatibleNote");
+  if (kind.group === "official") return t("providers.officialAPI", { p0: kind.name });
+  if (kind.group === "local") return t("providers.localServer");
+  return t(POPULAR.includes(kind.kind) || kind.kind === "bifrost" ? "providers.modelGateway" : "providers.cloudInference");
+}
+
+function directoryHTML(v: ProvidersView): string {
+  let count = 0;
+  const groups = (["official", "gateway", "local"] as const).map((group) => {
+    const kinds = v.kinds.filter((k) => k.group === group && k.name.toLowerCase().includes((v.kindQuery ?? "").trim().toLowerCase()));
+    if (group === "gateway") kinds.sort((a, b) => {
+      const rank = (id: string) => POPULAR.includes(id) ? POPULAR.indexOf(id) : POPULAR.length;
+      return rank(a.kind) - rank(b.kind) || a.name.localeCompare(b.name, "en");
+    });
+    count += kinds.length;
+    return kinds.length ? `<section class="sgroup"><h3>${esc(GROUP_TITLES[group]())}</h3><div class="pv-grid">` + kinds.map((k) => {
+      const note = description(k);
+      return `<div class="pv-card pv-add"><span class="ic">${providerMark(k.kind)}</span><span class="tx"><span class="nm">${esc(k.name)}</span><span class="ds" title="${esc(note)}">${esc(note)}</span></span>` +
+        btn(esc(t("providers.connect")), "", ` data-pv="add" data-id="${esc(k.kind)}" data-k="pv-add:${esc(k.kind)}" aria-label="${esc(t("providers.connect") + " " + k.name)}"${k.available ? "" : ` title="${esc(t("providers.soon"))}"`}${k.available && !v.busy ? "" : " disabled"}`) + `</div>`;
+    }).join("") + `</div></section>` : "";
+  }).join("");
+  return `<div class="cs-scrim" data-pv="scrim" data-dialog="provider:add"><div class="cs-dialog pv-dialog pv-catalog" id="pv-dialog" role="dialog" aria-modal="true" aria-labelledby="pv-title" tabindex="-1" data-trap>` +
+    `<div class="cs-dlg-head"><h2 id="pv-title">${esc(t("providers.add"))}</h2><span class="sp"></span>${iconButton("x", t("providers.close"), ' data-pv="close" data-k="pv-close"')}</div>` +
+    `<p class="note">${esc(t("providers.choose"))}</p>${fieldHTML(t("providers.searchKinds"), v.kindQuery ?? "", { id: "pv-kind-search", icon: "search" })}` +
+    `<div class="pv-directory">${groups || `<p class="note" role="status">${esc(t("providers.noMatches"))}</p>`}</div><p class="pv-results note" role="status">${esc(t("providers.results", { p0: count }))}</p></div></div>`;
+}
 const errorText = (error: ProvidersView["error"]): string => t(error === "account" ? "providers.invalidAccount" : error === "required" ? "providers.required" : "providers.error");
 function validAccount(value: string): boolean {
   try {
@@ -51,7 +78,8 @@ function validAccount(value: string): boolean {
 
 function dialogHTML(v: ProvidersView): string {
   const kind = kindOf(v);
-  if (!v.open || !kind) return "";
+  if (!v.open) return v.adding ? directoryHTML(v) : "";
+  if (!kind) return "";
   const provider = providerOf(v);
   const disabled = v.busy ? " disabled" : "";
   const fields = (["name", ...kind.fields] as (ProviderField | "name")[]).map((field) => {
@@ -67,8 +95,8 @@ function dialogHTML(v: ProvidersView): string {
         : fieldHTML(title, value, { id: inputId(v, field), type: secret(field) ? "password" : "text", disabled: v.busy });
     return `<div class="pv-field"><label class="pv-label" for="${esc(inputId(v, field))}">${esc(title)}</label><div class="svc-line">${control}</div></div>`;
   }).join("");
-  return `<div class="cs-scrim" data-pv="scrim" data-dialog="provider:${esc(v.open.id ?? kind.kind)}"><div class="cs-dialog pv-dialog" id="pv-dialog" role="dialog" aria-modal="true" aria-labelledby="pv-title" tabindex="-1" data-trap>` +
-    `<div class="cs-dlg-head"><span class="ic">${providerMark(kind.kind)}</span><h2 id="pv-title">${esc(provider?.name ?? kind.name)}</h2><span class="sp"></span>${iconButton("x", t("providers.close"), ' data-pv="close" data-k="pv-close"')}</div>` +
+  return `<div class="cs-scrim" data-pv="scrim" data-dialog="provider:${esc(v.adding ? "add" : v.open.id ?? kind.kind)}"><div class="cs-dialog pv-dialog${v.adding ? " pv-catalog" : ""}" id="pv-dialog" role="dialog" aria-modal="true" aria-labelledby="pv-title" tabindex="-1" data-trap>` +
+    `<div class="cs-dlg-head">${v.adding ? iconButton("left", t("providers.back"), ` data-pv="back" data-k="pv-back"${disabled}`) : ""}<span class="ic">${providerMark(kind.kind)}</span><h2 id="pv-title">${esc(provider?.name ?? kind.name)}</h2><span class="sp"></span>${iconButton("x", t("providers.close"), ' data-pv="close" data-k="pv-close"')}</div><div class="pv-setup">` +
     (kind.local_context_hint ? `<p class="note">${esc(t("providers.contextHint"))}</p>` : "") +
     fields + (kind.docs_url ? btn(esc(t("providers.getKey")), "", ` data-pv="docs" data-k="pv-docs"${disabled}`) : "") + (v.error ? `<p class="note" role="alert">${esc(errorText(v.error))}</p>` : "") +
     `<div class="svc-acts">${btn(esc(t("providers.save")), "pri", ` data-pv="save" data-k="pv-save"${disabled}`)}` +
@@ -78,7 +106,7 @@ function dialogHTML(v: ProvidersView): string {
     (v.result ? `<p class="note" role="status">${esc(v.result.ok ? t("providers.count", { p0: v.result.models }) : t(v.result.kind === "auth" ? "providers.auth" : v.result.kind === "offline" ? "providers.offline" : "providers.error"))}</p>` : "") +
     `<section class="pv-models"><h3>${esc(t("providers.models"))}</h3>` +
     (Array.isArray(v.models) && v.models.length > 10 ? fieldHTML(t("providers.search"), v.query, { id: "pv-model-search", icon: "search" }) : "") +
-    `<div class="pv-model-list">${modelsHTML(v)}</div></section></div></div>`;
+    `<div class="pv-model-list">${modelsHTML(v)}</div></section></div></div></div>`;
 }
 
 function modelsHTML(v: ProvidersView): string {
@@ -95,25 +123,19 @@ function statusNote(provider: ModelProvider): string {
 }
 
 export function providersHTML(v: ProvidersView): string {
-  const rows = v.providers.map((p) => `<div class="cs-item pv-item" data-pv="open" data-id="${esc(p.id)}">` +
-    btn(`<span class="ic">${providerMark(p.kind)}</span><span class="tx"><span class="nm">${esc(p.name)}</span><span class="ds">${esc(statusNote(p))}</span></span>`, "cs-open", ` data-pv="open" data-id="${esc(p.id)}" data-k="pv-open:${esc(p.id)}" aria-haspopup="dialog"`) +
+  const rows = v.providers.map((p) => `<div class="pv-card pv-item">` +
+    btn(`<span class="ic">${providerMark(p.kind)}</span><span class="tx"><span class="nm">${esc(p.name)}</span><span class="ds">${esc(statusNote(p))}</span></span><span class="chev" aria-hidden="true">${ico("right")}</span>`, "cs-open", ` data-pv="open" data-id="${esc(p.id)}" data-k="pv-open:${esc(p.id)}" aria-haspopup="dialog"`) +
     tg(p.enabled, t("providers.switch", { p0: p.name }), ` data-pv="toggle" data-id="${esc(p.id)}" data-k="pv-toggle:${esc(p.id)}"${v.busy ? " disabled" : ""}`) +
-    `<span class="chev" aria-hidden="true">${ico("right")}</span></div>`).join("");
-  const groups = (["official", "gateway", "local"] as const).map((group) => {
-    const kinds = v.kinds.filter((k) => k.group === group && k.name.toLowerCase().includes((v.kindQuery ?? "").trim().toLowerCase()));
-    if (group === "gateway") kinds.sort((a, b) => {
-      const rank = (id: string) => POPULAR.includes(id) ? POPULAR.indexOf(id) : POPULAR.length;
-      return rank(a.kind) - rank(b.kind) || a.name.localeCompare(b.name, "en");
-    });
-    return `<section class="sgroup"><h2>${esc(GROUP_TITLES[group]())}</h2><div class="cs-list">` +
-    kinds.map((k) => `<div class="cs-item pv-add"><span class="cs-main"><span class="ic">${providerMark(k.kind)}</span><span class="tx"><span class="nm">${esc(k.name)}</span><span class="ds">${esc(k.available ? GROUP_NOTES[group]() : t("providers.soon"))}</span></span></span>` +
-      btn(esc(t("providers.connect")), "", ` data-pv="add" data-id="${esc(k.kind)}" data-k="pv-add:${esc(k.kind)}"${k.available && !v.busy ? "" : " disabled"}`) + `</div>`).join("") + `</div></section>`;
-  }).join("");
-  return `<div class="pv"><section class="sgroup"><h2>${esc(t("providers.connected"))}</h2>` +
-    (v.state === "ready" ? rows ? `<div class="cs-list">${rows}</div>` : `<p class="note">${esc(t("providers.empty"))}</p>` : `<p class="note" role="status">${esc(t(v.state === "failed" ? "providers.error" : "providers.loading"))}</p>`) +
-    `</section>` + (v.error && !v.open ? `<p class="note" role="alert">${esc(errorText(v.error))}</p>` : "") +
+    `</div>`).join("");
+  return `<section class="sgroup pv"><h2>${esc(t("models.providers"))}</h2>` +
+    (v.state === "ready" ? rows ? `<div class="pv-grid">${rows}</div>` : `<p class="note">${esc(t("providers.empty"))}</p>` : `<p class="note" role="status">${esc(t(v.state === "failed" ? "providers.error" : "providers.loading"))}</p>`) +
+    (v.error && !v.open && !v.adding ? `<p class="note" role="alert">${esc(errorText(v.error))}</p>` : "") +
     (v.state === "failed" ? btn(esc(t("providers.retry")), "", ' data-pv="retry" data-k="pv-retry"') : "") +
-    `<h2 class="pv-add-title">${esc(t("providers.add"))}</h2>${fieldHTML(t("providers.searchKinds"), v.kindQuery ?? "", { id: "pv-kind-search", icon: "search" })}<div class="pv-directory">${groups}</div></div>` + dialogHTML(v);
+    `</section>`;
+}
+
+export function providersAddHTML(v: ProvidersView): string {
+  return `<div class="models-add">${btn(ico("plus") + esc(t("providers.add")), "", ` data-pv="directory" data-k="pv-directory" aria-haspopup="dialog"${v.state === "ready" && !v.busy ? "" : " disabled"}`)}</div>` + dialogHTML(v);
 }
 
 export interface ProvidersHost { root: HTMLElement; visible(): boolean; redraw(): void; }
@@ -155,7 +177,7 @@ export function createProviders(host: ProvidersHost) {
     clearConfirmation();
     accountDraft = null; accountReads++;
     modelLoads++;
-    state = { ...state, open: { kind, id, replacing: false }, error: null, result: null, models: [], query: "", dirty: false, accountSet: false, fieldValues: {} };
+    state = { ...state, adding: id === null, open: { kind, id, replacing: false }, error: null, result: null, models: [], query: "", dirty: false, accountSet: false, fieldValues: {} };
     redraw(); host.root.querySelector<HTMLElement>("#pv-dialog")?.focus();
     if (id) void loadModels(id);
   }
@@ -165,11 +187,19 @@ export function createProviders(host: ProvidersHost) {
   }
   function close() {
     const from = state.open;
+    const adding = state.adding;
     accountDraft = null; accountReads++; state.accountSet = false;
-    clearConfirmation(); modelLoads++; state.open = null; redraw();
-    const action = from?.id ? "open" : "add";
-    const id = from?.id ?? from?.kind;
-    [...host.root.querySelectorAll<HTMLElement>(`button[data-pv="${action}"]`)].find((el) => el.dataset.id === id)?.focus();
+    clearConfirmation(); modelLoads++; state.open = null; state.adding = false; state.kindQuery = ""; redraw();
+    if (adding) host.root.querySelector<HTMLElement>('[data-pv="directory"]')?.focus();
+    else [...host.root.querySelectorAll<HTMLElement>('button[data-pv="open"]')].find((el) => el.dataset.id === from?.id)?.focus();
+  }
+  function directory() {
+    const from = state.open?.kind;
+    accountDraft = null; accountReads++; modelLoads++; clearConfirmation();
+    state = { ...state, adding: true, open: null, error: null, result: null, models: [], accountSet: false, fieldValues: {}, dirty: false };
+    redraw();
+    const previous = [...host.root.querySelectorAll<HTMLElement>('[data-pv="add"]')].find((el) => el.dataset.id === from);
+    (previous ?? host.root.querySelector<HTMLElement>("#pv-kind-search"))?.focus();
   }
   async function remove() {
     const open = state.open;
@@ -265,6 +295,7 @@ export function createProviders(host: ProvidersHost) {
       if (!button) return false;
       if (button instanceof HTMLButtonElement && button.disabled) return true;
       if (button.dataset.pv !== "remove") clearConfirmation();
+      if (button.dataset.pv === "directory" || button.dataset.pv === "back") directory();
       if (button.dataset.pv === "toggle") void toggle(button.dataset.id!);
       if (button.dataset.pv === "add" && state.kinds.some((k) => k.kind === button.dataset.id && k.available)) show(button.dataset.id!, null);
       if (button.dataset.pv === "open") {
@@ -335,7 +366,7 @@ export function createProviders(host: ProvidersHost) {
       void load().then(() => { if (state.open?.id) void loadModels(state.open.id); });
     },
     key(event: KeyboardEvent): boolean {
-      if (!state.open) return false;
+      if (!state.open && !state.adding) return false;
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return true; }
       if (event.key === "Enter" && event.target instanceof HTMLInputElement && event.target.closest(".pv-field")) {
         event.preventDefault(); void save(); return true;
@@ -344,7 +375,7 @@ export function createProviders(host: ProvidersHost) {
     },
     reset(): void {
       accountDraft = null; accountReads++; state.accountSet = false;
-      loads++; modelLoads++; clearConfirmation(); state.open = null; state.error = null; state.result = null;
+      loads++; modelLoads++; clearConfirmation(); state.open = null; state.adding = false; state.kindQuery = ""; state.error = null; state.result = null;
       for (const input of host.root.querySelectorAll<HTMLInputElement>('.pv-field input[type="password"]')) input.value = "";
       for (const area of host.root.querySelectorAll<HTMLTextAreaElement>(".pv-field textarea")) area.value = "";
     },

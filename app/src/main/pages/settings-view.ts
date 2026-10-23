@@ -8,10 +8,9 @@
 // line under a row's name only where the setting would otherwise be set wrong. Each tab opens with
 // its name and one line on what it is for, then its rows in a few named groups.
 //
-// The tabs sit on the left in three groups, as Codex's settings have them: the basics with no name
-// (一般, 聽寫, 拉斐爾), 「整合」 (連接, 訊息平台) and 「帳戶」 (模型與用量, 資料, 關於), under a
-// 「搜尋設定」 field that finds a row in any tab, by its name in any of the three languages, and jumps
-// to it (`SEARCH_INDEX`, `searchSettings`).
+// The tabs sit on the left in three groups: basics, integrations and account (Models, Data, About).
+// Settings search finds a row in any tab by its name in any of the three languages, and jumps to
+// it (`SEARCH_INDEX`, `searchSettings`).
 
 import { catalogs, t } from "../i18n";
 import type { MessageKey } from "../i18n/zh-TW";
@@ -28,10 +27,8 @@ import { type RulesView, rulesHTML } from "../safety-rules";
 import { AUTO_MICROPHONE, microphoneChoices } from "../microphone";
 import type { LocalView } from "../local-models";
 import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
-import { fallbacksHTML } from "../model-fallbacks";
-import type { ModelPurpose } from "../types";
 import { type ServicesView, servicesHTML } from "../services";
-import { type ProvidersView, providersHTML, emptyProvidersView } from "../providers";
+import { type ProvidersView, providersHTML, providersAddHTML, emptyProvidersView } from "../providers";
 import { pricingNote } from "../pricing";
 import type { HotkeyField } from "../hotkey-recording";
 import type { AudioDevices, BrainSettings, DeviceSettings, LocalModel, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
@@ -92,7 +89,6 @@ export const PANES: { id: SettingsPane; group: PaneGroup; icon: IconName | "embl
   { id: "agent", group: "basics", icon: "emblem", title: () => t("settings.paneAgent"), purpose: agentPurpose },
   { id: "connections", group: "integrations", icon: "plug", title: () => t("settings.paneConnections"), purpose: () => t("settings.purposeConnections") },
   { id: "messaging", group: "integrations", icon: "send", title: () => t("settings.paneMessaging"), purpose: () => t("settings.purposeMessaging") },
-  { id: "usage", group: "account", icon: "wallet", title: () => t("settings.paneUsage"), purpose: () => t("settings.purposeUsage") },
   { id: "models", group: "account", icon: "bot", title: () => t("providers.title"), purpose: () => t("providers.about") },
   { id: "data", group: "account", icon: "database", title: () => t("settings.paneData"), purpose: () => t("settings.purposeData") },
   { id: "about", group: "account", icon: "info", title: () => t("common.about"), purpose: () => t("settings.purposeAbout") },
@@ -136,7 +132,7 @@ export interface SearchEntry {
  * entry here (its name's key), or the search does not know it.
  */
 export const SEARCH_INDEX: readonly SearchEntry[] = [
-  ...PANES.map((p) => ({ pane: p.id })),
+  ...PANES.map((p) => ({ pane: p.id, ...(p.id === "models" ? { also: "settings.paneUsage" as const } : {}) })),
   { pane: "general", label: "settings.059" },
   { pane: "general", label: "settings.067", words: ["dark", "light"] },
   { pane: "general", label: "settings.069" },
@@ -161,12 +157,12 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "agent", label: "services.voice", words: ["Fish Audio", "TTS"] },
   { pane: "messaging", words: ["Telegram"] },
   { pane: "models", label: "providers.add", words: ["OpenAI", "Anthropic", "Gemini", "Azure", "Bedrock", "Ollama", "LM Studio", "OpenRouter", "LiteLLM", "Portkey", "Vercel", "Nebius", "Bifrost", "Groq", "DeepSeek", "Mistral"] },
-  { pane: "usage", label: "common.apiKey", words: ["OpenRouter"] },
-  { pane: "usage", label: "settings.050" },
-  { pane: "usage", label: "settings.usageMonthly" },
-  { pane: "usage", label: "settings.031", also: "settings.searchModel" },
-  { pane: "usage", label: "settings.035", also: "settings.searchModel" },
-  { pane: "usage", label: "settings.agentModel", also: "settings.searchModel" },
+  { pane: "models", label: "common.apiKey", words: ["OpenRouter"] },
+  { pane: "models", label: "settings.050" },
+  { pane: "models", label: "settings.usageMonthly" },
+  { pane: "models", label: "settings.031", also: "settings.searchModel" },
+  { pane: "models", label: "settings.035", also: "settings.searchModel" },
+  { pane: "models", label: "settings.agentModel", also: "settings.searchModel" },
   { pane: "data", label: "data.retention", also: "settings.searchHistory" },
   { pane: "data", label: "data.clearDictation", also: "settings.searchHistory" },
   { pane: "data", label: "data.clearConversation" },
@@ -195,7 +191,7 @@ const allLanguages = (key: MessageKey): string[] => Object.values(catalogs).map(
 /** The keys of the tabs' names, in every language. */
 const PANE_TITLE_KEYS: Record<SettingsPane, MessageKey> = {
   general: "settings.paneGeneral", dictation: "settings.paneDictation", agent: "settings.paneAgent", connections: "settings.paneConnections",
-  messaging: "settings.paneMessaging", models: "providers.title", usage: "settings.paneUsage", data: "settings.paneData", about: "common.about",
+  messaging: "settings.paneMessaging", models: "providers.title", usage: "providers.title", data: "settings.paneData", about: "common.about",
 };
 
 /**
@@ -240,19 +236,16 @@ function agentPurpose(d: DeviceSettings): string {
   return binding ? t("settings.purposeAgent", { p0: bindingLabels(binding).join(" + ") }) : t("settings.purposeAgentNoKeys");
 }
 
+/** Both legacy entry points select the single Models pane. */
+export const canonicalPane = (id: SettingsPane): SettingsPane => id === "usage" ? "models" : id;
 /** The name of a tab, in the language of the window. */
-export const paneTitle = (id: SettingsPane): string => PANES.find((p) => p.id === id)!.title();
-
-/** The group of rows that OpenRouter's name heads: a brand, the same in every language. */
-const OPENROUTER = "OpenRouter";
+export const paneTitle = (id: SettingsPane): string => PANES.find((p) => p.id === canonicalPane(id))!.title();
 
 /** The shortcuts recorded here, and the row of each. */
 export const HOTKEY_ROWS: Record<HotkeyField, string> = { dictation_keys: "hotkey", agent_keys: "agent-hotkey" };
 
 /** Everything a tab is drawn from: what the panel has read, and what is being typed or done. */
 export interface SettingsView {
-  fallbackDrafts?: Partial<Record<ModelPurpose, boolean>>;
-  fallbackBusy?: boolean;
   pane: SettingsPane;
   device: DeviceSettings;
   /** The brain's settings; null while the core does not answer. */
@@ -367,10 +360,10 @@ const priceSpan = (v: SettingsView, k: string, cls = ""): string =>
 // draws the picker's button here; settings.ts makes it work. `k` names the control and its price.
 
 /** The three model rows, in order: what each is for, the `k` of its control and its price, and its name. */
-export const MODEL_ROWS: readonly { role: ModelRole; k: string; label: () => string }[] = [
-  { role: "stt", k: "stt-model", label: () => t("settings.031") },
-  { role: "cleanup", k: "model", label: () => t("settings.035") },
-  { role: "answer", k: "agent-model", label: () => t("settings.agentModel") },
+export const MODEL_ROWS: readonly { role: ModelRole; k: string; label: () => string; note: () => string }[] = [
+  { role: "answer", k: "agent-model", label: () => t("settings.agentModel"), note: () => t("models.answerNote") },
+  { role: "cleanup", k: "model", label: () => t("settings.035"), note: () => t("models.cleanupNote") },
+  { role: "stt", k: "stt-model", label: () => t("settings.031"), note: () => t("models.sttNote") },
 ];
 
 /**
@@ -414,16 +407,9 @@ export function visionPickerLook(v: SettingsView): ModelPickerLook {
   };
 }
 
-/** A model row: its name and the price of what is chosen, then its picker. */
-const modelRow = (v: SettingsView, { role, k, label }: (typeof MODEL_ROWS)[number]): string =>
-  row(label(), priceSpan(v, k, "price num"), `<div class="model-choices">${modelPickerHTML(modelPickerLook(v, role))}${fallbacksHTML(v.brain, role === "answer" ? "agent" : role, modelPickerLook(v, role), v.fallbackDrafts?.[role === "answer" ? "agent" : role], v.fallbackBusy)}</div>`, { cls: "row-model", attrs: ` data-row="${k}"` });
-
-// These purposes have no primary picker in this panel; their failover chains are independent.
-const EXTRA_FALLBACKS = [
-  { purpose: "router", label: () => t("fallbacks.router") },
-  { purpose: "pdf", label: () => t("fallbacks.pdf") },
-  { purpose: "memory", label: () => t("fallbacks.memory") },
-] as const;
+/** A model row: the purpose, its note and price, and the primary picker. */
+const modelRow = (v: SettingsView, { role, k, label, note }: (typeof MODEL_ROWS)[number]): string =>
+  row(label(), `<span class="models-purpose-note">${esc(note())}</span>${priceSpan(v, k, "price num")}`, modelPickerHTML(modelPickerLook(v, role)), { cls: "row-model", attrs: ` data-row="${k}"` });
 
 // ---------- the OpenRouter rows ----------
 
@@ -538,7 +524,7 @@ const altgrNote = (v: SettingsView, bindings: readonly string[]): string[] =>
 export const headingHTML = (v: SettingsView, actions = ""): string => {
   const title = `<h1 id="set-title" tabindex="-1">${esc(paneTitle(v.pane))}</h1>`;
   return (actions ? `<div class="set-head">${title}${actions}</div>` : title) +
-    `<p class="purpose">${esc(PANES.find((p) => p.id === v.pane)!.purpose(v.device))}</p>`;
+    `<p class="purpose">${esc(PANES.find((p) => p.id === canonicalPane(v.pane))!.purpose(v.device))}</p>`;
 };
 
 /** What the tabs that need the core say when it does not answer. */
@@ -640,7 +626,7 @@ function agentHTML(v: SettingsView): string {
       ),
       ...(v.cityError ? [note(st("err", v.cityError()), ' role="alert"')] : []),
     ]) +
-    (v.services ? servicesHTML(v.services, `<div class="model-choices">${modelPickerHTML(visionPickerLook(v))}${fallbacksHTML(v.brain, "vision", visionPickerLook(v), v.fallbackDrafts?.vision, v.fallbackBusy)}</div>`, v.brain) : "") +
+    (v.services ? servicesHTML(v.services, modelPickerHTML(visionPickerLook(v)), v.brain) : "") +
     (v.memoryShared ? memoryHTML(v.memoryShared) : "") +
     (v.memory ? memoryHTML(v.memory) : "") +
     (v.rules ? rulesHTML(v.rules) : "") +
@@ -691,20 +677,18 @@ function dataHTML(v: SettingsView): string {
   );
 }
 
-/** 模型與用量: the OpenRouter key and what this month has cost against the limit, then the models and their prices. */
-function usageHTML(v: SettingsView): string {
-  return (
-    headingHTML(v) +
-    coreNote(v) +
-    section(OPENROUTER, [
+/** Models: connected providers, primary models, existing usage controls and the add-provider dialog. */
+function modelsHTML(v: SettingsView): string {
+  const providers = v.providers ?? emptyProvidersView();
+  return headingHTML(v) + coreNote(v) + `<div class="models-page">` +
+    providersHTML(providers) +
+    section(t("models.used"), MODEL_ROWS.map((r) => modelRow(v, r)), priceSpan(v, "note")) +
+    section(t("models.usage"), [
       keyRow(v),
       ...(v.keyError ? [note(st("err", v.keyError()), ' role="alert"')] : []),
       spendRow(v),
       usageRow(v),
-    ], esc(t("settings.usageDifference"))) +
-    section(t("settings.groupModels"), MODEL_ROWS.map((r) => modelRow(v, r)), priceSpan(v, "note")) +
-    section(t("fallbacks.otherPurposes"), EXTRA_FALLBACKS.map(({ purpose, label }) => row(label(), "", fallbacksHTML(v.brain, purpose, modelPickerLook(v, "answer"), v.fallbackDrafts?.[purpose], v.fallbackBusy), { cls: "row-model" })))
-  );
+    ], esc(t("settings.usageDifference"))) + providersAddHTML(providers) + `</div>`;
 }
 
 /** 關於: the version, the license and the fan-project statement. */
@@ -734,9 +718,8 @@ export function paneHTML(v: SettingsView): string {
     case "messaging":
       return messagingTabHTML(v);
     case "usage":
-      return usageHTML(v);
     case "models":
-      return headingHTML(v) + providersHTML(v.providers ?? emptyProvidersView());
+      return modelsHTML(v);
     case "data":
       return dataHTML(v);
     case "about":

@@ -1,6 +1,6 @@
-// Settings: a panel over the main window with nine tabs in three groups (一般, 聽寫, 拉斐爾; 「整合」:
-// 連接, 訊息平台; 「帳戶」: 模型與用量, 資料, 關於) under a 「搜尋設定」 field that jumps to a row of any
-// of them. This file holds what the panel knows and what it does; settings-view.ts draws each tab
+// Settings: eight tabs in three groups: basics, integrations and account. Search jumps to a row
+// of any tab. Models combines providers, model choices and usage, including legacy usage links.
+// This file holds what the panel knows and what it does; settings-view.ts draws each tab
 // from a snapshot of it. A change takes effect at once; there is no save button. The settings of
 // the brain (limit, models, languages, speech-to-text, how Raphael answers) go to the core with
 // `settings.set`; the settings of this computer (hotkeys, microphone, emblem, theme, autostart) go
@@ -36,8 +36,6 @@ import { createHotkeyRecording } from "../hotkey-recording";
 import { type ModelPicker, type ModelPickerLook, type PickerRole, mountModelPicker, replacementNotices, withFavorite } from "../model-picker";
 import { createServices } from "../services";
 import { createProviders } from "../providers";
-import { FALLBACK_PURPOSES, fallbackKey, fallbackLook, fallbackRefs } from "../model-fallbacks";
-import type { ModelPurpose } from "../types";
 import { MonitorSwitch } from "../monitor";
 import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, LocalModel, MainEvent, ModelCatalog, ModelRole, Page, SettingsPane, Status } from "../types";
 import {
@@ -66,6 +64,7 @@ import {
   WORKER_COST_CAPS,
   workerCostCap,
   MODEL_ROWS,
+  canonicalPane,
   PANES,
   type SearchHit,
   SIZES,
@@ -187,9 +186,6 @@ export function createSettings(app: AppContext): SettingsPage {
   let catalogLoads = 0;
   /** The pickers of the model rows (and of 服務's 看圖片) on the tab that is drawn (settings-view.ts draws their buttons). */
   const pickers = new Map<PickerRole, ModelPicker>();
-  const fallbackPickers: { picker: ModelPicker; purpose: ModelPurpose; index: number; role: PickerRole }[] = [];
-  let fallbackDrafts: Partial<Record<ModelPurpose, boolean>> = {};
-  let fallbackBusy = false;
   /** The speech models of this computer, and the download of one that is under way. */
   let localModels: LocalModel[] | "loading" | "failed" = "loading";
   let localDownload: { name: string; done: number; total: number } | null = null;
@@ -261,7 +257,6 @@ export function createSettings(app: AppContext): SettingsPage {
 
   /** What the tabs are drawn from, as the panel knows it now. */
   const view = (): SettingsView => ({
-    fallbackDrafts, fallbackBusy,
     pane, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
     replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
     connections: connections.view(), messaging: messaging.view(), memory: memory.view(), memoryShared: memoryShared.view(), rules: rules.view(), services: services.view(), providers: providers.view(), confirmingClear, localModels, localDownload,
@@ -424,7 +419,7 @@ export function createSettings(app: AppContext): SettingsPage {
   /** Goes to a tab: what the tab before it had open is dropped, and the new one comes in. */
   function openPane(next: SettingsPane): void {
     closeMenu();
-    pane = next;
+    pane = canonicalPane(next);
     if (pane === "connections") void connections.load();
     else connections.reset();
     if (pane === "messaging") void messaging.load();
@@ -459,6 +454,11 @@ export function createSettings(app: AppContext): SettingsPage {
   function light(hit: SearchHit): void {
     pendingJump = null;
     if (pane !== hit.pane) return;
+    if (hit.label === "providers.add") {
+      const button = body.querySelector<HTMLElement>('[data-pv="directory"]');
+      button?.scrollIntoView({ block: "center" }); button?.focus({ preventScroll: true });
+      return;
+    }
     const rows = Array.from(body.querySelectorAll<HTMLElement>(".row"));
     const found =
       rows.find((r) => r.querySelector(":scope > .lbl > .t")?.textContent?.trim() === hit.text) ??
@@ -677,7 +677,6 @@ export function createSettings(app: AppContext): SettingsPage {
     }
     paintPrices();
     for (const [role, picker] of pickers) picker.update(lookFor(role));
-    for (const { picker, purpose, index, role } of fallbackPickers) picker.update(fallbackLook(lookFor(role), purpose, index, fallbackRefs(brain, purpose)[index] ?? "", fallbackBusy));
   }
 
   /** What the picker of `role` is drawn from now. */
@@ -769,7 +768,6 @@ export function createSettings(app: AppContext): SettingsPage {
    */
   function mountPickers(): void {
     pickers.clear();
-    fallbackPickers.length = 0;
     const v = view();
     const vision = body.querySelector<HTMLElement>('[data-model-picker="vision"]');
     if (vision) {
@@ -798,66 +796,6 @@ export function createSettings(app: AppContext): SettingsPage {
         );
       }
     }
-    for (const slot of body.querySelectorAll<HTMLElement>(".mf-row .mp-slot")) {
-      const purpose = slot.closest<HTMLElement>("[data-fallback-purpose]")!.dataset.fallbackPurpose as ModelPurpose;
-      const index = Number(slot.closest<HTMLElement>("[data-fallback-index]")!.dataset.fallbackIndex);
-      const role = slot.dataset.modelPicker as PickerRole;
-      fallbackPickers.push({ purpose, index, role, picker: mountModelPicker(slot, {
-        ...fallbackLook(lookFor(role), purpose, index, fallbackRefs(brain, purpose)[index] ?? "", fallbackBusy),
-        onChoose: (id) => {
-          if (!id || fallbackBusy) return;
-          const refs = fallbackRefs(brain, purpose);
-          refs[index] = id;
-          void saveFallbacks(purpose, refs, index);
-        },
-      }) });
-    }
-  }
-
-  function focusFallback(purpose: ModelPurpose, index?: number): void {
-    const key = index === undefined ? `fallback-${purpose}-add` : `fallback-${purpose}-${index}`;
-    el.querySelector<HTMLElement>(`[data-k="${key}"]`)?.focus();
-  }
-
-  async function saveFallbacks(purpose: ModelPurpose, refs: string[], index = 0): Promise<void> {
-    if (!brain || fallbackBusy || refs.length > 3) return;
-    const mine = loads, fromPane = pane;
-    fallbackBusy = true; render();
-    try {
-      const result = await api.settingsSet(fallbackKey(purpose), refs);
-      if (mine !== loads) return;
-      brain = result.settings;
-      delete fallbackDrafts[purpose];
-    } catch (err) { toaster.info(describeError(err)); }
-    finally {
-      fallbackBusy = false;
-      if (visible) {
-        render();
-        if (mine === loads && pane === fromPane) focusFallback(purpose, refs.length ? Math.min(index, refs.length - 1) : undefined);
-      }
-    }
-  }
-
-  function clickFallback(target: Element): boolean {
-    const button = target.closest<HTMLButtonElement>("[data-fallback-act]");
-    if (!button) return false;
-    const purpose = button.closest<HTMLElement>("[data-fallback-purpose]")?.dataset.fallbackPurpose as ModelPurpose;
-    if (!FALLBACK_PURPOSES.includes(purpose) || button.disabled || fallbackBusy || !brain) return true;
-    const refs = fallbackRefs(brain, purpose);
-    const index = Number(button.closest<HTMLElement>("[data-fallback-index]")?.dataset.fallbackIndex);
-    if (button.dataset.fallbackAct === "add") {
-      if (refs.length < 3 && !fallbackDrafts[purpose]) { fallbackDrafts[purpose] = true; render(); focusFallback(purpose, refs.length); }
-    } else if (button.dataset.fallbackAct === "remove") {
-      if (index === refs.length) { delete fallbackDrafts[purpose]; render(); focusFallback(purpose); }
-      else { refs.splice(index, 1); void saveFallbacks(purpose, refs, index); }
-    } else {
-      const next = index + (button.dataset.fallbackAct === "up" ? -1 : 1);
-      if (next >= 0 && next < refs.length) {
-        [refs[index], refs[next]] = [refs[next], refs[index]];
-        void saveFallbacks(purpose, refs, next);
-      }
-    }
-    return true;
   }
 
   /** The saving of favourites, one after the other, so that a quick second star is not saved before the first. */
@@ -1143,7 +1081,7 @@ export function createSettings(app: AppContext): SettingsPage {
       return;
     }
 
-    if (providers.click(target) || clickFallback(target)) return;
+    if (providers.click(target)) return;
     const choose = target.closest<HTMLElement>(".sel");
     if (choose) {
       if (menuIsOpenFor(choose)) {
@@ -1293,13 +1231,12 @@ export function createSettings(app: AppContext): SettingsPage {
     el,
     pane: () => pane,
     async show(open?: SettingsPane) {
-      fallbackDrafts = {};
       visible = true;
       document.addEventListener("keydown", settingsKey);
       const mine = ++loads;
       loading = true;
       // the first tab, unless the way in knows better (the report that says there is no key goes to the key)
-      pane = PANES.some((p) => p.id === open) ? open! : "general";
+      pane = open && PANES.some((p) => p.id === canonicalPane(open)) ? canonicalPane(open) : "general";
       connections.reset();
       messaging.reset();
       for (const list of memories) list.reset();
@@ -1370,7 +1307,6 @@ export function createSettings(app: AppContext): SettingsPage {
       syncMonitor();
     },
     hide() {
-      fallbackDrafts = {};
       visible = false;
       connections.reset();
       messaging.reset();

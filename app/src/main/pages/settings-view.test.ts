@@ -185,12 +185,12 @@ const described = (html: string): string[] =>
   html.split(/(?=<div class="row[ "])/).filter((r) => r.includes('<div class="d">')).map((r) => /<div class="t">(.*?)<\/div>/.exec(r)![1]);
 
 describe("the tabs", () => {
-  test("are General, Dictation, Raphael; Connections, Messaging; Models & usage, Data and About, in each language", () => {
-    expect(IDS).toEqual(["general", "dictation", "agent", "connections", "messaging", "usage", "models", "data", "about"]);
+  test("are General, Dictation, Raphael; Connections, Messaging; Models, Data and About, in each language", () => {
+    expect(IDS).toEqual(["general", "dictation", "agent", "connections", "messaging", "models", "data", "about"]);
     const titles = {
-      "zh-TW": ["一般", "聽寫", "拉斐爾", "連接", "訊息平台", "模型與用量", "模型", "資料", "關於"],
-      en: ["General", "Dictation", "Raphael", "Connections", "Messaging", "Models & usage", "Models", "Data", "About"],
-      ja: ["一般", "音声入力", "ラファエル", "接続", "メッセージ", "モデルと使用量", "モデル", "データ", "アプリ情報"],
+      "zh-TW": ["一般", "聽寫", "拉斐爾", "連接", "訊息平台", "模型", "資料", "關於"],
+      en: ["General", "Dictation", "Raphael", "Connections", "Messaging", "Models", "Data", "About"],
+      ja: ["一般", "音声入力", "ラファエル", "接続", "メッセージ", "モデル", "データ", "アプリ情報"],
     };
     for (const locale of LOCALES) {
       setLocale(locale);
@@ -201,7 +201,7 @@ describe("the tabs", () => {
   test("sit in three groups: the basics with no name, then 整合 and 帳戶 in small grey words", () => {
     const list = paneListHTML();
     const order = [...list.matchAll(/class="nav-group">([^<]+)<|data-pane="(\w+)"/g)].map((m) => m[1] ?? m[2]);
-    expect(order).toEqual(["general", "dictation", "agent", "整合", "connections", "messaging", "帳戶", "usage", "models", "data", "about"]);
+    expect(order).toEqual(["general", "dictation", "agent", "整合", "connections", "messaging", "帳戶", "models", "data", "about"]);
     setLocale("en");
     expect(paneListHTML()).toContain('<div class="nav-group">Integrations</div>');
     expect(paneListHTML()).toContain('<div class="nav-group">Account</div>');
@@ -211,7 +211,7 @@ describe("the tabs", () => {
 
   test("every tab is a real button; 拉斐爾's has Raphael's emblem, in a version for each theme", () => {
     const list = paneListHTML();
-    expect(list.match(/<button type="button" class="nav" data-pane="\w+" aria-current="false">/g)).toHaveLength(9);
+    expect(list.match(/<button type="button" class="nav" data-pane="\w+" aria-current="false">/g)).toHaveLength(8);
     const agent = list.slice(list.indexOf('data-pane="agent"'), list.indexOf('data-pane="connections"'));
     expect(agent).toContain('src="/brand/app-emblem-light-64.webp"');
     expect(agent).toContain('src="/brand/app-emblem-dark-64.webp"');
@@ -241,12 +241,12 @@ describe("the tabs", () => {
     expect(purpose("general")).toBe("介面和桌面圖案的外觀");
     expect(purpose("dictation")).toBe("按快捷鍵說話，拉斐爾把你說的打出來");
     expect(purpose("agent")).toBe("按 右 Alt + Space 問拉斐爾");
-    expect(purpose("usage")).toBe("拉斐爾用的雲端模型和花費");
+    expect(purpose("usage")).toBe(t("providers.about"));
   });
 
   test("keep the name and the purpose while the settings are being read", () => {
     const html = loadingHTML(view({ pane: "usage" }));
-    expect(html).toContain('<h1 id="set-title" tabindex="-1">模型與用量</h1>');
+    expect(html).toContain('<h1 id="set-title" tabindex="-1">模型</h1>');
     expect(html).toContain('<p class="purpose">');
     expect(html).toContain("settings-skeleton");
   });
@@ -277,7 +277,7 @@ describe("the rules for every tab, in every language", () => {
     expect(described(tab("general"))).toEqual(["字幕"]);
     expect(described(tab("dictation"))).toEqual(["你說的語言"]);
     // the key's status, the month's forecast, what the limit does, and what each model costs
-    expect(described(tab("usage"))).toEqual(["金鑰", "語音轉文字", "整理文字", "拉斐爾的回答"]);
+    expect(described(tab("usage"))).toEqual(["拉斐爾的回答", "整理文字", "語音轉文字", "金鑰"]);
   });
 });
 
@@ -426,11 +426,14 @@ describe("拉斐爾", () => {
   });
 });
 
-describe("模型與用量", () => {
-  test("is OpenRouter, the three primary models and the remaining purpose fallbacks", () => {
+describe("Models", () => {
+  test("orders providers, the three primary models, usage and the add action without fallbacks", () => {
     const html = tab("usage");
-    expect(groups(html)).toEqual(["OpenRouter", "模型", "其他用途的備援模型"]);
-    expect(names(html)).toEqual(["金鑰", "Raphael 本月花費", "OpenRouter 帳號本月用量", "語音轉文字", "整理文字", "拉斐爾的回答", "路由與快速工作", "閱讀 PDF", "記憶"]);
+    expect(html).toBe(tab("models"));
+    expect(groups(html)).toEqual(["供應商", "使用的模型", "用量"]);
+    expect(names(html)).toEqual(["拉斐爾的回答", "整理文字", "語音轉文字", "金鑰", "Raphael 本月花費", "OpenRouter 帳號本月用量"]);
+    expect(html.indexOf('data-pv="directory"')).toBeGreaterThan(html.indexOf('data-row="usage"'));
+    expect(html).not.toContain("data-fallback");
   });
 
   test("shows how OpenRouter took the key, with buttons to check again and to change it", () => {
@@ -473,14 +476,15 @@ describe("模型與用量", () => {
       const row = rowOf(html, name);
       expect(row).toContain(`data-row="${k}"`);
       expect(row).toContain(
-        `<div class="d"><span class="price num" data-price="${k}">${price}</span></div></div>` +
-          `<div class="ctl"><div class="model-choices"><span class="mp-slot" data-model-picker="${role}"><button type="button" class="sel mp-trigger" aria-haspopup="dialog"`,
+        `<span class="price num" data-price="${k}">${price}</span></div></div>` +
+          `<div class="ctl"><span class="mp-slot" data-model-picker="${role}"><button type="button" class="sel mp-trigger" aria-haspopup="dialog"`,
       );
       // The button names what is chosen and leaves its price to the line under the row's name.
       expect(row).toMatch(new RegExp(`data-k="${k}"><span class="mp-tname">${chosen}</span><svg`));
       expect(row).not.toContain("mp-tprice");
-      expect(buttons(row)).toHaveLength(2);
-      expect(row).toContain('data-fallback-act="add"');
+      expect(buttons(row)).toHaveLength(1);
+      expect(row).toContain('class="models-purpose-note"');
+      expect(row).not.toContain('data-fallback');
     }
     expect(priceTexts(view()).note).toBe("價格來自 OpenRouter，今天更新。實際花費依 OpenRouter 選用的供應商而定。");
   });
@@ -626,8 +630,9 @@ describe("搜尋設定", () => {
   test("finds a tab by its name, before its rows, and a brand by its name; case does not matter", () => {
     expect(where("連接")[0]).toBe("connections:連接");
     expect(where("telegram")).toEqual(["messaging:訊息平台"]);
-    expect(where("OPENROUTER")).toEqual(["models:新增供應商", "usage:金鑰", "usage:OpenRouter 帳號本月用量"]);
-    expect(where("模型")).toEqual(["usage:模型與用量", "models:模型", "usage:語音轉文字", "usage:整理文字", "usage:拉斐爾的回答"]);
+    expect(where("OPENROUTER")).toEqual(["models:新增供應商", "models:金鑰", "models:OpenRouter 帳號本月用量"]);
+    expect(where("模型")).toEqual(["models:模型", "models:語音轉文字", "models:整理文字", "models:拉斐爾的回答"]);
+    expect(where("Models & usage")[0]).toBe("models:模型");
   });
 
   test("finds nothing for nothing, and says so for what it does not know", () => {
@@ -653,7 +658,8 @@ describe("搜尋設定", () => {
         const headings = [...html.matchAll(/<h2(?: class="[^"]*")?>(.*?)<\/h2>/g)].map((m) => m[1]);
         // a capability of 服務 is a row of the rounded list, named by its `.nm`
         const items = [...html.matchAll(/<span class="nm">(.*?)<\/span>/g)].map((m) => m[1]);
-        expect([...names(html), ...items, ...headings].map((shown) => shown.replace("&#39;", "'")), `${locale} ${entry.label}`).toContain(name);
+        const addButton = /data-pv="directory"[^>]*>(.*?)<\/button>/.exec(html)?.[1].replace(/<[^>]*>/g, "") ?? "";
+        expect([...names(html), ...items, ...headings, addButton].map((shown) => shown.replace("&#39;", "'")), `${locale} ${entry.label}`).toContain(name);
       }
     }
   });

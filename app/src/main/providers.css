@@ -1,12 +1,32 @@
-/* Models follows the service list and dialog, with the same theme surfaces and type scale. */
-.pv { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); }
-.pv .sgroup { margin: 0; }
-.pv-directory { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); }
-.pv > .field { width: 100%; }
-.pv-add-title { margin: var(--sp-2) 0 0; font-size: var(--fs-md); }
-.pv-add { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 14px; cursor: default; }
-.pv-add .cs-main { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
+/* Models shares the service list's surfaces, focus states and type scale. */
+.models-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-6); margin-top: var(--sp-5); }
+.models-page > .sgroup { margin: 0; }
+.pv { container: models / inline-size; }
+.models-purpose-note { display: block; color: var(--text-2); line-height: 1.5; }
+.pv-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+.pv-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; min-width: 0; min-height: 96px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); }
+.pv-card:hover { background: var(--hover); }
+:where(:root[data-keys]) .pv-card:has(.cs-open:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+.pv-card .cs-open { display: flex; align-items: center; align-self: stretch; height: auto; min-height: 94px; min-width: 0; gap: var(--sp-3); padding: var(--sp-4); background: transparent; border: 0; border-radius: var(--r-lg); text-align: start; color: inherit; }
+.pv-card .cs-open:focus-visible { outline: none; }
+.pv-card > .tg { margin-inline-end: var(--sp-4); }
+.pv-card .ic { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px; }
+.pv-card .mono.md { width: 24px; height: 24px; }
+.pv-card .mono .i { width: 20px; height: 20px; }
+.pv-card .tx { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); min-width: 0; flex: 1; }
+.pv-card .nm { font-size: var(--fs-md); font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-card .ds { font-size: var(--fs-sm); color: var(--text-2); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-card .chev { display: inline-flex; color: var(--text-3); }
+.pv-add { grid-template-columns: 24px minmax(0, 1fr) auto; gap: var(--sp-3); padding: var(--sp-4); }
+:where(:root[data-keys]) .pv-add:has(.btn:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+.pv-directory { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-6); }
+.pv-directory .sgroup { margin: 0; }
+.pv-directory h3 { margin: 0 0 var(--sp-3); font-size: var(--fs-md); }
+.pv-results { margin: 0; }
 .pv-dialog { width: min(480px, 100%); }
+.pv-catalog { width: min(940px, 100%); gap: var(--sp-4); container: providers / inline-size; }
+.pv-setup { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); width: 100%; max-width: 520px; margin-inline: auto; }
+.pv-catalog > .field { width: 100%; }
 .pv-dialog .ic { display: inline-flex; align-items: center; flex: none; }
 .pv-dialog h2 { font-size: var(--fs-lg); min-width: 0; overflow-wrap: anywhere; margin: 0; }
 .pv-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
@@ -25,5 +45,8 @@
 .pv-model-list li + li { border-top: 1px solid var(--line); }
 .pv-model-name, .pv-model-id { overflow-wrap: anywhere; }
 .pv-model-id { font-size: var(--fs-sm); color: var(--text-3); }
-.pv .mono .i, .pv-dialog .mono .i { width: 20px; height: 20px; }
-.pv .mono.md, .pv-dialog .mono.md { width: 20px; height: 20px; }
+.pv-dialog .cs-dlg-head .mono .i { width: 20px; height: 20px; }
+.pv-dialog .cs-dlg-head .mono.md { width: 20px; height: 20px; }
+@container models (max-width: 560px) { .pv > .pv-grid { grid-template-columns: minmax(0, 1fr); } }
+@container providers (max-width: 560px) { .pv-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 720px) { .pv-grid { grid-template-columns: minmax(0, 1fr); } }

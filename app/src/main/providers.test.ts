@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { setLocale } from "./i18n";
+import { setLocale, t } from "./i18n";
 
 const api = vi.hoisted(() => ({
   providersKinds: vi.fn(), providersList: vi.fn(), providersAdd: vi.fn(), providersUpdate: vi.fn(),
@@ -9,7 +9,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("./api", () => api);
 
-import { createProviders, providersHTML } from "./providers";
+import { createProviders, providersHTML, providersAddHTML } from "./providers";
 
 const connected = { id: "p3", kind: "openai", name: "OpenAI", base_url: "https://api.openai.com/v1", has_key: true, enabled: true, status: "ok", models: 42 };
 const kinds = [
@@ -20,7 +20,7 @@ const kinds = [
 ];
 let root: HTMLDivElement;
 function mount() {
-  const panel = createProviders({ root, visible: () => true, redraw: () => { root.innerHTML = providersHTML(panel.view()); } });
+  const panel = createProviders({ root, visible: () => true, redraw: () => { root.innerHTML = providersHTML(panel.view()) + providersAddHTML(panel.view()); } });
   root.addEventListener("click", (e) => panel.click(e.target as Element));
   root.addEventListener("input", (e) => panel.input(e.target as Element));
   root.addEventListener("keydown", (e) => panel.key(e));
@@ -29,6 +29,11 @@ function mount() {
 }
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 function click(selector: string) { const el = root.querySelector<HTMLButtonElement>(selector); expect(el, selector).not.toBeNull(); el!.click(); }
+
+function connect(selector: string) {
+  if (!root.querySelector(selector)) click('[data-pv="directory"]');
+  click(selector);
+}
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -42,7 +47,7 @@ beforeEach(() => {
 
 test("connecting a kind saves its fields once and clears the password before awaiting the core", async () => {
   const panel = mount(); await panel.load();
-  click('[data-pv="add"][data-id="openai"]');
+  connect('[data-pv="add"][data-id="openai"]');
   const key = root.querySelector<HTMLInputElement>('input[type="password"]')!;
   expect(key).not.toBeNull();
   key.value = "secret-never-rendered";
@@ -64,6 +69,7 @@ test("the provider directory orders popular gateways first and searches names ac
     ...["Zulu", "Vercel", "Alpha", "Portkey", "OpenRouter", "LiteLLM"].map((name) => ({ kind: name.toLowerCase(), name, group: "gateway", fields: ["key"], available: true })),
   ] });
   const panel = mount(); await panel.load();
+  click('[data-pv="directory"]');
   const names = () => [...root.querySelectorAll('.pv-add .nm')].map((node) => node.textContent);
   expect(names()).toEqual(["OpenAI", "Amazon Bedrock", "OpenRouter", "LiteLLM", "Portkey", "Vercel", "Alpha", "Custom", "Zulu", "Ollama"]);
   const search = root.querySelector<HTMLInputElement>("#pv-kind-search")!;
@@ -73,9 +79,62 @@ test("the provider directory orders popular gateways first and searches names ac
   expect(root.querySelectorAll(".pv-add .ds")).toHaveLength(2);
 });
 
+test.each(["zh-TW", "en", "ja"] as const)("%s renders every kind as a marked card with a description and a real connect button", async (locale) => {
+  setLocale(locale);
+  const panel = mount(); await panel.load(); click('[data-pv="directory"]');
+  const dialog = root.querySelector('[role="dialog"]')!;
+  expect(dialog.getAttribute("aria-modal")).toBe("true");
+  expect(dialog.querySelectorAll(".pv-grid")).toHaveLength(3);
+  const cards = [...dialog.querySelectorAll(".pv-card")];
+  expect(cards).toHaveLength(kinds.length);
+  expect(cards.map((card) => card.querySelector<HTMLElement>('[data-pv="add"]')?.dataset.id).sort()).toEqual(kinds.map((kind) => kind.kind).sort());
+  for (const card of cards) {
+    expect(card.querySelector('.ic .mono :is(img.logo, svg.i)')).not.toBeNull();
+    expect(card.querySelector(".ds")?.textContent?.length).toBeGreaterThan(8);
+    expect(card.querySelector('button[type="button"][data-pv="add"]')).not.toBeNull();
+  }
+  expect(cards[0].textContent).toContain(t("providers.officialAPI", { p0: "OpenAI" }));
+  expect(cards[2].textContent).toContain(t("providers.compatibleNote"));
+});
+
+test("the add dialog preserves search on back, discards credentials and restores focus on close", async () => {
+  const panel = mount(); await panel.load(); click('[data-pv="directory"]');
+  expect(document.activeElement?.id).toBe("pv-kind-search");
+  const search = root.querySelector<HTMLInputElement>("#pv-kind-search")!;
+  search.value = "OpenAI"; search.dispatchEvent(new Event("input", { bubbles: true }));
+  click('[data-pv="add"][data-id="openai"]');
+  expect(root.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+  expect(root.querySelector('[data-dialog="provider:add"] .pv-catalog')).not.toBeNull();
+  root.querySelector<HTMLInputElement>('input[type="password"]')!.value = "discard-on-back";
+  click('[data-pv="back"]');
+  expect(root.querySelector<HTMLInputElement>("#pv-kind-search")?.value).toBe("OpenAI");
+  expect(root.querySelectorAll(".pv-add")).toHaveLength(1);
+  expect((document.activeElement as HTMLElement).dataset.id).toBe("openai");
+  click('[data-pv="add"][data-id="openai"]');
+  expect(root.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe("");
+  expect(api.providersAdd).not.toHaveBeenCalled();
+  click('[data-pv="close"]');
+  expect(root.querySelector('[role="dialog"]')).toBeNull();
+  expect((document.activeElement as HTMLElement).dataset.pv).toBe("directory");
+});
+
+test("a search with no matches remains editable and Escape closes the add dialog", async () => {
+  const panel = mount(); await panel.load(); click('[data-pv="directory"]');
+  const search = root.querySelector<HTMLInputElement>("#pv-kind-search")!;
+  search.value = "unmatched"; search.dispatchEvent(new Event("input", { bubbles: true }));
+  expect(root.querySelectorAll(".pv-add")).toHaveLength(0);
+  expect(root.querySelector('[role="dialog"]')?.textContent).toContain("No providers match");
+  expect(document.activeElement?.id).toBe("pv-kind-search");
+  document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(root.querySelector('[role="dialog"]')).toBeNull();
+  click('[data-pv="directory"]');
+  expect(root.querySelector<HTMLInputElement>("#pv-kind-search")?.value).toBe("");
+  expect(root.querySelectorAll(".pv-add")).toHaveLength(kinds.length);
+});
+
 test("Bedrock credentials are passwords and region is a working dropdown; docs open from metadata", async () => {
   api.providersKinds.mockResolvedValue({ kinds: [{ ...kinds[1], available: true, fields: ["region", "key_id", "secret", "api_version"], docs_url: "https://console.aws.amazon.com/bedrock/" }] });
-  const panel = mount(); await panel.load(); click('[data-pv="add"]');
+  const panel = mount(); await panel.load(); connect('[data-pv="add"]');
   expect(root.querySelectorAll('input[type="password"]')).toHaveLength(2);
   click('[data-pv-field="region"]');
   const choice = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find((node) => node.textContent?.includes("ap-northeast-1"));
@@ -94,7 +153,7 @@ test("Bedrock credentials are passwords and region is a working dropdown; docs o
 test("Vertex accepts pasted or locally picked JSON without rendering credentials and rejects malformed accounts", async () => {
   const vertex = { kind: "vertex", name: "Vertex AI", group: "official", available: true, fields: ["service_account", "project", "location"] };
   api.providersKinds.mockResolvedValue({ kinds: [vertex] });
-  const panel = mount(); await panel.load(); click('[data-pv="add"]');
+  const panel = mount(); await panel.load(); connect('[data-pv="add"]');
   const area = root.querySelector<HTMLTextAreaElement>("textarea")!;
   expect(area).not.toBeNull();
   area.value = JSON.stringify({ client_email: "user@example.com", private_key: "private-account-key" });
@@ -146,11 +205,14 @@ test("editing a saved regional provider preserves unknown public configuration u
   expect(api.providersUpdate).toHaveBeenCalledWith({ id: "p3", name: "OpenAI" });
 });
 
-test("connected providers show a status, a switch, and real connect buttons grouped by kind", async () => {
+test("connected cards show status, a switch and a dialog button; the add dialog groups all kinds", async () => {
   const panel = mount(); await panel.load();
   expect(root.textContent).toContain("42 models");
   expect(root.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
-  for (const title of ["Connected", "Add a provider", "Official", "Gateways and cloud", "Local"]) expect(root.textContent).toContain(title);
+  expect(root.querySelector('.pv-grid .pv-card [data-pv="open"]')).not.toBeNull();
+  expect(root.querySelector('[role="dialog"]')).toBeNull();
+  click('[data-pv="directory"]');
+  for (const title of ["Providers", "Add a provider", "Official", "Gateways and cloud", "Local"]) expect(root.textContent).toContain(title);
   expect(root.querySelector<HTMLButtonElement>('[data-pv="add"][data-id="bedrock"]')?.disabled).toBe(true);
   expect(root.querySelector('[data-pv="open"] .ic')?.textContent).toBe("");
   click('[data-pv="toggle"]'); await flush();
@@ -235,7 +297,7 @@ test("a replacement must be saved before testing so the result describes the new
 
 test("a custom endpoint can connect without a key while invalid addresses stay in the dialog", async () => {
   const panel = mount(); await panel.load();
-  click('[data-pv="add"][data-id="openai_compatible"]');
+  connect('[data-pv="add"][data-id="openai_compatible"]');
   const address = root.querySelector<HTMLInputElement>('input[aria-label="API address"]')!;
   address.value = "file:///tmp/model";
   click('[data-pv="save"]'); await flush();
@@ -252,7 +314,7 @@ test("a custom endpoint can connect without a key while invalid addresses stay i
 
 test("failed saves show a safe error and preserve public drafts without retaining the secret", async () => {
   const panel = mount(); await panel.load();
-  click('[data-pv="add"][data-id="openai"]');
+  connect('[data-pv="add"][data-id="openai"]');
   root.querySelector<HTMLInputElement>('input[aria-label="Name"]')!.value = "My account";
   root.querySelector<HTMLInputElement>('input[type="password"]')!.value = "write-only-secret";
   api.providersAdd.mockRejectedValue(new Error("write-only-secret"));

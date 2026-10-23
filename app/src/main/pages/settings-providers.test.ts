@@ -45,9 +45,39 @@ beforeEach(() => {
   api.languagesList.mockResolvedValue({ groups: [] });
   api.modelsLocal.mockResolvedValue({ models: [] });
   api.modelsCatalog.mockResolvedValue(empty);
+  api.providersKinds.mockResolvedValue({ kinds: [] });
+  api.providersList.mockResolvedValue({ providers: [] });
   api.settingsSet.mockImplementation(async (key: string, value: string) => ({ settings: { stt_engine: "cloud", [key]: value } }));
 });
 afterEach(() => { page?.hide(); document.body.innerHTML = ""; setLocale("zh-TW"); });
+
+test.each(["usage", "models"] as const)("%s opens the single Models pane without exposing saved fallback settings", async (alias) => {
+  api.settingsGet.mockResolvedValue({ settings: { stt_engine: "cloud", cleanup_fallbacks: ["@p1:private-chain"] } });
+  await mount(); await page.show(alias); await flush();
+  expect(page.pane()).toBe("models");
+  expect(page.el.querySelectorAll('.set-list [data-pane="models"]')).toHaveLength(1);
+  expect(page.el.querySelector('.set-list [data-pane="usage"]')).toBeNull();
+  expect(page.el.querySelectorAll('[data-model-picker]')).toHaveLength(3);
+  expect(page.el.querySelector('[data-fallback-purpose]')).toBeNull();
+  expect(page.el.textContent).not.toContain("Fallback models");
+  expect(api.settingsSet).not.toHaveBeenCalled();
+});
+
+test("provider search focuses the Models add action and opens its searchable dialog", async () => {
+  api.providersKinds.mockResolvedValue({ kinds: [{ kind: "openai", name: "OpenAI", fields: ["key"], group: "official", available: true }] });
+  await mount(); await page.show("general"); await flush();
+  const search = page.el.querySelector<HTMLInputElement>("#set-search")!;
+  search.value = "OpenAI"; search.dispatchEvent(new Event("input", { bubbles: true }));
+  click('.set-hit[data-hit="0"]'); await flush();
+  expect(page.pane()).toBe("models");
+  expect((document.activeElement as HTMLElement).dataset.pv).toBe("directory");
+  click('[data-pv="directory"]');
+  expect(page.el.querySelector('[role="dialog"] #pv-kind-search')).not.toBeNull();
+  click('[data-pv="add"]');
+  expect(page.el.querySelector('input[type="password"][id^="pv-"]')).not.toBeNull();
+  click('[data-pv="back"]');
+  expect(page.el.querySelector('[role="dialog"] #pv-kind-search')).not.toBeNull();
+});
 
 test("a late catalog response cannot undo a newer provider notification in an open picker", async () => {
   await mount(); click('[data-model-picker="answer"] .mp-trigger');
@@ -76,42 +106,10 @@ test.each([
   expect(api.settingsSet).toHaveBeenCalledWith(setting, "openai/example");
 });
 
-test("fallbacks add ordered provider refs, cap at three, reorder and remove through settings.set", async () => {
-  let settings = { stt_engine: "cloud", cleanup_fallbacks: ["@p1:first", "@p2:second"] };
-  api.settingsGet.mockImplementation(async () => ({ settings }));
-  api.settingsSet.mockImplementation(async (key: string, value: unknown) => { settings = { ...settings, [key]: value }; return { settings }; });
-  api.modelsCatalog.mockResolvedValue(direct);
-  await mount();
-  const section = () => page.el.querySelector('[data-fallback-purpose="cleanup"]')!;
-  expect(section()).not.toBeNull();
-  expect(section().querySelectorAll('.mp-slot')).toHaveLength(2);
-  click('[data-fallback-purpose="cleanup"] [data-fallback-act="add"]');
-  expect(api.settingsSet).not.toHaveBeenCalled();
-  expect(section().querySelectorAll('.mp-slot')).toHaveLength(3);
-  click('[data-fallback-purpose="cleanup"] [data-fallback-index="2"] .mp-trigger');
-  click('[data-id="@p4:local:8b"]'); await flush();
-  expect(api.settingsSet).toHaveBeenLastCalledWith("cleanup_fallbacks", ["@p1:first", "@p2:second", "@p4:local:8b"]);
-  expect(section().querySelector<HTMLButtonElement>('[data-fallback-act="add"]')?.disabled).toBe(true);
-  click('[data-fallback-purpose="cleanup"] [data-fallback-index="2"] [data-fallback-act="up"]'); await flush();
-  expect(api.settingsSet).toHaveBeenLastCalledWith("cleanup_fallbacks", ["@p1:first", "@p4:local:8b", "@p2:second"]);
-  click('[data-fallback-purpose="cleanup"] [data-fallback-index="0"] [data-fallback-act="down"]'); await flush();
-  expect(api.settingsSet).toHaveBeenLastCalledWith("cleanup_fallbacks", ["@p4:local:8b", "@p1:first", "@p2:second"]);
-  click('[data-fallback-purpose="cleanup"] [data-fallback-index="1"] [data-fallback-act="remove"]'); await flush();
-  expect(api.settingsSet).toHaveBeenLastCalledWith("cleanup_fallbacks", ["@p4:local:8b", "@p2:second"]);
-});
-
-test.each(["agent", "cleanup", "router", "pdf", "stt", "memory"])("the %s fallback picker stores its own purpose key", async (purpose) => {
-  api.modelsCatalog.mockResolvedValue(direct); await mount();
-  click(`[data-fallback-purpose="${purpose}"] [data-fallback-act="add"]`);
-  click(`[data-fallback-purpose="${purpose}"] .mp-trigger`);
-  click('[data-id="@p4:local:8b"]'); await flush();
-  expect(api.settingsSet).toHaveBeenCalledWith(`${purpose}_fallbacks`, ["@p4:local:8b"]);
-});
-
 test("provider dropdowns and local JSON fields work through settings event delegation", async () => {
   api.providersList.mockResolvedValue({ providers: [] });
   api.providersKinds.mockResolvedValue({ kinds: [{ kind: "vertex", name: "Vertex", fields: ["service_account", "project", "location"], group: "official", available: true }] });
-  await mount(); click('[data-pane="models"]'); await flush(); click('[data-pv="add"]');
+  await mount(); click('[data-pane="models"]'); await flush(); click('[data-pv="directory"]'); click('[data-pv="add"]');
   click('[data-pv-field="location"]');
   const choice = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find((node) => node.textContent?.includes("asia-east1"))!;
   expect(choice).toBeDefined(); choice.click();
@@ -122,7 +120,7 @@ test("provider dropdowns and local JSON fields work through settings event deleg
   expect(api.providersAdd).toHaveBeenCalledWith({ kind: "vertex", name: "Vertex", location: "asia-east1", project: "project", service_account: '{"client_email":"test@example.com","private_key":"secret"}' });
 });
 
-test("vision fallback settings use image models in the service dialog", async () => {
+test("vision keeps its primary image picker without fallback controls", async () => {
   const visionCatalog = { ...direct, llm: direct.llm.map((m) => ({ ...m, capabilities: { input_modalities: ["text", "image"] } })) };
   api.modelsCatalog.mockResolvedValue(visionCatalog);
   api.servicesStatus.mockResolvedValue({
@@ -133,19 +131,9 @@ test("vision fallback settings use image models in the service dialog", async ()
   await mount(); click('[data-pane="agent"]'); await flush();
   click('button[data-svc="open"][data-id="vision"]');
   click('button[data-svc="service"][data-service="model"]');
-  click('[data-fallback-purpose="vision"] [data-fallback-act="add"]');
-  click('[data-fallback-purpose="vision"] .mp-trigger');
+  expect(page.el.querySelector('[data-fallback-purpose]')).toBeNull();
+  expect(page.el.querySelectorAll('[data-model-picker="vision"]')).toHaveLength(1);
+  click('[data-model-picker="vision"] .mp-trigger');
   click('[data-id="@p4:local:8b"]'); await flush();
-  expect(api.settingsSet).toHaveBeenCalledWith("vision_fallbacks", ["@p4:local:8b"]);
-});
-
-test("redrawing an open fallback picker keeps its identity instead of selecting the primary model", async () => {
-  api.modelsCatalog.mockResolvedValue(direct);
-  api.settingsGet.mockResolvedValue({ settings: { stt_engine: "cloud", cleanup_fallbacks: ["@p1:old"] } });
-  await mount(); click('[data-fallback-purpose="cleanup"] .mp-trigger');
-  setLocale("ja"); await flush();
-  click('[data-id="@p4:local:8b"]'); await flush();
-  expect(api.settingsSet).toHaveBeenCalledWith("cleanup_fallbacks", ["@p4:local:8b"]);
-  expect(api.settingsSet).not.toHaveBeenCalledWith("cleanup_model", expect.anything());
-  expect((document.activeElement as HTMLElement).dataset.k).toBe("fallback-cleanup-0");
+  expect(api.settingsSet).toHaveBeenCalledWith("vision_model", "@p4:local:8b");
 });
