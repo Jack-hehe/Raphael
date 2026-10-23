@@ -11,7 +11,11 @@
 - `create_member {name, role, instructions, group?}` adds a member when the owner asks for one
   (「幫我加一個管行程的成員」). Raphael's alone, at the owner's request (never at a member's).
 
-Both are T1 in the gate (`gate.TEAM_TOOLS`): they run at once, through the gate like every tool. The
+Both are T1 in the gate (`gate.TEAM_TOOLS`): they run at once, through the gate like every tool.
+Adding a member changes something, so the owner's safety rules judge it first, as they judge a
+plugin's tool (`agent.safety`, by the name `create_member`): a rule may forbid it or have it asked
+about, in the fast tier at the overlay and in the background with the waiting question. Asking
+another is not judged: what the one asked does is judged as it does it. The
 fast tier offers them to the call that picks tools only when the request is about the team (it names
 a member, or Raphael for a member, or asks for a new member: `team_wanted`), so that a question about
 something else costs nothing more; the background worker is offered them whenever there is someone to
@@ -98,6 +102,11 @@ def _definition(name: str) -> dict[str, Any]:
             "required": ["name", "role", "instructions"],
         },
     }
+
+
+def description(name: str) -> str:
+    """What the team tool `name` does, as the model and the safety rules' judge are told."""
+    return str(_definition(name)["description"])
 
 
 def team_tool(name: str) -> PluginTool:

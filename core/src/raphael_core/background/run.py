@@ -33,7 +33,9 @@ tool call; it decides whether to give them, and gives them itself. In order:
   from memory: never a path.
 - **The team.** `ask_member` and `create_member` (`agent.team`) are made by the assistant for the
   task's speaker (`team`), through the gate like the rest; the member asked answers on this task's
-  ledger, so what it spends counts toward the task's own limit and the month's.
+  ledger, so what it spends counts toward the task's own limit and the month's. `create_member` is
+  judged by the safety rules first, like a plugin's tool that changes something: forbidden, or made
+  to wait for the owner (and then made by `answer_call` too).
 
 Each call, whatever came of it, leaves a step (`TaskStore.add_step`): the tool, its tier, how it
 ended, what it cost; never an argument or a result. A task that was cancelled while a plugin's tool
@@ -59,7 +61,8 @@ from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult
 from ..agent.steps import reason_of
 from ..agent.policy import Action, Approval, NotApproved, Tier, UnknownTool
 from ..agent.safety import DENY, PASS, Proposed, Screening, needs_yes, summarize
-from ..agent.team import ASK_MEMBER, TEAM_TOOLS
+from ..agent.team import ASK_MEMBER, CREATE_MEMBER, TEAM_TOOLS
+from ..agent.team import description as team_description
 from ..agent.tools import ToolResult, Tools
 from ..brain.catalog import LLM, find
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
@@ -164,7 +167,8 @@ NOT_MADE_WHILE_WAITING = (
 
 @dataclass
 class Waiting:
-    """A call of a plugin's tool that waits for the owner's yes: the alias the worker called it by,
+    """A call that waits for the owner's yes (a plugin's tool, or `create_member` that a rule asks
+    about): the alias the worker called it by,
     the tool, what it is given (in memory only), the id of the call, the tier it was asked at, and
     what the safety rules said of it."""
 
@@ -466,7 +470,7 @@ class TaskRun:
         elif ref.kind == FIND:
             reply, outcome, tier = self._find(arguments)
         else:
-            reply, outcome, tier, detail = await self._builtin(ref, arguments)
+            reply, outcome, tier, detail = await self._builtin(ref, arguments, name, call_id)
         if reply.get("ok") and isinstance(reply.get("content"), str):
             self.seen_urls.add_from(reply["content"])  # what it returned may be read next
         fields = {
@@ -488,16 +492,26 @@ class TaskRun:
 
     async def _screen(self, ref: ToolRef, arguments: dict) -> Screening:
         """What the owner's safety rules say of a call: PASS for a tool its server says only reads,
-        which is never judged. The judge is paid, so the limits on money are read first."""
-        if self._gate.safety is None or self._gate.reads_only(ref.server, ref.name):
+        and for Raphael's own but `create_member`, which are never judged. The judge is paid, so the
+        limits on money are read first."""
+        if self._gate.safety is None:
             return PASS
-        self._check(paid=True)
-        description = ""
-        pool = self.snapshot.pool
-        if pool is not None:
-            tool = next((t for t in pool.by_alias.values() if t.key == ref.key), None)
-            description = "" if tool is None else tool.description
-        proposed = Proposed(f"{ref.server} / {ref.name}", description, summarize(arguments))
+        if ref.kind == BUILTIN:
+            # Of Raphael's own, only adding a member is judged (`agent.team`), by its own name.
+            if ref.name != CREATE_MEMBER:
+                return PASS
+            self._check(paid=True)
+            proposed = Proposed(CREATE_MEMBER, team_description(CREATE_MEMBER), summarize(arguments))
+        else:
+            if self._gate.reads_only(ref.server, ref.name):
+                return PASS
+            self._check(paid=True)
+            description = ""
+            pool = self.snapshot.pool
+            if pool is not None:
+                tool = next((t for t in pool.by_alias.values() if t.key == ref.key), None)
+                description = "" if tool is None else tool.description
+            proposed = Proposed(f"{ref.server} / {ref.name}", description, summarize(arguments))
         return await self._guarded(
             self._gate.screen(proposed, language=self.language, ledger=self.ledger)
         )
@@ -579,6 +593,18 @@ class TaskRun:
                 outcome="blocked", ms=0, reason="denied",
             )  # fmt: skip
             return result_text(waiting.alias, ToolOutcome(False, "denied", OWNER_SAID_NO))
+        if ref.kind == BUILTIN:
+            # Adding a member that a rule asked about (T1: the owner's yes is all it waited for).
+            began = time.perf_counter()
+            result = await self._lookup(ref.name, waiting.arguments)
+            outcome = "ok" if result.ok else ("timeout" if result.error == "timeout" else "error")
+            self._gate.record_builtin(ref.name, outcome=outcome, task_id=self.task_id)
+            self._step(
+                kind="tool", tool=ref.name, server=ref.server, tier=waiting.tier.name,
+                outcome=outcome, ms=_ms(began), reason=reason_of(outcome, result.error),
+            )  # fmt: skip
+            content = json.dumps(result.data, ensure_ascii=False) if result.ok else ""
+            return result_text(waiting.alias, ToolOutcome(result.ok, result.error, content))
         now = self._gate.tier_now(ref.key)
         # The yes is for the tier the question was asked at: a tool that has none now, or a higher
         # one, is not covered by it.
@@ -630,7 +656,7 @@ class TaskRun:
         return reply, "ok", "T0"
 
     async def _builtin(
-        self, ref: ToolRef, arguments: dict
+        self, ref: ToolRef, arguments: dict, alias: str = "", call_id: str = ""
     ) -> tuple[dict, str, str | None, str | None]:
         """(the reply, how it ended, the tier, the service it used) of one of Raphael's own."""
         gate = self._gate
@@ -640,6 +666,23 @@ class TaskRun:
         except (UnknownTool, NotApproved):
             gate.record_builtin(ref.name, outcome="blocked", task_id=self.task_id)
             return _refused(), "blocked", None if tier is None else tier.name, None
+        if ref.name == CREATE_MEMBER and tier is not None:
+            screening = await self._screen(ref, arguments)
+            if screening.verdict == DENY:
+                gate.record_builtin(ref.name, outcome="blocked", task_id=self.task_id)
+                reply = {
+                    "ok": False,
+                    "kind": "forbidden",
+                    "content": FORBIDDEN_BY_RULE.format(rule=screening.rule or ""),
+                    "truncated": False,
+                }
+                return reply, "blocked", tier.name, None
+            if needs_yes(False, screening):
+                if self.can_wait:
+                    self.waiting = Waiting(alias or ref.name, ref, dict(arguments), call_id, tier, screening)
+                    raise stopped(WAITING)
+                gate.record_builtin(ref.name, outcome="blocked", task_id=self.task_id)
+                return _refused(), "blocked", tier.name, None
         result = await self._lookup(ref.name, arguments)
         if result.error == "url_not_seen":
             outcome = "blocked"

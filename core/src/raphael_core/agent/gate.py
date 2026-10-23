@@ -17,7 +17,8 @@ is unknown and cannot run; and it holds the door to the plugins' tools (`plugins
   the time, the memory) for a task;
 - `screen` asks the owner's safety rules (`safety`) about an action that changes something, before
   it is made: a plugin's tool that its server does not say only reads (`reads_only`), a step on the
-  desktop (never a command for this computer: see `safety`). Its verdict adds to the tiers and never
+  desktop, the creation of a member (`create_member`; never a command for this computer: see
+  `safety`). Its verdict adds to the tiers and never
   takes from them:
   a rule may refuse an action or have it asked about, and a rule that allows an action waives only
   the questions of the rules (`safety.needs_yes`). Without rules (or without a guard, as in most
@@ -28,7 +29,7 @@ turns (`history_search`) only read, so they are T0; writing and deleting a note 
 `memory_delete`) change only Raphael's own memory, which the user sees and can undo in the settings,
 so they are T1: they run at once, with no yes asked for. So are the tools that reach the owner's team
 (`team`): `ask_member`, which has another member answer, and `create_member`, which adds one at the
-owner's request.
+owner's request (and which the safety rules judge first, like a plugin's tool that changes something).
 
 The audit holds a time, a tool, a tier, who approved and how it ended; never an argument or a result.
 Nothing here logs a name, an argument or a result.

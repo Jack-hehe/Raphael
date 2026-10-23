@@ -96,7 +96,8 @@ does that. The team tools (`team`) are offered to the picking call when a reques
 any assistant asks any other (`ask_member`), and Raphael adds a member at the owner's request
 (`create_member`, 《了。已建立「…」。》). The one asked answers through `answer_for`, as itself and
 never on the desktop, within a chain at most two deep and with no cycle (`Speaker.can_ask`); the
-exchange is written in the two threads alone. A question for a yes in such an answer nobody waits for at
+exchange is written in the two threads alone. Adding a member is judged by the safety rules like
+a plugin's tool (`create_member`): a rule may forbid it or have it asked about first. A question for a yes in such an answer nobody waits for at
 the overlay: it goes to `ask_in_background`, which refuses it for now (the seam of the safety rules'
 waiting questions). `agent.history.list` and `agent.history.search` take `member_id` too, and read
 that thread alone; `agent.turn` names the thread of the turn (`member_id`).
@@ -1341,14 +1342,7 @@ class AgentService:
                 asking.append((call, screening))
             else:
                 automatic.append(call)
-        made = await asyncio.gather(
-            *(
-                self._team_call(ask, c, ledger)
-                if c.tool.key in TEAM_TOOLS
-                else self._plugin_call(c, None, steps=ask.steps)
-                for c in automatic
-            )
-        )
+        made = await asyncio.gather(*(self._make_call(ask, c, None, ledger) for c in automatic))
         results = [*results, *made]
         if not asking:
             return results
@@ -1367,13 +1361,37 @@ class AgentService:
         return self._ask_plugin(ask, first, results, ledger, why)
 
     async def _screen_call(self, ask: _Ask, call: PlannedCall, ledger: Ledger) -> Screening:
-        """What the owner's safety rules say of a call of a plugin's tool: PASS for a tool its
-        server says only reads, which is never judged."""
+        """What the owner's safety rules say of a call of a plugin's tool or a team tool: PASS for a
+        tool its server says only reads, and for `ask_member`, which are never judged."""
         tool = call.tool
-        if self._gate.reads_only(tool.server, tool.name):
+        if tool.key in TEAM_TOOLS:
+            # Asking another assistant changes nothing (what the one asked does is judged as it
+            # does it); adding a member does, and is judged by its own name.
+            if tool.key != CREATE_MEMBER:
+                return PASS
+            proposed = Proposed(CREATE_MEMBER, tool.description, summarize(call.arguments))
+        elif self._gate.reads_only(tool.server, tool.name):
             return PASS
-        proposed = Proposed(f"{tool.server} / {tool.name}", tool.description, summarize(call.arguments))
+        else:
+            proposed = Proposed(f"{tool.server} / {tool.name}", tool.description, summarize(call.arguments))
         return await self._gate.screen(proposed, language=ask.language, ledger=ledger)
+
+    async def _make_call(
+        self,
+        ask: _Ask,
+        call: PlannedCall,
+        approval: Approval | None,
+        ledger: Ledger,
+        action: Action | None = None,
+        *,
+        steps: list[Step] | None = None,
+    ) -> ToolResult:
+        """Make a picked call: a team tool through `team_tool` (T1: it needs no yes of a tier), a
+        plugin's tool through the gate with `approval`. A step of `steps` (the request's own when
+        none is given), whatever came of it."""
+        if call.tool.key in TEAM_TOOLS:
+            return await self._team_call(ask, call, ledger, steps=steps)
+        return await self._plugin_call(call, approval, action, steps=ask.steps if steps is None else steps)
 
     async def _plugin_call(
         self,
@@ -1483,9 +1501,11 @@ class AgentService:
             self._conversations[member_id] = conversation
         return conversation
 
-    async def _team_call(self, ask: _Ask, call: PlannedCall, ledger: Ledger) -> ToolResult:
-        """A team tool the picking call asked for, made for `ask` (see `team_tool`); a step of the
-        request, whatever came of it."""
+    async def _team_call(
+        self, ask: _Ask, call: PlannedCall, ledger: Ledger, *, steps: list[Step] | None = None
+    ) -> ToolResult:
+        """A team tool the picking call asked for, made for `ask` (see `team_tool`); a step of
+        `steps` (the request's own when none is given), whatever came of it."""
         began = time.perf_counter()
         result = await self.team_tool(
             ask.speaker,
@@ -1498,7 +1518,9 @@ class AgentService:
         outcome = "ok" if result.ok else ("blocked" if result.error == "blocked" else "error")
         if result.error == "timeout":
             outcome = "timeout"
-        ask.steps.append(self._step("tool", call.tool.key, TEAM_SERVER, outcome, began, result.error))
+        (ask.steps if steps is None else steps).append(
+            self._step("tool", call.tool.key, TEAM_SERVER, outcome, began, result.error)
+        )
         return result
 
     async def team_tool(
@@ -1663,8 +1685,15 @@ class AgentService:
         if now is None or now > pending.tier:
             approval = None
         steps: list[Step] = []
-        result = await self._plugin_call(call, approval, pending.action, steps=steps)
+        result = await self._make_call(
+            followup.ask, call, approval, ledger, pending.action, steps=steps
+        )
         self._write(lambda: self._history.add_steps(pending.turn_id, steps))
+        if call.tool.key == CREATE_MEMBER and result.ok:
+            # 《了。已建立「小行程」。》, after the yes a rule asked for: nothing more to word.
+            created = str((result.data or {}).get("created", ""))
+            text = phrase(language, "member_created", member=created)
+            return self._outcome(pending, "understood", text, "done", cost_usd=ledger.total)
         if not result.ok and result.error == "timeout":
             text = phrase(language, "plugin_unsure", server=call.tool.server)
             return self._outcome(pending, "negative", text, "error")

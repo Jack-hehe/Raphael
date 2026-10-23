@@ -385,3 +385,58 @@ def test_the_conversation_goes_on_with_a_result_for_every_call_of_the_last_reply
         ("c", "<tool_result"),
     ]
     assert "not made" in out[5]["content"]
+
+
+# --- adding a member from the background ------------------------------------------------------------
+
+
+class Creating:
+    """A team with nobody in it yet, and the team tools as the assistant makes them: it notes the
+    members added."""
+
+    def __init__(self):
+        self.created = []
+
+    def speaker(self, member_id):
+        return Speaker() if member_id == 0 else None
+
+    def has_members(self):
+        return False
+
+    async def tool(self, speaker, name, arguments, **_):
+        self.created.append(arguments["name"])
+        return ToolResult(name, True, {"created": arguments["name"]})
+
+
+def create_then_report(rig):
+    made = {"name": "MEMBER-NAME", "role": "r", "instructions": "i"}
+    rig.client.replies = [
+        turn("Adding.", [call("create_member", made, "c1")]),
+        report("Added."),
+    ]
+
+
+@pytest.mark.parametrize("verdict", [ASK, DENY])
+async def test_adding_a_member_is_judged_in_the_background(make_rig, clock, conn, verdict):
+    rules = SafetyRules(conn)
+    rules.create("新增成員", verdict)
+    judge = ScriptedJudge({1})
+    rig = make_rig(clock=clock, safety=SafetyGuard(rules, judge))
+    team = Creating()
+    rig.service.use_team(team, team.tool)
+    create_then_report(rig)
+    task_id = rig.submit()
+    if verdict == DENY:
+        [done] = await rig.wait_for_reports()
+        assert done["text"] == "Added." and team.created == [] and questions(rig) == []
+        steps = [(s.tool, s.outcome, s.reason) for s in rig.steps(task_id) if s.kind == "tool"]
+        assert steps == [("create_member", "blocked", "forbidden")]
+    else:
+        asked = await paused(rig, task_id)
+        assert asked["text"].startswith("This falls under the safety rule 「新增成員」.")
+        assert team.created == []
+        answer = {"task_id": task_id, "question_id": asked["question_id"], "approved": True}
+        assert (await rig.rpc.call("background.answer", answer))["status"] == "approved"
+        await rig.wait_for_reports()
+        assert team.created == ["MEMBER-NAME"]
+    assert judge.shown[0].tool == "create_member"
