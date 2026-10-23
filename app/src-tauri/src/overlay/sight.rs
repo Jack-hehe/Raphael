@@ -2,10 +2,10 @@
 //!
 //! The page can draw the emblem in a window that nobody sees: one that something hid or
 //! minimized, that the shell cloaked because it stayed on another virtual desktop, that another
-//! topmost window covers, or that is away from the work area. Just before the emblem appears,
-//! [`check`] looks at the window from the main thread, writes what it saw to the log (at debug
-//! level every time, at info level when something is wrong), and puts right what it can
-//! ([`remedies`]).
+//! topmost window covers, or that is away from the work area. Just before the emblem appears, and
+//! again as it thinks and counts, [`check`] looks at the window from the main thread, writes what
+//! it saw to the log (at debug level every time, at info level when something is wrong), and puts
+//! right what it can ([`remedies`]).
 //!
 //! Nothing here activates the window or takes the focus from the app the person types in. The
 //! window keeps `WS_EX_NOACTIVATE`, which is put back first if it went missing; it is raised

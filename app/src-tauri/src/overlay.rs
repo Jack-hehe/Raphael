@@ -20,11 +20,11 @@
 //!
 //! The page can draw the emblem in a window that nobody sees: something else may have hidden,
 //! minimized or covered the window, or the shell may keep it on another virtual desktop. So each
-//! time the emblem appears, [`sight`] looks at the window from the main thread, writes what it saw
-//! to the log, and puts right what it can, without ever activating the window. In between,
-//! [`screen`] writes down what happens to the screen (the display turning off and on, the session
-//! locking, sleep, the webview's GPU process exiting), so that an emblem that nobody saw in a
-//! window that was in sight can be put next to it.
+//! time the emblem appears, and again as it thinks and counts, [`sight`] looks at the window from
+//! the main thread, writes what it saw to the log, and puts right what it can, without ever
+//! activating the window. In between, [`screen`] writes down what happens to the screen (the
+//! display turning off and on, the session locking, sleep, the webview's GPU process exiting), so
+//! that an emblem that nobody saw in a window that was in sight can be put next to it.
 
 mod screen;
 mod sight;
@@ -657,6 +657,9 @@ impl OverlayApi for Overlay {
     }
 
     fn set_mode(&self, mode: Mode) {
+        // Another topmost window may have come over the emblem since it appeared: the person
+        // must see it think and count up to 100 % (owner, 2026-10-23).
+        self.keep_in_sight(self.place_window());
         self.publish(OverlayEvent::Mode {
             mode,
             quiet: false,
@@ -714,6 +717,7 @@ impl OverlayApi for Overlay {
     }
 
     fn progress(&self, progress: Progress) {
+        self.keep_in_sight(self.place_window());
         self.publish(OverlayEvent::Progress(progress));
     }
 }
@@ -1356,6 +1360,34 @@ mod tests {
             .unwrap();
         assert!(build.contains(".focusable(false)"));
         assert!(build.contains(".focused(false)"));
+    }
+
+    #[test]
+    fn the_window_is_kept_in_sight_when_the_emblem_appears_thinks_and_counts() {
+        // Another topmost window can cover the corner after `show`, while the user speaks or
+        // while transcription runs, so `set_mode` and `progress` must also raise the window.
+        let source = include_str!("overlay.rs").replace("\r\n", "\n");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let api = production
+            .split("impl OverlayApi for Overlay {")
+            .nth(1)
+            .unwrap();
+        for method in [
+            "fn show(",
+            "fn greet(",
+            "fn set_mode(",
+            "fn progress(",
+        ] {
+            let body = api
+                .split(method)
+                .nth(1)
+                .and_then(|rest| rest.split("\n    }\n").next())
+                .unwrap();
+            assert!(
+                body.contains("self.place_window()") && body.contains("self.keep_in_sight("),
+                "{method} must place the window and keep it in sight"
+            );
+        }
     }
 
     #[cfg(windows)]
