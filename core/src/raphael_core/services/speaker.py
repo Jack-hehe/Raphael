@@ -1,41 +1,53 @@
 """Raphael's voice: his answers spoken aloud, one at a time, and stopped the moment the owner moves on.
 
-`Speaker.say(prefix, text)` is called by the assistant (`agent.service`) with the line the
-overlay shows, for the owner's own requests only (never a dictation, a message from a phone, a
-report of the background worker, or a question waiting for a yes). The prefix (答, 告, 否, 了) is
-part of his character and is spoken ("告。主人，…"); the brackets of the overlay are not. The text is
-made speakable first (`speakable`): addresses and the marks of markdown are left out, whitespace is
-collapsed and a long answer is cut at a sentence end, since an answer read aloud for a minute is
-not an answer.
+`Speaker.say(prefix, text)` is called by the assistant (`agent.service`) with the line to speak, for
+the owner's own requests only (never a dictation, a message from a phone, a report of the
+background worker, or a question waiting for a yes). The line is the one the voice speaks, which is
+Japanese whatever the language on screen is (`agent.persona.spoken_line` makes it): the owner's
+voice model speaks Japanese only. The prefix (解, 告, 否, 了) is part of his character and is
+spoken ("告。マスター，…"); the brackets of the overlay are not. The text is made speakable first
+(`speakable`): addresses and the marks of markdown are left out, whitespace is collapsed and a long
+answer is cut at a sentence end, since an answer read aloud for a minute is not an answer.
 
 What happens, in order, all on the event loop except the playing:
 
-1. `say` stops whatever was being said (one utterance at a time: a new one replaces the old) and
-   returns at once. With no voice service chosen it does nothing more.
-2. A task asks the service for the audio (`ServiceHub.speech`) as soon as it starts, in parallel
-   with the answer being shown: nothing waits for it, and nothing it does can delay the answer.
-3. The audio is played on a worker thread by the player (`playback`), which looks at the
-   utterance's `stopped` event before each block of about 50 ms.
+1. `say` stops whatever was being said (one utterance at a time: a new one replaces the old). With
+   no voice service chosen it returns at once.
+2. A task asks the service for the sound (`ServiceHub.speech`, a stream of PCM) and gives each chunk
+   to the player (`playback`) as it arrives, on a worker thread, which writes it to the device a
+   block of about 50 ms at a time and looks at the utterance's `stopped` event before each block.
+   The sound begins with the first chunk: nothing waits for the rest.
+3. `say` waits for that beginning: it returns when the player is about to write the first block
+   (the voice is ready and playing), so that the assistant can show the line at that very moment.
+   The wait is bounded by `FIRST_AUDIO_WAIT_S`; after that `say` returns anyway and the sound
+   begins whenever the first chunk comes, but a first chunk that comes more than `LATE_DROP_S`
+   after the request is dropped (a line shown long ago and spoken now is worse than a silent one).
+   A voice that fails (no key, no voice id, the network, an error code of the service, a device that
+   cannot play) ends the wait at once.
 
 `stop` (the owner starts a new recording, presses Esc, asks a new question, `tts.stop`) sets the
-event of the utterance and cancels its task: the sound ends within a block, and a request still on
-its way is dropped. A failure (no key, no voice id, the network, an error code of the service, a
-device that cannot play) is logged as a kind, once for each kind in a row, and the answer, already
-on screen, stays silent: nothing is retried. The text, the voice id and the audio are never logged.
+event of the utterance, cancels its task, which closes the request still on its way, and ends the
+wait: the sound ends within a block. A failure is logged as a kind, once for each kind in a row, and
+the answer, already on screen, stays silent (or ends where the stream broke): nothing is retried,
+which would only delay. The text, the voice id and the audio are never logged.
 
 RPC methods:
 
 - `tts.stop` -> `{ok: true}`: the speech ends at once.
 - `tts.preview {text}` -> `{ok: true}` once the sound is playing, or `{ok: false, kind}` (the kinds
   of `common.ServiceError`, or "playback"): a short line spoken in the voice that is set up now,
-  for the settings page to try it. The text is at most PREVIEW_MAX_CHARS characters and is spoken
-  as given, without the brackets 《》 that show a line of his. It replaces whatever was being said, like an answer.
+  for the settings page to try it. It is always the Japanese greeting `PREVIEW_LINE`, whatever
+  language the page is in; `text` (at most PREVIEW_MAX_CHARS characters) is what the page shows
+  and is checked but not spoken. It replaces whatever was being said, like an answer.
 """
 
 import asyncio
 import logging
+import queue
 import re
 import threading
+from contextlib import aclosing
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from ..protocol import invalid_params
@@ -43,7 +55,7 @@ from ..router import Router
 from .common import ServiceError
 from .hub import ServiceHub
 from .playback import Player, SoundDevicePlayer
-from .tts import Audio
+from .tts import PCM_RATE
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +63,12 @@ logger = logging.getLogger(__name__)
 MAX_SPOKEN_CHARS = 400
 # The most that `tts.preview` takes.
 PREVIEW_MAX_CHARS = 200
-# How long `tts.preview` waits after the audio is in hand to see whether the device can play it.
-PLAYBACK_GRACE_S = 0.4
+# What `tts.preview` speaks: the greeting, in the voice's own language.
+PREVIEW_LINE = "告。マスター、ご指示をどうぞ。"
+# How long an answer waits for the first sound before it is returned without it.
+FIRST_AUDIO_WAIT_S = 2.5
+# A first chunk of sound later than this after the request is dropped, unplayed.
+LATE_DROP_S = 8.0
 
 _URL = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 # The marks of markdown that are read as symbols if left in: emphasis, code, headings, quotes.
@@ -62,9 +78,12 @@ _SENTENCE_END = "。！？!?.\n"
 
 
 class Speaking(Protocol):
-    """What the assistant needs of a voice: say a line, stop."""
+    """What the assistant needs of a voice: whether there is one to wait for, say a line (returns
+    when the sound begins, or has been given up for now), stop."""
 
-    def say(self, prefix: str, text: str) -> None: ...
+    def speaks(self) -> bool: ...
+
+    async def say(self, prefix: str, text: str) -> None: ...
 
     def stop(self) -> None: ...
 
@@ -95,15 +114,35 @@ def line(prefix: str, text: str) -> str:
     return f"{prefix.strip()}{stop}{body}" if prefix.strip() else body
 
 
-class Speaker:
-    """The voice of Raphael: `hub` makes the audio, `player` plays it (the sound device by
-    default; tests give a fake)."""
+@dataclass
+class _Utterance:
+    """One thing being said: `stopped` ends the sound, `ready` is set when the sound begins (or
+    when there will be none: a failure, a stop), `failure` is the kind of the failure, if any."""
 
-    def __init__(self, hub: ServiceHub, player: Player | None = None) -> None:
+    stopped: threading.Event = field(default_factory=threading.Event)
+    ready: asyncio.Event = field(default_factory=asyncio.Event)
+    failure: str | None = None
+    task: "asyncio.Task[None] | None" = None
+
+
+class Speaker:
+    """The voice of Raphael: `hub` makes the sound, `player` plays it (the sound device by
+    default; tests give a fake). `first_audio_wait_s` and `late_drop_s` are the two bounds of the
+    module, for tests."""
+
+    def __init__(
+        self,
+        hub: ServiceHub,
+        player: Player | None = None,
+        *,
+        first_audio_wait_s: float = FIRST_AUDIO_WAIT_S,
+        late_drop_s: float = LATE_DROP_S,
+    ) -> None:
         self._hub = hub
         self._player = player
-        self._stopped: threading.Event | None = None
-        self._task: asyncio.Task[None] | None = None
+        self._first_audio_wait_s = first_audio_wait_s
+        self._late_drop_s = late_drop_s
+        self._current: _Utterance | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         # The kind of the latest failure, so that a service that is down is logged once in a row.
         self._last_failure: str | None = None
@@ -120,61 +159,116 @@ class Speaker:
 
     # --- saying and stopping --------------------------------------------------------------------
 
-    def say(self, prefix: str, text: str) -> None:
-        """Speak a line of Raphael's (see the module), replacing what was being said. Returns at
-        once; does nothing when no voice service is chosen or there is nothing to say."""
+    def speaks(self) -> bool:
+        """Whether Raphael can be heard now: a voice service is chosen and has its key and voice.
+        The assistant asks before it shows a line, to know whether to wait for the voice and to
+        have the Japanese line made."""
+        return self._hub.tts_ready()
+
+    async def say(self, prefix: str, text: str) -> None:
+        """Speak a line of Raphael's (see the module), replacing what was being said. Returns when
+        the sound begins, when it cannot (the voice failed), or after FIRST_AUDIO_WAIT_S, whichever
+        is first; at once when no voice service is chosen or there is nothing to say."""
         self.stop()
         if self._hub.tts_service() == "none":
             return
         spoken = line(prefix, text)
         if not spoken:
             return
-        self._start(spoken)
+        utterance = self._start(spoken)
+        try:
+            await asyncio.wait_for(utterance.ready.wait(), self._first_audio_wait_s)
+        except TimeoutError:
+            pass  # the answer goes out without the sound, which follows when it comes
 
     def stop(self) -> None:
-        """End the speech at once: the sound, and a request still on its way."""
-        stopped, self._stopped = self._stopped, None
-        task, self._task = self._task, None
-        if stopped is not None:
-            stopped.set()
+        """End the speech at once: the sound, a request still on its way, and the wait for it."""
+        utterance, self._current = self._current, None
+        if utterance is None:
+            return
+        utterance.stopped.set()
+        utterance.ready.set()
+        task = utterance.task
         if task is not None and not task.done():
             task.cancel()
 
-    def _start(self, spoken: str) -> asyncio.Task[None] | None:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return None
-        stopped = threading.Event()
-        self._stopped = stopped
-        task = loop.create_task(self._speak(spoken, stopped))
-        self._task = task
+    def _start(self, spoken: str) -> _Utterance:
+        utterance = _Utterance()
+        self._current = utterance
+        task = asyncio.get_running_loop().create_task(self._speak(spoken, utterance))
+        utterance.task = task
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
-        return task
+        return utterance
 
-    async def _speak(self, spoken: str, stopped: threading.Event) -> None:
+    async def _speak(self, spoken: str, utterance: _Utterance) -> None:
+        """Ask for the sound and hand it to the player as it comes. Never raises for a failure of
+        the world: it is logged as a kind and noted on the utterance, and the wait is ended."""
+        loop = asyncio.get_running_loop()
+        source: queue.Queue[bytes | None] = queue.Queue()
+        playing: asyncio.Future[None] | None = None
+
+        def started() -> None:  # on the playing thread: the first block is about to be heard
+            try:
+                loop.call_soon_threadsafe(utterance.ready.set)
+            except RuntimeError:  # the loop is gone
+                pass
+
         try:
-            audio = await self._hub.speech(spoken)
+            async with aclosing(self._hub.speech(spoken)) as chunks:
+                try:
+                    first = await asyncio.wait_for(anext(chunks), self._late_drop_s)
+                except TimeoutError:
+                    self._fail(utterance, "late")
+                    return
+                except StopAsyncIteration:
+                    self._fail(utterance, "bad_response")
+                    return
+                if utterance.stopped.is_set():  # replaced or stopped while the sound was on its way
+                    return
+                source.put(first)
+                playing = asyncio.ensure_future(
+                    asyncio.to_thread(
+                        self._player_now().play, source, PCM_RATE, utterance.stopped, started
+                    )
+                )
+                playing.add_done_callback(lambda done: self._played(utterance, done))
+                try:
+                    async for chunk in chunks:
+                        if utterance.stopped.is_set() or playing.done():
+                            break
+                        source.put(chunk)
+                except ServiceError as error:  # the stream broke: what came is played
+                    self._failed(error.kind)
+                source.put(None)
+            try:
+                await playing
+            except Exception:  # noted by `_played`
+                pass
         except ServiceError as error:
-            self._failed(error.kind)
-            return
+            self._fail(utterance, error.kind)
         except Exception as exc:  # a bug in a service must not reach the answer
-            self._failed(type(exc).__name__)
-            return
-        if stopped.is_set():  # replaced or stopped while the audio was on its way
-            return
-        await self._play(audio, stopped)
+            self._fail(utterance, type(exc).__name__)
+        finally:
+            source.put(None)  # lets a player that is waiting for a chunk end
+            utterance.ready.set()
 
-    async def _play(self, audio: Audio, stopped: threading.Event) -> str | None:
-        """Play the audio on a worker thread; the kind of the failure, or None."""
-        try:
-            await asyncio.to_thread(self._player_now().play, audio.data, stopped)
-        except Exception as exc:  # no device, a file that cannot be decoded
-            self._failed("playback", type(exc).__name__)
-            return "playback"
-        self._last_failure = None
-        return None
+    def _played(self, utterance: _Utterance, done: "asyncio.Future[None]") -> None:
+        """The player has ended: the wait is over whatever came of it, and a device that could not
+        play is a failure of the kind "playback" (logged by the type of its error)."""
+        utterance.ready.set()
+        if done.cancelled():
+            return
+        error = done.exception()
+        if error is None:
+            self._last_failure = None
+            return
+        utterance.failure = "playback"
+        self._failed("playback", type(error).__name__)
+
+    def _fail(self, utterance: _Utterance, kind: str) -> None:
+        utterance.failure = kind
+        self._failed(kind)
 
     def _failed(self, kind: str, detail: str | None = None) -> None:
         if kind != self._last_failure:
@@ -200,25 +294,13 @@ class Speaker:
         if not isinstance(text, str) or not text.strip() or len(text) > PREVIEW_MAX_CHARS:
             raise invalid_params(f"text must be 1 to {PREVIEW_MAX_CHARS} characters")
         self.stop()
-        stopped = threading.Event()
-        self._stopped = stopped
+        utterance = self._start(PREVIEW_LINE)
+        # The sound is "playing" once its first block is about to be written; a service or a
+        # device that fails ends the wait at once, and that is told.
         try:
-            audio = await self._hub.speech(text.replace("《", "").replace("》", "").strip())
-        except ServiceError as error:
-            self._failed(error.kind)
-            return {"ok": False, "kind": error.kind}
-        except Exception as exc:
-            self._failed(type(exc).__name__)
-            return {"ok": False, "kind": "error"}
-        if stopped.is_set():  # something else was said, or stopped, meanwhile
-            return {"ok": True}
-        task = asyncio.ensure_future(self._play(audio, stopped))
-        self._task = task
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-        # The sound is "playing" once the audio is in hand; a device that cannot play it fails
-        # within moments, and that is told, while a sound that plays on is not waited for.
-        await asyncio.wait({task}, timeout=PLAYBACK_GRACE_S)
-        if task.done() and not task.cancelled() and task.result() is not None:
-            return {"ok": False, "kind": "playback"}
+            await asyncio.wait_for(utterance.ready.wait(), self._late_drop_s + 2.0)
+        except TimeoutError:
+            return {"ok": False, "kind": "timeout"}
+        if utterance.failure is not None:
+            return {"ok": False, "kind": utterance.failure}
         return {"ok": True}
