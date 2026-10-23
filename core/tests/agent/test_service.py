@@ -40,6 +40,8 @@ METHODS = [
     "agent.history.clear",
     "agent.history.list",
     "agent.history.search",
+    "brains.cli",
+    "brains.cli_login",
 ]
 GEOCODING = {
     "results": [
@@ -181,7 +183,7 @@ def rig(make_rig):
 # --- the contract ----------------------------------------------------------------------------------
 
 
-def test_the_six_methods_of_the_assistant_are_registered(rig):
+def test_the_assistant_and_cli_brain_methods_are_registered(rig):
     assert rig.rpc.methods() == METHODS
 
 

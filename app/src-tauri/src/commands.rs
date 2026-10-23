@@ -183,6 +183,7 @@ pub enum MainEvent {
     RoutinesChanged { member_id: u64 },
     MembersChanged,
     ProvidersChanged,
+    BrainsChanged,
     MemoryChanged {
         member_id: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -335,7 +336,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 63] = [
+const ALLOWED_METHODS: [&str; 65] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -348,6 +349,8 @@ const ALLOWED_METHODS: [&str; 63] = [
     "models.catalog",
     "providers.kinds",
     "providers.list",
+    "brains.cli",
+    "brains.cli_login",
     "providers.add",
     "providers.update",
     "providers.remove",
@@ -819,6 +822,7 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
         }),
         "members.changed" => Some(MainEvent::MembersChanged),
         "providers.changed" => Some(MainEvent::ProvidersChanged),
+        "brains.changed" => Some(MainEvent::BrainsChanged),
         "memory.changed" => {
             let space = match params.get("space") {
                 None => None,
@@ -1689,6 +1693,18 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn cli_brains_are_main_window_methods_and_emit_no_private_payload() {
+        for method in ["brains.cli", "brains.cli_login"] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        assert!(!is_allowed_method("brains.execute"));
+        let event = main_event_from(
+            &notification("brains.changed", json!({"token": "private"})), true,
+        ).unwrap();
+        assert_eq!(serde_json::to_value(event).unwrap(), json!({"type": "BrainsChanged"}));
     }
 
     #[test]
