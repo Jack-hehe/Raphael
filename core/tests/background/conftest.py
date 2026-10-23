@@ -267,7 +267,9 @@ class Rig:
     """A background service with a worker in the test, a model that plays what it is told to, and
     the plugins; `notifications` is what the app would be sent."""
 
-    def __init__(self, conn, plugins, *, limits=RunLimits(), host=None, links=None):
+    def __init__(
+        self, conn, plugins, *, limits=RunLimits(), host=None, links=None, safety=None, clock=None
+    ):
         self.conn = conn
         self.plugins = plugins
         self.client = FakeModel()
@@ -276,7 +278,7 @@ class Rig:
         self.meteo = Meteo()
         self.notifications: list[tuple[str, dict]] = []
         self.links = links if links is not None else Links()
-        self.gate = ToolGate(plugins.hub, conn=conn, now_ms=self.wall)
+        self.gate = ToolGate(plugins.hub, conn=conn, now_ms=self.wall, safety=safety)
         self.tools = Tools(self.client, http=self.meteo.http, now=lambda: LOCAL_NOW)
         self.host = host if host is not None else WorkerHost(connect=self.links, grace_s=0.3)
         self.service = BackgroundService(
@@ -289,6 +291,7 @@ class Rig:
             limits=limits,
             now_ms=self.wall,
             tz=timezone.utc,
+            **({} if clock is None else {"clock": clock}),
         )
         self.rpc = RpcRouter()
         self.service.register(self.rpc)

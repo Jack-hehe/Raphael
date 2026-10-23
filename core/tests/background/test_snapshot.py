@@ -44,10 +44,11 @@ async def test_a_tool_the_user_turned_off_is_not_in_it(plugins):
     assert [ref.name for ref in take_snapshot(plugins.hub).refs.values() if ref.kind == MCP] == []
 
 
-async def test_a_tool_that_would_have_to_ask_is_not_in_it(plugins):
-    # None does today (a tool is on or off), but the worker cannot ask at the overlay if one did.
+async def test_a_tool_that_asks_is_in_it_and_one_that_cannot_be_undone_is_not(plugins):
+    # A T2 tool asks the owner through the waiting question; a T3 one is never offered to a task.
     await plugins.connect(look="T0", note="T2", wipe="T3")
-    assert [ref.name for ref in take_snapshot(plugins.hub).refs.values() if ref.kind == MCP] == ["look"]
+    names = [ref.name for ref in take_snapshot(plugins.hub).refs.values() if ref.kind == MCP]
+    assert sorted(names) == ["look", "note"]
 
 
 async def test_a_plugin_that_is_off_has_no_tool_in_it(plugins):

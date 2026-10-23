@@ -5,7 +5,10 @@ a core that is gone leaves it nothing to do. The core calls:
 
 - `worker.hello {}`: answered with the protocol version and the process id (the start-up handshake);
 - `task.run {task_id, system, user, tools, limits}`: carry the task out (`loop.run_task`) and answer
-  with how it ended. One task at a time;
+  with how it ended. One task at a time. A task that goes on after the owner answered its question
+  is given `messages` (the whole conversation, as it was given back) in place of `system` and
+  `user`; a task that pauses for a question answers with the conversation as it stands
+  (`messages`) and the id of the call that waits (`waiting_call`);
 - `task.cancel {task_id}` (a notification): stop the task at once.
 
 and, while a task runs, the worker calls the core's `host.chat {task_id, messages, tools}` for a
@@ -107,6 +110,11 @@ def _result(outcome: Outcome) -> dict:
         "detail": outcome.detail,
         "model_calls": outcome.model_calls,
         "tool_calls": outcome.tool_calls,
+        **(
+            {"messages": outcome.messages, "waiting_call": outcome.waiting_call}
+            if outcome.messages is not None
+            else {}
+        ),
     }
 
 
@@ -129,7 +137,14 @@ class Worker:
         tools = params.get("tools")
         if type(task_id) is not int:
             raise invalid_params("task_id must be a whole number")
-        if not isinstance(system, str) or not isinstance(user, str):
+        messages = params.get("messages")
+        if messages is not None and (
+            not isinstance(messages, list)
+            or not messages
+            or not all(isinstance(m, dict) and isinstance(m.get("role"), str) for m in messages)
+        ):
+            raise invalid_params("messages must be a list of messages")
+        if messages is None and (not isinstance(system, str) or not isinstance(user, str)):
             raise invalid_params("system and user must be strings")
         if not isinstance(tools, list) or not all(_is_tool(tool) for tool in tools):
             raise invalid_params("tools must be a list of tools in the chat format")
@@ -140,9 +155,10 @@ class Worker:
         try:
             outcome = await run_task(
                 CoreHost(self._peer, task_id),
-                system=system,
-                user=user,
+                system=system if isinstance(system, str) else "",
+                user=user if isinstance(user, str) else "",
                 tools=tools,
+                messages=messages,
                 limits=_limits(params.get("limits")),
                 cancelled=self._cancelled,
             )

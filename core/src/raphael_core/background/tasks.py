@@ -9,12 +9,18 @@ are part of, they are not pruned by age.
 `state` is one of:
 
 - "queued" and "running": not over;
+- "waiting": not over either: the task paused for the owner's yes to one of its calls, which is a
+  row of `worker_questions` (the question as the card shows it). It goes on when the owner answers
+  in the app, and ends when nobody has after 24 hours;
 - "done": the model reported;
 - "failed": the model failed (no network, no credit, no key) or the worker could not start;
 - "limit": a limit stopped it (model calls, tool calls, time, the cost of one task, the month's);
 - "cancelled": the user stopped it;
 - "interrupted": the worker died, or the core was closed or restarted while it ran. It is never
   started again by itself.
+
+`worker_questions` is one row for each question a task asked (see `Question`): it goes with its
+task.
 
 Use it on the thread that owns `conn` (the event loop). Nothing here logs a task.
 """
@@ -25,7 +31,7 @@ from dataclasses import dataclass
 
 from ..clock import wall_clock_ms
 
-QUEUED, RUNNING = "queued", "running"
+QUEUED, RUNNING, WAITING = "queued", "running", "waiting"
 FINAL_STATES = ("done", "failed", "limit", "cancelled", "interrupted")
 
 
@@ -77,6 +83,29 @@ class Step:
     detail: str | None = None
 
 
+@dataclass
+class Question:
+    """A question a task asked the owner. `member_id` is the member whose thread shows it (0 is
+    Raphael); `prefix` and `text` are what the card says; `remaining_s` is the task's own time that
+    was left when it paused; `state` is "waiting", "approved", "denied", "expired" or "cancelled"."""
+
+    id: str
+    task_id: int
+    member_id: int
+    prefix: str
+    text: str
+    tier: str | None
+    created_at_ms: int
+    expires_at_ms: int
+    remaining_s: float
+    state: str
+    answered_at_ms: int | None = None
+
+
+_QUESTION_COLUMNS = (
+    "id, task_id, member_id, prefix, text, tier, created_at_ms, expires_at_ms, remaining_s, state,"
+    " answered_at_ms"
+)
 _TASK_COLUMNS = (
     "id, created_at_ms, started_at_ms, finished_at_ms, state, session_id, turn_id, language, text,"
     " report_prefix, report_text, report_detail, reason, model_calls, tool_calls, cost_usd,"
@@ -119,6 +148,14 @@ class TaskStore:
                 (self._now_ms(), task_id),
             )
 
+
+    def set_state(self, task_id: int, state: str) -> None:
+        """Move a task that is not over to another state that is not over: it pauses
+        ("waiting"), waits to go on ("queued") or goes on ("running")."""
+        if state not in (QUEUED, RUNNING, WAITING):
+            raise ValueError(f"{state!r} is not a state of a task that is not over")
+        with self._conn:
+            self._conn.execute("UPDATE worker_tasks SET state = ? WHERE id = ?", (state, task_id))
 
     def progress(self, task_id: int, *, model_calls: int, tool_calls: int, cost_usd: float) -> None:
         """What a running task has used so far."""
@@ -251,15 +288,22 @@ class TaskStore:
         report: Callable[[str, int], tuple[str, str]] | None = None,
         reason: str = "restart",
     ) -> list[Task]:
-        """Mark the tasks that were queued or running as interrupted: the worker they ran in is
-        gone, and a task is never started again by itself. With `report` (the task's language and
+        """Mark the tasks that were queued, running or waiting as interrupted: the worker they ran
+        in is gone (and the conversation a waiting one would go on with), and a task is never
+        started again by itself. Their questions are cancelled. With `report` (the task's language and
         the tool calls it made, to a prefix and a line) each gets that report, to be said once
         (`announced` 0). Returns the tasks as they are now."""
         with self._conn:
             rows = self._conn.execute(
-                "SELECT id, language FROM worker_tasks WHERE state IN ('queued', 'running')"
+                "SELECT id, language FROM worker_tasks"
+                " WHERE state IN ('queued', 'running', 'waiting')"
             ).fetchall()
             for row in rows:
+                self._conn.execute(
+                    "UPDATE worker_questions SET state = 'cancelled' WHERE task_id = ?"
+                    " AND state = 'waiting'",
+                    (row["id"],),
+                )
                 self._conn.execute(
                     "UPDATE worker_steps SET outcome = 'cancelled', reason = 'cancelled'"
                     " WHERE task_id = ? AND outcome = 'in_progress'",
@@ -285,7 +329,7 @@ class TaskStore:
         later, with something said (a cleared task keeps nothing)."""
         rows = self._conn.execute(
             f"SELECT {_TASK_COLUMNS} FROM worker_tasks WHERE text != ''"
-            " AND (state IN ('queued', 'running') OR finished_at_ms >= ?)"
+            " AND (state IN ('queued', 'running', 'waiting') OR finished_at_ms >= ?)"
             " ORDER BY CASE WHEN state = 'running' THEN 0 ELSE 1 END, id DESC LIMIT ?",
             (since_ms, limit),
         )
@@ -320,9 +364,10 @@ class TaskStore:
         ).fetchone()[0]
 
     def delete(self, task_id: int) -> None:
-        """Delete a task and its steps, whatever state it is in."""
+        """Delete a task, its steps and its questions, whatever state it is in."""
         with self._conn:
             self._conn.execute("DELETE FROM worker_steps WHERE task_id = ?", (task_id,))
+            self._conn.execute("DELETE FROM worker_questions WHERE task_id = ?", (task_id,))
             self._conn.execute("DELETE FROM worker_tasks WHERE id = ?", (task_id,))
 
     def scrub(self, task_id: int) -> None:
@@ -335,8 +380,13 @@ class TaskStore:
             )
 
     def clear(self) -> int:
-        """Delete every finished task, with its steps; one that is not over stays."""
+        """Delete every task that is not queued or running, with its steps and its questions (a
+        task that waits for the owner goes too); one that is queued or running stays."""
         with self._conn:
+            self._conn.execute(
+                "DELETE FROM worker_questions WHERE task_id IN (SELECT id FROM worker_tasks"
+                " WHERE state NOT IN ('queued', 'running'))"
+            )
             self._conn.execute(
                 "DELETE FROM worker_steps WHERE task_id IN (SELECT id FROM worker_tasks"
                 " WHERE state NOT IN ('queued', 'running'))"
@@ -345,3 +395,50 @@ class TaskStore:
                 "DELETE FROM worker_tasks WHERE state NOT IN ('queued', 'running')"
             )
         return cursor.rowcount
+
+    # --- the questions -------------------------------------------------------------------------
+
+    def add_question(self, question: Question) -> None:
+        with self._conn:
+            self._conn.execute(
+                f"INSERT INTO worker_questions ({_QUESTION_COLUMNS}) VALUES"
+                " (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    question.id,
+                    question.task_id,
+                    question.member_id,
+                    question.prefix,
+                    question.text,
+                    question.tier,
+                    question.created_at_ms,
+                    question.expires_at_ms,
+                    question.remaining_s,
+                    question.state,
+                    question.answered_at_ms,
+                ),
+            )
+
+    def close_question(self, question_id: str, state: str) -> None:
+        """End a question that waited: "approved", "denied", "expired" or "cancelled"."""
+        with self._conn:
+            self._conn.execute(
+                "UPDATE worker_questions SET state = ?, answered_at_ms = ? WHERE id = ?"
+                " AND state = 'waiting'",
+                (state, self._now_ms(), question_id),
+            )
+
+    def question(self, question_id: str) -> Question | None:
+        row = self._conn.execute(
+            f"SELECT {_QUESTION_COLUMNS} FROM worker_questions WHERE id = ?", (question_id,)
+        ).fetchone()
+        return None if row is None else Question(**dict(row))
+
+    def waiting_questions(self, member_id: int | None = None) -> list[Question]:
+        """The questions that wait for the owner, the oldest first; of one member, or of all."""
+        sql = f"SELECT {_QUESTION_COLUMNS} FROM worker_questions WHERE state = 'waiting'"
+        args: tuple = ()
+        if member_id is not None:
+            sql += " AND member_id = ?"
+            args = (member_id,)
+        rows = self._conn.execute(sql + " ORDER BY created_at_ms, id", args)
+        return [Question(**dict(row)) for row in rows]

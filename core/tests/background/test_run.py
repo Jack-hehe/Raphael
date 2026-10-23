@@ -295,21 +295,22 @@ async def test_a_tool_the_server_describes_differently_after_the_snapshot_is_sti
     assert reply["ok"] is True and calls == ["look"]  # a tool is on until the user turns it off
 
 
-async def test_a_tool_that_needs_a_yes_is_not_called_even_when_it_is_in_the_snapshot(rig, calls):
+async def test_a_tool_that_needs_a_yes_is_not_called_by_a_run_that_cannot_wait(rig, calls):
     server = await rig.plugins.connect(look="T0", note="T2")
     rig.resnap()
-    # The snapshot never held `note` (a background task has no yes to ask for) ...
-    assert "Notes__note" not in rig.run.snapshot.refs
+    # The snapshot holds `note` (a task of the background service asks through its question) ...
+    assert "Notes__note" in rig.run.snapshot.refs
+    assert rig.run.can_wait is False
     reply = await rig.tool("Notes__note", {"text": "x"})
+    # ... but a run that cannot wait for the owner is refused it by the gate itself.
     assert (reply["ok"], reply["kind"]) == (False, "blocked") and calls == []
-    # ... and one that was put there by hand is stopped by the gate itself.
     from raphael_core.background.snapshot import MCP, ToolRef
     from raphael_core.agent.policy import Tier
 
     rig.run.snapshot.refs["Notes__note"] = ToolRef(MCP, f"mcp:{server}/note", "Notes", "note", Tier.T0)
     reply = await rig.tool("Notes__note", {"text": "x"})
     assert reply["kind"] == "blocked" and calls == []
-    assert rig.audit() == [("Notes", "note", None, "none", "blocked", rig.task_id)]
+    assert rig.audit() == [("Notes", "note", None, "none", "blocked", rig.task_id)] * 2
 
 
 async def test_a_name_that_is_not_a_tool_of_the_task_is_not_called_and_not_audited(rig, calls):

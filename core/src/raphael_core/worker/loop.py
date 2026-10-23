@@ -16,7 +16,12 @@ Everything that could go wrong on the way is dealt with here or by the host, nev
   or the model failed: it raises `Stop`, and the loop ends there with the kind. The loop counts the
   limits too, so a host that forgot would not make a task endless;
 - cancelling is looked at before every step and while a host call is under way: the task stops at
-  once, and the call under way is given up.
+  once, and the call under way is given up;
+- a call the owner must say yes to first stops the loop too (`Stop("waiting")`): the core keeps the
+  question, and the loop gives back the conversation as it stands (the reply that asked for the
+  call, and the results of the calls of that reply made before it), so that the task can go on
+  later from there. It is started again with that conversation (`messages`), and with the result
+  of the call the owner answered, and of those after it that were not made, added by the core.
 
 The loop makes no call by itself and holds no key. Nothing here logs a prompt, an argument or a
 result.
@@ -55,10 +60,15 @@ class Limits:
     seconds: float = 600.0
 
 
+# The kind of `Stop` of a call that waits for the owner's yes: the task pauses there.
+WAITING = "waiting"
+
+
 class Stop(Exception):
     """The host will not go on, or the loop may not. `kind` says why: "cancelled" (the user
     stopped the task), "limit_model", "limit_tool", "limit_time", "limit_cost", "limit_month" (a
-    limit was reached), or "failed" (the model failed; `detail` is the kind of failure)."""
+    limit was reached), "failed" (the model failed; `detail` is the kind of failure) or "waiting"
+    (a call waits for the owner's yes: the task pauses)."""
 
     def __init__(self, kind: str, detail: str | None = None) -> None:
         super().__init__(kind)
@@ -116,6 +126,10 @@ class Outcome:
     detail: str | None = None
     model_calls: int = 0
     tool_calls: int = 0
+    # A task that pauses for the owner's yes ("stopped", kind "waiting"): the conversation as it
+    # stands, and the id of the call that waits.
+    messages: list[dict] | None = None
+    waiting_call: str | None = None
 
 
 async def _until(
@@ -170,18 +184,23 @@ async def run_task(
     limits: Limits = Limits(),
     cancelled: asyncio.Event | None = None,
     clock: Callable[[], float] = time.monotonic,
+    messages: Sequence[dict] | None = None,
 ) -> Outcome:
     """Carry out a task. `system` and `user` are the first two messages of the conversation (the
-    core wrote them), `tools` the tools the model is offered in the chat format. The loop ends when
-    the model reports, when a limit is reached, when the task is cancelled or when the host stops
-    it; it raises nothing for any of those."""
+    core wrote them), `tools` the tools the model is offered in the chat format; a task that goes
+    on after a pause starts from the whole conversation instead (`messages`, which the core gives
+    back as the loop left it, with the results of the calls that waited). The loop ends when the
+    model reports, when a limit is reached, when the task is cancelled or when the host stops it;
+    it raises nothing for any of those. `limits` are what is left to the task."""
     cancelled = cancelled if cancelled is not None else asyncio.Event()
     tools = list(tools)
     offered = {tool["function"]["name"] for tool in tools}
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]
+    conversation: list[dict[str, Any]] = (
+        [dict(message) for message in messages]
+        if messages
+        else [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    )
+    messages = conversation
     repeats = RepeatGuard()
     deadline = clock() + limits.seconds
     model_calls = tool_calls = 0
@@ -207,10 +226,19 @@ async def run_task(
                 if refusal is None:
                     check_before("limit_tool", tool_calls, limits.tool_calls)
                     tool_calls += 1
-                    outcome = await _until(
-                        host.tool(call.id, call.name, call.arguments), cancelled, deadline, clock
-                    )
-                    content = _result_text(call.name, outcome)
+                    try:
+                        outcome = await _until(
+                            host.tool(call.id, call.name, call.arguments), cancelled, deadline, clock
+                        )
+                    except Stop as stop:
+                        if stop.kind != WAITING:
+                            raise
+                        # The task pauses for the owner: the core keeps the conversation.
+                        return Outcome(
+                            "stopped", "", WAITING, None, model_calls, tool_calls,
+                            messages=list(messages), waiting_call=call.id,
+                        )  # fmt: skip
+                    content = result_text(call.name, outcome)
                     for found in outcome.tools:
                         name = found["function"]["name"]
                         if name not in offered:
@@ -238,7 +266,9 @@ def _refusal(call: Call, offered: set[str], repeats: RepeatGuard) -> str | None:
     return None
 
 
-def _result_text(name: str, outcome: ToolOutcome) -> str:
+def result_text(name: str, outcome: ToolOutcome) -> str:
+    """What the model is shown of a call that was made: its result, or why it failed, wrapped as
+    untrusted data. The core uses it too, for the call a paused task waited on."""
     if outcome.ok:
         return wrap_untrusted(name, outcome.content, ok=True)
     reason = outcome.kind or "error"

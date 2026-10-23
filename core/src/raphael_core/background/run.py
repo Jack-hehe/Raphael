@@ -16,6 +16,14 @@ tool call; it decides whether to give them, and gives them itself. In order:
   writes the audit with the task's id; a tool of Raphael's own (the weather, a web search, the time)
   is checked by the gate too and audited the same way. What a tool returns goes back as it is: the
   worker marks it as untrusted data.
+- **The owner's safety rules.** A plugin's tool that its server does not say only reads is judged
+  by the rules before it is called (`ToolGate.screen`, paid into the task's ledger). A rule that
+  forbids it refuses the call ("forbidden": the model is told which rule, and the call is not
+  made). A rule that asks, or a tier of T2 or more, makes the call wait for the owner: the run
+  keeps it (`waiting`) and stops the task with "waiting", and the background service turns that
+  into a question in the app (`service`). Only a run that may wait (`can_wait`, the service's) does
+  so; any other refuses such a call as before. When the owner has answered, the service has the
+  run make the call itself with the yes (`answer_call`), and the task goes on from where it was.
 - **Addresses.** `web_read` reads a page only at an address the task has seen (`SeenUrls`): in the
   task's request, or in what one of its tools returned before (search results, a page read, a
   plugin's answer), exactly or as the same page (the same origin and path). Any other is refused
@@ -46,7 +54,8 @@ from ..agent.gate import ToolGate
 from ..agent.ledger import Ledger
 from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult
 from ..agent.steps import reason_of
-from ..agent.policy import Action, NotApproved, UnknownTool
+from ..agent.policy import Action, Approval, NotApproved, Tier, UnknownTool
+from ..agent.safety import DENY, PASS, Proposed, Screening, needs_yes, summarize
 from ..agent.tools import ToolResult, Tools
 from ..brain.catalog import LLM, find
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
@@ -56,6 +65,7 @@ from ..integrations.pool import McpPool
 from ..protocol import WORKER_STOPPED, RpcError, invalid_params
 from ..services.attachments import Attachment
 from ..services.urls import SeenUrls
+from ..worker.loop import WAITING, ToolOutcome, result_text
 from .snapshot import BUILTIN, FIND, MCP, Snapshot, ToolRef
 from .tasks import TaskStore
 
@@ -131,6 +141,36 @@ def _refused() -> dict[str, Any]:
     return {"ok": False, "kind": "blocked", "content": "", "truncated": False}
 
 
+# What the model is told of a call that a rule of the owner's forbids, and of one the owner said no
+# to (the rule is in the owner's own words).
+FORBIDDEN_BY_RULE = (
+    "The owner's safety rule 「{rule}」 forbids this call, so it was not made. Do not try it another "
+    "way: do the rest of the task without it, and say in the report what was not done."
+)
+OWNER_SAID_NO = (
+    "The owner said no to this call, so it was not made. Do not make it or anything like it: do "
+    "the rest of the task without it, and say in the report what was not done."
+)
+NOT_MADE_WHILE_WAITING = (
+    "This call was not made: the task paused for the owner's answer to an earlier call of the same "
+    "reply. Make it again if it is still needed."
+)
+
+
+@dataclass
+class Waiting:
+    """A call of a plugin's tool that waits for the owner's yes: the alias the worker called it by,
+    the tool, what it is given (in memory only), the id of the call, the tier it was asked at, and
+    what the safety rules said of it."""
+
+    alias: str
+    ref: ToolRef
+    arguments: dict
+    call_id: str
+    tier: Tier
+    screening: Screening
+
+
 class TaskRun:
     """A task that is running. Everything here runs on the event loop.
 
@@ -161,8 +201,14 @@ class TaskRun:
         memory: "MemoryReader | None" = None,
         request: str = "",
         attachments: Sequence[Attachment] = (),
+        can_wait: bool = False,
     ) -> None:
         self._memory = memory
+        # Whether a call that needs the owner's yes pauses the task (the background service's runs)
+        # or is refused (any other).
+        self.can_wait = can_wait
+        # The call the task paused on, until the service takes it.
+        self.waiting: Waiting | None = None
         # The files of the task, by number from 1, and the addresses it has seen (see the module).
         self.attachments = list(attachments)
         self.seen_urls = SeenUrls([request])
@@ -245,6 +291,19 @@ class TaskRun:
 
     def _remaining_s(self) -> float:
         return max(self.deadline - self._clock(), 0.0)
+
+    def remaining_s(self) -> float:
+        """The task's own time that is left now."""
+        return self._remaining_s()
+
+    def reopen(self, remaining_s: float) -> None:
+        """Make the run ready to go on after a pause: the time it waited was not the task's, so it
+        has `remaining_s` from now; it has a new pool of connections (the old one was closed when it
+        paused), and no call waits."""
+        self.deadline = self._clock() + max(remaining_s, 0.0)
+        self.timed_out = False
+        self.waiting = None
+        self.pool = McpPool()
 
     # --- the steps ------------------------------------------------------------------------------
 
@@ -378,10 +437,11 @@ class TaskRun:
         name, arguments = params.get("name"), params.get("arguments")
         if not isinstance(name, str) or not isinstance(arguments, dict):
             raise invalid_params("name must be a string and arguments an object")
+        call_id = params.get("call_id")
         async with self._turn:
-            return await self._tool(name, arguments)
+            return await self._tool(name, arguments, call_id if isinstance(call_id, str) else "")
 
-    async def _tool(self, name: str, arguments: dict) -> dict:
+    async def _tool(self, name: str, arguments: dict, call_id: str = "") -> dict:
         ref = self.snapshot.refs.get(name)
         paying = ref is not None and ref.kind == BUILTIN and ref.name in _PAID_TOOLS
         self._check(tool=True, paid=paying)
@@ -394,7 +454,7 @@ class TaskRun:
         sent: int | None = None
         detail: str | None = None
         if ref.kind == MCP:
-            reply, outcome, tier, sent = await self._plugin(ref, arguments)
+            reply, outcome, tier, sent = await self._plugin(ref, arguments, name, call_id)
         elif ref.kind == FIND:
             reply, outcome, tier = self._find(arguments)
         else:
@@ -418,10 +478,46 @@ class TaskRun:
             self._step(kind="tool", **fields)
         return reply
 
+    async def _screen(self, ref: ToolRef, arguments: dict) -> Screening:
+        """What the owner's safety rules say of a call: PASS for a tool its server says only reads,
+        which is never judged. The judge is paid, so the limits on money are read first."""
+        if self._gate.safety is None or self._gate.reads_only(ref.server, ref.name):
+            return PASS
+        self._check(paid=True)
+        description = ""
+        pool = self.snapshot.pool
+        if pool is not None:
+            tool = next((t for t in pool.by_alias.values() if t.key == ref.key), None)
+            description = "" if tool is None else tool.description
+        proposed = Proposed(f"{ref.server} / {ref.name}", description, summarize(arguments))
+        return await self._guarded(
+            self._gate.screen(proposed, language=self.language, ledger=self.ledger)
+        )
+
     async def _plugin(
-        self, ref: ToolRef, arguments: dict
+        self, ref: ToolRef, arguments: dict, alias: str = "", call_id: str = ""
     ) -> tuple[dict, str, str | None, int | None]:
         now = self._gate.tier_now(ref.key)
+        if now is not None:
+            screening = await self._screen(ref, arguments)
+            if screening.verdict == DENY:
+                reply = {
+                    "ok": False,
+                    "kind": "forbidden",
+                    "content": FORBIDDEN_BY_RULE.format(rule=screening.rule or ""),
+                    "truncated": False,
+                }
+                self._gate.record_unrun(ref.key, outcome="blocked", task_id=self.task_id)
+                return reply, "blocked", now.name, None
+            if needs_yes(now >= Tier.T2, screening):
+                if self.can_wait:
+                    # The task pauses here; the service asks the owner (see the module).
+                    self.waiting = Waiting(alias or ref.name, ref, dict(arguments), call_id, now, screening)
+                    raise stopped(WAITING)
+                if screening.verdict != PASS.verdict:
+                    # A rule asks, and nobody can be asked: the call is not made.
+                    self._gate.record_unrun(ref.key, outcome="blocked", task_id=self.task_id)
+                    return _refused(), "blocked", now.name, None
         self._in_plugin_call = True
         began = time.perf_counter()
         # Written before the call is sent: if the core dies in the middle of it, the step is
@@ -461,6 +557,56 @@ class TaskRun:
             "truncated": cut or result.truncated,
         }
         return reply, _outcome_of(result), None if now is None else now.name, sent
+
+    async def answer_call(self, waiting: Waiting, approval: Approval | None, action: Action | None) -> str:
+        """The call the task paused on, now that the owner answered: made with the yes (`approval`,
+        for `action`, the very action the question was asked about), or not made after a no
+        (`action` None). Either way it is a step of the task, and the audit says what came of it.
+        Returns what the model is shown of it, as the worker shows a result."""
+        ref = waiting.ref
+        if action is None:
+            self._gate.record_unrun(ref.key, outcome="denied", task_id=self.task_id)
+            self._step(
+                kind="tool", tool=ref.name, server=ref.server, tier=waiting.tier.name,
+                outcome="blocked", ms=0, reason="denied",
+            )  # fmt: skip
+            return result_text(waiting.alias, ToolOutcome(False, "denied", OWNER_SAID_NO))
+        now = self._gate.tier_now(ref.key)
+        # The yes is for the tier the question was asked at: a tool that has none now, or a higher
+        # one, is not covered by it.
+        if now is None or now > waiting.tier:
+            approval = None
+        began = time.perf_counter()
+        sent = self._step(
+            kind="tool", tool=ref.name, server=ref.server,
+            tier=None if now is None else now.name, outcome="in_progress", ms=0,
+        )  # fmt: skip
+        self._in_plugin_call = True
+        try:
+            result = await self._guarded(
+                self._gate.call_plugin(
+                    ref.key, waiting.arguments, approval=approval, action=action,
+                    task_id=self.task_id, pool=self.pool,
+                )
+            )  # fmt: skip
+        except (RpcError, asyncio.CancelledError):
+            self._end_step(
+                sent, tool=ref.name, server=ref.server, tier=None if now is None else now.name,
+                outcome="cancelled", ms=_ms(began), reason="cancelled",
+            )  # fmt: skip
+            raise
+        finally:
+            self._in_plugin_call = False
+        text, cut = _cut(result.text)
+        outcome = _outcome_of(result)
+        self._end_step(
+            sent, tool=ref.name, server=ref.server, tier=None if now is None else now.name,
+            outcome=outcome, ms=_ms(began), reason=reason_of(outcome, result.kind),
+        )  # fmt: skip
+        if result.ok:
+            self.seen_urls.add_from(text)
+        shown = ToolOutcome(result.ok, result.kind, text, cut or result.truncated)
+        return result_text(waiting.alias, shown)
 
     def _find(self, arguments: dict) -> tuple[dict, str, str | None]:
         """Show the task more of the snapshot's tools, by what it says it wants to do. It makes no

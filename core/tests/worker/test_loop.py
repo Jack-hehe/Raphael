@@ -290,3 +290,33 @@ async def test_the_loop_does_not_catch_a_bug_of_the_host():
     host = FakeHost([RuntimeError("the host broke")])
     with pytest.raises(RuntimeError):
         await run(host)
+
+
+# --- a pause for the owner's yes -------------------------------------------------------------------
+
+
+async def test_a_call_that_waits_for_the_owner_stops_the_loop_with_the_conversation():
+    def answer(name, arguments):
+        return Stop("waiting") if arguments == {"topic": "b"} else ToolOutcome(True, None, "A")
+
+    first = Turn("", [ask("Notes__look", {"topic": "a"}, "c1"), ask("Notes__look", {"topic": "b"}, "c2")])
+    host = FakeHost([first], answer)
+    outcome = await run(host)
+    assert (outcome.status, outcome.kind, outcome.waiting_call) == ("stopped", "waiting", "c2")
+    assert [m["role"] for m in outcome.messages] == ["system", "user", "assistant", "tool"]
+    assert outcome.messages[-1]["tool_call_id"] == "c1"
+    assert (outcome.model_calls, outcome.tool_calls) == (1, 2)
+
+
+async def test_a_task_goes_on_from_the_conversation_it_is_given():
+    call = {"id": "c1", "type": "function", "function": {"name": "Notes__look", "arguments": "{}"}}
+    given = [
+        {"role": "system", "content": "SYSTEM"},
+        {"role": "user", "content": "USER"},
+        {"role": "assistant", "content": None, "tool_calls": [call]},
+        {"role": "tool", "tool_call_id": "c1", "content": "the yes came"},
+    ]
+    host = FakeHost([report("Went on.")])
+    outcome = await run_task(host, system="", user="", tools=TOOLS, messages=given)
+    assert outcome.status == "done" and host.conversations[0] == given
+    assert outcome.messages is None
