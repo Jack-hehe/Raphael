@@ -16,7 +16,6 @@
 import { catalogs, t } from "../i18n";
 import type { MessageKey } from "../i18n/zh-TW";
 
-import { avatarRowHTML } from "../avatar-settings";
 import { brandIcon } from "../brand";
 import { type ConnectionsView, connectionsAddHTML, connectionsHTML } from "../connections";
 import { DICTATION_MODES } from "../dictation";
@@ -149,7 +148,6 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "agent", label: "settings.agentKeys", also: "settings.searchShortcut" },
   { pane: "agent", label: "settings.agentCity" },
   { pane: "agent", label: "settings.workerCostCap" },
-  { pane: "agent", label: "settings.avatar", also: "settings.searchAvatar" },
   { pane: "agent", label: "mem.title", also: "settings.searchMemory" },
   { pane: "agent", label: "settings.computerUse" },
   { pane: "agent", label: "services.title" },
@@ -280,8 +278,10 @@ export interface SettingsView {
   messaging: MessagingView;
   /** In 資料, the clear that was pressed once and waits for its second press. */
   confirmingClear: "dictation" | "conversation" | null;
-  /** Raphael's memory, in the 拉斐爾 tab, after its settings (none: not drawn). */
+  /** Raphael's own memory, in the 拉斐爾 tab, after its settings (none: not drawn). */
   memory?: MemoryView;
+  /** 「共同記憶」, which every agent shares, drawn before Raphael's own (none: not drawn). */
+  memoryShared?: MemoryView;
   /** 服務, in the 拉斐爾 tab: who searches, reads pages and PDFs, and looks at images (none: not drawn). */
   services?: ServicesView;
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
@@ -609,9 +609,10 @@ function computerRows(v: SettingsView): string[] {
 }
 
 /**
- * 拉斐爾: Raphael's picture, the key that asks Raphael, the city of the weather, what a background
- * task may spend, then the services of his tools (services.ts), his memory and the apps he may
- * always operate. The model that answers is with the other models.
+ * 拉斐爾: the key that asks Raphael, the city of the weather, what a background task may spend,
+ * then the services of his tools (services.ts), his memory and the apps he may always operate. The
+ * model that answers is with the other models. His picture is changed in his details panel on the
+ * 拉斐爾 page, as every member's is (member-details.ts).
  */
 function agentHTML(v: SettingsView): string {
   const cityShown = v.cityDraft ?? agentCity(v);
@@ -621,7 +622,6 @@ function agentHTML(v: SettingsView): string {
     headingHTML(v) +
     coreNote(v) +
     section("", [
-      avatarRowHTML(),
       shortcutRow(t("settings.agentKeys"), agentKeys, { act: "rec-agent", field: "agent_keys" }),
       ...altgrNote(v, agentKeys),
       row(
@@ -633,6 +633,7 @@ function agentHTML(v: SettingsView): string {
       row(t("settings.workerCostCap"), "", sel(WORKER_COST_CAPS, workerCostCap(v), t("settings.workerCostCap"), ` data-k="worker-cap"${v.brain === null ? " disabled" : ""}`)),
     ]) +
     (v.services ? servicesHTML(v.services, modelPickerHTML(visionPickerLook(v)), v.brain) : "") +
+    (v.memoryShared ? memoryHTML(v.memoryShared) : "") +
     (v.memory ? memoryHTML(v.memory) : "") +
     section(t("settings.computerUse"), computerRows(v))
   );

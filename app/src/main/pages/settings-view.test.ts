@@ -105,8 +105,23 @@ test("the memory is in the 拉斐爾 tab, after its settings, and only there", (
   const agent = tab("agent", { memory });
   expect(agent).toContain("data-mem-section");
   expect(agent.indexOf("data-mem-section")).toBeGreaterThan(agent.indexOf('data-k="worker-cap"'));
-  expect(agent.indexOf("data-mem-section")).toBeGreaterThan(agent.indexOf("data-avatar"));
   for (const id of ["general", "dictation", "connections", "messaging", "usage", "data", "about"] as const) expect(tab(id, { memory })).not.toContain("data-mem");
+});
+
+test("the memory is two sections: 共同記憶 first, then Raphael's own, each with its notes' move", () => {
+  const notes = { memories: [{ name: "user-city", description: "主人住台北", type: "user", origin: "told", updated: "", expires: null }], summary: null };
+  const memoryShared = { ...emptyMemoryView(), status: notes, expanded: true, space: "shared" as const, title: "共同記憶", moveTo: "移到 拉斐爾 的記憶" };
+  const memory = { ...emptyMemoryView(), status: notes, expanded: true, space: "own" as const, title: "拉斐爾 的記憶", moveTo: "移到共同記憶" };
+  const agent = tab("agent", { memory, memoryShared });
+  const shared = agent.indexOf('data-mem-space="shared"');
+  const own = agent.indexOf('data-mem-space="own"');
+  expect(shared).toBeGreaterThan(0);
+  expect(own).toBeGreaterThan(shared);
+  expect(agent).toContain('aria-label="共同記憶"');
+  expect(agent).toContain('aria-label="拉斐爾 的記憶"');
+  // each note has its menu, a borderless more; the two lists' open notes have fields of their own
+  expect(agent.match(/data-mem="more"/g)).toHaveLength(2);
+  expect(agent).toContain('class="btn icon" aria-label="「主人住台北」的選項"');
 });
 
 test("服務 is in the 拉斐爾 tab, after its settings and before the memory, with the 看圖片 picker", () => {
@@ -345,19 +360,18 @@ describe("拉斐爾", () => {
     }
     setLocale("zh-TW");
     const html = tab("agent");
-    expect(names(html).slice(0, 3)).toEqual(["頭像", "問拉斐爾", "天氣的城市"]);
+    expect(names(html).slice(0, 2)).toEqual(["問拉斐爾", "天氣的城市"]);
     expect(described(html)).toEqual([]);
-    // 頭像: the picture in force, 更換, and 還原 only when there is a picture of the person's own
-    expect(rowOf(html, "頭像")).toContain('<button type="button" class="btn sm" data-act="avatar-change">更換</button>');
-    expect(rowOf(html, "頭像")).toContain('<button type="button" class="btn sm" data-act="avatar-reset" disabled>還原</button>');
-    expect(rowOf(html, "頭像")).toContain('src="/brand/app-emblem-light-64.webp"');
+    // Raphael's picture is changed in his details panel on the 拉斐爾 page, no longer here
+    expect(names(html)).not.toContain("頭像");
+    expect(html).not.toMatch(/avatar|app-emblem/);
     expect(rowOf(html, "問拉斐爾")).toContain('<button type="button" class="btn" data-act="rec-agent" data-k="rec-agent">變更</button>');
     expect(rowOf(html, "天氣的城市")).toContain('id="agent-city" type="text" value="台北"');
   });
 
   test("then what one background task may spend, a dropdown of four amounts", () => {
     const html = tab("agent");
-    expect(names(html).slice(0, 4)).toEqual(["頭像", "問拉斐爾", "天氣的城市", "背景任務的花費上限"]);
+    expect(names(html).slice(0, 3)).toEqual(["問拉斐爾", "天氣的城市", "背景任務的花費上限"]);
     const row = rowOf(html, "背景任務的花費上限");
     expect(row).toContain('class="sel"');
     expect(row).toContain('data-k="worker-cap"');
@@ -570,14 +584,11 @@ describe("搜尋設定", () => {
     expect(where("ショートカット")).toEqual(shortcuts);
   });
 
-  test("finds Raphael's picture by what people call it, in any of the languages", () => {
-    for (const query of ["頭像", "大頭貼", "avatar", "Picture", "photo", "アイコン", "アバター"]) {
-      expect(where(query), query).toEqual(["agent:頭像"]);
+  test("no longer finds Raphael's picture: it is changed in his details panel on the 拉斐爾 page", () => {
+    for (const locale of LOCALES) {
+      setLocale(locale);
+      for (const query of ["頭像", "大頭貼", "avatar", "Picture", "アイコン"]) expect(where(query), query).toEqual([]);
     }
-    setLocale("en");
-    expect(where("頭像")).toEqual(["agent:Picture"]);
-    setLocale("ja");
-    expect(where("avatar")).toEqual(["agent:アイコン"]);
   });
 
   test("finds Raphael's memory by its name and by what one asks him to do, in any of the languages", () => {

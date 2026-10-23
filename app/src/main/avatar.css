@@ -8,10 +8,6 @@
 .av.av-custom { overflow: hidden; border-radius: 50%; }
 .av.av-custom > img { object-fit: cover; }
 
-/* 頭像 in the settings of Raphael: the picture in force, 更換 and 還原 */
-.av-set { display: inline-flex; align-items: center; gap: var(--sp-2); }
-.av-set .av-set-face { margin-right: var(--sp-1); }
-
 /* the crop dialog: the picture is dragged and zoomed inside the circle that will show it */
 .av-crop-scrim { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 16px; background: var(--scrim); }
 .av-crop { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 14px; width: min(340px, 100%); padding: 18px 20px; border-radius: 16px; background: var(--panel); box-shadow: var(--pop); }
