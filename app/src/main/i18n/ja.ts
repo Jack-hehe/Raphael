@@ -79,7 +79,7 @@ export const ja = {
   "providers.contextHint": "エージェント用のローカルモデルには 64K 以上のコンテキストが必要です。",
   "providers.contextWarning": "コンテキストが 64K 未満",
   "providers.title": "モデル",
-  "providers.about": "プロバイダーを接続し、必要なモデルを選びます。",
+  "providers.about": "プロバイダーに接続し、モデルの選択や使用量の確認ができます。",
   "providers.add": "プロバイダーを追加",
   "providers.official": "公式",
   "providers.gateway": "ゲートウェイとクラウド",

@@ -8,7 +8,7 @@
 // line under a row's name only where the setting would otherwise be set wrong. Each tab opens with
 // its name and one line on what it is for, then its rows in a few named groups.
 //
-// The tabs sit on the left in three groups: basics, integrations and account (Models, Data, About).
+// The tabs sit on the left in three groups: basics, integrations and account (Models & usage, Data, About).
 // Settings search finds a row in any tab by its name in any of the three languages, and jumps to
 // it (`SEARCH_INDEX`, `searchSettings`).
 
@@ -33,7 +33,7 @@ import { pricingNote } from "../pricing";
 import type { HotkeyField } from "../hotkey-recording";
 import type { AudioDevices, BrainSettings, DeviceSettings, LocalModel, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
 import { keyEntryRow, micRow } from "../setup-rows";
-import { type Choice, type IconName, btn, esc, fieldHTML, ico, iconBtn, keys, note, row, sel, st, tg } from "../ui";
+import { type Choice, type IconName, btn, esc, fieldHTML, ico, iconBtn, keys, note, row, sel, st, tabs, tg } from "../ui";
 
 /** The models the core reads when none is chosen (brain/settings.py), shown while it does not answer. */
 const DEFAULT_MODELS = { cleanup: "openai/gpt-6-luna", answer: "openai/gpt-6-luna", stt: "elevenlabs/scribe-v2" } as const;
@@ -89,7 +89,7 @@ export const PANES: { id: SettingsPane; group: PaneGroup; icon: IconName | "embl
   { id: "agent", group: "basics", icon: "emblem", title: () => t("settings.paneAgent"), purpose: agentPurpose },
   { id: "connections", group: "integrations", icon: "plug", title: () => t("settings.paneConnections"), purpose: () => t("settings.purposeConnections") },
   { id: "messaging", group: "integrations", icon: "send", title: () => t("settings.paneMessaging"), purpose: () => t("settings.purposeMessaging") },
-  { id: "models", group: "account", icon: "bot", title: () => t("providers.title"), purpose: () => t("providers.about") },
+  { id: "models", group: "account", icon: "bot", title: () => t("settings.paneUsage"), purpose: () => t("providers.about") },
   { id: "data", group: "account", icon: "database", title: () => t("settings.paneData"), purpose: () => t("settings.purposeData") },
   { id: "about", group: "account", icon: "info", title: () => t("common.about"), purpose: () => t("settings.purposeAbout") },
 ];
@@ -132,7 +132,7 @@ export interface SearchEntry {
  * entry here (its name's key), or the search does not know it.
  */
 export const SEARCH_INDEX: readonly SearchEntry[] = [
-  ...PANES.map((p) => ({ pane: p.id, ...(p.id === "models" ? { also: "settings.paneUsage" as const } : {}) })),
+  ...PANES.map((p) => ({ pane: p.id })),
   { pane: "general", label: "settings.059" },
   { pane: "general", label: "settings.067", words: ["dark", "light"] },
   { pane: "general", label: "settings.069" },
@@ -157,9 +157,9 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "agent", label: "services.voice", words: ["Fish Audio", "TTS"] },
   { pane: "messaging", words: ["Telegram"] },
   { pane: "models", label: "providers.add", words: ["OpenAI", "Anthropic", "Gemini", "Azure", "Bedrock", "Ollama", "LM Studio", "OpenRouter", "LiteLLM", "Portkey", "Vercel", "Nebius", "Bifrost", "Groq", "DeepSeek", "Mistral"] },
-  { pane: "models", label: "common.apiKey", words: ["OpenRouter"] },
-  { pane: "models", label: "settings.050" },
-  { pane: "models", label: "settings.usageMonthly" },
+  { pane: "usage", label: "common.apiKey", words: ["OpenRouter"] },
+  { pane: "usage", label: "settings.050" },
+  { pane: "usage", label: "settings.usageMonthly" },
   { pane: "models", label: "settings.031", also: "settings.searchModel" },
   { pane: "models", label: "settings.035", also: "settings.searchModel" },
   { pane: "models", label: "settings.agentModel", also: "settings.searchModel" },
@@ -191,7 +191,7 @@ const allLanguages = (key: MessageKey): string[] => Object.values(catalogs).map(
 /** The keys of the tabs' names, in every language. */
 const PANE_TITLE_KEYS: Record<SettingsPane, MessageKey> = {
   general: "settings.paneGeneral", dictation: "settings.paneDictation", agent: "settings.paneAgent", connections: "settings.paneConnections",
-  messaging: "settings.paneMessaging", models: "providers.title", usage: "providers.title", data: "settings.paneData", about: "common.about",
+  messaging: "settings.paneMessaging", models: "settings.paneUsage", usage: "settings.paneUsage", data: "settings.paneData", about: "common.about",
 };
 
 /**
@@ -240,12 +240,14 @@ function agentPurpose(d: DeviceSettings): string {
 export const canonicalPane = (id: SettingsPane): SettingsPane => id === "usage" ? "models" : id;
 /** The name of a tab, in the language of the window. */
 export const paneTitle = (id: SettingsPane): string => PANES.find((p) => p.id === canonicalPane(id))!.title();
+export type ModelsTab = "models" | "usage";
 
 /** The shortcuts recorded here, and the row of each. */
 export const HOTKEY_ROWS: Record<HotkeyField, string> = { dictation_keys: "hotkey", agent_keys: "agent-hotkey" };
 
 /** Everything a tab is drawn from: what the panel has read, and what is being typed or done. */
 export interface SettingsView {
+  modelsTab?: ModelsTab;
   pane: SettingsPane;
   device: DeviceSettings;
   /** The brain's settings; null while the core does not answer. */
@@ -677,18 +679,24 @@ function dataHTML(v: SettingsView): string {
   );
 }
 
-/** Models: connected providers, primary models, existing usage controls and the add-provider dialog. */
+/** One page with model connections and usage in separate views. Legacy ids choose their own view. */
 function modelsHTML(v: SettingsView): string {
   const providers = v.providers ?? emptyProvidersView();
-  return headingHTML(v) + coreNote(v) + `<div class="models-page">` +
-    providersHTML(providers) +
-    section(t("models.used"), MODEL_ROWS.map((r) => modelRow(v, r)), priceSpan(v, "note")) +
-    section(t("models.usage"), [
+  const selected = v.modelsTab ?? (v.pane === "usage" ? "usage" : "models");
+  const content = selected === "models" ? providersHTML(providers) +
+    section(t("models.used"), MODEL_ROWS.map((r) => modelRow(v, r)), priceSpan(v, "note")) + providersAddHTML(providers) :
+    `<section class="sgroup" aria-label="${esc(t("models.usage"))}"><div class="slist">` + [
       keyRow(v),
       ...(v.keyError ? [note(st("err", v.keyError()), ' role="alert"')] : []),
       spendRow(v),
       usageRow(v),
-    ], esc(t("settings.usageDifference"))) + providersAddHTML(providers) + `</div>`;
+    ].join("") + `</div><p class="foot">${esc(t("settings.usageDifference"))}</p></section><div data-usage-host></div>`;
+  return headingHTML(v) + coreNote(v) + `<div class="models-page">` +
+    tabs((["models", "usage"] as const).map((id) => ({
+      id, label: id === "models" ? t("providers.title") : t("models.usage"),
+      attrs: ` id="models-tab-${id}" data-models-tab="${id}" data-k="models-tab:${id}" aria-controls="models-panel-${id}" tabindex="${id === selected ? 0 : -1}"`,
+    })), selected, { label: t("settings.paneUsage"), kind: "nav", plain: true, fill: true }) +
+    (["models", "usage"] as const).map((id) => `<div class="models-content" id="models-panel-${id}" role="tabpanel" aria-labelledby="models-tab-${id}"${id === selected ? "" : " hidden"}>${id === selected ? content : ""}</div>`).join("") + `</div>`;
 }
 
 /** 關於: the version, the license and the fan-project statement. */

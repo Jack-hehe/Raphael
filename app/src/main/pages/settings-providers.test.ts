@@ -1,13 +1,15 @@
 // @vitest-environment happy-dom
 // Exercise provider notifications through the real settings panel with a fake core API.
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { AppContext, MainEvent, ModelCatalog } from "../types";
+import type { AppContext, MainEvent, ModelCatalog, SettingsPane } from "../types";
 import { setLocale } from "../i18n";
+import * as analytics from "../usage-analytics";
+import type { UsageRequest } from "../usage-analytics-types";
 
 const api = vi.hoisted(() => ({
   settingsGet: vi.fn(), settingsSet: vi.fn(), secretsStatus: vi.fn(), statusGet: vi.fn(), audioDevices: vi.fn(),
   keyboardHasAltgr: vi.fn(), languagesList: vi.fn(), modelsCatalog: vi.fn(), modelsLocal: vi.fn(), hotkeysPause: vi.fn(), audioMonitor: vi.fn(),
-  providersKinds: vi.fn(), providersList: vi.fn(), providersModels: vi.fn(), providersAdd: vi.fn(), servicesStatus: vi.fn(),
+  providersKinds: vi.fn(), providersList: vi.fn(), providersModels: vi.fn(), providersAdd: vi.fn(), servicesStatus: vi.fn(), usageAnalytics: vi.fn(),
 }));
 vi.mock("../api", () => api);
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: async () => "test" }));
@@ -24,19 +26,19 @@ const flush = async () => { for (let i = 0; i < 40; i++) await Promise.resolve()
 const listeners = new Set<(event: MainEvent) => void>();
 const send = (event: MainEvent) => { for (const listener of listeners) listener(event); };
 let page: ReturnType<typeof createSettings>;
-async function mount() {
+async function mount(open: SettingsPane = "models") {
   page = createSettings({
     device: () => ({ dictation_keys: ["AltRight"], agent_keys: ["AltRight+Space"], ui_language: "en", dictation_mode: "hold" }),
     onEvent: (handler: (event: MainEvent) => void) => { listeners.add(handler); return () => { listeners.delete(handler); }; },
     refreshDevice: async () => {}, undo: { begin: vi.fn() },
   } as unknown as AppContext);
   document.body.append(page.el); page.el.hidden = false;
-  await page.show("usage"); await flush();
+  await page.show(open); await flush();
 }
 const click = (selector: string) => { const button = document.querySelector<HTMLButtonElement>(selector); expect(button, selector).not.toBeNull(); button!.click(); };
 
 beforeEach(() => {
-  vi.resetAllMocks(); listeners.clear(); setLocale("en");
+  vi.restoreAllMocks(); vi.resetAllMocks(); listeners.clear(); setLocale("en");
   api.settingsGet.mockResolvedValue({ settings: { stt_engine: "cloud" } });
   api.secretsStatus.mockResolvedValue({ has_key: true });
   api.statusGet.mockResolvedValue({ openrouter: null, spend: null });
@@ -47,6 +49,14 @@ beforeEach(() => {
   api.modelsCatalog.mockResolvedValue(empty);
   api.providersKinds.mockResolvedValue({ kinds: [] });
   api.providersList.mockResolvedValue({ providers: [] });
+  api.usageAnalytics.mockImplementation(async ({ range }: UsageRequest) => {
+    const group = { total: 0, series: [] };
+    const days = Array.from({ length: range === "30d" ? 30 : 7 }, (_, i) => `2026-10-${String(i + 1).padStart(2, "0")}`);
+    const cost = (key: string, total: number) => ({ total, series: [{ key, label: key, total, share: 1, values: days.map((_, i) => i === days.length - 1 ? total : 0) }] });
+    return { range, start_day: days[0], end_day: days[days.length - 1], today_day: "2026-10-30", days, tz: "Asia/Taipei",
+      cost_by: { purpose: cost("agent", 1), model: cost("example/model", 2), provider: cost("example", 3) }, tools: group, messages_by: { model: group, source: group }, members: [],
+      dictation: { dictations: days.map(() => 0), words: days.map(() => 0), estimated: days.map(() => false), estimated_words: 0, estimated_dictations: 0, day_basis: "capture_local" } };
+  });
   api.settingsSet.mockImplementation(async (key: string, value: string) => ({ settings: { stt_engine: "cloud", [key]: value } }));
 });
 afterEach(() => { page?.hide(); document.body.innerHTML = ""; setLocale("zh-TW"); });
@@ -57,15 +67,122 @@ test.each(["usage", "models"] as const)("%s opens the single Models pane without
   expect(page.pane()).toBe("models");
   expect(page.el.querySelectorAll('.set-list [data-pane="models"]')).toHaveLength(1);
   expect(page.el.querySelector('.set-list [data-pane="usage"]')).toBeNull();
-  expect(page.el.querySelectorAll('[data-model-picker]')).toHaveLength(3);
+  expect(page.el.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute("data-models-tab")).toBe(alias);
+  expect(page.el.querySelectorAll('[data-model-picker]')).toHaveLength(alias === "models" ? 3 : 0);
   expect(page.el.querySelector('[data-fallback-purpose]')).toBeNull();
   expect(page.el.textContent).not.toContain("Fallback models");
   expect(api.settingsSet).not.toHaveBeenCalled();
 });
 
+test("Models contains no spending and Usage mounts analytics once, preserving filters across tabs and redraws", async () => {
+  const mountAnalytics = vi.spyOn(analytics, "mountUsageAnalytics");
+  await mount();
+  expect(page.el.querySelector("#set-title")?.textContent).toBe("Models & usage");
+  expect(page.el.querySelector('[data-row="openrouter-usage"]')).toBeNull();
+  expect(page.el.querySelector('[data-row="raphael-spend"]')).toBeNull();
+  expect(api.usageAnalytics).not.toHaveBeenCalled();
+  click('[data-models-tab="usage"]'); await flush();
+  expect(mountAnalytics).toHaveBeenCalledTimes(1);
+  expect(api.usageAnalytics).toHaveBeenCalledTimes(1);
+  expect(page.el.querySelector('[data-row="openrouter-usage"]')).not.toBeNull();
+  expect(page.el.querySelector('[data-pv="directory"]')).toBeNull();
+  const node = page.el.querySelector(".usage-analytics");
+  click('[data-range="30d"]'); await flush();
+  const grouping = page.el.querySelector<HTMLSelectElement>('[data-control="cost"]')!;
+  grouping.value = "provider"; grouping.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(page.el.querySelector(".ua-total")?.textContent).toBe("US$3.00");
+  setLocale("ja"); await flush();
+  expect(page.el.querySelector(".usage-analytics")).toBe(node);
+  click('[data-models-tab="models"]');
+  expect(page.el.querySelector(".usage-analytics")).toBeNull();
+  click('[data-models-tab="usage"]'); await flush();
+  expect(page.el.querySelector(".usage-analytics")).toBe(node);
+  expect(mountAnalytics).toHaveBeenCalledTimes(1);
+  expect(page.el.querySelector('[data-control="cost"] option[selected]')?.getAttribute("value")).toBe("provider");
+  expect(page.el.querySelector(".ua-total")?.textContent).toBe("US$3.00");
+  expect(page.el.querySelector('[data-range="30d"]')?.getAttribute("aria-pressed")).toBe("true");
+});
+
+test("analytics refreshes on completed activity while visible, and is destroyed on pane leave or Settings close", async () => {
+  const mountAnalytics = vi.spyOn(analytics, "mountUsageAnalytics");
+  await mount(); click('[data-models-tab="usage"]'); await flush();
+  const first = mountAnalytics.mock.results[0].value;
+  const destroyed = vi.spyOn(first, "destroy");
+  const calls = api.usageAnalytics.mock.calls.length;
+  send({ type: "ProvidersChanged" }); await flush();
+  send({ type: "AgentTurn", turn_id: 42 }); await flush();
+  expect(api.usageAnalytics).toHaveBeenCalledTimes(calls + 2);
+  click('[data-models-tab="models"]');
+  send({ type: "AgentTurn", turn_id: 43 }); await flush();
+  expect(api.usageAnalytics).toHaveBeenCalledTimes(calls + 2);
+  expect(destroyed).not.toHaveBeenCalled();
+  click('[data-pane="general"]');
+  expect(destroyed).toHaveBeenCalledTimes(1);
+  click('[data-pane="models"]'); await flush();
+  expect(page.el.querySelector('[data-models-tab="models"][aria-selected="true"]')).not.toBeNull();
+  click('[data-models-tab="usage"]'); await flush();
+  const secondDestroyed = vi.spyOn(mountAnalytics.mock.results[1].value, "destroy");
+  page.hide(); expect(secondDestroyed).toHaveBeenCalledTimes(1);
+  await page.show("general"); click('[data-pane="models"]'); await flush();
+  expect(page.el.querySelector('[data-models-tab="usage"][aria-selected="true"]')).not.toBeNull();
+  await page.show("models");
+  expect(page.el.querySelector('[data-models-tab="models"][aria-selected="true"]')).not.toBeNull();
+});
+
+test("the shared tabs support arrow keys and usage search selects and focuses the usage control", async () => {
+  await mount();
+  const modelTab = page.el.querySelector<HTMLElement>('[data-models-tab="models"]')!;
+  modelTab.focus(); modelTab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); await flush();
+  expect((document.activeElement as HTMLElement).dataset.modelsTab).toBe("usage");
+  expect(document.activeElement?.getAttribute("aria-selected")).toBe("true");
+  document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+  expect((document.activeElement as HTMLElement).dataset.modelsTab).toBe("models");
+  const search = page.el.querySelector<HTMLInputElement>("#set-search")!;
+  search.value = "API key"; search.dispatchEvent(new Event("input", { bubbles: true }));
+  click('.set-hit[data-hit="0"]'); await flush();
+  expect(page.el.querySelector('[data-models-tab="usage"][aria-selected="true"]')).not.toBeNull();
+  expect((document.activeElement as HTMLElement).closest('[data-row="openrouter-key"]')).not.toBeNull();
+});
+
+test("show awaits the initial analytics reading and leaving during it disposes the stale view", async () => {
+  const result = await api.usageAnalytics({ range: "7d" });
+  const mountAnalytics = vi.spyOn(analytics, "mountUsageAnalytics");
+  await mount();
+  let finish!: (value: unknown) => void;
+  api.usageAnalytics.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  let ready = false;
+  const showing = Promise.resolve(page.show("usage")).then(() => { ready = true; });
+  await flush();
+  expect(ready).toBe(false);
+  const destroyed = vi.spyOn(mountAnalytics.mock.results[0].value, "destroy");
+  click('[data-pane="general"]');
+  expect(destroyed).toHaveBeenCalledTimes(1);
+  finish(result); await showing; await flush();
+  expect(page.pane()).toBe("general");
+  expect(page.el.querySelector(".usage-analytics")).toBeNull();
+  const requests = api.usageAnalytics.mock.calls.length;
+  send({ type: "AgentTurn", turn_id: 44 }); await flush();
+  expect(api.usageAnalytics).toHaveBeenCalledTimes(requests);
+});
+
+test("activity during the initial reading is coalesced into one refresh", async () => {
+  const result = await api.usageAnalytics({ range: "7d" });
+  api.usageAnalytics.mockClear();
+  let finish!: (value: unknown) => void;
+  api.usageAnalytics.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  await mount(); click('[data-models-tab="usage"]');
+  expect(api.usageAnalytics).toHaveBeenCalledTimes(1);
+  send({ type: "AgentTurn", turn_id: 45 });
+  send({ type: "AgentTurn", turn_id: 46 });
+  send({ type: "Dictation", phase: "pasted", agent: false });
+  expect(api.usageAnalytics).toHaveBeenCalledTimes(1);
+  finish(result); await flush();
+  expect(api.usageAnalytics).toHaveBeenCalledTimes(2);
+});
+
 test("provider search focuses the Models add action and opens its searchable dialog", async () => {
   api.providersKinds.mockResolvedValue({ kinds: [{ kind: "openai", name: "OpenAI", fields: ["key"], group: "official", available: true }] });
-  await mount(); await page.show("general"); await flush();
+  await mount("usage");
   const search = page.el.querySelector<HTMLInputElement>("#set-search")!;
   search.value = "OpenAI"; search.dispatchEvent(new Event("input", { bubbles: true }));
   click('.set-hit[data-hit="0"]'); await flush();

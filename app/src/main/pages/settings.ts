@@ -1,5 +1,5 @@
 // Settings: eight tabs in three groups: basics, integrations and account. Search jumps to a row
-// of any tab. Models combines providers, model choices and usage, including legacy usage links.
+// of any tab. Models & usage has two views, with legacy links selecting the matching view.
 // This file holds what the panel knows and what it does; settings-view.ts draws each tab
 // from a snapshot of it. A change takes effect at once; there is no save button. The settings of
 // the brain (limit, models, languages, speech-to-text, how Raphael answers) go to the core with
@@ -36,6 +36,7 @@ import { createHotkeyRecording } from "../hotkey-recording";
 import { type ModelPicker, type ModelPickerLook, type PickerRole, mountModelPicker, replacementNotices, withFavorite } from "../model-picker";
 import { createServices } from "../services";
 import { createProviders } from "../providers";
+import { mountUsageAnalytics, type UsageAnalyticsMount } from "../usage-analytics";
 import { MonitorSwitch } from "../monitor";
 import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, LocalModel, MainEvent, ModelCatalog, ModelRole, Page, SettingsPane, Status } from "../types";
 import {
@@ -69,6 +70,7 @@ import {
   type SearchHit,
   SIZES,
   type SettingsView,
+  type ModelsTab,
   UI_LANGUAGES,
   languagesOf,
   loadingHTML,
@@ -172,6 +174,13 @@ export function createSettings(app: AppContext): SettingsPage {
   const searchField = el.querySelector<HTMLInputElement>("#set-search")!;
   const navList = el.querySelector<HTMLElement>(".set-list")!;
   let pane: SettingsPane = "general";
+  let modelsTab: ModelsTab = "models";
+  const modelsScroll: Record<ModelsTab, number> = { models: 0, usage: 0 };
+  const usageHost = document.createElement("div");
+  usageHost.dataset.usageHost = "";
+  let usage: UsageAnalyticsMount | null = null;
+  let usageRefresh: Promise<void> | null = null;
+  let usageAgain = false;
   /** What 「搜尋設定」 found for what is typed in it; the tabs are listed again when it is empty. */
   let hits: SearchHit[] = [];
   /** A row the search chose, to be lit once its tab is drawn with its rows (not while it is being read). */
@@ -247,17 +256,18 @@ export function createSettings(app: AppContext): SettingsPage {
   const rules = createRules({ visible: () => visible && pane === "agent", redraw: () => render(), undo: app.undo });
   /** 服務, in the 「拉斐爾」 tab: who does the work of Raphael's tools. Choosing is a change of the brain's settings. */
   const services = createServices({ visible: () => visible && pane === "agent", redraw: () => render(), brain: () => brain, changeSetting: (key, value) => changeBrain(key, value) });
-  const providers = createProviders({ root: el, visible: () => visible && pane === "models", redraw: () => render() });
+  const providers = createProviders({ root: el, visible: () => visible && pane === "models" && modelsTab === "models", redraw: () => render() });
   app.onEvent((event) => {
     providers.followEvent(event);
     if (event.type === "ProvidersChanged" && visible) void loadCatalog();
+    if (event.type === "ProvidersChanged" || event.type === "AgentTurn" || event.type === "Dictation" && event.phase === "pasted") refreshUsage();
   });
 
   // ---------- drawing ----------
 
   /** What the tabs are drawn from, as the panel knows it now. */
   const view = (): SettingsView => ({
-    pane, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
+    pane, modelsTab, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
     replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
     connections: connections.view(), messaging: messaging.view(), memory: memory.view(), memoryShared: memoryShared.view(), rules: rules.view(), services: services.view(), providers: providers.view(), confirmingClear, localModels, localDownload,
   });
@@ -357,8 +367,29 @@ export function createSettings(app: AppContext): SettingsPage {
     return anchor?.dataset.k;
   }
 
+  function destroyUsage(): void {
+    usage?.destroy(); usage = null; usageRefresh = null; usageAgain = false;
+    usageHost.remove();
+  }
+
+  /** Coalesce activity bursts and wait for the first reading before refreshing it. */
+  function refreshUsage(): void {
+    if (!usage || !visible || pane !== "models" || modelsTab !== "usage") return;
+    usageAgain = true;
+    if (usageRefresh) return;
+    const current = usage;
+    usageRefresh = (async () => {
+      await current.ready;
+      while (usage === current && usageAgain && visible && pane === "models" && modelsTab === "usage") {
+        usageAgain = false;
+        await current.refresh();
+      }
+    })().finally(() => { if (usage === current) usageRefresh = null; });
+  }
+
   function render(): void {
     const active = document.activeElement as HTMLElement | null;
+    const usageFocus = active && usageHost.contains(active) ? active : null;
     const focused = active?.dataset?.k;
     const focusedId = active?.id;
     const keyDraft = el.querySelector<HTMLInputElement>("#key-input")?.value;
@@ -371,7 +402,15 @@ export function createSettings(app: AppContext): SettingsPage {
     const scroll = body.scrollTop;
     body.setAttribute("aria-busy", String(loading && pane !== "about"));
     // Only what changed moves: a list drawn again stands still, a switch that was turned slides.
+    // Analytics owns its controls and filters; keep that live subtree out of page HTML redraws.
+    usageHost.remove();
     swapHTML(body, pane !== "about" && loading ? loadingHTML(view()) : paneHTML(view()));
+    const slot = body.querySelector<HTMLElement>("[data-usage-host]");
+    if (slot) {
+      slot.replaceWith(usageHost);
+      usage ??= mountUsageAnalytics(usageHost, { usageAnalytics: api.usageAnalytics });
+      if (usageFocus?.isConnected) usageFocus.focus({ preventScroll: true });
+    }
     // Before the focus goes back by `data-k`, which the pickers' buttons have too.
     mountPickers();
     const keyInput = el.querySelector<HTMLInputElement>("#key-input");
@@ -417,9 +456,15 @@ export function createSettings(app: AppContext): SettingsPage {
   translateNav();
 
   /** Goes to a tab: what the tab before it had open is dropped, and the new one comes in. */
-  function openPane(next: SettingsPane): void {
+  function openPane(next: SettingsPane, tab?: ModelsTab): void {
     closeMenu();
+    const hadUsage = usage !== null;
+    const jumping = pendingJump !== null;
+    if (pane === "models") modelsScroll[modelsTab] = body.scrollTop;
+    if (next === "usage") modelsTab = "usage";
+    else if (tab) modelsTab = tab;
     pane = canonicalPane(next);
+    if (pane !== "models") destroyUsage();
     if (pane === "connections") void connections.load();
     else connections.reset();
     if (pane === "messaging") void messaging.load();
@@ -431,14 +476,30 @@ export function createSettings(app: AppContext): SettingsPage {
     services.reset();
     providers.reset();
     if (pane === "agent") void services.load();
-    if (pane === "models") void providers.load();
+    if (pane === "models" && modelsTab === "models") void providers.load();
     clearTimeout(clearTimer);
     confirmingClear = null;
     syncMonitor();
     body.scrollTop = 0;
     render();
+    if (!jumping && pane === "models") body.scrollTop = modelsScroll[modelsTab];
+    if (hadUsage && pane === "models" && modelsTab === "usage") refreshUsage();
     paintNav();
     replay(body, "pane-in");
+  }
+
+  function switchModelsTab(next: ModelsTab): void {
+    if (next === modelsTab) return;
+    const hadUsage = usage !== null;
+    closeMenu();
+    modelsScroll[modelsTab] = body.scrollTop;
+    modelsTab = next;
+    if (next === "usage") providers.reset();
+    render();
+    body.scrollTop = modelsScroll[next];
+    body.querySelector<HTMLElement>(`[data-models-tab="${next}"]`)?.focus({ preventScroll: true });
+    if (next === "models") void providers.load();
+    else if (hadUsage) refreshUsage();
   }
 
   /** Goes where a hit of the search is: its tab, then its row, which is lit for a moment and gets the focus. */
@@ -446,16 +507,17 @@ export function createSettings(app: AppContext): SettingsPage {
     searchField.value = "";
     hits = [];
     pendingJump = hit.label ? hit : null;
-    openPane(hit.pane);
+    openPane(hit.pane, hit.label && canonicalPane(hit.pane) === "models" ? hit.pane === "usage" ? "usage" : "models" : undefined);
     if (!hit.label) el.querySelector<HTMLElement>("#set-title")?.focus();
   }
 
   /** Lights the row a jump was for, if its tab shows it, scrolls it into view and focuses its control. */
   function light(hit: SearchHit): void {
     pendingJump = null;
-    if (pane !== hit.pane) return;
+    if (pane !== canonicalPane(hit.pane)) return;
     if (hit.label === "providers.add") {
-      const button = body.querySelector<HTMLElement>('[data-pv="directory"]');
+      const button = body.querySelector<HTMLButtonElement>('[data-pv="directory"]');
+      if (button?.disabled && providers.view().state !== "failed") { pendingJump = hit; return; }
       button?.scrollIntoView({ block: "center" }); button?.focus({ preventScroll: true });
       return;
     }
@@ -1069,6 +1131,8 @@ export function createSettings(app: AppContext): SettingsPage {
       app.closeSettings(); // a click on the dimmed window around the panel
       return;
     }
+    const modelTab = target.closest<HTMLElement>("[data-models-tab]");
+    if (modelTab) { switchModelsTab(modelTab.dataset.modelsTab as ModelsTab); return; }
     const paneButton = target.closest<HTMLElement>("[data-pane]");
     if (paneButton) {
       openPane(paneButton.dataset.pane as SettingsPane);
@@ -1182,7 +1246,15 @@ export function createSettings(app: AppContext): SettingsPage {
     if (input.id === "limit-input") limitDraft = input.value;
     else if (input.id === "agent-city") cityDraft = input.value;
   });
-  el.addEventListener("keydown", (e) => void (connections.key(e) || messaging.key(e) || memories.some((list) => list.key(e)) || rules.key(e) || services.key(e) || providers.key(e)));
+  el.addEventListener("keydown", (e) => {
+    const tab = (e.target as Element).closest<HTMLElement>("[data-models-tab]");
+    if (tab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+      e.preventDefault();
+      switchModelsTab(e.key === "Home" ? "models" : e.key === "End" ? "usage" : modelsTab === "models" ? "usage" : "models");
+      return;
+    }
+    void (connections.key(e) || messaging.key(e) || memories.some((list) => list.key(e)) || rules.key(e) || services.key(e) || providers.key(e));
+  });
   // Menus consume their own Escape; the panel and native window controls share one Tab loop.
   const settingsKey = (e: KeyboardEvent): void => {
     const chrome = document.getElementById("window-chrome");
@@ -1192,7 +1264,7 @@ export function createSettings(app: AppContext): SettingsPage {
       e.preventDefault();
       app.closeSettings();
     } else if (e.key === "Tab") {
-      const selector = "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), a[href], [tabindex='0']";
+      const selector = "button:not([disabled]):not([tabindex='-1']), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex='0']";
       const active = document.activeElement as HTMLElement | null;
       // A dialog over the settings (a service of 連接) keeps the focus to itself.
       const trap = el.querySelector<HTMLElement>("[data-trap]");
@@ -1231,12 +1303,15 @@ export function createSettings(app: AppContext): SettingsPage {
     el,
     pane: () => pane,
     async show(open?: SettingsPane) {
+      const hadUsage = usage !== null;
       visible = true;
       document.addEventListener("keydown", settingsKey);
       const mine = ++loads;
       loading = true;
       // the first tab, unless the way in knows better (the report that says there is no key goes to the key)
       pane = open && PANES.some((p) => p.id === canonicalPane(open)) ? canonicalPane(open) : "general";
+      if (open === "usage" || open === "models") modelsTab = open;
+      if (pane !== "models") destroyUsage();
       connections.reset();
       messaging.reset();
       for (const list of memories) list.reset();
@@ -1248,7 +1323,7 @@ export function createSettings(app: AppContext): SettingsPage {
       if (pane === "agent") for (const list of memories) void list.load();
       if (pane === "agent") void rules.load();
       if (pane === "agent") void services.load();
-      if (pane === "models") void providers.load();
+      if (pane === "models" && modelsTab === "models") void providers.load();
       searchField.value = "";
       hits = [];
       pendingJump = null;
@@ -1305,9 +1380,12 @@ export function createSettings(app: AppContext): SettingsPage {
         document.removeEventListener("visibilitychange", onVisibility);
       };
       syncMonitor();
+      if (hadUsage) refreshUsage();
+      await usage?.ready;
     },
     hide() {
       visible = false;
+      destroyUsage();
       connections.reset();
       messaging.reset();
       for (const list of memories) list.reset();

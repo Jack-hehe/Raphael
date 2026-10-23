@@ -78,7 +78,7 @@ export const zhTW = {
   "providers.contextHint": "代理使用的本機模型需要至少 64K 的 context。",
   "providers.contextWarning": "Context 低於 64K",
   "providers.title": "模型",
-  "providers.about": "連接模型供應商，選用你需要的模型。",
+  "providers.about": "連接供應商、選用模型並查看使用量。",
   "providers.add": "新增供應商",
   "providers.official": "官方",
   "providers.gateway": "閘道與雲端",

@@ -79,7 +79,7 @@ export const en = {
   "providers.unchanged": "Keep current setting",
   "providers.contextHint": "Local models for agent use need at least 64K context.",
   "providers.contextWarning": "Context below 64K",
-  "providers.about": "Connect providers and choose the models you need.",
+  "providers.about": "Connect providers, choose models and review usage.",
   "providers.add": "Add a provider",
   "providers.official": "Official",
   "providers.gateway": "Gateways and cloud",

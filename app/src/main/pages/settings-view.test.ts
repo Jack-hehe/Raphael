@@ -14,6 +14,7 @@ import type { BrainSettings, CatalogModel, DeviceSettings, LocalModel, ModelCata
 import {
   APPEARANCES,
   PANES,
+  canonicalPane,
   RETENTIONS,
   SEARCH_INDEX,
   computerApps,
@@ -185,12 +186,12 @@ const described = (html: string): string[] =>
   html.split(/(?=<div class="row[ "])/).filter((r) => r.includes('<div class="d">')).map((r) => /<div class="t">(.*?)<\/div>/.exec(r)![1]);
 
 describe("the tabs", () => {
-  test("are General, Dictation, Raphael; Connections, Messaging; Models, Data and About, in each language", () => {
+  test("are General, Dictation, Raphael; Connections, Messaging; Models & usage, Data and About, in each language", () => {
     expect(IDS).toEqual(["general", "dictation", "agent", "connections", "messaging", "models", "data", "about"]);
     const titles = {
-      "zh-TW": ["一般", "聽寫", "拉斐爾", "連接", "訊息平台", "模型", "資料", "關於"],
-      en: ["General", "Dictation", "Raphael", "Connections", "Messaging", "Models", "Data", "About"],
-      ja: ["一般", "音声入力", "ラファエル", "接続", "メッセージ", "モデル", "データ", "アプリ情報"],
+      "zh-TW": ["一般", "聽寫", "拉斐爾", "連接", "訊息平台", "模型與用量", "資料", "關於"],
+      en: ["General", "Dictation", "Raphael", "Connections", "Messaging", "Models & usage", "Data", "About"],
+      ja: ["一般", "音声入力", "ラファエル", "接続", "メッセージ", "モデルと使用量", "データ", "アプリ情報"],
     };
     for (const locale of LOCALES) {
       setLocale(locale);
@@ -246,7 +247,7 @@ describe("the tabs", () => {
 
   test("keep the name and the purpose while the settings are being read", () => {
     const html = loadingHTML(view({ pane: "usage" }));
-    expect(html).toContain('<h1 id="set-title" tabindex="-1">模型</h1>');
+    expect(html).toContain('<h1 id="set-title" tabindex="-1">模型與用量</h1>');
     expect(html).toContain('<p class="purpose">');
     expect(html).toContain("settings-skeleton");
   });
@@ -277,7 +278,8 @@ describe("the rules for every tab, in every language", () => {
     expect(described(tab("general"))).toEqual(["字幕"]);
     expect(described(tab("dictation"))).toEqual(["你說的語言"]);
     // the key's status, the month's forecast, what the limit does, and what each model costs
-    expect(described(tab("usage"))).toEqual(["拉斐爾的回答", "整理文字", "語音轉文字", "金鑰"]);
+    expect(described(tab("models"))).toEqual(["拉斐爾的回答", "整理文字", "語音轉文字"]);
+    expect(described(tab("usage"))).toEqual(["金鑰"]);
   });
 });
 
@@ -427,13 +429,20 @@ describe("拉斐爾", () => {
 });
 
 describe("Models", () => {
-  test("orders providers, the three primary models, usage and the add action without fallbacks", () => {
-    const html = tab("usage");
-    expect(html).toBe(tab("models"));
-    expect(groups(html)).toEqual(["供應商", "使用的模型", "用量"]);
-    expect(names(html)).toEqual(["拉斐爾的回答", "整理文字", "語音轉文字", "金鑰", "Raphael 本月花費", "OpenRouter 帳號本月用量"]);
-    expect(html.indexOf('data-pv="directory"')).toBeGreaterThan(html.indexOf('data-row="usage"'));
+  test("puts providers and model choices on Models, existing usage controls and analytics slot on Usage", () => {
+    const html = tab("models");
+    expect(groups(html)).toEqual(["供應商", "使用的模型"]);
+    expect(names(html)).toEqual(["拉斐爾的回答", "整理文字", "語音轉文字"]);
+    expect(html.indexOf('data-pv="directory"')).toBeGreaterThan(html.indexOf('data-row="stt-model"'));
+    expect(html).not.toContain('data-row="raphael-spend"');
+    expect(html).not.toContain("data-usage-host");
     expect(html).not.toContain("data-fallback");
+    const usage = tab("usage");
+    expect(names(usage)).toEqual(["金鑰", "Raphael 本月花費", "OpenRouter 帳號本月用量"]);
+    expect(usage).toContain("data-usage-host");
+    expect(usage).not.toContain("data-model-picker");
+    expect(usage).not.toContain("<h2>用量</h2>");
+    expect(usage).not.toContain('data-pv="directory"');
   });
 
   test("shows how OpenRouter took the key, with buttons to check again and to change it", () => {
@@ -467,7 +476,7 @@ describe("Models", () => {
   });
 
   test("puts the price of what is chosen under each model's name, its picker beside, one self-contained row each", () => {
-    const html = tab("usage");
+    const html = tab("models");
     for (const [name, k, role, price, chosen] of [
       ["語音轉文字", "stt-model", "stt", "每分鐘 $0.0067", "Scribe v2"],
       ["整理文字", "model", "cleanup", "輸入 $0.10 / 輸出 $0.40 每百萬 token", "GPT-6 Luna"],
@@ -482,7 +491,7 @@ describe("Models", () => {
       // The button names what is chosen and leaves its price to the line under the row's name.
       expect(row).toMatch(new RegExp(`data-k="${k}"><span class="mp-tname">${chosen}</span><svg`));
       expect(row).not.toContain("mp-tprice");
-      expect(buttons(row)).toHaveLength(1);
+      expect(buttons(row).filter((tag) => tag.includes('class="sel mp-trigger"'))).toHaveLength(1);
       expect(row).toContain('class="models-purpose-note"');
       expect(row).not.toContain('data-fallback');
     }
@@ -521,7 +530,7 @@ describe("Models", () => {
   test("the cloud model stays the picker's choice, also while the local engine is in use", () => {
     const local = view({ brain: { ...brain, stt_engine: "local", stt_local_model: "sensevoice" } });
     expect(modelPickerLook(local, "stt").current).toBe("elevenlabs/scribe-v2");
-    const row = rowOf(tab("usage", { brain: { ...brain, stt_engine: "local", stt_local_model: "sensevoice" } }), "語音轉文字");
+    const row = rowOf(tab("models", { brain: { ...brain, stt_engine: "local", stt_local_model: "sensevoice" } }), "語音轉文字");
     expect(row).toContain('<span class="mp-tname">本機 · SenseVoice</span>');
     expect(row).toContain('data-price="stt-model">免費</span>');
   });
@@ -536,14 +545,14 @@ describe("Models", () => {
   });
 
   test("says the prices are coming, and shows none it could not get", () => {
-    expect(rowOf(tab("usage", { catalog: "loading" }), "整理文字")).toContain(">價格載入中…</span>");
+    expect(rowOf(tab("models", { catalog: "loading" }), "整理文字")).toContain(">價格載入中…</span>");
     expect(modelPickerLook(view({ catalog: "loading" }), "cleanup")).toMatchObject({ catalog: null, loading: true });
     expect(modelPickerLook(view({ catalog: "failed" }), "cleanup")).toMatchObject({ catalog: null, loading: false });
     expect(priceTexts(view({ catalog: "failed" }))).toEqual({ model: "", "agent-model": "", "stt-model": "", note: "目前無法取得模型價格。" });
   });
 
   test("shows a saved model the catalog does not have by its id, with an unknown price", () => {
-    const row = rowOf(tab("usage", { brain: { ...brain, cleanup_model: "x/old" } }), "整理文字");
+    const row = rowOf(tab("models", { brain: { ...brain, cleanup_model: "x/old" } }), "整理文字");
     expect(row).toContain('<span class="mp-tname">old</span>');
     expect(row).toContain('data-price="model">價格未知</span>');
   });
@@ -630,9 +639,9 @@ describe("搜尋設定", () => {
   test("finds a tab by its name, before its rows, and a brand by its name; case does not matter", () => {
     expect(where("連接")[0]).toBe("connections:連接");
     expect(where("telegram")).toEqual(["messaging:訊息平台"]);
-    expect(where("OPENROUTER")).toEqual(["models:新增供應商", "models:金鑰", "models:OpenRouter 帳號本月用量"]);
-    expect(where("模型")).toEqual(["models:模型", "models:語音轉文字", "models:整理文字", "models:拉斐爾的回答"]);
-    expect(where("Models & usage")[0]).toBe("models:模型");
+    expect(where("OPENROUTER")).toEqual(["models:新增供應商", "usage:金鑰", "usage:OpenRouter 帳號本月用量"]);
+    expect(where("模型")).toEqual(["models:模型與用量", "models:語音轉文字", "models:整理文字", "models:拉斐爾的回答"]);
+    expect(where("Models & usage")[0]).toBe("models:模型與用量");
   });
 
   test("finds nothing for nothing, and says so for what it does not know", () => {
@@ -647,7 +656,7 @@ describe("搜尋設定", () => {
   });
 
   test("knows a row of every tab, and each row it knows is drawn on its tab under that name, in every language", () => {
-    expect(new Set(SEARCH_INDEX.map((e) => e.pane))).toEqual(new Set(IDS));
+    expect(new Set(SEARCH_INDEX.map((e) => canonicalPane(e.pane)))).toEqual(new Set(IDS));
     for (const locale of LOCALES) {
       setLocale(locale);
       for (const entry of SEARCH_INDEX) {
@@ -693,7 +702,7 @@ describe("while the core does not answer", () => {
     expect(rowOf(agent, "問拉斐爾")).not.toContain("disabled");
     const usage = tab("usage", down);
     expect(usage).not.toContain('id="limit-input"');
-    for (const name of ["語音轉文字", "整理文字", "拉斐爾的回答"]) expect(rowOf(usage, name)).toMatch(/data-k="[\w-]+" disabled>/);
+    for (const name of ["語音轉文字", "整理文字", "拉斐爾的回答"]) expect(rowOf(tab("models", down), name)).toMatch(/data-k="[\w-]+" disabled>/);
   });
 });
 

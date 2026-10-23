@@ -1,6 +1,7 @@
 /* Models shares the service list's surfaces, focus states and type scale. */
 .models-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-6); margin-top: var(--sp-5); }
-.models-page > .sgroup { margin: 0; }
+.models-content:not([hidden]) { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-6); }
+.models-content > .sgroup { margin: 0; }
 .pv { container: models / inline-size; }
 .models-purpose-note { display: block; color: var(--text-2); line-height: 1.5; }
 .pv-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
