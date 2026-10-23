@@ -150,6 +150,12 @@ body {
   opacity: 1;
 }
 
+/* The overlay never takes the keyboard's focus, so no ring ever has a reason to show on it: not
+   even the browser's own, after a click on a button of a question. */
+:focus-visible {
+  outline: none;
+}
+
 /* The page is click-through; only the buttons are not. */
 .ask-btn {
   pointer-events: auto;

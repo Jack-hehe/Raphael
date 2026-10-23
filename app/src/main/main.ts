@@ -22,6 +22,7 @@ import { installNavInput } from "./nav-input";
 import { labelNavItem, navItemHTML } from "./nav-items";
 import { brandIcon } from "./brand";
 import { installWindowHotkeys } from "./window-hotkeys";
+import { installFocusKeys } from "./focus-keys";
 import { followTray } from "./tray-open";
 import { installWindowChrome, labelWindowControls, showMaximized } from "./window-chrome";
 import type { AgentDraft, AppContext, DeviceSettings, MainEvent, Page, PageId, SettingsPane } from "./types";
@@ -106,6 +107,8 @@ function mountWindowChrome(): void {
 
 async function start(): Promise<void> {
   applyTheme();
+  // Focus rings only while Tab moves the focus (focus-keys.ts); a click or the caret shows the rest.
+  installFocusKeys(document);
   let deviceRead = false;
   try {
     await device.refresh();
