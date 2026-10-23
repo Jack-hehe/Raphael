@@ -38,6 +38,7 @@ from ..brain.catalog import LLM, TOOL_CALLING, CatalogEntry, find
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
 from ..brain.providers.base import ModelProvider
 from ..brain.pricing import builtin_catalog
+from ..memory.conversation import turn_text
 from .failure import AgentFailure, failure_kind
 from .history import Turn
 from .ledger import Ledger
@@ -269,7 +270,7 @@ def build_plan_message(question: str, context: Sequence[Turn]) -> str:
     which mark it as the user's words."""
     parts = []
     if context:
-        lines = [f"User: {turn.question}\nRaphael: {turn.text or turn.prefix}" for turn in context]
+        lines = [turn_text(turn, detail=False) for turn in context]
         parts.append("Conversation so far (oldest first):\n" + "\n".join(lines))
     parts.append(f"<question>\n{question}\n</question>")
     return "\n\n".join(parts)

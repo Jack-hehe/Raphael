@@ -162,8 +162,8 @@ async def test_the_summary_comes_before_the_turns_and_the_time_after_them(rig, c
     client.replies.append(reply("好。", prefix="答"))
     await rig.ask("繼續")
     user = client.json_calls[0]["user"]
-    assert user.index("<summary>\nOngoing:\n- 規劃墾丁之旅\n</summary>") < user.index("User: 上一句")
-    assert user.index("User: 上一句") < user.index("Current date and time") < user.index("<question>")
+    assert user.index("<summary>\nOngoing:\n- 規劃墾丁之旅\n</summary>") < user.index("owner: 上一句")
+    assert user.index("owner: 上一句") < user.index("Current date and time") < user.index("<question>")
 
 
 async def test_a_reply_that_asks_for_a_search_is_given_the_past_turns_and_asked_again(rig, client, memory):

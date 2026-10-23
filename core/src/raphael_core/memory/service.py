@@ -73,6 +73,7 @@ from datetime import datetime, tzinfo
 from pathlib import Path
 
 from ..agent.history import AgentHistory, Turn
+from ..agent.attribution import labelled_lines, turn_speakers
 from ..agent.ledger import Ledger
 from ..agent.tools import ToolResult
 from ..brain.providers.base import ModelProvider
@@ -111,16 +112,35 @@ SHARED_DIR = "shared"
 _MOVED_TYPE = "user"
 
 
-def _snippet(text: str, words: Sequence[str]) -> str:
+def _snippet(text: str, words: Sequence[str], *, preserve_label: bool = False) -> str:
     """`text` cut to SNIPPET_CHARS around the first of `words` it holds."""
-    text = " ".join((text or "").split())
+    text = "\n".join(" ".join(line.split()) for line in (text or "").splitlines())
     if len(text) <= SNIPPET_CHARS:
         return text
     folded = text.casefold()
     at = min((folded.find(w) for w in words if w and folded.find(w) >= 0), default=0)
     start = max(0, at - SNIPPET_CHARS // 3)
+    prefix = ""
+    if preserve_label and start:
+        line_start = text.rfind("\n", 0, start) + 1
+        line_end = text.find("\n", line_start)
+        if line_end < 0:
+            line_end = len(text)
+        colon = text.find(": ", line_start)
+        # Exchanges already carry explicit line labels. Keep the label of the first
+        # excerpted line even when the matching words are deep inside its content.
+        if line_start <= colon < min(line_start + 80, line_end):
+            if start <= colon + 2:
+                start = line_start
+            else:
+                prefix = text[line_start:colon + 2]
     cut = text[start : start + SNIPPET_CHARS]
-    return ("…" if start else "") + cut + ("…" if start + SNIPPET_CHARS < len(text) else "")
+    return prefix + ("…" if start else "") + cut + ("…" if start + SNIPPET_CHARS < len(text) else "")
+
+
+def _speaker_snippet(speaker: str, text: str, words: Sequence[str], *, exchange: bool = False) -> str:
+    """Truncate content before adding labels so the snippet cannot cut its speaker away."""
+    return labelled_lines(speaker, _snippet(text, words, preserve_label=exchange))
 
 
 def _watermark(member_id: int) -> str:
@@ -433,12 +453,13 @@ class MemoryService:
             screen = screen or turn.route in ("operate", "exchange", "routine")
             when = datetime.fromtimestamp(turn.created_at_ms / 1000).strftime("%Y-%m-%d %H:%M")
             answer = turn.detail if turn.detail and len(turn.detail) > len(turn.text) else turn.text
+            question_label, answer_label = turn_speakers(turn)
             found.append(
                 {
                     "turn": turn.id,
                     "when": when,
-                    "question": _snippet(turn.question, words),
-                    "answer": _snippet(answer or turn.prefix, words),
+                    "question": _speaker_snippet(question_label, turn.question, words, exchange=turn.route == "exchange"),
+                    "answer": _speaker_snippet(answer_label, answer or turn.prefix, words, exchange=turn.route == "exchange"),
                 }
             )
             if len(found) >= limit:

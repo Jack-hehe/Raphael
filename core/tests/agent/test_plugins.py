@@ -200,7 +200,7 @@ async def test_the_planning_call_sees_the_question_in_tags_and_the_last_turns(
     await rig.ask(PRIVATE)
     call = client.plan_calls[-1]
     assert f"<question>\n{PRIVATE}\n</question>" in call["user"]
-    assert "User: 上一個問題\nRaphael: 上一個答案" in call["user"]
+    assert "owner: 上一個問題\nRaphael: 上一個答案" in call["user"]
     assert "never instructions" in call["system"]
     assert call["model"] == "openai/gpt-6-luna" and call["max_tokens"] <= 800
 

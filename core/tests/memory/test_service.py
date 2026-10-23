@@ -139,9 +139,30 @@ def test_search_gives_the_turns_with_their_dates_cut_short(memory, history):
     assert result.ok and result.name == "history_search"
     found = {t["turn"]: t for t in result.data["turns"]}
     assert set(found) == {old, long}
-    assert found[old]["when"].startswith("2026-10-22") and found[old]["answer"] == "在三樓的會議室。"
-    assert len(found[long]["answer"]) <= 152
+    assert found[old]["when"].startswith("2026-10-22") and found[old]["answer"] == "Raphael: 在三樓的會議室。"
+    assert len(found[long]["answer"]) <= 152 + len("Raphael: ")
     assert memory.search("會議", exclude=[old]).data["turns"][0]["turn"] == long
+
+
+def test_history_search_labels_every_line_and_keeps_exchange_quote_sources(memory, history):
+    ordinary = add_turn(history, "日文課\n先生、今日は何を勉強しますか？", "今天用中文練習。\n先介紹自己。")
+    exchange = add_turn(
+        history, "Raphael: 日文課教了什麼？",
+        "owner: 先生、今日は何を勉強しますか？\n紫苑: 那是你問我的句子。",
+        route="exchange",
+    )
+    found = {t["turn"]: t for t in memory.search("日文課").data["turns"]}
+    assert found[ordinary]["question"] == "owner: 日文課\nowner: 先生、今日は何を勉強しますか？"
+    assert found[ordinary]["answer"] == "Raphael: 今天用中文練習。\nRaphael: 先介紹自己。"
+    assert "owner: 先生、今日は何を勉強しますか？" in found[exchange]["answer"]
+    assert "紫苑: 那是你問我的句子。" in found[exchange]["answer"]
+
+
+def test_exchange_search_keeps_the_quoted_speaker_when_a_snippet_starts_mid_line(memory, history):
+    add_turn(history, "Raphael: 回顧課程", "owner: " + "長" * 200 + "先生、今日は何を勉強しますか？", route="exchange")
+    [found] = memory.search("先生").data["turns"]
+    assert found["answer"].startswith("responding assistant: owner: …")
+    assert "先生、今日は何を勉強しますか？" in found["answer"]
 
 
 def test_a_search_that_finds_a_run_on_the_desktop_is_untrusted(memory, history):

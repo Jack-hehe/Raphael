@@ -83,6 +83,84 @@ async def test_naming_another_members_lesson_queries_the_member_as_itself(setup,
     assert any(s["tool"] == "ask_member" and s["outcome"] == "ok" for s in turn["steps"])
 
 
+@pytest.mark.parametrize("source", ["app", "voice"])
+async def test_relaying_a_lesson_preserves_the_owner_as_the_japanese_quotes_speaker(setup, client, source):
+    rig, team = setup
+    teacher = member(team, name="紫苑", role="日文老師")
+    question = "先生、今日は何を勉強しますか？"
+    client.chats = [live_said("今天練習自我介紹。\n先用中文說說你的興趣。")]
+    await typed(rig, question, teacher.id)
+    request = "紫苑剛剛教了我什麼？我想聽日文的部分。"
+    answer = f"當時的日文原句只有你問的：『{question}』\n我當時用中文教了自我介紹。"
+    final = f"那句日文是你問紫苑的：『{question}』。紫苑當時用中文教自我介紹。"
+    arguments = {"member": teacher.name, "request": request}
+    if source == "app":
+        client.chats = [chat("", ("ask_member", arguments)), live_said(answer), live_said(final)]
+        await typed(rig, request, 0)
+        target_prompt = client.chat_calls[-2]["messages"][-1]["content"]
+        tool = next(m["content"] for m in client.chat_calls[-1]["messages"] if m["role"] == "tool")
+    else:
+        client.decisions.append(decision("chat"))
+        client.plans.append(tool_plan(("Raphael__ask_member", arguments)))
+        client.chats = [live_said(answer)]
+        client.replies = [raphael_said(final)]
+        await rig.ask(request)
+        target_prompt = client.chat_calls[-1]["messages"][-1]["content"]
+        tool = client.json_calls[-1]["user"]
+    assert f"owner: {question}" in target_prompt
+    assert f"assistant (member {teacher.id}): 今天練習自我介紹。" in target_prompt
+    assert f"assistant (member {teacher.id}): 先用中文說說你的興趣。" in target_prompt
+    # The fake repeats the live model's unmarked quote; provenance comes from the real thread.
+    assert f"紫苑: {answer.splitlines()[0]}" in str(tool)
+    assert f"owner: {question}" in str(tool)
+    for member_id in (0, teacher.id):
+        turns = (await rig.call("agent.history.list", {"member_id": member_id}))["turns"]
+        exchange = next(t for t in turns if t["route"] == "exchange")
+        assert exchange["question"] == f"Raphael: {request}"
+        assert f"紫苑: {answer.splitlines()[0]}" in exchange["text"]
+        assert f"owner: {question}" in exchange["text"]
+
+
+async def test_relay_keeps_all_messages_without_misidentifying_other_sources_as_the_owner(setup, client):
+    rig, team = setup
+    teacher = member(team, name="紫苑")
+    other = member(team, name="Other")
+    for route, source, question, member_id in (
+        ("exchange", "member", "ASSISTANT-REQUEST", teacher.id),
+        ("routine", "routine", "ROUTINE-TITLE", teacher.id),
+        ("answer", "app", "OTHER-THREAD-QUESTION", other.id),
+        ("answer", "app", "PRIVATE-UNRELATED-QUESTION", teacher.id),
+    ):
+        rig.history.add(session_id="old", question=question, route=route, source=source,
+                        prefix="", text="Done.", status="done", member_id=member_id)
+    client.chats = [
+        chat("", ("ask_member", {"member": teacher.name, "request": "回顧"})),
+        chat('{"text":"Second.","messages":["ASSISTANT-REQUEST\\nROUTINE-TITLE\\nOTHER-THREAD-QUESTION","Second."]}'),
+        live_said("Relayed."),
+    ]
+    await typed(rig, "問紫苑", 0)
+    tool = next(m["content"] for m in client.chat_calls[-1]["messages"] if m["role"] == "tool")
+    assert "紫苑: ASSISTANT-REQUEST" in tool and "紫苑: Second." in tool
+    for line in ("ASSISTANT-REQUEST", "ROUTINE-TITLE", "OTHER-THREAD-QUESTION"):
+        assert f"owner: {line}" not in tool
+    assert "PRIVATE-UNRELATED-QUESTION" not in tool
+    turns = (await rig.call("agent.history.list", {"member_id": 0}))["turns"]
+    exchange = next(t for t in turns if t["route"] == "exchange")
+    assert "紫苑: ASSISTANT-REQUEST" in exchange["text"] and "紫苑: Second." in exchange["text"]
+
+
+@pytest.mark.parametrize("selected", ["raphael", "member"])
+async def test_shared_harness_requires_original_quote_attribution(setup, client, selected):
+    rig, team = setup
+    teacher = member(team)
+    client.chats = [live_said("Ready.")]
+    await typed(rig, "Start", 0 if selected == "raphael" else teacher.id)
+    system = client.chat_calls[0]["messages"][0]["content"]
+    assert "attribute each quote to its original speaker" in system
+    assert "Never present the owner's own words as another member's words" in system
+    assert "owner:" in system
+
+
 async def test_traditional_chinese_public_updates_and_reply_preserve_japanese(setup, client):
     rig, team = setup
     teacher = member(team)

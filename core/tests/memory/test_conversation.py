@@ -161,9 +161,18 @@ def test_the_context_holds_at_most_thirty_turns_however_far_the_fold_lags(conver
 def test_a_discussion_shows_the_start_of_its_longer_text():
     long = "長" * 500
     shown = turn_text(turn(1, route="discuss", detail=long), detail=True)
-    assert "User: q1\nRaphael: 好。\n(Raphael, at more length: " in shown
-    assert shown.endswith("…)") and shown.count("長") == 400
-    assert turn_text(turn(1, detail="好。"), detail=True) == "User: q1\nRaphael: 好。"
+    assert "owner: q1\nRaphael: 好。\nRaphael (detail): " in shown
+    assert shown.endswith("…") and shown.count("長") == 400
+    assert turn_text(turn(1, detail="好。"), detail=True) == "owner: q1\nRaphael: 好。"
+
+
+def test_a_delegated_member_request_is_not_labelled_as_the_owner():
+    delegated = turn(1, question="記下明天的會", route="delegate")
+    delegated.member_id, delegated.peer_id, delegated.source = 1, 0, "member"
+    shown = turn_text(delegated, detail=False)
+    assert "owner:" not in shown
+    assert "Raphael: 記下明天的會" in shown
+    assert "assistant (member 1): 好。" in shown
 
 
 # --- folding ----------------------------------------------------------------------------------------
@@ -204,7 +213,7 @@ async def test_a_fold_shows_each_turn_with_its_own_time(conversation, history, c
     assert time.strftime("Today: %Y-%m-%d (%A)", time.localtime(clock.ms() / 1000)) in call["user"]
     stamp = turn_time(said_at)
     assert stamp == time.strftime("%Y-%m-%d %a %H:%M", time.localtime(said_at / 1000))
-    assert f"[{stamp}]\nUser: 明天有面試" in call["user"]
+    assert f"[{stamp}]\nowner: 明天有面試" in call["user"]
     assert "own date" in call["system"]
 
 
