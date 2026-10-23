@@ -582,7 +582,7 @@ export function createAgent(app: AppContext): Page {
     const out = threadItems(base, state.nowMs).map((item) =>
       item.kind === "day"
         ? { key: item.key, html: dayHTML(item.label) }
-        : { key: item.key, html: turnHTML(item.turn, state, details.has(item.turn.id), shape), turnId: item.turn.id },
+        : { key: item.key, html: turnHTML(item.turn, state, details.has(item.turn.id), shape, item.inner), turnId: item.turn.id },
     );
     if (!(searching && query.trim() !== "")) {
       for (const sent of outgoing) if (sent.member === memberId()) out.push({ key: sent.key, html: pendingTurnHTML(sent.text, TYPED, shape, sent.files) });
@@ -1183,7 +1183,7 @@ export function createAgent(app: AppContext): Page {
 
   /** Opens or closes the messages of an exchange between members, under its line. */
   function toggleExchange(button: HTMLElement): void {
-    const id = Number(button.closest<HTMLElement>(".tn")?.dataset.id);
+    const id = Number(button.closest<HTMLElement>(".tn-x, .tn")?.dataset.id);
     if (openExchanges.has(id)) openExchanges.delete(id);
     else openExchanges.add(id);
     rememberLine(button);

@@ -523,21 +523,21 @@ export function routineLineHTML(turn: AgentTurn): string {
  * as many as there are), which opens on them: what was asked in 「」, and what was answered. They
  * are drawn only while it is open. `name` is the member on the other side.
  */
-export function exchangeHTML(turn: AgentTurn, name: string, open: boolean, face = ""): string {
+export function exchangeHTML(turn: AgentTurn, name: string, open: boolean, face = "", tag: "li" | "div" = "li"): string {
   const id = esc(turn.id);
   const messages = [turn.question.trim() ? userLine(turn.question.trim()) : "", turn.text.trim()].filter(Boolean);
   // the line ends in a colon that leads to the name; with no name it ends without one
   const said = t("members.exchange", { p0: messages.length });
   const label = name ? said : said.replace(/[：:]\s*$/, "");
   return (
-    `<li class="tn tn-x" data-id="${id}">` +
+    `<${tag} class="${tag === "li" ? "tn " : ""}tn-x" data-id="${id}">` +
     btn(
       `${face}<span>${esc(label)}</span>${name ? `<b>${esc(name)}</b>` : ""}<span class="steps-chev">${ico("right")}</span>`,
       "sys sys-x",
       ` data-act="exchange" aria-expanded="${open}" aria-controls="tn-x-${id}"`,
     ) +
     (open ? `<ol class="x-list" id="tn-x-${id}">` + messages.map((m) => `<li>${messageHTML(m)}</li>`).join("") + `</ol>` : "") +
-    `</li>`
+    `</${tag}>`
   );
 }
 
@@ -771,12 +771,13 @@ export function mediaCardHTML(payload: MediaPayload, query: string, seq?: number
 }
 
 /** Renders all ordered items in `turn.messages` (thinking block, progress, media cards, event chips, replies). */
-function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, plain: boolean | undefined, regenerate: boolean): string {
+function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, plain: boolean | undefined, regenerate: boolean, inner = ""): string {
   const ordered = [...(turn.messages ?? [])].sort((a, b) => a.seq - b.seq);
   const thinkingMsgs = ordered.filter((m) => m.kind === "thinking" && m.text.trim() !== "");
   let thinkingDrawn = false;
   const lastReply = [...ordered].reverse().find(m => m.kind === "reply" && m.text.trim())?.seq;
-  return ordered
+  // what the members said while the turn was answered comes just before its answer
+  const html = ordered
     .map((message) => {
       const text = message.text.trim();
       if (!text) return "";
@@ -798,24 +799,35 @@ function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, 
         return `<div data-seq="${esc(message.seq)}">${messageBlockHTML(turn, String(message.seq), text, message.at_ms, query, state, false)}</div>`;
       }
       const line = plain || text.startsWith("\u300a") ? text : replyLine(turn.prefix, text);
-      return `<div data-seq="${esc(message.seq)}">${messageBlockHTML(turn, String(message.seq), line, message.at_ms, query, state, true, regenerate && message.seq === lastReply)}</div>`;
+      return (message.seq === lastReply ? inner : "") +
+        `<div data-seq="${esc(message.seq)}">${messageBlockHTML(turn, String(message.seq), line, message.at_ms, query, state, true, regenerate && message.seq === lastReply)}</div>`;
     })
     .join("");
+  return lastReply === undefined ? html + inner : html;
 }
 
-/** One question and its answer, with what was done in between. */
-export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: boolean, look: TurnLook): string {
+/** The line of an exchange, named and faced after the member on its other side. */
+function exchangeLine(turn: AgentTurn, look: TurnLook, tag: "li" | "div"): string {
+  const peer = turn.peer_id ?? null;
+  return exchangeHTML(
+    turn,
+    peer === null ? "" : (look.memberName?.(peer) ?? ""),
+    look.openExchanges?.has(turn.id) ?? false,
+    peer === null ? "" : (look.memberFace?.(peer) ?? ""),
+    tag,
+  );
+}
+
+/**
+ * One question and its answer, with what was done in between; `inner` are the exchanges had while
+ * it was answered, drawn before the answer.
+ */
+export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: boolean, look: TurnLook, inner: readonly AgentTurn[] = []): string {
   if (isExchange(turn)) {
     // A request an asked member handed to the background (route "delegate", source "member") names
     // who asked in `peer_id`; one from before the core wrote it names no one, and its line then
     // says no name (not Raphael's) and shows no face.
-    const peer = turn.peer_id ?? null;
-    return exchangeHTML(
-      turn,
-      peer === null ? "" : (look.memberName?.(peer) ?? ""),
-      look.openExchanges?.has(turn.id) ?? false,
-      peer === null ? "" : (look.memberFace?.(peer) ?? ""),
-    );
+    return exchangeLine(turn, look, "li");
   }
   const id = esc(turn.id);
   const query = look.query ?? "";
@@ -844,7 +856,7 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
       : "") +
     `<div class="ra"><span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live)}</span><div class="ra-body">` +
     (hasMsgs
-      ? turnMessagesHTML(turn, state, query, look.plain, regenerate)
+      ? turnMessagesHTML(turn, state, query, look.plain, regenerate, inner.map((x) => exchangeLine(x, look, "div")).join(""))
       : (turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm")
         ? "" : turn.text.trim() ? messageBlockHTML(turn, "reply", look.plain ? turn.text : replyLine(turn.prefix, turn.text), turn.created_at_ms, query, state, true, regenerate) : "") +
     (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +

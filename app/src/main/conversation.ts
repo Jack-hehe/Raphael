@@ -20,25 +20,47 @@ export const TYPED = "app";
 export const sourceOf = (turn: AgentTurn): string => turn.source || VOICE;
 
 /** One line of the thread: the heading of a day, or a turn. */
-export type ThreadItem = { kind: "day"; key: string; label: string } | { kind: "turn"; key: string; turn: AgentTurn };
+export type ThreadItem =
+  | { kind: "day"; key: string; label: string }
+  | { kind: "turn"; key: string; turn: AgentTurn; inner?: AgentTurn[] };
+
+/** Whether a turn is one member asking another (`ask_member`), not the owner's own words. */
+const exchangeTurn = (turn: AgentTurn): boolean => turn.route === "exchange" || sourceOf(turn) === "member";
 
 /**
  * The thread: the turns (in any order) oldest first, each day under its heading (「今天」, 「昨天」, the
- * date). A turn's key is its id, so that the page can tell the lines it drew before.
+ * date). A turn's key is its id, so that the page can tell the lines it drew before. An exchange
+ * that was had while a turn of the thread was being answered (its speaker asking a member before it
+ * answered) goes inside that turn (`inner`), so that the answer comes after what the members said.
  */
 export function threadItems(turns: readonly AgentTurn[], nowMs: number): ThreadItem[] {
   const oldestFirst = [...turns].sort((a, b) => a.created_at_ms - b.created_at_ms || a.id - b.id);
   const items: ThreadItem[] = [];
   let day: string | null = null;
+  let host: { turn: AgentTurn; inner: AgentTurn[] } | null = null;
   for (const turn of oldestFirst) {
+    if (exchangeTurn(turn)) {
+      if (host && turn.id > host.turn.id && turn.created_at_ms <= answeredAt(host.turn)) {
+        host.inner.push(turn);
+        continue;
+      }
+    } else {
+      host = (turn.messages?.length ?? 0) > 0 ? { turn, inner: [] } : null;
+    }
     const label = dayLabel(turn.created_at_ms, nowMs);
     if (label !== day) {
       day = label;
       items.push({ kind: "day", key: `day:${label}`, label });
     }
-    items.push({ kind: "turn", key: `turn:${turn.id}`, turn });
+    items.push(host?.turn === turn ? { kind: "turn", key: `turn:${turn.id}`, turn, inner: host.inner } : { kind: "turn", key: `turn:${turn.id}`, turn });
   }
   return items;
+}
+
+/** When a turn was answered: its last message, or never while it is still being answered. */
+function answeredAt(turn: AgentTurn): number {
+  if (turn.status === "running" || turn.status === "confirm") return Infinity;
+  return Math.max(turn.created_at_ms, ...(turn.messages ?? []).map((message) => message.at_ms));
 }
 
 /** Text as the search compares it: the same width and case for every way of typing it. */

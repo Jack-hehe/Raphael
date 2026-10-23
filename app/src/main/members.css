@@ -257,3 +257,8 @@
   .sel.mb-pick { display: inline-flex; }
   .mb-chat { padding-inline: 16px; }
 }
+
+/* An exchange had while a turn was answered, inside that turn just before its answer. */
+.ra-body > .tn-x { display: flex; flex-direction: column; align-items: flex-start; gap: var(--pa-gap-in); }
+.ra-body > .tn-x .sys { align-self: flex-start; }
+.ra-body > .tn-x .x-list { margin: 0; }

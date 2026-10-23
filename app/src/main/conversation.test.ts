@@ -73,6 +73,20 @@ describe("one thread", () => {
     expect(threadItems([], now)).toEqual([]);
   });
 
+  test("the members asked while a turn was answered go inside it, before the answer", () => {
+    const msg = (seq: number, when: string, kind = "reply") => ({ seq, kind, text: `m${seq}`, at_ms: at(when) }) as NonNullable<AgentTurn["messages"]>[number];
+    const asked = turn(2, "2026-10-20T09:00:00+08:00", { messages: [msg(1, "2026-10-20T09:00:01+08:00", "progress"), msg(2, "2026-10-20T09:00:30+08:00")] });
+    const doctor = turn(4, "2026-10-20T09:00:07+08:00", { route: "exchange", source: "member", peer_id: 3 });
+    const teacher = turn(6, "2026-10-20T09:00:14+08:00", { route: "exchange", source: "member", peer_id: 1 });
+    const later = turn(8, "2026-10-20T09:05:00+08:00", { route: "exchange", source: "member", peer_id: 1 });
+    const items = threadItems([later, teacher, doctor, asked], now);
+    const lines = items.flatMap((item) => (item.kind === "turn" ? [[item.turn.id, (item.inner ?? []).map((x) => x.id)]] : []));
+    // one asked after the answer is a line of its own
+    expect(lines).toEqual([[2, [4, 6]], [8, []]]);
+    const running = threadItems([{ ...asked, status: "running" }, later], now);
+    expect(running.flatMap((item) => (item.kind === "turn" ? [[item.turn.id, (item.inner ?? []).map((x) => x.id)]] : []))).toEqual([[2, [8]]]);
+  });
+
   test("a turn from a core that keeps no source is a spoken one", () => {
     const old = { ...turn(1, "2026-10-20T09:00:00+08:00") };
     delete old.source;
