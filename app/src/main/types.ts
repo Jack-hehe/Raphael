@@ -120,7 +120,7 @@ export interface Period {
   cost_usd: number;
 }
 
-/** `stats.summary`: the numbers of the home page, all from this computer's history. */
+/** `stats.summary`: lasting local totals, independent of retained history. */
 export interface StatsSummary {
   today: Period;
   week: Period;
@@ -130,7 +130,7 @@ export interface StatsSummary {
   streak_days: number;
   /** The last 14 days (or as many as asked for), oldest first, today last. */
   by_day: { date: string; dictations: number; words: number }[];
-  /** Days with at least one dictation, in all the history. */
+  /** Days with at least one dictation, ever. */
   active_days: number;
   /** The most days in a row with a dictation, ever. */
   longest_streak_days: number;
@@ -138,6 +138,9 @@ export interface StatsSummary {
   speed_wpm: number | null;
   /** How much longer typing the same words would have taken. */
   time_saved_seconds: number;
+  /** Recovery estimates included in the totals; absent in older cores. */
+  estimated_words?: number;
+  estimated_dictations?: number;
 }
 
 /** A row of `history.list` */

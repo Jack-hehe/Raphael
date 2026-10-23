@@ -1,5 +1,5 @@
 // The usage numbers of the home page (`stats.summary`), and the ways they are written.
-// Everything here is local: the numbers come from this computer's history.
+// Everything here is local: the numbers come from lasting daily aggregates.
 
 import { t } from "./i18n";
 

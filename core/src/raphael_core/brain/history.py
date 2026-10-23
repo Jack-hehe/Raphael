@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import asdict, dataclass
+from datetime import tzinfo
+
+from .stats import record_dictation
 
 
 @dataclass
@@ -46,11 +49,12 @@ def _contains_pattern(query: str) -> str:
 
 
 class HistoryStore:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: sqlite3.Connection, tz: tzinfo | None = None) -> None:
         self._conn = conn
+        self._tz = tz
 
     def add(self, item: HistoryItem) -> int:
-        """Store a new row and return its id (the id on `item` is ignored)."""
+        """Store history and lasting dictation counts atomically; return the new history id."""
         values = {**asdict(item), "cleaned": int(item.cleaned)}
         with self._conn:
             cursor = self._conn.execute(
@@ -61,6 +65,12 @@ class HistoryStore:
                 " :cost_usd, :stt)",
                 values,
             )
+            if item.kind == "dictation":
+                record_dictation(
+                    self._conn, created_at_ms=item.created_at_ms, text=item.text,
+                    audio_seconds=item.audio_seconds, stt_ms=item.stt_ms, llm_ms=item.llm_ms,
+                    tz=self._tz,
+                )
         return cursor.lastrowid
 
     def get(self, id: int) -> HistoryItem | None:
@@ -105,8 +115,7 @@ class HistoryStore:
         return cursor.rowcount > 0
 
     def clear(self) -> int:
-        """Delete every item; return how many went. What was spent is kept in the spend table,
-        which this does not touch, so clearing the history loses no record of the money."""
+        """Delete every item; return how many went. Lasting statistics and spend are kept."""
         with self._conn:
             cursor = self._conn.execute("DELETE FROM history")
         return cursor.rowcount

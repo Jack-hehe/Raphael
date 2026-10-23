@@ -1,6 +1,6 @@
 // Home: a strip with the emblem and Raphael's report, then two columns. On the
 // left the four numbers (words, time saved, speed, time spoken) and the activity with its days and
-// streaks (`stats.summary`, all from this computer's history; a day with a dictation opens the
+// streaks (`stats.summary`, from lasting daily aggregates; a day with a dictation opens the
 // history at that day); on the right the shortcuts and Raphael's latest words
 // (`agent.history.list`). The key, connection and spend are in the settings; the report on the
 // strip says so, with a button, when one of them keeps dictation from working fully. The page
@@ -46,8 +46,11 @@ const card = (value: string, label: string, none = false): string =>
 function statsHTML(s: StatsSummary): string {
   const all = s.all;
   const speed = s.speed_wpm ?? periodSpeed(all);
+  const estimated = (s.estimated_dictations ?? 0) > 0
+    ? ` title="${esc(t("home.estimated", { p0: formatCount(s.estimated_words ?? 0) }))}"`
+    : "";
   return (
-    `<div class="icards">` +
+    `<div class="icards"${estimated}>` +
     card(unit(formatCount(all.words), t("home.003")), t("home.004")) +
     card(duration(s.time_saved_seconds), t("home.005")) +
     (speed === null ? card(t("home.006"), t("home.007"), true) : card(unit(formatCount(speed), t("home.008")), t("home.007"))) +
@@ -78,10 +81,10 @@ function activityHTML(s: StatsSummary): string {
   );
 }
 
-/** The cards of the main column that come from the history, in order: the four numbers, then the activity. */
+/** The lasting usage cards: the four numbers, then the activity. */
 export const usageHTML = (s: StatsSummary): string => statsHTML(s) + activityHTML(s);
 
-/** The page: the strip, then the main column (the history's cards, which are drawn into `.usage`) beside the shortcuts and Raphael's latest words. */
+/** The page: the strip, then the usage cards beside the shortcuts and Raphael's latest words. */
 export const homeHTML = (): string =>
   `<div class="stage home-stage" role="region" aria-label="Raphael"><canvas class="emb" aria-hidden="true"></canvas><div class="subs" aria-live="polite"></div></div>` +
   `<div class="home">` +

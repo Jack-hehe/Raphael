@@ -670,6 +670,7 @@ export const ja = {
   "settings.keyTaken": "このショートカットはすでに「{p0}」に使われています",
   "agent.more": "すべて",
   "home.activeDays": "{p0} 日利用",
+  "home.estimated": "履歴から削除された音声入力について、利用記録から推定した約 {p0} 語を含みます。",
   "home.streak": "{p0} 日連続",
   "home.longest": "最長 {p0} 日",
   "home.less": "少ない",
