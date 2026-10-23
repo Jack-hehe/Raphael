@@ -26,8 +26,10 @@ import type {
   MicAccess,
   ModelCatalog,
   ModelsStatus,
+  ServicesStatus,
   Status,
   StatsSummary,
+  WireAttachment,
 } from "./types";
 
 /** Calls `method` of the core. Only the methods of the main window go through (commands.rs). */
@@ -89,9 +91,12 @@ export const agentHistorySearch = (query: string): Promise<{ turns: AgentTurn[] 
 /**
  * Asks Raphael in writing (the composer of the 拉斐爾 page). The question goes the way a spoken one
  * goes once its words are heard, with the source `app`; this settles when its turn is over (its
- * answer is in the history, or it failed), and rejects when Raphael is busy with another.
+ * answer is in the history, or it failed), and rejects when Raphael is busy with another. The
+ * images and PDFs of the composer go with it as `attachments` (`agent.ask`'s, in base64), and only
+ * when there are some: a question with files may have no words.
  */
-export const agentAskText = (text: string): Promise<void> => invoke("agent_ask_text", { text });
+export const agentAskText = (text: string, attachments: WireAttachment[] = []): Promise<void> =>
+  invoke("agent_ask_text", attachments.length > 0 ? { text, attachments } : { text });
 /** The YES/NO question that waits for an answer now, if one does. */
 export const agentQuestionOpen = (): Promise<AgentQuestion | null> => invoke("agent_question_open");
 /**
@@ -135,6 +140,15 @@ export const secretsStatus = (): Promise<{ has_key: boolean }> => core("secrets.
 export const secretsSetOpenrouterKey = (key: string): Promise<KeyCheck> => core("secrets.set_openrouter_key", { key });
 /** Removes the stored key. Nothing comes back: the key never reaches the page. */
 export const secretsClearOpenrouterKey = (): Promise<Record<string, never>> => core("secrets.clear_openrouter_key");
+
+// ---------- the services of Raphael's tools (Settings › 拉斐爾 › 服務) ----------
+
+/** Who searches the web, reads pages and PDFs, and looks at images; whether each keyed service has its key. Never a key. */
+export const servicesStatus = (): Promise<ServicesStatus> => core("services.status");
+/** Keeps `key` for `service` in the vault (Windows Credential Manager). The key never comes back. */
+export const servicesSetKey = (service: string, key: string): Promise<{ ok: boolean }> => core("services.set_key", { service, key });
+/** Deletes the key of `service` from the vault. */
+export const servicesClearKey = (service: string): Promise<{ ok: boolean }> => core("services.clear_key", { service });
 
 // ---------- connections (the plugins and the store) ----------
 

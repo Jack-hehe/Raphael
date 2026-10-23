@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { emptyConnectionsView } from "../connections";
 import { emptyMessagingView } from "../messaging";
 import { emptyMemoryView } from "../memory-view";
+import { emptyServicesView } from "../services";
 import { setLocale, t } from "../i18n";
 import type { LanguageGroup } from "../languages";
 import type { BrainSettings, CatalogModel, DeviceSettings, LocalModel, ModelCatalog, SettingsPane, Status } from "../types";
@@ -106,6 +107,21 @@ test("the memory is in the 拉斐爾 tab, after its settings, and only there", (
   expect(agent.indexOf("data-mem-section")).toBeGreaterThan(agent.indexOf('data-k="worker-cap"'));
   expect(agent.indexOf("data-mem-section")).toBeGreaterThan(agent.indexOf("data-avatar"));
   for (const id of ["general", "dictation", "connections", "messaging", "usage", "data", "about"] as const) expect(tab(id, { memory })).not.toContain("data-mem");
+});
+
+test("服務 is in the 拉斐爾 tab, after its settings and before the memory, with the 看圖片 picker", () => {
+  const memory = { ...emptyMemoryView(), status: { memories: [], summary: null } };
+  const agent = tab("agent", { memory, services: emptyServicesView() });
+  expect(agent).toContain("<h2>服務</h2>");
+  expect(agent.indexOf("data-svc-section")).toBeGreaterThan(agent.indexOf('data-k="worker-cap"'));
+  expect(agent.indexOf("data-svc-section")).toBeLessThan(agent.indexOf("data-mem-section"));
+  // 看圖片 is the model picker, of the models that read images, and 「與回答相同」 ("") until one is chosen
+  expect(agent).toMatch(/<span class="mp-slot" data-model-picker="vision"><button type="button" class="sel mp-trigger"[^>]*data-k="svc-vision">/);
+  expect(agent).toContain('<span class="mp-tname">與回答相同</span>');
+  expect(tab("agent", { services: emptyServicesView(), brain: { ...brain, vision_model: "anthropic/claude-haiku-5.5" } })).toContain('<span class="mp-tname">Claude Haiku 5.5</span>');
+  for (const id of ["general", "dictation", "connections", "messaging", "usage", "data", "about"] as const) {
+    expect(tab(id, { services: emptyServicesView() })).not.toContain("data-svc");
+  }
 });
 
 const tab = (pane: SettingsPane, over: Partial<SettingsView> = {}): string => paneHTML(view({ pane, ...over }));
@@ -600,7 +616,7 @@ describe("搜尋設定", () => {
         if (!entry.label) continue;
         const name = (t as unknown as (key: string) => string)(entry.label).replace("&", "&amp;");
         // a row's name, or the name of a section (電腦操作 is found as a whole)
-        const html = tab(entry.pane, { memory: emptyMemoryView() });
+        const html = tab(entry.pane, { memory: emptyMemoryView(), services: emptyServicesView() });
         const headings = [...html.matchAll(/<h2>(.*?)<\/h2>/g)].map((m) => m[1]);
         expect([...names(html), ...headings], `${locale} ${entry.label}`).toContain(name);
       }

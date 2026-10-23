@@ -16,7 +16,7 @@ import { replyLine, userLine } from "../shared/anime";
 import { TYPED, VOICE, hasDetail, highlightHTML, sourceOf } from "./conversation";
 import { formatClock, formatUsd } from "./format";
 import { SERVICE_ICONS, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
-import type { AgentStep, AgentTask, AgentTurn, MainEvent } from "./types";
+import type { AgentStep, AgentTask, AgentTurn, MainEvent, TurnAttachment } from "./types";
 import { btn, esc, ico } from "./ui";
 
 /** The small turning ring of something under way. */
@@ -480,15 +480,32 @@ export interface TurnLook {
   query?: string;
 }
 
+/**
+ * The files a request came with, as small chips under its words: an image's or a PDF's mark and its
+ * name (the history keeps no more of them). Empty for none.
+ */
+export function filesHTML(files: readonly TurnAttachment[] | undefined): string {
+  if (!files || files.length === 0) return "";
+  const chip = (file: TurnAttachment): string =>
+    `<span class="me-file" title="${esc(file.name)}">${ico(file.mime.startsWith("image/") ? "image" : "file")}<span class="me-file-t">${esc(file.name)}</span></span>`;
+  return `<div class="me-files">${files.map(chip).join("")}</div>`;
+}
+
+/** The person's bubble: their words in 「」 (none when there were none) and the chips of the files under them. */
+function bubbleHTML(words: string, files: readonly TurnAttachment[] | undefined): string {
+  return `<div class="bubble">${words}${filesHTML(files)}</div>`;
+}
+
 /** One question and its answer, with what was done in between. */
 export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: boolean, look: TurnLook): string {
   const id = esc(turn.id);
   const query = look.query ?? "";
   const detail = hasDetail(turn);
-  const asked = turn.question.trim() !== "";
+  const said = turn.question.trim() !== "";
+  const asked = said || (turn.attachments?.length ?? 0) > 0;
   const live = isLive(turn.task);
   const source = sourceOf(turn);
-  const said = esc(`${sourceName(source)} · ${formatClock(turn.created_at_ms)}`);
+  const where = esc(`${sourceName(source)} · ${formatClock(turn.created_at_ms)}`);
   const meta = esc(answerMeta(turn));
   const more = detail
     ? `<div class="tn-foot">${btn(ico("down"), "sm icon tn-more", ` data-act="detail" aria-expanded="${detailOpen}" aria-controls="tn-detail-${id}" aria-label="${esc(t("agent.detail"))}" title="${esc(t("agent.detail"))}"`)}</div>`
@@ -496,8 +513,9 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
   return (
     `<li class="tn" data-id="${id}" data-status="${esc(turn.status)}"${live ? ' data-live="true"' : ""}>` +
     (asked
-      ? `<div class="me"><span class="me-src" role="img" aria-label="${said}" title="${said}">${sourceIcon(source)}</span>` +
-        `<div class="bubble">${highlightHTML(userLine(turn.question), query)}</div></div>`
+      ? `<div class="me"><span class="me-src" role="img" aria-label="${where}" title="${where}">${sourceIcon(source)}</span>` +
+        bubbleHTML(said ? highlightHTML(userLine(turn.question), query) : "", turn.attachments) +
+        `</div>`
       : "") +
     `<div class="ra"><span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live)}</span><div class="ra-body">` +
     stepsHTML(turn, state) +
@@ -513,14 +531,16 @@ export const dayHTML = (label: string): string => `<li class="day"><span>${esc(l
 
 /**
  * A turn that is not in the history yet: what the person typed (or, for a question said aloud,
- * a bubble with light passing over it until the words arrive) and Raphael thinking.
+ * a bubble with light passing over it until the words arrive) and Raphael thinking. A typed
+ * question shows the chips of the files it was sent with.
  */
-export function pendingTurnHTML(question: string | null, source: string, look: TurnLook): string {
+export function pendingTurnHTML(question: string | null, source: string, look: TurnLook, files: readonly TurnAttachment[] = []): string {
   const where = esc(sourceName(source));
-  const words = question === null ? `<span class="shimmer">${esc(t("agent.hearing"))}</span>` : esc(userLine(question));
+  const words =
+    question === null ? `<span class="shimmer">${esc(t("agent.hearing"))}</span>` : question.trim() === "" ? "" : esc(userLine(question));
   return (
     `<li class="tn is-pending">` +
-    `<div class="me"><span class="me-src" role="img" aria-label="${where}" title="${where}">${sourceIcon(source)}</span><div class="bubble">${words}</div></div>` +
+    `<div class="me"><span class="me-src" role="img" aria-label="${where}" title="${where}">${sourceIcon(source)}</span>${bubbleHTML(words, files)}</div>` +
     `<div class="ra"><span class="ra-face">${look.face(true)}</span><div class="ra-body">` +
     `<p class="ans thinking"><span class="think" role="img" aria-label="${esc(t("agent.thinking"))}"><i></i><i></i></span></p>` +
     `</div></div></li>`

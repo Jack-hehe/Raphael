@@ -59,7 +59,7 @@
 //!   session, so whatever begins next replaces it.
 //!
 //! The main window takes part in two ways ([`Desk`]). A question typed in its composer
-//! ([`DictationController::ask_typed`]) is an agent session without a recording: it goes to
+//! ([`DictationController::ask_typed_with`]) is an agent session without a recording: it goes to
 //! `agent.ask` with the source `app` and on from there as a spoken one does, the overlay showing the
 //! answer and any YES/NO question, but not the reports of the wait (the window shows its own). And
 //! the YES/NO question on screen is the window's too: it hears of every question that opens and
@@ -243,8 +243,9 @@ pub struct Busy;
 /// What the main window may ask of the controller (commands.rs). Kept in the app state as a
 /// [`DeskHandle`], so that the commands need not know the controller's types.
 pub trait Desk: Send + Sync {
-    /// Asks Raphael `text`, typed in the composer (see [`DictationController::ask_typed`]).
-    fn ask_typed(&self, text: &str) -> Result<JoinHandle<()>, Busy>;
+    /// Asks Raphael `text`, typed in the composer, with the images and PDFs attached to it (see
+    /// [`DictationController::ask_typed_with`]).
+    fn ask_typed(&self, text: &str, attachments: Vec<Value>) -> Result<JoinHandle<()>, Busy>;
     /// The YES/NO question that waits for its answer now, with the time it has left as its
     /// `timeout_ms`.
     fn open_question(&self) -> Option<AskPrompt>;
@@ -1289,7 +1290,14 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         if !self.set_stage(&id, AgentStage::Thinking) {
             return;
         }
-        self.converse(&id, question, target_app, None).await;
+        self.converse(&id, question, target_app, None, Vec::new())
+            .await;
+    }
+
+    /// A typed question with no files ([`Self::ask_typed_with`] with none): the tests' way in.
+    #[cfg(test)]
+    pub fn ask_typed(&self, text: &str) -> Result<JoinHandle<()>, Busy> {
+        self.ask_typed_with(text, Vec::new())
     }
 
     /// A question typed in the main window's composer: an agent session without a recording, which
@@ -1298,10 +1306,18 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// but not Raphael's reports while he thinks: the window shows its own, and the window is where
     /// the person is. Esc cancels it as it cancels a spoken one.
     ///
+    /// The images and PDFs the composer attached go to `agent.ask` as its `attachments`
+    /// (`{name, mime, data}`, the bytes in base64), untouched, and only when there are some. The
+    /// core checks them (services/attachments.py); nothing here logs a name or a byte of them.
+    ///
     /// Refused ([`Busy`]) while a recording, a question or a dictation is under way; an answer that
     /// is only being shown gives way, as it does to a key. Never logs the words. Returns the task
     /// that runs the question, which ends when its turn is over.
-    pub fn ask_typed(&self, text: &str) -> Result<JoinHandle<()>, Busy> {
+    pub fn ask_typed_with(
+        &self,
+        text: &str,
+        attachments: Vec<Value>,
+    ) -> Result<JoinHandle<()>, Busy> {
         let _transition = lock(&self.transitions);
         self.end_speaking();
         let id = uuid::Uuid::new_v4().to_string();
@@ -1325,7 +1341,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         log::info!("agent: a typed question");
         let (this, text) = (self.clone(), text.to_owned());
         Ok(tokio::spawn(async move {
-            this.converse(&id, &text, None, Some(TYPED_SOURCE)).await;
+            this.converse(&id, &text, None, Some(TYPED_SOURCE), attachments)
+                .await;
         }))
     }
 
@@ -1333,13 +1350,15 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// when it is not the voice, the core's default), the reply shown, and for a YES/NO question
     /// its answer sent with `agent.confirm` and that reply shown, which may be another question
     /// (a run on the desktop asks about the app, then about each step that sends), up to
-    /// [`MAX_QUESTIONS_IN_A_TURN`]. Never logs the words.
+    /// [`MAX_QUESTIONS_IN_A_TURN`]. The `attachments` of a typed question go with the first call
+    /// only when there are some. Never logs the words, nor anything of the attachments.
     async fn converse(
         &self,
         id: &str,
         question: &str,
         target_app: Option<String>,
         source: Option<&str>,
+        attachments: Vec<Value>,
     ) {
         let mut params = json!({
             "session_id": id,
@@ -1349,6 +1368,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         });
         if let Some(source) = source {
             params["source"] = json!(source);
+        }
+        if !attachments.is_empty() {
+            params["attachments"] = Value::Array(attachments);
         }
         let mut reply = self.core.call("agent.ask", params).await;
         let mut asked = 0;
@@ -1693,8 +1715,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> ReportStage
 impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Desk
     for DictationController<C, O, P, S>
 {
-    fn ask_typed(&self, text: &str) -> Result<JoinHandle<()>, Busy> {
-        DictationController::ask_typed(self, text)
+    fn ask_typed(&self, text: &str, attachments: Vec<Value>) -> Result<JoinHandle<()>, Busy> {
+        DictationController::ask_typed_with(self, text, attachments)
     }
 
     fn open_question(&self) -> Option<AskPrompt> {
@@ -5096,6 +5118,22 @@ mod tests {
         // The overlay says the answer, without Raphael's reports of the wait: the window has its own.
         assert_eq!(c.overlay().events(), vec!["say:答|會，下午七成。"]);
         assert_eq!(c.agent_stage(), Some(AgentStage::Speaking));
+    }
+
+    #[tokio::test]
+    async fn a_typed_question_takes_its_attachments_to_the_agent_and_none_when_it_has_none() {
+        let c = agent(answer("答", "是一張收據"));
+        let file = json!({"name": "receipt.png", "mime": "image/png", "data": "iVBORw0KGgo="});
+        c.ask_typed_with("", vec![file.clone()])
+            .unwrap()
+            .await
+            .unwrap();
+        let asked = c.core().call_params("agent.ask");
+        assert_eq!(asked["text"], "");
+        assert_eq!(asked["attachments"], json!([file]));
+        let c = agent(answer("答", "好"));
+        c.ask_typed("你好").unwrap().await.unwrap();
+        assert_eq!(c.core().call_params("agent.ask").get("attachments"), None);
     }
 
     #[tokio::test]

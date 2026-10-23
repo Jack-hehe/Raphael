@@ -10,6 +10,7 @@ const exact = [
   "backend.hotkeysOff", "backend.hotkeysOffChange", "backend.memoryBody", "backend.memoryDescription",
   "keys.004", "keys.005", "keys.006",
   "backend.agentBusy", "backend.agentEmpty", "backend.agentTooLong", "backend.agentOff", "backend.questionGone",
+  "backend.attachTooMany", "backend.attachBroken",
   "backend.questionUnfocused", "backend.avatarKind", "backend.avatarSize", "backend.avatarNone",
 ] as const;
 const detailed = [

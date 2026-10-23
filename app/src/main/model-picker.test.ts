@@ -6,6 +6,10 @@ import { afterEach, describe, expect, test } from "vitest";
 import { setLocale } from "./i18n";
 import {
   PickerList,
+  acceptsImages,
+  fitFor,
+  modelPickerHTML,
+  usableFor,
   footText,
   formatContext,
   listHTML,
@@ -482,5 +486,64 @@ describe("the small print and the notices", () => {
       "OpenRouter no longer lists tencent/hunyuan-a13b-instruct, so the cleanup model is back to the default, GPT-6 Luna.",
     );
     expect(replacementNotices(CATALOG)).toEqual([]);
+  });
+});
+
+describe("the picker of 看圖片 (the role vision)", () => {
+  const LEAD = { id: "", name: "與回答相同" };
+  const seeing = llm("google/gemini-4-flash", { input_modalities: ["text", "image"] });
+  const blind = llm("openai/gpt-6-luna", { input_modalities: ["text"] });
+  const unsaid = llm("acme/old-model");
+
+  test("chooses among the language models; those that read images can be used, the others say why", () => {
+    expect(modelsFor(CATALOG, "vision")).toBe(CATALOG.llm);
+    expect(usableFor(seeing, "vision")).toBe(true);
+    expect(usableFor(blind, "vision")).toBe(false);
+    expect(fitFor(blind, "vision")).toEqual({ usable: false, reason: "no_image_input" });
+    expect(reasonText("no_image_input")).toBe("無法讀圖片");
+    // a catalog that says nothing of what a model reads: the core still refuses an image to one that cannot take it
+    expect(acceptsImages(unsaid)).toBe(true);
+  });
+
+  test("lists 「與回答相同」 above every model, under no heading, without a star or a price", () => {
+    const list = new PickerList("vision", [blind, seeing], "", {}, [], LEAD);
+    expect(list.rows.map((row) => row.model.id)).toEqual(["", "google/gemini-4-flash", "openai/gpt-6-luna"]);
+    expect(list.rows[0].lead).toBe(true);
+    expect(list.modelCount()).toBe(2);
+    expect(list.chosen()).toBe(""); // highlighted, it is the one in use
+    const html = listHTML(list);
+    const lead = html.slice(0, html.indexOf("</div>", html.indexOf("mp-lead")) + 6);
+    expect(lead).toMatch(/^<div class="mp-row" role="presentation"><button type="button" class="mp-opt mp-lead"/);
+    expect(lead).toContain("data-current");
+    expect(lead).not.toContain('class="mp-star"');
+    expect(lead).not.toContain("mp-price");
+    expect(html).toContain("無法用來看圖片");
+    expect(html.indexOf("無法用來看圖片")).toBeGreaterThan(html.indexOf("gemini-4-flash"));
+  });
+
+  test("the lead goes with a search that does not match it, and stays whatever the maker or the order", () => {
+    const list = new PickerList("vision", [blind, seeing], "", {}, [], LEAD);
+    list.setQuery("gemini");
+    expect(list.rows.map((row) => row.model.id)).toEqual(["google/gemini-4-flash"]);
+    list.setQuery("回答");
+    expect(list.rows.map((row) => row.model.id)).toEqual([""]);
+    list.setQuery("");
+    list.setProvider("google");
+    list.setSort("name");
+    expect(list.rows.map((row) => row.model.id)).toEqual(["", "google/gemini-4-flash"]);
+  });
+
+  test("with favourites, the lead stays first and 我的最愛 comes after it", () => {
+    const list = new PickerList("vision", [blind, seeing], "google/gemini-4-flash", {}, ["google/gemini-4-flash"], LEAD);
+    expect(list.rows.map((row) => row.model.id)).toEqual(["", "google/gemini-4-flash", "openai/gpt-6-luna"]);
+    const html = listHTML(list);
+    expect(html.indexOf("mp-lead")).toBeLessThan(html.indexOf("我的最愛"));
+  });
+
+  test("the button names the lead when it is chosen, and a model otherwise", () => {
+    const look = { role: "vision" as const, label: "看圖片", catalog: { ...CATALOG, llm: [seeing] }, lead: LEAD, showPrice: false };
+    expect(modelPickerHTML({ ...look, current: "" })).toContain('<span class="mp-tname">與回答相同</span>');
+    expect(modelPickerHTML({ ...look, current: "" })).toContain('aria-label="看圖片: 與回答相同"');
+    expect(modelPickerHTML({ ...look, current: "google/gemini-4-flash" })).toContain('<span class="mp-tname">gemini-4-flash</span>');
   });
 });
