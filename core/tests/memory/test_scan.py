@@ -18,7 +18,7 @@ from raphael_core.memory.scan import find_injection, find_secret, refusal
         "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
         "Authorization: Bearer abcdef0123456789ABCDEF",
         "-----BEGIN OPENSSH PRIVATE KEY-----",
-        "bot 123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawQ",
+        "bot 123456789:" + "x" * 35,  # built here so no scanner reads it as a real token
         "Q7x9Lm2Pz8Rt4Kw6Vb3Nc5Jd1Hf0Gs7Ya2Ue",  # a long random run
     ],
 )
