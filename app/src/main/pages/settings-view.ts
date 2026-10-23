@@ -25,6 +25,7 @@ import { type LanguageGroup, languageSelectHTML, normalizeLanguages } from "../l
 import { bindingLabels } from "../keys";
 import { type MessagingView, messagingHTML } from "../messaging";
 import { type MemoryView, memoryHTML } from "../memory-view";
+import { type RulesView, rulesHTML } from "../safety-rules";
 import { AUTO_MICROPHONE, microphoneChoices } from "../microphone";
 import type { LocalView } from "../local-models";
 import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
@@ -151,6 +152,7 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "agent", label: "settings.workerCostCap" },
   { pane: "agent", label: "settings.avatar", also: "settings.searchAvatar" },
   { pane: "agent", label: "mem.title", also: "settings.searchMemory" },
+  { pane: "agent", label: "rules.title" },
   { pane: "agent", label: "settings.computerUse" },
   { pane: "agent", label: "services.title" },
   { pane: "agent", label: "services.search", words: ["Brave", "Tavily", "Exa", "SearXNG"] },
@@ -282,6 +284,8 @@ export interface SettingsView {
   confirmingClear: "dictation" | "conversation" | null;
   /** Raphael's memory, in the 拉斐爾 tab, after its settings (none: not drawn). */
   memory?: MemoryView;
+  /** The owner's safety rules, in the 拉斐爾 tab, after the memory (none: not drawn). */
+  rules?: RulesView;
   /** 服務, in the 拉斐爾 tab: who searches, reads pages and PDFs, and looks at images (none: not drawn). */
   services?: ServicesView;
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
@@ -610,8 +614,9 @@ function computerRows(v: SettingsView): string[] {
 
 /**
  * 拉斐爾: Raphael's picture, the key that asks Raphael, the city of the weather, what a background
- * task may spend, then the services of his tools (services.ts), his memory and the apps he may
- * always operate. The model that answers is with the other models.
+ * task may spend, then the services of his tools (services.ts), his memory, the owner's safety rules
+ * (safety-rules.ts) and the apps he may always operate. The model that answers is with the other
+ * models.
  */
 function agentHTML(v: SettingsView): string {
   const cityShown = v.cityDraft ?? agentCity(v);
@@ -634,6 +639,7 @@ function agentHTML(v: SettingsView): string {
     ]) +
     (v.services ? servicesHTML(v.services, modelPickerHTML(visionPickerLook(v)), v.brain) : "") +
     (v.memory ? memoryHTML(v.memory) : "") +
+    (v.rules ? rulesHTML(v.rules) : "") +
     section(t("settings.computerUse"), computerRows(v))
   );
 }

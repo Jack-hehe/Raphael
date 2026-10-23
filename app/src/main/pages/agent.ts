@@ -12,7 +12,9 @@
 // button, which does what the question key does (the same `window_hotkey` path) and flies up while
 // he listens (voice-mode.ts). When he asks a YES/NO question, a gold card takes the composer's
 // place: it is the overlay's question again (`AgentQuestion`), and answering either one answers
-// both. With no turn at all the page is Raphael alone, the composer under him.
+// both. With no turn at all the page is Raphael alone, the composer under him. A background task
+// that waits for the owner's yes shows its question where the thread ends, as a gold card of its own
+// (background-questions.ts), answered here only.
 //
 // Raphael's own settings (the question key, the weather city, the picture) are the 拉斐爾 tab of
 // Settings, which the sliders button at the top opens; Telegram is in its 訊息平台 tab.
@@ -22,6 +24,8 @@ import { onLocaleChange, t } from "../i18n";
 import { replyLine } from "../../shared/anime";
 import * as api from "../api";
 import { avatarHTML, onAvatarChange } from "../avatar";
+import "../background-questions.css";
+import { createBackgroundQuestions } from "../background-questions";
 import { TYPED, VOICE, mergeTurns, oldestId, refreshTurns, sourceOf, threadItems, turnMatches } from "../conversation";
 import { describeError } from "../format";
 import { loadingHTML } from "../loading";
@@ -243,6 +247,14 @@ export function createAgent(app: AppContext): Page {
   const hi = el.querySelector<HTMLElement>(".ra-hi")!;
   const slot = el.querySelector<HTMLElement>(".ra-slot")!;
   const dock = el.querySelector<HTMLElement>(".ra-dock")!;
+  // The questions of the background tasks of this thread (Raphael's, member 0), where it ends.
+  const waiting = createBackgroundQuestions({
+    memberId: () => 0,
+    changed: () => {
+      if (visible && !scroller.hidden && atBottom()) scroller.scrollTop = scroller.scrollHeight;
+    },
+  });
+  thread.after(waiting.element);
 
   // ---------- the composer and the approval card ----------
 
@@ -1207,6 +1219,7 @@ export function createAgent(app: AppContext): Page {
 
   app.onEvent((event) => {
     if (wantsRefresh(event)) scheduleRefresh();
+    waiting.follow(event);
     if (event.type === "AgentQuestion") {
       question = openQuestion(event);
       drawDock();
@@ -1275,6 +1288,7 @@ export function createAgent(app: AppContext): Page {
         if (visible && !scroller.hidden) scroller.scrollTop = scroller.scrollHeight;
         refocus();
       });
+      void waiting.load();
     },
     hide() {
       visible = false;

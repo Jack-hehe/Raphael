@@ -63,6 +63,7 @@ const REASONS: Record<string, MessageKey> = {
   handoff: "agent.reason.handoff",
   refused_app: "agent.reason.refused_app",
   interrupted: "agent.reason.interrupted",
+  forbidden: "agent.reason.forbidden",
   bad_arguments: "agent.reason.bad_arguments",
   auth: "agent.reason.auth",
   missing_secret: "agent.reason.missing_secret",
