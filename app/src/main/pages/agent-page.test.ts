@@ -199,7 +199,7 @@ describe("a question said aloud", () => {
 });
 
 describe("a question of the background", () => {
-  test("its gold card is where the thread ends, and is answered from here", async () => {
+  test("its gold card is in the slot above the composer, and is answered from here", async () => {
     api.agentHistoryList.mockResolvedValue({ turns: page(10, 2) });
     const question = { id: "q-1", task_id: 4, member_id: 0, prefix: "問", text: "是否讓「Notes」執行「note」？", tier: "T2", created_at_ms: 1, expires_at_ms: 2 };
     let waiting = [question];
@@ -214,7 +214,7 @@ describe("a question of the background", () => {
     mount();
     await flush();
     expect(api.core).toHaveBeenCalledWith("background.questions.list", { member_id: 0 });
-    const card = document.querySelector<HTMLElement>(".ra-col > .thread + .bgq-list .bgq-card")!;
+    const card = document.querySelector<HTMLElement>('[data-mount="background-questions"] .bgq-card')!;
     expect(card).not.toBeNull();
     expect(card.textContent).toContain("《問。是否讓「Notes」執行「note」？》");
     card.querySelector<HTMLButtonElement>(".bgq-yes")!.click();

@@ -33,6 +33,22 @@ describe("the card of a question of the background", () => {
     expect(html).toContain("/brand/app-emblem-light-64.webp");
   });
 
+  test("in a member's thread it is that member's: their face and name, plain words, no 《》 and no emblem", () => {
+    const face = '<span class="av mb-av mb-av-letter bgq-face" aria-hidden="true">小</span>';
+    const html = backgroundQuestionHTML({ ...QUESTION, member_id: 3, prefix: "問" }, false, { face, name: "小幫手" });
+    expect(visible(html)).toBe("小 小幫手 是否讓「Notes」執行「note」（買牛奶）？ 否 是");
+    expect(html).not.toContain("《");
+    expect(html).not.toContain("/brand/");
+    expect(html).toContain('<span class="bgq-name">小幫手</span>');
+    expect(html).toContain('data-bgq="yes" data-task="7" data-id="q-1"');
+  });
+
+  test("Raphael's own card has no name and keeps the emblem, bare", () => {
+    const html = backgroundQuestionHTML(QUESTION);
+    expect(html).not.toContain("bgq-name");
+    expect(html).toContain("《問。");
+  });
+
   test("its words are escaped, and its buttons are off while it is answered", () => {
     const html = backgroundQuestionHTML({ ...QUESTION, text: "<b>x</b>" }, true);
     expect(html).not.toContain("<b>x</b>");

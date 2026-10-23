@@ -276,6 +276,33 @@ describe("a member's thread", () => {
     expect(document.querySelectorAll('[data-mount="background-questions"]')).toHaveLength(1);
   });
 
+  test("the gold card shows in the thread of its member only: their name and plain words there, Raphael's 《問。》 in his", async () => {
+    const asked = (member_id: number, text: string) => ({ id: `q-${member_id}`, task_id: 10 + member_id, member_id, prefix: "問", text, tier: null, created_at_ms: 1, expires_at_ms: 2 });
+    const waiting: Record<number, ReturnType<typeof asked>[]> = { 0: [asked(0, "要付款嗎？")], 3: [asked(3, "要寄出信件嗎？")] };
+    api.core.mockImplementation(async (method: string, params?: { member_id?: number }) =>
+      method === "background.questions.list" ? { questions: waiting[params?.member_id ?? 0] ?? [] } : {},
+    );
+    mount();
+    await flush();
+    const slot = (): HTMLElement => $('[data-mount="background-questions"]');
+    expect(slot().querySelector(".bgq-card")!.textContent).toContain("《問。要付款嗎？》");
+    expect(slot().querySelector(".bgq-name")).toBeNull();
+    expect(slot().querySelector(".bgq-card img")!.getAttribute("src")).toContain("/brand/");
+    await pick(3);
+    await flush();
+    expect(api.core).toHaveBeenCalledWith("background.questions.list", { member_id: 3 });
+    const cards = slot().querySelectorAll(".bgq-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].querySelector(".bgq-name")!.textContent).toBe("日文老師");
+    expect(cards[0].textContent).toContain("要寄出信件嗎？");
+    expect(cards[0].textContent).not.toContain("《");
+    expect(cards[0].querySelector("img")).toBeNull();
+    await pick(0);
+    await flush();
+    expect(slot().querySelector(".bgq-card")!.textContent).toContain("《問。要付款嗎？》");
+    api.core.mockReset();
+  });
+
   test("an exchange between members is one line in the thread, opened on what was asked and answered", async () => {
     THREADS[4] = [turn(42, { member_id: 4, peer_id: 0, route: "exchange", source: "member", question: "主人明天幾點有空？", text: "下午兩點以後" })];
     mount();
