@@ -174,7 +174,7 @@
 /* ---------- nothing yet: Raphael in the middle, his line, the composer under him ---------- */
 .ra-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; min-height: 0; padding: 16px 16px 48px; text-align: center; }
 .ra-hero { width: 132px; height: 132px; }
-.ra-hi { margin: 0; min-height: 1.6em; font: 500 19px/1.6 var(--voice); letter-spacing: 0.04em; color: var(--text); }
+.ra-hi { max-width: 100%; margin: 0; min-height: 1.6em; font: 500 19px/1.6 var(--voice); letter-spacing: 0.04em; color: var(--text); overflow-wrap: anywhere; }
 .ra-empty.is-failed .ra-hi { font-size: var(--fs-md); letter-spacing: 0; color: var(--text-2); }
 .ra-slot { width: min(560px, 100%); margin-top: 6px; text-align: left; }
 
