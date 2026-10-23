@@ -170,6 +170,24 @@ async def test_a_question_nobody_answers_in_a_day_ends_the_task_politely(make_ri
     assert len(rig.client.chat_calls) == 1  # nothing more was spent
 
 
+async def test_a_question_that_ran_out_while_another_was_answered_still_ends_its_task(
+    make_rig, plugins, clock
+):
+    rig = make_rig(clock=clock)
+    await plugins.connect(note="T2")
+    note_then_report(rig)
+    first = rig.submit()
+    await paused(rig, first)
+    rig.client.replies = [turn("", [call("Notes__note", {"text": "x"}, "c9")])]
+    second = rig.submit("another task")
+    await paused(rig, second)
+    clock.now += QUESTION_WAIT_S + 1
+    # Stopping the second answers its question, which sweeps the first one's out of the way.
+    await rig.rpc.call("worker.cancel", {"task_id": second})
+    rig.service.sweep_questions()
+    assert (rig.task(first).state, rig.task(first).reason) == ("cancelled", "expired")
+
+
 async def test_a_yes_from_a_chat_app_is_never_taken(make_rig, plugins, calls, clock):
     rig = make_rig(clock=clock)
     await plugins.connect(note="T2")

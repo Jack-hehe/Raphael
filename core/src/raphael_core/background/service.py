@@ -970,10 +970,13 @@ class BackgroundService:
         return state
 
     def sweep_questions(self) -> None:
-        """End the tasks whose question nobody answered in time (QUESTION_WAIT_S)."""
-        for pending in self._questions.sweep():
-            paused = next((p for p in self._paused.values() if p.pending.id == pending.id), None)
-            if paused is not None and paused.answer is None:
+        """End the tasks whose question nobody answered in time (QUESTION_WAIT_S). Told by the
+        time each was asked, not by what `Confirmations.sweep` returns: a sweep that another
+        call made (`resolve` sweeps too) has taken those out already."""
+        self._questions.sweep()
+        now = self._clock()
+        for paused in list(self._paused.values()):
+            if paused.answer is None and now - paused.pending.created_at >= QUESTION_WAIT_S:
                 self._expire(paused)
         self._arm_expiry()
 
