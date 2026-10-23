@@ -102,3 +102,6 @@
 .menu.mp-panel .lm-confirm .btn { margin: 0; }
 /* the lead of a picker (看圖片 「與回答相同」) has no star: its place is kept, so that the names line up */
 .menu.mp-panel .mp-star-gap { flex: none; width: 28px; }
+.mp-provider { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); color: var(--text-2); font-size: var(--fs-sm); font-weight: 600; }
+.mp-provider-mark { display: inline-flex; flex: none; }
+.mp-provider-mark .mono.md, .mp-provider-mark .logo, .mp-provider-mark .i { width: 20px; height: 20px; }

@@ -447,6 +447,10 @@ export function createMembers(host: MembersHost): MembersShell {
       if (host.visible() && memberId === current) details.refreshRoutines();
     },
     follow(event) {
+      if (event.type === "ProvidersChanged") {
+        catalog = null;
+        details.refreshCatalog();
+      }
       if (!host.visible()) return;
       if (event.type === "MembersChanged") {
         if (refreshTimer !== null) clearTimeout(refreshTimer);

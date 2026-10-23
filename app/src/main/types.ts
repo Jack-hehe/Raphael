@@ -53,6 +53,51 @@ export interface KeyInfo {
 /** What a model is chosen for: the dictation cleanup, Raphael's answers, speech to text (the core's brain/catalog.py). */
 export type ModelRole = "cleanup" | "answer" | "stt";
 
+export type ProviderField = "key" | "base_url" | "api_version" | "region" | "key_id";
+export interface ProviderKind {
+  kind: string;
+  name: string;
+  group: "official" | "gateway" | "local";
+  fields: ProviderField[];
+  default_base_url: string | null;
+  available: boolean;
+}
+/** Public provider metadata. Secrets never come back from the core. */
+export interface ModelProvider {
+  id: string;
+  kind: string;
+  name: string;
+  base_url: string;
+  has_key: boolean;
+  enabled: boolean;
+  status: "ok" | "auth" | "offline" | "unknown";
+  models: number;
+}
+export interface ProviderPatch {
+  name?: string;
+  base_url?: string;
+  key?: string;
+  key_id?: string;
+  region?: string;
+  api_version?: string;
+  enabled?: boolean;
+}
+export interface ProviderTest {
+  ok: boolean;
+  kind?: "auth" | "offline" | "error";
+  models: number;
+}
+export interface ProviderModel {
+  id: string;
+  name: string;
+  context: number | null;
+  vision: boolean;
+  tools: boolean;
+  audio_in: boolean;
+  price_in: number | null;
+  price_out: number | null;
+}
+
 /** Whether a role can use a model, and if not why: a word of the core such as `no_structured_output`. */
 export interface RoleFit {
   usable: boolean;
@@ -62,6 +107,9 @@ export interface RoleFit {
 /** A model of `models.catalog`. Prices are US$; null is unknown or does not apply. */
 export interface CatalogModel {
   id: string;
+  /** Connection that serves the model; absent on legacy OpenRouter catalogs. */
+  provider_id?: string;
+  provider_name?: string;
   /** Without its maker: "GPT-6 Luna". */
   name: string;
   /** Its maker: "OpenAI". */
@@ -98,7 +146,7 @@ export interface ReplacedModel {
   default: string;
 }
 
-/** `models.catalog`: every OpenRouter model Raphael could use, by kind. */
+/** `models.catalog`: models from enabled providers, by kind; legacy catalogs contain OpenRouter alone. */
 export interface ModelCatalog {
   /** Text in, text out: the cleanup and the answers. */
   llm: CatalogModel[];
@@ -455,6 +503,7 @@ export type MainEvent =
   | { type: "AgentTurn"; turn_id: number; member_id?: number }
   | { type: "RoutinesChanged"; member_id: number }
   | { type: "MembersChanged" }
+  | { type: "ProvidersChanged" }
   | { type: "MemoryChanged"; member_id: number; space?: "own" | "shared" }
   /** A background task moved on: a step, a start or an end. */
   | { type: "WorkerChanged"; task_id: number; state: string; running: boolean }
@@ -621,7 +670,7 @@ export type TrayAction = "add-word";
 export type PageId = "home" | "agent" | "history" | "dictionary" | "settings";
 
 /** The tabs of the settings panel. */
-export type SettingsPane = "general" | "dictation" | "agent" | "connections" | "messaging" | "usage" | "data" | "about";
+export type SettingsPane = "general" | "dictation" | "agent" | "connections" | "messaging" | "models" | "usage" | "data" | "about";
 
 /**
  * What the 拉斐爾 page is to put in its composer when it opens, ready to be sent or changed: the

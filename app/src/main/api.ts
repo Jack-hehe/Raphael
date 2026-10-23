@@ -33,6 +33,11 @@ import type {
   MainEvent,
   MicAccess,
   ModelCatalog,
+  ModelProvider,
+  ProviderKind,
+  ProviderModel,
+  ProviderPatch,
+  ProviderTest,
   ModelsStatus,
   ServicesStatus,
   Status,
@@ -59,6 +64,15 @@ export const statsSummary = (days?: number): Promise<StatsSummary> =>
   core("stats.summary", days === undefined ? {} : { days });
 /** Every OpenRouter model Raphael could use, with its price and what each role can make of it. */
 export const modelsCatalog = (): Promise<ModelCatalog> => core("models.catalog");
+
+// Model provider connections. Keys are write-only and are kept by the core's vault.
+export const providersKinds = (): Promise<{ kinds: ProviderKind[] }> => core("providers.kinds");
+export const providersList = (): Promise<{ providers: ModelProvider[] }> => core("providers.list");
+export const providersAdd = (patch: ProviderPatch & { kind: string }): Promise<{ provider: ModelProvider }> => core("providers.add", patch);
+export const providersUpdate = (patch: ProviderPatch & { id: string }): Promise<{ provider: ModelProvider }> => core("providers.update", patch);
+export const providersRemove = (id: string): Promise<{ removed: boolean }> => core("providers.remove", { id });
+export const providersTest = (id: string): Promise<ProviderTest> => core("providers.test", { id });
+export const providersModels = (id: string): Promise<{ models: ProviderModel[] }> => core("providers.models", { id });
 
 // ---------- history ----------
 

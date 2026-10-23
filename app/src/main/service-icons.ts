@@ -17,10 +17,12 @@
 
 import { esc } from "./ui";
 
-/** The brands that have a logo file of their own in `service-logos/` (the test keeps this and the folder the same). */
+/** Registered logo ids, including reserved provider artwork. `hasLogo` reports installed files. */
 export const LOGO_IDS = [
   "monday", "jam", "fireflies", "close", "attio", "granola", "klaviyo", "apify", "jotform", "context7", "deepwiki", "mslearn", "aws",
   "huggingface", "exa", "tavily", "jina", "firecrawl", "fish",
+  "openai", "azure", "litellm", "portkey", "nebius", "bifrost", "groq", "anthropic", "googlegemini", "googlecloud",
+  "ollama", "vercel", "lmstudio", "deepseek", "mistral",
 ] as const;
 export type LogoIconId = (typeof LOGO_IDS)[number];
 
@@ -72,6 +74,7 @@ for (const id of LOGO_IDS) {
   const light = svgFiles[`./service-logos/${id}.svg`];
   const dark = svgFiles[`./service-logos/${id}.dark.svg`];
   const png = pngFiles[`./service-logos/${id}.png`];
+  if (!light && !png) continue; // Reserved provider ids use the plug until artwork arrives.
   LOGOS[id] = { light: light ? svgUri(light) : (png ?? ""), ...(dark ? { dark: svgUri(dark) } : {}) };
 }
 

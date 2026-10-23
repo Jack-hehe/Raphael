@@ -7,6 +7,7 @@ import { emptyMessagingView } from "../messaging";
 import { emptyMemoryView } from "../memory-view";
 import { emptyRulesView } from "../safety-rules";
 import { emptyServicesView } from "../services";
+import { emptyProvidersView } from "../providers";
 import { setLocale, t } from "../i18n";
 import type { LanguageGroup } from "../languages";
 import type { BrainSettings, CatalogModel, DeviceSettings, LocalModel, ModelCatalog, SettingsPane, Status } from "../types";
@@ -29,6 +30,12 @@ import {
 } from "./settings-view";
 
 afterEach(() => setLocale("zh-TW"));
+
+test("Models has its own settings navigation entry and searchable provider page", () => {
+  expect(paneListHTML()).toContain('data-pane="models"');
+  expect(searchSettings("OpenAI").some((hit) => hit.pane === "models")).toBe(true);
+  expect(tab("models", { providers: { ...emptyProvidersView(), state: "ready" } })).toContain("新增供應商");
+});
 
 const NOW = Date.UTC(2026, 9, 20, 6, 0);
 const REALTEK = "麥克風排列 (Realtek(R) Audio)";
@@ -179,11 +186,11 @@ const described = (html: string): string[] =>
 
 describe("the tabs", () => {
   test("are General, Dictation, Raphael; Connections, Messaging; Models & usage, Data and About, in each language", () => {
-    expect(IDS).toEqual(["general", "dictation", "agent", "connections", "messaging", "usage", "data", "about"]);
+    expect(IDS).toEqual(["general", "dictation", "agent", "connections", "messaging", "usage", "models", "data", "about"]);
     const titles = {
-      "zh-TW": ["一般", "聽寫", "拉斐爾", "連接", "訊息平台", "模型與用量", "資料", "關於"],
-      en: ["General", "Dictation", "Raphael", "Connections", "Messaging", "Models & usage", "Data", "About"],
-      ja: ["一般", "音声入力", "ラファエル", "接続", "メッセージ", "モデルと使用量", "データ", "アプリ情報"],
+      "zh-TW": ["一般", "聽寫", "拉斐爾", "連接", "訊息平台", "模型與用量", "模型", "資料", "關於"],
+      en: ["General", "Dictation", "Raphael", "Connections", "Messaging", "Models & usage", "Models", "Data", "About"],
+      ja: ["一般", "音声入力", "ラファエル", "接続", "メッセージ", "モデルと使用量", "モデル", "データ", "アプリ情報"],
     };
     for (const locale of LOCALES) {
       setLocale(locale);
@@ -194,7 +201,7 @@ describe("the tabs", () => {
   test("sit in three groups: the basics with no name, then 整合 and 帳戶 in small grey words", () => {
     const list = paneListHTML();
     const order = [...list.matchAll(/class="nav-group">([^<]+)<|data-pane="(\w+)"/g)].map((m) => m[1] ?? m[2]);
-    expect(order).toEqual(["general", "dictation", "agent", "整合", "connections", "messaging", "帳戶", "usage", "data", "about"]);
+    expect(order).toEqual(["general", "dictation", "agent", "整合", "connections", "messaging", "帳戶", "usage", "models", "data", "about"]);
     setLocale("en");
     expect(paneListHTML()).toContain('<div class="nav-group">Integrations</div>');
     expect(paneListHTML()).toContain('<div class="nav-group">Account</div>');
@@ -204,7 +211,7 @@ describe("the tabs", () => {
 
   test("every tab is a real button; 拉斐爾's has Raphael's emblem, in a version for each theme", () => {
     const list = paneListHTML();
-    expect(list.match(/<button type="button" class="nav" data-pane="\w+" aria-current="false">/g)).toHaveLength(8);
+    expect(list.match(/<button type="button" class="nav" data-pane="\w+" aria-current="false">/g)).toHaveLength(9);
     const agent = list.slice(list.indexOf('data-pane="agent"'), list.indexOf('data-pane="connections"'));
     expect(agent).toContain('src="/brand/app-emblem-light-64.webp"');
     expect(agent).toContain('src="/brand/app-emblem-dark-64.webp"');
@@ -618,8 +625,8 @@ describe("搜尋設定", () => {
   test("finds a tab by its name, before its rows, and a brand by its name; case does not matter", () => {
     expect(where("連接")[0]).toBe("connections:連接");
     expect(where("telegram")).toEqual(["messaging:訊息平台"]);
-    expect(where("OPENROUTER")).toEqual(["usage:金鑰", "usage:OpenRouter 帳號本月用量"]);
-    expect(where("模型")).toEqual(["usage:模型與用量", "usage:語音轉文字", "usage:整理文字", "usage:拉斐爾的回答"]);
+    expect(where("OPENROUTER")).toEqual(["models:新增供應商", "usage:金鑰", "usage:OpenRouter 帳號本月用量"]);
+    expect(where("模型")).toEqual(["usage:模型與用量", "models:模型", "usage:語音轉文字", "usage:整理文字", "usage:拉斐爾的回答"]);
   });
 
   test("finds nothing for nothing, and says so for what it does not know", () => {
@@ -642,7 +649,7 @@ describe("搜尋設定", () => {
         const name = (t as unknown as (key: string) => string)(entry.label).replace("&", "&amp;");
         // a row's name, or the name of a section (電腦操作 is found as a whole)
         const html = tab(entry.pane, { memory: emptyMemoryView(), rules: emptyRulesView(), services: emptyServicesView() });
-        const headings = [...html.matchAll(/<h2>(.*?)<\/h2>/g)].map((m) => m[1]);
+        const headings = [...html.matchAll(/<h2(?: class="[^"]*")?>(.*?)<\/h2>/g)].map((m) => m[1]);
         // a capability of 服務 is a row of the rounded list, named by its `.nm`
         const items = [...html.matchAll(/<span class="nm">(.*?)<\/span>/g)].map((m) => m[1]);
         expect([...names(html), ...items, ...headings].map((shown) => shown.replace("&#39;", "'")), `${locale} ${entry.label}`).toContain(name);

@@ -101,6 +101,25 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+test("provider changes refresh the member model picker and its qualified model selection", async () => {
+  const catalog = { llm: [], stt: [], source: "builtin", fetched_at_ms: null, replaced: [] };
+  api.modelsCatalog.mockResolvedValue(catalog);
+  mount(); await flush(); await pick(3);
+  $(".mb-pill").click(); await flush();
+  $(".mb-model .mp-trigger").click();
+  expect($("#mp-list").textContent).not.toContain("Local example");
+  api.modelsCatalog.mockResolvedValue({ ...catalog, llm: [{
+    id: "llama3.1:8b", name: "Local example", provider: "Meta", provider_id: "p4", provider_name: "Ollama",
+    input_per_mtok: null, output_per_mtok: null, per_minute: null, free: false, variable_price: false,
+    context_length: 8192, created_at_ms: null, capabilities: {}, roles: { answer: { usable: true, reason: null } },
+  }] });
+  send({ type: "ProvidersChanged" }); await flush();
+  expect($("#mp-list").textContent).toContain("Local example");
+  api.membersUpdate.mockResolvedValue({ member: { ...LIST.members[1], model: "@p4:llama3.1:8b" } });
+  $('[data-id="@p4:llama3.1:8b"]').click(); await flush();
+  expect(api.membersUpdate).toHaveBeenCalledWith(3, { model: "@p4:llama3.1:8b" });
+});
+
 test("routine notifications refresh the open panel immediately and keep the routine being edited", async () => {
   mount();
   await flush();
