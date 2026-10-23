@@ -74,6 +74,7 @@ from .secrets import KeyStore
 from .settings import SettingsStore, checked
 from .spend import SpendTracker
 from .stats import StatsStore
+from .usage import UsageAnalytics
 from .textnorm import (
     apply_replacements,
     finish_cleaned_text,
@@ -251,6 +252,7 @@ class Brain:
         self._settings = SettingsStore(conn)
         self._spend = SpendTracker(conn, now_ms, tz)
         self._stats = StatsStore(conn, now_ms, tz)
+        self._usage = UsageAnalytics(conn, now_ms, tz, providers)
         self._pricing = PricingService(conn, client, now_ms)
         self._cleanup = CleanupService(
             client,
@@ -319,6 +321,7 @@ class Brain:
             "status.check_openrouter": self._status_check_openrouter,
             "models.catalog": self._models_catalog,
             "stats.summary": self._stats_summary,
+            "usage.analytics": self._usage.read,
         }
         for method, handler in methods.items():
             router.register(method, handler)

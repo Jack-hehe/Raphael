@@ -335,7 +335,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 62] = [
+const ALLOWED_METHODS: [&str; 63] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -354,6 +354,7 @@ const ALLOWED_METHODS: [&str; 62] = [
     "providers.test",
     "providers.models",
     "stats.summary",
+    "usage.analytics",
     "messaging.telegram.status",
     "messaging.telegram.connect",
     "messaging.telegram.set_enabled",
@@ -1832,6 +1833,17 @@ mod tests {
     }
 
     #[test]
+    fn usage_analytics_is_a_named_read_of_the_main_window_only() {
+        assert!(is_allowed_method("usage.analytics"));
+        assert!(validate_core_call("usage.analytics", &json!({"range": "7d"})).is_ok());
+        assert!(!is_allowed_method("usage.clear"));
+        assert!(!is_allowed_method("usage.export"));
+        assert!(ensure_caller(crate::MAIN_WINDOW, crate::MAIN_WINDOW).is_ok());
+        assert!(ensure_caller("overlay", crate::MAIN_WINDOW).is_err());
+        assert!(ensure_caller("worker", crate::MAIN_WINDOW).is_err());
+    }
+
+    #[test]
     fn the_main_window_reads_the_conversations_but_never_asks_raphael() {
         // The record of the conversations is the main window's to read and clear...
         for method in [
@@ -2155,6 +2167,7 @@ mod tests {
             "models.local_delete",
             "models.catalog",
             "stats.summary",
+            "usage.analytics",
             "languages.list",
             "agent.history.list",
             "agent.history.clear",
