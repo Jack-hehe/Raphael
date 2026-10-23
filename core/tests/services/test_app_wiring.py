@@ -69,7 +69,10 @@ class NotedSpeaker:
     async def aclose(self):
         pass
 
-    def say(self, prefix, text):
+    def speaks(self):
+        return True
+
+    async def say(self, prefix, text):
         self.said.append((prefix, text))
 
 
@@ -93,6 +96,6 @@ async def test_a_spoken_answer_reaches_the_voice_through_the_whole_app(app):
     noted = NotedSpeaker()
     app.agent._speaking = noted
     await app.call(
-        "agent.ask", {"session_id": "s", "text": "你好", "ui_language": "zh-TW", "source": "voice"}
-    )
+        "agent.ask", {"session_id": "s", "text": "こんにちは", "ui_language": "ja", "source": "voice"}
+    )  # on a Japanese screen what is shown is what is spoken, whatever the fake model wrote
     assert len(noted.said) == 1 and noted.stops == 1

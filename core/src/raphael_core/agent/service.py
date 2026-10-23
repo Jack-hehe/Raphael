@@ -154,7 +154,14 @@ from .history import VOICE, AgentHistory, Turn
 from .ledger import Ledger
 from .local import extract_target, match_command
 from .opening import Opening, clean_target, match_settings, parse_domain, validate_url
-from .persona import DEFAULT_LANGUAGE, PREFIXES, normalize_language, parenthesized, phrase
+from .persona import (
+    DEFAULT_LANGUAGE,
+    PREFIXES,
+    normalize_language,
+    parenthesized,
+    phrase,
+    spoken_line,
+)
 from .plugins import (
     MAX_OFFERED,
     PLAN_CONTEXT_TURNS,
@@ -367,6 +374,11 @@ class _Ask:
     # What the ledger held before this request: a request answered inside another's shares its
     # ledger, and its turn costs only what was added.
     cost_base: float = 0.0
+    # Whether Raphael will say the answer aloud (`AgentService._voiced`): then the model is asked
+    # for its Japanese rendering too, and the turn is announced to the app when the voice is ready.
+    voiced: bool = False
+    # The turn whose announcement to the app is held until the voice is ready (`_turn_changed`).
+    held: int | None = None
 
     @property
     def nested(self) -> bool:
@@ -418,9 +430,12 @@ class AgentService:
     the hub of the services the owner chose for the tools (`services.hub`); without it the search is
     OpenRouter's, and no page or file is read (a file handed over is answered as unreadable).
     `speaker` is Raphael's voice (`services.speaker.Speaking`): the answer of every request made to
-    Raphael himself at this computer (spoken or typed) is said aloud, with its prefix, as the reply
-    is returned; a member's reply, an exchange between members, a routine's result, a cancel, a
-    denial, a question that ran out, a request from a messaging app, a report of the background
+    Raphael himself at this computer (spoken or typed) is said aloud, with its prefix, in Japanese
+    (the voice speaks nothing else: the line itself on a Japanese screen, else a fixed phrase's
+    Japanese wording or the Japanese the answer model wrote in the same call), and the reply is
+    returned, and its turn announced to the app, when the voice is ready to begin (at most
+    `speaker.FIRST_AUDIO_WAIT_S` later; with no voice that can be heard nothing waits). A member's
+    reply, an exchange between members, a routine's result, a cancel, a denial, a question that ran out, a request from a messaging app, a report of the background
     worker and a question waiting for a yes are not. Any new request at this computer
     and `agent.cancel` stop what is being said.
     """
@@ -498,6 +513,12 @@ class AgentService:
         # session id -> when agent.cancel named it (the monotonic clock).
         self._cancelled: dict[str, float] = {}
         self._last_language = DEFAULT_LANGUAGE
+        # turn id -> the member whose thread it is in (None: not known yet): the turns that were
+        # written but are not announced to the app (`agent.turn`) until the voice is ready.
+        self._held: dict[int, int | None] = {}
+        # turn id -> the Japanese rendering of its line, made by the model in the same call, for
+        # the voice. In memory only, until the turn is said: never logged or stored.
+        self._japanese: dict[int, str] = {}
         self._pruned_at_ms: int | None = None
         self._prune_if_due()
         # A question waits in this process only: one that was left by the last is long past.
@@ -644,6 +665,7 @@ class AgentService:
             return self._done(
                 0, ask.language, "understood", phrase(ask.language, "denied"), silent=True
             )
+        ask.voiced = self._voiced(ask.source, ask.speaker.id)
         # The questions that ran out are expired, and a new request replaces those that still wait.
         self._expire(self._confirmations.sweep())
         if ask.source in _AT_THIS_COMPUTER:
@@ -661,7 +683,7 @@ class AgentService:
         self._inflight[ask.session_id] = task
         try:
             result = await task
-            return self._said(result, ask.source, ask.speaker.id)
+            return await self._said(result, ask.source, ask.speaker.id, ask.language)
         except asyncio.CancelledError:
             current = asyncio.current_task()
             if task.cancelled() and (current is None or not current.cancelling()):
@@ -673,6 +695,7 @@ class AgentService:
         finally:
             if self._inflight.get(ask.session_id) is task:
                 del self._inflight[ask.session_id]
+            self._release(ask.held)  # a turn announced late must never be left unannounced
 
     async def _answer(self, ask: _Ask) -> dict:
         """One request, from the router to the reply. Never raises for a failure of the world."""
@@ -795,6 +818,7 @@ class AgentService:
                 memory_index=index,
                 looked_up=looked_up,
                 speaker=ask.speaker,
+                say_ja=ask.voiced and ask.language != "ja",
             )
 
         reply = await word(tools, False)
@@ -907,6 +931,8 @@ class AgentService:
         if not text:
             raise AgentFailure("error")  # a lookup and nothing after it, or a note it could not take
         result = self._finish(ask, route, which, text, ledger, detail=reply.detail)
+        if text == reply.text:  # not a fixed phrase in its place: the model's own line
+            self._keep_japanese(result["turn_id"], reply.say_ja)
         if notice is not None:
             result["notice"] = notice
         if applied is not None and applied.written and self._memory is not None:
@@ -1740,6 +1766,7 @@ class AgentService:
         except AgentFailure:
             # It was done, and Raphael cannot say more than that.
             return self._outcome(pending, "understood", "", "done", cost_usd=ledger.total)
+        self._keep_japanese(pending.turn_id, reply.say_ja)
         return self._outcome(
             pending,
             reply.prefix,
@@ -1940,7 +1967,9 @@ class AgentService:
         """`agent.confirm`: the answer to a question, said aloud when it is an answer and the
         question was Raphael's (a member's question ends in its thread, in writing)."""
         reply = await self._resolve(params)
-        return self._said(reply, member_id=self._member_of_turn(reply.get("turn_id")))
+        return await self._said(
+            reply, member_id=self._member_of_turn(reply.get("turn_id")), language=self._last_language
+        )
 
     def _member_of_turn(self, turn_id: object) -> int | None:
         """Whose thread the turn is in (0 is Raphael), or None if that cannot be told."""
@@ -2025,9 +2054,13 @@ class AgentService:
                 model=model,
             )
         )
-        self._turn_changed(pending.turn_id)
         # The owner's own "no", and a question nobody answered, are not said back.
         silent = status in _UNSPOKEN
+        # An answer that will be said is announced to the app when the voice is ready (`_said`).
+        self._turn_changed(
+            pending.turn_id,
+            hold=not silent and self._voiced(None, self._member_of_turn(pending.turn_id)),
+        )
         return self._done(pending.turn_id, pending.language, which, text, silent=silent)
 
     def _deny(self, pendings: list[Pending]) -> None:
@@ -2280,28 +2313,92 @@ class AgentService:
         if self._speaking is not None:
             self._speaking.stop()
 
-    def _said(self, reply: dict, source: str | None = None, member_id: int | None = 0) -> dict:
-        """`reply`, after Raphael has begun to say it aloud: only a reply that is an answer
-        (`status: "done"`, not a `_Silent` one) of a request made at this computer (`source`; None
-        for the answer to a question, which only the owner at this computer can give) with words in
-        it, and only Raphael's own (`member_id` 0; None, a thread that cannot be told, is not said):
-        a member answers in its thread, in writing, and an exchange between members, a routine's
-        result and a report of the background never come through here at all. It starts the voice and returns at once: the reply is never held up for the sound, and
-        a voice that fails is the voice's to log. The spoken line is the one the overlay shows;
-        the longer `detail` and the `notice` are not spoken."""
-        if (
-            self._speaking is not None
-            and member_id == 0
-            and not isinstance(reply, _Silent)
-            and reply.get("status") == "done"
-            and (source is None or source in _AT_THIS_COMPUTER)
-        ):
-            prefix, text = reply.get("prefix"), reply.get("text")
-            if isinstance(prefix, str) and isinstance(text, str) and text.strip():
-                try:
-                    self._speaking.say(prefix, text)
-                except Exception as exc:  # the voice must not cost the answer
-                    logger.warning("Raphael could not start to speak: %s", type(exc).__name__)
+    def _voiced(self, source: str | None, member_id: int | None) -> bool:
+        """Whether Raphael will say an answer aloud, and so is waited for: there is a voice that can
+        be heard (`Speaking.speaks`), the request was made at this computer (`source`; None for the
+        answer to a question, which only the owner at this computer can give) and it is Raphael's
+        own (`member_id` 0; a member answers in its thread, in writing). With no voice, nothing
+        changes and nothing waits."""
+        if self._speaking is None or member_id != 0:
+            return False
+        if source is not None and source not in _AT_THIS_COMPUTER:
+            return False
+        try:
+            return self._speaking.speaks()
+        except Exception as exc:  # the voice must not cost the answer
+            logger.warning("Could not tell whether Raphael can speak: %s", type(exc).__name__)
+            return False
+
+    def _voice_language(self) -> str:
+        """The language the voice speaks (the setting `tts_language`: Japanese for now)."""
+        try:
+            language = self._settings.get("tts_language")
+        except sqlite3.Error as exc:
+            logger.warning("Could not read the setting tts_language: %s", type(exc).__name__)
+            return "ja"
+        return language if language in PREFIXES else "ja"
+
+    def _keep_japanese(self, turn_id: int, line: str) -> None:
+        """Keep the Japanese rendering of a turn's line until the turn is said (`_said`). In memory
+        only, a few at a time: one that was never said is forgotten when others come."""
+        if not line:
+            return
+        self._japanese[turn_id] = line
+        while len(self._japanese) > 8:
+            del self._japanese[next(iter(self._japanese))]
+
+    def _release(self, turn_id: object) -> None:
+        """Announce a turn that was held back until the voice was ready (`_turn_changed`)."""
+        if type(turn_id) is int and turn_id in self._held:
+            self._turn_changed(turn_id, self._held.pop(turn_id))
+
+    async def _said(
+        self,
+        reply: dict,
+        source: str | None = None,
+        member_id: int | None = 0,
+        language: str = DEFAULT_LANGUAGE,
+    ) -> dict:
+        """`reply`, once Raphael's voice is ready to say it aloud: only a reply that is an answer
+        (`status: "done"`, not a `_Silent` one) with words in it, for which `_voiced` holds. It
+        starts the voice and waits for its first sound, at most a couple of seconds
+        (`Speaking.say`), so that the line is shown (the reply returned, the turn announced to the
+        app) when the sound begins, not before it; a voice that is slow or fails never costs the
+        answer, and a voice that fails is the voice's to log. What is spoken is not the shown line
+        but its rendering in the language of the voice (`persona.spoken_line`): the line itself in
+        Japanese, a fixed phrase in its Japanese wording, any other line in the Japanese the model
+        wrote with it; a line with none is not spoken. The longer `detail` and the `notice` are
+        not spoken. A turn held back for the voice is announced at the end, whatever happened."""
+        turn_id = reply.get("turn_id")
+        try:
+            if (
+                self._voiced(source, member_id)
+                and not isinstance(reply, _Silent)
+                and reply.get("status") == "done"
+            ):
+                prefix, text = reply.get("prefix"), reply.get("text")
+                if isinstance(prefix, str) and isinstance(text, str) and text.strip():
+                    spoken = spoken_line(
+                        language,
+                        prefix,
+                        text,
+                        self._japanese.get(turn_id, "") if type(turn_id) is int else "",
+                        voice_language=self._voice_language(),
+                    )
+                    if spoken is None:
+                        logger.info("A line was not spoken: it has no rendering in the voice's language")
+                    else:
+                        assert self._speaking is not None
+                        try:
+                            await self._speaking.say(*spoken)
+                        except Exception as exc:  # the voice must not cost the answer
+                            logger.warning(
+                                "Raphael could not start to speak: %s", type(exc).__name__
+                            )
+        finally:
+            if type(turn_id) is int:
+                self._japanese.pop(turn_id, None)
+            self._release(turn_id)
         return reply
 
     def _record(
@@ -2338,7 +2435,12 @@ class AgentService:
         except sqlite3.Error as exc:
             logger.warning("Could not write the turn to the history: %s", type(exc).__name__)
             return 0
-        self._turn_changed(turn_id, member_id)
+        # A turn that will be said aloud is announced to the app when the voice is ready, with the
+        # reply (`_said`), so that the conversation shows the line as the overlay does.
+        hold = ask.voiced and status not in ("confirm", *_UNSPOKEN)
+        self._turn_changed(turn_id, member_id, hold=hold)
+        if hold and turn_id:
+            ask.held = turn_id
         if self._memory is not None:
             try:
                 # The fold and, for Raphael's, the reflection pass, in the background.
@@ -2350,10 +2452,14 @@ class AgentService:
                 logger.warning("The memory could not follow the turn: %s", type(exc).__name__)
         return turn_id
 
-    def _turn_changed(self, turn_id: int, member_id: int | None = None) -> None:
+    def _turn_changed(self, turn_id: int, member_id: int | None = None, *, hold: bool = False) -> None:
         """Tell the app a turn was written or completed, so that a conversation on screen follows:
-        its id and whose thread it is in."""
+        its id and whose thread it is in. With `hold`, the turn is announced later, by `_release`,
+        when the voice that says it is ready."""
         if self._notify is None or not turn_id:
+            return
+        if hold:
+            self._held[turn_id] = member_id
             return
         if member_id is None:
             turn = self.turn(turn_id)
