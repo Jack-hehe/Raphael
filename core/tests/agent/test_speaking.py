@@ -38,11 +38,13 @@ class FakeSpeaker:
         self.can = True
         self.gate = None
         self.waiting = False
+        self.turn_ids = []
 
     def speaks(self):
         return self.can
 
-    async def say(self, prefix, text):
+    async def say(self, prefix, text, *, turn_id=None):
+        self.turn_ids.append(turn_id)
         if self.fail:
             raise RuntimeError("the voice broke")
         self.said.append((prefix, text))
@@ -88,6 +90,8 @@ async def test_a_chinese_answer_is_shown_in_chinese_and_spoken_in_japanese(rig, 
     result = await rig.ask("台北幾度")
     assert (result["prefix"], result["text"]) == ("答", "台北現在 24 度。")
     assert speaker.said == [("解", SAY_JA)]  # 答 is spoken as 解
+    assert result["voiced"] is True
+    assert speaker.turn_ids == [result["turn_id"]]
 
 
 async def test_an_english_answer_is_shown_in_english_and_spoken_in_japanese(rig, client, speaker):
@@ -208,6 +212,7 @@ async def test_a_reply_with_no_japanese_in_it_is_shown_and_not_spoken(rig, clien
     with caplog.at_level(logging.DEBUG):
         result = await rig.ask("你好")
     assert result["text"] == "好。" and speaker.said == []
+    assert not result.get("voiced", False)
 
 
 async def test_a_reply_whose_japanese_is_not_japanese_is_not_spoken(rig, client, speaker):
@@ -281,6 +286,7 @@ async def test_a_message_from_a_phone_is_never_said(rig, client, speaker):
     client.chats.append(chat('{"prefix":"答","text":"好。","detail":""}'))
     result = await ask_from(rig, "telegram")
     assert result["status"] == "done" and speaker.said == []
+    assert not result.get("voiced", False)
 
 
 async def test_a_message_from_a_phone_does_not_stop_what_is_being_said(rig, client, speaker):
@@ -342,6 +348,8 @@ async def test_a_question_for_a_yes_is_not_said_but_the_answer_to_the_yes_is(
     done = await rig.confirm(asked["confirm"]["id"], True)
     assert done["text"] == phrase("zh-TW", "copied")
     assert speaker.said == [("了", phrase("ja", "copied"))]
+    assert done["voiced"] is True
+    assert speaker.turn_ids == [done["turn_id"]]
 
 
 async def test_the_owners_no_is_not_said_back(rig, client, actions, speaker):

@@ -2775,8 +2775,12 @@ class AgentService:
                     else:
                         assert self._speaking is not None
                         try:
-                            await self._speaking.say(*spoken)
+                            reply["voiced"] = True
+                            await self._speaking.say(
+                                *spoken, turn_id=turn_id if type(turn_id) is int else None
+                            )
                         except Exception as exc:  # the voice must not cost the answer
+                            reply.pop("voiced", None)
                             logger.warning(
                                 "Raphael could not start to speak: %s", type(exc).__name__
                             )

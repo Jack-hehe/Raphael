@@ -72,7 +72,7 @@ class NotedSpeaker:
     def speaks(self):
         return True
 
-    async def say(self, prefix, text):
+    async def say(self, prefix, text, *, turn_id=None):
         self.said.append((prefix, text))
 
 

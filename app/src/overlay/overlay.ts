@@ -51,7 +51,7 @@ export type OverlayEvent =
   | { type: "progress"; stage: Stage; done: number; total: number; audio_seconds: number }
   | { type: "notice"; text: string }
   | { type: "learned"; text: string }
-  | { type: "say"; prefix: string; text: string }
+  | { type: "say"; prefix: string; text: string; hold?: boolean }
   /**
    * `always`: the label of a third answer, 「一律允許」, in the interface language. Only a question
    * about letting Raphael operate an app has it (the other questions have two answers); such a
@@ -66,6 +66,8 @@ export type OverlayEvent =
    */
   | { type: "operate"; line: string }
   | { type: "complete" }
+  /** The voice ended: let the held answer give way to any queued reports, then vanish. */
+  | { type: "release" }
   | { type: "hide" }
   | { type: "settings"; px: number; subtitles: string; language: string }
   /** Raphael's picture changed: the page asks for it again (`avatar_get`). */
@@ -133,6 +135,8 @@ interface Notice {
    * own answers (`say`) are written whatever the subtitles setting says.
    */
   kind: "notice" | "learned" | "say";
+  /** The app owns the lifetime of a voiced answer, including a delayed first sound. */
+  hold?: boolean;
 }
 
 /** A question that is on screen, or about to be. */
@@ -172,6 +176,7 @@ export class OverlayController {
   private readonly queue: Notice[] = [];
   /** A line is on screen, or about to be (or a question is). */
   private busy = false;
+  private heldSay = false;
   /** A show owns the emblem until a hide or notice takes over, regardless of renderer state. */
   private activeShow = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -258,7 +263,9 @@ export class OverlayController {
       case "say":
         // Raphael's answer comes before the learned words that wait: it is what was asked for.
         if (words(event.prefix) !== "" || words(event.text) !== "") {
-          this.speak({ text: replyLine(words(event.prefix), words(event.text)), kind: "say" }, true);
+          // Voice is already playing: it cannot wait behind a timed background report.
+          if (event.hold) this.cancelNotices();
+          this.speak({ text: replyLine(words(event.prefix), words(event.text)), kind: "say", hold: event.hold }, true);
         }
         break;
       case "ask":
@@ -266,6 +273,14 @@ export class OverlayController {
         break;
       case "operate":
         this.operate(words(event.line));
+        break;
+      case "release":
+        if (!this.heldSay) break;
+        clearTimeout(this.timer);
+        this.timer = undefined;
+        this.heldSay = false;
+        this.view.clearLine();
+        this.next();
         break;
       case "hide":
         this.activeShow = false;
@@ -582,6 +597,7 @@ export class OverlayController {
   /** Shows the next line, or lets the emblem vanish when none is left. */
   private next(): void {
     const notice = this.queue.shift();
+    this.heldSay = notice?.hold === true;
     if (!notice) {
       this.busy = false;
       this.emblem.vanish();
@@ -596,6 +612,7 @@ export class OverlayController {
     this.timer = setTimeout(() => {
       this.showLine(notice);
       this.emblem.speak(duration / 1000);
+      if (notice.hold) return;
       this.timer = setTimeout(() => {
         this.view.clearLine();
         this.next();
@@ -620,6 +637,7 @@ export class OverlayController {
       if (this.queue[i].kind !== "learned") this.queue.splice(i, 1);
     }
     this.busy = false;
+    this.heldSay = false;
     this.view.clearLine();
   }
 }

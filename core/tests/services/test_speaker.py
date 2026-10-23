@@ -156,6 +156,99 @@ def test_nothing_to_say_is_nothing():
 # --- saying ----------------------------------------------------------------------------------------
 
 
+async def test_speech_state_tracks_playback_until_the_last_sound(conn):
+    rest = asyncio.Event()
+    rig = a_rig_with(conn, body=Chunks(FIRST, rest, SECOND))
+    rig.set_up()
+    events = []
+    rig.rpc.set_notifier(lambda method, params: events.append((method, params)))
+    try:
+        await rig.speaker.say("Answer", "Hello.", turn_id=42)
+        assert events == [("speech.state", {"state": "playing", "turn_id": 42})]
+        rest.set()
+        await until(lambda: len(events) == 2)
+        assert rig.player.interrupted == [False]
+        assert events[-1] == ("speech.state", {"state": "done", "turn_id": 42})
+        rig.speaker.stop()
+        await rig.speaker.aclose()
+        assert len(events) == 2
+    finally:
+        await rig.speaker.aclose()
+        await rig.hub.aclose()
+
+
+@pytest.mark.parametrize("ending", ["stop", "pending_stop", "failure", "playback", "late"])
+async def test_speech_state_always_finishes_once_even_without_audio(conn, ending):
+    pending = ending in {"pending_stop", "late"}
+    rig = a_rig_with(
+        conn,
+        {"first_audio_wait_s": 0.01, "late_drop_s": 0.05},
+        Chunks(asyncio.Event(), FIRST) if pending else Chunks(FIRST, asyncio.Event()),
+    )
+    rig.set_up()
+    events = []
+    rig.rpc.set_notifier(lambda method, params: events.append((method, params)))
+    if ending == "failure":
+        rig.answer = lambda request: httpx.Response(503)
+    if ending == "playback":
+        rig.player.fail = OSError("no device")
+    try:
+        await rig.speaker.say("Answer", "Hello.", turn_id=42)
+        if ending in {"stop", "pending_stop"}:
+            rig.speaker.stop()
+        await until(lambda: any(params["state"] == "done" for _, params in events))
+        expected = ["playing", "done"] if ending == "stop" else ["done"]
+        assert events == [("speech.state", {"state": state, "turn_id": 42}) for state in expected]
+        await rig.speaker.aclose()
+        assert len(events) == len(expected)
+    finally:
+        await rig.speaker.aclose()
+        await rig.hub.aclose()
+
+
+@pytest.mark.parametrize("stop", [False, True])
+async def test_done_waits_for_the_player_to_release_its_audio_buffer(conn, stop):
+    rig = a_rig_with(conn, body=Chunks(FIRST))
+    rig.set_up()
+    draining = threading.Event()
+    release = threading.Event()
+    original = rig.player.play
+
+    def play(*args):
+        original(*args)
+        draining.set()
+        release.wait(3)
+
+    rig.player.play = play
+    events = []
+    rig.rpc.set_notifier(lambda method, params: events.append(params["state"]))
+    try:
+        await rig.speaker.say("Answer", "Hello.", turn_id=42)
+        await until(draining.is_set)
+        if stop:
+            rig.speaker.stop()
+        await asyncio.sleep(0.02)
+        assert events == ["playing"]
+        release.set()
+        await until(lambda: events == ["playing", "done"])
+    finally:
+        release.set()
+        await rig.speaker.aclose()
+        await rig.hub.aclose()
+
+
+async def test_a_stop_before_the_speech_task_starts_still_sends_done(rig):
+    rig.set_up()
+    events = []
+    rig.rpc.set_notifier(lambda method, params: events.append((method, params)))
+    saying = asyncio.create_task(rig.speaker.say("Answer", "Hello.", turn_id=42))
+    asyncio.get_running_loop().call_soon(rig.speaker.stop)
+    await saying
+    await until(lambda: bool(events))
+    assert events == [("speech.state", {"state": "done", "turn_id": 42})]
+    assert rig.requests == []
+
+
 async def test_a_line_is_asked_of_fish_and_played_as_it_streams_in(rig):
     rig.set_up()
     await rig.speaker.say("告", "マスター、ご指示をどうぞ。")
@@ -335,12 +428,19 @@ async def test_a_new_line_replaces_the_one_being_played(conn):
     body = Chunks(FIRST, rest)  # the first line never finishes by itself
     rig = a_rig_with(conn, body=body)
     rig.set_up()
-    await rig.speaker.say("解", "第一句。")
+    events = []
+    rig.rpc.set_notifier(lambda method, params: events.append(params))
+    await rig.speaker.say("解", "第一句。", turn_id=41)
     assert rig.player.received == [FIRST]
     rig.body = Chunks(SECOND)
-    await rig.speaker.say("解", "第二句。")
+    await rig.speaker.say("解", "第二句。", turn_id=42)
     await until(lambda: sorted(rig.player.interrupted) == [False, True])  # the first was stopped
     assert body.closed and rig.player.received[-1] == SECOND
+    await until(lambda: sum(event["state"] == "done" for event in events) == 2)
+    for turn_id in (41, 42):
+        assert [event["state"] for event in events if event.get("turn_id") == turn_id] == [
+            "playing", "done"
+        ]
     await rig.speaker.aclose()
     await rig.hub.aclose()
 

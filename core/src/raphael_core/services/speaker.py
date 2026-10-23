@@ -31,6 +31,10 @@ wait: the sound ends within a block. A failure is logged as a kind, once for eac
 the answer, already on screen, stays silent (or ends where the stream broke): nothing is retried,
 which would only delay. The text, the voice id and the audio are never logged.
 
+`speech.state` reports `playing` at the first sound and exactly one `done` after the player
+exits, including its last buffer. An attempt with no sound (failure, stop, late drop) still
+reports `done`. Answers carry their `turn_id`; previews omit it. Notifications contain no words.
+
 RPC methods:
 
 - `tts.stop` -> `{ok: true}`: the speech ends at once.
@@ -51,7 +55,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from ..protocol import invalid_params
-from ..router import Router
+from ..router import Notifier, Router
 from .common import ServiceError
 from .hub import ServiceHub
 from .playback import Player, SoundDevicePlayer
@@ -83,7 +87,7 @@ class Speaking(Protocol):
 
     def speaks(self) -> bool: ...
 
-    async def say(self, prefix: str, text: str) -> None: ...
+    async def say(self, prefix: str, text: str, *, turn_id: int | None = None) -> None: ...
 
     def stop(self) -> None: ...
 
@@ -123,6 +127,9 @@ class _Utterance:
     ready: asyncio.Event = field(default_factory=asyncio.Event)
     failure: str | None = None
     task: "asyncio.Task[None] | None" = None
+    turn_id: int | None = None
+    finished: bool = False
+    playing: bool = False
 
 
 class Speaker:
@@ -143,11 +150,13 @@ class Speaker:
         self._first_audio_wait_s = first_audio_wait_s
         self._late_drop_s = late_drop_s
         self._current: _Utterance | None = None
+        self._notify: Notifier | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         # The kind of the latest failure, so that a service that is down is logged once in a row.
         self._last_failure: str | None = None
 
     def register(self, router: Router) -> None:
+        self._notify = router.notify
         router.register("tts.stop", self._stop_rpc)
         router.register("tts.preview", self._preview)
 
@@ -165,17 +174,19 @@ class Speaker:
         have the Japanese line made."""
         return self._hub.tts_ready()
 
-    async def say(self, prefix: str, text: str) -> None:
+    async def say(self, prefix: str, text: str, *, turn_id: int | None = None) -> None:
         """Speak a line of Raphael's (see the module), replacing what was being said. Returns when
         the sound begins, when it cannot (the voice failed), or after FIRST_AUDIO_WAIT_S, whichever
         is first; at once when the owner has Raphael's voice off or there is nothing to say."""
         self.stop()
         if not self._hub.enabled("voice"):
+            self._ended(_Utterance(turn_id=turn_id))
             return
         spoken = line(prefix, text)
         if not spoken:
+            self._ended(_Utterance(turn_id=turn_id))
             return
-        utterance = self._start(spoken)
+        utterance = self._start(spoken, turn_id)
         try:
             await asyncio.wait_for(utterance.ready.wait(), self._first_audio_wait_s)
         except TimeoutError:
@@ -192,14 +203,37 @@ class Speaker:
         if task is not None and not task.done():
             task.cancel()
 
-    def _start(self, spoken: str) -> _Utterance:
-        utterance = _Utterance()
+    def _start(self, spoken: str, turn_id: int | None = None) -> _Utterance:
+        utterance = _Utterance(turn_id=turn_id)
         self._current = utterance
         task = asyncio.get_running_loop().create_task(self._speak(spoken, utterance))
         utterance.task = task
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        # Also runs if a stop cancels the task before its coroutine ever starts.
+        task.add_done_callback(lambda _: self._ended(utterance))
         return utterance
+
+    def _state(self, utterance: _Utterance, state: str) -> None:
+        if self._notify is not None:
+            params: dict[str, Any] = {"state": state}
+            if utterance.turn_id is not None:
+                params["turn_id"] = utterance.turn_id
+            self._notify("speech.state", params)
+
+    def _began(self, utterance: _Utterance) -> None:
+        if not utterance.finished and not utterance.playing:
+            utterance.playing = True
+            self._state(utterance, "playing")
+        utterance.ready.set()
+
+    def _ended(self, utterance: _Utterance) -> None:
+        if not utterance.finished:
+            utterance.finished = True
+            self._state(utterance, "done")
+        utterance.ready.set()
+        if self._current is utterance:
+            self._current = None
 
     async def _speak(self, spoken: str, utterance: _Utterance) -> None:
         """Ask for the sound and hand it to the player as it comes. Never raises for a failure of
@@ -210,7 +244,7 @@ class Speaker:
 
         def started() -> None:  # on the playing thread: the first block is about to be heard
             try:
-                loop.call_soon_threadsafe(utterance.ready.set)
+                loop.call_soon_threadsafe(self._began, utterance)
             except RuntimeError:  # the loop is gone
                 pass
 
@@ -242,7 +276,7 @@ class Speaker:
                     self._failed(error.kind)
                 source.put(None)
             try:
-                await playing
+                await asyncio.shield(playing)
             except Exception:  # noted by `_played`
                 pass
         except ServiceError as error:
@@ -251,7 +285,14 @@ class Speaker:
             self._fail(utterance, type(exc).__name__)
         finally:
             source.put(None)  # lets a player that is waiting for a chunk end
-            utterance.ready.set()
+            # Cancelling an asyncio thread future does not stop its device. Wait for the
+            # player's actual exit before reporting silence (including its final buffer).
+            if playing is not None:
+                try:
+                    await asyncio.shield(playing)
+                except Exception:
+                    pass
+            self._ended(utterance)
 
     def _played(self, utterance: _Utterance, done: "asyncio.Future[None]") -> None:
         """The player has ended: the wait is over whatever came of it, and a device that could not
@@ -265,6 +306,11 @@ class Speaker:
             return
         utterance.failure = "playback"
         self._failed("playback", type(error).__name__)
+        # The producer may be waiting for another network chunk forever after the
+        # device has failed. Close it too, so the terminal notification is not lost.
+        utterance.stopped.set()
+        if utterance.task is not None and not utterance.task.done():
+            utterance.task.cancel()
 
     def _fail(self, utterance: _Utterance, kind: str) -> None:
         utterance.failure = kind
