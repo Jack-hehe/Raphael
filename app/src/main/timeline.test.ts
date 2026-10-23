@@ -365,10 +365,10 @@ describe("a turn", () => {
     expect(html).toContain("<span>2 則訊息往來</span>");
   });
 
-  test("the person on the right in 「」 with where and when; Raphael on the left with his face and 《》", () => {
+  test("the person on the right without 「」 with where and when; Raphael on the left with his face and 《》", () => {
     const html = turnHTML(turn(5), emptyTimelineState(), false, LOOK);
     expect(html).toContain('<span class="me-src" role="img" aria-label="語音 · 09:00" title="語音 · 09:00">');
-    expect(html).toContain('<div class="bubble">「台北天氣如何，順便記到行事曆」</div>');
+    expect(html).toContain('<div class="bubble">台北天氣如何，順便記到行事曆</div>');
     expect(html).toContain('<span class="ra-face" title="gpt-6-luna · US$0.0012"><i class="face"></i></span>');
     expect(html).toContain('<p class="ans">《答。台北現在 24 度。》</p>');
     expect(html).not.toContain("tn-foot"); // nothing more to open
@@ -410,11 +410,146 @@ describe("a turn", () => {
 
   test("a turn that is not in the history yet: the words typed, or a shimmer for words being heard, and Raphael thinking", () => {
     const typed = pendingTurnHTML("明天會下雨嗎？", "app", LOOK);
-    expect(typed).toContain('<div class="bubble">「明天會下雨嗎？」</div>');
+    expect(typed).toContain('<div class="bubble">明天會下雨嗎？</div>');
     expect(typed).toContain('<i class="face loop">');
     expect(typed).toContain('class="think" role="img" aria-label="思考中…"');
     expect(pendingTurnHTML(null, "voice", LOOK)).toContain('<span class="shimmer">正在辨識…</span>');
-    expect(pendingTurnHTML("<b>", "app", LOOK)).toContain("「&lt;b&gt;」");
+    expect(pendingTurnHTML("<b>", "app", LOOK)).toContain("&lt;b&gt;");
+  });
+
+  test("a member turn with thinking, progress, media cards, event chip, and multiple replies renders in order without duplicating turn.text", () => {
+    const messages = [
+      { seq: 1, kind: "thinking" as const, text: "主人想看今天的 NHK 新聞與相關影片，先檢索重點報導。", at_ms: T0 + 1_000 },
+      { seq: 2, kind: "progress" as const, text: "先幫你找今天的 NHK 重點新聞。", at_ms: T0 + 2_000 },
+      { seq: 3, kind: "thinking" as const, text: "已找到新聞頁面與 YouTube 報導影片，整理成卡片附上。", at_ms: T0 + 4_000 },
+      {
+        seq: 4,
+        kind: "media" as const,
+        text: JSON.stringify({
+          type: "link",
+          url: "https://www3.nhk.or.jp/news/html/20261023/k1001.html",
+          title: "日銀維持利率不變 關注春季物價走勢",
+          site: "NHK",
+          description: "日本銀行於今日金融政策決定會議決議維持現行政策利率。",
+          thumbnail: "https://www3.nhk.or.jp/news/html/20261023/thumb.jpg",
+          embed: null,
+        }),
+        at_ms: T0 + 4_500,
+      },
+      {
+        seq: 5,
+        kind: "media" as const,
+        text: JSON.stringify({
+          type: "video",
+          url: "https://www.youtube.com/watch?v=hJdEb0N_0sc",
+          title: "NHK ニュース解説：金融政策の行方",
+          site: "YouTube · NHK",
+          description: "記者解説動画",
+          thumbnail: null,
+          embed: "https://www.youtube.com/embed/hJdEb0N_0sc",
+        }),
+        at_ms: T0 + 5_000,
+      },
+      { seq: 6, kind: "event" as const, text: "已建立例行任務：每天 08:00 · 早安新聞", at_ms: T0 + 5_500 },
+      { seq: 7, kind: "reply" as const, text: "以上是今天 NHK 的頭條新聞與解說影片。", at_ms: T0 + 6_000 },
+      { seq: 8, kind: "reply" as const, text: "我也幫你設好每天早上 08:00 的早安新聞例行任務了，想考哪一段單字隨時跟我說！", at_ms: T0 + 6_500 },
+    ];
+    // While running: thinking block is open with a live shimmer
+    const runningHtml = turnHTML(
+      turn(20, { status: "running", text: "不該重複出現的文字", detail: "不該出現的詳細", messages }),
+      emptyTimelineState(),
+      false,
+      { ...LOOK, plain: true },
+    );
+    expect(runningHtml.match(/class="think-box/g)).toHaveLength(1);
+    expect(runningHtml).toContain('aria-expanded="true"');
+    expect(runningHtml).toContain('<span class="think-label shimmer">思考過程</span>');
+    expect(runningHtml).toContain("主人想看今天的 NHK 新聞與相關影片");
+    expect(runningHtml).toContain("已找到新聞頁面與 YouTube 報導影片");
+
+    // When done: thinking block auto-collapses to 思考了 N 秒, and turn.text / turn.detail are not duplicated
+    const doneHtml = turnHTML(
+      turn(20, { status: "done", text: "不該重複出現的文字", detail: "不該出現的詳細", messages }),
+      emptyTimelineState(),
+      false,
+      { ...LOOK, plain: true },
+    );
+    expect(doneHtml.match(/class="think-box/g)).toHaveLength(1);
+    expect(doneHtml).toContain('data-act="thinking" aria-expanded="false"');
+    expect(doneHtml).toContain("思考了 5 秒");
+    expect(doneHtml).toContain('class="think-body" id="tn-think-20" hidden');
+    expect(doneHtml).toContain('data-media-type="link"');
+    expect(doneHtml).toContain("日銀維持利率不變 關注春季物價走勢");
+    expect(doneHtml).toContain('data-media-type="video"');
+    expect(doneHtml).toContain('src="https://www.youtube.com/embed/hJdEb0N_0sc"');
+    expect(doneHtml).toContain('data-act="open-url" data-url="https://www3.nhk.or.jp/news/html/20261023/k1001.html"');
+    expect(doneHtml).toContain("在網站開啟");
+    expect(doneHtml).toContain("已建立例行任務：每天 08:00 · 早安新聞");
+    expect(doneHtml).toContain("以上是今天 NHK 的頭條新聞與解說影片。");
+    expect(doneHtml).toContain("我也幫你設好每天早上 08:00 的早安新聞例行任務了");
+    expect(doneHtml).not.toContain("不該重複出現的文字");
+    expect(doneHtml).not.toContain("不該出現的詳細");
+  });
+
+  test("media cards support image lightbox buttons, direct video players, and inline PDF viewers while rejecting unsafe URLs", () => {
+    const html = turnHTML(
+      turn(21, {
+        status: "done",
+        messages: [
+          {
+            seq: 1,
+            kind: "media",
+            text: JSON.stringify({
+              type: "image",
+              url: "https://example.com/chart.png",
+              title: "匯率走勢圖",
+              site: "NHK",
+            }),
+            at_ms: T0 + 1_000,
+          },
+          {
+            seq: 2,
+            kind: "media",
+            text: JSON.stringify({
+              type: "video",
+              url: "https://example.com/clip.mp4",
+              title: "現場片段",
+              site: "Example",
+            }),
+            at_ms: T0 + 2_000,
+          },
+          {
+            seq: 3,
+            kind: "media",
+            text: JSON.stringify({
+              type: "pdf",
+              url: "https://example.com/report.pdf",
+              title: "金融政策報告.pdf",
+              site: "BOJ",
+            }),
+            at_ms: T0 + 3_000,
+          },
+          {
+            seq: 4,
+            kind: "media",
+            text: JSON.stringify({
+              type: "link",
+              url: "javascript:alert(1)",
+              title: "Unsafe link",
+            }),
+            at_ms: T0 + 4_000,
+          },
+        ],
+      }),
+      emptyTimelineState(),
+      false,
+      { ...LOOK, plain: true },
+    );
+    expect(html).toContain('data-act="lightbox" data-src="https://example.com/chart.png"');
+    expect(html).toContain('<video class="media-video" controls preload="metadata" src="https://example.com/clip.mp4"></video>');
+    expect(html).toContain('<iframe class="media-pdf-frame" src="https://example.com/report.pdf"');
+    expect(html).toContain('data-act="pdf-expand"');
+    expect(html).not.toContain("javascript:alert");
   });
 
   test("a day heading", () => {

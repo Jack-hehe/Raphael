@@ -252,7 +252,8 @@ describe("a turn with files in the conversation", () => {
   test("shows their names as small chips under the words, from the history's attachments", () => {
     const html = turnHTML(turn({ attachments: [{ name: "receipt.jpg", mime: "image/jpeg" }, { name: "a.pdf", mime: "application/pdf" }] }), emptyTimelineState(), false, look);
     const bubble = /<div class="bubble">(.*?)<\/div><\/div><div class="ra">/.exec(html)![1];
-    expect(bubble.indexOf("「這是什麼？」")).toBeLessThan(bubble.indexOf("me-files"));
+    expect(bubble.indexOf("這是什麼？")).toBeLessThan(bubble.indexOf("me-files"));
+    expect(bubble).not.toContain("「");
     expect([...bubble.matchAll(/<span class="me-file-t">(.*?)<\/span>/g)].map((m) => m[1])).toEqual(["receipt.jpg", "a.pdf"]);
   });
 

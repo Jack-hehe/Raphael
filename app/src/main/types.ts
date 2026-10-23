@@ -161,10 +161,29 @@ export interface HistoryItem {
   stt: string | null;
 }
 
+export type TurnMessageKind = "thinking" | "progress" | "reply" | "event" | "media";
+
+export interface TurnMessage {
+  seq: number;
+  kind: TurnMessageKind;
+  text: string;
+  at_ms: number;
+}
+
+export interface MediaPayload {
+  type: "link" | "image" | "video" | "pdf";
+  url: string;
+  title?: string;
+  site?: string;
+  description?: string;
+  thumbnail?: string | null;
+  embed?: string | null;
+}
+
 /** A turn of the conversation with Raphael (`agent.history.list`, newest first). */
 export interface AgentTurn {
   /** Ordered public lines; older cores and turns may have none. Text includes Raphael's framing. */
-  messages?: { seq: number; kind: "progress" | "reply" | "event"; text: string; at_ms: number }[];
+  messages?: TurnMessage[];
   id: number;
   created_at_ms: number;
   /** What the person said, as the speech recognition heard it. */

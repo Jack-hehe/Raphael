@@ -14,7 +14,7 @@ import { replyLine, userLine } from "../shared/anime";
 import { TYPED, VOICE, hasDetail, highlightHTML, sourceOf } from "./conversation";
 import { formatClock, formatUsd } from "./format";
 import { SERVICE_ICONS, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
-import type { AgentStep, AgentTask, AgentTurn, MainEvent, TurnAttachment } from "./types";
+import type { AgentStep, AgentTask, AgentTurn, MainEvent, MediaPayload, TurnAttachment, TurnMessage } from "./types";
 import { btn, esc, ico } from "./ui";
 
 /** The small turning ring of something under way. */
@@ -208,6 +208,8 @@ export const stepKey = (turn: AgentTurn, index: number): string => `${turn.id}:$
 export interface TimelineState {
   /** Turns whose steps the reader opened or closed: their choice beats the default. */
   open: Map<number, boolean>;
+  /** Turns whose thinking block the reader opened or closed: their choice beats the default. */
+  thinkingOpen: Map<number, boolean>;
   /** The steps drawn before; any other is new and comes in with a movement. */
   seen: Set<string>;
   /** Tasks the reader asked to stop, which have not stopped yet. */
@@ -223,6 +225,7 @@ export interface TimelineState {
 
 export const emptyTimelineState = (): TimelineState => ({
   open: new Map(),
+  thinkingOpen: new Map(),
   seen: new Set(),
   stopping: new Set(),
   rerunning: new Set(),
@@ -233,6 +236,10 @@ export const emptyTimelineState = (): TimelineState => ({
 
 /** Whether a turn's steps are open: as the reader left them, else open while its task runs and closed once it is done. */
 export const stepsOpen = (turn: AgentTurn, state: TimelineState): boolean => state.open.get(turn.id) ?? isLive(turn.task);
+
+/** Whether a turn's thinking block is open: open while the turn runs, collapsed once done, unless the reader toggled it. */
+export const isThinkingOpen = (turn: AgentTurn, state: TimelineState): boolean =>
+  state.thinkingOpen?.get(turn.id) ?? (turn.status === "running" || turn.status === "confirm");
 
 /**
  * Before a draw: a task seen under way that has ended since is `ended` for this draw (its check
@@ -554,9 +561,226 @@ function taskActionsHTML(turn: AgentTurn, state: TimelineState): string {
     (RERUNNABLE.has(task.state) ? btn(esc(t("agent.rerun")), "sm rerun", ` data-act="rerun" data-task="${esc(task.id)}"${state.rerunning.has(task.id) ? " disabled" : ""}`) : "") + `</div>`;
 }
 
-/** The person's bubble: their words in 「」 (none when there were none) and the chips of the files under them. */
+/** The person's bubble: their words (none when there were none) and the chips of the files under them. */
 function bubbleHTML(words: string, files: readonly TurnAttachment[] | undefined): string {
   return `<div class="bubble">${words}${filesHTML(files)}</div>`;
+}
+
+/** Validates an http(s) URL; returns null for any other scheme or invalid URL. */
+export function safeHttpUrl(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") return parsed.href;
+  } catch {
+    // not a valid URL
+  }
+  return null;
+}
+
+/** Validates an image/thumbnail source: http(s) or a safe data:image URI. */
+export function safeMediaSrc(raw: unknown, allowDataImage = false): string | null {
+  const http = safeHttpUrl(raw);
+  if (http) return http;
+  if (allowDataImage && typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (/^data:image\/(?:png|jpeg|jpg|webp|gif|svg\+xml);/i.test(trimmed)) return trimmed;
+  }
+  return null;
+}
+
+/** Extracts or validates a YouTube embed URL for an inline iframe player. */
+export function safeYoutubeEmbedUrl(embed: unknown, fallbackUrl?: unknown): string | null {
+  for (const candidate of [embed, fallbackUrl]) {
+    const valid = safeHttpUrl(candidate);
+    if (!valid) continue;
+    try {
+      const u = new URL(valid);
+      const host = u.hostname.toLowerCase();
+      if (
+        (host === "www.youtube.com" || host === "youtube.com" || host === "www.youtube-nocookie.com" || host === "youtube-nocookie.com") &&
+        u.pathname.startsWith("/embed/")
+      ) {
+        return valid;
+      }
+      if (host === "youtu.be" && u.pathname.length > 1) {
+        const id = u.pathname.slice(1).split("/")[0];
+        if (id && /^[\w-]{6,20}$/.test(id)) return `https://www.youtube.com/embed/${id}`;
+      }
+      if ((host === "www.youtube.com" || host === "youtube.com") && u.pathname === "/watch") {
+        const id = u.searchParams.get("v");
+        if (id && /^[\w-]{6,20}$/.test(id)) return `https://www.youtube.com/embed/${id}`;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+/** Parses a `media` message's JSON string; returns null when malformed. */
+export function parseMediaPayload(raw: string): MediaPayload | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<MediaPayload> | null;
+    if (!parsed || typeof parsed !== "object") return null;
+    if (parsed.type !== "link" && parsed.type !== "image" && parsed.type !== "video" && parsed.type !== "pdf") return null;
+    if (typeof parsed.url !== "string" || !parsed.url.trim()) return null;
+    return {
+      type: parsed.type,
+      url: parsed.url.trim(),
+      title: typeof parsed.title === "string" ? parsed.title.trim() : "",
+      site: typeof parsed.site === "string" ? parsed.site.trim() : "",
+      description: typeof parsed.description === "string" ? parsed.description.trim() : "",
+      thumbnail: typeof parsed.thumbnail === "string" && parsed.thumbnail.trim() ? parsed.thumbnail.trim() : null,
+      embed: typeof parsed.embed === "string" && parsed.embed.trim() ? parsed.embed.trim() : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Elapsed thinking time in whole seconds (at least 1s) for the collapsed `思考了 N 秒` header. */
+export function thinkingSeconds(turn: AgentTurn, thinkingMsgs: readonly TurnMessage[]): number {
+  const times = thinkingMsgs.map((m) => m.at_ms).filter((ms) => typeof ms === "number" && ms > 0);
+  if (times.length > 0) {
+    const first = Math.min(...times);
+    const last = Math.max(...times);
+    const ordered = [...(turn.messages ?? [])].sort((a, b) => a.seq - b.seq);
+    const lastThinkSeq = Math.max(...thinkingMsgs.map((m) => m.seq));
+    const nextMsg = ordered.find((m) => m.seq > lastThinkSeq && m.at_ms >= last);
+    const start = turn.created_at_ms > 0 && turn.created_at_ms <= first ? turn.created_at_ms : first;
+    const end = nextMsg && nextMsg.at_ms > last ? nextMsg.at_ms : last;
+    const spanMs = end - start;
+    if (spanMs >= 500) return Math.max(1, Math.round(spanMs / 1000));
+  }
+  const stepMs = (turn.steps ?? []).reduce((sum, s) => sum + (s.ms > 0 ? s.ms : 0), 0);
+  if (stepMs >= 500) return Math.max(1, Math.round(stepMs / 1000));
+  return Math.max(1, thinkingMsgs.length * 2);
+}
+
+/** One collapsible `思考過程` block per turn: open with a live shimmer while running, collapsed to `思考了 N 秒` when done. */
+function thinkingBlockHTML(turn: AgentTurn, thinkingMsgs: readonly TurnMessage[], state: TimelineState, query: string): string {
+  const running = turn.status === "running" || turn.status === "confirm";
+  const queryMatch = query.trim() !== "" && thinkingMsgs.some((m) => highlightHTML(m.text, query).includes("<mark>"));
+  const open = queryMatch || isThinkingOpen(turn, state);
+  const secs = thinkingSeconds(turn, thinkingMsgs);
+  const headText = running ? t("agent.thinkingProcess") : t("agent.thoughtFor", { p0: secs });
+  const bodyId = `tn-think-${esc(turn.id)}`;
+  const toggle = btn(
+    `<span class="think-label${running ? " shimmer" : ""}">${esc(headText)}</span><span class="steps-chev">${ico("down")}</span>`,
+    "think-toggle",
+    ` data-act="thinking" aria-expanded="${open}" aria-controls="${bodyId}"`,
+  );
+  const lines = thinkingMsgs.map((m) => `<p class="think-line">${highlightHTML(m.text.trim(), query)}</p>`).join("");
+  return (
+    `<div class="think-box${open ? " is-open" : ""}${running ? " is-live" : ""}" data-thinking-turn="${esc(turn.id)}">` +
+    toggle +
+    `<div class="think-body" id="${bodyId}"${open ? "" : " hidden"}>${lines}</div>` +
+    `</div>`
+  );
+}
+
+/** An inline media card (`link`, `image`, `video`, or `pdf`) with a safe `在網站開啟` action button. */
+export function mediaCardHTML(payload: MediaPayload, query: string, seq?: number): string {
+  const safeUrl = safeHttpUrl(payload.url);
+  const thumb = safeMediaSrc(payload.thumbnail, true);
+  const title = payload.title ?? "";
+  const site = payload.site ?? "";
+  const desc = payload.description ?? "";
+  const seqAttr = seq !== undefined ? ` data-seq="${esc(seq)}"` : "";
+  const openBtn = safeUrl
+    ? `<button type="button" class="btn sm media-open" data-act="open-url" data-url="${esc(safeUrl)}">${ico("link")}<span>${esc(t("agent.openInSite"))}</span></button>`
+    : "";
+  const metaHTML =
+    (site ? `<span class="media-site">${highlightHTML(site, query)}</span>` : "") +
+    (title ? `<div class="media-title">${highlightHTML(title, query)}</div>` : "") +
+    (desc ? `<div class="media-desc">${highlightHTML(desc, query)}</div>` : "");
+
+  if (payload.type === "image") {
+    const imgSrc = safeMediaSrc(payload.url, true) ?? thumb;
+    const pic = imgSrc
+      ? `<button type="button" class="btn media-img-btn" data-act="lightbox" data-src="${esc(imgSrc)}" data-title="${esc(title || site)}" aria-label="${esc(title || t("agent.viewImage"))}">` +
+        `<img class="media-img" src="${esc(imgSrc)}" alt="${esc(title)}" loading="lazy"></button>`
+      : "";
+    return (
+      `<div class="media-card media-image" data-media-type="image"${seqAttr}>` +
+      pic +
+      `<div class="media-bar"><div class="media-meta">${metaHTML}</div><div class="media-foot">${openBtn}</div></div>` +
+      `</div>`
+    );
+  }
+
+  if (payload.type === "video") {
+    const ytEmbed = safeYoutubeEmbedUrl(payload.embed, payload.url);
+    const player = ytEmbed
+      ? `<div class="media-player"><iframe class="media-iframe" src="${esc(ytEmbed)}" title="${esc(title || site || "Video")}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>`
+      : safeUrl
+        ? `<div class="media-player"><video class="media-video" controls preload="metadata"${thumb ? ` poster="${esc(thumb)}"` : ""} src="${esc(safeUrl)}"></video></div>`
+        : "";
+    return (
+      `<div class="media-card media-video-card" data-media-type="video"${seqAttr}>` +
+      player +
+      `<div class="media-bar"><div class="media-meta">${metaHTML}</div><div class="media-foot">${openBtn}</div></div>` +
+      `</div>`
+    );
+  }
+
+  if (payload.type === "pdf") {
+    const frame = safeUrl
+      ? `<div class="media-pdf-wrap"><iframe class="media-pdf-frame" src="${esc(safeUrl)}" title="${esc(title || "PDF")}" loading="lazy"></iframe></div>`
+      : "";
+    const expandBtn = `<button type="button" class="btn sm media-expand" data-act="pdf-expand" aria-expanded="false">${esc(t("agent.expandPdf"))}</button>`;
+    return (
+      `<div class="media-card media-pdf" data-media-type="pdf"${seqAttr}>` +
+      frame +
+      `<div class="media-bar"><div class="media-meta">${metaHTML}</div><div class="media-foot">${expandBtn}${openBtn}</div></div>` +
+      `</div>`
+    );
+  }
+
+  return (
+    `<div class="media-card media-link" data-media-type="link"${seqAttr}>` +
+    `<div class="media-link-main">` +
+    `<div class="media-meta">${metaHTML}</div>` +
+    (thumb ? `<img class="media-thumb" src="${esc(thumb)}" alt="${esc(title || site)}" loading="lazy">` : "") +
+    `</div>` +
+    `<div class="media-foot">${openBtn}</div>` +
+    `</div>`
+  );
+}
+
+/** Renders all ordered items in `turn.messages` (thinking block, progress, media cards, event chips, replies). */
+function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, plain: boolean | undefined): string {
+  const ordered = [...(turn.messages ?? [])].sort((a, b) => a.seq - b.seq);
+  const thinkingMsgs = ordered.filter((m) => m.kind === "thinking" && m.text.trim() !== "");
+  let thinkingDrawn = false;
+  return ordered
+    .map((message) => {
+      const text = message.text.trim();
+      if (!text) return "";
+      if (message.kind === "thinking") {
+        if (thinkingDrawn || thinkingMsgs.length === 0) return "";
+        thinkingDrawn = true;
+        return thinkingBlockHTML(turn, thinkingMsgs, state, query);
+      }
+      if (message.kind === "event") {
+        const isRoutine = text.includes(t("members.routineLine")) || /routine/i.test(text);
+        const icon = isRoutine ? ico("repeat") : ico("check");
+        return `<div class="turn-event" data-seq="${esc(message.seq)}">${icon}<span>${highlightHTML(text, query)}</span></div>`;
+      }
+      if (message.kind === "media") {
+        const media = parseMediaPayload(text);
+        return media ? mediaCardHTML(media, query, message.seq) : `<p class="ans" data-seq="${esc(message.seq)}">${highlightHTML(text, query)}</p>`;
+      }
+      if (message.kind === "progress") {
+        return `<p class="ans progress" data-seq="${esc(message.seq)}">${highlightHTML(text, query)}</p>`;
+      }
+      const line = plain || text.startsWith("\u300a") ? text : replyLine(turn.prefix, text);
+      return `<p class="ans" data-seq="${esc(message.seq)}">${highlightHTML(line, query)}</p>`;
+    })
+    .join("");
 }
 
 /** One question and its answer, with what was done in between. */
@@ -575,7 +799,8 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
   }
   const id = esc(turn.id);
   const query = look.query ?? "";
-  const detail = hasDetail(turn);
+  const hasMsgs = (turn.messages?.length ?? 0) > 0;
+  const detail = !hasMsgs && hasDetail(turn);
   // a routine's run says its routine in a line of its own, in place of the owner's words
   const routine = sourceOf(turn) === "routine";
   const said = turn.question.trim() !== "" && !routine;
@@ -592,14 +817,12 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
     (routine ? routineLineHTML(turn) : "") +
     (asked
       ? `<div class="me"><span class="me-src" role="img" aria-label="${where}" title="${where}">${sourceIcon(source)}</span>` +
-        bubbleHTML(said ? highlightHTML(userLine(turn.question), query) : "", turn.attachments) +
+        bubbleHTML(said ? highlightHTML(turn.question.trim(), query) : "", turn.attachments) +
         `</div>`
       : "") +
     `<div class="ra"><span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live)}</span><div class="ra-body">` +
-    (turn.messages?.length
-      ? turn.messages.map((message) => message.kind === "event"
-        ? `<div class="turn-event">${highlightHTML(message.text, query)}</div>`
-        : `<p class="ans${message.kind === "progress" ? " progress" : ""}">${highlightHTML(message.text, query)}</p>`).join("")
+    (hasMsgs
+      ? turnMessagesHTML(turn, state, query, look.plain)
       : (turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm")
         ? "" : `<p class="ans">${highlightHTML(look.plain ? turn.text : replyLine(turn.prefix, turn.text), query)}</p>`) +
     (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +
@@ -622,7 +845,7 @@ export const dayHTML = (label: string): string => `<li class="day"><span>${esc(l
 export function pendingTurnHTML(question: string | null, source: string, look: TurnLook, files: readonly TurnAttachment[] = []): string {
   const where = esc(sourceName(source));
   const words =
-    question === null ? `<span class="shimmer">${esc(t("agent.hearing"))}</span>` : question.trim() === "" ? "" : esc(userLine(question));
+    question === null ? `<span class="shimmer">${esc(t("agent.hearing"))}</span>` : question.trim() === "" ? "" : esc(question.trim());
   return (
     `<li class="tn is-pending${look.plain ? " tn-plain" : ""}">` +
     `<div class="me"><span class="me-src" role="img" aria-label="${where}" title="${where}">${sourceIcon(source)}</span>${bubbleHTML(words, files)}</div>` +

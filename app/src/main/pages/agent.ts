@@ -56,6 +56,8 @@ import {
   pendingTurnHTML,
   requestRerun,
   requestStop,
+  safeHttpUrl,
+  safeMediaSrc,
   stepsOpen,
   turnHTML,
   wantsRefresh,
@@ -1225,6 +1227,63 @@ export function createAgent(app: AppContext): Page {
     rememberLine(button);
   }
 
+  function toggleThinking(button: HTMLElement): void {
+    const box = button.closest<HTMLElement>(".think-box");
+    const body = box?.querySelector<HTMLElement>(".think-body");
+    if (!box || !body) return;
+    const id = Number(box.dataset.thinkingTurn ?? button.closest<HTMLElement>(".tn")?.dataset.id);
+    const next = Boolean(body.hidden);
+    body.hidden = !next;
+    box.classList.toggle("is-open", next);
+    button.setAttribute("aria-expanded", String(next));
+    if (!Number.isNaN(id)) state.thinkingOpen.set(id, next);
+    rememberLine(button);
+  }
+
+  function togglePdfExpand(button: HTMLElement): void {
+    const card = button.closest<HTMLElement>(".media-pdf");
+    if (!card) return;
+    const expanded = card.classList.toggle("is-expanded");
+    button.setAttribute("aria-expanded", String(expanded));
+    button.textContent = expanded ? t("agent.collapsePdf") : t("agent.expandPdf");
+    rememberLine(button);
+  }
+
+  function openLightbox(button: HTMLElement): void {
+    const src = safeMediaSrc(button.dataset.src, true);
+    if (!src) return;
+    const title = button.dataset.title ?? "";
+    document.querySelector(".media-lightbox")?.remove();
+    const scrim = document.createElement("div");
+    scrim.className = "mb-scrim media-lightbox";
+    scrim.setAttribute("role", "dialog");
+    scrim.setAttribute("aria-modal", "true");
+    scrim.setAttribute("aria-label", title || t("agent.viewImage"));
+    scrim.innerHTML =
+      `<div class="lb-card">` +
+      `<div class="lb-head"><span class="lb-title">${esc(title)}</span>${iconButton("x", t("common.close"), ' data-lb="close"')}</div>` +
+      `<img class="lb-img" src="${esc(src)}" alt="${esc(title)}">` +
+      `</div>`;
+    const close = (): void => {
+      scrim.remove();
+      document.removeEventListener("keydown", onKey, true);
+      button.focus({ preventScroll: true });
+    };
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        close();
+      }
+    };
+    scrim.addEventListener("click", (ev) => {
+      if (ev.target === scrim || (ev.target as Element).closest('[data-lb="close"]')) close();
+    });
+    document.addEventListener("keydown", onKey, true);
+    document.body.append(scrim);
+    scrim.querySelector<HTMLElement>('[data-lb="close"]')?.focus();
+  }
+
   /** A line changed in place by the reader is drawn from new data next time, so it is not kept as it was. */
   function rememberLine(control: HTMLElement): void {
     const line = control.closest<HTMLElement>("[data-key]");
@@ -1272,6 +1331,20 @@ export function createAgent(app: AppContext): Page {
         break;
       case "detail":
         toggleDetail(act);
+        break;
+      case "thinking":
+        toggleThinking(act);
+        break;
+      case "open-url": {
+        const url = safeHttpUrl(act.dataset.url);
+        if (url) void api.openLink(url);
+        break;
+      }
+      case "lightbox":
+        openLightbox(act);
+        break;
+      case "pdf-expand":
+        togglePdfExpand(act);
         break;
       case "exchange":
         toggleExchange(act);
