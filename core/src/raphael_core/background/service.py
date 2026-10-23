@@ -14,11 +14,39 @@ and to the assistant's history, and told to the app:
   `running` is whether a task is under way, which the tray's "stop the background task" follows;
   the window reads the conversation again, which shows the task's steps.
 
+**Asking from the background.** A call that needs the owner's yes (a tool at T2, or one a safety rule
+of the owner's asks about: `run`) pauses its task: the worker ends its run and gives back the
+conversation, and the task waits (state "waiting") with its question, which is a row of
+`worker_questions` with the id of the member whose thread shows it (0 is Raphael) and the task's own
+time that was left. The conversation, the call and its arguments stay in memory only. Then:
+
+- the app shows the question as a gold card in that thread, and the member column 「等你處理」
+  (`background.questions.list {member_id?}` → `{questions: [{id, task_id, member_id, prefix, text,
+  tier, created_at_ms, expires_at_ms}]}`);
+- `background.question {task_id, question_id, member_id, state, prefix, text, expires_at_ms,
+  notice}` tells the app, once when it opens (`state` "waiting", with `notice` {prefix, text}, the
+  line the overlay says once when the app is not in front: 《告。<name> 等你處理。》), and again when it
+  ends (`state` "approved", "denied", "expired" or "cancelled", without the rest);
+- it is answered in the app only, with `background.answer {task_id, question_id, approved}` →
+  `{status}`: "approved", "denied", or what became of a question that is no longer open
+  ("expired", "cancelled", "unknown"...). A call that says it comes from elsewhere (`source` other
+  than "app") is refused: a yes is given at this computer, never from a chat app;
+- a yes queues the task at the front: when its turn comes the call is made with that yes, and the
+  task goes on from where it paused, with its own time that was left (the time it waited is not
+  the task's). A no queues it the same way, with the call not made and the model told so, so that
+  it can report what it did do;
+- nobody answering within 24 hours ends the task politely (state "cancelled", reason "expired"),
+  with nothing more spent. A task that waited when the core ended is interrupted, like one that
+  ran, and its question is cancelled.
+
+A paused task does not hold the worker: the tasks behind it run meanwhile.
+
 A report is the model's own (`告。` and a line, with a longer version for the history) when the task
 finished. When it did not (a limit, the user's stop, a worker that died, a model that failed) it is a
 fixed line of the persona with the number of tool calls made, and nothing more is spent for it.
 
-RPC methods, for the app: `worker.cancel {task_id?}` (the task that runs, or the one named),
+RPC methods, for the app: `worker.cancel {task_id?}` (the task that runs, or the one named, a waiting
+one too),
 `worker.rerun {task_id}` (a task that was interrupted, stopped, ran out of a limit or failed, run
 again as a new task) and `worker.announce_pending`. The tasks themselves are read with the
 conversation: the assistant's history shows each task with the turn that handed it over
@@ -53,9 +81,13 @@ from ..agent.persona import (
     PREFIXES,
     language_reminder,
     member_worker_system_prompt,
+    parenthesized,
     phrase,
     worker_system_prompt,
 )
+from ..agent.plugins import preview
+from ..agent.policy import Action, Approval, Confirmations, Outcome, Pending
+from ..agent.safety import asked_with
 from ..agent.speaker import RAPHAEL, Speaker
 from ..agent.team import Team, team_tools_for
 from ..agent.tools import ToolResult, Tools
@@ -63,17 +95,18 @@ from ..brain.openrouter import OpenRouterClient
 from ..brain.settings import DEFAULTS, SettingsStore
 from ..brain.spend import SpendTracker
 from ..clock import wall_clock_ms
-from ..protocol import BUSY, NOT_FOUND, RpcError, invalid_params
+from ..protocol import BUSY, INVALID_PARAMS, NOT_FOUND, RpcError, invalid_params
 from ..memory.store import MemoryIndex
 from ..services.attachments import Attachment
 from ..router import Router
-from ..worker.guards import neutralize
+from ..worker.guards import neutralize, wrap_untrusted
+from ..worker.loop import WAITING as PAUSED_KIND
 from .brief import BRIEF_WINDOW_MS, TaskBrief, ToolUse
 from .host import WorkerCrashed, WorkerHost, WorkerStopped, WorkerUnavailable
-from .run import MemoryReader, RunLimits, TaskRun
+from .run import NOT_MADE_WHILE_WAITING, MemoryReader, RunLimits, TaskRun, Waiting
 from ..agent.toolpick import ToolPicker
 from .snapshot import BUILTIN_SERVER, refine, take_snapshot
-from .tasks import QUEUED, RUNNING, Refused, Step, Task, TaskStore
+from .tasks import QUEUED, RUNNING, WAITING, Question, Refused, Step, Task, TaskStore
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +117,11 @@ CONTEXT_TURNS = 3
 # The core waits this much longer than the task's own time, and the start of the worker
 # (`WorkerHost.start_s`), for the worker to say it is done.
 TIME_NET_S = 20.0
+# A question of the background waits this long for the owner, then the task ends without its call.
+QUESTION_WAIT_S = 24 * 3600.0
+QUESTION_WAIT_MS = round(QUESTION_WAIT_S * 1000)
+# Where the only yes to a question of the background may come from: the app at this computer.
+AT_THIS_COMPUTER = "app"
 # The assistant's history calls a task by the status of a turn.
 _TURN_STATUS = {"done": "done", "cancelled": "denied"}
 
@@ -160,6 +198,50 @@ def report_from(final: str, language: str, *, plain: bool = False) -> Reply | No
         return parse_reply(data, language, plain=plain)
     except AgentFailure:
         return None
+
+
+@dataclasses.dataclass
+class _Paused:
+    """A task that waits for the owner's answer, in memory only: its run (its counters, its ledger,
+    the addresses it has seen, its files), the conversation the worker gave back, the call that
+    waits, the question (`Confirmations`, which alone mints the yes), the member whose thread shows
+    it, and the task's own time that was left. `answer` is the owner's, once given: (approved, the
+    yes)."""
+
+    task_id: int
+    run: TaskRun
+    messages: list[dict]
+    waiting: Waiting
+    pending: Pending
+    member_id: int
+    remaining_s: float
+    answer: tuple[bool, Approval | None] | None = None
+
+
+def continued(messages: Sequence[dict], waiting_call: str, content: str) -> list[dict]:
+    """The conversation a paused task goes on with: as the worker gave it back, then a result for
+    each call of its last reply that has none yet: `content` for the call that waited, and for each
+    call after it that the pause left unmade, a line that says so."""
+    out = [dict(message) for message in messages]
+    last = next(
+        (n for n in range(len(out) - 1, -1, -1) if out[n].get("role") == "assistant"), None
+    )
+    if last is None:
+        return out
+    answered = {m.get("tool_call_id") for m in out[last + 1 :] if m.get("role") == "tool"}
+    for call in out[last].get("tool_calls") or []:
+        call_id = call.get("id") if isinstance(call, dict) else None
+        if not isinstance(call_id, str) or call_id in answered:
+            continue
+        function = call.get("function") if isinstance(call.get("function"), dict) else {}
+        name = str(function.get("name", ""))
+        text = (
+            content
+            if call_id == waiting_call
+            else wrap_untrusted(name, NOT_MADE_WHILE_WAITING, ok=False)
+        )
+        out.append({"role": "tool", "tool_call_id": call_id, "content": text})
+    return out
 
 
 def _is_builtin(step: Step) -> bool:
@@ -308,6 +390,13 @@ class BackgroundService:
         # task id -> the files handed over with it, in memory only, until the task is taken up
         # (they then go with its run, and are gone when it ends). A task run again has none.
         self._attachments: dict[int, list[Attachment]] = {}
+        # The questions of the background: only `Confirmations.resolve` makes a yes, for one call.
+        self._questions = Confirmations(clock, timeout_s=QUESTION_WAIT_S)
+        # task id -> the task that waits for the owner (see the module).
+        self._paused: dict[int, _Paused] = {}
+        self._expiry: asyncio.TimerHandle | None = None
+        # What a member is called, for the overlay's notice (none: every question is Raphael's).
+        self._member_name: Callable[[int], str | None] | None = None
         # A task that was under way when the last process ended is over: it is never started
         # again, and is told so once the app says hello (`announce_pending`).
         interrupted = self._interrupt_unfinished("restart")
@@ -342,11 +431,18 @@ class BackgroundService:
         except sqlite3.Error:
             return None
 
+    def use_member_names(self, name_of: Callable[[int], str | None]) -> None:
+        """Name the members in the overlay's notice of a question (`name_of(member_id)`, None for
+        one that is not known)."""
+        self._member_name = name_of
+
     def register(self, router: Router) -> None:
         for method, handler in {
             "worker.cancel": self._cancel,
             "worker.rerun": self._rerun,
             "worker.announce_pending": self._announce_pending,
+            "background.questions.list": self._questions_list,
+            "background.answer": self._answer,
         }.items():
             router.register(method, handler)
 
@@ -368,7 +464,8 @@ class BackgroundService:
         queue is full. The task starts as soon as the one before it is over. `model` is the model
         it runs on (the assistant's, or the member's own). `attachments` are the files handed over
         with the request, kept in memory for the task and never written down. `member_id` is whose
-        task it is (0: Raphael's), and `routine_id` the routine whose run it is, if it is one."""
+        task it is (0: Raphael's; its thread shows the task's question if it asks), and
+        `routine_id` the routine whose run it is, if it is one."""
         if self._host.disabled:
             raise Refused("worker_disabled")
         if len(self._queue) >= MAX_QUEUED + (0 if self._executing else 1):
@@ -492,6 +589,10 @@ class BackgroundService:
         and the one that runs is stopped, emptied of what the user said at once and deleted when it
         has stopped, without a report to the overlay or the history."""
         try:
+            # A task that waits for the owner goes with the rest; its question is gone with it.
+            self._paused.clear()
+            self._questions.cancel_all()
+            self._disarm_expiry()
             for task_id in list(self._queue):
                 self._queue.remove(task_id)
                 self._models.pop(task_id, None)
@@ -603,6 +704,13 @@ class BackgroundService:
         language = task.language
         if task.id in self._discarded:
             return
+        paused = self._paused.get(task.id)
+        if paused is not None:
+            if paused.answer is None:
+                return  # still waits for the owner (it is not queued until it is answered)
+            del self._paused[task.id]
+            await self._resume(task, paused)
+            return
         if self._host.disabled:
             self._conclude(
                 task, None, "failed", PREFIXES[language].negative,
@@ -653,6 +761,7 @@ class BackgroundService:
             request=task.text,
             attachments=files,
             team=self._team_call(speaker, task, ledger) if team else None,
+            can_wait=True,
         )
         system, user = _prompts(
             language,
@@ -665,8 +774,6 @@ class BackgroundService:
             attachments=files,
             speaker=speaker,
         )
-        self._run = run
-        self._changed(task.id, RUNNING)
         spec = {
             "task_id": task.id,
             "system": system,
@@ -678,21 +785,81 @@ class BackgroundService:
                 "seconds": self._limits.seconds,
             },
         }
+        await self._carry(task, run, spec, self._limits.seconds)
+
+    async def _resume(self, task: Task, paused: _Paused) -> None:
+        """Go on with a task the owner answered: the call it waited on is made with the yes (or not,
+        after a no), and the worker takes the task up again from the conversation it gave back,
+        with what is left of the task's limits."""
+        run = paused.run
+        approved, approval = paused.answer or (False, None)
+        if self._host.disabled:
+            self._conclude(
+                task, run, "failed", PREFIXES[task.language].negative,
+                phrase(task.language, "worker_disabled"), None, "disabled",
+            )  # fmt: skip
+            return
         try:
+            self._store.set_state(task.id, RUNNING)
+        except sqlite3.Error as exc:
+            logger.warning("Could not write down that a task goes on: %s", type(exc).__name__)
+        run.reopen(paused.remaining_s)
+        limits = run.limits
+        spec = {
+            "task_id": task.id,
+            "tools": run.snapshot.definitions,
+            "limits": {
+                "model_calls": max(limits.model_calls - run.model_calls, 1),
+                "tool_calls": max(limits.tool_calls - run.tool_calls, 1),
+                "seconds": max(paused.remaining_s, 1.0),
+            },
+        }
+
+        async def prepare() -> list[dict]:
+            action = paused.pending.action if approved else None
+            content = await run.answer_call(paused.waiting, approval, action)
+            return continued(paused.messages, paused.waiting.call_id, content)
+
+        logger.info("Background task %d goes on: approved=%s", task.id, approved)
+        await self._carry(task, run, spec, paused.remaining_s, prepare)
+
+    async def _carry(
+        self,
+        task: Task,
+        run: TaskRun,
+        spec: dict,
+        seconds: float,
+        prepare: Callable[[], Any] | None = None,
+    ) -> None:
+        """Have the worker carry the task out with `spec` (`prepare`, when given, first makes the
+        call a paused task waited on and gives the conversation to go on with), and turn how it
+        ended into the task's end, or its pause."""
+        language = task.language
+        self._run = run
+        self._changed(task.id, RUNNING)
+        try:
+            if prepare is not None:
+                spec = {**spec, "messages": await prepare()}
             try:
                 # A worker that has to be started first may take its time to say hello: the net is
                 # never shorter than that wait, so a worker still starting is not ended half-way.
                 # (The task's own time, which `run` enforces, counts from now, start included.)
                 reply = await asyncio.wait_for(
                     self._host.run(run, spec),
-                    self._limits.seconds + self._host.start_s + TIME_NET_S,
+                    seconds + self._host.start_s + TIME_NET_S,
                 )
             except TimeoutError:
                 run.timed_out = True
                 run.cancel()
                 self._host.kill()
                 reply = {"status": "stopped", "kind": "limit_time"}
-            self._conclude_run(task, run, reply)
+            if self._pauses(run, reply):
+                self._pause(task, run, reply)
+            else:
+                self._conclude_run(task, run, reply)
+        except RpcError:
+            # The call a paused task waited on was cut off as it went on: the owner stopped it.
+            self._conclude_run(task, run, {"status": "cancelled" if run.cancelled else "interrupted"})
         except WorkerStopped:
             if run.cancelled:
                 self._conclude_run(task, run, {"status": "cancelled"})
@@ -737,6 +904,249 @@ class BackgroundService:
             )
 
         return call
+
+    # --- the questions of the background ----------------------------------------------------------
+
+    @staticmethod
+    def _pauses(run: TaskRun, reply: dict) -> bool:
+        """Whether the worker stopped the task for a call that waits for the owner."""
+        return (
+            reply.get("status") == "stopped"
+            and reply.get("kind") == PAUSED_KIND
+            and run.waiting is not None
+            and not run.cancelled
+            and isinstance(reply.get("messages"), list)
+            and bool(reply.get("messages"))
+        )
+
+    def _pause(self, task: Task, run: TaskRun, reply: dict) -> None:
+        """The task waits for the owner: its question is written down and told to the app, and the
+        rest stays in memory until the owner answers (see the module)."""
+        waiting = run.waiting
+        assert waiting is not None
+        run.waiting = None
+        language = task.language
+        remaining = run.remaining_s()
+        ref = waiting.ref
+        action = Action(ref.key, dict(waiting.arguments))
+        pending = self._questions.open(task.session_id, task.turn_id or 0, action, waiting.tier, language)
+        member_id = task.member_id
+        prefix = PREFIXES[language].question
+        what = parenthesized(language, preview(waiting.arguments))
+        asked = phrase(language, "confirm_plugin", server=ref.server, tool=ref.name, what=what)
+        text = asked_with(language, waiting.screening, asked)
+        now = self._now_ms()
+        question = Question(
+            id=pending.id, task_id=task.id, member_id=member_id, prefix=prefix, text=text,
+            tier=waiting.tier.name, created_at_ms=now, expires_at_ms=now + QUESTION_WAIT_MS,
+            remaining_s=remaining, state="waiting",
+        )  # fmt: skip
+        try:
+            self._store.progress(
+                task.id, model_calls=run.model_calls, tool_calls=run.tool_calls,
+                cost_usd=run.ledger.total,
+            )  # fmt: skip
+            self._store.add_question(question)
+            self._store.set_state(task.id, WAITING)
+        except sqlite3.Error as exc:
+            logger.warning("Could not write down the question of a task: %s", type(exc).__name__)
+            self._questions.resolve(pending.id, False)
+            self._conclude_run(task, run, {"status": "interrupted"})
+            return
+        self._paused[task.id] = _Paused(
+            task.id, run, list(reply["messages"]), waiting, pending, member_id, remaining
+        )
+        self._arm_expiry()
+        logger.info(
+            "Background task %d waits for the owner: member=%d tier=%s left=%.0fs",
+            task.id, member_id, waiting.tier.name, remaining,
+        )  # fmt: skip
+        self._notify(
+            "background.question",
+            {
+                "task_id": task.id,
+                "question_id": pending.id,
+                "member_id": member_id,
+                "state": "waiting",
+                "prefix": prefix,
+                "text": text,
+                "expires_at_ms": question.expires_at_ms,
+                "notice": {"prefix": PREFIXES[language].notice, "text": self._notice(language, member_id)},
+            },
+        )
+        self._changed(task.id, WAITING, ending=True)
+
+    def _notice(self, language: str, member_id: int) -> str:
+        """What the overlay says once of a question: which member waits for the owner."""
+        name = None
+        if member_id and self._member_name is not None:
+            try:
+                name = self._member_name(member_id)
+            except Exception:
+                name = None
+        if name:
+            return phrase(language, "worker_waiting", member=name)
+        return phrase(language, "worker_waiting_self")
+
+    def _closed(self, paused: _Paused, state: str) -> None:
+        """Tell the app that the question of `paused` is over, and how."""
+        self._notify(
+            "background.question",
+            {
+                "task_id": paused.task_id,
+                "question_id": paused.pending.id,
+                "member_id": paused.member_id,
+                "state": state,
+            },
+        )
+
+    @staticmethod
+    def _question_view(question: Question) -> dict[str, Any]:
+        return {
+            "id": question.id,
+            "task_id": question.task_id,
+            "member_id": question.member_id,
+            "prefix": question.prefix,
+            "text": question.text,
+            "tier": question.tier,
+            "created_at_ms": question.created_at_ms,
+            "expires_at_ms": question.expires_at_ms,
+        }
+
+    def waiting_questions(self, member_id: int | None = None) -> list[dict[str, Any]]:
+        """The questions that wait for the owner now, the oldest first (of one member, or of
+        all), as `background.questions.list` gives them."""
+        self.sweep_questions()
+        try:
+            rows = self._store.waiting_questions(member_id)
+        except sqlite3.Error as exc:
+            logger.warning("Could not read the questions: %s", type(exc).__name__)
+            return []
+        live = {paused.pending.id for paused in self._paused.values() if paused.answer is None}
+        return [self._question_view(q) for q in rows if q.id in live]
+
+    def waiting_members(self) -> set[int]:
+        """The members a question waits in the thread of (0 is Raphael)."""
+        return {question["member_id"] for question in self.waiting_questions()}
+
+    async def _questions_list(self, params: dict) -> dict:
+        member_id = params.get("member_id")
+        if member_id is not None and type(member_id) is not int:
+            raise invalid_params("member_id must be a whole number or null")
+        return {"questions": self.waiting_questions(member_id)}
+
+    async def _answer(self, params: dict) -> dict:
+        task_id, question_id = params.get("task_id"), params.get("question_id")
+        approved, source = params.get("approved"), params.get("source", AT_THIS_COMPUTER)
+        if type(task_id) is not int:
+            raise invalid_params("task_id must be a whole number")
+        if not isinstance(question_id, str) or not question_id:
+            raise invalid_params("question_id must be a non-empty string")
+        if type(approved) is not bool:
+            raise invalid_params("approved must be true or false")
+        return {"status": self.answer(task_id, question_id, approved, source=source)}
+
+    def answer(self, task_id: int, question_id: str, approved: bool, *, source: Any = AT_THIS_COMPUTER) -> str:
+        """The owner's answer to a question of the background, from the app: "approved" or
+        "denied", or what became of a question that is no longer open. RpcError for an answer that
+        says it comes from anywhere but the app at this computer (a chat app): it is never taken."""
+        if source != AT_THIS_COMPUTER:
+            logger.info("An answer to a background question from elsewhere was refused")
+            raise RpcError(
+                INVALID_PARAMS,
+                "A question of the background is answered at this computer only",
+                {"kind": "not_here"},
+            )
+        self.sweep_questions()
+        paused = self._paused.get(task_id)
+        if paused is None or paused.pending.id != question_id or paused.answer is not None:
+            try:
+                row = self._store.question(question_id)
+            except sqlite3.Error:
+                row = None
+            return "unknown" if row is None or row.task_id != task_id else row.state
+        resolution = self._questions.resolve(question_id, approved)
+        if resolution.outcome is Outcome.EXPIRED:
+            self._expire(paused)
+            return "expired"
+        if resolution.outcome is Outcome.UNKNOWN:
+            return "unknown"
+        state = "approved" if resolution.outcome is Outcome.APPROVED else "denied"
+        paused.answer = (state == "approved", resolution.approval)
+        try:
+            self._store.close_question(question_id, state)
+            self._store.set_state(task_id, QUEUED)
+        except sqlite3.Error as exc:
+            logger.warning("Could not write down an answer: %s", type(exc).__name__)
+        logger.info("Background task %d was answered: %s", task_id, state)
+        # The owner just answered: the task goes on before the ones that wait.
+        self._queue.appendleft(task_id)
+        self._ensure_pump()
+        self._closed(paused, state)
+        self._changed(task_id, QUEUED)
+        self._arm_expiry()
+        return state
+
+    def sweep_questions(self) -> None:
+        """End the tasks whose question nobody answered in time (QUESTION_WAIT_S). Told by the
+        time each was asked, not by what `Confirmations.sweep` returns: a sweep that another
+        call made (`resolve` sweeps too) has taken those out already."""
+        self._questions.sweep()
+        now = self._clock()
+        for paused in list(self._paused.values()):
+            if paused.answer is None and now - paused.pending.created_at >= QUESTION_WAIT_S:
+                self._expire(paused)
+        self._arm_expiry()
+
+    def _expire(self, paused: _Paused) -> None:
+        """Nobody answered: the task ends politely, without the call and with nothing more spent."""
+        self._paused.pop(paused.task_id, None)
+        try:
+            self._store.close_question(paused.pending.id, "expired")
+        except sqlite3.Error as exc:
+            logger.warning("Could not write down that a question ran out: %s", type(exc).__name__)
+        self._gate.record_unrun(paused.waiting.ref.key, outcome="expired", task_id=paused.task_id)
+        logger.info("Background task %d: nobody answered its question in time", paused.task_id)
+        self._closed(paused, "expired")
+        task = self.task(paused.task_id)
+        if task is not None:
+            language = task.language
+            self._conclude(
+                task, paused.run, "cancelled", PREFIXES[language].notice,
+                phrase(language, "worker_expired"), None, "expired",
+            )  # fmt: skip
+
+    def _drop_paused(self, paused: _Paused, state: str = "cancelled") -> None:
+        """A task that waited is stopped (by the owner, or because the core closes): its question
+        goes, and its call is written down as not made."""
+        self._paused.pop(paused.task_id, None)
+        if paused.answer is None:
+            self._questions.resolve(paused.pending.id, False)
+            try:
+                self._store.close_question(paused.pending.id, state)
+            except sqlite3.Error as exc:
+                logger.warning("Could not write down that a question ended: %s", type(exc).__name__)
+            self._gate.record_unrun(paused.waiting.ref.key, outcome="denied", task_id=paused.task_id)
+            self._closed(paused, state)
+        self._arm_expiry()
+
+    def _arm_expiry(self) -> None:
+        """Have the questions that wait looked at again when the first of them runs out."""
+        self._disarm_expiry()
+        waiting = [p for p in self._paused.values() if p.answer is None]
+        if not waiting:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        due = min(p.pending.created_at for p in waiting) + QUESTION_WAIT_S - self._clock()
+        self._expiry = loop.call_later(max(due, 0.0) + 1.0, self.sweep_questions)
+
+    def _disarm_expiry(self) -> None:
+        if self._expiry is not None:
+            self._expiry.cancel()
+            self._expiry = None
 
     def _interrupt_closing(self, task: Task, run: TaskRun) -> None:
         """The task that ran when the core closed: told of at the next hello, in its own language."""
@@ -987,6 +1397,20 @@ class BackgroundService:
         if run is not None and task_id in (None, run.task_id):
             self._host.cancel(run)
             return {"cancelled": True}
+        paused = None if task_id is None else self._paused.get(task_id)
+        if paused is not None:
+            # A task that waits for the owner (or was answered and waits for its turn) ends here.
+            if task_id in self._queue:
+                self._queue.remove(task_id)
+            self._drop_paused(paused)
+            task = self._store.get(paused.task_id)
+            if task is not None:
+                text = phrase(task.language, "worker_cancelled", steps=str(paused.run.tool_calls))
+                self._conclude(
+                    task, paused.run, "cancelled", PREFIXES[task.language].notice, text, None,
+                    "cancelled",
+                )  # fmt: skip
+            return {"cancelled": True}
         if task_id is not None and task_id in self._queue:
             self._queue.remove(task_id)
             task = self._store.get(task_id)
@@ -1003,7 +1427,8 @@ class BackgroundService:
         tasks of other sessions are left alone. Whether anything was stopped."""
         stopped = False
         run = self._run
-        for task_id in [*([run.task_id] if run is not None else []), *self._queue]:
+        waiting = [task_id for task_id in self._paused if task_id not in self._queue]
+        for task_id in [*([run.task_id] if run is not None else []), *self._queue, *waiting]:
             task = self.task(task_id)
             if task is not None and task.session_id == session_id:
                 stopped = bool((await self._cancel({"task_id": task_id}))["cancelled"]) or stopped
@@ -1019,6 +1444,10 @@ class BackgroundService:
             await asyncio.gather(pump, return_exceptions=True)
         for task_id in list(self._queue):
             self._queue.remove(task_id)
+        # The tasks that wait for the owner end with the process: their conversation is gone.
+        self._paused.clear()
+        self._questions.cancel_all()
+        self._disarm_expiry()
         self._interrupt_unfinished("restart")
         await self._host.aclose()
         await self._tools.aclose()

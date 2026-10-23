@@ -25,6 +25,10 @@ How a run goes:
    - the safety rules judge the step (`safety.judge`): a password field, a sign-in or a payment
      hands the run over to the owner; a step that sends, deletes or buys asks the owner first, every
      time; keys outside the allowlist are refused;
+   - then the owner's own safety rules judge it (`agent.safety`, through the gate's `screen`): a
+     rule may refuse the step (the model is told so, and the step is not taken) or have the owner
+     asked first; they never loosen what is built in, so a step that sends still asks when a rule
+     allows it, and a question a rule asked for does not count as the yes to a step that sends;
    - every call goes through the one gate (`agent.gate`), a T2 one with the approval its question
      minted, and becomes a step of the turn (`agent.steps.Step`, kind "computer").
 3. After a step the window is looked at again, and the model sees what changed.
@@ -56,6 +60,7 @@ from ..agent.gate import ToolGate
 from ..agent.history import Turn
 from ..agent.ledger import Ledger
 from ..agent.persona import fit_text, phrase
+from ..agent import safety as rules
 from ..agent.policy import (
     CONFIRM_TIMEOUT_S,
     Action,
@@ -122,6 +127,11 @@ CLOSES = "closes"
 NEVER_CLOSES = (
     "Raphael never closes a window, a tab or an app, so that step was not taken. Do the task "
     "without it, or say what is left for the owner."
+)
+# A step one of the owner's safety rules forbids (`agent.safety`): never taken.
+FORBIDDEN_BY_RULE = (
+    "The owner's safety rule 「{rule}」 forbids this step, so it was not taken. Do not try it "
+    "another way: do the rest of the task without it, or say what is left for the owner."
 )
 _LANGUAGE_NAMES = {
     "zh-TW": "Traditional Chinese as written in Taiwan (never Simplified characters)",
@@ -894,19 +904,33 @@ class ComputerRun:
         # A step is shown to the model with the look after it: one that could not be is not taken.
         self._check_looks()
         await self._permit(window)
-        if verdict == safety.CONFIRM:
-            asked = Action(ACT_FINAL, dict(request))
-            text = self._confirm_text(action, element, chord)
-            stored = phrase(self.language, "computer_confirm_step")
+        # The owner's safety rules, after the built-in judgement, which they never loosen: a rule
+        # can refuse the step or have it asked about; the built-in question is asked whatever
+        # they say.
+        screening = await self._screen_step(window, action, element, chord, text)
+        if screening.verdict == rules.DENY:
+            self._step(action, window.app, "blocked", time.perf_counter(), "forbidden")
+            told = FORBIDDEN_BY_RULE.format(rule=screening.rule or "")
+            return wrap_untrusted(name, told, ok=False)
+        if rules.needs_yes(verdict == safety.CONFIRM, screening):
+            builtin = verdict == safety.CONFIRM
+            asked = Action(ACT_FINAL if builtin else name, dict(request))
+            question = self._confirm_text(action, element, chord)
+            text = rules.asked_with(self.language, screening, question)
+            stored = rules.asked_with(
+                self.language, screening, phrase(self.language, "computer_confirm_step")
+            )
             try:
                 answer, asked = await self._ask(asked, text, stored)
             except _Finished:
                 self._step(action, window.app, "blocked", time.perf_counter(), "denied")
                 raise
             self._pass_gate(asked, answer.approval)
-            # The shell types a line break (as Enter), or presses a key that deletes what is
-            # selected away from a text field, only in a step the owner said yes to.
-            request["confirmed"] = True
+            if builtin:
+                # The shell types a line break (as Enter), or presses a key that deletes what is
+                # selected away from a text field, only in a step the owner said yes to as one
+                # that sends or deletes (a yes asked for by a rule alone is not that).
+                request["confirmed"] = True
         else:
             self._pass_gate(Action(name, request))
         self._say_step(action, element, chord)
@@ -928,6 +952,35 @@ class ComputerRun:
             return wrap_untrusted(name, told, ok=True)
         told = f"Done ({clean_text(method, 20)}). The window now:\n{describe(after)}"
         return wrap_untrusted(name, told, ok=True)
+
+    async def _screen_step(
+        self,
+        window: Window,
+        action: str,
+        element: Element | None,
+        chord: tuple[str, ...] | None,
+        text: str,
+    ) -> rules.Screening:
+        """What the owner's safety rules say of a step: the action, the app, the element and what is
+        typed or pressed, as the judge is shown them. A judge that Esc or the run's end cuts off
+        stops the run; one that does not answer in time counts as one that failed (ask)."""
+        summary: dict[str, Any] = {"app": window.app.name, "action": action}
+        if element is not None:
+            summary.update(element=element.name, role=element.role)
+        if text:
+            summary["text"] = text
+        if chord is not None:
+            summary["keys"] = safety.chord_text(chord)
+        proposed = rules.Proposed(
+            tools.ACT.name,
+            f"One step in an app on the owner's own desktop ({action}).",
+            rules.summarize(summary),
+        )
+        screening = self._gate.screen(proposed, language=self.language, ledger=self.ledger)
+        try:
+            return await self._until(screening, rules.JUDGE_TIMEOUT_S + 1.0)
+        except TimeoutError:
+            return rules.Screening(rules.ASK, None, unchecked=True)
 
     def _confirm_text(self, action: str, element: Element | None, chord: tuple[str, ...] | None) -> str:
         language = self.language

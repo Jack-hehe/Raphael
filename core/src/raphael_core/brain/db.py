@@ -319,33 +319,124 @@ COMMIT;
 #   when it runs next.
 # - `member_unread` holds the members (Raphael too, as 0) whose thread has news the owner has not
 #   seen.
-_MIGRATION_V15 = """
-BEGIN;
-ALTER TABLE agent_turns ADD COLUMN member_id INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE agent_turns ADD COLUMN peer_id INTEGER;
-CREATE INDEX agent_turns_member ON agent_turns(member_id, id);
-ALTER TABLE worker_tasks ADD COLUMN member_id INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE worker_tasks ADD COLUMN routine_id INTEGER;
-CREATE TABLE conversation_summaries (member_id INTEGER PRIMARY KEY, text TEXT NOT NULL,
-  through_turn_id INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL);
-INSERT INTO conversation_summaries (member_id, text, through_turn_id, updated_at_ms)
-  SELECT 0, text, through_turn_id, updated_at_ms FROM agent_summary;
-DROP TABLE agent_summary;
-CREATE TABLE member_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-  position INTEGER NOT NULL, sources TEXT NOT NULL DEFAULT '[]');
-CREATE TABLE members (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  role TEXT NOT NULL DEFAULT '', instructions TEXT NOT NULL DEFAULT '',
-  avatar TEXT NOT NULL DEFAULT '', group_id INTEGER, model TEXT NOT NULL DEFAULT '',
-  position INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, tools TEXT);
-CREATE TABLE routines (id INTEGER PRIMARY KEY AUTOINCREMENT, member_id INTEGER NOT NULL,
-  title TEXT NOT NULL, prompt TEXT NOT NULL, schedule TEXT NOT NULL,
-  enabled INTEGER NOT NULL DEFAULT 1, last_run_ms INTEGER, next_run_ms INTEGER,
-  created_at_ms INTEGER NOT NULL);
-CREATE INDEX routines_member ON routines(member_id);
-CREATE TABLE member_unread (member_id INTEGER PRIMARY KEY);
-PRAGMA user_version = 15;
-COMMIT;
-"""
+#
+# The members and the safety rules (v16) were built side by side, and each first took the number 15.
+# A database can therefore be at 15 with either of them, so neither migration assumes what the other
+# made: each part is applied only where it is missing (`_add_members`, `_add_safety`), v15 applies
+# the members, and v16 applies both, which for a database that went through this v15 adds only the
+# safety rules, and for one that took the other v15 adds only the members.
+_MEMBERS_TABLES = (
+    "CREATE TABLE IF NOT EXISTS member_groups (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    " name TEXT NOT NULL, position INTEGER NOT NULL, sources TEXT NOT NULL DEFAULT '[]')",
+    "CREATE TABLE IF NOT EXISTS members (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    " name TEXT NOT NULL UNIQUE COLLATE NOCASE, role TEXT NOT NULL DEFAULT '',"
+    " instructions TEXT NOT NULL DEFAULT '', avatar TEXT NOT NULL DEFAULT '', group_id INTEGER,"
+    " model TEXT NOT NULL DEFAULT '', position INTEGER NOT NULL, created_at_ms INTEGER NOT NULL,"
+    " tools TEXT)",
+    "CREATE TABLE IF NOT EXISTS routines (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    " member_id INTEGER NOT NULL, title TEXT NOT NULL, prompt TEXT NOT NULL,"
+    " schedule TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, last_run_ms INTEGER,"
+    " next_run_ms INTEGER, created_at_ms INTEGER NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS routines_member ON routines(member_id)",
+    "CREATE TABLE IF NOT EXISTS member_unread (member_id INTEGER PRIMARY KEY)",
+)
+
+# v16: the owner's safety rules, and the questions the background waits on.
+#
+# - `safety_rules` is one row for each rule (`agent.safety`): the owner's own words for an action
+#   (one line, at most 80 characters), what Raphael does when an action falls under it (`ask`,
+#   `allow` or `deny`) and its place in the list. `safety_state` says, by the key "seeded", that the
+#   three rules of the first run were put there once (they are not put back when deleted).
+# - `worker_questions` is one row for each question a background task asked the owner
+#   (`background.service`): the task, the member whose thread it shows in (0 is Raphael), its
+#   prefix and its line as the card says it, the tier it was asked at, when it was asked and when it
+#   runs out (24 hours later), the task's time that was left when it paused, and how it ended
+#   (`waiting`, `approved`, `denied`, `expired`, `cancelled`). The line names the service and the
+#   tool and shows the start of what it is given, as a question of the fast tier does in the
+#   history; never the whole of it. The questions go with their tasks.
+_SAFETY_TABLES = (
+    "CREATE TABLE IF NOT EXISTS safety_rules (id INTEGER PRIMARY KEY, action TEXT NOT NULL,"
+    " verdict TEXT NOT NULL, position INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS safety_state (key TEXT PRIMARY KEY, value INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS worker_questions (id TEXT PRIMARY KEY, task_id INTEGER NOT NULL,"
+    " member_id INTEGER NOT NULL DEFAULT 0, prefix TEXT NOT NULL, text TEXT NOT NULL, tier TEXT,"
+    " created_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, remaining_s REAL NOT NULL,"
+    " state TEXT NOT NULL DEFAULT 'waiting', answered_at_ms INTEGER)",
+    "CREATE INDEX IF NOT EXISTS worker_questions_task ON worker_questions(task_id)",
+)
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """Whether `table` has a column named `column`."""
+    return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
+
+
+def _has_table(conn: sqlite3.Connection, table: str) -> bool:
+    """Whether a table named `table` exists."""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    return row is not None
+
+
+def _add_members(conn: sqlite3.Connection) -> None:
+    """Add the members' part of the schema (see v15) where it is missing; safe to run twice.
+
+    Runs inside the caller's transaction. `agent_summary`'s one row becomes Raphael's row of
+    `conversation_summaries` only while `agent_summary` is still there, so a second run moves
+    nothing."""
+    for table, column, decl in (
+        ("agent_turns", "member_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("agent_turns", "peer_id", "INTEGER"),
+        ("worker_tasks", "member_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("worker_tasks", "routine_id", "INTEGER"),
+    ):
+        if not _has_column(conn, table, column):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    conn.execute("CREATE INDEX IF NOT EXISTS agent_turns_member ON agent_turns(member_id, id)")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS conversation_summaries (member_id INTEGER PRIMARY KEY,"
+        " text TEXT NOT NULL, through_turn_id INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)"
+    )
+    if _has_table(conn, "agent_summary"):
+        conn.execute(
+            "INSERT OR IGNORE INTO conversation_summaries"
+            " (member_id, text, through_turn_id, updated_at_ms)"
+            " SELECT 0, text, through_turn_id, updated_at_ms FROM agent_summary"
+        )
+        conn.execute("DROP TABLE agent_summary")
+    for statement in _MEMBERS_TABLES:
+        conn.execute(statement)
+
+
+def _add_safety(conn: sqlite3.Connection) -> None:
+    """Add the safety rules' part of the schema (see v16) where it is missing; safe to run twice.
+
+    Runs inside the caller's transaction."""
+    for statement in _SAFETY_TABLES:
+        conn.execute(statement)
+
+
+def _migrate_v15(conn: sqlite3.Connection) -> None:
+    """v15: the members of the owner's team (see the notes above `_MEMBERS_TABLES`).
+
+    Like the others, one transaction with the version."""
+    conn.execute("BEGIN")
+    _add_members(conn)
+    conn.execute("PRAGMA user_version = 15")
+    conn.execute("COMMIT")
+
+
+def _migrate_v16(conn: sqlite3.Connection) -> None:
+    """v16: the owner's safety rules and the background's questions (see `_SAFETY_TABLES`).
+
+    It also applies the members' part where it is missing, for a database that took the safety
+    rules' own v15 before the two were numbered apart. One transaction with the version."""
+    conn.execute("BEGIN")
+    _add_members(conn)
+    _add_safety(conn)
+    conn.execute("PRAGMA user_version = 16")
+    conn.execute("COMMIT")
 
 
 _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
@@ -363,7 +454,8 @@ _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     12: _MIGRATION_V12,
     13: _migrate_v13,
     14: _MIGRATION_V14,
-    15: _MIGRATION_V15,
+    15: _migrate_v15,
+    16: _migrate_v16,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

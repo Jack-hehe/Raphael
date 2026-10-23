@@ -244,8 +244,33 @@ SCHEMA_V15 = {
 }
 # Where SQLite keeps the counters of the tables with AUTOINCREMENT.
 SEQUENCE = {"sqlite_sequence"}
+# Schema v16 adds the owner's safety rules (and whether the first run's were put there), and the
+# questions the background tasks wait on.
+SCHEMA_V16 = {
+    **SCHEMA_V15,
+    "safety_rules": [
+        "id INTEGER PK",
+        "action TEXT NOT NULL",
+        "verdict TEXT NOT NULL",
+        "position INTEGER NOT NULL",
+    ],
+    "safety_state": ["key TEXT PK", "value INTEGER NOT NULL"],
+    "worker_questions": [
+        "id TEXT PK",
+        "task_id INTEGER NOT NULL",
+        "member_id INTEGER NOT NULL DEFAULT 0",
+        "prefix TEXT NOT NULL",
+        "text TEXT NOT NULL",
+        "tier TEXT",
+        "created_at_ms INTEGER NOT NULL",
+        "expires_at_ms INTEGER NOT NULL",
+        "remaining_s REAL NOT NULL",
+        "state TEXT NOT NULL DEFAULT 'waiting'",
+        "answered_at_ms INTEGER",
+    ],
+}
 FTS_SHADOWS = {f"agent_turns_fts_{part}" for part in ("data", "idx", "content", "docsize", "config")}
-LATEST = 15
+LATEST = 16
 
 
 def schema_names(conn, kind):
@@ -269,7 +294,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V15) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V16) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -280,9 +305,10 @@ def test_connect_creates_the_latest_schema(conn):
         "agent_steps_turn",
         "agent_turns_member",
         "routines_member",
+        "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V15.items():
+    for table, columns in SCHEMA_V16.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
@@ -509,7 +535,7 @@ def assert_has_the_latest_schema(migrated, fresh):
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert schema_names(migrated, "table") == schema_names(fresh, "table")
     assert schema_names(migrated, "index") == schema_names(fresh, "index")
-    for table in SCHEMA_V15:
+    for table in SCHEMA_V16:
         assert describe_columns(migrated, table) == describe_columns(fresh, table)
     assert migrated.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
     assert HistoryStore(migrated).latest().text == "A"
@@ -860,7 +886,7 @@ def v14_database(path):
     raw.close()
 
 
-def test_a_v14_database_gets_the_members_at_v15_and_everything_old_is_raphaels(tmp_path, conn):
+def test_a_v14_database_gets_the_members_and_the_rules_and_everything_old_is_raphaels(tmp_path, conn):
     path = tmp_path / "v14.db"
     v14_database(path)
 
@@ -885,9 +911,7 @@ def test_a_v14_database_gets_the_members_at_v15_and_everything_old_is_raphaels(t
 def test_a_failed_v15_migration_leaves_the_database_at_v14(tmp_path, monkeypatch):
     path = tmp_path / "v14.db"
     v14_database(path)
-    monkeypatch.setitem(
-        db._MIGRATIONS, 15, db._MIGRATION_V15.replace("PRAGMA user_version = 15;", "NOT SQL;")
-    )
+    monkeypatch.setattr(db, "_MEMBERS_TABLES", (*db._MEMBERS_TABLES, "NOT SQL"))
     with pytest.raises(sqlite3.Error):
         db.connect(path)
     raw = sqlite3.connect(path)
@@ -895,3 +919,81 @@ def test_a_failed_v15_migration_leaves_the_database_at_v14(tmp_path, monkeypatch
     assert raw.execute("SELECT text FROM agent_summary").fetchone()[0] == "the summary"
     assert "members" not in schema_names(raw, "table")
     raw.close()
+
+
+# What the safety rules' branch made as its own v15, before the members took that number and the
+# rules moved to v16. A database the branch's build opened is at 15 with these tables and none of
+# the members'.
+SAFETY_BRANCH_V15 = """
+BEGIN;
+CREATE TABLE safety_rules (id INTEGER PRIMARY KEY, action TEXT NOT NULL, verdict TEXT NOT NULL,
+  position INTEGER NOT NULL);
+CREATE TABLE safety_state (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+CREATE TABLE worker_questions (id TEXT PRIMARY KEY, task_id INTEGER NOT NULL,
+  member_id INTEGER NOT NULL DEFAULT 0, prefix TEXT NOT NULL, text TEXT NOT NULL, tier TEXT,
+  created_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, remaining_s REAL NOT NULL,
+  state TEXT NOT NULL DEFAULT 'waiting', answered_at_ms INTEGER);
+CREATE INDEX worker_questions_task ON worker_questions(task_id);
+PRAGMA user_version = 15;
+COMMIT;
+"""
+
+
+def assert_same_schema(migrated, fresh):
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
+    assert schema_names(migrated, "table") == schema_names(fresh, "table")
+    assert schema_names(migrated, "index") == schema_names(fresh, "index")
+    for table in SCHEMA_V16:
+        assert describe_columns(migrated, table) == describe_columns(fresh, table)
+
+
+def test_a_database_at_the_members_v15_gets_only_the_rules(tmp_path, conn):
+    path = tmp_path / "v15.db"
+    v14_database(path)
+    raw = sqlite3.connect(path)
+    db._migrate_v15(raw)
+    raw.execute("INSERT INTO members (name, position, created_at_ms) VALUES ('Ann', 0, 1)")
+    raw.commit()
+    raw.close()
+
+    migrated = db.connect(path)
+    assert_same_schema(migrated, conn)
+    assert migrated.execute("SELECT name FROM members").fetchone()[0] == "Ann"
+    assert migrated.execute("SELECT text FROM conversation_summaries").fetchone()[0] == "the summary"
+    migrated.close()
+
+
+def test_a_database_at_the_safety_branchs_v15_gets_the_members_and_keeps_its_rules(tmp_path, conn):
+    path = tmp_path / "v15-safety.db"
+    v14_database(path)
+    raw = sqlite3.connect(path)
+    raw.executescript(SAFETY_BRANCH_V15)
+    raw.execute("INSERT INTO safety_rules (action, verdict, position) VALUES ('pay', 'ask', 0)")
+    raw.execute(
+        "INSERT INTO worker_questions (id, task_id, member_id, prefix, text, created_at_ms,"
+        " expires_at_ms, remaining_s) VALUES ('q1', 1, 0, '問', 'line', 1, 2, 3.0)"
+    )
+    raw.commit()
+    raw.close()
+
+    migrated = db.connect(path)
+    assert_same_schema(migrated, conn)
+    assert migrated.execute("SELECT action FROM safety_rules").fetchone()[0] == "pay"
+    assert migrated.execute("SELECT state FROM worker_questions").fetchone()[0] == "waiting"
+    assert tuple(migrated.execute("SELECT * FROM conversation_summaries").fetchone()) == (
+        0,
+        "the summary",
+        1,
+        9,
+    )
+    assert tuple(migrated.execute("SELECT member_id, peer_id FROM agent_turns").fetchone()) == (0, None)
+    migrated.close()
+
+
+def test_the_v15_and_v16_migrations_can_run_again_on_a_current_database(conn):
+    db._migrate_v15(conn)
+    db._migrate_v16(conn)
+    db._migrate_v16(conn)
+    fresh = db.connect(":memory:")
+    assert_same_schema(conn, fresh)
+    fresh.close()

@@ -63,6 +63,7 @@ const REASONS: Record<string, MessageKey> = {
   handoff: "agent.reason.handoff",
   refused_app: "agent.reason.refused_app",
   interrupted: "agent.reason.interrupted",
+  forbidden: "agent.reason.forbidden",
   bad_arguments: "agent.reason.bad_arguments",
   auth: "agent.reason.auth",
   missing_secret: "agent.reason.missing_secret",
@@ -307,8 +308,9 @@ export function summaryText(turn: AgentTurn, nowMs: number): { lead: string; tim
   const done = actionsText(steps.length);
   let lead = done;
   if (isLive(task)) lead = task!.state === "queued" ? t("agent.queued") : t("agent.working");
+  else if (task?.state === "waiting") lead = t("agent.taskWaiting"); // its question is the gold card
   else if (task && TASK_ENDS[task.state]) lead = `${plain(TASK_ENDS[task.state])} · ${done}`;
-  const ms = workMs(turn, nowMs);
+  const ms = task?.state === "waiting" ? 0 : workMs(turn, nowMs); // the time it waits is not its own
   return { lead, time: ms > 0 || isLive(task) ? formatDuration(ms) : "", failed };
 }
 
@@ -352,8 +354,11 @@ function taskCardHTML(turn: AgentTurn, state: TimelineState): string {
   const bad = failed ? t("agent.stepsFailed", { p0: failed }) : "";
   const words = [lead, time, bad].filter(Boolean).join(" · ");
   const ended = state.ended.has(task.id);
+  // A task that waits for the owner's yes is not under way, but not over either: it can be stopped.
+  const waiting = task.state === "waiting";
   const mark = live
     ? task.state === "queued" ? ico("clock") : SPINNER
+    : waiting ? ico("clock")
     : task.state === "done" ? `<span class="task-check${ended ? " is-pop" : ""}">${ico("check")}</span>` : ico("stop");
   const since = live && task.started_at_ms ? ` data-since="${task.started_at_ms}"` : "";
   const summary = btn(
@@ -364,8 +369,8 @@ function taskCardHTML(turn: AgentTurn, state: TimelineState): string {
     "task-sum",
     ` data-act="steps" aria-expanded="${open}" aria-controls="steps-${esc(turn.id)}" aria-label="${esc(words)}"`,
   );
-  const stopping = live && state.stopping.has(task.id);
-  const stop = live
+  const stopping = (live || waiting) && state.stopping.has(task.id);
+  const stop = live || waiting
     ? `<button type="button" class="btn sm stop" data-act="stop" data-task="${esc(task.id)}"${stopping ? " disabled" : ""}>${esc(stopping ? t("agent.stopping") : t("agent.stop"))}</button>`
     : "";
   const again = RERUNNABLE.has(task.state)

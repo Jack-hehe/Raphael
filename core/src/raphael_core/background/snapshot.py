@@ -5,8 +5,9 @@ tool an alias is stays here in the core. The snapshot holds:
 
 - the tools of the plugins the user connected that are on (`PluginHub.offered`), whether they read or
   change something there: the user turned off what a task must not use, and a tool that is on runs
-  without asking, for a task as for the assistant. (A tool that needed a yes would be left out: the
-  worker cannot ask at the overlay yet. None does, today.)
+  without asking, for a task as for the assistant, unless one of the owner's safety rules asks
+  first. A tool at T2 is offered too: its call pauses the task and asks the owner in the app (the
+  waiting question, `service`), and goes on only after a yes there. A tool at T3 is left out.
 - Raphael's own lookups on the web: the weather, a web search (by the search service the owner
   chose), the time, and the reading of a page (`web_read`, by the reader chosen). A page is read
   only at an address the task has seen: in its request, or in what one of its tools returned
@@ -55,9 +56,9 @@ from ..agent.toolpick import (
     widen,
 )
 
-# The most a task is offered at the highest tier of its snapshot: the tier that runs at once. A tool
-# above it would have to ask, which the worker cannot.
-SNAPSHOT_MAX_TIER = Tier.T1
+# The highest tier a task is offered: T2, whose calls ask the owner through the waiting question
+# (and so only after a yes in the app). A tool that cannot be undone at all (T3) is never offered.
+SNAPSHOT_MAX_TIER = Tier.T2
 
 BUILTIN = "builtin"
 MCP = "mcp"

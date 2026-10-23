@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { emptyConnectionsView } from "../connections";
 import { emptyMessagingView } from "../messaging";
 import { emptyMemoryView } from "../memory-view";
+import { emptyRulesView } from "../safety-rules";
 import { emptyServicesView } from "../services";
 import { setLocale, t } from "../i18n";
 import type { LanguageGroup } from "../languages";
@@ -107,6 +108,18 @@ test("the memory is in the 拉斐爾 tab, after its settings, and only there", (
   expect(agent.indexOf("data-mem-section")).toBeGreaterThan(agent.indexOf('data-k="worker-cap"'));
   expect(agent.indexOf("data-mem-section")).toBeGreaterThan(agent.indexOf("data-avatar"));
   for (const id of ["general", "dictation", "connections", "messaging", "usage", "data", "about"] as const) expect(tab(id, { memory })).not.toContain("data-mem");
+});
+
+test("the safety rules are in the 拉斐爾 tab, after the memory and before 電腦操作, with no switch", () => {
+  const memory = { ...emptyMemoryView(), status: { memories: [], summary: null } };
+  const rules = { ...emptyRulesView(), status: [{ id: 1, action: "付款結帳", verdict: "ask" as const, position: 1 }] };
+  const agent = tab("agent", { memory, rules });
+  expect(agent).toContain("<h2>安全規則</h2>");
+  expect(agent.indexOf("data-rules-section")).toBeGreaterThan(agent.indexOf("data-mem-section"));
+  const computer = agent.indexOf("<h2>電腦操作</h2>");
+  expect(agent.indexOf("data-rules-section")).toBeLessThan(computer);
+  expect(agent.slice(agent.indexOf("data-rules-section"), computer)).not.toContain('role="switch"');
+  for (const id of ["general", "dictation", "connections", "messaging", "usage", "data", "about"] as const) expect(tab(id, { rules })).not.toContain("data-rules");
 });
 
 test("服務 is in the 拉斐爾 tab, after its settings and before the memory, with the 看圖片 picker", () => {
@@ -616,7 +629,7 @@ describe("搜尋設定", () => {
         if (!entry.label) continue;
         const name = (t as unknown as (key: string) => string)(entry.label).replace("&", "&amp;");
         // a row's name, or the name of a section (電腦操作 is found as a whole)
-        const html = tab(entry.pane, { memory: emptyMemoryView(), services: emptyServicesView() });
+        const html = tab(entry.pane, { memory: emptyMemoryView(), rules: emptyRulesView(), services: emptyServicesView() });
         const headings = [...html.matchAll(/<h2>(.*?)<\/h2>/g)].map((m) => m[1]);
         expect([...names(html), ...headings], `${locale} ${entry.label}`).toContain(name);
       }

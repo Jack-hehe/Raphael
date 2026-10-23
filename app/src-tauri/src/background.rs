@@ -10,6 +10,11 @@
 //!   a queue, and is said once everything is quiet again ([`ReportStage::try_say`] is the
 //!   controller's answer to that). It is not said over a recording or over a question. The reports are
 //!   said one at a time, each for as long as an answer is, in the order they came.
+//! - **A task that waits for the owner's yes is told once on the overlay**: the core sends
+//!   `background.question {task_id, question_id, member_id, state: "waiting", notice: {prefix,
+//!   text}}` when its question opens, and the notice (《告。<name> 等你處理。》) is said like a report,
+//!   with no buttons: the question is answered in the app only. It is not said while the 拉斐爾
+//!   page is in front ([`ReportStage::try_notice`]), which shows the question itself.
 //! - **The tray offers 「中止背景任務」 while a task runs** ([`tray::set_background_running`]).
 //! - **The main window's conversation view reads the conversation again** at each move
 //!   (`MainEvent::WorkerChanged`, in commands.rs), and shows each task, with its steps, under the
@@ -36,6 +41,8 @@ use crate::tray;
 pub const WORKER_REPORT: &str = "worker.report";
 /// The core's note that a task moved on; `running` is whether one is under way.
 pub const WORKER_CHANGED: &str = "worker.changed";
+/// The core's note that a question of a background task opened (or ended).
+pub const BACKGROUND_QUESTION: &str = "background.question";
 
 /// How often a report that cannot be said yet looks again.
 const RETRY: Duration = Duration::from_millis(500);
@@ -45,11 +52,13 @@ const GAP: Duration = Duration::from_millis(700);
 /// conversation of the main window anyway).
 pub const MAX_WAITING: usize = 8;
 
-/// Raphael's report of a task: `《prefix。text》`.
+/// Raphael's report of a task: `《prefix。text》`. A `notice` is the line of a question of the
+/// background, said only when the app does not show the question itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
     pub prefix: String,
     pub text: String,
+    pub notice: bool,
 }
 
 /// What a notification of the core means for the shell.
@@ -69,6 +78,23 @@ pub fn parse_report(params: &Value) -> Option<Report> {
     (!prefix.is_empty()).then(|| Report {
         prefix: prefix.to_owned(),
         text: text.to_owned(),
+        notice: false,
+    })
+}
+
+/// The overlay's notice in `background.question`'s params: only when the question opens
+/// (`state` "waiting"), and only with a prefix to say it with.
+pub fn parse_notice(params: &Value) -> Option<Report> {
+    if params.get("state")?.as_str()? != "waiting" {
+        return None;
+    }
+    let notice = params.get("notice")?;
+    let prefix = notice.get("prefix")?.as_str()?.trim();
+    let text = notice.get("text")?.as_str()?;
+    (!prefix.is_empty() && !text.trim().is_empty()).then(|| Report {
+        prefix: prefix.to_owned(),
+        text: text.to_owned(),
+        notice: true,
     })
 }
 
@@ -82,6 +108,9 @@ pub fn parse_running(params: &Value) -> Option<bool> {
 pub fn effect_of(notification: &Notification) -> Effect {
     match notification.method.as_str() {
         WORKER_REPORT => parse_report(&notification.params).map_or(Effect::Nothing, Effect::Say),
+        BACKGROUND_QUESTION => {
+            parse_notice(&notification.params).map_or(Effect::Nothing, Effect::Say)
+        }
         WORKER_CHANGED => {
             parse_running(&notification.params).map_or(Effect::Nothing, Effect::Running)
         }
@@ -95,6 +124,12 @@ pub trait ReportStage {
     /// Say the report now if nothing is going on, and return how long it stays on screen; None
     /// if it cannot be said now (the person is dictating or asking, or an answer is on screen).
     fn try_say(&self, prefix: &str, text: &str) -> Option<Duration>;
+
+    /// The same for the notice of a question of the background, which is dropped (`Some` of no
+    /// time) while the app shows the question itself. By default it is said like a report.
+    fn try_notice(&self, prefix: &str, text: &str) -> Option<Duration> {
+        self.try_say(prefix, text)
+    }
 }
 
 /// The reports that wait to be said, and the task that says them.
@@ -151,7 +186,12 @@ async fn drain<S: ReportStage>(
             }
             continue;
         };
-        match stage.try_say(&report.prefix, &report.text) {
+        let said = if report.notice {
+            stage.try_notice(&report.prefix, &report.text)
+        } else {
+            stage.try_say(&report.prefix, &report.text)
+        };
+        match said {
             Some(stays) => tokio::time::sleep(stays + GAP).await,
             None => {
                 held = Some(report);
@@ -238,6 +278,14 @@ mod tests {
         Report {
             prefix: prefix.to_owned(),
             text: text.to_owned(),
+            notice: false,
+        }
+    }
+
+    fn notice(prefix: &str, text: &str) -> Report {
+        Report {
+            notice: true,
+            ..report(prefix, text)
         }
     }
 
@@ -316,6 +364,29 @@ mod tests {
     }
 
     #[test]
+    fn a_question_of_the_background_is_told_once_when_it_opens() {
+        let opened = json!({"task_id": 3, "question_id": "q", "member_id": 0, "state": "waiting",
+                            "prefix": "問", "text": "是否讓「Notes」執行「note」？",
+                            "notice": {"prefix": "告", "text": "有一件事等你處理。"}});
+        assert_eq!(
+            effect_of(&notification(BACKGROUND_QUESTION, opened)),
+            Effect::Say(notice("告", "有一件事等你處理。"))
+        );
+        for ended in [
+            json!({"task_id": 3, "question_id": "q", "state": "approved"}),
+            json!({"task_id": 3, "question_id": "q", "state": "waiting"}),
+            json!({"state": "waiting", "notice": {"prefix": "", "text": "x"}}),
+            json!({"state": "waiting", "notice": {"prefix": "告", "text": " "}}),
+        ] {
+            assert_eq!(
+                effect_of(&notification(BACKGROUND_QUESTION, ended.clone())),
+                Effect::Nothing,
+                "{ended}"
+            );
+        }
+    }
+
+    #[test]
     fn a_core_that_restarts_or_goes_down_has_no_task_under_way() {
         for method in [CORE_RESTARTED, CORE_DOWN] {
             assert_eq!(
@@ -333,6 +404,7 @@ mod tests {
         busy: AtomicBool,
         said: Mutex<Vec<(String, String)>>,
         asked: AtomicUsize,
+        page_in_front: AtomicBool,
     }
 
     impl FakeStage {
@@ -350,6 +422,31 @@ mod tests {
             lock(&self.said).push((prefix.to_owned(), text.to_owned()));
             Some(Duration::from_secs(3))
         }
+
+        fn try_notice(&self, prefix: &str, text: &str) -> Option<Duration> {
+            if self.page_in_front.load(Ordering::SeqCst) {
+                return Some(Duration::ZERO);
+            }
+            self.try_say(prefix, text)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_notice_is_said_like_a_report_unless_the_app_shows_the_question() {
+        let stage = Arc::new(FakeStage::default());
+        let reports = Reports::default();
+        reports.push(notice("告", "有一件事等你處理。"), &stage);
+        let_time_pass(1).await;
+        assert_eq!(
+            stage.said(),
+            [("告".to_owned(), "有一件事等你處理。".to_owned())]
+        );
+        stage.page_in_front.store(true, Ordering::SeqCst);
+        reports.push(notice("告", "進度官 等你處理。"), &stage);
+        reports.push(report("告", "完成。"), &stage);
+        let_time_pass(10).await;
+        let said: Vec<_> = stage.said().into_iter().map(|(_, text)| text).collect();
+        assert_eq!(said, ["有一件事等你處理。", "完成。"]);
     }
 
     async fn let_time_pass(seconds: u64) {

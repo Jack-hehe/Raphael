@@ -29,7 +29,8 @@ from dataclasses import dataclass
 # no_key: the model could not be paid for. On the owner's desktop (`raphael_core.computer`):
 # password: a password field, which only the owner fills; handoff: a step that is the owner's (a
 # sign-in, a payment, an administrator's prompt); refused_app: an app Raphael never operates;
-# interrupted: the owner's own mouse or keys stopped the run. error: anything else.
+# interrupted: the owner's own mouse or keys stopped the run. forbidden: a safety rule of the
+# owner's (`agent.safety`) forbids it, so it was not done. error: anything else.
 REASONS = frozenset(
     {
         "bad_arguments",
@@ -52,6 +53,7 @@ REASONS = frozenset(
         "handoff",
         "refused_app",
         "interrupted",
+        "forbidden",
         "error",
     }
 )

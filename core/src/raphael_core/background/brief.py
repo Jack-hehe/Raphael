@@ -38,7 +38,7 @@ class ToolUse:
 class TaskBrief:
     id: int
     text: str  # what the user asked
-    state: str  # queued, running, done, failed, limit, cancelled or interrupted
+    state: str  # queued, running, waiting (for a yes), done, failed, limit, cancelled, interrupted
     step: int  # how many steps it has taken (model calls and tool calls)
     tools: tuple[ToolUse, ...]
     report: str | None  # what it ended with, once it has
@@ -64,8 +64,11 @@ def background_line(briefs: list[TaskBrief]) -> str:
     queued = sum(1 for b in briefs if b.state == "queued")
     if queued:
         parts.append(f"{queued} queued")
+    waiting = sum(1 for b in briefs if b.state == "waiting")
+    if waiting:
+        parts.append(f"{waiting} waiting for the owner's answer in the app")
     for brief in briefs:
-        if brief.state in ("queued", "running"):
+        if brief.state in ("queued", "running", "waiting"):
             continue
         ago = f" {brief.ended_min_ago} min ago" if brief.ended_min_ago is not None else ""
         parts.append(f"1 {brief.state}{ago}")

@@ -37,6 +37,12 @@ ui_language, target_app}`. The router (Jev, and the language model when Jev fail
   like a command at that tier, one to a turn, made when the yes comes. Every call of a tool goes
   through the one gate (`gate`), the worker's too. A tool that is off is never offered, and a
   model that takes no tools (`plugins.ToolSupport`) leaves the plugins out of the request;
+- before a call of a plugin's tool that its server does not say only reads, the owner's safety
+  rules are read (`safety`, through the gate's `screen`, one paid call to Jev when there are
+  rules): a rule that forbids it is a 否 reply that names the rule, with nothing done; one that asks
+  makes it a question for a yes or a no (that names the rule) even at T1; one that allows it
+  changes nothing that is built in (a T2 tool still asks). A judge that fails counts as one that
+  asks. The commands for this computer are not judged (see `safety`);
 - a task done by operating an app on the screen (`operate`) is a run on the owner's desktop
   (`raphael_core.computer`), and only for a request made at this computer, spoken or typed: the
   model looks at the app's window and acts one step at a time through the shell, asking the owner
@@ -172,6 +178,7 @@ from .policy import (
 )
 from .routing import OpenAnswer, RouteDecision, Router
 from .speaker import RAPHAEL, RAPHAEL_NAMES, Speaker
+from .safety import DENY, PASS, Proposed, Screening, asked_with, forbidden, needs_yes, summarize
 from .steps import Step, reason_of
 from .targets import OpenTargets
 from .team import (
@@ -1316,11 +1323,24 @@ class AgentService:
         """Make the picked calls that need no yes, together, and add their results to `results`.
         If a call needs a yes the answer waits for it: that is the question to return instead, for
         the first such call; any others are not made (one question to a turn)."""
+        # The owner's safety rules judge every call that changes something, together, before any is
+        # made: one that a rule forbids ends the turn with Raphael saying so, and no call is made.
+        screenings = await asyncio.gather(*(self._screen_call(ask, c, ledger) for c in calls))
+        for call, screening in zip(calls, screenings):
+            if screening.verdict == DENY:
+                ask.steps.append(
+                    self._step("tool", call.tool.name, call.tool.server, "blocked", time.perf_counter(), "forbidden")
+                )
+                text = forbidden(ask.language, screening)
+                return self._finish(ask, "answer", "negative", text, ledger)
         automatic: list[PlannedCall] = []
-        asking: list[PlannedCall] = []
-        for call in calls:
+        asking: list[tuple[PlannedCall, Screening]] = []
+        for call, screening in zip(calls, screenings):
             tier = self._tier_now(call)
-            (asking if tier is not None and tier >= Tier.T2 else automatic).append(call)
+            if tier is not None and needs_yes(tier >= Tier.T2, screening):
+                asking.append((call, screening))
+            else:
+                automatic.append(call)
         made = await asyncio.gather(
             *(
                 self._team_call(ask, c, ledger)
@@ -1335,16 +1355,25 @@ class AgentService:
         if ask.nested:
             # Nobody waits at the overlay for a request one member handed another: each call that
             # needs a yes asks from the background, and is not made without one.
-            for call in asking:
+            for call, _ in asking:
                 results.append(await self._asked_in_background(ask, call))
             return results
-        first, *rest = asking
-        results += [_unmade(call) for call in rest]
-        for call in rest:
+        (first, why), *rest = asking
+        results += [_unmade(call) for call, _ in rest]
+        for call, _ in rest:
             ask.steps.append(
                 self._step("tool", call.tool.name, call.tool.server, "blocked", time.perf_counter(), "not_made")
             )
-        return self._ask_plugin(ask, first, results, ledger)
+        return self._ask_plugin(ask, first, results, ledger, why)
+
+    async def _screen_call(self, ask: _Ask, call: PlannedCall, ledger: Ledger) -> Screening:
+        """What the owner's safety rules say of a call of a plugin's tool: PASS for a tool its
+        server says only reads, which is never judged."""
+        tool = call.tool
+        if self._gate.reads_only(tool.server, tool.name):
+            return PASS
+        proposed = Proposed(f"{tool.server} / {tool.name}", tool.description, summarize(call.arguments))
+        return await self._gate.screen(proposed, language=ask.language, ledger=ledger)
 
     async def _plugin_call(
         self,
@@ -1371,18 +1400,28 @@ class AgentService:
         return _tool_result(call, outcome)
 
     def _ask_plugin(
-        self, ask: _Ask, call: PlannedCall, results: list[ToolResult], ledger: Ledger
+        self,
+        ask: _Ask,
+        call: PlannedCall,
+        results: list[ToolResult],
+        ledger: Ledger,
+        screening: Screening = PASS,
     ) -> dict:
         """The question for a yes before the call is made: which service, which tool, and the
-        start of what it is given. The call itself waits in `_followups`."""
+        start of what it is given, after the rule that has it asked, if one does. The call itself
+        waits in `_followups`."""
         language = ask.language
         shown = preview(call.arguments)
-        text = phrase(
+        text = asked_with(
             language,
-            "confirm_plugin",
-            server=call.tool.server,
-            tool=call.tool.name,
-            what=parenthesized(language, shown),
+            screening,
+            phrase(
+                language,
+                "confirm_plugin",
+                server=call.tool.server,
+                tool=call.tool.name,
+                what=parenthesized(language, shown),
+            ),
         )
         action = Action(call.tool.key, dict(call.arguments))
         reply = self._open_question(ask, action, "answer", text, ledger)
@@ -1687,6 +1726,8 @@ class AgentService:
                 )
             args, question = {"text": copy[0]}, copy[1]
         action = Action(command.name, args)
+        # Not judged by the owner's safety rules (`safety`): a command is T1, local and easily
+        # undone, and must stay instant and work with no key.
         if self._gate.needs_confirmation(command.name):
             return self._ask_to_confirm(ask, action, question, ledger)
         began = time.perf_counter()

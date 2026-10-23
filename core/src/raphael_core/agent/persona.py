@@ -141,6 +141,15 @@ class Phrases:
     member_desktop: str  # a member was asked to operate the computer: only Raphael does that
     member_created: str  # Raphael added a member at the owner's request: {member}
     desktop_asked: str  # another assistant asked Raphael for something on the desktop
+    # The owner's safety rules (`agent.safety`). `{rule}` is the rule in the owner's own words.
+    rule_forbids: str  # a rule of `deny` forbids the action, which was not done
+    rule_matched: str  # put before a question: the action falls under a rule of `ask`
+    rule_unchecked: str  # put before a question: the rules could not be checked, so Raphael asks
+    # A background task waits for the owner's yes (`background.service`): the overlay's notice,
+    # once, when the app is not in front. `{member}` is the member whose thread holds the question.
+    worker_waiting: str
+    worker_waiting_self: str  # ... the question is Raphael's own
+    worker_expired: str  # nobody answered in 24 hours: the task ended without that action
 
 
 # Each phrase states the fact and, for a refusal, the reason or the one thing to do next, in the
@@ -206,6 +215,12 @@ PHRASES: dict[str, Phrases] = {
         member_desktop="只有拉斐爾能操作這台電腦。",
         member_created="已建立「{member}」。",
         desktop_asked="操作電腦需要直接向拉斐爾下達指示。",
+        rule_forbids="安全規則「{rule}」不准此操作。未執行。",
+        rule_matched="此操作符合安全規則「{rule}」。",
+        rule_unchecked="無法比對安全規則。",
+        worker_waiting="{member} 等你處理。",
+        worker_waiting_self="有一件事等你處理。",
+        worker_expired="一天內未獲回應。任務已結束，該操作未執行。",
     ),
     "en": Phrases(
         unclear="The instruction could not be recognized. Please repeat it.",
@@ -285,6 +300,12 @@ PHRASES: dict[str, Phrases] = {
         member_desktop="Only Raphael can operate this computer.",
         member_created="Created {member}.",
         desktop_asked="Operating the computer needs a request made to Raphael directly.",
+        rule_forbids="The safety rule 「{rule}」 forbids this. Nothing was executed.",
+        rule_matched="This falls under the safety rule 「{rule}」.",
+        rule_unchecked="The safety rules could not be checked.",
+        worker_waiting="{member} is waiting for you.",
+        worker_waiting_self="Something is waiting for you.",
+        worker_expired="No answer came within a day. The task ended without that action.",
     ),
     "ja": Phrases(
         unclear="指示を認識できませんでした。もう一度お願いします。",
@@ -344,6 +365,12 @@ PHRASES: dict[str, Phrases] = {
         member_desktop="このコンピューターを操作できるのはラファエルだけです。",
         member_created="「{member}」を作成しました。",
         desktop_asked="コンピューターの操作は、ラファエルに直接ご指示ください。",
+        rule_forbids="安全ルール「{rule}」で禁止されています。未実行です。",
+        rule_matched="この操作は安全ルール「{rule}」に該当します。",
+        rule_unchecked="安全ルールを照合できませんでした。",
+        worker_waiting="{member}があなたの対応を待っています。",
+        worker_waiting_self="あなたの対応を待っている件があります。",
+        worker_expired="一日以内に応答がなかったため、その操作をせずにタスクを終えました。",
     ),
 }
 
