@@ -1,14 +1,23 @@
-"""The tools that fetch what the assistant answers with: the weather, a web search, the time.
+"""The tools that fetch what the assistant answers with: the weather, a web search, the time, a page
+read, and a file the owner handed over read.
 
-All three only read (T0). A tool never raises for a failure of the world: it returns a ToolResult
+All of them only read (T0). A tool never raises for a failure of the world: it returns a ToolResult
 whose `error` says which way it failed (a kind, never a message, which could hold anything), and the
 answer then says plainly that the data is missing.
 
 - The weather comes from Open-Meteo, which needs no key: the city (the `agent_city` setting) is
   looked up for its coordinates (`cities` knows how), then the forecast for them. It costs nothing.
-- A web search is a chat call to OpenRouter with the `web` plugin on, which puts a few search
-  results in front of the model. The call is paid and written to the spend by the ledger.
+- A web search is the `web_search_service` setting's (`raphael_core.services`). "openrouter", the
+  default, is a chat call to OpenRouter with the `web` plugin on, which puts a few search results
+  in front of the model; the call is paid and written to the spend by the ledger. Another service
+  (Brave, Tavily, Exa, SearXNG) returns the results themselves, which the answer model words.
+- A page is read by the `web_read_service` setting's reader (`web_read`), and a file the owner
+  handed over (an image, a PDF) by the vision model or the PDF service (`read_attachment`, `look`).
 - The time is the computer's.
+
+What a service returns (search results, a page, what the vision model saw in a file) is untrusted:
+its result is marked so, and the answer model is told never to follow what it says. A result also
+says which service it came from (`detail`), which its step keeps.
 
 Nothing here logs a city, a question or an answer.
 """
@@ -18,13 +27,18 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from ..brain.openrouter import OpenRouterClient, OpenRouterError
+from ..services.attachments import Attachment
+from ..services.common import ServiceError
 from .cities import city_key, geocoding_queries
 from .ledger import Ledger
+
+if TYPE_CHECKING:
+    from ..services.hub import ServiceHub
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +64,10 @@ _HTTP_STAGE_TIMEOUT_S = 5.0
 SEARCH_TIMEOUT_S = 12.0
 SEARCH_MAX_TOKENS = 500
 SEARCH_PLUGINS = [{"id": "web", "max_results": 3}]
+# Reading a page: the built-in reader has ten seconds of its own, a service that reads it longer.
+READ_TIMEOUT_S = 30.0
+# Reading a file the owner handed over: the vision model, or the PDF service.
+ATTACHMENT_TIMEOUT_S = 70.0
 _SEARCH_SYSTEM = (
     "Answer the user's question with facts from the web results. Reply in plain text of at most "
     "three short sentences, with no markdown, no list and no link. Name the site a fact comes "
@@ -112,8 +130,11 @@ class ToolResult:
     # Why it failed: "not_found", "http_error", "network", "timeout", "bad_response", or the kind of
     # an OpenRouterError ("auth", "credits", "server", ...). Never a message.
     error: str | None = None
-    # What a program the user connected returned: nobody vetted it, and the model is told so.
+    # What a program the user connected, or a service of the web, returned: nobody vetted it, and
+    # the model is told so.
     untrusted: bool = False
+    # The service it came from, for its step (agent.steps.Step.detail), or None.
+    detail: str | None = None
 
 
 def _number(value: Any) -> float | int | None:
@@ -132,7 +153,9 @@ def _compact(entries: dict[str, Any]) -> dict[str, Any]:
 class Tools:
     """The tools. `client` is the OpenRouter client (for the search). `http` is the httpx client
     for Open-Meteo, which the caller then owns; without one the tools make their own on first use
-    and `aclose` closes it. `now` is the clock, a local time with its offset."""
+    and `aclose` closes it. `now` is the clock, a local time with its offset. `services` is the hub
+    of the services the owner chose (`services.hub.ServiceHub`); without one the search is
+    OpenRouter's, and no page or file can be read."""
 
     def __init__(
         self,
@@ -140,8 +163,10 @@ class Tools:
         *,
         http: httpx.AsyncClient | None = None,
         now: Callable[[], datetime] | None = None,
+        services: "ServiceHub | None" = None,
     ) -> None:
         self._client = client
+        self.services = services
         self._http = http
         self._own_http: httpx.AsyncClient | None = None
         self._now = now or (lambda: datetime.now().astimezone())
@@ -181,9 +206,9 @@ class Tools:
         return ToolResult("weather", True, data)
 
     @staticmethod
-    def _failed(name: str, kind: str) -> ToolResult:
+    def _failed(name: str, kind: str, detail: str | None = None) -> ToolResult:
         logger.warning("The %s tool failed: %s", name, kind)
-        return ToolResult(name, False, None, kind)
+        return ToolResult(name, False, None, kind, detail=detail)
 
     async def _get_json(self, url: str, params: dict[str, Any]) -> Any:
         response = await self._http_client().get(url, params=params, timeout=_HTTP_STAGE_TIMEOUT_S)
@@ -252,8 +277,13 @@ class Tools:
     # --- the web --------------------------------------------------------------------------------
 
     async def web_search(self, question: str, model: str, ledger: Ledger) -> ToolResult:
-        """What `model` finds on the web for `question`, in a few sentences, with the pages it
-        drew on. The call is written to the spend through `ledger`."""
+        """What the search service chosen finds on the web for `question`: with "openrouter",
+        what `model` finds, in a few sentences, with the pages it drew on (the call is written to
+        the spend through `ledger`); with another service, its results themselves (`services.web`),
+        which are untrusted."""
+        service = "openrouter" if self.services is None else self.services.search_service()
+        if service != "openrouter":
+            return await self._search_with(service, question)
         try:
             found = await asyncio.wait_for(
                 self._client.chat_text(
@@ -268,16 +298,86 @@ class Tools:
                 SEARCH_TIMEOUT_S,
             )
         except TimeoutError:
-            return self._failed("web_search", "timeout")
+            return self._failed("web_search", "timeout", "openrouter")
         except OpenRouterError as error:
-            return self._failed("web_search", error.kind)
+            return self._failed("web_search", error.kind, "openrouter")
         ledger.add(
             model=found.model,
             cost_usd=found.cost_usd,
             prompt_tokens=found.prompt_tokens,
             completion_tokens=found.completion_tokens,
         )
-        return ToolResult("web_search", True, {"answer": found.text, "sources": found.sources})
+        data = {"answer": found.text, "sources": found.sources}
+        return ToolResult("web_search", True, data, detail="openrouter")
+
+    async def _search_with(self, service: str, question: str) -> ToolResult:
+        assert self.services is not None
+        try:
+            service, found = await asyncio.wait_for(self.services.search(question), SEARCH_TIMEOUT_S)
+        except TimeoutError:
+            return self._failed("web_search", "timeout", service)
+        except ServiceError as error:
+            return self._failed("web_search", error.kind, service)
+        return ToolResult("web_search", True, found, untrusted=True, detail=service)
+
+    async def web_read(self, url: str) -> ToolResult:
+        """The page at `url` (`{url, title, text, truncated}`), read by the reader chosen. What it
+        says is untrusted. "unavailable" without the services."""
+        if self.services is None:
+            return self._failed("web_read", "unavailable")
+        service = self.services.read_service()
+        try:
+            service, page = await asyncio.wait_for(self.services.read(url), READ_TIMEOUT_S)
+        except TimeoutError:
+            return self._failed("web_read", "timeout", service)
+        except ServiceError as error:
+            return self._failed("web_read", error.kind, service)
+        return ToolResult("web_read", True, {"url": url, **page}, untrusted=True, detail=service)
+
+    async def read_attachment(
+        self, attachment: Attachment, question: str, ledger: Ledger, *, number: int = 1
+    ) -> ToolResult:
+        """What the file `attachment` holds, for `question`: an image as the vision model sees it,
+        a PDF's text by the PDF service chosen. `number` is its place among the request's files,
+        which the model is told. The vision model's call is written to the spend through
+        `ledger`. What it says is untrusted."""
+        kind = "pdf" if attachment.is_pdf else "image"
+        if self.services is None:
+            return self._failed("read_attachment", "unavailable", kind)
+        try:
+            kind, found = await asyncio.wait_for(
+                self.services.read_attachment(attachment, question, ledger), ATTACHMENT_TIMEOUT_S
+            )
+        except TimeoutError:
+            return self._failed("read_attachment", "timeout", kind)
+        except ServiceError as error:
+            return self._failed("read_attachment", error.kind, kind)
+        data = {"file": number, "kind": kind, **found}
+        return ToolResult("read_attachment", True, data, untrusted=True, detail=kind)
+
+    async def look(
+        self,
+        images: list[Attachment],
+        question: str,
+        ledger: Ledger,
+        *,
+        numbers: list[int] | None = None,
+    ) -> ToolResult:
+        """What the vision model sees in `images`, all of them in one call, for `question`.
+        `numbers` are their places among the request's files (1, 2, ... by default)."""
+        if self.services is None:
+            return self._failed("read_attachment", "unavailable", "image")
+        try:
+            seen = await asyncio.wait_for(
+                self.services.look(images, question, ledger), ATTACHMENT_TIMEOUT_S
+            )
+        except TimeoutError:
+            return self._failed("read_attachment", "timeout", "image")
+        except ServiceError as error:
+            return self._failed("read_attachment", error.kind, "image")
+        files = numbers if numbers is not None else list(range(1, len(images) + 1))
+        data = {"files": files, "kind": "image", **seen}
+        return ToolResult("read_attachment", True, data, untrusted=True, detail="image")
 
     # --- the time -------------------------------------------------------------------------------
 

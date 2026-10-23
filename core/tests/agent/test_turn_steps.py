@@ -14,7 +14,7 @@ from .conftest import decision, tool_plan
 from .test_plugins import ARGUMENT, ask_for_note, calls, plugins, route  # noqa: F401 (fixtures)
 from .test_service import make_rig, spoken  # noqa: F401 (make_rig is the fixture the rig uses)
 
-STEP_KEYS = {"kind", "tool", "server", "outcome", "ms", "reason", "at_ms"}
+STEP_KEYS = {"kind", "tool", "server", "outcome", "ms", "reason", "at_ms", "detail"}
 
 
 @pytest.fixture

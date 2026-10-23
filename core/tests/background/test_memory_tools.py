@@ -36,7 +36,9 @@ async def rig(conn, plugins, memory):
 
 def test_a_task_is_offered_the_memory_tools_that_read_and_none_that_write():
     names = [d["function"]["name"] for d in take_snapshot(None, memory=True).definitions]
-    assert names == ["weather", "web_search", "local_time", "memory_read", "history_search"]
+    assert names == [
+        "weather", "web_search", "local_time", "web_read", "memory_read", "history_search",
+    ]  # fmt: skip
     assert "memory_write" not in names and "memory_delete" not in names
     assert "memory_read" not in [d["function"]["name"] for d in take_snapshot(None).definitions]
     refs = take_snapshot(None, memory=True).refs

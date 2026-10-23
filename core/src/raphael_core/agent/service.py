@@ -65,6 +65,21 @@ gives them in the same shape. `agent.turn {turn_id}` tells the app a turn was wr
 completed. `agent.ask` takes an optional `source`, where the request came from ("voice", the
 default; "app", typed in the conversation page of the app; or a chat app such as "telegram").
 
+The services of the tools (`raphael_core.services`, chosen by the owner) come in three ways. A web
+search uses the search service chosen: "openrouter" as before, or a search engine whose results the
+answer words (its step says which, in `detail`, never what was searched). An http(s) address in the
+owner's own request (typed, spoken, or sent from a chat app) is read with the page reader chosen
+before an answer, a discussion or small talk is worded, at most MAX_REQUEST_URLS of them; an
+address that a tool returned is never read by the fast tier. And `agent.ask` takes `attachments`,
+the images and PDFs the owner handed over (`services.attachments`, `from_wire`; a list that cannot
+be taken fails the request as a bad request, with its kind in the error's data): the images go to
+the vision model together, with the question, and each PDF is read by the PDF service chosen; what
+they hold is data for the call that words the answer. A request of only files (no words) asks
+「看這個」 in the language of the request. The files are kept in memory for the turn, and for the
+task when the request is handed to the background worker: never in the database, on disk or in a
+log. The history keeps their names and types (`attachments: [{name, mime}]` of a turn), for the
+conversation view. A request routed to `operate` or to a command makes nothing of them.
+
 `agent.cancel {session_id}` ends a request that is still being thought about and denies the
 question that session is waiting on, and stops its run on the desktop. A new request replaces any
 question that waits, and any run.
@@ -98,9 +113,11 @@ from ..brain.openrouter import OpenRouterClient
 from ..brain.secrets import KeyStore
 from ..brain.settings import DEFAULTS, SettingsStore
 from ..brain.spend import SpendTracker
-from ..protocol import invalid_params
+from ..protocol import INVALID_PARAMS, RpcError, invalid_params
 from ..router import Router as RpcRouter
 from ..memory.conversation import Conversation, asks_to_remember
+from ..services.attachments import MAX_ATTACHMENTS, Attachment, AttachmentError, from_wire
+from ..services.urls import urls_in
 from .answers import Reply, Voice
 from .cities import cities_in
 from .commands import COMMANDS, AppCatalog, run_command
@@ -144,6 +161,7 @@ from .tools import ToolResult, Tools
 
 if TYPE_CHECKING:
     from ..background.service import BackgroundService
+    from ..services.hub import ServiceHub
     from ..memory.reflection import Applied
     from ..memory.service import MemoryService
 
@@ -171,6 +189,12 @@ _FULL_CONTEXT_ROUTES = ("discuss",)
 # A connection to a plugin's server that nobody uses is closed after this long.
 PLUGIN_IDLE_S = 120.0
 _DAY_MS = 86_400_000
+# The most addresses of the owner's request that are read before the answer.
+MAX_REQUEST_URLS = 2
+# What a request of only files asks, in the language of the request.
+_LOOK_AT_THIS = {"zh-TW": "看這個", "en": "Look at this", "ja": "これを見て"}
+# The routes that word a reply, which read the pages and the files of the request first.
+_READING_ROUTES = ("answer", "discuss", "chat")
 # The routes that give an answer a later "copy that" can copy. Small talk ("不客氣。") is none.
 _ANSWER_ROUTES = ("answer", "discuss")
 # What Raphael says (a phrase of persona.Phrases) after a confirmed action; none says only 了.
@@ -209,6 +233,7 @@ def _step_view(step: Step) -> dict[str, Any]:
         "ms": step.ms,
         "reason": step.reason,
         "at_ms": step.at_ms,
+        "detail": step.detail,
     }
 
 
@@ -281,6 +306,8 @@ class _Ask:
     source: str = VOICE
     # What was done for the request so far; written with its turn.
     steps: list[Step] = field(default_factory=list)
+    # The files handed with the request, in memory only.
+    attachments: list[Attachment] = field(default_factory=list)
 
 
 @dataclass
@@ -318,7 +345,9 @@ class AgentService:
     the app (`agent.turn`). `computer` holds the run on the owner's desktop (the `operate` route);
     without it nothing on the desktop is operated. `memory` is Raphael's memory (`memory.service`),
     which also keeps the conversation's summary; without one there is no memory, and the
-    conversation is read without a summary (its last turns, within the same limits).
+    conversation is read without a summary (its last turns, within the same limits). `services` is
+    the hub of the services the owner chose for the tools (`services.hub`); without it the search is
+    OpenRouter's, and no page or file is read (a file handed over is answered as unreadable).
     """
 
     def __init__(
@@ -341,6 +370,7 @@ class AgentService:
         notify: Callable[[str, dict], None] | None = None,
         computer: ComputerRuns | None = None,
         memory: "MemoryService | None" = None,
+        services: "ServiceHub | None" = None,
     ) -> None:
         self._keys = keys
         self._client = client
@@ -373,7 +403,7 @@ class AgentService:
         self._catalog = AppCatalog(actions, clock=clock)
         self._targets = OpenTargets(conn, now_ms)
         self._warming: set[asyncio.Task[None]] = set()
-        self._tools = Tools(client, http=http, now=now)
+        self._tools = Tools(client, http=http, now=now, services=services)
         self._voice = Voice(client)
         self._decider = decider if decider is not None else Router(client)
         self._inflight: dict[str, asyncio.Task[dict]] = {}
@@ -446,19 +476,52 @@ class AgentService:
     # --- agent.ask ------------------------------------------------------------------------------
 
     async def _ask(self, params: dict) -> dict:
-        ask = _Ask(
-            session_id=_str(params, "session_id"),
-            text=_str(params, "text", blank=True),
-            language=normalize_language(_str(params, "ui_language")),
+        """`agent.ask`: the params checked, then `ask`."""
+        try:
+            attachments = from_wire(params.get("attachments"))
+        except AttachmentError as error:
+            raise RpcError(
+                INVALID_PARAMS, f"Invalid params: attachments ({error.kind})", {"kind": error.kind}
+            ) from None
+        target_app = params.get("target_app")  # for the apps to come; not used yet
+        if target_app is not None and not isinstance(target_app, str):
+            raise invalid_params("target_app must be a string or null")
+        return await self.ask(
+            _str(params, "session_id"),
+            _str(params, "text", blank=True),
+            _str(params, "ui_language"),
+            params.get("source"),
+            attachments=attachments,
         )
-        source = params.get("source")
+
+    async def ask(
+        self,
+        session_id: str,
+        text: str,
+        ui_language: str,
+        source: str | None = None,
+        *,
+        attachments: Sequence[Attachment] = (),
+    ) -> dict:
+        """One request, as `agent.ask` answers it. `attachments` are the files handed with it
+        (`services.attachments.Attachment`, at most MAX_ATTACHMENTS), kept in memory only; with
+        files and no words, the request asks 「看這個」 in its language."""
+        ask = _Ask(
+            session_id=session_id,
+            text=text,
+            language=normalize_language(ui_language),
+            attachments=list(attachments),
+        )
         if source is not None:
             if not isinstance(source, str) or not _SOURCE.fullmatch(source):
                 raise invalid_params("source must be a short lower-case word")
             ask.source = source
-        target_app = params.get("target_app")  # for the apps to come; not used yet
-        if target_app is not None and not isinstance(target_app, str):
-            raise invalid_params("target_app must be a string or null")
+        if len(ask.attachments) > MAX_ATTACHMENTS:
+            raise RpcError(
+                INVALID_PARAMS, "Invalid params: attachments (count)", {"kind": "count"}
+            )
+        if ask.attachments and not ask.text.strip():
+            ask.text = _LOOK_AT_THIS[ask.language]
         self._last_language = ask.language
         if self._was_cancelled(ask.session_id):
             # Esc came first: the request is answered as cancelled and nothing runs or is kept.
@@ -546,6 +609,8 @@ class AgentService:
         ):
             # "記住…" is no task and no command: it is answered where the note is written.
             route = "chat"
+        if route == "unclear" and ask.attachments:
+            route = "chat"  # what is unclear is the words: the files say what it is about
         if route == "command":
             return await self._command(ask, decision, settings, ledger)
         if route == "answer":
@@ -555,7 +620,8 @@ class AgentService:
         if route == "delegate":
             return self._hand_over(ask, settings, ledger)
         if route in ("discuss", "chat"):
-            reply, seen = await self._reply(ask, route, settings, ledger, [])
+            inputs = await self._inputs(ask, ledger)
+            reply, seen = await self._reply(ask, route, settings, ledger, inputs)
             return self._finish_reply(ask, route, reply, seen, ledger)
         return self._finish(ask, "unclear", "negative", phrase(ask.language, "unclear"), ledger)
 
@@ -887,7 +953,11 @@ class AgentService:
             )
         try:
             task_id = background.submit(
-                session_id=ask.session_id, text=ask.text, language=language, model=settings.model
+                session_id=ask.session_id,
+                text=ask.text,
+                language=language,
+                model=settings.model,
+                attachments=ask.attachments,
             )
         except Refused as refused:
             return self._finish(ask, "delegate", "negative", phrase(language, refused.kind), ledger)
@@ -925,8 +995,10 @@ class AgentService:
                 )
             )
         picking = self._pick_tools(ask, settings, ledger, offer)
-        looked_up, picked = await asyncio.gather(asyncio.gather(*jobs), picking)
-        results: list[ToolResult] = list(looked_up)
+        looked_up, inputs, picked = await asyncio.gather(
+            asyncio.gather(*jobs), self._inputs(ask, ledger), picking
+        )
+        results: list[ToolResult] = [*inputs, *looked_up]
         if decision.needs_time:
             results.append(self._tools.local_time())
         if offer is not None:
@@ -953,14 +1025,54 @@ class AgentService:
             logger.warning("The %s tool failed unexpectedly: %s", name, type(exc).__name__)
             result = ToolResult(name, False, None, "error")
         outcome = "ok" if result.ok else ("timeout" if result.error == "timeout" else "error")
-        ask.steps.append(self._step("tool", name, BUILTIN_SERVER, outcome, began, result.error))
+        ask.steps.append(
+            self._step("tool", name, BUILTIN_SERVER, outcome, began, result.error, result.detail)
+        )
         return result
 
+    async def _inputs(self, ask: _Ask, ledger: Ledger) -> list[ToolResult]:
+        """What the request brings besides its words, read before the reply is worded: the pages
+        of the http(s) addresses in the owner's own words (at most MAX_REQUEST_URLS), and the files
+        handed over (the images together, in one call of the vision model, and each PDF), each a
+        step of the request. Never an address a tool returned. Without the services, no page is
+        read (and a file is answered as unreadable)."""
+        jobs = []
+        if self._tools.services is not None:
+            for url in urls_in(ask.text, MAX_REQUEST_URLS):
+                jobs.append(self._tool(ask, self._tools.web_read(url), "web_read"))
+        files = list(enumerate(ask.attachments, start=1))
+        images = [(number, attachment) for number, attachment in files if attachment.is_image]
+        if images:
+            look = self._tools.look(
+                [attachment for _, attachment in images],
+                ask.text,
+                ledger,
+                numbers=[number for number, _ in images],
+            )
+            jobs.append(self._tool(ask, look, "read_attachment"))
+        for number, attachment in files:
+            if attachment.is_pdf:
+                jobs.append(
+                    self._tool(
+                        ask,
+                        self._tools.read_attachment(attachment, ask.text, ledger, number=number),
+                        "read_attachment",
+                    )
+                )
+        return list(await asyncio.gather(*jobs)) if jobs else []
+
     def _step(
-        self, kind: str, tool: str, server: str | None, outcome: str, began: float, why: str | None
+        self,
+        kind: str,
+        tool: str,
+        server: str | None,
+        outcome: str,
+        began: float,
+        why: str | None,
+        detail: str | None = None,
     ) -> Step:
         """A step that ended now, begun at `began` (`time.perf_counter`), with the reason of
-        `why`, the kind of its failure."""
+        `why`, the kind of its failure, and the service it used (`detail`)."""
         return Step(
             kind=kind,
             tool=tool,
@@ -969,6 +1081,7 @@ class AgentService:
             ms=_ms_since(began),
             reason=reason_of(outcome, why),
             at_ms=self._now_ms(),
+            detail=detail,
         )
 
     def _context(self, count: int) -> list[Turn]:
@@ -1522,6 +1635,8 @@ class AgentService:
                     "status": turn.status,
                     "cost_usd": turn.cost_usd,
                     "model": turn.model,
+                    # The files handed with the request: their names and types, never more.
+                    "attachments": list(turn.attachments or []),
                     # What the fast tier did, then what the worker did for the task it was given.
                     "steps": [_step_view(step) for step in steps.get(turn.id or 0, [])]
                     + task_steps,
@@ -1644,6 +1759,7 @@ class AgentService:
                 source=ask.source,
                 model=ledger.model,
                 steps=ask.steps,
+                attachments=[{"name": a.name, "mime": a.mime} for a in ask.attachments],
             )
         except sqlite3.Error as exc:
             logger.warning("Could not write the turn to the history: %s", type(exc).__name__)
