@@ -6,7 +6,7 @@
 .bgq-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; max-width: min(92%, 640px); padding: 10px 12px; border: 1px solid var(--rg-edge); border-radius: 14px; background: var(--rg-bg); box-shadow: 0 0 0 3px var(--rg-glow); }
 .bgq-q { display: flex; align-items: flex-start; gap: 8px; margin: 0; font: 600 14px/1.6 var(--voice); color: var(--rg-ink); overflow-wrap: anywhere; }
 .bgq-face { flex: none; display: block; width: 22px; height: 22px; margin-top: 1px; }
-.bgq-t { min-width: 0; display: grid; gap: 1px; }
+.bgq-t { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; }
 /* In a member's thread: their name over their words, plain (the voice font and weight are Raphael's). */
 .bgq-name { font: 650 12px/1.4 var(--ui); color: var(--rg-ink); opacity: 0.8; }
 .bgq-name + .bgq-line { font-weight: 500; }
