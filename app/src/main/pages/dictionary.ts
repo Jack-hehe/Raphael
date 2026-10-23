@@ -12,7 +12,7 @@ import { LearnHints, editorName } from "../learn-hint";
 import { loadingHTML } from "../loading";
 import type { AppContext, DictionaryEntry, Page } from "../types";
 import { Deletions } from "../undo";
-import { btn, esc, fieldHTML, ico, iconBtn, st, tabs, toaster } from "../ui";
+import { actionRow, btn, esc, fieldHTML, ico, iconBtn, st, tabs, toaster } from "../ui";
 
 type Filter = "all" | "auto" | "manual";
 const FILTERS: { id: Filter; name: string }[] = [
@@ -53,14 +53,13 @@ export function createDictionary(app: AppContext): DictionaryPage {
   el.innerHTML =
     t("dictionary.008", {
       p0:
-        `<div class="head-actions">${btn(t("dictionary.025"), "", ' data-act="import"')}` +
-        `${btn(t("dictionary.007", { p0: ico("plus") }), "pri", ' data-act="new" aria-expanded="false"')}</div>`,
+        actionRow({ cls: "head-actions", secondary: btn(t("dictionary.025"), "", ' data-act="import"'), primary: { label: t("dictionary.007", { p0: ico("plus") }), attrs: ' data-act="new" aria-expanded="false"' } }),
     }) +
     t("dictionary.009") +
     `<div class="addword card" hidden>${fieldHTML(t("dictionary.010"), "", { id: "nw-word", get label() { return t("dictionary.011"); } })}` +
-    `<div class="addword-actions">${btn(t("dictionary.014"), "pri", ' data-act="add"')}${btn(t("common.cancel"), "", ' data-act="new-cancel"')}</div></div>` +
+    actionRow({ cls: "addword-actions", secondary: btn(t("common.cancel"), "", ' data-act="new-cancel"'), primary: { label: t("dictionary.014"), attrs: ' data-act="add"' } }) + `</div>` +
     `<div class="importbox card" role="status" hidden><span class="importmsg"></span>` +
-    `<div class="addword-actions">${btn(t("dictionary.025"), "pri", ' data-act="import-go"')}${btn(t("common.cancel"), "", ' data-act="import-cancel"')}</div></div>` +
+    actionRow({ cls: "addword-actions", secondary: btn(t("common.cancel"), "", ' data-act="import-cancel"'), primary: { label: t("dictionary.025"), attrs: ' data-act="import-go"' } }) + `</div>` +
     `<input type="file" accept=".csv,.txt,text/csv,text/plain" hidden data-import-file aria-label="${esc(t("dictionary.034"))}">` +
     `<div class="tools">` +
     tabs(FILTERS.map((f) => ({ id: f.id, label: f.name, attrs: ` data-filter="${f.id}"` })), "all", { label: t("common.filter"), kind: "filter" }) +

@@ -450,7 +450,7 @@ describe("Models", () => {
     const key = rowOf(tab("usage"), "金鑰");
     expect(key).toContain("已連線");
     expect(key).toContain("延遲 120 ms");
-    expect(buttons(key)).toEqual(['<button type="button" class="btn" data-act="or-check">', '<button type="button" class="btn" data-act="key-replace" data-k="key">', '<button type="button" class="btn" data-act="key-remove">']);
+    expect(buttons(key)).toEqual(['<button type="button" class="btn danger" data-act="key-remove">', '<button type="button" class="btn" data-act="or-check">', '<button type="button" class="btn" data-act="key-replace" data-k="key">']);
     expect(key).toContain(">變更</button>");
     const bad = rowOf(tab("usage", { openrouter: { ...openrouter, state: "error", error: "auth" } }), "金鑰");
     expect(bad).toContain("金鑰無效，請更換");
@@ -458,7 +458,7 @@ describe("Models", () => {
 
   test("has a bordered button to remove the key, only while a key is set, that asks once more", () => {
     const key = rowOf(tab("usage"), "金鑰");
-    expect(buttons(key)).toContain('<button type="button" class="btn" data-act="key-remove">');
+    expect(buttons(key)).toContain('<button type="button" class="btn danger" data-act="key-remove">');
     expect(key).toContain(">移除金鑰</button>");
     expect(rowOf(tab("usage", { confirmingKeyRemoval: true }), "金鑰")).toContain(">確定移除？</button>");
     for (const over of [{ hasKey: false }, { replacingKey: true }]) {
@@ -474,6 +474,8 @@ describe("Models", () => {
       expect(key).not.toContain('data-act="key-replace"');
     }
     expect(rowOf(tab("usage", { replacingKey: true }), "金鑰")).toContain('data-act="key-cancel"');
+    const replacing = rowOf(tab("usage", { replacingKey: true }), "金鑰");
+    expect(replacing.indexOf('data-act="key-cancel"')).toBeLessThan(replacing.indexOf('data-act="key-paste"'));
   });
 
   test("puts the price of what is chosen under each model's name, its picker beside, one self-contained row each", () => {
@@ -585,8 +587,8 @@ describe("資料", () => {
 
   test("clears with a bordered button that asks once more, in red", () => {
     const html = tab("data");
-    expect(rowOf(html, "清除聽寫紀錄")).toContain('<button type="button" class="btn" data-act="clear-dictation" data-k="clear-dictation">清除</button>');
-    expect(rowOf(html, "清除拉斐爾的對話")).toContain('<button type="button" class="btn" data-act="clear-conversation" data-k="clear-conversation">清除</button>');
+    expect(rowOf(html, "清除聽寫紀錄")).toContain('<button type="button" class="btn danger" data-act="clear-dictation" data-k="clear-dictation">清除</button>');
+    expect(rowOf(html, "清除拉斐爾的對話")).toContain('<button type="button" class="btn danger" data-act="clear-conversation" data-k="clear-conversation">清除</button>');
     const asking = tab("data", { confirmingClear: "dictation" });
     expect(rowOf(asking, "清除聽寫紀錄")).toContain('class="btn danger" data-act="clear-dictation" data-k="clear-dictation">確定清除？<');
     expect(rowOf(asking, "清除拉斐爾的對話")).toContain(">清除<");

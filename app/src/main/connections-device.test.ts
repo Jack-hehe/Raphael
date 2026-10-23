@@ -77,6 +77,7 @@ describe("the code of a device login", () => {
     expect(html.match(/data-conn="device-open"/g)).toHaveLength(1);
     expect(html).toContain("複製代碼並開啟 GitHub");
     expect(html).toContain('data-conn="cancel-login"');
+    expect(html.indexOf('data-conn="cancel-login"')).toBeLessThan(html.indexOf('data-conn="device-open"'));
     // buttons are real buttons, never clickable text
     expect(html).not.toMatch(/<(a|span)[^>]*data-conn="device-open"/);
   });

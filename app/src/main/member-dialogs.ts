@@ -25,7 +25,7 @@ import {
   sourceLabel,
 } from "./members";
 import type { AvatarPreset, MemberGroup, MemberSource, NewMember, RoutineOffer, WireAttachment } from "./types";
-import { btn, closeMenu, esc, ico, iconButton, openMenu, openPopover, sel, toaster } from "./ui";
+import { type ActionRowOptions, actionRow, btn, closeMenu, esc, ico, iconButton, openMenu, openPopover, sel, toaster } from "./ui";
 
 // ---------- the dialog ----------
 
@@ -38,8 +38,8 @@ export interface DialogOptions {
   title: string;
   /** The fields, as HTML. */
   body: string;
-  /** The buttons at the foot, as HTML: text buttons, bordered. */
-  actions: string;
+  /** The footer's actions, ordered by the shared action row. */
+  actions: ActionRowOptions;
   /** A click on something with a `data-dlg` in the dialog. */
   onAct(act: string, target: HTMLElement, dialog: Dialog): void;
   /** Enter in a one-line field: the dialog's main action, if it has one. */
@@ -63,7 +63,7 @@ export function openDialog(o: DialogOptions): Dialog {
     `<div class="mb-dialog${o.cls ? ` ${o.cls}` : ""}" role="dialog" aria-modal="true" aria-labelledby="${id}">` +
     `<div class="mb-dlg-head"><h2 id="${id}">${esc(o.title)}</h2>${iconButton("x", t("common.close"), ' data-dlg="close"')}</div>` +
     `<div class="mb-dlg-body">${o.body}</div>` +
-    `<div class="mb-dlg-act">${o.actions}</div>` +
+    actionRow({ ...o.actions, cls: "mb-dlg-act" }) +
     `</div>`;
   let open = true;
   const mayClose = (): boolean => !o.canClose || o.canClose();
@@ -136,7 +136,7 @@ export function openDialog(o: DialogOptions): Dialog {
   });
   document.addEventListener("keydown", onKey, true);
   document.body.append(scrim);
-  (dialog.el.querySelector<HTMLElement>("input:not([type=file]), textarea") ?? dialog.el.querySelector<HTMLElement>(".mb-dlg-act .btn"))?.focus();
+  (dialog.el.querySelector<HTMLElement>("input:not([type=file]), textarea") ?? dialog.el.querySelector<HTMLElement>('[data-dlg="cancel"]') ?? dialog.el.querySelector<HTMLElement>(".mb-dlg-act .btn"))?.focus();
   return dialog;
 }
 
@@ -148,7 +148,7 @@ export function confirmDelete(name: string): Promise<boolean> {
       title: t("members.deleteConfirm", { p0: name }),
       body: "",
       cls: "mb-confirm",
-      actions: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"') + btn(esc(t("members.delete")), "danger", ' data-dlg="delete"'),
+      actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), destructive: { label: esc(t("members.delete")), attrs: ' data-dlg="delete"' } },
       onAct(act, _target, dialog) {
         answer = act === "delete";
         dialog.close();
@@ -169,7 +169,7 @@ export function offerRoutine(offer: RoutineOffer): Promise<boolean> {
       title: t("members.offerTitle"),
       cls: "mb-confirm mb-offer",
       body: `<div class="mb-offer-t"><b>${esc(offer.title)}</b><i>${esc(scheduleText(offer.schedule))}</i></div>`,
-      actions: btn(esc(t("members.offerNo")), "", ' data-dlg="no"') + btn(esc(t("members.offerYes")), "pri", ' data-dlg="yes"'),
+      actions: { secondary: btn(esc(t("members.offerNo")), "", ' data-dlg="no"'), primary: { label: esc(t("members.offerYes")), attrs: ' data-dlg="yes"' } },
       onAct(act, _target, dialog) {
         answer = act === "yes";
         dialog.close();
@@ -197,7 +197,7 @@ export function askGroupName(title: string, current = ""): Promise<string | null
     openDialog({
       title,
       body: field("mb-group-name", t("members.groupName"), current, GROUP_NAME_MAX),
-      actions: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"') + btn(esc(current ? t("members.save") : t("members.create")), "pri", ' data-dlg="save"'),
+      actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), primary: { label: esc(current ? t("members.save") : t("members.create")), attrs: ' data-dlg="save"' } },
       onAct(act, _target, dialog) {
         if (act === "save") save(dialog);
         else dialog.close();
@@ -252,7 +252,7 @@ export function editSources(group: MemberGroup): Promise<MemberSource[] | null> 
         `<div class="mb-addrow"><input id="mb-source" class="mb-fin" type="text" placeholder="${esc(t("members.sourceHint"))}" aria-label="${esc(t("members.sourceHint"))}" autocomplete="off" spellcheck="false">` +
         btn(esc(t("members.sourceAdd")), "", ' data-dlg="add"') +
         `</div>`,
-      actions: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"') + btn(esc(t("members.save")), "pri", ' data-dlg="save"'),
+      actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), primary: { label: esc(t("members.save")), attrs: ' data-dlg="save"' } },
       onAct(act, target, dialog) {
         if (act === "add") add(dialog);
         else if (act === "drop") {
@@ -426,7 +426,7 @@ export function openNewMember(o: NewMemberOptions): Dialog {
       `<label class="mb-frow mb-frow-top" for="mb-new-instr"><span>${esc(t("members.instructions"))}</span>` +
       `<textarea id="mb-new-instr" class="mb-fin mb-ta" rows="3" maxlength="${INSTRUCTIONS_MAX}"></textarea></label>` +
       `<div class="mb-frow"><span>${esc(t("members.group"))}</span><span class="mb-new-group"></span></div>`,
-    actions: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"') + btn(esc(t("members.create")), "pri", ' data-dlg="create"'),
+    actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), primary: { label: esc(t("members.create")), attrs: ' data-dlg="create"' } },
     canClose: () => !busy,
     onEnter: () => void create(),
     onAct(act, target) {

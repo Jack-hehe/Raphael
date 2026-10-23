@@ -19,5 +19,4 @@
 .mem-body { width: 100%; min-height: 96px; resize: vertical; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--panel); font-size: var(--fs-sm); line-height: 1.6; }
 .mem-title { width: 100%; min-height: 32px; padding: 6px 10px; border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--panel); font-size: var(--fs-sm); }
 .mem-body:focus, .mem-title:focus { outline: 0; }
-.mem-edit-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); }
 .mem-foot { margin: 10px 0 0 4px; }

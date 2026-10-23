@@ -248,14 +248,16 @@ describe("the dialog of a connected service", () => {
     expect(dialog(installedPage("cu1"))).not.toContain('data-conn="try"');
   });
 
-  test("ends with what is done less often, small bordered buttons after the rest, and a disconnect that asks twice", () => {
+  test("ends with a sticky action row: disconnect first, secondary controls, then the primary Try it", () => {
     const d = dialog(installedPage("ab12"));
-    const acts = d.slice(d.indexOf('class="cs-acts"'));
-    expect(d.indexOf('class="cs-acts"')).toBeGreaterThan(d.indexOf('data-conn="try"'));
+    const acts = d.slice(d.indexOf('class="action-row cs-acts is-sticky"'));
+    expect(acts).toContain('class="action-destructive"');
+    expect(acts.indexOf('data-conn="disconnect"')).toBeLessThan(acts.indexOf('data-conn="relogin"'));
+    expect(acts.indexOf('data-conn="refresh"')).toBeLessThan(acts.indexOf('data-conn="try"'));
     expect(acts).toMatch(/class="btn sm" data-conn="relogin" data-id="ab12"[^>]*>重新登入</);
     expect(acts).toMatch(/class="btn sm" data-conn="refresh" data-id="ab12"[^>]*>重新讀取工具</);
-    expect(acts).toMatch(/class="btn sm" data-conn="disconnect" data-id="ab12"[^>]*>中斷連線</);
-    expect(installedPage("ab12", { confirmingDisconnect: "ab12" })).toMatch(/class="btn sm danger" data-conn="disconnect"[^>]*>確定中斷？</);
+    expect(acts).toMatch(/class="btn danger sm" data-conn="disconnect" data-id="ab12"[^>]*>中斷連線</);
+    expect(installedPage("ab12", { confirmingDisconnect: "ab12" })).toMatch(/class="btn danger sm" data-conn="disconnect"[^>]*>確定中斷？</);
     // a service with no login has none to do again
     expect(dialog(installedPage("cu1"))).not.toContain('data-conn="relogin"');
   });
@@ -450,6 +452,8 @@ describe("the form that connects a server of the user's own", () => {
     expect(html).toContain("全部開啟");
     expect(html).toContain('data-conn="connect"');
     expect(html).toContain('data-conn="form-cancel"');
+    expect(html.indexOf('data-conn="form-cancel"')).toBeLessThan(html.indexOf('data-conn="connect"'));
+    expect(html).toContain('class="action-row add-acts is-sticky"');
     expect(html).not.toContain('role="tablist"');
     expect(html).not.toContain('role="dialog"');
   });

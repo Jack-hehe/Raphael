@@ -7,6 +7,7 @@ import { describe, expect, test } from "vitest";
 import { en } from "./main/i18n/en";
 import { ja } from "./main/i18n/ja";
 import { zhTW } from "./main/i18n/zh-TW";
+import { actionRow, btn } from "./main/ui";
 
 const SRC = __dirname;
 const MAIN = join(SRC, "main");
@@ -23,6 +24,41 @@ const mainFiles = walk(MAIN);
 /** Application code of the main window: every .ts that is not a test. */
 const sources = mainFiles.filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && !f.includes(`${sep}i18n${sep}`));
 const i18nFiles = mainFiles.filter((f) => f.includes(`${sep}i18n${sep}`) && !f.endsWith(".test.ts"));
+
+describe("action rows", () => {
+  test("primary is last, Cancel immediately precedes it, and destruction is first", () => {
+    const html = actionRow({
+      primary: { label: "Save", attrs: ' data-action="save" disabled' },
+      secondary: btn("Cancel", "", ' data-action="cancel"'),
+      destructive: { label: "Delete", attrs: ' data-action="delete"' },
+    });
+    expect([...html.matchAll(/data-action="([^"]+)"/g)].map((m) => m[1])).toEqual(["delete", "cancel", "save"]);
+    expect(html).toMatch(/class="action-destructive"><button[^>]*class="btn danger"/);
+    expect(html).toMatch(/class="btn pri" data-action="save" disabled>Save<\/button><\/div>$/);
+  });
+
+  test("a delete confirmation separates danger on the left from Cancel on the right", () => {
+    const html = actionRow({ secondary: btn("Cancel"), destructive: { label: "Delete" } });
+    expect(html).toMatch(/Delete<\/button><\/span><button[^>]*>Cancel<\/button><\/div>$/);
+    expect(html).not.toContain("btn pri");
+  });
+
+  test("shared alignment, destructive separation and sticky footers use the app's tokens", () => {
+    const css = read(join(MAIN, "styles.css"));
+    expect(css).toMatch(/\.action-row\s*\{[^}]*justify-content:\s*flex-end/);
+    expect(css).toMatch(/\.action-destructive\s*\{[^}]*margin-inline-end:\s*auto/);
+    expect(css).toMatch(/\.action-row\.is-sticky\s*\{[^}]*position:\s*sticky[^}]*bottom:\s*0[^}]*background:\s*var\(--panel\)/);
+  });
+
+  test("form footers use the shared row instead of hand-written button containers", () => {
+    // Provider/model-picker work is owned by another branch; gold approval cards keep their product order.
+    const rows = /<(?:div|span) class="(?:mb-dlg-act|mb-ract|av-crop-act|cs-acts|cs-device-acts|add-acts|svc-acts|mem-edit-actions|addword-actions|rules-acts)"/;
+    expect(sources.filter((f) => !["providers.ts", "model-picker.ts"].includes(rel(f)) && rows.test(read(f))).map(rel)).toEqual([]);
+    for (const file of ["member-dialogs.ts", "member-details.ts", "avatar-settings.ts", "connections.ts", "services.ts", "messaging.ts", "memory-view.ts", "pages/dictionary.ts", "setup-rows.ts", "onboarding/mount.ts", "safety-rules.ts", "local-models.ts"]) {
+      expect(read(join(MAIN, file)), file).toContain("actionRow(");
+    }
+  });
+});
 
 describe("buttons", () => {
   // Every <button> is one of the shapes of the component inventory (docs/ui.md), or a part of a menu / list / dialog.

@@ -52,7 +52,7 @@ describe("no sideways scrolling", () => {
       ".ra-scroll",
       ".mb-scroll",
       ".mb-det-scroll",
-      ".mb-dialog",
+      ".mb-dlg-body",
     ]) {
       const found = ruleFor(mainRules, selector);
       expect(found.length, selector).toBeGreaterThan(0);

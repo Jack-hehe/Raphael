@@ -45,7 +45,7 @@ import {
 } from "./members";
 import { type ModelPicker, mountModelPicker } from "./model-picker";
 import type { AppContext, AvatarPreset, Member, MemberPatch, MembersList, ModelCatalog, Routine, RoutineSchedule, WireAttachment } from "./types";
-import { btn, esc, iconButton, openMenu, sel, tabs, tg, toaster } from "./ui";
+import { actionRow, btn, esc, iconButton, openMenu, sel, tabs, tg, toaster } from "./ui";
 
 export type DetailsTab = "details" | "memory";
 
@@ -193,7 +193,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       (d.kind === "every" ? sel(hours, String(d.hours), t("members.hours"), ' data-det="r-hours" data-k="r-hours"') : time) +
       `</div>` +
       `<textarea id="mb-r-prompt" class="mb-fin mb-ta" rows="3" maxlength="${ROUTINE_PROMPT_MAX}" placeholder="${esc(t("members.routinePrompt"))}" aria-label="${esc(t("members.routinePrompt"))}">${esc(d.prompt)}</textarea>` +
-      `<div class="mb-ract">${btn(esc(t("common.cancel")), "sm", ' data-det="r-cancel" data-k="r-cancel"')}${btn(esc(t("members.save")), "sm pri", ' data-det="r-save" data-k="r-save"')}</div>` +
+      actionRow({ cls: "mb-ract", sticky: true, secondary: btn(esc(t("common.cancel")), "sm", ' data-det="r-cancel" data-k="r-cancel"'), primary: { label: esc(t("members.save")), kind: "sm", attrs: ' data-det="r-save" data-k="r-save"' } }) +
       `</div>`
     );
   }

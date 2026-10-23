@@ -37,7 +37,7 @@ import { describeError } from "./format";
 import { t } from "./i18n";
 import type { ServiceIconId } from "./service-icons";
 import type { BrainSettings, ServiceOption, ServicesStatus } from "./types";
-import { type IconName, btn, esc, fieldHTML, ico, iconButton, leave, st, tg, toaster } from "./ui";
+import { type IconName, actionRow, btn, esc, fieldHTML, ico, iconButton, leave, st, tg, toaster } from "./ui";
 
 /** The capabilities, in the order of the list. */
 export const CAPABILITIES = [
@@ -258,17 +258,17 @@ function keyLineHTML(option: ServiceOption, v: ServicesView): string {
   const name = serviceName(option.id);
   const off = v.busy === option.id ? " disabled" : "";
   if (option.has_key) {
-    return (
-      `<div class="svc-line" data-svc-line="${esc(option.id)}"><span class="val">${esc(t("services.keySet"))}</span>` +
-      btn(esc(t("services.remove")), "", ` data-svc="clear" data-service="${esc(option.id)}"${off}`) +
-      `</div>`
-    );
+    return `<div data-svc-line="${esc(option.id)}">` + actionRow({
+      cls: "svc-line",
+      secondary: `<span class="val">${esc(t("services.keySet"))}</span>`,
+      destructive: { label: esc(t("services.remove")), attrs: ` data-svc="clear" data-service="${esc(option.id)}"${off}` },
+    }) + `</div>`;
   }
   const placeholder = option.needs_key ? t("services.key") : t("services.keyOptional");
   return (
     `<div class="svc-line" data-svc-line="${esc(option.id)}">` +
     fieldHTML(placeholder, "", { id: keyInputId(option.id), type: "password", label: t("services.keyLabel", { p0: name }), disabled: v.busy === option.id }) +
-    btn(esc(t("services.save")), "", ` data-svc="save" data-service="${esc(option.id)}"${off}`) +
+    actionRow({ primary: { label: esc(t("services.save")), attrs: ` data-svc="save" data-service="${esc(option.id)}"${off}` } }) +
     `</div>`
   );
 }
@@ -280,7 +280,7 @@ function urlLineHTML(option: ServiceOption, v: ServicesView, url: string): strin
   return (
     `<div class="svc-line" data-svc-line="${esc(option.id)}">` +
     fieldHTML("https://…", url, { id: URL_INPUT_ID, label: t("services.url", { p0: name }), disabled: v.busy === option.id }) +
-    btn(esc(t("services.save")), "", ` data-svc="url" data-service="${esc(option.id)}"${off}`) +
+    actionRow({ primary: { label: esc(t("services.save")), attrs: ` data-svc="url" data-service="${esc(option.id)}"${off}` } }) +
     `</div>`
   );
 }
@@ -291,7 +291,7 @@ function voiceLineHTML(v: ServicesView, voice: string): string {
   return (
     `<div class="svc-line" data-svc-line="voice">` +
     fieldHTML(t("services.voiceId"), voice, { id: VOICE_INPUT_ID, label: t("services.voiceId"), disabled: v.busy === "voice" }) +
-    btn(esc(t("services.save")), "", ` data-svc="voice" data-service="fish"${off}`) +
+    actionRow({ primary: { label: esc(t("services.save")), attrs: ` data-svc="voice" data-service="fish"${off}` } }) +
     `</div>`
   );
 }
@@ -351,11 +351,11 @@ function subViewHTML(entry: (typeof CAPABILITIES)[number], service: string, v: S
   }
   const inUse = !!row?.chosen && on;
   const idle = v.busy !== null;
-  const acts =
-    `<div class="svc-acts">` +
-    btn(esc(t("services.use")), "", ` data-svc="use" data-service="${esc(service)}" data-k="svc-use"${inUse || !row?.usable || idle ? " disabled" : ""}`) +
-    (entry.kind === "voice" ? btn(esc(t("conn.tryIt")), "", ` data-svc="try" data-service="fish" data-k="svc-try"${idle ? " disabled" : ""}`) : "") +
-    `</div>`;
+  const acts = actionRow({
+    cls: "svc-acts", sticky: true,
+    secondary: entry.kind === "voice" ? btn(esc(t("conn.tryIt")), "", ` data-svc="try" data-service="fish" data-k="svc-try"${idle ? " disabled" : ""}`) : "",
+    primary: { label: esc(t("services.use")), attrs: ` data-svc="use" data-service="${esc(service)}" data-k="svc-use"${inUse || !row?.usable || idle ? " disabled" : ""}` },
+  });
   return head + fields + acts;
 }
 

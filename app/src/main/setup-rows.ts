@@ -3,7 +3,7 @@
 // data-act / data-k in the settings) and the text under the row.
 
 import { t } from "./i18n";
-import { type Choice, btn, fieldHTML, meter, row, sel } from "./ui";
+import { type Choice, actionRow, btn, fieldHTML, meter, row, sel } from "./ui";
 
 type RowOptions = { cls?: string; attrs?: string };
 
@@ -23,8 +23,10 @@ export function keyEntryRow(o: {
     t("common.apiKey"),
     o.desc,
     fieldHTML("sk-or-v1-…", "", { w: o.fieldWidth, get label() { return t("common.apiKeyField"); }, id: o.inputId, type: "password", invalid: o.invalid }) +
-      btn(o.busy ? t("common.checking") : t("common.paste"), "pri", `${o.hook("key-paste")}${o.busy ? " disabled" : ""}`) +
-      (o.canCancel ? btn(t("common.cancel"), "", `${o.hook("key-cancel")}${o.busy ? " disabled" : ""}`) : ""),
+      actionRow({
+        secondary: o.canCancel ? btn(t("common.cancel"), "", `${o.hook("key-cancel")}${o.busy ? " disabled" : ""}`) : "",
+        primary: { label: o.busy ? t("common.checking") : t("common.paste"), attrs: `${o.hook("key-paste")}${o.busy ? " disabled" : ""}` },
+      }),
     o.row,
   );
 }

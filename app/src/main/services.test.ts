@@ -338,12 +338,12 @@ describe("the page of one service", () => {
   test("a service that needs a key and has none: a password field 「API 金鑰」 and a bordered 「儲存」", () => {
     const d = inDialog(dialog("search", "brave"));
     expect(d).toContain(`id="${keyInputId("brave")}" type="password" value="" placeholder="API 金鑰"`);
-    expect(d).toContain('<button type="button" class="btn" data-svc="save" data-service="brave">儲存</button>');
+    expect(d).toContain('<button type="button" class="btn pri" data-svc="save" data-service="brave">儲存</button>');
   });
 
   test("a stored key: 「已設定」 in muted words and a bordered 「移除」, and no field", () => {
     const d = inDialog(dialog("search", "brave", { status: status({ braveKey: true }) }));
-    expect(d).toContain('<div class="svc-line" data-svc-line="brave"><span class="val">已設定</span><button type="button" class="btn" data-svc="clear" data-service="brave">移除</button></div>');
+    expect(d).toContain('<span class="action-destructive"><button type="button" class="btn danger" data-svc="clear" data-service="brave">移除</button></span><span class="val">已設定</span>');
     expect(d).not.toContain(keyInputId("brave"));
   });
 
@@ -361,13 +361,15 @@ describe("the page of one service", () => {
     expect(searx).not.toContain('type="password"');
   });
 
-  test("Fish Audio: its key, then the voice model's field with 「儲存」, then 「使用」 and a bordered 「Try it」, text only", () => {
+  test("Fish Audio: key and voice fields, then a sticky footer with Try it before the primary Use", () => {
     const d = inDialog(dialog("voice", "fish"));
     expect(d).toContain(`id="${keyInputId("fish")}" type="password"`);
     expect(d).toContain(`id="svc-voice-id" type="text" value="${VOICE_ID}" placeholder="聲音模型 ID"`);
     expect(d.indexOf('data-svc-line="fish"')).toBeLessThan(d.indexOf('data-svc-line="voice"'));
     expect(d).toContain('<button type="button" class="btn" data-svc="try" data-service="fish" data-k="svc-try">Try it</button>');
-    expect(d).toMatch(/<button type="button" class="btn" data-svc="use" data-service="fish" data-k="svc-use"[^>]*>使用<\/button>/);
+    expect(d).toMatch(/<button type="button" class="btn pri" data-svc="use" data-service="fish" data-k="svc-use"[^>]*>使用<\/button>/);
+    expect(d).toContain('class="action-row svc-acts is-sticky"');
+    expect(d.indexOf('data-svc="try"')).toBeLessThan(d.indexOf('data-svc="use"'));
     expect(d).not.toMatch(/data-svc="try"[^>]*><svg/);
   });
 
@@ -410,7 +412,7 @@ describe("the page of one service", () => {
 
   test("only real buttons: a bordered text button or a borderless icon one", () => {
     for (const d of [dialog("search", "brave"), dialog("voice", "fish"), dialog("search", "searxng")]) {
-      for (const tag of buttons(inDialog(d))) expect(tag).toMatch(/class="btn( icon)?"/);
+      for (const tag of buttons(inDialog(d))) expect(tag).toMatch(/class="btn(?: icon| pri| danger)?"/);
     }
   });
 });
@@ -674,7 +676,7 @@ describe("what the section does", () => {
     api.servicesStatus.mockResolvedValue(status({ braveKey: true }));
     answer({ ok: true });
     await flush();
-    expect(host.querySelector('[data-svc-line="brave"]')!.textContent).toBe("已設定移除");
+    expect(host.querySelector('[data-svc-line="brave"]')!.textContent).toBe("移除已設定");
     expect(host.innerHTML).not.toContain("BSA-typed-key");
     expect(toaster.info).toHaveBeenCalledWith("已存進 Windows 認證管理員");
     expect(titleOf(host)).toBe("Brave"); // it stays on the page of the service

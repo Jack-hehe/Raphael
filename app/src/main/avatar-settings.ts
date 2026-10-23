@@ -11,7 +11,7 @@ import { t } from "./i18n";
 import * as api from "./api";
 import { type AvatarCrop, ZOOM_MAX, cleanCrop, cropStyle, loadAvatar } from "./avatar";
 import { describeError } from "./format";
-import { btn, esc, toaster } from "./ui";
+import { actionRow, btn, esc, toaster } from "./ui";
 
 /** The circle of the crop dialog, in px. */
 const CIRCLE_PX = 220;
@@ -47,7 +47,7 @@ export function cropDialog(url: string): Promise<AvatarCrop | null> {
       `<h2 id="av-crop-title">${esc(t("settings.avatar"))}</h2>` +
       `<div class="av-crop-view" style="--side:${CIRCLE_PX}px"><img src="${esc(url)}" alt="" draggable="false"></div>` +
       `<input class="av-crop-zoom" type="range" min="1" max="${ZOOM_MAX}" step="0.01" value="1" aria-label="${esc(t("settings.avatarZoom"))}">` +
-      `<div class="av-crop-act">${btn(esc(t("common.cancel")), "", ' data-act="crop-cancel"')}${btn(esc(t("settings.avatarDone")), "pri", ' data-act="crop-done"')}</div>` +
+      actionRow({ cls: "av-crop-act", secondary: btn(esc(t("common.cancel")), "", ' data-act="crop-cancel"'), primary: { label: esc(t("settings.avatarDone")), attrs: ' data-act="crop-done"' } }) +
       `</div>`;
     const view = scrim.querySelector<HTMLElement>(".av-crop-view")!;
     const img = view.querySelector("img")!;
