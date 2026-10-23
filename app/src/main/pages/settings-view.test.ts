@@ -166,6 +166,10 @@ test("服務 is in the 拉斐爾 tab, after its settings and before the memory, 
 });
 
 const tab = (pane: SettingsPane, over: Partial<SettingsView> = {}): string => paneHTML(view({ pane, ...over }));
+
+test.each([catalog, "loading", "failed"] as const)("a CLI answer is priced as subscription regardless of API catalog availability", (source) => {
+  expect(priceTexts(view({ catalog: source, brain: { ...brain, agent_model: "cli:codex" } }))["agent-model"]).toBe("訂閱");
+});
 const IDS = PANES.map((p) => p.id);
 const LOCALES = ["zh-TW", "en", "ja"] as const;
 
@@ -431,7 +435,7 @@ describe("拉斐爾", () => {
 describe("Models", () => {
   test("puts providers and model choices on Models, existing usage controls and analytics slot on Usage", () => {
     const html = tab("models");
-    expect(groups(html)).toEqual(["供應商", "使用的模型"]);
+    expect(groups(html)).toEqual(["訂閱帳號", "供應商", "使用的模型"]);
     expect(names(html)).toEqual(["拉斐爾的回答", "整理文字", "語音轉文字"]);
     expect(html.indexOf('data-pv="directory"')).toBeGreaterThanOrEqual(0);
     expect(html.indexOf('data-pv="directory"')).toBeLessThan(html.indexOf('data-row="stt-model"'));

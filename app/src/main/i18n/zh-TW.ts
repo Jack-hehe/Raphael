@@ -1,5 +1,13 @@
 // Traditional Chinese is the source catalogue. Placeholders are interpolated by t().
 export const zhTW = {
+  "brains.accounts": "訂閱帳號",
+  "brains.subscription": "訂閱",
+  "brains.default": "預設模型",
+  "brains.missing": "未安裝",
+  "brains.ready": "已登入",
+  "brains.signedOut": "未登入",
+  "brains.login": "登入",
+  "brains.install": "安裝說明",
   "models.providers": "供應商",
   "models.used": "使用的模型",
   "models.usage": "用量",

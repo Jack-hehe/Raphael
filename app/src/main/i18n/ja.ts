@@ -1,6 +1,14 @@
 import type { Messages } from './zh-TW';
 
 export const ja = {
+  "brains.accounts": "サブスクリプションアカウント",
+  "brains.subscription": "サブスクリプション",
+  "brains.default": "既定のモデル",
+  "brains.missing": "未インストール",
+  "brains.ready": "ログイン済み",
+  "brains.signedOut": "未ログイン",
+  "brains.login": "ログイン",
+  "brains.install": "インストール方法",
   "models.providers": "プロバイダー",
   "models.used": "使用するモデル",
   "models.usage": "使用量",

@@ -113,6 +113,19 @@ export interface RoleFit {
   reason: string | null;
 }
 
+/** Public local CLI detection; credentials never cross this interface. */
+export type CliBrainId = "claude" | "codex" | "gemini";
+export interface CliBrain {
+  id: CliBrainId;
+  name: string;
+  installed: boolean;
+  logged_in: boolean | null;
+  version?: string;
+  login_command: string;
+  models: { id: string; name: string }[];
+  notes?: string;
+}
+
 /** A model of `models.catalog`. Prices are US$; null is unknown or does not apply. */
 export interface CatalogModel {
   id: string;
@@ -520,6 +533,7 @@ export type MainEvent =
   | { type: "RoutinesChanged"; member_id: number }
   | { type: "MembersChanged" }
   | { type: "ProvidersChanged" }
+  | { type: "BrainsChanged" }
   | { type: "MemoryChanged"; member_id: number; space?: "own" | "shared" }
   /** A background task moved on: a step, a start or an end. */
   | { type: "WorkerChanged"; task_id: number; state: string; running: boolean }

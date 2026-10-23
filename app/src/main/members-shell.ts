@@ -88,6 +88,7 @@ export function createMembers(host: MembersHost): MembersShell {
   let presets: AvatarPreset[] = [];
   let presetsRead = false;
   let catalog: Promise<ModelCatalog | null> | null = null;
+  let clis: ReturnType<typeof api.brainsCli> | null = null;
   let loads = 0;
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let open = typeof innerWidth === "number" ? innerWidth >= DETAILS_COLUMN_MIN_PX : true;
@@ -117,6 +118,7 @@ export function createMembers(host: MembersHost): MembersShell {
     list: () => list,
     presets: () => presets,
     catalog: () => (catalog ??= api.modelsCatalog().then((read) => read, () => null)),
+    clis: async () => (await (clis ??= Promise.resolve().then(() => api.brainsCli()).catch(() => ({ clis: [] })))).clis,
     update,
     setPicture,
     close: () => setDetails(false),
@@ -158,6 +160,8 @@ export function createMembers(host: MembersHost): MembersShell {
       panelRead = true;
       details.showMember();
     } else if (refreshOnShow) {
+      clis = null;
+      details.refreshCatalog();
       details.refreshRoutines();
       details.refreshMemory(current);
     }
@@ -255,12 +259,14 @@ export function createMembers(host: MembersHost): MembersShell {
     stopLeaving?.();
     stopLeaving = null;
     if (next) {
+      clis = null;
       details.el.hidden = false;
       page?.setAttribute("data-det", "open");
       details.el.classList.remove("is-in");
       void details.el.offsetWidth;
       details.el.classList.add("is-in");
       details.draw();
+      details.refreshCatalog();
       details.refreshRoutines();
       details.refreshMemory(current);
       details.el.querySelector<HTMLElement>('[data-det="close"]')?.focus({ preventScroll: true });
@@ -447,6 +453,7 @@ export function createMembers(host: MembersHost): MembersShell {
       if (host.visible() && memberId === current) details.refreshRoutines();
     },
     follow(event) {
+      if (event.type === "BrainsChanged") { clis = null; details.refreshCatalog(); }
       if (event.type === "ProvidersChanged") {
         catalog = null;
         details.refreshCatalog();
