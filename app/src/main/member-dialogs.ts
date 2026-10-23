@@ -43,6 +43,8 @@ export interface DialogOptions {
   onAct(act: string, target: HTMLElement, dialog: Dialog): void;
   /** Enter in a one-line field: the dialog's main action, if it has one. */
   onEnter?(dialog: Dialog): void;
+  /** Whether the dialog may be closed by Escape, the backdrop or × right now. */
+  canClose?(): boolean;
   /** The dialog closed, however it was. */
   onClose?(): void;
   /** A class of the dialog's own, for its layout. */
@@ -63,37 +65,73 @@ export function openDialog(o: DialogOptions): Dialog {
     `<div class="mb-dlg-act">${o.actions}</div>` +
     `</div>`;
   let open = true;
+  const mayClose = (): boolean => !o.canClose || o.canClose();
+  const isTop = (): boolean =>
+    !document.getElementById("app-popover") &&
+    !document.querySelector(".av-crop-scrim") &&
+    Array.from(document.querySelectorAll(".mb-scrim")).pop() === scrim;
   const dialog: Dialog = {
     el: scrim.querySelector<HTMLElement>(".mb-dialog")!,
     close() {
       if (!open) return;
       open = false;
       closeMenu();
+      const keepFocus =
+        document.activeElement instanceof HTMLElement &&
+        document.activeElement !== document.body &&
+        !scrim.contains(document.activeElement);
       scrim.remove();
       document.removeEventListener("keydown", onKey, true);
-      opener?.focus({ preventScroll: true });
+      if (!keepFocus) opener?.focus({ preventScroll: true });
       o.onClose?.();
     },
   };
   const onKey = (e: KeyboardEvent): void => {
-    if (e.key === "Escape" && !document.getElementById("app-popover")) {
+    if (!isTop()) return;
+    if (e.key === "Escape") {
       e.preventDefault();
-      e.stopPropagation();
-      dialog.close();
-    } else if (e.key === "Enter" && !e.isComposing && e.target instanceof HTMLInputElement && dialog.el.contains(e.target) && o.onEnter) {
+      e.stopImmediatePropagation();
+      if (mayClose()) dialog.close();
+    } else if (e.key === "Tab") {
+      const stops = [
+        ...dialog.el.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not([type=file]):not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+        ),
+      ];
+      if (stops.length === 0) return;
+      const first = stops[0]!;
+      const last = stops[stops.length - 1]!;
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey && (active === first || !active || !dialog.el.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (active === last || !active || !dialog.el.contains(active))) {
+        e.preventDefault();
+        first.focus();
+      }
+    } else if (
+      e.key === "Enter" &&
+      !e.isComposing &&
+      e.keyCode !== 229 &&
+      !e.repeat &&
+      e.target instanceof HTMLInputElement &&
+      dialog.el.contains(e.target) &&
+      o.onEnter
+    ) {
       e.preventDefault();
       o.onEnter(dialog);
     }
   };
   scrim.addEventListener("click", (e) => {
     if (e.target === scrim) {
-      dialog.close();
+      if (mayClose()) dialog.close();
       return;
     }
     const target = (e.target as Element).closest<HTMLElement>("[data-dlg]");
     if (!target || (target as HTMLButtonElement).disabled) return;
-    if (target.dataset.dlg === "close") dialog.close();
-    else o.onAct(target.dataset.dlg ?? "", target, dialog);
+    if (target.dataset.dlg === "close") {
+      if (mayClose()) dialog.close();
+    } else o.onAct(target.dataset.dlg ?? "", target, dialog);
   });
   document.addEventListener("keydown", onKey, true);
   document.body.append(scrim);
@@ -384,7 +422,10 @@ export function openNewMember(o: NewMemberOptions): Dialog {
       `<div class="mb-frow"><span>${esc(t("members.group"))}</span><span class="mb-new-group"></span></div>` +
       `<div class="mb-frow"><span>${esc(t("members.tools"))}</span><span class="mb-new-tools"></span></div>`,
     actions: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"') + btn(esc(t("members.create")), "pri", ' data-dlg="create"'),
+    canClose: () => !busy,
+    onEnter: () => void create(),
     onAct(act, target) {
+      if (busy) return;
       if (act === "cancel") dialog.close();
       else if (act === "create") void create();
       else if (act === "avatar") avatarMenu(target);
@@ -497,7 +538,10 @@ export function openNewMember(o: NewMemberOptions): Dialog {
     }
     busy = false;
     if (made) dialog.close();
-    else dialog.el.querySelectorAll<HTMLButtonElement>(".mb-dlg-act .btn").forEach((button) => (button.disabled = false));
+    else {
+      dialog.el.querySelectorAll<HTMLButtonElement>(".mb-dlg-act .btn").forEach((button) => (button.disabled = false));
+      if (!dialog.el.contains(document.activeElement)) nameInput.focus();
+    }
   }
 
   nameInput.addEventListener("input", () => {

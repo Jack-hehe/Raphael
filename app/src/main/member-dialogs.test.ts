@@ -121,6 +121,60 @@ describe("新增成員", () => {
     $('[data-dlg="avatar"]').click();
     expect([...document.querySelectorAll("#app-popover button")].map((b) => b.textContent)).toEqual(["從電腦選…"]);
   });
+
+  test("Enter in name or role submits (unless composing), and Tab wraps inside the dialog", async () => {
+    const { $, dialog, create } = open();
+    const name = $<HTMLInputElement>("#mb-new-name");
+    name.value = "日文老師";
+    name.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: true }));
+    expect(create).not.toHaveBeenCalled();
+
+    const closeBtn = $<HTMLButtonElement>('[data-dlg="close"]');
+    const createBtn = $<HTMLButtonElement>('[data-dlg="create"]');
+    closeBtn.focus();
+    closeBtn.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }));
+    expect(document.activeElement).toBe(createBtn);
+    createBtn.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(document.activeElement).toBe(closeBtn);
+
+    name.focus();
+    name.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flush();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(dialog.el.isConnected).toBe(false);
+  });
+
+  test("while create is in flight, Escape, backdrop click and menus are blocked; failed create keeps focus inside", async () => {
+    let finish!: (ok: boolean) => void;
+    const create = vi.fn(() => new Promise<boolean>((r) => (finish = r)));
+    const { $, dialog } = open({ create });
+    $<HTMLInputElement>("#mb-new-name").value = "日文老師";
+    const createBtn = $<HTMLButtonElement>('[data-dlg="create"]');
+    createBtn.focus();
+    createBtn.click();
+    expect(create).toHaveBeenCalledTimes(1);
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    dialog.el.parentElement!.click();
+    $('[data-dlg="close"]').click();
+    $('[data-dlg="group"]').click();
+    expect(document.querySelector(".mb-scrim")).not.toBeNull();
+    expect(document.getElementById("app-popover")).toBeNull();
+
+    finish(false);
+    await flush();
+    expect(document.querySelector(".mb-scrim")).not.toBeNull();
+    expect(dialog.el.contains(document.activeElement)).toBe(true);
+  });
+
+  test("Escape with stacked dialogs closes only the top dialog", async () => {
+    open();
+    const top = confirmDelete("文書");
+    expect(document.querySelectorAll(".mb-scrim")).toHaveLength(2);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(await top).toBe(false);
+    expect(document.querySelectorAll(".mb-scrim")).toHaveLength(1);
+  });
 });
 
 test("a picture of the PC is a PNG, JPG, WebP or GIF", () => {
