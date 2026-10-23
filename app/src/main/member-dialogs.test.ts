@@ -122,6 +122,16 @@ describe("新增成員", () => {
     expect([...document.querySelectorAll("#app-popover button")].map((b) => b.textContent)).toEqual(["從電腦選…"]);
   });
 
+  test("a preset whose picture URL is missing still updates the initial letter when typing the name", () => {
+    const { $ } = open({ presets: [{ avatar: "preset:a", name: "a", url: "" }] });
+    $('[data-dlg="avatar"]').click();
+    document.querySelector<HTMLElement>('#app-popover [data-preset="preset:a"]')!.click();
+    const name = $<HTMLInputElement>("#mb-new-name");
+    name.value = "進度官";
+    name.dispatchEvent(new Event("input"));
+    expect($(".mb-av-letter").textContent).toBe("進");
+  });
+
   test("Enter in name or role submits (unless composing), and Tab wraps inside the dialog", async () => {
     const { $, dialog, create } = open();
     const name = $<HTMLInputElement>("#mb-new-name");

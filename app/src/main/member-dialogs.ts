@@ -545,7 +545,8 @@ export function openNewMember(o: NewMemberOptions): Dialog {
   }
 
   nameInput.addEventListener("input", () => {
-    if (pictureUrl === null) face.querySelector(".mb-av-letter")!.textContent = initialOf(nameInput.value);
+    const letter = face.querySelector(".mb-av-letter");
+    if (letter) letter.textContent = initialOf(nameInput.value);
   });
   draw();
   return dialog;

@@ -387,6 +387,22 @@ describe("a new member", () => {
     expect(document.querySelector(".mb-scrim")).toBeNull();
     expect(document.activeElement).toBe(picker);
   });
+
+  test("retries loading presets after a transient failure on startup", async () => {
+    const url = "data:image/png;base64,iVBORw0KGgo=";
+    api.membersPresets.mockRejectedValueOnce(new Error("offline")).mockResolvedValue({
+      presets: [{ avatar: "preset:a", name: "a", url }],
+    });
+    mount();
+    await flush();
+    send({ type: "AgentTurn", turn_id: 99, member_id: 4 });
+    await new Promise((r) => setTimeout(r, 350));
+    await flush();
+    $('[data-col="add"]').click();
+    $('#app-popover [data-pick="member"]').click();
+    $('[data-dlg="avatar"]').click();
+    expect(document.querySelector('#app-popover [data-preset="preset:a"]')).not.toBeNull();
+  });
 });
 
 describe("the details panel", () => {

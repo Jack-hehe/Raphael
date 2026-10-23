@@ -183,26 +183,42 @@ export function createMembers(host: MembersHost): MembersShell {
     for (const m of read.members) previews.set(m.id, m.preview ?? "");
     column.draw();
     if (!presetsRead) {
-      presetsRead = true;
       void Promise.resolve()
         .then(() => api.membersPresets())
-        .then((answer) => {
-          presets = Array.isArray(answer?.presets) ? answer.presets : [];
-        }, () => {});
+        .then(
+          (answer) => {
+            if (Array.isArray(answer?.presets)) {
+              presets = answer.presets;
+              presetsRead = true;
+            }
+          },
+          () => {},
+        );
     }
     if (!toolsRead) {
-      toolsRead = true;
       // the core's own list of what a member may be given, or, from a core without it, the connections
       void Promise.resolve()
         .then(() => api.membersToolChoices())
         .then(
-          (answer) => toolChoices(answer.connections ?? [], answer.tools),
-          () => Promise.resolve().then(() => api.toolsetsList()).then((answer) => toolChoices(answer?.groups ?? [])),
+          (answer) => {
+            if (answer && (Array.isArray(answer.connections) || Array.isArray(answer.tools))) toolsRead = true;
+            return toolChoices(answer?.connections ?? [], answer?.tools);
+          },
+          () =>
+            Promise.resolve()
+              .then(() => api.toolsetsList())
+              .then((answer) => {
+                if (Array.isArray(answer?.groups)) toolsRead = true;
+                return toolChoices(answer?.groups ?? []);
+              }),
         )
-        .then((choices) => {
-          connections = choices;
-          details.draw();
-        }, () => {});
+        .then(
+          (choices) => {
+            connections = choices;
+            details.draw();
+          },
+          () => {},
+        );
     }
   }
 
@@ -336,7 +352,13 @@ export function createMembers(host: MembersHost): MembersShell {
           return false;
         }
         const id = answer.member.id;
-        if (picture) await api.membersSetAvatar(id, picture).catch((err: unknown) => toaster.info(describeError(err)));
+        if (picture) {
+          try {
+            await api.membersSetAvatar(id, picture);
+          } catch (err) {
+            toaster.info(describeError(err));
+          }
+        }
         toaster.info(t("members.created", { p0: made.name }));
         await load();
         select(id);
@@ -345,7 +367,11 @@ export function createMembers(host: MembersHost): MembersShell {
         if (offer) {
           setTimeout(async () => {
             if (!(await offerRoutine(offer))) return;
-            await api.routinesCreate({ member_id: id, ...offer }).catch((err: unknown) => toaster.info(describeError(err)));
+            try {
+              await api.routinesCreate({ member_id: id, ...offer });
+            } catch (err) {
+              toaster.info(describeError(err));
+            }
             if (current === id) details.showMember();
           }, 0);
         }
