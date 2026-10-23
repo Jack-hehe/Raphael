@@ -7,8 +7,9 @@
 //!   (`worker.cancel {task_id}`) or run one that did not finish again (`worker.rerun {task_id}`), the
 //!   way the tray stops the one that runs. It may list, read, edit and delete Raphael's memories and
 //!   clear the summary of the conversation (`memory.list`, `memory.get`, `memory.update`,
-//!   `memory.delete`, `memory.clear`, `memory.summary_clear`), each by its name and with its params
-//!   checked here first.
+//!   `memory.delete`, `memory.clear`, `memory.move`, `memory.summary_clear`), each by its name and
+//!   with its params checked here first; and manage the members of the owner's team, their groups
+//!   and their routines (`members.*`, `groups.*`, `routines.*`, each by its name).
 //! - `agent_ask_text`, `agent_question_open` and `agent_question_answer` are the 拉斐爾 page's own
 //!   way to Raphael, through the dictation controller rather than the core
 //!   ([`crate::dictation::Desk`]): a question typed in its composer (some text, of a bounded
@@ -323,7 +324,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 29] = [
+const ALLOWED_METHODS: [&str; 47] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -354,12 +355,33 @@ const ALLOWED_METHODS: [&str; 29] = [
     "memory.update",
     "memory.delete",
     "memory.clear",
+    "memory.move",
     "memory.summary_clear",
     // The services of the tools, in the settings: what is chosen and whether each key is stored
     // (never a key), and a key put in or taken out of the vault. Named one by one as well.
     "services.status",
     "services.set_key",
     "services.clear_key",
+    // The members of the owner's team, their groups and their routines (the 拉斐爾 page's member
+    // column and details panel). Named one by one as well; the core checks their params. A member
+    // is asked something only by `agent_ask_text`, like Raphael: `agent.ask` stays closed.
+    "members.list",
+    "members.create",
+    "members.update",
+    "members.delete",
+    "members.set_avatar",
+    "members.presets",
+    "members.read",
+    "members.viewing",
+    "members.tool_choices",
+    "groups.create",
+    "groups.update",
+    "groups.delete",
+    "routines.list",
+    "routines.create",
+    "routines.update",
+    "routines.delete",
+    "routines.template",
 ];
 
 /// The types a memory's name starts with (the core's `memory.store.TYPES`).
@@ -412,7 +434,10 @@ fn validate_history_search(params: &Value) -> Result<(), String> {
 /// The params of a memory method: `name` a memory's name where one is needed, and for
 /// `memory.update` a `body` of text within the limit and, if given, a `description` within its own.
 fn validate_memory_call(method: &str, params: &Value) -> Result<(), String> {
-    let needs_name = matches!(method, "memory.get" | "memory.update" | "memory.delete");
+    let needs_name = matches!(
+        method,
+        "memory.get" | "memory.update" | "memory.delete" | "memory.move"
+    );
     if needs_name
         && !params
             .get("name")
@@ -1540,6 +1565,49 @@ mod tests {
     }
 
     #[test]
+    fn the_main_window_manages_the_members_by_their_names_only() {
+        for method in [
+            "members.list",
+            "members.create",
+            "members.update",
+            "members.delete",
+            "members.set_avatar",
+            "members.presets",
+            "members.read",
+            "members.viewing",
+            "members.tool_choices",
+            "groups.create",
+            "groups.update",
+            "groups.delete",
+            "routines.list",
+            "routines.create",
+            "routines.update",
+            "routines.delete",
+            "routines.template",
+        ] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        for method in [
+            "members.",
+            "members",
+            "members.ask",
+            "groups.",
+            "routines.run",
+            "Members.list",
+        ] {
+            assert!(!is_allowed_method(method), "{method}");
+        }
+        assert!(validate_core_call("memory.move", &json!({"to_space": "shared"})).is_err());
+        assert!(
+            validate_core_call(
+                "memory.move",
+                &json!({"name": "user-city", "to_space": "shared", "member_id": 3})
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn the_main_window_reads_and_sets_the_services_by_their_names_only() {
         for method in ["services.status", "services.set_key", "services.clear_key"] {
             assert!(is_allowed_method(method), "{method}");
@@ -1926,10 +1994,28 @@ mod tests {
             "memory.update",
             "memory.delete",
             "memory.clear",
+            "memory.move",
             "memory.summary_clear",
             "services.status",
             "services.set_key",
             "services.clear_key",
+            "members.list",
+            "members.create",
+            "members.update",
+            "members.delete",
+            "members.set_avatar",
+            "members.presets",
+            "members.read",
+            "members.viewing",
+            "members.tool_choices",
+            "groups.create",
+            "groups.update",
+            "groups.delete",
+            "routines.list",
+            "routines.create",
+            "routines.update",
+            "routines.delete",
+            "routines.template",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
