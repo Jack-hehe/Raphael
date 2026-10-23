@@ -11,7 +11,9 @@ import { canvasSize } from "./emblem";
 
 const here = import.meta.dirname;
 const rust = (file: string) => readFileSync(path.join(here, "..", "..", "src-tauri", "src", file), "utf8");
-const styles = readFileSync(path.join(here, "overlay.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+const styles = readFileSync(path.join(here, "overlay.css"), "utf8")
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/@import\s+[^;]+;/g, "");
 
 /** A constant of the Rust shell, as it is written there. */
 function rustNumber(file: string, name: string): number {

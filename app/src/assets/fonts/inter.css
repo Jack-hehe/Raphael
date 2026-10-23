@@ -1,0 +1,15 @@
+/* Bundled Inter 4.1 (SIL OFL 1.1); CJK glyphs use the language's system faces. */
+@font-face {
+  font-family: "Inter";
+  src: url("./InterVariable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("./InterVariable-Italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+}
