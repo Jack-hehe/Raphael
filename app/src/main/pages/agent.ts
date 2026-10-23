@@ -14,14 +14,28 @@
 // place: it is the overlay's question again (`AgentQuestion`), and answering either one answers
 // both. With no turn at all the page is Raphael alone, the composer under him.
 //
-// Raphael's own settings (the question key, the weather city, the picture) are the 拉斐爾 tab of
-// Settings, which the sliders button at the top opens; Telegram is in its 訊息平台 tab.
+// Raphael's own settings (the question key, the weather city) are the 拉斐爾 tab of Settings, which
+// the sliders button at the top opens; Telegram is in its 訊息平台 tab.
+//
+// The page is also where the members are (members-shell.ts): the member column on the left, the
+// details panel on the right, and the centred pill over the chat. Each member has one thread, as
+// Raphael has: picking a member loads its turns (`agent.history.list {member_id}`), and the composer
+// asks it (`agent_ask_text {memberId}`). A member's answers are plain bubbles, with none of Raphael's
+// 《prefix。》, its composer says "Message <name>" and has no voice button (the voice always goes to
+// Raphael), and the gold card shows in the thread whose member asked. Raphael's thread is exactly as
+// it was. While the page is on screen the main sidebar is an icon rail (main.ts). Above the composer
+// is the slot of the thread's questions from the background (background-mount.ts). A member's
+// thread is its own: the search looks in it alone, and no turn of another thread shows in it but
+// the collapsed line of an exchange it had a part in.
 
 import { onLocaleChange, t } from "../i18n";
 
 import { replyLine } from "../../shared/anime";
 import * as api from "../api";
 import { avatarHTML, onAvatarChange } from "../avatar";
+import { RAPHAEL_ID, faceHTML, memberPlaceholder } from "../members";
+import { createMembers } from "../members-shell";
+import { mountBackgroundQuestions } from "../background-mount";
 import { TYPED, VOICE, mergeTurns, oldestId, refreshTurns, sourceOf, threadItems, turnMatches } from "../conversation";
 import { describeError } from "../format";
 import { loadingHTML } from "../loading";
@@ -46,6 +60,7 @@ import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, Page, SettingsPa
 import { btn, esc, ico, iconButton, toaster } from "../ui";
 import { VoiceMode } from "../voice-mode";
 import "../agent.css";
+import "../members.css";
 
 /** How many turns one load brings. */
 const PAGE_SIZE = 50;
@@ -197,6 +212,8 @@ export function draftText(arg: SettingsPane | AgentDraft | undefined): string | 
 /** A turn typed here that the history does not have yet. */
 interface Outgoing {
   key: string;
+  /** The member whose thread it was typed in (0: Raphael's). */
+  member: number;
   text: string;
   sentAt: number;
   /** The images and PDFs it went with, by name and type, for its chips. */
@@ -209,7 +226,8 @@ export function createAgent(app: AppContext): Page {
   el.dataset.page = "agent";
   el.hidden = true;
   el.innerHTML =
-    `<div class="page-head"><h1>${esc(t("agent.title"))}</h1><div class="ra-tools">` +
+    `<section class="mb-chat">` +
+    `<div class="page-head mb-head"><h1 class="mb-h1">${esc(t("agent.title"))}</h1><span class="mb-head-l"></span><span class="mb-head-c"></span><div class="ra-tools">` +
     iconButton("search", t("agent.search"), ' data-act="search" aria-expanded="false" hidden', "ra-tool") +
     btn("", "icon ra-tool ra-clear", ' data-act="clear" hidden') +
     iconButton("sliders", t("agent.settings"), ' data-act="settings"', "ra-tool") +
@@ -224,7 +242,8 @@ export function createAgent(app: AppContext): Page {
     `<div class="ra-wait" hidden></div>` +
     `<div class="ra-empty" hidden><div class="ra-hero"></div><p class="ra-hi"></p><div class="ra-slot"></div></div>` +
     `<div class="ra-dock"></div>` +
-    `</div>`;
+    `</div>` +
+    `</section>`;
   const heading = el.querySelector<HTMLElement>("h1")!;
   const searchButton = el.querySelector<HTMLElement>('[data-act="search"]')!;
   const clearButton = el.querySelector<HTMLElement>('[data-act="clear"]')!;
@@ -243,6 +262,22 @@ export function createAgent(app: AppContext): Page {
   const hi = el.querySelector<HTMLElement>(".ra-hi")!;
   const slot = el.querySelector<HTMLElement>(".ra-slot")!;
   const dock = el.querySelector<HTMLElement>(".ra-dock")!;
+  /** The open thread's questions from the background, above the composer wherever it is. */
+  const backgroundSlot = document.createElement("div");
+  backgroundSlot.className = "ra-bgq";
+  backgroundSlot.dataset.mount = "background-questions";
+
+  // ---------- the members ----------
+
+  const members = createMembers({ app, visible: () => visible, onSelect: () => switchThread() });
+  el.prepend(members.column);
+  el.append(members.details);
+  if (members.detailsOpen()) el.dataset.det = "open";
+  el.querySelector(".mb-head-l")!.append(members.picker);
+  el.querySelector(".mb-head-c")!.append(members.pill);
+  /** The member whose thread is open: 0 is Raphael. */
+  const memberId = (): number => members.current();
+  const inRaphael = (): boolean => memberId() === RAPHAEL_ID;
 
   // ---------- the composer and the approval card ----------
 
@@ -316,6 +351,12 @@ export function createAgent(app: AppContext): Page {
   /** The YES/NO question that waits for an answer, and whether an answer is on its way. */
   let question: AgentQuestion | null = null;
   let answering = false;
+  /** The member a typed question is on its way to, while it is: a question it asks is its thread's. */
+  let askingMember: number | null = null;
+  /** The thread of the question that waits (see `setQuestion`). */
+  let questionOwner = RAPHAEL_ID;
+  /** The exchanges between members that are open, by turn id. */
+  const openExchanges = new Set<number>();
   /** The search: open or not, its words, and what the core found (null: the page looks itself). */
   let searching = false;
   let query = "";
@@ -331,13 +372,29 @@ export function createAgent(app: AppContext): Page {
   const atBottom = (): boolean => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= BOTTOM_SLACK_PX;
   const shownTurns = (): AgentTurn[] => turns.filter((turn) => turn.id > clearedUpTo);
   const newestId = (): number => turns.reduce((max, turn) => Math.max(max, turn.id), 0);
-  const isEmpty = (): boolean => shownTurns().length === 0 && outgoing.length === 0 && hearing === null;
+  const isEmpty = (): boolean =>
+    shownTurns().length === 0 && !outgoing.some((sent) => sent.member === memberId()) && (hearing === null || !inRaphael());
 
-  const look = (): TurnLook => ({ face: (loop) => avatarHTML({ size: 26, loop }), query: searching ? query : "" });
+  const look = (): TurnLook => {
+    const shared = { query: searching ? query : "", openExchanges, memberName: members.nameOf, memberFace: (id: number) => members.faceOf(id, 18) };
+    if (inRaphael()) return { ...shared, face: (loop) => avatarHTML({ size: 26, loop }) };
+    const member = members.member();
+    return { ...shared, face: () => faceHTML(member, 26), plain: true };
+  };
+  /**
+   * The question that waits now (null: none), and whose thread it is in: the member a typed
+   * question was on its way to when it came, whose answer is what asks; else Raphael's (the voice
+   * and the overlay are his). The thread is kept with the question, so that what is typed later
+   * does not move it.
+   */
+  function setQuestion(next: AgentQuestion | null): void {
+    if (next !== null && next.id !== question?.id) questionOwner = askingMember ?? RAPHAEL_ID;
+    question = next;
+  }
 
   const voice = new VoiceMode({
     stage,
-    button: () => (voiceButton.isConnected && !composer.hidden ? voiceButton : null),
+    button: () => (voiceButton.isConnected && !composer.hidden && !voiceButton.hidden ? voiceButton : null),
     composer: () => (composer.isConnected && !composer.hidden ? composer : null),
     target: () => (empty.hidden ? null : hero.querySelector<HTMLElement>(".av")),
     face: () => avatarHTML({ size: 132, loop: true }),
@@ -355,13 +412,35 @@ export function createAgent(app: AppContext): Page {
     clearButton.innerHTML = ico("trash") + (confirmingClear ? `<span>${esc(label)}</span>` : "");
   }
 
-  /** Raphael's face where the composer, the card and the empty page show it. */
+  /**
+   * The face of who the thread is with, where the composer, the card and the empty page show it:
+   * Raphael's (his voice button too), or the member's (whose composer has no voice button).
+   */
   function drawFaces(): void {
     voiceButton.innerHTML = avatarHTML({ size: 34 });
-    askFace.innerHTML = avatarHTML({ size: 30 });
-    hero.innerHTML = avatarHTML({ size: 132, loop: true });
+    if (inRaphael()) {
+      askFace.innerHTML = avatarHTML({ size: 30 });
+      hero.innerHTML = avatarHTML({ size: 132, loop: true });
+    } else {
+      const member = members.member();
+      askFace.innerHTML = faceHTML(member, 30);
+      hero.innerHTML = faceHTML(member, 96);
+    }
     voice.redraw();
   }
+
+  /** The composer of the thread: "Ask Raphael" and his voice button, or "Message <name>" with none. */
+  function drawComposer(): void {
+    const words = inRaphael() ? COMPOSER_PLACEHOLDER : memberPlaceholder(members.member().name);
+    input.placeholder = words;
+    input.setAttribute("aria-label", words);
+    voiceButton.hidden = !inRaphael();
+    settingsButton.hidden = !inRaphael();
+    empty.classList.toggle("is-member", !inRaphael());
+  }
+
+  /** The words of the empty page: Raphael's greeting, or the member's name. */
+  const emptyLine = (): string => (inRaphael() ? greetingLine() : members.member().name);
 
   /** The words of the composer, the card and the search, in the language of the window. */
   function drawWords(): void {
@@ -378,7 +457,7 @@ export function createAgent(app: AppContext): Page {
     }
     findInput.placeholder = t("agent.search");
     findInput.setAttribute("aria-label", t("agent.search"));
-    hi.textContent = greetingLine();
+    hi.textContent = emptyLine();
     drawAskLabels();
     askCard.setAttribute("aria-label", t("agent.asking"));
     drawFile();
@@ -444,9 +523,10 @@ export function createAgent(app: AppContext): Page {
   /** The composer or, while Raphael asks, the card in its place; under the thread, or under Raphael on the empty page. */
   function drawDock(): void {
     const home = empty.hidden ? dock : slot;
+    if (backgroundSlot.parentElement !== home) home.prepend(backgroundSlot);
     if (composer.parentElement !== home) home.append(composer);
     if (askCard.parentElement !== home) home.append(askCard);
-    const asking = question !== null;
+    const asking = question !== null && questionOwner === memberId();
     if (asking && !askCard.hidden && askCard.dataset.id === question!.id) return;
     askCard.hidden = !asking;
     composer.hidden = asking;
@@ -458,7 +538,8 @@ export function createAgent(app: AppContext): Page {
     const q = question!;
     askCard.dataset.id = q.id;
     askCard.dataset.tier = q.tier;
-    askText.textContent = replyLine(q.prefix, q.text);
+    // a member asks in plain words, Raphael in his 《prefix。》
+    askText.textContent = inRaphael() ? replyLine(q.prefix, q.text) : q.text;
     drawAskLabels();
     answering = false;
     noButton.disabled = alwaysButton.disabled = yesButton.disabled = false;
@@ -475,8 +556,9 @@ export function createAgent(app: AppContext): Page {
         : { key: item.key, html: turnHTML(item.turn, state, details.has(item.turn.id), shape), turnId: item.turn.id },
     );
     if (!(searching && query.trim() !== "")) {
-      for (const sent of outgoing) out.push({ key: sent.key, html: pendingTurnHTML(sent.text, TYPED, shape, sent.files) });
-      if (hearing) out.push({ key: "hearing", html: pendingTurnHTML(null, VOICE, shape) });
+      for (const sent of outgoing) if (sent.member === memberId()) out.push({ key: sent.key, html: pendingTurnHTML(sent.text, TYPED, shape, sent.files) });
+      // the voice always goes to Raphael
+      if (hearing && inRaphael()) out.push({ key: "hearing", html: pendingTurnHTML(null, VOICE, shape) });
     }
     return out;
   }
@@ -531,14 +613,15 @@ export function createAgent(app: AppContext): Page {
     }
     wait.hidden = true;
     const shown = shownTurns();
-    clearButton.hidden = shown.length === 0;
+    // 清除全部 empties Raphael's conversation; a member's thread goes with the member
+    clearButton.hidden = shown.length === 0 || !inRaphael();
     searchButton.hidden = shown.length === 0;
     if (shown.length === 0 && searching) closeSearch(false);
     if (isEmpty()) {
       scroller.hidden = dock.hidden = true;
       empty.hidden = false;
       empty.classList.toggle("is-failed", failure !== null);
-      hi.textContent = failure ? `${t("agent.loadFailed")} ${failure()}` : greetingLine();
+      hi.textContent = failure ? `${t("agent.loadFailed")} ${failure()}` : emptyLine();
       drawDock();
       stopTicker();
       return;
@@ -591,7 +674,14 @@ export function createAgent(app: AppContext): Page {
     let got: AgentTurn[];
     try {
       const before = earlier ? oldestId(turns) : undefined;
-      got = (await api.agentHistoryList({ limit: PAGE_SIZE, ...(before === undefined ? {} : { before_id: before }) })).turns;
+      const member = memberId();
+      got = (
+        await api.agentHistoryList({
+          limit: PAGE_SIZE,
+          ...(before === undefined ? {} : { before_id: before }),
+          ...(member === RAPHAEL_ID ? {} : { member_id: member }),
+        })
+      ).turns;
     } catch (err) {
       // A newer load of the newest turns took over: what this one shows does not count, but an
       // earlier page that failed must still let the reader page up again.
@@ -685,7 +775,8 @@ export function createAgent(app: AppContext): Page {
       return;
     }
     const sending = files;
-    const mine: Outgoing = { key: `out:${++sent}`, text, sentAt: Date.now(), files: sending.map(({ name, mime }) => ({ name, mime })) };
+    const member = memberId();
+    const mine: Outgoing = { key: `out:${++sent}`, member, text, sentAt: Date.now(), files: sending.map(({ name, mime }) => ({ name, mime })) };
     outgoing.push(mine);
     input.value = "";
     attached = null;
@@ -693,9 +784,12 @@ export function createAgent(app: AppContext): Page {
     drawFile();
     fit();
     render(true);
+    askingMember = member;
     try {
-      await api.agentAskText(text, wireAttachments(sending));
+      if (member === RAPHAEL_ID) await api.agentAskText(text, wireAttachments(sending));
+      else await api.agentAskText(text, wireAttachments(sending), member);
     } catch (err) {
+      askingMember = null;
       outgoing = outgoing.filter((item) => item !== mine);
       if (input.value === "") {
         input.value = text;
@@ -710,6 +804,7 @@ export function createAgent(app: AppContext): Page {
       render();
       return;
     }
+    askingMember = null;
     // The turn is written by now: the history brings it, and the question waits no more.
     await load(false);
     outgoing = outgoing.filter((item) => item !== mine);
@@ -924,7 +1019,8 @@ export function createAgent(app: AppContext): Page {
     found = null;
     if (words !== "") {
       try {
-        const turnsFound = (await api.agentHistorySearch(words)).turns;
+        const member = memberId();
+        const turnsFound = (member === RAPHAEL_ID ? await api.agentHistorySearch(words) : await api.agentHistorySearch(words, member)).turns;
         if (mine !== searches) return;
         found = turnsFound;
       } catch {
@@ -1011,6 +1107,55 @@ export function createAgent(app: AppContext): Page {
     rememberLine(button);
   }
 
+  /** Opens or closes the messages of an exchange between members, under its line. */
+  function toggleExchange(button: HTMLElement): void {
+    const id = Number(button.closest<HTMLElement>(".tn")?.dataset.id);
+    if (openExchanges.has(id)) openExchanges.delete(id);
+    else openExchanges.add(id);
+    rememberLine(button);
+    render();
+  }
+
+  /** The questions from the background that wait in the open thread (background-mount.ts). */
+  function drawBackgroundQuestions(): void {
+    mountBackgroundQuestions(backgroundSlot, { memberId: memberId(), changed: () => members.changed() });
+  }
+
+  /**
+   * Another member's thread: what was loaded goes, and that member's turns are read. The search
+   * closes, the composer and the card become that thread's, and nothing of the last thread moves in.
+   */
+  function switchThread(): void {
+    loads++;
+    turns = [];
+    found = null;
+    canLoadEarlier = false;
+    loadingEarlier = false;
+    pending = false;
+    failure = null;
+    clearedUpTo = 0;
+    newestDrawn = 0;
+    drewOnce = false;
+    details.clear();
+    openExchanges.clear();
+    if (searching) closeSearch(false);
+    thread.replaceChildren();
+    if (voice.isUp) voice.drop();
+    drawComposer();
+    drawFaces();
+    hi.textContent = emptyLine();
+    // the card of another thread's question goes, and this thread's comes
+    delete askCard.dataset.id;
+    drawBackgroundQuestions();
+    render();
+    if (visible) {
+      void load(false).then(() => {
+        if (visible && !scroller.hidden) scroller.scrollTop = scroller.scrollHeight;
+      });
+      focusComposer();
+    }
+  }
+
   function toggleDetail(button: HTMLElement): void {
     const turn = button.closest<HTMLElement>(".tn");
     const detail = turn?.querySelector<HTMLElement>(".tn-detail");
@@ -1070,6 +1215,9 @@ export function createAgent(app: AppContext): Page {
         break;
       case "detail":
         toggleDetail(act);
+        break;
+      case "exchange":
+        toggleExchange(act);
         break;
       case "stop":
         void stop(act);
@@ -1206,21 +1354,27 @@ export function createAgent(app: AppContext): Page {
   });
 
   app.onEvent((event) => {
-    if (wantsRefresh(event)) scheduleRefresh();
+    if (wantsRefresh(event)) {
+      // a turn of another thread changes only that member's row
+      if (event.type !== "AgentTurn" || (event.member_id ?? RAPHAEL_ID) === memberId()) scheduleRefresh();
+      if (visible) members.changed();
+    }
     if (event.type === "AgentQuestion") {
-      question = openQuestion(event);
+      setQuestion(openQuestion(event));
       drawDock();
+      if (visible) members.changed();
     } else if (event.type === "AgentQuestionClosed") {
       if (question?.id === event.id) {
-        question = null;
+        setQuestion(null);
         drawDock();
       }
+      if (visible) members.changed();
     } else if (event.type === "VoiceLevel") {
       voice.level(event.value);
     } else if (event.type === "Dictation" && event.agent) {
       if (event.phase === "listening") {
         listening = true;
-        if (visible && !question) voice.up();
+        if (visible && !question && inRaphael()) voice.up();
       } else {
         listening = false;
         voice.down();
@@ -1237,23 +1391,28 @@ export function createAgent(app: AppContext): Page {
 
   onAvatarChange(() => {
     drawFaces();
+    void members.load();
     for (const child of thread.children) drawnHTML.delete(child); // every face is drawn again
     if (visible) render();
   });
 
   onLocaleChange(() => {
     drawWords();
+    drawComposer();
     for (const child of thread.children) drawnHTML.delete(child);
     render();
   });
   drawWords();
   drawFaces();
+  drawComposer();
+  drawBackgroundQuestions();
 
   return {
     id: "agent",
     el,
     show(arg) {
       visible = true;
+      void members.load();
       // A draft goes into the field at once; the composer may then move (the empty page has it
       // under Raphael, the thread under the turns) or give way to a question, which takes the
       // focus away: it is given back once each of those is known.
@@ -1266,7 +1425,7 @@ export function createAgent(app: AppContext): Page {
       void api
         .agentQuestionOpen()
         .then((open) => {
-          question = open && openQuestion(open);
+          setQuestion(open && openQuestion(open));
           drawDock();
           refocus();
         })
@@ -1278,6 +1437,7 @@ export function createAgent(app: AppContext): Page {
     },
     hide() {
       visible = false;
+      members.hide();
       clearTimeout(clearTimer);
       clearTimeout(holdTimer);
       clearTimeout(listenTimer);

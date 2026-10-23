@@ -1,0 +1,276 @@
+// The member column of the 拉斐爾 page (the mockup's `members`, left): at the top a search, which
+// narrows the members by name and role, and 「＋」, a menu of 「新增成員」 and 「新增分組」; then Raphael,
+// his emblem at 64 px and his name and nothing else; then the groups, each under a header that folds
+// it away, and 未分組 last. A member's row is its picture, its name, its role in small muted words and
+// a line of its last message; a question that waits for the owner turns that line gold, 「等你處理：…」,
+// with a gold dot, and a thread with news has a dot of the accent.
+//
+// A right click on a row, or its borderless 「more」 that shows under the pointer, gives 「移到分組 ▸」
+// and 「刪除」; a group header's gives 「重新命名」, 「看的地方」 and 「刪除」. What they do is the host's
+// (members-shell.ts): the column only draws and says what was asked.
+//
+// `columnHTML` draws the list from a snapshot (pure, so its rules can be tested without a browser);
+// `createMemberColumn` keeps the search and the folded groups and hands the clicks over.
+
+import { t } from "./i18n";
+import { type MemberSection, faceHTML, memberSections, previewOf, raphaelOf } from "./members";
+import type { Member, MembersList } from "./types";
+import { closeMenu, esc, ico, iconButton, openPopover } from "./ui";
+
+/** What the column is drawn from. */
+export interface ColumnView {
+  list: MembersList | null;
+  /** The member whose thread is open. */
+  current: number;
+  /** The last message of each member's thread, as far as it is known. */
+  previews: ReadonlyMap<number, string>;
+  query: string;
+  /** The groups folded away, by id. */
+  folded: ReadonlySet<number>;
+  /** The members that were not there at the last drawing: their rows fade in. */
+  fresh: ReadonlySet<number>;
+}
+
+/** A member's row: its picture, name, role, the line under them and the dot; then its 「more」. */
+export function memberRowHTML(member: Member, v: Pick<ColumnView, "current" | "previews" | "fresh">): string {
+  const preview = previewOf(member, v.previews.get(member.id));
+  const dot = member.waiting
+    ? `<span class="mb-dot is-wait" role="img" aria-label="${esc(t("members.waitingShort"))}"></span>`
+    : member.unread
+      ? `<span class="mb-dot is-unread" role="img" aria-label="${esc(t("members.unread"))}"></span>`
+      : "";
+  return (
+    `<div class="mb-item${v.fresh.has(member.id) ? " is-new" : ""}" data-member-item="${member.id}">` +
+    `<button type="button" class="nav mb-row" data-member="${member.id}" aria-current="${member.id === v.current}" data-k="member:${member.id}">` +
+    faceHTML(member, 34) +
+    `<span class="mb-row-main"><span class="mb-row-t"><b>${esc(member.name)}</b>${member.role ? `<i>${esc(member.role)}</i>` : ""}</span>` +
+    (preview.text ? `<span class="mb-row-p${preview.waiting ? " is-wait" : ""}">${esc(preview.text)}</span>` : "") +
+    `</span>${dot}</button>` +
+    iconButton("more", t("members.more", { p0: member.name }), ` data-member-more="${member.id}" aria-haspopup="menu" aria-expanded="false" data-k="member-more:${member.id}"`, "mb-more") +
+    `</div>`
+  );
+}
+
+/** A group's header and its members; 未分組 has no menu. */
+function sectionHTML(section: MemberSection, v: ColumnView): string {
+  const group = section.group;
+  const id = group ? String(group.id) : "none";
+  const name = group ? group.name : t("members.ungrouped");
+  const open = !(group && v.folded.has(group.id)) || v.query.trim() !== "";
+  return (
+    `<section class="mb-sec" data-group="${id}" data-open="${open}">` +
+    `<div class="mb-ghead"><span class="mb-gname">${esc(name)}</span>` +
+    (group
+      ? iconButton("more", t("members.more", { p0: name }), ` data-group-more="${id}" aria-haspopup="menu" aria-expanded="false" data-k="group-more:${id}"`, "mb-more")
+      : "") +
+    iconButton("down", t("members.toggleGroup", { p0: name }), ` data-group-fold="${id}" aria-expanded="${open}" data-k="group-fold:${id}"`, "mb-fold") +
+    `</div>` +
+    `<div class="mb-gbody"${open ? "" : " inert"}><div class="mb-gclip">${section.members.map((member) => memberRowHTML(member, v)).join("")}</div></div>` +
+    `</section>`
+  );
+}
+
+/** The list under the search: Raphael, the groups, 未分組; or a line that nothing matches. */
+export function columnHTML(v: ColumnView): string {
+  const raphael = raphaelOf(v.list);
+  const sections = memberSections(v.list ?? { members: [], groups: [] }, v.query);
+  const searching = v.query.trim() !== "";
+  const chief =
+    `<button type="button" class="nav mb-chief" data-member="0" aria-current="${v.current === 0}" data-k="member:0">` +
+    faceHTML(raphael, 64) +
+    `<b>${esc(raphael.name)}</b>` +
+    (raphael.waiting ? `<span class="mb-dot is-wait" role="img" aria-label="${esc(t("members.waitingShort"))}"></span>` : "") +
+    `</button>`;
+  return chief + sections.map((section) => sectionHTML(section, v)).join("") + (searching && sections.length === 0 ? `<p class="mb-none">${esc(t("members.noMatch"))}</p>` : "");
+}
+
+export interface ColumnHost {
+  view(): Omit<ColumnView, "query" | "folded">;
+  /** Opens the thread of member `id`. */
+  select(id: number): void;
+  newMember(groupId: number | null): void;
+  newGroup(): void;
+  /** 移到分組 chose a group for member `id` (null: 未分組). */
+  moveMember(id: number, groupId: number | null, anchor: HTMLElement): void;
+  deleteMember(id: number): void;
+  renameGroup(id: number): void;
+  editSources(id: number): void;
+  deleteGroup(id: number): void;
+}
+
+export interface MemberColumn {
+  readonly el: HTMLElement;
+  draw(): void;
+  /** The search's words now. */
+  query(): string;
+}
+
+/** A menu of plain items under `anchor`; `onPick` gets the chosen item's `id`. */
+export function openActions(anchor: HTMLElement, items: readonly { id: string; label: string; icon?: Parameters<typeof ico>[0]; sub?: boolean }[], onPick: (id: string) => void): void {
+  const el = openPopover(
+    anchor,
+    items
+      .map(
+        (item) =>
+          `<button type="button" role="menuitem" tabindex="-1" data-pick="${esc(item.id)}"${item.sub ? ' aria-haspopup="menu"' : ""}>` +
+          `<span class="ck">${item.icon ? ico(item.icon) : ""}</span><span class="mt">${esc(item.label)}</span>${item.sub ? ico("right") : ""}</button>`,
+      )
+      .join(""),
+    { className: "menu mb-menu", role: "menu", label: anchor.getAttribute("aria-label") ?? undefined },
+  );
+  el.addEventListener("click", (e) => {
+    const pick = (e.target as Element).closest<HTMLElement>("[data-pick]");
+    if (!pick) return;
+    const id = pick.dataset.pick ?? "";
+    // a submenu opens in the place of this one, from the same button
+    if (!pick.hasAttribute("aria-haspopup")) {
+      closeMenu();
+      anchor.focus({ preventScroll: true });
+    }
+    onPick(id);
+  });
+  el.querySelector<HTMLElement>("button")?.focus();
+}
+
+export function createMemberColumn(host: ColumnHost): MemberColumn {
+  const el = document.createElement("aside");
+  el.className = "mb-col";
+  el.innerHTML =
+    `<div class="mb-top">` +
+    `<label class="mb-find" hidden>${ico("search")}<input type="search" class="mb-find-input" autocomplete="off" spellcheck="false" maxlength="40"></label>` +
+    `<span class="mb-top-fill"></span>` +
+    iconButton("search", t("members.search"), ' data-col="search" aria-expanded="false"', "mb-tool") +
+    iconButton("plus", t("members.add"), ' data-col="add" aria-haspopup="menu" aria-expanded="false"', "mb-tool") +
+    `</div>` +
+    `<nav class="mb-scroll"><div class="mb-list"></div></nav>`;
+  const find = el.querySelector<HTMLElement>(".mb-find")!;
+  const findInput = el.querySelector<HTMLInputElement>(".mb-find-input")!;
+  const searchButton = el.querySelector<HTMLElement>('[data-col="search"]')!;
+  const addButton = el.querySelector<HTMLElement>('[data-col="add"]')!;
+  const list = el.querySelector<HTMLElement>(".mb-list")!;
+  const nav = el.querySelector<HTMLElement>(".mb-scroll")!;
+  let query = "";
+  const folded = new Set<number>();
+
+  function draw(): void {
+    nav.setAttribute("aria-label", t("members.title"));
+    for (const [button, label] of [
+      [searchButton, find.hidden ? t("members.search") : t("members.searchClose")],
+      [addButton, t("members.add")],
+    ] as const) {
+      button.setAttribute("aria-label", label);
+      button.title = label;
+    }
+    findInput.placeholder = t("members.search");
+    findInput.setAttribute("aria-label", t("members.search"));
+    const focusKey = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("[data-k]");
+    const key = focusKey && list.contains(focusKey) ? focusKey.dataset.k : undefined;
+    list.innerHTML = columnHTML({ ...host.view(), query, folded });
+    if (key) list.querySelector<HTMLElement>(`[data-k="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
+  }
+
+  function toggleSearch(): void {
+    find.hidden = !find.hidden;
+    searchButton.setAttribute("aria-expanded", String(!find.hidden));
+    if (find.hidden) {
+      query = "";
+      findInput.value = "";
+      draw();
+      searchButton.focus();
+    } else {
+      draw();
+      findInput.focus();
+    }
+  }
+
+  function memberMenu(id: number, anchor: HTMLElement): void {
+    openActions(
+      anchor,
+      [
+        { id: "move", label: t("members.moveTo"), icon: "folder", sub: true },
+        { id: "delete", label: t("members.delete"), icon: "trash" },
+      ],
+      (pick) => {
+        if (pick === "move") host.moveMember(id, null, anchor);
+        else host.deleteMember(id);
+      },
+    );
+  }
+
+  function groupMenu(id: number, anchor: HTMLElement): void {
+    openActions(
+      anchor,
+      [
+        { id: "rename", label: t("members.rename"), icon: "pencil" },
+        { id: "sources", label: t("members.sources"), icon: "link" },
+        { id: "delete", label: t("members.delete"), icon: "trash" },
+      ],
+      (pick) => {
+        if (pick === "rename") host.renameGroup(id);
+        else if (pick === "sources") host.editSources(id);
+        else host.deleteGroup(id);
+      },
+    );
+  }
+
+  el.addEventListener("click", (e) => {
+    const target = e.target as Element;
+    const col = target.closest<HTMLElement>("[data-col]")?.dataset.col;
+    if (col === "search") return toggleSearch();
+    if (col === "add") {
+      return openActions(
+        addButton,
+        [
+          { id: "member", label: t("members.newMember"), icon: "plus" },
+          { id: "group", label: t("members.newGroup"), icon: "folder" },
+        ],
+        (pick) => (pick === "member" ? host.newMember(null) : host.newGroup()),
+      );
+    }
+    const more = target.closest<HTMLElement>("[data-member-more]");
+    if (more) return memberMenu(Number(more.dataset.memberMore), more);
+    const groupMore = target.closest<HTMLElement>("[data-group-more]");
+    if (groupMore) return groupMenu(Number(groupMore.dataset.groupMore), groupMore);
+    const fold = target.closest<HTMLElement>("[data-group-fold]");
+    if (fold) {
+      const value = fold.dataset.groupFold!;
+      if (value === "none" || query.trim() !== "") return;
+      const id = Number(value);
+      if (folded.has(id)) folded.delete(id);
+      else folded.add(id);
+      // the group folds where it is: its body slides, nothing else is drawn again
+      const section = fold.closest<HTMLElement>(".mb-sec")!;
+      const open = !folded.has(id);
+      section.dataset.open = String(open);
+      fold.setAttribute("aria-expanded", String(open));
+      section.querySelector(".mb-gbody")?.toggleAttribute("inert", !open);
+      return;
+    }
+    const row = target.closest<HTMLElement>("[data-member]");
+    if (row) host.select(Number(row.dataset.member));
+  });
+
+  el.addEventListener("contextmenu", (e) => {
+    const item = (e.target as Element).closest<HTMLElement>("[data-member-item]");
+    const head = (e.target as Element).closest<HTMLElement>(".mb-ghead");
+    const button = item?.querySelector<HTMLElement>("[data-member-more]") ?? head?.querySelector<HTMLElement>("[data-group-more]");
+    if (!button) return;
+    e.preventDefault();
+    if (button.dataset.memberMore !== undefined) memberMenu(Number(button.dataset.memberMore), button);
+    else groupMenu(Number(button.dataset.groupMore), button);
+  });
+
+  findInput.addEventListener("input", () => {
+    query = findInput.value;
+    draw();
+  });
+  findInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleSearch();
+    }
+  });
+
+  return { el, draw, query: () => query };
+}

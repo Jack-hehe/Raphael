@@ -5,7 +5,8 @@
    (--rg-*) is only on the card of his YES/NO question. Every movement stops with
    prefers-reduced-motion (the rule at the end of styles.css, and the last block here). */
 
-.page.page-agent { max-width: none; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); padding-bottom: 0; }
+/* The page's columns (the members, the chat, the details) are in members.css; the chat holds the
+   head, the search and the stage, one above the other. */
 
 /* ---------- the head ---------- */
 .ra-tools { display: flex; align-items: center; gap: var(--sp-1); }
