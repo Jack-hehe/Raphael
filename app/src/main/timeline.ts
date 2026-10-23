@@ -516,10 +516,13 @@ export function routineLineHTML(turn: AgentTurn): string {
 export function exchangeHTML(turn: AgentTurn, name: string, open: boolean, face = ""): string {
   const id = esc(turn.id);
   const messages = [turn.question.trim() ? userLine(turn.question.trim()) : "", turn.text.trim()].filter(Boolean);
+  // the line ends in a colon that leads to the name; with no name it ends without one
+  const said = t("members.exchange", { p0: messages.length });
+  const label = name ? said : said.replace(/[：:]\s*$/, "");
   return (
     `<li class="tn tn-x" data-id="${id}">` +
     btn(
-      `${face}<span>${esc(t("members.exchange", { p0: messages.length }))}</span><b>${esc(name)}</b><span class="steps-chev">${ico("right")}</span>`,
+      `${face}<span>${esc(label)}</span>${name ? `<b>${esc(name)}</b>` : ""}<span class="steps-chev">${ico("right")}</span>`,
       "sys sys-x",
       ` data-act="exchange" aria-expanded="${open}" aria-controls="tn-x-${id}"`,
     ) +
@@ -547,8 +550,16 @@ function bubbleHTML(words: string, files: readonly TurnAttachment[] | undefined)
 /** One question and its answer, with what was done in between. */
 export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: boolean, look: TurnLook): string {
   if (isExchange(turn)) {
-    const peer = turn.peer_id ?? 0;
-    return exchangeHTML(turn, look.memberName?.(peer) ?? "", look.openExchanges?.has(turn.id) ?? false, look.memberFace?.(peer) ?? "");
+    // A request an asked member handed to the background (route "delegate", source "member") names
+    // who asked in `peer_id`; one from before the core wrote it names no one, and its line then
+    // says no name (not Raphael's) and shows no face.
+    const peer = turn.peer_id ?? null;
+    return exchangeHTML(
+      turn,
+      peer === null ? "" : (look.memberName?.(peer) ?? ""),
+      look.openExchanges?.has(turn.id) ?? false,
+      peer === null ? "" : (look.memberFace?.(peer) ?? ""),
+    );
   }
   const id = esc(turn.id);
   const query = look.query ?? "";

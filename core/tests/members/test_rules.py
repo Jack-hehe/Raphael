@@ -123,6 +123,8 @@ async def test_a_member_asked_for_what_needs_a_yes_hands_it_to_the_background(wi
     assert sorted(t.route for t in threads) == ["delegate", "exchange"]
     (handed,) = [t for t in threads if t.route == "delegate"]
     assert (handed.source, handed.prefix, handed.question) == ("member", "", "PRIVATE 記下明天的會")
+    # It names who asked (Raphael, 0), so the thread shows it as an exchange with that one.
+    assert handed.peer_id == 0
     assert (1, handed.id) in background.attached
 
 

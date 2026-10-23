@@ -1460,6 +1460,8 @@ class AgentService:
                 status="done",
                 source=EXCHANGE_SOURCE,
                 member_id=speaker.id,
+                # who handed it over: the thread shows it as an exchange with that member
+                peer_id=ask.peer,
             )
         except sqlite3.Error as exc:
             logger.warning("Could not write the turn to the history: %s", type(exc).__name__)

@@ -1403,6 +1403,8 @@ class BackgroundService:
                 if earlier is None
                 else ("app" if earlier.route == "routine" else earlier.source),
                 member_id=old.member_id,
+                # an exchange handed to the background stays one with the member who asked
+                peer_id=earlier.peer_id if earlier is not None else None,
             )
             self._store.attach_turn(new_id, turn_id)
         except sqlite3.Error as exc:

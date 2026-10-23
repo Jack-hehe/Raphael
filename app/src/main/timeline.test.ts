@@ -324,6 +324,25 @@ describe("停止", () => {
 const LOOK: TurnLook = { face: (loop) => `<i class="face${loop ? " loop" : ""}"></i>` };
 
 describe("a turn", () => {
+  test("a request handed to the background by a member is one exchange line, named for whoever asked", () => {
+    const delegate = turn(8, { route: "delegate", source: "member", prefix: "", member_id: 4, peer_id: 3, question: "整理報告", text: "我交給背景處理了" });
+    const look: TurnLook = { ...LOOK, memberName: (id) => (id === 3 ? "小幫手" : "拉斐爾"), memberFace: () => "<i></i>" };
+    const html = turnHTML(delegate, emptyTimelineState(), false, look);
+    expect(html).toContain('class="tn tn-x"');
+    expect(html).toContain("<b>小幫手</b>");
+    expect(html).not.toContain('class="bubble"');
+  });
+
+  test("the same turn with no one named says no name and no dangling colon, and is no broken row", () => {
+    const delegate = turn(8, { route: "delegate", source: "member", prefix: "", member_id: 4, peer_id: null, question: "整理報告", text: "我交給背景處理了" });
+    const look: TurnLook = { ...LOOK, memberName: () => "拉斐爾", memberFace: () => "<i></i>" };
+    const html = turnHTML(delegate, emptyTimelineState(), false, look);
+    expect(html).toContain('class="tn tn-x"');
+    expect(html).not.toContain("<b>");
+    expect(html).not.toContain("拉斐爾");
+    expect(html).toContain("<span>2 則訊息往來</span>");
+  });
+
   test("the person on the right in 「」 with where and when; Raphael on the left with his face and 《》", () => {
     const html = turnHTML(turn(5), emptyTimelineState(), false, LOOK);
     expect(html).toContain('<span class="me-src" role="img" aria-label="語音 · 09:00" title="語音 · 09:00">');
