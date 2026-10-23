@@ -37,8 +37,10 @@ import {
   ROUTINE_TITLE_MAX,
   type ToolChoice,
   allowedTools,
+  cleanName,
   dayName,
   faceHTML,
+  isMemberNameTaken,
   isTime,
   scheduleText,
   sourceLabel,
@@ -402,19 +404,27 @@ export function createDetails(host: DetailsHost): DetailsPanel {
   async function saveField(input: HTMLInputElement | HTMLTextAreaElement): Promise<void> {
     const member = host.member();
     if (member.id === RAPHAEL_ID) return;
-    const value = input.value.trim();
     if (input.id === "mb-det-name") {
-      if (value === member.name) return;
-      const taken = host.list()?.members.some((other) => other.id !== member.id && other.name.trim().toLocaleLowerCase() === value.toLocaleLowerCase());
+      const value = cleanName(input.value);
+      if (value === member.name) {
+        input.value = member.name;
+        return;
+      }
+      const others = (host.list()?.members ?? []).filter((other) => other.id !== member.id).map((other) => other.name);
+      const taken = value !== "" && isMemberNameTaken(value, others);
       if (value === "" || taken) {
         if (taken) toaster.info(t("members.nameTaken", { p0: value }));
         input.value = member.name;
         return;
       }
+      input.value = value;
       await host.update(member.id, { name: value });
     } else if (input.id === "mb-det-role") {
+      const value = cleanName(input.value);
+      input.value = value;
       if (value !== member.role) await host.update(member.id, { role: value });
     } else if (input.id === "mb-det-instr") {
+      const value = input.value.trim();
       if (value !== (member.instructions ?? "").trim()) await host.update(member.id, { instructions: value });
     }
   }

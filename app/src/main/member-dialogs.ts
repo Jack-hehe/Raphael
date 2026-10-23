@@ -16,8 +16,10 @@ import {
   NAME_MAX,
   ROLE_MAX,
   type ToolChoice,
+  cleanName,
   faceHTML,
   initialOf,
+  isMemberNameTaken,
   parseSource,
   scheduleText,
   sourceLabel,
@@ -183,8 +185,13 @@ export function askGroupName(title: string, current = ""): Promise<string | null
   return new Promise((resolve) => {
     let result: string | null = null;
     const save = (dialog: Dialog): void => {
-      const name = dialog.el.querySelector<HTMLInputElement>("#mb-group-name")!.value.trim();
-      if (name === "") return;
+      const input = dialog.el.querySelector<HTMLInputElement>("#mb-group-name")!;
+      const name = cleanName(input.value);
+      if (name === "") {
+        toaster.info(t("members.nameEmpty"));
+        input.focus();
+        return;
+      }
       result = name;
       dialog.close();
     };
@@ -507,13 +514,13 @@ export function openNewMember(o: NewMemberOptions): Dialog {
 
   async function create(): Promise<void> {
     if (busy) return;
-    const name = nameInput.value.trim();
+    const name = cleanName(nameInput.value);
     if (name === "") {
       toaster.info(t("members.nameEmpty"));
       nameInput.focus();
       return;
     }
-    if (o.taken.some((other) => other.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
+    if (isMemberNameTaken(name, o.taken)) {
       toaster.info(t("members.nameTaken", { p0: name }));
       nameInput.focus();
       return;
@@ -521,7 +528,7 @@ export function openNewMember(o: NewMemberOptions): Dialog {
     const group = groupOf();
     const member: NewMember = {
       name,
-      role: dialog.el.querySelector<HTMLInputElement>("#mb-new-role")!.value.trim(),
+      role: cleanName(dialog.el.querySelector<HTMLInputElement>("#mb-new-role")!.value),
       instructions: dialog.el.querySelector<HTMLTextAreaElement>("#mb-new-instr")!.value.trim(),
       group_id: group ? group.id : null,
       ...(avatar ? { avatar } : {}),

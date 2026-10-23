@@ -86,9 +86,11 @@ describe("新增成員", () => {
   });
 
   test("no name, or a name already taken, is not sent", async () => {
-    const { $, create } = open();
+    const { $, create } = open({ taken: ["日文 老師"] });
     $('[data-dlg="create"]').click();
-    $<HTMLInputElement>("#mb-new-name").value = "文書";
+    $<HTMLInputElement>("#mb-new-name").value = "日文   老師";
+    $('[data-dlg="create"]').click();
+    $<HTMLInputElement>("#mb-new-name").value = "Raphael";
     $('[data-dlg="create"]').click();
     await flush();
     expect(create).not.toHaveBeenCalled();

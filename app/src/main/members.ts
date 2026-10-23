@@ -10,7 +10,7 @@
 // his picture (avatar.ts), never the placeholder.
 
 import { avatarHTML } from "./avatar";
-import { t } from "./i18n";
+import { catalogs, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 import type { ConnectionGroup, Member, MemberGroup, MemberSource, MembersList, RoutineSchedule } from "./types";
 import { esc } from "./ui";
@@ -29,6 +29,16 @@ export const ROUTINE_PROMPT_MAX = 1000;
 
 /** The composer's placeholder in a member's thread: the same English words in every language, as "Ask Raphael" is. */
 export const memberPlaceholder = (name: string): string => `Message ${name}`;
+
+/** A one-line field (a member's name or role, or a group's name) as the core stores it: trimmed, with inner whitespace collapsed. */
+export const cleanName = (value: string): string => value.trim().replace(/\s+/g, " ");
+
+/** Whether `name` is already taken by another member or matches Raphael's reserved name in any language. */
+export function isMemberNameTaken(name: string, taken: readonly string[]): boolean {
+  const key = cleanName(name).toLocaleLowerCase();
+  const reserved = Object.values(catalogs).map((c) => cleanName(c["nav.agent"]).toLocaleLowerCase());
+  return reserved.includes(key) || taken.some((other) => cleanName(other).toLocaleLowerCase() === key);
+}
 
 /** Text as the search compares it: the same width and case for every way of typing it. */
 const fold = (text: string): string => text.normalize("NFKC").toLocaleLowerCase();
