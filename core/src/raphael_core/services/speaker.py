@@ -29,7 +29,7 @@ RPC methods:
 - `tts.preview {text}` -> `{ok: true}` once the sound is playing, or `{ok: false, kind}` (the kinds
   of `common.ServiceError`, or "playback"): a short line spoken in the voice that is set up now,
   for the settings page to try it. The text is at most PREVIEW_MAX_CHARS characters and is spoken
-  as given. It replaces whatever was being said, like an answer.
+  as given, without the brackets 《》 that show a line of his. It replaces whatever was being said, like an answer.
 """
 
 import asyncio
@@ -203,7 +203,7 @@ class Speaker:
         stopped = threading.Event()
         self._stopped = stopped
         try:
-            audio = await self._hub.speech(text.strip())
+            audio = await self._hub.speech(text.replace("《", "").replace("》", "").strip())
         except ServiceError as error:
             self._failed(error.kind)
             return {"ok": False, "kind": error.kind}

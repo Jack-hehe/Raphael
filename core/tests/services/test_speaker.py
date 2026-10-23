@@ -266,7 +266,7 @@ async def test_saying_with_the_service_set_to_none_still_stops_what_was_playing(
 async def test_a_preview_speaks_the_text_as_given_and_says_so(rig):
     rig.set_up()
     assert await rig.rpc.call("tts.preview", {"text": "《告。主人，請下達指示。》"}) == {"ok": True}
-    assert rig.texts() == ["《告。主人，請下達指示。》"]
+    assert rig.texts() == ["告。主人，請下達指示。"]  # the brackets only show a line, they are not said
     await until(lambda: rig.player.played)
 
 
