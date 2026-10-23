@@ -274,7 +274,17 @@ export function createAgent(app: AppContext): Page {
 
   // ---------- the members ----------
 
-  const members = createMembers({ app, visible: () => visible, onSelect: () => switchThread() });
+  const members = createMembers({
+    app,
+    visible: () => visible,
+    onSelect: () => switchThread(),
+    onUpdate: () => {
+      drawComposer();
+      drawFaces();
+      hi.textContent = emptyLine();
+      if (visible && !scroller.hidden) drawThread();
+    },
+  });
   el.prepend(members.column);
   el.append(members.details);
   if (members.detailsOpen()) el.dataset.det = "open";

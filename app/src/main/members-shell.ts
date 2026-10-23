@@ -41,6 +41,8 @@ export interface MembersHost {
   app: AppContext;
   /** The owner chose another member's thread. */
   onSelect(id: number): void;
+  /** The list of members changed (a name or picture was updated). */
+  onUpdate?(): void;
   /** Whether the page is on screen now (a thread read only then). */
   visible(): boolean;
 }
@@ -177,6 +179,7 @@ export function createMembers(host: MembersHost): MembersShell {
       details.showMember();
     }
     drawAll();
+    host.onUpdate?.();
     void readThread();
     if (host.visible()) tellViewing(current);
     previews.clear();

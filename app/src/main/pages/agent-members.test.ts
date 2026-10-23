@@ -422,6 +422,25 @@ describe("the details panel", () => {
     $(".mb-pill").click();
     expect($(".mb-det").hidden).toBe(false);
   });
+
+  test("renaming the open member in the details panel updates the composer placeholder and thread faces", async () => {
+    mount();
+    await flush();
+    await pick(3);
+    if ($(".mb-det").hidden) $(".mb-pill").click();
+    api.membersUpdate.mockResolvedValue({ member: { ...LIST.members[1], name: "嚴格老師" } });
+    api.membersList.mockResolvedValue({
+      ...structuredClone(LIST),
+      members: LIST.members.map((m) => (m.id === 3 ? { ...m, name: "嚴格老師" } : m)),
+    });
+    const name = $<HTMLInputElement>("#mb-det-name");
+    name.focus();
+    name.value = "嚴格老師";
+    name.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await flush();
+    expect($<HTMLTextAreaElement>(".cmp-input").placeholder).toBe("Message 嚴格老師");
+    expect($(".thread .mb-av-letter").textContent).toBe("嚴");
+  });
 });
 
 test("a core without the members: Raphael alone, and the page works as before", async () => {
