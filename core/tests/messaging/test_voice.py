@@ -11,7 +11,7 @@ import soundfile
 
 from raphael_core.messaging import voice
 from raphael_core.messaging.core import MAX_VOICE_BYTES, VoiceTooLarge
-from raphael_core.messaging.words import HEARD_CHARS, heard
+from raphael_core.messaging.words import HEARD_CHARS, heard, words
 
 from .test_telegram import OWNER, FakeTelegram, make_gateway, run_until
 
@@ -217,7 +217,8 @@ async def test_an_audio_file_that_is_not_ogg_is_declined(files, files_http):
     files.message(OWNER, None, audio={"file_id": "a1", "duration": 1, "mime_type": "audio/mpeg"})
     gateway = make_gateway(files, files_http, transcribe=transcriber())
     await run_until(gateway, lambda: files.sent)
-    assert files.downloads == [] and gateway.asked == [] and "text and voice" in files.sent[0][1]
+    assert files.downloads == [] and gateway.asked == []
+    assert files.sent[0][1] == words("en", "unsupported")
 
 
 async def test_an_ogg_audio_file_is_heard_like_a_voice_message(files, files_http):
