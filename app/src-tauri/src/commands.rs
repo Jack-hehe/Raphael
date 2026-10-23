@@ -13,7 +13,9 @@
 //!   way to Raphael, through the dictation controller rather than the core
 //!   ([`crate::dictation::Desk`]): a question typed in its composer (some text, of a bounded
 //!   length), and the YES/NO question that is open, which the page shows on a card and may answer
-//!   by its id, as the overlay's buttons do, while the window has the focus.
+//!   by its id, as the overlay's buttons do, while the window has the focus. `agent_page_shown`
+//!   says whether the page is on screen: while it is, and the window is in front, a question to
+//!   Raphael is shown there alone, not on the overlay too.
 //! - `device_settings_get` and `device_settings_set` read and change `device.json`
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
 //!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
@@ -79,6 +81,12 @@ static MONITORING: AtomicBool = AtomicBool::new(false);
 /// but start no dictation and no question. Set by `hotkeys_practice`; a page that subscribes again
 /// (it was reloaded) ends it, so that a lesson that was lost cannot leave the keys dead.
 static PRACTICE: AtomicBool = AtomicBool::new(false);
+/// Whether the main window shows the 拉斐爾 page, with neither the settings over it nor the
+/// first-run guide in its place. Set by `agent_page_shown` each time that changes; a page that
+/// subscribes again (it was reloaded) starts without it, until it says so. While it is set and the
+/// window is in front, a question to Raphael is shown on that page alone, not on the overlay too
+/// ([`crate::dictation::AppFront`]).
+static AGENT_PAGE: AtomicBool = AtomicBool::new(false);
 /// The task that passes the core's notifications on to the page that last called `main_events`.
 static FORWARDER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
@@ -663,6 +671,20 @@ pub fn agent_question_answer(
         .map_err(|_| AGENT_OFF.to_owned())
 }
 
+/// The main window says whether it shows the 拉斐爾 page now (see [`AGENT_PAGE`]).
+#[tauri::command]
+pub fn agent_page_shown(webview: Webview, shown: bool) -> Result<(), String> {
+    require_main(&webview)?;
+    AGENT_PAGE.store(shown, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Whether the main window said it shows the 拉斐爾 page (see [`AGENT_PAGE`]). Whether the window
+/// itself is in front is for the caller to find out.
+pub fn agent_page_on_screen() -> bool {
+    AGENT_PAGE.load(Ordering::SeqCst)
+}
+
 // ---------- events ----------
 
 /// A whole number out of JSON, which may have written it as 380000000.0.
@@ -730,8 +752,10 @@ pub async fn main_events(
     channel: Channel<MainEvent>,
 ) -> Result<(), String> {
     require_main(&webview)?;
-    // A page that subscribes is a new page: a practice of the one before is over.
+    // A page that subscribes is a new page: a practice of the one before is over, and the page it
+    // showed is gone until the new one says what it shows.
     PRACTICE.store(false, Ordering::SeqCst);
+    AGENT_PAGE.store(false, Ordering::SeqCst);
     PAGE.lock()
         .unwrap_or_else(PoisonError::into_inner)
         .subscribe(channel.clone());
@@ -1458,6 +1482,7 @@ mod tests {
             checked,
             [
                 "agent_ask_text",
+                "agent_page_shown",
                 "agent_question_answer",
                 "agent_question_open",
                 "core_call",
