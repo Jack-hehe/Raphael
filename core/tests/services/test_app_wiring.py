@@ -75,7 +75,7 @@ class NotedSpeaker:
 
 async def test_the_voice_methods_are_registered_and_the_assistant_stands_on_the_same_speaker(app):
     assert {"tts.stop", "tts.preview"} <= set(app.methods())
-    assert app.agent._speaker is app.speaker
+    assert app.agent._speaking is app.speaker
     assert await app.call("tts.stop", {}) == {"ok": True}
     # With no service chosen (the default) there is nothing to preview.
     assert await app.call("tts.preview", {"text": "x"}) == {"ok": False, "kind": "not_configured"}
@@ -91,7 +91,7 @@ async def test_a_new_recording_stops_the_voice_before_it_waits_for_anything(app)
 
 async def test_a_spoken_answer_reaches_the_voice_through_the_whole_app(app):
     noted = NotedSpeaker()
-    app.agent._speaker = noted
+    app.agent._speaking = noted
     await app.call(
         "agent.ask", {"session_id": "s", "text": "你好", "ui_language": "zh-TW", "source": "voice"}
     )
