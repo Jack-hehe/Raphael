@@ -159,12 +159,20 @@ pub enum OverlayEvent {
     /// that is showing: the page tells them when it is over.
     Learned { text: String },
     /// Raphael answers: the emblem and one subtitle line, 《`prefix`。`text`》.
-    Say { prefix: String, text: String },
+    Say {
+        prefix: String,
+        text: String,
+        /// A voiced answer stays until the controller publishes Release or Hide.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        hold: bool,
+    },
     /// Raphael asks a question: the subtitle line 《`prefix`。`text`》 and two buttons under it.
     /// The window takes the mouse until the question is over.
     Ask(AskPrompt),
     /// Delivery succeeded: show 100% briefly before the normal vanish animation.
     Complete,
+    /// The voice ended: release the held answer and continue with any queued reports.
+    Release,
     /// The vanish animation.
     Hide,
     /// Raphael operates the desktop: the emblem shows its 「操作中」 look, with `line` (the step,
@@ -214,6 +222,14 @@ pub trait OverlayApi: Send + Sync + 'static {
     /// Raphael answers: the emblem appears with 《`prefix`。`text`》 as one subtitle line, then
     /// vanishes after a time that depends on the length of `text`.
     fn say(&self, prefix: &str, text: &str);
+    /// A voiced answer whose lifetime is owned by the dictation controller.
+    fn say_held(&self, prefix: &str, text: &str) {
+        self.say(prefix, text);
+    }
+    /// Release a voiced answer without dropping the reports queued behind it.
+    fn release_say(&self) {
+        self.hide();
+    }
     /// Raphael asks a YES/NO question: the subtitle line and two buttons. From now on the window
     /// takes the mouse, without ever being activated, until another call puts something else on
     /// the stage (the reply to the answer, a notice, a hide). It keeps the mouse while the answer
@@ -328,6 +344,7 @@ pub(crate) fn takes_clicks(event: &OverlayEvent) -> Option<bool> {
         | OverlayEvent::Notice { .. }
         | OverlayEvent::Operate { .. }
         | OverlayEvent::Complete
+        | OverlayEvent::Release
         | OverlayEvent::Hide => Some(false),
         // The loudness and progress are about the emblem, learned words wait behind whatever is
         // on the stage, and the settings are no scene.
@@ -374,6 +391,7 @@ impl OverlayEvent {
             OverlayEvent::Say { .. } => "say",
             OverlayEvent::Ask(_) => "ask",
             OverlayEvent::Complete => "complete",
+            OverlayEvent::Release => "release",
             OverlayEvent::Hide => "hide",
             OverlayEvent::Operate { .. } => "operate",
             OverlayEvent::Settings { .. } => "settings",
@@ -693,9 +711,22 @@ impl OverlayApi for Overlay {
 
     fn say(&self, prefix: &str, text: &str) {
         self.publish(OverlayEvent::Say {
+            hold: false,
             prefix: prefix.to_owned(),
             text: text.to_owned(),
         });
+    }
+
+    fn say_held(&self, prefix: &str, text: &str) {
+        self.publish(OverlayEvent::Say {
+            prefix: prefix.to_owned(),
+            text: text.to_owned(),
+            hold: true,
+        });
+    }
+
+    fn release_say(&self) {
+        self.publish(OverlayEvent::Release);
     }
 
     fn ask(&self, prompt: &AskPrompt) {
@@ -1180,6 +1211,7 @@ mod tests {
         );
         assert_eq!(json(OverlayEvent::Hide), r#"{"type":"hide"}"#);
         assert_eq!(json(OverlayEvent::Complete), r#"{"type":"complete"}"#);
+        assert_eq!(json(OverlayEvent::Release), r#"{"type":"release"}"#);
         assert_eq!(
             json(OverlayEvent::Learned {
                 text: "《了。「手機」已加入詞典。》".into()
@@ -1234,6 +1266,15 @@ mod tests {
         let json = |e: OverlayEvent| serde_json::to_string(&e).unwrap();
         assert_eq!(
             json(OverlayEvent::Say {
+                prefix: "Answer".into(),
+                text: "Hello.".into(),
+                hold: true,
+            }),
+            r#"{"type":"say","prefix":"Answer","text":"Hello.","hold":true}"#
+        );
+        assert_eq!(
+            json(OverlayEvent::Say {
+                hold: false,
                 prefix: "答".into(),
                 text: "台北現在二十四度，多雲。".into()
             }),
@@ -1274,11 +1315,13 @@ mod tests {
                 line: None,
             },
             OverlayEvent::Say {
+                hold: false,
                 prefix: "答".into(),
                 text: String::new(),
             },
             notice(1),
             OverlayEvent::Complete,
+            OverlayEvent::Release,
             OverlayEvent::Hide,
         ] {
             assert_eq!(takes_clicks(&ends), Some(false), "{ends:?}");
@@ -1331,6 +1374,7 @@ mod tests {
         };
         let ask = OverlayEvent::Ask(prompt(Tier::T3));
         let say = OverlayEvent::Say {
+            hold: false,
             prefix: "了".into(),
             text: "好了".into(),
         };
@@ -1641,11 +1685,13 @@ mod tests {
                 text: String::new(),
             },
             OverlayEvent::Say {
+                hold: false,
                 prefix: "答".into(),
                 text: String::new(),
             },
             OverlayEvent::Ask(prompt(Tier::T2)),
             OverlayEvent::Complete,
+            OverlayEvent::Release,
             OverlayEvent::Hide,
             OverlayEvent::Settings {
                 px: 150,
@@ -1663,6 +1709,7 @@ mod tests {
     fn an_answer_and_a_question_from_before_the_page_loaded_wait_for_it() {
         let mut bus = Bus::new(150, "on", "zh-TW");
         bus.publish(OverlayEvent::Say {
+            hold: false,
             prefix: "答".into(),
             text: "好".into(),
         });
