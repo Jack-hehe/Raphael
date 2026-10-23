@@ -485,6 +485,12 @@ DROP TABLE agent_messages_v17;
 PRAGMA user_version = 18;
 COMMIT;
 """,
+    19: """
+BEGIN;
+ALTER TABLE members ADD COLUMN personality TEXT NOT NULL DEFAULT '';
+PRAGMA user_version = 19;
+COMMIT;
+""",
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

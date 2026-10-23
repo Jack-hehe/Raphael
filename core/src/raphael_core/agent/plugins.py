@@ -251,7 +251,9 @@ request needs.
 asks to do something in them.
 - Raphael has its own weather, clock and web search: never call a tool for those alone.
 - The tools ask_member and create_member, when offered, reach the user's own team of assistants: \
-call ask_member when the request asks a member of the team (by name) for something, and \
+call ask_member when the request mentions another member by name or refers to something said or \
+taught in that member's thread, even without an explicit request to ask them. Use the member's \
+answer instead of claiming the conversation cannot be accessed. Call \
 create_member only when the user asks for a new member.
 - Call at most three tools, and fill in arguments only with what the request or the conversation \
 says. Never invent a value, a name or an address.

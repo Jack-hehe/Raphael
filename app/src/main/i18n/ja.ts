@@ -911,6 +911,8 @@ export const ja = {
   "members.name": "名前",
   "members.role": "役割",
   "members.instructions": "指示",
+  "members.personality": "性格",
+  "members.personalityHint": "口調、口癖、呼び方。例：厳しくても根気強く、名前で呼ぶ。",
   "members.group": "グループ",
   "members.model": "モデル",
   "members.sameModel": "ラファエルと同じ",

@@ -101,7 +101,7 @@ _DEFINITIONS: dict[str, dict[str, Any]] = {
     },
     "read_attachment": {
         "description": (
-            "[Raphael] Read a file your master handed over with the task, by its number (1 for "
+            "[Raphael] Read a file the user handed over with the task, by its number (1 for "
             "the first): the text of a PDF, or what an image shows. Ask a question about it to "
             "say what to look for."
         ),
@@ -134,7 +134,7 @@ _DEFINITIONS: dict[str, dict[str, Any]] = {
     },
     "memory_read": {
         "description": (
-            "[Raphael] Read Raphael's notes about the user in full, by their names (the names in "
+            "[Raphael] Read your own notes and shared user facts in full, by their names (the names in "
             "the index of notes you were given)."
         ),
         "parameters": {
@@ -147,7 +147,7 @@ _DEFINITIONS: dict[str, dict[str, Any]] = {
     },
     "history_search": {
         "description": (
-            "[Raphael] Search what the user and Raphael said in earlier conversations, by a few "
+            "[Raphael] Search what the user and you said in this speaker's earlier conversations, by a few "
             "words. Returns the matching turns with their dates."
         ),
         "parameters": {

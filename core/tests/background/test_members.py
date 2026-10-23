@@ -32,6 +32,9 @@ class Team:
     def has_members(self):
         return True
 
+    def roster(self):
+        return [RAPHAEL, MEMBER]
+
     def create(self, **fields):
         raise AssertionError("no member is made here")
 

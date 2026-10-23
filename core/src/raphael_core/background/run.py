@@ -65,6 +65,7 @@ from ..agent.team import description as team_description
 from ..agent.tools import ToolResult, Tools
 from ..brain.catalog import LLM, find
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
+from ..brain.textnorm import convert_leftover_simplified
 from ..brain.pricing import builtin_catalog
 from ..brain.spend import SpendTracker
 from ..integrations.pool import McpPool
@@ -424,7 +425,8 @@ class TaskRun:
         )
         self._step(kind="model", outcome="ok", cost_usd=cost, ms=_ms(began))
         if turn.calls and turn.content.strip():
-            self._progress(" ".join(turn.content.split())[:200])
+            text = " ".join(turn.content.split())[:200]
+            self._progress(convert_leftover_simplified(text) if self.language == "zh-TW" else text)
         return {
             "content": turn.content,
             "calls": [

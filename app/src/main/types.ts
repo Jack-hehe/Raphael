@@ -503,6 +503,8 @@ export interface Member {
   name: string;
   role: string;
   instructions: string;
+  /** Character and speaking style; absent in older cached member lists. */
+  personality?: string;
   /** `""`, `"preset:<stem>"` or `"file:<stored name>"`. */
   avatar: string;
   avatar_url?: string;
@@ -548,6 +550,7 @@ export interface NewMember {
   name: string;
   role?: string;
   instructions?: string;
+  personality?: string;
   group_id?: number | null;
   avatar?: string;
   tools?: string[];
@@ -559,7 +562,7 @@ export interface NewMember {
  * What `members.update` may change, beside its `id`: the avatar only as `""` or `"preset:<stem>"`
  * (a picture of the PC goes by `members.set_avatar`).
  */
-export type MemberPatch = Partial<Pick<Member, "name" | "role" | "instructions" | "group_id" | "model" | "tools" | "avatar" | "position">>;
+export type MemberPatch = Partial<Pick<Member, "name" | "role" | "personality" | "instructions" | "group_id" | "model" | "tools" | "avatar" | "position">>;
 
 /** An image of the presets folder (`members.presets`): its avatar value, its file stem, and the picture as a data URL. */
 export interface AvatarPreset {

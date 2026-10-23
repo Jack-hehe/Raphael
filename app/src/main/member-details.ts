@@ -30,6 +30,7 @@ import {
   HOUR_STEPS,
   INSTRUCTIONS_MAX,
   NAME_MAX,
+  PERSONALITY_MAX,
   RAPHAEL_ID,
   ROLE_MAX,
   ROUTINE_PROMPT_MAX,
@@ -212,6 +213,8 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     const group = list?.groups.find((g) => g.id === member.group_id) ?? null;
     const sources = group?.sources ?? [];
     return (
+      `<section class="mb-field"><label class="mb-dh" for="mb-det-personality">${esc(t("members.personality"))}</label>` +
+      `<textarea id="mb-det-personality" data-member="${member.id}" class="mb-fin mb-ta" rows="3" maxlength="${PERSONALITY_MAX}" placeholder="${esc(t("members.personalityHint"))}">${esc(member.personality ?? "")}</textarea></section>` +
       `<section class="mb-field"><label class="mb-dh" for="mb-det-instr">${esc(t("members.instructions"))}</label>` +
       `<textarea id="mb-det-instr" data-member="${member.id}" class="mb-fin mb-ta" rows="4" maxlength="${INSTRUCTIONS_MAX}">${esc(member.instructions ?? "")}</textarea></section>` +
       `<section class="mb-field"><div class="mb-dh">${esc(t("members.group"))}</div>` +
@@ -277,20 +280,24 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       { label: t("members.panel"), kind: "nav", plain: true, fill: true },
     );
     keepTyping();
-    if (sameMember && typingIn === "mb-det-instr" && tab === "details") {
-      // Blur saves instructions, so keep that section alive while the other fields update.
-      const instructions = body.firstElementChild!;
+    const typingText = typingIn === "mb-det-instr" || typingIn === "mb-det-personality";
+    const kept = typingText ? (focused as HTMLElement).closest<HTMLElement>("section") : null;
+    if (sameMember && kept && kept.parentElement === body && tab === "details") {
+      // Blur saves the box being typed in, so keep its section alive while the other fields update.
+      const at = Array.from(body.children).indexOf(kept);
       const next = document.createElement("div");
       next.innerHTML = detailsHTML(member);
+      const fresh = Array.from(next.children);
       picker?.close();
       picker = null;
-      while (instructions.nextSibling) instructions.nextSibling.remove();
-      body.append(...Array.from(next.children).slice(1));
+      for (const child of Array.from(body.children)) if (child !== kept) child.remove();
+      kept.before(...fresh.slice(0, at));
+      kept.after(...fresh.slice(at + 1));
       mountPicker(member);
       scroll.scrollTop = scrollTop;
       return;
     }
-    if (typingIn === "mb-det-instr") void saveField(focused as HTMLTextAreaElement, true);
+    if (typingText) void saveField(focused as HTMLTextAreaElement, true);
     picker?.close();
     picker = null;
     body.innerHTML = tab === "details" ? detailsHTML(member) : memoryHTML(shared.view()) + memoryHTML(own.view());
@@ -444,6 +451,9 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       const value = cleanName(input.value);
       input.value = value;
       if (value !== member.role) await host.update(member.id, { role: value });
+    } else if (input.id === "mb-det-personality") {
+      const value = input.value.trim();
+      if (value !== (member.personality ?? "").trim()) await host.update(member.id, { personality: value });
     } else if (input.id === "mb-det-instr") {
       const value = input.value.trim();
       if (value !== (member.instructions ?? "").trim()) await host.update(member.id, { instructions: value });
@@ -555,7 +565,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
   el.addEventListener("focusout", (e) => {
     const target = e.target as HTMLElement;
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-      if (["mb-det-name", "mb-det-role", "mb-det-instr"].includes(target.id)) void saveField(target);
+      if (["mb-det-name", "mb-det-role", "mb-det-personality", "mb-det-instr"].includes(target.id)) void saveField(target);
     }
   });
 
