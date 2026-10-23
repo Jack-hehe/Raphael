@@ -35,6 +35,11 @@ def test_the_defaults_are_the_documented_ones():
         "worker_cost_cap_usd": 0.2,
         "stt_local_model": "qwen3-asr",
         "model_favorites": {"cleanup": [], "answer": [], "stt": []},
+        "web_search_service": "openrouter",
+        "web_read_service": "builtin",
+        "vision_model": "",
+        "pdf_service": "builtin",
+        "searxng_url": "",
     }
 
 

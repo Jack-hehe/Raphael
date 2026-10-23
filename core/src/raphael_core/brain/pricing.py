@@ -43,8 +43,9 @@ CACHE_KEY = "cache.pricing"
 # `parse_catalog` reads a model differently, or the cache holds something else (2: the MAI models
 # per hour, not unknown; 3: every model Raphael could use, not only the prices of his own; 4: the
 # batch variants left out; 5: whether a language model takes tools, as a capability; 6: the kind
-# of a model whose modalities are not listed, from its `modality`).
-CACHE_READING = 6
+# of a model whose modalities are not listed, from its `modality`; 7: whether a language model
+# reads images and files, as capabilities).
+CACHE_READING = 7
 
 # The models Raphael calls when nobody chose another: the default of each role (the settings'
 # DEFAULTS) and the fallbacks of the language models (openrouter.CLEANUP_FALLBACKS), at their
