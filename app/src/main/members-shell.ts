@@ -30,7 +30,7 @@ import {
 } from "./member-dialogs";
 import { RAPHAEL_ID, type ToolChoice, faceHTML, memberOf, memberSections, raphaelOf, toolChoices } from "./members";
 import type { AppContext, AvatarPreset, Member, MemberPatch, MembersList, ModelCatalog, WireAttachment } from "./types";
-import { type Choice, esc, ico, leave, openMenu, toaster } from "./ui";
+import { type Choice, closeMenu, esc, ico, leave, openMenu, toaster } from "./ui";
 
 /** Below this window width the details panel lies over the chat instead of taking a column of its own. */
 export const DETAILS_COLUMN_MIN_PX = 1120;
@@ -285,7 +285,15 @@ export function createMembers(host: MembersHost): MembersShell {
       ...(m.waiting ? { tag: t("members.waitingShort") } : m.unread ? { tag: t("members.unread") } : {}),
     }));
     openMenu(picker, people, String(current), (value) => select(Number(value)), undefined, [
-      { label: t("members.newMember"), icon: "plus", run: () => newMember(null) },
+      {
+        label: t("members.newMember"),
+        icon: "plus",
+        run: () => {
+          closeMenu();
+          picker.focus({ preventScroll: true });
+          newMember(null);
+        },
+      },
     ]);
   });
 

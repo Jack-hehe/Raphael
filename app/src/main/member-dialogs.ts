@@ -51,6 +51,7 @@ export interface DialogOptions {
 
 /** Opens a dialog over the window (see the top of the file). The first field, or the first button, has the focus. */
 export function openDialog(o: DialogOptions): Dialog {
+  closeMenu();
   const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const scrim = document.createElement("div");
   scrim.className = "mb-scrim";

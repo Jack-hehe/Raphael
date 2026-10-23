@@ -372,6 +372,21 @@ describe("a new member", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(document.querySelector(".mb-dialog")).toBeNull();
   });
+
+  test("opened from the narrow-window picker closes the menu first and returns focus to the picker on Escape", async () => {
+    mount();
+    await flush();
+    const picker = $<HTMLButtonElement>(".mb-pick");
+    picker.click();
+    expect(document.getElementById("app-popover")).not.toBeNull();
+    $<HTMLElement>('#app-popover [data-action="0"]').click();
+    expect(document.getElementById("app-popover")).toBeNull();
+    expect(document.querySelector(".mb-dialog")).not.toBeNull();
+    expect(document.activeElement?.id).toBe("mb-new-name");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector(".mb-scrim")).toBeNull();
+    expect(document.activeElement).toBe(picker);
+  });
 });
 
 describe("the details panel", () => {
