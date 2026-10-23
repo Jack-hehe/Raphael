@@ -1,0 +1,220 @@
+/* The members of the 拉斐爾 page (members-shell.ts): the member column, the chat between, the details
+   panel, and their dialogs. Colours are the app's tokens (styles.css); Raphael's gold (--rg-*) is only
+   where a question waits for the owner, as the brief asks.
+
+   Raphael's face is his emblem exactly as it is at the bottom right: bare, with no background,
+   border, ring, disc, shadow or circle crop, wherever it shows (the column, the pill, the panel, the
+   thread). So no rule here styles `.av` itself or the element a face is drawn into: the members'
+   own faces are styled by `.mb-av` alone, which Raphael's never carries (members.ts `faceHTML`). A
+   test reads this sheet to keep it so (members-emblem.test.ts). */
+
+/* ---------- the page: the column, the chat, the panel ---------- */
+.page.page-agent { position: relative; max-width: none; height: 100%; padding: 0; display: grid; grid-template-columns: 232px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.page.page-agent[data-det="open"] { grid-template-columns: 232px minmax(0, 1fr) 236px; }
+.mb-chat { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; min-height: 0; padding: calc(var(--window-controls-height) + 4px) 24px 0; }
+
+/* ---------- the member column ---------- */
+.mb-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--side); border-right: 1px solid var(--line); padding-top: calc(var(--window-controls-height) + 4px); }
+.mb-top { display: flex; align-items: center; gap: 2px; padding: 0 10px 6px; }
+.mb-top-fill { flex: 1; }
+.mb-find { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 30px; padding: 0 8px; border: 1px solid var(--btn-edge); border-radius: var(--r-sm); background: var(--panel); color: var(--text-3); }
+.mb-find:not([hidden]) + .mb-top-fill { display: none; }
+.mb-find-input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: var(--fs-sm); color: var(--text); }
+.mb-find-input::-webkit-search-cancel-button { display: none; }
+.mb-find-input:focus-visible { outline: 0; }
+.page-agent .btn.mb-tool { width: 30px; min-height: 30px; }
+.mb-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0 10px 14px; }
+.mb-list { display: flex; flex-direction: column; gap: 2px; }
+
+/* Raphael at the top: his emblem at 64 px and his name. The button is a plain place to click, with
+   no fill of its own, under the pointer or open either: nothing is ever behind the emblem. His
+   thread being the open one shows in his name, in the accent. */
+.nav.mb-chief { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 4px; min-height: 0; padding: 6px 8px 12px; text-align: center; color: var(--text); }
+.nav.mb-chief:hover, .nav.mb-chief[aria-current="true"] { background: transparent; }
+.nav.mb-chief b { font-size: var(--fs-md); font-weight: 650; }
+.nav.mb-chief:hover b { color: var(--accent-text); }
+.nav.mb-chief[aria-current="true"] b { color: var(--accent-text); }
+.nav.mb-chief > .mb-dot { position: absolute; top: 10px; right: 12px; }
+
+/* a group: its header folds it away, the body slides */
+.mb-sec { margin-top: 6px; }
+.mb-ghead { display: flex; align-items: center; gap: 2px; min-height: 30px; padding: 0 2px 0 8px; font-size: 11.5px; color: var(--text-3); }
+.mb-gname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-agent .mb-ghead .btn.icon { width: 24px; min-height: 24px; color: var(--text-3); }
+.page-agent .mb-ghead .btn.icon:hover:not(:disabled) { color: var(--text); }
+.mb-ghead .mb-more { opacity: 0; }
+.mb-ghead:hover .mb-more, .mb-ghead .mb-more:focus-visible, .mb-ghead .mb-more[aria-expanded="true"] { opacity: 1; }
+.mb-fold .i { transition: transform 0.2s ease; }
+.mb-sec[data-open="false"] .mb-fold .i { transform: rotate(-90deg); }
+.mb-gbody { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 0.22s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.mb-sec[data-open="false"] .mb-gbody { grid-template-rows: 0fr; }
+.mb-gclip { min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 2px; }
+.mb-none { margin: 20px 8px; font-size: var(--fs-sm); color: var(--text-3); text-align: center; }
+
+/* a member: its picture, name, role and last line; a dot when something waits or is new */
+.mb-item { position: relative; }
+.mb-item.is-new { animation: row-in 0.2s ease-out backwards; }
+.nav.mb-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 9px; align-items: center; min-height: 52px; padding: 7px 8px; border-radius: 10px; color: var(--text); }
+.nav.mb-row[aria-current="true"] { background: var(--selected); }
+.mb-row-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; min-width: 0; }
+.mb-row-t { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.mb-row-t b { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 13.5px; }
+.mb-row-t i { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: normal; font-size: 11px; color: var(--text-3); }
+.mb-row-p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 1.45; color: var(--text-3); }
+.mb-row-p.is-wait { color: var(--rg-ink); font-weight: 600; }
+.mb-dot { display: block; flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.mb-dot.is-wait { background: var(--rg-btn); }
+.mb-dot.is-unread { background: var(--accent-text); }
+/* its 「more」 shows under the pointer; the row makes room for it */
+.page-agent .mb-item .btn.mb-more { position: absolute; top: 50%; right: 4px; width: 28px; min-height: 28px; margin-top: -14px; opacity: 0; }
+.page-agent .mb-item:hover .btn.mb-more, .page-agent .mb-item .btn.mb-more:focus-visible, .page-agent .mb-item .btn.mb-more[aria-expanded="true"] { opacity: 1; }
+.mb-item:hover .nav.mb-row, .mb-item:has(.mb-more[aria-expanded="true"]) .nav.mb-row { padding-right: 36px; }
+.mb-item:hover .mb-row .mb-dot, .mb-item:has(.mb-more[aria-expanded="true"]) .mb-row .mb-dot { display: none; }
+
+/* ---------- the members' faces (never Raphael's: see the top) ---------- */
+.av.mb-av { overflow: hidden; border-radius: 50%; }
+.av.mb-av-letter { display: inline-flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--text-2); font: 650 calc(var(--av) * 0.42) / 1 var(--display); line-height: 1; user-select: none; }
+.av.mb-av-pic > img { object-fit: cover; }
+
+/* ---------- the chat's top row: the narrow windows' dropdown, the pill, the tools ---------- */
+.page-head.mb-head { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: var(--sp-2); min-height: 40px; }
+.mb-h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.mb-head-l { justify-self: start; min-width: 0; max-width: 100%; }
+.mb-head-c { justify-self: center; min-width: 0; max-width: 100%; }
+.mb-head .ra-tools { justify-self: end; }
+.page-agent .btn.mb-pill { max-width: 100%; min-height: 32px; gap: 8px; padding: 3px 12px 3px 5px; border-radius: var(--r-pill); border-color: var(--edge); background: var(--panel); font-weight: 600; font-size: var(--fs-sm); box-shadow: 0 4px 14px color-mix(in srgb, var(--text) 6%, transparent); }
+.page-agent .btn.mb-pill:hover:not(:disabled) { border-color: var(--btn-edge); background: var(--panel); }
+.mb-pill-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sel.mb-pick { display: none; max-width: 180px; }
+.sel.mb-pick .mb-dot { margin-left: -2px; }
+
+/* ---------- the thread of a member ---------- */
+/* its answers are plain bubbles, with none of Raphael's 《》 */
+.tn-plain .ans:not(.thinking) { justify-self: start; max-width: 100%; padding: 8px 12px; border: 1px solid var(--edge); border-radius: 14px; background: var(--panel); font-size: 14.5px; line-height: 1.65; }
+/* the line of a routine's run, and an exchange between members */
+.sys { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; font-size: var(--fs-xs); color: var(--text-3); }
+.sys b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--text-2); }
+.page-agent .btn.sys-x { min-height: 26px; padding: 2px 8px; border-color: transparent; background: transparent; border-radius: var(--r-sm); }
+.page-agent .btn.sys-x:hover:not(:disabled) { border-color: transparent; background: var(--hover); color: var(--text-2); }
+.sys-x .steps-chev .i { transition: transform 0.22s ease; }
+.sys-x[aria-expanded="true"] .steps-chev .i { transform: rotate(90deg); }
+.x-list { list-style: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; width: 100%; max-width: 560px; margin: 0 auto; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); font-size: 13px; line-height: 1.6; color: var(--text-2); }
+.x-list li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; overflow-wrap: anywhere; user-select: text; }
+.x-list b { font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); }
+/* a member's empty thread: its face and its name */
+.ra-empty.is-member .ra-hero { width: 96px; height: 96px; }
+.ra-empty.is-member .ra-hi { font: 650 17px/1.5 var(--display); letter-spacing: 0; }
+
+/* ---------- the details panel ---------- */
+.mb-det { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); border-left: 1px solid var(--line); padding-top: var(--window-controls-height); }
+.mb-det.is-in { animation: mb-det-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.mb-det.leaving { animation: mb-det-out 0.16s ease-in forwards; pointer-events: none; }
+@keyframes mb-det-in { from { opacity: 0; transform: translateX(16px); } }
+@keyframes mb-det-out { to { opacity: 0; transform: translateX(16px); } }
+.mb-det-head { display: flex; align-items: center; padding: 4px 8px 0; }
+.mb-det-fill { flex: 1; }
+.mb-det-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 0 14px 18px; }
+.mb-who { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 2px; text-align: center; }
+/* the face is the button that changes it: no edge and no fill, so that Raphael's emblem stands bare */
+.page-agent .btn.mb-avbtn { width: 64px; height: 64px; min-height: 64px; margin-bottom: 4px; padding: 0; border-color: transparent; background: transparent; transition: opacity 0.15s ease; }
+.page-agent .btn.mb-avbtn:hover:not(:disabled), .page-agent .btn.mb-avbtn:active:not(:disabled) { border-color: transparent; background: transparent; opacity: 0.85; }
+.mb-who-name { max-width: 100%; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
+.mb-edit { width: 100%; min-width: 0; padding: 2px 6px; border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; text-align: center; color: var(--text); outline: 0; }
+.mb-edit:hover { border-color: var(--edge); }
+.mb-edit:focus-visible { outline: 0; }
+.mb-who-role { font-size: var(--fs-xs); color: var(--text-3); }
+.mb-who-role::placeholder { color: var(--text-3); }
+.mb-tabs .tabs.plain { width: 100%; }
+.mb-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.mb-dh { display: flex; align-items: center; justify-content: space-between; min-height: 24px; font-size: 11.5px; color: var(--text-3); }
+.page-agent .mb-dh .btn.icon { width: 24px; min-height: 24px; }
+.mb-fin { width: 100%; min-width: 0; min-height: 32px; padding: 6px 10px; border: 1px solid var(--btn-edge); border-radius: var(--r-sm); background: var(--panel); font-size: var(--fs-sm); color: var(--text); outline: 0; }
+.mb-fin:focus-visible { outline: 0; }
+.mb-ta { min-height: 72px; resize: vertical; line-height: 1.55; }
+.mb-field .sel, .mb-frow .sel, .mb-rsched .sel { width: 100%; max-width: 100%; justify-content: space-between; }
+.mb-field .sel > span, .mb-frow .sel > span { flex: 1; min-width: 0; text-align: left; }
+/* routines: a row each, the switch at its end; the pencil and the trash show under the pointer */
+.mb-rts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.mb-rt { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; padding: 8px 8px 8px 10px; border: 1px solid var(--edge); border-radius: 10px; }
+.mb-rt-main { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+.mb-rt-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.mb-rt-main span { font-size: 11.5px; color: var(--text-3); }
+.mb-rt-ctl { display: flex; align-items: center; gap: 0; }
+.mb-rt-ctl .btn.icon { display: none; }
+.mb-rt:hover .mb-rt-ctl .btn.icon, .mb-rt:focus-within .mb-rt-ctl .btn.icon { display: inline-flex; }
+.mb-rt-ctl .tg { margin-left: 4px; }
+.mb-rform { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 10px; border: 1px solid var(--edge); border-radius: 10px; background: var(--content); }
+.mb-rsched { display: flex; flex-wrap: wrap; gap: 6px; }
+.mb-rsched > * { flex: 1 1 96px; min-width: 0; }
+.mb-ract { display: flex; justify-content: flex-end; gap: 6px; }
+.mb-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mb-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; padding: 2px 8px; border-radius: var(--r-pill); background: var(--surface-2); font-size: var(--fs-xs); color: var(--text-2); overflow-wrap: anywhere; }
+.mb-chip .chip-x { display: inline-grid; place-items: center; width: 20px; height: 20px; margin-right: -4px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-3); }
+.mb-chip .chip-x:hover { background: var(--hover); color: var(--text); }
+/* 工具: a checklist */
+.mb-tools { display: grid; grid-template-columns: minmax(0, 1fr); }
+.mb-tool-row { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 4px 2px; border-bottom: 1px solid var(--line); font-size: var(--fs-sm); }
+.mb-tool-row input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--accent-text); }
+.mb-tool-row span { min-width: 0; overflow-wrap: anywhere; }
+/* 記憶: the list of the settings, narrower */
+.mb-det .sgroup { margin-top: 0; }
+.mb-det .slist { --slist-pad: 10px; }
+.mb-det .slist > .row { min-height: 44px; padding: 8px 0; }
+.mb-det .slist > .row > .lbl { min-width: 0; }
+.mb-det .slist > .row.mem-sub > .lbl { padding-left: 0; }
+.mb-det .mem-edit { padding: 8px 0 10px; }
+.mb-det .slist > .row { flex-wrap: nowrap; }
+.mb-det .mem-line { flex-direction: column; align-items: flex-start; gap: 0; }
+.mb-det .mem-desc { white-space: normal; overflow-wrap: anywhere; }
+.mb-det .mem .ctl { gap: 0; }
+.page-agent .mb-det .mem .btn.icon { width: 28px; min-height: 28px; }
+/* the pencil and the trash of a note show under the pointer, so that its line has the room */
+.mb-det .mem-sub .ctl .btn.icon:not([data-mem="more"]) { display: none; }
+.mb-det .mem-sub:hover .ctl .btn.icon, .mb-det .mem-sub:focus-within .ctl .btn.icon { display: inline-flex; }
+.mb-det .sgroup + .sgroup { margin-top: 14px; }
+
+/* ---------- dialogs ---------- */
+.mb-scrim { position: fixed; inset: 0; z-index: 110; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; padding: 16px; background: var(--scrim); animation: scrim-in 0.2s ease-out; }
+.mb-dialog { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; width: min(420px, 100%); max-height: 100%; overflow-x: hidden; overflow-y: auto; padding: 18px; border-radius: 16px; background: var(--panel); box-shadow: var(--pop); animation: dialog-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.mb-dlg-head { display: flex; align-items: center; gap: var(--sp-2); }
+.mb-dlg-head h2 { flex: 1; min-width: 0; margin: 0; font: 650 var(--fs-lg)/1.35 var(--display); overflow-wrap: anywhere; }
+.mb-dlg-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.mb-dlg-body:empty { display: none; }
+.mb-dlg-act { display: flex; justify-content: flex-end; gap: var(--sp-2); }
+.mb-frow { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 10px; font-size: var(--fs-sm); }
+.mb-frow > span:first-child { color: var(--text-2); }
+.mb-frow.mb-frow-top { align-items: start; }
+.mb-frow.mb-frow-top > span:first-child { padding-top: 7px; }
+.mb-new-face { display: flex; align-items: center; gap: 12px; }
+.mb-new-av { display: inline-flex; width: 64px; height: 64px; }
+.mb-offer-t { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+.mb-offer-t b { font-size: var(--fs-sm); font-weight: 600; }
+.mb-offer-t i { font-style: normal; font-size: 11.5px; color: var(--text-3); }
+.mb-dialog.mb-confirm { width: min(340px, 100%); }
+.mb-addrow { display: flex; gap: var(--sp-2); }
+.mb-addrow .mb-fin { flex: 1; }
+
+/* the popovers: the presets and 從電腦選…, and the new member's tools */
+.menu.mb-avpop { min-width: 200px; }
+.mb-presets { display: grid; grid-template-columns: repeat(4, 40px); gap: 6px; padding: 6px; }
+.menu .mb-preset { width: 40px; height: 40px; min-height: 40px; padding: 0; justify-content: center; border-radius: 50%; overflow: hidden; }
+.mb-preset img { display: block; width: 100%; height: 100%; object-fit: cover; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mb-det.is-in, .mb-det.leaving, .mb-item.is-new, .mb-scrim, .mb-dialog { animation: none !important; }
+  .mb-gbody, .mb-fold .i, .sys-x .steps-chev .i, .btn.mb-avbtn { transition: none !important; }
+}
+
+/* ---------- narrower windows ---------- */
+/* Under 1120 px the panel lies over the chat, at its right. */
+@media (max-width: 1119px) {
+  .page.page-agent[data-det="open"] { grid-template-columns: 232px minmax(0, 1fr); }
+  .mb-det { position: absolute; top: 0; right: 0; bottom: 0; z-index: 20; width: 236px; box-shadow: var(--pop); }
+}
+/* Under 860 px the column becomes the dropdown at the left of the chat's top row. */
+@media (max-width: 859px) {
+  .page.page-agent, .page.page-agent[data-det="open"] { grid-template-columns: minmax(0, 1fr); }
+  .mb-col { display: none; }
+  .sel.mb-pick { display: inline-flex; }
+  .mb-chat { padding-inline: 16px; }
+}

@@ -14,8 +14,6 @@ import * as api from "../api";
 import "../settings-polish.css";
 import "../connections.css";
 import "../messaging.css";
-import { avatarClick } from "../avatar-settings";
-import { onAvatarChange } from "../avatar";
 import "../memory.css";
 import { createMemory } from "../memory-view";
 import "../safety-rules.css";
@@ -225,14 +223,16 @@ export function createSettings(app: AppContext): SettingsPage {
     tryPrompt: (text) => app.go("agent", `draft:${text}`),
   });
   app.onEvent((event) => connections.followEvent(event));
-  // 頭像 shows the picture in force, and whether there is one to take off.
-  onAvatarChange(() => {
-    if (visible && pane === "agent") render();
-  });
   /** Telegram, in the 「訊息平台」 tab: it keeps its own state too. */
   const messaging = createMessaging({ visible: () => visible && pane === "messaging", redraw: () => render() });
-  /** Raphael's memory, in the 「拉斐爾」 tab: its notes and the summary of the conversation. */
-  const memory = createMemory({ visible: () => visible && pane === "agent", redraw: () => render(), undo: app.undo });
+  /**
+   * The memory, in the 「拉斐爾」 tab: 「共同記憶」, which every agent shares, and Raphael's own (its
+   * notes and the summary of his conversation). Each list reads the other again when a note moves.
+   */
+  const memoryHost = { visible: () => visible && pane === "agent", redraw: () => render(), undo: app.undo };
+  const memoryShared = createMemory({ ...memoryHost, space: "shared", onMoved: () => void memory.load() });
+  const memory = createMemory({ ...memoryHost, space: "own", onMoved: () => void memoryShared.load() });
+  const memories = [memoryShared, memory];
   /** The owner's safety rules, in the 「拉斐爾」 tab: what Raphael asks about first, does at once, or never does. */
   const rules = createRules({ visible: () => visible && pane === "agent", redraw: () => render(), undo: app.undo });
   /** 服務, in the 「拉斐爾」 tab: who does the work of Raphael's tools. Choosing is a change of the brain's settings. */
@@ -244,7 +244,7 @@ export function createSettings(app: AppContext): SettingsPage {
   const view = (): SettingsView => ({
     pane, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
     replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
-    connections: connections.view(), messaging: messaging.view(), memory: memory.view(), rules: rules.view(), services: services.view(), confirmingClear, localModels, localDownload,
+    connections: connections.view(), messaging: messaging.view(), memory: memory.view(), memoryShared: memoryShared.view(), rules: rules.view(), services: services.view(), confirmingClear, localModels, localDownload,
   });
 
   /** The item at the foot of the microphones' menu that looks for them again. */
@@ -409,8 +409,8 @@ export function createSettings(app: AppContext): SettingsPage {
     else connections.reset();
     if (pane === "messaging") void messaging.load();
     else messaging.reset();
-    if (pane === "agent") void memory.load();
-    else memory.reset();
+    if (pane === "agent") for (const list of memories) void list.load();
+    else for (const list of memories) list.reset();
     if (pane === "agent") void rules.load();
     else rules.reset();
     services.reset();
@@ -1071,7 +1071,7 @@ export function createSettings(app: AppContext): SettingsPage {
       return;
     }
 
-    if (connections.click(target) || messaging.click(target) || memory.click(target) || rules.click(target) || services.click(target) || avatarClick(target)) return;
+    if (connections.click(target) || messaging.click(target) || memories.some((list) => list.click(target)) || rules.click(target) || services.click(target)) return;
 
     if (target.closest('.tg[data-k="autostart"]')) {
       void changeDevice({ autostart: !app.device().autostart });
@@ -1149,11 +1149,11 @@ export function createSettings(app: AppContext): SettingsPage {
   });
   el.addEventListener("input", (e) => {
     const input = e.target as HTMLInputElement;
-    if (connections.input(input) || messaging.input(input) || memory.input(input) || rules.input(input)) return;
+    if (connections.input(input) || messaging.input(input) || memories.some((list) => list.input(input)) || rules.input(input)) return;
     if (input.id === "limit-input") limitDraft = input.value;
     else if (input.id === "agent-city") cityDraft = input.value;
   });
-  el.addEventListener("keydown", (e) => void (connections.key(e) || messaging.key(e) || memory.key(e) || rules.key(e) || services.key(e)));
+  el.addEventListener("keydown", (e) => void (connections.key(e) || messaging.key(e) || memories.some((list) => list.key(e)) || rules.key(e) || services.key(e)));
   // Menus consume their own Escape; the panel and native window controls share one Tab loop.
   const settingsKey = (e: KeyboardEvent): void => {
     const chrome = document.getElementById("window-chrome");
@@ -1210,12 +1210,12 @@ export function createSettings(app: AppContext): SettingsPage {
       pane = PANES.some((p) => p.id === open) ? open! : "general";
       connections.reset();
       messaging.reset();
-      memory.reset();
+      for (const list of memories) list.reset();
       rules.reset();
       services.reset();
       if (pane === "connections") void connections.load();
       if (pane === "messaging") void messaging.load();
-      if (pane === "agent") void memory.load();
+      if (pane === "agent") for (const list of memories) void list.load();
       if (pane === "agent") void rules.load();
       if (pane === "agent") void services.load();
       searchField.value = "";
@@ -1279,7 +1279,7 @@ export function createSettings(app: AppContext): SettingsPage {
       visible = false;
       connections.reset();
       messaging.reset();
-      memory.reset();
+      for (const list of memories) list.reset();
       rules.reset();
       services.reset();
       document.removeEventListener("keydown", settingsKey);

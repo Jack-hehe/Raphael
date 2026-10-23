@@ -1,8 +1,10 @@
 // The questions of the background: a task that needs the owner's yes pauses and waits, at most a day,
-// for an answer here (the core's `background/service.py`). Each is a gold card, Raphael's own like
-// the card of his YES/NO question: his face and his line (《問。…》), an outlined 「否」 and a gold
-// 「是」. It is answered here only, never from a chat app (`background.answer`, which the core
-// refuses from anywhere else).
+// for an answer here (the core's `background/service.py`). Each is a gold card, like the card of
+// Raphael's YES/NO question, with an outlined 「否」 and a gold 「是」. In Raphael's thread it is his:
+// his bare emblem and his line (《問。…》). In a member's thread it is that member's: their face and
+// name, and the question as it is, plain, with no 《》 (a member does not speak in Raphael's voice).
+// It is answered here only, never from a chat app (`background.answer`, which the core refuses from
+// anywhere else).
 //
 // The cards are one self-contained element for one member's thread (`memberId`, 0 is Raphael): the
 // page that has the thread puts `element` where the thread ends. It reads the questions that wait
@@ -34,13 +36,36 @@ export interface BackgroundQuestion {
 /** What `background.answer` says became of an answer. */
 export type AnswerStatus = "approved" | "denied" | "expired" | "cancelled" | "unknown" | string;
 
-/** One card: Raphael's face and line, then 「否」 (outlined) and 「是」 (gold), the buttons off while it is being answered. */
-export function backgroundQuestionHTML(q: BackgroundQuestion, busy = false): string {
+/**
+ * Who asks in a thread: `name` is null for Raphael (his bare emblem and his 《問。》 line), and a
+ * member's name otherwise, with `face` that member's face (members.ts `faceHTML`, 22 px).
+ */
+export interface Asker {
+  face: string;
+  name: string | null;
+}
+
+/** Raphael's own: the emblem, bare (never framed, filled or shadowed), and no name. */
+const RAPHAEL: Asker = {
+  get face() {
+    return avatarHTML({ size: 22, cls: "bgq-face" });
+  },
+  name: null,
+};
+
+/**
+ * One card, then 「否」 (outlined) and 「是」 (gold), the buttons off while it is being answered. By
+ * Raphael it carries his emblem and his line (`replyLine`, 《問。…》); by a member, that member's
+ * face, their name and the question's words as they are.
+ */
+export function backgroundQuestionHTML(q: BackgroundQuestion, busy = false, asker: Asker = RAPHAEL): string {
   const off = busy ? " disabled" : "";
   const ids = ` data-task="${q.task_id}" data-id="${esc(q.id)}"`;
+  const line = asker.name === null ? replyLine(q.prefix, q.text) : q.text;
+  const head = asker.name === null ? "" : `<span class="bgq-name">${esc(asker.name)}</span>`;
   return (
     `<div class="bgq-card" role="group" aria-label="${esc(t("agent.asking"))}" data-bgq-card="${esc(q.id)}">` +
-    `<p class="bgq-q">${avatarHTML({ size: 22, cls: "bgq-face" })}<span class="bgq-t">${esc(replyLine(q.prefix, q.text))}</span></p>` +
+    `<div class="bgq-q">${asker.face}<span class="bgq-t">${head}<span class="bgq-line">${esc(line)}</span></span></div>` +
     `<div class="bgq-row">` +
     `<button type="button" class="btn bgq-no" data-bgq="no"${ids}${off}>${esc(t("agent.no"))}</button>` +
     `<button type="button" class="btn bgq-yes" data-bgq="yes"${ids}${off}>${esc(t("agent.yes"))}</button>` +
@@ -51,6 +76,8 @@ export function backgroundQuestionHTML(q: BackgroundQuestion, busy = false): str
 export interface BackgroundQuestionsHost {
   /** The member whose thread this is (0 is Raphael). */
   memberId(): number;
+  /** Who asks in this thread (absent: Raphael). Read each time a card is drawn. */
+  asker?(): Asker;
   /** The cards changed (one came or went): the page may keep its thread at the bottom. */
   changed?(): void;
 }
@@ -60,6 +87,10 @@ export interface BackgroundQuestions {
   element: HTMLElement;
   /** Read the questions that wait in this thread again. */
   load(): Promise<void>;
+  /** The thread is another member's now: the cards of the last one go before this one's are read. */
+  reset(): void;
+  /** The cards are drawn again (the asker's name or face changed). */
+  redraw(): void;
   /** An event of the window: a task that moved on may have asked, or been answered. */
   follow(event: MainEvent): void;
   /** The questions shown now, oldest first. */
@@ -85,7 +116,7 @@ export function createBackgroundQuestions(host: BackgroundQuestionsHost): Backgr
     const before = new Map<string, Element>();
     for (const card of [...element.children]) before.set((card as HTMLElement).dataset.bgqCard ?? "", card);
     const cards = shown.map((q) => {
-      const html = backgroundQuestionHTML(q, answering.has(q.id));
+      const html = backgroundQuestionHTML(q, answering.has(q.id), host.asker?.());
       const old = before.get(q.id);
       if (old && drawn.get(old) === html) return old;
       const made = document.createElement("template");
@@ -98,6 +129,13 @@ export function createBackgroundQuestions(host: BackgroundQuestionsHost): Backgr
     element.replaceChildren(...cards);
     element.hidden = shown.length === 0;
     if (changed) host.changed?.();
+  }
+
+  function reset(): void {
+    loads++; // a read still on its way belongs to the last thread
+    shown = [];
+    answering.clear();
+    draw();
   }
 
   async function load(): Promise<void> {
@@ -147,5 +185,5 @@ export function createBackgroundQuestions(host: BackgroundQuestionsHost): Backgr
   onLocaleChange(draw);
   onAvatarChange(draw);
 
-  return { element, load, follow, questions: () => shown };
+  return { element, load, reset, redraw: draw, follow, questions: () => shown };
 }

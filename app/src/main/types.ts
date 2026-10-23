@@ -190,6 +190,15 @@ export interface AgentTurn {
   task?: AgentTask | null;
   /** The images and PDFs the request came with, by their names and types only: never their bytes. */
   attachments?: TurnAttachment[];
+  /** Whose thread the turn is in: 0 (or none, in a history from before the members) is Raphael's. */
+  member_id?: number;
+  /**
+   * For an exchange between two members (`route` "exchange", `source` "member": one asked the other
+   * with `ask_member`, `question` what was asked and `text` the answer, written in both threads),
+   * the member on the other side: 0 is Raphael. The thread shows it as one collapsed line,
+   * 「N 則訊息往來：<name>」.
+   */
+  peer_id?: number | null;
 }
 
 /** A file a turn's request came with, as the history keeps it: what the conversation shows as a chip. */
@@ -399,8 +408,8 @@ export type MainEvent =
   | { type: "LearnLimited"; app: string; reason: string }
   /** A tray menu item asks for a page, and perhaps one thing to do there (tray-open.ts). */
   | { type: "TrayOpen"; page: TrayPage; action?: TrayAction }
-  /** A turn of the conversations was written or completed. */
-  | { type: "AgentTurn"; turn_id: number }
+  /** A turn of the conversations was written or completed, in the thread of `member_id` (0: Raphael's; none from an older shell). */
+  | { type: "AgentTurn"; turn_id: number; member_id?: number }
   /** A background task moved on: a step, a start or an end. */
   | { type: "WorkerChanged"; task_id: number; state: string; running: boolean }
   /** A service is signed in to with a code typed at its own page: show the code, open the address. */
@@ -434,6 +443,112 @@ export interface AgentQuestion {
    * Raphael operate an app has it. Such a question is always T2.
    */
   always?: string;
+}
+
+// ---------- members (members.*, groups.*, routines.*) ----------
+
+/**
+ * A member as `members.list` lists it, Raphael first as member 0 (he is no row of the core).
+ * `avatar_url` is a picture the page may show as it is (a `data:image/...` URL), absent for a member
+ * with none; Raphael's is the owner's picture of him with its `avatar_crop`, absent while he is his
+ * emblem. `unread`: a turn arrived while the owner was not reading its thread (until
+ * `members.read`); `waiting`: a question waits for the owner there. `preview` is the last line of
+ * its thread (the core cuts it to one line), `last_at` when it was said.
+ */
+export interface Member {
+  id: number;
+  name: string;
+  role: string;
+  instructions: string;
+  /** `""`, `"preset:<stem>"` or `"file:<stored name>"`. */
+  avatar: string;
+  avatar_url?: string;
+  /** Raphael's only: the cut of the owner's picture of him (avatar.ts `AvatarCrop`). */
+  avatar_crop?: { x: number; y: number; zoom: number };
+  /** Null: 未分組. */
+  group_id: number | null;
+  /** "" is the model that answers for Raphael. */
+  model: string;
+  /** The tool and plugin ids it may use; null is every one that is on (the core's default). */
+  tools: string[] | null;
+  position: number;
+  /** When it was made, in ms. */
+  created: number;
+  unread: boolean;
+  waiting: boolean;
+  preview: string;
+  last_at: number | null;
+}
+
+/** A place a group's members look at for progress: a GitHub `owner/repo`, or a Notion page id or URL. */
+export interface MemberSource {
+  kind: "github" | "notion";
+  ref: string;
+}
+
+/** A group of `members.list`. */
+export interface MemberGroup {
+  id: number;
+  name: string;
+  position: number;
+  sources: MemberSource[];
+}
+
+/** `members.list` */
+export interface MembersList {
+  members: Member[];
+  groups: MemberGroup[];
+}
+
+/** What `members.create` takes (`ui_language` names the language of the routine it may offer). */
+export interface NewMember {
+  name: string;
+  role?: string;
+  instructions?: string;
+  group_id?: number | null;
+  avatar?: string;
+  tools?: string[];
+  model?: string;
+  ui_language?: string;
+}
+
+/**
+ * What `members.update` may change, beside its `id`: the avatar only as `""` or `"preset:<stem>"`
+ * (a picture of the PC goes by `members.set_avatar`).
+ */
+export type MemberPatch = Partial<Pick<Member, "name" | "role" | "instructions" | "group_id" | "model" | "tools" | "avatar" | "position">>;
+
+/** An image of the presets folder (`members.presets`): its avatar value, its file stem, and the picture as a data URL. */
+export interface AvatarPreset {
+  /** What `members.update`/`members.create` take as the avatar: `preset:<stem>`. */
+  avatar: string;
+  name: string;
+  url: string;
+}
+
+/** The routine the core offers with a new member of a group with places to look (`members.create`, `routines.template`). */
+export interface RoutineOffer {
+  title: string;
+  prompt: string;
+  schedule: RoutineSchedule;
+}
+
+/** When a routine runs: at a time each day, on days of the week (0 is Sunday) at a time, or every 1 to 24 hours. */
+export type RoutineSchedule =
+  | { kind: "daily"; time: string }
+  | { kind: "weekly"; days: number[]; time: string }
+  | { kind: "every"; hours: number };
+
+/** A routine of `routines.list`. Times are ms; null for never. */
+export interface Routine {
+  id: number;
+  member_id: number;
+  title: string;
+  prompt: string;
+  schedule: RoutineSchedule;
+  enabled: boolean;
+  last_run: number | null;
+  next_run: number | null;
 }
 
 export type HotkeyKind = "dictation_down" | "dictation_up" | "agent_down" | "agent_up" | "paste_last" | "cancel";

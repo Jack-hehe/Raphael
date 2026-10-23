@@ -16,7 +16,15 @@ import type {
   NewConnection,
   StoreService,
   AudioDevices,
+  AvatarPreset,
   BrainSettings,
+  Member,
+  MemberGroup,
+  MemberPatch,
+  MembersList,
+  NewMember,
+  Routine,
+  RoutineOffer,
   DeviceSettings,
   DictionaryEntry,
   HistoryItem,
@@ -75,6 +83,8 @@ export interface AgentHistoryQuery {
   limit?: number;
   /** Only turns older than this id: the cursor of the next page. */
   before_id?: number;
+  /** Whose thread: a member's id; absent is Raphael's (0), the core's default. */
+  member_id?: number;
 }
 
 /** The turns of the conversations, newest first. */
@@ -86,17 +96,23 @@ export const workerCancel = (taskId: number): Promise<{ cancelled: boolean }> =>
 /** Runs a task that did not finish again, as a new task; its id. */
 export const workerRerun = (taskId: number): Promise<{ task_id: number }> => core("worker.rerun", { task_id: taskId });
 /** The answered turns whose words hold `query`, best first, over the whole history, in the shape of `agentHistoryList`. */
-export const agentHistorySearch = (query: string): Promise<{ turns: AgentTurn[] }> => core("agent.history.search", { query, limit: 100 });
+export const agentHistorySearch = (query: string, memberId = 0): Promise<{ turns: AgentTurn[] }> =>
+  core("agent.history.search", { query, limit: 100, member_id: memberId });
 
 /**
  * Asks Raphael in writing (the composer of the 拉斐爾 page). The question goes the way a spoken one
  * goes once its words are heard, with the source `app`; this settles when its turn is over (its
  * answer is in the history, or it failed), and rejects when Raphael is busy with another. The
  * images and PDFs of the composer go with it as `attachments` (`agent.ask`'s, in base64), and only
- * when there are some: a question with files may have no words.
+ * when there are some: a question with files may have no words. `memberId` asks a member in its
+ * own thread instead of Raphael (`agent.ask`'s `member_id`); it goes only when it is not 0.
  */
-export const agentAskText = (text: string, attachments: WireAttachment[] = []): Promise<void> =>
-  invoke("agent_ask_text", attachments.length > 0 ? { text, attachments } : { text });
+export const agentAskText = (text: string, attachments: WireAttachment[] = [], memberId = 0): Promise<void> =>
+  invoke("agent_ask_text", {
+    text,
+    ...(attachments.length > 0 ? { attachments } : {}),
+    ...(memberId ? { memberId } : {}),
+  });
 /** The YES/NO question that waits for an answer now, if one does. */
 export const agentQuestionOpen = (): Promise<AgentQuestion | null> => invoke("agent_question_open");
 /**
@@ -113,6 +129,52 @@ export const agentQuestionAnswer = (id: string, approved: boolean, always = fals
 export const agentPageShown = (shown: boolean): Promise<void> => invoke("agent_page_shown", { shown });
 /** The question key pressed (`down`) or let go (`up`) from the page's voice button: the same path as the key itself. */
 export const agentVoice = (edge: "down" | "up"): Promise<void> => invoke("window_hotkey", { kind: edge === "down" ? "agent_down" : "agent_up" });
+
+// ---------- members, their groups and their routines (the 拉斐爾 page) ----------
+
+/** Raphael (member 0, his name in `uiLanguage`) and the members, and the groups. */
+export const membersList = (uiLanguage?: string): Promise<MembersList> => core("members.list", uiLanguage ? { ui_language: uiLanguage } : {});
+/**
+ * Adds a member; the core answers with it and, for a member of a group with places to look, the
+ * routine it offers (「每天早上的進度」, in `ui_language`), which only `routinesCreate` makes: the
+ * page offers it to the owner.
+ */
+export const membersCreate = (member: NewMember): Promise<{ member: Member; routine_offer: RoutineOffer | null }> =>
+  core("members.create", member);
+/** Changes a member (never Raphael: the core refuses id 0 with the kind `raphael`). */
+export const membersUpdate = (id: number, patch: MemberPatch): Promise<{ member: Member }> => core("members.update", { id, ...patch });
+/** Deletes a member with its conversation, its memory and its routines. The page asks the owner first. */
+export const membersDelete = (id: number): Promise<{ deleted: boolean }> => core("members.delete", { id });
+/** A picture of this PC for a member: name, type and bytes in base64, checked by the core as the composer's images are. */
+export const membersSetAvatar = (id: number, file: WireAttachment): Promise<{ member: Member }> => core("members.set_avatar", { id, ...file });
+/** The images of the presets folder (`<app data>\avatars\presets`), none when it is not there. */
+export const membersPresets = (): Promise<{ presets: AvatarPreset[] }> => core("members.presets");
+/** The owner read the thread of member `id`: it is no longer unread. */
+export const membersRead = (id: number): Promise<unknown> => core("members.read", { id });
+/** The thread on screen now (null for none): what arrives there is no news. */
+export const membersViewing = (id: number | null): Promise<unknown> => core("members.viewing", { id });
+/** Raphael's own tools a member may be given, by id, and the connections. */
+export const membersToolChoices = (): Promise<{ tools: string[]; connections: { id: string; name: string; enabled: boolean }[] }> =>
+  core("members.tool_choices");
+
+export const groupsCreate = (name: string): Promise<{ group: MemberGroup }> => core("groups.create", { name });
+export const groupsUpdate = (id: number, patch: Partial<Pick<MemberGroup, "name" | "position" | "sources">>): Promise<{ group: MemberGroup }> =>
+  core("groups.update", { id, ...patch });
+/** Deletes a group; its members are 未分組 from then on. */
+export const groupsDelete = (id: number): Promise<{ deleted: boolean }> => core("groups.delete", { id });
+
+export const routinesList = (memberId: number): Promise<{ routines: Routine[] }> => core("routines.list", { member_id: memberId });
+export const routinesCreate = (
+  routine: Pick<Routine, "member_id" | "title" | "prompt" | "schedule"> & { enabled?: boolean },
+): Promise<{ routine: Routine }> => core("routines.create", routine);
+export const routinesUpdate = (
+  id: number,
+  patch: Partial<Pick<Routine, "title" | "prompt" | "schedule" | "enabled">>,
+): Promise<{ routine: Routine }> => core("routines.update", { id, ...patch });
+export const routinesDelete = (id: number): Promise<{ deleted: boolean }> => core("routines.delete", { id });
+/** The routine the core would offer member `memberId` now (its group's places), in `uiLanguage`; null for none. */
+export const routinesTemplate = (memberId: number, uiLanguage?: string): Promise<{ offer: RoutineOffer | null }> =>
+  core("routines.template", uiLanguage ? { member_id: memberId, ui_language: uiLanguage } : { member_id: memberId });
 
 // ---------- Raphael's picture ----------
 
