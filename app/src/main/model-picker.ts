@@ -1,5 +1,5 @@
 // The model picker: a button that shows the model chosen for one of Raphael's roles and its price,
-// and a panel to choose another from every model OpenRouter offers (`models.catalog`). The panel
+// and a panel to choose another from enabled providers (`models.catalog`). The panel
 // has a search field, the order and the maker as two small dropdowns, and the models of the role's
 // kind: those the role can use first, then the others, greyed, with the reason in plain words.
 // The models the user starred (`favorites`, kept by the core for each role) are listed first, under
@@ -33,6 +33,7 @@ import {
   tabsHTML,
 } from "./local-models";
 import { formatPerMinute, formatPerMtok, pricingNote } from "./pricing";
+import { providerMark } from "./provider-marks";
 import type { CatalogModel, ModelCatalog, ModelRole } from "./types";
 import { CHECK, closeMenu, esc, ico, menuIsOpenFor, openPopover, placeMenu } from "./ui";
 
@@ -62,7 +63,16 @@ export type PickerRole = ModelRole | "vision";
 const KIND: Record<PickerRole, "llm" | "stt"> = { cleanup: "llm", answer: "llm", stt: "stt", vision: "llm" };
 
 /** The models of the catalog that `role` chooses among: those of its kind. */
-export const modelsFor = (catalog: ModelCatalog, role: PickerRole): CatalogModel[] => catalog[KIND[role]];
+export const modelsFor = (catalog: ModelCatalog, role: PickerRole): CatalogModel[] => {
+  const models = catalog[KIND[role]];
+  return models.some((m) => modelRef(m) !== m.id) ? models.map((m) => ({ ...m, id: modelRef(m) })) : models;
+};
+
+/** Legacy slugs stay OpenRouter slugs. A colon inside a local model id is kept verbatim. */
+const modelRef = (model: CatalogModel): string => model.id.startsWith("@") || !model.provider_id || model.provider_id === "openrouter"
+  ? model.id : `@${model.provider_id}:${model.id}`;
+const connectionId = (model: CatalogModel): string => model.provider_id ?? (model.id.startsWith("@") ? model.id.slice(1).split(":", 1)[0] : "openrouter");
+const connectionName = (model: CatalogModel): string => model.provider_name ?? (connectionId(model) === "openrouter" ? "OpenRouter" : connectionId(model));
 
 /**
  * Whether `model` reads images, as OpenRouter's list says (`input_modalities`). A model of a catalog
@@ -192,7 +202,7 @@ function matcher(query: string): (text: string) => boolean {
 }
 
 /** What a search looks in: a model's name, its maker and its id. */
-const searched = (model: CatalogModel): string => `${model.name} ${model.provider} ${model.id}`;
+const searched = (model: CatalogModel): string => `${model.name} ${model.provider} ${model.provider_name ?? ""} ${model.id}`;
 
 /**
  * What a model sorts by when the order is the price, cheapest first: free and fixed prices, a speech
@@ -233,8 +243,16 @@ export function pickerRows(models: CatalogModel[], role: PickerRole, state: Pick
   const rows = models
     .filter((model) => (state.provider === "" || model.provider === state.provider) && matches(searched(model)))
     .sort(ORDERS[state.sort])
-    .map((model) => ({ model, usable: usableFor(model, role), favorite: starred.has(model.id) }));
-  const usableFirst = (own: PickerRow[]): PickerRow[] => [...own.filter((row) => row.usable), ...own.filter((row) => !row.usable)];
+    .map((model) => ({ model: { ...model, id: modelRef(model) }, usable: usableFor(model, role), favorite: starred.has(modelRef(model)) }));
+  const usableFirst = (own: PickerRow[]): PickerRow[] => {
+    const groups = new Map<string, PickerRow[]>();
+    for (const row of own) {
+      const id = connectionId(row.model);
+      groups.set(id, [...(groups.get(id) ?? []), row]);
+    }
+    const ids = [...groups.keys()].sort((a, b) => a === "openrouter" ? -1 : b === "openrouter" ? 1 : collator.compare(connectionName(groups.get(a)![0].model), connectionName(groups.get(b)![0].model)));
+    return ids.flatMap((id) => { const group = groups.get(id)!; return [...group.filter((r) => r.usable), ...group.filter((r) => !r.usable)]; });
+  };
   return [...usableFirst(rows.filter((row) => row.favorite)), ...usableFirst(rows.filter((row) => !row.favorite))];
 }
 
@@ -402,7 +420,7 @@ function optionHTML(row: PickerRow, index: number, list: PickerList): string {
   if (reason) details.push(reason);
   const price = priceText(model, list.role);
   // What a screen reader says of the row, in an order that makes sense when heard.
-  const heard = [model.name, model.provider, priceDescription(model, list.role)];
+  const heard = [model.name, connectionName(model), model.provider, priceDescription(model, list.role)];
   if (row.favorite) heard.push(t("picker.favorites"));
   if (chosen) heard.push(t("picker.current"));
   if (reason) heard.push(reason);
@@ -452,6 +470,10 @@ export function listHTML(list: PickerList): string {
       if (index === starred) heading = headingHTML(t("picker.favorites"));
       if (index === unusable) heading = headingHTML(UNUSABLE[list.role]());
       else if (index === others) heading = headingHTML(t("picker.others"));
+      const previous = rows[index - 1];
+      if (!row.lead && (!previous || previous.lead || previous.favorite !== row.favorite || connectionId(previous.model) !== connectionId(row.model))) {
+        heading += `<div class="mp-provider"><span class="mp-provider-mark" aria-hidden="true">${providerMark(connectionName(row.model))}</span><span>${esc(connectionName(row.model))}</span></div>`;
+      }
       return heading + optionHTML(row, index, list);
     })
     .join("");

@@ -1,4 +1,4 @@
-// Settings: a panel over the main window with eight tabs in three groups (一般, 聽寫, 拉斐爾; 「整合」:
+// Settings: a panel over the main window with nine tabs in three groups (一般, 聽寫, 拉斐爾; 「整合」:
 // 連接, 訊息平台; 「帳戶」: 模型與用量, 資料, 關於) under a 「搜尋設定」 field that jumps to a row of any
 // of them. This file holds what the panel knows and what it does; settings-view.ts draws each tab
 // from a snapshot of it. A change takes effect at once; there is no save button. The settings of
@@ -14,6 +14,7 @@ import * as api from "../api";
 import "../settings-polish.css";
 import "../connections.css";
 import "../services.css";
+import "../providers.css";
 import "../messaging.css";
 import "../memory.css";
 import { createMemory } from "../memory-view";
@@ -34,6 +35,7 @@ import {
 import { createHotkeyRecording } from "../hotkey-recording";
 import { type ModelPicker, type ModelPickerLook, type PickerRole, mountModelPicker, replacementNotices, withFavorite } from "../model-picker";
 import { createServices } from "../services";
+import { createProviders } from "../providers";
 import { MonitorSwitch } from "../monitor";
 import type { AppContext, AudioDevices, BrainSettings, DeviceSettings, LocalModel, MainEvent, ModelCatalog, ModelRole, Page, SettingsPane, Status } from "../types";
 import {
@@ -180,6 +182,7 @@ export function createSettings(app: AppContext): SettingsPage {
   let spend: Status["spend"] | null = null;
   /** OpenRouter's catalog of models, with their prices: being read (`loading`), read, or not to be had (`failed`). */
   let catalog: ModelCatalog | "loading" | "failed" = "loading";
+  let catalogLoads = 0;
   /** The pickers of the model rows (and of 服務's 看圖片) on the tab that is drawn (settings-view.ts draws their buttons). */
   const pickers = new Map<PickerRole, ModelPicker>();
   /** The speech models of this computer, and the download of one that is under way. */
@@ -243,6 +246,11 @@ export function createSettings(app: AppContext): SettingsPage {
   const rules = createRules({ visible: () => visible && pane === "agent", redraw: () => render(), undo: app.undo });
   /** 服務, in the 「拉斐爾」 tab: who does the work of Raphael's tools. Choosing is a change of the brain's settings. */
   const services = createServices({ visible: () => visible && pane === "agent", redraw: () => render(), brain: () => brain, changeSetting: (key, value) => changeBrain(key, value) });
+  const providers = createProviders({ root: el, visible: () => visible && pane === "models", redraw: () => render() });
+  app.onEvent((event) => {
+    providers.followEvent(event);
+    if (event.type === "ProvidersChanged" && visible) void loadCatalog();
+  });
 
   // ---------- drawing ----------
 
@@ -250,7 +258,7 @@ export function createSettings(app: AppContext): SettingsPage {
   const view = (): SettingsView => ({
     pane, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
     replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
-    connections: connections.view(), messaging: messaging.view(), memory: memory.view(), memoryShared: memoryShared.view(), rules: rules.view(), services: services.view(), confirmingClear, localModels, localDownload,
+    connections: connections.view(), messaging: messaging.view(), memory: memory.view(), memoryShared: memoryShared.view(), rules: rules.view(), services: services.view(), providers: providers.view(), confirmingClear, localModels, localDownload,
   });
 
   /** The item at the foot of the microphones' menu that looks for them again. */
@@ -356,7 +364,7 @@ export function createSettings(app: AppContext): SettingsPage {
     const activeLimit = focusedId === "limit-input" ? el.querySelector<HTMLInputElement>("#limit-input")?.value : undefined;
     // What is being typed in 服務's fields stays through a drawing (a status that came in, say): it
     // is carried from the old field to the new one here, and kept nowhere else.
-    const serviceDrafts = Array.from(el.querySelectorAll<HTMLInputElement>(".svc-line input")).map((input) => [input.id, input.value] as const);
+    const serviceDrafts = Array.from(el.querySelectorAll<HTMLInputElement>(".svc-line input, .pv-field input")).map((input) => [input.id, input.value] as const);
     // A menu that is open stays open when the page is drawn again (a status that came in, say).
     const openK = openAnchorKey();
     const scroll = body.scrollTop;
@@ -420,7 +428,9 @@ export function createSettings(app: AppContext): SettingsPage {
     if (pane === "agent") void rules.load();
     else rules.reset();
     services.reset();
+    providers.reset();
     if (pane === "agent") void services.load();
+    if (pane === "models") void providers.load();
     clearTimeout(clearTimer);
     confirmingClear = null;
     syncMonitor();
@@ -643,6 +653,7 @@ export function createSettings(app: AppContext): SettingsPage {
    */
   async function loadCatalog(): Promise<void> {
     const mine = loads;
+    const request = ++catalogLoads;
     let next: ModelCatalog | "failed";
     try {
       next = await api.modelsCatalog();
@@ -650,7 +661,7 @@ export function createSettings(app: AppContext): SettingsPage {
       // keep a catalog read earlier; else say that the prices cannot be had
       next = typeof catalog === "object" ? catalog : "failed";
     }
-    if (mine !== loads || !visible) return;
+    if (mine !== loads || request !== catalogLoads || !visible) return;
     catalog = next;
     if (typeof next === "object" && next.replaced.length > 0) {
       if (brain) for (const r of next.replaced) brain = { ...brain, [r.key]: r.default };
@@ -1080,7 +1091,7 @@ export function createSettings(app: AppContext): SettingsPage {
       return;
     }
 
-    if (connections.click(target) || messaging.click(target) || memories.some((list) => list.click(target)) || rules.click(target) || services.click(target)) return;
+    if (connections.click(target) || messaging.click(target) || memories.some((list) => list.click(target)) || rules.click(target) || services.click(target) || providers.click(target)) return;
 
     if (target.closest('.tg[data-k="autostart"]')) {
       void changeDevice({ autostart: !app.device().autostart });
@@ -1158,11 +1169,12 @@ export function createSettings(app: AppContext): SettingsPage {
   });
   el.addEventListener("input", (e) => {
     const input = e.target as HTMLInputElement;
+    providers.input(input);
     if (connections.input(input) || messaging.input(input) || memories.some((list) => list.input(input)) || rules.input(input)) return;
     if (input.id === "limit-input") limitDraft = input.value;
     else if (input.id === "agent-city") cityDraft = input.value;
   });
-  el.addEventListener("keydown", (e) => void (connections.key(e) || messaging.key(e) || memories.some((list) => list.key(e)) || rules.key(e) || services.key(e)));
+  el.addEventListener("keydown", (e) => void (connections.key(e) || messaging.key(e) || memories.some((list) => list.key(e)) || rules.key(e) || services.key(e) || providers.key(e)));
   // Menus consume their own Escape; the panel and native window controls share one Tab loop.
   const settingsKey = (e: KeyboardEvent): void => {
     const chrome = document.getElementById("window-chrome");
@@ -1222,11 +1234,13 @@ export function createSettings(app: AppContext): SettingsPage {
       for (const list of memories) list.reset();
       rules.reset();
       services.reset();
+      providers.reset();
       if (pane === "connections") void connections.load();
       if (pane === "messaging") void messaging.load();
       if (pane === "agent") for (const list of memories) void list.load();
       if (pane === "agent") void rules.load();
       if (pane === "agent") void services.load();
+      if (pane === "models") void providers.load();
       searchField.value = "";
       hits = [];
       pendingJump = null;
@@ -1291,6 +1305,7 @@ export function createSettings(app: AppContext): SettingsPage {
       for (const list of memories) list.reset();
       rules.reset();
       services.reset();
+      providers.reset();
       document.removeEventListener("keydown", settingsKey);
       loading = false;
       loads++;

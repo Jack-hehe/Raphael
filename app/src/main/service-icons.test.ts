@@ -3,6 +3,17 @@ import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { readdirSync } from "node:fs";
 import { BRAND_COLORS, LOGO_IDS, SERVICE_ICONS, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
+import { iconHTML } from "./connections";
+import { ico } from "./ui";
+
+test("reserved provider brands with no installed artwork show the plug instead of a broken image or initial", () => {
+  for (const id of ["openai", "azure", "litellm", "portkey", "nebius", "bifrost", "groq", "anthropic", "googlegemini", "googlecloud", "ollama", "vercel", "lmstudio", "deepseek", "mistral"] as const) {
+    expect(LOGO_IDS).toContain(id);
+    const html = iconHTML(id, id, "md");
+    expect(html).not.toContain('src=""');
+    if (!hasLogo(id)) expect(html).toContain(ico("plug"));
+  }
+});
 
 describe("the marks of well-known programs", () => {
   test.each([
@@ -144,9 +155,10 @@ describe("the marks of well-known programs", () => {
   test("the logo files and the list of ids are the same, and each has its source written down", () => {
     const files = readdirSync("src/main/service-logos");
     const ids = new Set(files.filter((f) => /\.(svg|png)$/.test(f)).map((f) => f.replace(/\.dark\.svg$|\.(svg|png)$/, "")));
-    expect([...ids].sort()).toEqual([...LOGO_IDS].sort());
+    const installed = LOGO_IDS.filter(hasLogo);
+    expect([...ids].sort()).toEqual([...installed].sort());
     const sources = JSON.parse(readFileSync("src/main/service-logos/sources.json", "utf8")) as Record<string, { file: string; url: string }>;
-    expect(Object.keys(sources).sort()).toEqual([...LOGO_IDS].sort());
+    expect(Object.keys(sources).sort()).toEqual([...installed].sort());
     for (const [id, source] of Object.entries(sources)) {
       expect(source.url, id).toMatch(/^https:\/\//);
       expect(files, id).toContain(source.file);

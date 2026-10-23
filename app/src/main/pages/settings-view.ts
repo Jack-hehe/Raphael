@@ -29,6 +29,7 @@ import { AUTO_MICROPHONE, microphoneChoices } from "../microphone";
 import type { LocalView } from "../local-models";
 import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
 import { type ServicesView, servicesHTML } from "../services";
+import { type ProvidersView, providersHTML, emptyProvidersView } from "../providers";
 import { pricingNote } from "../pricing";
 import type { HotkeyField } from "../hotkey-recording";
 import type { AudioDevices, BrainSettings, DeviceSettings, LocalModel, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
@@ -90,6 +91,7 @@ export const PANES: { id: SettingsPane; group: PaneGroup; icon: IconName | "embl
   { id: "connections", group: "integrations", icon: "plug", title: () => t("settings.paneConnections"), purpose: () => t("settings.purposeConnections") },
   { id: "messaging", group: "integrations", icon: "send", title: () => t("settings.paneMessaging"), purpose: () => t("settings.purposeMessaging") },
   { id: "usage", group: "account", icon: "wallet", title: () => t("settings.paneUsage"), purpose: () => t("settings.purposeUsage") },
+  { id: "models", group: "account", icon: "bot", title: () => t("providers.title"), purpose: () => t("providers.about") },
   { id: "data", group: "account", icon: "database", title: () => t("settings.paneData"), purpose: () => t("settings.purposeData") },
   { id: "about", group: "account", icon: "info", title: () => t("common.about"), purpose: () => t("settings.purposeAbout") },
 ];
@@ -156,6 +158,7 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "agent", label: "services.pdf", words: ["PDF"] },
   { pane: "agent", label: "services.voice", words: ["Fish Audio", "TTS"] },
   { pane: "messaging", words: ["Telegram"] },
+  { pane: "models", label: "providers.add", words: ["OpenAI", "Anthropic", "Gemini", "Azure", "Bedrock", "Ollama", "LM Studio", "OpenRouter", "LiteLLM", "Portkey", "Vercel", "Nebius", "Bifrost", "Groq", "DeepSeek", "Mistral"] },
   { pane: "usage", label: "common.apiKey", words: ["OpenRouter"] },
   { pane: "usage", label: "settings.050" },
   { pane: "usage", label: "settings.usageMonthly" },
@@ -190,7 +193,7 @@ const allLanguages = (key: MessageKey): string[] => Object.values(catalogs).map(
 /** The keys of the tabs' names, in every language. */
 const PANE_TITLE_KEYS: Record<SettingsPane, MessageKey> = {
   general: "settings.paneGeneral", dictation: "settings.paneDictation", agent: "settings.paneAgent", connections: "settings.paneConnections",
-  messaging: "settings.paneMessaging", usage: "settings.paneUsage", data: "settings.paneData", about: "common.about",
+  messaging: "settings.paneMessaging", models: "providers.title", usage: "settings.paneUsage", data: "settings.paneData", about: "common.about",
 };
 
 /**
@@ -285,6 +288,7 @@ export interface SettingsView {
   memoryShared?: MemoryView;
   /** 服務, in the 拉斐爾 tab: who searches, reads pages and PDFs, and looks at images (none: not drawn). */
   services?: ServicesView;
+  providers?: ProvidersView;
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
   languageGroups: LanguageGroup[] | null;
   /** The time the forecasts and the age of the prices are told from. */
@@ -719,6 +723,8 @@ export function paneHTML(v: SettingsView): string {
       return messagingTabHTML(v);
     case "usage":
       return usageHTML(v);
+    case "models":
+      return headingHTML(v) + providersHTML(v.providers ?? emptyProvidersView());
     case "data":
       return dataHTML(v);
     case "about":

@@ -28,6 +28,20 @@ import type { CatalogModel, ModelCatalog } from "./types";
 
 afterEach(() => setLocale("zh-TW"));
 
+test("provider groups put OpenRouter first and choose connection-qualified refs including model ids with colons", () => {
+  const local = llm("llama3.1:8b", { name: "Llama", provider: "Meta", provider_id: "p4", provider_name: "Ollama", input_per_mtok: 0 });
+  const direct = llm("gpt-5.1", { name: "GPT", provider: "OpenAI", provider_id: "p3", provider_name: "OpenAI" });
+  const catalog = { ...CATALOG, llm: [local, direct, LUNA] };
+  const list = new PickerList("answer", modelsFor(catalog, "answer"), "openai/gpt-6-luna");
+  expect(list.rows.map((r) => r.model.id)).toEqual(["openai/gpt-6-luna", "@p4:llama3.1:8b", "@p3:gpt-5.1"]);
+  const html = listHTML(list);
+  expect(html.indexOf("OpenRouter")).toBeLessThan(html.indexOf("Ollama"));
+  expect(html).toContain("mp-provider-mark");
+  list.point("@p4:llama3.1:8b");
+  expect(list.chosen()).toBe("@p4:llama3.1:8b");
+  expect(modelPickerHTML({ role: "answer", current: "@p4:llama3.1:8b", catalog, label: "Model" })).toContain("Llama");
+});
+
 const DAY = 86_400_000;
 const OCT_18 = Date.UTC(2026, 9, 18, 4);
 
@@ -316,7 +330,7 @@ describe("the chosen model", () => {
     expect(html).toMatch(/data-id="anthropic\/claude-haiku-5\.5"[^>]*data-current/);
     const row = html.slice(html.indexOf('data-id="anthropic/claude-haiku-5.5"'));
     expect(row.slice(0, row.indexOf("</button>"))).toContain("<svg");
-    expect(row).toContain("Claude Haiku 5.5, Anthropic, 輸入 $0.10 / 輸出 $0.50 每百萬 token, 目前使用");
+    expect(row).toContain("Claude Haiku 5.5, OpenRouter, Anthropic, 輸入 $0.10 / 輸出 $0.50 每百萬 token, 目前使用");
   });
 
   test("a row shows its maker and its context, and no badge", () => {

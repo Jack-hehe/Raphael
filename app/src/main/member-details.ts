@@ -107,6 +107,7 @@ export interface DetailsPanel {
   /** Another member's thread is open: its routines and memory are read, its tab is 詳細資訊. */
   showMember(): void;
   refreshRoutines(): void;
+  refreshCatalog(): void;
   refreshMemory(memberId: number, space?: "own" | "shared"): void;
 }
 
@@ -127,6 +128,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
   let draft: RoutineDraft | null = null;
   let catalog: ModelCatalog | null = null;
   let catalogAsked = false;
+  let catalogLoads = 0;
   let picker: ModelPicker | null = null;
   /** The member the panel was last drawn for: its fields are drawn afresh when it changes. */
   let drawnFor: number | null = null;
@@ -326,12 +328,17 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       onChoose: (id) => void host.update(member.id, { model: id }),
     });
     if (!catalogAsked) {
-      catalogAsked = true;
-      void host.catalog().then((read) => {
-        catalog = read;
-        picker?.update({ catalog: read, loading: false });
-      });
+      void loadCatalog();
     }
+  }
+
+  async function loadCatalog(): Promise<void> {
+    const mine = ++catalogLoads;
+    catalogAsked = true;
+    const read = await host.catalog();
+    if (mine !== catalogLoads) return;
+    catalog = read;
+    picker?.update({ catalog: read, loading: false });
   }
 
   // ---------- routines ----------
@@ -573,6 +580,10 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     el,
     draw,
     refreshRoutines() { void loadRoutines(); },
+    refreshCatalog() {
+      catalogLoads++; catalog = null; catalogAsked = false;
+      if (picker && el.isConnected && !el.hidden) void loadCatalog();
+    },
     refreshMemory(memberId, space) {
       if (!memoryHost.visible()) return;
       if (space !== "own") void shared.load();

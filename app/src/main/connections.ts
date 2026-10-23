@@ -188,7 +188,7 @@ const isIcon = (id: string | null | undefined): id is ServiceIconId => !!id && (
 /** The picture of a service: its mark, bare, or a neutral plug. */
 export function iconHTML(_name: string, icon: ServiceIconId | null, size: "md" | "xl"): string {
   if (icon && hasLogo(icon)) return `<span class="mono ${size} logo-art">${serviceLogoHTML(icon)}</span>`;
-  return icon
+  return icon && icon in SERVICE_ICONS
     ? `<span class="mono ${size} logo-mono"${brandStyle(icon)}>${serviceIconSVG(icon)}</span>`
     : `<span class="mono ${size}" aria-hidden="true">${ico("plug")}</span>`;
 }

@@ -1,0 +1,22 @@
+/* Models follows the service list and dialog, with the same theme surfaces and type scale. */
+.pv { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); }
+.pv .sgroup { margin: 0; }
+.pv-add-title { margin: var(--sp-2) 0 0; font-size: var(--fs-md); }
+.pv-add { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 14px; cursor: default; }
+.pv-add .cs-main { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
+.pv-dialog { width: min(480px, 100%); }
+.pv-dialog .ic { display: inline-flex; align-items: center; flex: none; }
+.pv-dialog h2 { font-size: var(--fs-lg); min-width: 0; overflow-wrap: anywhere; margin: 0; }
+.pv-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
+.pv-label { font-size: var(--fs-sm); color: var(--text-2); }
+.pv-models { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); min-width: 0; }
+.pv-models h3 { margin: var(--sp-2) 0 0; font-size: var(--fs-sm); color: var(--text-2); }
+.pv-models > .field { width: 100%; }
+.pv-model-list { max-height: 220px; overflow-y: auto; overflow-x: hidden; }
+.pv-model-list ul { list-style: none; margin: 0; padding: 0; }
+.pv-model-list li { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); padding: var(--sp-2) 0; }
+.pv-model-list li + li { border-top: 1px solid var(--line); }
+.pv-model-name, .pv-model-id { overflow-wrap: anywhere; }
+.pv-model-id { font-size: var(--fs-sm); color: var(--text-3); }
+.pv .mono .i, .pv-dialog .mono .i { width: 20px; height: 20px; }
+.pv .mono.md, .pv-dialog .mono.md { width: 20px; height: 20px; }
