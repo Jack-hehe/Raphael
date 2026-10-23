@@ -37,7 +37,12 @@
 //! what it needs from the app state with `try_state`: after a failure to start, the core, the
 //! hotkeys or the overlay may not be there, and the settings page still has to work.
 //!
-//! Never log the params of a call: `secrets.set_openrouter_key` carries the OpenRouter key.
+//! The window may also read and set the services of Raphael's tools (`services.status`,
+//! `services.set_key`, `services.clear_key`), and a typed question may carry images and PDFs
+//! (`agent_ask_text`'s `attachments`, which go on to `agent.ask` untouched).
+//!
+//! Never log the params of a call: `secrets.set_openrouter_key` carries the OpenRouter key,
+//! `services.set_key` a service's key, and a typed question's attachments the owner's files.
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -310,7 +315,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 26] = [
+const ALLOWED_METHODS: [&str; 29] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -342,6 +347,11 @@ const ALLOWED_METHODS: [&str; 26] = [
     "memory.delete",
     "memory.clear",
     "memory.summary_clear",
+    // The services of the tools, in the settings: what is chosen and whether each key is stored
+    // (never a key), and a key put in or taken out of the vault. Named one by one as well.
+    "services.status",
+    "services.set_key",
+    "services.clear_key",
 ];
 
 /// The types a memory's name starts with (the core's `memory.store.TYPES`).
@@ -537,11 +547,16 @@ pub const TYPED_MAX_CHARS: usize = 100_000;
 /// "拉斐爾現在無法回答問題": there is no controller (the core did not start) or it is gone.
 const AGENT_OFF: &str = "拉斐爾現在無法回答問題";
 
+/// The most images and PDFs one typed question may take (`MAX_ATTACHMENTS` of the core's
+/// services/attachments.py, and `ATTACH_MAX` of pages/agent.ts).
+pub const TYPED_MAX_ATTACHMENTS: usize = 4;
+
 /// A typed question as it is asked: its words without the blanks around them, or why it is not
-/// asked (nothing to ask, or too long).
-pub fn typed_question(text: &str) -> Result<&str, String> {
+/// asked (nothing to ask, or too long). With files (`with_files`), no words at all is a question
+/// too, which the core reads as 「看這個」.
+pub fn typed_question_with(text: &str, with_files: bool) -> Result<&str, String> {
     let text = text.trim();
-    if text.is_empty() {
+    if text.is_empty() && !with_files {
         return Err("沒有要問的內容".to_owned());
     }
     if text.chars().count() > TYPED_MAX_CHARS {
@@ -559,21 +574,47 @@ pub fn is_question_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-/// Asks Raphael a question typed in the composer of the 拉斐爾 page. It goes the way a spoken one
-/// goes once its words are heard (`agent.ask` with the source `app`; the overlay shows the answer
-/// and any YES/NO question), and the call settles when the turn is over, its answer in the history
-/// or its failure shown. Refused while Raphael is busy with a recording or another question.
+/// The images and PDFs of a typed question as they go on: at most [`TYPED_MAX_ATTACHMENTS`], each
+/// an object of three strings, `name`, `mime` and `data`. Everything else about them (the types,
+/// the sizes, the bytes) is the core's to check; a list that is not even this is refused here.
+pub fn typed_attachments(attachments: Option<Vec<Value>>) -> Result<Vec<Value>, String> {
+    let attachments = attachments.unwrap_or_default();
+    if attachments.len() > TYPED_MAX_ATTACHMENTS {
+        return Err("附加的檔案太多了".to_owned());
+    }
+    let whole = |item: &Value| {
+        ["name", "mime", "data"]
+            .iter()
+            .all(|key| item.get(key).is_some_and(Value::is_string))
+    };
+    if !attachments.iter().all(whole) {
+        return Err("附加的檔案無法讀取".to_owned());
+    }
+    Ok(attachments)
+}
+
+/// Asks Raphael a question typed in the composer of the 拉斐爾 page, with the images and PDFs
+/// attached to it, if any (`attachments`, `agent.ask`'s, never logged). It goes the way a spoken
+/// one goes once its words are heard (`agent.ask` with the source `app`; the overlay shows the
+/// answer and any YES/NO question), and the call settles when the turn is over, its answer in the
+/// history or its failure shown. Refused while Raphael is busy with a recording or another question.
 #[tauri::command]
-pub async fn agent_ask_text(app: AppHandle, webview: Webview, text: String) -> Result<(), String> {
+pub async fn agent_ask_text(
+    app: AppHandle,
+    webview: Webview,
+    text: String,
+    attachments: Option<Vec<Value>>,
+) -> Result<(), String> {
     require_main(&webview)?;
-    let text = typed_question(&text)?;
+    let attachments = typed_attachments(attachments)?;
+    let text = typed_question_with(&text, !attachments.is_empty())?;
     let desk = app
         .try_state::<DeskHandle>()
         .map(|desk| desk.inner().clone())
         .ok_or(AGENT_OFF)?;
     let turn = desk
         .0
-        .ask_typed(text)
+        .ask_typed(text, attachments)
         .map_err(|_| "拉斐爾正在忙，請稍後再問".to_owned())?;
     // The page waits for the turn, so that it knows when to stop waiting for its answer.
     if let Err(err) = turn.await {
@@ -1438,12 +1479,54 @@ mod tests {
 
     #[test]
     fn a_typed_question_has_words_and_a_bounded_length() {
-        assert_eq!(typed_question("  明天會下雨嗎？\n"), Ok("明天會下雨嗎？"));
-        assert!(typed_question("").is_err());
-        assert!(typed_question(" \n\t ").is_err());
+        assert_eq!(
+            typed_question_with("  明天會下雨嗎？\n", false),
+            Ok("明天會下雨嗎？")
+        );
+        assert!(typed_question_with("", false).is_err());
+        assert!(typed_question_with(" \n\t ", false).is_err());
         let longest = "字".repeat(TYPED_MAX_CHARS);
-        assert_eq!(typed_question(&longest), Ok(longest.as_str()));
-        assert!(typed_question(&format!("{longest}字")).is_err());
+        assert_eq!(typed_question_with(&longest, false), Ok(longest.as_str()));
+        assert!(typed_question_with(&format!("{longest}字"), false).is_err());
+        // with files, no words is a question too
+        assert_eq!(typed_question_with(" ", true), Ok(""));
+        assert!(typed_question_with(&format!("{longest}字"), true).is_err());
+    }
+
+    #[test]
+    fn a_typed_question_takes_at_most_four_whole_attachments() {
+        let file = json!({"name": "a.png", "mime": "image/png", "data": "iVBORw0KGgo="});
+        assert_eq!(typed_attachments(None), Ok(vec![]));
+        assert_eq!(
+            typed_attachments(Some(vec![file.clone(); 4])),
+            Ok(vec![file.clone(); 4])
+        );
+        assert!(typed_attachments(Some(vec![file.clone(); 5])).is_err());
+        assert!(
+            typed_attachments(Some(vec![json!({"name": "a.png", "mime": "image/png"})])).is_err()
+        );
+        assert!(
+            typed_attachments(Some(vec![
+                json!({"name": "a.png", "mime": "image/png", "data": 7})
+            ]))
+            .is_err()
+        );
+        assert!(typed_attachments(Some(vec![json!("C:/Users/me/a.png")])).is_err());
+    }
+
+    #[test]
+    fn the_main_window_reads_and_sets_the_services_by_their_names_only() {
+        for method in ["services.status", "services.set_key", "services.clear_key"] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        for method in [
+            "services.",
+            "services",
+            "services.get_key",
+            "Services.status",
+        ] {
+            assert!(!is_allowed_method(method), "{method}");
+        }
     }
 
     #[test]
@@ -1819,6 +1902,9 @@ mod tests {
             "memory.delete",
             "memory.clear",
             "memory.summary_clear",
+            "services.status",
+            "services.set_key",
+            "services.clear_key",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }

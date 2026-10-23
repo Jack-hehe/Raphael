@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
+/// <reference types="node" />
 // The composer's 「＋」 with images and PDFs, in a page of its own (happy-dom), with the app and the
 // core faked: what it takes, what it refuses, the chips it shows, and what it sends to `agent.ask`.
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AgentTurn, AppContext, MainEvent } from "../types";
 
@@ -102,6 +105,9 @@ describe("what 「＋」 takes", () => {
 
   test("at most four, an image up to 10 MB and a PDF up to 20 MB (the core's limits)", () => {
     expect(ATTACH_MAX).toBe(4);
+    // the app's own limit is the same (commands.rs)
+    const commands = readFileSync(path.resolve(import.meta.dirname, "..", "..", "..", "src-tauri", "src", "commands.rs"), "utf8");
+    expect(commands).toContain(`pub const TYPED_MAX_ATTACHMENTS: usize = ${ATTACH_MAX};`);
     expect(attachRefusal(3, "image/png", IMAGE_MAX_BYTES)).toBeNull();
     expect(attachRefusal(4, "image/png", 10)).toBe("count");
     expect(attachRefusal(0, "image/png", IMAGE_MAX_BYTES + 1)).toBe("size");

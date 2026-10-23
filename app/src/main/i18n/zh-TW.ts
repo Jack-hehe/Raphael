@@ -45,6 +45,8 @@ export const zhTW = {
   "backend.agentBusy": "拉斐爾正在忙，請稍後再問",
   "backend.agentEmpty": "沒有要問的內容",
   "backend.agentTooLong": "問題太長了",
+  "backend.attachTooMany": "附加的檔案太多了",
+  "backend.attachBroken": "附加的檔案無法讀取",
   "backend.agentOff": "拉斐爾現在無法回答問題",
   "backend.questionGone": "這個問題已經結束了",
   "backend.questionUnfocused": "請先回到拉斐爾的視窗再回答",

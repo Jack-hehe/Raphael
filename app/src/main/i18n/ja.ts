@@ -46,6 +46,8 @@ export const ja = {
   "backend.agentBusy": "ラファエルは対応中です。少し待ってからもう一度聞いてください",
   "backend.agentEmpty": "聞く内容がありません",
   "backend.agentTooLong": "質問が長すぎます",
+  "backend.attachTooMany": "添付ファイルが多すぎます",
+  "backend.attachBroken": "添付ファイルを読み込めません",
   "backend.agentOff": "ラファエルは今は質問に答えられません",
   "backend.questionGone": "その質問はもう終わっています",
   "backend.questionUnfocused": "ラファエルのウィンドウに戻ってから答えてください",

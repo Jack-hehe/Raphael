@@ -46,6 +46,8 @@ export const en = {
   "backend.agentBusy": "Raphael is busy; ask again in a moment",
   "backend.agentEmpty": "There is nothing to ask",
   "backend.agentTooLong": "The question is too long",
+  "backend.attachTooMany": "Too many files are attached",
+  "backend.attachBroken": "An attached file could not be read",
   "backend.agentOff": "Raphael cannot answer questions right now",
   "backend.questionGone": "That question is over",
   "backend.questionUnfocused": "Come back to Raphael's window to answer",
