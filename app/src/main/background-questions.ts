@@ -64,7 +64,7 @@ export function backgroundQuestionHTML(q: BackgroundQuestion, busy = false, aske
   const line = asker.name === null ? replyLine(q.prefix, q.text) : q.text;
   const head = asker.name === null ? "" : `<span class="bgq-name">${esc(asker.name)}</span>`;
   return (
-    `<div class="bgq-card" role="group" aria-label="${esc(t("agent.asking"))}" data-bgq-card="${esc(q.id)}">` +
+    `<div class="bgq-card${asker.name === null ? "" : " is-member"}" role="group" aria-label="${esc(t("agent.asking"))}" data-bgq-card="${esc(q.id)}">` +
     `<div class="bgq-q">${asker.face}<span class="bgq-t">${head}<span class="bgq-line">${esc(line)}</span></span></div>` +
     `<div class="bgq-row">` +
     `<button type="button" class="btn bgq-no" data-bgq="no"${ids}${off}>${esc(t("agent.no"))}</button>` +

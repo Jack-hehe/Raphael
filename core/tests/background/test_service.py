@@ -63,7 +63,7 @@ async def test_the_model_is_given_the_task_the_tools_of_the_snapshot_and_the_res
     first, second = rig.client.chat_calls
     system, user = first["messages"]
     assert system["role"] == "system" and "background worker" in system["content"]
-    assert "15 model calls" in system["content"] and "25 tool calls" in system["content"]
+    assert "80 model calls" in system["content"] and "200 tool calls" in system["content"]
     assert user["role"] == "user" and f"<task>\n{TASK_TEXT}\n</task>" in user["content"]
     assert "2026-10-21 14:05" in user["content"] and user["content"].rstrip().endswith("English only.")
     assert [t["function"]["name"] for t in first["tools"]] == [
@@ -146,6 +146,25 @@ async def test_the_report_is_in_the_language_of_the_request(make_rig):
     assert "Traditional Chinese" in rig.client.chat_calls[0]["messages"][0]["content"]
 
 
+async def test_public_progress_reaches_the_linked_turn_before_the_next_model_call(make_rig, conn):
+    rig = make_rig()
+    history = AgentHistory(conn, rig.wall)
+    turn_id = history.add(session_id="s", question=TASK_TEXT, route="delegate", prefix="",
+                          text="", status="running")
+
+    async def finish(**kwargs):
+        assert history.messages([turn_id])[turn_id][0]["text"] == "《Notice. I will check the time.》"
+        assert any(method == "agent.turn" and data["turn_id"] == turn_id for method, data in rig.notifications)
+        assert "I will check the time." in str(kwargs["messages"])
+        return report("Done.")
+
+    rig.client.replies = [turn("I will check the time.", [call("local_time", {}, "t")]), finish]
+    task_id = rig.submit()
+    rig.service.attach_turn(task_id, turn_id)
+    await rig.wait_for_reports()
+    assert [m["kind"] for m in history.messages([turn_id])[turn_id]] == ["progress", "reply"]
+
+
 async def test_the_context_is_the_last_turns_of_the_conversation_without_the_task_itself(
     make_rig, conn
 ):
@@ -213,7 +232,7 @@ def endless(rig, count=40, **extra):
 
 
 async def test_at_fifteen_model_calls_the_task_stops_and_says_so_with_a_fixed_line(make_rig):
-    rig = make_rig()
+    rig = make_rig(limits=RunLimits(model_calls=15))
     endless(rig)
     task_id = rig.submit()
     [done] = await rig.wait_for_reports()
@@ -237,17 +256,16 @@ async def test_at_twenty_five_tool_calls_the_task_stops_before_the_twenty_sixth(
     assert rig.task(task_id).tool_calls == 25
 
 
-async def test_the_money_one_task_may_spend_is_a_limit(make_rig):
+async def test_spending_does_not_stop_a_task(make_rig):
     rig = make_rig()
-    endless(rig, cost=0.09)
+    rig.client.replies = [turn("", [call("local_time", {}, "c0")], cost=0.3), report("Done", cost=0.4)]
     task_id = rig.submit()
     [done] = await rig.wait_for_reports()
-    assert done["state"] == "limit" and done["text"] == phrase("en", "worker_limit_cost", steps="3")
-    assert len(rig.client.chat_calls) == 3  # 0.09, 0.18, 0.27: stopped before a fourth
-    assert rig.task(task_id).cost_usd == pytest.approx(0.27)
+    assert done["state"] == "done" and done["text"] == "Done"
+    assert rig.task(task_id).cost_usd == pytest.approx(0.7)
 
 
-async def test_the_month_limit_stops_a_task_in_the_middle(make_rig, conn):
+async def test_the_month_limit_does_not_stop_a_task_in_the_middle(make_rig, conn):
     rig = make_rig()
     SettingsStore(conn).set("monthly_limit_usd", 0.5)
     rig.client.replies = [
@@ -256,12 +274,12 @@ async def test_the_month_limit_stops_a_task_in_the_middle(make_rig, conn):
             rig.service._spend.record(purpose="cleanup", model="m", cost_usd=1.0, prompt_tokens=1, completion_tokens=1)
             or turn("", [call("local_time", {"n": 1}, "c1")], cost=0.01)
         ),
-        turn("", [call("local_time", {"n": 2}, "c2")]),
+        report("Done"),
     ]
     rig.submit()
     [done] = await rig.wait_for_reports()
-    assert done["state"] == "limit" and done["text"] == phrase("en", "worker_limit_month", steps="2")
-    assert len(rig.client.chat_calls) == 2
+    assert done["state"] == "done" and done["text"] == "Done"
+    assert len(rig.client.chat_calls) == 3
 
 
 async def test_ten_minutes_is_a_limit_and_a_task_that_takes_longer_is_stopped(make_rig):

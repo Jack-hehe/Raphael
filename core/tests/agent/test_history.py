@@ -64,6 +64,32 @@ def test_an_unknown_turn_is_none(history):
     assert history.get(99) is None
 
 
+def test_messages_are_immediately_readable_in_order_and_cleared_with_their_thread(history, clock):
+    first = add(history, clock, status="running", member_id=1)
+    other = add(history, clock, member_id=2)
+    history.add_message(first, "progress", "I will check the examples.")
+    clock.now_ms += 10
+    history.add_message(first, "event", "Example saved")
+    history.add_message(first, "reply", "Try the next sentence.")
+    history.add_message(other, "reply", "Another conversation")
+    messages = history.messages([first, other])
+    assert [(m["seq"], m["kind"], m["text"]) for m in messages[first]] == [
+        (1, "progress", "I will check the examples."),
+        (2, "event", "Example saved"),
+        (3, "reply", "Try the next sentence."),
+    ]
+    assert messages[first][1]["at_ms"] == clock.now_ms
+    history.resolve(first, prefix="", text="Try the next sentence.", status="done")
+    assert history.recent(1, member_id=1)[0].messages == [
+        "I will check the examples.", "Example saved", "Try the next sentence."
+    ]
+    assert history.search("examples", member_id=1)[0].id == first
+    history.clear_member(1)
+    assert history.messages([first, other]) == {other: messages[other]}
+    history.clear()
+    assert history.messages([other]) == {}
+
+
 def test_list_is_newest_first(history, clock):
     ids = [add(history, clock, f"q{i}") for i in range(3)]
     assert [t.id for t in history.list()] == ids[::-1]

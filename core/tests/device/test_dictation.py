@@ -1924,6 +1924,8 @@ async def test_silence_is_heard_while_the_engine_is_busy_with_a_stretch(
     await wait_until(lambda: silences(notifications))
     assert not rig.engine.gate.is_set()  # still inside the engine
     assert silences(notifications) == [{"session_id": "s1"}]
+    # Silence is announced after 10 s; the final 2.5 s frame may still be queued at that instant.
+    await wait_until(lambda: rig.segmenter.accept_calls == 6)
     session = rig.service._session
     assert session.queue.qsize() == 0  # every frame was heard: none waits behind the engine
     rig.engine.gate.set()
@@ -1952,6 +1954,8 @@ async def test_stretches_are_transcribed_in_order_behind_a_slow_one(rig, router)
     await start(router)
     await rig.recorder.fed(4)
     await wait_until(lambda: rig.segmenter.accept_calls == 4)  # all cut while the first waits
+    # Segmentation finishing does not mean the separate transcription thread has started yet.
+    assert await asyncio.to_thread(rig.engine.entered.wait, 5)
     assert len(rig.engine.calls) == 1
     rig.engine.gate.set()
     r = await stop(router)

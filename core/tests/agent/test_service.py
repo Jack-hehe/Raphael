@@ -279,6 +279,7 @@ async def test_a_command_is_done_at_once_and_answered_with_the_fixed_reply(rig, 
             }
         ],
         "task": None,
+        "messages": [],
     }
 
 
@@ -922,16 +923,17 @@ async def test_without_a_key_the_commands_still_work_and_the_rest_is_refused_wit
     assert [t["status"] for t in await rig.turns()] == ["error", "done"]
 
 
-async def test_over_the_monthly_limit_the_commands_still_work_and_the_rest_is_refused(
+async def test_over_the_monthly_limit_answers_are_still_available(
     rig, client, actions
 ):
     rig.settings.set("monthly_limit_usd", 1)
     rig.spend.record(purpose="cleanup", model="m", cost_usd=1.0, prompt_tokens=1, completion_tokens=1)
     assert (await rig.ask("open youtube.com", language="en"))["prefix"] == "Understood"
     assert did(actions) == [("open_url", "https://youtube.com/")]
-    result = await rig.ask("what is the weather", language="en")
-    assert (result["prefix"], result["text"]) == ("Negative", "This month's limit has been reached.")
-    assert client.calls == 0
+    client.replies.extend([completion(classification()), completion({"prefix": "Answer", "text": "Still here.", "detail": ""})])
+    result = await rig.ask("hello", language="en")
+    assert result["text"] == "Still here."
+    assert client.calls > 0
 
 
 async def test_offline_the_commands_still_work_and_the_rest_is_refused_with_the_reason(
@@ -1414,7 +1416,7 @@ async def test_the_history_lists_the_newest_turn_first_with_the_fields_the_app_r
     assert set(turns[0]) == {
         "id", "created_at_ms", "question", "route", "prefix", "text", "detail", "status",
         "session_id", "source", "cost_usd", "model", "attachments", "steps", "task", "member_id",
-        "peer_id",
+        "peer_id", "messages",
     }  # fmt: skip
 
 

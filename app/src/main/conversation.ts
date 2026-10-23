@@ -48,7 +48,7 @@ const fold = (text: string): string => text.normalize("NFKC").toLocaleLowerCase(
 export function turnMatches(turn: AgentTurn, query: string): boolean {
   const q = fold(query.trim());
   if (q === "") return true;
-  return [turn.question, turn.text, turn.detail ?? ""].some((text) => fold(text).includes(q));
+  return [turn.question, turn.text, turn.detail ?? "", ...(turn.messages ?? []).map((message) => message.text)].some((text) => fold(text).includes(q));
 }
 
 /**

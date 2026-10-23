@@ -265,7 +265,7 @@ describe("the rules for every tab, in every language", () => {
     expect(described(tab("general"))).toEqual(["字幕"]);
     expect(described(tab("dictation"))).toEqual(["你說的語言"]);
     // the key's status, the month's forecast, what the limit does, and what each model costs
-    expect(described(tab("usage"))).toEqual(["金鑰", "Raphael 本月花費", "每月上限", "語音轉文字", "整理文字", "拉斐爾的回答"]);
+    expect(described(tab("usage"))).toEqual(["金鑰", "語音轉文字", "整理文字", "拉斐爾的回答"]);
   });
 });
 
@@ -382,14 +382,10 @@ describe("拉斐爾", () => {
     expect(rowOf(html, "天氣的城市")).toContain('id="agent-city" type="text" value="台北"');
   });
 
-  test("then what one background task may spend, a dropdown of four amounts", () => {
+  test("hides the retired background cost cap", () => {
     const html = tab("agent");
-    expect(names(html).slice(0, 3)).toEqual(["問拉斐爾", "天氣的城市", "背景任務的花費上限"]);
-    const row = rowOf(html, "背景任務的花費上限");
-    expect(row).toContain('class="sel"');
-    expect(row).toContain('data-k="worker-cap"');
-    expect(row).toContain("US$0.20"); // the default
-    expect(tab("agent", { brain: { ...brain, worker_cost_cap_usd: 0.5 } })).toContain("US$0.50");
+    expect(html).not.toContain('data-k="worker-cap"');
+    expect(tab("agent", { brain: { ...brain, worker_cost_cap_usd: 0.5 } })).not.toContain("US$0.50");
     expect(WORKER_COST_CAPS.map((c) => c.value)).toEqual(["0.1", "0.2", "0.5", "1"]);
   });
 
@@ -422,7 +418,7 @@ describe("模型與用量", () => {
   test("is OpenRouter (the key, the spend, the limit), then the three models", () => {
     const html = tab("usage");
     expect(groups(html)).toEqual(["OpenRouter", "模型"]);
-    expect(names(html)).toEqual(["金鑰", "Raphael 本月花費", "每月上限", "OpenRouter 帳號本月用量", "語音轉文字", "整理文字", "拉斐爾的回答"]);
+    expect(names(html)).toEqual(["金鑰", "Raphael 本月花費", "OpenRouter 帳號本月用量", "語音轉文字", "整理文字", "拉斐爾的回答"]);
   });
 
   test("shows how OpenRouter took the key, with buttons to check again and to change it", () => {
@@ -675,7 +671,7 @@ describe("while the core does not answer", () => {
     expect(rowOf(agent, "天氣的城市")).toContain("disabled");
     expect(rowOf(agent, "問拉斐爾")).not.toContain("disabled");
     const usage = tab("usage", down);
-    expect(rowOf(usage, "每月上限")).toContain("disabled");
+    expect(usage).not.toContain('id="limit-input"');
     for (const name of ["語音轉文字", "整理文字", "拉斐爾的回答"]) expect(rowOf(usage, name)).toMatch(/data-k="[\w-]+" disabled>/);
   });
 });

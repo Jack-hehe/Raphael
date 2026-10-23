@@ -1388,11 +1388,10 @@ async def test_status_recovers_when_a_later_call_succeeds(router, fake_client, c
 async def test_status_ignores_dictations_that_never_asked_the_model(
     router, fake_client, keys, conn
 ):
-    keys.set(KEY)
-    SettingsStore(conn).set("monthly_limit_usd", 0.0)  # the budget is used up
+    keys.clear()
     r = await finalize(router)
-    assert r["fallback_reason"] == "budget" and fake_client.calls == []
-    assert (await router.call("status.get", {}))["openrouter"]["state"] == "unknown"
+    assert r["fallback_reason"] == "no_key" and fake_client.calls == []
+    assert (await router.call("status.get", {}))["openrouter"]["state"] == "no_key"
 
 
 async def test_a_valid_key_makes_the_status_ok(router):

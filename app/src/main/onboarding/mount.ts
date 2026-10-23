@@ -21,7 +21,7 @@ import { MonitorSwitch } from "../monitor";
 import { ModelDownload, type ModelPhase, formatProgress } from "../models";
 import { UI_LANGUAGES } from "../pages/settings-view";
 import { Stage } from "../stage";
-import { keyEntryRow, limitRow, micRow as micRowShared } from "../setup-rows";
+import { keyEntryRow, micRow as micRowShared } from "../setup-rows";
 import type { AppContext, AudioDevices, MainEvent, MicAccess, StoreService } from "../types";
 import { btn, closeMenu, esc, group, menuIsOpenFor, note, openMenu, openMenuOnArrow, row, sel, setMeter, st, toaster } from "../ui";
 import { AUTO_MICROPHONE, automaticMicrophoneLabel, microphoneChoices } from "../microphone";
@@ -195,8 +195,6 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
       [
         keyRow(),
         ...(keyError ? [note(st("err", keyError()), ' role="alert"')] : []),
-        limitRow({ text: limitText, fieldWidth: 96, id: "ob-limit", invalid: limitError !== null }),
-        ...(limitError ? [note(st("err", limitError()), ' role="alert"')] : []),
       ],
       flow.setup.key === "done" ? "" : esc(t("onboarding.keyHelp")),
     );

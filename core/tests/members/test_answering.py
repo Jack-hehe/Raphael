@@ -2,10 +2,13 @@
 with its own tools and memory, never on the desktop; Raphael asks a member, or adds one, with the
 team tools; and what one assistant was told stays in its thread."""
 
+import json
+
 import pytest
 
 from agent.conftest import FakeActions, FakeOpenRouter, completion, decision, tool_plan
 from agent.test_service import Rig
+from agent.test_narration import chat
 from raphael_core.agent.history import AgentHistory
 from raphael_core.agent.team import team_tools_for
 from raphael_core.brain.secrets import MemoryKeyStore
@@ -69,6 +72,10 @@ def raphael_said(text, prefix="答"):
     return completion({"prefix": prefix, "text": text, "detail": "", "memory": [], "need": {"read": [], "search": ""}})
 
 
+def live_said(text, **fields):
+    return chat(json.dumps({"text": text, "detail": "", "memory": [], **fields}))
+
+
 # --- a member in its own thread ---------------------------------------------------------------------
 
 
@@ -76,14 +83,13 @@ async def test_a_member_answers_in_its_thread_as_itself_in_plain_sentences(setup
     rig, team = setup
     one = member(team)
     client.decisions.append(decision("chat"))
-    client.replies.append(said("好的。\n明天早上九點開會。", memory=[]))
+    client.chats.append(live_said("好的。\n明天早上九點開會。"))
     result = await typed(rig, "明天有什麼行程", one.id)
     assert (result["prefix"], result["text"]) == ("", "好的。\n明天早上九點開會。")
-    call = client.json_calls[0]
-    assert "You are 小行程" in call["system"] and "PRIVATE-INSTRUCTIONS" in call["system"]
-    assert "Your role: 管行程." in call["system"]
-    assert "You are Raphael" not in call["system"] and "主人" not in call["system"].split("Memory")[0]
-    assert "prefix" not in call["schema"]["properties"]
+    system = client.chat_calls[0]["messages"][0]["content"]
+    assert "You are 小行程" in system and "PRIVATE-INSTRUCTIONS" in system
+    assert "Your role: 管行程." in system
+    assert "You are Raphael" not in system
     history = AgentHistory(conn)
     (turn,) = history.list(member_id=one.id)
     assert (turn.member_id, turn.prefix, turn.source) == (one.id, "", "app")
@@ -93,13 +99,28 @@ async def test_a_member_answers_in_its_thread_as_itself_in_plain_sentences(setup
     assert (await rig.call("agent.history.list", {}))["turns"] == []
 
 
+async def test_a_teacher_keeps_each_reply_and_replays_the_whole_lesson(setup, client):
+    rig, team = setup
+    one = member(team, name="Teacher", instructions="Teach Japanese and lead with exercises.")
+    client.decisions = [decision("chat"), decision("chat")]
+    client.chats = [live_said("ignored", messages=["Correction.", "Example.", "Try this.", "Your answer?", "Dropped."]), live_said("Next lesson.")]
+    first = await typed(rig, "Start a lesson", one.id, language="en")
+    assert first["text"] == "Your answer?" and first["prefix"] == ""
+    [turn] = (await rig.call("agent.history.list", {"member_id": one.id}))["turns"]
+    assert [m["text"] for m in turn["messages"]] == ["Correction.", "Example.", "Try this.", "Your answer?"]
+    await typed(rig, "My answer", one.id, language="en")
+    context = str(client.chat_calls[1]["messages"])
+    assert all(line in context for line in ["Correction.", "Example.", "Try this.", "Your answer?"])
+    assert "Dropped." not in context
+
+
 async def test_a_member_has_its_own_model_when_it_has_one(setup, client):
     rig, team = setup
     one = member(team, model="own/model")
     client.decisions.append(decision("chat"))
-    client.replies.append(said("好。", memory=[]))
+    client.chats.append(live_said("好。"))
     await typed(rig, "你好", one.id)
-    assert client.json_calls[0]["model"] == "own/model"
+    assert client.chat_calls[0]["model"] == "own/model"
 
 
 async def test_the_voice_and_the_chat_apps_always_go_to_raphael(setup):
@@ -128,19 +149,21 @@ async def test_a_member_looks_up_only_with_the_tools_it_was_given(setup, client)
     rig, team = setup
     one = member(team, tools=[])
     client.decisions.append(decision("answer", search=0.95, weather=0.95))
-    client.replies.append(said("我沒有可以查的工具。", memory=[]))
-    await typed(rig, "今天台北天氣和新聞", one.id)
+    client.chats.append(live_said("我沒有可以查的工具。"))
+    assert (await typed(rig, "今天台北天氣和新聞", one.id))["text"] == "我沒有可以查的工具。"
     assert client.text_calls == []  # no web search
     assert rig.meteo.requests == []  # no weather
 
 
-async def test_a_member_task_goes_to_the_background_as_the_members(setup, client):
+async def test_a_member_task_stays_in_the_live_conversation(setup, client):
     rig, team = setup
     one = member(team, model="own/model")
     client.decisions.append(decision("delegate"))
+    client.chats.append(live_said("整理好了，接著看哪一天？"))
     result = await typed(rig, "整理這週的會議", one.id)
     assert result["prefix"] == ""
-    assert rig.service._background.members == [one.id]
+    assert rig.service._background.members == []
+    assert result["text"] == "整理好了，接著看哪一天？"
 
 
 # --- the team tools in Raphael's answers ------------------------------------------------------------
@@ -223,7 +246,7 @@ async def test_a_members_reply_is_not_spoken(voiced, client):
     rig, team, voice = voiced
     one = member(team)
     client.decisions.append(decision("chat"))
-    client.replies.append(said("明天早上九點開會。", memory=[]))
+    client.chats.append(live_said("明天早上九點開會。"))
     result = await typed(rig, "明天有什麼行程", one.id)
     assert result["text"] == "明天早上九點開會。"
     assert voice.said == []
@@ -238,10 +261,10 @@ async def test_an_exchange_between_members_is_never_spoken_only_raphaels_final_r
     rig, team, voice = voiced
     member(team, name="小研究")
     client.decisions.append(decision("answer"))  # Raphael's request
-    client.plans.append(tool_plan(("Raphael__ask_member", {"member": "小研究", "request": "上季的數字"})))
+    client.chats.append(chat("先問小研究。", ("ask_member", {"member": "小研究", "request": "上季的數字"})))
     client.decisions.append(decision("answer"))  # the member's flags
     client.replies.append(said("PRIVATE-ANSWER 上季營收兩百萬。", memory=[]))  # the member, asked
-    client.replies.append(raphael_said("小研究說上季營收兩百萬。"))  # Raphael, to the owner
+    client.chats.append(live_said("小研究說上季營收兩百萬。", prefix="答"))
     await typed(rig, "問小研究上季的數字", 0)
     assert voice.said == [("答", "小研究說上季營收兩百萬。")]
 
@@ -251,15 +274,15 @@ async def test_a_member_asks_raphael_who_answers_as_himself(setup, client, conn)
     one = member(team)
     member(team, name="小研究")
     client.decisions.append(decision("answer"))  # the member's request
-    client.plans.append(tool_plan(("Raphael__ask_member", {"member": "拉斐爾", "request": "主人住哪裡？"})))
+    client.chats.append(chat("先確認你住的地方。", ("ask_member", {"member": "拉斐爾", "request": "主人住哪裡？"})))
     client.decisions.append(decision("answer"))  # Raphael's flags, asked
     client.replies.append(raphael_said("台北。"))  # Raphael, asked: nobody named, nothing to pick
-    client.replies.append(said("主人住在台北。", memory=[]))
+    client.chats.append(live_said("主人住在台北。"))
     result = await typed(rig, "問拉斐爾主人住哪裡", one.id)
     assert result["text"] == "主人住在台北。"
-    tools = {t["function"]["name"] for t in client.plan_calls[0]["tools"]}
-    assert tools == {"Raphael__ask_member"}  # no create_member for a member
-    assert len(client.plan_calls) == 1
+    tools = {t["function"]["name"] for t in client.chat_calls[0]["tools"]}
+    assert "ask_member" in tools and "create_member" not in tools
+    assert client.plan_calls == []
     assert "You are Raphael" in client.json_calls[0]["system"]
     (raphaels,) = AgentHistory(conn).list(member_id=0)
     assert (raphaels.route, raphaels.peer_id) == ("exchange", one.id)
@@ -271,19 +294,19 @@ async def test_a_member_asks_another_and_only_those_two_threads_hold_it(setup, c
     b = member(team, name="小研究")
     c = member(team, name="小行程")
     client.decisions.append(decision("answer"))  # A's request
-    client.plans.append(tool_plan(("Raphael__ask_member", {"member": "小研究", "request": "PRIVATE-REQUEST 上季的數字"})))
+    client.chats.append(chat("我先確認上季的數字。", ("ask_member", {"member": "小研究", "request": "PRIVATE-REQUEST 上季的數字"})))
     client.decisions.append(decision("answer"))  # B's flags
     client.replies.append(said("PRIVATE-ANSWER 上季營收兩百萬。", memory=[]))  # B, as itself
-    client.replies.append(said("小研究說上季營收兩百萬。", memory=[]))  # A
+    client.chats.append(live_said("小研究說上季營收兩百萬。"))
     result = await typed(rig, "問小研究上季的數字", a.id)
     assert result["text"] == "小研究說上季營收兩百萬。"
-    b_call, a_call = client.json_calls
+    [b_call] = client.json_calls
     assert "You are 小研究" in b_call["system"]
-    assert "PRIVATE-ANSWER" in a_call["user"]  # the answer, as data
+    assert "PRIVATE-ANSWER" in client.chat_calls[-1]["messages"][-1]["content"]
     history = AgentHistory(conn)
     (bs,) = history.list(member_id=b.id)
     assert (bs.route, bs.peer_id, bs.question) == ("exchange", a.id, "PRIVATE-REQUEST 上季的數字")
-    assert [(t.route, t.peer_id) for t in history.list(member_id=a.id)] == [("answer", None), ("exchange", b.id)]
+    assert {(t.route, t.peer_id) for t in history.list(member_id=a.id)} == {("answer", None), ("exchange", b.id)}
     # A third member, and Raphael, see nothing of it.
     assert history.list(member_id=c.id) == [] and history.list(member_id=0) == []
     assert team.memory.search("上季", member_id=c.id).data["turns"] == []
@@ -331,9 +354,9 @@ async def test_raphael_asked_for_the_desktop_says_the_owner_must_ask_him(setup, 
     rig, team = setup
     one = member(team)
     client.decisions.append(decision("answer"))
-    client.plans.append(tool_plan(("Raphael__ask_member", {"member": "拉斐爾", "request": "幫我打開小算盤"})))
+    client.chats.append(chat("我會請拉斐爾處理。", ("ask_member", {"member": "拉斐爾", "request": "幫我打開小算盤"})))
     client.decisions.append(decision("operate"))  # what Raphael was asked for
-    client.replies.append(said("拉斐爾說要主人直接跟他說。", memory=[]))
+    client.chats.append(live_said("拉斐爾說要主人直接跟他說。"))
     await typed(rig, "請拉斐爾打開小算盤", one.id)
     (raphaels,) = AgentHistory(conn).list(member_id=0)
     assert raphaels.text == "操作電腦需要直接向拉斐爾下達指示。"
@@ -353,18 +376,18 @@ async def test_a_decision_in_one_members_thread_never_reaches_another(setup, cli
         "op": "write", "name": "user-budget", "type": "user", "description": "我們決定預算是三萬",
         "body": "我們決定預算是三萬元。", "expires": "", "space": "shared",
     }  # fmt: skip
-    client.replies.append(said("", memory=[note]))
+    client.chats.append(live_said("", memory=[note]))
     await typed(rig, "記住，我們決定預算是三萬", a.id)
     assert team.memory.shared.all() == []  # a decision is not macro knowledge: it stayed with A
     assert team.memory.store_for(a.id).get("user-budget") is not None
     # B is asked, and looks back in its past: none of it is there.
     client.decisions.append(decision("discuss"))
-    client.replies.append(said("", memory=[], search="預算"))
-    client.replies.append(said("我沒有關於預算的紀錄。", memory=[]))
+    client.chats.append(chat("先找找之前的決定。", ("history_search", {"query": "預算"})))
+    client.chats.append(live_said("我沒有關於預算的紀錄。"))
     await typed(rig, "我們的預算是多少", b.id)
-    first, again = client.json_calls[-2:]
+    first, again = client.chat_calls[-2:]
     for call in (first, again):
-        assert "三萬" not in call["system"] and "三萬" not in call["user"]
+        assert "三萬" not in json.dumps(call["messages"], ensure_ascii=False)
     assert "三萬" not in str(team.memory.index(b.id))
     # B's search finds B's own question, never A's turn.
     searched = team.memory.search("預算", member_id=b.id).data["turns"]

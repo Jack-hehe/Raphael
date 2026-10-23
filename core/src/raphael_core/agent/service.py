@@ -115,6 +115,7 @@ answered, a city or a key: only routes, kinds, latencies and costs.
 """
 
 import asyncio
+import json
 import logging
 import re
 import sqlite3
@@ -129,6 +130,7 @@ import httpx
 
 from ..background.brief import background_block, background_line
 from ..background.tasks import Refused
+from ..background.snapshot import FIND, take_snapshot
 from ..brain.catalog import CatalogEntry
 from ..clock import wall_clock_ms
 from ..computer.run import ComputerRun, ComputerRuns, Final, Question, conversation_block
@@ -144,7 +146,11 @@ from ..memory.conversation import Conversation, asks_to_remember
 from ..memory.store import MemoryIndex
 from ..services.attachments import MAX_ATTACHMENTS, Attachment, AttachmentError, from_wire
 from ..services.urls import urls_in
-from .answers import Reply, Voice
+from ..services.urls import SeenUrls
+from ..messaging.words import compose
+from ..worker.loop import Stop, ToolOutcome, WAITING
+from .answers import Reply, Voice, build_user_message
+from .narration import NarratedLoop
 from .cities import cities_in
 from .commands import COMMANDS, AppCatalog, run_command
 from .device import DeviceActions
@@ -154,7 +160,7 @@ from .history import VOICE, AgentHistory, Turn
 from .ledger import Ledger
 from .local import extract_target, match_command
 from .opening import Opening, clean_target, match_settings, parse_domain, validate_url
-from .persona import DEFAULT_LANGUAGE, PREFIXES, normalize_language, parenthesized, phrase
+from .persona import DEFAULT_LANGUAGE, PREFIXES, normalize_language, parenthesized, phrase, member_system_prompt, system_prompt
 from .plugins import (
     MAX_OFFERED,
     PLAN_CONTEXT_TURNS,
@@ -367,6 +373,11 @@ class _Ask:
     # What the ledger held before this request: a request answered inside another's shares its
     # ledger, and its turn costs only what was added.
     cost_base: float = 0.0
+    turn_id: int = 0
+    recorded_cost: float = 0.0
+    recorded_steps: int = 0
+    replies: list[str] = field(default_factory=list)
+    ledger: Ledger | None = None
 
     @property
     def nested(self) -> bool:
@@ -395,6 +406,7 @@ class _Followup:
     ask: _Ask
     call: PlannedCall
     results: list[ToolResult]
+    loop: NarratedLoop | None = None
 
 
 class AgentService:
@@ -671,6 +683,9 @@ class AgentService:
                 )
             raise
         finally:
+            if task.cancelled() and ask.turn_id:
+                self._finish(ask, "answer", "understood", phrase(ask.language, "denied"),
+                             ask.ledger or Ledger(self._spend), status="denied")
             if self._inflight.get(ask.session_id) is task:
                 del self._inflight[ask.session_id]
 
@@ -678,10 +693,13 @@ class AgentService:
         """One request, from the router to the reply. Never raises for a failure of the world."""
         began = time.perf_counter()
         ledger = Ledger(self._spend)
+        ask.ledger = ledger
         if not ask.text.strip():
             return self._finish(ask, "unclear", "negative", phrase(ask.language, "unclear"), ledger)
         settings = self._read_settings(ask.speaker)
         blocked = self._blocked(settings)
+        if blocked is None and ask.source == TYPED:
+            self._record(ask, "answer", "", "", "running", None, ledger)
         decision: RouteDecision | None = None
         failure = blocked
         if blocked is None:
@@ -746,6 +764,10 @@ class AgentService:
             )
         if route == "command":
             return await self._command(ask, decision, settings, ledger)
+        if ask.source == TYPED and (
+            not ask.speaker.is_raphael or route in ("answer", "delegate")
+        ):
+            return await self._narrated(ask, settings, ledger)
         if route == "answer":
             return await self._answer_with_tools(ask, decision, settings, ledger, self._offer(ask))
         if route == "operate":
@@ -906,6 +928,7 @@ class AgentService:
             text = phrase(language, "secret_not_kept" if secret else "not_remembered")
         if not text:
             raise AgentFailure("error")  # a lookup and nothing after it, or a note it could not take
+        ask.replies = reply.messages
         result = self._finish(ask, route, which, text, ledger, detail=reply.detail)
         if notice is not None:
             result["notice"] = notice
@@ -1057,11 +1080,7 @@ class AgentService:
             self._write_final(run, run.final, run.take_steps())
 
     def _over_budget(self, limit_usd: float) -> bool:
-        try:
-            return self._spend.is_over(limit_usd)
-        except sqlite3.Error as exc:
-            logger.warning("Could not read the month's spend: %s", type(exc).__name__)
-            return False
+        return False
 
     async def _open_for_run(self, name: str) -> str | None:
         """Open the app of the Start menu that `name` names, for a run, through the gate like the
@@ -1122,6 +1141,123 @@ class AgentService:
 
     def _moment(self) -> Mapping[str, str]:
         return self._tools.local_time().data or {}
+
+    def _message(self, ask: _Ask, kind: str, text: str, prefix: str = "") -> None:
+        """Publish only public words; each commit is visible before the next model/tool call."""
+        if not ask.turn_id or not text.strip():
+            return
+        line = compose(prefix, text, None) if ask.speaker.is_raphael else text
+        self._write(lambda: self._history.add_message(ask.turn_id, kind, line))
+        self._turn_changed(ask.turn_id, ask.speaker.id)
+
+    @staticmethod
+    def _loop_result(result: ToolResult) -> ToolOutcome:
+        return ToolOutcome(result.ok, result.error, json.dumps(result.data, ensure_ascii=False))
+
+    async def _narrated(
+        self, ask: _Ask, settings: _Settings, ledger: Ledger, loop: NarratedLoop | None = None
+    ) -> dict:
+        """A live typed turn, sharing the fast tier's safety gate and permission cards."""
+        if loop is None:
+            context = self._conversation_of(ask.speaker.id).context(quick=False)
+            index = None if self._memory is None else self._memory.index(ask.speaker.id)
+            if ask.speaker.is_raphael:
+                system = system_prompt(ask.language, "answer", index)
+            else:
+                system = member_system_prompt(
+                    ask.language, "answer", name=ask.speaker.name, role=ask.speaker.role,
+                    instructions=ask.speaker.instructions, memory_index=index,
+                )
+            user = build_user_message(
+                ask.text, self._moment(), context.turns, [], ask.language,
+                background_block(self._briefs()), summary=context.summary,
+            )
+            if ask.attachments:
+                user += "\nFiles: " + json.dumps([
+                    {"index": n, "name": a.name, "mime": a.mime}
+                    for n, a in enumerate(ask.attachments, 1)
+                ], ensure_ascii=False)
+            snapshot = take_snapshot(
+                self._plugins, ask.text, memory=self._memory is not None,
+                attachments=bool(ask.attachments), speaker=ask.speaker,
+                team=self._team_tools(ask), max_tier=Tier.T3,
+            )
+            urls = SeenUrls([ask.text])
+
+            async def execute(call_id: str, name: str, args: dict) -> ToolOutcome:
+                assert loop is not None
+                ref = snapshot.refs.get(name)
+                if ref is None:
+                    return ToolOutcome(False, "unknown_tool")
+                # Include results supplied after a permission pause, as well as ordinary rounds.
+                if loop.seen:
+                    urls.add_from(json.dumps(loop.seen[-1].data, ensure_ascii=False))
+                if ref.kind == FIND:
+                    definitions, lines = snapshot.find(str(args.get("query", "")))
+                    loop.tools.extend(definitions)
+                    return ToolOutcome(True, content="\n".join(lines), tools=definitions)
+                pool = snapshot.pool
+                if pool is not None and name in pool.by_alias:
+                    planned = PlannedCall(pool.by_alias[name], args)
+                elif name in TEAM_TOOLS:
+                    planned = PlannedCall(team_tool(name), args)
+                else:
+                    planned = None
+                if planned is not None:
+                    outcome = await self._carry_out(ask, [planned], [], ledger)
+                    if isinstance(outcome, dict):
+                        loop.response = outcome
+                        if outcome["status"] == "confirm":
+                            self._followups[outcome["confirm"]["id"]].loop = loop
+                            raise Stop(WAITING)
+                        raise Stop("finished")
+                    result = outcome[-1]
+                else:
+                    self._gate.check(Action(ref.key, args), None)
+                    if name == "local_time":
+                        result = self._tools.local_time()
+                    elif name == "weather":
+                        result = await self._tool(ask, self._tools.weather(str(args.get("city") or settings.city), ask.language), name)
+                    elif name == "web_search":
+                        query = args.get("query")
+                        if not isinstance(query, str) or not query.strip():
+                            return ToolOutcome(False, "bad_arguments")
+                        result = await self._tool(ask, self._tools.web_search(query, settings.model, ledger), name)
+                    elif name == "web_read":
+                        url = args.get("url")
+                        if not isinstance(url, str) or not urls.seen(url):
+                            return ToolOutcome(False, "url_not_seen")
+                        result = await self._tool(ask, self._tools.web_read(url), name)
+                    elif name == "read_attachment":
+                        number = args.get("index")
+                        if type(number) is not int or not 1 <= number <= len(ask.attachments):
+                            return ToolOutcome(False, "bad_arguments")
+                        result = await self._tool(ask, self._tools.read_attachment(
+                            ask.attachments[number - 1], str(args.get("question") or ask.text), ledger, number=number
+                        ), name)
+                    elif name in ("memory_read", "history_search"):
+                        reply = Reply("", "", None, read=args.get("names", []) if name == "memory_read" else [], search=str(args.get("query", "")) if name == "history_search" else "")
+                        found = self._look_up(ask, reply, [t.id for t in context.turns if t.id is not None])
+                        result = found[0] if found else ToolResult(name, False, None, "not_found")
+                    else:
+                        return ToolOutcome(False, "unknown_tool")
+                loop.seen.append(result)
+                if result.ok and name == CREATE_MEMBER:
+                    self._message(ask, "event", phrase(ask.language, "member_created", member=str((result.data or {}).get("created", ""))))
+                return self._loop_result(result)
+
+            loop = NarratedLoop(
+                client=self._client, model=settings.model, ledger=ledger,
+                language=ask.language, plain=not ask.speaker.is_raphael,
+                system=system, user=user, tools=snapshot.definitions,
+                progress=lambda text: self._message(ask, "progress", text, PREFIXES[ask.language].notice),
+                execute=execute,
+            )
+        outcome = await loop.run()
+        if loop.response is not None:
+            return loop.response
+        reply = loop.reply(outcome)
+        return self._finish_reply(ask, "answer", reply, loop.seen, ledger)
 
     async def _answer_with_tools(
         self,
@@ -1701,7 +1837,7 @@ class AgentService:
     ) -> dict:
         """The yes came: make the call, then word what came of it."""
         language = pending.language
-        ledger = Ledger(self._spend)
+        ledger = followup.loop.ledger if followup.loop else Ledger(self._spend)
         call = followup.call
         # The yes is for the tier the question was asked at. A tool that has none now, or a higher
         # one, is not covered by it.
@@ -1713,6 +1849,24 @@ class AgentService:
             followup.ask, call, approval, ledger, pending.action, steps=steps
         )
         self._write(lambda: self._history.add_steps(pending.turn_id, steps))
+        if followup.loop is not None:
+            loop = followup.loop
+            loop.seen.append(result)
+            if result.ok and call.tool.key == CREATE_MEMBER:
+                self._message(followup.ask, "event", phrase(
+                    language, "member_created", member=str((result.data or {}).get("created", ""))
+                ))
+            loop.continue_with(self._loop_result(result))
+            # The confirmed step was written above; future snapshots must not duplicate it.
+            followup.ask.steps.extend(steps)
+            followup.ask.recorded_steps = len(followup.ask.steps)
+            self._record(followup.ask, "answer", "", "", "running", None, ledger)
+            try:
+                return await self._narrated(
+                    followup.ask, self._read_settings(followup.ask.speaker), ledger, loop
+                )
+            except AgentFailure as error:
+                return self._failed(followup.ask, "answer", error.kind, ledger)
         if call.tool.key == CREATE_MEMBER and result.ok:
             # 《了。已建立「小行程」。》, after the yes a rule asked for: nothing more to word.
             created = str((result.data or {}).get("created", ""))
@@ -1983,6 +2137,8 @@ class AgentService:
             return self._outcome(pending, "understood", phrase(language, "denied"), "denied")
         followup = self._followups.pop(pending.id, None)
         if followup is not None:
+            if followup.loop is not None:
+                return await self._resume_narrated(pending, resolution.approval, followup)
             return await self._confirm_plugin(pending, resolution.approval, followup)
         command = COMMANDS.get(pending.action.tool)
         if command is None:
@@ -2001,6 +2157,26 @@ class AgentService:
         done = _DONE_PHRASE.get(command.name)
         return self._outcome(pending, "understood", phrase(language, done) if done else "", "done")
 
+    async def _resume_narrated(
+        self, pending: Pending, approval: Approval | None, followup: _Followup
+    ) -> dict:
+        """Keep the approved call and all later rounds cancellable as one live request."""
+        task = asyncio.ensure_future(self._confirm_plugin(pending, approval, followup))
+        session_id = followup.ask.session_id
+        self._inflight[session_id] = task
+        try:
+            return await task
+        except asyncio.CancelledError:
+            if not task.cancelled() or asyncio.current_task().cancelling():
+                raise
+            return _Silent({"status": "done", "turn_id": pending.turn_id, "prefix": "", "text": ""})
+        finally:
+            if task.cancelled():
+                self._finish(followup.ask, "answer", "understood", phrase(pending.language, "denied"),
+                             followup.loop.ledger, status="denied")
+            if self._inflight.get(session_id) is task:
+                del self._inflight[session_id]
+
     def _outcome(
         self,
         pending: Pending,
@@ -2013,7 +2189,8 @@ class AgentService:
         model: str | None = None,
     ) -> dict:
         """End the turn of a question: what Raphael says now, and how it ended."""
-        prefix = _prefix(pending.language, which)
+        turn = self._history.get(pending.turn_id)
+        prefix = _prefix(pending.language, which) if turn is None or turn.member_id == 0 else ""
         self._write(
             lambda: self._history.resolve(
                 pending.turn_id,
@@ -2025,34 +2202,25 @@ class AgentService:
                 model=model,
             )
         )
+        if turn is not None and turn.source == TYPED and text:
+            self._write(lambda: self._history.add_message(
+                pending.turn_id, "reply", compose(prefix, text, None)
+            ))
         self._turn_changed(pending.turn_id)
         # The owner's own "no", and a question nobody answered, are not said back.
         silent = status in _UNSPOKEN
-        return self._done(pending.turn_id, pending.language, which, text, silent=silent)
+        result = {"status": "done", "turn_id": pending.turn_id, "prefix": prefix, "text": text}
+        return _Silent(result) if silent else result
 
     def _deny(self, pendings: list[Pending]) -> None:
         for pending in pendings:
             self._drop_followup(pending, "denied")
-            prefix = PREFIXES[pending.language].understood
-            text = phrase(pending.language, "denied")
-            self._write(
-                lambda p=pending, prefix=prefix, text=text: self._history.resolve(
-                    p.turn_id, prefix=prefix, text=text, status="denied"
-                )
-            )
-            self._turn_changed(pending.turn_id)
+            self._outcome(pending, "understood", phrase(pending.language, "denied"), "denied")
 
     def _expire(self, pendings: list[Pending]) -> None:
         for pending in pendings:
             self._drop_followup(pending, "expired")
-            prefix = PREFIXES[pending.language].negative
-            text = phrase(pending.language, "expired")
-            self._write(
-                lambda p=pending, prefix=prefix, text=text: self._history.resolve(
-                    p.turn_id, prefix=prefix, text=text, status="expired"
-                )
-            )
-            self._turn_changed(pending.turn_id)
+            self._outcome(pending, "negative", phrase(pending.language, "expired"), "expired")
 
     # --- agent.cancel ---------------------------------------------------------------------------
 
@@ -2138,6 +2306,7 @@ class AgentService:
         to the worker, the task and the steps the worker took for it."""
         ids = [turn.id for turn in turns if turn.id is not None]
         steps = self._history.steps(ids)
+        messages = self._history.messages(ids)
         tasks = self._background.tasks_for_turns(ids)
         views = []
         for turn in turns:
@@ -2165,6 +2334,7 @@ class AgentService:
                     "steps": [_step_view(step) for step in steps.get(turn.id or 0, [])]
                     + task_steps,
                     "task": task,
+                    "messages": messages.get(turn.id or 0, []),
                 }
             )
         return views
@@ -2229,7 +2399,7 @@ class AgentService:
         )
 
     def _blocked(self, settings: _Settings) -> str | None:
-        """Why no model may be asked: "no_key", "auth" (the key store failed), "budget", or None."""
+        """Why no model may be asked: "no_key", "auth" (the key store failed), or None."""
         try:
             key = self._keys.get()
         except Exception as exc:  # its message could hold the key
@@ -2237,8 +2407,6 @@ class AgentService:
             return "auth"
         if not (key or "").strip():
             return "no_key"
-        if self._spend.is_over(settings.limit_usd):
-            return "budget"
         return None
 
     def _failed(self, ask: _Ask, route: str, kind: str, ledger: Ledger) -> dict:
@@ -2263,6 +2431,10 @@ class AgentService:
         prefix: it speaks in plain sentences."""
         prefix = _prefix(ask.language, which) if ask.speaker.is_raphael else ""
         turn_id = self._record(ask, route, prefix, text, status, detail, ledger)
+        if ask.source == TYPED and status != "confirm":
+            for line in ask.replies or [text]:
+                self._message(ask, "reply", line, prefix)
+            ask.replies = []
         return {"status": "done", "turn_id": turn_id, "prefix": prefix, "text": text}
 
     @staticmethod
@@ -2319,27 +2491,32 @@ class AgentService:
         another is written as an exchange with the asker (`peer_id`)."""
         member_id = ask.speaker.id
         try:
-            turn_id = self._history.add(
-                session_id=ask.session_id,
-                question=ask.text,
-                route="exchange" if ask.nested else route,
-                prefix=prefix,
-                text=text,
-                detail=detail,
-                status=status,
-                cost_usd=max(ledger.total - ask.cost_base, 0.0),
-                source=ask.source,
-                model=ledger.model,
-                steps=ask.steps,
-                attachments=[{"name": a.name, "mime": a.mime} for a in ask.attachments],
-                member_id=member_id,
-                peer_id=ask.peer,
-            )
+            cost = max(ledger.total - ask.cost_base, 0.0)
+            if ask.turn_id:
+                turn_id = ask.turn_id
+                self._history.resolve(
+                    turn_id, prefix=prefix, text=text, detail=detail, status=status,
+                    cost_usd=max(cost - ask.recorded_cost, 0.0), model=ledger.model,
+                    route="exchange" if ask.nested else route,
+                )
+                self._history.add_steps(turn_id, ask.steps[ask.recorded_steps:])
+            else:
+                turn_id = self._history.add(
+                    session_id=ask.session_id, question=ask.text,
+                    route="exchange" if ask.nested else route, prefix=prefix, text=text,
+                    detail=detail, status=status, cost_usd=cost,
+                    source=ask.source, model=ledger.model, steps=ask.steps,
+                    attachments=[{"name": a.name, "mime": a.mime} for a in ask.attachments],
+                    member_id=member_id, peer_id=ask.peer,
+                )
+                ask.turn_id = turn_id
+            ask.recorded_cost = cost
+            ask.recorded_steps = len(ask.steps)
         except sqlite3.Error as exc:
             logger.warning("Could not write the turn to the history: %s", type(exc).__name__)
             return 0
         self._turn_changed(turn_id, member_id)
-        if self._memory is not None:
+        if self._memory is not None and status not in ("running", "confirm"):
             try:
                 # The fold and, for Raphael's, the reflection pass, in the background.
                 if member_id:

@@ -268,12 +268,11 @@ async def test_no_key_is_not_configured_and_asks_nobody(router, fake_client, key
     assert fake_client.calls == [] and spend_rows(conn) == []
 
 
-async def test_the_monthly_limit_reached_is_budget_exceeded(router, fake_client, conn):
+async def test_the_monthly_limit_reached_still_allows_transcription(router, fake_client, conn):
     await router.call("settings.set", {"key": "monthly_limit_usd", "value": 0})
-    with pytest.raises(RpcError) as caught:
-        await transcribe(router)
-    assert caught.value.code == BUDGET_EXCEEDED and caught.value.data == {"kind": "budget"}
-    assert fake_client.calls == []
+    assert (await transcribe(router))["text"] == "你好世界"
+    assert len(fake_client.calls) == 1
+    assert spend_rows(conn)
 
 
 @pytest.mark.parametrize("kind", ["network", "timeout", "server", "auth", "credits"])

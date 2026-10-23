@@ -244,19 +244,19 @@ async def test_the_steps_are_limited(make_run, shell):
     assert shell.ops().count("act") == 1
 
 
-async def test_the_model_calls_and_the_cost_are_limited(make_run, shell):
+async def test_model_calls_are_limited_but_cost_is_not(make_run, shell):
     answering(shell, always=True)
     many = [reply(call("computer_apps")) for _ in range(5)]
     _, final = await drive(make_run(FakeModel(*many), limits=RunLimits(model_calls=2)))
     assert final.kind == "limit"
-    _, final = await drive(make_run(FakeModel(*many), limits=RunLimits(cost_usd=0.0015)))
-    assert final.kind == "limit"
+    _, final = await drive(make_run(FakeModel(reply(content="Done")), limits=RunLimits(cost_usd=0)))
+    assert final.status == "done"
 
 
-async def test_the_months_limit_stops_the_run(make_run, shell):
+async def test_the_months_limit_does_not_stop_the_run(make_run, shell):
     answering(shell, always=True)
-    _, final = await drive(make_run(FakeModel(), over_budget=lambda: True))
-    assert (final.text, final.kind) == ("本月額度已用盡。", "limit")
+    _, final = await drive(make_run(FakeModel(reply(content="Done")), over_budget=lambda: True))
+    assert final.status == "done"
 
 
 async def test_the_time_a_question_waits_is_not_the_runs(make_run, shell):

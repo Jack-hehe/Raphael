@@ -55,9 +55,9 @@ REPEATED = (
 class Limits:
     """What one task may use. The core enforces these; the loop counts them too."""
 
-    model_calls: int = 15
-    tool_calls: int = 25
-    seconds: float = 600.0
+    model_calls: int = 80
+    tool_calls: int = 200
+    seconds: float = 1800.0
 
 
 # The kind of `Stop` of a call that waits for the owner's yes: the task pauses there.
@@ -66,7 +66,7 @@ WAITING = "waiting"
 
 class Stop(Exception):
     """The host will not go on, or the loop may not. `kind` says why: "cancelled" (the user
-    stopped the task), "limit_model", "limit_tool", "limit_time", "limit_cost", "limit_month" (a
+    stopped the task), "limit_model", "limit_tool", "limit_time" (a
     limit was reached), "failed" (the model failed; `detail` is the kind of failure) or "waiting"
     (a call waits for the owner's yes: the task pauses)."""
 

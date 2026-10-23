@@ -564,7 +564,7 @@ class CleanupService:
         raw text, as for a dictation of one piece. With no `chunks`, or one, there is one call.
 
         The first of these that applies decides the reason: blank text is "empty", no key is
-        "no_key", the monthly limit reached is "budget". Then the model is asked, and the raw text
+        "no_key". Then the model is asked, and the raw text
         stays when it does not answer in time ("timeout"), when the call fails (f"error:{kind}"),
         or when its answer is no cleanup of the text: nothing, longer than 1.5 times what it read
         plus 20 characters (line breaks not counted), or with too few character pairs in common
@@ -595,8 +595,6 @@ class CleanupService:
     ) -> CleanupResult:
         if not self._has_key():
             return _fallback(raw, "no_key")
-        if self._spend.is_over(self._settings.get("monthly_limit_usd")):
-            return _fallback(raw, "budget")
 
         system = build_system_prompt(
             self._dictionary.hint_words(),

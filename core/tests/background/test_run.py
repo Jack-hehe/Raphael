@@ -135,34 +135,36 @@ async def test_a_conversation_that_is_not_one_is_refused_before_anything_is_paid
 
 async def test_the_fifteenth_model_call_is_the_last(rig):
     rig.client.replies = [turn("x") for _ in range(16)]
+    rig.run.limits = RunLimits(model_calls=15)
     for _ in range(15):
         await rig.chat()
     assert await stop_of(rig.chat()) == ("limit_model", None)
     assert len(rig.client.chat_calls) == 15
 
 
-async def test_a_task_that_spent_what_one_task_may_asks_the_model_no_more(rig):
+async def test_spending_does_not_stop_a_task(rig):
     rig.client.replies = [turn("x", cost=0.15), turn("x", cost=0.15), turn("x")]
     await rig.chat()
     await rig.chat()  # 0.15 is under 0.20: allowed; this one takes it to 0.30
-    assert await stop_of(rig.chat()) == ("limit_cost", None)
-    assert len(rig.client.chat_calls) == 2
+    assert (await rig.chat())["content"] == "x"
+    assert len(rig.client.chat_calls) == 3
 
 
-async def test_a_month_whose_limit_is_used_up_stops_the_task(rig):
+async def test_a_month_whose_limit_is_used_up_still_allows_the_task(rig):
     rig.settings.set("monthly_limit_usd", 1.0)
     rig.spend.record(purpose="cleanup", model="m", cost_usd=1.0, prompt_tokens=1, completion_tokens=1)
-    assert await stop_of(rig.chat()) == ("limit_month", None)
-    assert rig.client.chat_calls == []
+    rig.client.replies = [turn("Still working", cost=0.3)]
+    assert (await rig.chat())["content"] == "Still working"
+    assert rig.run.ledger.total == pytest.approx(0.3)
 
 
 async def test_a_task_out_of_time_asks_for_nothing(rig):
-    rig.clock.now += 601
+    rig.clock.now += 1801
     assert await stop_of(rig.chat()) == ("limit_time", None)
     rig.clock.now = 1000
     rig.client.replies = [turn("x")]
     await rig.chat()
-    rig.clock.now += 601
+    rig.clock.now += 1801
     assert await stop_of(rig.tool("local_time")) == ("limit_time", None)
 
 
@@ -339,6 +341,7 @@ async def test_a_tool_call_that_is_not_one_is_invalid(rig, params):
 
 
 async def test_the_twenty_sixth_tool_call_is_not_made(rig):
+    rig.run.limits = RunLimits(tool_calls=25)
     for _ in range(25):
         await rig.tool("local_time")
     assert await stop_of(rig.tool("local_time")) == ("limit_tool", None)
@@ -403,11 +406,11 @@ async def test_a_search_is_paid_for_by_the_task(rig):
     assert rig.client.text_calls[0]["model"] == "fake/model"
 
 
-async def test_a_search_is_refused_once_the_task_has_spent_what_it_may(rig):
+async def test_search_costs_are_recorded_without_stopping_the_task(rig):
     rig.client.search_cost = 0.25
     await rig.tool("web_search", {"query": "tea"})
-    assert await stop_of(rig.tool("web_search", {"query": "more tea"})) == ("limit_cost", None)
-    # ... but a lookup that costs nothing is still made.
+    assert (await rig.tool("web_search", {"query": "more tea"}))["ok"]
+    assert rig.run.ledger.total == pytest.approx(0.5)
     assert (await rig.tool("local_time"))["ok"]
 
 

@@ -148,7 +148,7 @@ def turn_text(turn: Turn, *, detail: bool) -> str:
     member's thread), and with `detail` the start of the longer text it kept (when it says more
     than the line). An exchange with another member reads as a request and its answer, and a
     routine's run as its title and its report: neither was said by the owner."""
-    said = turn.text or turn.prefix
+    said = "\n".join(turn.messages) if turn.messages else turn.text or turn.prefix
     if turn.route == "exchange":
         lines = f"(Between assistants) Request: {turn.question}\nAnswer: {said}"
     elif turn.route == "routine":

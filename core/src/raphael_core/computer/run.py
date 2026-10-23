@@ -40,7 +40,7 @@ While a question is open the run waits on it (`Question` events, answered with `
 the answer comes back with the next `agent.confirm`. The run ends with a `Final` event.
 
 Limits (`RunLimits`): 20 steps (an app opened is one, and a run opens three at most), 30 model
-calls, 40 looks, three minutes of work (questions not counted) and US$0.20, and the month's limit.
+calls, 40 looks and three minutes of work (questions not counted). Spend is recorded without a cap.
 A run the shell cannot watch the owner's own input for (its hooks did not go in) ends at once. Nothing here logs what the screen showed, what was
 typed, a window's title or the request: only kinds, counts and timings.
 """
@@ -143,7 +143,7 @@ _LANGUAGE_NAMES = {
 @dataclass(frozen=True)
 class RunLimits:
     """What one run may use: 20 steps (an app opened is one), 3 apps opened, 30 model calls, 40
-    looks, 180 s of work, US$0.20."""
+    looks and 180 s of work. cost_usd is retained for compatibility and is not enforced."""
 
     actions: int = 20
     opens: int = 3
@@ -530,10 +530,6 @@ class ComputerRun:
         self._check()
         if self.model_calls >= self.limits.model_calls:
             raise _Stopped("limit_model")
-        if self.ledger.total >= self.limits.cost_usd:
-            raise _Stopped("limit_cost")
-        if self._over_budget():
-            raise _Stopped("budget")
         self.model_calls += 1
         request_chars = len(json.dumps(messages, ensure_ascii=False))
         remaining = self._remaining_s()

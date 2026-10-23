@@ -83,6 +83,7 @@ from ..agent.failure import KINDS, AgentFailure
 from ..agent.gate import ATTACHMENT_TOOLS, MEMORY_READ_TOOLS, WEB_TOOLS, ToolGate
 from ..agent.history import VOICE, AgentHistory, Turn
 from ..agent.ledger import Ledger
+from ..agent.narration import PUBLIC_PROGRESS_RULES
 from ..agent.persona import (
     PREFIXES,
     language_reminder,
@@ -103,6 +104,7 @@ from ..brain.spend import SpendTracker
 from ..clock import wall_clock_ms
 from ..protocol import BUSY, INVALID_PARAMS, NOT_FOUND, RpcError, invalid_params
 from ..memory.store import MemoryIndex
+from ..messaging.words import compose
 from ..services.attachments import Attachment
 from ..router import Router
 from ..worker.guards import neutralize, wrap_untrusted
@@ -341,7 +343,7 @@ def _prompts(
             f"{calls}\n</previous_attempt>"
         )
     parts.append(language_reminder(language))
-    return system, "\n\n".join(parts)
+    return system + PUBLIC_PROGRESS_RULES, "\n\n".join(parts)
 
 
 class BackgroundService:
@@ -748,7 +750,7 @@ class BackgroundService:
             )  # fmt: skip
             return
         self._store.start(task.id)
-        limits = dataclasses.replace(self._limits, cost_usd=self._cost_cap())
+        limits = self._limits
         ledger = Ledger(self._spend)
         model = self._models.pop(task.id, DEFAULTS["agent_model"])
         context = self._context(task)
@@ -779,6 +781,7 @@ class BackgroundService:
             monthly_limit=lambda: self._settings.get("monthly_limit_usd"),
             city=lambda: self._text_setting("agent_city"),
             changed=lambda: self._changed(task.id, RUNNING),
+            progress=lambda text: self._progress(task, text),
             clock=self._clock,
             memory=memory,
             request=task.text,
@@ -1247,6 +1250,16 @@ class BackgroundService:
 
     # --- the end of a task ----------------------------------------------------------------------
 
+    def _progress(self, task: Task, text: str) -> None:
+        if task.id in self._discarded or not task.turn_id:
+            return
+        prefix = PREFIXES[task.language].notice if task.member_id == 0 else ""
+        try:
+            self._history.add_message(task.turn_id, "progress", compose(prefix, text, None))
+        except sqlite3.Error as exc:
+            logger.warning("Could not save public progress: %s", type(exc).__name__)
+        self._notify("agent.turn", {"turn_id": task.turn_id, "member_id": task.member_id})
+
     def _conclude_run(self, task: Task, run: TaskRun, reply: dict) -> None:
         """Turn how the worker said the task ended into the task's state and report."""
         language = task.language
@@ -1260,7 +1273,8 @@ class BackgroundService:
                     task, run, "done", notice, phrase(language, "worker_done"), None, None
                 )
             else:
-                self._conclude(task, run, "done", report.prefix, report.text, report.detail, None)
+                self._conclude(task, run, "done", report.prefix, report.text, report.detail, None,
+                               replies=report.messages)
         elif status == "cancelled":
             key = "worker_cancelled_unsure" if run.call_cut_off else "worker_cancelled"
             self._conclude(
@@ -1289,6 +1303,8 @@ class BackgroundService:
         text: str,
         detail: str | None,
         reason: str | None,
+        *,
+        replies: Sequence[str] = (),
     ) -> None:
         """Write the end of a task: its row, the turn of the history that handed it over, and the
         report to the app. `prefix` is a prefix of the task's language (《告》, 《否》 ...); a
@@ -1324,6 +1340,10 @@ class BackgroundService:
                     status=_TURN_STATUS.get(state, "error"),
                     cost_usd=cost,
                 )
+                for line in replies or [text]:
+                    if line:
+                        self._history.add_message(task.turn_id, "reply", compose(prefix, line, None))
+                self._notify("agent.turn", {"turn_id": task.turn_id, "member_id": task.member_id})
             except sqlite3.Error as exc:
                 logger.warning("Could not complete the turn of a task: %s", type(exc).__name__)
         logger.info(

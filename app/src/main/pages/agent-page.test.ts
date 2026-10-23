@@ -164,7 +164,7 @@ describe("coming back to the page", () => {
 });
 
 describe("the search", () => {
-  test("shows what the core found in the whole history, and what a found turn did opens", async () => {
+  test("shows what the core found in the whole history without raw steps", async () => {
     vi.useFakeTimers();
     api.agentHistoryList.mockResolvedValueOnce({ turns: page(200, 50) }).mockResolvedValue({ turns: [] });
     const step = { kind: "tool", tool: "search", server: "Raphael", outcome: "ok", ms: 800, reason: null, at_ms: 0 };
@@ -178,9 +178,7 @@ describe("the search", () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(api.agentHistorySearch).toHaveBeenCalledWith("出差");
     expect(shownIds()).toEqual([3]); // far behind the loaded page
-    const open = document.querySelector<HTMLElement>('.tn[data-id="3"] [data-act="steps"]')!;
-    open.click();
-    expect(open.closest<HTMLElement>(".steps")!.dataset.open).toBe("true");
+    expect(document.querySelector('.tn[data-id="3"] [data-act="steps"]')).toBeNull();
   });
 });
 
@@ -221,5 +219,42 @@ describe("a question of the background", () => {
     await flush();
     expect(api.core).toHaveBeenCalledWith("background.answer", { task_id: 4, question_id: "q-1", approved: true });
     expect(document.querySelector<HTMLElement>(".bgq-list")!.hidden).toBe(true);
+  });
+});
+
+describe("a continuous typed turn", () => {
+  test("new progress replaces the running turn and the final reply removes the typing dots", async () => {
+    vi.useFakeTimers();
+    let live = turn(1, { source: "app", status: "running", text: "", messages: [] });
+    api.agentHistoryList.mockImplementation(async () => ({ turns: [live] }));
+    mount();
+    await flush();
+    expect(document.querySelectorAll('.tn[data-id="1"] .think i')).toHaveLength(3);
+    live = { ...live, messages: [{ seq: 1, kind: "progress", text: "《告。先確認今天的日期。》", at_ms: 1 }] };
+    send({ type: "AgentTurn", turn_id: 1 });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(document.querySelector('.tn[data-id="1"] .progress')?.textContent).toBe("《告。先確認今天的日期。》");
+    live = { ...live, status: "done", text: "今天星期五。", messages: [...live.messages!, { seq: 2, kind: "reply", text: "《答。今天星期五。》", at_ms: 2 }] };
+    send({ type: "AgentTurn", turn_id: 1 });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(document.querySelectorAll('.tn[data-id="1"] .ans')).toHaveLength(2);
+    expect(document.querySelector('.tn[data-id="1"] .think')).toBeNull();
+  });
+
+  test("the permission card stays inline after another history refresh and remains answerable", async () => {
+    vi.useFakeTimers();
+    api.agentHistoryList.mockResolvedValue({ turns: [turn(1, { source: "app", status: "confirm", messages: [{ seq: 1, kind: "progress", text: "《告。先存下你的範例。》", at_ms: 1 }] })] });
+    api.agentQuestionAnswer.mockResolvedValue(undefined);
+    mount();
+    await flush();
+    send({ type: "AgentQuestion", id: "inline-q", prefix: "問", text: "儲存嗎？", tier: "T2", timeout_ms: 30000 });
+    const card = document.querySelector('.turn-question .ask-card');
+    expect(card).not.toBeNull();
+    send({ type: "AgentTurn", turn_id: 1 });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(document.querySelector('.turn-question .ask-card')).toBe(card);
+    card!.querySelector<HTMLButtonElement>(".ask-yes")!.click();
+    await flush();
+    expect(api.agentQuestionAnswer).toHaveBeenCalledWith("inline-q", true);
   });
 });

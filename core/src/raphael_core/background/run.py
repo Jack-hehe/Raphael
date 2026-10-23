@@ -4,8 +4,7 @@ A `TaskRun` is the gate between a task and the world. The worker asks it for a m
 tool call; it decides whether to give them, and gives them itself. In order:
 
 - **Limits.** Before every call it checks that the task was not cancelled, that its time is not up,
-  that it has model calls and tool calls left, that the task has not spent what one task may (and
-  the month has not spent its limit). A call it refuses is answered with `WORKER_STOPPED` and the
+  that it has model calls and tool calls left. A call it refuses is answered with `WORKER_STOPPED` and the
   kind, and the task ends there with no more spend. The worker counts the limits too; this is the
   count that counts.
 - **The model.** The key is read here, by the client, and nowhere else. The tools the model is offered
@@ -118,11 +117,11 @@ def estimate_cost(model: str, request_chars: int) -> float:
 
 @dataclass(frozen=True)
 class RunLimits:
-    """What one task may use: 15 model calls, 25 tool calls, 10 minutes, US$0.20."""
+    """Non-monetary safety bounds; cost_usd is retained for settings compatibility only."""
 
-    model_calls: int = 15
-    tool_calls: int = 25
-    seconds: float = 600.0
+    model_calls: int = 80
+    tool_calls: int = 200
+    seconds: float = 1800.0
     cost_usd: float = 0.20
 
 
@@ -184,9 +183,9 @@ class TaskRun:
     """A task that is running. Everything here runs on the event loop.
 
     `client` is the OpenRouter client, `gate` the one gate, `tools` Raphael's own lookups, `ledger`
-    the task's paid calls (it writes the spend), `spend` the tracker the month's limit is read
-    from, `monthly_limit` and `city` read the settings when asked. `changed` is told after each
-    step so that whoever shows the task can update it.
+    the task's paid calls (it writes the spend). `spend` and `monthly_limit` remain compatible
+    constructor arguments; monetary settings do not stop a task. `city` reads its setting when
+    asked. `changed` is told after each step so whoever shows the task can update it.
     """
 
     def __init__(
@@ -206,6 +205,7 @@ class TaskRun:
         monthly_limit: Callable[[], float],
         city: Callable[[], str],
         changed: Callable[[], None] = lambda: None,
+        progress: Callable[[str], None] = lambda text: None,
         clock: Callable[[], float] = time.monotonic,
         memory: "MemoryReader | None" = None,
         request: str = "",
@@ -244,6 +244,7 @@ class TaskRun:
         self._monthly_limit = monthly_limit
         self._city = city
         self._changed = changed
+        self._progress = progress
         self._clock = clock
         self.deadline = clock() + limits.seconds
         self._live: set[asyncio.Task[Any]] = set()
@@ -251,8 +252,7 @@ class TaskRun:
         # The connections of the task's plugin calls: one for each server, kept for the task and
         # closed by whoever ends it (`pool.aclose`).
         self.pool = McpPool()
-        # One call at a time: the worker may send several at once, and the limits (the money above
-        # all) are read before a reply lands. A call waits for the one before it and checks the
+        # One call at a time: the worker may send several at once. A call waits for the one before it and checks the
         # limits only when its turn comes.
         self._turn = asyncio.Lock()
 
@@ -292,14 +292,6 @@ class TaskRun:
             raise stopped("limit_model")
         if tool and self.tool_calls >= self.limits.tool_calls:
             raise stopped("limit_tool")
-        if paid:
-            if self.ledger.total >= self.limits.cost_usd:
-                raise stopped("limit_cost")
-            try:
-                if self._spend.is_over(self._monthly_limit()):
-                    raise stopped("limit_month")
-            except sqlite3.Error as exc:
-                logger.warning("Could not read the month's spend: %s", type(exc).__name__)
 
     def _remaining_s(self) -> float:
         return max(self.deadline - self._clock(), 0.0)
@@ -431,6 +423,8 @@ class TaskRun:
             completion_tokens=turn.completion_tokens,
         )
         self._step(kind="model", outcome="ok", cost_usd=cost, ms=_ms(began))
+        if turn.calls and turn.content.strip():
+            self._progress(" ".join(turn.content.split())[:200])
         return {
             "content": turn.content,
             "calls": [

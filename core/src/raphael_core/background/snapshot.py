@@ -227,6 +227,7 @@ def take_snapshot(
     attachments: bool = False,
     speaker: Speaker = RAPHAEL,
     team: Sequence[str] = (),
+    max_tier: Tier = SNAPSHOT_MAX_TIER,
 ) -> Snapshot:
     """The tools a task starting now may use: with `memory`, the memory's tools that read too, and
     with `attachments` (the task came with files) the tool that reads them. A
@@ -256,7 +257,7 @@ def take_snapshot(
             tools = [
                 tool
                 for tool in plugins.offered()
-                if tool.tier <= SNAPSHOT_MAX_TIER and speaker.uses_plugin(tool.key)
+                if tool.tier <= max_tier and speaker.uses_plugin(tool.key)
             ]
         except Exception:  # a plugin that breaks leaves its tools out, not the task
             tools = []

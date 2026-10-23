@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..clock import wall_clock_ms
 from ..memory.terms import QueryWord, fts_quote, index_terms, query_words
@@ -67,6 +67,7 @@ class Turn:
     attachments: list[dict[str, str]] | None = None
     member_id: int = 0  # whose thread it is in: 0 for Raphael
     peer_id: int | None = None  # for an exchange, the member on the other side
+    messages: list[str] = field(default_factory=list)
 
 
 _COLUMNS = (
@@ -183,7 +184,10 @@ class AgentHistory:
 
     def _index(self, turn_id: int, question: str, text: str, detail: str | None) -> None:
         """Put a turn into the search, in place of what it held for it."""
-        terms = index_terms(question, text, detail)
+        saved = self._conn.execute(
+            "SELECT text FROM agent_messages WHERE turn_id = ? ORDER BY seq", (turn_id,)
+        ).fetchall()
+        terms = index_terms(question, text, (detail or "") + "\n" + "\n".join(row[0] for row in saved))
         self._conn.execute("DELETE FROM agent_turns_fts WHERE rowid = ?", (turn_id,))
         self._conn.execute(
             "INSERT INTO agent_turns_fts (rowid, pairs, chars) VALUES (?, ?, ?)",
@@ -240,6 +244,44 @@ class AgentHistory:
         ).fetchone()
         return None if row is None else _to_turn(row)
 
+    def add_message(self, turn_id: int, kind: str, text: str) -> None:
+        """Commit one visible line immediately; cleared turns are never resurrected."""
+        if kind not in ("progress", "reply", "event"):
+            raise ValueError("unknown message kind")
+        with self._conn:
+            cursor = self._conn.execute(
+                "INSERT INTO agent_messages (turn_id, seq, kind, text, at_ms)"
+                " SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ? FROM agent_messages"
+                " WHERE turn_id = ? HAVING EXISTS (SELECT 1 FROM agent_turns WHERE id = ?)",
+                (turn_id, kind, text, self._now_ms(), turn_id, turn_id),
+            )
+            if cursor.rowcount:
+                turn = self.get(turn_id)
+                if turn:
+                    self._index(turn_id, turn.question, turn.text, turn.detail)
+
+    def _with_messages(self, turns: list[Turn]) -> list[Turn]:
+        saved = self.messages(turn.id for turn in turns if turn.id is not None)
+        for turn in turns:
+            turn.messages = [m["text"] for m in saved.get(turn.id, [])]
+        return turns
+
+    def messages(self, turn_ids: Iterable[int]) -> dict[int, list[dict]]:
+        """The visible messages of each turn, in insertion order."""
+        found: dict[int, list[dict]] = {}
+        ids = sorted(set(turn_ids))
+        for start in range(0, len(ids), 500):
+            chunk = ids[start : start + 500]
+            rows = self._conn.execute(
+                "SELECT turn_id, seq, kind, text, at_ms FROM agent_messages"
+                f" WHERE turn_id IN ({','.join('?' * len(chunk))}) ORDER BY turn_id, seq",
+                chunk,
+            )
+            for row in rows:
+                data = dict(row)
+                found.setdefault(data.pop("turn_id"), []).append(data)
+        return found
+
     def resolve(
         self,
         turn_id: int,
@@ -250,6 +292,7 @@ class AgentHistory:
         detail: str | None = None,
         cost_usd: float = 0.0,
         model: str | None = None,
+        route: str | None = None,
     ) -> bool:
         """Give a turn its outcome: what Raphael said in the end, how it ended, and the cost of
         getting there on top of what the turn cost so far (and the model that worded it, if one
@@ -257,8 +300,9 @@ class AgentHistory:
         with self._conn:
             cursor = self._conn.execute(
                 "UPDATE agent_turns SET prefix = ?, text = ?, detail = ?, status = ?,"
-                " cost_usd = cost_usd + ?, model = COALESCE(?, model) WHERE id = ?",
-                (prefix, text, detail, status, cost_usd, model, turn_id),
+                " cost_usd = cost_usd + ?, model = COALESCE(?, model),"
+                " route = COALESCE(?, route) WHERE id = ?",
+                (prefix, text, detail, status, cost_usd, model, route, turn_id),
             )
             if cursor.rowcount:
                 row = self._conn.execute(
@@ -291,7 +335,7 @@ class AgentHistory:
             " ORDER BY id DESC LIMIT ?",
             (member_id, count),
         )
-        return [_to_turn(row) for row in reversed(rows.fetchall())]
+        return self._with_messages([_to_turn(row) for row in reversed(rows.fetchall())])
 
     def after(
         self, turn_id: int, *, limit: int | None = None, member_id: int = 0
@@ -303,7 +347,7 @@ class AgentHistory:
                 f"SELECT {_COLUMNS} FROM agent_turns WHERE id > ? AND member_id = ? ORDER BY id",
                 (turn_id, member_id),
             ).fetchall()
-            return [_to_turn(row) for row in rows]
+            return self._with_messages([_to_turn(row) for row in rows])
         if limit <= 0:
             return []
         rows = self._conn.execute(
@@ -311,7 +355,7 @@ class AgentHistory:
             " ORDER BY id DESC LIMIT ?",
             (turn_id, member_id, limit),
         ).fetchall()
-        return [_to_turn(row) for row in reversed(rows)]
+        return self._with_messages([_to_turn(row) for row in reversed(rows)])
 
     def last_id(self) -> int:
         """The id of the latest turn of any thread; 0 when there is none."""
@@ -411,6 +455,7 @@ class AgentHistory:
         """Delete every turn of every thread, with its steps and its place in the search; return
         how many went."""
         with self._conn:
+            self._conn.execute("DELETE FROM agent_messages")
             self._conn.execute("DELETE FROM agent_steps")
             self._conn.execute("DELETE FROM agent_turns_fts")
             cursor = self._conn.execute("DELETE FROM agent_turns")
@@ -422,6 +467,7 @@ class AgentHistory:
         both = (member_id, member_id)
         ids = "SELECT id FROM agent_turns WHERE member_id = ? OR peer_id = ?"
         with self._conn:
+            self._conn.execute(f"DELETE FROM agent_messages WHERE turn_id IN ({ids})", both)
             self._conn.execute(f"DELETE FROM agent_steps WHERE turn_id IN ({ids})", both)
             self._conn.execute(f"DELETE FROM agent_turns_fts WHERE rowid IN ({ids})", both)
             cursor = self._conn.execute(
@@ -434,6 +480,6 @@ class AgentHistory:
         a process that is gone. Returns how many there were."""
         with self._conn:
             cursor = self._conn.execute(
-                "UPDATE agent_turns SET status = 'expired' WHERE status = 'confirm'"
+                "UPDATE agent_turns SET status = 'expired' WHERE status IN ('confirm', 'running')"
             )
         return cursor.rowcount

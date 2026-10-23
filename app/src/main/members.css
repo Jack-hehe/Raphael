@@ -91,6 +91,14 @@
 /* ---------- the thread of a member ---------- */
 /* its answers are plain bubbles, with none of Raphael's 《》 */
 .tn-plain .ans:not(.thinking) { justify-self: start; max-width: 100%; padding: 8px 12px; border: 1px solid var(--edge); border-radius: 14px; background: var(--panel); font-size: 14.5px; line-height: 1.65; }
+.ask-card.is-member { border-color: var(--edge); background: var(--panel); box-shadow: none; animation: none; }
+.ask-card.is-member .ask-q { color: var(--text); }
+.page-agent .ask-card.is-member .btn { border-color: var(--edge); color: var(--text); background: var(--surface-2); }
+.page-agent .ask-card.is-member .btn:hover:not(:disabled) { border-color: var(--edge); background: var(--surface-2); }
+.page-agent .ask-card.is-member .ask-fill { background: var(--text-2); }
+.bgq-card.is-member { border-color: var(--edge); background: var(--panel); box-shadow: none; animation: none; }
+.bgq-card.is-member .bgq-q, .bgq-card.is-member .bgq-name { color: var(--text); }
+.bgq-card.is-member .btn, .bgq-card.is-member .btn:hover:not(:disabled) { border-color: var(--edge); color: var(--text); background: var(--surface-2); }
 /* the line of a routine's run, and an exchange between members */
 .sys { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; font-size: var(--fs-xs); color: var(--text-3); }
 .sys b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--text-2); }

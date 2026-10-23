@@ -30,11 +30,9 @@ import type { LocalView } from "../local-models";
 import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
 import { type ServicesView, servicesHTML } from "../services";
 import { pricingNote } from "../pricing";
-import { runOutDay } from "../report";
-import { WARN_FROM, spendVisual, spentShare } from "../spend";
 import type { HotkeyField } from "../hotkey-recording";
 import type { AudioDevices, BrainSettings, DeviceSettings, LocalModel, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
-import { keyEntryRow, limitRow, micRow } from "../setup-rows";
+import { keyEntryRow, micRow } from "../setup-rows";
 import { type Choice, type IconName, btn, esc, fieldHTML, ico, iconBtn, keys, note, row, sel, st, tg } from "../ui";
 
 /** The models the core reads when none is chosen (brain/settings.py), shown while it does not answer. */
@@ -148,7 +146,6 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "dictation", label: "common.microphone", words: ["mic"] },
   { pane: "agent", label: "settings.agentKeys", also: "settings.searchShortcut" },
   { pane: "agent", label: "settings.agentCity" },
-  { pane: "agent", label: "settings.workerCostCap" },
   { pane: "agent", label: "mem.title", also: "settings.searchMemory" },
   { pane: "agent", label: "rules.title" },
   { pane: "agent", label: "settings.computerUse" },
@@ -161,7 +158,6 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "messaging", words: ["Telegram"] },
   { pane: "usage", label: "common.apiKey", words: ["OpenRouter"] },
   { pane: "usage", label: "settings.050" },
-  { pane: "usage", label: "common.monthlyLimit" },
   { pane: "usage", label: "settings.usageMonthly" },
   { pane: "usage", label: "settings.031", also: "settings.searchModel" },
   { pane: "usage", label: "settings.035", also: "settings.searchModel" },
@@ -459,20 +455,12 @@ function keyRow(v: SettingsView): string {
   });
 }
 
-/** This month's spend against the limit, and when it will run out at this pace. */
+/** This month's recorded spend, independent of the retired spending caps. */
 function spendRow(v: SettingsView): string {
   const attrs = ' data-row="raphael-spend"';
   const { spend } = v;
   if (!spend) return row(t("settings.050"), "", esc(t("settings.usageUnavailable")), { attrs });
-  const { month_usd: month, limit_usd: limit } = spend;
-  const used = spentShare(month, limit);
-  let forecast = "";
-  if (month >= limit) forecast = t("settings.047");
-  else if (used >= WARN_FROM) {
-    const { m, d } = runOutDay(month, limit, v.now);
-    forecast = t("settings.048", { p0: m, p1: d });
-  } else if (spend.forecast_usd > 0) forecast = t("settings.049", { p0: formatUsd(spend.forecast_usd) });
-  return row(t("settings.050"), month >= limit ? st("warn", forecast) : esc(forecast), spendVisual(month, limit), { attrs });
+  return row(t("settings.050"), "", `<span class="val num">${esc(formatUsd(spend.month_usd))}</span>`, { attrs });
 }
 
 /** Key-wide usage is separate from Raphael's local spending and its editable limit. */
@@ -636,7 +624,6 @@ function agentHTML(v: SettingsView): string {
         fieldHTML(t("settings.agentCityHint"), cityShown, { w: 200, get label() { return t("settings.agentCity"); }, id: "agent-city", invalid: v.cityError !== null, disabled: v.brain === null }),
       ),
       ...(v.cityError ? [note(st("err", v.cityError()), ' role="alert"')] : []),
-      row(t("settings.workerCostCap"), "", sel(WORKER_COST_CAPS, workerCostCap(v), t("settings.workerCostCap"), ` data-k="worker-cap"${v.brain === null ? " disabled" : ""}`)),
     ]) +
     (v.services ? servicesHTML(v.services, modelPickerHTML(visionPickerLook(v)), v.brain) : "") +
     (v.memoryShared ? memoryHTML(v.memoryShared) : "") +
@@ -691,7 +678,6 @@ function dataHTML(v: SettingsView): string {
 
 /** 模型與用量: the OpenRouter key and what this month has cost against the limit, then the models and their prices. */
 function usageHTML(v: SettingsView): string {
-  const limitShown = v.limitDraft ?? String(v.brain?.monthly_limit_usd ?? 10);
   return (
     headingHTML(v) +
     coreNote(v) +
@@ -699,8 +685,6 @@ function usageHTML(v: SettingsView): string {
       keyRow(v),
       ...(v.keyError ? [note(st("err", v.keyError()), ' role="alert"')] : []),
       spendRow(v),
-      limitRow({ text: limitShown, fieldWidth: 110, id: "limit-input", invalid: v.limitError !== null, disabled: v.brain === null }),
-      ...(v.limitError ? [note(st("err", v.limitError()), ' role="alert"')] : []),
       usageRow(v),
     ], esc(t("settings.usageDifference"))) +
     section(t("settings.groupModels"), MODEL_ROWS.map((r) => modelRow(v, r)), priceSpan(v, "note"))

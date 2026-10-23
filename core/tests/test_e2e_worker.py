@@ -7,9 +7,11 @@ fails on every use. Its worker is a second child, started by the core for the ta
 stdio program. No key, no network, no cost.
 """
 
+import ctypes
 import json
+import os
 import re
-import subprocess
+import signal
 import sys
 import time
 from pathlib import Path
@@ -93,8 +95,26 @@ def worker_pids(core):
 
 
 def is_alive(pid):
-    shown = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True)
-    return str(pid) in shown.stdout
+    """Inspect only this test's child, without requiring system-wide WMI process access."""
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE, no read or write access
+    if not handle:
+        if ctypes.get_last_error() == 87:  # ERROR_INVALID_PARAMETER: the process is gone
+            return False
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        result = kernel.WaitForSingleObject(handle, 0)
+        if result not in (0, 258):  # WAIT_OBJECT_0 or WAIT_TIMEOUT
+            raise ctypes.WinError(ctypes.get_last_error())
+        return result == 258
+    finally:
+        kernel.CloseHandle(handle)
 
 
 def wait_gone(pid, timeout=20.0):
@@ -195,7 +215,7 @@ def test_a_worker_that_is_killed_interrupts_its_task_and_the_core_goes_on(spawn)
     ask(core, "[delegate] this one is slow")
     wait_for(core, lambda: tool_call_under_way(core) and worker_pids(core))
     [pid] = worker_pids(core)
-    subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=True)
+    os.kill(pid, signal.SIGTERM)
     wait_for(core, lambda: reports(core))
     [interrupted] = reports(core)
     assert interrupted["state"] == "interrupted" and interrupted["prefix"] == "Notice"

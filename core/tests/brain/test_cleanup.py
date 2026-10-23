@@ -157,13 +157,14 @@ async def test_cleans_and_records_spend(svc, fake_client, spend):
     assert spend.month_total() == pytest.approx(0.0003)
 
 
-async def test_no_key_and_budget_skip_the_llm(make_svc, fake_client, spend):
+async def test_no_key_skips_the_llm_but_spending_does_not(make_svc, fake_client, spend):
     assert (
         await make_svc(has_key=False).clean("你好", audio_seconds=1)
     ).fallback_reason == "no_key"
     spend.record(purpose="cleanup", model="m", cost_usd=10.0, prompt_tokens=1, completion_tokens=1)
-    assert (await make_svc().clean("你好", audio_seconds=1)).fallback_reason == "budget"
-    assert fake_client.calls == []
+    fake_client.reply = completion({"text": "你好。"})
+    assert (await make_svc().clean("你好", audio_seconds=1)).fallback_reason is None
+    assert len(fake_client.calls) == 1
 
 
 async def test_timeout_falls_back_to_raw(make_svc, fake_client):
@@ -217,7 +218,7 @@ async def test_no_key_is_reported_before_the_budget(make_svc, spend):
     assert (r.text, r.cleaned, r.fallback_reason) == ("你好", False, "no_key")
 
 
-async def test_the_budget_is_the_monthly_limit_and_being_at_it_is_being_over(
+async def test_cleanup_continues_after_the_legacy_monthly_limit(
     make_svc, fake_client, settings, spend
 ):
     settings.set("monthly_limit_usd", 1.0)
@@ -226,8 +227,8 @@ async def test_the_budget_is_the_monthly_limit_and_being_at_it_is_being_over(
     assert (await make_svc().clean("你好", audio_seconds=1)).fallback_reason is None
     spend.record(purpose="cleanup", model="m", cost_usd=0.5, prompt_tokens=1, completion_tokens=1)
     r = await make_svc().clean("你好", audio_seconds=1)
-    assert (r.text, r.cleaned, r.fallback_reason) == ("你好", False, "budget")
-    assert len(fake_client.calls) == 1
+    assert (r.text, r.cleaned, r.fallback_reason) == ("你好。", True, None)
+    assert len(fake_client.calls) == 2
 
 
 async def test_the_fallbacks_without_a_call_cost_nothing_and_took_no_time(make_svc, spend):
@@ -518,7 +519,6 @@ def sabotage_store(request, monkeypatch, fixture, method):
 @pytest.mark.parametrize(
     ("fixture", "method"),
     [
-        ("spend", "is_over"),
         ("settings", "get"),
         ("dictionary", "hint_words"),
         ("dictionary", "hint_forms"),
@@ -584,7 +584,6 @@ async def test_on_result_hears_nothing_when_the_model_was_not_asked(make_svc, sp
     await make_svc(on_result=heard.append).clean("  ", audio_seconds=1)
     await make_svc(has_key=False, on_result=heard.append).clean("你好", audio_seconds=1)
     spend.record(purpose="cleanup", model="m", cost_usd=10.0, prompt_tokens=1, completion_tokens=1)
-    await make_svc(on_result=heard.append).clean("你好", audio_seconds=1)
     assert heard == []
 
 

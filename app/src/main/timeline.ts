@@ -1,9 +1,7 @@
 // A turn of the conversation as the 拉斐爾 page shows it: the person's words on the right, with a
-// small mark of where they were said; Raphael on the left, with his face, what he did in between
-// (one line, 「› 3 個動作 · 4 秒」, that opens on a step for each tool, lookup or command) and his
-// answer. A background task is a card instead of the line: its steps come in as they are taken,
-// the one under way has light passing over it, it has the time it has taken and 「停止」, and when
-// it is done its turning ring becomes a check.
+// small mark of where they were said; Raphael on the left, with his face and each public message
+// in order. Events are small chips, questions mount inline, and pending work shows three dots.
+// Raw steps remain available to older detail callers, outside the main conversation flow.
 //
 // The functions make HTML from plain data; `TimelineState` says what is open and which steps are new,
 // so that the page can draw again at any time and only what changed moves. Every word that came from
@@ -542,6 +540,20 @@ export function filesHTML(files: readonly TurnAttachment[] | undefined): string 
   return `<div class="me-files">${files.map(chip).join("")}</div>`;
 }
 
+/** Three dots while the next public line is pending. */
+const typingHTML = (): string => `<p class="ans thinking"><span class="think" role="img" aria-label="${esc(t("agent.thinking"))}"><i></i><i></i><i></i></span></p>`;
+
+/** Background task controls without raw tool labels or a collapsed steps box. */
+function taskActionsHTML(turn: AgentTurn, state: TimelineState): string {
+  const task = turn.task;
+  if (!task) return "";
+  const live = isLive(task) || task.state === "waiting";
+  const label = task.state === "waiting" ? t("agent.taskWaiting") : isLive(task) ? t("agent.working") : plain(TASK_ENDS[task.state] ?? "agent.ok");
+  return `<div class="turn-event task-actions"><span>${esc(label)}</span>` +
+    (live ? btn(esc(t("agent.stop")), "sm stop", ` data-act="stop" data-task="${esc(task.id)}"${state.stopping.has(task.id) ? " disabled" : ""}`) : "") +
+    (RERUNNABLE.has(task.state) ? btn(esc(t("agent.rerun")), "sm rerun", ` data-act="rerun" data-task="${esc(task.id)}"${state.rerunning.has(task.id) ? " disabled" : ""}`) : "") + `</div>`;
+}
+
 /** The person's bubble: their words in 「」 (none when there were none) and the chips of the files under them. */
 function bubbleHTML(words: string, files: readonly TurnAttachment[] | undefined): string {
   return `<div class="bubble">${words}${filesHTML(files)}</div>`;
@@ -568,7 +580,7 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
   const routine = sourceOf(turn) === "routine";
   const said = turn.question.trim() !== "" && !routine;
   const asked = said || (turn.attachments?.length ?? 0) > 0;
-  const live = isLive(turn.task);
+  const live = turn.status === "running" || isLive(turn.task);
   const source = sourceOf(turn);
   const where = esc(`${sourceName(source)} · ${formatClock(turn.created_at_ms)}`);
   const meta = esc(answerMeta(turn));
@@ -584,13 +596,17 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
         `</div>`
       : "") +
     `<div class="ra"><span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live)}</span><div class="ra-body">` +
-    stepsHTML(turn, state) +
-    // a routine's run that has not reported yet is still at work: the dots, not an empty bubble
-    (routine && turn.status === "running" && turn.text.trim() === ""
-      ? `<p class="ans thinking"><span class="think" role="img" aria-label="${esc(t("agent.thinking"))}"><i></i><i></i></span></p>`
-      : `<p class="ans">${highlightHTML(look.plain ? turn.text : replyLine(turn.prefix, turn.text), query)}</p>`) +
+    (turn.messages?.length
+      ? turn.messages.map((message) => message.kind === "event"
+        ? `<div class="turn-event">${highlightHTML(message.text, query)}</div>`
+        : `<p class="ans${message.kind === "progress" ? " progress" : ""}">${highlightHTML(message.text, query)}</p>`).join("")
+      : (turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm")
+        ? "" : `<p class="ans">${highlightHTML(look.plain ? turn.text : replyLine(turn.prefix, turn.text), query)}</p>`) +
+    (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +
+    (live ? typingHTML() : "") +
     (detail ? `<div class="tn-detail" id="tn-detail-${id}"${detailOpen ? "" : " hidden"}>${highlightHTML(turn.detail, query)}</div>` : "") +
     more +
+    taskActionsHTML(turn, state) +
     `</div></div></li>`
   );
 }
@@ -611,7 +627,7 @@ export function pendingTurnHTML(question: string | null, source: string, look: T
     `<li class="tn is-pending${look.plain ? " tn-plain" : ""}">` +
     `<div class="me"><span class="me-src" role="img" aria-label="${where}" title="${where}">${sourceIcon(source)}</span>${bubbleHTML(words, files)}</div>` +
     `<div class="ra"><span class="ra-face">${look.face(true)}</span><div class="ra-body">` +
-    `<p class="ans thinking"><span class="think" role="img" aria-label="${esc(t("agent.thinking"))}"><i></i><i></i></span></p>` +
+    typingHTML() +
     `</div></div></li>`
   );
 }

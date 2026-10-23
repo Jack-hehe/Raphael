@@ -6,7 +6,6 @@ fails. So this never falls back itself: it answers with the text, or raises an R
 `data.kind` says why not (the device side logs that kind, once):
 
 - no_key (NOT_CONFIGURED): no OpenRouter key is stored
-- budget (BUDGET_EXCEEDED): this month's spend has reached the limit
 - key_store (INTERNAL_ERROR): the key store failed
 - the kind of the OpenRouterError (INTERNAL_ERROR): network, timeout, server, auth, credits, ...
 
@@ -27,7 +26,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..languages import STT_CODES, stt_languages
-from ..protocol import BUDGET_EXCEEDED, INTERNAL_ERROR, NOT_CONFIGURED, RpcError, invalid_params
+from ..protocol import INTERNAL_ERROR, NOT_CONFIGURED, RpcError, invalid_params
 from .openrouter import OpenRouterClient, OpenRouterError
 from .settings import SettingsStore
 from .spend import SpendTracker
@@ -160,8 +159,6 @@ class CloudTranscriber:
             ) from None
         if not has_key:
             raise _refusal(NOT_CONFIGURED, "no_key", "No OpenRouter key is stored")
-        if self._spend.is_over(self._settings.get("monthly_limit_usd")):
-            raise _refusal(BUDGET_EXCEEDED, "budget", "The monthly limit has been reached")
 
         model = self._settings.get("stt_cloud_model")
         spoken = stt_languages(self._settings.get("languages"))

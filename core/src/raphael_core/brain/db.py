@@ -456,6 +456,19 @@ _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     14: _MIGRATION_V14,
     15: _migrate_v15,
     16: _migrate_v16,
+    17: """
+BEGIN;
+CREATE TABLE agent_messages (
+    turn_id INTEGER NOT NULL REFERENCES agent_turns(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('progress', 'reply', 'event')),
+    text TEXT NOT NULL,
+    at_ms INTEGER NOT NULL,
+    PRIMARY KEY (turn_id, seq)
+);
+PRAGMA user_version = 17;
+COMMIT;
+""",
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

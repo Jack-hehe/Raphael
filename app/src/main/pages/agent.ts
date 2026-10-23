@@ -530,8 +530,12 @@ export function createAgent(app: AppContext): Page {
     const home = empty.hidden ? dock : slot;
     if (backgroundSlot.parentElement !== home) home.prepend(backgroundSlot);
     if (composer.parentElement !== home) home.append(composer);
-    if (askCard.parentElement !== home) home.append(askCard);
     const asking = question !== null && questionOwner === memberId();
+    const waitingTurn = [...shownTurns()].reverse().find((turn) => turn.status === "confirm");
+    const inline = asking && waitingTurn ? thread.querySelector<HTMLElement>(`[data-question-turn="${waitingTurn.id}"]`) : null;
+    const cardHome = inline ?? home;
+    if (askCard.parentElement !== cardHome) cardHome.append(askCard);
+    askCard.classList.toggle("is-member", !inRaphael());
     if (asking && !askCard.hidden && askCard.dataset.id === question!.id) return;
     askCard.hidden = !asking;
     composer.hidden = asking;
@@ -639,6 +643,7 @@ export function createAgent(app: AppContext): Page {
     const keepUp = follow || wasEmpty || atBottom();
     noteTaskEnds(shown, state);
     drawThread();
+    drawDock();
     markSeen(shown, state);
     const searchingNow = searching && query.trim() !== "";
     none.hidden = !(searchingNow && thread.querySelector(".tn") === null);

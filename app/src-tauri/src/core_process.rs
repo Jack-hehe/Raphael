@@ -57,14 +57,9 @@ pub fn timeout_for(method: &str) -> Duration {
         // for the speech engine to load (about 31 s). The controller gives a long recording more
         // ([`dictation_stop_timeout`]): its cleanup takes longer.
         "dictation.stop" => 150,
-        // The router and then the model that words the answer, and perhaps a web search or the
-        // weather in between; or a run on the desktop up to its first question or its end, which
-        // the core bounds at three minutes of work (`computer.run.RunLimits`). Nobody waits for
-        // it longer than that: Esc stops it earlier.
-        "agent.ask" => 210,
-        // Does what was approved, then words the reply; or a run on the desktop goes on, up to
-        // its next question or its end.
-        "agent.confirm" => 210,
+        // A narrated conversation may work for thirty minutes before its final reply or next
+        // permission question. Leave time for routing and transport; Esc still stops it earlier.
+        "agent.ask" | "agent.confirm" => 1830,
         // Starts the plugin (a program that may first have to be fetched), reads its tools.
         "integrations.refresh" => 40,
         // Waits for the user to log in in the browser: up to five minutes (the core ends it at
@@ -851,8 +846,8 @@ mod tests {
         assert_eq!(timeout_for("dictation.stop"), Duration::from_secs(150));
         assert_eq!(timeout_for("models.ensure"), Duration::from_secs(3600));
         assert_eq!(timeout_for("models.local_use"), Duration::from_secs(3600));
-        assert_eq!(timeout_for("agent.ask"), Duration::from_secs(210));
-        assert_eq!(timeout_for("agent.confirm"), Duration::from_secs(210));
+        assert_eq!(timeout_for("agent.ask"), Duration::from_secs(1830));
+        assert_eq!(timeout_for("agent.confirm"), Duration::from_secs(1830));
         assert_eq!(timeout_for("integrations.refresh"), Duration::from_secs(40));
         assert_eq!(
             timeout_for("integrations.connect"),

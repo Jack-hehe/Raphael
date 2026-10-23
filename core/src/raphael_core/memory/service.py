@@ -440,12 +440,11 @@ class MemoryService:
         return model.strip() if isinstance(model, str) and model.strip() else DEFAULTS["agent_model"]
 
     def may_spend(self) -> bool:
-        """Whether a call of the memory's own may be made: there is a key and room under the
-        month's limit."""
+        """Whether a call of the memory's own may be made: there is a key."""
         try:
             if not (self._keys.get() or "").strip():
                 return False
-            return not self._spend.is_over(self._settings.get("monthly_limit_usd"))
+            return True
         except Exception as exc:  # the key store's message could hold the key
             logger.warning("The memory could not check the key or the limit: %s", type(exc).__name__)
             return False

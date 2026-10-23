@@ -58,6 +58,28 @@ const visible = (html: string): string =>
 
 const running = (over: Partial<AgentTask> = {}): AgentTask => ({ id: 41, state: "running", started_at_ms: T0, finished_at_ms: null, ...over });
 
+test("a live turn renders ordered public bubbles and event chips without raw steps", () => {
+  const html = turnHTML(turn(1, { status: "running", text: "", steps: THREE, messages: [
+    { seq: 1, kind: "progress", text: "I will check the examples.", at_ms: T0 },
+    { seq: 2, kind: "event", text: "Example saved", at_ms: T0 },
+    { seq: 3, kind: "reply", text: "Your turn?", at_ms: T0 },
+  ] }), emptyTimelineState(), false, { face: () => "", plain: true });
+  expect(html.indexOf("I will check")).toBeLessThan(html.indexOf("Example saved"));
+  expect(html.indexOf("Example saved")).toBeLessThan(html.indexOf("Your turn?"));
+  expect(html).toContain('class="turn-event"');
+  expect(html).toContain('class="ans progress"');
+  expect(html).toContain('class="ans thinking"');
+  expect(html.match(/<i><\/i>/g)).toHaveLength(3);
+  expect(html).not.toContain("steps-line");
+  expect(html).not.toContain("Google Calendar");
+});
+
+test("an old turn without messages still renders its answer once", () => {
+  const html = turnHTML(turn(1), emptyTimelineState(), false, { face: () => "" });
+  expect(html.match(/class="ans"/g)).toHaveLength(1);
+  expect(html).toContain("《答。台北現在 24 度。》");
+});
+
 describe("a step in words", () => {
   test("Raphael's own lookups and commands have words of their own, in the language of the window", () => {
     expect(stepTitle(step({ tool: "weather" }))).toBe("查天氣");

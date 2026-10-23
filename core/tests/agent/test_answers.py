@@ -31,6 +31,14 @@ NOW = {
 }
 
 
+def test_member_replies_keep_up_to_four_separate_messages_with_a_limit_per_message():
+    reply = parse_reply({"messages": ["Correction", "Example", "x" * 3000, "Your turn?", "extra"], "detail": ""}, "en", plain=True)
+    assert reply.messages[:2] == ["Correction", "Example"]
+    assert len(reply.messages) == 4
+    assert len(reply.messages[2]) == persona.MEMBER_TEXT_MAX
+    assert reply.text == "Your turn?"
+
+
 def completion(data, cost=0.0009, model="openai/gpt-6-luna"):
     return Completion(
         data=data, model=model, cost_usd=cost, prompt_tokens=700, completion_tokens=45,

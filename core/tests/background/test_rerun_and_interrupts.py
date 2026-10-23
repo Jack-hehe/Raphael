@@ -209,17 +209,17 @@ def test_the_cost_cap_is_one_of_four_amounts_and_twenty_cents_by_default(conn):
     assert settings.get("worker_cost_cap_usd") == 0.2
 
 
-async def test_each_task_is_stopped_by_the_cap_as_it_is_set_then(make_rig, conn):
+async def test_legacy_cost_cap_settings_do_not_stop_tasks(make_rig, conn):
     rig = make_rig()
     SettingsStore(conn).set("worker_cost_cap_usd", 0.10)
     rig.client.replies = [
         turn("", [call("local_time", {}, "c1")], cost=0.11),
-        report("never"),
+        report("finished"),
     ]
     rig.submit()
     [done] = await rig.wait_for_reports()
-    assert done["state"] == "limit"
-    assert len(rig.client.chat_calls) == 1
+    assert done["state"] == "done" and done["text"] == "finished"
+    assert len(rig.client.chat_calls) == 2
     SettingsStore(conn).set("worker_cost_cap_usd", 0.50)
     rig.client.replies = [turn("", [call("local_time", {}, "c2")], cost=0.11), report("fine")]
     rig.submit()

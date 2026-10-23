@@ -1186,12 +1186,7 @@ class App(Router):
             await self.call("agent.confirm", {"id": question["id"], "approved": False})
             asked = compose(question["prefix"], question["text"], None)
             return f"{asked}\n{words(language, 'confirm')}"
-        detail = None
-        turn_id = reply.get("turn_id")
-        if turn_id:
-            turn = self.agent.turn(turn_id)
-            detail = None if turn is None else turn.detail
-        return compose(reply.get("prefix", ""), reply.get("text", ""), detail)
+        return compose(reply.get("prefix", ""), reply.get("text", ""), None)
 
     async def _transcribe_from_messaging(self, audio: bytes, language: str) -> str:
         """The words of a voice message, heard by the engine that dictation uses (the cloud, with
@@ -1254,7 +1249,7 @@ class App(Router):
             return
         if task.report_text is None:
             return
-        text = compose(task.report_prefix or "", task.report_text, task.report_detail)
+        text = compose(task.report_prefix or "", task.report_text, None)
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:

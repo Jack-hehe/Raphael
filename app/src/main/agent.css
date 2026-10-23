@@ -51,9 +51,11 @@
 .ra-face { display: block; width: 26px; height: 26px; margin-top: 1px; }
 .ra-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; }
 .ans { margin: 0; font: 15px/1.7 var(--voice); color: var(--text); overflow-wrap: anywhere; user-select: text; }
+.ra-body > .ans { justify-self: start; max-width: 100%; padding: 8px 12px; border: 1px solid var(--edge); border-radius: 14px; background: var(--panel); white-space: pre-wrap; }
+.ans.progress { color: var(--text-2); }
+.turn-event { justify-self: center; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 3px 10px; border-radius: var(--r-pill); background: var(--surface-2); color: var(--text-2); font: var(--fs-xs)/1.6 var(--ui); }
+.turn-question { min-width: 0; }
 .tn[data-status="error"] .ans, .tn[data-status="denied"] .ans, .tn[data-status="expired"] .ans { color: var(--text-2); }
-/* while its task runs, the turn's line is only the hand-over: the report takes its place */
-.tn[data-live="true"] .ans { color: var(--text-3); }
 .tn mark { background: var(--selection); color: var(--on-selection); border-radius: 3px; padding: 0 1px; }
 .tn-detail { padding: 10px 12px; border-radius: 12px; background: var(--surface-2); font-size: 13.5px; line-height: 1.75; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .tn-foot { display: flex; align-items: center; }
@@ -119,9 +121,10 @@
 .spin { display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--track); border-top-color: var(--accent-text); animation: ra-spin 0.8s linear infinite; }
 .shimmer { background: linear-gradient(90deg, currentColor 0%, currentColor 40%, var(--accent-text) 50%, currentColor 60%, currentColor 100%) 0 0 / 250% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: ra-shimmer 1.6s linear infinite; }
 .think { display: inline-flex; gap: 6px; }
-.think i { display: block; height: 7px; border-radius: 4px; background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-2) 35%, var(--accent-soft) 50%, var(--surface-2) 65%, var(--surface-2) 100%) 0 0 / 250% 100%; animation: ra-shimmer 1.6s linear infinite; }
-.think i:first-child { width: 88px; }
-.think i:last-child { width: 46px; animation-delay: -0.4s; }
+.think i { display: block; width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); animation: ra-dots 1.2s ease-in-out infinite; }
+.think i:nth-child(2) { animation-delay: 0.15s; }
+.think i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes ra-dots { 50% { opacity: 0.3; transform: translateY(-2px); } }
 
 /* ---------- the composer ---------- */
 .ra-dock { flex: none; padding: 8px 16px 28px; }

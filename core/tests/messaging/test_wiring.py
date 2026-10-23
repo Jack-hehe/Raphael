@@ -94,7 +94,7 @@ async def test_the_report_of_a_task_from_telegram_is_sent_to_that_chat(app, monk
     store.finish(task_id, "done", prefix="《告》", text="finished", detail="more", reason=None)
     app._worker_notice("worker.report", {"task_id": task_id})
     await asyncio.sleep(0)
-    assert sent == [("telegram:42", "《告。finished》\n\nmore")]
+    assert sent == [("telegram:42", "《告。finished》")]
 
 
 async def test_the_report_of_a_spoken_task_is_not_sent(app, monkeypatch):

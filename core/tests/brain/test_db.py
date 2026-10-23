@@ -270,7 +270,11 @@ SCHEMA_V16 = {
     ],
 }
 FTS_SHADOWS = {f"agent_turns_fts_{part}" for part in ("data", "idx", "content", "docsize", "config")}
-LATEST = 16
+SCHEMA_V17 = {
+    **SCHEMA_V16,
+    "agent_messages": ["turn_id INTEGER PK NOT NULL", "seq INTEGER PK NOT NULL", "kind TEXT NOT NULL", "text TEXT NOT NULL", "at_ms INTEGER NOT NULL"],
+}
+LATEST = 17
 
 
 def schema_names(conn, kind):
@@ -294,7 +298,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V16) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V17) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -308,7 +312,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V16.items():
+    for table, columns in SCHEMA_V17.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
@@ -994,6 +998,8 @@ def test_the_v15_and_v16_migrations_can_run_again_on_a_current_database(conn):
     db._migrate_v15(conn)
     db._migrate_v16(conn)
     db._migrate_v16(conn)
+    # Historical migrations set their own version; compare their schema additions at today's version.
+    conn.execute(f"PRAGMA user_version = {LATEST}")
     fresh = db.connect(":memory:")
     assert_same_schema(conn, fresh)
     fresh.close()

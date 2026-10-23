@@ -321,7 +321,7 @@ async def test_a_piece_that_times_out_keeps_its_raw_text(conn, client):
     assert [part.cleaned for part in result.parts] == [True, False, True]
 
 
-async def test_the_budget_is_looked_at_once_and_stops_every_piece(conn, client):
+async def test_zero_budget_does_not_stop_any_piece(conn, client):
     settings = SettingsStore(conn)
     settings.set("monthly_limit_usd", 0.0)
     svc = CleanupService(
@@ -334,7 +334,8 @@ async def test_the_budget_is_looked_at_once_and_stops_every_piece(conn, client):
     pieces = sentences(3)
     raw = join_segments(pieces)
     result = await svc.clean(raw, audio_seconds=30.0, chunks=as_chunks(pieces))
-    assert (result.text, result.fallback_reason, client.calls) == (raw, "budget", [])
+    assert result.cleaned and result.fallback_reason is None
+    assert len(client.calls) == 3
 
 
 async def test_a_cancelled_cleanup_cancels_its_pieces(svc, client):

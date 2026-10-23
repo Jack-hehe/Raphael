@@ -83,6 +83,7 @@ class Reply:
     # The lookups the model asked for before it answers: notes to read, words to search for.
     read: list[str] = field(default_factory=list)
     search: str = ""
+    messages: list[str] = field(default_factory=list)
 
     @property
     def wants_lookup(self) -> bool:
@@ -123,6 +124,8 @@ def reply_schema(language: str, memory: bool = False, *, plain: bool = False) ->
     if plain:
         del properties["prefix"]
         required.remove("prefix")
+        properties["messages"] = {"type": "array", "items": {"type": "string"}, "maxItems": 4}
+        required.append("messages")
     if memory:
         properties["memory"] = {"type": "array", "items": _MEMORY_ITEM}
         properties["need"] = _NEED
@@ -270,7 +273,14 @@ def parse_reply(data: Any, language: str, *, plain: bool = False) -> Reply:
         raise AgentFailure("error")
     memory = _memory_items(data.get("memory"))
     read, search = _need(data.get("need"))
+    items = data.get("messages")
+    messages = (
+        [text for item in items[:4] if (text := _plain_text(item))]
+        if plain and isinstance(items, list) else []
+    )
     full = _plain_text(data.get("text")) if plain else " ".join(_one_line_text(data.get("text")).split())
+    if messages:
+        full = messages[-1]
     if not full and not (memory or read or search):
         logger.warning("The model's reply said nothing")
         raise AgentFailure("error")
@@ -279,6 +289,7 @@ def parse_reply(data: Any, language: str, *, plain: bool = False) -> Reply:
         if language == "zh-TW":
             full = convert_leftover_simplified(full)
             detail = convert_leftover_simplified(detail)
+            messages = [convert_leftover_simplified(text) for text in messages]
         return Reply(
             prefix="",
             text=full,
@@ -286,6 +297,7 @@ def parse_reply(data: Any, language: str, *, plain: bool = False) -> Reply:
             memory=memory,
             read=read,
             search=search,
+            messages=messages,
         )
     line, rest = fit_text(full, language)
     detail = _one_line_text(data.get("detail")).strip()

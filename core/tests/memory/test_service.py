@@ -261,15 +261,15 @@ async def test_without_a_key_the_background_looks_again_later_not_at_once(memory
     assert model.calls == [] and armed_in(memory) >= RETRY_S
 
 
-async def test_nothing_runs_without_a_key_or_over_the_limit(memory, history, model, keys, conn, clock):
+async def test_a_key_is_required_but_budget_does_not_block_memory(memory, history, model, keys, conn, clock):
     for n in range(REFLECT_AFTER_TURNS):
         add_turn(history, f"q{n}")
     keys.clear()
     await memory.run_due()
+    assert model.calls == []
     keys.set("sk-or-v1-test")
     SettingsStore(conn).set("monthly_limit_usd", 0.0)
-    await memory.run_due()
-    assert model.calls == []
+    assert memory.may_spend() is True
 
 
 async def test_the_consolidation_runs_weekly(memory, model, clock):
