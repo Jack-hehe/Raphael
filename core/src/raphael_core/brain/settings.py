@@ -9,7 +9,8 @@ tools (`web_search_service`, `web_read_service`, `pdf_service`) must be one of t
 `vision_model` a model id or "" (the answer model), and `searxng_url` an http(s) address or "".
 Raphael's voice is `tts_service` ("none" or "fish"), `tts_fish_voice` (the 32 hexadecimal
 characters of the owner's Fish Audio voice model, or "": it is the owner's to fill in) and
-`tts_fish_model` (a short token).
+`tts_fish_model` (a short token). `tts_language` is the language the voice speaks ("ja", the only
+one the owner's voice model speaks; the seam for voices in other languages).
 Which models may be
 chosen is for the brain to say, which knows OpenRouter's list of them (brain/catalog.py): here a
 model is only an id.
@@ -84,6 +85,10 @@ DEFAULTS: dict[str, Any] = {
     "tts_service": "none",
     "tts_fish_voice": "",
     "tts_fish_model": "s2.1-pro-free",
+    # The language Raphael speaks aloud, whatever the language on screen: the owner's voice model
+    # speaks Japanese only, so what is shown in another language is spoken in a Japanese rendering
+    # (see raphael_core.agent.persona.spoken_line). No page offers it: a seam for other voices.
+    "tts_language": "ja",
 }
 
 # The longest model id or city name taken: far more than any real one, short of an accident.
@@ -98,6 +103,8 @@ WEB_READ_SERVICES = ("builtin", "jina", "firecrawl", "tavily")
 PDF_SERVICES = ("builtin", "openrouter")
 # The services that may speak Raphael's answers.
 TTS_SERVICES = ("none", "fish")
+# The languages a voice may speak (for now the owner's only).
+TTS_LANGUAGES = ("ja",)
 # A Fish Audio voice model is named by 32 hexadecimal characters; its model by a short token.
 FISH_VOICE_PATTERN = re.compile(r"[0-9a-f]{32}")
 FISH_MODEL_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
@@ -113,6 +120,7 @@ _CHOICES: dict[str, tuple[Any, ...]] = {
     "web_read_service": WEB_READ_SERVICES,
     "pdf_service": PDF_SERVICES,
     "tts_service": TTS_SERVICES,
+    "tts_language": TTS_LANGUAGES,
 }
 # The settings that hold the id of an OpenRouter model.
 MODEL_SETTINGS = ("cleanup_model", "stt_cloud_model", "agent_model")

@@ -43,6 +43,7 @@ def test_the_defaults_are_the_documented_ones():
         "tts_service": "none",
         "tts_fish_voice": "",
         "tts_fish_model": "s2.1-pro-free",
+        "tts_language": "ja",
     }
 
 
@@ -432,6 +433,15 @@ def test_raphaels_voice_is_none_or_fish(conn):
             settings.set("tts_service", bad)
     with pytest.raises(TypeError):
         settings.set("tts_service", 1)
+
+
+def test_the_voice_speaks_japanese_and_no_other_language_yet(conn):
+    settings = SettingsStore(conn)
+    assert settings.get("tts_language") == "ja"
+    settings.set("tts_language", "ja")
+    for bad in ("zh-TW", "en", ""):
+        with pytest.raises(ValueError):
+            settings.set("tts_language", bad)
 
 
 def test_the_fish_voice_is_32_hexadecimal_characters_or_none_and_is_not_in_the_defaults(conn):
