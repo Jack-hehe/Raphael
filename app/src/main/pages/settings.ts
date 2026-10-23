@@ -13,6 +13,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
 import "../settings-polish.css";
 import "../connections.css";
+import "../services.css";
 import "../messaging.css";
 import "../memory.css";
 import { createMemory } from "../memory-view";
@@ -236,7 +237,7 @@ export function createSettings(app: AppContext): SettingsPage {
   /** The owner's safety rules, in the 「拉斐爾」 tab: what Raphael asks about first, does at once, or never does. */
   const rules = createRules({ visible: () => visible && pane === "agent", redraw: () => render(), undo: app.undo });
   /** 服務, in the 「拉斐爾」 tab: who does the work of Raphael's tools. Choosing is a change of the brain's settings. */
-  const services = createServices({ visible: () => visible && pane === "agent", redraw: () => render(), changeSetting: (key, value) => changeBrain(key, value) });
+  const services = createServices({ visible: () => visible && pane === "agent", redraw: () => render(), brain: () => brain, changeSetting: (key, value) => changeBrain(key, value) });
 
   // ---------- drawing ----------
 
@@ -324,7 +325,7 @@ export function createSettings(app: AppContext): SettingsPage {
           },
         };
       default:
-        return services.menuFor(k) ?? rules.menuFor(k) ?? connections.menuFor(k);
+        return rules.menuFor(k) ?? connections.menuFor(k);
     }
   }
 
@@ -438,17 +439,20 @@ export function createSettings(app: AppContext): SettingsPage {
     pendingJump = null;
     if (pane !== hit.pane) return;
     const rows = Array.from(body.querySelectorAll<HTMLElement>(".row"));
-    const found = rows.find((r) => r.querySelector(":scope > .lbl > .t")?.textContent?.trim() === hit.text);
+    const found =
+      rows.find((r) => r.querySelector(":scope > .lbl > .t")?.textContent?.trim() === hit.text) ??
+      // a capability of 服務 is a row of the rounded list, named by its `.nm`
+      Array.from(body.querySelectorAll<HTMLElement>(".cs-item.svc-item")).find((r) => r.querySelector(".nm")?.textContent?.trim() === hit.text);
     if (!found) {
       // A hit that names a whole section (電腦操作) brings its heading into view and lights its list.
-      const list = Array.from(body.querySelectorAll<HTMLElement>(".sgroup")).find((g) => g.querySelector(":scope > h2")?.textContent?.trim() === hit.text)?.querySelector<HTMLElement>(":scope > .slist");
+      const list = Array.from(body.querySelectorAll<HTMLElement>(".sgroup")).find((g) => g.querySelector(":scope > h2")?.textContent?.trim() === hit.text)?.querySelector<HTMLElement>(":scope > .slist, :scope > .cs-list");
       if (!list) return;
       list.scrollIntoView({ block: "center" });
       list.classList.add("found");
       setTimeout(() => list.classList.remove("found"), FOUND_MS);
       return;
     }
-    const control = found.querySelector<HTMLElement>(":scope > .ctl :is(button, input):not([disabled])");
+    const control = found.querySelector<HTMLElement>(":scope > .ctl :is(button, input):not([disabled]), :scope > .cs-open");
     control?.focus({ preventScroll: true });
     found.scrollIntoView({ block: "center" });
     found.classList.add("found");

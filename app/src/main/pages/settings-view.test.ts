@@ -137,16 +137,21 @@ test("the memory is two sections: 共同記憶 first, then Raphael's own, each w
   expect(agent).toContain('class="btn icon" aria-label="「主人住台北」的選項"');
 });
 
-test("服務 is in the 拉斐爾 tab, after its settings and before the memory, with the 看圖片 picker", () => {
+test("服務 is in the 拉斐爾 tab, after its settings and before the memory, as a clean list of five rows", () => {
   const memory = { ...emptyMemoryView(), status: { memories: [], summary: null } };
   const agent = tab("agent", { memory, services: emptyServicesView() });
   expect(agent).toContain("<h2>服務</h2>");
   expect(agent.indexOf("data-svc-section")).toBeGreaterThan(agent.indexOf('data-k="worker-cap"'));
   expect(agent.indexOf("data-svc-section")).toBeLessThan(agent.indexOf("data-mem-section"));
-  // 看圖片 is the model picker, of the models that read images, and 「與回答相同」 ("") until one is chosen
-  expect(agent).toMatch(/<span class="mp-slot" data-model-picker="vision"><button type="button" class="sel mp-trigger"[^>]*data-k="svc-vision">/);
-  expect(agent).toContain('<span class="mp-tname">與回答相同</span>');
-  expect(tab("agent", { services: emptyServicesView(), brain: { ...brain, vision_model: "anthropic/claude-haiku-5.5" } })).toContain('<span class="mp-tname">Claude Haiku 5.5</span>');
+  expect(agent.match(/data-k="svc-open:/g)).toHaveLength(5);
+  // nothing to choose or type at the tab's level: the picker of 看圖片 is in its dialog, not here
+  expect(agent).not.toContain("data-model-picker");
+  expect(agent).not.toContain('data-k="svc-search"');
+  // 看圖片 is the model picker, of the models that read images, in the dialog's page for 「指定模型」
+  const picker = tab("agent", { services: { ...emptyServicesView(), open: { kind: "vision", service: "model" } }, brain: { ...brain, vision_model: "anthropic/claude-haiku-5.5" } });
+  expect(picker).toMatch(/<span class="mp-slot" data-model-picker="vision"><button type="button" class="sel mp-trigger"[^>]*data-k="svc-vision">/);
+  expect(picker).toContain('<span class="mp-tname">Claude Haiku 5.5</span>');
+  expect(tab("agent", { services: { ...emptyServicesView(), open: { kind: "vision", service: "model" } } })).toContain('<span class="mp-tname">與回答相同</span>');
   for (const id of ["general", "dictation", "connections", "messaging", "usage", "data", "about"] as const) {
     expect(tab(id, { services: emptyServicesView() })).not.toContain("data-svc");
   }
@@ -638,7 +643,9 @@ describe("搜尋設定", () => {
         // a row's name, or the name of a section (電腦操作 is found as a whole)
         const html = tab(entry.pane, { memory: emptyMemoryView(), rules: emptyRulesView(), services: emptyServicesView() });
         const headings = [...html.matchAll(/<h2>(.*?)<\/h2>/g)].map((m) => m[1]);
-        expect([...names(html), ...headings].map((shown) => shown.replace("&#39;", "'")), `${locale} ${entry.label}`).toContain(name);
+        // a capability of 服務 is a row of the rounded list, named by its `.nm`
+        const items = [...html.matchAll(/<span class="nm">(.*?)<\/span>/g)].map((m) => m[1]);
+        expect([...names(html), ...items, ...headings].map((shown) => shown.replace("&#39;", "'")), `${locale} ${entry.label}`).toContain(name);
       }
     }
   });

@@ -14,6 +14,10 @@ answer then says plainly that the data is missing.
 - A page is read by the `web_read_service` setting's reader (`web_read`), and a file the owner
   handed over (an image, a PDF) by the vision model or the PDF service (`read_attachment`, `look`).
 - The time is the computer's.
+- Each of those capabilities has the owner's switch (`ServiceHub.enabled`): one that is off is not
+  used at all, whichever service is chosen for it. Its tool returns the failure "disabled" without
+  making a call, and the answer then says that Raphael cannot do it now (`answers`), `turned_off`
+  names the tools the background worker is not even offered (`background.snapshot`).
 
 What a service returns (search results, a page, what the vision model saw in a file) is untrusted:
 its result is marked so, and the answer model is told never to follow what it says. A result also
@@ -57,6 +61,8 @@ GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 # The language Open-Meteo names the place in, for each language Raphael speaks.
 _GEOCODING_LANGUAGE = {"zh-TW": "zh", "en": "en", "ja": "ja"}
+# The kind of failure of a tool whose capability the owner turned off.
+DISABLED = "disabled"
 # The weather, both requests together, and each stage of a request.
 WEATHER_TIMEOUT_S = 8.0
 _HTTP_STAGE_TIMEOUT_S = 5.0
@@ -281,6 +287,8 @@ class Tools:
         what `model` finds, in a few sentences, with the pages it drew on (the call is written to
         the spend through `ledger`); with another service, its results themselves (`services.web`),
         which are untrusted."""
+        if self.services is not None and not self.services.enabled("search"):
+            return self._failed("web_search", DISABLED)
         service = "openrouter" if self.services is None else self.services.search_service()
         if service != "openrouter":
             return await self._search_with(service, question)
@@ -325,6 +333,8 @@ class Tools:
         says is untrusted. "unavailable" without the services."""
         if self.services is None:
             return self._failed("web_read", "unavailable")
+        if not self.services.enabled("read"):
+            return self._failed("web_read", DISABLED)
         service = self.services.read_service()
         try:
             service, page = await asyncio.wait_for(self.services.read(url), READ_TIMEOUT_S)
@@ -344,6 +354,8 @@ class Tools:
         kind = "pdf" if attachment.is_pdf else "image"
         if self.services is None:
             return self._failed("read_attachment", "unavailable", kind)
+        if not self.services.enabled("pdf" if attachment.is_pdf else "vision"):
+            return self._failed("read_attachment", DISABLED, kind)
         try:
             kind, found = await asyncio.wait_for(
                 self.services.read_attachment(attachment, question, ledger), ATTACHMENT_TIMEOUT_S
@@ -367,6 +379,8 @@ class Tools:
         `numbers` are their places among the request's files (1, 2, ... by default)."""
         if self.services is None:
             return self._failed("read_attachment", "unavailable", "image")
+        if not self.services.enabled("vision"):
+            return self._failed("read_attachment", DISABLED, "image")
         try:
             seen = await asyncio.wait_for(
                 self.services.look(images, question, ledger), ATTACHMENT_TIMEOUT_S
@@ -378,6 +392,21 @@ class Tools:
         files = numbers if numbers is not None else list(range(1, len(images) + 1))
         data = {"files": files, "kind": "image", **seen}
         return ToolResult("read_attachment", True, data, untrusted=True, detail="image")
+
+    def turned_off(self) -> frozenset[str]:
+        """The tools of Raphael's own that the owner turned off, so that the background worker is not
+        offered them: `web_search`, `web_read`, and `read_attachment` when neither the images nor
+        the PDFs may be read (with one of them on, the tool refuses the other kind itself)."""
+        if self.services is None:
+            return frozenset()
+        off = {
+            tool
+            for tool, capability in (("web_search", "search"), ("web_read", "read"))
+            if not self.services.enabled(capability)
+        }
+        if not self.services.enabled("vision") and not self.services.enabled("pdf"):
+            off.add("read_attachment")
+        return frozenset(off)
 
     # --- the time -------------------------------------------------------------------------------
 

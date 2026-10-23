@@ -1,0 +1,39 @@
+/* 服務 (Settings › 拉斐爾): the list of capabilities and the dialog of each, in the markup and the
+   style of the 「連接」 tab (connections.css: `.cs-list`, `.cs-item`, `.cs-scrim`, `.cs-dialog`), which
+   this only adds to. Colours are the app's tokens. */
+
+/* A capability is its icon bare, in the colour of the text */
+.svc-ic { display: inline-grid; place-items: center; width: 30px; flex: none; color: var(--text-2); }
+.svc-ic .i { width: 20px; height: 20px; }
+
+/* A row of the list: the row, the service in use in small muted words, the switch, the chevron */
+.svc-item { grid-template-columns: minmax(0, 1fr) auto auto 18px; }
+.svc-now { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text-3); }
+.svc-item.off .nm { color: var(--text-2); }
+/* a row the settings' search lit */
+.cs-item.found, .cs-list.found > .cs-item { background: var(--accent-soft); }
+
+/* The dialog's list of services: the mark, the name and its note, the check on the one in use, the chevron */
+.svc-srv { grid-template-columns: minmax(0, 1fr) 16px 18px; }
+.svc-chk { display: inline-flex; justify-content: center; width: 16px; color: var(--accent-text); }
+.svc-h { margin: 0 0 -4px 2px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
+
+/* The two views of the dialog: the page that comes in slides from the side it is reached from (180 ms) */
+.svc-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.svc-view.slide-in { animation: svc-in 0.18s ease-out; }
+.svc-view.slide-out { animation: svc-out 0.18s ease-out; }
+@keyframes svc-in { from { opacity: 0; transform: translateX(14px); } }
+@keyframes svc-out { from { opacity: 0; transform: translateX(-14px); } }
+
+/* A service's own settings: its key, its address, its voice model, then the buttons */
+.svc-line { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.svc-line .field { flex: 1; min-width: 0; width: auto; }
+.svc-line .val { flex: 1; color: var(--text-2); font-size: var(--fs-sm); }
+.svc-acts { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.svc-pick { display: grid; grid-template-columns: minmax(0, 1fr); }
+.svc-pick .mp-slot, .svc-pick .sel { width: 100%; max-width: none; }
+
+@media (max-width: 720px) {
+  .svc-now { display: none; }
+  .svc-item { grid-template-columns: minmax(0, 1fr) auto 18px; }
+}

@@ -99,6 +99,7 @@ class Rig:
 
     def set_up(self, key=KEY, voice=VOICE):
         self.settings.set("tts_service", "fish")
+        self.settings.set("tts_enabled", True)
         self.settings.set("tts_fish_voice", voice)
         if key:
             self.keys.set("fish", key)
@@ -230,12 +231,13 @@ async def test_no_voice_service_chosen_asks_nothing_and_does_not_wait(rig):
 def test_a_voice_that_can_be_heard_has_a_service_a_key_and_a_voice_id(rig):
     assert rig.speaker.speaks() is False
     rig.settings.set("tts_service", "fish")
+    rig.settings.set("tts_enabled", True)
     assert rig.speaker.speaks() is False  # no voice id, no key
     rig.settings.set("tts_fish_voice", VOICE)
     assert rig.speaker.speaks() is False  # no key
     rig.keys.set("fish", KEY)
     assert rig.speaker.speaks() is True
-    rig.settings.set("tts_service", "none")
+    rig.settings.set("tts_enabled", False)
     assert rig.speaker.speaks() is False
 
 
@@ -394,11 +396,11 @@ async def test_the_stop_method_stops_and_a_stop_with_nothing_playing_is_harmless
     await rig.hub.aclose()
 
 
-async def test_saying_with_the_service_set_to_none_still_stops_what_was_playing(conn):
+async def test_saying_with_the_voice_turned_off_still_stops_what_was_playing(conn):
     rig = a_rig_with(conn, body=Chunks(FIRST, asyncio.Event()))
     rig.set_up()
     await rig.speaker.say("解", "はい。")
-    rig.settings.set("tts_service", "none")
+    rig.settings.set("tts_enabled", False)
     await rig.speaker.say("解", "出ません。")
     await until(lambda: rig.player.interrupted == [True])
     assert len(rig.requests) == 1

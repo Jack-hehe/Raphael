@@ -186,7 +186,7 @@ export function examplePrompt(s: StoreService | undefined): string | null {
 const isIcon = (id: string | null | undefined): id is ServiceIconId => !!id && (id in SERVICE_ICONS || hasLogo(id as ServiceIconId));
 
 /** The picture of a service: its mark, bare, or a letter. */
-function iconHTML(name: string, icon: ServiceIconId | null, size: "md" | "xl"): string {
+export function iconHTML(name: string, icon: ServiceIconId | null, size: "md" | "xl"): string {
   if (icon && hasLogo(icon)) return `<span class="mono ${size} logo-art">${serviceLogoHTML(icon)}</span>`;
   return icon
     ? `<span class="mono ${size} logo-mono"${brandStyle(icon)}>${serviceIconSVG(icon)}</span>`
