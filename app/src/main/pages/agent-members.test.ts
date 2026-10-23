@@ -327,6 +327,39 @@ describe("a member's thread", () => {
     await flush();
     expect(api.membersViewing).toHaveBeenLastCalledWith(null);
   });
+
+  test("switching threads clears unsent composer text, and an in-flight ask that fails on the previous thread does not overwrite the new thread's composer", async () => {
+    let failAsk!: (err: Error) => void;
+    api.agentAskText.mockImplementationOnce(() => new Promise<void>((_, rej) => (failAsk = rej)));
+    mount();
+    await flush();
+    await pick(3);
+    const input = $<HTMLTextAreaElement>(".cmp-input");
+    input.value = "給日文老師的草稿";
+    await pick(4);
+    expect(input.value).toBe("");
+
+    await pick(3);
+    input.value = "考我單字";
+    $<HTMLFormElement>(".composer").requestSubmit();
+    await pick(4);
+    input.value = "給管家的話";
+    failAsk(new Error("network down"));
+    await flush();
+    expect(input.value).toBe("給管家的話");
+  });
+
+  test("refocusing the window while scrolled up in a thread does not jump scroll to the bottom", async () => {
+    const agent = mount();
+    await flush();
+    const scroller = $<HTMLElement>(".ra-scroll");
+    Object.defineProperty(scroller, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(scroller, "clientHeight", { value: 200, configurable: true });
+    scroller.scrollTop = 100;
+    agent.show();
+    await flush();
+    expect(scroller.scrollTop).toBe(100);
+  });
 });
 
 describe("a new member", () => {
@@ -372,6 +405,37 @@ describe("a new member", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(document.querySelector(".mb-dialog")).toBeNull();
   });
+
+  test("opened from the narrow-window picker closes the menu first and returns focus to the picker on Escape", async () => {
+    mount();
+    await flush();
+    const picker = $<HTMLButtonElement>(".mb-pick");
+    picker.click();
+    expect(document.getElementById("app-popover")).not.toBeNull();
+    $<HTMLElement>('#app-popover [data-action="0"]').click();
+    expect(document.getElementById("app-popover")).toBeNull();
+    expect(document.querySelector(".mb-dialog")).not.toBeNull();
+    expect(document.activeElement?.id).toBe("mb-new-name");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector(".mb-scrim")).toBeNull();
+    expect(document.activeElement).toBe(picker);
+  });
+
+  test("retries loading presets after a transient failure on startup", async () => {
+    const url = "data:image/png;base64,iVBORw0KGgo=";
+    api.membersPresets.mockRejectedValueOnce(new Error("offline")).mockResolvedValue({
+      presets: [{ avatar: "preset:a", name: "a", url }],
+    });
+    mount();
+    await flush();
+    send({ type: "AgentTurn", turn_id: 99, member_id: 4 });
+    await new Promise((r) => setTimeout(r, 350));
+    await flush();
+    $('[data-col="add"]').click();
+    $('#app-popover [data-pick="member"]').click();
+    $('[data-dlg="avatar"]').click();
+    expect(document.querySelector('#app-popover [data-preset="preset:a"]')).not.toBeNull();
+  });
 });
 
 describe("the details panel", () => {
@@ -390,6 +454,25 @@ describe("the details panel", () => {
     expect($(".page-agent").dataset.det).toBeUndefined();
     $(".mb-pill").click();
     expect($(".mb-det").hidden).toBe(false);
+  });
+
+  test("renaming the open member in the details panel updates the composer placeholder and thread faces", async () => {
+    mount();
+    await flush();
+    await pick(3);
+    if ($(".mb-det").hidden) $(".mb-pill").click();
+    api.membersUpdate.mockResolvedValue({ member: { ...LIST.members[1], name: "嚴格老師" } });
+    api.membersList.mockResolvedValue({
+      ...structuredClone(LIST),
+      members: LIST.members.map((m) => (m.id === 3 ? { ...m, name: "嚴格老師" } : m)),
+    });
+    const name = $<HTMLInputElement>("#mb-det-name");
+    name.focus();
+    name.value = "嚴格老師";
+    name.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await flush();
+    expect($<HTMLTextAreaElement>(".cmp-input").placeholder).toBe("Message 嚴格老師");
+    expect($(".thread .mb-av-letter").textContent).toBe("嚴");
   });
 });
 

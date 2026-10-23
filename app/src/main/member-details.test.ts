@@ -218,6 +218,55 @@ describe("a member's panel", () => {
     panel.el.querySelector<HTMLElement>('[data-det="close"]')!.click();
     expect(host.close).toHaveBeenCalled();
   });
+
+  test("switching members while instructions are focused saves to the previous member and draws the new member", async () => {
+    const panel = mount();
+    await flush();
+    const box = panel.el.querySelector<HTMLTextAreaElement>("#mb-det-instr")!;
+    box.focus();
+    box.value = "改成每天 5 題";
+    current = 4;
+    panel.showMember();
+    await flush();
+    expect(host.update).toHaveBeenCalledWith(3, { instructions: "改成每天 5 題" });
+    expect(panel.el.querySelector<HTMLTextAreaElement>("#mb-det-instr")!.value).toBe("");
+  });
+
+  test("renaming a member while tabbing to role updates the face initial in the header", async () => {
+    const panel = mount();
+    await flush();
+    const name = panel.el.querySelector<HTMLInputElement>("#mb-det-name")!;
+    const role = panel.el.querySelector<HTMLInputElement>("#mb-det-role")!;
+    name.focus();
+    name.value = "老師";
+    host.update.mockImplementationOnce(async (_id, patch) => {
+      await Promise.resolve();
+      LIST.members[1] = { ...LIST.members[1], ...patch };
+      panel.draw();
+      return true;
+    });
+    name.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    role.focus();
+    await flush();
+    expect(panel.el.querySelector(".mb-avbtn .mb-av-letter")!.textContent).toBe("老");
+    LIST.members[1] = { ...LIST.members[1], name: "日文老師" };
+  });
+
+  test("double-clicking routine save while create is in flight sends only one request", async () => {
+    let finish!: () => void;
+    api.routinesCreate.mockImplementation(() => new Promise<Record<string, never>>((r) => (finish = () => r({}))));
+    const panel = mount();
+    await flush();
+    panel.el.querySelector<HTMLElement>('[data-det="routine-add"]')!.click();
+    panel.el.querySelector<HTMLInputElement>("#mb-r-title")!.value = "早報";
+    panel.el.querySelector<HTMLTextAreaElement>("#mb-r-prompt")!.value = "摘要";
+    const save = panel.el.querySelector<HTMLElement>('[data-det="r-save"]')!;
+    save.click();
+    save.click();
+    expect(api.routinesCreate).toHaveBeenCalledTimes(1);
+    finish();
+    await flush();
+  });
 });
 
 describe("Raphael's panel", () => {

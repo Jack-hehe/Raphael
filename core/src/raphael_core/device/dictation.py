@@ -85,7 +85,8 @@ logger = logging.getLogger(__name__)
 SAMPLE_RATE = 16_000
 # A recording in which the voice activity detector has heard no speech for this long, from its start
 # or from the last words, is over: the app is told (`dictation.silence`) and stops it, as the key
-# would. It is the only thing that ends a recording by itself.
+# would. It is the only thing that ends a recording by itself. A question to Raphael (PURPOSE_AGENT)
+# has no such end: only the key or Esc stops it.
 SILENCE_STOP_SECONDS = 10.0
 # Less speech than this is a cough or a tap, not a dictation.
 MIN_SPEECH_SECONDS = 0.3
@@ -553,7 +554,11 @@ class DictationService:
         """On the loop: `dictation.silence`, so the app stops the session as the key would, because
         it has heard no speech for SILENCE_STOP_SECONDS or, if `failed`, because it can hear
         nothing more. Once a session, and only while it is still the one recording: one that is
-        being stopped or was cancelled meanwhile has nothing to stop."""
+        being stopped or was cancelled meanwhile has nothing to stop. A question to Raphael is
+        never ended by its silence: only the key or Esc ends it (owner, 2026-10-23), so it is told
+        only that it can hear nothing more."""
+        if not failed and session.purpose == PURPOSE_AGENT:
+            return
         if (
             session.silence_told_at is not None
             or session.state != "recording"

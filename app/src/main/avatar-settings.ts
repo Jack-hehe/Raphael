@@ -61,10 +61,24 @@ export function cropDialog(url: string): Promise<AvatarCrop | null> {
       resolve(result);
     };
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      close(null);
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        close(null);
+      } else if (e.key === "Tab") {
+        const stops = [...scrim.querySelectorAll<HTMLElement>("input:not(:disabled), button:not(:disabled)")];
+        if (stops.length === 0) return;
+        const first = stops[0]!;
+        const last = stops[stops.length - 1]!;
+        const active = document.activeElement as HTMLElement | null;
+        if (e.shiftKey && (active === first || !active || !scrim.contains(active))) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && (active === last || !active || !scrim.contains(active))) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     let from: { x: number; y: number } | null = null;
     view.addEventListener("pointerdown", (e) => {

@@ -37,8 +37,10 @@ import {
   ROUTINE_TITLE_MAX,
   type ToolChoice,
   allowedTools,
+  cleanName,
   dayName,
   faceHTML,
+  isMemberNameTaken,
   isTime,
   scheduleText,
   sourceLabel,
@@ -155,8 +157,8 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     if (member.id === RAPHAEL_ID) return face + `<b class="mb-who-name">${esc(member.name)}</b>`;
     return (
       face +
-      `<input class="mb-who-name mb-edit" id="mb-det-name" type="text" maxlength="${NAME_MAX}" value="${esc(member.name)}" aria-label="${esc(t("members.name"))}" autocomplete="off" spellcheck="false">` +
-      `<input class="mb-who-role mb-edit" id="mb-det-role" type="text" maxlength="${ROLE_MAX}" value="${esc(member.role)}" placeholder="${esc(t("members.role"))}" aria-label="${esc(t("members.role"))}" autocomplete="off" spellcheck="false">`
+      `<input class="mb-who-name mb-edit" id="mb-det-name" data-member="${member.id}" type="text" maxlength="${NAME_MAX}" value="${esc(member.name)}" aria-label="${esc(t("members.name"))}" autocomplete="off" spellcheck="false">` +
+      `<input class="mb-who-role mb-edit" id="mb-det-role" data-member="${member.id}" type="text" maxlength="${ROLE_MAX}" value="${esc(member.role)}" placeholder="${esc(t("members.role"))}" aria-label="${esc(t("members.role"))}" autocomplete="off" spellcheck="false">`
     );
   }
 
@@ -216,7 +218,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     const sources = group?.sources ?? [];
     return (
       `<section class="mb-field"><label class="mb-dh" for="mb-det-instr">${esc(t("members.instructions"))}</label>` +
-      `<textarea id="mb-det-instr" class="mb-fin mb-ta" rows="4" maxlength="${INSTRUCTIONS_MAX}">${esc(member.instructions ?? "")}</textarea></section>` +
+      `<textarea id="mb-det-instr" data-member="${member.id}" class="mb-fin mb-ta" rows="4" maxlength="${INSTRUCTIONS_MAX}">${esc(member.instructions ?? "")}</textarea></section>` +
       `<section class="mb-field"><div class="mb-dh">${esc(t("members.group"))}</div>` +
       sel(groupChoices(list?.groups ?? []), groupValue(group ? group.id : null), t("members.group"), ' data-det="group" data-k="det-group"') +
       `</section>` +
@@ -260,6 +262,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
 
   function draw(): void {
     const member = host.member();
+    const sameMember = drawnFor === member.id;
     closeButton.setAttribute("aria-label", t("members.close"));
     closeButton.title = t("members.close");
     el.setAttribute("aria-label", t("members.panel"));
@@ -267,7 +270,15 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     const typingIn = focused && el.contains(focused) && (focused.matches("input, textarea") ? focused.id : null);
     const focusKey = focused && el.contains(focused) ? focused.closest<HTMLElement>("[data-k]")?.dataset.k : undefined;
     // the name and role are drawn afresh for another member, and left alone while they are typed in
-    if (drawnFor !== member.id || !(typingIn === "mb-det-name" || typingIn === "mb-det-role")) who.innerHTML = whoHTML(member);
+    if (!sameMember || !(typingIn === "mb-det-name" || typingIn === "mb-det-role")) {
+      if (!sameMember && (typingIn === "mb-det-name" || typingIn === "mb-det-role")) {
+        void saveField(focused as HTMLInputElement, true);
+      }
+      who.innerHTML = whoHTML(member);
+    } else {
+      const av = who.querySelector<HTMLElement>(".mb-avbtn");
+      if (av) av.innerHTML = faceHTML(member, 64);
+    }
     drawnFor = member.id;
     tabBar.innerHTML = tabs(
       [
@@ -278,15 +289,16 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       tab,
       { label: t("members.panel"), kind: "nav", plain: true, fill: true },
     );
-    if (typingIn === "mb-det-instr" && tab === "details") return; // the box keeps its caret; it saves on blur
+    if (sameMember && typingIn === "mb-det-instr" && tab === "details") return; // the box keeps its caret; it saves on blur
+    if (typingIn === "mb-det-instr") void saveField(focused as HTMLTextAreaElement, true);
     keepTyping();
     picker?.close();
     picker = null;
     body.innerHTML =
       tab === "details" ? detailsHTML(member) : tab === "memory" ? memoryHTML(shared.view()) + memoryHTML(own.view()) : toolsHTML(member);
     if (tab === "details" && member.id !== RAPHAEL_ID) mountPicker(member);
-    if (typingIn && typingIn !== "mb-det-name" && typingIn !== "mb-det-role") el.querySelector<HTMLElement>(`#${CSS.escape(typingIn)}`)?.focus();
-    else if (focusKey) el.querySelector<HTMLElement>(`[data-k="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+    if (sameMember && typingIn && typingIn !== "mb-det-name" && typingIn !== "mb-det-role") el.querySelector<HTMLElement>(`#${CSS.escape(typingIn)}`)?.focus();
+    else if (sameMember && focusKey) el.querySelector<HTMLElement>(`[data-k="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
   }
 
   function mountPicker(member: Member): void {
@@ -328,8 +340,10 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     draw();
   }
 
+  let savingRoutine = false;
+
   async function saveRoutine(): Promise<void> {
-    if (!draft) return;
+    if (!draft || savingRoutine) return;
     keepTyping();
     const d = draft;
     const title = d.title.trim();
@@ -339,12 +353,15 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       toaster.info(t("members.routineNeeds"));
       return;
     }
+    savingRoutine = true;
     try {
       if (d.id === null) await api.routinesCreate({ member_id: host.member().id, title, prompt, schedule });
       else await api.routinesUpdate(d.id, { title, prompt, schedule });
     } catch (err) {
       toaster.info(describeError(err));
       return;
+    } finally {
+      savingRoutine = false;
     }
     draft = null;
     await loadRoutines();
@@ -399,22 +416,33 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     });
   }
 
-  async function saveField(input: HTMLInputElement | HTMLTextAreaElement): Promise<void> {
-    const member = host.member();
-    if (member.id === RAPHAEL_ID) return;
-    const value = input.value.trim();
+  async function saveField(input: HTMLInputElement | HTMLTextAreaElement, replacing = false): Promise<void> {
+    if (input.dataset.saved === "1") return;
+    const memberId = input.dataset.member !== undefined ? Number(input.dataset.member) : host.member().id;
+    const member = host.list()?.members.find((m) => m.id === memberId) ?? (host.member().id === memberId ? host.member() : null);
+    if (!member || member.id === RAPHAEL_ID) return;
+    if (replacing || !input.isConnected) input.dataset.saved = "1";
     if (input.id === "mb-det-name") {
-      if (value === member.name) return;
-      const taken = host.list()?.members.some((other) => other.id !== member.id && other.name.trim().toLocaleLowerCase() === value.toLocaleLowerCase());
+      const value = cleanName(input.value);
+      if (value === member.name) {
+        input.value = member.name;
+        return;
+      }
+      const others = (host.list()?.members ?? []).filter((other) => other.id !== member.id).map((other) => other.name);
+      const taken = value !== "" && isMemberNameTaken(value, others);
       if (value === "" || taken) {
         if (taken) toaster.info(t("members.nameTaken", { p0: value }));
         input.value = member.name;
         return;
       }
+      input.value = value;
       await host.update(member.id, { name: value });
     } else if (input.id === "mb-det-role") {
+      const value = cleanName(input.value);
+      input.value = value;
       if (value !== member.role) await host.update(member.id, { role: value });
     } else if (input.id === "mb-det-instr") {
+      const value = input.value.trim();
       if (value !== (member.instructions ?? "").trim()) await host.update(member.id, { instructions: value });
     }
   }

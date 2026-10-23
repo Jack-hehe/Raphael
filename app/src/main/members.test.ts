@@ -4,8 +4,10 @@ import { afterEach, describe, expect, test } from "vitest";
 import { setLocale } from "./i18n";
 import {
   allowedTools,
+  cleanName,
   faceHTML,
   initialOf,
+  isMemberNameTaken,
   isPictureUrl,
   memberMatches,
   memberPlaceholder,
@@ -67,6 +69,15 @@ describe("the column's sections", () => {
   test("Raphael is the list's member 0, or his name before there is a list", () => {
     expect(raphaelOf(LIST).name).toBe("拉斐爾");
     expect(raphaelOf(null)).toMatchObject({ id: 0, name: "拉斐爾" });
+  });
+
+  test("collapses inner whitespace in names and reserves Raphael's name in every language", () => {
+    expect(cleanName("  日文   老師  ")).toBe("日文 老師");
+    expect(isMemberNameTaken("日文   老師", ["日文 老師"])).toBe(true);
+    expect(isMemberNameTaken("拉斐爾", [])).toBe(true);
+    expect(isMemberNameTaken("raphael", [])).toBe(true);
+    expect(isMemberNameTaken("ラファエル", [])).toBe(true);
+    expect(isMemberNameTaken("進度官", ["日文 老師"])).toBe(false);
   });
 });
 

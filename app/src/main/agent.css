@@ -282,7 +282,7 @@
 .ra-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; min-height: 0; padding: 16px 16px 48px; text-align: center; }
 /* Raphael's picture is 132 px at every size: the voice mode's flyer lands on it and is the same box (voice-mode.ts) */
 .ra-hero { width: 132px; height: 132px; }
-.ra-hi { margin: 0; min-height: 1.6em; font: 500 var(--pa-hi)/1.6 var(--voice); letter-spacing: 0.04em; color: var(--text); }
+.ra-hi { max-width: 100%; margin: 0; min-height: 1.6em; font: 500 var(--pa-hi)/1.6 var(--voice); letter-spacing: 0.04em; color: var(--text); overflow-wrap: anywhere; }
 .ra-empty.is-failed .ra-hi { font-size: var(--pa-dfs); letter-spacing: 0; color: var(--text-2); }
 .ra-slot { width: min(calc(560px + 160 * var(--pa-u)), 100%); margin-top: 6px; text-align: left; }
 

@@ -39,7 +39,21 @@ const ruleFor = (rules: Rule[], selector: string): Rule[] => rules.filter((r) =>
 
 describe("no sideways scrolling", () => {
   it("the page and every scrolling part of the main window clip sideways overflow", () => {
-    for (const selector of [".main", ".side", ".modal-nav", ".modal-body", ".menu", ".ob-body", ".lang-list", ".mp-scroll", ".mp-ddlist", ".ra-scroll"]) {
+    for (const selector of [
+      ".main",
+      ".side",
+      ".modal-nav",
+      ".modal-body",
+      ".menu",
+      ".ob-body",
+      ".lang-list",
+      ".mp-scroll",
+      ".mp-ddlist",
+      ".ra-scroll",
+      ".mb-scroll",
+      ".mb-det-scroll",
+      ".mb-dialog",
+    ]) {
       const found = ruleFor(mainRules, selector);
       expect(found.length, selector).toBeGreaterThan(0);
       expect(
@@ -82,5 +96,13 @@ describe("no sideways scrolling", () => {
       // 1fr alone means minmax(auto, 1fr): it cannot get narrower than the content.
       expect(columns, `${r.file}: ${r.selector}`).not.toMatch(/(^|\s)1fr(\s|$)/);
     }
+  });
+
+  it("long member names, routine schedules and chip buttons truncate or wrap without pushing their row past its width", () => {
+    expect(ruleFor(mainRules, ".mb-row-t b:not(:only-child)").some((r) => /max-width:\s*70%/.test(r.body))).toBe(true);
+    expect(ruleFor(mainRules, ".nav.mb-chief b").some((r) => /text-overflow:\s*ellipsis/.test(r.body))).toBe(true);
+    expect(ruleFor(mainRules, ".mb-rt-main span").some((r) => /text-overflow:\s*ellipsis/.test(r.body))).toBe(true);
+    expect(ruleFor(mainRules, ".mb-chip .chip-x").some((r) => /flex:\s*none/.test(r.body))).toBe(true);
+    expect(ruleFor(mainRules, ".ra-hi").some((r) => /overflow-wrap:\s*anywhere/.test(r.body))).toBe(true);
   });
 });

@@ -1802,14 +1802,34 @@ async def test_silence_after_speech_ends_the_recording_and_keeps_what_was_said(
     assert r["text"] == "明天開會" and brain.finalize_calls == 1
 
 
-async def test_an_agent_question_ends_after_ten_seconds_of_silence_too(rig, router, notifications):
+async def test_an_agent_question_is_never_ended_by_its_silence(rig, router, notifications):
     rig.segmenter.emit_nothing = True
-    rig.recorder.chunks = [chunk(5.0)] * 2
+    rig.recorder.chunks = [chunk(5.0)] * 4
     await router.call("dictation.start", {"session_id": "a1", "purpose": "agent"})
-    await wait_until(lambda: silences(notifications))
-    assert silences(notifications) == [{"session_id": "a1"}]
+    await rig.recorder.fed(4)
+    await wait_until(lambda: rig.segmenter.accept_calls == 4)
+    await asyncio.sleep(0.05)
+    assert silences(notifications) == []  # 20 s without a word: only the key or Esc ends it
+    assert rig.service.active
     r = await stop(router, "a1")
     assert r["purpose"] == "agent" and r["text"] == ""
+
+
+async def test_an_agent_question_on_a_microphone_that_delivers_nothing_waits_for_the_key(
+    make_rig, router, notifications
+):
+    clock = FakeClock()
+    rig = make_rig(clock=clock)
+    await router.call("dictation.start", {"session_id": "a1", "purpose": "agent"})
+    clock.advance(SILENCE_STOP_SECONDS - 0.5)
+    await wait_until(lambda: rig.recorder.stop_count >= 1)  # the stall closed it
+    clock.advance(SILENCE_STOP_SECONDS * 10)
+    await asyncio.sleep(0.3)
+    assert silences(notifications) == []
+    assert rig.service.active  # not lost either: it was never told to stop
+    with pytest.raises(RpcError) as e:  # the key's stop says what became of the microphone
+        await stop(router, "a1")
+    assert e.value.code == NO_MICROPHONE
 
 
 async def test_each_session_counts_its_own_silence(rig, router, notifications):

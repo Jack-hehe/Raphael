@@ -1,6 +1,8 @@
+// @vitest-environment happy-dom
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { avatarHTML, cleanCrop, cropStyle, currentAvatar, loadAvatar, onAvatarChange, readAvatar, setAvatar } from "./avatar";
-import { dragCrop } from "./avatar-settings";
+import { cropDialog, dragCrop } from "./avatar-settings";
+import { openDialog } from "./member-dialogs";
 import { pictureRect } from "../overlay/emblem";
 
 const PNG = "data:image/png;base64,iVBORw0KGgo=";
@@ -95,5 +97,23 @@ describe("the crop dialog", () => {
       expect(r.x + r.w).toBeGreaterThanOrEqual(100 - 1e-9);
       expect(r.y + r.h).toBeGreaterThanOrEqual(100 - 1e-9);
     }
+  });
+
+  test("traps Tab focus inside the crop dialog and Escape closes only the crop dialog when stacked over another dialog", async () => {
+    document.body.innerHTML = "";
+    const under = openDialog({ title: "Under", body: '<input id="u">', actions: "", onAct: () => {} });
+    const done = cropDialog(PNG);
+    const zoom = document.querySelector<HTMLInputElement>(".av-crop-zoom")!;
+    const doneBtn = document.querySelector<HTMLButtonElement>('[data-act="crop-done"]')!;
+    expect(document.activeElement).toBe(doneBtn);
+    doneBtn.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(document.activeElement).toBe(zoom);
+    zoom.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }));
+    expect(document.activeElement).toBe(doneBtn);
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(await done).toBeNull();
+    expect(under.el.isConnected).toBe(true);
+    under.close();
   });
 });
