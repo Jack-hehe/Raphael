@@ -141,6 +141,9 @@ class Phrases:
     member_desktop: str  # a member was asked to operate the computer: only Raphael does that
     member_created: str  # Raphael added a member at the owner's request: {member}
     desktop_asked: str  # another assistant asked Raphael for something on the desktop
+    # A request another assistant handed this one needs the owner's yes: it went to the
+    # background, where its question waits in the thread of {member} (the one asked).
+    exchange_waits: str
     # The owner's safety rules (`agent.safety`). `{rule}` is the rule in the owner's own words.
     rule_forbids: str  # a rule of `deny` forbids the action, which was not done
     rule_matched: str  # put before a question: the action falls under a rule of `ask`
@@ -215,6 +218,7 @@ PHRASES: dict[str, Phrases] = {
         member_desktop="只有拉斐爾能操作這台電腦。",
         member_created="已建立「{member}」。",
         desktop_asked="操作電腦需要直接向拉斐爾下達指示。",
+        exchange_waits="此事需要你的同意。問題在「{member}」的對話中等你處理。",
         rule_forbids="安全規則「{rule}」不准此操作。未執行。",
         rule_matched="此操作符合安全規則「{rule}」。",
         rule_unchecked="無法比對安全規則。",
@@ -300,6 +304,7 @@ PHRASES: dict[str, Phrases] = {
         member_desktop="Only Raphael can operate this computer.",
         member_created="Created {member}.",
         desktop_asked="Operating the computer needs a request made to Raphael directly.",
+        exchange_waits="This needs your yes. The question waits in the thread of 「{member}」.",
         rule_forbids="The safety rule 「{rule}」 forbids this. Nothing was executed.",
         rule_matched="This falls under the safety rule 「{rule}」.",
         rule_unchecked="The safety rules could not be checked.",
@@ -365,6 +370,7 @@ PHRASES: dict[str, Phrases] = {
         member_desktop="このコンピューターを操作できるのはラファエルだけです。",
         member_created="「{member}」を作成しました。",
         desktop_asked="コンピューターの操作は、ラファエルに直接ご指示ください。",
+        exchange_waits="承認が必要です。質問は「{member}」のスレッドで待っています。",
         rule_forbids="安全ルール「{rule}」で禁止されています。未実行です。",
         rule_matched="この操作は安全ルール「{rule}」に該当します。",
         rule_unchecked="安全ルールを照合できませんでした。",

@@ -41,6 +41,12 @@ time that was left. The conversation, the call and its arguments stay in memory 
 
 A paused task does not hold the worker: the tasks behind it run meanwhile.
 
+The tasks of the members of the owner's team (`member_id`) and their routines' runs ask the same
+way, in their own thread, and never at the overlay. So does a request that one assistant handed
+another through `ask_member` when one of its calls needs a yes: the assistant hands it over here
+as a task of the one asked (`AgentService.ask_in_background`, `submit` with `asked_by`), which runs
+at the depth it was asked at and asks no further than it could there.
+
 A report is the model's own (`告。` and a line, with a longer version for the history) when the task
 finished. When it did not (a limit, the user's stop, a worker that died, a model that failed) it is a
 fixed line of the persona with the number of tool calls made, and nothing more is spent for it.
@@ -376,6 +382,10 @@ class BackgroundService:
         self._queue: deque[int] = deque()
         # task id -> the model it runs on (the assistant's model, as it was when it was handed over)
         self._models: dict[int, str] = {}
+        # task id -> how deep in a chain of `ask_member` its speaker was asked, and by whom (the
+        # depth and the chain of `Speaker`), for a request one assistant handed another that
+        # went to the background (`AgentService.ask_in_background`). In memory, like the model.
+        self._chains: dict[int, tuple[int, frozenset[int]]] = {}
         self._pump: asyncio.Task[None] | None = None
         self._run: TaskRun | None = None
         self._executing = False  # a task has been taken off the queue and is being carried out
@@ -459,13 +469,16 @@ class BackgroundService:
         attachments: Sequence[Attachment] = (),
         member_id: int = 0,
         routine_id: int | None = None,
+        asked_by: Speaker | None = None,
     ) -> int:
         """Write a task down and queue it; its id. `Refused` when the worker is switched off or the
         queue is full. The task starts as soon as the one before it is over. `model` is the model
         it runs on (the assistant's, or the member's own). `attachments` are the files handed over
         with the request, kept in memory for the task and never written down. `member_id` is whose
         task it is (0: Raphael's; its thread shows the task's question if it asks), and
-        `routine_id` the routine whose run it is, if it is one."""
+        `routine_id` the routine whose run it is, if it is one. `asked_by` is the speaker as another
+        assistant asked it (`Speaker.asked_by`), for a request handed over from an exchange: the
+        task then runs at that depth and with that chain, and asks no further than it could there."""
         if self._host.disabled:
             raise Refused("worker_disabled")
         if len(self._queue) >= MAX_QUEUED + (0 if self._executing else 1):
@@ -479,6 +492,8 @@ class BackgroundService:
             routine_id=routine_id,
         )
         self._models[task_id] = model
+        if asked_by is not None and asked_by.depth:
+            self._chains[task_id] = (asked_by.depth, asked_by.chain)
         if attachments:
             self._attachments[task_id] = list(attachments)
         self._queue.append(task_id)
@@ -609,16 +624,21 @@ class BackgroundService:
 
     def forget_member(self, member_id: int) -> None:
         """A member was deleted: its tasks go with it. The ones that wait leave the queue and are
-        deleted, the one that runs is stopped, emptied of what was said at once and deleted when it
-        has stopped (with no report), and the finished ones are deleted with their steps."""
+        deleted, the ones that wait for the owner lose their question, the one that runs is
+        stopped, emptied of what was said at once and deleted when it has stopped (with no report),
+        and the finished ones are deleted with their steps and questions."""
         try:
             for task_id in list(self._queue):
                 waiting = self._store.get(task_id)
                 if waiting is not None and waiting.member_id == member_id:
                     self._queue.remove(task_id)
                     self._models.pop(task_id, None)
+                    self._chains.pop(task_id, None)
                     self._attachments.pop(task_id, None)
                     self._store.delete(task_id)
+            for paused in list(self._paused.values()):
+                if paused.member_id == member_id:  # its question goes with it
+                    self._drop_paused(paused)
             run = self._run
             if run is not None:
                 running = self._store.get(run.task_id)
@@ -718,6 +738,9 @@ class BackgroundService:
             )  # fmt: skip
             return
         speaker = self._speaker(task.member_id)
+        chain = self._chains.pop(task.id, None)
+        if speaker is not None and chain is not None:
+            speaker = dataclasses.replace(speaker, depth=chain[0], chain=chain[1])
         if speaker is None:  # the member was deleted while its task waited
             self._conclude(
                 task, None, "failed", PREFIXES[language].negative,

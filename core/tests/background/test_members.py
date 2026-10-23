@@ -122,3 +122,18 @@ async def test_a_deleted_members_tasks_go_with_it(make_rig):
     await ended(rig, done)
     rig.service.forget_member(MEMBER.id)
     assert rig.task(done) is None
+
+
+async def test_a_request_handed_over_from_an_exchange_asks_no_further_than_it_could_there(make_rig):
+    rig = make_rig()
+    team = Team()
+    rig.service.use_team(team, team.tool)
+    rig.client.replies.append(plain_report())
+    # Asked by Raphael, who was asked by another: at the end of the chain, it may ask nobody.
+    asked = MEMBER.asked_by(Speaker(id=7, depth=1, chain=frozenset({0})))
+    task_id = rig.service.submit(
+        session_id="s", text="x", language="zh-TW", model="m", member_id=MEMBER.id, asked_by=asked
+    )
+    task = await ended(rig, task_id)
+    assert task.state == "done"
+    assert "ask_member" not in [t["function"]["name"] for t in rig.client.chat_calls[0]["tools"]]

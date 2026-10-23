@@ -96,10 +96,13 @@ does that. The team tools (`team`) are offered to the picking call when a reques
 any assistant asks any other (`ask_member`), and Raphael adds a member at the owner's request
 (`create_member`, 《了。已建立「…」。》). The one asked answers through `answer_for`, as itself and
 never on the desktop, within a chain at most two deep and with no cycle (`Speaker.can_ask`); the
-exchange is written in the two threads alone. Adding a member is judged by the safety rules like
-a plugin's tool (`create_member`): a rule may forbid it or have it asked about first. A question for a yes in such an answer nobody waits for at
-the overlay: it goes to `ask_in_background`, which refuses it for now (the seam of the safety rules'
-waiting questions). `agent.history.list` and `agent.history.search` take `member_id` too, and read
+exchange is written in the two threads alone. Nobody waits at the overlay for such an answer, so
+when one of its calls needs a yes (a tier, or a safety rule that asks) none of its calls is made
+there: the request goes to the background as a task of the one asked (`ask_in_background`), which
+stops at that call with a question waiting in that thread, answered in the app alone (the
+background's waiting question), and the one asked says back that it waits there. Adding a member is
+judged by the safety rules like a plugin's tool (`create_member`): a rule may forbid it or have it
+asked about first. `agent.history.list` and `agent.history.search` take `member_id` too, and read
 that thread alone; `agent.turn` names the thread of the turn (`member_id`).
 
 `agent.cancel {session_id}` ends a request that is still being thought about and denies the
@@ -117,7 +120,7 @@ import re
 import sqlite3
 import time
 import unicodedata
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from typing import TYPE_CHECKING, Any
@@ -360,27 +363,6 @@ class _Ask:
         return self.peer is not None
 
 
-@dataclass(frozen=True)
-class BackgroundQuestion:
-    """A question for a yes that comes from where the owner is not waiting for one: a member that
-    another member asked something (`answer_for`), whose tool needs a yes. It names the member whose
-    thread the question is in, the request's session, the action and its tier, and the question as
-    the owner would read it. See `AgentService.ask_in_background`."""
-
-    member_id: int
-    session_id: str
-    action: Action
-    tier: Tier
-    language: str
-    text: str
-
-
-async def refuse_in_background(question: BackgroundQuestion) -> Approval | None:
-    """What a question from the background gets until the owner can be asked from there: no yes.
-    The action is not taken, and the request goes on without it."""
-    return None
-
-
 # The source of an exchange between two members: neither the owner's voice nor a chat app.
 EXCHANGE_SOURCE = "member"
 # How long a member that another asked something may take to answer, in seconds.
@@ -456,11 +438,6 @@ class AgentService:
         # The owner's team (raphael_core.members): who a `member_id` is, and the team tools. Without
         # one there is only Raphael.
         self._team = team
-        # The one place a question for a yes from the background goes (see BackgroundQuestion):
-        # refused for now. The safety rules' waiting question takes its place.
-        self.ask_in_background: Callable[
-            [BackgroundQuestion], Awaitable[Approval | None]
-        ] = refuse_in_background
         # The members' conversations when there is no memory to keep them.
         self._conversations: dict[int, Conversation] = {}
         # The run on the owner's desktop, through the shell; None where there is no shell to ask.
@@ -1342,15 +1319,15 @@ class AgentService:
                 asking.append((call, screening))
             else:
                 automatic.append(call)
+        if asking and ask.nested:
+            # Nobody waits at the overlay for a request one assistant handed another. None of its
+            # calls is made here (making the others first would have the task make them again):
+            # the request goes to the background as a task of the one asked, which stops at such a
+            # call with a question that waits in its thread, answered in the app alone.
+            return self.ask_in_background(ask, ledger)
         made = await asyncio.gather(*(self._make_call(ask, c, None, ledger) for c in automatic))
         results = [*results, *made]
         if not asking:
-            return results
-        if ask.nested:
-            # Nobody waits at the overlay for a request one member handed another: each call that
-            # needs a yes asks from the background, and is not made without one.
-            for call, _ in asking:
-                results.append(await self._asked_in_background(ask, call))
             return results
         (first, why), *rest = asking
         results += [_unmade(call) for call, _ in rest]
@@ -1446,39 +1423,54 @@ class AgentService:
         self._followups[reply["confirm"]["id"]] = _Followup(ask, call, results)
         return reply
 
-    async def _asked_in_background(self, ask: _Ask, call: PlannedCall) -> ToolResult:
-        """A call of a plugin's tool that needs a yes, in a request nobody waits at the overlay for:
-        the question goes to `ask_in_background`, and the call is made only with the yes that comes
-        back. It is a step of the request either way."""
+    def ask_in_background(self, ask: _Ask, ledger: Ledger) -> dict:
+        """A request one assistant handed another (`answer_for`) with a call that needs the owner's
+        yes: nobody waits at the overlay for it, so it goes to the background worker as a task of
+        the one asked, in its thread (`BackgroundService.submit`, with the depth and the chain it
+        was asked at, so that it asks no further than it could here). When the task comes to that
+        call it pauses with a question that waits in that thread, answered in the app alone (the
+        background's waiting question), and goes on after the owner's answer. The thread holds the
+        task as a turn of its own, which the report completes. What the one asked says back to the
+        asker is that the question waits there; a worker that cannot take the task is a 否 reply
+        with the reason, as a hand-over of the owner's is."""
         language = ask.language
-        action = Action(call.tool.key, dict(call.arguments))
-        text = phrase(
-            language,
-            "confirm_plugin",
-            server=call.tool.server,
-            tool=call.tool.name,
-            what=parenthesized(language, preview(call.arguments)),
-        )
-        question = BackgroundQuestion(
-            member_id=ask.speaker.id,
-            session_id=ask.session_id,
-            action=action,
-            tier=self._gate.tier(action.tool),
-            language=language,
-            text=text,
-        )
+        speaker = ask.speaker
+        settings = self._read_settings(speaker)
         try:
-            approval = await self.ask_in_background(question)
-        except Exception as exc:  # a question that cannot be asked is a no
-            logger.warning("A question from the background failed: %s", type(exc).__name__)
-            approval = None
-        if approval is None:
-            self._gate.record_unrun(action.tool, outcome="denied")
-            ask.steps.append(
-                self._step("tool", call.tool.name, call.tool.server, "blocked", time.perf_counter(), "denied")
+            task_id = self._background.submit(
+                session_id=ask.session_id,
+                text=ask.text,
+                language=language,
+                model=settings.model,
+                member_id=speaker.id,
+                asked_by=speaker,
             )
-            return ToolResult(_label(call), False, None, "denied")
-        return await self._plugin_call(call, approval, action, steps=ask.steps)
+        except Refused as refused:
+            return self._finish(ask, "answer", "negative", phrase(language, refused.kind), ledger)
+        except Exception as exc:  # a worker that cannot take a task is a 否 reply, not a raise
+            logger.warning("A request was not handed to the background: %s", type(exc).__name__)
+            return self._failed(ask, "answer", "error", ledger)
+        try:
+            turn_id = self._history.add(
+                session_id=ask.session_id,
+                question=ask.text,
+                route="delegate",
+                prefix=_prefix(language, "understood") if speaker.is_raphael else "",
+                text=phrase(language, "handoff"),
+                status="done",
+                source=EXCHANGE_SOURCE,
+                member_id=speaker.id,
+            )
+        except sqlite3.Error as exc:
+            logger.warning("Could not write the turn to the history: %s", type(exc).__name__)
+        else:
+            self._background.attach_turn(task_id, turn_id)
+            self._turn_changed(turn_id, speaker.id)
+        logger.info("A request between members went to the background: task %d", task_id)
+        who = speaker.name or RAPHAEL_NAMES[language]
+        return self._finish(
+            ask, "answer", "understood", phrase(language, "exchange_waits", member=who), ledger
+        )
 
     # --- the team ---------------------------------------------------------------------------------
 
@@ -1609,7 +1601,8 @@ class AgentService:
         one, its persona), as an answer, one step deeper in the chain (it may ask one more only if
         the chain allows: `Speaker.can_ask`). It never acts on the desktop: a request that would is
         answered that the owner must ask for it directly. It writes no note (the request is not
-        the owner's), asks no yes at the overlay (`ask_in_background` instead), and its costs go to
+        the owner's), asks no yes at the overlay (a call that needs one sends the request to the
+        background, `ask_in_background`), and its costs go to
         `ledger`, the asker's, so they count toward the asker's limits and the month's. The
         exchange is written in the two threads, one line each, and nowhere else."""
         ask = _Ask(
