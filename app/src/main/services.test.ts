@@ -24,7 +24,7 @@ import {
   servicesHTML,
 } from "./services";
 import type { BrainSettings, ServicesStatus } from "./types";
-import { toaster } from "./ui";
+import { ico, toaster } from "./ui";
 
 interface Over {
   search?: string;
@@ -82,6 +82,28 @@ function status(over: Over = {}): ServicesStatus {
   };
 }
 
+test("every service row has its brand mark or a meaningful local icon, never an initial", () => {
+  const brands = ["openrouter", "brave", "tavily", "exa", "searxng", "jina", "firecrawl", "fish"];
+  const seen = new Set<string>();
+  for (const kind of ["search", "read", "pdf", "voice", "vision"] as const) {
+    const host = document.createElement("div");
+    host.innerHTML = dialog(kind);
+    for (const row of serviceRows(kind, status(), BRAIN)) {
+      const picture = host.querySelector(`[data-service="${row.id}"] .ic`)!;
+      expect(picture.querySelector("svg, img"), row.id).not.toBeNull();
+      expect(picture.textContent, row.id).toBe("");
+      if (brands.includes(row.id)) {
+        expect(row.mark, row.id).toBe(row.id);
+        seen.add(row.id);
+      } else {
+        const expected = ico(row.id === "builtin" ? "monitor" : row.id === "same" ? "sparkle" : "bot");
+        expect(picture.querySelector("path")?.getAttribute("d"), row.id).toBe(/d="([^"]+)"/.exec(expected)![1]);
+      }
+    }
+  }
+  expect([...seen].sort()).toEqual(brands.sort());
+});
+
 const PICKER = '<span class="mp-slot" data-model-picker="vision"></span>';
 const VOICE_ID = "0123456789abcdef0123456789abcdef";
 const BRAIN = { agent_model: "openai/gpt-6-luna", searxng_url: "https://searx.example", tts_fish_voice: VOICE_ID } as BrainSettings;
@@ -100,6 +122,16 @@ const flush = async (): Promise<void> => {
 const inDialog = (html: string): string => html.slice(html.indexOf('<div class="cs-scrim"'));
 /** The part of the page that is the section: before the dialog. */
 const inSection = (html: string): string => (html.includes('<div class="cs-scrim"') ? html.slice(0, html.indexOf('<div class="cs-scrim"')) : html);
+
+test("a service added by a newer core gets a plug instead of an initial", () => {
+  const newer = status();
+  newer.search.options.push({ id: "future-search", needs_key: false, has_key: false, key_optional: false });
+  const host = document.createElement("div");
+  host.innerHTML = dialog("search", null, { status: newer });
+  const picture = host.querySelector('[data-service="future-search"] .ic')!;
+  expect(picture.textContent).toBe("");
+  expect(picture.querySelector("path")?.getAttribute("d")).toBe(/d="([^"]+)"/.exec(ico("plug"))![1]);
+});
 
 beforeEach(() => {
   document.body.innerHTML = "";
@@ -249,8 +281,8 @@ describe("the dialog of a capability", () => {
     expect(rows.map((r) => /<span class="ds">(.*?)<\/span>/.exec(r)?.[1])).toEqual(["共用金鑰", "需要金鑰", "需要金鑰", "需要金鑰", "需要網址"]);
     expect(rows[0]).toMatch(/^ data-svc="service" data-service="openrouter">/);
     expect(rows[0]).toMatch(/<button type="button" class="btn cs-open" data-svc="service" data-service="openrouter" data-k="svc-svc:openrouter"/);
-    expect(rows[0]).toContain('<span class="mono" aria-hidden="true">O</span>');
-    expect(rows[2]).toContain('<span class="mono" aria-hidden="true">T</span>');
+    expect(rows[0]).toContain('class="mono md logo-mono"');
+    expect(rows[2]).toContain('class="mono md logo-art"');
     expect(rows[3]).toContain('class="mono md logo-art"'); // Exa has its own mark
     expect(rows.every((r) => /<span class="chev" aria-hidden="true"><svg/.test(r))).toBe(true);
     // the check is on Brave, the one in use

@@ -27,10 +27,11 @@ import {
   createConnections,
   emptyConnectionsView,
   examplePrompt,
+  iconHTML,
   needsLogin,
   toolLabel,
 } from "./connections";
-import { toaster } from "./ui";
+import { ico, toaster } from "./ui";
 
 afterEach(() => setLocale("zh-TW"));
 
@@ -128,10 +129,11 @@ describe("已安裝", () => {
     // the chevron is a picture of where the row goes, not a second button
     expect(notion).toMatch(/<span class="chev" aria-hidden="true"><svg/);
     expect(notion.match(/<button/g)).toHaveLength(2);
-    // a server of the user's own: where it is reached, and a letter for a mark
+    // A server of the user's own: where it is reached, and a neutral plug.
     expect(files).toContain("Files");
     expect(files).toContain("npx");
-    expect(files).toContain(">F<");
+    expect(files).toContain(ico("plug"));
+    expect(files).not.toContain(">F<");
   });
 
   test("the switch is the whole service's and shows it off", () => {
@@ -349,8 +351,9 @@ describe("商店", () => {
     expect(notion).not.toContain('data-conn="join" data-id="notion"');
   });
 
-  test("a service with no mark is a letter, and one with a mark has it bare, in the brand colour where it reads", () => {
-    expect(html).toContain(">C<"); // Canva
+  test("a service with no bundled mark uses a plug, and known marks keep their brand colour where it reads", () => {
+    expect(html).toContain(ico("plug"));
+    expect(html).not.toContain(">C<");
     expect(html).toMatch(/class="mono md logo-mono" style="--brand:#5E6AD2"/); // Linear
     expect(html).toMatch(/class="mono md logo-mono">/); // Notion: the colour of the text
     expect(html).not.toMatch(/class="mono[^"]*tile|background/);
@@ -936,4 +939,12 @@ describe("what the tab does", () => {
     const c = createConnections(host);
     expect(c.click({ closest: () => null } as unknown as Element)).toBe(false);
   });
+});
+
+test("unknown connections use a plug at both sizes without exposing the name as markup or initials", () => {
+  for (const size of ["md", "xl"] as const) {
+    for (const name of ["Files", "\u7b46\u8a18", "<img src=x onerror=alert(1)>", ""]) {
+      expect(iconHTML(name, null, size)).toBe(`<span class="mono ${size}" aria-hidden="true">${ico("plug")}</span>`);
+    }
+  }
 });

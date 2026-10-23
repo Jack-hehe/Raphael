@@ -22,7 +22,7 @@ import * as api from "./api";
 import { dayLabel, describeError, formatClock } from "./format";
 import { getLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
-import { SERVICE_ICONS, type ServiceIconId, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
+import { SERVICE_ICONS, type ServiceIconId, brandStyle, hasLogo, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import type { AuditEntry, ConnectionGroup, ConnectionTool, MainEvent, NewConnection, StoreService, Words } from "./types";
 import { DISCONNECT_CONFIRM_MS, type Choice, btn, copyText, esc, fieldHTML, ico, iconButton, leave, row, st, tabs, tg, toaster } from "./ui";
 
@@ -185,12 +185,12 @@ export function examplePrompt(s: StoreService | undefined): string | null {
 
 const isIcon = (id: string | null | undefined): id is ServiceIconId => !!id && (id in SERVICE_ICONS || hasLogo(id as ServiceIconId));
 
-/** The picture of a service: its mark, bare, or a letter. */
-export function iconHTML(name: string, icon: ServiceIconId | null, size: "md" | "xl"): string {
+/** The picture of a service: its mark, bare, or a neutral plug. */
+export function iconHTML(_name: string, icon: ServiceIconId | null, size: "md" | "xl"): string {
   if (icon && hasLogo(icon)) return `<span class="mono ${size} logo-art">${serviceLogoHTML(icon)}</span>`;
   return icon
     ? `<span class="mono ${size} logo-mono"${brandStyle(icon)}>${serviceIconSVG(icon)}</span>`
-    : `<span class="mono ${size}" aria-hidden="true">${monogram(name)}</span>`;
+    : `<span class="mono ${size}" aria-hidden="true">${ico("plug")}</span>`;
 }
 
 function groupIcon(g: ConnectionGroup, v: ConnectionsView, size: "md" | "xl"): string {
