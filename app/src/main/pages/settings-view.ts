@@ -28,6 +28,8 @@ import { type RulesView, rulesHTML } from "../safety-rules";
 import { AUTO_MICROPHONE, microphoneChoices } from "../microphone";
 import type { LocalView } from "../local-models";
 import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
+import { fallbacksHTML } from "../model-fallbacks";
+import type { ModelPurpose } from "../types";
 import { type ServicesView, servicesHTML } from "../services";
 import { type ProvidersView, providersHTML, emptyProvidersView } from "../providers";
 import { pricingNote } from "../pricing";
@@ -249,6 +251,8 @@ export const HOTKEY_ROWS: Record<HotkeyField, string> = { dictation_keys: "hotke
 
 /** Everything a tab is drawn from: what the panel has read, and what is being typed or done. */
 export interface SettingsView {
+  fallbackDrafts?: Partial<Record<ModelPurpose, boolean>>;
+  fallbackBusy?: boolean;
   pane: SettingsPane;
   device: DeviceSettings;
   /** The brain's settings; null while the core does not answer. */
@@ -412,7 +416,14 @@ export function visionPickerLook(v: SettingsView): ModelPickerLook {
 
 /** A model row: its name and the price of what is chosen, then its picker. */
 const modelRow = (v: SettingsView, { role, k, label }: (typeof MODEL_ROWS)[number]): string =>
-  row(label(), priceSpan(v, k, "price num"), modelPickerHTML(modelPickerLook(v, role)), { cls: "row-model", attrs: ` data-row="${k}"` });
+  row(label(), priceSpan(v, k, "price num"), `<div class="model-choices">${modelPickerHTML(modelPickerLook(v, role))}${fallbacksHTML(v.brain, role === "answer" ? "agent" : role, modelPickerLook(v, role), v.fallbackDrafts?.[role === "answer" ? "agent" : role], v.fallbackBusy)}</div>`, { cls: "row-model", attrs: ` data-row="${k}"` });
+
+// These purposes have no primary picker in this panel; their failover chains are independent.
+const EXTRA_FALLBACKS = [
+  { purpose: "router", label: () => t("fallbacks.router") },
+  { purpose: "pdf", label: () => t("fallbacks.pdf") },
+  { purpose: "memory", label: () => t("fallbacks.memory") },
+] as const;
 
 // ---------- the OpenRouter rows ----------
 
@@ -629,7 +640,7 @@ function agentHTML(v: SettingsView): string {
       ),
       ...(v.cityError ? [note(st("err", v.cityError()), ' role="alert"')] : []),
     ]) +
-    (v.services ? servicesHTML(v.services, modelPickerHTML(visionPickerLook(v)), v.brain) : "") +
+    (v.services ? servicesHTML(v.services, `<div class="model-choices">${modelPickerHTML(visionPickerLook(v))}${fallbacksHTML(v.brain, "vision", visionPickerLook(v), v.fallbackDrafts?.vision, v.fallbackBusy)}</div>`, v.brain) : "") +
     (v.memoryShared ? memoryHTML(v.memoryShared) : "") +
     (v.memory ? memoryHTML(v.memory) : "") +
     (v.rules ? rulesHTML(v.rules) : "") +
@@ -691,7 +702,8 @@ function usageHTML(v: SettingsView): string {
       spendRow(v),
       usageRow(v),
     ], esc(t("settings.usageDifference"))) +
-    section(t("settings.groupModels"), MODEL_ROWS.map((r) => modelRow(v, r)), priceSpan(v, "note"))
+    section(t("settings.groupModels"), MODEL_ROWS.map((r) => modelRow(v, r)), priceSpan(v, "note")) +
+    section(t("fallbacks.otherPurposes"), EXTRA_FALLBACKS.map(({ purpose, label }) => row(label(), "", fallbacksHTML(v.brain, purpose, modelPickerLook(v, "answer"), v.fallbackDrafts?.[purpose], v.fallbackBusy), { cls: "row-model" })))
   );
 }
 

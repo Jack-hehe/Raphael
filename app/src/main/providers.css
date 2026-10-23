@@ -1,6 +1,8 @@
 /* Models follows the service list and dialog, with the same theme surfaces and type scale. */
 .pv { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); }
 .pv .sgroup { margin: 0; }
+.pv-directory { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); }
+.pv > .field { width: 100%; }
 .pv-add-title { margin: var(--sp-2) 0 0; font-size: var(--fs-md); }
 .pv-add { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 14px; cursor: default; }
 .pv-add .cs-main { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
@@ -9,6 +11,11 @@
 .pv-dialog h2 { font-size: var(--fs-lg); min-width: 0; overflow-wrap: anywhere; margin: 0; }
 .pv-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
 .pv-label { font-size: var(--fs-sm); color: var(--text-2); }
+.pv-account { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); width: 100%; }
+.pv-account > .btn { justify-self: start; }
+.pv-account .field { width: 100%; height: auto; min-height: var(--h-ctl); padding-block: var(--sp-2); }
+.pv-account textarea { width: 100%; min-width: 0; resize: vertical; font: inherit; color: inherit; background: transparent; border: 0; outline: 0; }
+.pv-context-warning { justify-self: start; border: 1px solid var(--line); border-radius: var(--r-sm); padding: var(--sp-1) var(--sp-2); color: var(--text-2); font-size: var(--fs-sm); }
 .pv-models { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); min-width: 0; }
 .pv-models h3 { margin: var(--sp-2) 0 0; font-size: var(--fs-sm); color: var(--text-2); }
 .pv-models > .field { width: 100%; }
