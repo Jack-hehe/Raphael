@@ -131,12 +131,12 @@
       "license": "Trademarks of their owners (no licence granted)",
       "repository": "https://github.com/Jack-hehe/Raphael",
       "source": "https://github.com/Jack-hehe/Raphael/tree/main/app/src/main/service-logos",
-      "usage": "The full-colour logos of the services (including Tavily, Jina, Firecrawl and Fish Audio), in app/src/main/service-logos/, each taken from its owner's own site or press kit (the address of each is in sources.json there). They are trademarks of their owners, who do not sponsor or endorse Raphael; they are shown only to tell a service apart.",
+      "usage": "The full-colour logos of the services and model providers (including Tavily, Jina, Firecrawl, Fish Audio, OpenAI, Azure, Groq, xAI and the other providers named in the notice), in app/src/main/service-logos/, each taken from its owner's own site or press kit (the address of each is in sources.json there). They are trademarks of their owners, who do not sponsor or endorse Raphael; they are shown only to tell a service apart.",
       "files": [
         {
           "file": "brand-logos-NOTICE.txt",
           "sourceUrl": "https://github.com/Jack-hehe/Raphael/blob/main/app/scripts/release-licenses/brand-logos-NOTICE.txt",
-          "sha256": "c62ff2a621a6e01e5c058a3cf03ca05cc35098b63cf54b76782bb4effaf37845"
+          "sha256": "dc4f77dd4130acbffc52d44f5219dc73fa1eba56d30425cab6288f461cfa2641"
         }
       ]
     }

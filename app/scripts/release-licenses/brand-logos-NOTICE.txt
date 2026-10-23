@@ -21,3 +21,14 @@ The existing Simple Icons paths are from 16.35.0. The added OpenRouter, Brave an
 are Simple Icons artwork, checked identical to the upstream files (develop branch) on 2026-10-23.
 Upstream: https://github.com/simple-icons/simple-icons (icons/openrouter.svg,
 icons/brave.svg and icons/searxng.svg). The CC0-1.0 text is included separately.
+
+The model providers' marks (added 2026-10-23), each from its owner's site, GitHub organization or
+Simple Icons as recorded in app/src/main/service-logos/sources.json: OpenAI, Microsoft Azure,
+Google Cloud (Vertex AI), Anthropic, Google Gemini, Amazon Web Services (Bedrock), LiteLLM, Bifrost,
+Portkey, Vercel, Nebius, Groq, xAI, Fireworks AI, Novita AI, DeepInfra, Together AI, Perplexity,
+Cerebras, SambaNova, Hyperbolic, NVIDIA, Moonshot AI, Alibaba Cloud (DashScope), Z.AI, MiniMax,
+StepFun, Arcee AI, GMI Cloud, Ollama, Meta, OpenCode, Kilo Code, Chutes, SiliconFlow, Baidu,
+Volcengine, Venice, Featherless AI, Inference.net, Lambda, Scaleway, Cohere, AI21 Labs, LM Studio,
+DeepSeek, Mistral AI, vLLM, SGLang, llama.cpp (ggml), Jan and LocalAI are trademarks or registered
+trademarks of their respective owners, who do not sponsor or endorse Raphael. Novita's mark is
+shown on a white rounded tile; marks drawn black in Simple Icons have a white dark-theme twin.
