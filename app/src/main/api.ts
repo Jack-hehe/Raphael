@@ -7,6 +7,7 @@ import { withWindowHotkeyPause } from "./window-hotkeys";
 import type { LanguageGroup } from "./languages";
 import type { TelegramStatus } from "./messaging";
 import type { AvatarCrop } from "./avatar";
+import type { UsageAnalytics, UsageRequest } from "./usage-analytics-types";
 import type {
   AgentQuestion,
   AgentTurn,
@@ -62,6 +63,9 @@ export const statusCheckOpenrouter = (): Promise<Status["openrouter"]> => core("
 /** The numbers of the home page: words, time, speed, the last 14 days. */
 export const statsSummary = (days?: number): Promise<StatsSummary> =>
   core("stats.summary", days === undefined ? {} : { days });
+/** Daily local usage, without conversation contents or provider credentials. */
+export const usageAnalytics = (params: UsageRequest): Promise<UsageAnalytics> =>
+  core("usage.analytics", params);
 /** Every OpenRouter model Raphael could use, with its price and what each role can make of it. */
 export const modelsCatalog = (): Promise<ModelCatalog> => core("models.catalog");
 

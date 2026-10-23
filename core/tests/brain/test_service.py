@@ -56,6 +56,7 @@ METHODS = [
     "status.check_openrouter",
     "models.catalog",
     "stats.summary",
+    "usage.analytics",
 ]
 
 
