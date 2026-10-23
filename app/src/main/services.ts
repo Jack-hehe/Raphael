@@ -1,5 +1,5 @@
 // 服務, in the 拉斐爾 tab of Settings: who does the work of Raphael's tools, one choice for each.
-// Four rows, drawn like every other row of the tab, the name on the left and the control on the
+// Five rows, drawn like every other row of the tab, the name on the left and the control on the
 // right:
 //
 // - 搜尋網路: a dropdown of the services that look the web up (OpenRouter, Brave, Tavily, Exa, SearXNG).
@@ -7,6 +7,9 @@
 // - 看圖片: the model picker (model-picker.ts), with the models that read images, under 「與回答相同」
 //   (the value "", the model that answers). settings.ts mounts it, as it mounts the model rows.
 // - 讀 PDF: a dropdown of 內建 and OpenRouter.
+// - 拉斐爾的聲音: a dropdown of 不出聲 and Fish Audio. With Fish Audio, under the key's line, a line
+//   with the id of the owner's voice model (saved with `settings.set tts_fish_voice`) and a bordered
+//   「Try it」, which has Raphael say a short line in that voice (`tts.preview`).
 //
 // Under a row whose service takes a key, one compact line: with no key stored, a password field and
 // a bordered 「儲存」; with one, 「已設定」 in muted words and a bordered 「移除」. Jina's key is
@@ -26,11 +29,12 @@ import { t } from "./i18n";
 import type { BrainSettings, ServiceChoice, ServiceOption, ServicesStatus } from "./types";
 import { type Choice, btn, esc, fieldHTML, note, row, sel, st, toaster } from "./ui";
 
-/** The three capabilities chosen with a dropdown, with the setting each choice is kept in. */
+/** The capabilities chosen with a dropdown, with the setting each choice is kept in. */
 export const SERVICE_KINDS = [
   { kind: "search", k: "svc-search", setting: "web_search_service", label: () => t("services.search") },
   { kind: "read", k: "svc-read", setting: "web_read_service", label: () => t("services.read") },
   { kind: "pdf", k: "svc-pdf", setting: "pdf_service", label: () => t("services.pdf") },
+  { kind: "voice", k: "svc-voice", setting: "tts_service", label: () => t("services.voice") },
 ] as const satisfies readonly { kind: keyof ServicesStatus; k: string; setting: keyof BrainSettings; label: () => string }[];
 
 export type ServiceKind = (typeof SERVICE_KINDS)[number]["kind"];
@@ -47,10 +51,11 @@ const NAMES: Record<string, string> = {
   searxng: "SearXNG",
   jina: "Jina",
   firecrawl: "Firecrawl",
+  fish: "Fish Audio",
 };
 
-/** The name of a service: 內建 for this computer's own, its brand for the others, its id for one this app does not know yet. */
-export const serviceName = (id: string): string => (id === "builtin" ? t("services.builtin") : (NAMES[id] ?? id));
+/** The name of a service: 內建 for this computer's own, 不出聲 for no voice, its brand for the others, its id for one this app does not know yet. */
+export const serviceName = (id: string): string => (id === "builtin" ? t("services.builtin") : id === "none" ? t("services.voiceNone") : (NAMES[id] ?? id));
 
 /** The choices of a capability's dropdown, in the core's order. */
 export const serviceChoices = (choice: ServiceChoice): Choice[] => choice.options.map((o) => ({ value: o.id, label: serviceName(o.id) }));
@@ -71,6 +76,25 @@ export const emptyServicesView = (): ServicesView => ({ status: "loading", busy:
 export const keyInputId = (service: string): string => `svc-key-${service}`;
 /** The id of SearXNG's address field. */
 export const URL_INPUT_ID = "svc-url";
+/** The id of the field of the Fish Audio voice model. */
+export const VOICE_INPUT_ID = "svc-voice-id";
+/** A Fish Audio voice model is 32 hexadecimal characters (the core checks the same). */
+const VOICE_ID = /^[0-9a-f]{32}$/i;
+
+/** Whether `text` may be the id of a voice model: blank (none yet) or 32 hexadecimal characters. */
+export const isVoiceId = (text: string): boolean => text.trim() === "" || VOICE_ID.test(text.trim());
+
+/** The line under the voice's key: the id of the voice model and 「Try it」 (English in every language). `voice` is the id as the settings have it; it is no secret. */
+function voiceLineHTML(v: ServicesView, voice: string): string {
+  const off = v.busy === "voice" ? " disabled" : "";
+  return (
+    `<div class="svc-line" data-svc-line="voice">` +
+    fieldHTML(t("services.voiceId"), voice, { id: VOICE_INPUT_ID, w: 200, label: t("services.voiceId"), disabled: v.busy === "voice" }) +
+    btn(esc(t("services.save")), "", ` data-svc="voice" data-service="fish"${off}`) +
+    btn(esc(t("conn.tryIt")), "", ` data-svc="try" data-service="fish"${off}`) +
+    `</div>`
+  );
+}
 
 /**
  * The line under a row whose chosen service takes a key or an address. `url` is SearXNG's address
@@ -105,7 +129,7 @@ function lineHTML(option: ServiceOption, v: ServicesView, url: string): string {
 }
 
 /**
- * The section: its four rows and the line under each that needs one. `visionPicker` is the button of
+ * The section: its five rows and the line under each that needs one. `visionPicker` is the button of
  * the 看圖片 picker (`modelPickerHTML`), which the settings draw with the catalog they hold. `brain`
  * gives what is chosen while the core has not said (`status` is loading or failed): the dropdowns
  * are shown, closed, until the core gives their choices.
@@ -120,6 +144,7 @@ export function servicesHTML(v: ServicesView, visionPicker: string, brain: Brain
     rows.push(row(esc(label()), "", sel(choices, chosen, label(), ` data-k="${k}"${status ? "" : " disabled"}`), { attrs: ` data-row="${k}"` }));
     const option = status?.[kind].options.find((o) => o.id === chosen);
     if (option && hasLine(option)) rows.push(lineHTML(option, v, brain?.searxng_url ?? ""));
+    if (kind === "voice" && chosen === "fish") rows.push(voiceLineHTML(v, brain?.tts_fish_voice ?? ""));
     // 看圖片 goes between 讀網頁 and 讀 PDF.
     if (kind === "read") rows.push(row(esc(t("services.vision")), "", visionPicker, { attrs: ' data-row="svc-vision"' }));
   }
@@ -247,6 +272,45 @@ export function createServices(host: ServicesHost): ServicesPanel {
     await load();
   }
 
+  /** Saves the id typed for the voice model (`tts_fish_voice`); the core says the rest. Whether it was saved. */
+  async function saveVoice(): Promise<boolean> {
+    if (busy !== null || typeof document === "undefined") return false;
+    const input = document.getElementById(VOICE_INPUT_ID) as HTMLInputElement | null;
+    if (!input) return false;
+    const id = input.value.trim();
+    if (!isVoiceId(id)) {
+      toaster.info(t("services.voiceInvalid"));
+      return false;
+    }
+    busy = "voice";
+    redraw();
+    await host.changeSetting("tts_fish_voice", id);
+    busy = null;
+    await load();
+    return true;
+  }
+
+  /** 「Try it」: saves the id as typed, then has Raphael say the sample line; a refusal is told in a few words. */
+  async function tryVoice(): Promise<void> {
+    if (busy !== null) return;
+    if (!(await saveVoice())) return;
+    try {
+      const done = await api.ttsPreview(t("services.voiceSample"));
+      if (done.ok) return;
+      toaster.info(
+        done.kind === "not_configured"
+          ? t("services.voiceNeedId")
+          : done.kind === "missing_secret"
+            ? t("services.voiceNeedKey")
+            : done.kind === "auth"
+              ? t("services.voiceAuth")
+              : t("services.voiceFailed"),
+      );
+    } catch (err) {
+      toaster.info(describeError(err));
+    }
+  }
+
   async function saveUrl(): Promise<void> {
     if (busy !== null || typeof document === "undefined") return;
     const input = document.getElementById(URL_INPUT_ID) as HTMLInputElement | null;
@@ -278,6 +342,12 @@ export function createServices(host: ServicesHost): ServicesPanel {
       case "url":
         void saveUrl();
         return true;
+      case "voice":
+        void saveVoice();
+        return true;
+      case "try":
+        void tryVoice();
+        return true;
     }
     return false;
   }
@@ -289,6 +359,11 @@ export function createServices(host: ServicesHost): ServicesPanel {
     if (input.id === URL_INPUT_ID) {
       e.preventDefault();
       void saveUrl();
+      return true;
+    }
+    if (input.id === VOICE_INPUT_ID) {
+      e.preventDefault();
+      void saveVoice();
       return true;
     }
     if (!input.id.startsWith("svc-key-")) return false;

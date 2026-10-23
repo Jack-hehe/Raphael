@@ -282,6 +282,12 @@ export interface BrainSettings {
   pdf_service?: string;
   /** The address of the owner's own SearXNG, `http(s)`; "" while there is none. */
   searxng_url?: string;
+  /** Who speaks Raphael's answers aloud: `none` or `fish` (Fish Audio). */
+  tts_service?: string;
+  /** The id of the owner's Fish Audio voice model: 32 hexadecimal characters, or "" while none is set. Not a secret. */
+  tts_fish_voice?: string;
+  /** The Fish Audio model; the window never changes it. */
+  tts_fish_model?: string;
 }
 
 /** One service a capability can use, as `services.status` lists it. Never a key, only whether there is one. */
@@ -308,6 +314,8 @@ export interface ServicesStatus {
   search: ServiceChoice;
   read: ServiceChoice;
   pdf: ServiceChoice;
+  /** Raphael's voice: `none` or `fish` (which needs a key), and whether the voice model id is filled in. */
+  voice: ServiceChoice & { fish_voice_set: boolean };
   vision: {
     /** The `vision_model` setting: "" is the model that answers. */
     model: string;

@@ -40,7 +40,8 @@
 //! hotkeys or the overlay may not be there, and the settings page still has to work.
 //!
 //! The window may also read and set the services of Raphael's tools (`services.status`,
-//! `services.set_key`, `services.clear_key`), and a typed question may carry images and PDFs
+//! `services.set_key`, `services.clear_key`), try Raphael's voice (`tts.preview`, `tts.stop`), and
+//! a typed question may carry images and PDFs
 //! (`agent_ask_text`'s `attachments`, which go on to `agent.ask` untouched).
 //!
 //! Never log the params of a call: `secrets.set_openrouter_key` carries the OpenRouter key,
@@ -323,7 +324,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 29] = [
+const ALLOWED_METHODS: [&str; 31] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -360,6 +361,10 @@ const ALLOWED_METHODS: [&str; 29] = [
     "services.status",
     "services.set_key",
     "services.clear_key",
+    // Raphael's voice, in the settings: the 「Try it」 line is spoken in the voice that is set up,
+    // and stopped by `tts.stop`. His answers are spoken by the core itself and need neither.
+    "tts.preview",
+    "tts.stop",
 ];
 
 /// The types a memory's name starts with (the core's `memory.store.TYPES`).
@@ -1550,6 +1555,16 @@ mod tests {
             "services.get_key",
             "Services.status",
         ] {
+            assert!(!is_allowed_method(method), "{method}");
+        }
+    }
+
+    #[test]
+    fn the_main_window_tries_the_voice_by_its_two_names_only() {
+        for method in ["tts.preview", "tts.stop"] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        for method in ["tts.", "tts", "tts.say", "Tts.preview", "xtts.stop"] {
             assert!(!is_allowed_method(method), "{method}");
         }
     }
