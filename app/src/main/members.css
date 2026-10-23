@@ -144,6 +144,8 @@
 .mb-who-role::placeholder { color: var(--text-3); }
 .mb-tabs .tabs.plain { width: 100%; }
 .mb-tabs .tabs.plain .tab { min-height: var(--pa-dtab-h); font-size: var(--pa-dtab); }
+/* the sections of a tab (個性, 指示, 分組, 模型, 例行任務) are set apart, each label close to its own field */
+.mb-tab-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: calc(16px + 6 * var(--pa-u)); }
 .mb-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: calc(6px + 2 * var(--pa-u)); }
 .mb-dh { display: flex; align-items: center; justify-content: space-between; min-height: var(--pa-gh-btn); font-size: var(--pa-dlabel); color: var(--text-3); }
 .page-agent .mb-dh .btn.icon { width: var(--pa-gh-btn); min-height: var(--pa-gh-btn); border-radius: 50%; }
