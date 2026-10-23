@@ -50,6 +50,38 @@ async def test_a_question_that_needs_a_yes_is_refused_not_left_open(app, monkeyp
     assert calls == ["agent.ask", "agent.confirm"]
 
 
+async def test_the_files_of_a_message_go_to_the_assistant_as_the_app_sends_them(app, monkeypatch):
+    from raphael_core.services.attachments import checked, from_wire
+
+    sent = []
+
+    async def call(method, params=None):
+        sent.append((method, params))
+        return {"status": "done", "prefix": "《答》", "text": "a cat"}
+
+    monkeypatch.setattr(app, "call", call)
+    photo = checked("photo.jpg", "image/jpeg", b"\xff\xd8\xff\xe0" + b"\x00" * 16)
+    pdf = checked("a.pdf", "application/pdf", b"%PDF-1.7\n")
+    text = await app._ask_from_messaging("telegram:42", "", "en", "telegram", attachments=[photo, pdf])
+    assert text == "《答》a cat"
+    [(method, params)] = sent
+    assert method == "agent.ask"
+    assert params["text"] == "" and params["source"] == "telegram"
+    assert from_wire(params["attachments"]) == [photo, pdf]
+
+
+async def test_a_message_without_files_asks_as_before(app, monkeypatch):
+    sent = []
+
+    async def call(method, params=None):
+        sent.append(params)
+        return {"status": "done", "prefix": "", "text": "hi"}
+
+    monkeypatch.setattr(app, "call", call)
+    await app._ask_from_messaging("telegram:42", "hello", "en", "telegram")
+    assert "attachments" not in sent[0]
+
+
 async def test_the_report_of_a_task_from_telegram_is_sent_to_that_chat(app, monkeypatch):
     sent = []
 

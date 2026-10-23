@@ -1119,12 +1119,16 @@ class App(Router):
         text: str,
         language: str,
         source: str,
+        /,
+        *,
         attachments: Sequence[Attachment] = (),
     ) -> str:
-        """A message from a messaging app, through the same entry as a spoken question, with the
-        images and PDFs it carried (`attachments`, in memory, sent on as `agent.ask` takes them).
-        Whatever needs a yes is refused on the spot: a yes is given at this computer, never from a
-        message."""
+        """A message from a messaging app, through the same entry as a spoken question. Whatever
+        needs a yes is refused on the spot: a yes is given at this computer, never from a message.
+
+        The images and PDFs the message came with (already checked by the switchboard) go as the
+        request's `attachments`, in the form `agent.ask` takes from the app: `{name, mime, data}`
+        with the bytes in base64. They stay in memory, for this request only."""
         params: dict[str, Any] = {
             "session_id": session_id,
             "text": text,
