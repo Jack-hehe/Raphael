@@ -872,6 +872,8 @@ export const zhTW = {
   "msg.tg.someone": "某人",
   "msg.tg.removeUser": "移除 {p0}",
   "msg.tg.disconnect": "中斷連線",
+  "msg.tg.disconnectTitle": "中斷 Telegram",
+  "msg.tg.disconnectAbout": "停止接收訊息，並刪除這個 bot 的權杖",
   "msg.tg.disconnectConfirm": "確定中斷？",
   "msg.tg.disconnected": "已中斷 Telegram，權杖已刪除",
   "msg.tg.codeGone": "這個配對碼已失效",

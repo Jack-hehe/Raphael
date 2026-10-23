@@ -89,6 +89,14 @@ describe("when connected", () => {
     expect(html).toContain('data-msg="disconnect"');
   });
 
+  test("中斷連線 is the last row inside the card, never a button left under it", () => {
+    const html = messagingHTML(view({ status: status({ allowed: [{ user_id: "1", name: "Ann" }] }), expanded: true }));
+    const list = html.slice(html.indexOf('<div class="slist">'), html.lastIndexOf("</div>") + 6);
+    expect(list).toContain('data-msg="disconnect"');
+    expect(html).not.toContain("msg-foot");
+    expect(html).toContain("中斷 Telegram");
+  });
+
   test("a waiting code opens it on a row of its own, with ✓ and ✗ named for the code", () => {
     const html = messagingHTML(view({ status: status({ allowed: [{ user_id: "1", name: "Bo" }], pending: [{ code: "AB3DEF", name: "Ann", expires_in_s: 540 }] }) }));
     expect(html).toContain('data-msg="expand" aria-expanded="true"');

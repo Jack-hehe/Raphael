@@ -873,6 +873,8 @@ export const ja = {
   "msg.tg.someone": "誰か",
   "msg.tg.removeUser": "{p0} を削除",
   "msg.tg.disconnect": "切断",
+  "msg.tg.disconnectTitle": "Telegram の接続を解除",
+  "msg.tg.disconnectAbout": "メッセージの受信を止め、この bot のトークンを削除します",
   "msg.tg.disconnectConfirm": "切断しますか？",
   "msg.tg.disconnected": "Telegram を切断しました。トークンを削除しました",
   "msg.tg.codeGone": "このコードは期限切れです",

@@ -873,6 +873,8 @@ export const en = {
   "msg.tg.someone": "Someone",
   "msg.tg.removeUser": "Remove {p0}",
   "msg.tg.disconnect": "Disconnect",
+  "msg.tg.disconnectTitle": "Disconnect Telegram",
+  "msg.tg.disconnectAbout": "Stops receiving messages and deletes this bot's token",
   "msg.tg.disconnectConfirm": "Disconnect?",
   "msg.tg.disconnected": "Disconnected Telegram. The token is deleted.",
   "msg.tg.codeGone": "That code has expired",

@@ -111,7 +111,7 @@ function detailRows(v: MessagingView, s: TelegramStatus): string[] {
   return [...pending, ...people];
 }
 
-/** Telegram: its rows, then under the card the one line before anyone has paired and 中斷連線. */
+/** Telegram: its rows, 中斷連線 as the last of them, then under the card the one line before anyone has paired. */
 export function messagingHTML(v: MessagingView): string {
   const group = (rows: string[], after = ""): string =>
     `<section class="sgroup msg" data-msg-section aria-label="Telegram"><div class="slist">${rows.join("")}</div>${after}</section>`;
@@ -132,13 +132,17 @@ export function messagingHTML(v: MessagingView): string {
       iconButton("down", t("msg.tg.details"), ` data-msg="expand" aria-expanded="${open}"`, "msg-more"),
     { cls: "msg-head" },
   );
-  const rows = [head, ...(fault ? [note(st(dot === "err" ? "err" : "warn", label), ' role="alert"')] : []), ...(open ? detailRows(v, s) : [])];
+  // 中斷連線 is a row of the card like any other setting, never a button left under it.
+  const disconnect = row(
+    esc(t("msg.tg.disconnectTitle")),
+    esc(t("msg.tg.disconnectAbout")),
+    btn(esc(v.confirmingDisconnect ? t("msg.tg.disconnectConfirm") : t("msg.tg.disconnect")), v.confirmingDisconnect ? "sm danger" : "sm", ` data-msg="disconnect"${v.busy ? " disabled" : ""}`),
+    {},
+  );
+  const rows = [head, ...(fault ? [note(st(dot === "err" ? "err" : "warn", label), ' role="alert"')] : []), ...(open ? [...detailRows(v, s), disconnect] : [])];
   // Before anyone has paired there is nothing to show but how to begin: the one line that says it.
   const waiting = open && !s.pending.length && !s.allowed.length ? `<p class="foot">${esc(t("msg.tg.waitingLead", { p0: bot }))}</p>` : "";
-  const disconnect = open
-    ? `<div class="msg-foot">${btn(esc(v.confirmingDisconnect ? t("msg.tg.disconnectConfirm") : t("msg.tg.disconnect")), v.confirmingDisconnect ? "sm danger" : "sm", ` data-msg="disconnect"${v.busy ? " disabled" : ""}`)}</div>`
-    : "";
-  return group(rows, waiting + disconnect);
+  return group(rows, waiting);
 }
 
 // ---------- state ----------
