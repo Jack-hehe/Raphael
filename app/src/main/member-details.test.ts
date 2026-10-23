@@ -69,6 +69,60 @@ beforeEach(() => {
 });
 
 describe("a member's panel", () => {
+  test("a personality draft survives redraws and is saved to its original member on switching", async () => {
+    const panel = mount();
+    await flush();
+    const box = panel.el.querySelector<HTMLTextAreaElement>("#mb-det-personality")!;
+    box.focus();
+    box.value = "嚴厲但耐心";
+    panel.draw();
+    expect(panel.el.querySelector<HTMLTextAreaElement>("#mb-det-personality")!.value).toBe("嚴厲但耐心");
+    expect(host.update).not.toHaveBeenCalled();
+    current = 4;
+    panel.showMember();
+    await flush();
+    expect(host.update).toHaveBeenCalledWith(3, { personality: "嚴厲但耐心" });
+    expect(panel.el.querySelector<HTMLTextAreaElement>("#mb-det-personality")!.value).toBe("");
+  });
+
+  test("stored personality is escaped, unchanged text is not saved, and clearing is saved", async () => {
+    const before = LIST.members[1];
+    LIST.members[1] = { ...before, personality: '</textarea><script>privateStyle()</script>' };
+    try {
+      const panel = mount();
+      await flush();
+      const box = panel.el.querySelector<HTMLTextAreaElement>("#mb-det-personality")!;
+      expect(box.value).toBe(LIST.members[1].personality);
+      expect(panel.el.querySelector("script")).toBeNull();
+      box.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      expect(host.update).not.toHaveBeenCalled();
+      box.value = " ";
+      box.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      await flush();
+      expect(host.update).toHaveBeenCalledWith(3, { personality: "" });
+    } finally {
+      LIST.members[1] = before;
+    }
+  });
+
+  test("personality is separate from instructions and saved on blur", async () => {
+    const panel = mount();
+    await flush();
+    const box = panel.el.querySelector<HTMLTextAreaElement>("#mb-det-personality");
+    expect(box).not.toBeNull();
+    expect(box!.maxLength).toBe(2000);
+    expect(panel.el.querySelector('label[for="mb-det-personality"]')!.textContent).toBe("個性");
+    box!.value = "  嚴厲但耐心。\n直接稱呼你。  ";
+    box!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await flush();
+    expect(host.update).toHaveBeenCalledWith(3, { personality: "嚴厲但耐心。\n直接稱呼你。" });
+    expect(panel.el.querySelector<HTMLTextAreaElement>("#mb-det-instr")!.value).toBe("每天出 10 題");
+    current = 0;
+    panel.showMember();
+    await flush();
+    expect(panel.el.querySelector("#mb-det-personality")).toBeNull();
+  });
+
   test("its picture, its name and role to change in place, and the tabs", async () => {
     const panel = mount();
     await flush();

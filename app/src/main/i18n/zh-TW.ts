@@ -909,6 +909,8 @@ export const zhTW = {
   "members.name": "名字",
   "members.role": "角色",
   "members.instructions": "指示",
+  "members.personality": "個性",
+  "members.personalityHint": "語氣、口頭禪與稱呼方式，例如：嚴厲但耐心，直接稱呼你。",
   "members.group": "分組",
   "members.model": "模型",
   "members.sameModel": "與拉斐爾相同",

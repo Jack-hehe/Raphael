@@ -11,6 +11,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
+from ..brain.textnorm import convert_leftover_simplified
 from ..background.run import estimate_cost
 from ..worker.loop import Call, Limits, Outcome, Stop, ToolOutcome, Turn, run_task
 from .answers import Reply, parse_reply
@@ -145,10 +146,13 @@ class NarratedLoop:
             for public in objects:
                 for kind, emit, limit in (("thinking", self.thinking, 120), ("progress", self.progress, 60)):
                     text = _public_text(public.get(kind), limit, sentences=2 if kind == "thinking" else None)
+                    if self.language == "zh-TW":
+                        text = convert_leftover_simplified(text)
                     if text:
                         emit(text)
             if answer.calls and not objects and prose:
-                self.progress(_public_text(prose, 60))
+                text = _public_text(prose, 60)
+                self.progress(convert_leftover_simplified(text) if self.language == "zh-TW" else text)
         self.batch_calls = answer.calls
         return Turn(answer.content, [
             Call(call.id, call.name, call.arguments, call.raw_arguments) for call in answer.calls

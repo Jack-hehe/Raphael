@@ -910,6 +910,8 @@ export const en = {
   "members.name": "Name",
   "members.role": "Role",
   "members.instructions": "Instructions",
+  "members.personality": "Personality",
+  "members.personalityHint": "Tone, mannerisms and form of address, e.g. strict but patient; address you by name.",
   "members.group": "Group",
   "members.model": "Model",
   "members.sameModel": "Same as Raphael",

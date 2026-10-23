@@ -102,7 +102,7 @@ _REMEMBER = re.compile(
 )
 
 _SUMMARY_SYSTEM = """\
-You keep the running summary of a long voice conversation between a user and Raphael, their \
+You keep the running summary of one conversation between a user and the selected \
 assistant. You are given the summary so far and the turns that come after it. Return the summary \
 updated with those turns: keep what still matters, change what the new turns changed, drop what \
 is finished and no longer matters. Do not start over, and do not summarise a summary of a summary.

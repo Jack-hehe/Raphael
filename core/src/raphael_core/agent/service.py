@@ -214,6 +214,7 @@ from .team import (
     Team,
     asks_to_create_member,
     names_raphael,
+    roster_prompt,
     team_tool,
     team_tools_for,
 )
@@ -747,7 +748,7 @@ class AgentService:
         if blocked is None:
             try:
                 decision = await self._decider.classify(
-                    ask.text, settings.model, ledger, background_line(self._briefs()),
+                    ask.text, settings.model, ledger, background_line(self._briefs(ask.speaker.id)),
                     context=self._before_run(ask.speaker),
                 )
             except AgentFailure as error:
@@ -855,6 +856,7 @@ class AgentService:
                 looked_up=looked_up,
                 speaker=ask.speaker,
                 say_ja=ask.voiced and ask.language != "ja",
+                roster=roster_prompt(self._team, ask.speaker, ask.language),
             )
 
         reply = await word(tools, False)
@@ -1029,6 +1031,7 @@ class AgentService:
             index = "\n".join(part for part in (index.shared, index.own) if part)
         persona = "" if speaker.is_raphael else (
             f"Speaker: {speaker.name}\nRole: {speaker.role}\n"
+            f"Personality: {speaker.personality}\n"
             f"Owner's instructions: {speaker.instructions}\n\n"
         )
         return persona + conversation_block(context.summary, context.turns, index)
@@ -1160,11 +1163,11 @@ class AgentService:
 
     # --- the background ---------------------------------------------------------------------------
 
-    def _briefs(self) -> list:
+    def _briefs(self, member_id: int = 0) -> list:
         """The tasks in the background as a few facts (running, waiting, or ended in the last half
         hour), for the router and the answer. Empty when the worker cannot say."""
         try:
-            return list(self._background.brief_for_assistant())
+            return list(self._background.brief_for_assistant(member_id=member_id))
         except Exception as exc:  # what the background knows must not stop a request
             logger.warning("Could not read the background for a request: %s", type(exc).__name__)
             return []
@@ -1238,11 +1241,13 @@ class AgentService:
             else:
                 system = member_system_prompt(
                     ask.language, "answer", name=ask.speaker.name, role=ask.speaker.role,
-                    instructions=ask.speaker.instructions, memory_index=index, narrated=True,
+                    instructions=ask.speaker.instructions, personality=ask.speaker.personality,
+                    memory_index=index, narrated=True,
                 )
+            system += roster_prompt(self._team, ask.speaker, ask.language)
             user = build_user_message(
                 ask.text, self._moment(), context.turns, [], ask.language,
-                background_block(self._briefs()), summary=context.summary, say_ja=say_ja, narrated=True,
+                background_block(self._briefs(ask.speaker.id)), summary=context.summary, say_ja=say_ja, narrated=True,
             )
             if ask.attachments:
                 user += "\nFiles: " + json.dumps([
@@ -1427,7 +1432,7 @@ class AgentService:
                 text = phrase(ask.language, "member_created", member=names)
                 return self._finish(ask, "answer", "understood", text, ledger)
         reply, seen = await self._reply(
-            ask, "answer", settings, ledger, results, background=background_block(self._briefs())
+            ask, "answer", settings, ledger, results, background=background_block(self._briefs(ask.speaker.id))
         )
         return self._finish_reply(ask, "answer", reply, seen, ledger)
 
@@ -1896,6 +1901,7 @@ class AgentService:
                     role=arguments.get("role", ""),
                     instructions=arguments.get("instructions", ""),
                     group=arguments.get("group"),
+                    personality=arguments.get("personality", ""),
                 )
             except ValueError as error:  # the store's MemberError: which field, never its text
                 return ToolResult(name, False, {"field": getattr(error, "kind", "")}, "bad_arguments")
@@ -2056,7 +2062,7 @@ class AgentService:
                 settings,
                 ledger,
                 [*followup.results, result],
-                background=background_block(self._briefs()),
+                background=background_block(self._briefs(followup.ask.speaker.id)),
             )
             if not reply.text:
                 raise AgentFailure("error")

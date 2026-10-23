@@ -21,6 +21,7 @@ export const RAPHAEL_ID = 0;
 /** The longest name, role, instructions and group name the core takes (members.* and groups.*). */
 export const NAME_MAX = 16;
 export const ROLE_MAX = 24;
+export const PERSONALITY_MAX = 2000;
 export const INSTRUCTIONS_MAX = 2000;
 export const GROUP_NAME_MAX = 24;
 /** The longest title and prompt of a routine (routines.*). */

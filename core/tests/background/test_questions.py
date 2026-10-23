@@ -41,6 +41,9 @@ class OneMember:
     def has_members(self):
         return True
 
+    def roster(self):
+        return [Speaker(), self.speaker(3)]
+
 
 async def no_team_tool(speaker, name, arguments, **_):
     return ToolResult(name, False, None, "blocked")
@@ -415,6 +418,9 @@ class Creating:
 
     def has_members(self):
         return False
+
+    def roster(self):
+        return [Speaker()]
 
     async def tool(self, speaker, name, arguments, **_):
         self.created.append(arguments["name"])

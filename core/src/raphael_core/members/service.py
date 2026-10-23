@@ -5,16 +5,16 @@ The RPC methods (the main window only, through the shell's allow-list):
 
 - `members.list {ui_language?}` -> `{members, groups}`. `members` is Raphael first (`id` 0, his name
   in the language, his picture when the owner chose one: `avatar_url`, a data URL, and
-  `avatar_crop`), then every member in its place: `{id, name, role, instructions, avatar,
+  `avatar_crop`), then every member in its place: `{id, name, role, personality, instructions, avatar,
   avatar_url?, group_id, model, tools, position, created, unread, waiting, preview, last_at}`.
   `preview` is the last line of its thread (one line, cut) and `last_at` when it was said; `unread`
   says the thread has news the owner has not seen (`members.read` clears it), and `waiting` that a
   question waits for the owner there. `groups` is `[{id, name, position, sources}]`.
-- `members.create {name, role?, instructions?, group_id?, avatar?, tools?, model?, ui_language?}` ->
+- `members.create {name, role?, personality?, instructions?, group_id?, avatar?, tools?, model?, ui_language?}` ->
   `{member, routine_offer}`. `routine_offer` is the routine offered to a member of a group that
   has places to look (`sources`): `{title, prompt, schedule}` for 「每天早上的進度」 at 09:00, or
   null. It is offered, not made: `routines.create` makes it.
-- `members.update {id, name?, role?, instructions?, group_id?, avatar?, tools?, model?, position?}`
+- `members.update {id, name?, role?, personality?, instructions?, group_id?, avatar?, tools?, model?, position?}`
   -> `{member}`. `avatar` here is "" or "preset:<stem>"; a picture of the owner's own comes by
   `members.set_avatar`. Raphael (0) is not changed here: his picture is the app's to change.
 - `members.delete {id}` -> `{deleted}`: the member, its conversation (and the exchanges of other
@@ -296,7 +296,13 @@ class MembersService:
     def has_members(self) -> bool:
         return self._conn.execute("SELECT 1 FROM members LIMIT 1").fetchone() is not None
 
-    def create(self, *, name: Any, role: Any, instructions: Any, group: Any) -> Speaker:
+    def roster(self) -> list[Speaker]:
+        return [RAPHAEL] + [
+            Speaker(id=member.id, name=member.name, role=member.role)
+            for member in self.store.members()
+        ]
+
+    def create(self, *, name: Any, role: Any, instructions: Any, group: Any, personality: Any = "") -> Speaker:
         """Add a member at the owner's request (`create_member`): in the group of that name, made
         when there is none, or in none. MemberError when it cannot be added."""
         group_id = None
@@ -304,7 +310,8 @@ class MembersService:
             found = self.store.group_by_name(group)
             group_id = (found or self.store.create_group(group)).id
         member = self.store.create_member(
-            name=name, role=role or "", instructions=instructions or "", group_id=group_id
+            name=name, role=role or "", instructions=instructions or "", group_id=group_id,
+            personality=personality,
         )
         return member.speaker()
 
@@ -442,6 +449,7 @@ class MembersService:
             "id": member.id,
             "name": member.name,
             "role": member.role,
+            "personality": member.personality,
             "instructions": member.instructions,
             "avatar": member.avatar,
             "group_id": member.group_id,
@@ -467,6 +475,7 @@ class MembersService:
             "id": 0,
             "name": RAPHAEL_NAMES[language],
             "role": "",
+            "personality": "",
             "instructions": "",
             "avatar": "",
             "group_id": None,
@@ -534,6 +543,7 @@ class MembersService:
                 name=params.get("name"),
                 role=params.get("role", ""),
                 instructions=params.get("instructions", ""),
+                personality=params.get("personality", ""),
                 group_id=params.get("group_id"),
                 avatar=avatar if avatar is not None else "",
                 tools=params.get("tools"),
@@ -550,7 +560,7 @@ class MembersService:
         member_id = self._member_id(params)
         fields = {
             name: params[name]
-            for name in ("name", "role", "instructions", "group_id", "avatar", "tools", "model", "position")
+            for name in ("name", "role", "personality", "instructions", "group_id", "avatar", "tools", "model", "position")
             if name in params
         }
         avatar = fields.get("avatar")

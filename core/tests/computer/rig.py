@@ -59,7 +59,7 @@ def completion(data):
 class _Background:
     """A background worker that is never handed anything."""
 
-    def brief_for_assistant(self, limit=3):
+    def brief_for_assistant(self, limit=3, *, member_id=0):
         return []
 
     def tasks_for_turns(self, turn_ids):

@@ -14,6 +14,7 @@ import {
   GROUP_NAME_MAX,
   INSTRUCTIONS_MAX,
   NAME_MAX,
+  PERSONALITY_MAX,
   ROLE_MAX,
   cleanName,
   faceHTML,
@@ -420,6 +421,8 @@ export function openNewMember(o: NewMemberOptions): Dialog {
       `<div class="mb-new-face"><span class="mb-new-av"></span>${btn(esc(t("members.changeAvatar")), "sm", ' data-dlg="avatar" aria-haspopup="menu" aria-expanded="false"')}</div>` +
       field("mb-new-name", t("members.name"), "", NAME_MAX) +
       field("mb-new-role", t("members.role"), "", ROLE_MAX) +
+      `<label class="mb-frow mb-frow-top" for="mb-new-personality"><span>${esc(t("members.personality"))}</span>` +
+      `<textarea id="mb-new-personality" class="mb-fin mb-ta" rows="3" maxlength="${PERSONALITY_MAX}" placeholder="${esc(t("members.personalityHint"))}"></textarea></label>` +
       `<label class="mb-frow mb-frow-top" for="mb-new-instr"><span>${esc(t("members.instructions"))}</span>` +
       `<textarea id="mb-new-instr" class="mb-fin mb-ta" rows="3" maxlength="${INSTRUCTIONS_MAX}"></textarea></label>` +
       `<div class="mb-frow"><span>${esc(t("members.group"))}</span><span class="mb-new-group"></span></div>`,
@@ -496,6 +499,7 @@ export function openNewMember(o: NewMemberOptions): Dialog {
     const member: NewMember = {
       name,
       role: cleanName(dialog.el.querySelector<HTMLInputElement>("#mb-new-role")!.value),
+      personality: dialog.el.querySelector<HTMLTextAreaElement>("#mb-new-personality")!.value.trim(),
       instructions: dialog.el.querySelector<HTMLTextAreaElement>("#mb-new-instr")!.value.trim(),
       group_id: group ? group.id : null,
       ...(avatar ? { avatar } : {}),

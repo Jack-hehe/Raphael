@@ -2,7 +2,7 @@
 
 A member is not a second assistant with paths of its own. It is a parameter of the one assistant:
 the same router, the same answer, the same gate and tiers, the same background worker, given a
-`Speaker` that says whose persona speaks (`name`, `role` and the owner's `instructions` for it),
+`Speaker` that says whose persona speaks (`name`, `role`, `personality` and work `instructions`),
 which model answers (`model`, "" for the answer model) and whose conversation and memory are read
 (`id`). Every speaker has the same capabilities under the same safety gate. Stored `tools` lists
 are retained for compatibility and do not restrict tools. Raphael is the speaker with id 0.
@@ -13,7 +13,7 @@ something through `ask_member`, 2 one that the asked one asked in turn. A chain 
 deep (A asks B, B asks C, and C asks nobody), and has no cycle: nobody already in it, the speaker
 itself included, can be asked again (`can_ask`).
 
-Nothing here logs a name, a role or an instruction.
+Nothing here logs a name, a role, a personality or an instruction.
 """
 
 from dataclasses import dataclass, replace
@@ -58,6 +58,7 @@ class Speaker:
     depth: int = 0
     # The ids of the assistants that asked on the way to this one (not this one itself).
     chain: frozenset[int] = frozenset()
+    personality: str = ""
 
     @property
     def is_raphael(self) -> bool:

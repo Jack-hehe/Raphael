@@ -25,10 +25,25 @@ function open(over: Partial<Parameters<typeof openNewMember>[0]> = {}) {
 }
 
 describe("新增成員", () => {
+  test("a distinct personality field is sent with the member", async () => {
+    const { dialog, $, create } = open();
+    const box = dialog.el.querySelector<HTMLTextAreaElement>("#mb-new-personality");
+    expect(box).not.toBeNull();
+    expect(box!.maxLength).toBe(2000);
+    box!.value = "  嚴厲、耐心。\n稱呼你。  ";
+    $<HTMLInputElement>("#mb-new-name").value = "Teacher";
+    $<HTMLTextAreaElement>("#mb-new-instr").value = "Teach N1.";
+    $('[data-dlg="create"]').click();
+    await flush();
+    expect(create.mock.calls[0]![0].member).toMatchObject({
+      personality: "嚴厲、耐心。\n稱呼你。", instructions: "Teach N1.",
+    });
+  });
+
   test("picture, name, role, instructions and group, with 取消 and 建立", () => {
     const { dialog } = open();
     expect(dialog.el.querySelector("h2")!.textContent).toBe("新增成員");
-    expect([...dialog.el.querySelectorAll(".mb-frow > span:first-child")].map((s) => s.textContent)).toEqual(["名字", "角色", "指示", "分組"]);
+    expect([...dialog.el.querySelectorAll(".mb-frow > span:first-child")].map((s) => s.textContent)).toEqual(["名字", "角色", "個性", "指示", "分組"]);
     expect(dialog.el.querySelector(".mb-new-av .mb-av-letter")).not.toBeNull();
     expect([...dialog.el.querySelectorAll(".mb-dlg-act .btn")].map((b) => b.textContent)).toEqual(["取消", "建立"]);
     // the name takes the focus
@@ -51,7 +66,7 @@ describe("新增成員", () => {
     $('[data-dlg="create"]').click();
     await flush();
     expect(create).toHaveBeenCalledWith({
-      member: { name: "日文老師", role: "N2 嚴格版", instructions: "每天出 10 題", group_id: 2 },
+      member: { name: "日文老師", role: "N2 嚴格版", personality: "", instructions: "每天出 10 題", group_id: 2 },
       picture: null,
     });
     expect(document.querySelector(".mb-scrim")).toBeNull();
@@ -66,7 +81,7 @@ describe("新增成員", () => {
     $<HTMLInputElement>("#mb-new-name").value = "進度官";
     $('[data-dlg="create"]').click();
     await flush();
-    expect(create.mock.calls[0]![0]).toEqual({ member: { name: "進度官", role: "", instructions: "", group_id: 1 }, picture: null });
+    expect(create.mock.calls[0]![0]).toEqual({ member: { name: "進度官", role: "", personality: "", instructions: "", group_id: 1 }, picture: null });
   });
 
   test("no name, or a name already taken, is not sent", async () => {

@@ -4,7 +4,8 @@
   place (`position`) and the places its members look for progress (`sources`, "看的地方"): a GitHub
   repository (`owner/repo`) or a Notion page (its id or its address), at most MAX_SOURCES.
 - `members`: a member, with a name (at most NAME_MAX characters, one no other member has and none
-  of Raphael's), a role (ROLE_MAX), the owner's instructions for it (INSTRUCTIONS_MAX), a picture
+  of Raphael's), a role (ROLE_MAX), its character and speaking style (PERSONALITY_MAX), the owner's
+  instructions for its work (INSTRUCTIONS_MAX), a picture
   (`avatar`: "", "preset:<file stem>" or "file:<stored file name>"), a group or none (未分組), a model
   ("" for the answer model), a place, when it was made, and the tools and connections it may use
   (`tools`: a list of ids, or None for every one that is on).
@@ -14,7 +15,7 @@
 - `member_unread`: the threads (Raphael's as 0) with news the owner has not seen.
 
 Raphael himself is not a row: he is member 0 everywhere, cannot be renamed or deleted, and has
-every tool. A name, a role, an instruction, a title and a prompt are what the owner wrote, so
+every tool. A name, a role, a personality, an instruction, a title and a prompt are what the owner wrote, so
 nothing here logs one; a refusal says which field was wrong, never what was in it.
 
 Use it on the thread that owns `conn` (the event loop).
@@ -34,6 +35,7 @@ from .schedule import Schedule, ScheduleError, parse_schedule
 
 NAME_MAX = 16
 ROLE_MAX = 24
+PERSONALITY_MAX = 2000
 INSTRUCTIONS_MAX = 2000
 GROUP_NAME_MAX = 24
 TITLE_MAX = 40
@@ -94,6 +96,7 @@ class Member:
     position: int
     created_at_ms: int
     tools: tuple[str, ...] | None = None
+    personality: str = ""
 
     def speaker(self) -> Speaker:
         """The member as the assistant takes it (`agent.speaker.Speaker`)."""
@@ -102,6 +105,7 @@ class Member:
             name=self.name,
             role=self.role,
             instructions=self.instructions,
+            personality=self.personality,
             model=self.model,
             tools=None if self.tools is None else frozenset(self.tools),
         )
@@ -155,6 +159,10 @@ def clean_role(value: Any) -> str:
 
 def clean_instructions(value: Any) -> str:
     return _text(value, "instructions", INSTRUCTIONS_MAX, one_line=False)
+
+
+def clean_personality(value: Any) -> str:
+    return _text(value, "personality", PERSONALITY_MAX, one_line=False)
 
 
 def clean_title(value: Any) -> str:
@@ -267,7 +275,7 @@ def _tools_of(saved: str | None) -> tuple[str, ...] | None:
 
 
 _MEMBER_COLUMNS = (
-    "id, name, role, instructions, avatar, group_id, model, position, created_at_ms, tools"
+    "id, name, role, instructions, avatar, group_id, model, position, created_at_ms, tools, personality"
 )
 _ROUTINE_COLUMNS = (
     "id, member_id, title, prompt, schedule, enabled, last_run_ms, next_run_ms, created_at_ms"
@@ -276,6 +284,7 @@ _ROUTINE_COLUMNS = (
 _MEMBER_FIELDS: dict[str, Callable[[Any], Any]] = {
     "role": clean_role,
     "instructions": clean_instructions,
+    "personality": clean_personality,
     "avatar": clean_avatar,
     "model": clean_model,
 }
@@ -430,6 +439,7 @@ class MemberStore:
         name: Any,
         role: Any = "",
         instructions: Any = "",
+        personality: Any = "",
         group_id: Any = None,
         avatar: Any = "",
         tools: Any = None,
@@ -441,6 +451,7 @@ class MemberStore:
             "name": name,
             "role": clean_role(role),
             "instructions": clean_instructions(instructions),
+            "personality": clean_personality(personality),
             "group_id": self._check_group(group_id),
             "avatar": clean_avatar(avatar),
             "model": clean_model(model),
@@ -453,8 +464,8 @@ class MemberStore:
                 "SELECT COALESCE(MAX(position), -1) + 1 FROM members"
             ).fetchone()
             cursor = self._conn.execute(
-                "INSERT INTO members (name, role, instructions, group_id, avatar, model, position,"
-                " created_at_ms, tools) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO members (name, role, instructions, personality, group_id, avatar, model, position,"
+                " created_at_ms, tools) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     *values.values(),
                     position,

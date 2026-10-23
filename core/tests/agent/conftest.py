@@ -39,7 +39,7 @@ class FakeBackground:
         self.files.append(list(attachments))
         return len(self.submitted)
 
-    def brief_for_assistant(self, limit=3):
+    def brief_for_assistant(self, limit=3, *, member_id=0):
         return list(self.briefs)
 
     def attach_turn(self, task_id, turn_id):

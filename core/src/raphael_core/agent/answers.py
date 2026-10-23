@@ -396,6 +396,7 @@ class Voice:
         looked_up: bool = False,
         speaker: Speaker = RAPHAEL,
         say_ja: bool = False,
+        roster: str = "",
     ) -> Reply:
         """What Raphael says to `question` on `route` ("answer", "discuss" or "chat"), in
         `language`. `summary` is the summary of the earlier conversation and `context` its latest
@@ -419,10 +420,12 @@ class Voice:
                 name=speaker.name,
                 role=speaker.role,
                 instructions=speaker.instructions,
+                personality=speaker.personality,
                 memory_index=memory_index,
             )
         else:
             system = system_prompt(language, route, memory_index, say_ja=say_ja)
+        system += roster
         try:
             completion = await asyncio.wait_for(
                 self._client.complete_json(
