@@ -27,12 +27,14 @@ class ChannelError(Exception):
 @dataclass
 class Attachment:
     """Something besides text in a message. `ref` is what the channel needs to fetch it. `size` is
-    in bytes, as the sender's app reports it (None when it does not)."""
+    in bytes, as the sender's app reports it (None when it does not). `name` is what the file is
+    called, for the owner to see which files a turn had; it is never logged."""
 
-    kind: str  # "voice" (a recorded message) or "other"
+    kind: str  # "voice" (a recorded message), "image", "pdf" or "other"
     ref: str
     mime: str | None = None
     size: int | None = None
+    name: str | None = None
 
 
 @dataclass
@@ -46,6 +48,11 @@ class Incoming:
     private: bool = True  # only one-to-one chats reach the assistant
     text: str | None = None
     attachments: list[Attachment] = field(default_factory=list)
+    # The words sent with a file (a photo's caption); never logged.
+    caption: str | None = None
+    # The album the message is part of. The apps send each photo of an album as a message of its
+    # own, all with this id; the switchboard answers them together, as one request.
+    group: str | None = None
 
 
 Deliver = Callable[[Incoming], None]
