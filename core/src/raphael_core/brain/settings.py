@@ -7,6 +7,9 @@ model ids of each role (at most 50 each), and the models and the assistant's cit
 substance (saved without the spaces around it; a model id has none inside). The services of the
 tools (`web_search_service`, `web_read_service`, `pdf_service`) must be one of their listed values,
 `vision_model` a model id or "" (the answer model), and `searxng_url` an http(s) address or "".
+Raphael's voice is `tts_service` ("none" or "fish"), `tts_fish_voice` (the 32 hexadecimal
+characters of the owner's Fish Audio voice model, or "": it is the owner's to fill in) and
+`tts_fish_model` (a short token).
 Which models may be
 chosen is for the brain to say, which knows OpenRouter's list of them (brain/catalog.py): here a
 model is only an id.
@@ -22,6 +25,7 @@ before the first release.
 
 import copy
 import json
+import re
 import sqlite3
 from typing import Any
 from urllib.parse import urlsplit
@@ -74,6 +78,12 @@ DEFAULTS: dict[str, Any] = {
     "pdf_service": "builtin",
     # The address of the owner's own SearXNG, for `web_search_service` "searxng"; "" when none.
     "searxng_url": "",
+    # Raphael's voice (raphael_core.services.tts): the service that speaks his answers aloud, "none"
+    # for silence. Fish Audio's voice is the owner's own clone, chosen by the id of its model, which
+    # is not in the repository: "" until the owner fills it in.
+    "tts_service": "none",
+    "tts_fish_voice": "",
+    "tts_fish_model": "s2.1-pro-free",
 }
 
 # The longest model id or city name taken: far more than any real one, short of an accident.
@@ -86,6 +96,11 @@ STT_ENGINES = ("cloud", "local")
 WEB_SEARCH_SERVICES = ("openrouter", "brave", "tavily", "exa", "searxng")
 WEB_READ_SERVICES = ("builtin", "jina", "firecrawl", "tavily")
 PDF_SERVICES = ("builtin", "openrouter")
+# The services that may speak Raphael's answers.
+TTS_SERVICES = ("none", "fish")
+# A Fish Audio voice model is named by 32 hexadecimal characters; its model by a short token.
+FISH_VOICE_PATTERN = re.compile(r"[0-9a-f]{32}")
+FISH_MODEL_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
 # The longest address of a SearXNG taken.
 URL_MAX_CHARS = 300
 # What one background task may cost, as the settings page offers it.
@@ -97,6 +112,7 @@ _CHOICES: dict[str, tuple[Any, ...]] = {
     "web_search_service": WEB_SEARCH_SERVICES,
     "web_read_service": WEB_READ_SERVICES,
     "pdf_service": PDF_SERVICES,
+    "tts_service": TTS_SERVICES,
 }
 # The settings that hold the id of an OpenRouter model.
 MODEL_SETTINGS = ("cleanup_model", "stt_cloud_model", "agent_model")
@@ -168,6 +184,24 @@ def _optional_model(key: str, value: str) -> str:
     return _trimmed(key, text) if text else ""
 
 
+def _fish_voice(key: str, value: str) -> str:
+    """`value` without the spaces around it, in lower case: "" (none yet) or the 32 hexadecimal
+    characters of a Fish Audio voice model. ValueError for anything else."""
+    text = value.strip().lower()
+    if text and not FISH_VOICE_PATTERN.fullmatch(text):
+        raise ValueError(f"Setting {key!r} must be empty or 32 hexadecimal characters")
+    return text
+
+
+def _fish_model(key: str, value: str) -> str:
+    """`value` without the spaces around it: a short token such as "s2.1-pro-free". ValueError for
+    a blank text, one with a space or other mark in it, or one of more than 40 characters."""
+    text = value.strip()
+    if not FISH_MODEL_PATTERN.fullmatch(text):
+        raise ValueError(f"Setting {key!r} must be a short token of letters, digits, . _ and -")
+    return text
+
+
 def _favorites(value: dict) -> dict[str, list[str]]:
     """The favourites to save: every role with its list, each id once and in order.
 
@@ -217,6 +251,10 @@ def checked(key: str, value: Any) -> tuple[str, Any]:
         value = _url(key, value)
     if key == "vision_model":
         value = _optional_model(key, value)
+    if key == "tts_fish_voice":
+        value = _fish_voice(key, value)
+    if key == "tts_fish_model":
+        value = _fish_model(key, value)
     return key, value
 
 

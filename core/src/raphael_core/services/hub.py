@@ -2,7 +2,8 @@
 and the `services.*` methods of the settings page.
 
 `ServiceHub` reads the choices from the settings at each call (`web_search_service`,
-`web_read_service`, `pdf_service`, `vision_model`, `searxng_url`), so a change the owner makes
+`web_read_service`, `pdf_service`, `vision_model`, `searxng_url`, `tts_service`, `tts_fish_voice`,
+`tts_fish_model`), so a change the owner makes
 takes effect with the next request, and it holds the keys (`keys.ServiceKeys`), the HTTP client the
 services are called with, the safe fetch of the built-in page reader (`fetch.PageFetcher`) and the
 model that sees (`vision.Vision`). The fast tier (`agent.tools.Tools`) and the background worker's
@@ -10,13 +11,16 @@ tools reach the services through it alone.
 
 RPC methods (the choice itself is `settings.set`, like any other setting):
 
-- `services.status` -> `{search, read, pdf, vision}`. `search`, `read` and `pdf` are each
+- `services.status` -> `{search, read, pdf, vision, voice}`. `search`, `read` and `pdf` are each
   `{service, options: [{id, needs_key, has_key, key_optional}]}`: the service chosen, and each one
   that could be, with whether it needs a key of the owner's, whether one is stored and whether a key
   is optional (Jina's: it works without one, with lower limits). SearXNG's option also has
   `url_set`, whether its address is set. `vision` is `{model, resolved_model, supports_images}`:
   the setting ("" for the answer model), the model that reads images in the end, and whether
-  OpenRouter's list says it reads them (null when the list does not say). A key is never in it.
+  OpenRouter's list says it reads them (null when the list does not say). `voice` is Raphael's
+  voice: `{service, options, fish_voice_set}`, with `service` and `options` as above ("none" or
+  "fish", which needs a key) and whether the owner has filled in the Fish Audio voice id (the id
+  itself is a setting, `tts_fish_voice`). A key is never in it.
 - `services.set_key {service, key}` -> `{ok: true}`: the key of a keyed service, without the
   spaces around it, 1 to 512 characters with no space or control character inside, stored in the
   vault. The key is never echoed back, and a key that is refused is refused by a kind.
@@ -39,7 +43,7 @@ from ..brain.openrouter import OpenRouterClient
 from ..brain.settings import DEFAULTS, SettingsStore
 from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError, invalid_params
 from ..router import Router
-from . import pdf, web
+from . import pdf, tts, web
 from .attachments import Attachment
 from .common import ServiceError
 from .fetch import PageFetcher, Resolver, system_resolver
@@ -73,6 +77,7 @@ READ_OPTIONS = (
     Option("tavily", needs_key=True),
 )
 PDF_OPTIONS = (Option("builtin"), Option("openrouter"))
+TTS_OPTIONS = (Option("none"), Option("fish", needs_key=True))
 
 
 def _setting(settings: SettingsStore, key: str, choices: Sequence[Option]) -> str:
@@ -143,6 +148,10 @@ class ServiceHub:
     def pdf_service(self) -> str:
         return _setting(self._settings, "pdf_service", PDF_OPTIONS)
 
+    def tts_service(self) -> str:
+        """Who speaks Raphael's answers aloud: "none" (silence) or "fish"."""
+        return _setting(self._settings, "tts_service", TTS_OPTIONS)
+
     def vision_model(self) -> tuple[str, bool | None]:
         """The model that reads images (the `vision_model` setting, or the answer model when it is
         ""), and whether OpenRouter's list says it reads them: None when the list does not say."""
@@ -187,6 +196,21 @@ class ServiceHub:
             service, url, http=self._client(), fetcher=self.fetcher, read_pdf=pdf.read_pdf, key=key
         )
         return service, page
+
+    async def speech(self, text: str) -> tts.Audio:
+        """The speech of `text` by the voice service chosen (`tts.synthesize`), with its key, voice
+        and model as the settings and the vault hold them now. ServiceError of a kind, among them
+        "not_configured" (no service, or no voice id) and "missing_secret" (no key)."""
+        service = self.tts_service()
+        key = self._keys.get(service) if service in KEYED_SERVICES else None
+        return await tts.synthesize(
+            service,
+            text,
+            http=self._client(),
+            key=key,
+            voice=self._text("tts_fish_voice"),
+            model=self._text("tts_fish_model"),
+        )
 
     async def read_attachment(
         self, attachment: Attachment, question: str, ledger: Ledger
@@ -236,6 +260,11 @@ class ServiceHub:
                 "model": self._text("vision_model"),
                 "resolved_model": model,
                 "supports_images": sees,
+            },
+            "voice": {
+                "service": self.tts_service(),
+                "options": self._options(TTS_OPTIONS),
+                "fish_voice_set": bool(self._text("tts_fish_voice")),
             },
         }
 

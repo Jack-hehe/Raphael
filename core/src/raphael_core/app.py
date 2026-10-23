@@ -5,7 +5,8 @@
 assistant's (`agent.*`, raphael_core.agent), the background worker's (`worker.*`,
 raphael_core.background), the plugins' (`integrations.*` and `toolsets.list`,
 raphael_core.integrations), the messaging apps' (`messaging.<app>.*`, raphael_core.messaging), the
-services of the tools' (`services.*`, raphael_core.services) and the few that belong to none of them (`core.*`, `models.*`, `audio.*`). `__main__` serves it on
+services of the tools' (`services.*`, raphael_core.services), Raphael's voice (`tts.*`,
+raphael_core.services.speaker) and the few that belong to none of them (`core.*`, `models.*`, `audio.*`). `__main__` serves it on
 stdio.
 
 Start-up. The app's first calls come within seconds of the process starting (`core.hello`, the
@@ -105,6 +106,7 @@ from .router import Router
 from .services.attachments import Attachment
 from .services.hub import ServiceHub, offline_transport
 from .services.keys import ServiceKeys, credential_keys, memory_keys
+from .services.speaker import Speaker
 
 logger = logging.getLogger(__name__)
 
@@ -755,6 +757,9 @@ class App(Router):
             transport=offline_transport() if fake_llm else None,
         )
         self.services.register(self)
+        # Raphael's voice (`tts.*`): his answers aloud, through the service the owner chose.
+        self.speaker = Speaker(self.services)
+        self.speaker.register(self)
         if agent_actions is None:
             agent_actions = NullActions() if fake_llm else WindowsActions()
         # The plugins: servers the user connected, and the hub the assistant reaches their tools by.
@@ -799,6 +804,7 @@ class App(Router):
             computer=self.computer,
             memory=self.memory,
             services=self.services,
+            speaker=self.speaker,
         )
         self.agent.register(self)
         # Messaging apps (Telegram): messages reach the assistant like a spoken question.
@@ -996,6 +1002,7 @@ class App(Router):
             ("end the messaging connections", self.messaging.aclose),
             ("end the background tasks", self.background.aclose),
             ("end the assistant's requests", self.agent.aclose),
+            ("end Raphael's voice", self.speaker.aclose),
             ("end the memory's background pass", self.memory.aclose),
             ("close the services' HTTP client", self.services.aclose),
             ("close the HTTP client", self.client.aclose),
@@ -1493,6 +1500,8 @@ class App(Router):
         way the meter stays suspended, so a stop that ends meanwhile cannot reopen it beside the
         new dictation.
         """
+        if method == "dictation.start":
+            self.speaker.stop()  # a new recording ends what Raphael was saying
         service = await self._wait_for(self._service)
         if method != "dictation.start":
             try:

@@ -1,4 +1,5 @@
-"""The owner's own keys for the services that take one: Brave, Tavily, Exa, Firecrawl and Jina.
+"""The owner's own keys for the services that take one: Brave, Tavily, Exa, Firecrawl and Jina, and
+Fish Audio (Raphael's voice).
 
 Each key is a credential of its own in Windows Credential Manager, through the same store as the
 OpenRouter key (`brain.secrets.CredentialKeyStore`), with its own target name ("Raphael service
@@ -19,7 +20,7 @@ from ..brain.secrets import CredentialKeyStore, KeyStore, MemoryKeyStore
 logger = logging.getLogger(__name__)
 
 # The services that take a key of the owner's. Jina works without one, with lower limits.
-KEYED_SERVICES = ("brave", "tavily", "exa", "firecrawl", "jina")
+KEYED_SERVICES = ("brave", "tavily", "exa", "firecrawl", "jina", "fish")
 # The longest key taken: far more than any service issues, and well within a credential.
 MAX_KEY_CHARS = 512
 # The target name of each key's credential is this, a space and the service.
