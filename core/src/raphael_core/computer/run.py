@@ -76,7 +76,8 @@ from ..agent.policy import (
 )
 from ..agent.steps import Step, reason_of
 from ..background.run import estimate_cost
-from ..brain.openrouter import CLEANUP_FALLBACKS, ChatTurn, OpenRouterClient, OpenRouterError
+from ..brain.openrouter import CLEANUP_FALLBACKS, ChatTurn, OpenRouterError
+from ..brain.providers.base import ModelProvider
 from ..clock import wall_clock_ms
 from ..memory.conversation import turn_text
 from ..worker.guards import MAX_ARGUMENT_CHARS, canonical, elide_old, neutralize, wrap_untrusted
@@ -307,7 +308,7 @@ class ComputerRun:
         language: str,
         request: str,
         model: str,
-        client: OpenRouterClient,
+        client: ModelProvider,
         bridge: ShellBridge,
         gate: ToolGate,
         ledger: Ledger,

@@ -1339,7 +1339,7 @@ async def test_the_opencc_converter_is_warmed_up_at_start(make_app):
 
 async def test_the_openrouter_client_is_warmed_up_at_start(make_app):
     app = make_app(make_kit())
-    await wait_until(lambda: app.client.warmed_up)
+    await wait_until(lambda: app.client.openrouter.warmed_up)
 
 
 # --- models.status and models.ensure ----------------------------------------------------------
@@ -2083,13 +2083,13 @@ async def test_closing_the_app_ends_the_assistants_requests_before_closing_the_c
     closing = app.agent.aclose
 
     async def agent_aclose():
-        order.append(("agent", app.client.closed))
+        order.append(("agent", app.client.openrouter.closed))
         await closing()
 
     app.agent.aclose = agent_aclose
     await app.aclose()
     assert order == [("agent", False)]
-    assert app.client.closed
+    assert app.client.openrouter.closed
 
 
 # --- the background worker --------------------------------------------------------------------
@@ -2146,7 +2146,7 @@ async def test_closing_the_app_ends_the_background_tasks_and_the_worker_before_t
     closing = app.background.aclose
 
     async def background_aclose():
-        order.append(("background", app.client.closed))
+        order.append(("background", app.client.openrouter.closed))
         await closing()
 
     app.background.aclose = background_aclose
@@ -2171,7 +2171,7 @@ async def test_closing_the_app_closes_the_meter_and_the_client(make_app):
     await app.call("audio.monitor", {"on": True})
     await app.aclose()
     assert not kit.mics[0].open
-    assert app.client.closed
+    assert app.client.openrouter.closed
 
 
 async def test_closing_the_app_stops_usage_refresh_before_closing_the_client(make_app):
@@ -2183,7 +2183,7 @@ async def test_closing_the_app_stops_usage_refresh_before_closing_the_client(mak
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
-            assert not app.client.closed
+            assert not app.client.openrouter.closed
             cancelled.set()
             raise
 
@@ -2191,7 +2191,7 @@ async def test_closing_the_app_stops_usage_refresh_before_closing_the_client(mak
     await app.call("status.get")
     await asyncio.wait_for(started.wait(), 1)
     await app.aclose()
-    assert cancelled.is_set() and app.client.closed
+    assert cancelled.is_set() and app.client.openrouter.closed
 
 
 async def test_a_close_step_that_fails_does_not_skip_the_rest(make_app, caplog):
@@ -2248,7 +2248,7 @@ async def test_core_shutdown_closes_everything_and_answers(make_app):
     app = make_app(kit)
     await app.call("audio.monitor", {"on": True})
     assert await app.call("core.shutdown") == {}
-    assert not kit.mics[0].open and app.client.closed
+    assert not kit.mics[0].open and app.client.openrouter.closed
 
 
 async def test_core_shutdown_tells_the_server_to_stop(make_app):
@@ -2534,7 +2534,7 @@ async def openrouter_mock():
 
         http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         opened.append(http)
-        app.client._http = http
+        app.client.openrouter._http = http
         app.keys.set(CLOUD_KEY)
         return requests
 

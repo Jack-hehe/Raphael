@@ -137,7 +137,8 @@ from ..clock import wall_clock_ms
 from ..computer.run import ComputerRun, ComputerRuns, Final, Question, conversation_block
 from ..computer.words import answers as answer_labels
 from ..integrations.pool import McpPool
-from ..brain.openrouter import OpenRouterClient
+from ..brain.providers.base import ModelProvider
+from ..brain.providers.registry import ProviderRouter
 from ..brain.secrets import KeyStore
 from ..brain.settings import DEFAULTS, SettingsStore
 from ..brain.spend import SpendTracker
@@ -466,7 +467,7 @@ class AgentService:
     def __init__(
         self,
         conn: sqlite3.Connection,
-        client: OpenRouterClient,
+        client: ModelProvider,
         keys: KeyStore,
         *,
         actions: DeviceActions,
@@ -2644,6 +2645,8 @@ class AgentService:
     def _blocked(self, settings: _Settings) -> str | None:
         """Why no model may be asked: "no_key", "auth" (the key store failed), or None."""
         try:
+            if isinstance(self._client, ProviderRouter):
+                return None if self._client.available(settings.model) else "no_key"
             key = self._keys.get()
         except Exception as exc:  # its message could hold the key
             logger.warning("The key store failed to read the key: %s", type(exc).__name__)

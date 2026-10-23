@@ -55,7 +55,8 @@ from datetime import date
 
 from ..agent.history import Turn
 from ..agent.ledger import Ledger
-from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
+from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
+from ..brain.providers.base import ModelProvider
 from .conversation import turn_time
 from .store import TYPES, Memory, MemoryIndex, MemoryRefused, MemoryStore, make_name, valid_name
 
@@ -523,7 +524,7 @@ def consolidation_message(today: date, memories: Sequence[Memory]) -> str:
 class Reflector:
     """Asks the model for the actions and applies them. `client` is the OpenRouter client."""
 
-    def __init__(self, client: OpenRouterClient, *, timeout_s: float = REFLECT_TIMEOUT_S) -> None:
+    def __init__(self, client: ModelProvider, *, timeout_s: float = REFLECT_TIMEOUT_S) -> None:
         self._client = client
         self._timeout_s = timeout_s
 

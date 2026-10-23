@@ -55,7 +55,8 @@ from dataclasses import dataclass
 from ..agent.failure import AgentFailure
 from ..agent.history import AgentHistory, Turn
 from ..agent.ledger import Ledger
-from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
+from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
+from ..brain.providers.base import ModelProvider
 from ..clock import wall_clock_ms
 from .terms import estimate_tokens
 
@@ -245,7 +246,7 @@ class Conversation:
     def __init__(
         self,
         conn: sqlite3.Connection,
-        client: OpenRouterClient,
+        client: ModelProvider,
         *,
         now_ms: Callable[[], int] = wall_clock_ms,
         clock: Callable[[], float] = time.monotonic,

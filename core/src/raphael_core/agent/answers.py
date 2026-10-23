@@ -36,7 +36,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
+from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
+from ..brain.providers.base import ModelProvider
 from ..brain.textnorm import convert_leftover_simplified
 from ..memory.reflection import SPACES as MEMORY_SPACES
 from ..memory.reflection import Action as MemoryAction
@@ -375,7 +376,7 @@ class Voice:
     """Asks the model for Raphael's words. `client` is the OpenRouter client; `timeout_s` is how
     long an answer may take."""
 
-    def __init__(self, client: OpenRouterClient, *, timeout_s: float = ANSWER_TIMEOUT_S) -> None:
+    def __init__(self, client: ModelProvider, *, timeout_s: float = ANSWER_TIMEOUT_S) -> None:
         self._client = client
         self._timeout_s = timeout_s
 

@@ -27,7 +27,8 @@ from typing import Any
 
 from ..languages import STT_CODES, stt_languages
 from ..protocol import INTERNAL_ERROR, NOT_CONFIGURED, RpcError, invalid_params
-from .openrouter import OpenRouterClient, OpenRouterError
+from .openrouter import OpenRouterError
+from .providers.base import ModelProvider
 from .settings import SettingsStore
 from .spend import SpendTracker
 
@@ -134,7 +135,7 @@ class CloudTranscriber:
 
     def __init__(
         self,
-        client: OpenRouterClient,
+        client: ModelProvider,
         settings: SettingsStore,
         spend: SpendTracker,
         has_key: Callable[[], bool],

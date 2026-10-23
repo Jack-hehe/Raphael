@@ -18,6 +18,7 @@ _KIND_OF_OPENROUTER = {
     "auth": "auth",
     "credits": "credits",
     "network": "offline",
+    "offline": "offline",
     "timeout": "timeout",
 }
 

@@ -10,7 +10,8 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
 
-from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
+from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
+from ..brain.providers.base import ModelProvider
 from ..brain.textnorm import convert_leftover_simplified
 from ..background.run import estimate_cost
 from ..worker.loop import Call, Limits, Outcome, Stop, ToolOutcome, Turn, run_task
@@ -100,7 +101,7 @@ def _public_text(value: object, limit: int, *, sentences: int | None = None) -> 
 
 class NarratedLoop:
     def __init__(
-        self, *, client: OpenRouterClient, model: str, ledger: Ledger,
+        self, *, client: ModelProvider, model: str, ledger: Ledger,
         language: str, plain: bool, system: str, user: str, tools: Sequence[dict],
         progress: Callable[[str], None],
         execute: Callable[[str, str, dict], Awaitable[ToolOutcome]],

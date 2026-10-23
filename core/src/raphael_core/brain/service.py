@@ -66,8 +66,10 @@ from .cleanup import CleanupService, join_parts, split_for_cleanup
 from .cloud_stt import CloudTranscriber
 from .dictionary import DictionaryStore, Learned
 from .history import HistoryItem, HistoryStore
-from .openrouter import KeyInfo, OpenRouterClient, OpenRouterError
+from .openrouter import KeyInfo, OpenRouterError
+from .providers.base import ModelProvider
 from .pricing import PricingService, builtin_catalog
+from .providers.registry import ProviderRegistry, ProviderRouter
 from .secrets import KeyStore
 from .settings import SettingsStore, checked
 from .spend import SpendTracker
@@ -220,14 +222,17 @@ class Brain:
     def __init__(
         self,
         conn: sqlite3.Connection,
-        client: OpenRouterClient,
+        client: ModelProvider,
         keys: KeyStore,
         now_ms: Callable[[], int] = wall_clock_ms,
         *,
         key_check_timeout_s: float = KEY_CHECK_TIMEOUT_S,
         tz: tzinfo | None = None,
+        providers: ProviderRegistry | None = None,
     ) -> None:
         self._client = client
+        self._providers = providers
+        self._notify_providers = lambda: None
         self._keys = keys
         self._now_ms = now_ms
         self._key_check_timeout_s = key_check_timeout_s
@@ -252,17 +257,29 @@ class Brain:
             self._settings,
             self._dictionary,
             self._spend,
-            has_key=self._has_key,
-            on_result=self._on_cleanup_result,
+            has_key=lambda: self._model_available("cleanup_model"),
+            on_model_result=self._on_cleanup_result,
         )
-        self._stt = CloudTranscriber(client, self._settings, self._spend, has_key=self._has_key)
+        self._stt = CloudTranscriber(client, self._settings, self._spend,
+                                     has_key=lambda: self._model_available("stt_cloud_model"))
         self._prune_history()
 
     def known_models(self) -> list[CatalogEntry] | None:
         """The models of OpenRouter's list as it was given last, however old, without fetching it;
         None if it never gave one. What the assistant asks, request by request, what a model can
         do (`tool_calling`): quick, and never a wait for the network."""
-        return self._pricing.known()
+        known = self._pricing.known()
+        if self._providers and not self._providers.config("openrouter")["enabled"]:
+            known = []
+        extra = self._providers.catalog_entries() if self._providers else []
+        if not extra:
+            return known
+        return [*(known if known is not None else builtin_catalog()), *extra]
+
+    def _model_available(self, setting: str) -> bool:
+        if isinstance(self._client, ProviderRouter):
+            return self._client.available(self._settings.get(setting))
+        return self._has_key()
 
     async def aclose(self) -> None:
         """Stop the status refresh before its HTTP client is closed."""
@@ -275,6 +292,8 @@ class Brain:
 
     def register(self, router: Router) -> None:
         """Put every method of the brain on `router`."""
+        if self._providers:
+            self._notify_providers = lambda: router.notify("providers.changed", {})
         methods = {
             "brain.finalize_dictation": self._finalize_dictation,
             "brain.normalize_transcript": self._normalize_transcript,
@@ -355,7 +374,7 @@ class Brain:
         finally:
             # Taken in the same breath as the text is saved, so that no cancel comes in between.
             cancelled = self._cleaning.pop(session_id, False)
-        if result.model is not None and self._openrouter.state == "ok":
+        if result.model is not None and not result.model.startswith("@") and self._openrouter.state == "ok":
             # The model answered, so the time it took is a round trip to OpenRouter.
             self._openrouter.latency_ms = result.llm_ms
         if result.parts:
@@ -570,7 +589,7 @@ class Brain:
         settings page showed (catalog.choice_problem)."""
         _, model_id = checked(role.setting, value)
         current = self._settings.get(role.setting)
-        known = self._pricing.known()
+        known = self.known_models()
         listed = builtin_catalog() if known is None else known
         problem = choice_problem(role, model_id, listed, current)
         if problem is not None:
@@ -583,7 +602,7 @@ class Brain:
         language model of OpenRouter's list that reads images (`IMAGE_INPUT`). Before any list
         could be had, a model id is taken as it is: only the list says what a model reads."""
         _, model_id = checked("vision_model", value)
-        known = self._pricing.known()
+        known = self.known_models()
         if not model_id or known is None or model_id == self._settings.get("vision_model"):
             return
         entry = find(known, LLM, model_id)
@@ -654,6 +673,7 @@ class Brain:
         self._remember_key(key)
         self._key_check_revision += 1
         self._note("ok", latency_ms=latency_ms, key=info)
+        self._notify_providers()
         return {
             "valid": True,
             "label": info.label,
@@ -669,6 +689,7 @@ class Brain:
             raise _key_store_failure(exc, "remove") from None
         self._remember_key(None)
         self._openrouter = _OpenRouterState()  # what was known belonged to the key that is gone
+        self._notify_providers()
         return {}
 
     async def _check_key(self, key: str | None) -> tuple[KeyInfo, int]:
@@ -713,8 +734,10 @@ class Brain:
             key=key if key is not None else self._openrouter.key,
         )
 
-    def _on_cleanup_result(self, error: Exception | None) -> None:
+    def _on_cleanup_result(self, model: str, error: Exception | None) -> None:
         """How a call to the model went, as the cleanup service reports it."""
+        if model.startswith("@"):
+            return
         if error is None:
             self._note("ok")
         elif isinstance(error, OpenRouterError):
@@ -836,9 +859,21 @@ class Brain:
     async def _models_catalog(self, params: dict) -> dict:
         """Every OpenRouter model Raphael could use (catalog.py). A chosen model that OpenRouter no
         longer lists goes back to its role's default first, which `replaced` reports."""
-        entries, fetched_at_ms, source = await self._pricing.catalog()
+        if self._providers and not self._providers.config("openrouter")["enabled"]:
+            entries, fetched_at_ms, source = [], None, "builtin"
+        else:
+            entries, fetched_at_ms, source = await self._pricing.catalog()
+        if self._providers:
+            await self._providers.refresh_catalog()
+            entries = [*entries, *self._providers.catalog_entries()]
         replaced = [] if source == "builtin" else self._replace_vanished(entries)
-        return catalog_view(entries, fetched_at_ms, source, replaced)
+        view = catalog_view(entries, fetched_at_ms, source, replaced)
+        for kind in ("llm", "stt"):
+            for model in view[kind]:
+                pid = model["id"][1:].partition(":")[0] if model["id"].startswith("@") else "openrouter"
+                model["provider_id"] = pid
+                model["provider_name"] = self._providers.config(pid)["name"] if self._providers else "OpenRouter"
+        return view
 
     def _replace_vanished(self, entries: list[CatalogEntry]) -> list[dict[str, str]]:
         """Set each chosen model that is not on OpenRouter's list (`entries`) back to its role's
@@ -850,6 +885,7 @@ class Brain:
             chosen, default = self._settings.get(role.setting), role.default
             if (
                 not isinstance(chosen, str)
+                or chosen.startswith("@")
                 or chosen == default
                 or find(entries, role.kind, chosen) is not None
                 or find(entries, role.kind, default) is None
