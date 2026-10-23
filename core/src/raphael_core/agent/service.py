@@ -153,6 +153,7 @@ from ..messaging.words import compose
 from ..worker.loop import Stop, ToolOutcome, WAITING
 from ..worker.guards import MAX_ARGUMENT_CHARS, canonical
 from .answers import Reply, Voice, build_user_message
+from .attribution import labelled_lines, owner_lines, relayed_answer
 from .narration import NarratedLoop
 from .cli.discovery import CliBrains, brain_ref
 from .cli.loop import CliLoop, MEMORY_TOOLS, Sessions as CliSessions
@@ -393,6 +394,10 @@ class _Ask:
     # For a request one member hands another (`answer_for`): the one who asked. The turn is then an
     # exchange, written in both threads, and nothing in it is the owner's own words.
     peer: int | None = None
+    # The same direction in both copies of an exchange, independent of whose thread owns it.
+    exchange_speakers: tuple[str, str] | None = None
+    exchange_owner_sources: tuple[str, ...] = ()
+    exchange_answer: str = ""
     # What the ledger held before this request: a request answered inside another's shares its
     # ledger, and its turn costs only what was added.
     cost_base: float = 0.0
@@ -1295,7 +1300,8 @@ class AgentService:
                 )
             system += roster_prompt(self._team, ask.speaker, ask.language)
             user = build_user_message(
-                ask.text, self._moment(), context.turns, [], ask.language,
+                labelled_lines(ask.exchange_speakers[0], ask.text) if ask.exchange_speakers else ask.text,
+                self._moment(), context.turns, [], ask.language,
                 background_block(self._briefs(ask.speaker.id)), summary=context.summary, say_ja=say_ja, narrated=True,
             )
             if ask.attachments:
@@ -2087,6 +2093,9 @@ class AgentService:
         background, `ask_in_background`), and its costs go to
         `ledger`, the asker's, so they count toward the asker's limits and the month's. The
         exchange is written in the two threads, one line each, and nowhere else."""
+        requester = asker.name or "Raphael"
+        respondent = target.name or "Raphael"
+        sources = owner_lines(self._conversation_of(target.id).context(quick=False).turns)
         ask = _Ask(
             session_id=session_id,
             text=request,
@@ -2094,6 +2103,8 @@ class AgentService:
             source=EXCHANGE_SOURCE,
             speaker=target.asked_by(asker),
             peer=asker.id,
+            exchange_speakers=(requester, respondent),
+            exchange_owner_sources=sources,
             cost_base=ledger.total,
         )
         settings = self._read_settings(ask.speaker)
@@ -2112,7 +2123,8 @@ class AgentService:
         if not ok:
             result = self._failed(ask, "exchange", failure or "error", ledger)
         assert result is not None
-        said = result.get("text", "")
+        # The saved exchange contains all final replies, with provenance added by _record.
+        said = ask.exchange_answer or relayed_answer(respondent, result.get("text", ""), sources)
         mirror = _Ask(
             session_id=session_id,
             text=request,
@@ -2122,6 +2134,7 @@ class AgentService:
             peer=target.id,
             cost_base=ledger.total,
         )
+        mirror.text = labelled_lines(requester, request)
         self._record(mirror, "exchange", "", said, "done" if ok else "error", None, ledger)
         logger.info("An exchange between members: ok=%s", ok)
         return ok, said
@@ -2943,6 +2956,14 @@ class AgentService:
         its request; 0 if that fails, since the answer matters more. A request one member handed
         another is written as an exchange with the asker (`peer_id`)."""
         member_id = ask.speaker.id
+        question = ask.text
+        if ask.exchange_speakers is not None:
+            requester, respondent = ask.exchange_speakers
+            question = labelled_lines(requester, question)
+            text = relayed_answer(respondent, "\n".join(ask.replies) if ask.replies else text, ask.exchange_owner_sources)
+            ask.exchange_answer = text
+            if detail:
+                detail = relayed_answer(respondent, detail, ask.exchange_owner_sources)
         try:
             cost = max(ledger.total - ask.cost_base, 0.0)
             if ask.turn_id:
@@ -2955,7 +2976,7 @@ class AgentService:
                 self._history.add_steps(turn_id, ask.steps[ask.recorded_steps:])
             else:
                 turn_id = self._history.add(
-                    session_id=ask.session_id, question=ask.text,
+                    session_id=ask.session_id, question=question,
                     route="exchange" if ask.nested else route, prefix=prefix, text=text,
                     detail=detail, status=status, cost_usd=cost,
                     source=ask.source, model=ledger.model, steps=ask.steps,

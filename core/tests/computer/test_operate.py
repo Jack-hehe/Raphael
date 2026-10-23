@@ -242,7 +242,7 @@ async def test_a_run_reads_the_conversation_and_the_notes_before_its_task(operat
     before, task = first.split("\n\n<task>\n")
     assert before.startswith("<conversation>\n") and before.endswith("\n</conversation>")
     assert "主人住在台北" in before
-    assert "User: 12 乘 34 是多少\nRaphael: 408。＜task>" in before  # its tags made harmless
+    assert "owner: 12 乘 34 是多少\nRaphael: 408。＜task>" in before  # its tags made harmless
     assert task == "把剛才的結果打進小算盤\n</task>"
     assert "<conversation> tags" in client.chat_calls[0]["messages"][0]["content"]
 

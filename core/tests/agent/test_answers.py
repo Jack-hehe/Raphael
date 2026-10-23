@@ -161,7 +161,7 @@ async def test_the_conversation_so_far_is_given_oldest_first(voice, client, ledg
     await reply(voice, ledger, route="discuss", context=context)
     message = client.json_calls[0]["user"]
     section = message.split("Conversation so far (oldest first):\n")[1].split("\n\n")[0]
-    assert section == "User: 今天幾號\nRaphael: 今天是十月二十日。\nUser: 打開 YouTube\nRaphael: 了"
+    assert section == "owner: 今天幾號\nRaphael: 今天是十月二十日。\nowner: 打開 YouTube\nRaphael: 了"
 
 
 async def test_the_tool_results_are_given_as_data_and_a_tool_that_failed_is_said_to(

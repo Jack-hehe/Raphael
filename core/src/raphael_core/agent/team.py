@@ -72,7 +72,8 @@ def _definition(name: str) -> dict[str, Any]:
                 "Ask another assistant of the owner's team (a member by its name, or Raphael) to "
                 "answer a request or do something within its role and tools, and get its answer "
                 "back. It answers from what it knows: its own conversation and notes, which you do "
-                "not see."
+                "not see. Returned lines identify the speaker; an owner quotation remains the "
+                "owner's words, even when another member relays it."
             ),
             "parameters": {
                 "type": "object",
