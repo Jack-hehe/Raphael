@@ -30,7 +30,7 @@ import {
 } from "./member-dialogs";
 import { RAPHAEL_ID, type ToolChoice, faceHTML, memberOf, memberSections, raphaelOf, toolChoices } from "./members";
 import type { AppContext, AvatarPreset, Member, MemberPatch, MembersList, ModelCatalog, WireAttachment } from "./types";
-import { type Choice, esc, ico, leave, openMenu, toaster } from "./ui";
+import { type Choice, closeMenu, esc, ico, leave, openMenu, toaster } from "./ui";
 
 /** Below this window width the details panel lies over the chat instead of taking a column of its own. */
 export const DETAILS_COLUMN_MIN_PX = 1120;
@@ -41,6 +41,8 @@ export interface MembersHost {
   app: AppContext;
   /** The owner chose another member's thread. */
   onSelect(id: number): void;
+  /** The list of members changed (a name or picture was updated). */
+  onUpdate?(): void;
   /** Whether the page is on screen now (a thread read only then). */
   visible(): boolean;
 }
@@ -177,32 +179,49 @@ export function createMembers(host: MembersHost): MembersShell {
       details.showMember();
     }
     drawAll();
+    host.onUpdate?.();
     void readThread();
     if (host.visible()) tellViewing(current);
     previews.clear();
     for (const m of read.members) previews.set(m.id, m.preview ?? "");
     column.draw();
     if (!presetsRead) {
-      presetsRead = true;
       void Promise.resolve()
         .then(() => api.membersPresets())
-        .then((answer) => {
-          presets = Array.isArray(answer?.presets) ? answer.presets : [];
-        }, () => {});
+        .then(
+          (answer) => {
+            if (Array.isArray(answer?.presets)) {
+              presets = answer.presets;
+              presetsRead = true;
+            }
+          },
+          () => {},
+        );
     }
     if (!toolsRead) {
-      toolsRead = true;
       // the core's own list of what a member may be given, or, from a core without it, the connections
       void Promise.resolve()
         .then(() => api.membersToolChoices())
         .then(
-          (answer) => toolChoices(answer.connections ?? [], answer.tools),
-          () => Promise.resolve().then(() => api.toolsetsList()).then((answer) => toolChoices(answer?.groups ?? [])),
+          (answer) => {
+            if (answer && (Array.isArray(answer.connections) || Array.isArray(answer.tools))) toolsRead = true;
+            return toolChoices(answer?.connections ?? [], answer?.tools);
+          },
+          () =>
+            Promise.resolve()
+              .then(() => api.toolsetsList())
+              .then((answer) => {
+                if (Array.isArray(answer?.groups)) toolsRead = true;
+                return toolChoices(answer?.groups ?? []);
+              }),
         )
-        .then((choices) => {
-          connections = choices;
-          details.draw();
-        }, () => {});
+        .then(
+          (choices) => {
+            connections = choices;
+            details.draw();
+          },
+          () => {},
+        );
     }
   }
 
@@ -285,7 +304,15 @@ export function createMembers(host: MembersHost): MembersShell {
       ...(m.waiting ? { tag: t("members.waitingShort") } : m.unread ? { tag: t("members.unread") } : {}),
     }));
     openMenu(picker, people, String(current), (value) => select(Number(value)), undefined, [
-      { label: t("members.newMember"), icon: "plus", run: () => newMember(null) },
+      {
+        label: t("members.newMember"),
+        icon: "plus",
+        run: () => {
+          closeMenu();
+          picker.focus({ preventScroll: true });
+          newMember(null);
+        },
+      },
     ]);
   });
 
@@ -328,7 +355,13 @@ export function createMembers(host: MembersHost): MembersShell {
           return false;
         }
         const id = answer.member.id;
-        if (picture) await api.membersSetAvatar(id, picture).catch((err: unknown) => toaster.info(describeError(err)));
+        if (picture) {
+          try {
+            await api.membersSetAvatar(id, picture);
+          } catch (err) {
+            toaster.info(describeError(err));
+          }
+        }
         toaster.info(t("members.created", { p0: made.name }));
         await load();
         select(id);
@@ -337,7 +370,11 @@ export function createMembers(host: MembersHost): MembersShell {
         if (offer) {
           setTimeout(async () => {
             if (!(await offerRoutine(offer))) return;
-            await api.routinesCreate({ member_id: id, ...offer }).catch((err: unknown) => toaster.info(describeError(err)));
+            try {
+              await api.routinesCreate({ member_id: id, ...offer });
+            } catch (err) {
+              toaster.info(describeError(err));
+            }
             if (current === id) details.showMember();
           }, 0);
         }

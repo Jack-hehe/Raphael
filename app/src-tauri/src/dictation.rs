@@ -23,11 +23,10 @@
 //!   「一律允許」). Esc while the answer is with the agent stops what it goes on with. An agent
 //!   session never pastes and never touches the clipboard of the focused window.
 //!
-//! A recording has no time limit. It ends when the key stops it, when Esc cancels it, or by
-//! itself when the core has heard no speech in it for ten seconds: the core says so
-//! (`dictation.silence`) and the recording is stopped as the key would stop it ([`on_silence`]).
-//! The core never says so of a question to Raphael: only the key or Esc ends it, unless what
-//! listens has failed.
+//! A recording has no time limit, and silence never ends it: it ends only when the key stops it
+//! or Esc cancels it. When what listens or transcribes in the core has failed for good and the
+//! session can hear nothing more, the core says so (`dictation.silence`, named from when silence
+//! ended a recording too) and the recording is stopped as the key would stop it ([`on_silence`]).
 //! The wait for the core's `dictation.stop` grows with the length of the recording
 //! ([`dictation_stop_timeout`]).
 //!
@@ -651,15 +650,15 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
     }
 
-    /// The core's `dictation.silence`: the recording of the session it names has heard no speech
-    /// for ten seconds. If that session is the current one and still recording, it is stopped at
-    /// `now_ms` (on the clock of [`Self::on_hotkey`]) exactly as the key would stop it: what was
-    /// said is transcribed and pasted, or asked, and a recording in which nothing was said ends
-    /// as one does when the key stops it with nothing heard. Whatever the keys were in the middle
-    /// of is forgotten, as when Esc ends a recording: the release of a key that is still held
-    /// (hold mode), or the next press (toggle mode), is a new start, not a stop. A notification
-    /// about any other session (stopped or cancelled meanwhile, or from before a restart) is
-    /// dropped.
+    /// The core's `dictation.silence`: the recording of the session it names can hear nothing
+    /// more (what listens or transcribes has failed). If that session is the current one and
+    /// still recording, it is stopped at `now_ms` (on the clock of [`Self::on_hotkey`]) exactly
+    /// as the key would stop it: what was said is transcribed and pasted, or asked, and a
+    /// recording in which nothing was said ends as one does when the key stops it with nothing
+    /// heard. Whatever the keys were in the middle of is forgotten, as when Esc ends a recording:
+    /// the release of a key that is still held (hold mode), or the next press (toggle mode), is a
+    /// new start, not a stop. A notification about any other session (stopped or cancelled
+    /// meanwhile, or from before a restart) is dropped.
     pub fn on_silence(&self, params: &Value, now_ms: u64) -> Option<JoinHandle<()>> {
         let Some(session) = params.get("session_id").and_then(Value::as_str) else {
             log::debug!("dictation.silence ignored: {params}");
@@ -7707,7 +7706,7 @@ mod tests {
         assert_eq!(seen.lock().unwrap().last(), Some(&(Phased::Failed, false)));
     }
 
-    // ---------- ten seconds of silence stop the recording ----------
+    // ---------- the core says a recording can hear nothing more (dictation.silence) ----------
 
     /// The id of the session the core was last asked to start.
     fn started_id(c: &Ctl) -> String {
@@ -7717,7 +7716,7 @@ mod tests {
             .to_owned()
     }
 
-    /// The core's `dictation.silence` for `session`, at `now_ms`; the stop's task is awaited.
+    /// The core's `dictation.silence` (can hear nothing more) for `session`, at `now_ms`; the stop's task is awaited.
     async fn silence(c: &Ctl, session: &str, now_ms: u64) -> bool {
         match c.on_silence(&json!({ "session_id": session }), now_ms) {
             Some(task) => {
@@ -7729,7 +7728,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn silence_stops_the_dictation_as_the_key_would_and_pastes_it() {
+    async fn notice_that_it_can_hear_nothing_more_stops_the_dictation_as_the_key_would() {
         for mode in BOTH_MODES {
             let c = controller_in(
                 mode,
@@ -7759,9 +7758,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn after_a_silence_the_keys_start_afresh() {
-        // Hold mode: the key is still down when the silence ends the recording. Its release is
-        // nobody's, and the next press starts a new dictation.
+    async fn after_the_core_stops_a_recording_the_keys_start_afresh() {
+        // Hold mode: the key is still down when the core's notice ends the recording. Its release
+        // is nobody's, and the next press starts a new dictation.
         let c = controller_in(
             DictationMode::Hold,
             FakeCore::with("dictation.stop", stop_result("好", None)),
@@ -7802,7 +7801,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_silence_in_which_nothing_was_said_ends_like_a_stop_that_heard_nothing() {
+    async fn a_stopped_session_in_which_nothing_was_said_ends_like_a_stop_that_heard_nothing() {
         let c = controller(
             FakeCore::with("dictation.stop", empty_result(false)),
             FakePaster::pasting("notepad.exe"),
@@ -7825,7 +7824,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_silence_of_another_session_is_ignored() {
+    async fn a_notice_of_another_session_is_ignored() {
         let c = controller(
             FakeCore::with("dictation.stop", stop_result("好", None)),
             FakePaster::pasting("notepad.exe"),
@@ -7844,14 +7843,14 @@ mod tests {
         let id = started_id(&c);
         run(&c, DictationUp, 13_000).await;
         assert_eq!(c.core().count("dictation.stop"), 1);
-        // A silence that comes after the stop is the stopped session's: nothing to do.
+        // A notice that comes after the stop is the stopped session's: nothing to do.
         assert!(!silence(&c, &id, 13_100).await);
         assert_eq!(c.core().count("dictation.stop"), 1);
         assert_eq!(c.paster().delivered(), vec!["好"]);
     }
 
     #[tokio::test]
-    async fn a_silence_while_the_stop_is_under_way_changes_nothing() {
+    async fn a_notice_while_the_stop_is_under_way_changes_nothing() {
         let (core, gate) =
             FakeCore::with("dictation.stop", stop_result("好", None)).gated("dictation.stop");
         let c = controller(core, FakePaster::pasting("notepad.exe"));
@@ -7872,7 +7871,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_silence_after_esc_is_ignored() {
+    async fn a_notice_after_esc_is_ignored() {
         let c = controller(
             FakeCore::with("dictation.stop", stop_result("好", None)),
             FakePaster::pasting("notepad.exe"),
@@ -7886,7 +7885,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn silence_ends_a_question_to_raphael_too() {
+    async fn notice_that_it_can_hear_nothing_more_ends_a_question_to_raphael_too() {
         for mode in BOTH_MODES {
             let c = controller_in(
                 mode,
@@ -7931,7 +7930,7 @@ mod tests {
             c.core().timeout("dictation.stop"),
             Some(dictation_stop_timeout(Duration::from_secs(1)))
         );
-        // An hour of dictation, ended by its silence.
+        // An hour of dictation, stopped when the core says it can hear nothing more.
         run(&c, DictationDown, 10_000).await;
         assert!(silence(&c, &started_id(&c), 10_000 + 3_600_000).await);
         assert_eq!(

@@ -274,7 +274,17 @@ export function createAgent(app: AppContext): Page {
 
   // ---------- the members ----------
 
-  const members = createMembers({ app, visible: () => visible, onSelect: () => switchThread() });
+  const members = createMembers({
+    app,
+    visible: () => visible,
+    onSelect: () => switchThread(),
+    onUpdate: () => {
+      drawComposer();
+      drawFaces();
+      hi.textContent = emptyLine();
+      if (visible && !scroller.hidden) drawThread();
+    },
+  });
   el.prepend(members.column);
   el.append(members.details);
   if (members.detailsOpen()) el.dataset.det = "open";
@@ -613,7 +623,7 @@ export function createAgent(app: AppContext): Page {
 
   function render(follow = false): void {
     stage.setAttribute("aria-busy", String(pending));
-    if (pending && turns.length === 0 && outgoing.length === 0 && hearing === null) {
+    if (pending && isEmpty()) {
       wait.innerHTML = loadingHTML();
       wait.hidden = false;
       scroller.hidden = empty.hidden = dock.hidden = true;
@@ -638,9 +648,9 @@ export function createAgent(app: AppContext): Page {
     const wasEmpty = scroller.hidden;
     empty.hidden = true;
     scroller.hidden = dock.hidden = false;
+    const keepUp = follow || wasEmpty || atBottom();
     drawDock();
     state.nowMs = Date.now();
-    const keepUp = follow || wasEmpty || atBottom();
     noteTaskEnds(shown, state);
     drawThread();
     drawDock();
@@ -739,10 +749,25 @@ export function createAgent(app: AppContext): Page {
 
   /** The questions in the history now are no longer waited for: a typed one by its words, a spoken one by any new turn of the voice. */
   function settlePending(): void {
+    const current = memberId();
     const sinceSent = (sent: Outgoing): AgentTurn | undefined =>
-      turns.find((turn) => sourceOf(turn) === TYPED && turn.question.trim() === sent.text.trim() && turn.created_at_ms >= sent.sentAt - 5_000);
+      sent.member === current
+        ? turns.find(
+            (turn) =>
+              (turn.member_id ?? RAPHAEL_ID) === sent.member &&
+              sourceOf(turn) === TYPED &&
+              turn.question.trim() === sent.text.trim() &&
+              turn.created_at_ms >= sent.sentAt - 5_000,
+          )
+        : undefined;
     outgoing = outgoing.filter((sent) => sinceSent(sent) === undefined);
-    if (hearing && (turns.some((turn) => turn.id > hearing!.after && sourceOf(turn) === VOICE) || Date.now() - hearing.since > HEARING_MAX_MS)) stopHearing();
+    if (
+      hearing &&
+      ((inRaphael() && turns.some((turn) => turn.id > hearing!.after && sourceOf(turn) === VOICE)) ||
+        Date.now() - hearing.since > HEARING_MAX_MS)
+    ) {
+      stopHearing();
+    }
   }
 
   /**
@@ -799,24 +824,27 @@ export function createAgent(app: AppContext): Page {
       if (member === RAPHAEL_ID) await api.agentAskText(text, wireAttachments(sending));
       else await api.agentAskText(text, wireAttachments(sending), member);
     } catch (err) {
-      askingMember = null;
+      if (askingMember === member) askingMember = null;
       outgoing = outgoing.filter((item) => item !== mine);
-      if (input.value === "") {
-        input.value = text;
-        fit();
-      }
-      // The files come back to the composer, unless others were attached meanwhile.
-      if (files.length === 0 && sending.length > 0) {
-        files = sending;
-        drawFile();
+      if (memberId() === member) {
+        if (input.value === "") {
+          input.value = text;
+          fit();
+        }
+        // The files come back to the composer, unless others were attached meanwhile.
+        if (files.length === 0 && sending.length > 0) {
+          files = sending;
+          drawFile();
+        }
       }
       toaster.info(describeError(err));
       render();
       return;
     }
-    askingMember = null;
+    if (askingMember === member) askingMember = null;
     // The turn is written by now: the history brings it, and the question waits no more.
-    await load(false);
+    if (memberId() === member) await load(false);
+    else members.changed();
     outgoing = outgoing.filter((item) => item !== mine);
     render();
   }
@@ -1165,6 +1193,11 @@ export function createAgent(app: AppContext): Page {
     if (searching) closeSearch(false);
     thread.replaceChildren();
     if (voice.isUp) voice.drop();
+    input.value = "";
+    attached = null;
+    files = [];
+    drawFile();
+    fit();
     drawComposer();
     drawFaces();
     hi.textContent = emptyLine();
@@ -1436,6 +1469,7 @@ export function createAgent(app: AppContext): Page {
     id: "agent",
     el,
     show(arg) {
+      const wasVisible = visible;
       visible = true;
       void members.load();
       // A draft goes into the field at once; the composer may then move (the empty page has it
@@ -1456,7 +1490,7 @@ export function createAgent(app: AppContext): Page {
         })
         .catch(() => {});
       void load(false).then(() => {
-        if (visible && !scroller.hidden) scroller.scrollTop = scroller.scrollHeight;
+        if (visible && !scroller.hidden && (!wasVisible || draft !== null)) scroller.scrollTop = scroller.scrollHeight;
         refocus();
       });
       drawBackgroundQuestions();

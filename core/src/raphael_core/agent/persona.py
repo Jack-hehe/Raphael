@@ -17,7 +17,9 @@ marks, never "as an AI".
 """
 
 import re
+import string
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import NamedTuple
 
 from ..memory.store import MemoryIndex
@@ -388,6 +390,72 @@ def phrase(language: str, name: str, **fields: str) -> str:
     return text.format(**fields) if fields else text
 
 
+@lru_cache(maxsize=None)
+def _templates(language: str) -> tuple[tuple[str, "re.Pattern[str]", tuple[str, ...]], ...]:
+    """For each phrase of `language` that has any words: its name, the pattern that matches it with
+    any text in the place of each `{field}`, and the names of its fields."""
+    found = []
+    for name in Phrases.__dataclass_fields__:
+        template = getattr(PHRASES[language], name)
+        if not template:
+            continue
+        pattern, fields = "", []
+        for literal, field, _spec, _conversion in string.Formatter().parse(template):
+            pattern += re.escape(literal)
+            if field is not None:
+                fields.append(field)
+                # A field named twice must be the same text both times.
+                pattern += f"(?P={field})" if fields.count(field) > 1 else f"(?P<{field}>.+?)"
+        found.append((name, re.compile(pattern, re.DOTALL), tuple(fields)))
+    # The phrases with fewest fields first, then the longest: "Something is waiting for you." is the
+    # phrase of its own, not "{member} is waiting for you." with a member called Something.
+    found.sort(key=lambda entry: (len(entry[2]), -len(entry[1].pattern)))
+    return tuple(found)
+
+
+def fixed_line(language: str, text: str, target: str) -> str | None:
+    """`text` in the words of `target`, if `text` is one of the fixed phrases of `language`
+    (`PHRASES`, with its fields filled in): the same phrase in `target`, with the same fields (a
+    member's name, a number of steps). None when `text` is not one of them: a line the model
+    worded has no counterpart to look up. A line is told by its words alone, so nothing has to be
+    carried from where it was made to where it is spoken."""
+    if language == target:
+        return text
+    for name, pattern, fields in _templates(language):
+        found = pattern.fullmatch(text)
+        if found is None:
+            continue
+        template = getattr(PHRASES[target], name)
+        return template.format(**{field: found.group(field) for field in fields}) if fields else template
+    return None
+
+
+def spoken_line(
+    language: str, prefix: str, text: str, say_ja: str = "", *, voice_language: str = "ja"
+) -> tuple[str, str] | None:
+    """`(prefix, text)` as the voice speaks them, or None when there is nothing to say in its
+    language. The voice speaks `voice_language` (the setting `tts_language`: Japanese, the only
+    language of the owner's voice model) whatever `language` the line is shown in.
+
+    - In the voice's own language the line is spoken as it is shown.
+    - A fixed phrase (`fixed_line`: a failure, a refusal, the cancelled line, "Noted.") is spoken in
+      the voice's wording of the same phrase.
+    - A line the model worded is spoken as `say_ja`, the rendering the model made of it in the same
+      reply (`Reply.say_ja`); with none, there is nothing to say, since a line in the wrong language
+      is not read in a voice that does not speak it.
+
+    The prefix is the voice language's counterpart of the shown one (答 is 解, "Notice" is 告)."""
+    spoken_prefix = canonical_prefix(prefix, voice_language, default=PREFIXES[voice_language].answer)
+    if language == voice_language:
+        return prefix, text
+    fixed = fixed_line(language, text, voice_language)
+    if fixed is not None:
+        return spoken_prefix, fixed
+    if say_ja.strip():
+        return spoken_prefix, say_ja.strip()
+    return None
+
+
 def parenthesized(language: str, text: str) -> str:
     """`text` in brackets after what it explains, written the way the language writes them (a space
     and round brackets in English, full-width ones close up in Chinese and Japanese); nothing when
@@ -598,11 +666,14 @@ def memory_rules(index: "str | MemoryIndex") -> str:
     return _MEMORY_RULES.format(index=str(indexes))
 
 
-def language_reminder(language: str) -> str:
+def language_reminder(language: str, *, say_ja: bool = False) -> str:
     """The last line the answering model reads. With reasoning off, a model answers in the
     language of the question and of the conversation shown to it, whatever the system prompt said
     (seen live: a Chinese question in the English interface got a Chinese answer), unless this is
-    the last thing it is told."""
+    the last thing it is told. With `say_ja`, the one field that is in Japanese is named, so that
+    the reminder does not pull it into the language of the screen."""
+    if say_ja:
+        return f'Reply in {_LANGUAGE_NAMES[language]} only, except the field "say_ja", which is Japanese.'
     return f"Reply in {_LANGUAGE_NAMES[language]} only."
 
 
@@ -824,10 +895,28 @@ def member_worker_system_prompt(
     )
 
 
-def system_prompt(language: str, route: str, memory_index: str | None = None) -> str:
+_SAY_JA = """\
+
+The spoken line
+Your reply is also read aloud, by a voice that speaks Japanese and nothing else. So the JSON \
+object has one more field.
+- "say_ja": what "text" says, as you would say it aloud in natural Japanese, in your own calm, \
+precise voice (polite です and ます, terse, no casual endings), using "{address_ja}" as \
+sparingly as in "text" and not otherwise. The same meaning and the same figures, no more: not a \
+word-for-word translation but the sentence a Japanese speaker would say. At most 200 characters, \
+one line of plain text, without the prefix and without brackets of any kind, no markdown, no \
+links, no emoji. Write numbers and names so that they are easy to read aloud. This is the only \
+field written in Japanese when "text" is not."""
+
+
+def system_prompt(
+    language: str, route: str, memory_index: str | None = None, *, say_ja: bool = False
+) -> str:
     """The system prompt for the model that words an answer on `route` ("answer", "discuss" or
     "chat") in `language`, with the memory's rules and index (`memory_rules`) when there is a
-    memory (`memory_index` is not None). The same arguments always give the same prompt."""
+    memory (`memory_index` is not None). With `say_ja`, the reply has a field more, `say_ja`: the
+    line in Japanese, for the voice (which speaks Japanese only) when the screen is not in it. The
+    same arguments always give the same prompt."""
     prefixes = PREFIXES[language]
     prompt = _SYSTEM_PROMPT.format(
         language=_LANGUAGE_NAMES[language],
@@ -843,6 +932,8 @@ def system_prompt(language: str, route: str, memory_index: str | None = None) ->
         limit=_LIMIT_WORDS[language],
         route=_ROUTE_RULES[route],
     )
+    if say_ja:
+        prompt += _SAY_JA.format(address_ja=ADDRESS["ja"])
     if memory_index is None:
         return prompt
     return prompt + "\n\n" + memory_rules(memory_index)

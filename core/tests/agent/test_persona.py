@@ -374,3 +374,72 @@ def test_the_answer_rules_refuse_only_when_nothing_useful_can_be_said(language):
     assert "speech-to-text" in prompt  # a dictation app: SST is most likely STT
     assert "Never invent a number" in prompt  # live facts stay on the tool results
     assert "use only the tool results and the conversation" not in prompt
+
+
+# --- what the voice speaks -----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("language", ["zh-TW", "en"])
+def test_every_fixed_phrase_is_found_again_in_its_japanese_wording(language):
+    fields = {"server": "S", "tool": "T", "what": "W", "steps": "3", "member": "小行程", "rule": "R",
+              "app": "A", "target": "G", "keys": "K"}  # fmt: skip
+    for name in persona.Phrases.__dataclass_fields__:
+        shown = phrase(language, name, **{k: v for k, v in fields.items() if "{" + k + "}" in getattr(PHRASES[language], name)})
+        expected = phrase("ja", name, **{k: v for k, v in fields.items() if "{" + k + "}" in getattr(PHRASES["ja"], name)})
+        assert persona.fixed_line(language, shown, "ja") == expected, name
+
+
+def test_a_line_that_is_no_fixed_phrase_has_no_japanese_wording():
+    assert persona.fixed_line("zh-TW", "台北現在 24 度。", "ja") is None
+    assert persona.fixed_line("en", "It is 24 degrees.", "ja") is None
+
+
+def test_a_fixed_phrase_keeps_the_words_of_its_fields():
+    shown = phrase("en", "worker_cancelled", steps="7")
+    assert persona.fixed_line("en", shown, "ja") == phrase("ja", "worker_cancelled", steps="7")
+
+
+def test_in_the_voice_language_a_line_is_spoken_as_it_is_shown():
+    assert persona.spoken_line("ja", "解", "二十四度です。") == ("解", "二十四度です。")
+
+
+@pytest.mark.parametrize(
+    ("language", "shown", "spoken"),
+    [("zh-TW", "答", "解"), ("zh-TW", "告", "告"), ("zh-TW", "否", "否"), ("zh-TW", "了", "了"),
+     ("zh-TW", "問", "問"), ("en", "Answer", "解"), ("en", "Notice", "告"), ("en", "Negative", "否"),
+     ("en", "Understood", "了"), ("en", "Question", "問")],
+)  # fmt: skip
+def test_the_prefix_is_spoken_as_its_japanese_counterpart(language, shown, spoken):
+    assert persona.spoken_line(language, shown, "x", "はい。") == (spoken, "はい。")
+
+
+def test_a_line_is_spoken_as_the_models_japanese_when_it_is_no_fixed_phrase():
+    assert persona.spoken_line("zh-TW", "答", "台北現在 24 度。", "二十四度です。") == ("解", "二十四度です。")
+
+
+def test_a_line_with_no_japanese_is_not_spoken():
+    assert persona.spoken_line("zh-TW", "答", "台北現在 24 度。", "") is None
+    assert persona.spoken_line("en", "Answer", "It is 24 degrees.", "  ") is None
+
+
+def test_a_fixed_phrase_is_spoken_in_japanese_even_if_the_model_wrote_a_japanese_line():
+    shown = phrase("zh-TW", "denied")
+    assert persona.spoken_line("zh-TW", "了", shown, "別の文") == ("了", phrase("ja", "denied"))
+
+
+def test_the_system_prompt_asks_for_the_japanese_line_only_when_told_to():
+    plain = persona.system_prompt("zh-TW", "chat")
+    asking = persona.system_prompt("zh-TW", "chat", say_ja=True)
+    assert "say_ja" not in plain and asking.startswith(plain)
+    assert '"say_ja"' in asking and "200 characters" in asking and "brackets" in asking
+    assert persona.system_prompt("zh-TW", "chat", "index", say_ja=True).endswith(
+        persona.memory_rules("index")
+    )  # the memory's rules stay last
+    assert persona.system_prompt("zh-TW", "chat", say_ja=True) == persona.system_prompt(
+        "zh-TW", "chat", say_ja=True
+    )
+
+
+def test_the_language_reminder_names_the_japanese_field_only_when_there_is_one():
+    assert persona.language_reminder("en") == "Reply in English only."
+    assert 'except the field "say_ja"' in persona.language_reminder("en", say_ja=True)

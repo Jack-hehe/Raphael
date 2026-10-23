@@ -136,6 +136,7 @@ class FakeSegmenter:
         self.silence_seconds = 0.0
         self.flushes = 0
         self._flushed = False
+        self.fail_on_accept = False
         self.calls_from: set[int] = set()
         self.max_segment_s: list[float] = []  # each limit it was told, as set_max_segment_s keeps
         kit.segmenters.append(self)
@@ -146,6 +147,8 @@ class FakeSegmenter:
 
     def accept(self, frames):
         self.calls_from.add(threading.get_ident())
+        if self.fail_on_accept:
+            raise RuntimeError("vad failed")
         if self._flushed:
             self._flushed = False
             self.speech_seconds = 0.0
@@ -1728,28 +1731,34 @@ async def test_a_stop_that_ends_while_a_new_start_makes_way_does_not_reopen_the_
     assert kit.mics[-1].open and sum(mic.open for mic in kit.mics) == 1  # the meter is back
 
 
-async def test_a_silent_dictation_is_told_of_through_the_whole_app(make_app, notes):
+async def test_silence_never_ends_a_dictation_and_a_failed_detector_tells_the_app(make_app, notes):
     kit = make_kit()
     app = make_app(kit)
     listen(app, notes)
     await dictate(app)  # the first dictation has the detector built
-    assert notes.methods("dictation.silence") == []  # it heard speech
-    kit.segmenters[-1].silence_seconds = dictation.SILENCE_STOP_SECONDS
+    assert notes.methods("dictation.silence") == []
+    kit.segmenters[-1].silence_seconds = 60.0
     await app.call("dictation.start", {"session_id": "s2"})
-    await wait_until(lambda: notes.methods("dictation.silence"))
-    assert notes.methods("dictation.silence") == [{"session_id": "s2"}]
+    await asyncio.sleep(0.05)
+    assert notes.methods("dictation.silence") == []  # silence never ends a recording
     result = await app.call("dictation.stop", {"session_id": "s2", "target_app": None})
-    assert result["text"] == WORDS + WORDS  # the stop the app makes delivers what was heard
+    assert result["text"] == WORDS + WORDS
+    kit.segmenters[-1].fail_on_accept = True
+    await app.call("dictation.start", {"session_id": "s3"})
+    await wait_until(lambda: notes.methods("dictation.silence"))
+    assert notes.methods("dictation.silence") == [{"session_id": "s3"}]
+    with pytest.raises(RpcError):
+        await app.call("dictation.stop", {"session_id": "s3", "target_app": None})
 
 
 async def test_the_meter_comes_back_after_a_session_nobody_stopped(make_app, monkeypatch):
-    monkeypatch.setattr(dictation, "SILENCE_STOP_SECONDS", 0.0)  # silent at once
     monkeypatch.setattr(dictation, "LOST_SESSION_SECONDS", 0.3)
     kit = make_kit()
     app = make_app(kit)
     await app.call("audio.monitor", {"on": True})
     await app.call("dictation.start", {"session_id": "s"})  # and nobody stops it
     service = app._service.result()
+    service._tell_silence(service._session)  # it can hear nothing more, and the app was told
     await wait_until(lambda: not service.active)  # the watchdog cancelled it
     await wait_until(lambda: len(kit.mics) == 3 and kit.mics[2].open)  # the meter is back
     assert sum(mic.open for mic in kit.mics) == 1

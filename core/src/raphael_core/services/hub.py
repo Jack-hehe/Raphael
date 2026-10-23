@@ -31,7 +31,7 @@ Nothing here logs a key, a query, an address, a file's name or a result.
 
 import logging
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -197,13 +197,25 @@ class ServiceHub:
         )
         return service, page
 
-    async def speech(self, text: str) -> tts.Audio:
-        """The speech of `text` by the voice service chosen (`tts.synthesize`), with its key, voice
-        and model as the settings and the vault hold them now. ServiceError of a kind, among them
-        "not_configured" (no service, or no voice id) and "missing_secret" (no key)."""
+    def tts_ready(self) -> bool:
+        """Whether Raphael can be heard: a voice service is chosen and has what it needs (for
+        Fish Audio, a key and the owner's voice id). Nothing is requested to tell."""
+        service = self.tts_service()
+        if service == "none":
+            return False
+        if service in KEYED_SERVICES and not self._keys.has(service):
+            return False
+        return service != "fish" or bool(self._text("tts_fish_voice"))
+
+    def speech(self, text: str) -> AsyncIterator[bytes]:
+        """The speech of `text` by the voice service chosen (`tts.stream`) as chunks of PCM
+        (`tts.PCM_RATE`, mono, 16-bit), with its key, voice and model as the settings and the vault
+        hold them now. Close it (`contextlib.aclosing`) unless it is read to its end. ServiceError
+        of a kind, among them "not_configured" (no service, or no voice id) and "missing_secret"
+        (no key), raised when it is first read."""
         service = self.tts_service()
         key = self._keys.get(service) if service in KEYED_SERVICES else None
-        return await tts.synthesize(
+        return tts.stream(
             service,
             text,
             http=self._client(),

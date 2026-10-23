@@ -68,8 +68,11 @@ def said(text, *, detail="", memory=None, search=""):
     return completion(data)
 
 
-def raphael_said(text, prefix="答"):
-    return completion({"prefix": prefix, "text": text, "detail": "", "memory": [], "need": {"read": [], "search": ""}})
+def raphael_said(text, prefix="答", say_ja="台北です。"):
+    return completion(
+        {"prefix": prefix, "text": text, "detail": "", "say_ja": say_ja, "memory": [],
+         "need": {"read": [], "search": ""}}
+    )  # fmt: skip
 
 
 def live_said(text, **fields):
@@ -224,7 +227,10 @@ class _Voice:
     def __init__(self):
         self.said = []
 
-    def say(self, prefix, text):
+    def speaks(self):
+        return True
+
+    async def say(self, prefix, text):
         self.said.append((prefix, text))
 
     def stop(self):
@@ -254,7 +260,7 @@ async def test_a_members_reply_is_not_spoken(voiced, client):
     client.decisions.append(decision("chat"))
     client.replies.append(raphael_said("台北。"))
     await typed(rig, "主人住哪裡", 0)
-    assert voice.said == [("答", "台北。")]
+    assert voice.said == [("解", "台北です。")]  # in Japanese: the voice speaks nothing else
 
 
 async def test_an_exchange_between_members_is_never_spoken_only_raphaels_final_reply(voiced, client):
@@ -264,9 +270,11 @@ async def test_an_exchange_between_members_is_never_spoken_only_raphaels_final_r
     client.chats.append(chat("先問小研究。", ("ask_member", {"member": "小研究", "request": "上季的數字"})))
     client.decisions.append(decision("answer"))  # the member's flags
     client.replies.append(said("PRIVATE-ANSWER 上季營收兩百萬。", memory=[]))  # the member, asked
-    client.chats.append(live_said("小研究說上季營收兩百萬。", prefix="答"))
+    client.chats.append(
+        live_said("小研究說上季營收兩百萬。", prefix="答", say_ja="小研究によると、前期の売上は二百万です。")
+    )  # Raphael, to the owner
     await typed(rig, "問小研究上季的數字", 0)
-    assert voice.said == [("答", "小研究說上季營收兩百萬。")]
+    assert voice.said == [("解", "小研究によると、前期の売上は二百万です。")]
 
 
 async def test_a_member_asks_raphael_who_answers_as_himself(setup, client, conn):

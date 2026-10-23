@@ -361,3 +361,56 @@ async def test_nothing_the_user_said_or_the_model_answered_is_logged(
         with pytest.raises(AgentFailure):
             await reply(voice, ledger, question="我的秘密問題")
     assert "秘密" not in caplog.text
+
+
+# --- the line in Japanese, for the voice ----------------------------------------------------------
+
+
+def test_the_schema_has_the_japanese_field_only_when_asked_for():
+    assert "say_ja" not in reply_schema("zh-TW")["properties"]
+    asking = reply_schema("zh-TW", say_ja=True)
+    assert asking["properties"]["say_ja"] == {"type": "string"}
+    assert asking["required"] == ["prefix", "text", "detail", "say_ja"]
+    assert reply_schema("zh-TW", memory=True, say_ja=True)["required"][-3:] == ["say_ja", "memory", "need"]
+
+
+def test_the_japanese_line_is_one_line_without_the_brackets_and_within_the_limit():
+    assert answers_module.japanese_line("《解。\n二十四度です。》") == "解。 二十四度です。"
+    long_line = "二十四度です。" * 60
+    cut = answers_module.japanese_line(long_line)
+    assert len(cut) <= answers_module.SAY_JA_MAX and cut.endswith("。")
+
+
+@pytest.mark.parametrize("value", [None, 5, "", "  ", "It is 24 degrees.", "台北現在 24 度。"])
+def test_a_japanese_line_with_no_kana_is_none(value):
+    assert answers_module.japanese_line(value) == ""
+
+
+def test_a_reply_carries_the_japanese_line_beside_the_shown_one():
+    reply = parse_reply(
+        {"prefix": "答", "text": "台北現在 24 度。", "detail": "", "say_ja": "台北は二十四度です。"}, "zh-TW"
+    )
+    assert (reply.prefix, reply.text, reply.say_ja) == ("答", "台北現在 24 度。", "台北は二十四度です。")
+    assert parse_reply({"prefix": "答", "text": "好。", "detail": ""}, "zh-TW").say_ja == ""
+
+
+async def test_the_voice_asks_for_the_japanese_in_the_same_call_when_told_to(voice, client, ledger):
+    client.replies.append(completion({**spoken("答", "好。"), "say_ja": "はい。"}))
+    got = await reply(voice, ledger, say_ja=True)
+    assert len(client.json_calls) == 1 and got.say_ja == "はい。"
+    call = client.json_calls[0]
+    assert "say_ja" in call["schema"]["properties"]
+    assert call["system"] == persona.system_prompt("zh-TW", "answer", say_ja=True)
+    assert call["user"].endswith(persona.language_reminder("zh-TW", say_ja=True))
+
+
+async def test_the_voice_does_not_ask_for_it_by_default_nor_for_a_japanese_screen(
+    voice, client, ledger
+):
+    client.replies.append(completion(spoken()))
+    await reply(voice, ledger)
+    assert "say_ja" not in client.json_calls[0]["schema"]["properties"]
+    client.replies.append(completion(spoken("解", "はい。")))
+    await reply(voice, ledger, language="ja", say_ja=True)
+    assert "say_ja" not in client.json_calls[1]["schema"]["properties"]
+    assert "say_ja" not in client.json_calls[1]["system"]
