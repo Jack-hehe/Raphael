@@ -29,6 +29,7 @@ import type { LocalView } from "../local-models";
 import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
 import { type ServicesView, servicesHTML } from "../services";
 import { type ProvidersView, providersHTML, providersAddHTML, emptyProvidersView } from "../providers";
+import { type CliBrainsView, cliBrainsHTML, emptyCliBrainsView } from "../cli-brains";
 import { pricingNote } from "../pricing";
 import type { HotkeyField } from "../hotkey-recording";
 import type { AudioDevices, BrainSettings, DeviceSettings, LocalModel, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
@@ -288,6 +289,7 @@ export interface SettingsView {
   /** 服務, in the 拉斐爾 tab: who searches, reads pages and PDFs, and looks at images (none: not drawn). */
   services?: ServicesView;
   providers?: ProvidersView;
+  cliBrains?: CliBrainsView;
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
   languageGroups: LanguageGroup[] | null;
   /** The time the forecasts and the age of the prices are told from. */
@@ -343,11 +345,12 @@ function chosenPrice(catalog: ModelCatalog, role: ModelRole, id: string): string
 export function priceTexts(v: SettingsView): Record<string, string> {
   const catalog = catalogOf(v);
   const local = sttIsLocal(v) ? t("settings.sttLocalPrice") : null;
-  if (v.catalog === "loading") return { model: PRICES_LOADING(), "agent-model": PRICES_LOADING(), "stt-model": local ?? PRICES_LOADING(), note: "" };
-  if (!catalog) return { model: "", "agent-model": "", "stt-model": local ?? "", note: t("settings.030") };
+  const subscription = agentModel(v).startsWith("cli:") ? t("brains.subscription") : null;
+  if (v.catalog === "loading") return { model: PRICES_LOADING(), "agent-model": subscription ?? PRICES_LOADING(), "stt-model": local ?? PRICES_LOADING(), note: "" };
+  if (!catalog) return { model: "", "agent-model": subscription ?? "", "stt-model": local ?? "", note: t("settings.030") };
   return {
     model: chosenPrice(catalog, "cleanup", cleanupModel(v)),
-    "agent-model": chosenPrice(catalog, "answer", agentModel(v)),
+    "agent-model": subscription ?? chosenPrice(catalog, "answer", agentModel(v)),
     "stt-model": local ?? chosenPrice(catalog, "stt", sttModel(v)),
     note: pricingNote(catalog, v.now),
   };
@@ -381,6 +384,7 @@ export function modelPickerLook(v: SettingsView, role: ModelRole): ModelPickerLo
     current: role === "stt" ? sttModel(v) : role === "cleanup" ? cleanupModel(v) : agentModel(v),
     catalog: catalogOf(v),
     providers: v.providers?.providers,
+    clis: role === "answer" ? v.cliBrains?.clis : undefined,
     loading: v.catalog === "loading",
     favorites: v.brain?.model_favorites?.[role] ?? [],
     ...(role === "stt" ? { local: localView(v) } : {}),
@@ -687,7 +691,7 @@ function dataHTML(v: SettingsView): string {
 function modelsHTML(v: SettingsView): string {
   const providers = v.providers ?? emptyProvidersView();
   const selected = v.modelsTab ?? (v.pane === "usage" ? "usage" : "models");
-  const content = selected === "models" ? providersHTML(providers) +
+  const content = selected === "models" ? cliBrainsHTML(v.cliBrains ?? emptyCliBrainsView()) + providersHTML(providers) +
     section(t("models.used"), MODEL_ROWS.map((r) => modelRow(v, r)), priceSpan(v, "note")) + providersAddHTML(providers) :
     `<section class="sgroup" aria-label="${esc(t("models.usage"))}"><div class="slist">` + [
       keyRow(v),

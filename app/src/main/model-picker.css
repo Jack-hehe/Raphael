@@ -24,6 +24,8 @@
 :where(:root[data-keys]) .menu.mp-panel .mp-connection:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; box-shadow: none; }
 .mp-connection .num { color: var(--text-3); font-size: var(--fs-xs); }
 .mp-row-mark { display: inline-flex; flex: none; align-self: center; }
+.cli-marks { display: inline-flex; align-items: center; gap: 2px; }
+.mp-row-mark .cli-marks .mono.md, .mp-provider-mark .cli-marks .mono.md { width: 14px; height: 14px; }
 .mp-row-mark .mono.md, .mp-row-mark .logo, .mp-row-mark .i { width: 16px; height: 16px; }
 .mp-filters { position: relative; display: flex; flex-wrap: wrap; gap: 6px; }
 .menu.mp-panel .mp-dd { width: auto; max-width: 62%; min-height: 0; height: var(--h-ctl-sm); gap: 6px; padding: 0 8px 0 10px; border: 1px solid var(--btn-edge); border-radius: 7px; background: var(--btn); font-size: var(--fs-xs); color: var(--text-2); }

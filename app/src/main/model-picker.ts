@@ -34,7 +34,8 @@ import {
 } from "./local-models";
 import { formatPerMinute, formatPerMtok, pricingNote } from "./pricing";
 import { providerMark } from "./provider-marks";
-import type { CatalogModel, ModelCatalog, ModelRole, ModelProvider } from "./types";
+import { cliModels, subscriptionMarks } from "./cli-brains";
+import type { CatalogModel, CliBrain, ModelCatalog, ModelRole, ModelProvider } from "./types";
 import { CHECK, closeMenu, esc, ico, menuIsOpenFor, openPopover, placeMenu } from "./ui";
 
 // ---------- what the list shows ----------
@@ -71,7 +72,7 @@ export const modelsFor = (catalog: ModelCatalog, role: PickerRole): CatalogModel
 };
 
 /** Legacy slugs stay OpenRouter slugs. A colon inside a local model id is kept verbatim. */
-const modelRef = (model: CatalogModel): string => model.id.startsWith("@") || !model.provider_id || model.provider_id === "openrouter"
+const modelRef = (model: CatalogModel): string => model.id.startsWith("cli:") || model.id.startsWith("@") || !model.provider_id || model.provider_id === "openrouter"
   ? model.id : `@${model.provider_id}:${model.id}`;
 const connectionId = (model: CatalogModel): string => model.provider_id ?? (model.id.startsWith("@") ? model.id.slice(1).split(":", 1)[0] : "openrouter");
 const connectionName = (model: CatalogModel): string => model.provider_name ?? (connectionId(model) === "openrouter" ? "OpenRouter" : connectionId(model));
@@ -106,6 +107,7 @@ const hasTokenPrice = (m: CatalogModel): boolean => m.input_per_mtok !== null ||
  * by the token, `$2.00 / $12 每百萬 token`. Else 免費, 價格不固定 (a router) or 價格未知.
  */
 export function priceText(model: CatalogModel, role: PickerRole): string {
+  if (model.id.startsWith("cli:")) return t("brains.subscription");
   if (model.variable_price) return t("picker.varies");
   if (model.free) return t("picker.free");
   if (model.per_minute !== null) return t("pricing.003", { p0: formatPerMinute(model.per_minute) });
@@ -388,6 +390,7 @@ export class PickerList {
   }
 
   mark(id: string, fallback: string): string {
+    if (id === "subscription") return subscriptionMarks();
     return providerMark(this.connectionsInfo.find((p) => p.id === id)?.kind ?? fallback);
   }
 
@@ -467,7 +470,7 @@ function optionHTML(row: PickerRow, index: number, list: PickerList): string {
     `<button type="button" class="mp-opt" role="option" id="mp-o-${index}" tabindex="-1" data-id="${esc(model.id)}" aria-selected="false"` +
     `${row.usable ? "" : ' aria-disabled="true"'}${chosen ? " data-current" : ""} aria-label="${esc(heard.join(", "))}" title="${esc(model.id)}">` +
     `<span class="ck">${chosen ? CHECK : ""}</span>` +
-    `<span class="mp-main"><span class="mp-line"><span class="mp-row-mark" aria-hidden="true">${list.mark(connectionId(model), connectionName(model))}</span><span class="mp-name">${esc(model.name)}</span>` +
+    `<span class="mp-main"><span class="mp-line"><span class="mp-row-mark" aria-hidden="true">${model.id.startsWith("cli:") ? providerMark(model.provider) : list.mark(connectionId(model), connectionName(model))}</span><span class="mp-name">${esc(model.name)}</span>` +
     `<span class="mp-price num">${esc(price)}</span></span>` +
     (details.length ? `<span class="mp-sub">${esc(details.join(" · "))}</span>` : "") +
     `</span></button>` +
@@ -609,6 +612,7 @@ export interface ModelPickerOptions {
   catalog: ModelCatalog | null;
   /** Public connection metadata includes enabled connections with no models for this role. */
   providers?: readonly ModelProvider[];
+  clis?: readonly CliBrain[];
   loading?: boolean;
   /** What the control is called: the title of its row. It names the button and the list for a screen reader. */
   label: string;
@@ -657,7 +661,7 @@ function buttonFace(o: ModelPickerLook): { inner: string; label: string; title: 
     return { inner: `<span class="mp-tname">${esc(o.lead.name)}</span>${ico("down")}`, label: `${o.label}: ${o.lead.name}`, title: o.lead.name };
   }
   const local = o.local ? faceTitle(o.local) : null;
-  const model = local ? undefined : (o.catalog ? modelsFor(o.catalog, o.role) : []).find((m) => m.id === o.current);
+  const model = local ? undefined : pickerModels(o).find((m) => m.id === o.current);
   const name = local ?? model?.name ?? shortName(o.current);
   const price = local ? t("settings.sttLocalPrice") : model ? priceText(model, o.role) : o.loading ? "…" : "";
   const said = local ? t("settings.sttLocalPrice") : model ? priceDescription(model, o.role) : "";
@@ -694,6 +698,11 @@ const typing = (e: KeyboardEvent): boolean => e.key.length === 1 && e.key !== " 
 
 /** The picker whose list is open: a redraw hands its list to the same control. */
 let opened: { picker: MountedPicker; role: PickerRole; button: HTMLElement } | null = null;
+
+function pickerModels(o: ModelPickerLook): CatalogModel[] {
+  const apiModels = o.catalog ? modelsFor(o.catalog, o.role).filter((m) => !m.id.startsWith("cli:") && o.providers?.find((p) => p.id === connectionId(m))?.enabled !== false) : [];
+  return [...apiModels, ...(o.role === "answer" ? cliModels(o.clis ?? []) : [])];
+}
 
 interface Dropdown {
   which: "sort" | "provider";
@@ -768,7 +777,7 @@ class MountedPicker implements ModelPicker {
   // ---------- drawing ----------
 
   private models(): CatalogModel[] {
-    return this.o.catalog ? modelsFor(this.o.catalog, this.o.role).filter((m) => this.o.providers?.find((p) => p.id === connectionId(m))?.enabled !== false) : [];
+    return pickerModels(this.o);
   }
 
   private newList(state: Partial<PickerState>): PickerList {
@@ -888,7 +897,9 @@ class MountedPicker implements ModelPicker {
     const missing = this.o.loading ? t("common.loading") : t("picker.failed");
     empty.textContent = list.rows.length > 0 ? "" : this.o.catalog ? t("picker.empty") : missing;
     empty.hidden = list.rows.length > 0;
-    this.panel.querySelector(".mp-foot")!.textContent = footText(this.o.catalog, list.modelCount());
+    const subscription = list.state.connection === "subscription";
+    this.panel.querySelector(".mp-cols > span:last-child")!.textContent = t(subscription || KIND[this.o.role] !== "llm" ? "picker.prices" : "picker.tokenPrices");
+    this.panel.querySelector(".mp-foot")!.textContent = subscription ? t("picker.count", { p0: list.modelCount() }) : footText(this.o.catalog, list.modelCount());
     this.lit = null;
     if (scroll === "top") this.panel.querySelector(".mp-scroll")!.scrollTop = 0;
     this.paintActive(scroll === "center" || scroll === "nearest" ? scroll : null);

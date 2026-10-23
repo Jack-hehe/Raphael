@@ -35,6 +35,7 @@ import {
 import { createHotkeyRecording } from "../hotkey-recording";
 import { type ModelPicker, type ModelPickerLook, type PickerRole, mountModelPicker, replacementNotices, withFavorite } from "../model-picker";
 import { createServices } from "../services";
+import { createCliBrains } from "../cli-brains";
 import { createProviders } from "../providers";
 import { mountUsageAnalytics, type UsageAnalyticsMount } from "../usage-analytics";
 import { MonitorSwitch } from "../monitor";
@@ -256,9 +257,11 @@ export function createSettings(app: AppContext): SettingsPage {
   const rules = createRules({ visible: () => visible && pane === "agent", redraw: () => render(), undo: app.undo });
   /** 服務, in the 「拉斐爾」 tab: who does the work of Raphael's tools. Choosing is a change of the brain's settings. */
   const services = createServices({ visible: () => visible && pane === "agent", redraw: () => render(), brain: () => brain, changeSetting: (key, value) => changeBrain(key, value) });
+  const cliBrains = createCliBrains({ visible: () => visible, redraw: () => render() });
   const providers = createProviders({ root: el, visible: () => visible && pane === "models" && modelsTab === "models", redraw: () => render() });
   app.onEvent((event) => {
     providers.followEvent(event);
+    cliBrains.followEvent(event);
     if (event.type === "ProvidersChanged" && visible) void loadCatalog();
     if (event.type === "ProvidersChanged" || event.type === "AgentTurn" || event.type === "Dictation" && event.phase === "pasted") refreshUsage();
   });
@@ -269,7 +272,7 @@ export function createSettings(app: AppContext): SettingsPage {
   const view = (): SettingsView => ({
     pane, modelsTab, device: app.device(), brain, hasKey, openrouter, spend, catalog, checkingOpenrouter, devices, altgr, version,
     replacingKey, confirmingKeyRemoval, keyBusy, keyError, limitDraft, limitError, cityDraft, cityError, languageGroups, now: Date.now(),
-    connections: connections.view(), messaging: messaging.view(), memory: memory.view(), memoryShared: memoryShared.view(), rules: rules.view(), services: services.view(), providers: providers.view(), confirmingClear, localModels, localDownload,
+    connections: connections.view(), messaging: messaging.view(), memory: memory.view(), memoryShared: memoryShared.view(), rules: rules.view(), services: services.view(), providers: providers.view(), cliBrains: cliBrains.view(), confirmingClear, localModels, localDownload,
   });
 
   /** The item at the foot of the microphones' menu that looks for them again. */
@@ -1145,6 +1148,7 @@ export function createSettings(app: AppContext): SettingsPage {
       return;
     }
 
+    if (target.closest("[data-cli]")) { void cliBrains.click(target); return; }
     if (providers.click(target)) return;
     const choose = target.closest<HTMLElement>(".sel");
     if (choose) {
@@ -1305,6 +1309,7 @@ export function createSettings(app: AppContext): SettingsPage {
     async show(open?: SettingsPane) {
       const hadUsage = usage !== null;
       visible = true;
+      cliBrains.start();
       document.addEventListener("keydown", settingsKey);
       const mine = ++loads;
       loading = true;
@@ -1385,6 +1390,7 @@ export function createSettings(app: AppContext): SettingsPage {
     },
     hide() {
       visible = false;
+      cliBrains.stop();
       destroyUsage();
       connections.reset();
       messaging.reset();

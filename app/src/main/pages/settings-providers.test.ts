@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   settingsGet: vi.fn(), settingsSet: vi.fn(), secretsStatus: vi.fn(), statusGet: vi.fn(), audioDevices: vi.fn(),
   keyboardHasAltgr: vi.fn(), languagesList: vi.fn(), modelsCatalog: vi.fn(), modelsLocal: vi.fn(), hotkeysPause: vi.fn(), audioMonitor: vi.fn(),
   providersKinds: vi.fn(), providersList: vi.fn(), providersModels: vi.fn(), providersAdd: vi.fn(), servicesStatus: vi.fn(), usageAnalytics: vi.fn(),
+  brainsCli: vi.fn(), brainsCliLogin: vi.fn(), openExternalUrl: vi.fn(),
 }));
 vi.mock("../api", () => api);
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: async () => "test" }));
@@ -49,6 +50,7 @@ beforeEach(() => {
   api.modelsCatalog.mockResolvedValue(empty);
   api.providersKinds.mockResolvedValue({ kinds: [] });
   api.providersList.mockResolvedValue({ providers: [] });
+  api.brainsCli.mockResolvedValue({ clis: [] });
   api.usageAnalytics.mockImplementation(async ({ range }: UsageRequest) => {
     const group = { total: 0, series: [] };
     const days = Array.from({ length: range === "30d" ? 30 : 7 }, (_, i) => `2026-10-${String(i + 1).padStart(2, "0")}`);
@@ -60,6 +62,27 @@ beforeEach(() => {
   api.settingsSet.mockImplementation(async (key: string, value: string) => ({ settings: { stt_engine: "cloud", [key]: value } }));
 });
 afterEach(() => { page?.hide(); document.body.innerHTML = ""; setLocale("zh-TW"); });
+
+test("subscription accounts precede providers, login uses the core, and live readiness refreshes only the answer picker", async () => {
+  const claude = { id: "claude", name: "Claude Code", installed: true, logged_in: false, models: [], login_command: "claude auth login" };
+  api.brainsCli.mockResolvedValue({ clis: [claude] });
+  api.brainsCliLogin.mockResolvedValue({ started: true });
+  await mount();
+  const sections = [...page.el.querySelectorAll(".models-content > section h2")].map((el) => el.textContent);
+  expect(sections.slice(0, 2)).toEqual(["Subscription accounts", "Providers"]);
+  click('[data-cli="claude"]'); await flush();
+  expect(api.brainsCliLogin).toHaveBeenCalledWith("claude");
+  api.brainsCli.mockResolvedValue({ clis: [{ ...claude, logged_in: true, version: "2.1" }] });
+  send({ type: "BrainsChanged" }); await flush();
+  expect(page.el.querySelector('.cli-card')!.textContent).toContain("Signed in · v2.1");
+  expect(page.el.querySelector('[data-cli="claude"]')).toBeNull();
+  click('[data-model-picker="answer"] .mp-trigger');
+  expect(document.querySelector('[data-connection="subscription"]')).not.toBeNull();
+  click('.mp-opt[data-id="cli:claude"]'); await flush();
+  expect(api.settingsSet).toHaveBeenCalledWith("agent_model", "cli:claude");
+  click('[data-model-picker="cleanup"] .mp-trigger');
+  expect(document.querySelector('[data-connection="subscription"]')).toBeNull();
+});
 
 test.each(["usage", "models"] as const)("%s opens the single Models pane without exposing saved fallback settings", async (alias) => {
   api.settingsGet.mockResolvedValue({ settings: { stt_engine: "cloud", cleanup_fallbacks: ["@p1:private-chain"] } });

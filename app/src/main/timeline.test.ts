@@ -424,7 +424,7 @@ describe("a turn", () => {
     expect(pendingTurnHTML("<b>", "app", LOOK)).toContain("&lt;b&gt;");
   });
 
-  test("a member turn with thinking, progress, media cards, event chip, and multiple replies renders in order without duplicating turn.text", () => {
+  test.each(["openai/gpt-6-luna", "cli:claude:sonnet", "cli:codex", "cli:gemini"])("a %s member turn with thinking, progress, media cards, event chip, and multiple replies renders in order without duplicating turn.text", (model) => {
     const messages = [
       { seq: 1, kind: "thinking" as const, text: "主人想看今天的 NHK 新聞與相關影片，先檢索重點報導。", at_ms: T0 + 1_000 },
       { seq: 2, kind: "progress" as const, text: "先幫你找今天的 NHK 重點新聞。", at_ms: T0 + 2_000 },
@@ -463,7 +463,7 @@ describe("a turn", () => {
     ];
     // While running: thinking block is open with a live shimmer
     const runningHtml = turnHTML(
-      turn(20, { status: "running", text: "不該重複出現的文字", detail: "不該出現的詳細", messages }),
+      turn(20, { model, status: "running", text: "不該重複出現的文字", detail: "不該出現的詳細", messages }),
       emptyTimelineState(),
       false,
       { ...LOOK, plain: true },
@@ -476,7 +476,7 @@ describe("a turn", () => {
 
     // When done: thinking block auto-collapses to 思考了 N 秒, and turn.text / turn.detail are not duplicated
     const doneHtml = turnHTML(
-      turn(20, { status: "done", text: "不該重複出現的文字", detail: "不該出現的詳細", messages }),
+      turn(20, { model, status: "done", text: "不該重複出現的文字", detail: "不該出現的詳細", messages }),
       emptyTimelineState(),
       false,
       { ...LOOK, plain: true },

@@ -69,6 +69,19 @@ beforeEach(() => {
 });
 
 describe("a member's panel", () => {
+  test("a subscription brain appears under the name with its official mark", () => {
+    const before = LIST.members[1];
+    LIST.members[1] = { ...before, model: "cli:claude:sonnet" };
+    try {
+      const panel = mount();
+      const line = panel.el.querySelector(".mb-brain")!;
+      expect(line).not.toBeNull();
+      expect(line.textContent).toBe("Claude Code · 訂閱");
+      expect(line.querySelector(".mono")).not.toBeNull();
+      expect(panel.el.querySelector("#mb-det-name")!.nextElementSibling).toBe(line);
+      expect(line.querySelector("button")).toBeNull();
+    } finally { LIST.members[1] = before; }
+  });
   test("a personality draft survives redraws and is saved to its original member on switching", async () => {
     const panel = mount();
     await flush();

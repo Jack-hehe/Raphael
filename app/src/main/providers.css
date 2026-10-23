@@ -2,9 +2,11 @@
 .models-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-6); margin-top: var(--sp-5); }
 .models-content:not([hidden]) { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-6); }
 .models-content > .sgroup { margin: 0; }
-.pv { container: models / inline-size; }
+.pv, .cli-accounts { container: models / inline-size; }
 .models-purpose-note { display: block; color: var(--text-2); line-height: 1.5; }
 .pv-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+.cli-card.pv-card { grid-template-columns: 24px minmax(0, 1fr) auto; gap: var(--sp-3); padding: var(--sp-4); }
+:where(:root[data-keys]) .cli-card:has(.btn:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
 .pv-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; min-width: 0; min-height: 96px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); }
 .pv-card:hover { background: var(--hover); }
 :where(:root[data-keys]) .pv-card:has(.cs-open:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -67,6 +69,6 @@
 .pv-model-id { font-size: var(--fs-sm); color: var(--text-3); }
 .pv-dialog .cs-dlg-head .mono .i { width: 20px; height: 20px; }
 .pv-dialog .cs-dlg-head .mono.md { width: 20px; height: 20px; }
-@container models (max-width: 560px) { .pv > .pv-grid { grid-template-columns: minmax(0, 1fr); } }
+@container models (max-width: 560px) { .pv > .pv-grid, .cli-accounts > .pv-grid { grid-template-columns: minmax(0, 1fr); } }
 @container providers (max-width: 560px) { .pv-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 720px) { .pv-grid { grid-template-columns: minmax(0, 1fr); } }

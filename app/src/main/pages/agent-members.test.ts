@@ -29,6 +29,7 @@ const api = vi.hoisted(() => ({
   toolsetsList: vi.fn(),
   routinesList: vi.fn(),
   modelsCatalog: vi.fn(),
+  brainsCli: vi.fn(),
   core: vi.fn(),
 }));
 vi.mock("../api", () => api);
@@ -87,6 +88,7 @@ const pick = async (id: number) => {
 beforeEach(() => {
   document.body.innerHTML = "";
   for (const fn of Object.values(api)) fn.mockReset();
+  api.brainsCli.mockResolvedValue({ clis: [] });
   api.agentQuestionOpen.mockResolvedValue(null);
   api.membersList.mockResolvedValue(structuredClone(LIST));
   api.membersPresets.mockResolvedValue({ presets: [] });
@@ -118,6 +120,24 @@ test("provider changes refresh the member model picker and its qualified model s
   api.membersUpdate.mockResolvedValue({ member: { ...LIST.members[1], model: "@p4:llama3.1:8b" } });
   $('[data-id="@p4:llama3.1:8b"]').click(); await flush();
   expect(api.membersUpdate).toHaveBeenCalledWith(3, { model: "@p4:llama3.1:8b" });
+});
+
+test("member picker follows CLI readiness and saves a CLI brain through the existing model control", async () => {
+  const claude = { id: "claude", name: "Claude Code", installed: true, logged_in: true, models: [{ id: "cli:claude:sonnet", name: "sonnet" }], login_command: "claude auth login" };
+  api.modelsCatalog.mockResolvedValue({ llm: [], stt: [], source: "builtin", fetched_at_ms: null, replaced: [] });
+  api.brainsCli.mockResolvedValue({ clis: [claude] });
+  const agent = mount(); await flush(); await pick(3);
+  $(".mb-pill").click(); await flush(); $(".mb-model .mp-trigger").click();
+  expect(document.querySelector('[data-id="cli:claude:sonnet"]')).not.toBeNull();
+  api.brainsCli.mockResolvedValue({ clis: [{ ...claude, logged_in: false }] });
+  send({ type: "BrainsChanged" }); await flush();
+  expect(document.querySelector('[data-id="cli:claude:sonnet"]')).toBeNull();
+  api.brainsCli.mockResolvedValue({ clis: [claude] });
+  send({ type: "BrainsChanged" }); await flush();
+  api.membersUpdate.mockResolvedValue({ member: { ...LIST.members[1], model: "cli:claude:sonnet" } });
+  $('[data-id="cli:claude:sonnet"]').click(); await flush();
+  expect(api.membersUpdate).toHaveBeenCalledWith(3, { model: "cli:claude:sonnet" });
+  agent.hide();
 });
 
 test("regenerating the latest member reply asks the same question in that member's thread", async () => {

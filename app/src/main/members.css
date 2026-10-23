@@ -141,6 +141,8 @@
 .mb-edit:hover { border-color: var(--edge); }
 .mb-edit:focus-visible { outline: 0; }
 .mb-who-role { font-size: var(--pa-drole); color: var(--text-3); }
+.mb-brain { display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2); max-width: 100%; color: var(--text-2); font-size: var(--fs-sm); }
+.mb-brain .mono.md { width: 16px; height: 16px; flex: none; }
 .mb-who-role::placeholder { color: var(--text-3); }
 .mb-tabs .tabs.plain { width: 100%; }
 .mb-tabs .tabs.plain .tab { min-height: var(--pa-dtab-h); font-size: var(--pa-dtab); }

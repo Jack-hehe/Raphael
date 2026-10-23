@@ -1,6 +1,14 @@
 import type { Messages } from './zh-TW';
 
 export const en = {
+  "brains.accounts": "Subscription accounts",
+  "brains.subscription": "Subscription",
+  "brains.default": "Default model",
+  "brains.missing": "Not installed",
+  "brains.ready": "Signed in",
+  "brains.signedOut": "Signed out",
+  "brains.login": "Sign in",
+  "brains.install": "Install guide",
   "models.providers": "Providers",
   "models.used": "Models in use",
   "models.usage": "Usage",
