@@ -178,12 +178,15 @@ def build_user_message(
     summary: str = "",
     looked_up: bool = False,
     say_ja: bool = False,
+    narrated: bool = False,
+    member: bool = False,
 ) -> str:
     """What the model is shown: the summary of the earlier conversation, the latest turns
     (oldest first), the date and time, the results of the tools, the question in tags, which mark it
     as the user's words, and last the language to reply in. What changes least comes first.
     `looked_up` says that the lookups the model asked for were made (their results are among the
-    tools) and that it is to answer now."""
+    tools) and that it is to answer now. `narrated` distinguishes public UI-language updates from
+    persona replies; `member` allows persona reply languages in the non-narrated path too."""
     parts = []
     if summary:
         parts.append(
@@ -209,7 +212,7 @@ def build_user_message(
             "The lookups you asked for are done: their results are among the tool results. "
             "Answer now, and leave \"need\" empty."
         )
-    parts.append(language_reminder(language, say_ja=say_ja))
+    parts.append(language_reminder(language, say_ja=say_ja, narrated=narrated, member=member))
     return "\n\n".join(parts)
 
 
@@ -407,7 +410,7 @@ class Voice:
         say_ja = say_ja and not plain and language != "ja"
         user = build_user_message(
             question, moment, context, tools, language, background,
-            summary=summary, looked_up=looked_up, say_ja=say_ja,
+            summary=summary, looked_up=looked_up, say_ja=say_ja, member=plain,
         )  # fmt: skip
         if plain:
             system = member_system_prompt(

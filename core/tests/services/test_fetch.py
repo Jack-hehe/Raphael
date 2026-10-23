@@ -214,3 +214,13 @@ def test_a_page_becomes_its_title_headings_paragraphs_and_items_without_its_fram
 def test_an_element_left_open_inside_a_skipped_one_does_not_swallow_the_page():
     _, text = html_to_text("<nav><svg><g>menu</nav><p>after</p>")
     assert text == "after"
+
+
+def test_nhk_ruby_keeps_base_text_without_furigana_or_fallback_parentheses():
+    title, text = html_to_text('''<title>台風のニュース</title>
+    <p><ruby>弱点<rt>じゃくてん</rt></ruby>と
+    <ruby>子吉<rp>（</rp><rt>こよし</rt><rp>）</rp></ruby><ruby>川<rt>がわ</rt></ruby>。
+    <ruby>台風<rp>(</rp><rt><span>たいふう</span></rt><rp>)</rp></ruby>30<ruby>号<rt>ごう</rt></ruby>。</p>
+    <p>次の段落。</p>''')
+    assert title == "台風のニュース"
+    assert text == "弱点と 子吉川。 台風30号。\n次の段落。"

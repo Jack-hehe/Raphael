@@ -556,6 +556,16 @@ _TONE = {
     "en": "The second option is optimal. It costs thirty percent less at the same risk.",
 }
 
+_FINAL_FORMAT = (
+    "Final content must be ONLY one JSON object with the fields below, with "
+    "no code fences, no prose before or after, and no separate thinking object."
+)
+_NARRATED_REPLY_TEXT = """\
+"text": the reply, at most 2000 characters. Replies follow the persona and the owner's instructions.
+- "messages": up to four replies in order, each at most 2000 characters. Put corrections,
+examples and exercises in separate messages. Set "text" to the last message.
+- "thinking": optional final public explanation, following the public thinking rules."""
+
 _SYSTEM_PROMPT = """\
 You are Raphael, the analytical intelligence that serves your master, the user, on their Windows \
 computer. You speak through a single caption beside an emblem in the corner of the screen, so \
@@ -587,13 +597,12 @@ in one; your reply is in {language} all the same.
 - For the tone only, never for the content, a reply reads like this: {tone}
 
 What you return
-Return a JSON object with three fields.
+{final_format}
 - "prefix": the label of the reply, exactly one of {prefixes}. {answer} when you answer a \
 question; {notice} when you report something your master should know; {negative} when you \
 cannot, will not, or lack the data, and when you correct a mistaken premise; {understood} when \
 you only acknowledge; {question} when you ask something that can be answered with yes or no.
-- "text": the reply as one line of plain text, at most {limit}, without the prefix (it is shown \
-for you). No markdown, no lists, no links, no emoji.
+- {reply_text}
 - "detail": a longer version of the reply for your master's history, in the same voice, when \
 "text" had to leave out something worth keeping (the other numbers, the sources); otherwise an \
 empty string.
@@ -670,12 +679,28 @@ def memory_rules(index: "str | MemoryIndex") -> str:
     return _MEMORY_RULES.format(index=str(indexes))
 
 
-def language_reminder(language: str, *, say_ja: bool = False) -> str:
+def language_reminder(
+    language: str, *, say_ja: bool = False, narrated: bool = False, member: bool = False,
+) -> str:
     """The last line the answering model reads. With reasoning off, a model answers in the
     language of the question and of the conversation shown to it, whatever the system prompt said
     (seen live: a Chinese question in the English interface got a Chinese answer), unless this is
     the last thing it is told. With `say_ja`, the one field that is in Japanese is named, so that
-    the reminder does not pull it into the language of the screen."""
+    the reminder does not pull it into the language of the screen. Live narration always uses
+    the UI language; member replies may use the language of the persona's instructions."""
+    if narrated:
+        reminder = (
+            f"Owner's UI language: {_LANGUAGE_NAMES[language]}. Thinking and progress use this language. "
+            "Reply messages follow the persona's language rules."
+        )
+        if say_ja:
+            reminder += ' For replies, use the UI language, except the field "say_ja", which is Japanese.'
+        return reminder
+    if member:
+        return (
+            f"Use {_LANGUAGE_NAMES[language]} for replies unless your persona or your owner's "
+            "instructions call for another language."
+        )
     if say_ja:
         return f'Reply in {_LANGUAGE_NAMES[language]} only, except the field "say_ja", which is Japanese.'
     return f"Reply in {_LANGUAGE_NAMES[language]} only."
@@ -782,17 +807,15 @@ step, give a concrete exercise when useful, and end with one specific question t
 can answer next. A teacher corrects, demonstrates, then gives the next exercise.
 
 Language
-- Reply ONLY in {language}. Your owner may write in another language, and the tool results may be \
-in one; your reply is in {language} all the same.
-- {register}
+- Replies follow the persona and the owner's instructions, including their requested language.
+By default use {language}. A Japanese teacher may reply or give examples in Japanese.
+- When using the UI language: {register}
 
 What you return
-Return a JSON object with these fields.
-- "text": your reply, at most about {limit}, in plain sentences.
+{final_format}
+- {reply_text}
 - "detail": a longer version for the record when "text" had to leave out something worth keeping \
 (the other numbers, the sources); otherwise an empty string.
-- "messages": one to four short messages in order, each at most 2000 characters. Put each
-correction, example, or next exercise in its own message. Set "text" to the last message.
 
 Facts
 - Live or changing facts (the weather, the time, the news, prices, anything "right now") come only \
@@ -869,12 +892,19 @@ def member_system_prompt(
     role: str,
     instructions: str,
     memory_index: str | None = None,
+    narrated: bool = False,
 ) -> str:
     """The system prompt for the model that words a member's reply on `route` in `language`, with
     the memory's rules and index when there is a memory. The same arguments always give the same
-    prompt."""
+    prompt. `narrated` uses the live thread's longer final format, including optional thinking."""
     prompt = _MEMBER_PROMPT.format(
         **_member_fields(language, name, role, instructions),
+        final_format=_FINAL_FORMAT,
+        reply_text=_NARRATED_REPLY_TEXT if narrated else (
+            f'"text": your reply, at most about {_MEMBER_LIMIT_WORDS[language]}, in plain sentences.\n'
+            '- "messages": one to four short messages in order, each at most 2000 characters. '
+            'Put each correction, example, or next exercise in its own message. Set "text" to the last message.'
+        ),
         route=_MEMBER_ROUTE_RULES[route],
     )
     if memory_index is None:
@@ -914,15 +944,22 @@ field written in Japanese when "text" is not."""
 
 
 def system_prompt(
-    language: str, route: str, memory_index: str | None = None, *, say_ja: bool = False
+    language: str, route: str, memory_index: str | None = None, *, say_ja: bool = False,
+    narrated: bool = False,
 ) -> str:
     """The system prompt for the model that words an answer on `route` ("answer", "discuss" or
     "chat") in `language`, with the memory's rules and index (`memory_rules`) when there is a
     memory (`memory_index` is not None). With `say_ja`, the reply has a field more, `say_ja`: the
     line in Japanese, for the voice (which speaks Japanese only) when the screen is not in it. The
-    same arguments always give the same prompt."""
+    same arguments always give the same prompt. `narrated` uses the live thread's longer final
+    format, including optional thinking."""
     prefixes = PREFIXES[language]
     prompt = _SYSTEM_PROMPT.format(
+        final_format=_FINAL_FORMAT,
+        reply_text=_NARRATED_REPLY_TEXT if narrated else (
+            f'"text": the reply as one line of plain text, at most {_LIMIT_WORDS[language]}, '
+            'without the prefix (it is shown for you). No markdown, no lists, no links, no emoji.'
+        ),
         language=_LANGUAGE_NAMES[language],
         address=ADDRESS[language],
         register=_REGISTER[language],

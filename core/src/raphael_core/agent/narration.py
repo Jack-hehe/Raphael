@@ -6,6 +6,7 @@ The service supplies tool execution so its safety gate and inline confirmations 
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
 
@@ -19,9 +20,11 @@ from .tools import ToolResult
 
 PUBLIC_PROGRESS_RULES = """
 This is a live conversation: your owner sees your messages while you work.
-Before EVERY batch of tool calls, write one short public progress sentence in content, in the
-owner's reply language. Say what you are doing and why it helps the goal, in everyday words.
-Use first person, at most 25 Chinese/Japanese characters or 25 English words. Do not name tools,
+Before EVERY batch of tool calls, provide a public progress update.
+Thinking and progress are ALWAYS in the owner's UI language,
+even when the persona teaches or replies in another language. Replies follow the persona.
+Say what you are doing and why it helps the goal, in everyday words.
+Use first person, at most 25 CJK characters or 25 words. Do not name tools,
 services, API parameters or internal steps. Do not expose private reasoning or chain of thought.
 Never send only tool calls without a sentence. Keep the earlier progress lines in mind and make
 the next line connect naturally to them. Do not repeat yourself or ask the owner to wait.
@@ -33,8 +36,9 @@ answer directly in a single model reply.
 """
 
 NARRATION_RULES = PUBLIC_PROGRESS_RULES + """
-Before acting, write content as a JSON object with public fields "thinking" and "progress".
-"thinking" is one or two short sentences about the practical choice or next decision that helps
+Before tool calls, content must be ONLY {"thinking": "...", "progress": "..."},
+with no code fences, no prose before or after, and no other objects.
+"thinking" is at most 2 sentences (about 60 CJK characters) about the practical choice or next decision that helps
 the owner's goal. It is a public explanation, never private reasoning, chain of thought or tool
 names. "progress" is the short action sentence described above. After results, add thinking only
 when a finding changes the plan. Never request or expose hidden provider reasoning.
@@ -42,13 +46,55 @@ Understand follow-ups using the conversation. Never reject a vague request as an
 command: answer from context or ask one short clarifying question.
 Prefer show and replies inside this conversation. Only open a browser when the owner asks to
 open it. For a full article, read the page, provide its text in replies and show its link card.
-For the final JSON, text may be up to 2000 characters; messages may hold up to four such replies.
 Only lead within this owner-started turn or a routine run. Do not send unsolicited messages.
-When finished, stop calling tools and return the final reply as the JSON object specified above.
 Use memory_read and history_search as tools rather than writing a final JSON need request.
-For a member, messages may contain up to four replies: a correction, an example, and the next
-exercise or concrete question. Lead toward the goal in your owner's instructions.
+For a member, offer a correction, an example, and the next exercise or concrete question.
+Lead toward the goal in your owner's instructions.
 """
+
+
+def _content(text: str) -> tuple[list[dict], str]:
+    """Read separate objects, without confusing nested braces or braces inside strings."""
+    decoder = json.JSONDecoder()
+    objects, prose = [], []
+    cursor = copied = 0
+    while (start := text.find("{", cursor)) >= 0:
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except ValueError:
+            cursor = start + 1
+            continue
+        objects.append(value)
+        prose.append(text[copied:start])
+        copied = cursor = end
+    prose.append(text[copied:])
+    text = "".join(prose)
+    # Broken objects are not replies either. Remove balanced fragments from the inside out;
+    # an unfinished fragment ends at its fence, or consumes the ambiguous remainder.
+    while "{" in text:
+        cleaned = re.sub(r"\{[^{}]*\}", "", text)
+        if cleaned == text:
+            text = re.sub(r"\{(?:(?!```).)*", "", text, flags=re.DOTALL)
+            break
+        text = cleaned
+    return objects, re.sub(r"```(?:[\w+-]+)?[ \t]*\n?", "", text).strip()
+
+
+def _reply_text(value: object) -> str:
+    """Last-line guard for protocol echoed inside a reply's own string fields."""
+    return _content(value)[1] if isinstance(value, str) else ""
+
+
+def _public_text(value: object, limit: int, *, sentences: int | None = None) -> str:
+    """Bound public narration, preserving a complete sentence whenever one fits."""
+    text = " ".join(_reply_text(value).split())
+    ends = [match.end() for match in re.finditer(r"[。！？!?]|\.(?=\s|$)", text)]
+    if sentences and len(ends) >= sentences:
+        text = text[:ends[sentences - 1]]
+    if len(text) <= limit:
+        return text
+    end = max((end for end in ends if end <= limit), default=0)
+    return text[:end] if end else text[:limit - 1].rstrip() + "…"
 
 
 class NarratedLoop:
@@ -93,22 +139,16 @@ class NarratedLoop:
             ),
             prompt_tokens=answer.prompt_tokens, completion_tokens=answer.completion_tokens,
         )
-        if answer.calls and answer.content.strip():
-            # This is the explicitly requested public narration, never a provider reasoning field.
-            content = answer.content.strip()
-            if content.startswith("```") and content.endswith("```"):
-                content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            try:
-                public = json.loads(content)
-            except ValueError:
-                public = None
-            if isinstance(public, dict):
-                for kind, emit, limit in (("thinking", self.thinking, 600), ("progress", self.progress, 200)):
-                    value = public.get(kind)
-                    if isinstance(value, str) and value.strip():
-                        emit(" ".join(value.split())[:limit])
-            else:
-                self.progress(" ".join(answer.content.split())[:200])
+        if answer.content.strip():
+            # Only explicitly public fields are published, including those in final content.
+            objects, prose = _content(answer.content)
+            for public in objects:
+                for kind, emit, limit in (("thinking", self.thinking, 120), ("progress", self.progress, 60)):
+                    text = _public_text(public.get(kind), limit, sentences=2 if kind == "thinking" else None)
+                    if text:
+                        emit(text)
+            if answer.calls and not objects and prose:
+                self.progress(_public_text(prose, 60))
         self.batch_calls = answer.calls
         return Turn(answer.content, [
             Call(call.id, call.name, call.arguments, call.raw_arguments) for call in answer.calls
@@ -151,10 +191,12 @@ class NarratedLoop:
     def reply(self, outcome: Outcome) -> Reply:
         if outcome.status != "done":
             raise AgentFailure(outcome.detail or "error")
-        try:
-            text = outcome.final.strip()
-            start, end = text.find("{"), text.rfind("}")
-            data = json.loads(text[start:end + 1] if start >= 0 and end > start else text)
-        except ValueError:
-            data = {"text": outcome.final, "detail": ""}
+        objects, prose = _content(outcome.final)
+        data = next((obj for obj in reversed(objects) if "text" in obj or "messages" in obj),
+                    {"text": prose, "detail": ""})
+        data = dict(data)
+        for field in ("text", "detail", "say_ja"):
+            data[field] = _reply_text(data.get(field))
+        if isinstance(data.get("messages"), list):
+            data["messages"] = [_reply_text(item) for item in data["messages"]]
         return parse_reply(data, self.language, plain=self.plain, long=True)

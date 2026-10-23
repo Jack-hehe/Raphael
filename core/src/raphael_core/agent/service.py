@@ -1234,15 +1234,15 @@ class AgentService:
             index = None if self._memory is None else self._memory.index(ask.speaker.id)
             say_ja = ask.voiced and ask.language != "ja"
             if ask.speaker.is_raphael:
-                system = system_prompt(ask.language, "answer", index, say_ja=say_ja)
+                system = system_prompt(ask.language, "answer", index, say_ja=say_ja, narrated=True)
             else:
                 system = member_system_prompt(
                     ask.language, "answer", name=ask.speaker.name, role=ask.speaker.role,
-                    instructions=ask.speaker.instructions, memory_index=index,
+                    instructions=ask.speaker.instructions, memory_index=index, narrated=True,
                 )
             user = build_user_message(
                 ask.text, self._moment(), context.turns, [], ask.language,
-                background_block(self._briefs()), summary=context.summary, say_ja=say_ja,
+                background_block(self._briefs()), summary=context.summary, say_ja=say_ja, narrated=True,
             )
             if ask.attachments:
                 user += "\nFiles: " + json.dumps([

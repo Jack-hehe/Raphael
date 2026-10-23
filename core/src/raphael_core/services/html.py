@@ -5,7 +5,8 @@ other blocks as lines, the items of a list as "- " lines, the cells of a table s
 words of a link (its address is not: an address in the text is what the background worker may read
 next, and the words are what a reader sees). What is left out: scripts, styles, the navigation, the
 footer, and what a reader never sees as text (`noscript`, templates, SVG, frames, embedded objects,
-canvases, buttons and the options of a list to pick from).
+canvases, buttons and the options of a list to pick from). Ruby annotations and their fallback
+parentheses are omitted; the base text is kept.
 Spaces are folded, and a line has words: there are no empty ones.
 
 The parser takes any HTML, however broken: what it cannot make sense of it reads as text. An
@@ -18,7 +19,7 @@ from html.parser import HTMLParser
 # The elements whose content is not text a reader sees, or is the page's frame around its content.
 _SKIPPED = frozenset(
     {"script", "style", "nav", "footer", "noscript", "template", "svg", "iframe", "object", "canvas",
-     "select", "button"}
+     "select", "button", "rt", "rp"}
 )  # fmt: skip
 # The elements that end a line.
 _BLOCKS = frozenset(
