@@ -154,6 +154,9 @@ from ..worker.loop import Stop, ToolOutcome, WAITING
 from ..worker.guards import MAX_ARGUMENT_CHARS, canonical
 from .answers import Reply, Voice, build_user_message
 from .narration import NarratedLoop
+from .cli.discovery import CliBrains, brain_ref
+from .cli.loop import CliLoop, MEMORY_TOOLS, Sessions as CliSessions
+from .persona import cli_system_prompt
 from .cities import cities_in
 from .commands import COMMANDS, AppCatalog, run_command
 from .device import DeviceActions
@@ -185,6 +188,7 @@ from .plugins import (
     Planner,
     PluginHub,
     PluginResult,
+    PluginTool,
     ToolsNotSupported,
     ToolSupport,
     make_offer,
@@ -430,7 +434,7 @@ class _Followup:
     ask: _Ask
     call: PlannedCall
     results: list[ToolResult]
-    loop: NarratedLoop | None = None
+    loop: NarratedLoop | CliLoop | None = None
 
 
 class AgentService:
@@ -487,6 +491,7 @@ class AgentService:
         services: "ServiceHub | None" = None,
         team: Team | None = None,
         speaker: "Speaking | None" = None,
+        cli_brains: CliBrains | None = None,
     ) -> None:
         self._conn = conn
         self._keys = keys
@@ -509,6 +514,9 @@ class AgentService:
             else Conversation(conn, client, now_ms=now_ms, clock=clock)
         )
         self._notify = notify
+        self._cli_brains = cli_brains or CliBrains(notify=notify)
+        self._cli_sessions = CliSessions(conn)
+        self._cli_loops: set[CliLoop] = set()
         self._now_ms = now_ms
         self._actions = actions
         self._settings = SettingsStore(conn)
@@ -572,9 +580,23 @@ class AgentService:
             "agent.history.list": self._history_list,
             "agent.history.search": self._history_search,
             "agent.history.clear": self._history_clear,
+            "brains.cli": self._list_clis,
+            "brains.cli_login": self._login_cli,
         }
         for method, handler in methods.items():
             router.register(method, handler)
+
+    async def _list_clis(self, params: dict) -> dict:
+        return await self._cli_brains.list(params)
+
+    async def _login_cli(self, params: dict) -> dict:
+        name = params.get("id")
+        if name not in ("claude", "codex", "gemini"):
+            raise invalid_params("Unknown CLI")
+        try:
+            return self._cli_brains.login(name)
+        except (OSError, ValueError):
+            raise invalid_params("Install the CLI before signing in") from None
 
     def prewarm(self) -> None:
         """Read the apps of the Start menu now, in the background, so that the first "open" finds
@@ -589,6 +611,8 @@ class AgentService:
     async def aclose(self) -> None:
         """End the requests being thought about and close the HTTP client of the tools. A fold of
         the conversation that runs is ended too (the memory's own, by the memory)."""
+        await asyncio.gather(*(loop.aclose() for loop in self._cli_loops))
+        await self._cli_brains.aclose()
         if self._memory is None:
             await self._conversation.aclose()
             for conversation in self._conversations.values():
@@ -703,6 +727,7 @@ class AgentService:
         earlier = self._inflight.pop(ask.session_id, None)
         if earlier is not None:
             earlier.cancel()
+        await asyncio.gather(*(loop.aclose() for loop in list(self._cli_loops) if loop.task and loop.task.cancelling()))
         task = asyncio.ensure_future(self._voice_answer(ask) if ask.source == VOICE else self._answer(ask))
         self._inflight[ask.session_id] = task
         try:
@@ -760,7 +785,8 @@ class AgentService:
         if blocked is None:
             try:
                 decision = await self._decider.classify(
-                    ask.text, settings.model, ledger, background_line(self._briefs(ask.speaker.id)),
+                    ask.text, DEFAULTS["agent_model"] if brain_ref(settings.model) else settings.model,
+                    ledger, background_line(self._briefs(ask.speaker.id)),
                     context=self._before_run(ask.speaker),
                 )
             except AgentFailure as error:
@@ -821,6 +847,9 @@ class AgentService:
             route = "answer"
         if route == "command":
             return await self._command(ask, decision, settings, ledger)
+        if brain_ref(settings.model):
+            self._record(ask, "answer", "", "", "running", None, ledger)
+            return await self._narrated(ask, settings, ledger)
         if route == "answer":
             return await self._answer_with_tools(ask, decision, settings, ledger, self._offer(ask))
         if route == "operate":
@@ -1244,14 +1273,19 @@ class AgentService:
         return self._loop_result(tool)
 
     async def _narrated(
-        self, ask: _Ask, settings: _Settings, ledger: Ledger, loop: NarratedLoop | None = None
+        self, ask: _Ask, settings: _Settings, ledger: Ledger, loop: NarratedLoop | CliLoop | None = None
     ) -> dict:
         """A narrated turn, sharing the fast tier's safety gate and permission cards."""
         if loop is None:
             context = self._conversation_of(ask.speaker.id).context(quick=False)
             index = None if self._memory is None else self._memory.index(ask.speaker.id)
             say_ja = ask.voiced and ask.language != "ja"
-            if ask.speaker.is_raphael:
+            if brain_ref(settings.model):
+                system = cli_system_prompt(ask.language,
+                    name=None if ask.speaker.is_raphael else ask.speaker.name,
+                    role=ask.speaker.role, instructions=ask.speaker.instructions,
+                    personality=ask.speaker.personality, memory_index=index)
+            elif ask.speaker.is_raphael:
                 system = system_prompt(ask.language, "answer", index, say_ja=say_ja, narrated=True)
             else:
                 system = member_system_prompt(
@@ -1283,6 +1317,8 @@ class AgentService:
             screenings: dict[str, Screening] = {}
 
             def plan(name: str, args: dict) -> PlannedCall | None:
+                if brain_ref(settings.model) and name in ("memory_write", "memory_delete") and self._memory is not None:
+                    return PlannedCall(PluginTool(name, BUILTIN_SERVER, name, "Change an explicitly requested memory", {}, Tier.T1), args)
                 if name not in snapshot.refs:
                     return None
                 if snapshot.pool is not None and name in snapshot.pool.by_alias:
@@ -1296,8 +1332,11 @@ class AgentService:
             async def execute(call_id: str, name: str, args: dict) -> ToolOutcome:
                 nonlocal checked_batch, screenings
                 assert loop is not None
+                if isinstance(loop, CliLoop) and name == "cli_permission":
+                    return await self._cli_permission(ask, args, ledger, loop)
                 ref = snapshot.refs.get(name)
-                if ref is None:
+                memory_call = isinstance(loop, CliLoop) and name in ("memory_write", "memory_delete") and self._memory is not None
+                if ref is None and not memory_call:
                     return ToolOutcome(False, "unknown_tool")
                 # Include results supplied after a permission pause, as well as ordinary rounds.
                 if loop.seen:
@@ -1335,7 +1374,7 @@ class AgentService:
                         loop.response = result
                         raise Stop(WAITING)
                     return self._computer_result(loop, result)
-                if ref.kind == FIND:
+                if ref is not None and ref.kind == FIND:
                     definitions, lines = snapshot.find(str(args.get("query", "")))
                     loop.tools.extend(definitions)
                     return ToolOutcome(True, content="\n".join(lines), tools=definitions)
@@ -1360,7 +1399,8 @@ class AgentService:
                         query = args.get("query")
                         if not isinstance(query, str) or not query.strip():
                             return ToolOutcome(False, "bad_arguments")
-                        result = await self._tool(ask, self._tools.web_search(query, settings.model, ledger), name)
+                        search_model = DEFAULTS["agent_model"] if brain_ref(settings.model) else settings.model
+                        result = await self._tool(ask, self._tools.web_search(query, search_model, ledger), name)
                     elif name in ("web_read", "show"):
                         url = args.get("url")
                         if not isinstance(url, str) or not urls.seen(url):
@@ -1387,19 +1427,58 @@ class AgentService:
                     self._message(ask, "event", phrase(ask.language, "member_created", member=str((result.data or {}).get("created", ""))))
                 return self._loop_result(result)
 
-            loop = NarratedLoop(
-                client=self._client, model=settings.model, ledger=ledger,
+            async def cli_execute(call_id: str, name: str, args: dict) -> ToolOutcome:
+                began, before = time.perf_counter(), len(ask.steps)
+                result = await execute(call_id, name, args)
+                if len(ask.steps) == before:
+                    ask.steps.append(self._step("tool", name, BUILTIN_SERVER, "ok" if result.ok else "blocked", began, result.kind))
+                return result
+
+            common = dict(model=settings.model, ledger=ledger,
                 language=ask.language, plain=not ask.speaker.is_raphael,
                 system=system, user=user, tools=snapshot.definitions,
                 progress=lambda text: self._message(ask, "progress", text, PREFIXES[ask.language].notice),
                 thinking=lambda text: self._message(ask, "thinking", text),
                 execute=execute,
             )
-        outcome = await loop.run()
+            if brain_ref(settings.model):
+                common["execute"] = cli_execute
+                loop = CliLoop(brains=self._cli_brains, sessions=self._cli_sessions,
+                    member_id=ask.speaker.id, event=lambda text: self._message(ask, "event", text),
+                    expire=lambda: self._expire(self._confirmations.sweep()), spoken=ask.voiced and ask.language != "ja", **common)
+                if self._memory is not None:
+                    loop.tools.extend(MEMORY_TOOLS)
+                self._cli_loops.add(loop)
+                loop.on_done = self._cli_loops.discard
+            else:
+                loop = NarratedLoop(client=self._client, **common)
+        try:
+            outcome = await loop.run()
+        finally:
+            if isinstance(loop, CliLoop) and loop.task and loop.task.done():
+                self._cli_loops.discard(loop)
         if loop.response is not None:
             return loop.response
         reply = loop.reply(outcome)
+        if isinstance(loop, CliLoop) and loop.failed:
+            return self._finish(ask, "answer", "negative", reply.text, ledger, status="error")
         return self._finish_reply(ask, "exchange" if ask.nested else "answer", reply, loop.seen, ledger)
+
+    async def _cli_permission(self, ask: _Ask, args: dict, ledger: Ledger, loop: CliLoop) -> ToolOutcome:
+        if len(canonical(args)) > MAX_ARGUMENT_CHARS:
+            return ToolOutcome(False, "bad_arguments")
+        if ask.source not in _AT_THIS_COMPUTER or ask.nested:
+            return ToolOutcome(False, "presence_required")
+        screening = await self._gate.screen(Proposed("cli_permission", "CLI native action", summarize(args)), language=ask.language, ledger=ledger)
+        if screening.verdict == DENY:
+            self._gate.record_unrun("cli_permission", outcome="denied")
+            return ToolOutcome(False, "blocked")
+        operation = args.get("command") or args.get("tool_name") or (args.get("toolCall") or {}).get("title") or args.get("method", "CLI action")
+        shown = {"operation": operation, "details": args}
+        call = PlannedCall(PluginTool("cli_permission", BUILTIN_SERVER, "cli_permission", "CLI native action", {}, Tier.T2), shown)
+        loop.response = self._ask_plugin(ask, call, [], ledger, screening)
+        self._followups[loop.response["confirm"]["id"]].loop = loop
+        raise Stop(WAITING)
 
     async def _answer_with_tools(
         self,
@@ -1679,11 +1758,43 @@ class AgentService:
         """Make a picked call: a team tool through `team_tool` (T1: it needs no yes of a tier), a
         plugin's tool through the gate with `approval`. A step of `steps` (the request's own when
         none is given), whatever came of it."""
+        if call.tool.key == "cli_permission":
+            began = time.perf_counter()
+            try:
+                self._gate.check(action or Action(call.tool.key, call.arguments), approval)
+                result = ToolResult(call.tool.key, True, {"approved": True})
+            except (NotApproved, UnknownTool):
+                result = ToolResult(call.tool.key, False, None, "denied")
+            (ask.steps if steps is None else steps).append(self._step("tool", call.tool.key, BUILTIN_SERVER, "ok" if result.ok else "blocked", began, result.error))
+            self._gate.record_builtin(call.tool.key, outcome="ok" if result.ok else "blocked", approver="user")
+            return result
+        if call.tool.key in ("memory_write", "memory_delete"):
+            return self._cli_memory_call(ask, call, steps, approval)
         if call.tool.key in HARNESS_TOOLS:
             return await self._harness_call(ask, call, approval, action, steps=steps)
         if call.tool.key in TEAM_TOOLS:
             return await self._team_call(ask, call, ledger, steps=steps)
         return await self._plugin_call(call, approval, action, steps=ask.steps if steps is None else steps)
+
+    def _cli_memory_call(self, ask: _Ask, call: PlannedCall, steps: list[Step] | None, approval: Approval | None) -> ToolResult:
+        from .answers import parse_reply
+        args = dict(call.arguments)
+        args["op"] = "delete" if call.tool.key == "memory_delete" else "write"
+        loop = next((loop for loop in self._cli_loops if loop.member_id == ask.speaker.id), None)
+        if not asks_to_remember(ask.text) or loop is None:
+            return ToolResult(call.tool.key, False, None, "owner_request_required")
+        reply = parse_reply({"text": "Memory update", "memory": [args]}, ask.language, plain=True)
+        before = len(ask.steps)
+        applied = self._remember(ask, reply, loop.seen)
+        if steps is not None:
+            steps.extend(ask.steps[before:])
+            del ask.steps[before:]
+        if applied is None:
+            return ToolResult(call.tool.key, False, None, "blocked")
+        if applied.written or applied.deleted:
+            self._message(ask, "event", phrase(ask.language, "remembered" if applied.written else "forgotten"))
+            self._gate.record_builtin(call.tool.key, outcome="ok", approver="user" if approval is not None else "auto")
+        return ToolResult(call.tool.key, not applied.refused, {"written": applied.written, "deleted": applied.deleted}, "blocked" if applied.refused else None)
 
     async def _harness_call(
         self, ask: _Ask, call: PlannedCall, approval: Approval | None, action: Action | None,
@@ -2021,6 +2132,8 @@ class AgentService:
         followup = self._followups.pop(pending.id, None)
         if followup is not None:
             self._gate.record_unrun(pending.action.tool, outcome=outcome)
+            if isinstance(followup.loop, CliLoop):
+                followup.loop.cancel()
 
     async def _confirm_plugin(
         self, pending: Pending, approval: Approval | None, followup: _Followup
@@ -2035,9 +2148,14 @@ class AgentService:
         if now is None or now > pending.tier:
             approval = None
         steps: list[Step] = []
-        result = await self._make_call(
-            followup.ask, call, approval, ledger, pending.action, steps=steps
-        )
+        if isinstance(followup.loop, CliLoop) and approval is None:
+            self._gate.record_unrun(call.tool.key, outcome="denied")
+            result = ToolResult(call.tool.key, False, None, "denied")
+            steps.append(self._step("tool", call.tool.name, call.tool.server, "blocked", time.perf_counter(), "denied"))
+        else:
+            result = await self._make_call(
+                followup.ask, call, approval, ledger, pending.action, steps=steps
+            )
         self._write(lambda: self._history.add_steps(pending.turn_id, steps))
         if followup.loop is not None:
             loop = followup.loop
@@ -2318,6 +2436,7 @@ class AgentService:
             return await self._next_from_run(run)
         self._expire(self._confirmations.sweep())
         resolution = self._confirmations.resolve(confirm_id, approved)
+        await asyncio.gather(*(loop.aclose() for loop in list(self._cli_loops) if loop.task and loop.task.cancelling()))
         pending = resolution.pending
         if resolution.outcome is Outcome.UNKNOWN or pending is None:
             return self._done(
@@ -2328,10 +2447,17 @@ class AgentService:
             self._drop_followup(pending, "expired")
             return self._outcome(pending, "negative", phrase(language, "expired"), "expired")
         if resolution.outcome is Outcome.DENIED:
+            followup = self._followups.get(pending.id)
+            if followup is not None and isinstance(followup.loop, CliLoop):
+                self._followups.pop(pending.id)
+                followup.loop.permission_always = False
+                return await self._resume_narrated(pending, None, followup)
             self._drop_followup(pending, "denied")
             return self._outcome(pending, "understood", phrase(language, "denied"), "denied")
         followup = self._followups.pop(pending.id, None)
         if followup is not None:
+            if isinstance(followup.loop, CliLoop):
+                followup.loop.permission_always = bool(approved and always)
             if followup.loop is not None:
                 return await self._resume_narrated(pending, resolution.approval, followup)
             return await self._confirm_plugin(pending, resolution.approval, followup)
@@ -2464,10 +2590,13 @@ class AgentService:
         task = self._inflight.get(session_id)
         if task is not None:
             task.cancel()
+            if self._cli_loops:
+                await asyncio.gather(task, return_exceptions=True)
         if self._computer is not None:
             self._computer.stop_session(session_id)
         self._expire(self._confirmations.sweep())
         self._deny(self._confirmations.cancel_session(session_id))
+        await asyncio.gather(*(loop.aclose() for loop in list(self._cli_loops) if loop.task and loop.task.cancelling()))
         return {}
 
     def stop_session(self, session_id: str) -> bool:
@@ -2574,6 +2703,14 @@ class AgentService:
     async def _history_clear(self, params: dict) -> dict:
         """Clear the conversations: every thread, with every summary (each member's too), what
         opening taught Raphael and the background tasks."""
+        if self._cli_loops:
+            for task in self._inflight.values():
+                task.cancel()
+            await asyncio.gather(*self._inflight.values(), return_exceptions=True)
+            self._deny(self._confirmations.cancel_all())
+        await asyncio.gather(*(loop.aclose() for loop in list(self._cli_loops)))
+        self._cli_loops.clear()
+        self._cli_sessions.clear()
         deleted = self._history.clear()
         try:
             # The summary is made of the turns, and the reflection pass starts over with the ids.
@@ -2644,6 +2781,8 @@ class AgentService:
 
     def _blocked(self, settings: _Settings) -> str | None:
         """Why no model may be asked: "no_key", "auth" (the key store failed), or None."""
+        if brain_ref(settings.model):
+            return None
         try:
             if isinstance(self._client, ProviderRouter):
                 return None if self._client.available(settings.model) else "no_key"

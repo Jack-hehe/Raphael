@@ -593,7 +593,10 @@ class Brain:
         """ValueError (or the store's TypeError) if `value` cannot be chosen for `role`, by the
         catalog OpenRouter gave last, or the builtin one if it never gave one: the catalog the
         settings page showed (catalog.choice_problem)."""
+        from ..agent.cli.discovery import brain_ref
         _, model_id = checked(role.setting, value)
+        if role.setting == "agent_model" and brain_ref(model_id):
+            return
         current = self._settings.get(role.setting)
         known = self.known_models()
         listed = builtin_catalog() if known is None else known

@@ -103,6 +103,7 @@ class ToolGate:
             self._registry.register(name, TEAM_TIER)
         for name, tier in HARNESS_TIERS.items():
             self._registry.register(name, tier)
+        self._registry.register("cli_permission", Tier.T2)
         self._audit = None if conn is None else AuditLog(conn, now_ms)
 
     @property
