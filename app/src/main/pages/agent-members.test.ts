@@ -327,6 +327,39 @@ describe("a member's thread", () => {
     await flush();
     expect(api.membersViewing).toHaveBeenLastCalledWith(null);
   });
+
+  test("switching threads clears unsent composer text, and an in-flight ask that fails on the previous thread does not overwrite the new thread's composer", async () => {
+    let failAsk!: (err: Error) => void;
+    api.agentAskText.mockImplementationOnce(() => new Promise<void>((_, rej) => (failAsk = rej)));
+    mount();
+    await flush();
+    await pick(3);
+    const input = $<HTMLTextAreaElement>(".cmp-input");
+    input.value = "給日文老師的草稿";
+    await pick(4);
+    expect(input.value).toBe("");
+
+    await pick(3);
+    input.value = "考我單字";
+    $<HTMLFormElement>(".composer").requestSubmit();
+    await pick(4);
+    input.value = "給管家的話";
+    failAsk(new Error("network down"));
+    await flush();
+    expect(input.value).toBe("給管家的話");
+  });
+
+  test("refocusing the window while scrolled up in a thread does not jump scroll to the bottom", async () => {
+    const agent = mount();
+    await flush();
+    const scroller = $<HTMLElement>(".ra-scroll");
+    Object.defineProperty(scroller, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(scroller, "clientHeight", { value: 200, configurable: true });
+    scroller.scrollTop = 100;
+    agent.show();
+    await flush();
+    expect(scroller.scrollTop).toBe(100);
+  });
 });
 
 describe("a new member", () => {
