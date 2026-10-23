@@ -195,8 +195,8 @@ async def test_cancelling_gives_up_the_model_call_under_way(rig):
         (OpenRouterError(401, "auth", "x"), "auth"),
         (OpenRouterError(402, "credits", "x"), "credits"),
         (OpenRouterError(0, "network", "x"), "offline"),
-        (OpenRouterError(429, "rate_limit", "x"), "offline"),
-        (OpenRouterError(503, "server", "x"), "offline"),
+        (OpenRouterError(429, "rate_limit", "x"), "error"),
+        (OpenRouterError(503, "server", "x"), "error"),
         (OpenRouterError(400, "bad_request", "x"), "error"),
         (OpenRouterError(404, "bad_request", "x"), "tools"),
         (RuntimeError("boom"), "error"),
@@ -210,7 +210,7 @@ async def test_a_model_that_fails_ends_the_task_with_the_kind_of_failure(rig, er
     assert rig.steps()[0].reason == {"offline": "network", "tools": "error"}.get(detail, detail)
 
 
-async def test_a_model_that_takes_too_long_is_a_failure_to_reach_it(rig, monkeypatch):
+async def test_a_model_that_takes_too_long_is_a_timeout(rig, monkeypatch):
     import raphael_core.background.run as module
 
     monkeypatch.setattr(module, "CHAT_TIMEOUT_S", 0.05)
@@ -219,7 +219,7 @@ async def test_a_model_that_takes_too_long_is_a_failure_to_reach_it(rig, monkeyp
         await asyncio.sleep(30)
 
     rig.client.replies = [slow]
-    assert await stop_of(rig.chat()) == ("failed", "offline")
+    assert await stop_of(rig.chat()) == ("failed", "timeout")
     assert rig.steps()[0].outcome == "timeout"
     assert rig.steps()[0].reason == "timeout"
 

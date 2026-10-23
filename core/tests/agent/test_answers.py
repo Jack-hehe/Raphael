@@ -319,9 +319,9 @@ async def test_the_pages_are_listed_even_when_the_model_wrote_no_detail(voice, c
         (OpenRouterError(401, "auth", "no"), "auth"),
         (OpenRouterError(402, "credits", "broke"), "credits"),
         (OpenRouterError(0, "network", "offline"), "offline"),
-        (OpenRouterError(0, "timeout", "slow"), "offline"),
-        (OpenRouterError(503, "server", "down"), "offline"),
-        (OpenRouterError(429, "rate_limit", "slow"), "offline"),
+        (OpenRouterError(0, "timeout", "slow"), "timeout"),
+        (OpenRouterError(503, "server", "down"), "error"),
+        (OpenRouterError(429, "rate_limit", "slow"), "error"),
         (OpenRouterError(400, "bad_request", "no"), "error"),
         (OpenRouterError(200, "bad_response", "html"), "error"),
         (RuntimeError("boom"), "error"),
@@ -341,7 +341,7 @@ async def test_a_model_that_hangs_is_a_timeout(client, ledger):
     client.replies.append(hang)
     with pytest.raises(AgentFailure) as failure:
         await reply(Voice(client, timeout_s=0.1), ledger)
-    assert failure.value.kind == "offline"
+    assert failure.value.kind == "timeout"
 
 
 async def test_a_reply_that_is_paid_for_but_empty_is_still_written_to_the_spend(

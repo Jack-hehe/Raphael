@@ -443,3 +443,21 @@ def test_the_system_prompt_asks_for_the_japanese_line_only_when_told_to():
 def test_the_language_reminder_names_the_japanese_field_only_when_there_is_one():
     assert persona.language_reminder("en") == "Reply in English only."
     assert 'except the field "say_ja"' in persona.language_reminder("en", say_ja=True)
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+@pytest.mark.parametrize("narrated", [False, True])
+def test_only_raphael_knows_his_replies_at_this_computer_are_voiced(language, narrated):
+    prompt = persona.system_prompt(language, "answer", narrated=narrated)
+    for rule in (
+        "You have a voice",
+        "spoken aloud in Japanese",
+        "put it in your reply",
+        "the voice reads your reply",
+        "Never claim that you cannot play audio or speak",
+    ):
+        assert rule in prompt
+        assert rule not in persona.member_system_prompt(
+            language, "answer", name="Tutor", role="Teacher", instructions="Teach examples.",
+            narrated=narrated,
+        )

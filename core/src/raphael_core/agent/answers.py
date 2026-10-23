@@ -445,10 +445,10 @@ class Voice:
             raise AgentFailure(failure_kind(error)) from None
         except TimeoutError:
             logger.warning("The answering model timed out")
-            raise AgentFailure("offline") from None
+            raise AgentFailure("timeout") from None
         except Exception as exc:
             logger.warning("The answering model failed unexpectedly: %s", type(exc).__name__)
-            raise AgentFailure("error") from None
+            raise AgentFailure(failure_kind(exc)) from None
         ledger.add(
             model=completion.model,
             cost_usd=completion.cost_usd,

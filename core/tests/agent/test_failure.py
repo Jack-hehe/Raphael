@@ -8,7 +8,7 @@ from raphael_core.brain.openrouter import OpenRouterError
 
 
 def test_every_kind_of_failure_has_a_phrase_in_every_language():
-    assert KINDS == ("no_key", "auth", "budget", "credits", "offline", "error")
+    assert KINDS == ("no_key", "auth", "budget", "credits", "offline", "timeout", "error")
     for phrases in PHRASES.values():
         for kind in KINDS:
             assert getattr(phrases, kind)
@@ -20,13 +20,14 @@ def test_every_kind_of_failure_has_a_phrase_in_every_language():
         (OpenRouterError(0, "auth", "No OpenRouter key"), "auth"),
         (OpenRouterError(401, "auth", "bad key"), "auth"),
         (OpenRouterError(402, "credits", "broke"), "credits"),
-        (OpenRouterError(429, "rate_limit", "slow down"), "offline"),
+        (OpenRouterError(429, "rate_limit", "slow down"), "error"),
         (OpenRouterError(0, "network", "no route"), "offline"),
-        (OpenRouterError(0, "timeout", "slow"), "offline"),
-        (OpenRouterError(503, "server", "down"), "offline"),
+        (OpenRouterError(0, "timeout", "slow"), "timeout"),
+        (OpenRouterError(503, "server", "down"), "error"),
         (OpenRouterError(400, "bad_request", "no"), "error"),
         (OpenRouterError(200, "bad_response", "html"), "error"),
-        (TimeoutError(), "offline"),
+        (TimeoutError(), "timeout"),
+        (ConnectionError("unreachable"), "offline"),
         (RuntimeError("boom"), "error"),
         (KeyError("x"), "error"),
     ],
@@ -42,3 +43,14 @@ def test_a_failure_carries_its_kind_and_nothing_else():
 
 def test_a_failure_of_an_unknown_kind_is_an_error():
     assert AgentFailure("whatever").kind == "error"
+
+
+async def test_a_tool_planner_timeout_keeps_its_kind(conn, client):
+    from raphael_core.agent.ledger import Ledger
+    from raphael_core.agent.plugins import Offer, Planner
+    from raphael_core.brain.spend import SpendTracker
+
+    client.plans.append(TimeoutError())
+    with pytest.raises(AgentFailure) as failure:
+        await Planner(client).plan(Offer(), "Explain this", [], model="fake/model", ledger=Ledger(SpendTracker(conn)))
+    assert failure.value.kind == "timeout"

@@ -3,6 +3,8 @@ reads (the index, the summary, a note in full, a search of the past turns), and 
 write. The memory's own model is a separate fake, so its background pass never takes a reply that
 the assistant's test queued."""
 
+import json
+
 import pytest
 
 from raphael_core.agent.persona import PHRASES
@@ -10,6 +12,7 @@ from raphael_core.brain.secrets import MemoryKeyStore
 from raphael_core.memory.service import MemoryService
 
 from .conftest import FakeBackground, completion, decision
+from .test_narration import chat
 from .test_service import found, make_rig  # noqa: F401
 
 
@@ -120,10 +123,12 @@ async def test_a_request_to_remember_the_router_misplaced_is_answered_where_note
 ):
     client.decisions.append(decision(route))
     client.replies.append(reply(memory=[note(name="ongoing-tokyo", type="ongoing", description="10/31 去東京", body="x", expires="2026-11-01")]))
+    if route == "unclear":
+        client.chats.append(chat(json.dumps(client.replies.pop().data)))
     result = await rig.ask("記住我下週六要去東京")
     assert result["text"] == "已記下。" and background.submitted == []
     assert memory.store.get("ongoing-tokyo") is not None
-    assert (await rig.turns())[0]["route"] == "chat"
+    assert (await rig.turns())[0]["route"] == ("answer" if route == "unclear" else "chat")
 
 
 async def test_nothing_is_written_from_a_turn_that_saw_the_web(rig, client, memory):

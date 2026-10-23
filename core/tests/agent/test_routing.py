@@ -504,8 +504,8 @@ async def test_what_the_language_model_cost_is_written_to_the_spend(router, clie
         (OpenRouterError(401, "auth", "no"), "auth"),
         (OpenRouterError(402, "credits", "broke"), "credits"),
         (OpenRouterError(0, "network", "offline"), "offline"),
-        (OpenRouterError(0, "timeout", "slow"), "offline"),
-        (OpenRouterError(503, "server", "down"), "offline"),
+        (OpenRouterError(0, "timeout", "slow"), "timeout"),
+        (OpenRouterError(503, "server", "down"), "error"),
         (OpenRouterError(400, "bad_request", "no"), "error"),
         (RuntimeError("boom"), "error"),
     ],
@@ -527,7 +527,7 @@ async def test_a_language_model_that_hangs_is_a_timeout(client, ledger):
     router = Router(client, luna_s=0.1)
     with pytest.raises(AgentFailure) as failure:
         await router.ask_luna("hi", "m", ledger)
-    assert failure.value.kind == "offline"
+    assert failure.value.kind == "timeout"
 
 
 # --- both together ----------------------------------------------------------------------------------

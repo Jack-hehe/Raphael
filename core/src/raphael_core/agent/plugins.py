@@ -362,10 +362,10 @@ class Planner:
             raise AgentFailure(failure_kind(error)) from None
         except TimeoutError:
             logger.warning("The tool-picking model timed out")
-            raise AgentFailure("offline") from None
+            raise AgentFailure("timeout") from None
         except Exception as exc:
             logger.warning("The tool-picking model failed unexpectedly: %s", type(exc).__name__)
-            raise AgentFailure("error") from None
+            raise AgentFailure(failure_kind(exc)) from None
         ledger.add(
             model=plan.model,
             cost_usd=plan.cost_usd,

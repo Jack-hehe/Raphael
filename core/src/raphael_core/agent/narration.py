@@ -129,7 +129,7 @@ class NarratedLoop:
             raise Stop("failed", failure_kind(error)) from None
         except TimeoutError:
             self.ledger.add(model=self.model, cost_usd=estimate_cost(self.model, len(str(messages))))
-            raise Stop("failed", "offline") from None
+            raise Stop("failed", "timeout") from None
         except asyncio.CancelledError:
             self.ledger.add(model=self.model, cost_usd=estimate_cost(self.model, len(str(messages))))
             raise

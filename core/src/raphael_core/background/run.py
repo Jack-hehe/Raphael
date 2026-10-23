@@ -405,7 +405,7 @@ class TaskRun:
             # clock, which a timer that fires a tick early leaves just short of the deadline.
             if remaining <= CHAT_TIMEOUT_S or self._clock() >= self.deadline:
                 raise stopped("limit_time") from None
-            raise stopped("failed", "offline") from None
+            raise stopped("failed", "timeout") from None
         except RpcError:
             self._charge_estimate(request_chars)  # cancelled while the provider was working
             raise

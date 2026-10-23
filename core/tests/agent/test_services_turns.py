@@ -4,6 +4,7 @@ addresses in the owner's own words, and the files handed with a request (`agent.
 the network or spends money."""
 
 import base64
+import json
 import logging
 
 import httpx
@@ -17,6 +18,7 @@ from raphael_core.services.keys import memory_keys
 from brain.test_catalog import RECORDED, edited
 
 from .conftest import decision
+from .test_narration import chat
 from .test_service import found, make_rig, spoken  # noqa: F401 (make_rig is a fixture)
 
 PUBLIC = "93.184.216.34"
@@ -211,11 +213,15 @@ async def test_files_with_no_words_ask_to_look_at_them(services_rig, client, lan
     client.decisions.append(decision("unclear"))
     client.texts.append(found("A receipt."))
     client.replies.append(spoken("答", "收據。"))
+    client.chats.extend([
+        chat("I will read the file.", ("read_attachment", {"index": 1})),
+        chat(json.dumps(client.replies.pop().data)),
+    ])
     result = await ask(rig, "  ", [wire("r.jpg", "image/jpeg", b"\xff\xd8\xff\xe0" + b"\x00" * 20)], language)
     assert result["status"] == "done" and result["text"] == "收據。"
     assert question in client.text_calls[0]["user"][0]["text"]
     (turn,) = await rig.turns()
-    assert turn["question"] == question and turn["route"] == "chat"
+    assert turn["question"] == question and turn["route"] == "answer"
 
 
 async def test_no_words_and_no_files_is_still_unclear(services_rig, client):
