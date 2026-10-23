@@ -14,7 +14,13 @@ is unknown and cannot run; and it holds the door to the plugins' tools (`plugins
   on, of a plugin that is on) and writes the audit whatever happens, with the task that made the
   call; a call the gate refuses is made as a refused one, so it is written down too;
 - `record_builtin` writes the audit of one of Raphael's own lookups (the weather, a web search,
-  the time, the memory) for a task.
+  the time, the memory) for a task;
+- `screen` asks the owner's safety rules (`safety`) about an action that changes something, before
+  it is made: a plugin's tool that its server does not say only reads (`reads_only`), a command for
+  this computer, a step on the desktop. Its verdict adds to the tiers and never takes from them:
+  a rule may refuse an action or have it asked about, and a rule that allows an action waives only
+  the questions of the rules (`safety.needs_yes`). Without rules (or without a guard, as in most
+  tests) every action passes it, with no call.
 
 The memory's tools are Raphael's own too: reading a note (`memory_read`) and searching the past
 turns (`history_search`) only read, so they are T0; writing and deleting a note (`memory_write`,
@@ -35,7 +41,9 @@ from ..computer.tools import GATE_TIERS as COMPUTER_TIERS
 from ..integrations.audit import AuditLog
 from .commands import COMMANDS
 from .plugins import PluginHub, PluginResult
+from .ledger import Ledger
 from .policy import Action, Approval, NotApproved, Tier, ToolRegistry, UnknownTool
+from .safety import PASS, Proposed, SafetyGuard, Screening
 
 if TYPE_CHECKING:
     from ..integrations.pool import McpPool
@@ -60,6 +68,7 @@ class ToolGate:
 
     `plugins` is the hub of the tools the user connected (none: only Raphael's own exist). `conn` is
     the open database, for the audit of the built-in lookups; without it they are not audited.
+    `safety` is the owner's safety rules with their judge (none: no rule is read).
     """
 
     def __init__(
@@ -68,8 +77,10 @@ class ToolGate:
         *,
         conn: sqlite3.Connection | None = None,
         now_ms: Callable[[], int] = wall_clock_ms,
+        safety: SafetyGuard | None = None,
     ) -> None:
         self._plugins = plugins
+        self._safety = safety
         self._registry = ToolRegistry(
             {name: command.tier for name, command in COMMANDS.items()},
             plugin_tier=None if plugins is None else plugins.tier_of,
@@ -113,6 +124,31 @@ class ToolGate:
         if worker and (action.tool in COMMANDS or action.tool in COMPUTER_TIERS):
             raise NotApproved(action.tool)
         self._registry.check(action, approval)
+
+    # --- the owner's safety rules ----------------------------------------------------------------
+
+    @property
+    def safety(self) -> SafetyGuard | None:
+        return self._safety
+
+    async def screen(self, proposed: Proposed, *, language: str, ledger: Ledger) -> Screening:
+        """What the owner's safety rules say of `proposed`, an action that changes something: PASS
+        when there is no guard or no rule. Never raises but for a cancellation."""
+        if self._safety is None:
+            return PASS
+        return await self._safety.screen(proposed, language=language, ledger=ledger)
+
+    def reads_only(self, server: str, tool: str) -> bool:
+        """Whether the server of a plugin's tool says that the tool only reads (`readOnlyHint` and
+        not destructive). Such a tool is never judged by the rules. A hub that cannot say, or a
+        tool it does not know, changes things."""
+        kind_of = getattr(self._plugins, "kind_of", None)
+        if kind_of is None:
+            return False
+        try:
+            return kind_of(server, tool) == "read"
+        except Exception:
+            return False
 
     # --- the plugins' tools ---------------------------------------------------------------------
 

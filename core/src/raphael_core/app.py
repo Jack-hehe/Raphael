@@ -63,6 +63,7 @@ import keyring
 from . import __version__, paths
 from .agent.device import DeviceActions, NullActions, WindowsActions
 from .agent.gate import ToolGate
+from .agent.safety import SafetyGuard, SafetyJudge, SafetyRules
 from .agent.service import AgentService
 from .agent.tools import Tools
 from .background.service import BackgroundService
@@ -227,6 +228,11 @@ class EchoClient:
         )
 
     async def decide(self, **kwargs: Any) -> Decision:
+        questions = kwargs.get("questions")
+        if isinstance(questions, dict) and questions and all(k.startswith("rule_") for k in questions):
+            # The safety rules' judge: no rule matches what the fake LLM does.
+            rules = {name: {"type": "noul", "noul": 0.0} for name in questions}
+            return Decision(answers=rules, cost_usd=0.0, latency_ms=0)
         # Jev, sure that every request is small talk (or a task, for the scripted one).
         state = kwargs.get("state")
         spoken = state.get("utterance", "") if isinstance(state, dict) else ""
@@ -760,8 +766,16 @@ class App(Router):
         # The plugins: servers the user connected, and the hub the assistant reaches their tools by.
         self.integrations = IntegrationsService(self._conn, data_dir, self.vault, notify=self.notify)
         self.integrations.register(self)
+        # The owner's safety rules (`safety.rules.*`), which the gate asks before every action that
+        # changes something, with their judge (Jev).
+        self.safety_rules = SafetyRules(self._conn)
+        self.safety_rules.register(self)
         # The one gate every tool call goes through, the assistant's and the worker's.
-        self.gate = ToolGate(self.integrations, conn=self._conn)
+        self.gate = ToolGate(
+            self.integrations,
+            conn=self._conn,
+            safety=SafetyGuard(self.safety_rules, SafetyJudge(self.client)),
+        )
         # The background worker: tasks the assistant hands over, carried out in a process of their
         # own that has no key, no database and no plugin (raphael_core.worker).
         self.background = BackgroundService(
@@ -1189,8 +1203,12 @@ class App(Router):
 
     def _worker_notice(self, method: str, params: dict) -> None:
         """The background worker's notifications go to the app, and the report of a task that a
-        messaging chat handed over goes back to that chat."""
+        messaging chat handed over goes back to that chat. When such a task waits for the owner's
+        yes, the chat is told that the answer is given at the computer: never there."""
         self.notify(method, params)
+        if method == "background.question" and params.get("state") == "waiting":
+            self._tell_chat_to_answer_here(params.get("task_id"))
+            return
         if method != "worker.report" or type(params.get("task_id")) is not int:
             return
         task = self.background.task(params["task_id"])
@@ -1203,6 +1221,20 @@ class App(Router):
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
+        sent = loop.create_task(self.messaging.report(task.session_id, text))
+        sent.add_done_callback(lambda t: t.cancelled() or t.exception())
+
+    def _tell_chat_to_answer_here(self, task_id: object) -> None:
+        if type(task_id) is not int:
+            return
+        task = self.background.task(task_id)
+        if task is None or not self.messaging.handles(task.session_id):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        text = words(task.language, "confirm")
         sent = loop.create_task(self.messaging.report(task.session_id, text))
         sent.add_done_callback(lambda t: t.cancelled() or t.exception())
 

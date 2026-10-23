@@ -301,6 +301,34 @@ COMMIT;
 """
 
 
+# v15: the owner's safety rules, and the questions the background waits on.
+#
+# - `safety_rules` is one row for each rule (`agent.safety`): the owner's own words for an action
+#   (one line, at most 80 characters), what Raphael does when an action falls under it (`ask`,
+#   `allow` or `deny`) and its place in the list. `safety_state` says, by the key "seeded", that the
+#   three rules of the first run were put there once (they are not put back when deleted).
+# - `worker_questions` is one row for each question a background task asked the owner
+#   (`background.service`): the task, the member whose thread it shows in (0 is Raphael), its
+#   prefix and its line as the card says it, the tier it was asked at, when it was asked and when it
+#   runs out (24 hours later), the task's time that was left when it paused, and how it ended
+#   (`waiting`, `approved`, `denied`, `expired`, `cancelled`). The line names the service and the
+#   tool and shows the start of what it is given, as a question of the fast tier does in the
+#   history; never the whole of it. The questions go with their tasks.
+_MIGRATION_V15 = """
+BEGIN;
+CREATE TABLE safety_rules (id INTEGER PRIMARY KEY, action TEXT NOT NULL, verdict TEXT NOT NULL,
+  position INTEGER NOT NULL);
+CREATE TABLE safety_state (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+CREATE TABLE worker_questions (id TEXT PRIMARY KEY, task_id INTEGER NOT NULL,
+  member_id INTEGER NOT NULL DEFAULT 0, prefix TEXT NOT NULL, text TEXT NOT NULL, tier TEXT,
+  created_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, remaining_s REAL NOT NULL,
+  state TEXT NOT NULL DEFAULT 'waiting', answered_at_ms INTEGER);
+CREATE INDEX worker_questions_task ON worker_questions(task_id);
+PRAGMA user_version = 15;
+COMMIT;
+"""
+
+
 _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_V1,
     2: _MIGRATION_V2,
@@ -316,6 +344,7 @@ _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     12: _MIGRATION_V12,
     13: _migrate_v13,
     14: _MIGRATION_V14,
+    15: _MIGRATION_V15,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

@@ -190,8 +190,33 @@ SCHEMA_V14 = {
     "agent_steps": [*SCHEMA_V13["agent_steps"], "detail TEXT"],
     "worker_steps": [*SCHEMA_V13["worker_steps"], "detail TEXT"],
 }
+# Schema v15 adds the owner's safety rules (and whether the first run's were put there), and the
+# questions the background tasks wait on.
+SCHEMA_V15 = {
+    **SCHEMA_V14,
+    "safety_rules": [
+        "id INTEGER PK",
+        "action TEXT NOT NULL",
+        "verdict TEXT NOT NULL",
+        "position INTEGER NOT NULL",
+    ],
+    "safety_state": ["key TEXT PK", "value INTEGER NOT NULL"],
+    "worker_questions": [
+        "id TEXT PK",
+        "task_id INTEGER NOT NULL",
+        "member_id INTEGER NOT NULL DEFAULT 0",
+        "prefix TEXT NOT NULL",
+        "text TEXT NOT NULL",
+        "tier TEXT",
+        "created_at_ms INTEGER NOT NULL",
+        "expires_at_ms INTEGER NOT NULL",
+        "remaining_s REAL NOT NULL",
+        "state TEXT NOT NULL DEFAULT 'waiting'",
+        "answered_at_ms INTEGER",
+    ],
+}
 FTS_SHADOWS = {f"agent_turns_fts_{part}" for part in ("data", "idx", "content", "docsize", "config")}
-LATEST = 14
+LATEST = 15
 
 
 def schema_names(conn, kind):
@@ -215,7 +240,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V14) | FTS_SHADOWS
+    assert schema_names(conn, "table") == set(SCHEMA_V15) | FTS_SHADOWS
     assert {
         "history_created",
         "agent_turns_created",
@@ -224,9 +249,10 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_steps_task",
         "open_targets_used",
         "agent_steps_turn",
+        "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V14.items():
+    for table, columns in SCHEMA_V15.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
@@ -453,7 +479,7 @@ def assert_has_the_latest_schema(migrated, fresh):
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert schema_names(migrated, "table") == schema_names(fresh, "table")
     assert schema_names(migrated, "index") == schema_names(fresh, "index")
-    for table in SCHEMA_V14:
+    for table in SCHEMA_V15:
         assert describe_columns(migrated, table) == describe_columns(fresh, table)
     assert migrated.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
     assert HistoryStore(migrated).latest().text == "A"
