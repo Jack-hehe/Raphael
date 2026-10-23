@@ -29,7 +29,8 @@ from importlib import resources
 
 from ..languages import DEFAULT_LANGUAGES, display_name
 from .dictionary import DictionaryStore
-from .openrouter import CLEANUP_FALLBACKS, Completion, OpenRouterClient, OpenRouterError
+from .openrouter import CLEANUP_FALLBACKS, Completion, OpenRouterError
+from .providers.base import ModelProvider
 from .settings import SettingsStore
 from .spend import SpendTracker
 from .textnorm import to_mainland, to_simplified
@@ -521,13 +522,14 @@ class CleanupService:
 
     def __init__(
         self,
-        client: OpenRouterClient,
+        client: ModelProvider,
         settings: SettingsStore,
         dictionary: DictionaryStore,
         spend: SpendTracker,
         has_key: Callable[[], bool],
         timeout_fn: Callable[[float], float] = timeout_for,
         on_result: Callable[[Exception | None], None] | None = None,
+        on_model_result: Callable[[str, Exception | None], None] | None = None,
     ) -> None:
         self._client = client
         self._settings = settings
@@ -536,6 +538,7 @@ class CleanupService:
         self._has_key = has_key
         self._timeout_fn = timeout_fn
         self._on_result = on_result
+        self._on_model_result = on_model_result
 
     async def clean(
         self,
@@ -662,10 +665,11 @@ class CleanupService:
     async def _clean_one(self, raw: str, heard: str, system: str, timeout: float) -> CleanupResult:
         """One call to the model: the cleanup of `heard`, or `raw` with the reason."""
         started = time.perf_counter()
+        model = self._settings.get("cleanup_model")
         try:
             completion = await asyncio.wait_for(
                 self._client.complete_json(
-                    model=self._settings.get("cleanup_model"),
+                    model=model,
                     fallbacks=CLEANUP_FALLBACKS,
                     system=system,
                     user=build_user_message(heard),
@@ -678,13 +682,13 @@ class CleanupService:
             )
         except TimeoutError:
             logger.warning("Cleanup timed out after %.1f s, using the raw text", timeout)
-            self._notify(OpenRouterError(0, "timeout", "Cleanup timed out"))
+            self._notify(OpenRouterError(0, "timeout", "Cleanup timed out"), model=model)
             return _fallback(raw, "timeout", llm_ms=_elapsed_ms(started))
         except OpenRouterError as error:
             logger.warning(
                 "Cleanup failed, using the raw text: kind=%s status=%s", error.kind, error.status
             )
-            self._notify(error)
+            self._notify(error, model=model)
             return _fallback(raw, f"error:{error.kind}", llm_ms=_elapsed_ms(started))
         except Exception as exc:  # anything else the client lets out
             return _unexpected(raw, exc, _elapsed_ms(started))
@@ -692,7 +696,7 @@ class CleanupService:
 
         # Before anything looks at the reply: the money is spent whatever it holds.
         self._record_spend(completion)
-        self._notify(None)
+        self._notify(None, model=model)
 
         cost_usd = _usable_cost(completion.cost_usd)
         text = completion.data.get("text")
@@ -728,10 +732,11 @@ class CleanupService:
         except Exception as exc:  # a cost it refuses, or a database that fails
             logger.warning("Could not record what a cleanup cost: %s", type(exc).__name__)
 
-    def _notify(self, result: Exception | None) -> None:
-        if self._on_result is None:
-            return
+    def _notify(self, result: Exception | None, *, model: str) -> None:
         try:
-            self._on_result(result)
+            if self._on_result is not None:
+                self._on_result(result)
+            if self._on_model_result is not None:
+                self._on_model_result(model, result)
         except Exception as exc:  # the status is a side matter: the text does not depend on it
             logger.warning("The cleanup status callback failed: %s", type(exc).__name__)

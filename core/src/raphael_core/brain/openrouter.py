@@ -66,6 +66,7 @@ class Completion:
     prompt_tokens: int
     completion_tokens: int
     latency_ms: int  # of the HTTP call
+    usage_known: bool = True
 
 
 @dataclass
@@ -87,6 +88,7 @@ class TextCompletion:
     completion_tokens: int
     latency_ms: int  # of the HTTP call
     sources: list[dict[str, str]]  # {"title", "url"} of the pages a web search drew on
+    usage_known: bool = True
 
 
 @dataclass
@@ -106,6 +108,7 @@ class ToolPlan:
     prompt_tokens: int
     completion_tokens: int
     latency_ms: int  # of the HTTP call
+    usage_known: bool = True
 
 
 @dataclass
@@ -134,8 +137,8 @@ class ChatTurn:
     prompt_tokens: int
     completion_tokens: int
     latency_ms: int  # of the HTTP call
-    # Whether the reply said what it cost. A reply that did not has cost_usd 0.0, which is not a
-    # price: the caller that limits spending must charge an estimate for it.
+    # Whether the reply supplied a usable cost (or a provider adapter priced its usage). When
+    # unknown, cost_usd 0.0 is not a price: a spending guard must charge an estimate for it.
     usage_known: bool = True
 
 
@@ -160,6 +163,7 @@ class Transcription:
     input_tokens: int
     output_tokens: int
     latency_ms: int  # of the HTTP call
+    usage_known: bool = True
 
 
 class OpenRouterError(Exception):
@@ -306,6 +310,10 @@ def _usage_cost(usage: dict) -> float:
     return cost if math.isfinite(cost) and cost >= 0 else 0.0
 
 
+def _known_cost(usage: dict) -> bool:
+    return _is_number(usage.get("cost")) and _usage_cost(usage) == usage.get("cost")
+
+
 def _usage_count(usage: dict, field: str) -> int:
     """usage[field], or 0 if it is missing, null or no whole number."""
     value = usage.get(field)
@@ -346,6 +354,7 @@ def _to_completion(reply: _Reply, requested_model: str) -> Completion:
         prompt_tokens=_usage_count(usage, "prompt_tokens"),
         completion_tokens=_usage_count(usage, "completion_tokens"),
         latency_ms=reply.latency_ms,
+        usage_known=body.get("_usage_known", _known_cost(usage)),
     )
 
 
@@ -412,6 +421,7 @@ def _to_text_completion(reply: _Reply, requested_model: str) -> TextCompletion:
         completion_tokens=_usage_count(usage, "completion_tokens"),
         latency_ms=reply.latency_ms,
         sources=_sources(message.get("annotations")),
+        usage_known=body.get("_usage_known", _known_cost(usage)),
     )
 
 
@@ -450,6 +460,7 @@ def _to_tool_plan(reply: _Reply, requested_model: str) -> ToolPlan:
         prompt_tokens=_usage_count(usage, "prompt_tokens"),
         completion_tokens=_usage_count(usage, "completion_tokens"),
         latency_ms=reply.latency_ms,
+        usage_known=body.get("_usage_known", _known_cost(usage)),
     )
 
 
@@ -513,7 +524,7 @@ def _to_chat_turn(reply: _Reply, requested_model: str) -> ChatTurn:
         prompt_tokens=_usage_count(usage, "prompt_tokens"),
         completion_tokens=_usage_count(usage, "completion_tokens"),
         latency_ms=reply.latency_ms,
-        usage_known=_is_number(usage.get("cost")) and _usage_cost(usage) == usage.get("cost"),
+        usage_known=_known_cost(usage),
     )
 
 
@@ -619,6 +630,7 @@ def _to_transcription(reply: _Reply, model: str) -> Transcription:
         input_tokens=_usage_count(usage, "input_tokens"),
         output_tokens=_usage_count(usage, "output_tokens"),
         latency_ms=reply.latency_ms,
+        usage_known=_known_cost(usage),
     )
 
 

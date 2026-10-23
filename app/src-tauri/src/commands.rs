@@ -182,6 +182,7 @@ pub enum MainEvent {
     /// Data changed: the window re-reads it without receiving private content.
     RoutinesChanged { member_id: u64 },
     MembersChanged,
+    ProvidersChanged,
     MemoryChanged {
         member_id: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -334,7 +335,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 55] = [
+const ALLOWED_METHODS: [&str; 62] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -345,6 +346,13 @@ const ALLOWED_METHODS: [&str; 55] = [
     "models.local_cancel",
     "models.local_delete",
     "models.catalog",
+    "providers.kinds",
+    "providers.list",
+    "providers.add",
+    "providers.update",
+    "providers.remove",
+    "providers.test",
+    "providers.models",
     "stats.summary",
     "messaging.telegram.status",
     "messaging.telegram.connect",
@@ -809,6 +817,7 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
             member_id: params.get("member_id")?.as_u64()?,
         }),
         "members.changed" => Some(MainEvent::MembersChanged),
+        "providers.changed" => Some(MainEvent::ProvidersChanged),
         "memory.changed" => {
             let space = match params.get("space") {
                 None => None,
@@ -1660,6 +1669,34 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn providers_are_main_window_methods_and_emit_an_empty_change_event() {
+        for method in [
+            "providers.kinds",
+            "providers.list",
+            "providers.add",
+            "providers.update",
+            "providers.remove",
+            "providers.test",
+            "providers.models",
+        ] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        for method in [
+            "providers",
+            "providers.proxy",
+            "providers.request",
+            "providers.models.extra",
+        ] {
+            assert!(!is_allowed_method(method), "{method}");
+        }
+        let event = main_event_from(
+            &notification("providers.changed", json!({"key": "private"})),
+            true,
+        ).unwrap();
+        assert_eq!(serde_json::to_value(event).unwrap(), json!({"type": "ProvidersChanged"}));
     }
 
     #[test]

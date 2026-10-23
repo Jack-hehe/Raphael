@@ -21,7 +21,8 @@ import logging
 import re
 from collections.abc import Sequence
 
-from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient
+from ..brain.openrouter import CLEANUP_FALLBACKS
+from ..brain.providers.base import ModelProvider
 from .history import Turn
 from .ledger import Ledger
 from .plugins import Offer, PluginTool, build_plan_message
@@ -150,7 +151,7 @@ def widen(offer: Offer, aliases: list[str]) -> list[str]:
 class ToolPicker:
     """Chooses, with one cheap call to the language model, the tools of an offer a request needs."""
 
-    def __init__(self, client: OpenRouterClient, *, timeout_s: float = PICK_TIMEOUT_S) -> None:
+    def __init__(self, client: ModelProvider, *, timeout_s: float = PICK_TIMEOUT_S) -> None:
         self._client = client
         self._timeout_s = timeout_s
 

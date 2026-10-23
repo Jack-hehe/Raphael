@@ -365,6 +365,9 @@ class Router:
         """What `text` is: Jev's decision if Jev is sure, else the language model's `model`.
         `background` is one line about the tasks in the background, if there are any. AgentFailure
         (of a kind) when nothing decides."""
+        if model.startswith("@"):
+            # Jev is an OpenRouter-only alpha API. Other providers need no OpenRouter key.
+            return await self.ask_luna(text, model, ledger, background, context=context)
         outcome = await self.ask_jev(text, ledger, background, context=context)
         if outcome.decision is not None:
             return outcome.decision

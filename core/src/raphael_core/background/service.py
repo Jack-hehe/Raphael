@@ -98,7 +98,7 @@ from ..agent.safety import asked_with
 from ..agent.speaker import RAPHAEL, Speaker
 from ..agent.team import Team, team_tools_for, roster_prompt
 from ..agent.tools import ToolResult, Tools
-from ..brain.openrouter import OpenRouterClient
+from ..brain.providers.base import ModelProvider
 from ..brain.settings import DEFAULTS, SettingsStore
 from ..brain.spend import SpendTracker
 from ..clock import wall_clock_ms
@@ -352,7 +352,7 @@ class BackgroundService:
     def __init__(
         self,
         conn: sqlite3.Connection,
-        client: OpenRouterClient,
+        client: ModelProvider,
         gate: ToolGate,
         tools: Tools,
         *,

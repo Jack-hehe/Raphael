@@ -41,7 +41,7 @@ import httpx
 
 from ..agent.ledger import Ledger
 from ..brain.catalog import IMAGE_INPUT, LLM, CatalogEntry, find
-from ..brain.openrouter import OpenRouterClient
+from ..brain.providers.base import ModelProvider
 from ..brain.settings import DEFAULTS, SettingsStore
 from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError, invalid_params
 from ..router import Router
@@ -113,7 +113,7 @@ class ServiceHub:
     def __init__(
         self,
         conn: sqlite3.Connection,
-        client: OpenRouterClient,
+        client: ModelProvider,
         keys: ServiceKeys,
         *,
         models: Callable[[], Sequence[CatalogEntry] | None] | None = None,

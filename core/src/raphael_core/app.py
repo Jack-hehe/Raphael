@@ -88,6 +88,7 @@ from .brain.openrouter import (
     ToolPlan,
 )
 from .brain.secrets import CredentialKeyStore, KeyStore, MemoryKeyStore
+from .brain.providers.registry import ProviderRegistry, ProviderRouter
 from .brain.service import Brain
 from .brain.settings import SettingsStore
 from .device.models import LOCAL_STT_MODELS, REGISTRY, ModelDownloadError, ModelManager, local_model
@@ -760,11 +761,19 @@ class App(Router):
                 self.client = OpenRouterClient(self.keys.get)
                 self.vault = CredentialVault()
                 service_keys = credential_keys()
-            self.brain = Brain(self._conn, self.client, self.keys)  # prunes the history
+            provider_keys: dict[str, MemoryKeyStore] = {}
+            self.providers = ProviderRegistry(
+                self._conn, self.client, self.keys,
+                credential=(lambda pid: provider_keys.setdefault(pid, MemoryKeyStore())) if fake_llm else None,
+                transport=offline_transport() if fake_llm else None,
+            )
+            self.client = ProviderRouter(self.providers, self.client)
+            self.brain = Brain(self._conn, self.client, self.keys, providers=self.providers)
         except BaseException:
             self._conn.close()
             raise
         self.brain.register(self)
+        self.providers.register(self)
         # The services the tools stand on, as the owner chose them (`services.*`). With the fake LLM
         # every one of them is offline: a run of the tests reaches no network.
         self.services = ServiceHub(

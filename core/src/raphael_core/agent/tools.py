@@ -35,7 +35,8 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from ..brain.openrouter import OpenRouterClient, OpenRouterError
+from ..brain.openrouter import OpenRouterError
+from ..brain.providers.base import ModelProvider
 from ..services.attachments import Attachment
 from ..services.common import ServiceError
 from .cities import city_key, geocoding_queries
@@ -165,7 +166,7 @@ class Tools:
 
     def __init__(
         self,
-        client: OpenRouterClient,
+        client: ModelProvider,
         *,
         http: httpx.AsyncClient | None = None,
         now: Callable[[], datetime] | None = None,

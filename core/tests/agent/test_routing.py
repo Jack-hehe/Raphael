@@ -540,6 +540,15 @@ async def test_jev_decides_and_the_language_model_is_not_asked(router, client, l
     assert client.json_calls == []
 
 
+async def test_another_provider_classifies_without_an_openrouter_decision(router, client, ledger):
+    client.decisions.append(OpenRouterError(401, "auth", "no OpenRouter key"))
+    client.replies.append(completion(classification(route="discuss")))
+    result = await router.classify("hello", "@local:llama3.1:8b", ledger)
+    assert result.route == "discuss" and result.source == "luna"
+    assert len(client.decisions) == 1
+    assert client.json_calls[0]["model"] == "@local:llama3.1:8b"
+
+
 @pytest.mark.parametrize(
     "jev",
     [

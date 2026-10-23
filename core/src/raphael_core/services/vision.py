@@ -23,7 +23,8 @@ import logging
 from collections.abc import Callable, Sequence
 
 from ..agent.ledger import Ledger
-from ..brain.openrouter import OpenRouterClient, OpenRouterError
+from ..brain.openrouter import OpenRouterError
+from ..brain.providers.base import ModelProvider
 from .attachments import Attachment
 from .common import ServiceError
 
@@ -74,7 +75,7 @@ class Vision:
     """The model that sees. `client` is the OpenRouter client; `model` says which model it is now
     (read at each call, so a change of the setting takes effect at once)."""
 
-    def __init__(self, client: OpenRouterClient, model: VisionModel) -> None:
+    def __init__(self, client: ModelProvider, model: VisionModel) -> None:
         self._client = client
         self._model = model
 

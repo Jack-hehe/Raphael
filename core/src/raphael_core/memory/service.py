@@ -75,7 +75,8 @@ from pathlib import Path
 from ..agent.history import AgentHistory, Turn
 from ..agent.ledger import Ledger
 from ..agent.tools import ToolResult
-from ..brain.openrouter import OpenRouterClient
+from ..brain.providers.base import ModelProvider
+from ..brain.providers.registry import ProviderRouter
 from ..brain.secrets import KeyStore
 from ..brain.settings import DEFAULTS, SettingsStore
 from ..brain.spend import SpendTracker
@@ -137,7 +138,7 @@ class MemoryService:
         self,
         conn: sqlite3.Connection,
         root: Path,
-        client: OpenRouterClient,
+        client: ModelProvider,
         keys: KeyStore,
         *,
         now_ms: Callable[[], int] = wall_clock_ms,
@@ -453,6 +454,8 @@ class MemoryService:
     def may_spend(self) -> bool:
         """Whether a call of the memory's own may be made: there is a key."""
         try:
+            if isinstance(self._client, ProviderRouter):
+                return self._client.available(self._model())
             if not (self._keys.get() or "").strip():
                 return False
             return True

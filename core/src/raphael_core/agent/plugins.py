@@ -35,7 +35,8 @@ from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..brain.catalog import LLM, TOOL_CALLING, CatalogEntry, find
-from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
+from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
+from ..brain.providers.base import ModelProvider
 from ..brain.pricing import builtin_catalog
 from .failure import AgentFailure, failure_kind
 from .history import Turn
@@ -332,7 +333,7 @@ class Planner:
     """Asks the language model which of the offered tools a request needs. `client` is the
     OpenRouter client."""
 
-    def __init__(self, client: OpenRouterClient, *, timeout_s: float = PLAN_TIMEOUT_S) -> None:
+    def __init__(self, client: ModelProvider, *, timeout_s: float = PLAN_TIMEOUT_S) -> None:
         self._client = client
         self._timeout_s = timeout_s
 

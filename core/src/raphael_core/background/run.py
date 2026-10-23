@@ -64,7 +64,8 @@ from ..agent.team import ASK_MEMBER, CREATE_MEMBER, TEAM_TOOLS
 from ..agent.team import description as team_description
 from ..agent.tools import ToolResult, Tools
 from ..brain.catalog import LLM, find
-from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
+from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
+from ..brain.providers.base import ModelProvider
 from ..brain.textnorm import convert_leftover_simplified
 from ..brain.pricing import builtin_catalog
 from ..brain.spend import SpendTracker
@@ -197,7 +198,7 @@ class TaskRun:
         model: str,
         limits: RunLimits,
         snapshot: Snapshot,
-        client: OpenRouterClient,
+        client: ModelProvider,
         gate: ToolGate,
         tools: Tools,
         ledger: Ledger,
