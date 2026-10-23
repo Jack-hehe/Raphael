@@ -59,6 +59,17 @@ function select(host: HTMLElement, control: string, value: string) {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+test("a chart mark has only our tooltip, never the system's own on top of it", async () => {
+  const { host } = await setup();
+  const marks = host.querySelectorAll(".ua-mark");
+  expect(marks.length).toBeGreaterThan(0);
+  for (const mark of marks) {
+    expect(mark.querySelector("title")).toBeNull();
+    expect(mark.hasAttribute("title")).toBe(false);
+    expect(mark.getAttribute("aria-label")).toBeTruthy();
+  }
+});
+
 test("changes cost, message and dictation grouping without another RPC", async () => {
   const { host, api } = await setup();
   select(host, "cost", "provider");

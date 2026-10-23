@@ -80,10 +80,10 @@ function chart(days: string[], group: UsageGroup, title: string, category: strin
       const exact = `${days[i]} · ${name} · ${money ? exactUsd(v) : count(v)}`;
       const attrs = `class="ua-mark ua-color-${seriesIndex}" tabindex="0" role="img" aria-label="${esc(exact)}" data-tooltip="${esc(exact)}"`;
       if (mode === "bars") {
-        if (v > 0) svg += `<rect ${attrs} x="${x(i) - step * 0.32}" y="${y(prior[i]! + v)}" width="${step * 0.64}" height="${v / max * height}"><title>${esc(exact)}</title></rect>`;
+        if (v > 0) svg += `<rect ${attrs} x="${x(i) - step * 0.32}" y="${y(prior[i]! + v)}" width="${step * 0.64}" height="${v / max * height}"/>`;
         prior[i]! += v;
       } else {
-        svg += `<circle ${attrs} cx="${x(i)}" cy="${y(v)}" r="3"><title>${esc(exact)}</title></circle>`;
+        svg += `<circle ${attrs} cx="${x(i)}" cy="${y(v)}" r="3"/>`;
       }
     });
   });
