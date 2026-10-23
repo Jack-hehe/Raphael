@@ -174,9 +174,10 @@ pub enum MainEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         action: Option<TrayAction>,
     },
-    /// A turn of the conversations with Raphael was written or completed (`agent.turn`): the page
-    /// of the conversations reads it again. Only its id: what was said stays in the core.
-    AgentTurn { turn_id: u64 },
+    /// A turn of the conversations was written or completed (`agent.turn`): the page of the
+    /// conversations reads it again. Only its id and the thread it is in (`member_id`: 0 is
+    /// Raphael's, and a core from before the members names none): what was said stays in the core.
+    AgentTurn { turn_id: u64, member_id: u64 },
     /// A background task moved on (`worker.changed`): a step was taken, or it started or ended.
     /// `running` is whether any task is under way.
     WorkerChanged {
@@ -627,16 +628,19 @@ pub fn typed_attachments(attachments: Option<Vec<Value>>) -> Result<Vec<Value>, 
 }
 
 /// Asks Raphael a question typed in the composer of the 拉斐爾 page, with the images and PDFs
-/// attached to it, if any (`attachments`, `agent.ask`'s, never logged). It goes the way a spoken
-/// one goes once its words are heard (`agent.ask` with the source `app`; the overlay shows the
-/// answer and any YES/NO question), and the call settles when the turn is over, its answer in the
-/// history or its failure shown. Refused while Raphael is busy with a recording or another question.
+/// attached to it, if any (`attachments`, `agent.ask`'s, never logged), or, with a `member_id`
+/// that is not 0, the member whose thread it was typed in (a member is reached only this way, with
+/// the source `app`). It goes the way a spoken one goes once its words are heard (`agent.ask` with
+/// the source `app`; the overlay shows the answer and any YES/NO question), and the call settles
+/// when the turn is over, its answer in the history or its failure shown. Refused while Raphael is
+/// busy with a recording or another question.
 #[tauri::command]
 pub async fn agent_ask_text(
     app: AppHandle,
     webview: Webview,
     text: String,
     attachments: Option<Vec<Value>>,
+    member_id: Option<u64>,
 ) -> Result<(), String> {
     require_main(&webview)?;
     let attachments = typed_attachments(attachments)?;
@@ -647,7 +651,7 @@ pub async fn agent_ask_text(
         .ok_or(AGENT_OFF)?;
     let turn = desk
         .0
-        .ask_typed(text, attachments)
+        .ask_typed(text, attachments, member_id.unwrap_or(0))
         .map_err(|_| "拉斐爾正在忙，請稍後再問".to_owned())?;
     // The page waits for the turn, so that it knows when to stop waiting for its answer.
     if let Err(err) = turn.await {
@@ -745,6 +749,7 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
         }),
         "agent.turn" => Some(MainEvent::AgentTurn {
             turn_id: params.get("turn_id")?.as_u64()?,
+            member_id: params.get("member_id").and_then(Value::as_u64).unwrap_or(0),
         }),
         "worker.changed" => Some(MainEvent::WorkerChanged {
             task_id: params.get("task_id")?.as_u64()?,
@@ -2251,7 +2256,18 @@ mod tests {
         let turn = notification("agent.turn", json!({"turn_id": 12}));
         assert_eq!(
             main_event_from(&turn, false),
-            Some(MainEvent::AgentTurn { turn_id: 12 })
+            Some(MainEvent::AgentTurn {
+                turn_id: 12,
+                member_id: 0
+            })
+        );
+        let theirs = notification("agent.turn", json!({"turn_id": 13, "member_id": 4}));
+        assert_eq!(
+            main_event_from(&theirs, false),
+            Some(MainEvent::AgentTurn {
+                turn_id: 13,
+                member_id: 4
+            })
         );
         let task = notification(
             "worker.changed",
@@ -2319,8 +2335,12 @@ mod tests {
             r#"{"type":"LearnLimited","app":"vscode","reason":"accessibility_off"}"#
         );
         assert_eq!(
-            serde_json::to_string(&MainEvent::AgentTurn { turn_id: 4 }).unwrap(),
-            r#"{"type":"AgentTurn","turn_id":4}"#
+            serde_json::to_string(&MainEvent::AgentTurn {
+                turn_id: 4,
+                member_id: 2
+            })
+            .unwrap(),
+            r#"{"type":"AgentTurn","turn_id":4,"member_id":2}"#
         );
         assert_eq!(
             serde_json::to_string(&MainEvent::WorkerChanged {
