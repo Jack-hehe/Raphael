@@ -38,7 +38,7 @@
 .mp-ddlist button[aria-selected="true"] .mt { font-weight: 600; }
 
 /* The heading of the columns lines up with the names and the prices of the rows below it. */
-.mp-cols { flex: none; display: flex; justify-content: space-between; gap: var(--sp-3); padding: 8px 54px 6px 42px; border-top: 1px solid var(--line); font-size: 11px; color: var(--text-3); }
+.mp-cols { flex: none; display: flex; justify-content: space-between; gap: var(--sp-3); padding: 8px 54px 6px 42px; border-top: 1px solid var(--line); font-size: var(--fs-xs); color: var(--text-3); }
 /* A height of its own, so that the panel does not jump while a search narrows the list. */
 .mp-scroll { flex: 0 1 auto; height: min(380px, calc(100vh - 280px)); min-height: 112px; overflow-x: hidden; overflow-y: auto; padding: 0 4px 6px 6px; scrollbar-gutter: stable; }
 .mp-row { display: flex; align-items: flex-start; gap: 2px; }
@@ -52,7 +52,7 @@
 .mp-line { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
 .mp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); line-height: 1.45; }
 .mp-opt[data-current] .mp-name { font-weight: 600; }
-.mp-price { flex: none; margin-left: auto; padding-left: var(--sp-2); font-size: var(--fs-xs); color: var(--text-2); white-space: nowrap; }
+.mp-price { flex: none; margin-left: auto; padding-left: var(--sp-2); font-size: var(--fs-xs); color: var(--text-2); white-space: nowrap; font-feature-settings: "tnum"; }
 .mp-sub { font-size: var(--fs-xs); line-height: 1.4; color: var(--text-3); overflow-wrap: anywhere; }
 .mp-opt[aria-disabled="true"] .mp-price { color: var(--text-3); }
 /* The star beside a row: shown on the row that is pointed at or highlighted, always on a favourite, and when the focus is on it. */
@@ -62,10 +62,10 @@
 .menu.mp-panel .mp-star[data-on] { color: var(--accent-text); }
 .mp-star[data-on] .i { fill: currentColor; }
 :where(:root[data-keys]) .menu.mp-panel .mp-star:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
-.mp-group { margin: 8px 6px 2px; padding: 10px 4px 2px; border-top: 1px solid var(--line); font-size: 11px; color: var(--text-3); }
+.mp-group { margin: 8px 6px 2px; padding: 10px 4px 2px; border-top: 1px solid var(--line); font-size: var(--fs-xs); color: var(--text-3); }
 .mp-list > .mp-group:first-child { margin-top: var(--sp-1); padding-top: var(--sp-1); border-top: 0; }
 .mp-empty { margin: 0; padding: 32px 12px; text-align: center; font-size: var(--fs-sm); color: var(--text-3); }
-.mp-foot { flex: none; margin: 0; padding: 8px 14px 10px; border-top: 1px solid var(--line); font-size: 11px; line-height: 1.5; color: var(--text-3); text-wrap: pretty; }
+.mp-foot { flex: none; margin: 0; padding: 8px 14px 10px; border-top: 1px solid var(--line); font-size: var(--fs-xs); line-height: 1.5; color: var(--text-3); text-wrap: pretty; }
 .mp-foot:empty { display: none; }
 @media (max-width: 520px) {
   .mp-cols { padding-left: 36px; }

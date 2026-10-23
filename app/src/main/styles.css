@@ -1,18 +1,20 @@
 /* Ice-blue surfaces and periwinkle accents frame Raphael's portrait and quiet status report.
    Text, links and filled controls use separate contrast-tested colors in each theme. */
 
+@import "../assets/fonts/inter.css";
+
 /* ---------- tokens ---------- */
 :root {
   --sidebar-width: 208px; --window-controls-height: 32px;
   /* scale: spacing, type, radius, control heights (docs/ui.md) */
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
-  --fs-xs: 12px; --fs-sm: 13px; --fs-md: 14px; --fs-lg: 17px; --fs-h1: 28px;
+  --fs-xs: 13px; --fs-sm: 14px; --fs-md: 15px; --fs-lg: 18px; --fs-h1: 28px;
   --r-sm: 8px; --r-md: 10px; --r-lg: 14px; --r-pill: 999px;
   --h-ctl: 34px; --h-ctl-sm: 28px; --h-row: 48px;
   /* official brand colours of service logos: the only colours outside the app palette */
   --brand-telegram: #26a5e4;
-  --ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", system-ui, sans-serif;
-  --display: "Segoe UI Variable Display", "Segoe UI", "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif;
+  --ui: "Inter", "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", system-ui, sans-serif;
+  --display: var(--ui);
   --ja: "Yu Gothic UI", "Yu Gothic", "Meiryo UI", "Meiryo", "Hiragino Sans", "Noto Sans JP", sans-serif;
   --zh-sub: "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif;
 
@@ -67,7 +69,7 @@
 * { box-sizing: border-box; }
 /* Nothing in the app scrolls sideways: a page that is wider than its window has a bug to fix, and a scrollbar along the bottom is no answer. The scrolling parts below set overflow-x: hidden as a last guard; the layouts shrink and wrap so that nothing is cut off. */
 html, body { margin: 0; height: 100%; overflow-x: hidden; }
-body { font: 14px/1.5 var(--ui); color: var(--text); background: var(--side); -webkit-font-smoothing: antialiased; overflow: hidden; }
+body { font: var(--fs-md)/1.6 var(--ui); color: var(--text); background: var(--side); -webkit-font-smoothing: antialiased; overflow: hidden; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 /* No focus ring under the pointer, the browser's own included: a click shows where it went, and the
@@ -87,7 +89,8 @@ button:disabled { cursor: default; }
 ::selection { background: var(--selection); color: var(--on-selection); }
 input::placeholder { color: var(--text-3); opacity: 1; }
 [lang="ja"] { font-family: var(--ja); }
-.num { font-variant-numeric: tabular-nums; }
+.num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+[data-price] { font-feature-settings: "tnum"; }
 [hidden] { display: none !important; }
 /* Every icon is drawn for 16 px (ui.ts ICON) and shown at 16 px, or 20 where a larger one is meant:
    never 12 to 15 px, nor with a stroke of its own, which would blur its lines. */
@@ -125,7 +128,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .wbody { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); height: 100%; min-height: 0; }
 
 .side { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 12px; min-height: 0; overflow-x: hidden; overflow-y: auto; }
-.btn.brand { justify-content: flex-start; border: 0; background: transparent; width: 100%; text-align: left; cursor: pointer; display: flex; align-items: center; gap: 10px; min-height: var(--h-row); padding: 0 10px; margin-bottom: 14px; font: 650 17px/1 var(--display); letter-spacing: -0.01em; color: var(--text); user-select: none; }
+.btn.brand { justify-content: flex-start; border: 0; background: transparent; width: 100%; text-align: left; cursor: pointer; display: flex; align-items: center; gap: 10px; min-height: var(--h-row); padding: 0 10px; margin-bottom: 14px; font: 650 var(--fs-lg)/1 var(--display); letter-spacing: -0.01em; color: var(--text); user-select: none; }
 .app-icon { display: block; width: 40px; height: 40px; flex: none; object-fit: contain; object-position: center; border-radius: 0; background: transparent; }
 .nav { position: relative; display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 8px 12px; border: 0; border-radius: 9px; background: transparent; text-align: left; font-size: var(--fs-md); line-height: 1.4; color: var(--text-2); width: 100%; }
 .nav:hover { background: var(--hover); color: var(--text); }
@@ -163,7 +166,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .main { position: relative; overflow-x: hidden; overflow-y: auto; background: var(--content); border-top-left-radius: var(--r-lg); border-left: 1px solid var(--edge); border-top: 1px solid var(--edge); min-height: 0; container: main / inline-size; scrollbar-gutter: stable; }
 /* Each page is a column centred in the window: wide windows get margins, nothing stretches edge to edge. */
 .page { max-width: 1160px; margin: 0 auto; padding: calc(var(--window-controls-height) + 8px) 32px 40px; }
-.page h1 { font: 650 28px/1.3 var(--display); margin: 0; letter-spacing: -0.015em; }
+.page h1 { font: 650 var(--fs-h1)/1.3 var(--display); margin: 0; letter-spacing: -0.015em; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); min-height: 36px; }
 .lede { margin: 8px 0 0; color: var(--text-2); font-size: var(--fs-sm); max-width: 64ch; text-wrap: pretty; }
 @media (max-width: 880px) {
@@ -228,7 +231,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .action-row.is-sticky { position: sticky; bottom: 0; z-index: 2; padding-block: var(--sp-3); border-top: 1px solid var(--line); background: var(--panel); }
 .lm-confirm-actions { flex: 1 1 100%; }
 .keys { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--text-3); font-size: var(--fs-xs); }
-kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 24px; padding: 0 8px; border-radius: 5px; background: var(--key); border: 1px solid var(--key-edge); border-bottom-width: 2px; font: 600 12px/1 var(--ui); color: var(--text); }
+kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 24px; padding: 0 8px; border-radius: 5px; background: var(--key); border: 1px solid var(--key-edge); border-bottom-width: 2px; font: 600 var(--fs-xs)/1 var(--ui); color: var(--text); }
 .rec-hint { color: var(--accent-text); font-size: var(--fs-xs); }
 .st { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--text); white-space: nowrap; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex: none; }
@@ -270,7 +273,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .wgrid .page-loading { grid-column: 1 / -1; }
 
 .dash-empty { margin-top: 28px; padding: var(--sp-5); border-radius: var(--r-lg); border: 1px dashed var(--btn-edge); }
-.dash-empty h2 { margin: 0; font: 600 15px/1.3 var(--display); }
+.dash-empty h2 { margin: 0; font: 600 var(--fs-md)/1.3 var(--display); }
 .dash-empty p { margin: 6px 0 0; font-size: var(--fs-sm); color: var(--text-2); max-width: 52ch; text-wrap: pretty; }
 .hint { margin-top: 28px; display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--text-3); }
 .dash-empty .hint { margin-top: var(--sp-4); }
@@ -327,7 +330,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .hdetail h4 { margin: 6px 0 0; font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); }
 .hdetail .raw { font-size: var(--fs-sm); line-height: 1.6; color: var(--text-2); overflow-wrap: anywhere; user-select: text; }
 .empty { padding: 36px 0; text-align: center; color: var(--text-3); font-size: var(--fs-sm); }
-.empty .say { font-family: var(--voice); font-weight: 700; color: var(--text); font-size: 15px; margin-bottom: var(--sp-1); }
+.empty .say { font-family: var(--voice); font-weight: 700; color: var(--text); font-size: var(--fs-md); margin-bottom: var(--sp-1); }
 .more { display: flex; justify-content: center; margin-top: 14px; }
 
 /* ---------- dictionary ---------- */
@@ -367,7 +370,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .set-search .i { color: var(--text-3); }
 .set-list { display: flex; flex-direction: column; gap: 2px; min-height: 0; }
 /* The name of a group of tabs: small grey words, no line. */
-.nav-group { padding: 12px 10px 4px; font-size: 11.5px; line-height: 1.4; color: var(--text-3); }
+.nav-group { padding: 12px 10px 4px; font-size: var(--fs-xs); line-height: 1.4; color: var(--text-3); }
 .nav-em { display: inline-grid; width: 18px; height: 18px; margin: -1px; flex: none; }
 .nav-em img { width: 100%; height: 100%; display: block; }
 .nav-em .em-d { display: none; }
@@ -375,7 +378,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 :root[data-theme="dark"] .nav-em .em-d { display: block; }
 .set-hit { flex-direction: column; align-items: flex-start; gap: 0; }
 .set-hit .hit-t { color: var(--text); }
-.set-hit .hit-p { font-size: 11.5px; color: var(--text-3); }
+.set-hit .hit-p { font-size: var(--fs-xs); color: var(--text-3); }
 .set-none { margin: 8px 10px; font-size: var(--fs-sm); color: var(--text-3); }
 /* A row the search jumped to is lit for a moment. */
 .slist > .row { transition: background-color 0.4s ease, box-shadow 0.4s ease; }
@@ -394,7 +397,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .modal-x { position: absolute; top: 12px; right: 12px; }
 /* A group of settings: a short name, then its rows on one card with hairlines between them. */
 .sgroup { margin-top: 28px; }
-.sgroup > h2 { margin: 0 0 8px 4px; font: 600 13px/1.4 var(--ui); color: var(--text-2); }
+.sgroup > h2 { margin: 0 0 8px 4px; font: 600 var(--fs-sm)/1.4 var(--ui); color: var(--text-2); }
 .slist { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; --slist-pad: 18px; padding: 0 var(--slist-pad); }
 .slist > .row { min-height: 60px; padding: 12px 0; flex-wrap: wrap; row-gap: 10px; }
 .slist > .row + .row::before, .slist > .note + .row::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--line); }
@@ -457,7 +460,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .menu .mtd { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .menu .mtd .mt { white-space: normal; }
 .menu .mdesc { font-size: var(--fs-xs); line-height: 1.4; color: var(--text-3); text-wrap: pretty; }
-.menu-head { padding: 6px 10px; font-size: 11px; color: var(--text-3); text-align: right; border-bottom: 1px solid var(--line); margin-bottom: var(--sp-1); }
+.menu-head { padding: 6px 10px; font-size: var(--fs-xs); color: var(--text-3); text-align: right; border-bottom: 1px solid var(--line); margin-bottom: var(--sp-1); }
 /* An item that does something rather than choose (「重新搜尋麥克風」), after a line under the choices. */
 .menu-sep { height: 1px; margin: 4px 6px; background: var(--line); }
 .menu .menu-action { color: var(--accent-text); }
@@ -578,21 +581,21 @@ kbd.ob-cap { white-space: nowrap; }
 @media (min-width: 1440px) and (min-height: 800px) {
   :root { --sidebar-width: 232px; }
   .side { padding: 10px 14px 16px; }
-  .side .nav { min-height: 44px; padding: 10px 14px; font-size: 15px; }
-  .brand { min-height: 52px; margin-bottom: 18px; font-size: 18px; }
-  .page { max-width: 1480px; padding: calc(var(--window-controls-height) + 24px) 40px 48px; font-size: 15px; }
+  .side .nav { min-height: 44px; padding: 10px 14px; font-size: var(--fs-md); }
+  .brand { min-height: 52px; margin-bottom: 18px; font-size: var(--fs-lg); }
+  .page { max-width: 1480px; padding: calc(var(--window-controls-height) + 24px) 40px 48px; font-size: var(--fs-md); }
   .page h1 { font-size: 32px; }
-  .page .lede { font-size: 15px; }
+  .page .lede { font-size: var(--fs-md); }
   .page kbd { height: var(--h-ctl-sm); font-size: var(--fs-md); }
   .page .btn { min-height: 38px; font-size: var(--fs-md); }
   .page .field { height: 38px; font-size: var(--fs-md); }
   .page .field input { font-size: var(--fs-md); }
-  .page .row .t { font-size: 15px; }
+  .page .row .t { font-size: var(--fs-md); }
   .page .row .d, .page .row .ctl, .page .row .val { font-size: var(--fs-md); }
   .hist-top .row { min-height: 76px; padding-block: 16px; }
   .hrow .txt { font-size: 16px; line-height: 1.65; }
   .hrow .time, .hrow .meta { font-size: var(--fs-sm); }
-  .hdetail .raw { font-size: 15px; }
+  .hdetail .raw { font-size: var(--fs-md); }
   .wgrid { gap: 14px; }
   .wchip { min-height: 56px; padding: 12px 8px 12px 18px; }
   .word { font-size: 16px; }
@@ -605,7 +608,7 @@ kbd.ob-cap { white-space: nowrap; }
   .stage { min-height: 100px; grid-template-columns: 84px minmax(0, 1fr); gap: 14px; padding-bottom: var(--sp-3); }
   .stage canvas.emb { width: 84px !important; height: 84px !important; }
   .stage .subs { padding: 4px 0; }
-  .sub-line { font-size: 15px; line-height: 1.5; }
+  .sub-line { font-size: var(--fs-md); line-height: 1.5; }
   .modal-scrim { --modal-gap: 12px; }
   .modal-body { padding-top: 20px; padding-bottom: var(--sp-5); }
   .sgroup { margin-top: var(--sp-5); }
