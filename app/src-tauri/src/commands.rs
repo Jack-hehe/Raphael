@@ -324,7 +324,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 47] = [
+const ALLOWED_METHODS: [&str; 53] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -344,7 +344,7 @@ const ALLOWED_METHODS: [&str; 47] = [
     "messaging.telegram.remove_user",
     "messaging.telegram.disconnect",
     // The conversation view stops the task it shows, by its id (`validate_core_call`). The other
-    // methods of the worker stay closed: a yes to its question is the overlay's real click alone.
+    // methods of the worker stay closed (a task's question is answered by `background.answer`).
     "worker.cancel",
     // ... and runs one that did not finish again, by its id.
     "worker.rerun",
@@ -382,6 +382,16 @@ const ALLOWED_METHODS: [&str; 47] = [
     "routines.update",
     "routines.delete",
     "routines.template",
+    // The owner's safety rules, in Settings › 拉斐爾 (the core checks the words and the verdict).
+    "safety.rules.list",
+    "safety.rules.create",
+    "safety.rules.update",
+    "safety.rules.delete",
+    // The questions a background task waits on, as the gold card of a thread shows them, and the
+    // owner's answer from that card: the one place such a question is answered
+    // (`validate_core_call` checks it names its task and question and says yes or no).
+    "background.questions.list",
+    "background.answer",
 ];
 
 /// The types a memory's name starts with (the core's `memory.store.TYPES`).
@@ -468,7 +478,8 @@ fn validate_memory_call(method: &str, params: &Value) -> Result<(), String> {
 /// settings (the `languages` setting too), the key, the status, the usage numbers, OpenRouter's
 /// catalog of models with their prices, the list of languages, the record of the conversations
 /// with Raphael, the plugins (the store, the servers the user connects and whether each of their tools is on),
-/// stopping a background task, and the few device methods the settings page needs. Everything else
+/// stopping a background task, the owner's safety rules, the questions a background task waits on
+/// and the answer to one, and the few device methods the settings page needs. Everything else
 /// is refused, the dictation methods and the ones that ask Raphael something above all.
 pub fn is_allowed_method(m: &str) -> bool {
     ALLOWED_METHODS.contains(&m)
@@ -483,7 +494,9 @@ pub fn is_allowed_method(m: &str) -> bool {
 /// (each model against OpenRouter's list), so that the settings page gets these refusals in its
 /// own words. `Err` says what is wrong. The window's `worker.cancel` and `worker.rerun` must name
 /// their task, the memory's methods a memory by a name that is one, with a text within the
-/// limits, and the search of the conversation its words and a whole limit. Other calls pass.
+/// limits, the search of the conversation its words and a whole limit, and the answer to a question
+/// of the background its task, its question and a yes or a no (`validate_background_answer`). Other
+/// calls pass.
 pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     if method == "worker.cancel" {
         // Without an id the core stops whichever task runs: the window stops only the one it shows.
@@ -497,6 +510,9 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
             Some(_) => Ok(()),
             None => Err("worker.rerun needs the task_id of the task to run again".to_owned()),
         };
+    }
+    if method == "background.answer" {
+        return validate_background_answer(params);
     }
     if method.starts_with("memory.") {
         return validate_memory_call(method, params);
@@ -538,6 +554,31 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
         _ => "沒有指定整理用的模型",
     }
     .to_owned())
+}
+
+/// The params of `background.answer`: the task's whole id, the question's id (a short word of
+/// letters, digits, `-` and `_`, as the core makes them: [`is_question_id`]) and `approved`, true
+/// or false. A `source` other than this window's ("app") is refused here as the core refuses it:
+/// the answer to a question of the background is given at this computer, in the app, alone.
+fn validate_background_answer(params: &Value) -> Result<(), String> {
+    if params.get("task_id").and_then(Value::as_u64).is_none() {
+        return Err("background.answer needs the task_id of the task that waits".to_owned());
+    }
+    if !params
+        .get("question_id")
+        .and_then(Value::as_str)
+        .is_some_and(is_question_id)
+    {
+        return Err("background.answer needs the question_id of the question".to_owned());
+    }
+    if !params.get("approved").is_some_and(Value::is_boolean) {
+        return Err("background.answer needs approved, true or false".to_owned());
+    }
+    match params.get("source") {
+        None => Ok(()),
+        Some(source) if source.as_str() == Some("app") => Ok(()),
+        Some(_) => Err("a question of the background is answered in the app alone".to_owned()),
+    }
 }
 
 /// Passes `method` on to the core and returns its answer. Fails with the core's own error (code
@@ -1565,6 +1606,28 @@ mod tests {
     }
 
     #[test]
+    fn the_main_window_answers_a_background_question_only_as_itself() {
+        let id = "0f6d8a52-1c3e-4c2b-9a51-7d1e2f3a4b5c";
+        let ok = json!({"task_id": 3, "question_id": id, "approved": true});
+        assert!(validate_core_call("background.answer", &ok).is_ok());
+        let from_app = json!({"task_id": 3, "question_id": id, "approved": false, "source": "app"});
+        assert!(validate_core_call("background.answer", &from_app).is_ok());
+        for bad in [
+            json!({"question_id": id, "approved": true}),
+            json!({"task_id": -1, "question_id": id, "approved": true}),
+            json!({"task_id": 3, "approved": true}),
+            json!({"task_id": 3, "question_id": "../x", "approved": true}),
+            json!({"task_id": 3, "question_id": id, "approved": "yes"}),
+            json!({"task_id": 3, "question_id": id, "approved": true, "source": "telegram"}),
+        ] {
+            assert!(
+                validate_core_call("background.answer", &bad).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
     fn the_main_window_manages_the_members_by_their_names_only() {
         for method in [
             "members.list",
@@ -2016,11 +2079,21 @@ mod tests {
             "routines.update",
             "routines.delete",
             "routines.template",
+            "safety.rules.list",
+            "safety.rules.create",
+            "safety.rules.update",
+            "safety.rules.delete",
+            "background.questions.list",
+            "background.answer",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
         for method in [
             "",
+            "safety.",
+            "safety.rules.",
+            "background.",
+            "background.cancel",
             "history",
             "history.",
             "dictation.start",
