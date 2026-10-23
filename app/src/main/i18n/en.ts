@@ -895,7 +895,6 @@ export const en = {
   "members.unread": "New messages",
   "members.pick": "Choose a member",
   "members.details": "Details",
-  "members.tools": "Tools",
   "members.panel": "Member details",
   "members.close": "Close details",
   "members.open": "Details of {p0}",
@@ -943,9 +942,6 @@ export const en = {
   "members.offerYes": "Add",
   "members.nameEmpty": "Enter a name",
   "members.nameTaken": "There is already a member called {p0}",
-  "members.toolsAll": "All",
-  "members.toolsSome": "{p0} chosen",
-  "members.toolsNone": "No tools",
   "members.exchange": "{p0} messages with ",
   "members.routineLine": "Routine"
 } satisfies Messages;

@@ -1,9 +1,8 @@
 // The members as data (members.ts): the column's sections and search, a row's preview, how a
-// routine's schedule is said, the places a group looks at, the faces and the tools.
+// routine's schedule is said, the places a group looks at, and the faces.
 import { afterEach, describe, expect, test } from "vitest";
 import { setLocale } from "./i18n";
 import {
-  allowedTools,
   cleanName,
   faceHTML,
   initialOf,
@@ -17,10 +16,8 @@ import {
   raphaelOf,
   scheduleText,
   sourceLabel,
-  toolChoices,
-  toolsSummary,
 } from "./members";
-import type { ConnectionGroup, Member, MembersList } from "./types";
+import type { Member, MembersList } from "./types";
 
 afterEach(() => setLocale("zh-TW"));
 
@@ -154,27 +151,5 @@ describe("a group's places", () => {
     expect(sourceLabel({ kind: "github", ref: "example/app" })).toBe("example/app");
     expect(sourceLabel({ kind: "notion", ref: "https://www.notion.so/My-Roadmap-0123456789abcdef0123456789abcdef" })).toBe("My Roadmap");
     expect(sourceLabel({ kind: "notion", ref: "0123456789abcdef0123456789abcdef" })).toBe("Notion");
-  });
-});
-
-describe("the tools", () => {
-  const groups = [
-    { id: "notion", name: "Notion", enabled: true },
-    { id: "off", name: "Off", enabled: false },
-  ] as unknown as ConnectionGroup[];
-
-  test("Raphael's own tools, then the connected services that are on", () => {
-    expect(toolChoices(groups).map((c) => c.id)).toEqual(["web_search", "web_read", "weather", "local_time", "notion"]);
-    // the core's own list, when it gives one, named in the language of the window
-    expect(toolChoices(groups, ["web_search", "local_time", "new_tool"]).map((c) => c.label)).toEqual(["搜尋網路", "看時間", "new_tool", "Notion"]);
-  });
-
-  test("a member that keeps none may use every one; one that keeps some, those", () => {
-    const choices = toolChoices(groups);
-    expect(allowedTools(null, choices)).toHaveLength(5);
-    expect(allowedTools(["notion", "gone"], choices)).toEqual(["notion"]);
-    expect(toolsSummary(choices.map((c) => c.id), choices)).toBe("全部");
-    expect(toolsSummary([], choices)).toBe("不用工具");
-    expect(toolsSummary(["weather", "notion"], choices)).toBe("查天氣、Notion");
   });
 });

@@ -894,7 +894,6 @@ export const zhTW = {
   "members.unread": "有新訊息",
   "members.pick": "選擇成員",
   "members.details": "詳細資訊",
-  "members.tools": "工具",
   "members.panel": "成員的詳細資訊",
   "members.close": "關閉詳細資訊",
   "members.open": "「{p0}」的詳細資訊",
@@ -942,9 +941,6 @@ export const zhTW = {
   "members.offerYes": "加入",
   "members.nameEmpty": "請輸入名字",
   "members.nameTaken": "已經有叫「{p0}」的成員",
-  "members.toolsAll": "全部",
-  "members.toolsSome": "{p0} 個",
-  "members.toolsNone": "不用工具",
   "members.exchange": "{p0} 則訊息往來：",
   "members.routineLine": "例行任務"
 } as const;

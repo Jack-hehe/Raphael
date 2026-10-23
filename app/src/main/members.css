@@ -173,11 +173,6 @@
 .mb-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; padding: calc(2px + 2 * var(--pa-u)) calc(8px + 4 * var(--pa-u)); border-radius: var(--r-pill); background: var(--surface-2); font-size: calc(12px + 3 * var(--pa-u)); color: var(--text-2); overflow-wrap: anywhere; }
 .mb-chip .chip-x { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; margin-right: -4px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-3); }
 .mb-chip .chip-x:hover { background: var(--hover); color: var(--text); }
-/* 工具: a checklist */
-.mb-tools { display: grid; grid-template-columns: minmax(0, 1fr); }
-.mb-tool-row { display: flex; align-items: center; gap: calc(10px + 4 * var(--pa-u)); min-height: calc(38px + 14 * var(--pa-u)); padding: 4px 2px; border-bottom: 1px solid var(--line); font-size: var(--pa-dfs); }
-.mb-tool-row input { flex: none; width: calc(16px + 4 * var(--pa-u)); height: calc(16px + 4 * var(--pa-u)); margin: 0; accent-color: var(--accent-text); }
-.mb-tool-row span { min-width: 0; overflow-wrap: anywhere; }
 /* 記憶: the list of the settings, narrower */
 .mb-det .sgroup { margin-top: 0; }
 .mb-det .slist { --slist-pad: 10px; }
@@ -222,9 +217,9 @@
 .mb-addrow { display: flex; gap: var(--sp-2); }
 .mb-addrow .mb-fin { flex: 1; }
 
-/* the popovers: the presets and 從電腦選…, the new member's tools, and a member's or group's actions */
-.menu.mb-avpop, .menu.mb-menu, .menu.mb-toolpop { max-width: min(calc(360px + 80 * var(--pa-u)), calc(100vw - 16px)); }
-.menu.mb-avpop button, .menu.mb-menu button, .menu.mb-toolpop button { min-height: var(--pa-menu-h); font-size: var(--pa-menu-fs); }
+/* the popovers: the presets and 從電腦選…, and a member's or group's actions */
+.menu.mb-avpop, .menu.mb-menu { max-width: min(calc(360px + 80 * var(--pa-u)), calc(100vw - 16px)); }
+.menu.mb-avpop button, .menu.mb-menu button { min-height: var(--pa-menu-h); font-size: var(--pa-menu-fs); }
 .menu.mb-avpop { min-width: calc(200px + 60 * var(--pa-u)); }
 .menu.mb-menu { min-width: calc(180px + 40 * var(--pa-u)); }
 .mb-presets { display: grid; grid-template-columns: repeat(4, var(--pa-preset)); gap: calc(6px + 4 * var(--pa-u)); padding: calc(6px + 4 * var(--pa-u)); }
@@ -241,7 +236,7 @@
 @media (min-width: 1280px) {
   .page-agent .btn.mb-tool .i, .mb-find .i, .page-agent .mb-ghead .btn.icon .i, .page-agent .mb-item .btn.mb-more .i, .page-agent .mb-det-head .btn.icon .i, .page-agent .mb-dh .btn.icon .i, .mb-dialog .btn.icon .i { width: 20px; height: 20px; }
   .sys .i { width: 20px; height: 20px; }
-  .menu.mb-avpop :is(.ck, .ck svg, svg.i), .menu.mb-menu :is(.ck, .ck svg, svg.i), .menu.mb-toolpop :is(.ck, .ck svg, svg.i) { width: 20px; height: 20px; }
+  .menu.mb-avpop :is(.ck, .ck svg, svg.i), .menu.mb-menu :is(.ck, .ck svg, svg.i) { width: 20px; height: 20px; }
 }
 
 /* ---------- narrower windows ---------- */

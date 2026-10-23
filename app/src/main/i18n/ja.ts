@@ -895,7 +895,6 @@ export const ja = {
   "members.unread": "新着あり",
   "members.pick": "メンバーを選ぶ",
   "members.details": "詳細",
-  "members.tools": "ツール",
   "members.panel": "メンバーの詳細",
   "members.close": "詳細を閉じる",
   "members.open": "「{p0}」の詳細",
@@ -943,9 +942,6 @@ export const ja = {
   "members.offerYes": "追加",
   "members.nameEmpty": "名前を入力してください",
   "members.nameTaken": "「{p0}」というメンバーはすでにいます",
-  "members.toolsAll": "すべて",
-  "members.toolsSome": "{p0} 個",
-  "members.toolsNone": "ツールなし",
   "members.exchange": "{p0} 件のやりとり：",
   "members.routineLine": "定期タスク"
 } satisfies Messages;
