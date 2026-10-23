@@ -140,6 +140,7 @@ class Phrases:
     # The owner's team (`raphael_core.members`). A member says these in its own thread, plainly.
     member_desktop: str  # a member was asked to operate the computer: only Raphael does that
     member_created: str  # Raphael added a member at the owner's request: {member}
+    desktop_asked: str  # another assistant asked Raphael for something on the desktop
 
 
 # Each phrase states the fact and, for a refusal, the reason or the one thing to do next, in the
@@ -204,6 +205,7 @@ PHRASES: dict[str, Phrases] = {
         secret_not_kept="密碼、金鑰與驗證碼不予記錄。",
         member_desktop="只有拉斐爾能操作這台電腦。",
         member_created="已建立「{member}」。",
+        desktop_asked="操作電腦需要直接向拉斐爾下達指示。",
     ),
     "en": Phrases(
         unclear="The instruction could not be recognized. Please repeat it.",
@@ -282,6 +284,7 @@ PHRASES: dict[str, Phrases] = {
         secret_not_kept="Passwords, keys and codes are never kept.",
         member_desktop="Only Raphael can operate this computer.",
         member_created="Created {member}.",
+        desktop_asked="Operating the computer needs a request made to Raphael directly.",
     ),
     "ja": Phrases(
         unclear="指示を認識できませんでした。もう一度お願いします。",
@@ -340,6 +343,7 @@ PHRASES: dict[str, Phrases] = {
         secret_not_kept="パスワード、キー、認証コードは記録しません。",
         member_desktop="このコンピューターを操作できるのはラファエルだけです。",
         member_created="「{member}」を作成しました。",
+        desktop_asked="コンピューターの操作は、ラファエルに直接ご指示ください。",
     ),
 }
 

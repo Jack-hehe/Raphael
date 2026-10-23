@@ -7,9 +7,11 @@ which of the tools and connections it may use (`tools`), which model answers (`m
 answer model) and whose conversation and memory are read (`id`). Raphael is the speaker with id 0:
 he is not a row of the members table, he has every tool, and nothing about him is changed here.
 
-`depth` is how the speaker was reached. 0 is the owner (a message in its thread, a routine, a task
-handed to the background); 1 is another member asking it something through `ask_member`, and a
-speaker asked that way asks nobody in turn: the depth limit is 1.
+`depth` is how the speaker was reached, and `chain` who asked on the way. 0 is the owner (a message
+in its thread, a routine, a task handed to the background); 1 is another assistant asking it
+something through `ask_member`, 2 one that the asked one asked in turn. A chain is at most MAX_DEPTH
+deep (A asks B, B asks C, and C asks nobody), and has no cycle: nobody already in it, the speaker
+itself included, can be asked again (`can_ask`).
 
 Nothing here logs a name, a role or an instruction.
 """
@@ -25,6 +27,9 @@ RAPHAEL_NAMES = {"zh-TW": "拉斐爾", "en": "Raphael", "ja": "ラファエル"}
 # The memory's tools, reading the files the owner hands over and asking another member are not on
 # the list: a member always has its own memory, the owner's files, and the depth it was asked at.
 BUILTIN_TOOL_IDS = ("web_search", "web_read", "weather", "local_time")
+# How deep a chain of `ask_member` may go: the owner's assistant asks one (1), which may ask one
+# more (2), which asks nobody.
+MAX_DEPTH = 2
 
 
 def is_raphael_name(name: str) -> bool:
@@ -54,6 +59,8 @@ class Speaker:
     # for every one that is on, which is what Raphael and a member with no list of its own have.
     tools: frozenset[str] | None = None
     depth: int = 0
+    # The ids of the assistants that asked on the way to this one (not this one itself).
+    chain: frozenset[int] = frozenset()
 
     @property
     def is_raphael(self) -> bool:
@@ -74,13 +81,19 @@ class Speaker:
 
     @property
     def may_ask(self) -> bool:
-        """Whether it may ask another member something (`ask_member`): not when it was itself asked
-        by one."""
-        return self.depth < 1
+        """Whether it may ask another assistant something (`ask_member`): not at the end of a
+        chain that is as deep as it may be."""
+        return self.depth < MAX_DEPTH
 
-    def asked(self) -> "Speaker":
-        """The same speaker, reached through `ask_member`: it asks nobody in turn."""
-        return replace(self, depth=1)
+    def can_ask(self, other: "Speaker") -> bool:
+        """Whether it may ask `other`: it may ask at all, `other` is not itself, and `other` is not
+        already in the chain that reached it (no cycle)."""
+        return self.may_ask and other.id != self.id and other.id not in self.chain
+
+    def asked_by(self, asker: "Speaker") -> "Speaker":
+        """The same speaker, asked something by `asker` through `ask_member`: one step deeper in
+        the chain, with `asker` and those before it in it."""
+        return replace(self, depth=asker.depth + 1, chain=asker.chain | {asker.id})
 
     def model_or(self, default: str) -> str:
         """The model that answers for it: its own, or `default` (the answer model)."""

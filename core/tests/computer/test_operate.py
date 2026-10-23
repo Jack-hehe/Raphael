@@ -222,7 +222,7 @@ class _Notes:
     def index(self):
         return "- [user] 主人住在台北 (10/22) → user-city"
 
-    def after_turn(self):
+    def after_turn(self, member_id=0):
         pass
 
 

@@ -23,6 +23,9 @@ tool call; it decides whether to give them, and gives them itself. In order:
   knows to an address of the page's making. The addresses are kept in the run, in memory.
 - **Files.** `read_attachment` reads one of the files handed over with the task, by its number,
   from memory: never a path.
+- **The team.** `ask_member` and `create_member` (`agent.team`) are made by the assistant for the
+  task's speaker (`team`), through the gate like the rest; the member asked answers on this task's
+  ledger, so what it spends counts toward the task's own limit and the month's.
 
 Each call, whatever came of it, leaves a step (`TaskStore.add_step`): the tool, its tier, how it
 ended, what it cost; never an argument or a result. A task that was cancelled while a plugin's tool
@@ -47,6 +50,7 @@ from ..agent.ledger import Ledger
 from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult
 from ..agent.steps import reason_of
 from ..agent.policy import Action, NotApproved, UnknownTool
+from ..agent.team import ASK_MEMBER, TEAM_TOOLS
 from ..agent.tools import ToolResult, Tools
 from ..brain.catalog import LLM, find
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
@@ -73,8 +77,9 @@ MAX_CHAT_CHARS = 600_000
 MAX_RESULT_CHARS = 12_000
 # A page read, or a file's text, is longer: the budget of a tool's text, and its footer.
 MAX_TEXT_RESULT_CHARS = 16_000
-# The tools whose call is paid: the search (by a model, or a service), and the reading of a file.
-_PAID_TOOLS = ("web_search", "read_attachment")
+# The tools whose call is paid: the search (by a model, or a service), the reading of a file, and
+# asking another member (who answers with model calls of its own, on this task's ledger).
+_PAID_TOOLS = ("web_search", "read_attachment", ASK_MEMBER)
 
 
 # A model call whose cost is not known, and whose model has no price we know, is charged this.
@@ -161,8 +166,11 @@ class TaskRun:
         memory: "MemoryReader | None" = None,
         request: str = "",
         attachments: Sequence[Attachment] = (),
+        team: "TeamCall | None" = None,
     ) -> None:
         self._memory = memory
+        # The team tools (`agent.team`), made for this task's speaker on this task's ledger.
+        self._team = team
         # The files of the task, by number from 1, and the addresses it has seen (see the module).
         self.attachments = list(attachments)
         self.seen_urls = SeenUrls([request])
@@ -520,6 +528,10 @@ class TaskRun:
                 return await self._read_attachment(arguments)
             if name in ("memory_read", "history_search"):
                 return self._read_memory(name, arguments)
+            if name in TEAM_TOOLS:
+                if self._team is None:
+                    return ToolResult(name, False, None, "blocked")
+                return await self._guarded(self._team(name, arguments))
             return self._tools.local_time()
         except RpcError:
             raise
@@ -574,11 +586,16 @@ class TaskRun:
 
 
 class MemoryReader(Protocol):
-    """What a task may do with the memory (`memory.service.MemoryService`): read and search."""
+    """What a task may do with the memory (`memory.service.MemoryService`, or a member's
+    `MemberMemory`): read and search."""
 
     def read(self, names: Sequence[str]) -> ToolResult: ...
 
     def search(self, query: str, *, limit: int = 5, exclude: Sequence[int] = ()) -> ToolResult: ...
+
+
+# A team tool (`agent.team`) made for a task: its name and arguments to what came of it.
+TeamCall = Callable[[str, dict], Awaitable[ToolResult]]
 
 
 def _ms(began: float) -> int:

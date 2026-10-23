@@ -25,8 +25,10 @@ class FakeBackground:
         self.fail = None
         self.briefs = []
         self.files = []  # the attachments of each task submitted
+        self.members = []  # whose task each one submitted was (0: Raphael's)
 
-    def submit(self, *, session_id, text, language, model, attachments=()):
+    def submit(self, *, session_id, text, language, model, attachments=(), member_id=0):
+        self.members.append(member_id)
         if self.refuse:
             raise Refused(self.refuse)
         if self.fail:
