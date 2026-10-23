@@ -61,7 +61,7 @@
 /* A day with a dictation opens the history at that day. */
 .heat [data-date] { cursor: pointer; }
 .heat [data-date]:focus { outline: none; }
-.heat [data-date]:focus-visible { stroke: var(--text); stroke-width: 2; }
+:where(:root[data-keys]) .heat [data-date]:focus-visible { stroke: var(--text); stroke-width: 2; }
 .heat .ax { font: 10px var(--ui); fill: var(--text-3); }
 .legend { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-1); margin-top: 10px; font-size: 11px; color: var(--text-3); }
 .legend span:first-child { margin-right: 2px; } .legend span:last-child { margin-left: 2px; }

@@ -5,6 +5,10 @@ A turn is written when the assistant has its answer, or when it has asked for a 
 conversations shows them, and they are the one continuous conversation the model reads: the
 latest turns as they were said, the earlier ones through a summary (`memory.conversation`).
 
+A turn also keeps the names and the types of the files the owner handed Raphael with the request
+(`attachments`, so that the conversation view can show which), never the files themselves, which
+stay in memory for the turn.
+
 Each turn keeps where it came from (`source`: "voice", or a chat app such as "telegram") and the
 model that answered, and its steps (`agent_steps`, `steps.Step`): what the fast tier did for it, so
 the conversation view can show what happened between the question and the answer. The steps go with
@@ -22,8 +26,9 @@ turns stay until the user clears them (`clear`). Nothing here logs a question or
 # builtin in the annotations of the methods defined after it.
 from __future__ import annotations
 
+import json
 import sqlite3
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from ..clock import wall_clock_ms
@@ -49,20 +54,44 @@ class Turn:
     cost_usd: float = 0.0
     source: str = VOICE  # "voice", or the chat app the request came from
     model: str | None = None  # the model that answered, when one did
+    # The files handed with the request, `[{"name", "mime"}]`; None when there were none.
+    attachments: list[dict[str, str]] | None = None
 
 
 _COLUMNS = (
     "id, created_at_ms, session_id, question, route, prefix, text, detail, status, cost_usd,"
-    " source, model"
+    " source, model, attachments"
 )
-_STEP_COLUMNS = "turn_id, kind, tool, server, outcome, ms, reason, at_ms"
+_STEP_COLUMNS = "turn_id, kind, tool, server, outcome, ms, reason, at_ms, detail"
 _TURN_COLUMNS = ", ".join(f"t.{name.strip()}" for name in _COLUMNS.split(","))
 # The most turns a search returns to the model (the conversation page asks for more).
 SEARCH_MAX = 10
 
 
+def _attachments(saved: str | None) -> list[dict[str, str]] | None:
+    """The files of a turn as saved (JSON), or None when it had none or what is saved is damaged."""
+    if not saved:
+        return None
+    try:
+        items = json.loads(saved)
+    except ValueError:
+        return None
+    if not isinstance(items, list):
+        return None
+    kept = [
+        {"name": item["name"], "mime": item["mime"]}
+        for item in items
+        if isinstance(item, dict)
+        and isinstance(item.get("name"), str)
+        and isinstance(item.get("mime"), str)
+    ]
+    return kept or None
+
+
 def _to_turn(row: sqlite3.Row) -> Turn:
-    return Turn(**dict(row))
+    data = dict(row)
+    data["attachments"] = _attachments(data.get("attachments"))
+    return Turn(**data)
 
 
 def _filters(since_ms: int | None, exclude: Sequence[int]) -> tuple[str, list[object]]:
@@ -102,13 +131,16 @@ class AgentHistory:
         source: str = VOICE,
         model: str | None = None,
         steps: Sequence[Step] = (),
+        attachments: Sequence[Mapping[str, str]] = (),
     ) -> int:
-        """Store a new turn, made now, with the steps taken for it, and return its id."""
+        """Store a new turn, made now, with the steps taken for it, and return its id.
+        `attachments` are the names and the types of the files handed with the request."""
+        files = [{"name": item["name"], "mime": item["mime"]} for item in attachments]
         with self._conn:
             cursor = self._conn.execute(
                 "INSERT INTO agent_turns (created_at_ms, session_id, question, route, prefix,"
-                " text, detail, status, cost_usd, source, model)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " text, detail, status, cost_usd, source, model, attachments)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     self._now_ms(),
                     session_id,
@@ -121,6 +153,7 @@ class AgentHistory:
                     cost_usd,
                     source,
                     model,
+                    json.dumps(files, ensure_ascii=False) if files else None,
                 ),
             )
             turn_id = cursor.lastrowid
@@ -148,8 +181,8 @@ class AgentHistory:
         for step in steps:
             self._conn.execute(
                 "INSERT INTO agent_steps (turn_id, n, at_ms, kind, tool, server, outcome, ms,"
-                " reason) VALUES (?, (SELECT COALESCE(MAX(n), 0) + 1 FROM agent_steps"
-                " WHERE turn_id = ?), ?, ?, ?, ?, ?, ?, ?)",
+                " reason, detail) VALUES (?, (SELECT COALESCE(MAX(n), 0) + 1 FROM agent_steps"
+                " WHERE turn_id = ?), ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     turn_id,
                     turn_id,
@@ -160,6 +193,7 @@ class AgentHistory:
                     step.outcome,
                     max(int(step.ms), 0),
                     step.reason,
+                    step.detail,
                 ),
             )
 

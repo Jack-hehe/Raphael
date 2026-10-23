@@ -716,7 +716,7 @@ class OpenRouterClient:
         *,
         model: str,
         system: str,
-        user: str,
+        user: str | Sequence[dict],
         timeout_s: float,
         max_tokens: int,
         plugins: Sequence[dict] | None = None,
@@ -724,6 +724,9 @@ class OpenRouterClient:
     ) -> TextCompletion:
         """Ask `model` for text, with the OpenRouter `plugins` given (`{"id": "web",
         "max_results": 3}` lets it search the web first). The pages it drew on are in `sources`.
+        `user` is the text of the user's message, or its content parts (`{"type": "text"}`,
+        `{"type": "image_url"}`, `{"type": "file"}`: an image or a PDF for a model to read, with the
+        `file-parser` plugin for the PDF; raphael_core.services.vision).
 
         Like complete_json, this sends no temperature and denies data collection. Unlike it, the
         reply is not JSON and the routing does not require every parameter, since the plugins are
@@ -733,7 +736,7 @@ class OpenRouterClient:
             "model": model,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                {"role": "user", "content": user if isinstance(user, str) else list(user)},
             ],
             "provider": {"sort": "latency", "data_collection": "deny"},
             "reasoning": {"effort": reasoning_effort},

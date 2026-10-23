@@ -285,6 +285,22 @@ def _migrate_v13(conn: sqlite3.Connection) -> None:
     conn.execute("COMMIT")
 
 
+# v14: what the tools of the services left in a turn. `agent_turns.attachments` is the files the
+# owner handed Raphael with the request, as JSON (`[{"name", "mime"}]`, so the conversation view can
+# show which), or NULL: never a byte of them, which stay in memory for the turn. `agent_steps.detail`
+# and `worker_steps.detail` say which service a step used (the search engine of a web search, the
+# reader of a page, "image" or "pdf" for a file read), as one word of a fixed list: never what it
+# was given.
+_MIGRATION_V14 = """
+BEGIN;
+ALTER TABLE agent_turns ADD COLUMN attachments TEXT;
+ALTER TABLE agent_steps ADD COLUMN detail TEXT;
+ALTER TABLE worker_steps ADD COLUMN detail TEXT;
+PRAGMA user_version = 14;
+COMMIT;
+"""
+
+
 _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_V1,
     2: _MIGRATION_V2,
@@ -299,6 +315,7 @@ _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     11: _MIGRATION_V11,
     12: _MIGRATION_V12,
     13: _migrate_v13,
+    14: _MIGRATION_V14,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

@@ -3,8 +3,12 @@
 The owner makes a bot with BotFather and gives Raphael its token. Raphael polls the Bot API for
 messages (`getUpdates` with a long timeout), so no public address is needed.
 
-What goes in the log: counts and kinds. Never a message, a name, a token, or the address of a
-request (it contains the token): this module silences the log lines of httpx that would show one.
+Besides text, a message may hold a voice message, a photo (Raphael takes its largest size) or a
+document; an image or a PDF among them is fetched for the switchboard to hand the assistant.
+
+What goes in the log: counts and kinds. Never a message, a caption, a name, a file's name or id, a
+token, or the address of a request (it contains the token): this module silences the log lines of
+httpx that would show one.
 """
 
 import asyncio
@@ -16,6 +20,7 @@ from typing import Any
 
 import httpx
 
+from ...services.attachments import IMAGE_TYPES, PDF_TYPE
 from .base import Attachment, ChannelError, ChannelType, Deliver, Identity, Incoming
 
 logger = logging.getLogger(__name__)
@@ -32,6 +37,10 @@ MAX_BACKOFF_SECONDS = 60.0
 _TOKEN_SHAPE = re.compile(r"\d{3,}:[A-Za-z0-9_-]{20,}")
 # Voice messages are Ogg/Opus; an audio file counts as one only when it is.
 _VOICE_MIMES = ("audio/ogg", "audio/opus", "application/ogg")
+# Files of a message that Raphael does not read (they get the reply that says what it reads).
+_OTHER_FILES = ("video", "video_note", "animation")
+# What a photo is called in the history: Telegram sends a photo without a name.
+PHOTO_NAME = "photo.jpg"
 
 
 class _KeepTokensOutOfTheLog(logging.Filter):
@@ -190,6 +199,17 @@ def _incoming(update: dict) -> Incoming | None:
                 size if type(size) is int else None,
             )
         )
+    photo = _largest_photo(message.get("photo"))
+    if photo is not None:
+        attachments.append(photo)
+    document = message.get("document")
+    if isinstance(document, dict) and isinstance(document.get("file_id"), str):
+        attachments.append(_document(document))
+    for field_name in _OTHER_FILES:
+        item = message.get(field_name)
+        if isinstance(item, dict) and isinstance(item.get("file_id"), str):
+            attachments.append(Attachment("other", item["file_id"]))
+    caption, group = message.get("caption"), message.get("media_group_id")
     return Incoming(
         chat=str(chat_id),
         user=str(user_id),
@@ -198,6 +218,55 @@ def _incoming(update: dict) -> Incoming | None:
         private=chat.get("type") == "private" and user_id == chat_id,
         text=text if isinstance(text, str) else None,
         attachments=attachments,
+        caption=caption if isinstance(caption, str) else None,
+        group=group if isinstance(group, str) and group else None,
+    )
+
+
+def _size(item: dict) -> int | None:
+    size = item.get("file_size")
+    return size if type(size) is int else None
+
+
+def _largest_photo(sizes: Any) -> Attachment | None:
+    """The largest of the sizes Telegram offers a photo in (it sends a list of them, from a
+    thumbnail up), by its pixels, or by its bytes when the pixels are not given. Telegram makes
+    every photo a JPEG."""
+    if not isinstance(sizes, list):
+        return None
+    offered = [s for s in sizes if isinstance(s, dict) and isinstance(s.get("file_id"), str)]
+    if not offered:
+        return None
+
+    def area(size: dict) -> tuple[int, int]:
+        width, height = size.get("width"), size.get("height")
+        pixels = width * height if type(width) is int and type(height) is int else 0
+        return pixels, _size(size) or 0
+
+    best = max(offered, key=area)
+    return Attachment("image", best["file_id"], "image/jpeg", _size(best), PHOTO_NAME)
+
+
+def _document(document: dict) -> Attachment:
+    """A file sent as a document: an image or a PDF is one Raphael can read; anything else is
+    "other". Its type is the one the sender's app gave it; the switchboard checks the bytes."""
+    mime = document.get("mime_type")
+    mime = mime.strip().lower() if isinstance(mime, str) else ""
+    if mime == "image/jpg":
+        mime = "image/jpeg"
+    name = document.get("file_name")
+    if mime == PDF_TYPE:
+        kind, fallback = "pdf", "document.pdf"
+    elif mime in IMAGE_TYPES:
+        kind, fallback = "image", "image." + mime.partition("/")[2]
+    else:
+        kind, fallback = "other", "file"
+    return Attachment(
+        kind,
+        document["file_id"],
+        mime or None,
+        _size(document),
+        name if isinstance(name, str) and name.strip() else fallback,
     )
 
 

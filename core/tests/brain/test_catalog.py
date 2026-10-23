@@ -444,7 +444,10 @@ def test_an_entry_has_what_the_picker_shows():
             "reasoning_off": True,
             "max_tokens": True,
             "tool_calling": True,
+            "image_input": True,
+            "file_input": True,
         },
+        "input_modalities": ["text", "image", "file"],
         "roles": {
             "cleanup": {"usable": True, "reason": None},
             "answer": {"usable": True, "reason": None},
@@ -453,6 +456,7 @@ def test_an_entry_has_what_the_picker_shows():
     scribe = by_id(view["stt"])["elevenlabs/scribe-v2"]
     assert scribe["context_length"] is None
     assert scribe["capabilities"] == {"dictionary_hints": False}
+    assert scribe["input_modalities"] == ["audio"]
     assert scribe["roles"] == {"stt": {"usable": True, "reason": None}}
     flash = by_id(view["llm"])["google/gemini-3.8-flash"]
     assert flash["roles"]["cleanup"] == {"usable": False, "reason": "reasoning_required"}

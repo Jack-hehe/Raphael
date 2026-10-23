@@ -13,3 +13,7 @@
 .lang-panel .lang-list { min-height: 0; }
 .lang-panel .lang-foot { flex: none; line-height: 1.55; }
 @keyframes settings-pulse { 50% { opacity: .45; } }
+/* 服務 (Settings › 拉斐爾): the line under a row whose service takes a key or an address, its controls under the row's own */
+.slist > .svc-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-2); margin-top: -4px; padding: 0 0 12px; }
+.slist > .svc-line .field { max-width: 100%; }
+.slist > .svc-line + .row::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--line); }

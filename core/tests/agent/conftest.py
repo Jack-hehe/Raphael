@@ -24,13 +24,15 @@ class FakeBackground:
         self.refuse = None
         self.fail = None
         self.briefs = []
+        self.files = []  # the attachments of each task submitted
 
-    def submit(self, *, session_id, text, language, model):
+    def submit(self, *, session_id, text, language, model, attachments=()):
         if self.refuse:
             raise Refused(self.refuse)
         if self.fail:
             raise self.fail
         self.submitted.append((session_id, text, language, model))
+        self.files.append(list(attachments))
         return len(self.submitted)
 
     def brief_for_assistant(self, limit=3):

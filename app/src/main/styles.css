@@ -70,7 +70,12 @@ html, body { margin: 0; height: 100%; overflow-x: hidden; }
 body { font: 14px/1.5 var(--ui); color: var(--text); background: var(--side); -webkit-font-smoothing: antialiased; overflow: hidden; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
-:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+/* No focus ring under the pointer, the browser's own included: a click shows where it went, and the
+   caret shows where typing goes. The rings are drawn only while Tab moves the focus, when
+   focus-keys.ts has set data-keys on <html>. :where() keeps each gated rule at the specificity it
+   had before the gate, so the rules that turn a ring off or move it still win as they did. */
+:focus-visible { outline: none; }
+:where(:root[data-keys]) :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
 button:active:not(:disabled) { filter: brightness(0.97); }
 button:disabled { cursor: default; }
 * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
@@ -176,7 +181,6 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .sel { display: inline-flex; align-items: center; gap: var(--sp-2); height: var(--h-ctl); max-width: 260px; padding: 0 10px 0 12px; border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--btn); font-size: var(--fs-sm); color: var(--text); }
 .sel > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sel:hover { border-color: var(--text-3); }
-.sel[aria-expanded="true"] { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-ring); }
 .sel:disabled { opacity: 0.55; cursor: default; }
 .sel:disabled:hover { border-color: var(--btn-edge); }
 .sel .i { color: var(--text-2); }
@@ -196,7 +200,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .btn.icon { width: var(--h-ctl); padding: 0; border-color: transparent; background: transparent; color: var(--text-2); }
 .btn.icon:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--text); }
 .btn.icon:active:not(:disabled) { background: var(--selected); border-color: transparent; }
-.btn.icon:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+:where(:root[data-keys]) .btn.icon:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .btn.icon.pri { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .btn.icon.pri:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--on-accent); }
 /* The small one on a row: copy, delete, close, previous month. */
@@ -212,7 +216,6 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .dot.idle { background: transparent; border: 1.5px solid var(--text-3); }
 .st.warn { color: var(--warn); } .st.err { color: var(--err); }
 .field { display: inline-flex; align-items: center; gap: 6px; height: var(--h-ctl); padding: 0 10px; border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--panel); font-size: var(--fs-sm); }
-.field:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-ring); }
 .field[data-invalid] { border-color: var(--err); }
 .field input { border: 0; outline: 0; background: transparent; width: 100%; min-width: 0; font-size: var(--fs-sm); }
 .field .pre { color: var(--text-3); }
@@ -271,7 +274,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .tabs.switch .tab + .tab { border-left: 1px solid var(--btn-edge); }
 .tabs.switch .tab:hover { background: var(--hover); }
 .tabs.switch .tab[aria-selected="true"] { background: var(--selected); color: var(--text); font-weight: 600; }
-.tabs.switch .tab:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+.tabs.switch .tab:focus-visible { outline: none; }
+:where(:root[data-keys]) .tabs.switch .tab:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
 .tabs.switch .n { margin-left: 6px; font-size: var(--fs-xs); font-weight: 400; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .tabs.fill { display: flex; }
 /* Quiet tabs in a bar with a search (連接): words, and a soft fill under the one that is open. */
@@ -321,7 +325,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .dsearch { margin-left: auto; display: flex; flex: 1; justify-content: flex-end; min-width: 160px; }
 .dsearch .field { max-width: 260px; }
 .chip { display: inline-flex; align-items: center; height: 26px; border-radius: 13px; border: 1px dashed var(--btn-edge); background: transparent; font-size: var(--fs-xs); color: var(--text); }
-.chip:hover, .chip:focus-within { border-style: solid; border-color: var(--accent); }
+.chip:hover, :where(:root[data-keys]) .chip:focus-within { border-style: solid; border-color: var(--accent); }
 .chip button { display: inline-flex; align-items: center; height: 100%; border: 0; background: transparent; color: inherit; font: inherit; }
 .wgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 18px; }
 .wchip { position: relative; display: flex; align-items: center; gap: var(--sp-2); min-height: 46px; padding: 8px 6px 8px 14px; border-radius: 11px; border: 1px solid var(--edge); background: var(--panel); min-width: 0; }
@@ -415,7 +419,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .menu { position: fixed; z-index: 60; min-width: 180px; max-width: min(360px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow-x: hidden; overflow-y: auto; padding: var(--sp-1); border-radius: var(--r-md); background: var(--menu); border: 1px solid var(--edge); box-shadow: var(--pop); }
 .menu button { display: flex; align-items: center; gap: var(--sp-2); width: 100%; min-height: var(--h-ctl); padding: 6px 10px; border: 0; border-radius: 6px; background: transparent; font-size: var(--fs-sm); text-align: left; }
 .menu button:hover { background: var(--hover); }
-.menu button:focus-visible { background: var(--hover); outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+.menu button:focus-visible { background: var(--hover); outline: none; }
+:where(:root[data-keys]) .menu button:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
 .menu .ck { width: 16px; height: 16px; flex: none; color: var(--accent-text); }
 .menu .ck svg { display: block; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .menu .mt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -536,7 +541,7 @@ kbd.ob-cap { white-space: nowrap; }
 .dot.busy { background: var(--accent); animation: ob-pulse 1.2s ease-in-out infinite; }
 @keyframes ob-pulse { 50% { opacity: 0.35; } }
 .trybox { display: block; width: 100%; min-height: 72px; padding: 12px 14px; border-radius: var(--r-md); border: 1px solid var(--btn-edge); background: var(--panel); font-size: var(--fs-md); line-height: 1.6; resize: none; }
-.trybox:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-ring); }
+.trybox:focus { outline: none; }
 .trybox::placeholder { color: var(--text-3); }
 :root[lang="ja"] .ob-col, :root[lang="ja"] .ob-col h2 { font-family: var(--ja); }
 /* Short windows (the smallest is 720 x 480) give the screen less air, and scroll the rest. */

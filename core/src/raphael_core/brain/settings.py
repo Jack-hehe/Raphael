@@ -4,7 +4,10 @@ Only keys in DEFAULTS exist. A key nobody has set reads as its default. Most key
 type-checked; the speech-to-text engine and the local model must also be one of their listed
 values, `languages` a valid selection (see raphael_core.languages), `model_favorites` the starred
 model ids of each role (at most 50 each), and the models and the assistant's city a text of some
-substance (saved without the spaces around it; a model id has none inside). Which models may be
+substance (saved without the spaces around it; a model id has none inside). The services of the
+tools (`web_search_service`, `web_read_service`, `pdf_service`) must be one of their listed values,
+`vision_model` a model id or "" (the answer model), and `searxng_url` an http(s) address or "".
+Which models may be
 chosen is for the brain to say, which knows OpenRouter's list of them (brain/catalog.py): here a
 model is only an id.
 
@@ -21,6 +24,7 @@ import copy
 import json
 import sqlite3
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..device.models import LOCAL_STT_MODELS
 from ..languages import DEFAULT_LANGUAGES, checked_languages
@@ -55,6 +59,21 @@ DEFAULTS: dict[str, Any] = {
     # they were added. The page shows the ones the catalog still has at the top of its list; the
     # others stay here, in case the catalog gets them back.
     "model_favorites": {"cleanup": [], "answer": [], "stt": []},
+    # The services Raphael's tools stand on (raphael_core.services), each chosen by the owner. The
+    # web search: "openrouter" is the answer model with OpenRouter's `web` plugin, as it always was;
+    # the others are search engines that return results for the answer model to word.
+    "web_search_service": "openrouter",
+    # Reading a page: "builtin" fetches it from this computer and turns its HTML into text here, at
+    # no cost; the others are services that read it for Raphael.
+    "web_read_service": "builtin",
+    # The model that reads an image, or "" for the answer model (`agent_model`).
+    "vision_model": "",
+    # Reading a PDF: "builtin" takes its text here (pypdf) and shows the vision model the pages that
+    # have none; "openrouter" sends the whole file to the vision model, through OpenRouter's
+    # `file-parser` plugin.
+    "pdf_service": "builtin",
+    # The address of the owner's own SearXNG, for `web_search_service` "searxng"; "" when none.
+    "searxng_url": "",
 }
 
 # The longest model id or city name taken: far more than any real one, short of an accident.
@@ -63,12 +82,21 @@ AGENT_TEXT_MAX_CHARS = 100
 FAVORITE_ROLES = ("cleanup", "answer", "stt")
 MAX_FAVORITES = 50
 STT_ENGINES = ("cloud", "local")
+# The services each tool may stand on (raphael_core.services.catalog says what each needs).
+WEB_SEARCH_SERVICES = ("openrouter", "brave", "tavily", "exa", "searxng")
+WEB_READ_SERVICES = ("builtin", "jina", "firecrawl", "tavily")
+PDF_SERVICES = ("builtin", "openrouter")
+# The longest address of a SearXNG taken.
+URL_MAX_CHARS = 300
 # What one background task may cost, as the settings page offers it.
 WORKER_COST_CAPS = (0.10, 0.20, 0.50, 1.00)
 _CHOICES: dict[str, tuple[Any, ...]] = {
     "worker_cost_cap_usd": WORKER_COST_CAPS,
     "stt_engine": STT_ENGINES,
     "stt_local_model": tuple(entry.name for entry in LOCAL_STT_MODELS),
+    "web_search_service": WEB_SEARCH_SERVICES,
+    "web_read_service": WEB_READ_SERVICES,
+    "pdf_service": PDF_SERVICES,
 }
 # The settings that hold the id of an OpenRouter model.
 MODEL_SETTINGS = ("cleanup_model", "stt_cloud_model", "agent_model")
@@ -111,9 +139,33 @@ def _trimmed(key: str, value: str) -> str:
         raise ValueError(f"Setting {key!r} must not be blank")
     if len(text) > AGENT_TEXT_MAX_CHARS:
         raise ValueError(f"Setting {key!r} must be at most {AGENT_TEXT_MAX_CHARS} characters")
-    if key in (*MODEL_SETTINGS, "model_favorites") and any(char.isspace() for char in text):
+    if key in (*MODEL_SETTINGS, "model_favorites", "vision_model") and any(char.isspace() for char in text):
         raise ValueError(f"Setting {key!r} must not contain spaces")
     return text
+
+
+def _url(key: str, value: str) -> str:
+    """`value` without the spaces around it: "" for none, else an http or https address with a
+    host, of at most URL_MAX_CHARS and with no space inside. ValueError for anything else."""
+    text = value.strip()
+    if not text:
+        return ""
+    if len(text) > URL_MAX_CHARS or any(char.isspace() for char in text):
+        raise ValueError(f"Setting {key!r} must be an address of at most {URL_MAX_CHARS} characters")
+    try:
+        parsed = urlsplit(text)
+        host = parsed.hostname
+    except ValueError:
+        host = None
+    if host is None or parsed.scheme.lower() not in ("http", "https"):
+        raise ValueError(f"Setting {key!r} must be an http or https address")
+    return text
+
+
+def _optional_model(key: str, value: str) -> str:
+    """`value` without the spaces around it: "" (the answer model), or a model id (`_trimmed`)."""
+    text = value.strip()
+    return _trimmed(key, text) if text else ""
 
 
 def _favorites(value: dict) -> dict[str, list[str]]:
@@ -161,6 +213,10 @@ def checked(key: str, value: Any) -> tuple[str, Any]:
         value = _trimmed(key, value)
     if key == "model_favorites":
         value = _favorites(value)
+    if key == "searxng_url":
+        value = _url(key, value)
+    if key == "vision_model":
+        value = _optional_model(key, value)
     return key, value
 
 

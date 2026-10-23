@@ -67,7 +67,7 @@ async def test_the_model_is_given_the_task_the_tools_of_the_snapshot_and_the_res
     assert user["role"] == "user" and f"<task>\n{TASK_TEXT}\n</task>" in user["content"]
     assert "2026-10-21 14:05" in user["content"] and user["content"].rstrip().endswith("English only.")
     assert [t["function"]["name"] for t in first["tools"]] == [
-        "weather", "web_search", "local_time", "Notes__look",
+        "weather", "web_search", "local_time", "web_read", "Notes__look",
     ]  # fmt: skip
     result = second["messages"][-1]
     assert result["role"] == "tool" and result["tool_call_id"] == "c1"

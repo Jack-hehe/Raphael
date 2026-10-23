@@ -18,10 +18,12 @@
 .page-agent .btn.ra-clear.is-confirm { width: auto; padding: 0 12px 0 10px; color: var(--err); border-color: var(--err); }
 
 .ra-find { display: flex; align-items: center; gap: var(--sp-2); max-width: 760px; width: 100%; margin: 10px auto 0; padding: 0 6px 0 12px; min-height: 40px; border: 1px solid var(--edge); border-radius: var(--r-pill); background: var(--panel); }
-.ra-find:focus-within { border-color: var(--accent-text); }
 .ra-find-ic { display: inline-grid; place-items: center; width: 18px; color: var(--text-3); }
 .ra-find-input { flex: 1; min-width: 0; height: 34px; border: 0; outline: 0; background: transparent; font-size: var(--fs-md); }
 .ra-find-input::-webkit-search-cancel-button { display: none; }
+/* The caret alone shows where typing goes, the keyboard's focus included: without this the base
+   ring of styles.css, which loads later, would draw a box inside the pill. */
+.ra-find-input:focus-visible { outline: 0; }
 .ra-find-count { font-size: var(--fs-xs); color: var(--text-3); }
 .page-agent .ra-find .btn.ra-tool { width: 30px; min-height: 30px; }
 
@@ -124,7 +126,8 @@
 .ra-dock { flex: none; padding: 6px 16px 16px; }
 .ra-dock > .composer, .ra-dock > .ask-card { max-width: 760px; margin: 0 auto; }
 .composer { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; background: var(--panel); border: 1px solid var(--edge); border-radius: 26px; padding: 6px 7px 6px 8px; box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 6%, transparent); transition: border-color 0.16s ease, box-shadow 0.16s ease; }
-.composer:focus-within { border-color: color-mix(in srgb, var(--accent-text) 55%, var(--edge)); box-shadow: 0 6px 24px color-mix(in srgb, var(--text) 10%, transparent); }
+/* Typing into it deepens its shadow a little; its edge keeps its colour, as no frame shows where the focus is. */
+.composer:focus-within { box-shadow: 0 6px 24px color-mix(in srgb, var(--text) 10%, transparent); }
 .cmp-row { display: flex; align-items: flex-end; gap: 4px; }
 .page-agent .btn.cmp-attach { flex: none; width: 36px; min-height: 36px; padding: 0; border-radius: 50%; border-color: transparent; background: transparent; color: var(--text-2); }
 .page-agent .btn.cmp-attach:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--text); }
@@ -138,8 +141,16 @@
 .page-agent .btn.cmp-voice:active:not(:disabled) { background: transparent; transform: scale(0.96); }
 /* while its picture is up (voice-mode.ts) the button stays, and keeps the focus; only its picture is hidden */
 .vm-away > * { visibility: hidden; }
-.cmp-file { padding: 2px 4px 0 8px; }
-.cmp-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 4px 2px 9px; border-radius: var(--r-pill); background: var(--surface-2); font-size: var(--fs-xs); color: var(--text-2); }
+.cmp-file { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 4px 0 8px; }
+.cmp-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; padding: 2px 4px 2px 9px; border-radius: var(--r-pill); background: var(--surface-2); font-size: var(--fs-xs); color: var(--text-2); }
+/* an image's chip begins with a small picture of it, round like the chip */
+.cmp-chip:has(> .cmp-thumb) { padding-left: 3px; }
+.cmp-thumb { flex: none; width: 20px; height: 20px; border-radius: 50%; object-fit: cover; }
+/* the files a request came with, under its words in the bubble */
+.me-files { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; white-space: normal; }
+.bubble > .me-files:not(:first-child) { margin-top: 6px; }
+.me-file { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0; padding: 1px 9px 1px 7px; border-radius: var(--r-pill); background: var(--surface-2); font: var(--fs-xs)/1.6 var(--ui); color: var(--text-2); }
+.me-file-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmp-chip-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmp-chip .chip-x { display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-3); }
 .cmp-chip .chip-x:hover { background: var(--hover); color: var(--text); }

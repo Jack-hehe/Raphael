@@ -70,6 +70,13 @@ STT = "stt"
 KINDS = (LLM, STT)
 # The capability of a language model that takes `tools` and `tool_choice` (see the docstring).
 TOOL_CALLING = "tool_calling"
+# The capabilities of a language model that reads images, and files (a PDF), besides text: what
+# the list says it reads (its `input_modalities`, or its `modality`). The model that reads an image
+# for Raphael (the `vision_model` setting, raphael_core.services.vision) must have the first.
+IMAGE_INPUT = "image_input"
+FILE_INPUT = "file_input"
+# What the list calls each of those inputs.
+_INPUT_CAPABILITIES = {"image": IMAGE_INPUT, "file": FILE_INPUT}
 
 # What a minute of speech-to-text can plausibly cost at most, in US dollars. The dearest model
 # (Google Chirp 3) is 1.6 cents.
@@ -127,7 +134,15 @@ ROLE_OF_SETTING = {role.setting: role for role in ROLES}
 
 # What the catalog tells of each kind of model, as the `capabilities` of its entries.
 CAPABILITIES = {
-    LLM: ("structured_output", "reasoning", "reasoning_off", "max_tokens", TOOL_CALLING),
+    LLM: (
+        "structured_output",
+        "reasoning",
+        "reasoning_off",
+        "max_tokens",
+        TOOL_CALLING,
+        IMAGE_INPUT,
+        FILE_INPUT,
+    ),
     STT: ("dictionary_hints",),
 }
 
@@ -265,18 +280,24 @@ def _modality(architecture: object) -> tuple[list[str], list[str]] | None:
     return inputs, outputs
 
 
-def kind_of(model: Mapping) -> str | None:
-    """LLM, STT, or None for a kind no role uses, by what the model reads and writes: the list's
-    `input_modalities` and `output_modalities` of it, or its `modality` when it lacks those. A
-    model of which the list says neither is of no kind."""
+def _reads_and_writes(model: Mapping) -> tuple[list[str], list[str]] | None:
+    """What a model reads and what it writes: the list's `input_modalities` and `output_modalities`
+    of it, or its `modality` when it lacks those; None when the list says neither."""
     architecture = model.get("architecture")
     inputs = _modalities(architecture, "input_modalities")
     outputs = _modalities(architecture, "output_modalities")
     if inputs is None or outputs is None:
-        read = _modality(architecture)
-        if read is None:
-            return None
-        inputs, outputs = read
+        return _modality(architecture)
+    return inputs, outputs
+
+
+def kind_of(model: Mapping) -> str | None:
+    """LLM, STT, or None for a kind no role uses, by what the model reads and writes
+    (`_reads_and_writes`). A model of which the list says neither is of no kind."""
+    read = _reads_and_writes(model)
+    if read is None:
+        return None
+    inputs, outputs = read
     if "transcription" in outputs:
         return STT
     if set(outputs) == {"text"} and "text" in inputs:
@@ -347,6 +368,10 @@ def _capabilities(model: Mapping, kind: str) -> frozenset[str]:
     # The tools, and the choice among them, which the call that picks a plugin's tools sends.
     if {"tools", "tool_choice"} <= parameters:
         found.add(TOOL_CALLING)
+    read = _reads_and_writes(model)
+    for modality in [] if read is None else read[0]:
+        if modality in _INPUT_CAPABILITIES:
+            found.add(_INPUT_CAPABILITIES[modality])
     return frozenset(found)
 
 
@@ -463,6 +488,15 @@ def entry_from_json(data: object) -> CatalogEntry | None:
 # --- the answer ---------------------------------------------------------------------------------
 
 
+def input_modalities(entry: CatalogEntry) -> list[str]:
+    """What the model of `entry` reads, as OpenRouter's list names it: "text", and "image" and
+    "file" when it reads those; "audio" for a speech-to-text model."""
+    if entry.kind == STT:
+        return ["audio"]
+    extra = [name for name, capability in _INPUT_CAPABILITIES.items() if capability in entry.capabilities]
+    return ["text", *extra]
+
+
 def entry_view(entry: CatalogEntry) -> dict[str, Any]:
     """One model of the answer of `models.catalog`, with what each role of its kind can make of
     it."""
@@ -479,6 +513,9 @@ def entry_view(entry: CatalogEntry) -> dict[str, Any]:
         "context_length": entry.context_length,
         "created_at_ms": entry.created_at_ms,
         "capabilities": {name: name in entry.capabilities for name in CAPABILITIES[entry.kind]},
+        # What the model reads, as the list names it: the image picker offers the language models
+        # whose list holds "image".
+        "input_modalities": input_modalities(entry),
         "roles": {
             role.name: {"usable": reason is None, "reason": reason}
             for role in roles

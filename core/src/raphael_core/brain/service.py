@@ -29,7 +29,8 @@ handler below; what a handler alone does not show is here:
   table of the models Raphael calls when nobody chose another (pricing.builtin_catalog).
   Choosing fetches nothing. When `models.catalog` finds a chosen model gone from OpenRouter's
   list, the setting goes back to its default, and the answer's `replaced` says so for the app to
-  tell the user, as it tells of a setting it could not change.
+  tell the user, as it tells of a setting it could not change. The model that reads images
+  (`vision_model`) is "" for the answer model, or a model of that list that reads images.
 - Nothing here logs the dictated text, a key or the message of a failure. A failure of OpenRouter
   is logged by its kind and status, any other by the name of its type: the message, cause or
   traceback of an OpenRouterError can hold the text of the key store.
@@ -50,7 +51,17 @@ from ..clock import wall_clock_ms
 from ..languages import chinese_variant, language_groups
 from ..protocol import INTERNAL_ERROR, RpcError, invalid_params
 from ..router import Router
-from .catalog import ROLE_OF_SETTING, ROLES, CatalogEntry, Role, catalog_view, choice_problem, find
+from .catalog import (
+    IMAGE_INPUT,
+    LLM,
+    ROLE_OF_SETTING,
+    ROLES,
+    CatalogEntry,
+    Role,
+    catalog_view,
+    choice_problem,
+    find,
+)
 from .cleanup import CleanupService, join_parts, split_for_cleanup
 from .cloud_stt import CloudTranscriber
 from .dictionary import DictionaryStore, Learned
@@ -546,6 +557,8 @@ class Brain:
             role = ROLE_OF_SETTING.get(key)
             if role is not None:
                 self._check_model(role, value)
+            if key == "vision_model":
+                self._check_vision_model(value)
             self._settings.set(key, value)
         if key == "history_retention_days":
             self._prune_history()
@@ -563,6 +576,21 @@ class Brain:
         if problem is not None:
             message = _MODEL_PROBLEMS.get(problem, _MODEL_UNUSABLE)
             raise ValueError(message.format(key=role.setting, reason=problem))
+
+    def _check_vision_model(self, value: Any) -> None:
+        """ValueError (or the store's TypeError) if `value` cannot be the model that reads images:
+        "" (the answer model) always can, and so can the model chosen now; another must be a
+        language model of OpenRouter's list that reads images (`IMAGE_INPUT`). Before any list
+        could be had, a model id is taken as it is: only the list says what a model reads."""
+        _, model_id = checked("vision_model", value)
+        known = self._pricing.known()
+        if not model_id or known is None or model_id == self._settings.get("vision_model"):
+            return
+        entry = find(known, LLM, model_id)
+        if entry is None:
+            raise ValueError(_MODEL_PROBLEMS["not_listed"].format(key="vision_model"))
+        if IMAGE_INPUT not in entry.capabilities:
+            raise ValueError(_MODEL_UNUSABLE.format(key="vision_model", reason="no_image_input"))
 
     async def _languages_list(self, params: dict) -> dict:
         """The languages the `languages` setting can hold, by group, in the order shown."""

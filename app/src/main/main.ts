@@ -22,6 +22,7 @@ import { installNavInput } from "./nav-input";
 import { labelNavItem, navItemHTML } from "./nav-items";
 import { brandIcon } from "./brand";
 import { installWindowHotkeys } from "./window-hotkeys";
+import { installFocusKeys } from "./focus-keys";
 import { followTray } from "./tray-open";
 import { installWindowChrome, labelWindowControls, showMaximized } from "./window-chrome";
 import type { AgentDraft, AppContext, DeviceSettings, MainEvent, Page, PageId, SettingsPane } from "./types";
@@ -106,6 +107,8 @@ function mountWindowChrome(): void {
 
 async function start(): Promise<void> {
   applyTheme();
+  // Focus rings only while Tab moves the focus (focus-keys.ts); a click or the caret shows the rest.
+  installFocusKeys(document);
   let deviceRead = false;
   try {
     await device.refresh();
@@ -200,6 +203,19 @@ async function start(): Promise<void> {
   /** What had the focus before the settings opened: it gets it back when they close. */
   let opener: HTMLElement | null = null;
   let shownAt = 0;
+  /** What the app last heard of whether the 拉斐爾 page is what the window shows (`agentPageShown`). */
+  let agentPageTold = false;
+  /**
+   * Tells the app whether the 拉斐爾 page is what the window shows: the page is the current one,
+   * with no settings over it and no guide in its place. While it is and the window is in front, a
+   * question to Raphael is shown here alone, and the overlay at the bottom right stays empty.
+   */
+  function tellAgentPage(): void {
+    const shown = current === "agent" && !settingsOpen && guide.hidden !== false;
+    if (shown === agentPageTold) return;
+    agentPageTold = shown;
+    void api.agentPageShown(shown).catch(() => {});
+  }
 
   /** Where the window is: the page, the settings panel if it is open over it and the day the history shows. Null before the first page. */
   function where(): Place | null {
@@ -257,6 +273,7 @@ async function start(): Promise<void> {
     main.scrollTop = 0;
     shownAt = performance.now();
     void pages[id].show(arg);
+    tellAgentPage();
     void refreshUsage();
   }
 
@@ -273,6 +290,7 @@ async function start(): Promise<void> {
     settings.el.hidden = false;
     document.querySelector<HTMLElement>(".wbody")!.inert = true;
     void settings.show(pane);
+    tellAgentPage();
   }
 
   /**
@@ -291,6 +309,7 @@ async function start(): Promise<void> {
     document.querySelector<HTMLElement>(".wbody")!.inert = false;
     if (restoreFocus) opener?.focus();
     opener = null;
+    tellAgentPage();
     void refreshUsage();
   }
 
@@ -340,6 +359,7 @@ async function start(): Promise<void> {
     document.documentElement.dataset.windowLayout = "onboarding";
     document.querySelector<HTMLElement>(".wbody")!.hidden = true;
     guide.hidden = false;
+    tellAgentPage();
     mountOnboarding(
       guide,
       {
@@ -347,6 +367,7 @@ async function start(): Promise<void> {
         onDone: (result) => {
           guide.hidden = true;
           showPages();
+          tellAgentPage();
           if (mode === "first" || !current) go("home");
           if (result.toSettings) go("settings", "usage");
           // The speech models that the guide did not wait for come on in the background.

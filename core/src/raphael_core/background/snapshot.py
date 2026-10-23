@@ -7,7 +7,13 @@ tool an alias is stays here in the core. The snapshot holds:
   change something there: the user turned off what a task must not use, and a tool that is on runs
   without asking, for a task as for the assistant. (A tool that needed a yes would be left out: the
   worker cannot ask at the overlay yet. None does, today.)
-- Raphael's own lookups on the web: the weather, a web search and the time;
+- Raphael's own lookups on the web: the weather, a web search (by the search service the owner
+  chose), the time, and the reading of a page (`web_read`, by the reader chosen). A page is read
+  only at an address the task has seen: in its request, or in what one of its tools returned
+  (`run.TaskRun`, which refuses any other with "url_not_seen"), so a task cannot be made to send
+  what it knows to an address of someone's making;
+- when the task came with files (an image, a PDF the owner handed over), `read_attachment`, which
+  reads one of them by its number: never a path;
 - and, when there is a memory, its two tools that only read (`memory_read`, `history_search`): a
   task may read a note or look up what was said before. It never writes one: a task reads what
   services return, and a memory is written only from the owner's own words.
@@ -27,7 +33,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from ..agent.gate import MEMORY_READ_TOOLS, WEB_TOOLS
+from ..agent.gate import ATTACHMENT_TOOLS, MEMORY_READ_TOOLS, WEB_TOOLS
 from ..agent.history import Turn
 from ..agent.ledger import Ledger
 from ..agent.plugins import MAX_OFFERED, Offer, PluginHub, make_offer
@@ -71,6 +77,32 @@ _DEFINITIONS: dict[str, dict[str, Any]] = {
             "type": "object",
             "properties": {"query": {"type": "string", "description": "What to look up."}},
             "required": ["query"],
+        },
+    },
+    "web_read": {
+        "description": (
+            "[Raphael] Read a web page as text. Only an address you have seen in the task or in "
+            "what a tool of this task returned (a search result, a page read) can be read."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"url": {"type": "string", "description": "The page's address."}},
+            "required": ["url"],
+        },
+    },
+    "read_attachment": {
+        "description": (
+            "[Raphael] Read a file your master handed over with the task, by its number (1 for "
+            "the first): the text of a PDF, or what an image shows. Ask a question about it to "
+            "say what to look for."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "index": {"type": "integer", "description": "The file's number, from 1."},
+                "question": {"type": "string", "description": "What to look for in it."},
+            },
+            "required": ["index"],
         },
     },
     "find_tools": {
@@ -180,16 +212,26 @@ class Snapshot:
 
 
 def take_snapshot(
-    plugins: PluginHub | None, question: str = "", *, memory: bool = False
+    plugins: PluginHub | None,
+    question: str = "",
+    *,
+    memory: bool = False,
+    attachments: bool = False,
 ) -> Snapshot:
-    """The tools a task starting now may use: with `memory`, the memory's tools that read too. A
+    """The tools a task starting now may use: with `memory`, the memory's tools that read too, and
+    with `attachments` (the task came with files) the tool that reads them. A
     plugin that fails to list its tools is left out. When the plugins have more tools than fit, the
     task is shown the ones that share the most words with `question` (`refine` chooses with the
     model) and can find the rest."""
     refs: dict[str, ToolRef] = {}
     definitions: list[dict[str, Any]] = []
     pool: Offer | None = None
-    for name in (*WEB_TOOLS, *(MEMORY_READ_TOOLS if memory else ())):
+    builtin = (
+        *WEB_TOOLS,
+        *(MEMORY_READ_TOOLS if memory else ()),
+        *(ATTACHMENT_TOOLS if attachments else ()),
+    )
+    for name in builtin:
         refs[name] = ToolRef(BUILTIN, name, BUILTIN_SERVER, name, Tier.T0)
         definitions.append({"type": "function", "function": {"name": name, **_DEFINITIONS[name]}})
     snapshot = Snapshot(refs, definitions)
@@ -199,7 +241,13 @@ def take_snapshot(
         except Exception:  # a plugin that breaks leaves its tools out, not the task
             tools = []
         pool = make_offer(tools)
-        taken = set(WEB_TOOLS) | set(MEMORY_READ_TOOLS) | {"find_tools"} | PRESENCE_TOOLS
+        taken = (
+            set(WEB_TOOLS)
+            | set(MEMORY_READ_TOOLS)
+            | set(ATTACHMENT_TOOLS)
+            | {"find_tools"}
+            | PRESENCE_TOOLS
+        )
         clash = set(pool.by_alias) & taken
         if clash:  # a plugin's tool never takes the name of one of Raphael's own
             pool = make_offer([tool for alias, tool in pool.by_alias.items() if alias not in clash])

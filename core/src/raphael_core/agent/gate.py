@@ -43,7 +43,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Raphael's own lookups. They only read, so they are T0. The audit calls their "server" this.
-WEB_TOOLS = ("weather", "web_search", "local_time")
+# `web_read` reads a page (by the reader the owner chose, `raphael_core.services`).
+WEB_TOOLS = ("weather", "web_search", "local_time", "web_read")
+# Reading a file the owner handed over with the request (an image, a PDF): T0 too. A task is
+# offered it only when it has files, and it reads only those, by their number: never a path.
+ATTACHMENT_TOOLS = ("read_attachment",)
 BUILTIN_SERVER = "Raphael"
 # The memory's tools (raphael_core.memory), by tier: the ones that read, and the ones that change it.
 MEMORY_READ_TOOLS = ("memory_read", "history_search")
@@ -70,7 +74,7 @@ class ToolGate:
             {name: command.tier for name, command in COMMANDS.items()},
             plugin_tier=None if plugins is None else plugins.tier_of,
         )
-        for name in (*WEB_TOOLS, *MEMORY_READ_TOOLS):
+        for name in (*WEB_TOOLS, *MEMORY_READ_TOOLS, *ATTACHMENT_TOOLS):
             self._registry.register(name, Tier.T0)
         # The steps of a run on the owner's desktop (`raphael_core.computer`).
         for name, tier in COMPUTER_TIERS.items():

@@ -16,6 +16,13 @@ tool call; it decides whether to give them, and gives them itself. In order:
   writes the audit with the task's id; a tool of Raphael's own (the weather, a web search, the time)
   is checked by the gate too and audited the same way. What a tool returns goes back as it is: the
   worker marks it as untrusted data.
+- **Addresses.** `web_read` reads a page only at an address the task has seen (`SeenUrls`): in the
+  task's request, or in what one of its tools returned before (search results, a page read, a
+  plugin's answer), exactly or as the same page (the same origin and path). Any other is refused
+  with the kind "url_not_seen", and nothing is fetched: a page cannot make the task send what it
+  knows to an address of the page's making. The addresses are kept in the run, in memory.
+- **Files.** `read_attachment` reads one of the files handed over with the task, by its number,
+  from memory: never a path.
 
 Each call, whatever came of it, leaves a step (`TaskStore.add_step`): the tool, its tier, how it
 ended, what it cost; never an argument or a result. A task that was cancelled while a plugin's tool
@@ -47,6 +54,8 @@ from ..brain.pricing import builtin_catalog
 from ..brain.spend import SpendTracker
 from ..integrations.pool import McpPool
 from ..protocol import WORKER_STOPPED, RpcError, invalid_params
+from ..services.attachments import Attachment
+from ..services.urls import SeenUrls
 from .snapshot import BUILTIN, FIND, MCP, Snapshot, ToolRef
 from .tasks import TaskStore
 
@@ -62,6 +71,10 @@ MAX_MESSAGES = 200
 MAX_CHAT_CHARS = 600_000
 # The most of a tool's result that goes to the worker, in characters (it cuts it further).
 MAX_RESULT_CHARS = 12_000
+# A page read, or a file's text, is longer: the budget of a tool's text, and its footer.
+MAX_TEXT_RESULT_CHARS = 16_000
+# The tools whose call is paid: the search (by a model, or a service), and the reading of a file.
+_PAID_TOOLS = ("web_search", "read_attachment")
 
 
 # A model call whose cost is not known, and whose model has no price we know, is charged this.
@@ -146,8 +159,13 @@ class TaskRun:
         changed: Callable[[], None] = lambda: None,
         clock: Callable[[], float] = time.monotonic,
         memory: "MemoryReader | None" = None,
+        request: str = "",
+        attachments: Sequence[Attachment] = (),
     ) -> None:
         self._memory = memory
+        # The files of the task, by number from 1, and the addresses it has seen (see the module).
+        self.attachments = list(attachments)
+        self.seen_urls = SeenUrls([request])
         self.task_id = task_id
         self.language = language
         self.model = model
@@ -365,8 +383,8 @@ class TaskRun:
 
     async def _tool(self, name: str, arguments: dict) -> dict:
         ref = self.snapshot.refs.get(name)
-        searching = ref is not None and ref.kind == BUILTIN and ref.name == "web_search"
-        self._check(tool=True, paid=searching)
+        paying = ref is not None and ref.kind == BUILTIN and ref.name in _PAID_TOOLS
+        self._check(tool=True, paid=paying)
         self.tool_calls += 1
         began = time.perf_counter()
         if ref is None or len(json.dumps(arguments, ensure_ascii=False)) > MAX_ARGUMENT_CHARS:
@@ -374,12 +392,15 @@ class TaskRun:
             self._step(kind="tool", outcome="blocked", ms=_ms(began), reason="blocked")
             return _refused()
         sent: int | None = None
+        detail: str | None = None
         if ref.kind == MCP:
             reply, outcome, tier, sent = await self._plugin(ref, arguments)
         elif ref.kind == FIND:
             reply, outcome, tier = self._find(arguments)
         else:
-            reply, outcome, tier = await self._builtin(ref, arguments)
+            reply, outcome, tier, detail = await self._builtin(ref, arguments)
+        if reply.get("ok") and isinstance(reply.get("content"), str):
+            self.seen_urls.add_from(reply["content"])  # what it returned may be read next
         fields = {
             "tool": ref.name,
             "server": ref.server,
@@ -389,6 +410,8 @@ class TaskRun:
             # The kind the reply carries, never its content: a service's own words stay out.
             "reason": reason_of(outcome, reply.get("kind")),
         }
+        if detail is not None:
+            fields["detail"] = detail
         if ref.kind == MCP:
             self._end_step(sent, **fields)  # the step written when the call was sent
         else:
@@ -452,23 +475,30 @@ class TaskRun:
             reply["tools"] = added
         return reply, "ok", "T0"
 
-    async def _builtin(self, ref: ToolRef, arguments: dict) -> tuple[dict, str, str | None]:
+    async def _builtin(
+        self, ref: ToolRef, arguments: dict
+    ) -> tuple[dict, str, str | None, str | None]:
+        """(the reply, how it ended, the tier, the service it used) of one of Raphael's own."""
         gate = self._gate
         tier = gate.tier_now(ref.key)
         try:
             gate.check(Action(ref.key, arguments), None, worker=True)
         except (UnknownTool, NotApproved):
             gate.record_builtin(ref.name, outcome="blocked", task_id=self.task_id)
-            return _refused(), "blocked", None if tier is None else tier.name
+            return _refused(), "blocked", None if tier is None else tier.name, None
         result = await self._lookup(ref.name, arguments)
-        outcome = "ok" if result.ok else ("timeout" if result.error == "timeout" else "error")
+        if result.error == "url_not_seen":
+            outcome = "blocked"
+        else:
+            outcome = "ok" if result.ok else ("timeout" if result.error == "timeout" else "error")
         gate.record_builtin(ref.name, outcome=outcome, task_id=self.task_id)
         if result.ok:
-            text, cut = _cut(json.dumps(result.data, ensure_ascii=False))
+            limit = MAX_TEXT_RESULT_CHARS if ref.name in ("web_read", "read_attachment") else None
+            text, cut = _cut(json.dumps(result.data, ensure_ascii=False), limit)
             reply = {"ok": True, "kind": None, "content": text, "truncated": cut}
         else:
             reply = {"ok": False, "kind": result.error or "error", "content": "", "truncated": False}
-        return reply, outcome, None if tier is None else tier.name
+        return reply, outcome, None if tier is None else tier.name, result.detail
 
     async def _lookup(self, name: str, arguments: dict) -> ToolResult:
         """One of Raphael's own lookups. It never raises for a failure of the world."""
@@ -484,6 +514,10 @@ class TaskRun:
                 return await self._guarded(
                     self._tools.web_search(query.strip(), self.model, self.ledger)
                 )
+            if name == "web_read":
+                return await self._read_page(arguments)
+            if name == "read_attachment":
+                return await self._read_attachment(arguments)
             if name in ("memory_read", "history_search"):
                 return self._read_memory(name, arguments)
             return self._tools.local_time()
@@ -495,6 +529,34 @@ class TaskRun:
             logger.warning("The %s lookup failed unexpectedly: %s", name, type(exc).__name__)
             return ToolResult(name, False, None, "error")
 
+
+    async def _read_page(self, arguments: dict) -> ToolResult:
+        """A page at an address the task has seen; "url_not_seen" for any other, unfetched."""
+        url = arguments.get("url")
+        if not isinstance(url, str) or not url.strip():
+            return ToolResult("web_read", False, None, "bad_arguments")
+        url = url.strip()
+        if not self.seen_urls.seen(url):
+            logger.info("A task asked to read an address it has not seen: refused")
+            return ToolResult("web_read", False, None, "url_not_seen")
+        result = await self._guarded(self._tools.web_read(url))
+        if result.ok:
+            self.seen_urls.add(url)
+        return result
+
+    async def _read_attachment(self, arguments: dict) -> ToolResult:
+        """One of the task's own files, by its number from 1: never anything else."""
+        index = arguments.get("index")
+        if type(index) is not int or not 1 <= index <= len(self.attachments):
+            return ToolResult("read_attachment", False, None, "bad_arguments")
+        question = arguments.get("question")
+        question = question.strip() if isinstance(question, str) and question.strip() else ""
+        attachment = self.attachments[index - 1]
+        return await self._guarded(
+            self._tools.read_attachment(
+                attachment, question or "What does this file hold?", self.ledger, number=index
+            )
+        )
 
     def _read_memory(self, name: str, arguments: dict) -> ToolResult:
         """A note read or the past turns searched; never a write."""
@@ -523,5 +585,6 @@ def _ms(began: float) -> int:
     return round((time.perf_counter() - began) * 1000)
 
 
-def _cut(text: str) -> tuple[str, bool]:
-    return (text, False) if len(text) <= MAX_RESULT_CHARS else (text[:MAX_RESULT_CHARS], True)
+def _cut(text: str, limit: int | None = None) -> tuple[str, bool]:
+    most = MAX_RESULT_CHARS if limit is None else limit
+    return (text, False) if len(text) <= most else (text[:most], True)

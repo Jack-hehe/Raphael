@@ -80,6 +80,12 @@ export interface CatalogModel {
   created_at_ms: number | null;
   /** What it can do: `structured_output`, `reasoning`, `reasoning_off`, `max_tokens`, `tool_calling` (no role needs it: the plugins do); `dictionary_hints` for speech. */
   capabilities: Record<string, boolean>;
+  /**
+   * What it reads, as OpenRouter's list says (`text`, `image`, `file`, `audio`...). The 看圖片
+   * picker of Settings › 拉斐爾 offers the models whose list holds `image`. A catalog from before
+   * the core sent it has none: see `acceptsImages` (model-picker.ts).
+   */
+  input_modalities?: string[];
   /** The roles of its kind. */
   roles: Partial<Record<ModelRole, RoleFit>>;
 }
@@ -182,6 +188,24 @@ export interface AgentTurn {
   steps?: AgentStep[];
   /** The background task the turn handed over, if it handed one over. */
   task?: AgentTask | null;
+  /** The images and PDFs the request came with, by their names and types only: never their bytes. */
+  attachments?: TurnAttachment[];
+}
+
+/** A file a turn's request came with, as the history keeps it: what the conversation shows as a chip. */
+export interface TurnAttachment {
+  name: string;
+  mime: string;
+}
+
+/**
+ * A file handed with a typed question, as `agent.ask` takes it (`attachments`, the core's
+ * services/attachments.py `from_wire`): its name, its type and its bytes in base64.
+ */
+export interface WireAttachment {
+  name: string;
+  mime: string;
+  data: string;
 }
 
 /** One thing Raphael did for a turn. Never what a tool was given or what it returned. */
@@ -248,6 +272,50 @@ export interface BrainSettings {
   worker_cost_cap_usd?: number;
   /** The models starred in the pickers, per role, in the order they were added. */
   model_favorites?: Partial<Record<ModelRole, string[]>>;
+  /** Who looks the web up: `openrouter` (its `web` plugin, today's way), `brave`, `tavily`, `exa` or `searxng`. */
+  web_search_service?: string;
+  /** Who reads a web page: `builtin` (this computer, at no cost), `jina`, `firecrawl` or `tavily`. */
+  web_read_service?: string;
+  /** The model that looks at images; "" is the model that answers (`agent_model`). */
+  vision_model?: string;
+  /** Who reads a PDF: `builtin` (its text, on this computer) or `openrouter`. */
+  pdf_service?: string;
+  /** The address of the owner's own SearXNG, `http(s)`; "" while there is none. */
+  searxng_url?: string;
+}
+
+/** One service a capability can use, as `services.status` lists it. Never a key, only whether there is one. */
+export interface ServiceOption {
+  id: string;
+  /** It works only with a key of the owner's. */
+  needs_key: boolean;
+  /** A key of the owner's is in the vault (Windows Credential Manager). */
+  has_key: boolean;
+  /** A key is taken but not needed (Jina, which has lower limits without one). */
+  key_optional: boolean;
+  /** SearXNG only: whether its address is set (`searxng_url`). */
+  url_set?: boolean;
+}
+
+/** A capability's services: the one chosen and the ones it could use. */
+export interface ServiceChoice {
+  service: string;
+  options: ServiceOption[];
+}
+
+/** `services.status`: who searches, reads pages, reads PDFs and looks at images. */
+export interface ServicesStatus {
+  search: ServiceChoice;
+  read: ServiceChoice;
+  pdf: ServiceChoice;
+  vision: {
+    /** The `vision_model` setting: "" is the model that answers. */
+    model: string;
+    /** The model that will look: `model`, or the answer model when it is "". */
+    resolved_model: string;
+    /** Whether the catalog says `resolved_model` reads images. */
+    supports_images: boolean;
+  };
 }
 
 /** `secrets.set_openrouter_key` */

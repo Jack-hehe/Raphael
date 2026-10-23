@@ -4,8 +4,8 @@
 (raphael_core.brain), the dictation service's (`dictation.*`, raphael_core.device), the voice
 assistant's (`agent.*`, raphael_core.agent), the background worker's (`worker.*`,
 raphael_core.background), the plugins' (`integrations.*` and `toolsets.list`,
-raphael_core.integrations), the messaging apps' (`messaging.<app>.*`, raphael_core.messaging) and
-the few that belong to none of them (`core.*`, `models.*`, `audio.*`). `__main__` serves it on
+raphael_core.integrations), the messaging apps' (`messaging.<app>.*`, raphael_core.messaging), the
+services of the tools' (`services.*`, raphael_core.services) and the few that belong to none of them (`core.*`, `models.*`, `audio.*`). `__main__` serves it on
 stdio.
 
 Start-up. The app's first calls come within seconds of the process starting (`core.hello`, the
@@ -43,6 +43,7 @@ stdout is the JSON-RPC channel (see stdio_server); everything this module says g
 from __future__ import annotations
 
 import asyncio
+import base64
 import concurrent.futures
 import functools
 import gc
@@ -52,7 +53,7 @@ import re
 import shutil
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -101,6 +102,9 @@ from .protocol import (
     invalid_params,
 )
 from .router import Router
+from .services.attachments import Attachment
+from .services.hub import ServiceHub, offline_transport
+from .services.keys import ServiceKeys, credential_keys, memory_keys
 
 logger = logging.getLogger(__name__)
 
@@ -724,20 +728,33 @@ class App(Router):
             self.keys: KeyStore
             self.client: Any
             self.vault: SecretVault
+            service_keys: ServiceKeys
             if fake_llm:
                 self.keys = MemoryKeyStore()
                 self.keys.set(_FAKE_KEY)
                 self.client = EchoClient()
                 self.vault = MemoryVault()
+                service_keys = memory_keys()
             else:
                 self.keys = CredentialKeyStore()
                 self.client = OpenRouterClient(self.keys.get)
                 self.vault = CredentialVault()
+                service_keys = credential_keys()
             self.brain = Brain(self._conn, self.client, self.keys)  # prunes the history
         except BaseException:
             self._conn.close()
             raise
         self.brain.register(self)
+        # The services the tools stand on, as the owner chose them (`services.*`). With the fake LLM
+        # every one of them is offline: a run of the tests reaches no network.
+        self.services = ServiceHub(
+            self._conn,
+            self.client,
+            service_keys,
+            models=self.brain.known_models,
+            transport=offline_transport() if fake_llm else None,
+        )
+        self.services.register(self)
         if agent_actions is None:
             agent_actions = NullActions() if fake_llm else WindowsActions()
         # The plugins: servers the user connected, and the hub the assistant reaches their tools by.
@@ -748,7 +765,11 @@ class App(Router):
         # The background worker: tasks the assistant hands over, carried out in a process of their
         # own that has no key, no database and no plugin (raphael_core.worker).
         self.background = BackgroundService(
-            self._conn, self.client, self.gate, Tools(self.client), notify=self._worker_notice
+            self._conn,
+            self.client,
+            self.gate,
+            Tools(self.client, services=self.services),
+            notify=self._worker_notice,
         )
         self.background.register(self)
         # The run on the owner's desktop: the core asks the shell, which reaches UI Automation
@@ -777,6 +798,7 @@ class App(Router):
             notify=self.notify,
             computer=self.computer,
             memory=self.memory,
+            services=self.services,
         )
         self.agent.register(self)
         # Messaging apps (Telegram): messages reach the assistant like a spoken question.
@@ -975,6 +997,7 @@ class App(Router):
             ("end the background tasks", self.background.aclose),
             ("end the assistant's requests", self.agent.aclose),
             ("end the memory's background pass", self.memory.aclose),
+            ("close the services' HTTP client", self.services.aclose),
             ("close the HTTP client", self.client.aclose),
             ("wait for the start-up threads", join_threads),
             ("let go of the speech models", close_speech),
@@ -1091,14 +1114,33 @@ class App(Router):
     # --- core -----------------------------------------------------------------------------------
 
     async def _ask_from_messaging(
-        self, session_id: str, text: str, language: str, source: str
+        self,
+        session_id: str,
+        text: str,
+        language: str,
+        source: str,
+        /,
+        *,
+        attachments: Sequence[Attachment] = (),
     ) -> str:
         """A message from a messaging app, through the same entry as a spoken question. Whatever
-        needs a yes is refused on the spot: a yes is given at this computer, never from a message."""
-        reply = await self.call(
-            "agent.ask",
-            {"session_id": session_id, "text": text, "ui_language": language, "source": source},
-        )
+        needs a yes is refused on the spot: a yes is given at this computer, never from a message.
+
+        The images and PDFs the message came with (already checked by the switchboard) go as the
+        request's `attachments`, in the form `agent.ask` takes from the app: `{name, mime, data}`
+        with the bytes in base64. They stay in memory, for this request only."""
+        params: dict[str, Any] = {
+            "session_id": session_id,
+            "text": text,
+            "ui_language": language,
+            "source": source,
+        }
+        if attachments:
+            params["attachments"] = [
+                {"name": a.name, "mime": a.mime, "data": base64.b64encode(a.data).decode("ascii")}
+                for a in attachments
+            ]
+        reply = await self.call("agent.ask", params)
         if reply.get("status") == "confirm":
             question = reply["confirm"]
             await self.call("agent.confirm", {"id": question["id"], "approved": False})
