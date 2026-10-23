@@ -642,7 +642,7 @@ describe("搜尋設定", () => {
         // a row's name, or the name of a section (電腦操作 is found as a whole)
         const html = tab(entry.pane, { memory: emptyMemoryView(), rules: emptyRulesView(), services: emptyServicesView() });
         const headings = [...html.matchAll(/<h2>(.*?)<\/h2>/g)].map((m) => m[1]);
-        expect([...names(html), ...headings], `${locale} ${entry.label}`).toContain(name);
+        expect([...names(html), ...headings].map((shown) => shown.replace("&#39;", "'")), `${locale} ${entry.label}`).toContain(name);
       }
     }
   });

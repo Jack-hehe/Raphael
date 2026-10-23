@@ -203,6 +203,7 @@ from .tools import ToolResult, Tools
 if TYPE_CHECKING:
     from ..background.service import BackgroundService
     from ..services.hub import ServiceHub
+    from ..services.speaker import Speaking
     from ..memory.reflection import Applied
     from ..memory.service import MemoryService
 
@@ -224,6 +225,9 @@ _SOURCE = re.compile(r"[a-z]{1,20}")
 TYPED = "app"
 # The sources of the requests made at this computer: a new one replaces every question that waits.
 _AT_THIS_COMPUTER = frozenset({VOICE, TYPED})
+# The statuses of a turn that ended with a denial or a question that ran out: Raphael does not say
+# these aloud, as the owner knows (a "no", an Esc) or was not there.
+_UNSPOKEN = ("denied", "expired")
 # The routes that read the whole of the conversation after its summary; the others read its last
 # few turns (`memory.conversation.QUICK_TURNS`), which keeps a quick answer cheap.
 _FULL_CONTEXT_ROUTES = ("discuss",)
@@ -246,6 +250,12 @@ _QUOTES = (
     re.compile(r"“([^”]+)”"),
     re.compile(r'"([^"]+)"'),
 )
+
+
+class _Silent(dict):
+    """The reply of `agent.ask` or `agent.confirm` that Raphael does not speak: the owner's own
+    "no" or Esc answered back, a question that ran out, a run that was stopped. It is an ordinary
+    dict on the wire; only the voice (`AgentService._said`) tells it apart."""
 
 
 def _ms_since(began: float) -> int:
@@ -407,6 +417,12 @@ class AgentService:
     conversation is read without a summary (its last turns, within the same limits). `services` is
     the hub of the services the owner chose for the tools (`services.hub`); without it the search is
     OpenRouter's, and no page or file is read (a file handed over is answered as unreadable).
+    `speaker` is Raphael's voice (`services.speaker.Speaking`): the answer of every request made to
+    Raphael himself at this computer (spoken or typed) is said aloud, with its prefix, as the reply
+    is returned; a member's reply, an exchange between members, a routine's result, a cancel, a
+    denial, a question that ran out, a request from a messaging app, a report of the background
+    worker and a question waiting for a yes are not. Any new request at this computer
+    and `agent.cancel` stop what is being said.
     """
 
     def __init__(
@@ -431,9 +447,14 @@ class AgentService:
         memory: "MemoryService | None" = None,
         services: "ServiceHub | None" = None,
         team: Team | None = None,
+        speaker: "Speaking | None" = None,
     ) -> None:
         self._conn = conn
         self._keys = keys
+        # Raphael's voice (`services.speaker`): says the answers of the owner's own requests to
+        # Raphael, and is stopped by a new request and by agent.cancel. None: the answers are
+        # silent. (Not `_speaker`: that is the lookup of who answers a `member_id`.)
+        self._speaking = speaker
         self._client = client
         # The owner's team (raphael_core.members): who a `member_id` is, and the team tools. Without
         # one there is only Raphael.
@@ -620,10 +641,13 @@ class AgentService:
         self._last_language = ask.language
         if self._was_cancelled(ask.session_id):
             # Esc came first: the request is answered as cancelled and nothing runs or is kept.
-            return self._done(0, ask.language, "understood", phrase(ask.language, "denied"))
+            return self._done(
+                0, ask.language, "understood", phrase(ask.language, "denied"), silent=True
+            )
         # The questions that ran out are expired, and a new request replaces those that still wait.
         self._expire(self._confirmations.sweep())
         if ask.source in _AT_THIS_COMPUTER:
+            self._stop_speaking()  # a new request ends what Raphael was saying
             self._deny(self._confirmations.cancel_all())
             if self._computer is not None:
                 self._computer.stop_all("replaced")
@@ -636,12 +660,15 @@ class AgentService:
         task = asyncio.ensure_future(self._answer(ask))
         self._inflight[ask.session_id] = task
         try:
-            return await task
+            result = await task
+            return self._said(result, ask.source, ask.speaker.id)
         except asyncio.CancelledError:
             current = asyncio.current_task()
             if task.cancelled() and (current is None or not current.cancelling()):
                 # Ended by agent.cancel (or by a newer request of the session), not by the caller.
-                return self._done(0, ask.language, "understood", phrase(ask.language, "denied"))
+                return self._done(
+                    0, ask.language, "understood", phrase(ask.language, "denied"), silent=True
+                )
             raise
         finally:
             if self._inflight.get(ask.session_id) is task:
@@ -990,12 +1017,14 @@ class AgentService:
                 detail=final.detail, status=final.status,
             )  # fmt: skip
             run.turn_id = reply["turn_id"]
-            return reply
+            return _Silent(reply) if final.status in _UNSPOKEN else reply
         prefix = _prefix(ask.language, final.which)
         self._update_run_turn(
             run, steps, prefix=prefix, text=final.text, status=final.status, detail=final.detail
         )
-        return self._done(run.turn_id, ask.language, final.which, final.text)
+        return self._done(
+            run.turn_id, ask.language, final.which, final.text, silent=final.status in _UNSPOKEN
+        )
 
     def _update_run_turn(
         self,
@@ -1908,6 +1937,24 @@ class AgentService:
         }
 
     async def _confirm(self, params: dict) -> dict:
+        """`agent.confirm`: the answer to a question, said aloud when it is an answer and the
+        question was Raphael's (a member's question ends in its thread, in writing)."""
+        reply = await self._resolve(params)
+        return self._said(reply, member_id=self._member_of_turn(reply.get("turn_id")))
+
+    def _member_of_turn(self, turn_id: object) -> int | None:
+        """Whose thread the turn is in (0 is Raphael), or None if that cannot be told."""
+        if type(turn_id) is not int:
+            return None
+        if turn_id <= 0:
+            return 0  # a turn that could not be written is Raphael's (no member runs on the desktop)
+        try:
+            turn = self._history.get(turn_id)
+        except sqlite3.Error:
+            return None
+        return None if turn is None else (turn.member_id or 0)
+
+    async def _resolve(self, params: dict) -> dict:
         confirm_id = _str(params, "id")
         approved = params.get("approved")
         if type(approved) is not bool:
@@ -1925,7 +1972,7 @@ class AgentService:
         pending = resolution.pending
         if resolution.outcome is Outcome.UNKNOWN or pending is None:
             return self._done(
-                0, self._last_language, "negative", phrase(self._last_language, "expired")
+                0, self._last_language, "negative", phrase(self._last_language, "expired"), silent=True
             )
         language = pending.language
         if resolution.outcome is Outcome.EXPIRED:
@@ -1979,7 +2026,9 @@ class AgentService:
             )
         )
         self._turn_changed(pending.turn_id)
-        return self._done(pending.turn_id, pending.language, which, text)
+        # The owner's own "no", and a question nobody answered, are not said back.
+        silent = status in _UNSPOKEN
+        return self._done(pending.turn_id, pending.language, which, text, silent=silent)
 
     def _deny(self, pendings: list[Pending]) -> None:
         for pending in pendings:
@@ -2009,6 +2058,7 @@ class AgentService:
 
     async def _cancel(self, params: dict) -> dict:
         session_id = _str(params, "session_id")
+        self._stop_speaking()
         self._forget_old_cancels()
         self._cancelled[session_id] = self._clock()
         task = self._inflight.get(session_id)
@@ -2216,13 +2266,43 @@ class AgentService:
         return {"status": "done", "turn_id": turn_id, "prefix": prefix, "text": text}
 
     @staticmethod
-    def _done(turn_id: int, language: str, which: str, text: str) -> dict:
-        return {
+    def _done(turn_id: int, language: str, which: str, text: str, *, silent: bool = False) -> dict:
+        """The reply of a request that is over. `silent`: Raphael does not say it aloud."""
+        reply = {
             "status": "done",
             "turn_id": turn_id,
             "prefix": _prefix(language, which),
             "text": text,
         }
+        return _Silent(reply) if silent else reply
+
+    def _stop_speaking(self) -> None:
+        if self._speaking is not None:
+            self._speaking.stop()
+
+    def _said(self, reply: dict, source: str | None = None, member_id: int | None = 0) -> dict:
+        """`reply`, after Raphael has begun to say it aloud: only a reply that is an answer
+        (`status: "done"`, not a `_Silent` one) of a request made at this computer (`source`; None
+        for the answer to a question, which only the owner at this computer can give) with words in
+        it, and only Raphael's own (`member_id` 0; None, a thread that cannot be told, is not said):
+        a member answers in its thread, in writing, and an exchange between members, a routine's
+        result and a report of the background never come through here at all. It starts the voice and returns at once: the reply is never held up for the sound, and
+        a voice that fails is the voice's to log. The spoken line is the one the overlay shows;
+        the longer `detail` and the `notice` are not spoken."""
+        if (
+            self._speaking is not None
+            and member_id == 0
+            and not isinstance(reply, _Silent)
+            and reply.get("status") == "done"
+            and (source is None or source in _AT_THIS_COMPUTER)
+        ):
+            prefix, text = reply.get("prefix"), reply.get("text")
+            if isinstance(prefix, str) and isinstance(text, str) and text.strip():
+                try:
+                    self._speaking.say(prefix, text)
+                except Exception as exc:  # the voice must not cost the answer
+                    logger.warning("Raphael could not start to speak: %s", type(exc).__name__)
+        return reply
 
     def _record(
         self,

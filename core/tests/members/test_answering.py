@@ -195,6 +195,57 @@ async def test_raphael_adds_a_member_when_the_owner_asks(setup, client):
     assert client.json_calls == []  # nothing more to word
 
 
+class _Voice:
+    """Raphael's voice, as a note of what he was told to say and how often he was stopped."""
+
+    def __init__(self):
+        self.said = []
+
+    def say(self, prefix, text):
+        self.said.append((prefix, text))
+
+    def stop(self):
+        pass
+
+
+@pytest.fixture
+async def voiced(conn, tmp_path, client):
+    team = Team(conn, tmp_path)
+    voice = _Voice()
+    rig = Rig(conn, client, FakeActions(), team=team.members, memory=team.memory, speaker=voice)
+    yield rig, team, voice
+    await rig.aclose()
+    await team.memory.aclose()
+
+
+async def test_a_members_reply_is_not_spoken(voiced, client):
+    """Only Raphael's own replies are said aloud: what a member answers in its thread is written."""
+    rig, team, voice = voiced
+    one = member(team)
+    client.decisions.append(decision("chat"))
+    client.replies.append(said("明天早上九點開會。", memory=[]))
+    result = await typed(rig, "明天有什麼行程", one.id)
+    assert result["text"] == "明天早上九點開會。"
+    assert voice.said == []
+    # ... and Raphael's own, typed at this computer in his thread, is.
+    client.decisions.append(decision("chat"))
+    client.replies.append(raphael_said("台北。"))
+    await typed(rig, "主人住哪裡", 0)
+    assert voice.said == [("答", "台北。")]
+
+
+async def test_an_exchange_between_members_is_never_spoken_only_raphaels_final_reply(voiced, client):
+    rig, team, voice = voiced
+    member(team, name="小研究")
+    client.decisions.append(decision("answer"))  # Raphael's request
+    client.plans.append(tool_plan(("Raphael__ask_member", {"member": "小研究", "request": "上季的數字"})))
+    client.decisions.append(decision("answer"))  # the member's flags
+    client.replies.append(said("PRIVATE-ANSWER 上季營收兩百萬。", memory=[]))  # the member, asked
+    client.replies.append(raphael_said("小研究說上季營收兩百萬。"))  # Raphael, to the owner
+    await typed(rig, "問小研究上季的數字", 0)
+    assert voice.said == [("答", "小研究說上季營收兩百萬。")]
+
+
 async def test_a_member_asks_raphael_who_answers_as_himself(setup, client, conn):
     rig, team = setup
     one = member(team)

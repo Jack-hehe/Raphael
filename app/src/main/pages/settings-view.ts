@@ -157,6 +157,7 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "agent", label: "services.read", words: ["Jina", "Firecrawl"] },
   { pane: "agent", label: "services.vision" },
   { pane: "agent", label: "services.pdf", words: ["PDF"] },
+  { pane: "agent", label: "services.voice", words: ["Fish Audio", "TTS"] },
   { pane: "messaging", words: ["Telegram"] },
   { pane: "usage", label: "common.apiKey", words: ["OpenRouter"] },
   { pane: "usage", label: "settings.050" },

@@ -218,6 +218,9 @@ export const servicesSetKey = (service: string, key: string): Promise<{ ok: bool
 /** Deletes the key of `service` from the vault. */
 export const servicesClearKey = (service: string): Promise<{ ok: boolean }> => core("services.clear_key", { service });
 
+/** Speaks `text` (a short line, at most 200 characters) in the voice that is set up; `kind` says why it could not. */
+export const ttsPreview = (text: string): Promise<{ ok: boolean; kind?: string }> => core("tts.preview", { text });
+
 // ---------- connections (the plugins and the store) ----------
 
 export const toolsetsList = (): Promise<{ groups: ConnectionGroup[] }> => core("toolsets.list");

@@ -4,16 +4,16 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { setLocale } from "./i18n";
 
-const api = vi.hoisted(() => ({ servicesStatus: vi.fn(), servicesSetKey: vi.fn(), servicesClearKey: vi.fn() }));
+const api = vi.hoisted(() => ({ servicesStatus: vi.fn(), servicesSetKey: vi.fn(), servicesClearKey: vi.fn(), ttsPreview: vi.fn() }));
 vi.mock("./api", () => api);
 vi.mock("./ui", async (original) => ({ ...(await original<typeof import("./ui")>()), toaster: { info: vi.fn() } }));
 
-import { type ServicesView, createServices, emptyServicesView, isServiceUrl, keyInputId, servicesHTML } from "./services";
+import { type ServicesView, createServices, emptyServicesView, isServiceUrl, isVoiceId, keyInputId, servicesHTML } from "./services";
 import type { BrainSettings, ServicesStatus } from "./types";
 import { toaster } from "./ui";
 
 /** A status of the core: Brave chosen for the search, with no key; Jina for the pages; PDFs read here. */
-function status(over: { search?: string; read?: string; braveKey?: boolean; jinaKey?: boolean; urlSet?: boolean } = {}): ServicesStatus {
+function status(over: { search?: string; read?: string; braveKey?: boolean; jinaKey?: boolean; urlSet?: boolean; voice?: string; fishKey?: boolean; voiceSet?: boolean } = {}): ServicesStatus {
   return {
     search: {
       service: over.search ?? "brave",
@@ -41,12 +41,21 @@ function status(over: { search?: string; read?: string; braveKey?: boolean; jina
         { id: "openrouter", needs_key: false, has_key: false, key_optional: false },
       ],
     },
+    voice: {
+      service: over.voice ?? "none",
+      options: [
+        { id: "none", needs_key: false, has_key: false, key_optional: false },
+        { id: "fish", needs_key: true, has_key: over.fishKey ?? false, key_optional: false },
+      ],
+      fish_voice_set: over.voiceSet ?? false,
+    },
     vision: { model: "", resolved_model: "openai/gpt-6-luna", supports_images: true },
   };
 }
 
 const PICKER = '<span class="mp-slot" data-model-picker="vision"></span>';
-const BRAIN = { searxng_url: "https://searx.example" } as BrainSettings;
+const VOICE_ID = "0123456789abcdef0123456789abcdef";
+const BRAIN = { searxng_url: "https://searx.example", tts_fish_voice: VOICE_ID } as BrainSettings;
 const draw = (over: Partial<ServicesView> = {}, brain: BrainSettings | null = BRAIN): string =>
   servicesHTML({ ...emptyServicesView(), status: status(), ...over }, PICKER, brain);
 
@@ -65,17 +74,18 @@ beforeEach(() => {
 afterEach(() => setLocale("zh-TW"));
 
 describe("the section", () => {
-  test("is titled 服務, with four rows, name left and control right, in that order", () => {
+  test("is titled 服務, with five rows, name left and control right, in that order", () => {
     const html = draw();
     expect(html).toMatch(/^<section class="sgroup svc" data-svc-section><h2>服務<\/h2><div class="slist">/);
     const names = [...html.matchAll(/<div class="t">(.*?)<\/div>/g)].map((m) => m[1]);
-    expect(names).toEqual(["搜尋網路", "讀網頁", "看圖片", "讀 PDF"]);
+    expect(names).toEqual(["搜尋網路", "讀網頁", "看圖片", "讀 PDF", "拉斐爾的聲音"]);
     expect(html).toContain('<div class="ctl"><button type="button" class="sel"');
     expect(html).toContain(PICKER);
     // the dropdowns show what is chosen, by its name
     expect(html).toMatch(/data-k="svc-search"[^>]*><span>Brave<\/span>/);
     expect(html).toMatch(/data-k="svc-read"[^>]*><span>Jina<\/span>/);
     expect(html).toMatch(/data-k="svc-pdf"[^>]*><span>內建<\/span>/);
+    expect(html).toMatch(/data-k="svc-voice"[^>]*><span>不出聲<\/span>/);
   });
 
   test("the built-in services are named in the window's language", () => {
@@ -135,6 +145,57 @@ describe("the section", () => {
     leaky.search.options[1].key = "BSA-secret-key";
     const html = servicesHTML({ status: leaky as unknown as ServicesStatus, busy: null }, PICKER, BRAIN);
     expect(html).not.toContain("BSA-secret-key");
+  });
+});
+
+describe("Raphael's voice", () => {
+  const fish = (over: Parameters<typeof status>[0] = {}): ServicesView => ({ ...emptyServicesView(), status: status({ voice: "fish", ...over }) });
+
+  test("is a dropdown of 不出聲 and Fish Audio, in the three languages", () => {
+    expect(draw()).toMatch(/data-k="svc-voice"[^>]*><span>不出聲<\/span>/);
+    expect(draw({ status: status({ voice: "fish" }) })).toMatch(/data-k="svc-voice"[^>]*><span>Fish Audio<\/span>/);
+    setLocale("en");
+    expect(draw()).toContain(">Raphael&#39;s voice<");
+    setLocale("ja");
+    expect(draw()).toContain(">ラファエルの声<");
+  });
+
+  test("not chosen: no line under it", () => {
+    expect(draw()).not.toContain("svc-voice-id");
+    expect(draw()).not.toContain('data-svc-line="fish"');
+  });
+
+  test("Fish Audio with no key: the key's field and 「儲存」, then the voice model's field, 「儲存」 and a bordered 「Try it」", () => {
+    const html = servicesHTML(fish(), PICKER, BRAIN);
+    expect(html).toContain(`id="${keyInputId("fish")}" type="password" value="" placeholder="API 金鑰"`);
+    expect(html).toContain('data-svc="save" data-service="fish"');
+    expect(html).toContain(`id="svc-voice-id" type="text" value="${VOICE_ID}" placeholder="聲音模型 ID"`);
+    expect(html).toContain('<button type="button" class="btn" data-svc="try" data-service="fish">Try it</button>');
+    // the key's line comes first
+    expect(html.indexOf('data-svc-line="fish"')).toBeLessThan(html.indexOf('data-svc-line="voice"'));
+  });
+
+  test("Try it is English in every language", () => {
+    for (const locale of ["en", "ja", "zh-TW"] as const) {
+      setLocale(locale);
+      expect(servicesHTML(fish(), PICKER, BRAIN)).toContain(">Try it</button>");
+    }
+  });
+
+  test("a stored key: 「已設定」 and 「移除」 above the same voice line", () => {
+    const html = servicesHTML(fish({ fishKey: true }), PICKER, BRAIN);
+    expect(html).toContain('<div class="svc-line" data-svc-line="fish"><span class="val">已設定</span>');
+    expect(html).toContain('data-svc-line="voice"');
+  });
+
+  test("the voice line has no helper text and only real buttons", () => {
+    const line = /<div class="svc-line" data-svc-line="voice">.*?<\/div>/.exec(servicesHTML(fish(), PICKER, BRAIN))![0];
+    expect(visible(line)).toBe("儲存 Try it");
+    for (const tag of buttons(line)) expect(tag).toContain('class="btn"');
+  });
+
+  test("the voice model id is a setting, not a secret: it is drawn from the settings", () => {
+    expect(servicesHTML(fish(), PICKER, { ...BRAIN, tts_fish_voice: "" })).toContain('id="svc-voice-id" type="text" value=""');
   });
 });
 
@@ -274,5 +335,111 @@ describe("what the section does", () => {
     expect(isServiceUrl("searx.example")).toBe(false);
     expect(isServiceUrl("javascript:alert(1)")).toBe(false);
     expect(isServiceUrl("file:///C:/x")).toBe(false);
+  });
+  test("choosing the voice is the tts_service setting", async () => {
+    api.servicesStatus.mockResolvedValue(status());
+    const { panel, changeSetting } = mount();
+    await panel.load();
+    expect(panel.menuFor("svc-voice")!.choices.map((c) => c.label)).toEqual(["不出聲", "Fish Audio"]);
+    api.servicesStatus.mockResolvedValue(status({ voice: "fish" }));
+    panel.menuFor("svc-voice")!.pick("fish");
+    await flush();
+    expect(changeSetting).toHaveBeenCalledWith("tts_service", "fish");
+  });
+
+  test("the key of Fish Audio goes to the vault like the others", async () => {
+    api.servicesStatus.mockResolvedValue(status({ voice: "fish" }));
+    api.servicesSetKey.mockResolvedValue({ ok: true });
+    const { host, panel } = mount();
+    await panel.load();
+    host.querySelector<HTMLInputElement>(`#${keyInputId("fish")}`)!.value = "fish-typed-key";
+    host.querySelector<HTMLElement>('[data-svc="save"][data-service="fish"]')!.click();
+    expect(api.servicesSetKey).toHaveBeenCalledWith("fish", "fish-typed-key");
+    await flush();
+    expect(host.innerHTML).not.toContain("fish-typed-key");
+  });
+
+  test("the voice model id is saved with settings.set tts_fish_voice, and only 32 hexadecimal characters or none", async () => {
+    api.servicesStatus.mockResolvedValue(status({ voice: "fish" }));
+    const { host, panel, changeSetting } = mount();
+    await panel.load();
+    const field = (): HTMLInputElement => host.querySelector<HTMLInputElement>("#svc-voice-id")!;
+    field().value = "not-an-id";
+    host.querySelector<HTMLElement>('[data-svc="voice"]')!.click();
+    await flush();
+    expect(changeSetting).not.toHaveBeenCalled();
+    expect(toaster.info).toHaveBeenCalledWith("聲音模型 ID 是 32 個十六進位字元");
+    field().value = `  ${VOICE_ID.toUpperCase()}  `;
+    field().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flush();
+    expect(changeSetting).toHaveBeenCalledWith("tts_fish_voice", VOICE_ID.toUpperCase());
+    field().value = "";
+    host.querySelector<HTMLElement>('[data-svc="voice"]')!.click();
+    await flush();
+    expect(changeSetting).toHaveBeenLastCalledWith("tts_fish_voice", "");
+  });
+
+  test("「Try it」 saves the id, then has Raphael say the sample line of the window's language", async () => {
+    api.servicesStatus.mockResolvedValue(status({ voice: "fish", fishKey: true }));
+    api.ttsPreview.mockResolvedValue({ ok: true });
+    const { host, panel, changeSetting } = mount();
+    await panel.load();
+    host.querySelector<HTMLElement>('[data-svc="try"]')!.click();
+    await flush();
+    expect(changeSetting).toHaveBeenCalledWith("tts_fish_voice", VOICE_ID);
+    expect(api.ttsPreview).toHaveBeenCalledWith("告。主人，請下達指示。");
+    expect(toaster.info).not.toHaveBeenCalled();
+    setLocale("en");
+    host.querySelector<HTMLElement>('[data-svc="try"]')!.click();
+    await flush();
+    expect(api.ttsPreview).toHaveBeenLastCalledWith("Notice. Master, please give your instructions.");
+    setLocale("ja");
+    host.querySelector<HTMLElement>('[data-svc="try"]')!.click();
+    await flush();
+    expect(api.ttsPreview).toHaveBeenLastCalledWith("告。マスター、ご指示をお願いします。");
+  });
+
+  test("「Try it」 with a bad id previews nothing", async () => {
+    api.servicesStatus.mockResolvedValue(status({ voice: "fish" }));
+    const { host, panel } = mount();
+    await panel.load();
+    host.querySelector<HTMLInputElement>("#svc-voice-id")!.value = "zzz";
+    host.querySelector<HTMLElement>('[data-svc="try"]')!.click();
+    await flush();
+    expect(api.ttsPreview).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["not_configured", "先填入聲音模型 ID"],
+    ["missing_secret", "先儲存 API 金鑰"],
+    ["auth", "Fish Audio 不接受這把金鑰"],
+    ["network", "無法發聲"],
+    [undefined, "無法發聲"],
+  ])("a voice that could not be played (%s) is said in a few words", async (kind, words) => {
+    api.servicesStatus.mockResolvedValue(status({ voice: "fish" }));
+    api.ttsPreview.mockResolvedValue({ ok: false, kind });
+    const { host, panel } = mount();
+    await panel.load();
+    host.querySelector<HTMLElement>('[data-svc="try"]')!.click();
+    await flush();
+    expect(toaster.info).toHaveBeenCalledWith(words);
+  });
+
+  test("a call that fails is told by the error", async () => {
+    api.servicesStatus.mockResolvedValue(status({ voice: "fish" }));
+    api.ttsPreview.mockRejectedValue("the core is not running");
+    const { host, panel } = mount();
+    await panel.load();
+    host.querySelector<HTMLElement>('[data-svc="try"]')!.click();
+    await flush();
+    expect(toaster.info).toHaveBeenCalled();
+  });
+
+  test("a voice id is blank or 32 hexadecimal characters", () => {
+    expect(isVoiceId("")).toBe(true);
+    expect(isVoiceId(` ${VOICE_ID} `)).toBe(true);
+    expect(isVoiceId(VOICE_ID.slice(1))).toBe(false);
+    expect(isVoiceId(`${VOICE_ID}0`)).toBe(false);
+    expect(isVoiceId("g".repeat(32))).toBe(false);
   });
 });

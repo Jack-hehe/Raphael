@@ -2,6 +2,7 @@
 stand on them, and a message from a chat app hands its files on to `agent.ask`. With the fake LLM
 every service is offline."""
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -52,3 +53,46 @@ async def test_an_address_in_a_request_reaches_no_network_with_the_fake_llm(app)
     (turn,) = (await app.call("agent.history.list", {}))["turns"]
     (step,) = turn["steps"]
     assert (step["tool"], step["outcome"], step["reason"]) == ("web_read", "error", "network")
+
+
+# --- Raphael's voice ----------------------------------------------------------------------------
+
+
+class NotedSpeaker:
+    def __init__(self):
+        self.stops = 0
+        self.said = []
+
+    def stop(self):
+        self.stops += 1
+
+    async def aclose(self):
+        pass
+
+    def say(self, prefix, text):
+        self.said.append((prefix, text))
+
+
+async def test_the_voice_methods_are_registered_and_the_assistant_stands_on_the_same_speaker(app):
+    assert {"tts.stop", "tts.preview"} <= set(app.methods())
+    assert app.agent._speaker is app.speaker
+    assert await app.call("tts.stop", {}) == {"ok": True}
+    # With no service chosen (the default) there is nothing to preview.
+    assert await app.call("tts.preview", {"text": "x"}) == {"ok": False, "kind": "not_configured"}
+
+
+async def test_a_new_recording_stops_the_voice_before_it_waits_for_anything(app):
+    noted = NotedSpeaker()
+    app.speaker = noted  # `dictation.start` reaches the speaker through the app
+    with pytest.raises(Exception):  # no speech side in this app: the start itself fails
+        await asyncio.wait_for(app.call("dictation.start", {"session_id": "s"}), 1)
+    assert noted.stops == 1
+
+
+async def test_a_spoken_answer_reaches_the_voice_through_the_whole_app(app):
+    noted = NotedSpeaker()
+    app.agent._speaker = noted
+    await app.call(
+        "agent.ask", {"session_id": "s", "text": "你好", "ui_language": "zh-TW", "source": "voice"}
+    )
+    assert len(noted.said) == 1 and noted.stops == 1
