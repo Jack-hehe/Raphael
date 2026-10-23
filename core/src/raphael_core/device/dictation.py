@@ -7,11 +7,9 @@ dictation is mostly done by the time it is stopped and only the last stretch is 
 The audio of a stretch is let go once it has been transcribed, so an hour of dictation holds no
 more of it than a minute does.
 
-There is no limit on how long a recording may last or how much may be said in it. What ends one
-by itself is silence: when the voice activity detector has heard no speech for
-SILENCE_STOP_SECONDS (from the start of the recording, or from the last speech), the service sends
-`dictation.silence` with the session's id, once, and the app stops the session as if the user had
-pressed the key: `dictation.stop` as ever, which delivers what was said, or nothing if nothing was.
+There is no limit on how long a recording may last or how much may be said in it, and silence
+never ends one: only the key (`dictation.stop`) or Esc (`dictation.cancel`) does (owner,
+2026-10-23). The one exception is a session that can hear nothing more (below).
 
 A session has a purpose, given to `dictation.start`: "dictation" (the default) or "agent", the voice
 assistant's question. It records and transcribes in the same way, but what its stop returns is not
@@ -38,9 +36,9 @@ segmenter, getting the engine) runs on a thread of its own, never on the loop. T
 through `loop.call_soon_threadsafe`.
 
 A session whose listening or transcribing has broken down for good (the voice activity detector
-failed, or there is no engine) cannot hear anything more, so it does not wait for a silence that
-will never be counted: the app is sent `dictation.silence` at once, stops the session as the key
-would, and its stop answers with the error, as it would have when the user stopped it.
+failed, or there is no engine) cannot hear anything more, so it does not wait for the key: the app
+is sent `dictation.silence` at once, stops the session as the key would, and its stop answers with
+the error, as it would have when the user stopped it.
 
 The service is handed what it uses and builds none of it, so the app can load the engine and the
 voice activity model once, at start-up, which takes tens of seconds (ONNX Runtime). The segmenter
@@ -83,11 +81,6 @@ logger = logging.getLogger(__name__)
 
 # The format of the frames a recorder delivers (audio.SAMPLE_RATE).
 SAMPLE_RATE = 16_000
-# A recording in which the voice activity detector has heard no speech for this long, from its start
-# or from the last words, is over: the app is told (`dictation.silence`) and stops it, as the key
-# would. It is the only thing that ends a recording by itself. A question to Raphael (PURPOSE_AGENT)
-# has no such end: only the key or Esc stops it.
-SILENCE_STOP_SECONDS = 10.0
 # Less speech than this is a cough or a tap, not a dictation.
 MIN_SPEECH_SECONDS = 0.3
 # A recording whose loudest block (root-mean-square amplitude, 1.0 being full scale) stayed below
@@ -99,11 +92,11 @@ SILENT_PEAK = 0.003
 # Windows MME may never tell us that a microphone was unplugged: the frames just stop. A recording
 # that gets no frames for this long is treated like one whose recorder reported an error.
 MIC_STALL_SECONDS = 2.0
-# A session still recording this long after the app was told to stop it (`dictation.silence`)
-# has been forgotten: the controller stops a silent session at once, and would have done so long
-# since. It is cancelled and the microphone closed, so the service does not stay busy, and the
-# microphone open, for good. Counted from the silence, never from the start: a recording in which
-# the user goes on speaking is never lost, however long it lasts.
+# A session still recording this long after the app was told to stop it (`dictation.silence`,
+# because it can hear nothing more) has been forgotten: the controller stops such a session at once,
+# and would have done so long since. It is cancelled and the microphone closed, so the service does
+# not stay busy, and the microphone open, for good. Counted from that notice, never from the start: a
+# recording in which the user goes on speaking is never lost, however long it lasts.
 LOST_SESSION_SECONDS = 60.0
 
 # What a session can be for (the `purpose` of `dictation.start`).
@@ -114,8 +107,8 @@ _LEVEL_METHOD = "audio.level"
 # After the stop: how far the transcription of what is left has come, then that the brain is
 # cleaning the text. The app draws it on the emblem. The stop's reply is the end of it.
 _PROGRESS_METHOD = "dictation.progress"
-# The recording has heard no speech for SILENCE_STOP_SECONDS, or can hear nothing more because
-# what listens or transcribes has failed: the app stops it.
+# The recording can hear nothing more because what listens or transcribes has failed: the app stops
+# it. (The name is from when silence ended a recording too.)
 _SILENCE_METHOD = "dictation.silence"
 
 # What goes on a session's queues besides frames and stretches of speech: the last item of each.
@@ -188,8 +181,8 @@ class _Session:
         self.watch_busy = False  # the watchdog is closing the recorder or cancelling the session
         self.started_at = now  # when the recording began, on the service's clock
         self.stalled = False
-        # When the app was told to stop the recording (`dictation.silence`: it has gone silent, or
-        # cannot hear any more), on the service's clock; None until then. The loop's.
+        # When the app was told to stop the recording (`dictation.silence`, because it cannot hear
+        # any more), on the service's clock; None until then. The loop's.
         self.silence_told_at: float | None = None
         self.close_lock = asyncio.Lock()
         self.hints: list[str] = []
@@ -224,7 +217,6 @@ class _Session:
         self.stt_used: list[str] = []  # the model that heard each segment, in order
         # The listener's:
         self.fed_any = False
-        self.heard_silence = False  # the segmenter has gone SILENCE_STOP_SECONDS without speech
         # Either thread's, under `lock`:
         self.failure: Exception | None = None  # the first thing that went wrong
         self.fatal = False  # ... and it was one that ends the session's work
@@ -279,7 +271,7 @@ class DictationService:
     `brain.normalize_transcript` for the assistant's question, and `brain.cancel_dictation` for a
     cancel that comes while the text is being cleaned) and where it sends its notifications:
     `audio.level` while recording, `dictation.silence` (`{session_id}`, once a session) when the
-    recording has heard no speech for SILENCE_STOP_SECONDS, `dictation.progress` after the stop
+    recording can hear nothing more, `dictation.progress` after the stop
     (`stage` "transcribing" with the segments `done` of `total`, then "cleaning" right before the
     brain is asked; the reply means done).
     `recorder_factory` makes a recorder that delivers its frames to the function it is given.
@@ -506,7 +498,7 @@ class DictationService:
         """A failure that ends the session's work: what it hears from now on is thrown away, and
         the app is asked to stop it (`_tell_silence`), so that its stop says what went wrong."""
         session.fail(error, fatal=True)
-        self._call_on_loop(session, self._tell_silence, session, True)
+        self._call_on_loop(session, self._tell_silence, session)
 
     def _listen(self, session: _Session) -> None:
         """The listener: frames into the segmenter, as they come, until the recording is over."""
@@ -538,27 +530,11 @@ class DictationService:
             session.found += len(segments)
         for segment in segments:
             session.segments.put(segment)
-        self._look_for_silence(session)
 
-    def _look_for_silence(self, session: _Session) -> None:
-        """Tell the loop, once, that the segmenter has heard no speech for SILENCE_STOP_SECONDS.
-        The listener counts it from the audio as it comes, however long the transcriber takes."""
-        assert session.segmenter is not None
-        if session.heard_silence:
-            return
-        if float(session.segmenter.silence_seconds) >= SILENCE_STOP_SECONDS:
-            session.heard_silence = True
-            self._call_on_loop(session, self._tell_silence, session)
-
-    def _tell_silence(self, session: _Session, failed: bool = False) -> None:
+    def _tell_silence(self, session: _Session) -> None:
         """On the loop: `dictation.silence`, so the app stops the session as the key would, because
-        it has heard no speech for SILENCE_STOP_SECONDS or, if `failed`, because it can hear
-        nothing more. Once a session, and only while it is still the one recording: one that is
-        being stopped or was cancelled meanwhile has nothing to stop. A question to Raphael is
-        never ended by its silence: only the key or Esc ends it (owner, 2026-10-23), so it is told
-        only that it can hear nothing more."""
-        if not failed and session.purpose == PURPOSE_AGENT:
-            return
+        it can hear nothing more. Once a session, and only while it is still the one recording: one
+        that is being stopped or was cancelled meanwhile has nothing to stop."""
         if (
             session.silence_told_at is not None
             or session.state != "recording"
@@ -567,10 +543,7 @@ class DictationService:
         ):
             return
         session.silence_told_at = self._clock()
-        if failed:
-            logger.warning("The dictation can hear nothing more: it ends")
-        else:
-            logger.info("No speech for %g s: the dictation ends", SILENCE_STOP_SECONDS)
+        logger.warning("The dictation can hear nothing more: it ends")
         self._router.notify(_SILENCE_METHOD, {"session_id": session.id})
 
     def _finish(self, session: _Session, *, transcribe: bool) -> None:
@@ -670,18 +643,13 @@ class DictationService:
     # --- the microphone watchdog ----------------------------------------------------------------
 
     async def _watchdog(self, session: _Session) -> None:
-        """Three things to look out for while a session is recording.
+        """Two things to look out for while a session is recording.
 
-        A recorder that has gone quiet is closed. The session goes on, as for a recorder error: the
-        stop uses the speech that was captured, or says there is no microphone.
+        A recorder that has gone quiet is closed. The session goes on, as for a recorder error, until
+        the key stops it: the stop uses the speech that was captured, or says there is no microphone.
 
-        A recorder that has delivered nothing for SILENCE_STOP_SECONDS has heard no speech for that
-        long either, though the segmenter, which is given no audio, cannot say so: the app is told
-        of the silence (`dictation.silence`) all the same, and its stop says what became of the
-        microphone.
-
-        A session the app was told to stop (`dictation.silence`, for its silence or because it can
-        hear nothing more) and that nobody has stopped or cancelled for LOST_SESSION_SECONDS since
+        A session the app was told to stop (`dictation.silence`, because it can hear nothing more)
+        and that nobody has stopped or cancelled for LOST_SESSION_SECONDS since
         is cancelled, the way `dictation.cancel` would, and the
         microphone closed.
         """
@@ -706,8 +674,6 @@ class DictationService:
                 return
             with session.lock:
                 last_frame_at = session.last_frame_at
-            if told is None and now - last_frame_at >= SILENCE_STOP_SECONDS:
-                self._tell_silence(session)
             if not session.stalled and now - last_frame_at >= self._stall_seconds:
                 logger.warning(
                     "No audio from the microphone for %g s: taking it as gone and closing it",
