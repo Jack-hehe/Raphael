@@ -31,6 +31,7 @@ from ..languages import DEFAULT_LANGUAGES, display_name
 from .dictionary import DictionaryStore
 from .openrouter import CLEANUP_FALLBACKS, Completion, OpenRouterError
 from .providers.base import ModelProvider
+from .providers.registry import for_purpose
 from .settings import SettingsStore
 from .spend import SpendTracker
 from .textnorm import to_mainland, to_simplified
@@ -531,7 +532,7 @@ class CleanupService:
         on_result: Callable[[Exception | None], None] | None = None,
         on_model_result: Callable[[str, Exception | None], None] | None = None,
     ) -> None:
-        self._client = client
+        self._client = for_purpose(client, "cleanup")
         self._settings = settings
         self._dictionary = dictionary
         self._spend = spend
@@ -696,7 +697,7 @@ class CleanupService:
 
         # Before anything looks at the reply: the money is spent whatever it holds.
         self._record_spend(completion)
-        self._notify(None, model=model)
+        self._notify(None, model=completion.model)
 
         cost_usd = _usable_cost(completion.cost_usd)
         text = completion.data.get("text")

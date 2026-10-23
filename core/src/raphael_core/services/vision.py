@@ -25,6 +25,7 @@ from collections.abc import Callable, Sequence
 from ..agent.ledger import Ledger
 from ..brain.openrouter import OpenRouterError
 from ..brain.providers.base import ModelProvider
+from ..brain.providers.registry import ProviderRouter, for_purpose
 from .attachments import Attachment
 from .common import ServiceError
 
@@ -75,12 +76,20 @@ class Vision:
     """The model that sees. `client` is the OpenRouter client; `model` says which model it is now
     (read at each call, so a change of the setting takes effect at once)."""
 
-    def __init__(self, client: ModelProvider, model: VisionModel) -> None:
-        self._client = client
+    def __init__(self, client: ModelProvider, model: VisionModel, *, purpose: str = "vision") -> None:
+        self._client = for_purpose(client, purpose)
         self._model = model
 
+    def for_purpose(self, purpose: str):
+        return Vision(self._client, self._model, purpose=purpose)
+
     def model(self) -> tuple[str, bool | None]:
-        return self._model()
+        model, sees = self._model()
+        if isinstance(self._client, ProviderRouter):
+            selected = self._client.model_for(model)
+            if selected != model:
+                return selected, None
+        return model, sees
 
     async def look(
         self, images: Sequence[Attachment | str], question: str, ledger: Ledger
@@ -88,7 +97,7 @@ class Vision:
         """`{text}`: what the images show, for `question`. An image is an attachment, or the
         address of one on the web (http or https). ServiceError("vision_unsupported") when the
         model cannot see, and of the kind of the failure when the call fails."""
-        model, sees = self._model()
+        model, sees = self.model()
         if sees is False:
             raise ServiceError("vision_unsupported")
         parts: list[dict] = [{"type": "text", "text": f"The user's question:\n{question}"}]
@@ -100,7 +109,7 @@ class Vision:
     async def read_file(self, document: Attachment, question: str, ledger: Ledger) -> dict:
         """`{text}`: the text of the PDF `document`, as the model reads it through OpenRouter's
         `file-parser`. ServiceError of the kind of the failure."""
-        model, _ = self._model()
+        model, _ = self.for_purpose("pdf").model()
         parts: list[dict] = [
             {"type": "text", "text": f"The user's question:\n{question}"},
             {
@@ -124,7 +133,7 @@ class Vision:
     ) -> dict:
         try:
             found = await asyncio.wait_for(
-                self._client.chat_text(
+                (for_purpose(self._client, "pdf") if plugins else self._client).chat_text(
                     model=model,
                     system=system,
                     user=parts,

@@ -86,10 +86,10 @@ async def test_rpc_rejects_invalid_configuration_without_logging_secrets(setup_r
     assert notices == []
 
 
-async def test_disabled_bedrock_is_advertised_and_google_contract_root_is_accepted(setup_registry):
+async def test_available_bedrock_is_advertised_and_google_contract_root_is_accepted(setup_registry):
     *_, registry, router, notices = setup_registry
     kinds = (await router.call("providers.kinds"))["kinds"]
-    assert next(k for k in kinds if k["kind"] == "bedrock")["available"] is False
+    assert next(k for k in kinds if k["kind"] == "bedrock")["available"] is True
     google = (await router.call("providers.add", {"kind": "google", "base_url": "https://generativelanguage.googleapis.com", "key": "secret"}))["provider"]
     assert google["base_url"] == "https://generativelanguage.googleapis.com/v1beta/openai"
     await router.call("providers.update", {"id": google["id"], "enabled": False})

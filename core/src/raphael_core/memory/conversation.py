@@ -57,6 +57,7 @@ from ..agent.history import AgentHistory, Turn
 from ..agent.ledger import Ledger
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
 from ..brain.providers.base import ModelProvider
+from ..brain.providers.registry import for_purpose
 from ..clock import wall_clock_ms
 from .terms import estimate_tokens
 
@@ -257,7 +258,7 @@ class Conversation:
         self._on_change = on_change
         self.member_id = member_id
         self._conn = conn
-        self._client = client
+        self._client = for_purpose(client, "memory")
         self._now_ms = now_ms
         self._clock = clock
         self._history = AgentHistory(conn, now_ms)

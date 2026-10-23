@@ -26,6 +26,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ..brain.providers.registry import ProviderRouter, for_purpose
 from ..brain.openrouter import CLEANUP_FALLBACKS, Completion, OpenRouterClient, OpenRouterError
 from .commands import COMMAND_NAMES, COMMANDS, NONE
 from .failure import AgentFailure, failure_kind
@@ -352,7 +353,7 @@ class Router:
         luna_s: float = LUNA_ROUTE_S,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._client = client
+        self._client = for_purpose(client, "router")
         self._jev_model = jev_model
         self._jev_total_s = jev_total_s
         self._jev_first_s = jev_first_s
@@ -365,6 +366,10 @@ class Router:
         """What `text` is: Jev's decision if Jev is sure, else the language model's `model`.
         `background` is one line about the tasks in the background, if there are any. AgentFailure
         (of a kind) when nothing decides."""
+        if isinstance(self._client, ProviderRouter) and (
+                self._client.registry.settings.get("router_model") or
+                self._client.registry.settings.get("router_fallbacks")):
+            return await self.ask_luna(text, model, ledger, background, context=context)
         if model.startswith("@"):
             # Jev is an OpenRouter-only alpha API. Other providers need no OpenRouter key.
             return await self.ask_luna(text, model, ledger, background, context=context)

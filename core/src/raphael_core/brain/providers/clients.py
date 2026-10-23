@@ -13,6 +13,7 @@ from urllib.parse import quote, unquote, urlsplit
 import httpx
 
 from ..openrouter import OpenRouterClient, OpenRouterError, Transcription, _Reply
+from .presets import OPTIONAL_KEY_KINDS
 
 
 def validate_base_url(value: str) -> str:
@@ -56,6 +57,13 @@ def token_count(value):
     return value if type(value) is int and 0 <= value <= 2**63 - 1 else None
 
 
+def _refused_error(data):
+    error = data.get("error") if isinstance(data, dict) else None
+    markers = {"content_filter", "content_policy_violation", "safety_violation"}
+    return isinstance(error, dict) and any(isinstance(error.get(field), str) and
+        error[field] in markers for field in ("type", "code"))
+
+
 def is_transcription(kind, model_id):
     return kind in ("openai", "groq") and (model_id.startswith("whisper") or "transcribe" in model_id)
 
@@ -89,7 +97,8 @@ def model_info(raw: dict, *, kind: str) -> dict:
     name = raw.get("display_name") or raw.get("displayName") or raw.get("name")
     return {
         "id": model_id, "name": name if isinstance(name, str) else model_id,
-        "context": token_count(raw.get("context_length", raw.get("inputTokenLimit"))) or None,
+        "context": next((value for field in ("context_length", "inputTokenLimit", "max_model_len")
+                         if (value := token_count(raw.get(field))) and value > 0), None),
         "vision": "image" in inputs or raw.get("vision") is True or vision,
         "tools": "tools" in params or raw.get("tools") is True or official_chat,
         "audio_in": "audio" in inputs or raw.get("audio_in") is True or is_transcription(kind, model_id),
@@ -123,7 +132,7 @@ class CompatibleProvider(OpenRouterClient):
                 raise ValueError
         except Exception:
             raise OpenRouterError(0, "auth", "Could not read provider credential") from None
-        if not key and self.kind not in ("ollama", "lmstudio", "openai_compatible", "litellm", "bifrost"):
+        if not key and self.kind not in OPTIONAL_KEY_KINDS:
             raise OpenRouterError(0, "auth", "No provider credential")
         headers = {}
         if key:
@@ -155,10 +164,18 @@ class CompatibleProvider(OpenRouterClient):
             raise OpenRouterError(0, "error", "Invalid provider request") from None
         status = response.status_code
         if not response.is_success:
+            try:
+                refused = _refused_error(response.json())
+            except ValueError:
+                refused = False
+            if refused:
+                raise OpenRouterError(status, "refusal", "Provider declined the request")
             kind = {401: "auth", 403: "auth", 408: "timeout", 429: "rate_limit"}.get(status, "error")
             raise OpenRouterError(status, kind, f"Provider request failed ({status})")
         try:
             decoded = response.json()
+            if _refused_error(decoded):
+                raise OpenRouterError(status, "refusal", "Provider declined the request")
             if not isinstance(decoded, dict) or decoded.get("error"):
                 raise ValueError
         except ValueError:
@@ -182,6 +199,10 @@ class CompatibleProvider(OpenRouterClient):
                 prefix = "/openai" if not urlsplit(self.base_url).path else ""
                 path = f"{prefix}/deployments/{quote(model, safe='')}{path}"
         reply = await self._send(method, path, timeout_s, body=body)
+        for choice in reply.body.get("choices", []):
+            if isinstance(choice, dict) and (choice.get("finish_reason") == "content_filter" or
+                    isinstance(choice.get("message"), dict) and choice["message"].get("refusal")):
+                raise OpenRouterError(reply.status, "refusal", "Provider declined the request")
         self._usage(reply.body, (body or {}).get("model", ""))
         return reply
 
@@ -386,6 +407,8 @@ class AnthropicProvider(CompatibleProvider):
             native["tools"] = tools
         reply = await self._send("POST", "/v1/messages", timeout_s, body=native)
         data = reply.body
+        if data.get("stop_reason") == "refusal":
+            raise OpenRouterError(reply.status, "refusal", "Provider declined the request")
         if not isinstance(data.get("content"), list):
             raise OpenRouterError(200, "error", "Invalid Anthropic response")
         content, calls, json_content = [], [], None

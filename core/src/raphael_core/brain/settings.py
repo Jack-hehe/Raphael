@@ -64,6 +64,17 @@ DEFAULTS: dict[str, Any] = {
     # The voice assistant (raphael_core.agent). The model that words its answers, and that decides
     # what a request is when Jev (agent/routing.py, not a setting) fails or is unsure.
     "agent_model": "openai/gpt-6-luna",
+    # Empty purpose-specific primaries inherit the answer/vision model, as before.
+    "router_model": "",
+    "memory_model": "",
+    "pdf_model": "",
+    "agent_fallbacks": [],
+    "cleanup_fallbacks": [],
+    "router_fallbacks": [],
+    "vision_fallbacks": [],
+    "pdf_fallbacks": [],
+    "stt_fallbacks": [],
+    "memory_fallbacks": [],
     # Where the weather is looked up when the user does not say.
     "agent_city": "台北",
     # The most one background task may spend, in US$ (one of WORKER_COST_CAPS).
@@ -148,6 +159,9 @@ _CHOICES: dict[str, tuple[Any, ...]] = {
 }
 # The settings that hold the id of an OpenRouter model.
 MODEL_SETTINGS = ("cleanup_model", "stt_cloud_model", "agent_model")
+OPTIONAL_MODEL_SETTINGS = ("vision_model", "router_model", "memory_model", "pdf_model")
+FALLBACK_SETTINGS = tuple(purpose + "_fallbacks" for purpose in
+                          ("agent", "cleanup", "router", "vision", "pdf", "stt", "memory"))
 _TRIMMED = (*MODEL_SETTINGS, "agent_city")
 
 
@@ -187,7 +201,7 @@ def _trimmed(key: str, value: str) -> str:
         raise ValueError(f"Setting {key!r} must not be blank")
     if len(text) > AGENT_TEXT_MAX_CHARS:
         raise ValueError(f"Setting {key!r} must be at most {AGENT_TEXT_MAX_CHARS} characters")
-    if key in (*MODEL_SETTINGS, "model_favorites", "vision_model") and any(char.isspace() for char in text):
+    if key in (*MODEL_SETTINGS, *OPTIONAL_MODEL_SETTINGS, "model_favorites") and any(char.isspace() for char in text):
         raise ValueError(f"Setting {key!r} must not contain spaces")
     return text
 
@@ -281,8 +295,21 @@ def checked(key: str, value: Any) -> tuple[str, Any]:
         value = _favorites(value)
     if key == "searxng_url":
         value = _url(key, value)
-    if key == "vision_model":
+    if key in OPTIONAL_MODEL_SETTINGS:
         value = _optional_model(key, value)
+    if key in FALLBACK_SETTINGS:
+        if len(value) > 3:
+            raise ValueError("At most three fallback models")
+        kept = []
+        for reference in value:
+            if not isinstance(reference, str):
+                raise TypeError("Fallbacks must contain model references")
+            reference = _trimmed("model_favorites", reference)
+            if reference.startswith("@") and not re.fullmatch(r"@[A-Za-z0-9_-]+:.+", reference):
+                raise ValueError("Invalid fallback model reference")
+            if reference not in kept:
+                kept.append(reference)
+        value = kept
     if key == "tts_fish_voice":
         value = _fish_voice(key, value)
     if key == "tts_fish_model":
@@ -333,7 +360,7 @@ class SettingsStore:
             "SELECT 1 FROM settings WHERE key = ?", (key,)
         ).fetchone():
             return None  # saved as "none", which is not the same as never saved
-        return default if saved is None else saved
+        return copy.deepcopy(default) if saved is None else saved
 
     def set(self, key: str, value: Any) -> None:
         """Save a value.
@@ -357,7 +384,7 @@ class SettingsStore:
 
     def all(self) -> dict[str, Any]:
         """Every setting: the defaults with the saved values on top."""
-        values = dict(DEFAULTS)
+        values = copy.deepcopy(DEFAULTS)
         for row in self._conn.execute("SELECT key, value FROM settings"):
             if row["key"] in values:
                 values[row["key"]] = json.loads(row["value"])

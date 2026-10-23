@@ -76,7 +76,7 @@ from ..agent.history import AgentHistory, Turn
 from ..agent.ledger import Ledger
 from ..agent.tools import ToolResult
 from ..brain.providers.base import ModelProvider
-from ..brain.providers.registry import ProviderRouter
+from ..brain.providers.registry import ProviderRouter, for_purpose
 from ..brain.secrets import KeyStore
 from ..brain.settings import DEFAULTS, SettingsStore
 from ..brain.spend import SpendTracker
@@ -156,7 +156,7 @@ class MemoryService:
         self._clock = clock
         self._quiet_s = quiet_s
         self._start_delay_s = start_delay_s
-        self._client = client
+        self._client = for_purpose(client, "memory")
         self._now = now
         self.store = MemoryStore(root, now=now, on_change=lambda: self._changed(0))  # Raphael's own
         self.shared = MemoryStore(root / SHARED_DIR, now=now, on_change=lambda: self._changed(0, "shared"))

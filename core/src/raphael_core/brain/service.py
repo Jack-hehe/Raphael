@@ -278,7 +278,8 @@ class Brain:
 
     def _model_available(self, setting: str) -> bool:
         if isinstance(self._client, ProviderRouter):
-            return self._client.available(self._settings.get(setting))
+            purpose = "stt" if setting == "stt_cloud_model" else setting.removesuffix("_model")
+            return self._client.for_purpose(purpose).available(self._settings.get(setting))
         return self._has_key()
 
     async def aclose(self) -> None:

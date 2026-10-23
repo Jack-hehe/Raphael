@@ -29,6 +29,7 @@ from ..languages import STT_CODES, stt_languages
 from ..protocol import INTERNAL_ERROR, NOT_CONFIGURED, RpcError, invalid_params
 from .openrouter import OpenRouterError
 from .providers.base import ModelProvider
+from .providers.registry import for_purpose
 from .settings import SettingsStore
 from .spend import SpendTracker
 
@@ -140,7 +141,7 @@ class CloudTranscriber:
         spend: SpendTracker,
         has_key: Callable[[], bool],
     ) -> None:
-        self._client = client
+        self._client = for_purpose(client, "stt")
         self._settings = settings
         self._spend = spend
         self._has_key = has_key

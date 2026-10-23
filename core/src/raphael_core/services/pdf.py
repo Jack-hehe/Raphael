@@ -132,6 +132,8 @@ async def read_pdf(
     """`{pages, text, truncated}` of the PDF `document`, read by `service` (see the module).
     `vision` and `ledger` are what reads a scanned page, or the whole file for "openrouter"; without
     them only the text layer is read. ServiceError of a kind."""
+    if isinstance(vision, Vision):
+        vision = vision.for_purpose("pdf")
     if service == "openrouter":
         if vision is None or ledger is None:
             raise ServiceError("not_configured")

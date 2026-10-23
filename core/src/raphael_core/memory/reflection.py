@@ -57,6 +57,7 @@ from ..agent.history import Turn
 from ..agent.ledger import Ledger
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
 from ..brain.providers.base import ModelProvider
+from ..brain.providers.registry import for_purpose
 from .conversation import turn_time
 from .store import TYPES, Memory, MemoryIndex, MemoryRefused, MemoryStore, make_name, valid_name
 
@@ -525,7 +526,7 @@ class Reflector:
     """Asks the model for the actions and applies them. `client` is the OpenRouter client."""
 
     def __init__(self, client: ModelProvider, *, timeout_s: float = REFLECT_TIMEOUT_S) -> None:
-        self._client = client
+        self._client = for_purpose(client, "memory")
         self._timeout_s = timeout_s
 
     async def _ask(self, system: str, user: str, model: str, ledger: Ledger) -> list[Action]:

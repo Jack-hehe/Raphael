@@ -1803,13 +1803,13 @@ async def test_an_agent_dictation_goes_through_the_whole_app_without_cleanup_or_
     app = make_app(kit)
     await app.call("dictionary.add", {"word": "哈囉", "misheard": ["你好"]})
     asked = []
-    echo = app.client.complete_json
+    echo = app.client.openrouter.complete_json
 
     async def spy(**kwargs):
         asked.append(kwargs)
         return await echo(**kwargs)
 
-    app.client.complete_json = spy
+    app.client.openrouter.complete_json = spy
     assert await app.call("dictation.start", {"session_id": "a1", "purpose": "agent"}) == {}
     result = await app.call("dictation.stop", {"session_id": "a1", "target_app": "notepad.exe"})
     assert result == {
@@ -1925,14 +1925,14 @@ async def test_a_dictation_cancelled_while_its_text_is_cleaned_is_not_the_latest
     await dictate(app, "s0")
     kept = (await app.call("history.latest"))["item"]
     entered, gate = asyncio.Event(), asyncio.Event()
-    echo = app.client.complete_json
+    echo = app.client.openrouter.complete_json
 
     async def slow(**kwargs):
         entered.set()
         await gate.wait()
         return await echo(**kwargs)
 
-    app.client.complete_json = slow
+    app.client.openrouter.complete_json = slow
     await app.call("dictation.start", {"session_id": "s1"})
     stopping = asyncio.ensure_future(
         app.call("dictation.stop", {"session_id": "s1", "target_app": None})
@@ -1948,7 +1948,7 @@ async def test_a_dictation_cancelled_while_its_text_is_cleaned_is_not_the_latest
     assert (await app.call("history.latest"))["item"] == kept
     assert len((await app.call("history.list"))["items"]) == 1
     # The next dictation is kept as ever.
-    app.client.complete_json = echo
+    app.client.openrouter.complete_json = echo
     again = await dictate(app, "s2")
     assert (await app.call("history.latest"))["item"]["id"] == again["id"]
 

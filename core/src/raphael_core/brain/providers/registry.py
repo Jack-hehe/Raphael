@@ -7,6 +7,7 @@
 
 import asyncio
 import json
+import logging
 import re
 import uuid
 from collections.abc import Callable
@@ -17,40 +18,18 @@ import httpx
 from ...protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from ..catalog import CatalogEntry, ModelPrice
 from ..openrouter import OpenRouterError
-from ..secrets import CredentialKeyStore, KeyStore
+from ..secrets import KeyStore
+from ..settings import SettingsStore
 from .base import ModelProvider
+from .presets import BY_KIND, KINDS, OPTIONAL_KEY_KINDS
 from .clients import AnthropicProvider, CompatibleProvider, is_transcription, model_info, validate_base_url
+from .bedrock import BedrockProvider
+from .vertex import VertexProvider
+from .secrets import ProviderCredentialStore
 
 CONFIG_KEY = "providers.config.v1"
 MODELS_KEY = "providers.models.v1"
-
-
-def _kind(kind, name, group, url="", fields=("key",), available=True):
-    return {"kind": kind, "name": name, "group": group, "fields": list(fields),
-            "default_base_url": url, "available": available}
-
-
-KINDS = [
-    _kind("openrouter", "OpenRouter", "gateway", "https://openrouter.ai/api/v1"),
-    _kind("openai", "OpenAI", "official", "https://api.openai.com/v1"),
-    _kind("anthropic", "Anthropic (Claude)", "official", "https://api.anthropic.com"),
-    _kind("google", "Google Gemini", "official", "https://generativelanguage.googleapis.com"),
-    _kind("azure_openai", "Azure OpenAI", "official", fields=("key", "base_url", "api_version")),
-    # TODO: Bedrock needs SigV4 signing and a separate request dialect; no heavy SDK is bundled.
-    _kind("bedrock", "Amazon Bedrock", "official", fields=("key_id", "key", "region"), available=False),
-    _kind("openai_compatible", "Custom (OpenAI-compatible)", "gateway", fields=("base_url", "key")),
-    _kind("litellm", "LiteLLM", "gateway", fields=("base_url", "key")),
-    _kind("portkey", "Portkey", "gateway", "https://api.portkey.ai/v1"),
-    _kind("vercel", "Vercel AI Gateway", "gateway", "https://ai-gateway.vercel.sh/v1"),
-    _kind("nebius", "Nebius", "gateway", "https://api.studio.nebius.com/v1"),
-    _kind("bifrost", "Bifrost", "gateway", fields=("base_url", "key")),
-    _kind("groq", "Groq", "gateway", "https://api.groq.com/openai/v1"),
-    _kind("deepseek", "DeepSeek", "gateway", "https://api.deepseek.com/v1"),
-    _kind("mistral", "Mistral", "gateway", "https://api.mistral.ai/v1"),
-    _kind("ollama", "Ollama", "local", "http://localhost:11434/v1", ("base_url",)),
-    _kind("lmstudio", "LM Studio", "local", "http://localhost:1234/v1", ("base_url",)),
-]
-BY_KIND = {item["kind"]: item for item in KINDS}
+logger = logging.getLogger(__name__)
 
 
 def _text(value, *, empty=False):
@@ -74,7 +53,7 @@ class ProviderRegistry:
                  credential: Callable[[str], KeyStore] | None = None,
                  http: httpx.AsyncClient | None = None, transport=None):
         self._conn, self.openrouter, self.keys = conn, openrouter, keys
-        self._credential = credential or (lambda pid: CredentialKeyStore(username=f"provider:{pid}"))
+        self._credential = credential or (lambda pid: ProviderCredentialStore(f"provider:{pid}"))
         self._own_http = httpx.AsyncClient(transport=transport) if transport is not None else None
         self._http = http if http is not None else self._own_http
         self._clients: dict[str, ModelProvider] = {}
@@ -83,6 +62,7 @@ class ProviderRegistry:
         self._notify = lambda method, params: None
         self._configs = self._load(CONFIG_KEY, {})
         self._models = self._load(MODELS_KEY, {})
+        self.settings = SettingsStore(conn)
 
     def _load(self, key, default):
         row = self._conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
@@ -114,6 +94,12 @@ class ProviderRegistry:
     def ids(self):
         return ["openrouter", *(pid for pid in self._configs if pid != "openrouter")]
 
+    def configured_fallbacks(self, purpose):
+        """None preserves legacy defaults; an explicitly saved empty array disables them."""
+        key = purpose + "_fallbacks"
+        saved = self._conn.execute("SELECT 1 FROM settings WHERE key = ?", (key,)).fetchone()
+        return self.settings.get(key) if saved else None
+
     def resolve(self, reference: str) -> tuple[str, str]:
         if not isinstance(reference, str) or not reference or len(reference) > 2048 or any(c.isspace() for c in reference):
             raise ValueError("Invalid model reference")
@@ -131,10 +117,20 @@ class ProviderRegistry:
             config = self.config(pid)
             if not config["enabled"]:
                 return False
-            return bool((self._secret(pid).get() or "").strip()) or config["kind"] in (
-                "ollama", "lmstudio", "openai_compatible", "litellm", "bifrost")
+            return self._has_credential(pid, config) or config["kind"] in OPTIONAL_KEY_KINDS
         except ValueError:
             return False
+
+    def _has_credential(self, pid, config):
+        value = self._secret(pid).get()
+        if config["kind"] == "bedrock":
+            try:
+                credentials = json.loads(value or "{}")
+                return all(isinstance(credentials.get(field), str) and credentials[field]
+                           for field in ("key_id", "secret"))
+            except (ValueError, AttributeError):
+                return False
+        return bool((value or "").strip())
 
     def client(self, pid) -> ModelProvider:
         config = self.config(pid)
@@ -143,9 +139,11 @@ class ProviderRegistry:
         if pid == "openrouter":
             return OpenRouterProvider(self.openrouter)
         if pid not in self._clients:
-            cls = AnthropicProvider if config["kind"] == "anthropic" else CompatibleProvider
+            cls = {"anthropic": AnthropicProvider, "vertex": VertexProvider,
+                   "bedrock": BedrockProvider}.get(config["kind"], CompatibleProvider)
             self._clients[pid] = cls(config["kind"], config["base_url"], self._secret(pid).get,
-                api_version=config.get("api_version", ""), http=self._http)
+                api_version=config.get("api_version", ""), http=self._http,
+                **({"region": config["region"]} if config["kind"] == "bedrock" else {}))
             self._clients[pid]._prices = {row["id"]: (row["price_in"], row["price_out"])
                                          for row in self._models.get(pid, [])}
         return self._clients[pid]
@@ -153,7 +151,7 @@ class ProviderRegistry:
     def view(self, pid):
         config = self.config(pid)
         try:
-            has_key = bool((self._secret(pid).get() or "").strip())
+            has_key = self._has_credential(pid, config)
             status = self._status.get(pid, "unknown")
         except Exception:
             has_key, status = False, "auth"
@@ -190,7 +188,8 @@ class ProviderRegistry:
         return {"providers": providers}
 
     def _checked(self, params, old=None):
-        allowed = {"id", "kind", "name", "base_url", "key", "enabled", "api_version", "region", "key_id"}
+        allowed = {"id", "kind", "name", "base_url", "key", "enabled", "api_version", "region", "key_id",
+                   "secret", "service_account", "project", "location"}
         if set(params) - allowed:
             raise ValueError("Unknown provider field")
         kind = params.get("kind", (old or {}).get("kind"))
@@ -199,7 +198,41 @@ class ProviderRegistry:
             raise ValueError("Unsupported provider kind")
         config = dict(old or {"kind": kind, "name": preset["name"], "enabled": True})
         config["name"] = _text(params.get("name", config["name"]))
-        config["base_url"] = validate_base_url(_text(params.get("base_url", config.get("base_url", preset["default_base_url"]))))
+        if set(params) & {"region", "key_id", "secret"} and kind != "bedrock":
+            raise ValueError("Unexpected Bedrock field")
+        if set(params) & {"project", "location", "service_account"} and kind != "vertex":
+            raise ValueError("Unexpected Vertex field")
+        if kind in ("bedrock", "vertex"):
+            if "base_url" in params or "key" in params:
+                raise ValueError("Native provider endpoint and credentials have dedicated fields")
+            for field in (("region",) if kind == "bedrock" else ("project", "location")):
+                value = params.get(field, config.get(field))
+                if not isinstance(value, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", value):
+                    raise ValueError("Invalid native provider field")
+                config[field] = value
+            if kind == "bedrock":
+                suffix = "amazonaws.com.cn" if config["region"].startswith("cn-") else "amazonaws.com"
+                config["base_url"] = f"https://bedrock-runtime.{config['region']}.{suffix}"
+            else:
+                config["base_url"] = (f"https://{config['location']}-aiplatform.googleapis.com/v1/projects/"
+                                      f"{config['project']}/locations/{config['location']}/endpoints/openapi")
+            for field in ("key_id", "secret"):
+                if field in params and (not isinstance(params[field], str) or
+                        (params[field] and not re.fullmatch(r"[!-~]{1,2048}", params[field]))):
+                    raise ValueError("Invalid Bedrock credential")
+            if "service_account" in params:
+                value = params["service_account"]
+                if not isinstance(value, str) or len(value) > 32768:
+                    raise ValueError("Invalid service account")
+                if value:
+                    try:
+                        account = json.loads(value)
+                        if not all(isinstance(account[k], str) and account[k] for k in ("client_email", "private_key")):
+                            raise ValueError
+                    except (ValueError, KeyError, TypeError):
+                        raise ValueError("Invalid service account") from None
+        else:
+            config["base_url"] = validate_base_url(_text(params.get("base_url", config.get("base_url", preset["default_base_url"]))))
         if kind == "openrouter" and config["base_url"] != BY_KIND[kind]["default_base_url"]:
             raise ValueError("OpenRouter endpoint is fixed")
         if kind == "google":
@@ -218,8 +251,6 @@ class ProviderRegistry:
             key = params["key"]
             if not isinstance(key, str) or (key and not re.fullmatch(r"[!-~]+", key)):
                 raise ValueError("Invalid provider key")
-        if params.get("key_id") or params.get("region"):
-            raise ValueError("Bedrock is not available")
         return config
 
     async def add(self, params):
@@ -239,17 +270,23 @@ class ProviderRegistry:
 
     async def _write(self, pid, config, params):
         secret = self._secret(pid)
-        old_key = secret.get() if "key" in params else None
+        changed_secret = bool(set(params) & {"key", "secret", "key_id", "service_account"})
+        old_key = secret.get() if changed_secret else None
+        new_key = params.get("service_account", params.get("key"))
+        if config["kind"] == "bedrock" and changed_secret:
+            credentials = json.loads(old_key) if old_key else {}
+            credentials.update({k: params[k] for k in ("key_id", "secret") if k in params})
+            new_key = json.dumps(credentials) if any(credentials.values()) else ""
         previous, old_models = dict(self._configs), dict(self._models)
         try:
-            if "key" in params:
-                secret.set(params["key"]) if params["key"] else secret.clear()
+            if changed_secret:
+                secret.set(new_key) if new_key else secret.clear()
             self._configs[pid] = config
             self._models.pop(pid, None)
             self._save()
         except Exception:
             self._configs, self._models = previous, old_models
-            if "key" in params:
+            if changed_secret:
                 secret.set(old_key) if old_key else secret.clear()
             raise
         self._revisions[pid] = self._revisions.get(pid, 0) + 1
@@ -310,7 +347,13 @@ class ProviderRegistry:
             return {"ok": False, "kind": kind, "models": 0}
 
     async def models(self, params):
-        return {"models": await self.discover(_text(params["id"]))}
+        pid = _text(params["id"])
+        rows = await self.discover(pid)
+        selected = {self.settings.get("agent_model"), *self.settings.get("agent_fallbacks")}
+        selected.update(row[0] for row in self._conn.execute("SELECT model FROM members WHERE model != ''"))
+        local = BY_KIND[self.config(pid)["kind"]]["local_context_hint"]
+        return {"models": [{**row, "context_warning": bool(local and row["context"] is not None
+                           and row["context"] < 65_536 and f"@{pid}:{row['id']}" in selected)} for row in rows]}
 
     def catalog_entries(self):
         entries = []
@@ -357,6 +400,11 @@ def url_path(url):
     return urlsplit(url).path
 
 
+def for_purpose(client, purpose):
+    """Scope the real router while retaining simple provider fakes at consumer seams."""
+    return client.for_purpose(purpose) if isinstance(client, ProviderRouter) else client
+
+
 class ProviderRouter:
     """One resolver injected into every model consumer. Plain slugs keep their old wire format.
 
@@ -364,13 +412,67 @@ class ProviderRouter:
     completion methods route by reference and never send OpenRouter fallbacks to another service.
     """
 
-    def __init__(self, registry, openrouter):
+    def __init__(self, registry, openrouter, purpose="agent"):
         self.registry, self.openrouter = registry, openrouter
+        self.purpose = purpose
+
+    def for_purpose(self, purpose):
+        if purpose not in ("agent", "cleanup", "router", "vision", "pdf", "stt", "memory"):
+            raise ValueError("Unknown model purpose")
+        return ProviderRouter(self.registry, self.openrouter, purpose)
+
+    def model_for(self, reference):
+        if self.purpose in ("router", "memory", "pdf"):
+            return self.registry.settings.get(self.purpose + "_model") or reference
+        return reference
 
     def available(self, model):
-        return self.registry.available(model)
+        references = [self.model_for(model), *self.registry.settings.get(self.purpose + "_fallbacks")]
+        unreadable = False
+        for reference in references:
+            try:
+                if self.registry.available(reference):
+                    return True
+            except Exception:
+                unreadable = True
+        if unreadable:
+            raise OpenRouterError(0, "auth", "Could not read provider credential") from None
+        return False
 
     async def _call(self, method, kwargs):
+        reference = self.model_for(kwargs["model"])
+        configured = self.registry.configured_fallbacks(self.purpose)
+        explicit = configured or []
+        # Legacy curated fallbacks stay within OpenRouter. Cross-provider attempts are
+        # possible only through the owner's ordered settings, never an implicit default.
+        implicit = [ref for ref in kwargs.get("fallbacks", []) if not ref.startswith("@")]
+        fallbacks = explicit if configured is not None else implicit if not reference.startswith("@") else []
+        chain = list(dict.fromkeys([reference, *fallbacks]))
+        timeout = kwargs["timeout_s"] / len(chain)
+        for index, target in enumerate(chain):
+            attempt = {**kwargs, "model": target, "timeout_s": timeout}
+            try:
+                return await asyncio.wait_for(self._attempt(method, attempt), timeout)
+            except TimeoutError:
+                error = OpenRouterError(0, "timeout", "Provider request timed out")
+                pid, _ = self.registry.resolve(target)
+                self.registry.record_result(pid, error)
+            except OpenRouterError as caught:
+                error = caught
+            retryable = error.kind in ("offline", "network", "timeout", "rate_limit", "server") or (
+                error.kind == "error" and error.status >= 500)
+            # An auth failure may cross a provider boundary only with an explicitly
+            # listed fallback. Content refusals and malformed requests never retry.
+            if index + 1 == len(chain) or not (retryable or (error.kind == "auth" and explicit)):
+                raise error from None
+            source_id = target[1:].partition(":")[0] if target.startswith("@") else "openrouter"
+            next_ref = chain[index + 1]
+            next_id = next_ref[1:].partition(":")[0] if next_ref.startswith("@") else "openrouter"
+            logger.warning("Provider fallback: purpose=%s from=%s to=%s kind=%s attempt=%d",
+                           self.purpose, source_id, next_id, error.kind, index + 1)
+        raise AssertionError("Empty provider chain")
+
+    async def _attempt(self, method, kwargs):
         reference = kwargs["model"]
         try:
             pid, model = self.registry.resolve(reference)
@@ -379,7 +481,7 @@ class ProviderRouter:
             raise OpenRouterError(0, "error", "Unknown provider or invalid model reference") from None
         kwargs = {**kwargs, "model": model}
         if "fallbacks" in kwargs:
-            kwargs["fallbacks"] = [m for m in kwargs["fallbacks"] if not m.startswith("@")] if pid == "openrouter" else []
+            kwargs["fallbacks"] = []
         try:
             result = await getattr(client, method)(**kwargs)
         except OpenRouterError as error:
