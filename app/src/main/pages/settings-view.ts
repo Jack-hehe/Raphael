@@ -28,6 +28,7 @@ import { type MemoryView, memoryHTML } from "../memory-view";
 import { AUTO_MICROPHONE, microphoneChoices } from "../microphone";
 import type { LocalView } from "../local-models";
 import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
+import { type ServicesView, servicesHTML } from "../services";
 import { pricingNote } from "../pricing";
 import { runOutDay } from "../report";
 import { WARN_FROM, spendVisual, spentShare } from "../spend";
@@ -151,6 +152,11 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "agent", label: "settings.avatar", also: "settings.searchAvatar" },
   { pane: "agent", label: "mem.title", also: "settings.searchMemory" },
   { pane: "agent", label: "settings.computerUse" },
+  { pane: "agent", label: "services.title" },
+  { pane: "agent", label: "services.search", words: ["Brave", "Tavily", "Exa", "SearXNG"] },
+  { pane: "agent", label: "services.read", words: ["Jina", "Firecrawl"] },
+  { pane: "agent", label: "services.vision" },
+  { pane: "agent", label: "services.pdf", words: ["PDF"] },
   { pane: "messaging", words: ["Telegram"] },
   { pane: "usage", label: "common.apiKey", words: ["OpenRouter"] },
   { pane: "usage", label: "settings.050" },
@@ -276,6 +282,8 @@ export interface SettingsView {
   confirmingClear: "dictation" | "conversation" | null;
   /** Raphael's memory, in the 拉斐爾 tab, after its settings (none: not drawn). */
   memory?: MemoryView;
+  /** 服務, in the 拉斐爾 tab: who searches, reads pages and PDFs, and looks at images (none: not drawn). */
+  services?: ServicesView;
   /** The languages the core offers (`languages.list`); null while unknown or when it cannot say. */
   languageGroups: LanguageGroup[] | null;
   /** The time the forecasts and the age of the prices are told from. */
@@ -371,6 +379,27 @@ export function modelPickerLook(v: SettingsView, role: ModelRole): ModelPickerLo
     loading: v.catalog === "loading",
     favorites: v.brain?.model_favorites?.[role] ?? [],
     ...(role === "stt" ? { local: localView(v) } : {}),
+    showPrice: false,
+    disabled: v.brain === null,
+  };
+}
+
+/**
+ * What the 看圖片 picker of 服務 is drawn from: the language models, those that read images first,
+ * under 「與回答相同」 (""). Its stars are the answer model's: the two choose among the same models,
+ * and the core keeps favourites for its own roles only.
+ */
+export function visionPickerLook(v: SettingsView): ModelPickerLook {
+  const status = typeof v.services?.status === "object" ? v.services.status : null;
+  return {
+    role: "vision",
+    key: "svc-vision",
+    label: t("services.vision"),
+    current: status?.vision.model ?? v.brain?.vision_model ?? "",
+    catalog: catalogOf(v),
+    loading: v.catalog === "loading",
+    favorites: v.brain?.model_favorites?.answer ?? [],
+    lead: { id: "", name: t("services.sameAsAnswer") },
     showPrice: false,
     disabled: v.brain === null,
   };
@@ -579,7 +608,11 @@ function computerRows(v: SettingsView): string[] {
   );
 }
 
-/** 拉斐爾: Raphael's picture, the key that asks Raphael, the city of the weather, what a background task may spend, then Raphael's memory and the apps he may always operate. The model that answers is with the other models. */
+/**
+ * 拉斐爾: Raphael's picture, the key that asks Raphael, the city of the weather, what a background
+ * task may spend, then the services of his tools (services.ts), his memory and the apps he may
+ * always operate. The model that answers is with the other models.
+ */
 function agentHTML(v: SettingsView): string {
   const cityShown = v.cityDraft ?? agentCity(v);
   // an app from before the question key has none yet
@@ -599,6 +632,7 @@ function agentHTML(v: SettingsView): string {
       ...(v.cityError ? [note(st("err", v.cityError()), ' role="alert"')] : []),
       row(t("settings.workerCostCap"), "", sel(WORKER_COST_CAPS, workerCostCap(v), t("settings.workerCostCap"), ` data-k="worker-cap"${v.brain === null ? " disabled" : ""}`)),
     ]) +
+    (v.services ? servicesHTML(v.services, modelPickerHTML(visionPickerLook(v)), v.brain) : "") +
     (v.memory ? memoryHTML(v.memory) : "") +
     section(t("settings.computerUse"), computerRows(v))
   );

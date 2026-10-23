@@ -9,6 +9,9 @@
 // Tab and pressed with Enter or Space.
 // The speech-to-text picker has two tabs over it, 雲端 (all of this) and 本機 (local-models.ts: the
 // speech models that run on this computer, downloaded only when the user chooses one).
+// The picker of 看圖片 (Settings › 拉斐爾 › 服務, the role `vision`) lists the language models too,
+// those that read images first (`acceptsImages`), and above them all a row of its own (`lead`):
+// 「與回答相同」, the value "", which is the model that answers.
 // Keys: the arrows and Enter in the list, typing searches, Tab goes between the tabs, the search, the
 // star of the highlighted row and the two dropdowns, Left and Right change the tab, Esc closes. The panel is the app's popover (ui.ts), so
 // it closes the way menus do.
@@ -48,14 +51,35 @@ export interface PickerState {
 
 export const DEFAULT_PICKER_STATE: PickerState = { query: "", sort: "price", provider: "" };
 
+/**
+ * What a picker chooses a model for: a role of the core's catalog, or `vision`, the model that looks
+ * at images (the `vision_model` setting), which the catalog has no role for: it is any language
+ * model that reads images.
+ */
+export type PickerRole = ModelRole | "vision";
+
 /** The kind of model each role chooses among. */
-const KIND: Record<ModelRole, "llm" | "stt"> = { cleanup: "llm", answer: "llm", stt: "stt" };
+const KIND: Record<PickerRole, "llm" | "stt"> = { cleanup: "llm", answer: "llm", stt: "stt", vision: "llm" };
 
 /** The models of the catalog that `role` chooses among: those of its kind. */
-export const modelsFor = (catalog: ModelCatalog, role: ModelRole): CatalogModel[] => catalog[KIND[role]];
+export const modelsFor = (catalog: ModelCatalog, role: PickerRole): CatalogModel[] => catalog[KIND[role]];
+
+/**
+ * Whether `model` reads images, as OpenRouter's list says (`input_modalities`). A model of a catalog
+ * that says nothing of what its models read (a core from before it sent it) is taken to: the core
+ * still refuses an image to a model that cannot take it (`vision_unsupported`).
+ */
+export const acceptsImages = (model: CatalogModel): boolean => model.input_modalities?.includes("image") ?? true;
+
+/** Whether `role` can use `model`, and if not why: the core's word for a role of its catalog, ours for `vision`. */
+export function fitFor(model: CatalogModel, role: PickerRole): { usable: boolean; reason: string | null } {
+  if (role === "vision") return acceptsImages(model) ? { usable: true, reason: null } : { usable: false, reason: "no_image_input" };
+  const fit = model.roles[role];
+  return { usable: fit?.usable === true, reason: fit?.reason ?? null };
+}
 
 /** Whether `role` can use `model`. */
-export const usableFor = (model: CatalogModel, role: ModelRole): boolean => model.roles[role]?.usable === true;
+export const usableFor = (model: CatalogModel, role: PickerRole): boolean => fitFor(model, role).usable;
 
 // Names sort as people read them: "GPT-5" before "GPT-10", whatever the case.
 const collator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
@@ -69,7 +93,7 @@ const hasTokenPrice = (m: CatalogModel): boolean => m.input_per_mtok !== null ||
  * and out, which the list's heading says once), a speech model's `每分鐘 $0.0018` or, for one priced
  * by the token, `$2.00 / $12 每百萬 token`. Else 免費, 價格不固定 (a router) or 價格未知.
  */
-export function priceText(model: CatalogModel, role: ModelRole): string {
+export function priceText(model: CatalogModel, role: PickerRole): string {
   if (model.variable_price) return t("picker.varies");
   if (model.free) return t("picker.free");
   if (model.per_minute !== null) return t("pricing.003", { p0: formatPerMinute(model.per_minute) });
@@ -78,7 +102,7 @@ export function priceText(model: CatalogModel, role: ModelRole): string {
 }
 
 /** The price in full words, for a screen reader: 「輸入 $0.10 / 輸出 $0.50 每百萬 token」. */
-export function priceDescription(model: CatalogModel, role: ModelRole): string {
+export function priceDescription(model: CatalogModel, role: PickerRole): string {
   if (KIND[role] === "llm" && !model.variable_price && !model.free && hasTokenPrice(model)) {
     return t("pricing.002", { p0: perMtok(model.input_per_mtok), p1: perMtok(model.output_per_mtok) });
   }
@@ -105,6 +129,7 @@ const REASONS = new Map<string, () => string>([
   ["reasoning_required", () => t("picker.reasonReasoning")],
   ["no_reasoning_setting", () => t("picker.reasonReasoningSetting")],
   ["no_max_tokens", () => t("picker.reasonMaxTokens")],
+  ["no_image_input", () => t("picker.reasonImages")],
 ]);
 
 /** Why a role cannot use a model, in plain words; a reason this app does not know yet still has some. */
@@ -112,10 +137,11 @@ export const reasonText = (reason: string | null | undefined): string =>
   (reason ? REASONS.get(reason)?.() : undefined) ?? t("picker.reasonOther");
 
 /** The heading over the models a role cannot use. */
-const UNUSABLE: Record<ModelRole, () => string> = {
+const UNUSABLE: Record<PickerRole, () => string> = {
   cleanup: () => t("picker.unusableCleanup"),
   answer: () => t("picker.unusableAnswer"),
   stt: () => t("picker.unusableStt"),
+  vision: () => t("picker.unusableVision"),
 };
 
 /** A row of the list: a model, whether the role can use it, and whether the user starred it. */
@@ -123,6 +149,27 @@ export interface PickerRow {
   model: CatalogModel;
   usable: boolean;
   favorite: boolean;
+  /** The picker's own first row (`PickerLead`), which is no model of the catalog. */
+  lead?: boolean;
+}
+
+/**
+ * A choice above every model, which is not one of them: 「與回答相同」 of 看圖片, whose value is "".
+ * It has no maker, price or star, is listed whatever the order and the maker, and leaves the list
+ * only when a search does not match its name.
+ */
+export interface PickerLead {
+  id: string;
+  name: string;
+}
+
+/** The lead as a row of the list: a model with its id and name and nothing else. */
+function leadRow(lead: PickerLead): PickerRow {
+  const model: CatalogModel = {
+    id: lead.id, name: lead.name, provider: "", input_per_mtok: null, output_per_mtok: null, per_minute: null, free: false,
+    variable_price: false, context_length: null, created_at_ms: null, capabilities: {}, roles: {},
+  };
+  return { model, usable: true, favorite: false, lead: true };
 }
 
 /** `favorites` with `id` added (once, at the end) or taken out. */
@@ -180,7 +227,7 @@ const ORDERS: Record<PickerSort, (a: CatalogModel, b: CatalogModel) => number> =
  * The favourites come first, then the other models; in each, those the role can use before those it
  * cannot. A favourite that the catalog lacks is no row.
  */
-export function pickerRows(models: CatalogModel[], role: ModelRole, state: PickerState, favorites: readonly string[] = []): PickerRow[] {
+export function pickerRows(models: CatalogModel[], role: PickerRole, state: PickerState, favorites: readonly string[] = []): PickerRow[] {
   const matches = matcher(state.query);
   const starred = new Set(favorites);
   const rows = models
@@ -252,13 +299,15 @@ export class PickerList {
   active = -1;
 
   constructor(
-    readonly role: ModelRole,
+    readonly role: PickerRole,
     private readonly models: CatalogModel[],
     /** The model chosen now: checked, and highlighted when the list opens. */
     public current: string,
     state: Partial<PickerState> = {},
     /** The ids the user starred, in the order they were added; those the catalog lacks are kept, not listed. */
     public favorites: readonly string[] = [],
+    /** The choice above every model, if the picker has one (`PickerLead`). */
+    private readonly lead: PickerLead | null = null,
   ) {
     this.state = { ...DEFAULT_PICKER_STATE, ...state };
     this.refresh(current);
@@ -315,13 +364,15 @@ export class PickerList {
     return row?.usable ? row.model.id : null;
   }
 
-  /** How many models the list shows. */
+  /** How many models the list shows (the lead is none). */
   modelCount(): number {
-    return this.rows.length;
+    return this.rows.filter((row) => !row.lead).length;
   }
 
   private refresh(keep: string | null): void {
-    this.rows = pickerRows(this.models, this.role, this.state, this.favorites);
+    const models = pickerRows(this.models, this.role, this.state, this.favorites);
+    const lead = this.lead && matcher(this.state.query)(this.lead.name) ? [leadRow(this.lead)] : [];
+    this.rows = [...lead, ...models];
     const kept = keep === null ? -1 : this.rows.findIndex((row) => row.model.id === keep);
     this.active = kept >= 0 ? kept : this.rows.length > 0 ? 0 : -1;
   }
@@ -342,11 +393,12 @@ function starHTML(model: CatalogModel, on: boolean): string {
 function optionHTML(row: PickerRow, index: number, list: PickerList): string {
   const { model } = row;
   const chosen = model.id === list.current;
+  if (row.lead) return leadHTML(model.id, model.name, index, chosen);
   const details = [model.provider];
   if (model.context_length !== null) details.push(t("picker.context", { p0: formatContext(model.context_length) }));
   if (model.capabilities.dictionary_hints) details.push(t("picker.dictionary"));
   if (list.state.sort === "newest" && model.created_at_ms !== null) details.push(addedText(model.created_at_ms));
-  const reason = row.usable ? "" : reasonText(model.roles[list.role]?.reason);
+  const reason = row.usable ? "" : reasonText(fitFor(model, list.role).reason);
   if (reason) details.push(reason);
   const price = priceText(model, list.role);
   // What a screen reader says of the row, in an order that makes sense when heard.
@@ -368,17 +420,32 @@ function optionHTML(row: PickerRow, index: number, list: PickerList): string {
   );
 }
 
+/** The lead's row: its name alone, checked when it is chosen; no price, no maker, and a gap where a star would be. */
+function leadHTML(id: string, name: string, index: number, chosen: boolean): string {
+  const heard = chosen ? `${name}, ${t("picker.current")}` : name;
+  return (
+    `<div class="mp-row" role="presentation">` +
+    `<button type="button" class="mp-opt mp-lead" role="option" id="mp-o-${index}" tabindex="-1" data-id="${esc(id)}" aria-selected="false"` +
+    `${chosen ? " data-current" : ""} aria-label="${esc(heard)}">` +
+    `<span class="ck">${chosen ? CHECK : ""}</span>` +
+    `<span class="mp-main"><span class="mp-line"><span class="mp-name">${esc(name)}</span></span></span></button>` +
+    `<span class="mp-star-gap" aria-hidden="true"></span>` +
+    `</div>`
+  );
+}
+
 const headingHTML = (text: string): string => `<div class="mp-group" aria-hidden="true">${esc(text)}</div>`;
 
 /**
  * The rows of the list. With favourites, 我的最愛 heads the list and 所有模型 the rest; the models
- * the role cannot use are under a heading of their own, which says why.
+ * the role cannot use are under a heading of their own, which says why. A lead is above them all,
+ * under no heading.
  */
 export function listHTML(list: PickerList): string {
   const { rows } = list;
   const starred = rows.findIndex((row) => row.favorite);
-  const others = starred < 0 ? -1 : rows.findIndex((row) => !row.favorite);
-  const unusable = rows.findIndex((row) => !row.usable && !row.favorite);
+  const others = starred < 0 ? -1 : rows.findIndex((row) => !row.favorite && !row.lead);
+  const unusable = rows.findIndex((row) => !row.usable && !row.favorite && !row.lead);
   return rows
     .map((row, index) => {
       let heading = "";
@@ -466,7 +533,7 @@ const shortName = (id: string): string => id.slice(id.lastIndexOf("/") + 1) || i
 
 export interface ModelPickerOptions {
   /** What the model is for. */
-  role: ModelRole;
+  role: PickerRole;
   /** The id of the model chosen now. */
   current: string;
   /** The catalog (`models.catalog`), or null while it is being read (`loading`) or when it cannot be had. */
@@ -494,6 +561,8 @@ export interface ModelPickerOptions {
   onDeleteLocal?: (name: string) => void;
   /** The user starred (`on`) or un-starred `id`. The picker shows it at once; the page saves it and hands the saved list back with `update`. */
   onFavorite?: (id: string, on: boolean) => void;
+  /** A choice above every model (`PickerLead`): 看圖片's 「與回答相同」. `current` may be its id. */
+  lead?: PickerLead;
 }
 
 /** What a picker's button is drawn from: all but what choosing does. */
@@ -512,6 +581,10 @@ export interface ModelPicker {
 
 /** What the button shows: the chosen model (or choice), and its price unless the page shows that. */
 function buttonFace(o: ModelPickerLook): { inner: string; label: string; title: string } {
+  // The lead chosen: its name alone, with no price.
+  if (o.lead && o.current === o.lead.id && !o.local) {
+    return { inner: `<span class="mp-tname">${esc(o.lead.name)}</span>${ico("down")}`, label: `${o.label}: ${o.lead.name}`, title: o.lead.name };
+  }
   const local = o.local ? faceTitle(o.local) : null;
   const model = local ? undefined : (o.catalog ? modelsFor(o.catalog, o.role) : []).find((m) => m.id === o.current);
   const name = local ?? model?.name ?? shortName(o.current);
@@ -549,7 +622,7 @@ export function mountModelPicker(container: HTMLElement, options: ModelPickerOpt
 const typing = (e: KeyboardEvent): boolean => e.key.length === 1 && e.key !== " " && !e.ctrlKey && !e.metaKey && !e.altKey;
 
 /** The picker whose list is open: a page drawn again hands that list to the new button of the role. */
-let opened: { picker: MountedPicker; role: ModelRole; button: HTMLElement } | null = null;
+let opened: { picker: MountedPicker; role: PickerRole; button: HTMLElement } | null = null;
 
 interface Dropdown {
   which: "sort" | "provider";
@@ -628,7 +701,7 @@ class MountedPicker implements ModelPicker {
   }
 
   private newList(state: Partial<PickerState>): PickerList {
-    return new PickerList(this.o.role, this.models(), this.o.current, state, this.o.favorites ?? []);
+    return new PickerList(this.o.role, this.models(), this.o.current, state, this.o.favorites ?? [], this.o.lead ?? null);
   }
 
   private paintButton(): void {
@@ -965,7 +1038,7 @@ class MountedPicker implements ModelPicker {
       if (e.key === "Enter") {
         e.preventDefault();
         const id = this.list.chosen();
-        if (id) this.choose(id);
+        if (id !== null) this.choose(id);
       } else if (["ArrowDown", "ArrowUp", "PageDown", "PageUp"].includes(e.key)) {
         e.preventDefault();
         if (this.list.move(e.key) && this.panel) {
@@ -1111,7 +1184,8 @@ class MountedPicker implements ModelPicker {
   }
 
   private choose(id: string): void {
-    const changed = id !== "" && id !== this.o.current;
+    // "" is no model, but it is the lead's value when the picker has one.
+    const changed = (id !== "" || this.o.lead?.id === "") && id !== this.o.current;
     this.close();
     if (!changed) return;
     this.o = { ...this.o, current: id };
