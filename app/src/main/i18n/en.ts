@@ -533,6 +533,7 @@ export const en = {
   "agent.stepsList": "What Raphael did",
   "agent.working": "Working",
   "agent.queued": "Queued",
+  "agent.taskWaiting": "Waiting for you",
   "agent.thinking": "Thinking…",
   "agent.stop": "Stop",
   "agent.stopping": "Stopping…",

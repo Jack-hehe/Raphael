@@ -532,6 +532,7 @@ export const zhTW = {
   "agent.stepsList": "拉斐爾做的事",
   "agent.working": "進行中",
   "agent.queued": "排隊中",
+  "agent.taskWaiting": "等你處理",
   "agent.thinking": "思考中…",
   "agent.stop": "停止",
   "agent.stopping": "正在停止…",

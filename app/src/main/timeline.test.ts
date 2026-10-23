@@ -251,6 +251,16 @@ describe("what a turn did", () => {
     expect(workMs(stopped, T0 + 99_000)).toBe(5_000); // an ended task's time does not grow
   });
 
+  test("a task that waits for the owner's yes says so, with a clock and 停止, and does not tick", () => {
+    const html = stepsHTML(turn(3, { task: running({ state: "waiting" }), steps: [step()] }), { ...emptyTimelineState(), nowMs: T0 + 42_000 });
+    expect(html).toContain('<div class="steps task" data-open="false">');
+    expect(visible(html)).toMatch(/^等你處理 /);
+    expect(html).toContain('<path d="' + "M"); // an icon, not the turning ring
+    expect(html).not.toContain('class="spin"');
+    expect(html).not.toContain("data-since");
+    expect(html).toContain('<button type="button" class="btn sm stop" data-act="stop" data-task="41">停止</button>');
+  });
+
   test("a step that arrives is the only one that comes in moving", () => {
     const state = emptyTimelineState();
     const before = turn(3, { task: running(), steps: [step()] });

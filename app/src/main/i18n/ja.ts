@@ -533,6 +533,7 @@ export const ja = {
   "agent.stepsList": "ラファエルの操作",
   "agent.working": "実行中",
   "agent.queued": "順番待ち",
+  "agent.taskWaiting": "対応待ち",
   "agent.thinking": "考え中…",
   "agent.stop": "停止",
   "agent.stopping": "停止しています…",
