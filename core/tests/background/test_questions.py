@@ -117,6 +117,19 @@ async def test_the_member_of_a_task_is_carried_by_its_question(make_rig, plugins
     assert rig.service.waiting_members() == {3}
 
 
+async def test_a_routines_run_pauses_too_and_is_never_asked_at_the_overlay(make_rig, plugins, calls, clock):
+    rig = make_rig(clock=clock)
+    await plugins.connect(note="T2")
+    note_then_report(rig)
+    task_id = rig.service.submit(
+        session_id="routine:1", text=TASK_TEXT, language="en", model="fake/model", routine_id=1
+    )
+    asked = await paused(rig, task_id)
+    assert asked["state"] == "waiting" and calls == []
+    # The overlay is only told, once, that something waits (no buttons there): no report is said.
+    assert set(asked["notice"]) == {"prefix", "text"} and rig.reports() == []
+
+
 # --- the answers ------------------------------------------------------------------------------------
 
 
