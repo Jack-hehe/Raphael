@@ -37,12 +37,12 @@ ui_language, target_app}`. The router (Jev, and the language model when Jev fail
   like a command at that tier, one to a turn, made when the yes comes. Every call of a tool goes
   through the one gate (`gate`), the worker's too. A tool that is off is never offered, and a
   model that takes no tools (`plugins.ToolSupport`) leaves the plugins out of the request;
-- before a command for this computer, or a call of a plugin's tool that its server does not say
-  only reads, the owner's safety rules are read (`safety`, through the gate's `screen`, one paid
-  call to Jev when there are rules): a rule that forbids it is a 否 reply that names the rule, with
-  nothing done; one that asks makes it a question for a yes or a no (that names the rule) even at
-  T1; one that allows it changes nothing that is built in (a T2 tool still asks). A judge that
-  fails counts as one that asks;
+- before a call of a plugin's tool that its server does not say only reads, the owner's safety
+  rules are read (`safety`, through the gate's `screen`, one paid call to Jev when there are
+  rules): a rule that forbids it is a 否 reply that names the rule, with nothing done; one that asks
+  makes it a question for a yes or a no (that names the rule) even at T1; one that allows it
+  changes nothing that is built in (a T2 tool still asks). A judge that fails counts as one that
+  asks. The commands for this computer are not judged (see `safety`);
 - a task done by operating an app on the screen (`operate`) is a run on the owner's desktop
   (`raphael_core.computer`), and only for a request made at this computer, spoken or typed: the
   model looks at the app's window and acts one step at a time through the shell, asking the owner
@@ -1337,19 +1337,10 @@ class AgentService:
                 )
             args, question = {"text": copy[0]}, copy[1]
         action = Action(command.name, args)
-        # The owner's safety rules, before anything is done to this computer.
-        screening = await self._gate.screen(
-            Proposed(command.name, command.guidance, summarize(args)),
-            language=language,
-            ledger=ledger,
-        )
-        if screening.verdict == DENY:
-            ask.steps.append(
-                self._step("command", command.name, None, "blocked", time.perf_counter(), "forbidden")
-            )
-            return self._finish(ask, "command", "negative", forbidden(language, screening), ledger)
-        if needs_yes(self._gate.needs_confirmation(command.name), screening):
-            return self._ask_to_confirm(ask, action, question, ledger, screening)
+        # Not judged by the owner's safety rules (`safety`): a command is T1, local and easily
+        # undone, and must stay instant and work with no key.
+        if self._gate.needs_confirmation(command.name):
+            return self._ask_to_confirm(ask, action, question, ledger)
         began = time.perf_counter()
         try:
             self._gate.check(action, None)
@@ -1475,11 +1466,8 @@ class AgentService:
 
     # --- confirmations --------------------------------------------------------------------------
 
-    def _ask_to_confirm(
-        self, ask: _Ask, action: Action, question: str, ledger: Ledger, screening: Screening = PASS
-    ) -> dict:
-        language = ask.language
-        text = asked_with(language, screening, phrase(language, question or "confirm_action"))
+    def _ask_to_confirm(self, ask: _Ask, action: Action, question: str, ledger: Ledger) -> dict:
+        text = phrase(ask.language, question or "confirm_action")
         return self._open_question(ask, action, "command", text, ledger)
 
     def _open_question(

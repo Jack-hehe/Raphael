@@ -2051,11 +2051,7 @@ async def test_without_a_key_the_assistant_still_runs_commands_and_says_why_it_c
     actions = RecordingActions()
     app = make_app(fake_llm=False, agent_actions=actions)
     assert await app.call("secrets.status") == {"has_key": False}
-    # With no key the safety rules cannot be checked, so a command asks first, then runs on a yes.
-    asked = await app.call("agent.ask", ask_params("靜音"))
-    assert asked["status"] == "confirm" and actions.calls == []
-    assert asked["confirm"]["text"].startswith("無法比對安全規則。")
-    done = await app.call("agent.confirm", {"id": asked["confirm"]["id"], "approved": True})
+    done = await app.call("agent.ask", ask_params("靜音"))
     assert (done["prefix"], done["text"]) == ("了", "")
     assert actions.calls == [("press_key", "volume_mute", 1)]
     refused = await app.call("agent.ask", ask_params("what is the weather", "en", "a2"))

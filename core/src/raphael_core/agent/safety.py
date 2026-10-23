@@ -14,10 +14,19 @@ something) three are put there in the language of the moment, each `ask`: paying
 deleting files, and sending a mail or a message to someone else. They can be changed and deleted
 like any other; once seeded, they are never put back.
 
-**When the rules are read.** Before every action that changes something (`ToolGate.screen`): a
-plugin's tool that its server does not say only reads, one of Raphael's commands for this computer,
-each step of a run on the owner's desktop, and whatever a member or a routine does through the same
-paths. A tool that only reads is never judged. Rules apply to Raphael and to every member alike.
+**When the rules are read.** Before an action that changes something beyond this computer's own
+easily undone state (`ToolGate.screen`): a plugin's tool that its server does not say only reads
+(in the fast tier and in the background worker), each step of a run on the owner's desktop
+(`computer_act`), and, as they come, the creation of a member and whatever a member or a routine
+does through the same paths. A tool that only reads is never judged. Rules apply to Raphael and to
+every member alike.
+
+**What is not judged.** Raphael's own commands for this computer (open a page or an app, the
+volume, the media keys, the lock, copy to the clipboard) are T1: local, done at the owner's word at
+this computer, and undone as easily. Judging them would put a paid call and about half a second in
+front of every 「音量調大」, which the owner cares about most, and would stop them from working
+without a key, which they always have. A command that ever needs more is given a higher tier, which
+asks for a yes anyway.
 
 **The judge.** One call to Jev, OpenRouter's decisions endpoint (`routing.JEV_MODEL`): the action
 (its tool, the tool's description and a short summary of its arguments) is the state, and each rule

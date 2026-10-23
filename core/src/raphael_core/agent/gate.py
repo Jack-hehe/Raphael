@@ -16,8 +16,9 @@ is unknown and cannot run; and it holds the door to the plugins' tools (`plugins
 - `record_builtin` writes the audit of one of Raphael's own lookups (the weather, a web search,
   the time, the memory) for a task;
 - `screen` asks the owner's safety rules (`safety`) about an action that changes something, before
-  it is made: a plugin's tool that its server does not say only reads (`reads_only`), a command for
-  this computer, a step on the desktop. Its verdict adds to the tiers and never takes from them:
+  it is made: a plugin's tool that its server does not say only reads (`reads_only`), a step on the
+  desktop (never a command for this computer: see `safety`). Its verdict adds to the tiers and never
+  takes from them:
   a rule may refuse an action or have it asked about, and a rule that allows an action waives only
   the questions of the rules (`safety.needs_yes`). Without rules (or without a guard, as in most
   tests) every action passes it, with no call.

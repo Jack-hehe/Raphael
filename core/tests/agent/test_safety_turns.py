@@ -1,5 +1,5 @@
-"""Tests for the owner's safety rules in the turns of the fast tier: Raphael's commands for this
-computer and the plugins' tools are judged before they are done; what only reads is not. The judge
+"""Tests for the owner's safety rules in the turns of the fast tier: the plugins' tools are judged
+before they are done; what only reads is not, nor are Raphael's commands for this computer. The judge
 (Jev) and the model are fakes; the plugins are real ones that live in the test.
 """
 
@@ -34,45 +34,15 @@ def judged(*matches, among=(1,)):
 # --- the commands ----------------------------------------------------------------------------------
 
 
-async def test_a_command_a_rule_forbids_is_not_done_and_raphael_says_which_rule(
-    guarded, rules, client, actions
-):
-    rules.create("調整音量", DENY)
-    client.decisions += [decision("command", "volume_mute"), judged(1)]
+@pytest.mark.parametrize("verdict", [DENY, ASK, ALLOW])
+async def test_a_command_for_this_computer_is_never_judged(guarded, rules, client, actions, verdict):
+    # T1, local and easily undone: no paid call and no wait in front of 「靜音」, whatever the rules say.
+    rules.create("調整音量", verdict)
+    client.decisions.append(decision("command", "volume_mute"))
     reply = await guarded.ask("靜音")
-    assert reply["status"] == "done" and reply["prefix"] == "否"
-    assert reply["text"] == "安全規則「調整音量」不准此操作。未執行。"
-    assert actions.calls == []
-    judge = client.decide_calls[1]
-    assert judge["state"]["action"]["tool"] == "volume_mute"
-    turn = (await guarded.call("agent.history.list"))["turns"][0]
-    assert [(s["tool"], s["outcome"], s["reason"]) for s in turn["steps"]] == [
-        ("volume_mute", "blocked", "forbidden")
-    ]
-
-
-async def test_a_command_a_rule_asks_about_waits_for_the_yes(guarded, rules, client, actions):
-    rules.create("調整音量", ASK)
-    client.decisions += [decision("command", "volume_mute"), judged(1)]
-    asked = await guarded.ask("靜音")
-    assert asked["status"] == "confirm" and actions.calls == []
-    assert asked["confirm"]["text"] == "此操作符合安全規則「調整音量」。是否執行此操作？"
-    done = await guarded.call("agent.confirm", {"id": asked["confirm"]["id"], "approved": True})
-    assert done["prefix"] == "了" and actions.calls == [("press_key", "volume_mute", 1)]
-
-
-async def test_a_command_a_rule_allows_runs_at_once(guarded, rules, client, actions):
-    rules.create("調整音量", ALLOW)
-    client.decisions += [decision("command", "volume_mute"), judged(1)]
-    assert (await guarded.ask("靜音"))["status"] == "done"
+    assert (reply["status"], reply["prefix"]) == ("done", "了")
     assert actions.calls == [("press_key", "volume_mute", 1)]
-
-
-async def test_a_command_no_rule_matches_runs_as_ever(guarded, rules, client, actions):
-    rules.create("付款結帳", ASK)
-    client.decisions += [decision("command", "volume_mute"), judged()]
-    assert (await guarded.ask("靜音"))["prefix"] == "了"
-    assert actions.calls == [("press_key", "volume_mute", 1)]
+    assert len(client.decide_calls) == 1  # the route only
 
 
 # --- the plugins' tools ----------------------------------------------------------------------------
