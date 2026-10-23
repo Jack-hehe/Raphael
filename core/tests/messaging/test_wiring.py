@@ -63,7 +63,7 @@ async def test_the_files_of_a_message_go_to_the_assistant_as_the_app_sends_them(
     photo = checked("photo.jpg", "image/jpeg", b"\xff\xd8\xff\xe0" + b"\x00" * 16)
     pdf = checked("a.pdf", "application/pdf", b"%PDF-1.7\n")
     text = await app._ask_from_messaging("telegram:42", "", "en", "telegram", attachments=[photo, pdf])
-    assert text == "《答》a cat"
+    assert text == "《答。a cat》"
     [(method, params)] = sent
     assert method == "agent.ask"
     assert params["text"] == "" and params["source"] == "telegram"
@@ -94,7 +94,7 @@ async def test_the_report_of_a_task_from_telegram_is_sent_to_that_chat(app, monk
     store.finish(task_id, "done", prefix="《告》", text="finished", detail="more", reason=None)
     app._worker_notice("worker.report", {"task_id": task_id})
     await asyncio.sleep(0)
-    assert sent == [("telegram:42", "《告》finished\n\nmore")]
+    assert sent == [("telegram:42", "《告。finished》\n\nmore")]
 
 
 async def test_the_report_of_a_spoken_task_is_not_sent(app, monkeypatch):

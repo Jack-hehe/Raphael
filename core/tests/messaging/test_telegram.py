@@ -162,9 +162,13 @@ def test_emoji_count_as_two_units():
 
 
 def test_compose_adds_detail_only_when_it_says_more():
-    assert compose("《答》", "好", None) == "《答》好"
-    assert compose("《答》", "好", "好") == "《答》好"
-    assert compose("《答》", "好", "longer") == "《答》好\n\nlonger"
+    # The same line as the overlay and the app: 《prefix。text》, the stop of the prefix's script.
+    assert compose("答", "臺中今日有短暫陣雨。", None) == "《答。臺中今日有短暫陣雨。》"
+    assert compose("《答》", "好", "好") == "《答。好》"
+    assert compose("答", "好", "longer") == "《答。好》\n\nlonger"
+    assert compose("Answer", "Light rain in Taichung.", None) == "《Answer. Light rain in Taichung.》"
+    # A member speaks plainly: no prefix, no brackets.
+    assert compose("", "好的", None) == "好的"
 
 
 # --- pairing ---
