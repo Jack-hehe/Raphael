@@ -724,7 +724,7 @@ export function createSettings(app: AppContext): SettingsPage {
     const request = ++catalogLoads;
     let next: ModelCatalog | "failed";
     try {
-      next = await api.modelsCatalog();
+      [next] = await Promise.all([api.modelsCatalog(), providers.load()]);
     } catch {
       // keep a catalog read earlier; else say that the prices cannot be had
       next = typeof catalog === "object" ? catalog : "failed";
