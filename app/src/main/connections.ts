@@ -24,7 +24,7 @@ import { getLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 import { SERVICE_ICONS, type ServiceIconId, brandStyle, hasLogo, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import type { AuditEntry, ConnectionGroup, ConnectionTool, MainEvent, NewConnection, StoreService, Words } from "./types";
-import { DISCONNECT_CONFIRM_MS, type Choice, btn, copyText, esc, fieldHTML, ico, iconButton, leave, row, st, tabs, tg, toaster } from "./ui";
+import { DISCONNECT_CONFIRM_MS, type Choice, actionRow, btn, copyText, esc, fieldHTML, ico, iconButton, leave, row, st, tabs, tg, toaster } from "./ui";
 
 /** `t` for a key that is chosen at run time (its placeholders, if any, are none). */
 const tr = t as unknown as (key: MessageKey) => string;
@@ -381,21 +381,20 @@ function summaryHTML(g: ConnectionGroup, v: ConnectionsView): string {
         .join("")}</div>`
     : `<p class="cs-count conn-empty">${esc(t("conn.noTools"))}</p>`;
   const example = examplePrompt(entry);
-  const tryIt = example ? `<div class="cs-try">${btn(esc(t("conn.tryIt")), "pri", ` data-conn="try"${id} data-k="cs-try"`)}</div>` : "";
-  const acts =
-    `<div class="cs-acts">` +
-    (g.auth !== "none" && !needsLogin(g)
+  const acts = actionRow({
+    cls: "cs-acts", sticky: true,
+    primary: example ? { label: esc(t("conn.tryIt")), attrs: ` data-conn="try"${id} data-k="cs-try"` } : undefined,
+    destructive: {
+      label: esc(v.confirmingDisconnect === g.id ? t("conn.disconnectConfirm") : t("conn.disconnect")),
+      kind: "sm", attrs: ` data-conn="disconnect"${id} data-k="cs-disconnect"${busy ? " disabled" : ""}`,
+    },
+    secondary: (g.auth !== "none" && !needsLogin(g)
       ? btn(esc(loggingIn ? t("conn.loggingIn") : t("conn.relogin")), "sm", ` data-conn="relogin"${id} data-k="cs-relogin"${busy || v.login ? " disabled" : ""}`)
       : "") +
     btn(esc(busy ? t("conn.refreshing") : t("conn.refresh")), "sm", ` data-conn="refresh"${id} data-k="cs-refresh"${busy ? " disabled" : ""}`) +
-    btn(
-      esc(v.confirmingDisconnect === g.id ? t("conn.disconnectConfirm") : t("conn.disconnect")),
-      v.confirmingDisconnect === g.id ? "sm danger" : "sm",
-      ` data-conn="disconnect"${id} data-k="cs-disconnect"${busy ? " disabled" : ""}`,
-    ) +
-    (g.auth === "device" && g.catalog_id && GRANTS_URL[g.catalog_id] ? btn(esc(t("conn.revokeOpen", { p0: g.name })), "sm", ` data-conn="open-grants"${id}`) : "") +
-    `</div>`;
-  return head + about + meta + alert + (loggingIn ? deviceHTML(v) : "") + tools + tryIt + acts + auditHTML(v, g.name);
+    (g.auth === "device" && g.catalog_id && GRANTS_URL[g.catalog_id] ? btn(esc(t("conn.revokeOpen", { p0: g.name })), "sm", ` data-conn="open-grants"${id}`) : ""),
+  });
+  return head + about + meta + alert + (loggingIn ? deviceHTML(v) : "") + tools + auditHTML(v, g.name) + acts;
 }
 
 /** The dialog's second view: the tools of one kind, each with its switch, and one switch for them all. */
@@ -500,7 +499,7 @@ function pairsHTML(f: ConnectionForm): string {
     .map(
       (p, i) =>
         `<div class="secret-row"><span class="nm">${esc(p.name)}</span><span class="where">${ico("lock")}${esc(t("conn.form.willStore"))}</span>` +
-        btn(esc(t("conn.remove")), "sm", ` data-conn="pair-drop" data-i="${i}" aria-label="${esc(t("conn.form.pairDrop", { p0: p.name }))}"`) +
+        btn(esc(t("conn.remove")), "sm danger", ` data-conn="pair-drop" data-i="${i}" aria-label="${esc(t("conn.form.pairDrop", { p0: p.name }))}"`) +
         `</div>`,
     )
     .join("");
@@ -532,10 +531,11 @@ function formHTML(f: ConnectionForm): string {
     pairsHTML(f) +
     `<div class="trust">${ico("shield")}<span><b>${esc(t("conn.form.trustTitle"))}</b> ${esc(t("conn.form.trustBody"))}</span></div>` +
     error +
-    `<div class="add-acts">` +
-    btn(esc(off ? t("conn.form.connecting") : t("conn.form.connect")), "pri", ` data-conn="connect"${off ? " disabled" : ""}`) +
-    btn(esc(t("conn.form.cancel")), "", ` data-conn="form-cancel"${off ? " disabled" : ""}`) +
-    `</div></div>`
+    actionRow({
+      cls: "add-acts", sticky: true,
+      secondary: btn(esc(t("conn.form.cancel")), "", ` data-conn="form-cancel"${off ? " disabled" : ""}`),
+      primary: { label: esc(off ? t("conn.form.connecting") : t("conn.form.connect")), attrs: ` data-conn="connect"${off ? " disabled" : ""}` },
+    }) + `</div>`
   );
 }
 
@@ -550,7 +550,7 @@ function deviceHTML(v: ConnectionsView): string {
   return (
     `<div class="cs-device" role="group" aria-label="${esc(name)}"><p class="cs-device-hint">${esc(t("conn.device.hint"))}</p>` +
     `<div class="cs-code" aria-label="${esc(d.user_code)}">${caps}</div>` +
-    `<div class="cs-device-acts">${btn(esc(t("conn.device.open", { p0: name })), "pri", ' data-conn="device-open"')}${btn(esc(t("conn.cancel")), "", ' data-conn="cancel-login"')}</div></div>`
+    actionRow({ cls: "cs-device-acts", secondary: btn(esc(t("conn.cancel")), "", ' data-conn="cancel-login"'), primary: { label: esc(t("conn.device.open", { p0: name })), attrs: ' data-conn="device-open"' } }) + `</div>`
   );
 }
 

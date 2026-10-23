@@ -20,7 +20,7 @@ import { core } from "./api";
 import { describeError } from "./format";
 import { t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
-import { DISCONNECT_CONFIRM_MS, btn, closeMenu, esc, iconButton, note, openPopover, row, st, toaster } from "./ui";
+import { DISCONNECT_CONFIRM_MS, actionRow, btn, closeMenu, esc, iconButton, note, openPopover, row, st, toaster } from "./ui";
 import type { Undoable } from "./undo";
 
 /** A note as `memory.list` gives it. */
@@ -103,7 +103,7 @@ function editorHTML(v: MemoryView, item: MemoryItem): string {
     `<input id="${memoryFieldId("mem-title", v.space)}" class="mem-title" type="text" maxlength="${MEMORY_DESCRIPTION_MAX}" aria-label="${esc(t("mem.descLabel", { p0: item.description }))}" value="${esc(e.descDraft)}"${off}>` +
     `<textarea id="${memoryFieldId("mem-body", v.space)}" class="mem-body" rows="5" maxlength="${MEMORY_BODY_MAX}" aria-label="${esc(t("mem.body", { p0: item.description }))}"${off}>${esc(e.draft)}</textarea>` +
     (e.error ? note(st("err", esc(e.error)), ' role="alert"') : "") +
-    `<div class="mem-edit-actions">${btn(esc(t("common.cancel")), "sm", ` data-mem="cancel"${off}`)}${btn(esc(t("mem.save")), "sm pri", ` data-mem="save"${off}`)}</div>` +
+    actionRow({ cls: "mem-edit-actions", sticky: true, secondary: btn(esc(t("common.cancel")), "sm", ` data-mem="cancel"${off}`), primary: { label: esc(t("mem.save")), kind: "sm", attrs: ` data-mem="save"${off}` } }) +
     `</div>`
   );
 }
@@ -151,12 +151,12 @@ export function memoryHTML(v: MemoryView): string {
     ? [row(
         esc(t("mem.summary")),
         "",
-        btn(esc(v.confirmingSummary ? t("mem.summaryConfirm") : t("mem.summaryClear")), v.confirmingSummary ? "sm danger" : "sm", ` data-mem="summary"${off}`),
+        actionRow({ destructive: { label: esc(v.confirmingSummary ? t("mem.summaryConfirm") : t("mem.summaryClear")), kind: "sm", attrs: ` data-mem="summary"${off}` } }),
         { cls: "mem-sub mem-summary" },
       )]
     : [];
   const clear = notes.length
-    ? `<div class="mem-foot">${btn(esc(v.confirmingClear ? t("mem.clearConfirm") : t("mem.clearAll")), v.confirmingClear ? "sm danger" : "sm", ` data-mem="clear"${off}`)}</div>`
+    ? actionRow({ cls: "mem-foot", destructive: { label: esc(v.confirmingClear ? t("mem.clearConfirm") : t("mem.clearAll")), kind: "sm", attrs: ` data-mem="clear"${off}` } })
     : "";
   return group([head, ...itemRows(v, list), ...summary], clear);
 }

@@ -80,8 +80,8 @@ describe("the memory's rows", () => {
 
   test("全部清除 and the summary's 清除 ask for a second press", () => {
     const html = memoryHTML(view({ expanded: true, confirmingClear: true, confirmingSummary: true }));
-    expect(html).toContain('class="btn sm danger" data-mem="clear"');
-    expect(html).toContain('class="btn sm danger" data-mem="summary"');
+    expect(html).toContain('class="btn danger sm" data-mem="clear"');
+    expect(html).toContain('class="btn danger sm" data-mem="summary"');
     expect(visible(html)).toContain("確定全部清除？");
     expect(visible(html)).toContain("確定清除？");
   });

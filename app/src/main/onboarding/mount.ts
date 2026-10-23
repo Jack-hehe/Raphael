@@ -23,7 +23,7 @@ import { UI_LANGUAGES } from "../pages/settings-view";
 import { Stage } from "../stage";
 import { keyEntryRow, micRow as micRowShared } from "../setup-rows";
 import type { AppContext, AudioDevices, MainEvent, MicAccess, StoreService } from "../types";
-import { btn, closeMenu, esc, group, menuIsOpenFor, note, openMenu, openMenuOnArrow, row, sel, setMeter, st, toaster } from "../ui";
+import { actionRow, btn, closeMenu, esc, group, menuIsOpenFor, note, openMenu, openMenuOnArrow, row, sel, setMeter, st, toaster } from "../ui";
 import { AUTO_MICROPHONE, automaticMicrophoneLabel, microphoneChoices } from "../microphone";
 import type { AbilityId, LessonId } from "./abilities";
 import { heardAfter, limitAction, lookUp, modelPercent } from "./helpers";
@@ -303,15 +303,12 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
     const disabled = !canAdvance(flow) || finishing ? " disabled" : "";
     if (flow.step === "done") {
       if (noKey()) {
-        return btn(esc(t("onboarding.setKey")), "pri", ` data-ob="finish-key"${finishing ? " disabled" : ""}`) + btn(esc(t(mode === "rerun" ? "onboarding.finishRerun" : "onboarding.finish")), "", ` data-ob="next"${finishing ? " disabled" : ""}`);
+        return actionRow({ cls: "ob-actions", secondary: btn(esc(t(mode === "rerun" ? "onboarding.finishRerun" : "onboarding.finish")), "", ` data-ob="next"${finishing ? " disabled" : ""}`), primary: { label: esc(t("onboarding.setKey")), attrs: ` data-ob="finish-key"${finishing ? " disabled" : ""}` } });
       }
-      return btn(esc(t(mode === "rerun" ? "onboarding.finishRerun" : "onboarding.finish")), "pri", ` data-ob="next"${finishing ? " disabled" : ""}`);
+      return actionRow({ cls: "ob-actions", primary: { label: esc(t(mode === "rerun" ? "onboarding.finishRerun" : "onboarding.finish")), attrs: ` data-ob="next"${finishing ? " disabled" : ""}` } });
     }
-    return btn(esc(t(flow.step === "welcome" ? "onboarding.start" : "onboarding.next")), "pri", ` data-ob="next"${disabled}`);
+    return actionRow({ cls: "ob-actions", primary: { label: esc(t(flow.step === "welcome" ? "onboarding.start" : "onboarding.next")), attrs: ` data-ob="next"${disabled}` } });
   }
-
-  /** The end without a key has a second button beside the main one: they share the row. */
-  const twoButtons = (): boolean => flow.step === "done" && noKey();
 
   function paintTop(): void {
     const top = root.querySelector<HTMLElement>(".ob-top");
@@ -325,7 +322,6 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
     const foot = root.querySelector<HTMLElement>(".ob-foot");
     if (!foot) return;
     const focus = focusSelector(foot);
-    foot.classList.toggle("two", twoButtons());
     foot.innerHTML = footHTML();
     if (focus) foot.querySelector<HTMLElement>(focus)?.focus({ preventScroll: true });
   }
@@ -341,7 +337,7 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
     root.innerHTML =
       `<div class="ob-top${quiet ? " quiet" : ""}">${topHTMLNow()}</div>` +
       `<div class="ob-body"><div class="ob-col">${bodyHTML()}</div></div>` +
-      `<div class="ob-foot${twoButtons() ? " two" : ""}">${footHTML()}</div>`;
+      `<div class="ob-foot">${footHTML()}</div>`;
     enterScreen();
   }
 

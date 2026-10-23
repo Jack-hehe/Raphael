@@ -14,7 +14,7 @@ import { core } from "./api";
 import { describeError } from "./format";
 import { getLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
-import { type Choice, btn, esc, iconButton, note, sel, st } from "./ui";
+import { type Choice, actionRow, btn, esc, iconButton, note, sel, st } from "./ui";
 import type { Undoable } from "./undo";
 
 export type Verdict = "ask" | "allow" | "deny";
@@ -105,7 +105,7 @@ function editorRow(e: RuleEditor, rule: SafetyRule): string {
     `<label class="field rules-field"${e.error ? " data-invalid" : ""}><input id="rule-edit" type="text" maxlength="${RULE_MAX}" value="${esc(e.action)}" ` +
     `aria-label="${esc(t("rules.editLabel", { p0: rule.action }))}" autocomplete="off" spellcheck="false"${e.error ? ' aria-invalid="true"' : ""}${off}></label>` +
     sel(verdictChoices(), e.verdict, t("rules.verdict"), ` data-k="rule-edit-verdict"${off}`) +
-    `<span class="rules-acts">${btn(esc(t("common.cancel")), "sm", ` data-rule="cancel"${off}`)}${btn(esc(t("rules.save")), "sm pri", ` data-rule="save"${off}`)}</span>` +
+    actionRow({ cls: "rules-acts", secondary: btn(esc(t("common.cancel")), "sm", ` data-rule="cancel"${off}`), primary: { label: esc(t("rules.save")), kind: "sm", attrs: ` data-rule="save"${off}` } }) +
     `</div>` +
     (e.error ? note(st("err", errorText(e.error)), ' role="alert"') : "")
   );
@@ -139,7 +139,7 @@ export function rulesHTML(v: RulesView): string {
     `<label class="field rules-field"${d.error ? " data-invalid" : ""}><input id="rule-new" type="text" maxlength="${RULE_MAX}" value="${esc(d.action)}" ` +
     `placeholder="${esc(t("rules.placeholder"))}" aria-label="${esc(t("rules.placeholder"))}" autocomplete="off" spellcheck="false"${d.error ? ' aria-invalid="true"' : ""}${off}></label>` +
     sel(verdictChoices(), d.verdict, t("rules.verdict"), ` data-k="rule-new-verdict"${off}`) +
-    btn(esc(t("rules.add")), "", ` data-rule="add"${off}`) +
+    actionRow({ primary: { label: esc(t("rules.add")), attrs: ` data-rule="add"${off}` } }) +
     `</div>` +
     (d.error ? note(st("err", errorText(d.error)), ' role="alert"') : "");
   const rules = v.status.filter((r) => !v.hidden.includes(r.id));

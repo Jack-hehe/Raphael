@@ -220,8 +220,13 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .btn.icon.pri:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--on-accent); }
 /* The small one on a row: copy, delete, close, previous month. */
 .btn.icon.row { width: var(--h-ctl-sm); min-height: var(--h-ctl-sm); padding: 0; }
-/* A button whose next press deletes something: its second, asking press. */
+/* Destructive actions stay distinct before and during confirmation. */
 .btn.danger { color: var(--err); border-color: var(--err); }
+/* Form actions share their visual and keyboard order, including narrow, wrapped rows. */
+.action-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-2); min-width: 0; }
+.action-destructive { display: flex; margin-inline-end: auto; }
+.action-row.is-sticky { position: sticky; bottom: 0; z-index: 2; padding-block: var(--sp-3); border-top: 1px solid var(--line); background: var(--panel); }
+.lm-confirm-actions { flex: 1 1 100%; }
 .keys { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--text-3); font-size: var(--fs-xs); }
 kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 24px; padding: 0 8px; border-radius: 5px; background: var(--key); border: 1px solid var(--key-edge); border-bottom-width: 2px; font: 600 12px/1 var(--ui); color: var(--text); }
 .rec-hint { color: var(--accent-text); font-size: var(--fs-xs); }
@@ -329,7 +334,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .addword { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-4); padding: var(--sp-3); }
 .addword .field:first-child { flex: 1.2; min-width: 180px; }
 .addword .field { flex: 1; min-width: 160px; }
-.addword-actions { display: flex; gap: var(--sp-2); margin-left: auto; }
+.addword-actions { margin-left: auto; }
 .head-actions { display: flex; gap: var(--sp-2); }
 .importbox { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin-top: var(--sp-4); padding: var(--sp-3); }
 .importmsg { flex: 1; min-width: 180px; font-size: var(--fs-sm); }
@@ -504,10 +509,9 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .ob-main { margin-top: var(--sp-5); }
 .ob-col .stage { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: var(--sp-2); min-height: 0; margin: 0 0 var(--sp-3); padding: 0; border-bottom: 0; }
 .ob-col .stage .subs { padding: 0; text-align: center; }
-.ob-foot { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-5) var(--sp-5); }
-.ob-foot .btn { width: min(560px, 100%); min-height: 40px; }
-.ob-foot.two { flex-direction: row; justify-content: center; }
-.ob-foot.two .btn { width: min(276px, 50%); }
+.ob-foot { padding: var(--sp-3) var(--sp-5) var(--sp-5); }
+.ob-actions { width: min(560px, 100%); margin-inline: auto; }
+.ob-foot .btn { min-height: 40px; }
 .ob-lang { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--sp-3); }
 .ob-lang-label { color: var(--text-2); font-size: var(--fs-sm); }
 .ob-abilities { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: var(--sp-2); }

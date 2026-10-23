@@ -43,7 +43,7 @@ describe("the safety rules section", () => {
   test("新增 is a bordered text button; the pencil and the trash can are icon buttons with their names", () => {
     const html = rulesHTML(view());
     const tags = buttons(html);
-    expect(tags.find((b) => b.includes('data-rule="add"'))).toMatch(/^<button type="button" class="btn" data-rule="add"/);
+    expect(tags.find((b) => b.includes('data-rule="add"'))).toMatch(/^<button type="button" class="btn pri" data-rule="add"/);
     const icons = tags.filter((b) => /class="btn icon/.test(b));
     expect(icons).toHaveLength(10);
     for (const tag of icons) expect(tag).toMatch(/aria-label="[^"]+" title="[^"]+"/);

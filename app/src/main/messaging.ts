@@ -13,7 +13,7 @@ import { describeError } from "./format";
 import { t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 import { monogram, serviceIconSVG } from "./service-icons";
-import { DISCONNECT_CONFIRM_MS, btn, esc, fieldHTML, ico, iconButton, note, row, st, tg, toaster } from "./ui";
+import { DISCONNECT_CONFIRM_MS, actionRow, btn, esc, fieldHTML, ico, iconButton, note, row, st, tg, toaster } from "./ui";
 
 /** How often a connected bot is asked who is waiting to pair. */
 const POLL_MS = 3000;
@@ -76,11 +76,11 @@ function setupRows(v: MessagingView): string[] {
     invalid: v.tokenError !== null,
     disabled: v.connecting,
   });
-  const go = btn(esc(v.connecting ? t("msg.tg.checking") : t("msg.tg.connect")), "pri", ` data-msg="connect"${v.connecting ? " disabled" : ""}`);
+  const tokenRow = actionRow({ cls: "msg-token", secondary: field, primary: { label: esc(v.connecting ? t("msg.tg.checking") : t("msg.tg.connect")), attrs: ` data-msg="connect"${v.connecting ? " disabled" : ""}` } });
   const botfather = btn(`${ico("bot")}<span>BotFather</span>${ico("link")}`, "", ` data-msg="botfather" title="${esc(t("msg.tg.step1"))}"`);
   return [
     row(headName("Telegram", dotHTML("idle", t("msg.tg.notSet"))), "", botfather, { cls: "msg-head" }),
-    row(esc(t("msg.tg.token")), "", `<span class="msg-token">${field}${go}</span>`, { cls: "msg-token-row" }),
+    row(esc(t("msg.tg.token")), "", tokenRow, { cls: "msg-token-row" }),
     ...(v.tokenError ? [note(st("err", tr(v.tokenError)), ' role="alert"')] : []),
   ];
 }
@@ -136,7 +136,7 @@ export function messagingHTML(v: MessagingView): string {
   const disconnect = row(
     esc(t("msg.tg.disconnectTitle")),
     esc(t("msg.tg.disconnectAbout")),
-    btn(esc(v.confirmingDisconnect ? t("msg.tg.disconnectConfirm") : t("msg.tg.disconnect")), v.confirmingDisconnect ? "sm danger" : "sm", ` data-msg="disconnect"${v.busy ? " disabled" : ""}`),
+    actionRow({ destructive: { label: esc(v.confirmingDisconnect ? t("msg.tg.disconnectConfirm") : t("msg.tg.disconnect")), kind: "sm", attrs: ` data-msg="disconnect"${v.busy ? " disabled" : ""}` } }),
     {},
   );
   const rows = [head, ...(fault ? [note(st(dot === "err" ? "err" : "warn", label), ' role="alert"')] : []), ...(open ? [...detailRows(v, s), disconnect] : [])];

@@ -170,6 +170,30 @@ export const DISCONNECT_CONFIRM_MS = 5000;
 export const btn = (label: string, kind = "", attrs = ""): string =>
   `<button type="button" class="btn${kind ? " " + kind : ""}"${attrs}>${label}</button>`;
 
+interface ActionButton {
+  /** HTML label; escape user text before passing it. */
+  label: string;
+  attrs?: string;
+  kind?: "sm";
+}
+
+export interface ActionRowOptions {
+  primary?: ActionButton;
+  /** Secondary controls, with Cancel last when present. */
+  secondary?: string;
+  destructive?: ActionButton;
+  cls?: string;
+  sticky?: boolean;
+}
+
+/** Danger first and separated, secondary controls next, and the primary action last in tab order. */
+export function actionRow(o: ActionRowOptions): string {
+  const button = (b: ActionButton, kind: string): string => btn(b.label, `${kind}${b.kind ? ` ${b.kind}` : ""}`, b.attrs);
+  return `<div class="action-row${o.cls ? ` ${o.cls}` : ""}${o.sticky ? " is-sticky" : ""}">` +
+    (o.destructive ? `<span class="action-destructive">${button(o.destructive, "danger")}</span>` : "") +
+    (o.secondary ?? "") + (o.primary ? button(o.primary, "pri") : "") + `</div>`;
+}
+
 /**
  * A button with an icon only (trash, ×, chevron, search, settings, sliders): what it does is its
  * label and its tooltip. It has no border, only a fill under the pointer and the focus ring

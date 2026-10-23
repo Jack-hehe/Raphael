@@ -101,7 +101,7 @@ describe("the crop dialog", () => {
 
   test("traps Tab focus inside the crop dialog and Escape closes only the crop dialog when stacked over another dialog", async () => {
     document.body.innerHTML = "";
-    const under = openDialog({ title: "Under", body: '<input id="u">', actions: "", onAct: () => {} });
+    const under = openDialog({ title: "Under", body: '<input id="u">', actions: {}, onAct: () => {} });
     const done = cropDialog(PNG);
     const zoom = document.querySelector<HTMLInputElement>(".av-crop-zoom")!;
     const doneBtn = document.querySelector<HTMLButtonElement>('[data-act="crop-done"]')!;

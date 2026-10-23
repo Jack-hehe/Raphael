@@ -33,7 +33,7 @@ import { pricingNote } from "../pricing";
 import type { HotkeyField } from "../hotkey-recording";
 import type { AudioDevices, BrainSettings, DeviceSettings, LocalModel, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
 import { keyEntryRow, micRow } from "../setup-rows";
-import { type Choice, type IconName, btn, esc, fieldHTML, ico, iconBtn, keys, note, row, sel, st, tabs, tg } from "../ui";
+import { type Choice, type IconName, actionRow, btn, esc, fieldHTML, ico, iconBtn, keys, note, row, sel, st, tabs, tg } from "../ui";
 
 /** The models the core reads when none is chosen (brain/settings.py), shown while it does not answer. */
 const DEFAULT_MODELS = { cleanup: "openai/gpt-6-luna", answer: "openai/gpt-6-luna", stt: "elevenlabs/scribe-v2" } as const;
@@ -440,9 +440,11 @@ function keyRow(v: SettingsView): string {
     return row(
       t("common.apiKey"),
       keyStatus(v),
-      btn(v.checkingOpenrouter ? t("common.checking") : t("settings.046"), "", ` data-act="or-check"${v.checkingOpenrouter ? " disabled" : ""}`) +
-        btn(t("home.018"), "", ' data-act="key-replace" data-k="key"') +
-        btn(v.confirmingKeyRemoval ? t("settings.keyRemoveConfirm") : t("settings.keyRemove"), "", ' data-act="key-remove"'),
+      actionRow({
+        destructive: { label: t(v.confirmingKeyRemoval ? "settings.keyRemoveConfirm" : "settings.keyRemove"), attrs: ' data-act="key-remove"' },
+        secondary: btn(v.checkingOpenrouter ? t("common.checking") : t("settings.046"), "", ` data-act="or-check"${v.checkingOpenrouter ? " disabled" : ""}`) +
+          btn(t("home.018"), "", ' data-act="key-replace" data-k="key"'),
+      }),
       { attrs, cls: "row-key" },
     );
   }
@@ -658,7 +660,7 @@ export const retentionOf = (v: SettingsView): string => String(v.brain?.history_
 /** A clear button of 資料: 「清除」, and 「確定清除？」 while it waits for the second press. */
 function clearButton(v: SettingsView, what: "dictation" | "conversation"): string {
   const asking = v.confirmingClear === what;
-  return btn(esc(asking ? t("data.clearConfirm") : t("data.clear")), asking ? "danger" : "", ` data-act="clear-${what}" data-k="clear-${what}"`);
+  return actionRow({ destructive: { label: esc(asking ? t("data.clearConfirm") : t("data.clear")), attrs: ` data-act="clear-${what}" data-k="clear-${what}"` } });
 }
 
 /**

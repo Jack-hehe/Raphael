@@ -11,7 +11,7 @@
 import { GB, MB } from "./format";
 import { t } from "./i18n";
 import type { LocalModel } from "./types";
-import { CHECK, btn, esc, ico, tabs } from "./ui";
+import { CHECK, actionRow, btn, esc, ico, tabs } from "./ui";
 
 /** What the local tab is drawn from. */
 export interface LocalView {
@@ -133,8 +133,11 @@ function rowHTML(model: LocalModel, view: LocalView, confirm: LocalConfirm | nul
     const text = deleteQuestion(model, view);
     return (
       `${open}<div class="lm-confirm" role="group" aria-label="${esc(text)}"><span class="lm-ask">${esc(text)}</span>` +
-      btn(esc(t("local.delete")), "pri sm", ` data-act="confirm" data-name="${esc(model.name)}"`) +
-      btn(esc(t("local.cancel")), "sm", ` data-act="dismiss" data-name="${esc(model.name)}"`) +
+      actionRow({
+        cls: "lm-confirm-actions",
+        destructive: { label: esc(t("local.delete")), kind: "sm", attrs: ` data-act="confirm" data-name="${esc(model.name)}"` },
+        secondary: btn(esc(t("local.cancel")), "sm", ` data-act="dismiss" data-name="${esc(model.name)}"`),
+      }) +
       `</div></div>`
     );
   }
