@@ -16,6 +16,10 @@ are part of, they are not pruned by age.
 - "interrupted": the worker died, or the core was closed or restarted while it ran. It is never
   started again by itself.
 
+A task is someone's (`member_id`: 0 for Raphael, else a member of the owner's team, whose persona,
+tools and memory it runs with), and a routine's run says which routine started it (`routine_id`).
+Such a task is `quiet`: its report stays in its thread and is never said on the overlay.
+
 Use it on the thread that owns `conn` (the event loop). Nothing here logs a task.
 """
 
@@ -59,6 +63,14 @@ class Task:
     # 0 for the report of an interrupted task that has not been said yet; 1 otherwise.
     announced: int = 1
     rerun_of: int | None = None  # the task this one runs again
+    member_id: int = 0  # whose task it is: 0 for Raphael's, else a member of the team's
+    routine_id: int | None = None  # the routine that started it, if one did
+
+    @property
+    def quiet(self) -> bool:
+        """Whether its report stays in its thread: a member's task, or a routine's run, is never
+        said on the overlay (the owner reads it in the app)."""
+        return self.member_id != 0 or self.routine_id is not None
 
 
 @dataclass
@@ -80,7 +92,7 @@ class Step:
 _TASK_COLUMNS = (
     "id, created_at_ms, started_at_ms, finished_at_ms, state, session_id, turn_id, language, text,"
     " report_prefix, report_text, report_detail, reason, model_calls, tool_calls, cost_usd,"
-    " announced, rerun_of"
+    " announced, rerun_of, member_id, routine_id"
 )
 _STEP_COLUMNS = "n, at_ms, kind, tool, server, tier, outcome, cost_usd, ms, reason, detail"
 
@@ -95,13 +107,20 @@ class TaskStore:
         self._now_ms = now_ms
 
     def create(
-        self, *, session_id: str, language: str, text: str, rerun_of: int | None = None
+        self,
+        *,
+        session_id: str,
+        language: str,
+        text: str,
+        rerun_of: int | None = None,
+        member_id: int = 0,
+        routine_id: int | None = None,
     ) -> int:
         with self._conn:
             cursor = self._conn.execute(
                 "INSERT INTO worker_tasks (created_at_ms, state, session_id, language, text,"
-                " rerun_of) VALUES (?, 'queued', ?, ?, ?, ?)",
-                (self._now_ms(), session_id, language, text, rerun_of),
+                " rerun_of, member_id, routine_id) VALUES (?, 'queued', ?, ?, ?, ?, ?, ?)",
+                (self._now_ms(), session_id, language, text, rerun_of, member_id, routine_id),
             )
         assert cursor.lastrowid is not None
         return cursor.lastrowid
@@ -333,6 +352,14 @@ class TaskStore:
                 " report_detail = NULL WHERE id = ?",
                 (task_id,),
             )
+
+    def of_member(self, member_id: int) -> list[Task]:
+        """The tasks of `member_id`, whatever their state, oldest first."""
+        rows = self._conn.execute(
+            f"SELECT {_TASK_COLUMNS} FROM worker_tasks WHERE member_id = ? ORDER BY id",
+            (member_id,),
+        )
+        return [Task(**dict(row)) for row in rows]
 
     def clear(self) -> int:
         """Delete every finished task, with its steps; one that is not over stays."""

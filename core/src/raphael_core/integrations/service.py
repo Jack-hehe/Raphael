@@ -477,6 +477,14 @@ class IntegrationsService:
     def _group(self, server: ServerConfig) -> dict[str, Any]:
         return {**self._view(server), "tools": self._tool_views(server)}
 
+    def connections(self) -> list[dict[str, Any]]:
+        """The connections, as the 工具 tab of a member lists them: each one's id, name and whether
+        it is on. Nothing secret."""
+        return [
+            {"id": server.id, "name": server.name, "enabled": server.enabled}
+            for server in self._config.servers()
+        ]
+
     async def _toolsets(self, params: dict) -> dict:
         return {"groups": [self._group(server) for server in self._config.servers()]}
 

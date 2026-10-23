@@ -301,6 +301,53 @@ COMMIT;
 """
 
 
+# v15: the members of the owner's team (raphael_core.members), each with a conversation of its own.
+#
+# - `agent_turns.member_id` is whose thread a turn is in: 0 for Raphael (every turn there was until
+#   now), else the id of a row of `members`. `agent_turns.peer_id` is, for an exchange between two
+#   of them (`route` "exchange": one asked the other through `ask_member`), the other one.
+# - `worker_tasks.member_id` is whose task it is (0: Raphael's), and `worker_tasks.routine_id` the
+#   routine that started it, if one did.
+# - `conversation_summaries` is the rolling summary of each conversation, one row a member, Raphael's
+#   as member 0; it takes the place of `agent_summary`, whose one row becomes Raphael's.
+# - `member_groups` are the groups of the member column: a name, a place, and the places their
+#   members look for progress (`sources`, JSON: `[{kind, ref}]`, GitHub or Notion).
+# - `members` are the members themselves. `avatar` is "", "preset:<stem>" or "file:<name>" (a copy
+#   in the app's local folder, never the path it came from); `model` "" is the answer model; `tools`
+#   JSON is the tools and connections it may use, NULL for every one that is on.
+# - `routines` are what a member does on a schedule (`schedule` JSON), with when it last ran and
+#   when it runs next.
+# - `member_unread` holds the members (Raphael too, as 0) whose thread has news the owner has not
+#   seen.
+_MIGRATION_V15 = """
+BEGIN;
+ALTER TABLE agent_turns ADD COLUMN member_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE agent_turns ADD COLUMN peer_id INTEGER;
+CREATE INDEX agent_turns_member ON agent_turns(member_id, id);
+ALTER TABLE worker_tasks ADD COLUMN member_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE worker_tasks ADD COLUMN routine_id INTEGER;
+CREATE TABLE conversation_summaries (member_id INTEGER PRIMARY KEY, text TEXT NOT NULL,
+  through_turn_id INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL);
+INSERT INTO conversation_summaries (member_id, text, through_turn_id, updated_at_ms)
+  SELECT 0, text, through_turn_id, updated_at_ms FROM agent_summary;
+DROP TABLE agent_summary;
+CREATE TABLE member_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+  position INTEGER NOT NULL, sources TEXT NOT NULL DEFAULT '[]');
+CREATE TABLE members (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  role TEXT NOT NULL DEFAULT '', instructions TEXT NOT NULL DEFAULT '',
+  avatar TEXT NOT NULL DEFAULT '', group_id INTEGER, model TEXT NOT NULL DEFAULT '',
+  position INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, tools TEXT);
+CREATE TABLE routines (id INTEGER PRIMARY KEY AUTOINCREMENT, member_id INTEGER NOT NULL,
+  title TEXT NOT NULL, prompt TEXT NOT NULL, schedule TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1, last_run_ms INTEGER, next_run_ms INTEGER,
+  created_at_ms INTEGER NOT NULL);
+CREATE INDEX routines_member ON routines(member_id);
+CREATE TABLE member_unread (member_id INTEGER PRIMARY KEY);
+PRAGMA user_version = 15;
+COMMIT;
+"""
+
+
 _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_V1,
     2: _MIGRATION_V2,
@@ -316,6 +363,7 @@ _MIGRATIONS: dict[int, str | Callable[[sqlite3.Connection], None]] = {
     12: _MIGRATION_V12,
     13: _migrate_v13,
     14: _MIGRATION_V14,
+    15: _MIGRATION_V15,
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

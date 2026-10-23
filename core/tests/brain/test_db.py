@@ -190,8 +190,62 @@ SCHEMA_V14 = {
     "agent_steps": [*SCHEMA_V13["agent_steps"], "detail TEXT"],
     "worker_steps": [*SCHEMA_V13["worker_steps"], "detail TEXT"],
 }
+# Schema v15 adds the members of the owner's team: whose thread a turn is in and whose a task is, a
+# summary for each conversation in place of the one, the groups, the members, their routines and
+# which threads have news.
+SCHEMA_V15 = {
+    **{name: columns for name, columns in SCHEMA_V14.items() if name != "agent_summary"},
+    "agent_turns": [
+        *SCHEMA_V14["agent_turns"],
+        "member_id INTEGER NOT NULL DEFAULT 0",
+        "peer_id INTEGER",
+    ],
+    "worker_tasks": [
+        *SCHEMA_V14["worker_tasks"],
+        "member_id INTEGER NOT NULL DEFAULT 0",
+        "routine_id INTEGER",
+    ],
+    "conversation_summaries": [
+        "member_id INTEGER PK",
+        "text TEXT NOT NULL",
+        "through_turn_id INTEGER NOT NULL",
+        "updated_at_ms INTEGER NOT NULL",
+    ],
+    "member_groups": [
+        "id INTEGER PK",
+        "name TEXT NOT NULL",
+        "position INTEGER NOT NULL",
+        "sources TEXT NOT NULL DEFAULT '[]'",
+    ],
+    "members": [
+        "id INTEGER PK",
+        "name TEXT NOT NULL",
+        "role TEXT NOT NULL DEFAULT ''",
+        "instructions TEXT NOT NULL DEFAULT ''",
+        "avatar TEXT NOT NULL DEFAULT ''",
+        "group_id INTEGER",
+        "model TEXT NOT NULL DEFAULT ''",
+        "position INTEGER NOT NULL",
+        "created_at_ms INTEGER NOT NULL",
+        "tools TEXT",
+    ],
+    "routines": [
+        "id INTEGER PK",
+        "member_id INTEGER NOT NULL",
+        "title TEXT NOT NULL",
+        "prompt TEXT NOT NULL",
+        "schedule TEXT NOT NULL",
+        "enabled INTEGER NOT NULL DEFAULT 1",
+        "last_run_ms INTEGER",
+        "next_run_ms INTEGER",
+        "created_at_ms INTEGER NOT NULL",
+    ],
+    "member_unread": ["member_id INTEGER PK"],
+}
+# Where SQLite keeps the counters of the tables with AUTOINCREMENT.
+SEQUENCE = {"sqlite_sequence"}
 FTS_SHADOWS = {f"agent_turns_fts_{part}" for part in ("data", "idx", "content", "docsize", "config")}
-LATEST = 14
+LATEST = 15
 
 
 def schema_names(conn, kind):
@@ -215,7 +269,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V14) | FTS_SHADOWS
+    assert schema_names(conn, "table") == set(SCHEMA_V15) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -224,9 +278,11 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_steps_task",
         "open_targets_used",
         "agent_steps_turn",
+        "agent_turns_member",
+        "routines_member",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V14.items():
+    for table, columns in SCHEMA_V15.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
@@ -429,7 +485,7 @@ def test_a_v4_database_gets_the_turns_table_at_v5_and_keeps_its_rows(tmp_path):
 
     conn = db.connect(path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    assert describe_columns(conn, "agent_turns") == SCHEMA_V14["agent_turns"]
+    assert describe_columns(conn, "agent_turns") == SCHEMA_V15["agent_turns"]
     assert conn.execute("SELECT count(*) FROM agent_turns").fetchone()[0] == 0
     assert HistoryStore(conn).latest().text == "A"
     assert [e.word for e in DictionaryStore(conn).list()] == ["拉斐爾"]
@@ -453,7 +509,7 @@ def assert_has_the_latest_schema(migrated, fresh):
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert schema_names(migrated, "table") == schema_names(fresh, "table")
     assert schema_names(migrated, "index") == schema_names(fresh, "index")
-    for table in SCHEMA_V14:
+    for table in SCHEMA_V15:
         assert describe_columns(migrated, table) == describe_columns(fresh, table)
     assert migrated.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
     assert HistoryStore(migrated).latest().text == "A"
@@ -776,3 +832,66 @@ def test_connect_closes_the_connection_when_setting_it_up_fails(monkeypatch):
         db.connect(":memory:")
     with pytest.raises(sqlite3.ProgrammingError):  # "Cannot operate on a closed database."
         opened[0].execute("SELECT 1")
+
+
+def v14_database(path):
+    """A database as the version before the members left it: at v14, with a turn, its summary and a
+    task."""
+    raw = sqlite3.connect(path)
+    for version in range(1, 15):
+        step = db._MIGRATIONS[version]
+        if callable(step):
+            step(raw)
+        else:
+            raw.executescript(step)
+    raw.execute(
+        "INSERT INTO agent_turns (created_at_ms, session_id, question, route, prefix, text, status)"
+        " VALUES (1, 's', 'q', 'chat', '答', 'a', 'done')"
+    )
+    raw.execute(
+        "INSERT INTO agent_summary (id, text, through_turn_id, updated_at_ms)"
+        " VALUES (1, 'the summary', 1, 9)"
+    )
+    raw.execute(
+        "INSERT INTO worker_tasks (created_at_ms, state, session_id, language, text)"
+        " VALUES (2, 'done', 's', 'en', 't')"
+    )
+    raw.commit()
+    raw.close()
+
+
+def test_a_v14_database_gets_the_members_at_v15_and_everything_old_is_raphaels(tmp_path, conn):
+    path = tmp_path / "v14.db"
+    v14_database(path)
+
+    migrated = db.connect(path)
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
+    assert schema_names(migrated, "table") == schema_names(conn, "table")
+    assert schema_names(migrated, "index") == schema_names(conn, "index")
+    assert tuple(migrated.execute("SELECT member_id, peer_id FROM agent_turns").fetchone()) == (0, None)
+    assert tuple(migrated.execute("SELECT member_id, routine_id FROM worker_tasks").fetchone()) == (
+        0,
+        None,
+    )
+    assert tuple(migrated.execute("SELECT * FROM conversation_summaries").fetchone()) == (
+        0,
+        "the summary",
+        1,
+        9,
+    )
+    migrated.close()
+
+
+def test_a_failed_v15_migration_leaves_the_database_at_v14(tmp_path, monkeypatch):
+    path = tmp_path / "v14.db"
+    v14_database(path)
+    monkeypatch.setitem(
+        db._MIGRATIONS, 15, db._MIGRATION_V15.replace("PRAGMA user_version = 15;", "NOT SQL;")
+    )
+    with pytest.raises(sqlite3.Error):
+        db.connect(path)
+    raw = sqlite3.connect(path)
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 14
+    assert raw.execute("SELECT text FROM agent_summary").fetchone()[0] == "the summary"
+    assert "members" not in schema_names(raw, "table")
+    raw.close()

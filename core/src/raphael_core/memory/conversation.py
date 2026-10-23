@@ -10,7 +10,7 @@ the next, for the provider's prompt cache):
 - The recent turns (`context`) are every turn after the summary, as they were said, oldest first:
   the question and Raphael's line (and, for a discussion, the start of its longer text). Only the
   turns that were answered: one that waits for a yes, was refused or failed says nothing.
-- The summary (`agent_summary`) covers the turns before them. When the turns after it pass
+- The summary (`conversation_summaries`) covers the turns before them. When the turns after it pass
   FOLD_AT_TOKENS (about 12K tokens) or FOLD_AT_TURNS, the oldest of them are folded into it by one
   call to the cheap model (`fold`), down to a tail of KEEP_TOKENS (about 6K) or KEEP_TURNS. The
   summary is updated in place, not written anew from a summary of a summary, and is held to
@@ -35,6 +35,11 @@ the next, for the provider's prompt cache):
 Folded turns are not deleted: the conversation view shows them and the search finds them. The
 summary can be cleared (`clear_summary`, `memory.summary_clear`); the turns are then read again
 from the start, within the limits.
+
+Each member of the owner's team (raphael_core.members) has a conversation of its own: a
+`Conversation` reads one thread (`member_id`, 0 for Raphael) and keeps that thread's summary
+(`conversation_summaries`, one row a member). An exchange with another member and a routine's run
+are read as what they were, not as words of the owner's (`turn_text`).
 
 Nothing here logs the conversation or the summary.
 """
@@ -139,14 +144,24 @@ def turn_time(ms: int) -> str:
 
 
 def turn_text(turn: Turn, *, detail: bool) -> str:
-    """A turn as the model reads it: the question and Raphael's line, and with `detail` the start
-    of the longer text it kept (when it says more than the line)."""
+    """A turn as the model reads it: the question and Raphael's line (or the member's, in a
+    member's thread), and with `detail` the start of the longer text it kept (when it says more
+    than the line). An exchange with another member reads as a request and its answer, and a
+    routine's run as its title and its report: neither was said by the owner."""
     said = turn.text or turn.prefix
-    lines = f"User: {turn.question}\nRaphael: {said}"
+    if turn.route == "exchange":
+        lines = f"(Between assistants) Request: {turn.question}\nAnswer: {said}"
+    elif turn.route == "routine":
+        lines = f"(Routine) {turn.question}\nReport: {said}"
+    elif turn.member_id:
+        lines = f"User: {turn.question}\nYou: {said}"
+    else:
+        lines = f"User: {turn.question}\nRaphael: {said}"
     longer = (turn.detail or "").strip()
     if detail and longer and longer != said:
         cut = longer if len(longer) <= DETAIL_CHARS else longer[:DETAIL_CHARS].rstrip() + "…"
-        lines += f"\n(Raphael, at more length: {cut})"
+        speaker = "You" if turn.member_id else "Raphael"
+        lines += f"\n({speaker}, at more length: {cut})"
     return lines
 
 
@@ -224,7 +239,8 @@ class Conversation:
     """The summary and the recent turns, on the database `conn` (used on the event loop only).
     `client` is the OpenRouter client the fold calls; `reflected_through` says up to which turn the
     reflection pass has read (the corrections after it are kept from the fold). `clock` is a
-    monotonic clock in seconds (the pauses after a failed fold)."""
+    monotonic clock in seconds (the pauses after a failed fold). `member_id` is whose thread it is:
+    0, Raphael's, by default."""
 
     def __init__(
         self,
@@ -234,7 +250,9 @@ class Conversation:
         now_ms: Callable[[], int] = wall_clock_ms,
         clock: Callable[[], float] = time.monotonic,
         reflected_through: Callable[[], int] = lambda: 0,
+        member_id: int = 0,
     ) -> None:
+        self.member_id = member_id
         self._conn = conn
         self._client = client
         self._now_ms = now_ms
@@ -251,7 +269,9 @@ class Conversation:
 
     def summary(self) -> Summary:
         row = self._conn.execute(
-            "SELECT text, through_turn_id, updated_at_ms FROM agent_summary WHERE id = 1"
+            "SELECT text, through_turn_id, updated_at_ms FROM conversation_summaries"
+            " WHERE member_id = ?",
+            (self.member_id,),
         ).fetchone()
         if row is None:
             return Summary("", 0, 0)
@@ -260,11 +280,11 @@ class Conversation:
     def _save(self, text: str, through_turn_id: int) -> None:
         with self._conn:
             self._conn.execute(
-                "INSERT INTO agent_summary (id, text, through_turn_id, updated_at_ms)"
-                " VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET text = excluded.text,"
-                " through_turn_id = excluded.through_turn_id,"
+                "INSERT INTO conversation_summaries (member_id, text, through_turn_id,"
+                " updated_at_ms) VALUES (?, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET"
+                " text = excluded.text, through_turn_id = excluded.through_turn_id,"
                 " updated_at_ms = excluded.updated_at_ms",
-                (text, through_turn_id, self._now_ms()),
+                (self.member_id, text, through_turn_id, self._now_ms()),
             )
 
     def clear_summary(self) -> bool:
@@ -272,7 +292,9 @@ class Conversation:
         start within the limits. A fold that waits for the model meanwhile will write nothing."""
         self._clears += 1
         with self._conn:
-            cursor = self._conn.execute("DELETE FROM agent_summary")
+            cursor = self._conn.execute(
+                "DELETE FROM conversation_summaries WHERE member_id = ?", (self.member_id,)
+            )
         return cursor.rowcount > 0
 
     # --- what the model reads ----------------------------------------------------------------------
@@ -283,7 +305,9 @@ class Conversation:
         the turns read are held to FOLD_AT_TOKENS and FOLD_AT_TURNS, the newest kept."""
         try:
             summary = self.summary()
-            after = self._history.after(summary.through_turn_id, limit=FOLD_AT_TURNS * 3)
+            after = self._history.after(
+                summary.through_turn_id, limit=FOLD_AT_TURNS * 3, member_id=self.member_id
+            )
         except sqlite3.Error as exc:
             logger.warning("Could not read the conversation so far: %s", type(exc).__name__)
             return Context("", [])
@@ -318,7 +342,8 @@ class Conversation:
 
     def _unreported(self, turns: Sequence[Turn]) -> set[int]:
         """The turns whose background task is not over, or whose report has not been said."""
-        ids = [turn.id for turn in turns if turn.id is not None and turn.route == "delegate"]
+        tasked = ("delegate", "routine")  # the routes whose turn a background task completes
+        ids = [turn.id for turn in turns if turn.id is not None and turn.route in tasked]
         if not ids:
             return set()
         marks = ", ".join("?" * len(ids))
@@ -335,7 +360,7 @@ class Conversation:
     def fold_due(self) -> tuple[list[Turn], int] | None:
         """What a fold now would fold (see `plan_fold`), or None."""
         summary = self.summary()
-        turns = self._history.after(summary.through_turn_id)
+        turns = self._history.after(summary.through_turn_id, member_id=self.member_id)
         return plan_fold(turns, self.protected(turns))
 
     def schedule_fold(self, model: str, ledger_for: Callable[[], Ledger]) -> None:

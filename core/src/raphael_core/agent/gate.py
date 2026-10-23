@@ -19,7 +19,9 @@ is unknown and cannot run; and it holds the door to the plugins' tools (`plugins
 The memory's tools are Raphael's own too: reading a note (`memory_read`) and searching the past
 turns (`history_search`) only read, so they are T0; writing and deleting a note (`memory_write`,
 `memory_delete`) change only Raphael's own memory, which the user sees and can undo in the settings,
-so they are T1: they run at once, with no yes asked for.
+so they are T1: they run at once, with no yes asked for. So are the tools that reach the owner's team
+(`team`): `ask_member`, which has another member answer, and `create_member`, which adds one at the
+owner's request.
 
 The audit holds a time, a tool, a tier, who approved and how it ended; never an argument or a result.
 Nothing here logs a name, an argument or a result.
@@ -36,6 +38,7 @@ from ..integrations.audit import AuditLog
 from .commands import COMMANDS
 from .plugins import PluginHub, PluginResult
 from .policy import Action, Approval, NotApproved, Tier, ToolRegistry, UnknownTool
+from .team import TEAM_TIER, TEAM_TOOLS
 
 if TYPE_CHECKING:
     from ..integrations.pool import McpPool
@@ -81,6 +84,9 @@ class ToolGate:
             self._registry.register(name, tier)
         for name in MEMORY_WRITE_TOOLS:
             self._registry.register(name, Tier.T1)
+        # The tools that reach the owner's team (`team`): asking a member, adding one.
+        for name in TEAM_TOOLS:
+            self._registry.register(name, TEAM_TIER)
         self._audit = None if conn is None else AuditLog(conn, now_ms)
 
     @property

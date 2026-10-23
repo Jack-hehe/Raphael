@@ -263,6 +263,8 @@ async def test_a_command_is_done_at_once_and_answered_with_the_fixed_reply(rig, 
         "source": "voice",
         "cost_usd": 0.00004,
         "model": "typesafe/jev-1.14",
+        "member_id": 0,
+        "peer_id": None,
         "attachments": [],
         "steps": [
             {
@@ -1411,7 +1413,8 @@ async def test_the_history_lists_the_newest_turn_first_with_the_fields_the_app_r
     assert [t["id"] for t in turns] == [3, 2, 1]
     assert set(turns[0]) == {
         "id", "created_at_ms", "question", "route", "prefix", "text", "detail", "status",
-        "session_id", "source", "cost_usd", "model", "attachments", "steps", "task",
+        "session_id", "source", "cost_usd", "model", "attachments", "steps", "task", "member_id",
+        "peer_id",
     }  # fmt: skip
 
 

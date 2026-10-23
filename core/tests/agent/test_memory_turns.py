@@ -79,7 +79,11 @@ async def test_a_request_to_remember_is_written_at_once_and_said_so(rig, client,
     assert saved.turns == (result["turn_id"],)
     assert await steps_of(rig) == [("memory_write", "ok")]
     call = client.json_calls[0]
-    assert "<memory_index>\n(no notes yet)\n</memory_index>" in call["system"]
+    # Both memories, the shared one first, each in its tags.
+    assert (
+        "<shared_memory>\n(no notes yet)\n</shared_memory>\n<own_memory>\n(no notes yet)\n"
+        "</own_memory>"
+    ) in call["system"]
     assert {"memory", "need"} <= set(call["schema"]["properties"])
 
 
