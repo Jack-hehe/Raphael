@@ -270,9 +270,14 @@ pub struct Busy;
 /// What the main window may ask of the controller (commands.rs). Kept in the app state as a
 /// [`DeskHandle`], so that the commands need not know the controller's types.
 pub trait Desk: Send + Sync {
-    /// Asks Raphael `text`, typed in the composer, with the images and PDFs attached to it (see
-    /// [`DictationController::ask_typed_with`]).
-    fn ask_typed(&self, text: &str, attachments: Vec<Value>) -> Result<JoinHandle<()>, Busy>;
+    /// Asks Raphael `text`, typed in the composer, with the images and PDFs attached to it, or the
+    /// member `member` (not 0) in its own thread (see [`DictationController::ask_typed_with`]).
+    fn ask_typed(
+        &self,
+        text: &str,
+        attachments: Vec<Value>,
+        member: u64,
+    ) -> Result<JoinHandle<()>, Busy>;
     /// The YES/NO question that waits for its answer now, with the time it has left as its
     /// `timeout_ms`.
     fn open_question(&self) -> Option<AskPrompt>;
@@ -1374,14 +1379,14 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         if !self.set_stage(&id, AgentStage::Thinking) {
             return;
         }
-        self.converse(&id, question, target_app, None, Vec::new())
+        self.converse(&id, question, target_app, None, Vec::new(), 0)
             .await;
     }
 
-    /// A typed question with no files ([`Self::ask_typed_with`] with none): the tests' way in.
+    /// A typed question to Raphael with no files ([`Self::ask_typed_with`] with none): the tests' way in.
     #[cfg(test)]
     pub fn ask_typed(&self, text: &str) -> Result<JoinHandle<()>, Busy> {
-        self.ask_typed_with(text, Vec::new())
+        self.ask_typed_with(text, Vec::new(), 0)
     }
 
     /// A question typed in the main window's composer: an agent session without a recording, which
@@ -1395,6 +1400,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// (`{name, mime, data}`, the bytes in base64), untouched, and only when there are some. The
     /// core checks them (services/attachments.py); nothing here logs a name or a byte of them.
     ///
+    /// `member` is the member whose thread on the 拉斐爾 page it was typed in: it goes to
+    /// `agent.ask` as `member_id`, and only when it is not 0 (Raphael, the core's default).
+    ///
     /// Refused ([`Busy`]) while a recording, a question or a dictation is under way; an answer that
     /// is only being shown gives way, as it does to a key. Never logs the words. Returns the task
     /// that runs the question, which ends when its turn is over.
@@ -1402,6 +1410,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         &self,
         text: &str,
         attachments: Vec<Value>,
+        member: u64,
     ) -> Result<JoinHandle<()>, Busy> {
         let _transition = lock(&self.transitions);
         self.end_speaking();
@@ -1426,7 +1435,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         log::info!("agent: a typed question");
         let (this, text) = (self.clone(), text.to_owned());
         Ok(tokio::spawn(async move {
-            this.converse(&id, &text, None, Some(TYPED_SOURCE), attachments)
+            this.converse(&id, &text, None, Some(TYPED_SOURCE), attachments, member)
                 .await;
         }))
     }
@@ -1436,7 +1445,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// its answer sent with `agent.confirm` and that reply shown, which may be another question
     /// (a run on the desktop asks about the app, then about each step that sends), up to
     /// [`MAX_QUESTIONS_IN_A_TURN`]. The `attachments` of a typed question go with the first call
-    /// only when there are some. Never logs the words, nor anything of the attachments.
+    /// only when there are some, and a member's `member_id` only when it is not 0. Never logs the
+    /// words, nor anything of the attachments.
     async fn converse(
         &self,
         id: &str,
@@ -1444,6 +1454,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         target_app: Option<String>,
         source: Option<&str>,
         attachments: Vec<Value>,
+        member: u64,
     ) {
         let mut params = json!({
             "session_id": id,
@@ -1456,6 +1467,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
         if !attachments.is_empty() {
             params["attachments"] = Value::Array(attachments);
+        }
+        if member != 0 {
+            params["member_id"] = json!(member);
         }
         let mut reply = self.core.call("agent.ask", params).await;
         let mut asked = 0;
@@ -1848,13 +1862,27 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> ReportStage
     fn try_say(&self, prefix: &str, text: &str) -> Option<Duration> {
         self.say_in_background(prefix, text)
     }
+
+    /// The notice of a question of the background goes to the overlay only when the 拉斐爾 page
+    /// is not in front ([`AppFront`]): the page shows the question's card itself.
+    fn try_notice(&self, prefix: &str, text: &str) -> Option<Duration> {
+        if self.app_shows_question() {
+            return Some(Duration::ZERO);
+        }
+        self.say_in_background(prefix, text)
+    }
 }
 
 impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Desk
     for DictationController<C, O, P, S>
 {
-    fn ask_typed(&self, text: &str, attachments: Vec<Value>) -> Result<JoinHandle<()>, Busy> {
-        DictationController::ask_typed_with(self, text, attachments)
+    fn ask_typed(
+        &self,
+        text: &str,
+        attachments: Vec<Value>,
+        member: u64,
+    ) -> Result<JoinHandle<()>, Busy> {
+        DictationController::ask_typed_with(self, text, attachments, member)
     }
 
     fn open_question(&self) -> Option<AskPrompt> {
@@ -5311,7 +5339,7 @@ mod tests {
     async fn a_typed_question_takes_its_attachments_to_the_agent_and_none_when_it_has_none() {
         let c = agent(answer("答", "是一張收據"));
         let file = json!({"name": "receipt.png", "mime": "image/png", "data": "iVBORw0KGgo="});
-        c.ask_typed_with("", vec![file.clone()])
+        c.ask_typed_with("", vec![file.clone()], 0)
             .unwrap()
             .await
             .unwrap();
@@ -5321,6 +5349,22 @@ mod tests {
         let c = agent(answer("答", "好"));
         c.ask_typed("你好").unwrap().await.unwrap();
         assert_eq!(c.core().call_params("agent.ask").get("attachments"), None);
+    }
+
+    #[tokio::test]
+    async fn a_question_typed_in_a_members_thread_names_the_member_and_raphaels_names_none() {
+        let c = agent(answer("答", "好"));
+        c.ask_typed_with("今天的進度？", Vec::new(), 3)
+            .unwrap()
+            .await
+            .unwrap();
+        assert_eq!(c.core().call_params("agent.ask")["member_id"], json!(3));
+        let c = agent(answer("答", "好"));
+        c.ask_typed_with("你好", Vec::new(), 0)
+            .unwrap()
+            .await
+            .unwrap();
+        assert_eq!(c.core().call_params("agent.ask").get("member_id"), None);
     }
 
     #[tokio::test]

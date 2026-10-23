@@ -66,8 +66,17 @@ def heard(language: str, transcript: str) -> str:
 
 
 def compose(prefix: str, text: str, detail: str | None) -> str:
-    """The answer as one message: the line of the overlay and, when there is more, the longer text."""
-    line = f"{prefix}{text}".strip()
+    """The answer as one message: the line as the overlay and the app show it, 《prefix。text》, and,
+    when there is more, the longer text. The prefix of the English persona is a word ("Answer"),
+    the others one character (答), each followed by the stop of its script. With no prefix (a
+    member, who speaks plainly) the text goes as it is."""
+    mark = prefix.strip().strip("《》").rstrip("。.").strip()
+    body = text.strip()
+    if mark:
+        stop = ". " if mark.isascii() else "。"
+        line = f"《{mark}{stop}{body}》"
+    else:
+        line = body
     if detail and detail.strip() and detail.strip() != text.strip():
         return f"{line}\n\n{detail.strip()}" if line else detail.strip()
     return line

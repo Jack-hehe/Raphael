@@ -1,7 +1,9 @@
 // The main window: a sidebar with home, Raphael's conversations, history and dictionary, this
 // month's spend and the way to the settings at the bottom, and the page that is chosen. The
 // settings open as a panel over the window. The pages are in pages/; this file holds what they
-// share.
+// share. On the 拉斐爾 page the sidebar is a rail of its icons alone (52 px), to leave room for the
+// members' column: `data-rail` on <html> says so to the style sheet, and each icon is named in its
+// tooltip then.
 
 import { onLocaleChange, setLocale, t } from "./i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -182,6 +184,23 @@ async function start(): Promise<void> {
     markQuestion(waitingQuestion);
     for (const item of NAV) labelNavItem(nav, item.id, item.name);
     nav.querySelector<HTMLElement>(".nav-bottom span")!.textContent = t("nav.settings");
+    nameRailItems();
+  }
+
+  /** Whether the sidebar is the rail of icons: while the 拉斐爾 page is the one on screen. */
+  let rail = false;
+  /** In the rail each icon says its page in its tooltip; in the whole sidebar the name is beside it. */
+  function nameRailItems(): void {
+    nav.querySelectorAll<HTMLElement>(".nav").forEach((item) => {
+      const name = item.querySelector(".nav-t, .nav-bottom span")?.textContent ?? "";
+      if (rail && name) item.title = name;
+      else item.removeAttribute("title");
+    });
+  }
+  function setRail(on: boolean): void {
+    rail = on;
+    document.documentElement.dataset.rail = String(on);
+    nameRailItems();
   }
   translateNavigation();
   onLocaleChange(() => {
@@ -266,6 +285,7 @@ async function start(): Promise<void> {
     if (settingsOpen) closeSettings(false);
     if (current && current !== id) pages[current].hide();
     current = id;
+    setRail(id === "agent");
     for (const page of Object.values(pages)) if (page !== settings) page.el.hidden = page.id !== id;
     nav.querySelectorAll<HTMLElement>(".nav[data-go]").forEach((item) =>
       item.setAttribute("aria-current", item.dataset.go === id ? "page" : "false"),

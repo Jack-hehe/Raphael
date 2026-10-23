@@ -7,8 +7,9 @@
 //!   (`worker.cancel {task_id}`) or run one that did not finish again (`worker.rerun {task_id}`), the
 //!   way the tray stops the one that runs. It may list, read, edit and delete Raphael's memories and
 //!   clear the summary of the conversation (`memory.list`, `memory.get`, `memory.update`,
-//!   `memory.delete`, `memory.clear`, `memory.summary_clear`), each by its name and with its params
-//!   checked here first.
+//!   `memory.delete`, `memory.clear`, `memory.move`, `memory.summary_clear`), each by its name and
+//!   with its params checked here first; and manage the members of the owner's team, their groups
+//!   and their routines (`members.*`, `groups.*`, `routines.*`, each by its name).
 //! - `agent_ask_text`, `agent_question_open` and `agent_question_answer` are the 拉斐爾 page's own
 //!   way to Raphael, through the dictation controller rather than the core
 //!   ([`crate::dictation::Desk`]): a question typed in its composer (some text, of a bounded
@@ -40,7 +41,8 @@
 //! hotkeys or the overlay may not be there, and the settings page still has to work.
 //!
 //! The window may also read and set the services of Raphael's tools (`services.status`,
-//! `services.set_key`, `services.clear_key`), and a typed question may carry images and PDFs
+//! `services.set_key`, `services.clear_key`), try Raphael's voice (`tts.preview`, `tts.stop`), and
+//! a typed question may carry images and PDFs
 //! (`agent_ask_text`'s `attachments`, which go on to `agent.ask` untouched).
 //!
 //! Never log the params of a call: `secrets.set_openrouter_key` carries the OpenRouter key,
@@ -173,9 +175,10 @@ pub enum MainEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         action: Option<TrayAction>,
     },
-    /// A turn of the conversations with Raphael was written or completed (`agent.turn`): the page
-    /// of the conversations reads it again. Only its id: what was said stays in the core.
-    AgentTurn { turn_id: u64 },
+    /// A turn of the conversations was written or completed (`agent.turn`): the page of the
+    /// conversations reads it again. Only its id and the thread it is in (`member_id`: 0 is
+    /// Raphael's, and a core from before the members names none): what was said stays in the core.
+    AgentTurn { turn_id: u64, member_id: u64 },
     /// A background task moved on (`worker.changed`): a step was taken, or it started or ended.
     /// `running` is whether any task is under way.
     WorkerChanged {
@@ -323,7 +326,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 29] = [
+const ALLOWED_METHODS: [&str; 55] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -343,7 +346,7 @@ const ALLOWED_METHODS: [&str; 29] = [
     "messaging.telegram.remove_user",
     "messaging.telegram.disconnect",
     // The conversation view stops the task it shows, by its id (`validate_core_call`). The other
-    // methods of the worker stay closed: a yes to its question is the overlay's real click alone.
+    // methods of the worker stay closed (a task's question is answered by `background.answer`).
     "worker.cancel",
     // ... and runs one that did not finish again, by its id.
     "worker.rerun",
@@ -354,12 +357,47 @@ const ALLOWED_METHODS: [&str; 29] = [
     "memory.update",
     "memory.delete",
     "memory.clear",
+    "memory.move",
     "memory.summary_clear",
     // The services of the tools, in the settings: what is chosen and whether each key is stored
     // (never a key), and a key put in or taken out of the vault. Named one by one as well.
     "services.status",
     "services.set_key",
     "services.clear_key",
+    // The members of the owner's team, their groups and their routines (the 拉斐爾 page's member
+    // column and details panel). Named one by one as well; the core checks their params. A member
+    // is asked something only by `agent_ask_text`, like Raphael: `agent.ask` stays closed.
+    "members.list",
+    "members.create",
+    "members.update",
+    "members.delete",
+    "members.set_avatar",
+    "members.presets",
+    "members.read",
+    "members.viewing",
+    "members.tool_choices",
+    "groups.create",
+    "groups.update",
+    "groups.delete",
+    "routines.list",
+    "routines.create",
+    "routines.update",
+    "routines.delete",
+    "routines.template",
+    // The owner's safety rules, in Settings › 拉斐爾 (the core checks the words and the verdict).
+    "safety.rules.list",
+    "safety.rules.create",
+    "safety.rules.update",
+    "safety.rules.delete",
+    // The questions a background task waits on, as the gold card of a thread shows them, and the
+    // owner's answer from that card: the one place such a question is answered
+    // (`validate_core_call` checks it names its task and question and says yes or no).
+    "background.questions.list",
+    "background.answer",
+    // Raphael's voice, in the settings: the 「Try it」 line is spoken in the voice that is set up,
+    // and stopped by `tts.stop`. His answers are spoken by the core itself and need neither.
+    "tts.preview",
+    "tts.stop",
 ];
 
 /// The types a memory's name starts with (the core's `memory.store.TYPES`).
@@ -412,7 +450,10 @@ fn validate_history_search(params: &Value) -> Result<(), String> {
 /// The params of a memory method: `name` a memory's name where one is needed, and for
 /// `memory.update` a `body` of text within the limit and, if given, a `description` within its own.
 fn validate_memory_call(method: &str, params: &Value) -> Result<(), String> {
-    let needs_name = matches!(method, "memory.get" | "memory.update" | "memory.delete");
+    let needs_name = matches!(
+        method,
+        "memory.get" | "memory.update" | "memory.delete" | "memory.move"
+    );
     if needs_name
         && !params
             .get("name")
@@ -443,7 +484,8 @@ fn validate_memory_call(method: &str, params: &Value) -> Result<(), String> {
 /// settings (the `languages` setting too), the key, the status, the usage numbers, OpenRouter's
 /// catalog of models with their prices, the list of languages, the record of the conversations
 /// with Raphael, the plugins (the store, the servers the user connects and whether each of their tools is on),
-/// stopping a background task, and the few device methods the settings page needs. Everything else
+/// stopping a background task, the owner's safety rules, the questions a background task waits on
+/// and the answer to one, and the few device methods the settings page needs. Everything else
 /// is refused, the dictation methods and the ones that ask Raphael something above all.
 pub fn is_allowed_method(m: &str) -> bool {
     ALLOWED_METHODS.contains(&m)
@@ -458,7 +500,9 @@ pub fn is_allowed_method(m: &str) -> bool {
 /// (each model against OpenRouter's list), so that the settings page gets these refusals in its
 /// own words. `Err` says what is wrong. The window's `worker.cancel` and `worker.rerun` must name
 /// their task, the memory's methods a memory by a name that is one, with a text within the
-/// limits, and the search of the conversation its words and a whole limit. Other calls pass.
+/// limits, the search of the conversation its words and a whole limit, and the answer to a question
+/// of the background its task, its question and a yes or a no (`validate_background_answer`). Other
+/// calls pass.
 pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     if method == "worker.cancel" {
         // Without an id the core stops whichever task runs: the window stops only the one it shows.
@@ -472,6 +516,9 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
             Some(_) => Ok(()),
             None => Err("worker.rerun needs the task_id of the task to run again".to_owned()),
         };
+    }
+    if method == "background.answer" {
+        return validate_background_answer(params);
     }
     if method.starts_with("memory.") {
         return validate_memory_call(method, params);
@@ -513,6 +560,31 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
         _ => "沒有指定整理用的模型",
     }
     .to_owned())
+}
+
+/// The params of `background.answer`: the task's whole id, the question's id (a short word of
+/// letters, digits, `-` and `_`, as the core makes them: [`is_question_id`]) and `approved`, true
+/// or false. A `source` other than this window's ("app") is refused here as the core refuses it:
+/// the answer to a question of the background is given at this computer, in the app, alone.
+fn validate_background_answer(params: &Value) -> Result<(), String> {
+    if params.get("task_id").and_then(Value::as_u64).is_none() {
+        return Err("background.answer needs the task_id of the task that waits".to_owned());
+    }
+    if !params
+        .get("question_id")
+        .and_then(Value::as_str)
+        .is_some_and(is_question_id)
+    {
+        return Err("background.answer needs the question_id of the question".to_owned());
+    }
+    if !params.get("approved").is_some_and(Value::is_boolean) {
+        return Err("background.answer needs approved, true or false".to_owned());
+    }
+    match params.get("source") {
+        None => Ok(()),
+        Some(source) if source.as_str() == Some("app") => Ok(()),
+        Some(_) => Err("a question of the background is answered in the app alone".to_owned()),
+    }
 }
 
 /// Passes `method` on to the core and returns its answer. Fails with the core's own error (code
@@ -602,16 +674,19 @@ pub fn typed_attachments(attachments: Option<Vec<Value>>) -> Result<Vec<Value>, 
 }
 
 /// Asks Raphael a question typed in the composer of the 拉斐爾 page, with the images and PDFs
-/// attached to it, if any (`attachments`, `agent.ask`'s, never logged). It goes the way a spoken
-/// one goes once its words are heard (`agent.ask` with the source `app`; the overlay shows the
-/// answer and any YES/NO question), and the call settles when the turn is over, its answer in the
-/// history or its failure shown. Refused while Raphael is busy with a recording or another question.
+/// attached to it, if any (`attachments`, `agent.ask`'s, never logged), or, with a `member_id`
+/// that is not 0, the member whose thread it was typed in (a member is reached only this way, with
+/// the source `app`). It goes the way a spoken one goes once its words are heard (`agent.ask` with
+/// the source `app`; the overlay shows the answer and any YES/NO question), and the call settles
+/// when the turn is over, its answer in the history or its failure shown. Refused while Raphael is
+/// busy with a recording or another question.
 #[tauri::command]
 pub async fn agent_ask_text(
     app: AppHandle,
     webview: Webview,
     text: String,
     attachments: Option<Vec<Value>>,
+    member_id: Option<u64>,
 ) -> Result<(), String> {
     require_main(&webview)?;
     let attachments = typed_attachments(attachments)?;
@@ -622,7 +697,7 @@ pub async fn agent_ask_text(
         .ok_or(AGENT_OFF)?;
     let turn = desk
         .0
-        .ask_typed(text, attachments)
+        .ask_typed(text, attachments, member_id.unwrap_or(0))
         .map_err(|_| "拉斐爾正在忙，請稍後再問".to_owned())?;
     // The page waits for the turn, so that it knows when to stop waiting for its answer.
     if let Err(err) = turn.await {
@@ -720,6 +795,7 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
         }),
         "agent.turn" => Some(MainEvent::AgentTurn {
             turn_id: params.get("turn_id")?.as_u64()?,
+            member_id: params.get("member_id").and_then(Value::as_u64).unwrap_or(0),
         }),
         "worker.changed" => Some(MainEvent::WorkerChanged {
             task_id: params.get("task_id")?.as_u64()?,
@@ -1540,6 +1616,71 @@ mod tests {
     }
 
     #[test]
+    fn the_main_window_answers_a_background_question_only_as_itself() {
+        let id = "0f6d8a52-1c3e-4c2b-9a51-7d1e2f3a4b5c";
+        let ok = json!({"task_id": 3, "question_id": id, "approved": true});
+        assert!(validate_core_call("background.answer", &ok).is_ok());
+        let from_app = json!({"task_id": 3, "question_id": id, "approved": false, "source": "app"});
+        assert!(validate_core_call("background.answer", &from_app).is_ok());
+        for bad in [
+            json!({"question_id": id, "approved": true}),
+            json!({"task_id": -1, "question_id": id, "approved": true}),
+            json!({"task_id": 3, "approved": true}),
+            json!({"task_id": 3, "question_id": "../x", "approved": true}),
+            json!({"task_id": 3, "question_id": id, "approved": "yes"}),
+            json!({"task_id": 3, "question_id": id, "approved": true, "source": "telegram"}),
+        ] {
+            assert!(
+                validate_core_call("background.answer", &bad).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_main_window_manages_the_members_by_their_names_only() {
+        for method in [
+            "members.list",
+            "members.create",
+            "members.update",
+            "members.delete",
+            "members.set_avatar",
+            "members.presets",
+            "members.read",
+            "members.viewing",
+            "members.tool_choices",
+            "groups.create",
+            "groups.update",
+            "groups.delete",
+            "routines.list",
+            "routines.create",
+            "routines.update",
+            "routines.delete",
+            "routines.template",
+        ] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        for method in [
+            "members.",
+            "members",
+            "members.ask",
+            "groups.",
+            "routines.run",
+            "Members.list",
+        ] {
+            assert!(!is_allowed_method(method), "{method}");
+        }
+        assert!(validate_core_call("memory.move", &json!({"to_space": "shared"})).is_err());
+        assert!(
+            validate_core_call(
+                "memory.move",
+                &json!({"name": "user-city", "to_space": "shared", "member_id": 3})
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn the_main_window_reads_and_sets_the_services_by_their_names_only() {
         for method in ["services.status", "services.set_key", "services.clear_key"] {
             assert!(is_allowed_method(method), "{method}");
@@ -1550,6 +1691,16 @@ mod tests {
             "services.get_key",
             "Services.status",
         ] {
+            assert!(!is_allowed_method(method), "{method}");
+        }
+    }
+
+    #[test]
+    fn the_main_window_tries_the_voice_by_its_two_names_only() {
+        for method in ["tts.preview", "tts.stop"] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        for method in ["tts.", "tts", "tts.say", "Tts.preview", "xtts.stop"] {
             assert!(!is_allowed_method(method), "{method}");
         }
     }
@@ -1926,15 +2077,43 @@ mod tests {
             "memory.update",
             "memory.delete",
             "memory.clear",
+            "memory.move",
             "memory.summary_clear",
             "services.status",
             "services.set_key",
             "services.clear_key",
+            "members.list",
+            "members.create",
+            "members.update",
+            "members.delete",
+            "members.set_avatar",
+            "members.presets",
+            "members.read",
+            "members.viewing",
+            "members.tool_choices",
+            "groups.create",
+            "groups.update",
+            "groups.delete",
+            "routines.list",
+            "routines.create",
+            "routines.update",
+            "routines.delete",
+            "routines.template",
+            "safety.rules.list",
+            "safety.rules.create",
+            "safety.rules.update",
+            "safety.rules.delete",
+            "background.questions.list",
+            "background.answer",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
         for method in [
             "",
+            "safety.",
+            "safety.rules.",
+            "background.",
+            "background.cancel",
             "history",
             "history.",
             "dictation.start",
@@ -2165,7 +2344,18 @@ mod tests {
         let turn = notification("agent.turn", json!({"turn_id": 12}));
         assert_eq!(
             main_event_from(&turn, false),
-            Some(MainEvent::AgentTurn { turn_id: 12 })
+            Some(MainEvent::AgentTurn {
+                turn_id: 12,
+                member_id: 0
+            })
+        );
+        let theirs = notification("agent.turn", json!({"turn_id": 13, "member_id": 4}));
+        assert_eq!(
+            main_event_from(&theirs, false),
+            Some(MainEvent::AgentTurn {
+                turn_id: 13,
+                member_id: 4
+            })
         );
         let task = notification(
             "worker.changed",
@@ -2233,8 +2423,12 @@ mod tests {
             r#"{"type":"LearnLimited","app":"vscode","reason":"accessibility_off"}"#
         );
         assert_eq!(
-            serde_json::to_string(&MainEvent::AgentTurn { turn_id: 4 }).unwrap(),
-            r#"{"type":"AgentTurn","turn_id":4}"#
+            serde_json::to_string(&MainEvent::AgentTurn {
+                turn_id: 4,
+                member_id: 2
+            })
+            .unwrap(),
+            r#"{"type":"AgentTurn","turn_id":4,"member_id":2}"#
         );
         assert_eq!(
             serde_json::to_string(&MainEvent::WorkerChanged {

@@ -5,7 +5,8 @@
    (--rg-*) is only on the card of his YES/NO question. Every movement stops with
    prefers-reduced-motion (the rule at the end of styles.css, and the last block here). */
 
-.page.page-agent { max-width: none; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); padding-bottom: 0; }
+/* The page's columns (the members, the chat, the details) are in members.css; the chat holds the
+   head, the search and the stage, one above the other. */
 
 /* ---------- the head ---------- */
 .ra-tools { display: flex; align-items: center; gap: var(--sp-1); }
@@ -29,7 +30,7 @@
 
 /* ---------- the stage ---------- */
 .ra-stage { grid-row: 3; position: relative; display: flex; flex-direction: column; min-height: 0; }
-.ra-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; overflow-anchor: none; padding: 8px 4px 12px; }
+.ra-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; overflow-anchor: none; padding: 8px 4px 36px; }
 .ra-col { max-width: 760px; margin: 0 auto; }
 .ra-older { display: flex; justify-content: center; padding: 6px 0 2px; }
 .ra-wait { padding-top: var(--sp-5); }
@@ -123,7 +124,7 @@
 .think i:last-child { width: 46px; animation-delay: -0.4s; }
 
 /* ---------- the composer ---------- */
-.ra-dock { flex: none; padding: 6px 16px 16px; }
+.ra-dock { flex: none; padding: 8px 16px 28px; }
 .ra-dock > .composer, .ra-dock > .ask-card { max-width: 760px; margin: 0 auto; }
 .composer { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; background: var(--panel); border: 1px solid var(--edge); border-radius: 26px; padding: 6px 7px 6px 8px; box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 6%, transparent); transition: border-color 0.16s ease, box-shadow 0.16s ease; }
 /* Typing into it deepens its shadow a little; its edge keeps its colour, as no frame shows where the focus is. */

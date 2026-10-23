@@ -18,6 +18,15 @@ Every turn is also in the search (`agent_turns_fts`, `search`): its question and
 words and pairs of CJK characters (`memory.terms`), so that Raphael can look up what was said long
 ago, a word of two Chinese characters too.
 
+Each turn is in the thread of one member of the owner's team (`member_id`, raphael_core.members):
+0 is Raphael, whose thread every turn was in before there were members, and the rest are the members
+the owner made. Every reading here is of one thread (Raphael's, unless another is named), so each
+member has a conversation, a summary and a search of its own. Two kinds of turn are not the owner's
+own words: an exchange (`route` "exchange", `source` "member"), where one member asked another
+something through `ask_member` and the other answered (it is written in both threads, `peer_id`
+naming the other one), and a routine's run (`route` and `source` "routine"), whose `question` is the
+routine's title and whose answer is what the run reported.
+
 The conversation is not pruned: unlike the dictations, which go after the retention setting, the
 turns stay until the user clears them (`clear`). Nothing here logs a question or an answer.
 """
@@ -56,11 +65,13 @@ class Turn:
     model: str | None = None  # the model that answered, when one did
     # The files handed with the request, `[{"name", "mime"}]`; None when there were none.
     attachments: list[dict[str, str]] | None = None
+    member_id: int = 0  # whose thread it is in: 0 for Raphael
+    peer_id: int | None = None  # for an exchange, the member on the other side
 
 
 _COLUMNS = (
     "id, created_at_ms, session_id, question, route, prefix, text, detail, status, cost_usd,"
-    " source, model, attachments"
+    " source, model, attachments, member_id, peer_id"
 )
 _STEP_COLUMNS = "turn_id, kind, tool, server, outcome, ms, reason, at_ms, detail"
 _TURN_COLUMNS = ", ".join(f"t.{name.strip()}" for name in _COLUMNS.split(","))
@@ -94,10 +105,13 @@ def _to_turn(row: sqlite3.Row) -> Turn:
     return Turn(**data)
 
 
-def _filters(since_ms: int | None, exclude: Sequence[int]) -> tuple[str, list[object]]:
+def _filters(
+    since_ms: int | None, exclude: Sequence[int], member_id: int = 0
+) -> tuple[str, list[object]]:
     """The conditions of a search besides its words, as SQL to add to its WHERE, and their params:
-    the turns made from `since_ms` on, and none of the ids of `exclude`."""
-    where, params = "", []
+    the turns of the thread of `member_id`, made from `since_ms` on, and none of the ids of
+    `exclude`."""
+    where, params = " AND t.member_id = ?", [member_id]
     if since_ms is not None:
         where += " AND t.created_at_ms >= ?"
         params.append(since_ms)
@@ -132,15 +146,18 @@ class AgentHistory:
         model: str | None = None,
         steps: Sequence[Step] = (),
         attachments: Sequence[Mapping[str, str]] = (),
+        member_id: int = 0,
+        peer_id: int | None = None,
     ) -> int:
-        """Store a new turn, made now, with the steps taken for it, and return its id.
-        `attachments` are the names and the types of the files handed with the request."""
+        """Store a new turn, made now, in the thread of `member_id`, with the steps taken for it,
+        and return its id. `attachments` are the names and the types of the files handed with the
+        request; `peer_id` is the other member of an exchange."""
         files = [{"name": item["name"], "mime": item["mime"]} for item in attachments]
         with self._conn:
             cursor = self._conn.execute(
                 "INSERT INTO agent_turns (created_at_ms, session_id, question, route, prefix,"
-                " text, detail, status, cost_usd, source, model, attachments)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " text, detail, status, cost_usd, source, model, attachments, member_id, peer_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     self._now_ms(),
                     session_id,
@@ -154,6 +171,8 @@ class AgentHistory:
                     source,
                     model,
                     json.dumps(files, ensure_ascii=False) if files else None,
+                    member_id,
+                    peer_id,
                 ),
             )
             turn_id = cursor.lastrowid
@@ -248,48 +267,65 @@ class AgentHistory:
                 self._index(turn_id, row[0], text, detail)
         return cursor.rowcount > 0
 
-    def list(self, limit: int = 50, before_id: int | None = None) -> list[Turn]:
-        """Newest first. `before_id` keeps the turns made before that one: the cursor for the next
-        page."""
-        conditions = "" if before_id is None else " WHERE id < ?"
-        params: list[object] = [] if before_id is None else [before_id]
+    def list(
+        self, limit: int = 50, before_id: int | None = None, *, member_id: int = 0
+    ) -> list[Turn]:
+        """The thread of `member_id`, newest first. `before_id` keeps the turns made before that
+        one: the cursor for the next page."""
+        conditions = " WHERE member_id = ?" + ("" if before_id is None else " AND id < ?")
+        params: list[object] = [member_id] if before_id is None else [member_id, before_id]
         rows = self._conn.execute(
             f"SELECT {_COLUMNS} FROM agent_turns{conditions} ORDER BY id DESC LIMIT ?",
             [*params, limit],
         )
         return [_to_turn(row) for row in rows]
 
-    def recent(self, count: int) -> list[Turn]:
-        """The last `count` turns that were answered, oldest first: the context of what is asked
-        next. A turn that is waiting for a yes or a no, was refused or failed says nothing."""
+    def recent(self, count: int, *, member_id: int = 0) -> list[Turn]:
+        """The last `count` turns of the thread of `member_id` that were answered, oldest first:
+        the context of what is asked next. A turn that is waiting for a yes or a no, was refused
+        or failed says nothing."""
         if count <= 0:
             return []
         rows = self._conn.execute(
-            f"SELECT {_COLUMNS} FROM agent_turns WHERE status = 'done' ORDER BY id DESC LIMIT ?",
-            (count,),
+            f"SELECT {_COLUMNS} FROM agent_turns WHERE status = 'done' AND member_id = ?"
+            " ORDER BY id DESC LIMIT ?",
+            (member_id, count),
         )
         return [_to_turn(row) for row in reversed(rows.fetchall())]
 
-    def after(self, turn_id: int, *, limit: int | None = None) -> list[Turn]:
-        """The turns made after the turn `turn_id`, whatever their status, oldest first; with a
-        `limit`, only the newest that many of them."""
+    def after(
+        self, turn_id: int, *, limit: int | None = None, member_id: int = 0
+    ) -> list[Turn]:
+        """The turns of the thread of `member_id` made after the turn `turn_id`, whatever their
+        status, oldest first; with a `limit`, only the newest that many of them."""
         if limit is None:
             rows = self._conn.execute(
-                f"SELECT {_COLUMNS} FROM agent_turns WHERE id > ? ORDER BY id", (turn_id,)
+                f"SELECT {_COLUMNS} FROM agent_turns WHERE id > ? AND member_id = ? ORDER BY id",
+                (turn_id, member_id),
             ).fetchall()
             return [_to_turn(row) for row in rows]
         if limit <= 0:
             return []
         rows = self._conn.execute(
-            f"SELECT {_COLUMNS} FROM agent_turns WHERE id > ? ORDER BY id DESC LIMIT ?",
-            (turn_id, limit),
+            f"SELECT {_COLUMNS} FROM agent_turns WHERE id > ? AND member_id = ?"
+            " ORDER BY id DESC LIMIT ?",
+            (turn_id, member_id, limit),
         ).fetchall()
         return [_to_turn(row) for row in reversed(rows)]
 
     def last_id(self) -> int:
-        """The id of the latest turn; 0 when there is none."""
+        """The id of the latest turn of any thread; 0 when there is none."""
         (found,) = self._conn.execute("SELECT COALESCE(MAX(id), 0) FROM agent_turns").fetchone()
         return int(found)
+
+    def latest_by_member(self) -> dict[int, Turn]:
+        """The latest turn of each thread that has one, by member: what the member column shows
+        under each name."""
+        rows = self._conn.execute(
+            f"SELECT {_COLUMNS} FROM agent_turns WHERE id IN"
+            " (SELECT MAX(id) FROM agent_turns GROUP BY member_id)"
+        ).fetchall()
+        return {turn.member_id: turn for turn in map(_to_turn, rows)}
 
     def search(
         self,
@@ -299,6 +335,7 @@ class AgentHistory:
         since_ms: int | None = None,
         exclude: Sequence[int] = (),
         most: int = SEARCH_MAX,
+        member_id: int = 0,
     ) -> list[Turn]:
         """The answered turns that hold the words of `query`, best first (BM25, then the newest),
         at most `limit` and `most` (SEARCH_MAX for the model, more for the conversation page). Each
@@ -306,12 +343,13 @@ class AgentHistory:
         and a turn that holds any of them is found. A word that is a long run of Chinese and is not
         found as it is written is looked for by its pairs of characters. `since_ms` keeps the turns made from then on. The turns of `exclude` (the
         ones the model already reads) are left out by the query itself, before the limit, so that
-        the older turns behind them are found however many of them match."""
+        the older turns behind them are found however many of them match. Only the thread of
+        `member_id` is searched."""
         words = query_words(query)
         limit = max(1, min(limit, most))
         if not words:
             return []
-        where, params = _filters(since_ms, exclude)
+        where, params = _filters(since_ms, exclude, member_id)
         found = self._find(words, limit, where, params)
         if not found and any(len(word.pairs) > 1 for word in words):
             pairs = dict.fromkeys(pair for word in words for pair in word.pairs)
@@ -370,11 +408,25 @@ class AgentHistory:
         return row is not None and "fts5" in (row[0] or "").lower()
 
     def clear(self) -> int:
-        """Delete every turn, with its steps and its place in the search; return how many went."""
+        """Delete every turn of every thread, with its steps and its place in the search; return
+        how many went."""
         with self._conn:
             self._conn.execute("DELETE FROM agent_steps")
             self._conn.execute("DELETE FROM agent_turns_fts")
             cursor = self._conn.execute("DELETE FROM agent_turns")
+        return cursor.rowcount
+
+    def clear_member(self, member_id: int) -> int:
+        """Delete the thread of `member_id` and the exchanges of the other threads with it, with
+        their steps and their place in the search; return how many turns went."""
+        both = (member_id, member_id)
+        ids = "SELECT id FROM agent_turns WHERE member_id = ? OR peer_id = ?"
+        with self._conn:
+            self._conn.execute(f"DELETE FROM agent_steps WHERE turn_id IN ({ids})", both)
+            self._conn.execute(f"DELETE FROM agent_turns_fts WHERE rowid IN ({ids})", both)
+            cursor = self._conn.execute(
+                "DELETE FROM agent_turns WHERE member_id = ? OR peer_id = ?", both
+            )
         return cursor.rowcount
 
     def expire_pending(self) -> int:

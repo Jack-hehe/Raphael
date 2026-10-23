@@ -123,10 +123,10 @@ async def test_the_app_is_told_when_a_turn_is_written_and_when_it_is_answered(
     rig, plugins, client, calls, heard
 ):
     asked = await ask_for_note(rig, plugins, client, "T2")
-    assert heard == [("agent.turn", {"turn_id": asked["turn_id"]})]
+    assert heard == [("agent.turn", {"turn_id": asked["turn_id"], "member_id": 0})]
     client.replies.append(spoken("了", "記下了。"))
     await rig.confirm(asked["confirm"]["id"], True)
-    assert heard[-1] == ("agent.turn", {"turn_id": asked["turn_id"]}) and len(heard) == 2
+    assert heard[-1] == ("agent.turn", {"turn_id": asked["turn_id"], "member_id": 0}) and len(heard) == 2
 
 
 async def test_clearing_the_history_takes_the_steps_too(rig, client, conn):

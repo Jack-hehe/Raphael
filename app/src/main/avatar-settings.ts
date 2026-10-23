@@ -1,33 +1,20 @@
-// 頭像, in Settings › 拉斐爾: Raphael's picture, its 「更換」 and 「還原」. 更換 opens the file dialog of
-// Windows from the app (`avatar_pick`: PNG, JPG, WebP or GIF; the page never learns where the file
-// was), then a small dialog where the picture is dragged and zoomed inside the circle that will
-// show it; 完成 keeps a copy of it in the app's local folder with that cut (`avatar_save`). 還原
-// deletes the copy, and Raphael is his emblem again (`avatar_clear`). A moving picture keeps moving:
-// the copy is the file itself, and the cut is a crop drawn over it (`AvatarCrop`), not a new image.
+// Changing Raphael's picture, from his details panel on the 拉斐爾 page (member-details.ts), the
+// same place as every member's: 「從電腦選…」 opens the file dialog of Windows from the app
+// (`avatar_pick`: PNG, JPG, WebP or GIF; the page never learns where the file was), then a small
+// dialog where the picture is dragged and zoomed inside the circle that will show it; 完成 keeps a
+// copy of it in the app's local folder with that cut (`avatar_save`). 還原 deletes the copy, and
+// Raphael is his emblem again (`avatar_clear`). A moving picture keeps moving: the copy is the file
+// itself, and the cut is a crop drawn over it (`AvatarCrop`), not a new image.
 
 import { t } from "./i18n";
 
 import * as api from "./api";
-import { type AvatarCrop, ZOOM_MAX, avatarHTML, cleanCrop, cropStyle, currentAvatar, loadAvatar } from "./avatar";
+import { type AvatarCrop, ZOOM_MAX, cleanCrop, cropStyle, loadAvatar } from "./avatar";
 import { describeError } from "./format";
-import { btn, esc, row, toaster } from "./ui";
+import { btn, esc, toaster } from "./ui";
 
 /** The circle of the crop dialog, in px. */
 const CIRCLE_PX = 220;
-
-/** The row: the picture as it is now in a circle, and the two buttons. */
-export function avatarRowHTML(): string {
-  const custom = currentAvatar() !== null;
-  return row(
-    t("settings.avatar"),
-    "",
-    `<span class="av-set">${avatarHTML({ size: 40, cls: "av-set-face" })}` +
-      btn(esc(t("settings.avatarChange")), "sm", ' data-act="avatar-change"') +
-      btn(esc(t("settings.avatarReset")), "sm", ` data-act="avatar-reset"${custom ? "" : " disabled"}`) +
-      `</span>`,
-    { attrs: ' data-row="avatar"' },
-  );
-}
 
 /**
  * Where a drag of `dx`, `dy` px moves the crop of a picture `w` × `h` in a circle of `side` px:
@@ -119,8 +106,8 @@ export function cropDialog(url: string): Promise<AvatarCrop | null> {
   });
 }
 
-/** 更換: the file dialog, the crop dialog, then the copy kept. */
-async function change(): Promise<void> {
+/** 從電腦選…: the file dialog, the crop dialog, then the copy kept. */
+export async function changeRaphaelAvatar(): Promise<void> {
   let url: string | null;
   try {
     url = await api.avatarPick();
@@ -141,7 +128,7 @@ async function change(): Promise<void> {
 }
 
 /** 還原: the copy is deleted and Raphael is his emblem. */
-async function reset(): Promise<void> {
+export async function resetRaphaelAvatar(): Promise<void> {
   try {
     await api.avatarClear();
   } catch (err) {
@@ -149,18 +136,4 @@ async function reset(): Promise<void> {
     return;
   }
   await loadAvatar(api.avatarGet);
-}
-
-/** A click in the settings: true when it was one of the row's buttons, which it then handles. */
-export function avatarClick(target: Element): boolean {
-  const act = target.closest<HTMLElement>("[data-act]")?.dataset.act;
-  if (act === "avatar-change") {
-    void change();
-    return true;
-  }
-  if (act === "avatar-reset") {
-    void reset();
-    return true;
-  }
-  return false;
 }

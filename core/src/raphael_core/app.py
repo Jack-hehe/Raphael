@@ -5,8 +5,10 @@
 assistant's (`agent.*`, raphael_core.agent), the background worker's (`worker.*`,
 raphael_core.background), the plugins' (`integrations.*` and `toolsets.list`,
 raphael_core.integrations), the messaging apps' (`messaging.<app>.*`, raphael_core.messaging), the
-services of the tools' (`services.*`, raphael_core.services) and the few that belong to none of them (`core.*`, `models.*`, `audio.*`). `__main__` serves it on
-stdio.
+services of the tools' (`services.*`, raphael_core.services), Raphael's voice (`tts.*`,
+raphael_core.services.speaker), the owner's team's (`members.*`, `groups.*`, `routines.*`,
+raphael_core.members) and the few that belong to none of them (`core.*`, `models.*`, `audio.*`).
+`__main__` serves it on stdio.
 
 Start-up. The app's first calls come within seconds of the process starting (`core.hello`, the
 saved microphone, the settings page's questions), so the models, which take tens of seconds to
@@ -63,9 +65,12 @@ import keyring
 from . import __version__, paths
 from .agent.device import DeviceActions, NullActions, WindowsActions
 from .agent.gate import ToolGate
+from .agent.safety import SafetyGuard, SafetyJudge, SafetyRules
 from .agent.service import AgentService
 from .agent.tools import Tools
 from .background.service import BackgroundService
+from .background.tasks import FINAL_STATES
+from .members.service import MembersService
 from .computer.bridge import ShellBridge
 from .computer.run import ComputerRuns
 from .brain import textnorm
@@ -105,6 +110,7 @@ from .router import Router
 from .services.attachments import Attachment
 from .services.hub import ServiceHub, offline_transport
 from .services.keys import ServiceKeys, credential_keys, memory_keys
+from .services.speaker import Speaker
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +233,11 @@ class EchoClient:
         )
 
     async def decide(self, **kwargs: Any) -> Decision:
+        questions = kwargs.get("questions")
+        if isinstance(questions, dict) and questions and all(k.startswith("rule_") for k in questions):
+            # The safety rules' judge: no rule matches what the fake LLM does.
+            rules = {name: {"type": "noul", "noul": 0.0} for name in questions}
+            return Decision(answers=rules, cost_usd=0.0, latency_ms=0)
         # Jev, sure that every request is small talk (or a task, for the scripted one).
         state = kwargs.get("state")
         spoken = state.get("utterance", "") if isinstance(state, dict) else ""
@@ -755,13 +766,24 @@ class App(Router):
             transport=offline_transport() if fake_llm else None,
         )
         self.services.register(self)
+        # Raphael's voice (`tts.*`): his answers aloud, through the service the owner chose.
+        self.speaker = Speaker(self.services)
+        self.speaker.register(self)
         if agent_actions is None:
             agent_actions = NullActions() if fake_llm else WindowsActions()
         # The plugins: servers the user connected, and the hub the assistant reaches their tools by.
         self.integrations = IntegrationsService(self._conn, data_dir, self.vault, notify=self.notify)
         self.integrations.register(self)
+        # The owner's safety rules (`safety.rules.*`), which the gate asks before every action that
+        # changes something, with their judge (Jev).
+        self.safety_rules = SafetyRules(self._conn)
+        self.safety_rules.register(self)
         # The one gate every tool call goes through, the assistant's and the worker's.
-        self.gate = ToolGate(self.integrations, conn=self._conn)
+        self.gate = ToolGate(
+            self.integrations,
+            conn=self._conn,
+            safety=SafetyGuard(self.safety_rules, SafetyJudge(self.client)),
+        )
         # The background worker: tasks the assistant hands over, carried out in a process of their
         # own that has no key, no database and no plugin (raphael_core.worker).
         self.background = BackgroundService(
@@ -778,14 +800,23 @@ class App(Router):
         self.computer_bridge.register(self)
         self.computer = ComputerRuns(self.computer_bridge)
         # Raphael's memory: the notes on this PC, the summary of the conversation, the reflection.
-        self.memory = MemoryService(
-            self._conn,
-            paths.memory_dir(data_dir) if memory_dir is None else memory_dir,
-            self.client,
-            self.keys,
-        )
+        memory_root = paths.memory_dir(data_dir) if memory_dir is None else memory_dir
+        self.memory = MemoryService(self._conn, memory_root, self.client, self.keys)
         self.memory.register(self)
         self.background.use_memory(self.memory)
+        # The members of the owner's team, their pictures (in the local folder the memory is in,
+        # beside the shell's copy of Raphael's own) and their routines.
+        self.members = MembersService(
+            self._conn,
+            memory_root.parent,
+            background=self.background,
+            memory=self.memory,
+            language=lambda: self.agent.language,
+            notify=self.notify,
+            connections=self.integrations.connections,
+        )
+        self.members.register(self)
+        self.memory.member_exists = self.members.member_exists
         self.agent = AgentService(
             self._conn,
             self.client,
@@ -795,12 +826,19 @@ class App(Router):
             models=self.brain.known_models,
             gate=self.gate,
             background=self.background,
-            notify=self.notify,
+            notify=self._agent_notice,
             computer=self.computer,
             memory=self.memory,
             services=self.services,
+            team=self.members,
+            speaker=self.speaker,
         )
         self.agent.register(self)
+        self.background.use_team(self.members, self.agent.team_tool)
+        # The questions the background waits on: a thread one waits in is `waiting` in the member
+        # column, and the overlay's notice of one names the member whose thread holds it.
+        self.members.add_waiting_source(self.background.waiting_members)
+        self.background.use_member_names(self.members.name_of)
         # Messaging apps (Telegram): messages reach the assistant like a spoken question.
         self.messaging = MessagingService(
             MessagingStore(data_dir),
@@ -994,8 +1032,10 @@ class App(Router):
             ("close the level meter", close_meter),
             ("stop the account usage refresh", self.brain.aclose),
             ("end the messaging connections", self.messaging.aclose),
+            ("stop the routines' scheduler", self.members.aclose),
             ("end the background tasks", self.background.aclose),
             ("end the assistant's requests", self.agent.aclose),
+            ("end Raphael's voice", self.speaker.aclose),
             ("end the memory's background pass", self.memory.aclose),
             ("close the services' HTTP client", self.services.aclose),
             ("close the HTTP client", self.client.aclose),
@@ -1187,10 +1227,26 @@ class App(Router):
         thinking = self.agent.stop_session(session_id)
         return await self.background.cancel_session(session_id) or thinking
 
+    def _agent_notice(self, method: str, params: dict) -> None:
+        """The assistant's notifications go to the app; a turn written or completed is news in its
+        thread, unless that thread is on screen (`MembersService.turn_arrived`)."""
+        if method == "agent.turn" and type(params.get("turn_id")) is int:
+            self.members.turn_arrived(params["turn_id"])
+        self.notify(method, params)
+
     def _worker_notice(self, method: str, params: dict) -> None:
         """The background worker's notifications go to the app, and the report of a task that a
-        messaging chat handed over goes back to that chat."""
+        messaging chat handed over goes back to that chat. When such a task waits for the owner's
+        yes, the chat is told that the answer is given at the computer: never there. A task that
+        ended completed its turn, which is news in its thread."""
         self.notify(method, params)
+        if method == "background.question" and params.get("state") == "waiting":
+            self._tell_chat_to_answer_here(params.get("task_id"))
+            return
+        if method == "worker.changed" and params.get("state") in FINAL_STATES:
+            ended = self.background.task(params["task_id"]) if type(params.get("task_id")) is int else None
+            if ended is not None and ended.turn_id:
+                self.members.turn_arrived(ended.turn_id)
         if method != "worker.report" or type(params.get("task_id")) is not int:
             return
         task = self.background.task(params["task_id"])
@@ -1206,10 +1262,25 @@ class App(Router):
         sent = loop.create_task(self.messaging.report(task.session_id, text))
         sent.add_done_callback(lambda t: t.cancelled() or t.exception())
 
+    def _tell_chat_to_answer_here(self, task_id: object) -> None:
+        if type(task_id) is not int:
+            return
+        task = self.background.task(task_id)
+        if task is None or not self.messaging.handles(task.session_id):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        text = words(task.language, "confirm")
+        sent = loop.create_task(self.messaging.report(task.session_id, text))
+        sent.add_done_callback(lambda t: t.cancelled() or t.exception())
+
     async def _hello(self, params: dict) -> dict:
         self.messaging.start()  # a Telegram bot that was left on polls again
         self.agent.prewarm()  # the app is up: read the Start menu now, not at the first "open"
         self.memory.start()  # and look for turns the reflection pass has not read, soon
+        self.members.start()  # the routines: one missed while the core was not running runs now
         return {"protocol": PROTOCOL_VERSION, "version": __version__}
 
     async def _shutdown(self, params: dict) -> dict:
@@ -1493,6 +1564,8 @@ class App(Router):
         way the meter stays suspended, so a stop that ends meanwhile cannot reopen it beside the
         new dictation.
         """
+        if method == "dictation.start":
+            self.speaker.stop()  # a new recording ends what Raphael was saying
         service = await self._wait_for(self._service)
         if method != "dictation.start":
             try:

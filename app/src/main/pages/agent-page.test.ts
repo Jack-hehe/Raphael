@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
   agentVoice: vi.fn(),
   workerCancel: vi.fn(),
   workerRerun: vi.fn(),
+  core: vi.fn(),
 }));
 vi.mock("../api", () => api);
 
@@ -194,5 +195,31 @@ describe("a question said aloud", () => {
     // the core crashed: no turn, no last phase, no refresh
     await vi.advanceTimersByTimeAsync(120_000 + 10);
     expect(document.querySelector('[data-key="hearing"]')).toBeNull();
+  });
+});
+
+describe("a question of the background", () => {
+  test("its gold card is in the slot above the composer, and is answered from here", async () => {
+    api.agentHistoryList.mockResolvedValue({ turns: page(10, 2) });
+    const question = { id: "q-1", task_id: 4, member_id: 0, prefix: "問", text: "是否讓「Notes」執行「note」？", tier: "T2", created_at_ms: 1, expires_at_ms: 2 };
+    let waiting = [question];
+    api.core.mockImplementation(async (method: string) => {
+      if (method === "background.questions.list") return { questions: waiting };
+      if (method === "background.answer") {
+        waiting = [];
+        return { status: "approved" };
+      }
+      return {};
+    });
+    mount();
+    await flush();
+    expect(api.core).toHaveBeenCalledWith("background.questions.list", { member_id: 0 });
+    const card = document.querySelector<HTMLElement>('[data-mount="background-questions"] .bgq-card')!;
+    expect(card).not.toBeNull();
+    expect(card.textContent).toContain("《問。是否讓「Notes」執行「note」？》");
+    card.querySelector<HTMLButtonElement>(".bgq-yes")!.click();
+    await flush();
+    expect(api.core).toHaveBeenCalledWith("background.answer", { task_id: 4, question_id: "q-1", approved: true });
+    expect(document.querySelector<HTMLElement>(".bgq-list")!.hidden).toBe(true);
   });
 });

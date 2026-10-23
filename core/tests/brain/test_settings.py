@@ -40,6 +40,9 @@ def test_the_defaults_are_the_documented_ones():
         "vision_model": "",
         "pdf_service": "builtin",
         "searxng_url": "",
+        "tts_service": "none",
+        "tts_fish_voice": "",
+        "tts_fish_model": "s2.1-pro-free",
     }
 
 
@@ -417,3 +420,38 @@ def test_the_local_engine_needs_a_local_model(conn):
     with pytest.raises(ValueError, match="stt_local_model"):
         s.set("stt_local_model", None)
     assert s.get("stt_local_model") == "sensevoice"
+
+
+def test_raphaels_voice_is_none_or_fish(conn):
+    settings = SettingsStore(conn)
+    assert settings.get("tts_service") == "none"
+    settings.set("tts_service", "fish")
+    assert settings.get("tts_service") == "fish"
+    for bad in ("elevenlabs", "Fish", ""):
+        with pytest.raises(ValueError):
+            settings.set("tts_service", bad)
+    with pytest.raises(TypeError):
+        settings.set("tts_service", 1)
+
+
+def test_the_fish_voice_is_32_hexadecimal_characters_or_none_and_is_not_in_the_defaults(conn):
+    settings = SettingsStore(conn)
+    assert DEFAULTS["tts_fish_voice"] == "" and settings.get("tts_fish_voice") == ""
+    settings.set("tts_fish_voice", "  0123456789ABCDEF0123456789abcdef  ")
+    assert settings.get("tts_fish_voice") == "0123456789abcdef0123456789abcdef"
+    settings.set("tts_fish_voice", "")
+    assert settings.get("tts_fish_voice") == ""
+    for bad in ("0123", "g" * 32, "0" * 33, "0123456789abcdef 123456789abcdef"):
+        with pytest.raises(ValueError):
+            settings.set("tts_fish_voice", bad)
+    with pytest.raises(TypeError):
+        settings.set("tts_fish_voice", 5)
+
+
+def test_the_fish_model_is_a_short_token(conn):
+    settings = SettingsStore(conn)
+    settings.set("tts_fish_model", " s2.1-pro ")
+    assert settings.get("tts_fish_model") == "s2.1-pro"
+    for bad in ("", "  ", "has space", "s2/pro", "x" * 41, "-s1", "好"):
+        with pytest.raises(ValueError):
+            settings.set("tts_fish_model", bad)

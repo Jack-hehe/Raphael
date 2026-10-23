@@ -79,6 +79,14 @@ async def test_the_status_says_what_is_chosen_and_what_each_service_needs(rig):
             ],
         },
         "vision": {"model": "", "resolved_model": "openai/gpt-6-luna", "supports_images": True},
+        "voice": {
+            "service": "none",
+            "options": [
+                {"id": "none", "needs_key": False, "has_key": False, "key_optional": False},
+                {"id": "fish", "needs_key": True, "has_key": False, "key_optional": False},
+            ],
+            "fish_voice_set": False,
+        },
     }  # fmt: skip
 
 
@@ -181,6 +189,42 @@ def test_a_key_store_that_fails_reads_as_no_key(caplog):
 
     keys = ServiceKeys(lambda service: Broken())
     assert keys.get("brave") is None and KEY not in caplog.text
+
+
+# --- Raphael's voice ----------------------------------------------------------------------------
+
+FISH_KEY = "fish-the-owners-key-0123456789abcdef"
+FISH_VOICE = "0123456789abcdef0123456789abcdef"
+
+
+async def test_the_key_of_fish_is_kept_and_removed_like_any_other_and_never_comes_back(rig, caplog):
+    with caplog.at_level(logging.DEBUG):
+        await rig.call("services.set_key", {"service": "fish", "key": f"  {FISH_KEY}  "})
+        status = await rig.call("services.status")
+        assert option(status["voice"], "fish")["has_key"] is True
+        assert rig.keys.get("fish") == FISH_KEY and FISH_KEY not in str(status)
+        await rig.call("services.clear_key", {"service": "fish"})
+    assert option((await rig.call("services.status"))["voice"], "fish")["has_key"] is False
+    assert FISH_KEY not in caplog.text
+
+
+async def test_the_status_of_the_voice_follows_the_settings_without_giving_the_voice_id(rig):
+    rig.settings.set("tts_service", "fish")
+    rig.settings.set("tts_fish_voice", FISH_VOICE)
+    voice = (await rig.call("services.status"))["voice"]
+    assert voice["service"] == "fish" and voice["fish_voice_set"] is True
+    assert FISH_VOICE not in str(voice)
+
+
+async def test_a_voice_service_that_cannot_be_read_back_reads_as_none(conn):
+    conn.execute("INSERT INTO settings (key, value) VALUES ('tts_service', '\"edge\"')")
+    assert Rig(conn).hub.tts_service() == "none"
+
+
+async def test_a_key_for_fish_with_a_space_in_it_is_refused_by_a_kind_and_never_echoed(rig):
+    with pytest.raises(RpcError) as caught:
+        await rig.call("services.set_key", {"service": "fish", "key": f"has a space {FISH_KEY}"})
+    assert caught.value.code == INVALID_PARAMS and FISH_KEY not in caught.value.message
 
 
 # --- the settings -------------------------------------------------------------------------------

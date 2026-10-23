@@ -5,8 +5,9 @@ tool an alias is stays here in the core. The snapshot holds:
 
 - the tools of the plugins the user connected that are on (`PluginHub.offered`), whether they read or
   change something there: the user turned off what a task must not use, and a tool that is on runs
-  without asking, for a task as for the assistant. (A tool that needed a yes would be left out: the
-  worker cannot ask at the overlay yet. None does, today.)
+  without asking, for a task as for the assistant, unless one of the owner's safety rules asks
+  first. A tool at T2 is offered too: its call pauses the task and asks the owner in the app (the
+  waiting question, `service`), and goes on only after a yes there. A tool at T3 is left out.
 - Raphael's own lookups on the web: the weather, a web search (by the search service the owner
   chose), the time, and the reading of a page (`web_read`, by the reader chosen). A page is read
   only at an address the task has seen: in its request, or in what one of its tools returned
@@ -17,6 +18,11 @@ tool an alias is stays here in the core. The snapshot holds:
 - and, when there is a memory, its two tools that only read (`memory_read`, `history_search`): a
   task may read a note or look up what was said before. It never writes one: a task reads what
   services return, and a memory is written only from the owner's own words.
+- the team tools (`agent.team`): `ask_member`, when there is someone to ask (for Raphael, a member;
+  for a member, Raphael), and for Raphael `create_member`.
+
+A task of a member of the owner's team is offered only what the member was given (`Speaker.uses`,
+`Speaker.uses_plugin`): Raphael's own web tools on its list, and the connections on it.
 
 Not the commands for this computer (open a site, the volume, lock the screen, copy): those stay with
 the fast tier, which the user speaks to; a task in the background must not open a page or lock the
@@ -38,6 +44,8 @@ from ..agent.history import Turn
 from ..agent.ledger import Ledger
 from ..agent.plugins import MAX_OFFERED, Offer, PluginHub, make_offer
 from ..agent.policy import Tier
+from ..agent.speaker import RAPHAEL, Speaker
+from ..agent.team import TEAM_TIER, TEAM_TOOLS, worker_definition
 from ..computer.tools import PRESENCE_TOOLS
 from ..agent.toolpick import (
     PICK_MAX,
@@ -48,9 +56,9 @@ from ..agent.toolpick import (
     widen,
 )
 
-# The most a task is offered at the highest tier of its snapshot: the tier that runs at once. A tool
-# above it would have to ask, which the worker cannot.
-SNAPSHOT_MAX_TIER = Tier.T1
+# The highest tier a task is offered: T2, whose calls ask the owner through the waiting question
+# (and so only after a yes in the app). A tool that cannot be undone at all (T3) is never offered.
+SNAPSHOT_MAX_TIER = Tier.T2
 
 BUILTIN = "builtin"
 MCP = "mcp"
@@ -217,27 +225,39 @@ def take_snapshot(
     *,
     memory: bool = False,
     attachments: bool = False,
+    speaker: Speaker = RAPHAEL,
+    team: Sequence[str] = (),
 ) -> Snapshot:
     """The tools a task starting now may use: with `memory`, the memory's tools that read too, and
     with `attachments` (the task came with files) the tool that reads them. A
     plugin that fails to list its tools is left out. When the plugins have more tools than fit, the
     task is shown the ones that share the most words with `question` (`refine` chooses with the
-    model) and can find the rest."""
+    model) and can find the rest. A task of a member of the team (`speaker`) is offered only the
+    tools and connections the member was given; `team` are the team tools it is offered
+    (`agent.team`: asking another member, adding one), T1 like the plugins' tools that are on."""
     refs: dict[str, ToolRef] = {}
     definitions: list[dict[str, Any]] = []
     pool: Offer | None = None
     builtin = (
-        *WEB_TOOLS,
+        *(name for name in WEB_TOOLS if speaker.uses(name)),
         *(MEMORY_READ_TOOLS if memory else ()),
         *(ATTACHMENT_TOOLS if attachments else ()),
     )
     for name in builtin:
         refs[name] = ToolRef(BUILTIN, name, BUILTIN_SERVER, name, Tier.T0)
         definitions.append({"type": "function", "function": {"name": name, **_DEFINITIONS[name]}})
+    for name in team:
+        if name in TEAM_TOOLS:
+            refs[name] = ToolRef(BUILTIN, name, BUILTIN_SERVER, name, TEAM_TIER)
+            definitions.append(worker_definition(name))
     snapshot = Snapshot(refs, definitions)
     if plugins is not None:
         try:
-            tools = [tool for tool in plugins.offered() if tool.tier <= SNAPSHOT_MAX_TIER]
+            tools = [
+                tool
+                for tool in plugins.offered()
+                if tool.tier <= SNAPSHOT_MAX_TIER and speaker.uses_plugin(tool.key)
+            ]
         except Exception:  # a plugin that breaks leaves its tools out, not the task
             tools = []
         pool = make_offer(tools)
@@ -245,6 +265,7 @@ def take_snapshot(
             set(WEB_TOOLS)
             | set(MEMORY_READ_TOOLS)
             | set(ATTACHMENT_TOOLS)
+            | set(TEAM_TOOLS)
             | {"find_tools"}
             | PRESENCE_TOOLS
         )

@@ -63,6 +63,7 @@ const REASONS: Record<string, MessageKey> = {
   handoff: "agent.reason.handoff",
   refused_app: "agent.reason.refused_app",
   interrupted: "agent.reason.interrupted",
+  forbidden: "agent.reason.forbidden",
   bad_arguments: "agent.reason.bad_arguments",
   auth: "agent.reason.auth",
   missing_secret: "agent.reason.missing_secret",
@@ -307,8 +308,9 @@ export function summaryText(turn: AgentTurn, nowMs: number): { lead: string; tim
   const done = actionsText(steps.length);
   let lead = done;
   if (isLive(task)) lead = task!.state === "queued" ? t("agent.queued") : t("agent.working");
+  else if (task?.state === "waiting") lead = t("agent.taskWaiting"); // its question is the gold card
   else if (task && TASK_ENDS[task.state]) lead = `${plain(TASK_ENDS[task.state])} · ${done}`;
-  const ms = workMs(turn, nowMs);
+  const ms = task?.state === "waiting" ? 0 : workMs(turn, nowMs); // the time it waits is not its own
   return { lead, time: ms > 0 || isLive(task) ? formatDuration(ms) : "", failed };
 }
 
@@ -352,8 +354,11 @@ function taskCardHTML(turn: AgentTurn, state: TimelineState): string {
   const bad = failed ? t("agent.stepsFailed", { p0: failed }) : "";
   const words = [lead, time, bad].filter(Boolean).join(" · ");
   const ended = state.ended.has(task.id);
+  // A task that waits for the owner's yes is not under way, but not over either: it can be stopped.
+  const waiting = task.state === "waiting";
   const mark = live
     ? task.state === "queued" ? ico("clock") : SPINNER
+    : waiting ? ico("clock")
     : task.state === "done" ? `<span class="task-check${ended ? " is-pop" : ""}">${ico("check")}</span>` : ico("stop");
   const since = live && task.started_at_ms ? ` data-since="${task.started_at_ms}"` : "";
   const summary = btn(
@@ -364,8 +369,8 @@ function taskCardHTML(turn: AgentTurn, state: TimelineState): string {
     "task-sum",
     ` data-act="steps" aria-expanded="${open}" aria-controls="steps-${esc(turn.id)}" aria-label="${esc(words)}"`,
   );
-  const stopping = live && state.stopping.has(task.id);
-  const stop = live
+  const stopping = (live || waiting) && state.stopping.has(task.id);
+  const stop = live || waiting
     ? `<button type="button" class="btn sm stop" data-act="stop" data-task="${esc(task.id)}"${stopping ? " disabled" : ""}>${esc(stopping ? t("agent.stopping") : t("agent.stop"))}</button>`
     : "";
   const again = RERUNNABLE.has(task.state)
@@ -474,10 +479,56 @@ export function answerMeta(turn: AgentTurn): string {
 
 /** How a turn is drawn besides its data. */
 export interface TurnLook {
-  /** Raphael's face for the turn: `loop` while he is at work on it (avatar.ts). */
+  /** The face of who answers (Raphael's, avatar.ts, or the member's): `loop` while at work on it. */
   face: (loop: boolean) => string;
   /** The words being looked for, marked wherever they are; blank for none. */
   query?: string;
+  /**
+   * A member's thread: its answers are plain sentences in a bubble, with none of Raphael's
+   * 《prefix。》. Raphael's thread leaves it out and stays as it was.
+   */
+  plain?: boolean;
+  /** The exchanges between members that are open, by turn id (their line opens on the messages). */
+  openExchanges?: ReadonlySet<number>;
+  /** The name of member `id` (0 is Raphael), for the line of an exchange. */
+  memberName?: (id: number) => string;
+  /** The small face of member `id` on the line of an exchange (Raphael's bare emblem for 0). */
+  memberFace?: (id: number) => string;
+}
+
+/** Whether a turn is an exchange between two members, not the owner's own words. */
+export const isExchange = (turn: AgentTurn): boolean => turn.route === "exchange" || sourceOf(turn) === "member";
+
+/**
+ * The line of a routine's run above its answer: 「例行任務 <title>」, the title being the run's
+ * `question` (the core writes the routine's title there).
+ */
+export function routineLineHTML(turn: AgentTurn): string {
+  const title = turn.question.trim();
+  return `<div class="sys">${ico("repeat")}<span>${esc(t("members.routineLine"))}</span>${title ? `<b>${esc(title)}</b>` : ""}</div>`;
+}
+
+/**
+ * An exchange between two members, as one line: 「N 則訊息往來：<name>」 (the question and the answer,
+ * as many as there are), which opens on them: what was asked in 「」, and what was answered. They
+ * are drawn only while it is open. `name` is the member on the other side.
+ */
+export function exchangeHTML(turn: AgentTurn, name: string, open: boolean, face = ""): string {
+  const id = esc(turn.id);
+  const messages = [turn.question.trim() ? userLine(turn.question.trim()) : "", turn.text.trim()].filter(Boolean);
+  // the line ends in a colon that leads to the name; with no name it ends without one
+  const said = t("members.exchange", { p0: messages.length });
+  const label = name ? said : said.replace(/[：:]\s*$/, "");
+  return (
+    `<li class="tn tn-x" data-id="${id}">` +
+    btn(
+      `${face}<span>${esc(label)}</span>${name ? `<b>${esc(name)}</b>` : ""}<span class="steps-chev">${ico("right")}</span>`,
+      "sys sys-x",
+      ` data-act="exchange" aria-expanded="${open}" aria-controls="tn-x-${id}"`,
+    ) +
+    (open ? `<ol class="x-list" id="tn-x-${id}">` + messages.map((m) => `<li>${esc(m)}</li>`).join("") + `</ol>` : "") +
+    `</li>`
+  );
 }
 
 /**
@@ -498,10 +549,24 @@ function bubbleHTML(words: string, files: readonly TurnAttachment[] | undefined)
 
 /** One question and its answer, with what was done in between. */
 export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: boolean, look: TurnLook): string {
+  if (isExchange(turn)) {
+    // A request an asked member handed to the background (route "delegate", source "member") names
+    // who asked in `peer_id`; one from before the core wrote it names no one, and its line then
+    // says no name (not Raphael's) and shows no face.
+    const peer = turn.peer_id ?? null;
+    return exchangeHTML(
+      turn,
+      peer === null ? "" : (look.memberName?.(peer) ?? ""),
+      look.openExchanges?.has(turn.id) ?? false,
+      peer === null ? "" : (look.memberFace?.(peer) ?? ""),
+    );
+  }
   const id = esc(turn.id);
   const query = look.query ?? "";
   const detail = hasDetail(turn);
-  const said = turn.question.trim() !== "";
+  // a routine's run says its routine in a line of its own, in place of the owner's words
+  const routine = sourceOf(turn) === "routine";
+  const said = turn.question.trim() !== "" && !routine;
   const asked = said || (turn.attachments?.length ?? 0) > 0;
   const live = isLive(turn.task);
   const source = sourceOf(turn);
@@ -511,7 +576,8 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
     ? `<div class="tn-foot">${btn(ico("down"), "sm icon tn-more", ` data-act="detail" aria-expanded="${detailOpen}" aria-controls="tn-detail-${id}" aria-label="${esc(t("agent.detail"))}" title="${esc(t("agent.detail"))}"`)}</div>`
     : "";
   return (
-    `<li class="tn" data-id="${id}" data-status="${esc(turn.status)}"${live ? ' data-live="true"' : ""}>` +
+    `<li class="tn${look.plain ? " tn-plain" : ""}" data-id="${id}" data-status="${esc(turn.status)}"${live ? ' data-live="true"' : ""}>` +
+    (routine ? routineLineHTML(turn) : "") +
     (asked
       ? `<div class="me"><span class="me-src" role="img" aria-label="${where}" title="${where}">${sourceIcon(source)}</span>` +
         bubbleHTML(said ? highlightHTML(userLine(turn.question), query) : "", turn.attachments) +
@@ -519,7 +585,10 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
       : "") +
     `<div class="ra"><span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live)}</span><div class="ra-body">` +
     stepsHTML(turn, state) +
-    `<p class="ans">${highlightHTML(replyLine(turn.prefix, turn.text), query)}</p>` +
+    // a routine's run that has not reported yet is still at work: the dots, not an empty bubble
+    (routine && turn.status === "running" && turn.text.trim() === ""
+      ? `<p class="ans thinking"><span class="think" role="img" aria-label="${esc(t("agent.thinking"))}"><i></i><i></i></span></p>`
+      : `<p class="ans">${highlightHTML(look.plain ? turn.text : replyLine(turn.prefix, turn.text), query)}</p>`) +
     (detail ? `<div class="tn-detail" id="tn-detail-${id}"${detailOpen ? "" : " hidden"}>${highlightHTML(turn.detail, query)}</div>` : "") +
     more +
     `</div></div></li>`
@@ -539,7 +608,7 @@ export function pendingTurnHTML(question: string | null, source: string, look: T
   const words =
     question === null ? `<span class="shimmer">${esc(t("agent.hearing"))}</span>` : question.trim() === "" ? "" : esc(userLine(question));
   return (
-    `<li class="tn is-pending">` +
+    `<li class="tn is-pending${look.plain ? " tn-plain" : ""}">` +
     `<div class="me"><span class="me-src" role="img" aria-label="${where}" title="${where}">${sourceIcon(source)}</span>${bubbleHTML(words, files)}</div>` +
     `<div class="ra"><span class="ra-face">${look.face(true)}</span><div class="ra-body">` +
     `<p class="ans thinking"><span class="think" role="img" aria-label="${esc(t("agent.thinking"))}"><i></i><i></i></span></p>` +
