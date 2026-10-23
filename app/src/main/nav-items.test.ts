@@ -1,11 +1,26 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, test } from "vitest";
 import { avatarHTML, setAvatar } from "./avatar";
-import { labelNavItem, navItemHTML } from "./nav-items";
+import { labelNavItem, navItemHTML, navHomeHTML } from "./nav-items";
+import { setLocale } from "./i18n";
 
-afterEach(() => setAvatar(null));
+afterEach(() => { setAvatar(null); setLocale("zh-TW"); });
 
 describe("the sidebar's pages", () => {
+  test("the emblem is a keyboard-accessible home button using the Home item's navigation target", () => {
+    for (const [locale, label] of [["zh-TW", "回到首頁"], ["en", "Home"], ["ja", "ホームへ"]] as const) {
+      setLocale(locale);
+      const nav = document.createElement("nav");
+      nav.innerHTML = navHomeHTML() + navItemHTML("home", "Home", "");
+      const emblem = nav.querySelector<HTMLButtonElement>(".brand")!;
+      expect(emblem.tagName).toBe("BUTTON");
+      expect(emblem.type).toBe("button");
+      expect(emblem.getAttribute("aria-label")).toBe(label);
+      expect(emblem.dataset.go).toBe(nav.querySelector<HTMLElement>(".nav")!.dataset.go);
+      expect(emblem.hasAttribute("data-window-drag")).toBe(false);
+      expect(emblem.querySelector("img")).not.toBeNull();
+    }
+  });
   test("a new language names 拉斐爾 again and leaves his face where it is, the person's picture too", () => {
     const nav = document.createElement("nav");
     nav.innerHTML = navItemHTML("agent", "拉斐爾", avatarHTML({ size: 18, cls: "nav-face" })) + navItemHTML("home", "首頁", "<svg></svg>");

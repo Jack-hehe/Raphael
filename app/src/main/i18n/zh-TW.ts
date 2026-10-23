@@ -61,6 +61,7 @@ export const zhTW = {
   "unit.seconds": "秒",
   "unit.minutes": "分",
   "unit.hours": "小時",
+  "nav.home": "回到首頁",
   "nav.pages": "頁面",
   "action.refreshMicrophones": "重新搜尋麥克風",
   "locale.english": "English",

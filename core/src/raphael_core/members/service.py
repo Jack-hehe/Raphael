@@ -302,11 +302,20 @@ class MembersService:
         group_id = None
         if isinstance(group, str) and group.strip():
             found = self.store.group_by_name(group)
-            group_id = (found or self.store.create_group(group)).id
+            if found is None:
+                found = self.store.create_group(group)
+                self._changed()
+            group_id = found.id
         member = self.store.create_member(
             name=name, role=role or "", instructions=instructions or "", group_id=group_id
         )
+        self._changed()
         return member.speaker()
+
+    def _changed(self, method: str = "members.changed", member_id: int | None = None) -> None:
+        """Announce committed data changes using identifiers only."""
+        if self._notify is not None:
+            self._notify(method, {} if member_id is None else {"member_id": member_id})
 
     def member_exists(self, member_id: int) -> bool:
         return self.store.exists(member_id)
@@ -330,7 +339,10 @@ class MembersService:
             turn = self._history.get(turn_id)
             if turn is None or turn.source == "voice" or turn.member_id == self._viewing:
                 return
+            was_unread = turn.member_id in self.store.unread()
             self.store.mark_unread(turn.member_id)
+            if not was_unread:
+                self._changed()
         except sqlite3.Error as exc:
             logger.warning("Could not mark a thread unread: %s", type(exc).__name__)
 
@@ -544,6 +556,7 @@ class MembersService:
         logger.info("A member was added")
         group = None if member.group_id is None else self.store.group(member.group_id)
         offer = routine_template(group.sources if group else (), self._ui_language(params))
+        self._changed()
         return {"member": self.view_of(member), "routine_offer": offer}
 
     async def _update(self, params: dict) -> dict:
@@ -568,6 +581,7 @@ class MembersService:
             raise _rpc_error(error) from None
         if old is not None and "avatar" in fields and old.avatar != member.avatar:
             self._remove_picture(old.avatar)
+        self._changed()
         return {"member": self.view_of(member)}
 
     async def _delete(self, params: dict) -> dict:
@@ -585,6 +599,9 @@ class MembersService:
         deleted = self.store.delete_member(member_id)
         if self._viewing == member_id:
             self._viewing = None
+        if deleted:
+            self._changed()
+            self._changed("routines.changed", member_id)
         logger.info("A member was deleted")
         return {"deleted": deleted}
 
@@ -622,6 +639,7 @@ class MembersService:
         if old is not None and old.avatar != member.avatar:
             self._remove_picture(old.avatar)
         logger.info("A member's picture was set (%s, %d bytes)", picture.mime, len(picture.data))
+        self._changed()
         return {"member": self.view_of(member)}
 
     async def _presets(self, params: dict) -> dict:
@@ -636,7 +654,8 @@ class MembersService:
         member_id = _whole(params, "id")
         if not self.store.exists(member_id):
             raise RpcError(INVALID_PARAMS, "Invalid params: no such member", {"kind": "not_found"})
-        self.store.mark_read(member_id)
+        if self.store.mark_read(member_id):
+            self._changed()
         return {}
 
     async def _viewing_now(self, params: dict) -> dict:
@@ -647,7 +666,8 @@ class MembersService:
                 raise RpcError(
                     INVALID_PARAMS, "Invalid params: no such member", {"kind": "not_found"}
                 )
-            self.store.mark_read(member_id)
+            if self.store.mark_read(member_id):
+                self._changed()
         self._viewing = member_id
         return {}
 
@@ -672,6 +692,7 @@ class MembersService:
             group = self.store.create_group(params.get("name"))
         except MemberError as error:
             raise _rpc_error(error) from None
+        self._changed()
         return {"group": group_view(group)}
 
     async def _group_update(self, params: dict) -> dict:
@@ -685,10 +706,14 @@ class MembersService:
             )
         except MemberError as error:
             raise _rpc_error(error) from None
+        self._changed()
         return {"group": group_view(group)}
 
     async def _group_delete(self, params: dict) -> dict:
-        return {"deleted": self.store.delete_group(self._group_id(params))}
+        deleted = self.store.delete_group(self._group_id(params))
+        if deleted:
+            self._changed()
+        return {"deleted": deleted}
 
     # --- routines.* ----------------------------------------------------------------------------------
 
@@ -738,6 +763,7 @@ class MembersService:
             )
         except MemberError as error:
             raise _rpc_error(error) from None
+        self._changed("routines.changed", routine.member_id)
         return {"routine": routine_view(routine)}
 
     async def _routine_update(self, params: dict) -> dict:
@@ -753,10 +779,16 @@ class MembersService:
             )
         except MemberError as error:
             raise _rpc_error(error) from None
+        self._changed("routines.changed", routine.member_id)
         return {"routine": routine_view(routine)}
 
     async def _routine_delete(self, params: dict) -> dict:
-        return {"deleted": self.store.delete_routine(self._routine_id(params))}
+        routine = self.store.routine(self._routine_id(params))
+        assert routine is not None
+        deleted = self.store.delete_routine(routine.id)
+        if deleted:
+            self._changed("routines.changed", routine.member_id)
+        return {"deleted": deleted}
 
     async def _routine_template(self, params: dict) -> dict:
         member_id = self._routine_member(params)
@@ -800,6 +832,7 @@ class MembersService:
             )
             if not still_there:
                 continue
+            self._changed("routines.changed", routine.member_id)
             if not catch_up:
                 logger.info("A routine was missed too long ago to run: %d", routine.id)
                 continue

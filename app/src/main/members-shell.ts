@@ -29,7 +29,7 @@ import {
   openNewMember,
 } from "./member-dialogs";
 import { RAPHAEL_ID, faceHTML, memberOf, memberSections, raphaelOf } from "./members";
-import type { AppContext, AvatarPreset, Member, MemberPatch, MembersList, ModelCatalog, WireAttachment } from "./types";
+import type { AppContext, AvatarPreset, MainEvent, Member, MemberPatch, MembersList, ModelCatalog, WireAttachment } from "./types";
 import { type Choice, closeMenu, esc, ico, leave, openMenu, toaster } from "./ui";
 
 /** Below this window width the details panel lies over the chat instead of taking a column of its own. */
@@ -70,6 +70,8 @@ export interface MembersShell {
   load(): Promise<void>;
   /** A turn was written or a task moved: the list is read again a moment later. */
   changed(): void;
+  follow(event: MainEvent): void;
+  refreshRoutines(memberId: number): void;
   /** Whether the details panel is open. */
   detailsOpen(): boolean;
   setDetails(open: boolean): void;
@@ -91,6 +93,7 @@ export function createMembers(host: MembersHost): MembersShell {
   let open = typeof innerWidth === "number" ? innerWidth >= DETAILS_COLUMN_MIN_PX : true;
   let stopLeaving: (() => void) | null = null;
   let panelRead = false;
+  let refreshOnShow = false;
 
   const member = (): Member => memberOf(list, current) ?? raphaelOf(list);
 
@@ -154,7 +157,11 @@ export function createMembers(host: MembersHost): MembersShell {
     if (!panelRead) {
       panelRead = true;
       details.showMember();
+    } else if (refreshOnShow) {
+      details.refreshRoutines();
+      details.refreshMemory(current);
     }
+    refreshOnShow = false;
     let read: MembersList;
     try {
       read = await Promise.resolve().then(() => api.membersList(getLocale()));
@@ -254,6 +261,8 @@ export function createMembers(host: MembersHost): MembersShell {
       void details.el.offsetWidth;
       details.el.classList.add("is-in");
       details.draw();
+      details.refreshRoutines();
+      details.refreshMemory(current);
       details.el.querySelector<HTMLElement>('[data-det="close"]')?.focus({ preventScroll: true });
     } else {
       details.el.classList.remove("is-in");
@@ -434,7 +443,23 @@ export function createMembers(host: MembersHost): MembersShell {
     changed,
     detailsOpen: () => open,
     setDetails,
+    refreshRoutines(memberId) {
+      if (host.visible() && memberId === current) details.refreshRoutines();
+    },
+    follow(event) {
+      if (!host.visible()) return;
+      if (event.type === "MembersChanged") {
+        if (refreshTimer !== null) clearTimeout(refreshTimer);
+        refreshTimer = null;
+        void load();
+      } else if (event.type === "RoutinesChanged" && event.member_id === current) {
+        details.refreshRoutines();
+      } else if (event.type === "MemoryChanged") {
+        details.refreshMemory(event.member_id, event.space);
+      }
+    },
     hide() {
+      refreshOnShow = true;
       if (refreshTimer !== null) clearTimeout(refreshTimer);
       refreshTimer = null;
       loads++;

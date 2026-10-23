@@ -62,6 +62,7 @@ export const en = {
   "unit.seconds": "sec",
   "unit.minutes": "min",
   "unit.hours": "hr",
+  "nav.home": "Home",
   "nav.pages": "Pages",
   "action.refreshMicrophones": "Find microphones again",
   "locale.english": "English",

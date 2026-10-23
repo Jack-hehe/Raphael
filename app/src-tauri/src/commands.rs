@@ -179,6 +179,14 @@ pub enum MainEvent {
     /// conversations reads it again. Only its id and the thread it is in (`member_id`: 0 is
     /// Raphael's, and a core from before the members names none): what was said stays in the core.
     AgentTurn { turn_id: u64, member_id: u64 },
+    /// Data changed: the window re-reads it without receiving private content.
+    RoutinesChanged { member_id: u64 },
+    MembersChanged,
+    MemoryChanged {
+        member_id: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        space: Option<String>,
+    },
     /// A background task moved on (`worker.changed`): a step was taken, or it started or ended.
     /// `running` is whether any task is under way.
     WorkerChanged {
@@ -797,6 +805,23 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
             turn_id: params.get("turn_id")?.as_u64()?,
             member_id: params.get("member_id").and_then(Value::as_u64).unwrap_or(0),
         }),
+        "routines.changed" => Some(MainEvent::RoutinesChanged {
+            member_id: params.get("member_id")?.as_u64()?,
+        }),
+        "members.changed" => Some(MainEvent::MembersChanged),
+        "memory.changed" => {
+            let space = match params.get("space") {
+                None => None,
+                Some(value) => match value.as_str()? {
+                    "own" | "shared" => Some(value.as_str()?.to_owned()),
+                    _ => return None,
+                },
+            };
+            Some(MainEvent::MemoryChanged {
+                member_id: params.get("member_id")?.as_u64()?,
+                space,
+            })
+        }
         "worker.changed" => Some(MainEvent::WorkerChanged {
             task_id: params.get("task_id")?.as_u64()?,
             state: params.get("state")?.as_str()?.to_owned(),
@@ -2387,6 +2412,30 @@ mod tests {
             json!({"task_id": 3, "state": "done", "prefix": "告", "text": "x"}),
         );
         assert_eq!(main_event_from(&report, true), None);
+    }
+
+    #[test]
+    fn data_changes_are_forwarded_without_private_fields() {
+        for (method, params, expected) in [
+            ("routines.changed", json!({"member_id": 4, "prompt": "private"}), json!({"type": "RoutinesChanged", "member_id": 4})),
+            ("members.changed", json!({"name": "private"}), json!({"type": "MembersChanged"})),
+            ("memory.changed", json!({"member_id": 4, "space": "own", "body": "private"}), json!({"type": "MemoryChanged", "member_id": 4, "space": "own"})),
+            ("memory.changed", json!({"member_id": 0, "space": "shared"}), json!({"type": "MemoryChanged", "member_id": 0, "space": "shared"})),
+            ("memory.changed", json!({"member_id": 4}), json!({"type": "MemoryChanged", "member_id": 4})),
+        ] {
+            for monitoring in [false, true] {
+                let event = main_event_from(&notification(method, params.clone()), monitoring);
+                assert_eq!(serde_json::to_value(event).unwrap(), expected);
+            }
+        }
+        for (method, params) in [
+            ("routines.changed", json!({})),
+            ("routines.changed", json!({"member_id": -1})),
+            ("memory.changed", json!({"member_id": "4"})),
+            ("memory.changed", json!({"member_id": 4, "space": "invalid"})),
+        ] {
+            assert_eq!(main_event_from(&notification(method, params), false), None);
+        }
     }
 
     #[test]

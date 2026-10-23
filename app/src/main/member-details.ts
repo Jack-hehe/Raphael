@@ -105,6 +105,8 @@ export interface DetailsPanel {
   draw(): void;
   /** Another member's thread is open: its routines and memory are read, its tab is 詳細資訊. */
   showMember(): void;
+  refreshRoutines(): void;
+  refreshMemory(memberId: number, space?: "own" | "shared"): void;
 }
 
 export function createDetails(host: DetailsHost): DetailsPanel {
@@ -144,7 +146,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
 
   function whoHTML(member: Member): string {
     const face =
-      `<button type="button" class="btn mb-avbtn" data-det="avatar" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(t("members.changeAvatar"))}" title="${esc(t("members.changeAvatar"))}">` +
+      `<button type="button" class="btn mb-avbtn" data-det="avatar" data-k="det-avatar" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(t("members.changeAvatar"))}" title="${esc(t("members.changeAvatar"))}">` +
       faceHTML(member, 64) +
       `</button>`;
     if (member.id === RAPHAEL_ID) return face + `<b class="mb-who-name">${esc(member.name)}</b>`;
@@ -188,7 +190,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       (d.kind === "every" ? sel(hours, String(d.hours), t("members.hours"), ' data-det="r-hours" data-k="r-hours"') : time) +
       `</div>` +
       `<textarea id="mb-r-prompt" class="mb-fin mb-ta" rows="3" maxlength="${ROUTINE_PROMPT_MAX}" placeholder="${esc(t("members.routinePrompt"))}" aria-label="${esc(t("members.routinePrompt"))}">${esc(d.prompt)}</textarea>` +
-      `<div class="mb-ract">${btn(esc(t("common.cancel")), "sm", ' data-det="r-cancel"')}${btn(esc(t("members.save")), "sm pri", ' data-det="r-save"')}</div>` +
+      `<div class="mb-ract">${btn(esc(t("common.cancel")), "sm", ' data-det="r-cancel" data-k="r-cancel"')}${btn(esc(t("members.save")), "sm pri", ' data-det="r-save" data-k="r-save"')}</div>` +
       `</div>`
     );
   }
@@ -201,7 +203,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     if (routines === "loading") return head + `<span class="spin" role="status" aria-label="${esc(t("common.loading"))}"></span>`;
     if (routines === "failed") return head;
     const rows = routines.map(routineRowHTML).join("");
-    return head + (draft?.id === null ? routineFormHTML(draft) : "") + `<div class="mb-rts">${rows}</div>`;
+    return head + (draft && (draft.id === null || !routines.some((r) => r.id === draft?.id)) ? routineFormHTML(draft) : "") + `<div class="mb-rts">${rows}</div>`;
   }
 
   function detailsHTML(member: Member): string {
@@ -244,6 +246,11 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     el.setAttribute("aria-label", t("members.panel"));
     const focused = document.activeElement as HTMLElement | null;
     const typingIn = focused && el.contains(focused) && (focused.matches("input, textarea") ? focused.id : null);
+    const scroll = el.querySelector<HTMLElement>(".mb-det-scroll")!;
+    const scrollTop = scroll.scrollTop;
+    const textField = typingIn ? focused as HTMLInputElement | HTMLTextAreaElement : null;
+    const selection = textField && typeof textField.selectionStart === "number"
+      ? [textField.selectionStart, textField.selectionEnd!, textField.selectionDirection] as const : null;
     const focusKey = focused && el.contains(focused) ? focused.closest<HTMLElement>("[data-k]")?.dataset.k : undefined;
     // the name and role are drawn afresh for another member, and left alone while they are typed in
     if (!sameMember || !(typingIn === "mb-det-name" || typingIn === "mb-det-role")) {
@@ -254,25 +261,47 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     } else {
       const av = who.querySelector<HTMLElement>(".mb-avbtn");
       if (av) av.innerHTML = faceHTML(member, 64);
+      // A focused field keeps its draft; the other field can still change remotely.
+      for (const [id, value] of [["mb-det-name", member.name], ["mb-det-role", member.role]]) {
+        const input = who.querySelector<HTMLInputElement>(`#${id}`);
+        if (input && id !== typingIn) input.value = value;
+      }
     }
     drawnFor = member.id;
     tabBar.innerHTML = tabs(
       [
-        { id: "details", label: t("members.details"), attrs: ' data-det="tab" data-tab="details"' },
-        { id: "memory", label: t("mem.title"), attrs: ' data-det="tab" data-tab="memory"' },
+        { id: "details", label: t("members.details"), attrs: ' data-det="tab" data-tab="details" data-k="det-tab:details"' },
+        { id: "memory", label: t("mem.title"), attrs: ' data-det="tab" data-tab="memory" data-k="det-tab:memory"' },
       ],
       tab,
       { label: t("members.panel"), kind: "nav", plain: true, fill: true },
     );
-    if (sameMember && typingIn === "mb-det-instr" && tab === "details") return; // the box keeps its caret; it saves on blur
-    if (typingIn === "mb-det-instr") void saveField(focused as HTMLTextAreaElement, true);
     keepTyping();
+    if (sameMember && typingIn === "mb-det-instr" && tab === "details") {
+      // Blur saves instructions, so keep that section alive while the other fields update.
+      const instructions = body.firstElementChild!;
+      const next = document.createElement("div");
+      next.innerHTML = detailsHTML(member);
+      picker?.close();
+      picker = null;
+      while (instructions.nextSibling) instructions.nextSibling.remove();
+      body.append(...Array.from(next.children).slice(1));
+      mountPicker(member);
+      scroll.scrollTop = scrollTop;
+      return;
+    }
+    if (typingIn === "mb-det-instr") void saveField(focused as HTMLTextAreaElement, true);
     picker?.close();
     picker = null;
     body.innerHTML = tab === "details" ? detailsHTML(member) : memoryHTML(shared.view()) + memoryHTML(own.view());
     if (tab === "details" && member.id !== RAPHAEL_ID) mountPicker(member);
-    if (sameMember && typingIn && typingIn !== "mb-det-name" && typingIn !== "mb-det-role") el.querySelector<HTMLElement>(`#${CSS.escape(typingIn)}`)?.focus();
+    if (sameMember && typingIn && typingIn !== "mb-det-name" && typingIn !== "mb-det-role") el.querySelector<HTMLElement>(`#${CSS.escape(typingIn)}`)?.focus({ preventScroll: true });
     else if (sameMember && focusKey) el.querySelector<HTMLElement>(`[data-k="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+    if (sameMember && selection && typingIn) {
+      const field = el.querySelector<HTMLInputElement | HTMLTextAreaElement>(`#${CSS.escape(typingIn)}`);
+      field?.setSelectionRange(selection[0], selection[1], selection[2] ?? undefined);
+    }
+    if (sameMember) scroll.scrollTop = scrollTop;
   }
 
   function mountPicker(member: Member): void {
@@ -305,11 +334,11 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     const id = host.member().id;
     try {
       const { routines: read } = await api.routinesList(id);
-      if (mine !== routineLoads) return;
+      if (mine !== routineLoads || id !== host.member().id) return;
       routines = read;
     } catch {
-      if (mine !== routineLoads) return;
-      routines = "failed";
+      if (mine !== routineLoads || id !== host.member().id) return;
+      if (!Array.isArray(routines)) routines = "failed";
     }
     draw();
   }
@@ -533,6 +562,12 @@ export function createDetails(host: DetailsHost): DetailsPanel {
   return {
     el,
     draw,
+    refreshRoutines() { void loadRoutines(); },
+    refreshMemory(memberId, space) {
+      if (!memoryHost.visible()) return;
+      if (space !== "own") void shared.load();
+      if (space !== "shared" && memberId === host.member().id) void own.load();
+    },
     showMember() {
       tab = "details";
       draft = null;

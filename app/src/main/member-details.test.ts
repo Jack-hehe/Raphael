@@ -298,3 +298,77 @@ describe("the routine form", () => {
     expect(draftSchedule(routineDraft({ ...ROUTINE, schedule: { kind: "every", hours: 30 } }))).toEqual({ kind: "every", hours: 24 });
   });
 });
+
+
+test("live routines update while instructions retain their node, draft and caret", async () => {
+  const panel = mount();
+  await flush();
+  const box = panel.el.querySelector<HTMLTextAreaElement>("#mb-det-instr")!;
+  box.focus();
+  box.value = "Unsaved instructions";
+  box.setSelectionRange(2, 6);
+  api.routinesList.mockResolvedValue({ routines: [{ ...ROUTINE, title: "Changed live" }] });
+  panel.refreshRoutines();
+  await flush();
+  expect(panel.el.querySelector(".mb-rts")!.textContent).toContain("Changed live");
+  expect(panel.el.querySelector("#mb-det-instr")).toBe(box);
+  expect(document.activeElement).toBe(box);
+  expect(box.value).toBe("Unsaved instructions");
+  expect(box.selectionStart).toBe(2);
+  expect(host.update).not.toHaveBeenCalled();
+});
+
+test("a remote deletion keeps the routine draft editable and refresh failure keeps rows", async () => {
+  const panel = mount();
+  await flush();
+  panel.el.querySelector<HTMLElement>('[data-det="routine-edit"]')!.click();
+  const title = panel.el.querySelector<HTMLInputElement>("#mb-r-title")!;
+  title.value = "Unsaved routine";
+  title.focus();
+  api.routinesList.mockResolvedValue({ routines: [] });
+  panel.refreshRoutines();
+  await flush();
+  expect(panel.el.querySelector<HTMLInputElement>("#mb-r-title")!.value).toBe("Unsaved routine");
+  expect(document.activeElement?.id).toBe("mb-r-title");
+  panel.el.querySelector<HTMLElement>('[data-det="r-cancel"]')!.click();
+  api.routinesList.mockResolvedValue({ routines: [ROUTINE] });
+  panel.refreshRoutines();
+  await flush();
+  api.routinesList.mockRejectedValue(new Error("offline"));
+  panel.refreshRoutines();
+  await flush();
+  expect(panel.el.querySelector('[data-routine="9"]')).not.toBeNull();
+});
+
+test("a late routine response cannot replace the newly selected member's routines", async () => {
+  const panel = mount();
+  await flush();
+  let resolve!: (value: { routines: Routine[] }) => void;
+  api.routinesList.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+  panel.refreshRoutines();
+  current = 4;
+  api.routinesList.mockResolvedValue({ routines: [{ ...ROUTINE, id: 10, member_id: 4, title: "Other member" }] });
+  panel.showMember();
+  await flush();
+  resolve({ routines: [ROUTINE] });
+  await flush();
+  expect(panel.el.querySelector(".mb-rts")!.textContent).toContain("Other member");
+  expect(panel.el.querySelector('[data-routine="9"]')).toBeNull();
+});
+
+
+test("a focused name keeps its draft while the remote role updates", async () => {
+  const panel = mount();
+  await flush();
+  const name = panel.el.querySelector<HTMLInputElement>("#mb-det-name")!;
+  name.focus();
+  name.value = "Draft name";
+  name.setSelectionRange(2, 4);
+  const original = host.member();
+  host.member = () => ({ ...original, role: "New remote role" });
+  panel.draw();
+  expect(panel.el.querySelector<HTMLInputElement>("#mb-det-role")!.value).toBe("New remote role");
+  expect(document.activeElement).toBe(name);
+  expect(name.value).toBe("Draft name");
+  expect(name.selectionStart).toBe(2);
+});

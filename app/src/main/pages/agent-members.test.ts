@@ -5,7 +5,7 @@
 // was; a turn of another thread does not touch the open one; the slot of the background questions
 // sits above the composer; the details panel closes and comes back from the pill.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { AgentTurn, AppContext, MainEvent, Member, MembersList } from "../types";
+import type { AgentTurn, AppContext, MainEvent, Member, MembersList, Routine } from "../types";
 
 const api = vi.hoisted(() => ({
   agentHistoryList: vi.fn(),
@@ -100,6 +100,90 @@ beforeEach(() => {
   api.agentHistoryList.mockImplementation(async (q: { member_id?: number; limit?: number }) => ({ turns: THREADS[q.member_id ?? 0].slice(0, q.limit) }));
 });
 afterEach(() => vi.useRealTimers());
+
+test("routine notifications refresh the open panel immediately and keep the routine being edited", async () => {
+  mount();
+  await flush();
+  await pick(3);
+  $(".mb-pill").click();
+  const routine: Routine = { id: 9, member_id: 3, title: "Daily review", prompt: "Review", schedule: { kind: "daily", time: "09:00" }, enabled: true, next_run: null, last_run: null };
+  api.routinesList.mockResolvedValue({ routines: [routine] });
+  send({ type: "RoutinesChanged", member_id: 3 });
+  await flush();
+  expect($(".mb-rts").textContent).toContain("Daily review");
+  $('[data-det="routine-edit"]').click();
+  const title = $<HTMLInputElement>("#mb-r-title");
+  title.focus();
+  title.value = "My unsaved title";
+  title.setSelectionRange(3, 5);
+  const scroll = $(".mb-det-scroll");
+  scroll.scrollTop = 84;
+  api.routinesList.mockResolvedValue({ routines: [routine, { ...routine, id: 10, title: "New routine" }] });
+  send({ type: "RoutinesChanged", member_id: 3 });
+  await flush();
+  expect($(".mb-rts").textContent).toContain("New routine");
+  expect($<HTMLInputElement>("#mb-r-title").value).toBe("My unsaved title");
+  expect(document.activeElement).toBe($("#mb-r-title"));
+  expect($<HTMLInputElement>("#mb-r-title").selectionStart).toBe(3);
+  expect(scroll.scrollTop).toBe(84);
+});
+
+test("a chat event refreshes routines even when its explicit change notification was missed", async () => {
+  vi.useFakeTimers();
+  mount();
+  await flush();
+  await pick(3);
+  $(".mb-pill").click();
+  const routine = { id: 9, member_id: 3, title: "Created from chat", prompt: "Review", schedule: { kind: "daily", time: "09:00" }, enabled: true, next_run: null, last_run: null };
+  api.routinesList.mockResolvedValue({ routines: [routine] });
+  api.agentHistoryList.mockResolvedValue({ turns: [turn(99, { member_id: 3, messages: [{ seq: 1, kind: "event", text: "Routine created", at_ms: 1 }] })] });
+  send({ type: "AgentTurn", turn_id: 99, member_id: 3 });
+  await vi.advanceTimersByTimeAsync(350);
+  await flush();
+  expect($(".mb-rts").textContent).toContain("Created from chat");
+});
+
+test("member notifications refresh names, groups, unread dots and the open header", async () => {
+  mount();
+  await flush();
+  await pick(3);
+  const next = structuredClone(LIST);
+  next.members[1] = { ...next.members[1], name: "Updated name", role: "Updated role", group_id: 5 };
+  next.members[2] = { ...next.members[2], waiting: true, unread: true, preview: "New preview" };
+  next.groups = [{ id: 5, name: "New group", position: 0, sources: [] }];
+  api.membersList.mockResolvedValue(next);
+  send({ type: "MembersChanged" });
+  await flush();
+  expect($(".mb-pill-t").textContent).toBe("Updated name");
+  expect($<HTMLInputElement>("#mb-det-name").value).toBe("Updated name");
+  expect($(".mb-col").textContent).toContain("New group");
+  expect($('.mb-col [data-member="4"]').textContent).toContain("New preview");
+  expect($('.mb-col [data-member="4"] .mb-dot')).not.toBeNull();
+});
+
+test("memory notifications refresh the visible own and shared lists with correct scope", async () => {
+  api.core.mockImplementation(async (method: string) => method === "memory.list" ? { memories: [], summary: null } : { questions: [] });
+  mount();
+  await flush();
+  await pick(3);
+  $(".mb-pill").click();
+  $('[data-tab="memory"]').click();
+  await flush();
+  api.core.mockClear();
+  send({ type: "MemoryChanged", member_id: 4, space: "own" });
+  await flush();
+  expect(api.core).not.toHaveBeenCalled();
+  const note = { name: "reference-live", description: "Fresh note", type: "reference", origin: "told", updated: "", expires: null };
+  api.core.mockImplementation(async (method: string) => method === "memory.list" ? { memories: [note], summary: null } : { questions: [] });
+  send({ type: "MemoryChanged", member_id: 3, space: "own" });
+  await flush();
+  expect(api.core).toHaveBeenLastCalledWith("memory.list", { member_id: 3, space: "own" });
+  expect($('[data-mem-space="own"]').textContent).toContain("Fresh note");
+  send({ type: "MemoryChanged", member_id: 0, space: "shared" });
+  await flush();
+  expect(api.core).toHaveBeenLastCalledWith("memory.list", { space: "shared" });
+  expect($('[data-mem-space="shared"]').textContent).toContain("Fresh note");
+});
 
 describe("Raphael's thread", () => {
   test("is as it was: his turns in 《》, Ask Raphael, his voice button, asked with no member", async () => {

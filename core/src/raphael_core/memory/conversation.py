@@ -251,7 +251,9 @@ class Conversation:
         clock: Callable[[], float] = time.monotonic,
         reflected_through: Callable[[], int] = lambda: 0,
         member_id: int = 0,
+        on_change: Callable[[], None] | None = None,
     ) -> None:
+        self._on_change = on_change
         self.member_id = member_id
         self._conn = conn
         self._client = client
@@ -287,6 +289,9 @@ class Conversation:
                 (self.member_id, text, through_turn_id, self._now_ms()),
             )
 
+        if self._on_change is not None:
+            self._on_change()
+
     def clear_summary(self) -> bool:
         """Forget the summary; whether there was one. The turns stay, and are read again from the
         start within the limits. A fold that waits for the model meanwhile will write nothing."""
@@ -295,6 +300,8 @@ class Conversation:
             cursor = self._conn.execute(
                 "DELETE FROM conversation_summaries WHERE member_id = ?", (self.member_id,)
             )
+        if cursor.rowcount > 0 and self._on_change is not None:
+            self._on_change()
         return cursor.rowcount > 0
 
     # --- what the model reads ----------------------------------------------------------------------

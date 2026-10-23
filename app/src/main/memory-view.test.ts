@@ -324,3 +324,15 @@ describe("the controller", () => {
     expect(c.view()).toMatchObject({ expanded: false, editing: null, confirmingClear: false });
   });
 });
+
+
+test("reset invalidates a memory list still loading for the previous member", async () => {
+  let resolve!: (value: MemoryList) => void;
+  api.core.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+  const memory = createMemory({ visible: () => true, redraw: vi.fn(), undo: { begin: vi.fn() } });
+  const old = memory.load();
+  memory.reset();
+  resolve(LIST);
+  await old;
+  expect(memory.view().status).toBe("loading");
+});

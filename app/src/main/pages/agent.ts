@@ -683,6 +683,9 @@ export function createAgent(app: AppContext): Page {
     ticker = null;
   }
 
+  // Event messages also cover a missed data-change notification from an older core.
+  const routineEvents = new Set<string>();
+
   // ---------- loading ----------
 
   /** Loads the newest turns, or with `earlier` the ones before what is loaded, keeping the reader's place. */
@@ -726,6 +729,17 @@ export function createAgent(app: AppContext): Page {
       if (earlier) loadingEarlier = false;
       return;
     }
+    let routinesChanged = false;
+    for (const turn of got) {
+      for (const message of turn.messages ?? []) {
+        if (message.kind !== "event") continue;
+        const key = `${turn.id}:${message.seq}`;
+        if (routineEvents.has(key)) continue;
+        routineEvents.add(key);
+        routinesChanged = true;
+      }
+    }
+    if (routinesChanged) members.refreshRoutines(memberId());
     const fromBottom = scroller.scrollHeight - scroller.scrollTop;
     if (earlier) {
       loadingEarlier = false;
@@ -1484,6 +1498,7 @@ export function createAgent(app: AppContext): Page {
   });
 
   app.onEvent((event) => {
+    members.follow(event);
     if (wantsRefresh(event)) {
       // a turn of another thread changes only that member's row
       if (event.type !== "AgentTurn" || (event.member_id ?? RAPHAEL_ID) === memberId()) scheduleRefresh();

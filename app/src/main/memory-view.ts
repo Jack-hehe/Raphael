@@ -465,6 +465,8 @@ export function createMemory(host: MemoryHost): MemoryPanel {
   }
 
   function reset(): void {
+    loads++; // A pending list belongs to the member or tab that was left.
+    status = "loading";
     editing = null;
     expanded = host.expanded === true;
     confirmingClear = false;

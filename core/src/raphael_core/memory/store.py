@@ -237,7 +237,9 @@ class MemoryStore:
     """The memory folder `root`. Made on the first write; reading a folder that is not there finds
     no memories. `now` is the local time with its offset. Use it on one thread (the event loop)."""
 
-    def __init__(self, root: Path, *, now: Callable[[], datetime] | None = None) -> None:
+    def __init__(self, root: Path, *, now: Callable[[], datetime] | None = None,
+                 on_change: Callable[[], None] | None = None) -> None:
+        self._on_change = on_change
         self.root = root
         self._now = now or (lambda: datetime.now().astimezone())
         self._cache_key: tuple | None = None
@@ -492,6 +494,8 @@ class MemoryStore:
         turns = (*memory.turns, turn_id)[-MAX_TURNS:]
         self._write_file(self.root / f"{name}.md", render(replace(memory, turns=turns)))
         self._cache_key = None
+        if self._on_change is not None:
+            self._on_change()
 
     def delete(self, name: str) -> bool:
         """Delete the memory `name`; whether there was one."""
@@ -543,6 +547,8 @@ class MemoryStore:
             self._write_file(self.root / INDEX_FILE, header + (index + "\n" if index else ""))
         except OSError as exc:
             logger.warning("Could not write the index of the memory: %s", type(exc).__name__)
+        if self._on_change is not None:
+            self._on_change()
 
 
 def move_note(name: str, source: MemoryStore, target: MemoryStore) -> bool:

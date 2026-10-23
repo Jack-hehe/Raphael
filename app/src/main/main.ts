@@ -21,8 +21,7 @@ import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
 import { Navigation, type Place, samePage } from "./nav-history";
 import { installNavInput } from "./nav-input";
-import { labelNavItem, navItemHTML } from "./nav-items";
-import { brandIcon } from "./brand";
+import { labelNavItem, navItemHTML, navHomeHTML } from "./nav-items";
 import { installWindowHotkeys } from "./window-hotkeys";
 import { installFocusKeys } from "./focus-keys";
 import { followTray } from "./tray-open";
@@ -160,7 +159,7 @@ async function start(): Promise<void> {
   const face = (): string => avatarHTML({ size: 18, cls: "nav-face" });
   const button = (id: PageId, name: string, icon: IconName | "face"): string => navItemHTML(id, name, icon === "face" ? face() : ico(icon));
   nav.innerHTML =
-    `<div class="brand" data-window-drag>${brandIcon()}<span>Raphael</span></div>` +
+    navHomeHTML() +
     NAV.map((item) => button(item.id, item.name, item.icon)).join("") +
     `<div class="side-fill"></div>` +
     `<button type="button" class="usage-box" data-go="settings" data-pane="usage" hidden></button>` +
@@ -181,6 +180,9 @@ async function start(): Promise<void> {
   void api.agentQuestionOpen().then((open) => markQuestion(open?.id ?? null), () => {});
   function translateNavigation(): void {
     nav.setAttribute("aria-label", t("nav.pages"));
+    const homeButton = nav.querySelector<HTMLElement>(".brand")!;
+    homeButton.setAttribute("aria-label", t("nav.home"));
+    homeButton.title = t("nav.home");
     markQuestion(waitingQuestion);
     for (const item of NAV) labelNavItem(nav, item.id, item.name);
     nav.querySelector<HTMLElement>(".nav-bottom span")!.textContent = t("nav.settings");

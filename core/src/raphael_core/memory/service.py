@@ -146,7 +146,9 @@ class MemoryService:
         now: Callable[[], datetime] | None = None,
         quiet_s: float = QUIET_S,
         start_delay_s: float = START_DELAY_S,
+        notify: Callable[[str, dict], None] | None = None,
     ) -> None:
+        self._notify = notify
         self._conn = conn
         self._keys = keys
         self._now_ms = now_ms
@@ -155,14 +157,15 @@ class MemoryService:
         self._start_delay_s = start_delay_s
         self._client = client
         self._now = now
-        self.store = MemoryStore(root, now=now)  # Raphael's own
-        self.shared = MemoryStore(root / SHARED_DIR, now=now)
+        self.store = MemoryStore(root, now=now, on_change=lambda: self._changed(0))  # Raphael's own
+        self.shared = MemoryStore(root / SHARED_DIR, now=now, on_change=lambda: self._changed(0, "shared"))
         self._history = AgentHistory(conn, now_ms)
         self._settings = SettingsStore(conn)
         self._spend = SpendTracker(conn, now_ms, tz)
         self._reflector = Reflector(client)
         self.conversation = Conversation(
-            conn, client, now_ms=now_ms, clock=clock, reflected_through=self.reflected_through
+            conn, client, now_ms=now_ms, clock=clock, reflected_through=self.reflected_through,
+            on_change=lambda: self._changed(0),
         )
         # The members' memories and conversations, made when first needed.
         self._stores: dict[int, MemoryStore] = {}
@@ -176,6 +179,11 @@ class MemoryService:
         # How many times the conversation was cleared: a pass that began at another count is stale.
         self._turn_clears = 0
         self._share_the_owner()
+
+    def _changed(self, member_id: int, space: str = "own") -> None:
+        """Only the affected space and owner leave the core, never a note's contents."""
+        if self._notify is not None:
+            self._notify("memory.changed", {"member_id": member_id, "space": space})
 
     def register(self, router: RpcRouter) -> None:
         methods = {
@@ -238,7 +246,8 @@ class MemoryService:
             return self.store
         store = self._stores.get(member_id)
         if store is None:
-            store = MemoryStore(self.store.root / MEMBERS_DIR / str(int(member_id)), now=self._now)
+            store = MemoryStore(self.store.root / MEMBERS_DIR / str(int(member_id)), now=self._now,
+                                on_change=lambda: self._changed(member_id))
             self._stores[member_id] = store
         return store
 
@@ -259,6 +268,7 @@ class MemoryService:
                 clock=self._clock,
                 reflected_through=lambda: self.reflected_through(member_id),
                 member_id=member_id,
+                on_change=lambda: self._changed(member_id),
             )
             self._conversations[member_id] = conversation
         return conversation
@@ -317,6 +327,7 @@ class MemoryService:
             pass
         except OSError as exc:
             logger.warning("Could not delete a member's memory: %s", type(exc).__name__)
+        self._changed(member_id)
 
     # --- for the assistant -------------------------------------------------------------------------
 

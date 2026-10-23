@@ -62,6 +62,7 @@ export const ja = {
   "unit.seconds": "秒",
   "unit.minutes": "分",
   "unit.hours": "時間",
+  "nav.home": "ホームへ",
   "nav.pages": "ページ",
   "action.refreshMicrophones": "マイクを再検索",
   "locale.english": "English",

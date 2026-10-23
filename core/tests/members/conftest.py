@@ -71,6 +71,7 @@ class Rig:
         self.memory = MemoryService(
             conn, self.local / "memory", QuietModel(), keys, now_ms=self.wall,
             quiet_s=3600.0, start_delay_s=3600.0,
+            notify=lambda method, params: self.notes.append((method, params)),
         )  # fmt: skip
         self.background = FakeBackground(conn)
         self.language = "zh-TW"

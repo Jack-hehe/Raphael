@@ -450,6 +450,9 @@ export type MainEvent =
   | { type: "TrayOpen"; page: TrayPage; action?: TrayAction }
   /** A turn of the conversations was written or completed, in the thread of `member_id` (0: Raphael's; none from an older shell). */
   | { type: "AgentTurn"; turn_id: number; member_id?: number }
+  | { type: "RoutinesChanged"; member_id: number }
+  | { type: "MembersChanged" }
+  | { type: "MemoryChanged"; member_id: number; space?: "own" | "shared" }
   /** A background task moved on: a step, a start or an end. */
   | { type: "WorkerChanged"; task_id: number; state: string; running: boolean }
   /** A service is signed in to with a code typed at its own page: show the code, open the address. */

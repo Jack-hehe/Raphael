@@ -810,7 +810,7 @@ class App(Router):
         self.computer = ComputerRuns(self.computer_bridge)
         # Raphael's memory: the notes on this PC, the summary of the conversation, the reflection.
         memory_root = paths.memory_dir(data_dir) if memory_dir is None else memory_dir
-        self.memory = MemoryService(self._conn, memory_root, self.client, self.keys)
+        self.memory = MemoryService(self._conn, memory_root, self.client, self.keys, notify=self.notify)
         self.memory.register(self)
         self.background.use_memory(self.memory)
         # The members of the owner's team, their pictures (in the local folder the memory is in,

@@ -234,6 +234,11 @@ export function createSettings(app: AppContext): SettingsPage {
   const memoryShared = createMemory({ ...memoryHost, space: "shared", onMoved: () => void memory.load() });
   const memory = createMemory({ ...memoryHost, space: "own", onMoved: () => void memoryShared.load() });
   const memories = [memoryShared, memory];
+  app.onEvent((event) => {
+    if (event.type !== "MemoryChanged" || !memoryHost.visible()) return;
+    if (event.space !== "own") void memoryShared.load();
+    if (event.space !== "shared" && event.member_id === 0) void memory.load();
+  });
   /** The owner's safety rules, in the 「拉斐爾」 tab: what Raphael asks about first, does at once, or never does. */
   const rules = createRules({ visible: () => visible && pane === "agent", redraw: () => render(), undo: app.undo });
   /** 服務, in the 「拉斐爾」 tab: who does the work of Raphael's tools. Choosing is a change of the brain's settings. */
