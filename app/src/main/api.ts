@@ -105,6 +105,12 @@ export const agentQuestionOpen = (): Promise<AgentQuestion | null> => invoke("ag
  */
 export const agentQuestionAnswer = (id: string, approved: boolean, always = false): Promise<void> =>
   invoke("agent_question_answer", always ? { id, approved, always: true } : { id, approved });
+/**
+ * Tells the app whether the 拉斐爾 page is what the window shows (no settings over it, no guide in
+ * its place). While it is and the window is in front, a question to Raphael is shown on the page
+ * alone: its voice mode, the conversation and the card, and nothing at the bottom right.
+ */
+export const agentPageShown = (shown: boolean): Promise<void> => invoke("agent_page_shown", { shown });
 /** The question key pressed (`down`) or let go (`up`) from the page's voice button: the same path as the key itself. */
 export const agentVoice = (edge: "down" | "up"): Promise<void> => invoke("window_hotkey", { kind: edge === "down" ? "agent_down" : "agent_up" });
 

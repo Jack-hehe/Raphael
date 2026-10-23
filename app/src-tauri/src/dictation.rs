@@ -61,10 +61,25 @@
 //! The main window takes part in two ways ([`Desk`]). A question typed in its composer
 //! ([`DictationController::ask_typed_with`]) is an agent session without a recording: it goes to
 //! `agent.ask` with the source `app` and on from there as a spoken one does, the overlay showing the
-//! answer and any YES/NO question, but not the reports of the wait (the window shows its own). And
+//! answer and any YES/NO question only once the person has left the window (see below), and never
+//! the reports of the wait (the window shows its own). And
 //! the YES/NO question on screen is the window's too: it hears of every question that opens and
 //! closes ([`QuestionNews`]), and its card answers through [`DictationController::on_answer`]
 //! as the overlay's buttons do. Whichever answers first wins; the other finds nothing to answer.
+//!
+//! The overlay is for a question asked from elsewhere. While the main window is in front with the
+//! 拉斐爾 page on screen ([`AppFront`]), that page shows the question itself: its voice mode while
+//! Raphael listens, the conversation, and the card of a YES/NO question. Then the overlay shows
+//! nothing of it, not the greeting, not the reports of the wait, not the answer nor the question,
+//! whether the question was typed, asked with the page's voice button or with the agent keys. This
+//! is looked at again at each of those calls, so a person who leaves the window while Raphael
+//! thinks finds the answer or the question on the overlay, and one who comes back finds it in the
+//! window, where whatever of the session the overlay still showed is hidden. While a YES/NO question
+//! waits, the overlay follows the window too: it shows the question once the person leaves the window
+//! and hides it once they come back, so that the question is never out of sight. The notices of a
+//! failure (no microphone, no sound, the agent could not answer) still go to the overlay: the page
+//! has no place for them. A dictation, and a report of the background worker, never look at the
+//! window.
 //!
 //! [`spawn`] builds the controller from the app state and runs it in a task that listens to the
 //! hotkeys, the core's notifications and the overlay's buttons.
@@ -200,6 +215,18 @@ struct PendingAsk {
     answer: oneshot::Sender<Answer>,
 }
 
+impl PendingAsk {
+    /// The question with the time it has left as its `timeout_ms`: what the main window's card
+    /// shows when the page opens after it was asked, and what the overlay shows when it takes the
+    /// question over from the window.
+    fn remaining(&self) -> AskPrompt {
+        let spent = u64::try_from(self.shown.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut prompt = self.prompt.clone();
+        prompt.timeout_ms = prompt.timeout_ms.saturating_sub(spent);
+        prompt
+    }
+}
+
 /// The answer to a YES/NO question, whether it came from the main window, which has the focus
 /// when it is clicked (the overlay never takes it), and whether it was the third answer of a
 /// question that has one (「一律允許」: a YES kept for next time).
@@ -255,6 +282,17 @@ pub trait Desk: Send + Sync {
 #[derive(Clone)]
 pub struct DeskHandle(pub Arc<dyn Desk>);
 
+/// Whether the main window shows the 拉斐爾 page in front now: the window is visible, not
+/// minimised and the foreground window, and the page is on screen, with neither the settings over
+/// it nor the first-run guide in its place. A question to Raphael is then shown by that page and
+/// not by the overlay (see the module's notes). Asked at every overlay call of a question, so it
+/// must be quick and must not wait for the main thread.
+pub type AppFront = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// How often the controller looks at the window while a YES/NO question waits, to show it on the
+/// overlay once the person leaves the window and to hide it there once they come back.
+const FRONT_POLL: Duration = Duration::from_millis(250);
+
 /// The source of a question typed in the main window (`agent.ask {source}`).
 pub const TYPED_SOURCE: &str = "app";
 
@@ -284,6 +322,10 @@ struct State {
     media: MediaHold,
     /// Told of each YES/NO question that opens or closes: the main window shows it too.
     questions: Option<QuestionReport>,
+    /// Whether the overlay shows something of the current question to Raphael (its greeting, the
+    /// emblem of the dictation it took over, its reports of the wait, the answer or the YES/NO
+    /// question), which must be hidden once the main window shows the question instead.
+    on_overlay: bool,
 }
 
 impl State {
@@ -301,6 +343,7 @@ impl State {
         self.holdtap.reset();
         self.agent_holdtap.reset();
         self.agent = None;
+        self.on_overlay = false;
         self.take_ask();
         self.session.take()
     }
@@ -353,6 +396,9 @@ pub struct DictationController<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSw
     phase_report: Option<PhaseReport>,
     /// Told the loudness while a question is recorded (see [`VoiceLevelReport`]).
     voice_level: Option<VoiceLevelReport>,
+    /// Whether the main window shows a question to Raphael itself (see [`AppFront`]). Without
+    /// it, the overlay shows every question.
+    front: Option<AppFront>,
 }
 
 impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Clone
@@ -371,6 +417,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Clone
             after_paste: self.after_paste.clone(),
             phase_report: self.phase_report.clone(),
             voice_level: self.voice_level.clone(),
+            front: self.front.clone(),
         }
     }
 }
@@ -405,12 +452,43 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 down_noticed: false,
                 media: MediaHold::default(),
                 questions: None,
+                on_overlay: false,
             })),
             transitions: Arc::new(Mutex::new(())),
             after_paste: None,
             phase_report: None,
             voice_level: None,
+            front: None,
         }
+    }
+
+    /// The controller, asking `front` whether the main window shows a question to Raphael itself
+    /// before it puts the question on the overlay.
+    pub fn with_app_front(mut self, front: AppFront) -> Self {
+        self.front = Some(front);
+        self
+    }
+
+    /// Whether the main window shows the current question to Raphael itself now ([`AppFront`]).
+    fn app_shows_question(&self) -> bool {
+        self.front.as_ref().is_some_and(|front| front())
+    }
+
+    /// Puts something of the current question to Raphael on the overlay with `call`, unless the
+    /// main window shows the question itself ([`AppFront`]): then nothing goes to the overlay, and
+    /// whatever of the question it still shows is hidden. Returns whether the overlay got it.
+    /// Called with the transitions held, and never with the state lock.
+    fn question_on_overlay(&self, call: impl FnOnce(&O)) -> bool {
+        if self.app_shows_question() {
+            let shown = std::mem::replace(&mut lock(&self.state).on_overlay, false);
+            if shown {
+                self.overlay.hide();
+            }
+            return false;
+        }
+        lock(&self.state).on_overlay = true;
+        call(&self.overlay);
+        true
     }
 
     /// The controller, telling `report` where each session is.
@@ -681,6 +759,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 started,
             });
             state.agent = (kind == Kind::Agent).then_some(AgentStage::Listening);
+            // The emblem of a dictation that a question takes over is the question's now.
+            state.on_overlay = kind == Kind::Agent && replaced.is_some();
             state.started_ms = now_ms;
             self.cancel.set(true);
             // A recording that takes another over is the same recording, and already holds the
@@ -694,9 +774,12 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         match kind {
             // Raphael greets a question, on the emblem of the dictation it took over too. A
             // dictation shows the emblem alone, so the two are never mistaken for each other.
-            Kind::Agent => self
-                .overlay
-                .greet(notices::GREETING.text(&self.language.get())),
+            // With the 拉斐爾 page in front, the page's voice mode is the greeting, and the emblem
+            // of a dictation taken over goes.
+            Kind::Agent => {
+                let greeting = notices::GREETING.text(&self.language.get());
+                self.question_on_overlay(|overlay| overlay.greet(greeting));
+            }
             Kind::Dictation => self.overlay.show(Mode::Listening),
         }
         self.tell(DictationPhase::Listening, kind == Kind::Agent);
@@ -1215,9 +1298,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         // The app the person was in when the key was released is the one the question is about.
         let target = self.paster.foreground();
         // No percentage: nothing reports how far an answer has come. Raphael's reports on the
-        // analysis, in the interface language, change in its place until the answer.
-        self.overlay
-            .think_quietly(notices::WAITING.lines(&self.language.get()));
+        // analysis, in the interface language, change in its place until the answer. (The 拉斐爾
+        // page in front shows its own.)
+        let lines = notices::WAITING.lines(&self.language.get());
+        self.question_on_overlay(|overlay| overlay.think_quietly(lines));
         self.tell(DictationPhase::Processing, true);
 
         let this = self.clone();
@@ -1302,9 +1386,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
 
     /// A question typed in the main window's composer: an agent session without a recording, which
     /// goes to `agent.ask` at once with the source [`TYPED_SOURCE`] and on from there as a spoken
-    /// question does ([`Self::converse`]). The overlay shows its answer and any YES/NO question,
-    /// but not Raphael's reports while he thinks: the window shows its own, and the window is where
-    /// the person is. Esc cancels it as it cancels a spoken one.
+    /// question does ([`Self::converse`]). The overlay shows its answer and any YES/NO question
+    /// only when the 拉斐爾 page is no longer in front ([`AppFront`]), and never Raphael's reports
+    /// while he thinks: the window shows its own, and the window is where the person is. Esc
+    /// cancels it as it cancels a spoken one.
     ///
     /// The images and PDFs the composer attached go to `agent.ask` as its `attachments`
     /// (`{name, mime, data}`, the bytes in base64), untouched, and only when there are some. The
@@ -1446,9 +1531,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         };
         match parsed {
             Ok(Reply::Say { prefix, text }) => {
-                self.speak(id, &prefix, &text);
-                if agent::remembered(&reply) {
-                    // The answer said something else: 《了。已記下。》 follows it.
+                let shown = self.speak(id, &prefix, &text);
+                if shown && agent::remembered(&reply) {
+                    // The answer said something else: 《了。已記下。》 follows it, where it was said.
                     self.show(notices::REMEMBERED);
                 }
                 None
@@ -1464,7 +1549,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                         answer,
                     });
                 }
-                self.overlay.ask(&prompt);
+                // The main window hears of it (`open_ask`) and shows it on its card; the overlay
+                // too, unless the 拉斐爾 page is in front. `await_answer` keeps following the window.
+                self.question_on_overlay(|overlay| overlay.ask(&prompt));
                 Some((prompt, wait))
             }
             Err(bad) => {
@@ -1482,21 +1569,34 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     }
 
     /// Waits for the answer to the question on screen: a button of the overlay or of the main
-    /// window's card ([`Self::on_answer`]), Esc, or the time the question was given. Returns the answer, or `None` if the session ended meanwhile.
+    /// window's card ([`Self::on_answer`]), Esc, or the time the question was given. Meanwhile the
+    /// overlay follows the main window ([`Self::follow_front`]). Returns the answer, or `None` if
+    /// the session ended meanwhile.
     async fn await_answer(
         &self,
         id: &str,
         prompt: &AskPrompt,
-        wait: oneshot::Receiver<Answer>,
+        mut wait: oneshot::Receiver<Answer>,
     ) -> Option<Answer> {
         // A click must not take the focus from the app the person is typing into. The overlay
         // cannot be activated, in theory; if it was in practice, the log says so.
         let before = self.paster.foreground();
-        let answer = tokio::select! {
-            answer = wait => answer.unwrap_or(Answer::NO),
-            () = tokio::time::sleep(Duration::from_millis(prompt.timeout_ms)) => {
-                log::info!("agent: the question timed out");
-                Answer::NO
+        let deadline = tokio::time::sleep(Duration::from_millis(prompt.timeout_ms));
+        tokio::pin!(deadline);
+        // Only a controller that can tell whether the 拉斐爾 page is in front follows it.
+        let mut front = self.front.is_some().then(|| {
+            let mut ticks = tokio::time::interval(FRONT_POLL);
+            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ticks
+        });
+        let answer = loop {
+            tokio::select! {
+                answer = &mut wait => break answer.unwrap_or(Answer::NO),
+                () = &mut deadline => {
+                    log::info!("agent: the question timed out");
+                    break Answer::NO;
+                }
+                () = next_tick(&mut front) => self.follow_front(id),
             }
         };
         // An answer from the main window was given in it: the window has the focus because the
@@ -1532,6 +1632,47 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         state.take_ask();
         state.agent = Some(AgentStage::Confirming);
         Some(answer)
+    }
+
+    /// While the YES/NO question of the session `id` waits, the overlay follows the main window:
+    /// it shows the question, with the time it has left, once the 拉斐爾 page is no longer in front,
+    /// and hides it once the page is in front again, whose card has it all along. Nothing changes
+    /// while the window stays where it was, and nothing at all once the question is answered or the
+    /// session is over. The answer still comes from either page, Esc or the clock.
+    fn follow_front(&self, id: &str) {
+        let _transition = lock(&self.transitions);
+        let in_front = self.app_shows_question();
+        let prompt = {
+            let mut state = lock(&self.state);
+            let current = state.agent == Some(AgentStage::Asking)
+                && state
+                    .session
+                    .as_ref()
+                    .is_some_and(|current| current.id == id);
+            if !current || state.on_overlay != in_front {
+                return;
+            }
+            state.on_overlay = !in_front;
+            if in_front {
+                None
+            } else {
+                let Some(prompt) = state.ask.as_ref().map(PendingAsk::remaining) else {
+                    state.on_overlay = false;
+                    return;
+                };
+                Some(prompt)
+            }
+        };
+        match prompt {
+            Some(prompt) => {
+                log::info!("agent: the window is left; the question goes to the overlay");
+                self.overlay.ask(&prompt);
+            }
+            None => {
+                log::info!("agent: the window is in front; its card has the question");
+                self.overlay.hide();
+            }
+        }
     }
 
     /// The overlay's answer to the question on screen: its button was clicked (`overlay_confirm`).
@@ -1593,29 +1734,26 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// The YES/NO question that waits for its answer now, if one does, with the time it has left
     /// as its `timeout_ms`.
     pub fn open_question(&self) -> Option<AskPrompt> {
-        let state = lock(&self.state);
-        let ask = state.ask.as_ref()?;
-        let spent = u64::try_from(ask.shown.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let mut prompt = ask.prompt.clone();
-        prompt.timeout_ms = prompt.timeout_ms.saturating_sub(spent);
-        Some(prompt)
+        lock(&self.state).ask.as_ref().map(PendingAsk::remaining)
     }
 
     /// Shows Raphael's answer and keeps it on screen for as long as it takes to read. The session
     /// lasts that long too: Esc dismisses the answer, and the keys that begin something new replace
-    /// it. Called with the transitions held.
-    fn speak(&self, id: &str, prefix: &str, text: &str) {
+    /// it. The answer goes to the overlay unless the 拉斐爾 page is in front, which has it in its
+    /// conversation; returns whether the overlay got it. Called with the transitions held.
+    fn speak(&self, id: &str, prefix: &str, text: &str) -> bool {
         {
             let mut state = lock(&self.state);
             state.agent = Some(AgentStage::Speaking);
         }
-        self.overlay.say(prefix, text);
+        let shown = self.question_on_overlay(|overlay| overlay.say(prefix, text));
         let hold = Duration::from_millis(agent::say_hold_ms(text));
         let (this, id) = (self.clone(), id.to_owned());
         tokio::spawn(async move {
             tokio::time::sleep(hold).await;
             this.finish_speaking(&id);
         });
+        shown
     }
 
     /// The answer has been on screen long enough: the session is over, and Esc is Esc again.
@@ -1783,6 +1921,16 @@ fn stole_focus(before: Option<&Target>, after: Option<&Target>, own_pid: u32) ->
         && !before.is_some_and(|before| before.pid == own_pid)
 }
 
+/// The next tick of `ticks`, or never when there are none: the controller has no window to follow.
+async fn next_tick(ticks: &mut Option<tokio::time::Interval>) {
+    match ticks {
+        Some(ticks) => {
+            ticks.tick().await;
+        }
+        None => std::future::pending().await,
+    }
+}
+
 /// `agent.cancel` for `session`: the agent drops the question and any confirmation it has open.
 async fn agent_cancel<C: CoreApi>(core: &C, session: &str) {
     if let Err(err) = core
@@ -1851,7 +1999,7 @@ mod app {
     use tokio::sync::broadcast::{self, error::RecvError};
     use tokio::sync::mpsc::UnboundedReceiver;
 
-    use super::{DeskHandle, DictationController, ModeCell};
+    use super::{AppFront, DeskHandle, DictationController, ModeCell};
     use crate::core_process::{CORE_DOWN, CORE_RESTARTED, CoreProcess};
     use crate::hotkey::{CancelSwitch, HotkeyEvent, HotkeyService};
     use crate::learn::{Learner, UiaProbe};
@@ -1995,32 +2143,35 @@ mod app {
                 // Learns from the user's corrections after a paste (`learn`).
                 let learner = Learner::new(core.clone(), overlay.clone(), Arc::new(UiaProbe))
                     .with_language(language.clone());
-                Some(
-                    DictationController::new(
-                        core,
-                        overlay.clone(),
-                        Arc::new(WindowsPaster::new()),
-                        Arc::new(MaybeHotkeys(hotkeys)),
-                        mode,
-                    )
-                    .with_language(language.clone())
-                    .with_phase_report(Arc::new(|phase, agent| {
-                        crate::commands::tell_main_window(crate::commands::MainEvent::Dictation {
-                            phase,
-                            agent,
-                        });
-                    }))
-                    .with_question_report(Arc::new(|news| {
-                        crate::commands::tell_main_window(crate::commands::MainEvent::from(news));
-                    }))
-                    .with_voice_level(Arc::new(|value| {
-                        crate::commands::tell_main_window(crate::commands::MainEvent::VoiceLevel {
-                            value: value.clamp(0.0, 1.0),
-                        });
-                    }))
-                    .with_after_paste(Arc::new(learner))
-                    .with_media(Arc::new(WindowsMedia::start())),
+                let controller = DictationController::new(
+                    core,
+                    overlay.clone(),
+                    Arc::new(WindowsPaster::new()),
+                    Arc::new(MaybeHotkeys(hotkeys)),
+                    mode,
                 )
+                .with_language(language.clone())
+                .with_phase_report(Arc::new(|phase, agent| {
+                    crate::commands::tell_main_window(crate::commands::MainEvent::Dictation {
+                        phase,
+                        agent,
+                    });
+                }))
+                .with_question_report(Arc::new(|news| {
+                    crate::commands::tell_main_window(crate::commands::MainEvent::from(news));
+                }))
+                .with_voice_level(Arc::new(|value| {
+                    crate::commands::tell_main_window(crate::commands::MainEvent::VoiceLevel {
+                        value: value.clamp(0.0, 1.0),
+                    });
+                }))
+                .with_after_paste(Arc::new(learner))
+                .with_media(Arc::new(WindowsMedia::start()));
+                // A question asked while the 拉斐爾 page is in front is shown by the page alone.
+                Some(match app_front(app) {
+                    Some(front) => controller.with_app_front(front),
+                    None => controller,
+                })
             }
             None => {
                 log::error!("dictation is off: the Python core is not running");
@@ -2046,6 +2197,42 @@ mod app {
             confirmations: Some(confirmation_rx),
         };
         tauri::async_runtime::spawn(run(controller, overlay, language, inputs));
+    }
+
+    /// Whether the main window shows the 拉斐爾 page in front ([`AppFront`]): the page says it is
+    /// on screen (`agent_page_shown`), and the window is the foreground window, visible and not
+    /// minimised. The handle of the window is taken once, here on the main thread; the closure then
+    /// makes only Win32 calls that never wait for the main thread, as it is called with the
+    /// controller's transitions held. Without a main window every question goes to the overlay.
+    fn app_front(app: &AppHandle) -> Option<AppFront> {
+        let window = app.get_webview_window(crate::MAIN_WINDOW)?;
+        let hwnd = match window.hwnd() {
+            Ok(hwnd) => hwnd.0 as isize,
+            Err(err) => {
+                log::warn!("no handle for the main window; questions all go to the overlay: {err}");
+                return None;
+            }
+        };
+        Some(Arc::new(move || {
+            crate::commands::agent_page_on_screen() && main_window_in_front(hwnd)
+        }))
+    }
+
+    /// Whether the window `hwnd` is the foreground window, visible and not minimised.
+    fn main_window_in_front(hwnd: isize) -> bool {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetForegroundWindow, IsIconic, IsWindowVisible,
+        };
+
+        let hwnd = HWND(hwnd as *mut _);
+        // SAFETY: no pointers are passed. A handle that is no longer a window is not the
+        // foreground window, and the other two calls answer false for it.
+        unsafe {
+            GetForegroundWindow() == hwnd
+                && IsWindowVisible(hwnd).as_bool()
+                && !IsIconic(hwnd).as_bool()
+        }
     }
 
     async fn run(
@@ -7717,5 +7904,222 @@ mod tests {
             c.core().timeout("dictation.stop"),
             Some(dictation_stop_timeout(Duration::from_secs(600)))
         );
+    }
+
+    // ---------- the 拉斐爾 page in front: the window shows the question, the overlay nothing ----------
+
+    /// `c`, asking a switch whether the 拉斐爾 page is in front, which starts at `on`.
+    fn with_front(c: Ctl, on: bool) -> (Ctl, Arc<std::sync::atomic::AtomicBool>) {
+        let front = Arc::new(std::sync::atomic::AtomicBool::new(on));
+        let seen = front.clone();
+        let c = c.with_app_front(Arc::new(move || {
+            seen.load(std::sync::atomic::Ordering::SeqCst)
+        }));
+        (c, front)
+    }
+
+    fn set_front(front: &std::sync::atomic::AtomicBool, on: bool) {
+        front.store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The YES/NO question `c-1` asked by a typed question while the page is in front, with the
+    /// switch, the questions the main window heard of and the turn.
+    async fn question_in_front(
+        timeout_ms: u64,
+    ) -> (
+        Ctl,
+        Arc<std::sync::atomic::AtomicBool>,
+        Arc<Mutex<Vec<QuestionNews>>>,
+        JoinHandle<()>,
+    ) {
+        let (c, heard) = questioning(question("c-1", timeout_ms));
+        let (c, front) = with_front(c, true);
+        let turn = c.ask_typed("幫我複製這句話").unwrap();
+        until_stage(&c, AgentStage::Asking).await;
+        (c, front, heard, turn)
+    }
+
+    #[tokio::test]
+    async fn a_typed_question_with_the_page_in_front_puts_nothing_on_the_overlay() {
+        let (c, _front) = with_front(agent(answer("答", "會，下午七成。")), true);
+        c.ask_typed("明天會下雨嗎？").unwrap().await.unwrap();
+        assert_eq!(c.core().count("agent.ask"), 1);
+        assert_eq!(c.overlay().events(), Vec::<String>::new());
+        // The session lasts as long as ever: Esc dismisses it, a key replaces it.
+        assert_eq!(c.agent_stage(), Some(AgentStage::Speaking));
+    }
+
+    #[tokio::test]
+    async fn a_spoken_question_with_the_page_in_front_is_neither_greeted_nor_answered_on_the_overlay()
+     {
+        // The page's voice button and the agent keys reach the controller the same way.
+        let (c, _front) = with_front(agent(answer("答", "台北現在二十四度。")), true);
+        ask_aloud(&c).await;
+        assert_eq!(c.core().count("agent.ask"), 1);
+        assert_eq!(c.overlay().events(), Vec::<String>::new());
+        assert!(c.overlay().greetings.lock().unwrap().is_empty());
+        assert_eq!(c.agent_stage(), Some(AgentStage::Speaking));
+    }
+
+    #[tokio::test]
+    async fn the_emblem_of_a_dictation_that_a_question_takes_over_goes_with_the_page_in_front() {
+        let (c, _front) = with_front(agent(answer("答", "好")), true);
+        run(&c, DictationDown, 0).await;
+        run(&c, AgentDown, 150).await;
+        assert_eq!(c.agent_stage(), Some(AgentStage::Listening));
+        assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
+        run(&c, AgentUp, 900).await;
+        assert_eq!(c.overlay().events(), vec!["show:listening", "hide"]);
+    }
+
+    #[tokio::test]
+    async fn remembering_is_said_with_the_answer_and_not_alone() {
+        let mut reply = answer("答", "好的。");
+        reply["notice"] = json!("remembered");
+        let (c, _front) = with_front(agent(reply), true);
+        c.ask_typed("記得我喜歡無糖").unwrap().await.unwrap();
+        assert_eq!(c.overlay().events(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_failure_is_still_told_on_the_overlay_with_the_page_in_front() {
+        // The page has no place for it: without the notice the question would just end.
+        let core = FakeCore::failing("agent.ask", RpcError::new(-32603, "boom"));
+        let (c, _front) = with_front(controller(core, FakePaster::pasting("chrome.exe")), true);
+        c.ask_typed("明天會下雨嗎？").unwrap().await.unwrap();
+        assert_eq!(c.overlay().events(), vec![notice(ASK_FAILED.zh)]);
+    }
+
+    #[tokio::test]
+    async fn leaving_the_window_while_raphael_thinks_puts_the_answer_on_the_overlay() {
+        let (core, gate) = agent_core(answer("答", "好")).gated("agent.ask");
+        let (c, front) = with_front(controller(core, FakePaster::pasting("chrome.exe")), true);
+        let turn = c.ask_typed("明天會下雨嗎？").unwrap();
+        settle().await;
+        assert_eq!(c.core().count("agent.ask"), 1);
+        set_front(&front, false);
+        gate.notify_one();
+        turn.await.unwrap();
+        assert_eq!(c.overlay().events(), vec!["say:答|好"]);
+    }
+
+    #[tokio::test]
+    async fn coming_back_while_raphael_thinks_hides_his_reports_and_the_window_has_the_answer() {
+        let (core, gate) = agent_core(answer("答", "好")).gated("agent.ask");
+        let (c, front) = with_front(controller(core, FakePaster::pasting("chrome.exe")), false);
+        let turn = start_turn(&c).await;
+        settle().await;
+        assert_eq!(c.overlay().events(), vec!["greet", "mode:thinking"]);
+        set_front(&front, true);
+        gate.notify_one();
+        turn.await.unwrap();
+        assert_eq!(c.overlay().events(), vec!["greet", "mode:thinking", "hide"]);
+        assert_eq!(c.agent_stage(), Some(AgentStage::Speaking));
+    }
+
+    #[tokio::test]
+    async fn a_question_with_the_page_in_front_is_on_the_card_alone_and_the_card_answers_it() {
+        let (c, _front, heard, turn) = question_in_front(30_000).await;
+        assert_eq!(
+            *heard.lock().unwrap(),
+            vec![QuestionNews::Open(prompt("c-1", 30_000))]
+        );
+        assert_eq!(c.overlay().events(), Vec::<String>::new());
+        c.on_confirm_in_app("c-1", true);
+        turn.await.unwrap();
+        assert_eq!(
+            c.core().call_params("agent.confirm"),
+            json!({"id": "c-1", "approved": true})
+        );
+        assert_eq!(heard.lock().unwrap().len(), 2, "and closed");
+        assert_eq!(c.overlay().events(), Vec::<String>::new(), "nor the reply");
+    }
+
+    #[tokio::test]
+    async fn esc_still_answers_no_to_a_question_the_page_shows() {
+        let (c, _front, _heard, turn) = question_in_front(30_000).await;
+        run(&c, Cancel, 1_000).await;
+        turn.await.unwrap();
+        assert_eq!(
+            c.core().call_params("agent.confirm"),
+            json!({"id": "c-1", "approved": false})
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_question_the_page_shows_still_runs_out_as_a_no() {
+        let (c, _front, _heard, turn) = question_in_front(5_000).await;
+        turn.await.unwrap();
+        assert_eq!(
+            c.core().call_params("agent.confirm"),
+            json!({"id": "c-1", "approved": false})
+        );
+        assert_eq!(c.overlay().events(), Vec::<String>::new());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_waiting_question_follows_the_window_to_the_overlay_and_back() {
+        let (c, front, _heard, turn) = question_in_front(60_000).await;
+        tokio::time::advance(Duration::from_secs(1)).await;
+        settle().await;
+        assert_eq!(c.overlay().events(), Vec::<String>::new(), "still in front");
+
+        // The person leaves the window: the overlay asks, with the time that is left.
+        set_front(&front, false);
+        tokio::time::advance(FRONT_POLL * 2).await;
+        settle().await;
+        let events = c.overlay().events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        let left: u64 = events[0]
+            .strip_prefix("ask:c-1|T2|問|要複製到剪貼簿嗎？|是|否|")
+            .expect("the question")
+            .parse()
+            .unwrap();
+        assert!((55_000..60_000).contains(&left), "{left}");
+        assert!(c.overlay().mouse(), "its buttons take the mouse");
+
+        // Back in the window: the card has it, the overlay lets it go.
+        set_front(&front, true);
+        tokio::time::advance(FRONT_POLL * 2).await;
+        settle().await;
+        assert_eq!(c.overlay().events().len(), 2);
+        assert_eq!(c.overlay().events()[1], "hide");
+        assert!(!c.overlay().mouse());
+
+        // Away again, and answered on the overlay; the reply is said there too.
+        set_front(&front, false);
+        tokio::time::advance(FRONT_POLL * 2).await;
+        settle().await;
+        assert!(c.overlay().events()[2].starts_with("ask:c-1|"));
+        c.on_confirm("c-1", true);
+        turn.await.unwrap();
+        assert_eq!(
+            c.core().call_params("agent.confirm"),
+            json!({"id": "c-1", "approved": true})
+        );
+        assert_eq!(
+            c.overlay().events().last().unwrap(),
+            "say:了|已複製到剪貼簿。"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dictation_and_a_report_of_the_background_never_look_at_the_window() {
+        let (c, _front) = with_front(
+            controller(
+                FakeCore::with("dictation.stop", stop_result("好", None)),
+                FakePaster::pasting("notepad.exe"),
+            ),
+            true,
+        );
+        assert!(c.try_say("告", "完成。").is_some());
+        run(&c, DictationDown, 0).await;
+        run(&c, DictationUp, 900).await;
+        settle().await;
+        let events = c.overlay().events();
+        assert_eq!(events[0], "say:告|完成。");
+        assert_eq!(events[1], "show:listening");
+        assert_eq!(events[2], "mode:thinking");
+        assert_eq!(c.paster().delivered(), vec!["好"]);
     }
 }

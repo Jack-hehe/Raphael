@@ -21,8 +21,9 @@
 .mp-filters { position: relative; display: flex; flex-wrap: wrap; gap: 6px; }
 .menu.mp-panel .mp-dd { width: auto; max-width: 62%; min-height: 0; height: var(--h-ctl-sm); gap: 6px; padding: 0 8px 0 10px; border: 1px solid var(--btn-edge); border-radius: 7px; background: var(--btn); font-size: var(--fs-xs); color: var(--text-2); }
 .menu.mp-panel .mp-dd:hover { border-color: var(--text-3); background: var(--btn); color: var(--text); }
-.menu.mp-panel .mp-dd:focus-visible { background: var(--btn); box-shadow: none; outline: 2px solid var(--focus); outline-offset: 2px; }
-.menu.mp-panel .mp-dd[aria-expanded="true"] { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-ring); color: var(--text); }
+.menu.mp-panel .mp-dd:focus-visible { background: var(--btn); box-shadow: none; }
+:where(:root[data-keys]) .menu.mp-panel .mp-dd:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.menu.mp-panel .mp-dd[aria-expanded="true"] { color: var(--text); }
 .mp-dd > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mp-dd .i { color: var(--text-3); }
 .mp-ddlist { position: absolute; z-index: 2; top: calc(100% + 4px); min-width: 200px; max-width: min(300px, calc(100vw - 40px)); max-height: 288px; overflow-x: hidden; overflow-y: auto; padding: var(--sp-1); border-radius: var(--r-md); background: var(--menu); border: 1px solid var(--edge); box-shadow: var(--pop); }
@@ -53,7 +54,7 @@
 .menu.mp-panel .mp-star:hover { background: var(--hover); color: var(--text); }
 .menu.mp-panel .mp-star[data-on] { color: var(--accent-text); }
 .mp-star[data-on] .i { fill: currentColor; }
-.menu.mp-panel .mp-star:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
+:where(:root[data-keys]) .menu.mp-panel .mp-star:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
 .mp-group { margin: 8px 6px 2px; padding: 10px 4px 2px; border-top: 1px solid var(--line); font-size: 11px; color: var(--text-3); }
 .mp-list > .mp-group:first-child { margin-top: var(--sp-1); padding-top: var(--sp-1); border-top: 0; }
 .mp-empty { margin: 0; padding: 32px 12px; text-align: center; font-size: var(--fs-sm); color: var(--text-3); }
@@ -94,7 +95,8 @@
 .menu.mp-panel .lm-row .btn:hover { background: var(--hover); border-color: var(--text-3); }
 .menu.mp-panel .lm-row .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 .menu.mp-panel .lm-row .btn.pri:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-.menu.mp-panel .lm-row .btn:focus-visible { box-shadow: none; outline: 2px solid var(--focus); outline-offset: 2px; }
+.menu.mp-panel .lm-row .btn:focus-visible { box-shadow: none; }
+:where(:root[data-keys]) .menu.mp-panel .lm-row .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .lm-confirm { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 6px 4px 6px 10px; border-radius: var(--r-sm); background: var(--hover); }
 .lm-ask { flex: 1 1 160px; min-width: 0; font-size: var(--fs-sm); line-height: 1.4; }
 .menu.mp-panel .lm-confirm .btn { margin: 0; }

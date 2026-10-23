@@ -147,6 +147,7 @@ pub fn run() {
             commands::agent_ask_text,
             commands::agent_question_open,
             commands::agent_question_answer,
+            commands::agent_page_shown,
             avatar::avatar_pick,
             avatar::avatar_save,
             avatar::avatar_get,
