@@ -1476,7 +1476,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         let mut asked = 0;
         loop {
             let may_ask = asked < MAX_QUESTIONS_IN_A_TURN;
-            let Some((prompt, answer)) = self.show_reply(id, reply, may_ask) else {
+            let Some((prompt, answer)) = self.show_reply(id, reply, may_ask, member) else {
                 return;
             };
             asked += 1;
@@ -1501,6 +1501,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         id: &str,
         reply: Result<Value, RpcError>,
         may_ask: bool,
+        member: u64,
     ) -> Option<(AskPrompt, oneshot::Receiver<Answer>)> {
         // All of it, the check that the session still exists included, is one transition: Esc
         // and the core's restarts cannot come in between.
@@ -1539,6 +1540,15 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 return None;
             }
         };
+        // A member's answer is in its thread on the 拉斐爾 page, and it has no prefix: the overlay is
+        // Raphael's alone. The turn is over, as when an answer has been on screen long enough.
+        if member != 0 && reply.get("status").and_then(Value::as_str) == Some("done") {
+            if lock(&self.state).session.as_ref().is_some_and(|current| current.id == id) {
+                lock(&self.state).go_idle();
+                self.cancel.set(false);
+            }
+            return None;
+        }
         let parsed = if may_ask {
             agent::parse_reply(&reply)
         } else {
@@ -5366,6 +5376,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(c.core().call_params("agent.ask").get("member_id"), None);
+    }
+
+    #[tokio::test]
+    async fn a_members_answer_stays_in_its_thread_and_is_never_a_failure_on_the_overlay() {
+        // A member speaks plainly, with no prefix: its answer is not Raphael's to say.
+        let c = agent(answer("", "おはようございます。"));
+        c.ask_typed_with("早安", Vec::new(), 1)
+            .unwrap()
+            .await
+            .unwrap();
+        assert!(
+            c.overlay().events().iter().all(|e| !e.starts_with("notice")),
+            "{:?}",
+            c.overlay().events()
+        );
+        assert_eq!(c.agent_stage(), None);
+        assert!(c.ask_typed("你好").is_ok(), "the next question is taken");
     }
 
     #[tokio::test]
