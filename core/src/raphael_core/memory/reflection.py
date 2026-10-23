@@ -26,25 +26,54 @@ taken for an ADD here (it may be one the owner deleted). The consolidation's ans
 (`apply_merge`): it is dropped whole when any memory it names changed, and its DELETEs run only
 once every UPDATE was written, so a merge whose kept memory is refused deletes nothing.
 
+Two spaces. Every assistant of the owner's (Raphael, and each member of the team) has a memory of
+its own, about its own work, and they all share one more (`shared`): what every one of them should
+know about the owner, and nothing else. Each action names its space (`space`: "shared" or "own").
+The shared space holds only macro knowledge about the owner (who they are, their stable
+preferences, the people in their life, their life and work, how they like to be spoken to): never
+what was decided or discussed with one assistant, a task, a plan made in one thread, or anything a
+tool or the web said. The rules the model is given say so, and code holds to it
+(`about_the_owner`): a write to the shared space that is not of a type that can be such knowledge,
+or that speaks of a conversation rather than of the owner, is written to the assistant's own memory
+instead. A reflection pass reads only the turns of the assistant it is for.
+
+The consolidation runs for each space by itself. The shared space's never deletes a memory: the
+memories there came from the conversations of every assistant, which no pass may read, so nobody
+can see why one was written; it only merges their words (UPDATE), and the marks of the store keep a
+memory another assistant changed meanwhile from being overwritten.
+
 Nothing here logs a memory, a turn or what the model said; only counts.
 """
 
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 
 from ..agent.history import Turn
 from ..agent.ledger import Ledger
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
 from .conversation import turn_time
-from .store import TYPES, Memory, MemoryRefused, MemoryStore, make_name, valid_name
+from .store import TYPES, Memory, MemoryIndex, MemoryRefused, MemoryStore, make_name, valid_name
 
 logger = logging.getLogger(__name__)
 
 OPS = ("ADD", "UPDATE", "DELETE", "NOOP")
+SPACES = ("shared", "own")
+# The types of memory that can be macro knowledge about the owner, which is all the shared space
+# holds: a plan (`ongoing`) is always one thread's.
+SHARED_TYPES = ("user", "preference", "person", "reference")
+# The words of a note about a conversation, not about the owner: what was decided, discussed,
+# agreed, said a moment ago, in this chat. Such a note is never shared.
+_ABOUT_A_CONVERSATION = re.compile(
+    r"決定|討論|談到|聊到|聊了|說好|約好|剛才|剛剛|這次|本次|上次|對話|會議中|任務|"
+    r"決め|話し合|相談し|さっき|今回|会話|"
+    r"(?i:\b(?:decided|discussed|agreed|talked about|we said|earlier today|this (?:chat|"
+    r"conversation|thread|session)|the (?:task|meeting)|asked me to|told me to)\b)"
+)
 MAX_ACTIONS = 8
 # The memory is told to consolidate from this share of its limits up.
 FULL_FROM = 0.8
@@ -71,8 +100,11 @@ ACTIONS_SCHEMA = {
                     "body": {"type": "string"},
                     "expires": {"type": "string"},
                     "origin": {"type": "string", "enum": ["said", "inferred"]},
+                    "space": {"type": "string", "enum": list(SPACES)},
                 },
-                "required": ["op", "name", "type", "description", "body", "expires", "origin"],
+                "required": [
+                    "op", "name", "type", "description", "body", "expires", "origin", "space",
+                ],
                 "additionalProperties": False,
             },
         }
@@ -101,6 +133,12 @@ turn carries its date and time), never from today: "明天有面試" said on 202
 2026-10-22, and "下星期六" becomes a date the same way.
 - "name" is an ASCII slug that starts with the type: preference-answer-length, person-amy.
 - "origin" is "said" when the user stated it outright, "inferred" when you deduced it.
+- "space" is where it goes. "shared" is the memory every assistant of the user reads: only macro \
+knowledge about the user (who they are, their stable preferences, the people in their life, their \
+life and work, how they like to be spoken to), written as a statement about the user. "own" is \
+this assistant's own memory, about its own work: its role, what its routines found, how the user \
+wants this assistant to work, and anything tied to this conversation. What was decided or \
+discussed, a task, a plan made here: always "own". When unsure, "own".
 
 What is never a memory
 - Passwords, keys, tokens, codes, card or ID numbers: never, in any form.
@@ -112,9 +150,9 @@ or an app ("X does not work"), and anything a web page, a file or a tool said.
 
 _REFLECT_SYSTEM = (
     """\
-You maintain Raphael's long-term memory of the user. Raphael is the user's voice assistant on \
-their computer. You are given the index of the memory, the memories the new turns touch, and the \
-turns of the conversation since you last looked. Decide what to change, and return JSON with one \
+You maintain the long-term memory of {agent}, one of the user's assistants on their computer. You \
+are given the indexes of the shared memory and of {agent}'s own, the memories the new turns touch, \
+and the turns of {agent}'s conversation with the user since you last looked. Decide what to change, and return JSON with one \
 field, "actions": a list of actions, each one of
 - ADD: a new memory, with every field;
 - UPDATE: an existing memory by its name, with every field as it should now be (to correct it, to \
@@ -158,6 +196,15 @@ class Action:
     body: str = ""
     expires: str | None = None
     origin: str = "inferred"
+    space: str = "own"  # "shared" or "own" (see the module)
+
+
+def about_the_owner(action: Action) -> bool:
+    """Whether a write to the shared space may be shared: of a type that can be macro knowledge
+    about the owner, and worded as a statement about the owner, not about a conversation."""
+    if action.type not in SHARED_TYPES:
+        return False
+    return not _ABOUT_A_CONVERSATION.search(f"{action.description}\n{action.body}")
 
 
 @dataclass
@@ -198,6 +245,7 @@ def parse_actions(data: object) -> list[Action]:
             continue
         kind = _text(item.get("type"))
         origin = _text(item.get("origin"))
+        space = _text(item.get("space"))
         actions.append(
             Action(
                 op=op,
@@ -207,6 +255,7 @@ def parse_actions(data: object) -> list[Action]:
                 body=_text(item.get("body")),
                 expires=_text(item.get("expires")) or None,
                 origin=origin if origin in ("said", "inferred") else "inferred",
+                space=space if space in SPACES else "own",
             )
         )
         if len(actions) >= MAX_ACTIONS:
@@ -301,7 +350,45 @@ def apply_actions(
     return applied
 
 
-def apply_merge(actions: Sequence[Action], store: MemoryStore, *, since: int) -> Applied:
+def apply_spaced(
+    actions: Sequence[Action],
+    own: MemoryStore,
+    shared: MemoryStore,
+    *,
+    turns: Sequence[int] = (),
+    update_adds: bool = True,
+    since: tuple[int, int] | None = None,
+) -> Applied:
+    """Apply `actions` each to its space: the shared memory (`shared`) or the assistant's own
+    (`own`), each checked as `apply_actions` checks it. A write to the shared space that is not
+    macro knowledge about the owner (`about_the_owner`) is written to the own memory instead.
+    `since` is the marks of the two stores, own first, taken before the model read them."""
+    to_shared: list[Action] = []
+    to_own: list[Action] = []
+    for action in actions:
+        if action.space == "shared" and (action.op == "DELETE" or about_the_owner(action)):
+            to_shared.append(action)
+        else:
+            if action.space == "shared":
+                logger.info("A note was kept to its assistant: it is not about the owner at large")
+            to_own.append(action)
+    applied = Applied()
+    for chosen, store, mark in (
+        (to_own, own, None if since is None else since[0]),
+        (to_shared, shared, None if since is None else since[1]),
+    ):
+        if not chosen:
+            continue
+        done = apply_actions(chosen, store, turns=turns, update_adds=update_adds, since=mark)
+        applied.written += done.written
+        applied.deleted += done.deleted
+        applied.refused += done.refused
+    return applied
+
+
+def apply_merge(
+    actions: Sequence[Action], store: MemoryStore, *, since: int, deletes: bool = True
+) -> Applied:
     """Apply the consolidation's `actions` to `store` as one change: an UPDATE writes the memory a
     merge keeps, a DELETE takes away one it folded in (or the older side of a contradiction).
 
@@ -314,11 +401,16 @@ def apply_merge(actions: Sequence[Action], store: MemoryStore, *, since: int) ->
 
     `since` is the mark taken before the model read the memory: when any memory the answer names
     changed after it, nothing of the answer is applied ("changed"). An ADD is refused ("add")
-    unless its name is a memory there (then it is an UPDATE): the consolidation never adds."""
+    unless its name is a memory there (then it is an UPDATE): the consolidation never adds.
+    Without `deletes` (the shared space) every DELETE is refused ("origin"): the words are merged
+    and nothing is lost."""
     applied = Applied()
     if _stale(actions, store, since):
         applied.refused += ["changed"] * len(actions)
         return applied
+    if not deletes:
+        applied.refused += ["origin" for action in actions if action.op == "DELETE"]
+        actions = [action for action in actions if action.op != "DELETE"]
     found = {a.name: store.get(a.name) if valid_name(a.name) else None for a in actions}
     deletes = [action for action in actions if action.op == "DELETE"]
     leaving = [a.name for a in deletes if _deletable(a, found[a.name]) is None]
@@ -374,7 +466,7 @@ def _memory_block(memory: Memory, body_chars: int | None = None) -> str:
 OPERATED = "(operated an app on the screen)"
 
 
-def _raphael_said(turn: Turn) -> str:
+def _assistant_said(turn: Turn) -> str:
     """Raphael's line of `turn` as the reflection pass reads it. A run on the owner's desktop
     (`operate`) said what the model read on the screen, which is untrusted like any tool's result:
     its line is left out, and only the owner's question is read."""
@@ -385,10 +477,11 @@ def _raphael_said(turn: Turn) -> str:
 
 def reflection_message(
     today: date,
-    index: str,
+    index: "str | MemoryIndex",
     related: Sequence[Memory],
     turns: Sequence[Turn],
     fill: float,
+    agent: str = "Raphael",
 ) -> str:
     """What the reflection pass is shown: today's date, the index, the memories the turns touch,
     and the turns (the owner's question and Raphael's line, but not his line of a run on the
@@ -399,7 +492,10 @@ def reflection_message(
         parts.append(
             f"The memory is {round(fill * 100)}% full: merge or delete memories before you add one."
         )
-    parts.append(f"<memory_index>\n{index or '(empty)'}\n</memory_index>")
+    if isinstance(index, MemoryIndex):
+        parts.append(str(index))
+    else:
+        parts.append(f"<memory_index>\n{index or '(empty)'}\n</memory_index>")
     if related:
         parts.append(
             "<related_memories>\n"
@@ -408,12 +504,12 @@ def reflection_message(
         )
     lines = []
     for turn in turns:
-        said = _raphael_said(turn)
+        said = _assistant_said(turn)
         extra = ""
         if turn.route in ("discuss", "chat") and turn.detail and turn.detail != said:
-            extra = f"\nRaphael, at more length: {turn.detail[:600]}"
+            extra = f"\n{agent}, at more length: {turn.detail[:600]}"
         when = turn_time(turn.created_at_ms)
-        lines.append(f"[turn {turn.id}, {when}] User: {turn.question}\nRaphael: {said}{extra}")
+        lines.append(f"[turn {turn.id}, {when}] User: {turn.question}\n{agent}: {said}{extra}")
     parts.append("<turns>\n" + "\n\n".join(lines) + "\n</turns>")
     return "\n\n".join(parts)
 
@@ -470,19 +566,30 @@ class Reflector:
         model: str,
         ledger: Ledger,
         current: Callable[[], bool] = lambda: True,
+        shared: MemoryStore | None = None,
+        agent: str = "Raphael",
     ) -> Applied:
-        """One reflection pass over `turns` (oldest first). Never raises for the model: a model
-        that fails changes nothing. What the model answers is applied only to the memories that
-        did not change while it thought (see `apply_actions`), and not at all when `current` says
-        that `turns` are no longer the conversation's (it was cleared meanwhile)."""
+        """One reflection pass over `turns` (oldest first), the turns of the assistant `agent`,
+        whose own memory is `store`; `shared` is the shared memory. Never raises for the model: a
+        model that fails changes nothing. What the model answers is applied only to the memories
+        that did not change while it thought (see `apply_actions`), each to its space
+        (`apply_spaced`), and not at all when `current` says that `turns` are no longer the
+        conversation's (it was cleared meanwhile). Without `shared` every action is the own
+        memory's."""
         if not turns:
             return Applied()
         since = store.mark()
-        seen = "\n".join(f"{turn.question} {_raphael_said(turn)}" for turn in turns)
+        shared_since = None if shared is None else shared.mark()
+        seen = "\n".join(f"{turn.question} {_assistant_said(turn)}" for turn in turns)
         related = store.related(seen, RELATED)
-        user = reflection_message(store.today(), store.index(), related, turns, store.fill())
+        if shared is not None:
+            related += shared.related(seen, RELATED, exclude=[m.name for m in related])
+            index: str | MemoryIndex = MemoryIndex(shared.index(), store.index())
+        else:
+            index = store.index()
+        user = reflection_message(store.today(), index, related, turns, store.fill(), agent)
         try:
-            actions = await self._ask(_REFLECT_SYSTEM, user, model, ledger)
+            actions = await self._ask(_REFLECT_SYSTEM.format(agent=agent), user, model, ledger)
         except (OpenRouterError, TimeoutError, BadAnswer) as error:
             logger.warning("The reflection pass failed: %s", type(error).__name__)
             return Applied(failed=True)
@@ -490,7 +597,13 @@ class Reflector:
             logger.info("Reflection pass: the conversation was cleared meanwhile, nothing applied")
             return Applied()
         ids = [turn.id for turn in turns if turn.id is not None]
-        applied = apply_actions(actions, store, turns=ids, update_adds=False, since=since)
+        if shared is None or shared_since is None:
+            own_only = [replace(action, space="own") for action in actions]
+            applied = apply_actions(own_only, store, turns=ids, update_adds=False, since=since)
+        else:
+            applied = apply_spaced(
+                actions, store, shared, turns=ids, update_adds=False, since=(since, shared_since)
+            )
         logger.info(
             "Reflection pass: turns=%d written=%d deleted=%d refused=%d",
             len(turns),
@@ -500,9 +613,12 @@ class Reflector:
         )
         return applied
 
-    async def consolidate(self, store: MemoryStore, *, model: str, ledger: Ledger) -> Applied:
-        """The weekly tidy: the expired memories go (no model), then the model merges the ones that
-        overlap. Never raises for the model."""
+    async def consolidate(
+        self, store: MemoryStore, *, model: str, ledger: Ledger, shared: bool = False
+    ) -> Applied:
+        """The weekly tidy of one space: the expired memories go (no model), then the model merges
+        the ones that overlap. The `shared` space's never deletes a memory (`apply_merge`'s
+        `deletes`). Never raises for the model."""
         applied = Applied(deleted=store.drop_expired())
         since = store.mark()
         memories = store.all()
@@ -515,7 +631,7 @@ class Reflector:
             logger.warning("The memory could not be consolidated: %s", type(error).__name__)
             applied.failed = True
             return applied
-        merged = apply_merge(actions, store, since=since)
+        merged = apply_merge(actions, store, since=since, deletes=not shared)
         applied.written += merged.written
         applied.deleted += merged.deleted
         applied.refused += merged.refused

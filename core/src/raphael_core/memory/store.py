@@ -545,6 +545,43 @@ class MemoryStore:
             logger.warning("Could not write the index of the memory: %s", type(exc).__name__)
 
 
+def move_note(name: str, source: MemoryStore, target: MemoryStore) -> bool:
+    """Move the memory `name` from `source` to `target` as its file is, byte for byte (an edit by
+    hand is kept); whether it moved. Not when `source` has no such memory or `target` already has
+    one of that name: nothing is ever overwritten. Both indexes are written again, and the move
+    counts as a change of the memory in both (`changed_since`), so a pass of the model that read
+    either before it applies nothing to it."""
+    if not valid_name(name) or source.get(name) is None or target.get(name) is not None:
+        return False
+    target.root.mkdir(parents=True, exist_ok=True)
+    os.replace(source.root / f"{name}.md", target.root / f"{name}.md")
+    for store in (source, target):
+        store._count_change(name)
+        store._after_change()
+    return True
+
+
+@dataclass(frozen=True)
+class MemoryIndex:
+    """What an assistant reads of the memory: the index of the shared memory, which every assistant
+    of the owner's reads and writes (who the owner is), and the index of its own (its own work).
+    The shared one comes first: it changes less often than an assistant's own work, which keeps
+    the start of the prompt the same for the provider's cache."""
+
+    shared: str = ""
+    own: str = ""
+
+    def __bool__(self) -> bool:
+        return bool(self.shared or self.own)
+
+    def __str__(self) -> str:
+        """Both indexes, each in its tags, for a prompt that shows them as data."""
+        return (
+            f"<shared_memory>\n{self.shared or '(no notes yet)'}\n</shared_memory>\n"
+            f"<own_memory>\n{self.own or '(no notes yet)'}\n</own_memory>"
+        )
+
+
 def _is_turn_id(turn: object) -> bool:
     """Whether `turn` is a turn id: a whole number above zero (not a bool)."""
     return type(turn) is int and turn > 0

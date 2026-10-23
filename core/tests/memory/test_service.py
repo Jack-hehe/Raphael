@@ -126,7 +126,7 @@ def test_read_gives_the_notes_and_names_the_missing(memory):
     result = memory.read(["user-tea", "user-none", "../x", "user-tea"])
     assert result.ok and result.name == "memory_read"
     assert result.data == {
-        "memories": [{"name": "user-tea", "description": SECRET_WORDS, "body": "烏龍茶。", "updated": "2026-10-22", "origin": "said"}],
+        "memories": [{"name": "user-tea", "description": SECRET_WORDS, "body": "烏龍茶。", "updated": "2026-10-22", "origin": "said", "space": "own"}],
         "missing": ["user-none", "../x"],
     }  # fmt: skip
 

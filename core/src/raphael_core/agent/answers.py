@@ -17,18 +17,28 @@ notes, `history_search` of the past turns), after which the model is asked once 
 found. The system prompt comes first and changes only when a memory does; what changes every turn
 (the time, the question) comes last, so the provider's prompt cache keeps the start.
 
+A note names its space (`space`): the shared memory every assistant of the owner's reads (macro
+knowledge about the owner), or the assistant's own; one with none is the own's.
+
+A member of the owner's team (`speaker.Speaker`) is worded the same way, with a system prompt of its
+own (`persona.member_system_prompt`): its persona, plain sentences, no prefix in the schema or in the
+reply, and a text kept as it was written, its lines too (`parse_reply`'s `plain`), since it is read in
+the app's thread, not on the overlay.
+
 Nothing here logs the question, the context, the tool results or the reply.
 """
 
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
 from ..brain.textnorm import convert_leftover_simplified
+from ..memory.reflection import SPACES as MEMORY_SPACES
 from ..memory.reflection import Action as MemoryAction
 from ..memory.store import TYPES as MEMORY_TYPES
 from .failure import AgentFailure, failure_kind
@@ -36,13 +46,16 @@ from .history import Turn
 from .ledger import Ledger
 from ..memory.conversation import turn_text
 from .persona import (
+    MEMBER_TEXT_MAX,
     PREFIXES,
     canonical_prefix,
     fit_text,
     language_reminder,
+    member_system_prompt,
     phrase,
     system_prompt,
 )
+from .speaker import RAPHAEL, Speaker
 from .tools import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -85,8 +98,9 @@ _MEMORY_ITEM = {
         "description": {"type": "string"},
         "body": {"type": "string"},
         "expires": {"type": "string"},
+        "space": {"type": "string", "enum": list(MEMORY_SPACES)},
     },
-    "required": ["op", "name", "type", "description", "body", "expires"],
+    "required": ["op", "name", "type", "description", "body", "expires", "space"],
     "additionalProperties": False,
 }
 _NEED = {
@@ -97,15 +111,18 @@ _NEED = {
 }
 
 
-def reply_schema(language: str, memory: bool = False) -> dict:
+def reply_schema(language: str, memory: bool = False, *, plain: bool = False) -> dict:
     """The JSON the model must return: the prefixes offered are the language's own. With a
-    `memory`, the fields `memory` and `need` too."""
+    `memory`, the fields `memory` and `need` too. A `plain` reply (a member's) has no prefix."""
     properties: dict[str, Any] = {
         "prefix": {"type": "string", "enum": list(PREFIXES[language])},
         "text": {"type": "string"},
         "detail": {"type": "string"},
     }
     required = ["prefix", "text", "detail"]
+    if plain:
+        del properties["prefix"]
+        required.remove("prefix")
     if memory:
         properties["memory"] = {"type": "array", "items": _MEMORY_ITEM}
         properties["need"] = _NEED
@@ -197,6 +214,7 @@ def _memory_items(value: Any) -> list[MemoryAction]:
         if op is None or (op == "DELETE" and not name):
             continue
         kind = _one_line_text(item.get("type")).strip()
+        space = _one_line_text(item.get("space")).strip()
         items.append(
             MemoryAction(
                 op=op,
@@ -206,6 +224,8 @@ def _memory_items(value: Any) -> list[MemoryAction]:
                 body=_one_line_text(item.get("body")).strip(),
                 expires=_one_line_text(item.get("expires")).strip() or None,
                 origin="said",
+                # A note's space as the model chose it; the own memory when it chose none.
+                space=space if space in MEMORY_SPACES else "own",
             )
         )
         if len(items) >= MAX_MEMORY_ITEMS:
@@ -224,7 +244,16 @@ def _need(value: Any) -> tuple[list[str], str]:
     return list(dict.fromkeys(names))[:MAX_READS], search
 
 
-def parse_reply(data: Any, language: str) -> Reply:
+def _plain_text(value: Any) -> str:
+    """A member's reply as it is shown in its thread: its lines kept, each without the spaces
+    around and inside it doubled, no more than one empty line in a row, at most MEMBER_TEXT_MAX
+    characters."""
+    lines = [" ".join(line.split()) for line in _one_line_text(value).splitlines()]
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return text if len(text) <= MEMBER_TEXT_MAX else text[: MEMBER_TEXT_MAX - 1].rstrip() + "…"
+
+
+def parse_reply(data: Any, language: str, *, plain: bool = False) -> Reply:
     """The model's JSON as Raphael's words. AgentFailure if it says nothing (an empty text is
     taken only beside a note to write or delete, or a lookup to make).
 
@@ -232,15 +261,32 @@ def parse_reply(data: Any, language: str) -> Reply:
     line cut to the length Raphael speaks; when it had to be cut, the detail is the whole of it (or
     the detail the model wrote, if that is longer). Chinese is made Traditional, as the user
     reads it.
+
+    A `plain` reply is a member's: it has no prefix (the prefix is empty), and its text is kept as
+    it was written, its lines too, up to MEMBER_TEXT_MAX characters: it is read in the app, not on
+    the overlay.
     """
     if not isinstance(data, Mapping):
         raise AgentFailure("error")
     memory = _memory_items(data.get("memory"))
     read, search = _need(data.get("need"))
-    full = " ".join(_one_line_text(data.get("text")).split())
+    full = _plain_text(data.get("text")) if plain else " ".join(_one_line_text(data.get("text")).split())
     if not full and not (memory or read or search):
         logger.warning("The model's reply said nothing")
         raise AgentFailure("error")
+    if plain:
+        detail = _one_line_text(data.get("detail")).strip()
+        if language == "zh-TW":
+            full = convert_leftover_simplified(full)
+            detail = convert_leftover_simplified(detail)
+        return Reply(
+            prefix="",
+            text=full,
+            detail=detail if detail and detail != full else None,
+            memory=memory,
+            read=read,
+            search=search,
+        )
     line, rest = fit_text(full, language)
     detail = _one_line_text(data.get("detail")).strip()
     if rest and len(full) > len(detail):
@@ -295,24 +341,38 @@ class Voice:
         summary: str = "",
         memory_index: str | None = None,
         looked_up: bool = False,
+        speaker: Speaker = RAPHAEL,
     ) -> Reply:
         """What Raphael says to `question` on `route` ("answer", "discuss" or "chat"), in
         `language`. `summary` is the summary of the earlier conversation and `context` its latest
         turns; `memory_index` is the memory's index, or None when there is no memory (then the
-        reply has no `memory` and no `need`). AgentFailure (of a kind) if the model fails or says
-        nothing."""
+        reply has no `memory` and no `need`). With a `speaker` who is a member of the team, the
+        member says it instead, in its persona and in plain sentences (`parse_reply`'s `plain`).
+        AgentFailure (of a kind) if the model fails or says nothing."""
         user = build_user_message(
             question, moment, context, tools, language, background,
             summary=summary, looked_up=looked_up,
         )  # fmt: skip
+        plain = not speaker.is_raphael
+        if plain:
+            system = member_system_prompt(
+                language,
+                route,
+                name=speaker.name,
+                role=speaker.role,
+                instructions=speaker.instructions,
+                memory_index=memory_index,
+            )
+        else:
+            system = system_prompt(language, route, memory_index)
         try:
             completion = await asyncio.wait_for(
                 self._client.complete_json(
                     model=model,
                     fallbacks=CLEANUP_FALLBACKS,
-                    system=system_prompt(language, route, memory_index),
+                    system=system,
                     user=user,
-                    schema=reply_schema(language, memory=memory_index is not None),
+                    schema=reply_schema(language, memory=memory_index is not None, plain=plain),
                     schema_name="raphael_reply",
                     timeout_s=self._timeout_s,
                     max_tokens=REPLY_MAX_TOKENS,
@@ -335,6 +395,6 @@ class Voice:
             prompt_tokens=completion.prompt_tokens,
             completion_tokens=completion.completion_tokens,
         )
-        result = parse_reply(completion.data, language)
+        result = parse_reply(completion.data, language, plain=plain)
         result.detail = _with_sources(result.detail, tools, language)
         return result
