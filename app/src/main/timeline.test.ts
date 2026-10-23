@@ -80,6 +80,13 @@ test("an old turn without messages still renders its answer once", () => {
   expect(html).toContain("《答。台北現在 24 度。》");
 });
 
+test("an unknown tool connection has a plug with its accessible name, never an initial", () => {
+  const html = stepHTML(step({ server: "Files", tool: "list" }), false);
+  expect(html).toContain(`<span class="step-ic" role="img" aria-label="Files" title="Files">${ico("plug")}</span>`);
+  expect(html).not.toContain(">F<");
+  expect(html).not.toContain('class="step-ic letter"');
+});
+
 describe("a step in words", () => {
   test("Raphael's own lookups and commands have words of their own, in the language of the window", () => {
     expect(stepTitle(step({ tool: "weather" }))).toBe("查天氣");

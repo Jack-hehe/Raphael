@@ -232,7 +232,6 @@
 .step.is-new { animation: ra-step-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
 .step-ic { display: grid; place-items: center; width: var(--pa-step-ic); height: var(--pa-step-ic); color: var(--text-3); }
 .step-ic .logo { width: var(--pa-step-logo); height: var(--pa-step-logo); display: block; }
-.step-ic.letter { font: 700 calc(11px + 2 * var(--pa-u))/1 var(--display); color: var(--text); }
 .step-ic.logo-art .logo { width: var(--pa-step-logo); height: var(--pa-step-logo); display: block; object-fit: contain; }
 .step-ic.logo-art .lg-d { display: none; }
 :root[data-theme="dark"] .step-ic.logo-art .lg-d { display: block; }

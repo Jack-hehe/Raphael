@@ -11,7 +11,7 @@
 //
 // A click on the row, or on its chevron, opens the capability's dialog over the settings, with the
 // same switch and a close button at its head and, under 「已安裝」, a list of the services it can use:
-// each row is the service's mark (a letter where there is no mark), its name, a muted note (本機,
+// each row is the service's mark (an app icon where there is no brand), its name, a muted note (本機,
 // 需要金鑰, 已設定 ...), a check on the one in use and a chevron.
 //   - 搜尋網路: OpenRouter, Brave, Tavily, Exa, SearXNG.   - 讀網頁: 內建, Jina, Firecrawl, Tavily.
 //   - 讀 PDF: 內建, OpenRouter.   - 拉斐爾的聲音: Fish Audio.
@@ -78,8 +78,14 @@ const NAMES: Record<string, string> = {
   fish: "Fish Audio",
 };
 
-/** The services that have their mark in the app (service-icons.ts); the others are a letter. */
-const MARKS: Record<string, ServiceIconId> = { exa: "exa" };
+/** Each named service uses its own brand mark from service-icons.ts. */
+const MARKS: Record<string, ServiceIconId> = {
+  openrouter: "openrouter", brave: "brave", tavily: "tavily", exa: "exa",
+  searxng: "searxng", jina: "jina", firecrawl: "firecrawl", fish: "fish",
+};
+
+/** App-owned pictures for local reading and the two model choices. */
+const LOCAL_ICONS: Record<string, IconName> = { builtin: "monitor", same: "sparkle", model: "bot" };
 
 /** The name of a service: 內建 for this computer's own, its brand for the others, its id for one this app does not know yet. */
 export const serviceName = (id: string): string => (id === "builtin" ? t("services.builtin") : (NAMES[id] ?? id));
@@ -306,7 +312,7 @@ function listViewHTML(entry: (typeof CAPABILITIES)[number], v: ServicesView, bra
   }
   const rows = serviceRows(entry.kind, status, brain)
     .map((row) => {
-      const mark = row.mark ? iconHTML(row.name, row.mark, "md") : `<span class="mono" aria-hidden="true">${esc((Array.from(row.name.trim())[0] ?? "?").toUpperCase())}</span>`;
+      const mark = row.mark ? iconHTML(row.name, row.mark, "md") : `<span class="mono md" aria-hidden="true">${ico(LOCAL_ICONS[row.id] ?? "plug")}</span>`;
       return (
         `<div class="cs-item svc-srv" data-svc="service" data-service="${esc(row.id)}">` +
         btn(

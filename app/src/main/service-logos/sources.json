@@ -13,5 +13,9 @@
   "mslearn": { "file": "mslearn.svg", "url": "https://learn.microsoft.com/", "note": "The four-square mark in the header of Microsoft Learn." },
   "aws": { "file": "aws.svg", "url": "https://aws.amazon.com/", "note": "The mark in the header of aws.amazon.com, in AWS's colours; the dark-theme file has white letters." },
   "huggingface": { "file": "huggingface.svg", "url": "https://huggingface.co/datasets/huggingface/brand-assets/resolve/main/hf-logo.svg", "page": "https://huggingface.co/brand" },
-  "exa": { "file": "exa.svg", "url": "https://exa.ai/images/logo/exa-logo-blue.svg", "note": "The symbol cut from the site's wordmark file." }
+  "exa": { "file": "exa.svg", "url": "https://exa.ai/images/logo/exa-logo-blue.svg", "note": "The symbol cut from the site's wordmark file." },
+  "tavily": { "file": "tavily.svg", "url": "https://www.tavily.com/icon.svg", "page": "https://www.tavily.com/", "note": "The site's own SVG icon; the dark-theme file has the tile and arrow fills inverted." },
+  "jina": { "file": "jina.svg", "url": "https://jina.ai/Jina%20-%20Light.svg", "page": "https://jina.ai/", "note": "The symbol cut from the site's wordmark file (matching the site's favicon)." },
+  "fish": { "file": "fish.png", "url": "https://fish.audio/apple-touch-icon.png", "page": "https://fish.audio/", "note": "Fish Audio's own full-colour rounded apple-touch icon, bundled without alteration and drawn like the other PNG logos." },
+  "firecrawl": { "file": "firecrawl.svg", "url": "https://www.firecrawl.dev/brand/brand-assets.zip", "page": "https://www.firecrawl.dev/", "note": "firecrawl-logo.svg from Firecrawl's official brand-assets pack." }
 }

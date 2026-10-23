@@ -28,6 +28,13 @@ describe("the marks of well-known programs", () => {
     [{ name: "x", url: "https://mcp.stripe.com" }, "stripe"],
     [{ name: "x", url: "https://mcp.zapier.com/api/mcp/mcp" }, "zapier"],
     [{ name: "x", url: "https://mcp.paypal.com/mcp" }, "paypal"],
+    [{ name: "OpenRouter" }, "openrouter"],
+    [{ name: "Brave Search" }, "brave"],
+    [{ name: "SearXNG" }, "searxng"],
+    [{ name: "Tavily" }, "tavily"],
+    [{ name: "Jina AI" }, "jina"],
+    [{ name: "Firecrawl" }, "firecrawl"],
+    [{ name: "Fish Audio" }, "fish"],
   ] as const)("%j is %s", (hints, id) => {
     expect(serviceIconOf(hints)).toBe(id);
   });
@@ -89,7 +96,7 @@ describe("the marks of well-known programs", () => {
     expect(brandStyle("notion")).toBe("");
   });
 
-  test("a letter stands in for the others, escaped", () => {
+  test("a paired person's avatar can keep an escaped initial", () => {
     expect(monogram("filesystem")).toBe("F");
     expect(monogram("  筆記")).toBe("筆");
     expect(monogram("<b>")).toBe("&lt;");
@@ -109,6 +116,29 @@ describe("the marks of well-known programs", () => {
     const html = serviceLogoHTML("attio");
     expect(html).toMatch(/class="logo lg-l" src="data:image\/svg\+xml/);
     expect(html).toMatch(/class="logo lg-d" src="data:image\/svg\+xml/);
+  });
+
+  test("Fish Audio uses its official PNG artwork instead of an unattributed vector", () => {
+    expect(hasLogo("fish")).toBe(true);
+    expect(SERVICE_ICONS).not.toHaveProperty("fish");
+    expect(serviceLogoHTML("fish")).toMatch(/^<img class="logo lg-l" src="data:image\/png;base64,/);
+    const sources = JSON.parse(readFileSync("src/main/service-logos/sources.json", "utf8"));
+    expect(sources.fish).toMatchObject({ file: "fish.png", url: "https://fish.audio/apple-touch-icon.png", page: "https://fish.audio/" });
+  });
+
+  test("release credits name all the added service marks and their source groups", () => {
+    const notice = readFileSync("scripts/release-licenses/brand-logos-NOTICE.txt", "utf8");
+    const manifest = JSON.parse(readFileSync("scripts/release-licenses/manifest.json", "utf8"));
+    const icons = manifest.components.find((entry: { name: string }) => entry.name === "Simple Icons");
+    const logos = manifest.components.find((entry: { name: string }) => entry.name === "Brand logos");
+    for (const name of ["OpenRouter", "Brave", "SearXNG"]) {
+      expect(notice).toContain(name);
+      expect(icons.usage).toContain(name);
+    }
+    for (const name of ["Tavily", "Jina", "Firecrawl", "Fish Audio"]) {
+      expect(notice).toContain(name);
+      expect(logos.usage).toContain(name);
+    }
   });
 
   test("the logo files and the list of ids are the same, and each has its source written down", () => {

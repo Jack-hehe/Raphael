@@ -714,7 +714,7 @@ export interface StoreService {
   publisher: string;
   url: string;
   category: string;
-  /** The mark in `service-icons.ts`, or null for a letter. */
+  /** The mark in `service-icons.ts`, or null for a neutral plug. */
   icon: string | null;
   popular: boolean;
   summary: Words;

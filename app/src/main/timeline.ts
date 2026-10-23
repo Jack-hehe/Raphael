@@ -13,7 +13,7 @@ import type { MessageKey } from "./i18n/zh-TW";
 import { replyLine, userLine } from "../shared/anime";
 import { TYPED, VOICE, hasDetail, highlightHTML, sourceOf } from "./conversation";
 import { formatClock, formatUsd } from "./format";
-import { SERVICE_ICONS, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
+import { SERVICE_ICONS, brandStyle, hasLogo, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import type { AgentStep, AgentTask, AgentTurn, MainEvent, MediaPayload, TurnAttachment, TurnMessage } from "./types";
 import { btn, esc, ico } from "./ui";
 
@@ -269,7 +269,7 @@ function stepIcon(step: AgentStep): string {
   if (mark && hasLogo(mark)) return `<span class="step-ic logo-art" ${named}>${serviceLogoHTML(mark)}</span>`;
   return mark
     ? `<span class="step-ic logo-mono"${brandStyle(mark)} ${named}>${serviceIconSVG(mark)}</span>`
-    : `<span class="step-ic letter" ${named}>${monogram(step.server)}</span>`;
+    : `<span class="step-ic" ${named}>${ico("plug")}</span>`;
 }
 
 /** One step: what, where, how long, and whether it worked (a mark and a word, never the colour alone). */
