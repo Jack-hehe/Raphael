@@ -132,7 +132,7 @@ def test_a_database_of_an_older_version_has_its_turns_put_into_the_search(tmp_pa
     raw.commit()
     raw.close()
     conn = db.connect(path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.LATEST_VERSION
     assert [t.question for t in AgentHistory(conn).search("會議")] == ["上次的會議記錄"]
     assert [t.question for t in AgentHistory(conn).search("notion")] == ["上次的會議記錄"]
     conn.close()

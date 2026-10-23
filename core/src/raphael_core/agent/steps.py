@@ -5,6 +5,11 @@ a plugin, a command for this computer, or, in the background worker, a model cal
 the server it belongs to, how it ended, how long it took and, when it failed, why, as one word of
 `REASONS`; the app words that word in the language of the window.
 
+A step of a tool that stands on a service the owner chose (`raphael_core.services`) also keeps which
+one (`detail`): the search engine of a web search ("openrouter", "brave", "tavily", "exa",
+"searxng"), the reader of a page ("builtin", "jina", "firecrawl", "tavily"), or what kind of file a
+file read was ("image", "pdf"). One word of that list, never what the tool was given.
+
 Never an argument, a result or an error message. A service's message can quote what it was given (a
 name, an address, a sentence the user said), so even a short one could carry what the user said
 into a table that is not cleared like the history. The kind of a failure is all that is kept: the
@@ -65,6 +70,18 @@ _ALIASES = {
     "keys_not_allowed": "blocked",
     "unavailable": "network",
     "failed": "error",
+    # The services' kinds (raphael_core.services.common.ServiceError).
+    "blocked_address": "blocked",
+    "url_not_seen": "blocked",
+    "bad_url": "bad_arguments",
+    "redirects": "network",
+    "too_large": "error",
+    "unsupported_type": "error",
+    "not_configured": "missing_secret",
+    "vision_unsupported": "error",
+    "bad_pdf": "error",
+    "encrypted": "error",
+    "no_text": "not_found",
 }
 
 # The reason of a step that failed with no kind, by how it ended.
@@ -98,3 +115,4 @@ class Step:
     ms: int
     reason: str | None = None
     at_ms: int = 0
+    detail: str | None = None  # the service the step used (see the module), or None

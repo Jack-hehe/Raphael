@@ -182,8 +182,16 @@ SCHEMA_V13 = {
     "memory_state": ["key TEXT PK", "value INTEGER NOT NULL"],
     "agent_turns_fts": [" ", " "],  # a virtual table: its columns have no type
 }
+# Schema v14 adds what the tools of the services leave: the names and types of the files handed with
+# a turn, and the service a step used.
+SCHEMA_V14 = {
+    **SCHEMA_V13,
+    "agent_turns": [*SCHEMA_V13["agent_turns"], "attachments TEXT"],
+    "agent_steps": [*SCHEMA_V13["agent_steps"], "detail TEXT"],
+    "worker_steps": [*SCHEMA_V13["worker_steps"], "detail TEXT"],
+}
 FTS_SHADOWS = {f"agent_turns_fts_{part}" for part in ("data", "idx", "content", "docsize", "config")}
-LATEST = 13
+LATEST = 14
 
 
 def schema_names(conn, kind):
@@ -207,7 +215,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V13) | FTS_SHADOWS
+    assert schema_names(conn, "table") == set(SCHEMA_V14) | FTS_SHADOWS
     assert {
         "history_created",
         "agent_turns_created",
@@ -218,7 +226,7 @@ def test_connect_creates_the_latest_schema(conn):
         "agent_steps_turn",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V13.items():
+    for table, columns in SCHEMA_V14.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
@@ -421,7 +429,7 @@ def test_a_v4_database_gets_the_turns_table_at_v5_and_keeps_its_rows(tmp_path):
 
     conn = db.connect(path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    assert describe_columns(conn, "agent_turns") == SCHEMA_V11["agent_turns"]
+    assert describe_columns(conn, "agent_turns") == SCHEMA_V14["agent_turns"]
     assert conn.execute("SELECT count(*) FROM agent_turns").fetchone()[0] == 0
     assert HistoryStore(conn).latest().text == "A"
     assert [e.word for e in DictionaryStore(conn).list()] == ["拉斐爾"]
@@ -445,7 +453,7 @@ def assert_has_the_latest_schema(migrated, fresh):
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert schema_names(migrated, "table") == schema_names(fresh, "table")
     assert schema_names(migrated, "index") == schema_names(fresh, "index")
-    for table in SCHEMA_V13:
+    for table in SCHEMA_V14:
         assert describe_columns(migrated, table) == describe_columns(fresh, table)
     assert migrated.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
     assert HistoryStore(migrated).latest().text == "A"

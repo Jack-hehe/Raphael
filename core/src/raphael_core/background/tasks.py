@@ -73,6 +73,8 @@ class Step:
     cost_usd: float
     ms: int
     reason: str | None = None  # why it failed, one word of agent.steps.REASONS; never a message
+    # The service the step used (agent.steps.Step.detail): "brave", "builtin", "pdf"...; or None.
+    detail: str | None = None
 
 
 _TASK_COLUMNS = (
@@ -80,7 +82,7 @@ _TASK_COLUMNS = (
     " report_prefix, report_text, report_detail, reason, model_calls, tool_calls, cost_usd,"
     " announced, rerun_of"
 )
-_STEP_COLUMNS = "n, at_ms, kind, tool, server, tier, outcome, cost_usd, ms, reason"
+_STEP_COLUMNS = "n, at_ms, kind, tool, server, tier, outcome, cost_usd, ms, reason, detail"
 
 
 class TaskStore:
@@ -159,14 +161,15 @@ class TaskStore:
         cost_usd: float = 0.0,
         ms: int = 0,
         reason: str | None = None,
+        detail: str | None = None,
     ) -> int:
         """Write a step; its id. A step with the outcome "in_progress" is a call that was sent and
         has not come back; `update_step` ends it, and `settle_in_progress` does when nobody can."""
         with self._conn:
             cursor = self._conn.execute(
                 "INSERT INTO worker_steps (task_id, n, at_ms, kind, tool, server, tier, outcome,"
-                " cost_usd, ms, reason) VALUES (?, (SELECT COALESCE(MAX(n), 0) + 1 FROM"
-                " worker_steps WHERE task_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " cost_usd, ms, reason, detail) VALUES (?, (SELECT COALESCE(MAX(n), 0) + 1 FROM"
+                " worker_steps WHERE task_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task_id,
                     task_id,
@@ -179,6 +182,7 @@ class TaskStore:
                     cost_usd,
                     ms,
                     reason,
+                    detail,
                 ),
             )
         assert cursor.lastrowid is not None

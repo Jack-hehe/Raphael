@@ -68,7 +68,7 @@ def test_a_step_has_no_column_for_an_argument_or_a_result(conn):
     columns = [row["name"] for row in conn.execute("PRAGMA table_info(worker_steps)")]
     assert columns == [
         "id", "task_id", "n", "at_ms", "kind", "tool", "server", "tier", "outcome", "cost_usd", "ms",
-        "reason",
+        "reason", "detail",
     ]  # fmt: skip
 
 
