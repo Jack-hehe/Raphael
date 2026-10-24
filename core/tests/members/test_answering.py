@@ -218,6 +218,39 @@ async def test_raphael_asks_a_member_and_the_exchange_is_in_both_threads(setup, 
     assert ("ask_member", "ok") in [(s["tool"], s["outcome"]) for s in steps]
 
 
+async def test_member_exchange_returns_to_the_named_conversation_that_asked(setup, client, conn):
+    rig, team = setup
+    one = member(team, name="Researcher")
+    conversation = (await rig.call("conversations.create", {"member_id": 0}))["conversation"]
+    client.decisions.append(decision("answer"))
+    client.chats.append(chat("I will ask Researcher.", ("ask_member", {"member": "Researcher", "request": "Compare the reports"})))
+    client.decisions.append(decision("answer"))
+    client.chats.append(live_said("The reports agree."))
+    client.chats.append(live_said("Researcher checked both reports.", prefix="Answer"))
+    result = await rig.call("agent.ask", {"session_id": "named-exchange", "text": "Ask Researcher to compare the reports",
+        "source": "app", "ui_language": "en", "conversation_id": conversation["id"]})
+    assert result["status"] == "done"
+    selected = (await rig.call("agent.history.list", {"conversation_id": conversation["id"]}))["turns"]
+    assert {turn["route"] for turn in selected} == {"answer", "exchange"}
+    assert (await rig.call("agent.history.list"))["turns"] == []
+    [theirs] = AgentHistory(conn).list(member_id=one.id)
+    assert theirs.conversation_id == rig.service.conversations.main(one.id)
+
+
+async def test_deleting_a_member_removes_named_conversation_context(setup, conn):
+    rig, team = setup
+    one = member(team, name="Researcher")
+    conversation = (await rig.call("conversations.create", {"member_id": one.id}))["conversation"]
+    id = conversation["id"]
+    rig.service._cli_sessions.put(one.id, "cli:codex", "native-session", id)
+    with conn:
+        conn.execute("INSERT INTO conversation_context_summaries VALUES (?, 'Summary', 0, 1)", (id,))
+    team.members.store.delete_member(one.id)
+    assert conn.execute("SELECT COUNT(*) FROM conversations WHERE member_id = ?", (one.id,)).fetchone()[0] == 0
+    assert rig.service._cli_sessions.get(one.id, "cli:codex", id) is None
+    assert conn.execute("SELECT COUNT(*) FROM conversation_context_summaries WHERE conversation_id = ?", (id,)).fetchone()[0] == 0
+
+
 async def test_a_question_about_something_else_offers_no_team_tool(setup, client):
     rig, team = setup
     member(team)

@@ -110,7 +110,7 @@ test("messages copy plain text, code copies exactly, only the latest reply regen
   const copy = vi.spyOn(ui, "copyText").mockResolvedValue(undefined);
   const agent = mount(); await flush();
   const latest = document.querySelector<HTMLElement>('.tn[data-id="2"]')!;
-  expect(document.querySelectorAll('[data-act="regenerate"]')).toHaveLength(1);
+  expect(document.querySelectorAll('[data-regenerate="true"]')).toHaveLength(1);
   latest.querySelector<HTMLButtonElement>('.owner-message [data-act="copy-message"]')!.click();
   await flush(); expect(copy).toHaveBeenLastCalledWith("問題 2");
   latest.querySelector<HTMLButtonElement>('.ra [data-act="copy-message"]')!.click();
@@ -121,7 +121,8 @@ test("messages copy plain text, code copies exactly, only the latest reply regen
   const expand = latest.querySelector<HTMLButtonElement>('[data-act="expand-message"]')!;
   expect(expand.hidden).toBe(false); expand.click();
   expect(document.querySelector('.tn[data-id="2"] .is-expanded')).not.toBeNull();
-  document.querySelector<HTMLButtonElement>('[data-act="regenerate"]')!.click();
+  document.querySelector<HTMLButtonElement>('[data-regenerate="true"]')!.click();
+  await flush(); document.querySelector<HTMLButtonElement>('[data-pick="regenerate"]')!.click();
   await flush(); expect(api.agentAskText).toHaveBeenCalledExactlyOnceWith("問題 2", [], 0, expect.objectContaining({ requestId: expect.any(String) }));
   copy.mockRestore(); agent.hide();
 });
@@ -281,11 +282,12 @@ describe("a continuous typed turn", () => {
     live = { ...live, messages: [{ seq: 1, kind: "progress", text: "《告。先確認今天的日期。》", at_ms: 1 }] };
     send({ type: "AgentTurn", turn_id: 1 });
     await vi.advanceTimersByTimeAsync(200);
-    expect(document.querySelector('.tn[data-id="1"] .progress')?.textContent).toBe("《告。先確認今天的日期。》");
+    expect(document.querySelector('.tn[data-id="1"] .work-body')?.textContent).toContain("《告。先確認今天的日期。》");
     live = { ...live, status: "done", text: "今天星期五。", messages: [...live.messages!, { seq: 2, kind: "reply", text: "《答。今天星期五。》", at_ms: 2 }] };
     send({ type: "AgentTurn", turn_id: 1 });
     await vi.advanceTimersByTimeAsync(200);
-    expect(document.querySelectorAll('.tn[data-id="1"] .ans')).toHaveLength(2);
+    expect(document.querySelectorAll('.tn[data-id="1"] .ans')).toHaveLength(1);
+    expect(document.querySelector('.tn[data-id="1"] .work-body')?.hasAttribute('hidden')).toBe(true);
     expect(document.querySelector('.tn[data-id="1"] .think')).toBeNull();
   });
 

@@ -283,6 +283,12 @@ pub trait Desk: Send + Sync {
         replace_turn_id: Option<u64>,
         quote: Option<Value>,
     ) -> Result<JoinHandle<()>, Busy>;
+    fn ask_conversation(
+        &self, text: &str, attachments: Vec<Value>, member: u64, request_id: Option<String>,
+        replace_turn_id: Option<u64>, quote: Option<Value>, _conversation_id: Option<u64>,
+    ) -> Result<JoinHandle<()>, Busy> {
+        self.ask_typed(text, attachments, member, request_id, replace_turn_id, quote)
+    }
     fn retract(&self, session: String, member: u64, turn_id: Option<u64>) -> JoinHandle<Result<Value, RpcError>>;
     /// The YES/NO question that waits for its answer now, with the time it has left as its
     /// `timeout_ms`.
@@ -1451,7 +1457,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         if !self.set_stage(&id, AgentStage::Thinking) {
             return;
         }
-        self.converse(&id, question, target_app, None, Vec::new(), session.member, None, None)
+        self.converse(&id, question, target_app, None, Vec::new(), session.member, None, None, None)
             .await;
     }
 
@@ -1496,6 +1502,13 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         replace_turn_id: Option<u64>,
         quote: Option<Value>,
     ) -> Result<JoinHandle<()>, Busy> {
+        self.ask_composed_in(text, attachments, member, request_id, replace_turn_id, quote, None)
+    }
+
+    pub fn ask_composed_in(
+        &self, text: &str, attachments: Vec<Value>, member: u64, request_id: Option<String>,
+        replace_turn_id: Option<u64>, quote: Option<Value>, conversation_id: Option<u64>,
+    ) -> Result<JoinHandle<()>, Busy> {
         let _transition = lock(&self.transitions);
         self.end_speaking();
         let id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -1520,7 +1533,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         log::info!("agent: a typed question");
         let (this, text) = (self.clone(), text.to_owned());
         Ok(tokio::spawn(async move {
-            this.converse(&id, &text, None, Some(TYPED_SOURCE), attachments, member, replace_turn_id, quote)
+            this.converse(&id, &text, None, Some(TYPED_SOURCE), attachments, member, replace_turn_id, quote, conversation_id)
                 .await;
         }))
     }
@@ -1542,6 +1555,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         member: u64,
         replace_turn_id: Option<u64>,
         quote: Option<Value>,
+        conversation_id: Option<u64>,
     ) {
         let mut params = json!({
             "session_id": id,
@@ -1558,6 +1572,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         if member != 0 {
             params["member_id"] = json!(member);
         }
+        if let Some(conversation) = conversation_id {
+            params["conversation_id"] = json!(conversation);
+        }
         if let Some(turn) = replace_turn_id {
             params["replace_turn_id"] = json!(turn);
         }
@@ -1568,7 +1585,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         let mut asked = 0;
         loop {
             let may_ask = asked < MAX_QUESTIONS_IN_A_TURN;
-            let Some((prompt, answer)) = self.show_reply(id, reply, may_ask, member) else {
+            let Some((prompt, answer)) = self.show_reply(id, reply, may_ask, member, conversation_id) else {
                 return;
             };
             asked += 1;
@@ -1594,6 +1611,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         reply: Result<Value, RpcError>,
         may_ask: bool,
         member: u64,
+        conversation_id: Option<u64>,
     ) -> Option<(AskPrompt, oneshot::Receiver<Answer>)> {
         // All of it, the check that the session still exists included, is one transition: Esc
         // and the core's restarts cannot come in between.
@@ -1664,6 +1682,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             }
             Ok(Reply::Ask(mut prompt)) => {
                 prompt.member_id = (member != 0).then_some(member);
+                prompt.conversation_id = conversation_id;
                 let (answer, wait) = oneshot::channel();
                 {
                     let mut state = lock(&self.state);
@@ -2024,6 +2043,13 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Desk
         quote: Option<Value>,
     ) -> Result<JoinHandle<()>, Busy> {
         self.ask_composed(text, attachments, member, request_id, replace_turn_id, quote)
+    }
+
+    fn ask_conversation(
+        &self, text: &str, attachments: Vec<Value>, member: u64, request_id: Option<String>,
+        replace_turn_id: Option<u64>, quote: Option<Value>, conversation_id: Option<u64>,
+    ) -> Result<JoinHandle<()>, Busy> {
+        self.ask_composed_in(text, attachments, member, request_id, replace_turn_id, quote, conversation_id)
     }
 
     fn retract(&self, session: String, member: u64, turn_id: Option<u64>) -> JoinHandle<Result<Value, RpcError>> {
@@ -5613,6 +5639,7 @@ mod tests {
     fn prompt(id: &str, timeout_ms: u64) -> AskPrompt {
         AskPrompt {
             member_id: None,
+            conversation_id: None,
             always: None,
             id: id.to_owned(),
             tier: Tier::T2,
@@ -5686,6 +5713,17 @@ mod tests {
         c.retract("old".into(), 3, Some(1)).await.unwrap().unwrap();
         assert_eq!(c.agent_stage(), Some(AgentStage::Thinking));
         gate.notify_one(); turn.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_composed_request_names_its_conversation_and_voice_keeps_the_default() {
+        let c = agent(answer("Answer", "Hello"));
+        c.ask_composed_in("Explain", Vec::new(), 3, Some("conversation-1".into()), None, None, Some(42))
+            .unwrap().await.unwrap();
+        assert_eq!(c.core().call_params("agent.ask")["conversation_id"], 42);
+        let c = agent(answer("Answer", "Hello"));
+        c.ask_typed("Hi").unwrap().await.unwrap();
+        assert!(c.core().call_params("agent.ask").get("conversation_id").is_none());
     }
 
     #[tokio::test]

@@ -44,6 +44,7 @@ from ..protocol import RpcError
 from ..memory.terms import QueryWord, fts_quote, index_terms, query_words
 from .steps import Step
 from .quotes import quote_from_wire
+from .conversations import Conversations
 
 # Where a turn came from when nobody says: the hotkey and the overlay.
 VOICE = "voice"
@@ -70,11 +71,12 @@ class Turn:
     peer_id: int | None = None  # for an exchange, the member on the other side
     messages: list[str] = field(default_factory=list)
     quote: dict[str, str] | None = None
+    conversation_id: int | None = None
 
 
 _COLUMNS = (
     "id, created_at_ms, session_id, question, route, prefix, text, detail, status, cost_usd,"
-    " source, model, attachments, member_id, peer_id, quote"
+    " source, model, attachments, member_id, peer_id, quote, conversation_id"
 )
 _STEP_COLUMNS = "turn_id, kind, tool, server, outcome, ms, reason, at_ms, detail"
 _TURN_COLUMNS = ", ".join(f"t.{name.strip()}" for name in _COLUMNS.split(","))
@@ -114,12 +116,16 @@ def _to_turn(row: sqlite3.Row) -> Turn:
 
 
 def _filters(
-    since_ms: int | None, exclude: Sequence[int], member_id: int = 0
+    since_ms: int | None, exclude: Sequence[int], member_id: int | None = 0,
+    conversation_id: int | None = None,
 ) -> tuple[str, list[object]]:
     """The conditions of a search besides its words, as SQL to add to its WHERE, and their params:
     the turns of the thread of `member_id`, made from `since_ms` on, and none of the ids of
     `exclude`."""
-    where, params = " AND t.member_id = ?", [member_id]
+    where, params = ("", []) if member_id is None else (" AND t.member_id = ?", [member_id])
+    if conversation_id is not None:
+        where += " AND t.conversation_id = ?"
+        params.append(conversation_id)
     if since_ms is not None:
         where += " AND t.created_at_ms >= ?"
         params.append(since_ms)
@@ -157,16 +163,19 @@ class AgentHistory:
         member_id: int = 0,
         peer_id: int | None = None,
         quote: dict[str, str] | None = None,
+        conversation_id: int | None = None,
     ) -> int:
         """Store a new turn, made now, in the thread of `member_id`, with the steps taken for it,
         and return its id. `attachments` are the names and the types of the files handed with the
         request; `peer_id` is the other member of an exchange."""
         files = [{key: item[key] for key in ("name", "mime", "id", "size") if key in item} for item in attachments]
         with self._conn:
+            conversations = Conversations(self._conn, self._now_ms)
+            conversation_id = conversations.resolve(member_id, conversation_id)
             cursor = self._conn.execute(
                 "INSERT INTO agent_turns (created_at_ms, session_id, question, route, prefix,"
-                " text, detail, status, cost_usd, source, model, attachments, member_id, peer_id, quote)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " text, detail, status, cost_usd, source, model, attachments, member_id, peer_id, quote, conversation_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     self._now_ms(),
                     session_id,
@@ -183,12 +192,14 @@ class AgentHistory:
                     member_id,
                     peer_id,
                     json.dumps(quote, ensure_ascii=False) if quote else None,
+                    conversation_id,
                 ),
             )
             turn_id = cursor.lastrowid
             assert turn_id is not None
             self._insert_steps(turn_id, steps)
             self._index(turn_id, question, text, detail)
+            conversations.touch(conversation_id, question)
         return turn_id
 
     def _index(self, turn_id: int, question: str, text: str, detail: str | None) -> None:
@@ -321,48 +332,56 @@ class AgentHistory:
         return cursor.rowcount > 0
 
     def list(
-        self, limit: int = 50, before_id: int | None = None, *, member_id: int = 0
+        self, limit: int = 50, before_id: int | None = None, *, member_id: int = 0,
+        conversation_id: int | None = None,
     ) -> list[Turn]:
         """The thread of `member_id`, newest first. `before_id` keeps the turns made before that
         one: the cursor for the next page."""
         conditions = " WHERE member_id = ?" + ("" if before_id is None else " AND id < ?")
         params: list[object] = [member_id] if before_id is None else [member_id, before_id]
+        if conversation_id is not None:
+            conditions += " AND conversation_id = ?"
+            params.append(conversation_id)
         rows = self._conn.execute(
             f"SELECT {_COLUMNS} FROM agent_turns{conditions} ORDER BY id DESC LIMIT ?",
             [*params, limit],
         )
         return [_to_turn(row) for row in rows]
 
-    def recent(self, count: int, *, member_id: int = 0) -> list[Turn]:
+    def recent(self, count: int, *, member_id: int = 0, conversation_id: int | None = None) -> list[Turn]:
         """The last `count` turns of the thread of `member_id` that were answered, oldest first:
         the context of what is asked next. A turn that is waiting for a yes or a no, was refused
         or failed says nothing."""
         if count <= 0:
             return []
+        condition = "" if conversation_id is None else " AND conversation_id = ?"
         rows = self._conn.execute(
             f"SELECT {_COLUMNS} FROM agent_turns WHERE status = 'done' AND member_id = ?"
-            " ORDER BY id DESC LIMIT ?",
-            (member_id, count),
+            + condition + " ORDER BY id DESC LIMIT ?",
+            [member_id, *([] if conversation_id is None else [conversation_id]), count],
         )
         return self._with_messages([_to_turn(row) for row in reversed(rows.fetchall())])
 
     def after(
-        self, turn_id: int, *, limit: int | None = None, member_id: int = 0
+        self, turn_id: int, *, limit: int | None = None, member_id: int = 0,
+        conversation_id: int | None = None,
     ) -> list[Turn]:
         """The turns of the thread of `member_id` made after the turn `turn_id`, whatever their
         status, oldest first; with a `limit`, only the newest that many of them."""
+        condition = "" if conversation_id is None else " AND conversation_id = ?"
+        params = [turn_id, member_id, *([] if conversation_id is None else [conversation_id])]
         if limit is None:
             rows = self._conn.execute(
-                f"SELECT {_COLUMNS} FROM agent_turns WHERE id > ? AND member_id = ? ORDER BY id",
-                (turn_id, member_id),
+                f"SELECT {_COLUMNS} FROM agent_turns WHERE id > ? AND member_id = ?" + condition + " ORDER BY id",
+                params,
             ).fetchall()
             return self._with_messages([_to_turn(row) for row in rows])
         if limit <= 0:
             return []
         rows = self._conn.execute(
             f"SELECT {_COLUMNS} FROM agent_turns WHERE id > ? AND member_id = ?"
-            " ORDER BY id DESC LIMIT ?",
-            (turn_id, member_id, limit),
+            + condition + " ORDER BY id DESC LIMIT ?",
+            [*params, limit],
         ).fetchall()
         return self._with_messages([_to_turn(row) for row in reversed(rows)])
 
@@ -388,7 +407,8 @@ class AgentHistory:
         since_ms: int | None = None,
         exclude: Sequence[int] = (),
         most: int = SEARCH_MAX,
-        member_id: int = 0,
+        member_id: int | None = 0,
+        conversation_id: int | None = None,
     ) -> list[Turn]:
         """The answered turns that hold the words of `query`, best first (BM25, then the newest),
         at most `limit` and `most` (SEARCH_MAX for the model, more for the conversation page). Each
@@ -402,7 +422,7 @@ class AgentHistory:
         limit = max(1, min(limit, most))
         if not words:
             return []
-        where, params = _filters(since_ms, exclude, member_id)
+        where, params = _filters(since_ms, exclude, member_id, conversation_id)
         found = self._find(words, limit, where, params)
         if not found and any(len(word.pairs) > 1 for word in words):
             pairs = dict.fromkeys(pair for word in words for pair in word.pairs)

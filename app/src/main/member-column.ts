@@ -13,6 +13,7 @@
 // `createMemberColumn` keeps the search and the folded groups and hands the clicks over.
 
 import { t } from "./i18n";
+import { createMessageSearch } from "./message-search";
 import { type MemberSection, faceHTML, memberSections, previewOf, raphaelOf } from "./members";
 import type { Member, MembersList } from "./types";
 import { closeMenu, esc, ico, iconButton, openPopover } from "./ui";
@@ -81,10 +82,11 @@ export function columnHTML(v: ColumnView): string {
     `<b>${esc(raphael.name)}</b>` +
     (raphael.waiting ? `<span class="mb-dot is-wait" role="img" aria-label="${esc(t("members.waitingShort"))}"></span>` : "") +
     `</button>`;
-  return chief + sections.map((section) => sectionHTML(section, v)).join("") + (searching && sections.length === 0 ? `<p class="mb-none">${esc(t("members.noMatch"))}</p>` : "");
+  return (!searching || `${raphael.name} ${raphael.role}`.toLocaleLowerCase().includes(v.query.trim().toLocaleLowerCase()) ? chief : "") + sections.map((section) => sectionHTML(section, v)).join("") + (searching && sections.length === 0 ? `<p class="mb-none">${esc(t("members.noMatch"))}</p>` : "");
 }
 
 export interface ColumnHost {
+  openMessage?(member: number, conversation: number, turn: number): void;
   view(): Omit<ColumnView, "query" | "folded">;
   /** Opens the thread of member `id`. */
   select(id: number): void;
@@ -101,6 +103,8 @@ export interface ColumnHost {
 export interface MemberColumn {
   readonly el: HTMLElement;
   draw(): void;
+  /** The same cross-conversation search, available when the column is hidden on narrow windows. */
+  openSearch(anchor: HTMLElement): void;
   /** The search's words now. */
   query(): string;
 }
@@ -151,6 +155,15 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
   const nav = el.querySelector<HTMLElement>(".mb-scroll")!;
   let query = "";
   const folded = new Set<number>();
+  const search = createMessageSearch(list, {
+    name: id => (id === 0 ? raphaelOf(host.view().list) : host.view().list?.members.find(member => member.id === id))?.name ?? "",
+    face: id => {
+      const members = host.view().list;
+      const member = id === 0 ? raphaelOf(members) : members?.members.find(member => member.id === id);
+      return member ? faceHTML(member, 34) : "";
+    },
+    open: (member, conversation, turn) => host.openMessage?.(member, conversation, turn),
+  });
 
   function draw(): void {
     nav.setAttribute("aria-label", t("members.title"));
@@ -161,11 +174,11 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
       button.setAttribute("aria-label", label);
       button.title = label;
     }
-    findInput.placeholder = t("members.search");
-    findInput.setAttribute("aria-label", t("members.search"));
+    findInput.placeholder = t("chat.searchAll");
+    findInput.setAttribute("aria-label", t("chat.searchAll"));
     const focusKey = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("[data-k]");
     const key = focusKey && list.contains(focusKey) ? focusKey.dataset.k : undefined;
-    list.innerHTML = columnHTML({ ...host.view(), query, folded });
+    search.draw(query, columnHTML({ ...host.view(), query, folded }));
     if (key) list.querySelector<HTMLElement>(`[data-k="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
   }
 
@@ -272,5 +285,26 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
     }
   });
 
-  return { el, draw, query: () => query };
+  function openSearch(anchor: HTMLElement): void {
+    const panel = openPopover(anchor, '<div class="conversation-tools"><input type="search"></div><div class="conversation-rows page-agent"></div>', { className: "menu conversation-picker conversation-search", role: "dialog", label: t("chat.searchAll") });
+    const input = panel.querySelector<HTMLInputElement>("input")!;
+    input.placeholder = t("chat.searchAll"); input.setAttribute("aria-label", t("chat.searchAll"));
+    const results = panel.querySelector<HTMLElement>(".conversation-rows")!;
+    const lookup = createMessageSearch(results, {
+      name: id => (id === 0 ? raphaelOf(host.view().list) : host.view().list?.members.find(member => member.id === id))?.name ?? "",
+      face: id => {
+        const member = id === 0 ? raphaelOf(host.view().list) : host.view().list?.members.find(member => member.id === id);
+        return member ? faceHTML(member, 34) : "";
+      },
+      open: (member, conversation, turn) => { closeMenu(); host.openMessage?.(member, conversation, turn); },
+    });
+    const redraw = (): void => lookup.draw(input.value, columnHTML({ ...host.view(), query: input.value, folded }));
+    input.addEventListener("input", redraw);
+    results.addEventListener("click", event => {
+      const member = (event.target as Element).closest<HTMLElement>("[data-member]")?.dataset.member;
+      if (member !== undefined) { closeMenu(); host.select(Number(member)); }
+    });
+    redraw(); input.focus();
+  }
+  return { el, draw, openSearch, query: () => query };
 }

@@ -200,7 +200,8 @@ test.each(["edit", "cancel", "regenerate"])("%s after reload retrieves stored fi
   api.agentHistoryList.mockImplementation(async ({ member_id }: { member_id?: number }) => ({ turns: member_id === 3 ? [original] : [] }));
   api.core.mockImplementation(async (method: string) => method === "attachments.get" ? { mime: "text/csv", data: btoa("report") } : { questions: [] });
   const agent = mount(); await flush(); await pick(3);
-  $(`[data-id="8"] [data-act="${action === "regenerate" ? action : `${action}-message`}"]`).click(); await flush();
+  $(`[data-id="8"] [data-act="${action === "regenerate" ? "more-message" : `${action}-message`}"]`).click(); await flush();
+  if (action === "regenerate") { $('[data-pick="regenerate"]').click(); await flush(); }
   expect(api.core).toHaveBeenCalledWith("attachments.get", { id });
   if (action !== "regenerate") {
     expect($<HTMLTextAreaElement>(".cmp-input").value).toBe("問題 8");
@@ -294,8 +295,9 @@ test.each(["finish", "switch", "search", "reduced"])("a live member burst reveal
 
 test("regenerating the latest member reply asks the same question in that member's thread", async () => {
   const agent = mount(); await flush(); await pick(3);
-  expect(document.querySelectorAll('[data-act="regenerate"]')).toHaveLength(1);
-  document.querySelector<HTMLButtonElement>('[data-act="regenerate"]')!.click();
+  expect(document.querySelectorAll('[data-regenerate="true"]')).toHaveLength(1);
+  document.querySelector<HTMLButtonElement>('[data-regenerate="true"]')!.click();
+  await flush(); document.querySelector<HTMLButtonElement>('[data-pick="regenerate"]')!.click();
   await flush();
   expect(api.agentAskText).toHaveBeenCalledExactlyOnceWith("問題 31", [], 3, expect.objectContaining({ requestId: expect.any(String) }));
   agent.hide();
@@ -653,7 +655,7 @@ describe("a member's thread", () => {
     await pick(3);
     const run = $('.tn[data-id="32"]');
     expect(run.querySelector(".sys")!.textContent).toBe("例行任務每天的單字");
-    expect(run.querySelector(".ans.thinking")).not.toBeNull();
+    expect(run.querySelector(".work-toggle .think")).not.toBeNull();
     expect(run.querySelector(".me")).toBeNull();
     THREADS[3] = [turn(31, { member_id: 3, text: "今天的單字" })];
   });
@@ -804,7 +806,7 @@ describe("a new member", () => {
     const picker = $<HTMLButtonElement>(".mb-pick");
     picker.click();
     expect(document.getElementById("app-popover")).not.toBeNull();
-    $<HTMLElement>('#app-popover [data-action="0"]').click();
+    $<HTMLElement>('#app-popover [data-action="1"]').click();
     expect(document.getElementById("app-popover")).toBeNull();
     expect(document.querySelector(".mb-dialog")).not.toBeNull();
     expect(document.activeElement?.id).toBe("mb-new-name");

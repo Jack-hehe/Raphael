@@ -522,6 +522,53 @@ ALTER TABLE agent_turns ADD COLUMN quote TEXT;
 PRAGMA user_version = 21;
 COMMIT;
 """,
+    22: """
+BEGIN;
+CREATE TABLE conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id INTEGER NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX conversations_member ON conversations(member_id, updated_at_ms DESC);
+CREATE UNIQUE INDEX conversations_default ON conversations(member_id) WHERE is_default = 1;
+INSERT INTO conversations (member_id, title, created_at_ms, updated_at_ms, is_default)
+SELECT m.id,
+       COALESCE((SELECT substr(trim(replace(replace(replace(question, char(10), ' '), char(13), ' '), char(9), ' ')), 1, 80) FROM agent_turns WHERE member_id = m.id ORDER BY id LIMIT 1), ''),
+       COALESCE((SELECT MIN(created_at_ms) FROM agent_turns WHERE member_id = m.id), CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+       COALESCE((SELECT MAX(created_at_ms) FROM agent_turns WHERE member_id = m.id), CAST(strftime('%s', 'now') AS INTEGER) * 1000), 1
+FROM (SELECT 0 AS id UNION SELECT id FROM members UNION SELECT member_id FROM agent_turns) m;
+ALTER TABLE agent_turns ADD COLUMN conversation_id INTEGER REFERENCES conversations(id);
+UPDATE agent_turns SET conversation_id = (SELECT id FROM conversations WHERE member_id = agent_turns.member_id AND is_default = 1);
+CREATE INDEX agent_turns_conversation ON agent_turns(conversation_id, id);
+CREATE TABLE conversation_context_summaries (
+    conversation_id INTEGER PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    through_turn_id INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+CREATE TABLE agent_conversation_cli_sessions (
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    brain TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    PRIMARY KEY(conversation_id, brain)
+);
+CREATE TRIGGER delete_member_conversations AFTER DELETE ON members
+BEGIN
+    DELETE FROM conversation_context_summaries WHERE conversation_id IN (SELECT id FROM conversations WHERE member_id = OLD.id);
+    DELETE FROM agent_conversation_cli_sessions WHERE conversation_id IN (SELECT id FROM conversations WHERE member_id = OLD.id);
+    DELETE FROM conversations WHERE member_id = OLD.id;
+END;
+CREATE TABLE subscription_quotas (
+    provider TEXT PRIMARY KEY NOT NULL,
+    reset_at_ms INTEGER,
+    updated_at_ms INTEGER NOT NULL
+);
+PRAGMA user_version = 22;
+COMMIT;
+""",
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

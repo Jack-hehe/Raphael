@@ -30,9 +30,12 @@
 // thread is its own: the search looks in it alone, and no turn of another thread shows in it but
 // the collapsed line of an exchange it had a part in.
 
+import { mountConversationList, conversationTitle, conversationChange, type ConversationInfo } from "../conversation-list";
+import { openActions } from "../member-column";
+import { confirmDelete } from "../member-dialogs";
 import { createAttachmentMedia } from "../attachment-media";
 import { fileMime, fileKind, fileSize, fileIcon, mountFileDrop } from "../attachments";
-import { onLocaleChange, t } from "../i18n";
+import { getLocale, onLocaleChange, t } from "../i18n";
 import { isTopLayer, registerDismissal } from "../dismissals";
 
 import { replyLine } from "../../shared/anime";
@@ -72,7 +75,7 @@ import {
   wantsRefresh,
 } from "../timeline";
 import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, MessageQuote, Page, SettingsPane, TurnAttachment, WireAttachment } from "../types";
-import { btn, copyText, esc, ico, iconButton, toaster } from "../ui";
+import { btn, closeMenu, copyText, esc, ico, iconButton, openMenu, openPopover, toaster } from "../ui";
 import { VoiceMode } from "../voice-mode";
 import "../agent.css";
 import "../members.css";
@@ -202,6 +205,7 @@ interface Outgoing {
   requestId: string;
   /** The member whose thread it was typed in (0: Raphael's). */
   member: number;
+  conversationId?: number;
   text: string;
   sentAt: number;
   /** Files it went with, including previews until their stored copies reach history. */
@@ -269,6 +273,7 @@ export function createAgent(app: AppContext): Page {
 
   const members = createMembers({
     app,
+    onOpenConversation: (member, conversation, turn) => openConversation(member, conversation, turn),
     visible: () => visible,
     onSelect: () => switchThread(),
     onUpdate: () => {
@@ -282,10 +287,102 @@ export function createAgent(app: AppContext): Page {
   el.append(members.details);
   if (members.detailsOpen()) el.dataset.det = "open";
   el.querySelector(".mb-head-l")!.append(members.picker);
-  el.querySelector(".mb-head-c")!.append(members.pill);
+  const head = document.createElement("div"); head.className = "conversation-head";
+  const conversationButton = document.createElement("button");
+  conversationButton.type = "button"; conversationButton.className = "btn conversation-trigger";
+  conversationButton.setAttribute("aria-haspopup", "menu"); conversationButton.setAttribute("aria-expanded", "false");
+  head.append(members.pill, document.createTextNode(" / "), conversationButton);
+  el.querySelector(".mb-head-c")!.append(head);
+  const chosenConversations = new Map<number, number>();
+  const conversationCache = new Map<number, ConversationInfo[]>();
+  let conversationList: ReturnType<typeof mountConversationList> | null = null;
+  let targetTurn: number | undefined;
+  let actionMode: "ask" | "direct" = "direct";
+  const quotaHost = document.createElement("div"); quotaHost.className = "quota-chips";
+  quotaHost.hidden = true;
+  let quotas: { provider: string; reset_at_ms: number | null }[] = [];
+  let quotaTimer: ReturnType<typeof setTimeout> | undefined;
+  const conversationId = (): number | undefined => chosenConversations.get(memberId());
+  const belongs = (sent: Outgoing): boolean => sent.member === memberId() && sent.conversationId === conversationId();
+
+  function drawConversation(): void {
+    const selected = conversationCache.get(memberId())?.find(c => c.id === conversationId());
+    const title = conversationTitle(selected);
+    conversationButton.innerHTML = `<span class="conversation-caption">${esc(title)}</span>${ico("down")}`;
+    conversationButton.setAttribute("aria-label", title); conversationButton.title = title;
+  }
+
+  async function readConversations(member: number): Promise<void> {
+    try {
+      const result = await api.core<{ conversations: ConversationInfo[] }>("conversations.list", { member_id: member });
+      if (!Array.isArray(result?.conversations)) return;
+      conversationCache.set(member, result.conversations);
+      const chosen = chosenConversations.get(member);
+      if (!result.conversations.some(c => c.id === chosen)) {
+        const next = result.conversations.find(c => c.is_default) ?? result.conversations[0];
+        if (next) chosenConversations.set(member, next.id);
+      }
+      if (member === memberId()) drawConversation();
+    } catch { /* A core that is restarting keeps the last selection until the next refresh. */ }
+  }
+
+  function openConversation(member: number, id: number, turnId?: number): void {
+    const changed = memberId() !== member;
+    if (!changed && conversationId() === id && turnId === undefined) return;
+    chosenConversations.set(member, id); targetTurn = turnId;
+    if (changed) members.select(member); else switchThread();
+    drawConversation();
+  }
+
+  conversationButton.addEventListener("click", () => {
+    conversationList?.destroy();
+    const panel = openPopover(conversationButton, `<div class="conversation-menu-list"></div>`, { className: "menu conversation-picker", role: "dialog", label: t("conversations.search"), onClose() { conversationList?.destroy(); conversationList = null; } });
+    conversationList = mountConversationList(panel.querySelector<HTMLElement>(".conversation-menu-list")!, { memberId: memberId(), onOpen: id => openConversation(memberId(), id) });
+    panel.querySelector<HTMLInputElement>("input")?.focus();
+  });
+  window.addEventListener("conversations-changed", (event) => {
+    const member = (event as CustomEvent<number>).detail;
+    const old = conversationId();
+    void readConversations(member).then(() => {
+      if (visible && member === memberId() && old !== conversationId()) switchThread();
+    });
+  });
+
+  function drawQuotas(): void {
+    clearTimeout(quotaTimer);
+    const now = Date.now(); quotas = quotas.filter(q => q.reset_at_ms === null || q.reset_at_ms > now);
+    const names: Record<string, string> = { codex: "Codex", claude: "Claude", gemini: "Antigravity" };
+    const time = (ms: number): string => new Intl.DateTimeFormat(getLocale(), { hour: "numeric", minute: "2-digit" })
+      .formatToParts(new Date(ms)).map(part => part.type === "dayPeriod" ? `${part.value} ` : part.value).join("").trim();
+    quotaHost.innerHTML = quotas.map(q => `<span class="quota-chip" role="status">${ico("clock")}<span>${esc(t("chat.quota", { p0: names[q.provider] ?? q.provider }))}${q.reset_at_ms ? esc(t("chat.quotaReset", { p0: time(q.reset_at_ms) })) : ""}</span></span>`).join("");
+    quotaHost.hidden = quotas.length === 0;
+    if (quotaHost.hidden) quotaHost.remove();
+    else composer.before(quotaHost);
+    const next = Math.min(...quotas.map(q => q.reset_at_ms ?? Infinity));
+    if (Number.isFinite(next)) quotaTimer = setTimeout(drawQuotas, Math.min(2_147_483_647, Math.max(1, next - now)));
+  }
+  async function readQuotas(): Promise<void> {
+    try { const result = await api.core<{ quotas: typeof quotas }>("quota.list"); if (Array.isArray(result?.quotas)) { quotas = result.quotas; drawQuotas(); } } catch { /* Preserve the last known reset until reconnection. */ }
+  }
+  async function readActionMode(): Promise<void> {
+    try { const result = await api.core<{ settings: { action_mode?: "ask" | "direct" } }>("settings.get"); actionMode = result?.settings?.action_mode ?? "direct"; } catch { /* The next open reads again. */ }
+  }
+  function attachMenu(): void {
+    void readActionMode().then(() => {
+      openMenu(attachButton, [], "", () => {}, undefined, [
+        { label: t("agent.attach"), icon: "file", run() { closeMenu(); picker.value = ""; picker.click(); } },
+        { label: t("chat.beforeAct"), desc: t(actionMode === "ask" ? "chat.askFirst" : "chat.direct"), icon: "shield", submenu: true, run(row) {
+          openMenu(row, [{ value: "ask", label: t("chat.askFirst") }, { value: "direct", label: t("chat.direct") }], actionMode, mode => {
+            void api.core("settings.set", { key: "action_mode", value: mode }).then(() => { actionMode = mode as typeof actionMode; }).catch(err => toaster.info(describeError(err)));
+          }, t("chat.beforeAct"), [], { placement: "beside" });
+        } },
+      ]);
+    });
+  }
   /** The member whose thread is open: 0 is Raphael. */
   const memberId = (): number => members.current();
   const inRaphael = (): boolean => memberId() === RAPHAEL_ID;
+  drawConversation();
 
   // ---------- the composer and the approval card ----------
 
@@ -373,7 +470,8 @@ export function createAgent(app: AppContext): Page {
   let replacing: number | undefined;
   let composerQuote: MessageQuote | undefined;
   const drafts = new Map<string, ComposerDraft>();
-  const restored = new Map<number, ComposerDraft>();
+  const restored = new Map<string, ComposerDraft>();
+  const draftKey = (member = memberId(), conversation = conversationId()): string => `${member}:${conversation ?? "main"}`;
   const retracting = new Set<string>();
   const retracted = new Set<string>();
   let attachmentEpoch = 0;
@@ -422,11 +520,11 @@ export function createAgent(app: AppContext): Page {
   const shownTurns = (): AgentTurn[] => turns.filter((turn) => turn.id > clearedUpTo);
   const newestId = (): number => turns.reduce((max, turn) => Math.max(max, turn.id), 0);
   const isEmpty = (): boolean =>
-    shownTurns().length === 0 && !outgoing.some((sent) => sent.member === memberId()) && hearing?.member !== memberId();
+    shownTurns().length === 0 && !outgoing.some(belongs) && hearing?.member !== memberId();
 
   const look = (): TurnLook => {
     const latest = shownTurns().filter(turn => turn.question.trim() && sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && turn.route !== "exchange" && (turn.text.trim() || turn.messages?.some(m => m.kind === "reply"))).reduce((id, turn) => Math.max(id, turn.id), 0);
-    const busy = pacing.active || regenerating.size > 0 || outgoing.some(sent => sent.member === memberId()) || shownTurns().some(turn => turn.status === "running" || isLive(turn.task));
+    const busy = pacing.active || regenerating.size > 0 || outgoing.some(belongs) || shownTurns().some(turn => turn.status === "running" || isLive(turn.task));
     const shared = { regenerateTurnId: busy ? undefined : latest, revealing: (id: number) => pacing.waiting(id), query: searching ? query : "", openExchanges, memberName: members.nameOf, memberFace: (id: number) => members.faceOf(id, 18) };
     if (inRaphael()) return { ...shared, face: (loop) => avatarHTML({ size: 26, loop }) };
     const member = members.member();
@@ -581,7 +679,9 @@ export function createAgent(app: AppContext): Page {
     const home = empty.hidden ? dock : slot;
     if (backgroundSlot.parentElement !== home) home.prepend(backgroundSlot);
     if (composer.parentElement !== home) home.append(composer);
-    const asking = question !== null && questionOwner === memberId();
+    if (!quotaHost.hidden && quotaHost.nextElementSibling !== composer) home.insertBefore(quotaHost, composer);
+    const asking = question !== null && questionOwner === memberId() &&
+      (question.conversation_id !== undefined ? question.conversation_id === conversationId() : conversationCache.get(memberId())?.find(c => c.id === conversationId())?.is_default !== 0);
     const waitingTurn = [...shownTurns()].reverse().find((turn) => turn.status === "confirm");
     const inline = asking && waitingTurn ? thread.querySelector<HTMLElement>(`[data-question-turn="${waitingTurn.id}"]`) : null;
     const cardHome = inline ?? home;
@@ -616,7 +716,7 @@ export function createAgent(app: AppContext): Page {
         : { key: item.key, html: turnHTML(pacing.view(item.turn), state, details.has(item.turn.id), shape, item.inner), turnId: item.turn.id },
     );
     if (!(searching && query.trim() !== "")) {
-      for (const sent of outgoing) if (sent.member === memberId()) out.push({ key: sent.key, html: pendingTurnHTML(sent.text, TYPED, shape, sent.files, { id: sent.requestId, time: sent.sentAt, quote: sent.quote }) });
+      for (const sent of outgoing) if (belongs(sent)) out.push({ key: sent.key, html: pendingTurnHTML(sent.text, TYPED, shape, sent.files, { id: sent.requestId, time: sent.sentAt, quote: sent.quote }) });
       if (hearing?.member === memberId()) out.push({ key: "hearing", html: pendingTurnHTML(null, VOICE, shape) });
     }
     return out;
@@ -717,7 +817,7 @@ export function createAgent(app: AppContext): Page {
     older.hidden = !loadingEarlier;
     older.innerHTML = loadingEarlier ? loadingHTML() : "";
     if (keepUp) scroller.scrollTop = scroller.scrollHeight;
-    if (shown.some((turn) => isLive(turn.task))) startTicker();
+    if (shown.some((turn) => isLive(turn.task) || turn.status === "running")) startTicker();
     else stopTicker();
     // A first page that does not fill the window has no scrolling to bring the earlier ones.
     if (canLoadEarlier && !loadingEarlier && !searchingNow && scroller.scrollHeight <= scroller.clientHeight) void load(true);
@@ -726,6 +826,11 @@ export function createAgent(app: AppContext): Page {
   /** The time since a task began, each second, in the lines that show it. */
   function tick(): void {
     const now = Date.now();
+    state.nowMs = now;
+    for (const turn of shownTurns().filter(turn => turn.status === "running" || isLive(turn.task))) {
+      const label = thread.querySelector<HTMLElement>(`[data-thinking-turn="${turn.id}"] .work-time`);
+      if (label) label.textContent = t("chat.workingFor", { p0: Math.max(0, Math.round((now - turn.created_at_ms) / 1000)) });
+    }
     for (const line of thread.querySelectorAll<HTMLElement>("[data-since]")) line.textContent = formatDuration(now - Number(line.dataset.since));
   }
   function startTicker(): void {
@@ -753,9 +858,13 @@ export function createAgent(app: AppContext): Page {
     try {
       const before = earlier ? oldestId(turns) : undefined;
       const member = memberId();
+      await readConversations(member);
+      if (mine !== loads) return;
       got = (
         await api.agentHistoryList({
           limit: PAGE_SIZE,
+          ...(conversationId() !== undefined ? { conversation_id: conversationId() } : {}),
+          ...(!earlier && targetTurn !== undefined ? { around_id: targetTurn } : {}),
           ...(before === undefined ? {} : { before_id: before }),
           ...(member === RAPHAEL_ID ? {} : { member_id: member }),
         })
@@ -782,7 +891,7 @@ export function createAgent(app: AppContext): Page {
       if (earlier) loadingEarlier = false;
       return;
     }
-    pacing.observe(turns, got, visible && loadedThread && !earlier && !searching, new Set(outgoing.filter(item => item.member === memberId()).map(item => item.requestId)));
+    pacing.observe(turns, got, visible && loadedThread && !earlier && !searching, new Set(outgoing.filter(belongs).map(item => item.requestId)));
     loadedThread = true;
     let routinesChanged = false;
     for (const turn of got) {
@@ -816,6 +925,11 @@ export function createAgent(app: AppContext): Page {
     render();
     // The earlier turns come in above the reader, who stays where they were.
     if (earlier) scroller.scrollTop = scroller.scrollHeight - fromBottom;
+    if (targetTurn !== undefined) {
+      const target = thread.querySelector<HTMLElement>(`[data-id="${targetTurn}"]`);
+      if (target) { target.scrollIntoView?.({ block: "center" }); target.classList.add("is-search-target"); setTimeout(() => target.classList.remove("is-search-target"), 2400); }
+      targetTurn = undefined;
+    }
   }
 
   /** The questions in the history now are no longer waited for: a typed one by its words, a spoken one by any new turn of the voice. */
@@ -888,10 +1002,11 @@ export function createAgent(app: AppContext): Page {
     }
     const sending = files;
     const member = memberId();
+    const sentConversation = conversationId();
     const requestId = crypto.randomUUID();
     const draft: ComposerDraft = { text: input.value, files: sending, missing: [], replacing, quote: composerQuote };
     rememberDraft(requestId, draft);
-    const mine: Outgoing = { key: `out:${++sent}`, requestId, member, text, sentAt: Date.now(), files: sending.map(({ name, mime, data, size }) => ({ name, mime, size, preview: fileKind(mime) !== "file" ? `data:${mime};base64,${data}` : undefined })), quote: composerQuote };
+    const mine: Outgoing = { key: `out:${++sent}`, requestId, member, conversationId: sentConversation, text, sentAt: Date.now(), files: sending.map(({ name, mime, data, size }) => ({ name, mime, size, preview: fileKind(mime) !== "file" ? `data:${mime};base64,${data}` : undefined })), quote: composerQuote };
     outgoing.push(mine);
     input.value = "";
     files = [];
@@ -903,13 +1018,13 @@ export function createAgent(app: AppContext): Page {
     render(true);
     askingMember = member;
     try {
-      await api.agentAskText(text, wireAttachments(sending), member, { requestId, ...(draft.replacing !== undefined ? { replaceTurnId: draft.replacing } : {}), ...(draft.quote ? { quote: draft.quote } : {}) });
+      await api.agentAskText(text, wireAttachments(sending), member, { requestId, ...(sentConversation !== undefined ? { conversationId: sentConversation } : {}), ...(draft.replacing !== undefined ? { replaceTurnId: draft.replacing } : {}), ...(draft.quote ? { quote: draft.quote } : {}) });
     } catch (err) {
       if (retracted.has(requestId)) return;
       if (askingMember === member) askingMember = null;
       outgoing = outgoing.filter((item) => item !== mine);
-      if (memberId() === member && input.value === "" && !files.length) restoreDraft(draft);
-      else restored.set(member, draft);
+      if (memberId() === member && conversationId() === sentConversation && input.value === "" && !files.length) restoreDraft(draft);
+      else restored.set(draftKey(member, sentConversation), draft);
       toaster.info(describeError(err));
       render();
       return;
@@ -917,7 +1032,7 @@ export function createAgent(app: AppContext): Page {
     if (retracted.has(requestId)) return;
     if (askingMember === member) askingMember = null;
     // The turn is written by now: the history brings it, and the question waits no more.
-    if (memberId() === member) await load(false);
+    if (memberId() === member && conversationId() === sentConversation) await load(false);
     else members.changed();
     outgoing = outgoing.filter((item) => item !== mine);
     render();
@@ -1133,7 +1248,7 @@ export function createAgent(app: AppContext): Page {
     if (words !== "") {
       try {
         const member = memberId();
-        const turnsFound = (member === RAPHAEL_ID ? await api.agentHistorySearch(words) : await api.agentHistorySearch(words, member)).turns;
+        const turnsFound = (conversationId() !== undefined ? await api.agentHistorySearch(words, member, conversationId()) : member === RAPHAEL_ID ? await api.agentHistorySearch(words) : await api.agentHistorySearch(words, member)).turns;
         if (mine !== searches) return;
         found = turnsFound;
       } catch {
@@ -1254,6 +1369,7 @@ export function createAgent(app: AppContext): Page {
    * closes, the composer and the card become that thread's, and nothing of the last thread moves in.
    */
   function switchThread(): void {
+    drawConversation();
     hideTooltip();
     hideSelection();
     pacing.flush();
@@ -1282,8 +1398,8 @@ export function createAgent(app: AppContext): Page {
     replacing = undefined;
     composerQuote = undefined;
     drawQuote();
-    const draft = restored.get(memberId());
-    if (draft) { restored.delete(memberId()); restoreDraft(draft); }
+    const draft = restored.get(draftKey());
+    if (draft) { restored.delete(draftKey()); restoreDraft(draft); }
     drawFile();
     fit();
     drawComposer();
@@ -1296,7 +1412,7 @@ export function createAgent(app: AppContext): Page {
     if (listening && voiceMember === memberId() && !question) voice.up();
     if (visible) {
       void load(false).then(() => {
-        if (visible && !scroller.hidden) scroller.scrollTop = scroller.scrollHeight;
+        if (visible && !scroller.hidden && !thread.querySelector(".is-search-target")) scroller.scrollTop = scroller.scrollHeight;
       });
       focusComposer();
     }
@@ -1426,10 +1542,44 @@ export function createAgent(app: AppContext): Page {
     catch (err) { toaster.info(describeError(err)); }
   }
 
+  function replyMessage(control: HTMLElement): void {
+    const source = messageSource(control);
+    const pending = outgoing.find(item => item.requestId === control.closest<HTMLElement>("[data-session]")?.dataset.session);
+    if (!source && !pending) return;
+    composerQuote = { text: source ? messagePlainText(source.text, source.markdown) : pending!.text,
+      author: !source || source.key === "question" ? t("chat.you") : members.nameOf(source.turn.member_id ?? memberId()) };
+    drawQuote(); focusComposer();
+  }
+
+  async function messageMenu(control: HTMLElement): Promise<void> {
+    const source = messageSource(control);
+    if (!source) return;
+    const member = memberId(), conversation = conversationId();
+    let speaks = false;
+    try { speaks = (await api.core<{ ready: boolean }>("agent.speech.status")).ready; } catch { /* Reading and deletion remain available without speech. */ }
+    if (!control.isConnected || member !== memberId() || conversation !== conversationId()) return;
+    const items: Parameters<typeof openActions>[1][number][] = [];
+    if (control.dataset.regenerate === "true" && look().regenerateTurnId === source.turn.id) items.push({ id: "regenerate", label: t("chat.regenerate"), icon: "refresh" });
+    if (speaks) items.push({ id: "speak", label: t("chat.readAloud"), icon: "voice" });
+    items.push({ id: "delete", label: t("chat.deleteTurn"), icon: "trash" });
+    openActions(control, items, pick => {
+      if (pick === "regenerate") { void regenerate(control); return; }
+      const params = { member_id: member, conversation_id: conversation, turn_id: source.turn.id };
+      if (pick === "speak") {
+        void api.core("agent.speak", { ...params, ...(source.key !== "reply" ? { message_seq: Number(source.key) } : {}) }).catch(err => toaster.info(describeError(err)));
+      } else void confirmDelete(t("chat.deleteTurn")).then(async yes => {
+        if (!yes) return;
+        await api.core("agent.history.delete", params);
+        if (member === memberId() && conversation === conversationId()) await load(false);
+      }).catch(err => toaster.info(describeError(err)));
+    });
+  }
+
   async function regenerate(control: HTMLElement): Promise<void> {
     const source = messageSource(control);
     if (!source || look().regenerateTurnId !== source.turn.id) return;
     const member = memberId(), turn = source.turn;
+    const sentConversation = conversationId();
     const requestId = crypto.randomUUID();
     const epoch = attachmentEpoch;
     const draft = await draftFor(turn);
@@ -1437,11 +1587,11 @@ export function createAgent(app: AppContext): Page {
     if (draft.missing.length) { restoreDraft(draft); toaster.info(t("chat.reattach")); return; }
     regenerating.add(turn.id);
     rememberDraft(requestId, draft);
-    const mine: Outgoing = { key: `out:${++sent}`, requestId, member, text: turn.question, sentAt: Date.now(), files: draft.files.map(({ name, mime }) => ({ name, mime })), quote: draft.quote };
+    const mine: Outgoing = { key: `out:${++sent}`, requestId, member, conversationId: sentConversation, text: turn.question, sentAt: Date.now(), files: draft.files.map(({ name, mime }) => ({ name, mime })), quote: draft.quote };
     outgoing.push(mine); render(true);
     askingMember = member;
     try {
-      await api.agentAskText(turn.question, wireAttachments(draft.files), member, { requestId, ...(draft.quote ? { quote: draft.quote } : {}) });
+      await api.agentAskText(turn.question, wireAttachments(draft.files), member, { requestId, ...(sentConversation !== undefined ? { conversationId: sentConversation } : {}), ...(draft.quote ? { quote: draft.quote } : {}) });
       if (visible && memberId() === member) await load(false);
       else members.changed();
     } catch (err) { toaster.info(describeError(err)); }
@@ -1507,7 +1657,7 @@ export function createAgent(app: AppContext): Page {
     const turn = pending ? turns.find(turn => turn.session_id === pending.requestId) : source?.turn ?? (!control ? shownTurns().find(turn => sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && (turn.status === "running" || turn.status === "confirm" || isLive(turn.task) || turn.task?.state === "waiting")) : undefined);
     const session = pending?.requestId ?? turn?.session_id;
     if (!session || retracting.has(session)) return;
-    const member = memberId();
+    const member = memberId(), sentConversation = conversationId();
     retracting.add(session);
     try {
       await api.agentRetract(session, member, turn?.id);
@@ -1518,8 +1668,8 @@ export function createAgent(app: AppContext): Page {
       if (found) found = found.filter(item => item.session_id !== session && item.id !== turn?.id);
       if (questionOwner === member && (turn?.status === "confirm" || pending)) setQuestion(null);
       if (askingMember === member) askingMember = null;
-      if (memberId() === member) { render(); restoreDraft(draft); }
-      else restored.set(member, draft);
+      if (memberId() === member && conversationId() === sentConversation) { render(); restoreDraft(draft); }
+      else restored.set(draftKey(member, sentConversation), draft);
       members.changed();
     } catch (err) { toaster.info(describeError(err)); }
     finally { retracting.delete(session); }
@@ -1567,6 +1717,12 @@ export function createAgent(app: AppContext): Page {
       }
       case "copy-message":
         void copyMessage(act);
+        break;
+      case "reply-message":
+        replyMessage(act);
+        break;
+      case "more-message":
+        void messageMenu(act);
         break;
       case "edit-message":
         void editMessage(act);
@@ -1623,8 +1779,7 @@ export function createAgent(app: AppContext): Page {
         void rerun(act);
         break;
       case "attach":
-        picker.value = "";
-        picker.click();
+        attachMenu();
         break;
       case "unattach-file": {
         const id = Number(act.dataset.file);
@@ -1747,6 +1902,10 @@ export function createAgent(app: AppContext): Page {
   app.onEvent((event) => {
     if (event.type === "Hotkey" && event.kind === "cancel" && visible && document.activeElement === input && !input.value.trim() && !files.length && !listening) void cancelMessage();
     members.follow(event);
+    if (event.type === "ConversationsChanged") conversationChange(event.member_id);
+    if (event.type === "AgentTurn") conversationChange(event.member_id ?? RAPHAEL_ID);
+    if (event.type === "QuotaChanged") void readQuotas();
+    if (event.type === "ActionModeChanged") void readActionMode();
     if (wantsRefresh(event)) {
       // a turn of another thread changes only that member's row
       if (event.type !== "AgentTurn" || (event.member_id ?? RAPHAEL_ID) === memberId()) scheduleRefresh();
@@ -1800,6 +1959,7 @@ export function createAgent(app: AppContext): Page {
 
   onLocaleChange(() => {
     drawWords();
+    drawQuotas();
     drawComposer();
     for (const child of thread.children) drawnHTML.delete(child);
     render();
@@ -1820,6 +1980,7 @@ export function createAgent(app: AppContext): Page {
       dropResize?.observe(composer);
       dropResize?.observe(askCard);
       void members.load();
+      void readQuotas(); void readActionMode();
       // A draft goes into the field at once; the composer may then move (the empty page has it
       // under Raphael, the thread under the turns) or give way to a question, which takes the
       // focus away: it is given back once each of those is known.

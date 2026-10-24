@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .process import Child, PrivateFiles
+from ..quota import parse_quota
+from ...clock import wall_clock_ms
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +26,23 @@ class Event:
 
 
 class Driver:
-    def __init__(self, name, command, *, model=None, effort=None, environ=None):
+    def __init__(self, name, command, *, model=None, effort=None, environ=None, quota=None):
         self.name, self.command, self.model = name, list(command), model
         self.effort = effort
         self.environ = environ
         self.child = None
         self.session = None
         self.turn = None
+        self.quota = quota
+        self.exhausted = False
+
+    def _event(self, kind, text):
+        # Only normalized quota metadata crosses this boundary, never provider diagnostics.
+        if kind == "error" and self.exhausted:
+            text = "quota"
+        elif kind == "final" and self.quota and not self.exhausted:
+            self.quota(self.name, {"exhausted": False})
+        return Event(kind, text)
 
     async def interrupt(self):
         if self.child and self.child.process and self.child.process.returncode is None:
@@ -104,7 +116,7 @@ class Driver:
                     yield event
         except (OSError, ValueError, TimeoutError, EOFError, asyncio.IncompleteReadError) as error:
             logger.warning("CLI transport failed: %s", type(error).__name__)
-            yield Event("error", "protocol_or_process_error")
+            yield self._event("error", "protocol_or_process_error")
         finally:
             try:
                 await self.interrupt()
@@ -120,7 +132,26 @@ class Driver:
         value = json.loads(line)
         if not isinstance(value, dict):
             raise ValueError("invalid_packet")
+        self._observe_quota(value)
         return value
+
+    def _observe_quota(self, packet):
+        method = packet.get("method", "")
+        kind = packet.get("type", packet.get("event", ""))
+        failed = ("error" in packet or method in ("error", "account/rateLimits/updated")
+                  or kind in ("error", "rate_limit_event")
+                  or method == "turn/completed" and (packet.get("params", {}).get("turn") or {}).get("status") != "completed")
+        if kind == "result":
+            if self.name == "gemini":
+                failed = failed or (packet.get("result") or {}).get("status") != "SUCCESS"
+            else:
+                failed = failed or packet.get("is_error") or packet.get("subtype") != "success"
+        if failed:
+            data = parse_quota(packet, wall_clock_ms())
+            if data is not None:
+                self.exhausted = data["exhausted"]
+                if self.quota:
+                    self.quota(self.name, data)
 
     async def _claude(self):
         text = ""
@@ -160,9 +191,9 @@ class Driver:
                     yield Event("session", self.session)
                 yield Event("usage", data=packet.get("usage", {}))
                 if packet.get("is_error") or packet.get("subtype") != "success":
-                    yield Event("error", "cli_failed")
+                    yield self._event("error", "cli_failed")
                 else:
-                    yield Event("final", packet.get("result") or text)
+                    yield self._event("final", packet.get("result") or text)
                 return
 
     async def _antigravity(self):
@@ -192,9 +223,9 @@ class Driver:
                 yield Event("usage", data=result.get("usage") or {})
                 if result.get("status") != "SUCCESS":
                     error = str(result.get("error") or "").lower()
-                    yield Event("error", "quota" if "quota" in error or "rate limit" in error else "cli_failed")
+                    yield self._event("error", "quota" if "quota" in error or "rate limit" in error else "cli_failed")
                 else:
-                    yield Event("final", result.get("response") or text)
+                    yield self._event("final", result.get("response") or text)
                 return
 
     async def _rpc(self, user, system, endpoint, token, session, permission):
@@ -220,7 +251,7 @@ class Driver:
             if not method and packet.get("id") in pending:
                 label = pending.pop(packet["id"])
                 if "error" in packet:
-                    yield Event("error", "cli_request_failed")
+                    yield self._event("error", "cli_request_failed")
                     return
                 result = packet.get("result") or {}
                 if label == "initialize":
@@ -276,12 +307,12 @@ class Driver:
                 self.turn = (params.get("turn") or {}).get("id")
             elif method == "turn/completed":
                 if (params.get("turn") or {}).get("status") == "completed":
-                    yield Event("final", text)
+                    yield self._event("final", text)
                 else:
-                    yield Event("error", "cli_turn_failed")
+                    yield self._event("error", "cli_turn_failed")
                 return
             elif method == "error":
-                yield Event("error", "cli_error")
+                yield self._event("error", "cli_error")
                 return
 
 def antigravity_home(workspace, endpoint, token, system):

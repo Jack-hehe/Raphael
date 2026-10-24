@@ -433,6 +433,7 @@ class MemoryService:
         limit: int = 5,
         exclude: Sequence[int] = (),
         member_id: int = 0,
+        conversation_id: int | None = None,
     ) -> ToolResult:
         """`history_search`: the past turns of the thread of `member_id` (and of no other) that
         hold the words of `query`, best first, each as its date, the question and the answer, cut
@@ -442,7 +443,7 @@ class MemoryService:
         there tells what the screen showed, or what a member or a service said, so the reply that
         reads it writes no note."""
         try:
-            turns = self._history.search(query, limit=limit, exclude=exclude, member_id=member_id)
+            turns = self._history.search(query, limit=limit, exclude=exclude, member_id=member_id, conversation_id=conversation_id)
         except sqlite3.Error as exc:
             logger.warning("Could not search the conversation: %s", type(exc).__name__)
             return ToolResult("history_search", False, None, "error")

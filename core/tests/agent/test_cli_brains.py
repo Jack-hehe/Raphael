@@ -129,6 +129,56 @@ else:
     assert len(permissions) == (1 if name == "codex" else 0)
 
 
+@pytest.mark.parametrize("name", ["claude", "codex", "gemini"])
+@pytest.mark.parametrize("state", ["failed", "exhausted_with_answer", "recovered"])
+async def test_driver_quota_notifications_and_terminal_events(tmp_path, monkeypatch, name, state):
+    from raphael_core.agent.cli.drivers import Driver
+    from .test_quota import NOW
+
+    monkeypatch.setattr("raphael_core.agent.cli.drivers.wall_clock_ms", lambda: NOW)
+    script = tmp_path / "quota_protocol.py"
+    script.write_text('''import json, sys
+name, state, reset = sys.argv[1:4]
+def send(packet): print(json.dumps(packet), flush=True)
+def finish():
+    if state != "recovered":
+        limits = {"primary": {"usedPercent": 100, "resetsAt": int(reset)}}
+        if name == "codex": send({"method":"account/rateLimits/updated", "params":{"rateLimits":limits}})
+        else: send({"type":"rate_limit_event", "event":"rate_limit_event", "rateLimits":limits})
+    if name == "codex":
+        if state != "failed": send({"method":"item/agentMessage/delta", "params":{"delta":"Public answer."}})
+        send({"method":"turn/completed", "params":{"turn":{"status":"failed" if state == "failed" else "completed"}}})
+    elif name == "claude":
+        send({"type":"result", "subtype":"error_during_execution" if state == "failed" else "success",
+              "is_error":state == "failed", "result":"PRIVATE-DIAGNOSTIC" if state == "failed" else "Public answer."})
+    else:
+        send({"event":"result", "result":{"status":"ERROR" if state == "failed" else "SUCCESS",
+              "error":"PRIVATE-DIAGNOSTIC" if state == "failed" else "", "response":"Public answer."}})
+if name == "codex":
+    for line in sys.stdin:
+        request = json.loads(line)
+        method = request.get("method")
+        if method == "initialize": send({"id":request["id"], "result":{}})
+        elif method == "thread/start": send({"id":request["id"], "result":{"thread":{"id":"one"}}})
+        elif method == "turn/start":
+            finish()
+            break
+else:
+    json.loads(sys.stdin.readline())
+    finish()
+''', encoding="utf-8")
+    recorded = []
+    driver = Driver(name, [sys.executable, str(script), name, state, str(NOW // 1000 + 3600)],
+                    quota=lambda *value: recorded.append(value))
+    events = [event async for event in driver.run(user="hello", system="persona", endpoint="http://127.0.0.1:1/mcp",
+                                                 token="ephemeral", permission=None)]
+    expected = {"exhausted": False} if state == "recovered" else {"exhausted": True, "reset_at_ms": NOW + 3600000}
+    assert recorded == [(name, expected)]
+    assert events[-1].kind == ("error" if state == "failed" else "final")
+    assert events[-1].text == ("quota" if state == "failed" else "Public answer.")
+    assert all("PRIVATE-DIAGNOSTIC" not in event.text for event in events)
+
+
 async def test_discovery_reports_changes_without_reading_credentials(tmp_path, monkeypatch):
     from pathlib import Path
     script = tmp_path / "version.py"

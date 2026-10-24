@@ -69,6 +69,22 @@ async def steps_of(rig):
 
 # --- writing in the turn ---------------------------------------------------------------------------
 
+async def test_ask_first_confirms_each_memory_change_before_it_is_written(rig, client, memory):
+    rig.settings.set("action_mode", "ask")
+    client.decisions.append(decision("chat"))
+    client.replies.append(reply("Saved both notes.", memory=[note(), note(name="user-other", description="Other fact")]))
+    first = await rig.ask("Remember these facts", language="en")
+    assert first["status"] == "confirm" and first["confirm"]["tier"] == "T2"
+    assert memory.store.all() == []
+    second = await rig.confirm(first["confirm"]["id"])
+    assert second["status"] == "confirm"
+    assert memory.store.get("user-city") is not None
+    assert memory.store.get("user-other") is None
+    done = await rig.confirm(second["confirm"]["id"])
+    assert done["status"] == "done"
+    assert memory.store.get("user-other") is not None
+
+
 
 @pytest.mark.parametrize(("language", "line"), [("zh-TW", ("了", "已記下。")), ("en", ("Understood", "Noted.")), ("ja", ("了", "記憶しました。"))])
 async def test_a_request_to_remember_is_written_at_once_and_said_so(rig, client, memory, language, line):

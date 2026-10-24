@@ -102,6 +102,8 @@ export const historyClear = (): Promise<{ deleted: number }> => core("history.cl
 // ---------- conversations with Raphael ----------
 
 export interface AgentHistoryQuery {
+  conversation_id?: number;
+  around_id?: number;
   limit?: number;
   /** Only turns older than this id: the cursor of the next page. */
   before_id?: number;
@@ -118,8 +120,8 @@ export const workerCancel = (taskId: number): Promise<{ cancelled: boolean }> =>
 /** Runs a task that did not finish again, as a new task; its id. */
 export const workerRerun = (taskId: number): Promise<{ task_id: number }> => core("worker.rerun", { task_id: taskId });
 /** The answered turns whose words hold `query`, best first, over the whole history, in the shape of `agentHistoryList`. */
-export const agentHistorySearch = (query: string, memberId = 0): Promise<{ turns: AgentTurn[] }> =>
-  core("agent.history.search", { query, limit: 100, member_id: memberId });
+export const agentHistorySearch = (query: string, memberId = 0, conversationId?: number): Promise<{ turns: AgentTurn[] }> =>
+  core("agent.history.search", { query, limit: 100, member_id: memberId, ...(conversationId !== undefined ? { conversation_id: conversationId } : {}) });
 
 /**
  * Asks Raphael in writing (the composer of the 拉斐爾 page). The question goes the way a spoken one
@@ -129,7 +131,7 @@ export const agentHistorySearch = (query: string, memberId = 0): Promise<{ turns
  * when there are some: a question with files may have no words. `memberId` asks a member in its
  * own thread instead of Raphael (`agent.ask`'s `member_id`); it goes only when it is not 0.
  */
-export const agentAskText = (text: string, attachments: WireAttachment[] = [], memberId = 0, options: { requestId?: string; replaceTurnId?: number; quote?: import("./types").MessageQuote } = {}): Promise<void> =>
+export const agentAskText = (text: string, attachments: WireAttachment[] = [], memberId = 0, options: { requestId?: string; replaceTurnId?: number; quote?: import("./types").MessageQuote; conversationId?: number } = {}): Promise<void> =>
   invoke("agent_ask_text", {
     text,
     ...(attachments.length > 0 ? { attachments } : {}),

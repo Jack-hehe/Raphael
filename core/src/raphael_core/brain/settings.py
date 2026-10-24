@@ -77,6 +77,8 @@ DEFAULTS: dict[str, Any] = {
     "memory_fallbacks": [],
     # Where the weather is looked up when the user does not say.
     "agent_city": "台北",
+    # Shared by every member and the worker; read at each action, never cached per conversation.
+    "action_mode": "direct",
     # The most one background task may spend, in US$ (one of WORKER_COST_CAPS).
     "worker_cost_cap_usd": 0.20,
     # The models the user starred in the pickers, per role (the page's names for them), in the order
@@ -148,6 +150,7 @@ URL_MAX_CHARS = 300
 # What one background task may cost, as the settings page offers it.
 WORKER_COST_CAPS = (0.10, 0.20, 0.50, 1.00)
 _CHOICES: dict[str, tuple[Any, ...]] = {
+    "action_mode": ("ask", "direct"),
     "worker_cost_cap_usd": WORKER_COST_CAPS,
     "stt_engine": STT_ENGINES,
     "stt_local_model": tuple(entry.name for entry in LOCAL_STT_MODELS),

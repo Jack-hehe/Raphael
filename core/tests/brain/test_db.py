@@ -282,7 +282,15 @@ SCHEMA_V20 = {**SCHEMA_V19, "dictation_daily": [
     "estimated_dictations INTEGER NOT NULL DEFAULT 0",
 ]}
 SCHEMA_V21 = {**SCHEMA_V20, "agent_turns": [*SCHEMA_V20["agent_turns"], "quote TEXT"]}
-LATEST = 21
+SCHEMA_V22 = {
+    **SCHEMA_V21,
+    "agent_turns": [*SCHEMA_V21["agent_turns"], "conversation_id INTEGER"],
+    "conversations": ["id INTEGER PK", "member_id INTEGER NOT NULL", "title TEXT NOT NULL DEFAULT ''", "created_at_ms INTEGER NOT NULL", "updated_at_ms INTEGER NOT NULL", "is_default INTEGER NOT NULL DEFAULT 0"],
+    "conversation_context_summaries": ["conversation_id INTEGER PK", "text TEXT NOT NULL", "through_turn_id INTEGER NOT NULL", "updated_at_ms INTEGER NOT NULL"],
+    "agent_conversation_cli_sessions": ["conversation_id INTEGER PK NOT NULL", "brain TEXT PK NOT NULL", "session_id TEXT NOT NULL"],
+    "subscription_quotas": ["provider TEXT PK NOT NULL", "reset_at_ms INTEGER", "updated_at_ms INTEGER NOT NULL"],
+}
+LATEST = 22
 
 
 def schema_names(conn, kind):
@@ -306,7 +314,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V21) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V22) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -320,7 +328,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V21.items():
+    for table, columns in SCHEMA_V22.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
@@ -523,7 +531,7 @@ def test_a_v4_database_gets_the_turns_table_at_v5_and_keeps_its_rows(tmp_path):
 
     conn = db.connect(path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    assert describe_columns(conn, "agent_turns") == SCHEMA_V21["agent_turns"]
+    assert describe_columns(conn, "agent_turns") == SCHEMA_V22["agent_turns"]
     assert conn.execute("SELECT count(*) FROM agent_turns").fetchone()[0] == 0
     assert HistoryStore(conn).latest().text == "A"
     assert [e.word for e in DictionaryStore(conn).list()] == ["拉斐爾"]
@@ -1055,4 +1063,32 @@ def test_v21_quotes_preserve_old_turns_and_survive_reopening(tmp_path):
     reopened = db.connect(path)
     assert AgentHistory(reopened).get(new_id).quote == quote
     assert AgentHistory(reopened).get(1).question == "q"
+    reopened.close()
+
+
+def test_v22_assigns_each_legacy_member_a_stable_default_conversation(tmp_path, conn):
+    from raphael_core.agent.conversations import Conversations
+    from raphael_core.agent.history import AgentHistory
+
+    assert Conversations(conn).get(Conversations(conn).main(0))["created_at_ms"] > 0
+
+    path = tmp_path / "v21.db"
+    raw = sqlite3.connect(path)
+    for version in range(1, 22):
+        step = db._MIGRATIONS[version]
+        step(raw) if callable(step) else raw.executescript(step)
+    for member, question, stamp in [(0, "First\nquestion", 100), (7, "Member question", 200), (0, "Later", 300)]:
+        raw.execute("INSERT INTO agent_turns (session_id, member_id, question, route, prefix, text, status, created_at_ms) VALUES (?, ?, ?, 'chat', '', 'answer', 'done', ?)", (str(stamp), member, question, stamp))
+    raw.commit(); raw.close()
+    migrated = db.connect(path)
+    conversations = Conversations(migrated)
+    main, member = conversations.main(0), conversations.main(7)
+    assert main != member
+    assert conversations.get(main)["title"] == "First question"
+    assert [AgentHistory(migrated).get(id).conversation_id for id in (1, 2, 3)] == [main, member, main]
+    assert (conversations.get(main)["created_at_ms"], conversations.get(main)["updated_at_ms"]) == (100, 300)
+    migrated.close()
+    reopened = db.connect(path)
+    assert Conversations(reopened).main(0) == main
+    assert len(Conversations(reopened).list(7)) == 1
     reopened.close()

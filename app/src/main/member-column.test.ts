@@ -102,7 +102,7 @@ describe("the column, drawn", () => {
     expect(el.querySelector<HTMLElement>('[data-group="20"]')!.dataset.open).toBe("true");
     const none = dom(columnHTML(view({ query: "沒有這個人" })));
     expect(none.querySelector(".mb-none")!.textContent).toBe("沒有相符的成員");
-    expect(none.querySelector(".mb-chief")).not.toBeNull();
+    expect(none.querySelector(".mb-chief")).toBeNull();
   });
 });
 
@@ -142,6 +142,15 @@ describe("the column, used", () => {
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(column.query()).toBe("");
     expect(column.el.querySelectorAll(".mb-row")).toHaveLength(4);
+  });
+
+  test("the narrow-window search opens a member and closes its popover", () => {
+    const column = mount(), anchor = document.createElement("button");
+    document.body.append(anchor); column.openSearch(anchor);
+    expect(document.activeElement).toBe(document.querySelector("#app-popover input"));
+    document.querySelector<HTMLButtonElement>('#app-popover [data-member="3"]')!.click();
+    expect(host.select).toHaveBeenCalledWith(3);
+    expect(document.getElementById("app-popover")).toBeNull();
   });
 
   test("＋ offers 新增成員 and 新增分組", () => {

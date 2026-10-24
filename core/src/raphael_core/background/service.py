@@ -916,14 +916,14 @@ class BackgroundService:
         make = self._team_tool
         assert make is not None
 
-        async def call(name: str, arguments: dict) -> ToolResult:
+        async def call(name: str, arguments: dict, **consent) -> ToolResult:
             return await make(
                 speaker,
                 name,
                 arguments,
                 language=task.language,
                 ledger=ledger,
-                session_id=task.session_id,
+                session_id=task.session_id, **consent,
             )
 
         return call

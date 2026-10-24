@@ -207,13 +207,8 @@
 
 /* thinking: one collapsible 思考過程 block per turn */
 .think-box { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; justify-self: start; max-width: 100%; }
-.page-agent .btn.think-toggle { justify-self: start; gap: 5px; min-height: var(--pa-small-btn); padding: 2px 8px 2px 6px; margin-left: -4px; border-color: transparent; background: transparent; border-radius: var(--r-sm); font-size: var(--pa-sys); font-weight: 500; color: var(--text-3); }
-.page-agent .btn.think-toggle:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--text-2); }
-.think-toggle .steps-chev .i { transform: rotate(-90deg); transition: transform 0.2s ease; }
-.think-box.is-open .think-toggle .steps-chev .i { transform: none; }
 .think-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; padding: calc(4px + 2 * var(--pa-u)) calc(10px + 4 * var(--pa-u)); border-left: 2px solid var(--edge); margin-left: 4px; font-size: var(--pa-fs-d); line-height: 1.5; color: var(--text-2); }
 .think-body[hidden] { display: none; }
-.think-line { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 
 /* inline media cards (link, image, video, pdf) */
 .media-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: calc(6px + 2 * var(--pa-u)); justify-self: start; width: min(calc(440px + 120 * var(--pa-u)), 100%); padding: calc(8px + 3 * var(--pa-u)) calc(10px + 4 * var(--pa-u)); border: 1px solid var(--edge); border-radius: calc(var(--pa-br) - 2px); background: var(--panel); overflow: hidden; }

@@ -1,0 +1,53 @@
+// @vitest-environment happy-dom
+import { afterEach, expect, test, vi } from "vitest";
+const api = vi.hoisted(() => ({ core: vi.fn(), agentHistoryList: vi.fn(), agentQuestionOpen: vi.fn(), agentAskText: vi.fn() }));
+vi.mock("../api", () => api);
+import { createAgent } from "./agent";
+import { Cleared } from "../cleared";
+import { closeMenu } from "../ui";
+import { setLocale } from "../i18n";
+import type { AppContext } from "../types";
+const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+afterEach(() => { closeMenu(); document.body.replaceChildren(); vi.clearAllMocks(); vi.useRealTimers(); });
+
+test("quota notices stay immediately above the composer and disappear at reset", async () => {
+  vi.useFakeTimers(); setLocale("zh-TW");
+  vi.setSystemTime(new Date("2026-10-24T14:06:00+08:00"));
+  api.agentQuestionOpen.mockResolvedValue(null);
+  api.agentHistoryList.mockResolvedValue({ turns: [] });
+  api.core.mockImplementation(async method => method === "conversations.list" ? { conversations: [{ id: 1, member_id: 0, is_default: 1, title: "Main" }] } :
+    method === "quota.list" ? { quotas: [{ provider: "codex", reset_at_ms: Date.now() + 1000 }] } :
+    method === "background.questions.list" ? { questions: [] } : {});
+  const page = createAgent({ go() {}, device: () => ({}), onEvent: () => () => {}, undo: { begin() {} }, cleared: new Cleared() } as unknown as AppContext);
+  document.body.append(page.el); page.show(); await flush();
+  const notice = page.el.querySelector<HTMLElement>(".quota-chips")!;
+  expect(notice.nextElementSibling).toBe(page.el.querySelector(".composer"));
+  expect(notice.textContent).toBe("Codex 額度已滿，下午 2:06 重設");
+  expect(notice.hidden).toBe(false);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(notice.hidden).toBe(true);
+  expect(notice.textContent).toBe("");
+  page.hide();
+});
+
+test("switching conversations scopes history, quotes the entire answer and sends the chosen ID", async () => {
+  api.agentQuestionOpen.mockResolvedValue(null);
+  const conversations = [{ id: 1, member_id: 0, title: "Main", is_default: 1 }, { id: 2, member_id: 0, title: "Research", is_default: 0 }];
+  api.core.mockImplementation(async method => method === "conversations.list" ? { conversations } : method === "agent.speech.status" ? { ready: true } : method === "background.questions.list" ? { questions: [] } : {});
+  api.agentHistoryList.mockImplementation(async ({ conversation_id }) => ({ turns: [{ id: conversation_id, conversation_id, member_id: 0, question: "Explain", text: "**Entire** answer\n\nSecond paragraph.", prefix: "", created_at_ms: 1000, status: "done", route: "answer", source: "app", detail: null }] }));
+  const page = createAgent({ go() {}, device: () => ({}), onEvent: () => () => {}, undo: { begin() {} }, cleared: new Cleared() } as unknown as AppContext);
+  document.body.append(page.el); page.show(); await flush();
+  page.el.querySelector<HTMLButtonElement>(".conversation-trigger")!.click(); await flush();
+  document.querySelector<HTMLButtonElement>('[data-conversation-open="2"]')!.click(); await flush();
+  expect(api.agentHistoryList).toHaveBeenLastCalledWith(expect.objectContaining({ conversation_id: 2 }));
+  page.el.querySelector<HTMLButtonElement>('.ra [data-act="reply-message"]')!.click();
+  expect(page.el.querySelector(".cmp-quote .quote-text")?.textContent).toBe("《Entire answer\nSecond paragraph.》");
+  const input = page.el.querySelector<HTMLTextAreaElement>(".cmp-input")!; input.value = "Continue"; input.dispatchEvent(new Event("input"));
+  page.el.querySelector(".composer")!.dispatchEvent(new Event("submit", { cancelable: true })); await flush();
+  expect(api.agentAskText).toHaveBeenCalledWith("Continue", [], 0, expect.objectContaining({ conversationId: 2, quote: expect.objectContaining({ text: "《Entire answer\nSecond paragraph.》" }) }));
+  page.el.querySelector<HTMLButtonElement>('[data-act="more-message"]')!.click(); await flush();
+  expect(document.querySelector('[data-pick="speak"]')).not.toBeNull();
+  document.querySelector<HTMLButtonElement>('[data-pick="speak"]')!.click(); await flush();
+  expect(api.core).toHaveBeenCalledWith("agent.speak", { member_id: 0, conversation_id: 2, turn_id: 2 });
+  page.hide();
+});

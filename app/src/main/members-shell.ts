@@ -38,6 +38,7 @@ export const DETAILS_COLUMN_MIN_PX = 1120;
 const REFRESH_DELAY_MS = 300;
 
 export interface MembersHost {
+  onOpenConversation?(member: number, conversation: number, turn?: number): void;
   app: AppContext;
   /** The owner chose another member's thread. */
   onSelect(id: number): void;
@@ -99,6 +100,7 @@ export function createMembers(host: MembersHost): MembersShell {
   // ---------- the parts ----------
 
   const column = createMemberColumn({
+    openMessage: (member, conversation, turn) => host.onOpenConversation?.(member, conversation, turn),
     view: () => ({ list, current, previews, fresh }),
     select: (id) => select(id),
     newMember: (groupId) => newMember(groupId),
@@ -283,6 +285,7 @@ export function createMembers(host: MembersHost): MembersShell {
       ...(m.waiting ? { tag: t("members.waitingShort") } : m.unread ? { tag: t("members.unread") } : {}),
     }));
     openMenu(picker, people, String(current), (value) => select(Number(value)), undefined, [
+      { label: t("chat.searchAll"), icon: "search", run: () => column.openSearch(picker) },
       {
         label: t("members.newMember"),
         icon: "plus",

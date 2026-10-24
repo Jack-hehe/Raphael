@@ -179,6 +179,9 @@ pub enum MainEvent {
     /// conversations reads it again. Only its id and the thread it is in (`member_id`: 0 is
     /// Raphael's, and a core from before the members names none): what was said stays in the core.
     AgentTurn { turn_id: u64, member_id: u64 },
+    ConversationsChanged { member_id: u64 },
+    QuotaChanged,
+    ActionModeChanged,
     /// Data changed: the window re-reads it without receiving private content.
     RoutinesChanged { member_id: u64 },
     MembersChanged,
@@ -341,7 +344,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 67] = [
+const ALLOWED_METHODS: [&str; 76] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -395,6 +398,15 @@ const ALLOWED_METHODS: [&str; 67] = [
     // column and details panel). Named one by one as well; the core checks their params. A member
     // is asked something only by `agent_ask_text`, like Raphael: `agent.ask` stays closed.
     "members.list",
+    "conversations.list",
+    "conversations.create",
+    "conversations.rename",
+    "conversations.delete",
+    "agent.history.delete",
+    "messages.search",
+    "quota.list",
+    "agent.speech.status",
+    "agent.speak",
     "members.create",
     "members.update",
     "members.delete",
@@ -728,6 +740,7 @@ pub async fn agent_ask_text(
     request_id: Option<String>,
     replace_turn_id: Option<u64>,
     quote: Option<Value>,
+    conversation_id: Option<u64>,
 ) -> Result<(), String> {
     require_main(&webview)?;
     if request_id.as_deref().is_some_and(|id| !is_question_id(id)) {
@@ -742,7 +755,7 @@ pub async fn agent_ask_text(
         .ok_or(AGENT_OFF)?;
     let turn = desk
         .0
-        .ask_typed(text, attachments, member_id.unwrap_or(0), request_id, replace_turn_id, quote)
+        .ask_conversation(text, attachments, member_id.unwrap_or(0), request_id, replace_turn_id, quote, conversation_id)
         .map_err(|_| "拉斐爾正在忙，請稍後再問".to_owned())?;
     // The page waits for the turn, so that it knows when to stop waiting for its answer.
     if let Err(err) = turn.await {
@@ -863,6 +876,11 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
             member_id: params.get("member_id")?.as_u64()?,
         }),
         "members.changed" => Some(MainEvent::MembersChanged),
+        "conversations.changed" => Some(MainEvent::ConversationsChanged {
+            member_id: params.get("member_id").and_then(Value::as_u64).unwrap_or(0),
+        }),
+        "quota.changed" => Some(MainEvent::QuotaChanged),
+        "action_mode.changed" => Some(MainEvent::ActionModeChanged),
         "providers.changed" => Some(MainEvent::ProvidersChanged),
         "brains.changed" => Some(MainEvent::BrainsChanged),
         "memory.changed" => {
@@ -1911,6 +1929,7 @@ mod tests {
     fn the_window_hears_a_question_open_and_close() {
         let prompt = AskPrompt {
             member_id: None,
+            conversation_id: None,
             always: None,
             id: "c-1".to_owned(),
             tier: crate::overlay::Tier::T3,

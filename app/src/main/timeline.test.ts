@@ -67,11 +67,11 @@ test("a live turn renders ordered public bubbles and event chips without raw ste
   expect(html.indexOf("I will check")).toBeLessThan(html.indexOf("Example saved"));
   expect(html.indexOf("Example saved")).toBeLessThan(html.indexOf("Your turn?"));
   expect(html).toContain('class="turn-event"');
-  expect(html).toContain('class="ans progress"');
-  expect(html).toContain('class="ans thinking"');
+  expect(html).toContain('class="work-progress"');
+  expect(html).toContain('class="work-time"');
   expect(html.match(/<i><\/i>/g)).toHaveLength(3);
   expect(html).not.toContain("steps-line");
-  expect(html).not.toContain("Google Calendar");
+  expect(html).toContain("Google Calendar");
 });
 
 test("an old turn without messages still renders its answer once", () => {
@@ -470,9 +470,9 @@ describe("a turn", () => {
       false,
       { ...LOOK, plain: true },
     );
-    expect(runningHtml.match(/class="think-box/g)).toHaveLength(1);
-    expect(runningHtml).toContain('aria-expanded="true"');
-    expect(runningHtml).toContain('<span class="think-label shimmer">思考過程</span>');
+    expect(runningHtml.match(/class="work-section think-box/g)).toHaveLength(1);
+    expect(runningHtml).toContain('data-act="thinking" aria-expanded="false"');
+    expect(runningHtml).toContain("work-toggle");
     expect(runningHtml).toContain("主人想看今天的 NHK 新聞與相關影片");
     expect(runningHtml).toContain("已找到新聞頁面與 YouTube 報導影片");
 
@@ -483,10 +483,10 @@ describe("a turn", () => {
       false,
       { ...LOOK, plain: true },
     );
-    expect(doneHtml.match(/class="think-box/g)).toHaveLength(1);
+    expect(doneHtml.match(/class="work-section think-box/g)).toHaveLength(1);
     expect(doneHtml).toContain('data-act="thinking" aria-expanded="false"');
-    expect(doneHtml).toContain("思考了 5 秒");
-    expect(doneHtml).toContain('class="think-body" id="tn-think-20" hidden');
+    expect(doneHtml).toContain("work-toggle");
+    expect(doneHtml).toContain('class="work-body think-body" id="work-20" hidden');
     expect(doneHtml).toContain('data-media-type="link"');
     expect(doneHtml).toContain("日銀維持利率不變 關注春季物價走勢");
     expect(doneHtml).toContain('data-media-type="video"');

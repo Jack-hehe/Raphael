@@ -271,6 +271,7 @@ export interface MediaPayload {
 
 /** A turn of the conversation with Raphael (`agent.history.list`, newest first). */
 export interface AgentTurn {
+  conversation_id?: number;
   quote?: MessageQuote | null;
   /** Ordered public lines; older cores and turns may have none. Text includes Raphael's framing. */
   messages?: TurnMessage[];
@@ -383,6 +384,7 @@ export interface DictionaryEntry {
 
 /** `settings.get`: the settings of the brain. */
 export interface BrainSettings {
+  action_mode?: "ask" | "direct";
   agent_fallbacks?: string[];
   cleanup_fallbacks?: string[];
   router_fallbacks?: string[];
@@ -548,6 +550,9 @@ export interface DeviceSettings {
 
 /** What commands.rs sends on the `main_events` channel (`MainEvent`). */
 export type MainEvent =
+  | { type: "ConversationsChanged"; member_id: number }
+  | { type: "QuotaChanged" }
+  | { type: "ActionModeChanged" }
   | { type: "Level"; value: number }
   | { type: "ModelProgress"; name: string; done: number; total: number }
   /** An editor hides its text from UI Automation, so corrections in it cannot be learned. */
@@ -578,6 +583,7 @@ export type MainEvent =
 
 /** A YES/NO question of Raphael's that waits for its answer (`AgentQuestion`, `agent_question_open`). */
 export interface AgentQuestion {
+  conversation_id?: number;
   /** The thread that owns this confirmation, including when the page reopens mid-turn. */
   member_id?: number;
   id: string;

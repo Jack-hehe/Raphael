@@ -595,7 +595,7 @@ class TaskRun:
         if ref.kind == BUILTIN:
             # Adding a member that a rule asked about (T1: the owner's yes is all it waited for).
             began = time.perf_counter()
-            result = await self._lookup(ref.name, waiting.arguments)
+            result = await self._lookup(ref.name, waiting.arguments, approval=approval, action=action)
             outcome = "ok" if result.ok else ("timeout" if result.error == "timeout" else "error")
             self._gate.record_builtin(ref.name, outcome=outcome, task_id=self.task_id)
             self._step(
@@ -661,7 +661,8 @@ class TaskRun:
         gate = self._gate
         tier = gate.tier_now(ref.key)
         try:
-            gate.check(Action(ref.key, arguments), None, worker=True)
+            if ref.name != CREATE_MEMBER:
+                gate.check(Action(ref.key, arguments), None, worker=True)
         except (UnknownTool, NotApproved):
             gate.record_builtin(ref.name, outcome="blocked", task_id=self.task_id)
             return _refused(), "blocked", None if tier is None else tier.name, None
@@ -696,7 +697,7 @@ class TaskRun:
             reply = {"ok": False, "kind": result.error or "error", "content": "", "truncated": False}
         return reply, outcome, None if tier is None else tier.name, result.detail
 
-    async def _lookup(self, name: str, arguments: dict) -> ToolResult:
+    async def _lookup(self, name: str, arguments: dict, *, approval: Approval | None = None, action: Action | None = None) -> ToolResult:
         """One of Raphael's own lookups. It never raises for a failure of the world."""
         try:
             if name == "weather":
@@ -719,7 +720,7 @@ class TaskRun:
             if name in TEAM_TOOLS:
                 if self._team is None:
                     return ToolResult(name, False, None, "blocked")
-                return await self._guarded(self._team(name, arguments))
+                return await self._guarded(self._team(name, arguments, **({"approval": approval, "action": action} if approval is not None else {})))
             return self._tools.local_time()
         except RpcError:
             raise
