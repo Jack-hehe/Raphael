@@ -1,5 +1,6 @@
 // Settings > Models: provider metadata is public; credentials live only in the input until sent.
 import * as api from "./api";
+import { isTopLayer, registerDismissal } from "./dismissals";
 import { t } from "./i18n";
 import { providerMark } from "./provider-marks";
 import type { MainEvent, ModelProvider, ProviderKind, ProviderField, ProviderPatch, ProviderModel, ProviderTest } from "./types";
@@ -159,6 +160,7 @@ export function providersAddHTML(v: ProvidersView): string {
 export interface ProvidersHost { root: HTMLElement; visible(): boolean; redraw(): void; }
 export function createProviders(host: ProvidersHost) {
   let state = emptyProvidersView();
+  let stopOutside: (() => void) | null = null;
   let loads = 0;
   let modelLoads = 0;
   let accountDraft: string | null = null;
@@ -208,6 +210,9 @@ export function createProviders(host: ProvidersHost) {
     const scroll = host.root.querySelector(".pv-body")?.scrollTop;
     const selection = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement ? [active.selectionStart, active.selectionEnd] : null;
     host.redraw();
+    if ((state.open || state.adding) && !stopOutside) {
+      stopOutside = registerDismissal(() => host.root.querySelector<HTMLElement>("#pv-dialog"), close);
+    } else if (!state.open && !state.adding) { stopOutside?.(); stopOutside = null; }
     for (const input of host.root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('.pv-field input:not([type="file"]), .pv-field textarea')) {
       if (drafts.has(input.id)) input.value = drafts.get(input.id)!;
       if (active?.id === input.id) { input.focus(); if (selection) input.setSelectionRange(selection[0], selection[1]); }
@@ -382,7 +387,7 @@ export function createProviders(host: ProvidersHost) {
           state.dirty = true; state.result = null; redraw();
         });
       }
-      if (button.dataset.pv === "close" || button.dataset.pv === "scrim" && target === button) close();
+      if (button.dataset.pv === "close") close();
       return true;
     },
     input(target: Element): void {
@@ -431,6 +436,8 @@ export function createProviders(host: ProvidersHost) {
     },
     key(event: KeyboardEvent): boolean {
       if (!state.open && !state.adding) return false;
+      const panel = host.root.querySelector<HTMLElement>("#pv-dialog");
+      if (event.key === "Escape" && panel && !isTopLayer(panel)) return false;
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return true; }
       if (event.key === "Enter" && event.target instanceof HTMLInputElement && event.target.closest(".pv-field")) {
         event.preventDefault(); void save(); return true;
@@ -438,6 +445,7 @@ export function createProviders(host: ProvidersHost) {
       return false;
     },
     reset(): void {
+      stopOutside?.(); stopOutside = null;
       accountDraft = null; accountReads++; state.accountSet = false;
       loads++; modelLoads++; clearConfirmation(); state.open = null; state.adding = false; state.kindQuery = ""; state.error = null; state.result = null;
       for (const input of host.root.querySelectorAll<HTMLInputElement>('.pv-field input[type="password"]')) input.value = "";

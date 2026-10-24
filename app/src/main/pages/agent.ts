@@ -31,6 +31,7 @@
 // the collapsed line of an exchange it had a part in.
 
 import { onLocaleChange, t } from "../i18n";
+import { isTopLayer, registerDismissal } from "../dismissals";
 
 import { replyLine } from "../../shared/anime";
 import * as api from "../api";
@@ -1283,11 +1284,12 @@ export function createAgent(app: AppContext): Page {
     rememberLine(button);
   }
 
+  let closeLightbox: (() => void) | null = null;
   function openLightbox(button: HTMLElement): void {
     const src = safeMediaSrc(button.dataset.src, true);
     if (!src) return;
     const title = button.dataset.title ?? "";
-    document.querySelector(".media-lightbox")?.remove();
+    closeLightbox?.();
     const scrim = document.createElement("div");
     scrim.className = "mb-scrim media-lightbox";
     scrim.setAttribute("role", "dialog");
@@ -1298,12 +1300,16 @@ export function createAgent(app: AppContext): Page {
       `<div class="lb-head"><span class="lb-title">${esc(title)}</span>${iconButton("x", t("common.close"), ' data-lb="close"')}</div>` +
       `<img class="lb-img" src="${esc(src)}" alt="${esc(title)}">` +
       `</div>`;
+    let stopOutside = (): void => {};
     const close = (): void => {
+      stopOutside();
+      closeLightbox = null;
       scrim.remove();
       document.removeEventListener("keydown", onKey, true);
       button.focus({ preventScroll: true });
     };
     const onKey = (ev: KeyboardEvent): void => {
+      if (!isTopLayer(scrim.querySelector(".lb-card"))) return;
       if (ev.key === "Escape") {
         ev.preventDefault();
         ev.stopImmediatePropagation();
@@ -1311,10 +1317,12 @@ export function createAgent(app: AppContext): Page {
       }
     };
     scrim.addEventListener("click", (ev) => {
-      if (ev.target === scrim || (ev.target as Element).closest('[data-lb="close"]')) close();
+      if ((ev.target as Element).closest('[data-lb="close"]')) close();
     });
     document.addEventListener("keydown", onKey, true);
     document.body.append(scrim);
+    closeLightbox = close;
+    stopOutside = registerDismissal(scrim.querySelector<HTMLElement>(".lb-card")!, close);
     scrim.querySelector<HTMLElement>('[data-lb="close"]')?.focus();
   }
 
@@ -1681,6 +1689,7 @@ export function createAgent(app: AppContext): Page {
     },
     hide() {
       visible = false;
+      closeLightbox?.();
       previews.pause();
       messageResize?.disconnect();
       members.hide();

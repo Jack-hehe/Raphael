@@ -9,6 +9,7 @@
 // focus back to what had it. What a person types goes into the page through `esc` only.
 
 import { t } from "./i18n";
+import { isTopLayer, registerDismissal } from "./dismissals";
 import { describeError } from "./format";
 import {
   GROUP_NAME_MAX,
@@ -67,15 +68,13 @@ export function openDialog(o: DialogOptions): Dialog {
     `</div>`;
   let open = true;
   const mayClose = (): boolean => !o.canClose || o.canClose();
-  const isTop = (): boolean =>
-    !document.getElementById("app-popover") &&
-    !document.querySelector(".av-crop-scrim") &&
-    Array.from(document.querySelectorAll(".mb-scrim")).pop() === scrim;
+  let stopOutside = (): void => {};
   const dialog: Dialog = {
     el: scrim.querySelector<HTMLElement>(".mb-dialog")!,
     close() {
       if (!open) return;
       open = false;
+      stopOutside();
       closeMenu();
       const keepFocus =
         document.activeElement instanceof HTMLElement &&
@@ -88,7 +87,7 @@ export function openDialog(o: DialogOptions): Dialog {
     },
   };
   const onKey = (e: KeyboardEvent): void => {
-    if (!isTop()) return;
+    if (!isTopLayer(dialog.el)) return;
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -124,10 +123,6 @@ export function openDialog(o: DialogOptions): Dialog {
     }
   };
   scrim.addEventListener("click", (e) => {
-    if (e.target === scrim) {
-      if (mayClose()) dialog.close();
-      return;
-    }
     const target = (e.target as Element).closest<HTMLElement>("[data-dlg]");
     if (!target || (target as HTMLButtonElement).disabled) return;
     if (target.dataset.dlg === "close") {
@@ -136,6 +131,7 @@ export function openDialog(o: DialogOptions): Dialog {
   });
   document.addEventListener("keydown", onKey, true);
   document.body.append(scrim);
+  stopOutside = registerDismissal(dialog.el, () => dialog.close(), mayClose);
   (dialog.el.querySelector<HTMLElement>("input:not([type=file]), textarea") ?? dialog.el.querySelector<HTMLElement>('[data-dlg="cancel"]') ?? dialog.el.querySelector<HTMLElement>(".mb-dlg-act .btn"))?.focus();
   return dialog;
 }

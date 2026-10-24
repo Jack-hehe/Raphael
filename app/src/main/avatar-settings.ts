@@ -7,6 +7,7 @@
 // itself, and the cut is a crop drawn over it (`AvatarCrop`), not a new image.
 
 import { t } from "./i18n";
+import { isTopLayer, registerDismissal } from "./dismissals";
 
 import * as api from "./api";
 import { type AvatarCrop, ZOOM_MAX, cleanCrop, cropStyle, loadAvatar } from "./avatar";
@@ -53,14 +54,17 @@ export function cropDialog(url: string): Promise<AvatarCrop | null> {
     const img = view.querySelector("img")!;
     const zoom = scrim.querySelector<HTMLInputElement>(".av-crop-zoom")!;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    let stopOutside = (): void => {};
     const draw = (): void => img.setAttribute("style", cropStyle(crop));
     const close = (result: AvatarCrop | null): void => {
+      stopOutside();
       scrim.remove();
       document.removeEventListener("keydown", onKey, true);
       opener?.focus();
       resolve(result);
     };
     const onKey = (e: KeyboardEvent): void => {
+      if (!isTopLayer(scrim.querySelector(".av-crop"))) return;
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -110,12 +114,13 @@ export function cropDialog(url: string): Promise<AvatarCrop | null> {
     });
     scrim.addEventListener("click", (e) => {
       const act = (e.target as Element).closest<HTMLElement>("[data-act]")?.dataset.act;
-      if (act === "crop-cancel" || e.target === scrim) close(null);
+      if (act === "crop-cancel") close(null);
       else if (act === "crop-done") close(crop);
     });
     document.addEventListener("keydown", onKey, true);
     draw();
     document.body.append(scrim);
+    stopOutside = registerDismissal(scrim.querySelector<HTMLElement>(".av-crop")!, () => close(null));
     scrim.querySelector<HTMLElement>('[data-act="crop-done"]')!.focus();
   });
 }
