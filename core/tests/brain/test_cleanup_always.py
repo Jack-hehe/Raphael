@@ -158,9 +158,10 @@ async def test_both_fail_returns_raw_with_final_failure_reason(second, caplog):
 
 
 async def test_timeout_reserves_retry_time_inside_original_deadline():
-    budgets, cancelled = [], []
+    budgets, attempted, cancelled = [], [], []
 
     async def handler(request):
+        attempted.append(time.perf_counter())
         budgets.append(request.extensions["timeout"]["read"])
         if len(budgets) == 1:
             try:
@@ -175,7 +176,10 @@ async def test_timeout_reserves_retry_time_inside_original_deadline():
         elapsed = time.perf_counter() - started
         assert result.cleaned and cancelled == [True]
         assert budgets[0] == pytest.approx(0.12)
-        assert 0 < budgets[1] <= 0.08
+        # Windows timers may wake slightly before 120 ms. Check the actual deadline,
+        # rather than assuming the first timeout consumed exactly its nominal budget.
+        assert 0 < budgets[1] < 0.2
+        assert budgets[1] == pytest.approx(0.2 - (attempted[1] - started), abs=0.01)
         assert elapsed < 0.4
 
 

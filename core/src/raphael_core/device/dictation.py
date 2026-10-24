@@ -14,8 +14,9 @@ never ends one: only the key (`dictation.stop`) or Esc (`dictation.cancel`) does
 A session has a purpose, given to `dictation.start`: "dictation" (the default) or "agent", the voice
 assistant's question. It records and transcribes in the same way, but what its stop returns is not
 text to paste: `{"purpose": "agent", "text", "stt", "audio_seconds", "silent"}`, the transcript with
-the dictionary's replacements and the Chinese script applied (`brain.normalize_transcript`). There
-is no cleanup, no history row and no cost, and no "cleaning" stage in the progress.
+dictionary replacements, Chinese script selection and the same cleanup as dictation. Cleanup
+uses the same model, prompt, safeguards and short-sentence shortcut, and records its cost. The
+agent result still has no history row or paste, and progress includes the cleaning stage.
 
 A cancel that comes while the brain is cleaning the text (the service is idle by then, and the
 cancel names the session) reaches the brain too, with `brain.cancel_dictation`. The brain finishes
@@ -271,8 +272,8 @@ def _failure_as_error(error: Exception) -> RpcError:
 class DictationService:
     """Dictation behind `dictation.start`, `dictation.stop` and `dictation.cancel`.
 
-    `router` is how the service reaches the brain (`dictionary.list`, `brain.finalize_dictation`,
-    `brain.normalize_transcript` for the assistant's question, and `brain.cancel_dictation` for a
+    `router` is how the service reaches the brain (`dictionary.list`, `brain.finalize_dictation`
+    for polished dictation and voice questions, and `brain.cancel_dictation` for a
     cancel that comes while the text is being cleaned) and where it sends its notifications:
     `audio.level` while recording, `dictation.silence` (`{session_id}`, once a session) when the
     recording can hear nothing more, `dictation.progress` after the stop
@@ -825,8 +826,6 @@ class DictationService:
             }
         if mic_failed:
             logger.warning("The microphone stopped during the recording; using what was captured")
-        if session.purpose == PURPOSE_AGENT:
-            return await self._agent_transcript(session, text, speech)
         with session.lock:
             done, total = session.finished, session.found
         self._send_progress(session, "cleaning", done, total, speech)
@@ -838,17 +837,25 @@ class DictationService:
                     "raw_text": text,
                     "audio_seconds": speech,
                     "stt_ms": stt_ms,
-                    "target_app": target_app,
+                    "target_app": None if session.purpose == PURPOSE_AGENT else target_app,
+                    **({"purpose": PURPOSE_AGENT} if session.purpose == PURPOSE_AGENT else {}),
                     "stt": "+".join(session.stt_used) or None,
                     "session_id": session.id,
                     "incomplete": cut_short,
                     **({"ui_language": session.ui_language} if cut_short else {}),
                 },
             )
+        except Exception:
+            if session.purpose != PURPOSE_AGENT:
+                raise
+            # Keep understood speech if the brain cannot finalize; never log its contents.
+            result = await self._agent_transcript(session, text, speech)
         finally:
             self._cleaning.pop(session.id, None)
         if session.cancelled:  # while the brain cleaned the text: it has not kept it
             raise RpcError(NOT_FOUND, f"The dictation session {session_id!r} was cancelled")
+        if session.purpose == PURPOSE_AGENT:
+            return self._agent_result(result["text"], session, speech, silent=False)
         return {
             **result,
             "audio_seconds": speech,
@@ -859,8 +866,7 @@ class DictationService:
         }
 
     async def _agent_transcript(self, session: _Session, text: str, speech: float) -> dict:
-        """The stop of an agent session: the transcript, normalized by the brain. Nothing is asked
-        of a language model, written to the history or paid for."""
+        """Recovery when agent cleanup cannot be reached: preserve dictionary/script normalization."""
         try:
             result = await self._router.call("brain.normalize_transcript", {"raw_text": text})
             normalized = result["text"]
