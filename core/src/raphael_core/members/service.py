@@ -624,7 +624,7 @@ class MembersService:
             raise RpcError(INVALID_PARAMS, "Invalid params: avatar (size)", {"kind": "size"})
         try:
             raw = base64.b64decode(data, validate=True)
-            picture = checked(name, mime, raw)
+            picture = checked(name, mime, raw, max_bytes=MAX_IMAGE_BYTES)
         except (binascii.Error, ValueError) as error:
             kind = error.kind if isinstance(error, AttachmentError) else "data"
             raise RpcError(INVALID_PARAMS, f"Invalid params: avatar ({kind})", {"kind": kind}) from None
@@ -875,7 +875,7 @@ class MembersService:
                 session_id=session_id,
                 text=routine.prompt,
                 language=language,
-                model=speaker.model_or(model),
+                model=model,
                 member_id=routine.member_id,
                 routine_id=routine.id,
             )

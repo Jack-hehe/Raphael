@@ -269,6 +269,14 @@ async def test_a_model_kept_from_an_older_raphael_that_is_not_listed_is_replaced
     assert (await router.call("settings.get", {}))["settings"]["agent_model"] == "openai/gpt-6-luna"
 
 
+@pytest.mark.parametrize("chosen", ["cli:gemini:gemini-3.8-flash-high", "cli:claude:opus?effort=high", "@p1:gpt-6-luna"])
+async def test_a_subscription_or_another_providers_model_is_never_replaced(conn, router, chosen):
+    # they are not on OpenRouter's list, and never were: the list says nothing about them
+    SettingsStore(conn).set("agent_model", chosen)
+    assert (await router.call("models.catalog", {}))["replaced"] == []
+    assert (await router.call("settings.get", {}))["settings"]["agent_model"] == chosen
+
+
 async def test_a_gone_model_stays_when_the_default_is_gone_too(conn, router, client):
     SettingsStore(conn).set("cleanup_model", "nobody/model")
     client.reply = [m for m in RECORDED if m["id"] != "openai/gpt-6-luna"]

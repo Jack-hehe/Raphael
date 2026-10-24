@@ -19,6 +19,7 @@
 // levels to choose: that is the whole of the permission.
 
 import * as api from "./api";
+import { isTopLayer, registerDismissal } from "./dismissals";
 import { dayLabel, describeError, formatClock } from "./format";
 import { getLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
@@ -593,6 +594,7 @@ export interface ConnectionMenu {
 }
 
 export interface ConnectionsHost {
+  root?: HTMLElement;
   /** The tab is on screen. */
   visible(): boolean;
   /** Draws the page again. */
@@ -639,9 +641,14 @@ export function createConnections(host: ConnectionsHost): Connections {
   let firstLoad = true;
   /** The dialog is on its way out (140 ms): a second close waits for the first. */
   let closing = false;
+  let stopOutside: (() => void) | null = null;
 
   const redraw = (): void => {
     if (host.visible()) host.redraw();
+    if (open?.tab === "installed" && !stopOutside && typeof document !== "undefined") {
+      const root = host.root ?? document.querySelector("#cs-dialog")?.parentElement?.parentElement;
+      if (root) stopOutside = registerDismissal(() => root.querySelector<HTMLElement>("#cs-dialog"), closeDialog);
+    } else if (open?.tab !== "installed") { stopOutside?.(); stopOutside = null; }
   };
 
   const view = (): ConnectionsView => ({
@@ -872,8 +879,7 @@ export function createConnections(host: ConnectionsHost): Connections {
         if (groupById(id)) openDialog(id);
         break;
       case "scrim":
-        // the dimmed part around the dialog closes it; a click inside it (on no control) does nothing
-        if (target === button) closeDialog();
+        // Outside gestures are handled by the shared dismissal layer.
         break;
       case "close":
         closeDialog();
@@ -1022,6 +1028,8 @@ export function createConnections(host: ConnectionsHost): Connections {
   }
 
   function key(e: KeyboardEvent): boolean {
+    const panel = typeof document !== "undefined" ? (host.root ?? document).querySelector<HTMLElement>("#cs-dialog") : null;
+    if (e.key === "Escape" && panel && !isTopLayer(panel)) return false;
     if (e.key === "Escape" && open?.tab === "installed" && !e.defaultPrevented) {
       e.preventDefault();
       closeDialog();
@@ -1074,6 +1082,7 @@ export function createConnections(host: ConnectionsHost): Connections {
   }
 
   function reset(): void {
+    stopOutside?.(); stopOutside = null;
     clearTimeout(confirmTimer);
     confirming = null;
     form = null;

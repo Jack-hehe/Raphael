@@ -21,13 +21,13 @@ describe("the composer", () => {
     expect(sendsOnEnter(key({ key: "a" }))).toBe(false);
   });
 
-  test("a question is the words, then an attached file's name in 「」 and its text; nothing or too much is no question", () => {
-    expect(typedQuestion("  明天會下雨嗎？ ", null)).toBe("明天會下雨嗎？");
-    expect(typedQuestion("幫我整理", { name: "notes.md", text: "# 待辦\n- 買牛奶\n" })).toBe("幫我整理\n\n「notes.md」\n# 待辦\n- 買牛奶");
-    expect(typedQuestion("", { name: "a.txt", text: "x" })).toBe("「a.txt」\nx");
-    expect(typedQuestion(" \n ", null)).toBeNull();
-    expect(typedQuestion("字".repeat(TYPED_MAX_CHARS), null)).not.toBeNull();
-    expect(typedQuestion("字".repeat(TYPED_MAX_CHARS + 1), null)).toBeNull();
+  test("question words stay separate from files; empty drafts and overly long words cannot send", () => {
+    expect(typedQuestion("  明天會下雨嗎？ ")).toBe("明天會下雨嗎？");
+    expect(typedQuestion("幫我整理", true)).toBe("幫我整理");
+    expect(typedQuestion("", true)).toBe("");
+    expect(typedQuestion(" \n ")).toBeNull();
+    expect(typedQuestion("字".repeat(TYPED_MAX_CHARS))).not.toBeNull();
+    expect(typedQuestion("字".repeat(TYPED_MAX_CHARS + 1))).toBeNull();
     // the app's own limit is the same (commands.rs)
     const commands = readFileSync(path.resolve(import.meta.dirname, "..", "..", "..", "src-tauri", "src", "commands.rs"), "utf8");
     expect(commands).toContain(`pub const TYPED_MAX_CHARS: usize = ${TYPED_MAX_CHARS.toLocaleString("en").replace(/,/g, "_")};`);

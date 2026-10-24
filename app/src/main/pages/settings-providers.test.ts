@@ -2,7 +2,7 @@
 // Exercise provider notifications through the real settings panel with a fake core API.
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { AppContext, MainEvent, ModelCatalog, SettingsPane } from "../types";
-import { setLocale } from "../i18n";
+import { setLocale, t } from "../i18n";
 import * as analytics from "../usage-analytics";
 import type { UsageRequest } from "../usage-analytics-types";
 
@@ -27,11 +27,13 @@ const flush = async () => { for (let i = 0; i < 40; i++) await Promise.resolve()
 const listeners = new Set<(event: MainEvent) => void>();
 const send = (event: MainEvent) => { for (const listener of listeners) listener(event); };
 let page: ReturnType<typeof createSettings>;
+const closeSettings = vi.fn();
 async function mount(open: SettingsPane = "models") {
   page = createSettings({
     device: () => ({ dictation_keys: ["AltRight"], agent_keys: ["AltRight+Space"], ui_language: "en", dictation_mode: "hold" }),
     onEvent: (handler: (event: MainEvent) => void) => { listeners.add(handler); return () => { listeners.delete(handler); }; },
     refreshDevice: async () => {}, undo: { begin: vi.fn() },
+    closeSettings,
   } as unknown as AppContext);
   document.body.append(page.el); page.el.hidden = false;
   await page.show(open); await flush();
@@ -62,6 +64,24 @@ beforeEach(() => {
   api.settingsSet.mockImplementation(async (key: string, value: string) => ({ settings: { stt_engine: "cloud", [key]: value } }));
 });
 afterEach(() => { page?.hide(); document.body.innerHTML = ""; setLocale("zh-TW"); });
+
+test("outside gestures close the provider or chooser before settings, preserving inside-start selections", async () => {
+  await mount(); click('[data-pv="directory"]');
+  const outside = (start: Element, end = start) => {
+    start.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 1, isPrimary: true }));
+    end.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, pointerId: 1, isPrimary: true }));
+    end.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+  };
+  outside(page.el.querySelector("#pv-dialog")!, document.body);
+  expect(page.el.querySelector("#pv-dialog")).not.toBeNull();
+  send({ type: "ProvidersChanged" }); await flush();
+  outside(document.body);
+  expect(page.el.querySelector("#pv-dialog")).toBeNull(); expect(closeSettings).not.toHaveBeenCalled();
+  click('[data-model-picker="answer"] .mp-trigger');
+  outside(document.body);
+  expect(document.querySelector(".model-chooser")).toBeNull(); expect(closeSettings).not.toHaveBeenCalled();
+  outside(document.body); expect(closeSettings).toHaveBeenCalledOnce();
+});
 
 test("models in use precede subscription accounts and providers, login uses the core, and live readiness refreshes only the answer picker", async () => {
   const claude = { id: "claude", name: "Claude Code", installed: true, logged_in: false, models: [], login_command: "claude auth login" };
@@ -111,8 +131,7 @@ test("Models contains no spending and Usage mounts analytics once, preserving fi
   expect(page.el.querySelector('[data-pv="directory"]')).toBeNull();
   const node = page.el.querySelector(".usage-analytics");
   click('[data-range="30d"]'); await flush();
-  const grouping = page.el.querySelector<HTMLSelectElement>('[data-control="cost"]')!;
-  grouping.value = "provider"; grouping.dispatchEvent(new Event("change", { bubbles: true }));
+  click('.sel[data-control="cost"]'); click('.menu [data-value="provider"]');
   expect(page.el.querySelector(".ua-total")?.textContent).toBe("US$3.00");
   setLocale("ja"); await flush();
   expect(page.el.querySelector(".usage-analytics")).toBe(node);
@@ -121,7 +140,7 @@ test("Models contains no spending and Usage mounts analytics once, preserving fi
   click('[data-models-tab="usage"]'); await flush();
   expect(page.el.querySelector(".usage-analytics")).toBe(node);
   expect(mountAnalytics).toHaveBeenCalledTimes(1);
-  expect(page.el.querySelector('[data-control="cost"] option[selected]')?.getAttribute("value")).toBe("provider");
+  expect(page.el.querySelector('.sel[data-control="cost"]')?.getAttribute("title")).toBe(t("usage.provider"));
   expect(page.el.querySelector(".ua-total")?.textContent).toBe("US$3.00");
   expect(page.el.querySelector('[data-range="30d"]')?.getAttribute("aria-pressed")).toBe("true");
 });

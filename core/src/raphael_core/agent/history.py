@@ -5,9 +5,8 @@ A turn is written when the assistant has its answer, or when it has asked for a 
 conversations shows them, and they are the one continuous conversation the model reads: the
 latest turns as they were said, the earlier ones through a summary (`memory.conversation`).
 
-A turn also keeps the names and the types of the files the owner handed Raphael with the request
-(`attachments`, so that the conversation view can show which), never the files themselves, which
-stay in memory for the turn.
+A turn keeps file metadata and opaque IDs for locally stored copies. The bytes live in
+its data folder, outside the database; legacy turns with names and types remain readable.
 
 Each turn keeps where it came from (`source`: "voice", or a chat app such as "telegram") and the
 model that answered, and its steps (`agent_steps`, `steps.Step`): what the fast tier did for it, so
@@ -65,8 +64,8 @@ class Turn:
     cost_usd: float = 0.0
     source: str = VOICE  # "voice", or the chat app the request came from
     model: str | None = None  # the model that answered, when one did
-    # The files handed with the request, `[{"name", "mime"}]`; None when there were none.
-    attachments: list[dict[str, str]] | None = None
+    # File metadata, optionally including a stored-copy ID and byte count; None for no files.
+    attachments: list[dict[str, str | int]] | None = None
     member_id: int = 0  # whose thread it is in: 0 for Raphael
     peer_id: int | None = None  # for an exchange, the member on the other side
     messages: list[str] = field(default_factory=list)
@@ -83,7 +82,7 @@ _TURN_COLUMNS = ", ".join(f"t.{name.strip()}" for name in _COLUMNS.split(","))
 SEARCH_MAX = 10
 
 
-def _attachments(saved: str | None) -> list[dict[str, str]] | None:
+def _attachments(saved: str | None) -> list[dict[str, str | int]] | None:
     """The files of a turn as saved (JSON), or None when it had none or what is saved is damaged."""
     if not saved:
         return None
@@ -94,7 +93,7 @@ def _attachments(saved: str | None) -> list[dict[str, str]] | None:
     if not isinstance(items, list):
         return None
     kept = [
-        {"name": item["name"], "mime": item["mime"]}
+        {key: item[key] for key in ("name", "mime", "id", "size") if key in item}
         for item in items
         if isinstance(item, dict)
         and isinstance(item.get("name"), str)
@@ -154,7 +153,7 @@ class AgentHistory:
         source: str = VOICE,
         model: str | None = None,
         steps: Sequence[Step] = (),
-        attachments: Sequence[Mapping[str, str]] = (),
+        attachments: Sequence[Mapping[str, str | int]] = (),
         member_id: int = 0,
         peer_id: int | None = None,
         quote: dict[str, str] | None = None,
@@ -162,7 +161,7 @@ class AgentHistory:
         """Store a new turn, made now, in the thread of `member_id`, with the steps taken for it,
         and return its id. `attachments` are the names and the types of the files handed with the
         request; `peer_id` is the other member of an exchange."""
-        files = [{"name": item["name"], "mime": item["mime"]} for item in attachments]
+        files = [{key: item[key] for key in ("name", "mime", "id", "size") if key in item} for item in attachments]
         with self._conn:
             cursor = self._conn.execute(
                 "INSERT INTO agent_turns (created_at_ms, session_id, question, route, prefix,"

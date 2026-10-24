@@ -1,3 +1,4 @@
+import { fileKind, sentFileHTML } from "./attachments";
 // A turn of the conversation as the 拉斐爾 page shows it: the person's words on the right, with a
 // their actions below each bubble; Raphael on the left, with his face and each public message
 // in order. Events are small chips, questions mount inline, and pending work shows three dots.
@@ -544,14 +545,13 @@ export function exchangeHTML(turn: AgentTurn, name: string, open: boolean, face 
 }
 
 /**
- * The files a request came with, as small chips under its words: an image's or a PDF's mark and its
- * name (the history keeps no more of them). Empty for none.
+ * Visual media share a grid; audio and documents stack underneath it.
  */
 export function filesHTML(files: readonly TurnAttachment[] | undefined): string {
   if (!files || files.length === 0) return "";
-  const chip = (file: TurnAttachment): string =>
-    `<span class="me-file" title="${esc(file.name)}">${ico(file.mime.startsWith("image/") ? "image" : "file")}<span class="me-file-t">${esc(file.name)}</span></span>`;
-  return `<div class="me-files">${files.map(chip).join("")}</div>`;
+  const visual = files.filter(file => ["image", "video"].includes(fileKind(file.mime)) && (file.id || file.preview));
+  const rest = files.filter(file => !visual.includes(file));
+  return `<div class="me-files">${visual.length ? `<div class="attachment-grid${visual.length > 1 ? " is-multiple" : ""}">${visual.map(sentFileHTML).join("")}</div>` : ""}${rest.map(sentFileHTML).join("")}</div>`;
 }
 
 /** Three dots while the next public line is pending. */
@@ -568,9 +568,10 @@ function taskActionsHTML(turn: AgentTurn, state: TimelineState): string {
     (RERUNNABLE.has(task.state) ? btn(esc(t("agent.rerun")), "sm rerun", ` data-act="rerun" data-task="${esc(task.id)}"${state.rerunning.has(task.id) ? " disabled" : ""}`) : "") + `</div>`;
 }
 
-/** The person's bubble: their words (none when there were none) and the chips of the files under them. */
+/** Media stands above the owner's bubble, whose quote precedes the words. */
 function bubbleHTML(words: string, files: readonly TurnAttachment[] | undefined, quote?: MessageQuote | null): string {
-  return `<div class="bubble">${quote ? quoteHTML(quote) : ""}${words}${filesHTML(files)}</div>`;
+  const bubble = words || quote ? `<div class="bubble">${quote ? quoteHTML(quote) : ""}${words}</div>` : "";
+  return files?.length ? `<div class="owner-content">${filesHTML(files)}${bubble}</div>` : bubble;
 }
 
 function messageActionsHTML(time: number, regenerate = false, owner?: "edit" | "cancel"): string {

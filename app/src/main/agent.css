@@ -340,19 +340,50 @@
 .page-agent .btn.cmp-voice:active:not(:disabled) { background: transparent; transform: scale(0.96); }
 /* while its picture is up (voice-mode.ts) the button stays, and keeps the focus; only its picture is hidden */
 .vm-away > * { visibility: hidden; }
-.cmp-file { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 4px 0 8px; }
-.cmp-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; padding: 2px 4px 2px 9px; border-radius: var(--r-pill); background: var(--surface-2); font-size: var(--pa-sys); color: var(--text-2); }
-/* an image's chip begins with a small picture of it, round like the chip */
-.cmp-chip:has(> .cmp-thumb) { padding-left: 3px; }
-.cmp-thumb { flex: none; width: 20px; height: 20px; border-radius: 50%; object-fit: cover; }
-/* the files a request came with, under its words in the bubble */
-.me-files { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; white-space: normal; }
-.bubble > .me-files:not(:first-child) { margin-top: 6px; }
-.me-file { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0; padding: 1px 9px 1px 7px; border-radius: var(--r-pill); background: var(--surface-2); font: var(--pa-sys)/1.6 var(--ui); color: var(--text-2); }
-.me-file-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cmp-chip-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cmp-chip .chip-x { display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-3); }
+.cmp-file { display: flex; flex-wrap: nowrap; gap: 8px; min-width: 0; overflow-x: auto; padding: 4px 4px 6px 8px; }
+.cmp-chip { display: flex; flex: 0 0 220px; align-items: center; gap: 8px; height: 52px; min-width: 0; max-width: 100%; padding: 6px; border-radius: var(--r-md); background: var(--surface-2); font-size: var(--pa-sys); color: var(--text-2); }
+.cmp-tile { display: grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; overflow: hidden; border-radius: var(--r-sm); background: var(--panel); }
+.cmp-thumb { display: block; width: 40px; height: 40px; object-fit: cover; border-radius: 0; }
+.cmp-chip > .attachment-name { flex: 1; }
+.me-file-t, .cmp-chip-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-chip .chip-x { display: inline-grid; place-items: center; flex: 0 0 20px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-3); }
 .cmp-chip .chip-x:hover { background: var(--hover); color: var(--text); }
+
+/* The drop target ends above whichever composer or approval card is visible. */
+.attachment-drop { position: absolute; inset: 12px; z-index: 12; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; border: 2px dashed var(--accent-text); border-radius: var(--r-lg); background: color-mix(in srgb, var(--accent-soft) 94%, transparent); color: var(--accent-text); font-size: var(--fs-md); font-weight: 600; pointer-events: none; }
+.attachment-drop[hidden] { display: none; }
+/* The review calls for a larger pictogram on this full-thread drop target. */
+.attachment-drop > .i { width: 28px; height: 28px; }
+.attachment-name { display: flex; flex-direction: column; min-width: 0; text-align: start; }
+.attachment-name small { color: var(--text-3); font-size: var(--fs-xs); }
+.attachment-icon { display: inline-flex; flex-direction: column; align-items: center; flex-shrink: 0; gap: 2px; }
+.attachment-icon small { font-size: 10px; font-weight: 600; line-height: 1.2; }
+
+/* Media stand on their own; only the owner's words receive a text bubble. */
+.owner-content { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; min-width: 0; max-width: min(var(--pa-bw), 78%); }
+.me > .owner-content:has(.me-files), .owner-message:has(.me-files) { width: min(420px, 78%); }
+.owner-message > .owner-content { max-width: 100%; }
+.owner-content > .bubble { max-width: 100%; }
+.me-files { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; width: 100%; min-width: 0; white-space: normal; }
+.me-file { position: relative; min-width: 0; max-width: 100%; color: var(--text-2); font: var(--pa-sys)/1.4 var(--ui); }
+.attachment-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; width: 100%; }
+.attachment-grid.is-multiple { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.attachment-image, .attachment-video { overflow: hidden; border-radius: 12px; }
+.btn.attachment-picture { display: block; width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; border-radius: 12px; overflow: hidden; }
+.attachment-picture img { display: block; width: 100%; max-height: 300px; object-fit: contain; }
+.attachment-video video { display: block; width: 100%; max-height: 300px; border-radius: 12px; background: var(--surface-2); }
+.attachment-grid.is-multiple .attachment-picture img, .attachment-grid.is-multiple video { aspect-ratio: 4 / 3; object-fit: cover; }
+.btn.attachment-open { position: absolute; top: 6px; right: 6px; width: 28px; min-height: 28px; border-radius: 50%; background: var(--panel); color: var(--text); opacity: 0; pointer-events: none; transition: opacity 0.12s ease; }
+.me-file:hover > .attachment-open, .me-file:focus-within > .attachment-open { opacity: 1; pointer-events: auto; }
+.attachment-audio { display: flex; align-items: center; gap: 8px; width: 320px; height: 64px; padding: 6px 12px 6px 8px; border-radius: var(--r-pill); background: var(--surface-2); }
+.attachment-audio audio { display: none; }
+.btn.attachment-play { flex: 0 0 32px; width: 32px; min-height: 32px; border-radius: 50%; background: var(--panel); }
+.attachment-audio-body { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; padding-right: 22px; }
+.attachment-audio .attachment-name { font-size: var(--fs-xs); }
+.attachment-audio input { width: 100%; height: 12px; margin: 0; padding: 0; accent-color: var(--accent-text); }
+.attachment-audio-body > small { color: var(--text-3); font-size: var(--fs-xs); line-height: 1; }
+.btn.attachment-file { display: flex; justify-content: flex-start; gap: 10px; width: 320px; min-height: 56px; padding: 8px 12px; border-radius: var(--r-md); text-align: start; background: var(--surface-2); }
+.attachment-file .attachment-name { flex: 1; gap: 2px; }
 
 /* ---------- Raphael asks: his gold, a soft breathing glow, his face, 否 outlined and 是 gold ---------- */
 .ask-card { display: grid; grid-template-columns: var(--pa-ask-face) minmax(0, 1fr) auto; align-items: center; gap: calc(12px + 4 * var(--pa-u)); padding: calc(12px + 4 * var(--pa-u)) calc(14px + 6 * var(--pa-u)) calc(12px + 4 * var(--pa-u)) calc(12px + 6 * var(--pa-u)); border: 1px solid var(--rg-edge); background: var(--rg-bg); border-radius: var(--pa-ask-r); box-shadow: 0 0 0 3px var(--rg-glow), 0 10px 30px var(--rg-glow); }

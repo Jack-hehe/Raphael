@@ -14,25 +14,27 @@
 .mc-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); height: 100%; min-height: 0; }
 .mc-rail { display: flex; flex-direction: column; min-height: 0; padding: 14px 10px 12px; background: var(--side); border-right: 1px solid var(--line); }
 .mc-source-list { flex: 1; overflow-x: hidden; overflow-y: auto; min-height: 0; }
+.mc-rail section { display: flex; flex-direction: column; gap: 2px; }
 .mc-inherit { margin: 0 0 14px; width: 100%; font-size: var(--fs-xs); }
 .mc-inherit[aria-pressed="true"] { background: var(--selected); }
 .mc-rail section + section { margin-top: 16px; }
-.mc-rail h3 { margin: 0 10px 6px; color: var(--text-3); font-size: var(--fs-xs); font-weight: 500; }
-.mc-source { position: relative; display: flex; align-items: center; justify-content: flex-start; gap: 10px; padding: 9px 10px; width: 100%; min-height: 52px; text-align: left; background: transparent; color: var(--text); border: 1px solid transparent; border-radius: var(--r-sm); }
-.mc-source:hover { background: var(--hover); }
-.mc-source[aria-pressed="true"] { background: var(--panel); border-color: var(--edge); }
+.mc-rail h3 { margin: 0 11px 6px; color: var(--text-3); font-size: var(--fs-xs); font-weight: 500; }
+/* `.btn` is the button's base: these win over it whatever order the stylesheets load in. */
+.mc-rail .btn.mc-source { position: relative; display: flex; align-items: center; justify-content: flex-start; gap: 10px; padding: 9px 10px; width: 100%; min-height: 52px; font-size: inherit; font-weight: 400; text-align: left; background: transparent; color: var(--text); border: 1px solid transparent; border-radius: var(--r-sm); box-shadow: none; }
+.mc-rail .btn.mc-source:hover:not(:disabled) { background: var(--hover); border-color: transparent; }
+.mc-rail .btn.mc-source[aria-pressed="true"] { background: var(--panel); border-color: var(--edge); }
 .mc-source > span:not(.mono) { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; min-width: 0; }
 .mc-source strong { font-size: var(--fs-sm); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mc-source small { font-size: var(--fs-xs); color: var(--text-3); }
 .mc-current { margin-left: auto; width: 5px; height: 5px; border-radius: 50%; background: var(--accent-text); flex: none; }
-.mc-rail > .btn { flex: none; width: 100%; justify-content: flex-start; margin-top: 10px; background: transparent; border-color: transparent; font-size: var(--fs-xs); }
+.mc-rail > .btn.ghost { flex: none; min-height: 40px; padding: 0 11px; width: 100%; justify-content: flex-start; margin-top: 10px; background: transparent; border-color: transparent; font-size: var(--fs-xs); }
 .mc-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); }
 .mc-pane-head { display: flex; align-items: center; gap: 12px; padding: 20px 22px 14px; flex: none; }
 .mc-pane-head h3 { margin: 0 0 4px; font-size: var(--fs-md); font-weight: 600; }
 .mc-pane-head p { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: 1.5; }
 .mc-tools { display: flex; gap: 8px; padding: 0 22px 12px; flex: none; }
 .mc-tools input { width: 0; min-width: 80px; flex: 1; height: var(--h-ctl); border: 1px solid var(--btn-edge); border-radius: var(--r-sm); background: var(--btn); padding: 0 10px; color: var(--text); font-size: var(--fs-sm); }
-.mc-tools select { max-width: 130px; min-width: 0; padding: 0 6px; flex: 0 1 auto; }
+.mc-tools .sel { max-width: 150px; min-width: 0; flex: 0 1 auto; }
 .mc-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0 12px 12px; scrollbar-gutter: stable; }
 .mc-list { display: grid; grid-template-columns: minmax(0, 1fr); }
 .mc-list h4 { padding: 12px 10px 6px; margin: 0; color: var(--text-3); font-size: var(--fs-xs); font-weight: 500; }
@@ -47,7 +49,6 @@
 .mc-model { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; flex: 1; }
 .mc-model-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .mc-model-line strong { font-size: var(--fs-sm); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mc-default { font-size: var(--fs-xs); border: 1px solid var(--edge); background: var(--panel); border-radius: 4px; padding: 0 5px; color: var(--text-2); flex: none; }
 .mc-description { color: var(--text-3); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mc-price { color: var(--text-2); font-size: var(--fs-xs); flex: none; white-space: nowrap; }
 .mc-empty { text-align: center; margin: auto; padding: 30px 18px; font-size: var(--fs-sm); color: var(--text-3); line-height: 1.7; }
@@ -118,3 +119,6 @@
 .mc-source > .mono, .mc-row .mono, .mc-pane-head .mono { width: 24px; height: 24px; flex: none; }
 .mc-source > .mono .logo, .mc-row .mono .logo, .mc-pane-head .mono .logo { width: 20px; height: 20px; margin: auto; }
 .mc-source > .mono svg, .mc-row .mono svg, .mc-pane-head .mono svg { width: 20px; height: 20px; }
+/* A favourite's star is filled. */
+.mc-item .mp-star[aria-pressed="true"] { color: var(--accent-text); }
+.mc-item .mp-star[aria-pressed="true"] .i { fill: currentColor; }

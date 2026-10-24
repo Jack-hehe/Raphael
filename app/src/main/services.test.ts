@@ -428,6 +428,7 @@ describe("what the section does", () => {
       (brain as unknown as Record<string, unknown>)[key] = value;
     });
     const panel = createServices({
+      root: host,
       visible: () => true,
       redraw: () => {
         // the panel's drawing, as settings.ts does it: the HTML anew (a field's draft is not kept here)
@@ -470,9 +471,13 @@ describe("what the section does", () => {
     const again = mount();
     await again.panel.load();
     again.host.querySelector<HTMLElement>('.cs-item[data-id="pdf"] .chev')!.click();
+    expect(dlg(host)).toBeNull();
+    again.host.querySelector<HTMLElement>('.cs-item[data-id="pdf"] .chev')!.click();
     expect(titleOf(again.host)).toBe("讀 PDF");
     const third = mount();
     await third.panel.load();
+    third.host.querySelector<HTMLElement>('.cs-item[data-id="vision"] .svc-now')!.click();
+    expect(dlg(again.host)).toBeNull();
     third.host.querySelector<HTMLElement>('.cs-item[data-id="vision"] .svc-now')!.click();
     expect(titleOf(third.host)).toBe("看圖片");
   });
@@ -609,6 +614,7 @@ describe("what the section does", () => {
     await flush();
     expect(titleOf(host)).toBe("Brave"); // not usable: the page of the service in use
     expect(changeSetting).not.toHaveBeenCalled();
+    press(host, '[data-svc="close"]');
     const usable = await opened("pdf", { enabled: { pdf: false } });
     press(usable.host, '[data-k="svc-dlg-toggle"]');
     await flush();

@@ -116,4 +116,20 @@ describe("the crop dialog", () => {
     expect(under.el.isConnected).toBe(true);
     under.close();
   });
+
+  test("crop drags ending outside keep the crop open; an outside press cancels only the crop", async () => {
+    document.body.innerHTML = "";
+    const under = openDialog({ title: "Under", body: '<input id="u">', actions: {}, onAct: () => {} });
+    const done = cropDialog(PNG);
+    const press = (start: Element, end = start) => {
+      start.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 1, isPrimary: true }));
+      end.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, pointerId: 1, isPrimary: true }));
+      end.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+    };
+    press(document.querySelector(".av-crop h2")!, document.body);
+    expect(document.querySelector(".av-crop")).not.toBeNull();
+    press(document.body); expect(await done).toBeNull();
+    expect(under.el.isConnected).toBe(true); expect(document.activeElement).toBe(under.el.querySelector("input"));
+    under.close();
+  });
 });

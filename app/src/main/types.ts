@@ -312,10 +312,13 @@ export interface AgentTurn {
   peer_id?: number | null;
 }
 
-/** A file a turn's request came with, as the history keeps it: what the conversation shows as a chip. */
+/** File metadata and a stored-copy ID; preview data belongs only to an unsaved outgoing turn. */
 export interface TurnAttachment {
   name: string;
   mime: string;
+  id?: string;
+  size?: number;
+  preview?: string;
 }
 
 /** A selected passage, separate from the owner's instructions. */

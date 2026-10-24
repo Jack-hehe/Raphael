@@ -24,7 +24,7 @@ test("subscriptions are separate; bare refs show the concrete default and source
   expect(html).toContain("Claude Sonnet 5.5"); expect(html).toContain("Claude Code");
   mount(); expect(document.querySelectorAll('[data-source^="cli:"]')).toHaveLength(3);
   expect(document.querySelector('.mc-row[aria-checked="true"]')?.textContent).toContain("Claude Sonnet 5.5");
-  expect(document.querySelector('.mc-default')).not.toBeNull(); expect(document.querySelector(".mc-tools")).toBeNull();
+  expect(document.querySelector('.mc-default')).toBeNull(); expect(document.querySelector(".mc-tools")).toBeNull();
 });
 test("selection is staged and effort is saved with the concrete model only on confirmation", () => {
   const { choose } = mount(); click('[data-model="cli:claude:opus"]'); click('[data-effort="low"]');

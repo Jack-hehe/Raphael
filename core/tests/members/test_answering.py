@@ -12,6 +12,7 @@ from agent.test_narration import chat
 from raphael_core.agent.history import AgentHistory
 from raphael_core.agent.team import team_tools_for
 from raphael_core.brain.secrets import MemoryKeyStore
+from raphael_core.brain.settings import SettingsStore
 from raphael_core.members.service import MembersService
 from raphael_core.memory.service import MemoryService
 from raphael_core.protocol import RpcError
@@ -21,6 +22,7 @@ from .conftest import FakeBackground, QuietModel
 
 class Team:
     def __init__(self, conn, tmp_path):
+        self.conn = conn
         keys = MemoryKeyStore()
         keys.set("sk-or-v1-test")
         self.memory = MemoryService(
@@ -48,6 +50,9 @@ async def setup(conn, tmp_path, client):
 
 
 def member(team, name="小行程", **fields):
+    # every member answers with Raphael's model: a test that needs a brain sets that one
+    if model := fields.pop("model", None):
+        SettingsStore(team.conn).set("agent_model", model)
     return team.members.store.create_member(
         name=name, role=fields.pop("role", "管行程"),
         instructions=fields.pop("instructions", "PRIVATE-INSTRUCTIONS 用條列回覆"), **fields,
@@ -117,13 +122,14 @@ async def test_a_teacher_keeps_each_reply_and_replays_the_whole_lesson(setup, cl
     assert "Dropped." not in context
 
 
-async def test_a_member_has_its_own_model_when_it_has_one(setup, client):
+async def test_a_member_answers_with_raphaels_model_even_with_an_old_one_of_its_own(setup, client):
+    # one model for the whole team (owner, 2026-10-24): a model kept on a member is not used
     rig, team = setup
-    one = member(team, model="own/model")
+    one = team.members.store.create_member(name="舊的", role="r", instructions="i", model="own/model")
     client.decisions.append(decision("chat"))
     client.chats.append(live_said("好。"))
     await typed(rig, "你好", one.id)
-    assert client.chat_calls[0]["model"] == "own/model"
+    assert client.chat_calls[0]["model"] != "own/model"
 
 
 @pytest.mark.parametrize("source", ["voice", None])

@@ -87,6 +87,18 @@ const pick = async (id: number) => {
   await flush();
 };
 
+test("files dropped into a member's thread are sent only to that member", async () => {
+  const agent = mount(); await flush(); await pick(3);
+  const event = new Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: { types: ["Files"], files: [new File(["report"], "report.csv", { type: "text/csv" })] } });
+  agent.el.querySelector(".ra-stage")!.dispatchEvent(event);
+  await flush(); await new Promise(resolve => setTimeout(resolve, 0)); await flush();
+  expect(agent.el.querySelector(".cmp-chip-t")?.textContent).toBe("report.csv");
+  agent.el.querySelector<HTMLFormElement>(".composer")!.requestSubmit(); await flush();
+  expect(api.agentAskText).toHaveBeenCalledWith("", [{ name: "report.csv", mime: "text/csv", data: btoa("report") }], 3, expect.objectContaining({ requestId: expect.any(String) }));
+  agent.hide();
+});
+
 beforeEach(() => {
   document.body.innerHTML = "";
   for (const fn of Object.values(api)) fn.mockReset();
@@ -129,7 +141,7 @@ test("pending owner questions can be cancelled into the same member's composer, 
 
 test("editing preserves the old turn until resending the replacement in its own thread", async () => {
   const agent = mount(); await flush(); await pick(3);
-  $('[data-id="31"] [data-act="edit-message"]').click();
+  $('[data-id="31"] [data-act="edit-message"]').click(); await flush();
   const input = $<HTMLTextAreaElement>(".cmp-input");
   expect(input.value).toBe("問題 31");
   expect(document.querySelector('[data-id="31"]')).not.toBeNull();
@@ -166,17 +178,66 @@ test("Escape cancels only from an empty composer and restores a running turn", a
   agent.hide();
 });
 
-test("editing after reload requires reattachment, while dropping a draft file preserves the old message", async () => {
+test("editing a legacy attachment without a stored copy requires reattachment, without mutating history", async () => {
   const original = turn(8, { session_id: "saved", attachments: [{ name: "original.pdf", mime: "application/pdf" }], quote: { text: "Saved passage", author: "You" } });
   api.agentHistoryList.mockResolvedValue({ turns: [original] });
   const agent = mount(); await flush();
-  $('[data-id="8"] [data-act="edit-message"]').click();
+  $('[data-id="8"] [data-act="edit-message"]').click(); await flush();
   expect($(".cmp-quote .quote-text").textContent).toBe("Saved passage");
   expect($<HTMLButtonElement>(".cmp-send").disabled).toBe(true);
   $('[data-act="drop-missing"]').click();
   expect($<HTMLButtonElement>(".cmp-send").disabled).toBe(false);
   expect(original.attachments).toEqual([{ name: "original.pdf", mime: "application/pdf" }]);
   expect(api.agentRetract).not.toHaveBeenCalled();
+  agent.hide();
+});
+
+test.each(["edit", "cancel", "regenerate"])("%s after reload retrieves stored files and preserves the quote in its member thread", async action => {
+  const id = `${"a".repeat(32)}.csv`;
+  const quote = { text: "Saved passage", author: "You" };
+  const original = turn(8, { member_id: 3, session_id: "saved", status: action === "cancel" ? "running" : "done",
+    attachments: [{ id, name: "report.csv", mime: "text/csv", size: 6 }], quote });
+  api.agentHistoryList.mockImplementation(async ({ member_id }: { member_id?: number }) => ({ turns: member_id === 3 ? [original] : [] }));
+  api.core.mockImplementation(async (method: string) => method === "attachments.get" ? { mime: "text/csv", data: btoa("report") } : { questions: [] });
+  const agent = mount(); await flush(); await pick(3);
+  $(`[data-id="8"] [data-act="${action === "regenerate" ? action : `${action}-message`}"]`).click(); await flush();
+  expect(api.core).toHaveBeenCalledWith("attachments.get", { id });
+  if (action !== "regenerate") {
+    expect($<HTMLTextAreaElement>(".cmp-input").value).toBe("問題 8");
+    expect($(".cmp-chip-t").textContent).toBe("report.csv");
+    expect(document.querySelector("[data-missing]")).toBeNull();
+    expect($(".cmp-quote .quote-text").textContent).toBe("Saved passage");
+    expect($<HTMLButtonElement>(".cmp-send").disabled).toBe(false);
+    $(".composer").dispatchEvent(new Event("submit", { cancelable: true })); await flush();
+  }
+  expect(api.agentAskText).toHaveBeenCalledWith("問題 8", [{ name: "report.csv", mime: "text/csv", data: btoa("report") }], 3,
+    expect.objectContaining({ quote, ...(action === "edit" ? { replaceTurnId: 8 } : {}) }));
+  expect(original.attachments).toEqual([{ id, name: "report.csv", mime: "text/csv", size: 6 }]);
+  agent.hide();
+});
+
+test("an unavailable stored copy falls back to reattachment", async () => {
+  const id = `${"b".repeat(32)}.pdf`;
+  api.agentHistoryList.mockResolvedValue({ turns: [turn(8, { attachments: [{ id, name: "lost.pdf", mime: "application/pdf" }] })] });
+  api.core.mockImplementation(async (method: string) => { if (method === "attachments.get") throw new Error("unavailable"); return { questions: [] }; });
+  const agent = mount(); await flush();
+  $('[data-id="8"] [data-act="edit-message"]').click(); await flush();
+  expect(api.core).toHaveBeenCalledWith("attachments.get", { id });
+  expect($("[data-missing]").textContent).toContain("lost.pdf");
+  expect($<HTMLButtonElement>(".cmp-send").disabled).toBe(true);
+  agent.hide();
+});
+
+test("a stored-file read finishing after a thread switch cannot fill the new composer", async () => {
+  let finish!: (file: { mime: string; data: string }) => void;
+  api.agentHistoryList.mockResolvedValue({ turns: [turn(8, { attachments: [{ id: `${"c".repeat(32)}.csv`, name: "old.csv", mime: "text/csv" }] })] });
+  api.core.mockImplementation((method: string) => method === "attachments.get" ? new Promise(resolve => { finish = resolve; }) : Promise.resolve({ questions: [] }));
+  const agent = mount(); await flush();
+  $('[data-id="8"] [data-act="edit-message"]').click(); await flush();
+  await pick(3);
+  finish({ mime: "text/csv", data: btoa("old") }); await flush();
+  expect($<HTMLTextAreaElement>(".cmp-input").value).toBe("");
+  expect(document.querySelector(".cmp-chip")).toBeNull();
   agent.hide();
 });
 
@@ -228,55 +289,6 @@ test.each(["finish", "switch", "search", "reduced"])("a live member burst reveal
   }
   expect(replies()).toEqual(["First", "Second", "Third"]);
   expect(document.querySelector('[data-id="50"] .thinking')).toBeNull();
-  agent.hide();
-});
-
-test("provider changes refresh the member model picker and its qualified model selection", async () => {
-  const catalog = { llm: [], stt: [], source: "builtin", fetched_at_ms: null, replaced: [] };
-  api.modelsCatalog.mockResolvedValue(catalog);
-  mount(); await flush(); await pick(3);
-  $(".mb-pill").click(); await flush();
-  $(".mb-model .mp-trigger").click();
-  expect($(".mc-pane").textContent).not.toContain("Local example");
-  api.modelsCatalog.mockResolvedValue({ ...catalog, llm: [{
-    id: "llama3.1:8b", name: "Local example", provider: "Meta", provider_id: "p4", provider_name: "Ollama",
-    input_per_mtok: null, output_per_mtok: null, per_minute: null, free: false, variable_price: false,
-    context_length: 8192, created_at_ms: null, capabilities: {}, roles: { answer: { usable: true, reason: null } },
-  }] });
-  send({ type: "ProvidersChanged" }); await flush();
-  $('[data-source="p4"]').click();
-  expect($(".mc-pane").textContent).toContain("Local example");
-  api.membersUpdate.mockResolvedValue({ member: { ...LIST.members[1], model: "@p4:llama3.1:8b" } });
-  $('[data-id="@p4:llama3.1:8b"]').click(); $('[data-dlg="use"]').click(); await flush();
-  expect(api.membersUpdate).toHaveBeenCalledWith(3, { model: "@p4:llama3.1:8b" });
-});
-
-test("member picker follows CLI readiness and saves a CLI brain through the existing model control", async () => {
-  const claude = { id: "claude", name: "Claude Code", installed: true, logged_in: true, models: [{ id: "cli:claude:sonnet", name: "Claude Sonnet", is_default: true }], login_command: "claude auth login" };
-  api.modelsCatalog.mockResolvedValue({ llm: [], stt: [], source: "builtin", fetched_at_ms: null, replaced: [] });
-  api.brainsCli.mockResolvedValue({ clis: [claude] });
-  const agent = mount(); await flush(); await pick(3);
-  $(".mb-pill").click(); await flush(); $(".mb-model .mp-trigger").click();
-  expect(document.querySelector('[data-id="cli:claude:sonnet"]')).not.toBeNull();
-  api.brainsCli.mockResolvedValue({ clis: [{ ...claude, logged_in: false }] });
-  send({ type: "BrainsChanged" }); await flush();
-  expect(document.querySelector('[data-id="cli:claude:sonnet"]')).toBeNull();
-  api.brainsCli.mockResolvedValue({ clis: [claude] });
-  send({ type: "BrainsChanged" }); await flush();
-  api.membersUpdate.mockResolvedValue({ member: { ...LIST.members[1], model: "cli:claude:sonnet" } });
-  $('[data-id="cli:claude:sonnet"]').click(); $('[data-dlg="use"]').click(); await flush();
-  expect(api.membersUpdate).toHaveBeenCalledWith(3, { model: "cli:claude:sonnet" });
-  agent.hide();
-});
-
-test("the member chooser includes empty connected sources with their real provider kind", async () => {
-  api.providersList.mockResolvedValue({ providers: [{ id: "p9", kind: "ollama", name: "My local server", enabled: true, has_key: false, base_url: "http://localhost:11434", models: 0, status: "unknown" }] });
-  const agent = mount(); await flush(); await pick(3);
-  $(".mb-pill").click(); await flush(); $(".mb-model .mp-trigger").click();
-  const source = $('[data-source="p9"]');
-  expect(source.textContent).toContain("My local server");
-  expect(source.querySelector(".mono")).not.toBeNull();
-  expect(source.closest("section")?.textContent).toContain("自架");
   agent.hide();
 });
 

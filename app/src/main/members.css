@@ -263,3 +263,14 @@
 .ra-body > .tn-x { display: flex; flex-direction: column; align-items: flex-start; gap: var(--pa-gap-in); }
 .ra-body > .tn-x .sys { align-self: flex-start; }
 .ra-body > .tn-x .x-list { margin: 0; }
+
+/* 個性 and 指示: closed, one line behind a button (the name, the first line, a chevron); open, the box. */
+.mb-fold-field { gap: 8px; }
+.mb-field .btn.mb-fold-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid var(--btn-edge); border-radius: var(--r-md); background: var(--btn); color: var(--text); text-align: left; font-weight: 400; }
+.mb-field .btn.mb-fold-head:hover:not(:disabled) { background: var(--hover); border-color: var(--hover-edge); }
+.mb-fold-head .mb-dh { margin: 0; }
+.mb-fold-head .mb-peek { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-size: var(--fs-sm); }
+.mb-fold-head > .i { justify-self: end; color: var(--text-3); transition: transform 0.18s ease; }
+.mb-fold-head[aria-expanded="true"] > .i { transform: rotate(180deg); }
+.mb-fold-head[aria-expanded="true"] { grid-template-columns: minmax(0, 1fr) auto; }
+@media (prefers-reduced-motion: reduce) { .mb-fold-head > .i { transition: none; } }

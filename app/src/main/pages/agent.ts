@@ -4,10 +4,10 @@
 // read to the end. A turn written or completed (`AgentTurn`) and a background task that took a step
 // (`WorkerChanged`) bring the newest turns again, and a task under way can be stopped here.
 //
-// At the bottom is the composer: 「＋」 attaches a text file, whose text goes into the question, and
-// up to four images (PNG, JPG, WebP, GIF) and PDFs, which go with it as `attachments` (an image
-// pasted into the field is attached too); each shows as a chip with a × above the field, an image
-// with a small picture of itself. The field asks Raphael in writing
+// The composer accepts any file type through the picker, clipboard or thread drop target.
+// Up to four files share a 100 MB budget; each file may be up to 50 MB. Media thumbnails and
+// file cards show in the tray before sending, and stored copies remain available in history.
+// The field asks Raphael in writing
 // (`agent_ask_text`, Enter sends, Shift+Enter starts a new line) and Raphael's face is the voice
 // button, which does what the question key does (the same `window_hotkey` path) and flies up while
 // he listens (voice-mode.ts). When he asks a YES/NO question, a gold card takes the composer's
@@ -30,7 +30,10 @@
 // thread is its own: the search looks in it alone, and no turn of another thread shows in it but
 // the collapsed line of an exchange it had a part in.
 
+import { createAttachmentMedia } from "../attachment-media";
+import { fileMime, fileKind, fileSize, fileIcon, mountFileDrop } from "../attachments";
 import { onLocaleChange, t } from "../i18n";
+import { isTopLayer, registerDismissal } from "../dismissals";
 
 import { replyLine } from "../../shared/anime";
 import * as api from "../api";
@@ -88,7 +91,7 @@ const CLEAR_CONFIRM_MS = 4000;
 const SEARCH_DELAY_MS = 200;
 /** The longest words the search takes (the core's and the app's limit for `agent.history.search`). */
 const SEARCH_MAX_CHARS = 200;
-/** The most a typed question may hold, an attached file included (the app's own limit is the same). */
+/** The most a typed question may hold (the app's own limit is the same). */
 export const TYPED_MAX_CHARS = 100_000;
 /** The composer grows with its text up to this many lines, then scrolls. */
 const COMPOSER_LINES = 6;
@@ -134,61 +137,32 @@ export function openRaphaelSettings(app: Pick<AppContext, "go">): void {
 export const greetingLine = (): string => t("agent.greet");
 
 /**
- * What a typed question is, from the field and the attached text file: the words, then the file's
- * name in 「」 and its text. Null when there is nothing to send or it is too long. With images or
- * PDFs attached (`withFiles`), no words at all is a question too: "", which the core takes as
- * 「看這個」.
+ * The question's words stay separate from all file types. Null when there is nothing to send or
+ * it is too long. With files attached, no words is a question too: "", interpreted by the core.
  */
-export function typedQuestion(words: string, file: { name: string; text: string } | null, withFiles = false): string | null {
-  const head = words.trim();
-  const body = file ? `「${file.name}」\n${file.text.trim()}` : "";
-  const text = [head, body].filter(Boolean).join("\n\n");
+export function typedQuestion(words: string, withFiles = false): string | null {
+  const text = words.trim();
   if ((text === "" && !withFiles) || text.length > TYPED_MAX_CHARS) return null;
   return text;
 }
 
-// ---------- images and PDFs ----------
-// The limits are the core's (services/attachments.py): at most four files, an image of at most
-// 10 MB, a PDF of at most 20 MB, of these types only. The core checks them again, and the first
-// bytes of each file too.
-
-/** The most images and PDFs one question may take. */
+// ---------- attachments ----------
+/** Shared with the core: four files, 50 MB each and 100 MB in total. */
 export const ATTACH_MAX = 4;
-/** The largest image, in bytes. */
-export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
-/** The largest PDF, in bytes. */
-export const PDF_MAX_BYTES = 20 * 1024 * 1024;
+export const FILE_MAX_BYTES = 50 * 1024 * 1024;
+export const TOTAL_MAX_BYTES = 100 * 1024 * 1024;
+export const IMAGE_MAX_BYTES = FILE_MAX_BYTES;
+export const PDF_MAX_BYTES = FILE_MAX_BYTES;
 export const PDF_TYPE = "application/pdf";
-const IMAGE_TYPES: readonly string[] = ["image/png", "image/jpeg", "image/webp", "image/gif"];
-/** The type of a file by the end of its name, for a file the system gave no type. */
-const BY_EXTENSION: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif", pdf: PDF_TYPE };
-/** What 「＋」 offers to pick: the text files, the images and the PDFs. */
-export const PICKER_ACCEPT =
-  ".txt,.md,.markdown,text/plain,text/markdown,.png,.jpg,.jpeg,.webp,.gif,.pdf,image/png,image/jpeg,image/webp,image/gif,application/pdf";
-
-/**
- * What a file is to the composer: the type of an image or a PDF it takes (its own, or by the end of
- * its name when the system gave it none), "text" for a text file whose text goes into the
- * question, null for anything else.
- */
-export function attachmentType(file: { name: string; type: string }): string | null {
-  const type = file.type.trim().toLowerCase();
-  const extension = /\.([^.]+)$/.exec(file.name)?.[1]?.toLowerCase() ?? "";
-  if (/^(txt|md|markdown)$/.test(extension)) return "text";
-  if (type === "image/jpg") return "image/jpeg";
-  if (IMAGE_TYPES.includes(type) || type === PDF_TYPE) return type;
-  if (type === "" || type === "application/octet-stream") return BY_EXTENSION[extension] ?? null;
-  return null;
-}
-
-/** The largest file of type `mime` the composer takes. */
-export const attachLimit = (mime: string): number => (mime === PDF_TYPE ? PDF_MAX_BYTES : IMAGE_MAX_BYTES);
-
-/** Why a file of type `mime` and `size` bytes cannot join `count` files already attached: too many, too big, empty; null when it can. */
-export function attachRefusal(count: number, mime: string, size: number): "count" | "size" | "empty" | null {
+/** An empty accept list leaves the picker open to every file type. */
+export const PICKER_ACCEPT = "";
+export const attachmentType = fileMime;
+export const attachLimit = (_mime: string): number => FILE_MAX_BYTES;
+export function attachRefusal(count: number, _mime: string, size: number, total = 0): "count" | "size" | "total" | "empty" | null {
   if (count >= ATTACH_MAX) return "count";
   if (size <= 0) return "empty";
-  if (size > attachLimit(mime)) return "size";
+  if (size > FILE_MAX_BYTES) return "size";
+  if (size + total > TOTAL_MAX_BYTES) return "total";
   return null;
 }
 
@@ -200,9 +174,10 @@ export function base64Of(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** An image or a PDF attached to the next question: what `agent.ask` is sent, and a key for its chip. */
+/** A file attached to the next question, with its tray identity and byte count. */
 export interface ComposerFile extends WireAttachment {
   id: number;
+  size?: number;
 }
 
 /** The files as `agent.ask` takes them: name, type and bytes, nothing of the page's own. */
@@ -229,14 +204,13 @@ interface Outgoing {
   member: number;
   text: string;
   sentAt: number;
-  /** The images and PDFs it went with, by name and type, for its chips. */
+  /** Files it went with, including previews until their stored copies reach history. */
   files: TurnAttachment[];
   quote?: MessageQuote;
 }
 
 interface ComposerDraft {
   text: string;
-  attached: { name: string; text: string } | null;
   files: ComposerFile[];
   missing: TurnAttachment[];
   replacing?: number;
@@ -327,7 +301,7 @@ export function createAgent(app: AppContext): Page {
     iconButton("send", t("chat.send"), " disabled", "cmp-send").replace('type="button"', 'type="submit"').replace(" title=", " data-tooltip=") +
     `<button type="button" class="btn cmp-voice" data-act="voice"></button>` +
     `</div>` +
-    `<input class="cmp-picker" type="file" accept="${PICKER_ACCEPT}" multiple hidden>`;
+    `<input class="cmp-picker" type="file" multiple hidden>`;
   const input = composer.querySelector<HTMLTextAreaElement>(".cmp-input")!;
   const attachButton = composer.querySelector<HTMLElement>(".cmp-attach")!;
   const voiceButton = composer.querySelector<HTMLButtonElement>(".cmp-voice")!;
@@ -374,6 +348,7 @@ export function createAgent(app: AppContext): Page {
   reducedMotion?.addEventListener("change", () => { pacing.flush(); if (visible) render(); });
   const details = new Set<number>();
   const state: TimelineState = emptyTimelineState();
+  const attachmentMedia = createAttachmentMedia(scroller, id => api.core("attachments.get", { id }));
   const previews = createLinkPreviews(scroller, url => api.core<LinkPreview | null>("links.preview", { url }));
   const regenerating = new Set<number>();
   const messageResize = typeof ResizeObserver === "function" ? new ResizeObserver(() => measureMessages()) : null;
@@ -391,9 +366,7 @@ export function createAgent(app: AppContext): Page {
   let hearing: { since: number; after: number; member: number } | null = null;
   /** Ends `hearing` at `HEARING_MAX_MS` when neither its turn nor any other word of the core comes. */
   let hearingTimer: ReturnType<typeof setTimeout> | undefined;
-  /** The text file attached to the next typed question. */
-  let attached: { name: string; text: string } | null = null;
-  /** The images and PDFs attached to it, in the order they were added. Kept here only, never written anywhere. */
+  /** Draft file bytes, kept in memory until the request is sent. */
   let files: ComposerFile[] = [];
   let fileIds = 0;
   let missingFiles: TurnAttachment[] = [];
@@ -403,6 +376,25 @@ export function createAgent(app: AppContext): Page {
   const restored = new Map<number, ComposerDraft>();
   const retracting = new Set<string>();
   const retracted = new Set<string>();
+  let attachmentEpoch = 0;
+  let attaching = 0;
+  let attachQueue: Promise<void> = Promise.resolve();
+  const dropOverlay = document.createElement("div");
+  dropOverlay.className = "attachment-drop";
+  dropOverlay.hidden = true;
+  dropOverlay.setAttribute("role", "status");
+  dropOverlay.innerHTML = `${ico("file")}<span></span>`;
+  stage.append(dropOverlay);
+  function measureDrop(): void {
+    const bounds = stage.getBoundingClientRect();
+    const control = composer.hidden ? askCard : composer;
+    const top = control.getBoundingClientRect().top;
+    dropOverlay.style.bottom = `${Math.max(12, bounds.bottom - top + 12)}px`;
+  }
+  const dropResize = typeof ResizeObserver === "function" ? new ResizeObserver(measureDrop) : null;
+  stage.addEventListener("dragenter", measureDrop, true);
+  stage.addEventListener("dragover", measureDrop, true);
+  const resetDrop = mountFileDrop(stage, dropOverlay, list => { void attachAll(list); });
   /** The chip of each of them, made once (an image's picture is not loaded again at each drawing). */
   const fileChips = new Map<number, HTMLElement>();
   /** The YES/NO question that waits for an answer, and whether an answer is on its way. */
@@ -501,6 +493,7 @@ export function createAgent(app: AppContext): Page {
 
   /** The words of the composer, the card and the search, in the language of the window. */
   function drawWords(): void {
+    dropOverlay.querySelector("span")!.textContent = t("agent.dropFiles");
     heading.textContent = t("agent.title");
     sendButton.setAttribute("aria-label", t("chat.send"));
     sendButton.dataset.tooltip = t("chat.send");
@@ -524,19 +517,10 @@ export function createAgent(app: AppContext): Page {
     drawQuote();
   }
 
-  /**
-   * The attached files, as chips above the field, each with a button that takes it off: the text
-   * file first, then the images (with a small picture of each) and the PDFs. A file's chip is made
-   * once and kept while it is attached; only the words of its button are drawn again.
-   */
+  /** Keep draft cards mounted while their filenames and remove labels stay current. */
   function drawFile(): void {
     const label = esc(t("agent.unattach"));
-    const textChip = attached
-      ? `<span class="cmp-chip" data-text-chip>${ico("attach")}<span class="cmp-chip-t">${esc(attached.name)}</span>` +
-        `<button type="button" class="chip-x" data-act="unattach" aria-label="${label}" title="${label}">${ico("x")}</button></span>`
-      : "";
-    fileChip.querySelector("[data-text-chip]")?.remove();
-    if (textChip) fileChip.insertAdjacentHTML("afterbegin", textChip);
+    const follows = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= BOTTOM_SLACK_PX;
     for (const [id, chip] of fileChips) {
       if (files.some((file) => file.id === id)) continue;
       chip.remove();
@@ -548,7 +532,7 @@ export function createAgent(app: AppContext): Page {
         chip = fileChipElement(file);
         fileChips.set(file.id, chip);
       }
-      fileChip.append(chip); // in the order of the files, after the text file's
+      fileChip.append(chip); // preserve attachment order
       const x = chip.querySelector<HTMLElement>(".chip-x")!;
       x.setAttribute("aria-label", t("agent.unattach"));
       x.title = t("agent.unattach");
@@ -557,8 +541,9 @@ export function createAgent(app: AppContext): Page {
     for (const [index, file] of missingFiles.entries()) fileChip.insertAdjacentHTML("beforeend",
       `<span class="cmp-chip" data-missing><span class="cmp-chip-t">${esc(file.name)} · ${esc(t("chat.reattach"))}</span>` +
       `<button type="button" class="chip-x" data-act="drop-missing" data-index="${index}" aria-label="${label}">${ico("x")}</button></span>`);
-    fileChip.hidden = attached === null && files.length === 0 && missingFiles.length === 0;
-    sendButton.disabled = missingFiles.length > 0 || typedQuestion(input.value, attached, files.length > 0) === null;
+    fileChip.hidden = files.length === 0 && missingFiles.length === 0;
+    sendButton.disabled = missingFiles.length > 0 || typedQuestion(input.value, files.length > 0) === null;
+    if (follows) scroller.scrollTop = scroller.scrollHeight;
   }
 
   function drawQuote(): void {
@@ -567,17 +552,17 @@ export function createAgent(app: AppContext): Page {
       iconButton("x", t("chat.removeQuote"), ' data-act="remove-quote"').replace(" title=", " data-tooltip=") : "";
   }
 
-  /** The chip of an image or a PDF: a small picture of the image (from its own bytes) or a file's mark, its name, and ×. */
+  /** A draft card with a thumbnail or type icon, size and a remove button. */
   function fileChipElement(file: ComposerFile): HTMLElement {
     const chip = document.createElement("span");
     chip.className = "cmp-chip";
     chip.dataset.file = String(file.id);
     chip.innerHTML =
-      (file.mime === PDF_TYPE ? ico("file") : `<img class="cmp-thumb" alt="" width="20" height="20">`) +
-      `<span class="cmp-chip-t">${esc(file.name)}</span>` +
+      `<span class="cmp-tile">${fileKind(file.mime) === "image" ? `<img class="cmp-thumb" alt="" width="40" height="40">` : fileIcon(file)}</span>` +
+      `<span class="attachment-name"><span class="cmp-chip-t">${esc(file.name)}</span><small>${esc(fileSize(file.size))}</small></span>` +
       `<button type="button" class="chip-x" data-act="unattach-file" data-file="${file.id}">${ico("x")}</button>`;
     const thumb = chip.querySelector<HTMLImageElement>(".cmp-thumb");
-    // A data: URL (the window's content security policy allows images from data: and itself only).
+    // A raster thumbnail from the draft's own bytes.
     if (thumb) thumb.src = `data:${file.mime};base64,${file.data}`;
     return chip;
   }
@@ -675,6 +660,7 @@ export function createAgent(app: AppContext): Page {
     if (focusKey) thread.querySelector<HTMLElement>(`[data-focus="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
     newestDrawn = Math.max(newestDrawn, ...wanted.map((line) => line.turnId ?? 0));
     drewOnce = true;
+    if (visible) attachmentMedia.sync();
     if (visible) previews.sync();
     else previews.pause();
     measureMessages();
@@ -889,21 +875,25 @@ export function createAgent(app: AppContext): Page {
 
   /** Sends what the composer holds as a typed question: it shows at once, and Raphael's answer when it lands. */
   async function send(): Promise<void> {
+    if (attaching) {
+      const epoch = attachmentEpoch;
+      await attachQueue;
+      if (epoch !== attachmentEpoch) return;
+    }
     if (missingFiles.length > 0) { toaster.info(t("chat.reattach")); return; }
-    const text = typedQuestion(input.value, attached, files.length > 0);
+    const text = typedQuestion(input.value, files.length > 0);
     if (text === null) {
-      if (input.value.trim() !== "" || attached) toaster.info(t("agent.tooLong"));
+      if (input.value.trim() !== "") toaster.info(t("agent.tooLong"));
       return;
     }
     const sending = files;
     const member = memberId();
     const requestId = crypto.randomUUID();
-    const draft: ComposerDraft = { text: input.value, attached, files: sending, missing: [], replacing, quote: composerQuote };
+    const draft: ComposerDraft = { text: input.value, files: sending, missing: [], replacing, quote: composerQuote };
     rememberDraft(requestId, draft);
-    const mine: Outgoing = { key: `out:${++sent}`, requestId, member, text, sentAt: Date.now(), files: sending.map(({ name, mime }) => ({ name, mime })), quote: composerQuote };
+    const mine: Outgoing = { key: `out:${++sent}`, requestId, member, text, sentAt: Date.now(), files: sending.map(({ name, mime, data, size }) => ({ name, mime, size, preview: fileKind(mime) !== "file" ? `data:${mime};base64,${data}` : undefined })), quote: composerQuote };
     outgoing.push(mine);
     input.value = "";
-    attached = null;
     files = [];
     replacing = undefined;
     composerQuote = undefined;
@@ -918,7 +908,7 @@ export function createAgent(app: AppContext): Page {
       if (retracted.has(requestId)) return;
       if (askingMember === member) askingMember = null;
       outgoing = outgoing.filter((item) => item !== mine);
-      if (memberId() === member && input.value === "" && !files.length && !attached) restoreDraft(draft);
+      if (memberId() === member && input.value === "" && !files.length) restoreDraft(draft);
       else restored.set(member, draft);
       toaster.info(describeError(err));
       render();
@@ -935,7 +925,7 @@ export function createAgent(app: AppContext): Page {
 
   /** The field grows with its text, up to `COMPOSER_LINES` lines. */
   function fit(): void {
-    sendButton.disabled = missingFiles.length > 0 || typedQuestion(input.value, attached, files.length > 0) === null;
+    sendButton.disabled = missingFiles.length > 0 || typedQuestion(input.value, files.length > 0) === null;
     input.style.height = "auto";
     const line = parseFloat(getComputedStyle(input).lineHeight) || 22;
     input.style.height = `${Math.min(input.scrollHeight, line * COMPOSER_LINES + 2)}px`;
@@ -969,48 +959,34 @@ export function createAgent(app: AppContext): Page {
    * says so and ends it.
    */
   async function attachAll(list: readonly File[]): Promise<void> {
-    for (const file of list) if (!(await attach(file))) return;
+    const epoch = attachmentEpoch;
+    attaching++;
+    composer.setAttribute("aria-busy", "true");
+    attachQueue = attachQueue.then(async () => {
+      for (const file of list) {
+        if (epoch !== attachmentEpoch) break;
+        if (!(await attachFile(file, attachmentType(file), epoch))) break;
+      }
+    }).finally(() => {
+      attaching--;
+      if (!attaching) composer.removeAttribute("aria-busy");
+    });
+    await attachQueue;
   }
 
-  /**
-   * One file for the next question: a text file, whose text goes into the question, or an image or a
-   * PDF, which goes with it as it is. False when no more may be attached.
-   */
-  async function attach(file: File): Promise<boolean> {
-    const kind = attachmentType(file);
-    if (kind === null) {
-      toaster.info(t("agent.attachKind"));
-      return true;
-    }
-    if (kind !== "text") return attachFile(file, kind);
-    if (file.size > TYPED_MAX_CHARS * 4) {
-      toaster.info(t("agent.tooLong"));
-      return true;
-    }
-    const text = await file.text();
-    if (typedQuestion(input.value, { name: file.name, text }) === null) {
-      toaster.info(t("agent.tooLong"));
-      return true;
-    }
-    attached = { name: file.name, text };
-    drawFile();
-    input.focus();
-    return true;
-  }
-
-  /**
-   * An image or a PDF for the next question, read whole into base64 (`agent.ask` takes it so). Too
-   * many or too big is told and not taken. A pasted picture without a name is named after its type.
-   */
-  async function attachFile(file: File, mime: string): Promise<boolean> {
+  async function attachFile(file: File, mime: string, epoch: number): Promise<boolean> {
     const name = file.name.trim() || `image.${mime.slice(mime.indexOf("/") + 1)}`;
-    const refusal = attachRefusal(files.length, mime, file.size);
+    const refusal = attachRefusal(files.length, mime, file.size, files.reduce((sum, item) => sum + (item.size ?? 0), 0));
     if (refusal === "count") {
       toaster.info(t("agent.attachTooMany", { p0: ATTACH_MAX }));
       return false;
     }
     if (refusal === "size") {
-      toaster.info(t("agent.attachTooBig", { p0: name, p1: IMAGE_MAX_BYTES / 1024 / 1024, p2: PDF_MAX_BYTES / 1024 / 1024 }));
+      toaster.info(t("agent.attachTooBig", { p0: name, p1: FILE_MAX_BYTES / 1024 / 1024 }));
+      return true;
+    }
+    if (refusal === "total") {
+      toaster.info(t("agent.attachTotal", { p0: TOTAL_MAX_BYTES / 1024 / 1024 }));
       return true;
     }
     let data: string;
@@ -1021,12 +997,13 @@ export function createAgent(app: AppContext): Page {
       toaster.info(t("agent.attachUnreadable", { p0: name }));
       return true;
     }
+    if (epoch !== attachmentEpoch) return false;
     // Others may have been attached while this one was read.
     if (files.length >= ATTACH_MAX) {
       toaster.info(t("agent.attachTooMany", { p0: ATTACH_MAX }));
       return false;
     }
-    files = [...files, { id: ++fileIds, name, mime, data }];
+    files = [...files, { id: ++fileIds, name, mime, data, size: file.size }];
     const missing = missingFiles.findIndex(file => file.name === name && file.mime === mime);
     if (missing >= 0) missingFiles.splice(missing, 1);
     drawFile();
@@ -1282,6 +1259,9 @@ export function createAgent(app: AppContext): Page {
     pacing.flush();
     loadedThread = false;
     loads++;
+    attachmentEpoch++;
+    attachmentMedia.reset();
+    resetDrop();
     turns = [];
     found = null;
     canLoadEarlier = false;
@@ -1297,7 +1277,6 @@ export function createAgent(app: AppContext): Page {
     thread.replaceChildren();
     if (voice.isUp) voice.drop();
     input.value = "";
-    attached = null;
     files = [];
     missingFiles = [];
     replacing = undefined;
@@ -1357,11 +1336,12 @@ export function createAgent(app: AppContext): Page {
     rememberLine(button);
   }
 
-  function openLightbox(button: HTMLElement): void {
-    const src = safeMediaSrc(button.dataset.src, true);
+  let closeLightbox: (() => void) | null = null;
+  function openLightbox(button: HTMLElement, localSrc?: string): void {
+    const src = localSrc ?? safeMediaSrc(button.dataset.src, true);
     if (!src) return;
     const title = button.dataset.title ?? "";
-    document.querySelector(".media-lightbox")?.remove();
+    closeLightbox?.();
     const scrim = document.createElement("div");
     scrim.className = "mb-scrim media-lightbox";
     scrim.setAttribute("role", "dialog");
@@ -1372,12 +1352,16 @@ export function createAgent(app: AppContext): Page {
       `<div class="lb-head"><span class="lb-title">${esc(title)}</span>${iconButton("x", t("common.close"), ' data-lb="close"')}</div>` +
       `<img class="lb-img" src="${esc(src)}" alt="${esc(title)}">` +
       `</div>`;
+    let stopOutside = (): void => {};
     const close = (): void => {
+      stopOutside();
+      closeLightbox = null;
       scrim.remove();
       document.removeEventListener("keydown", onKey, true);
       button.focus({ preventScroll: true });
     };
     const onKey = (ev: KeyboardEvent): void => {
+      if (!isTopLayer(scrim.querySelector(".lb-card"))) return;
       if (ev.key === "Escape") {
         ev.preventDefault();
         ev.stopImmediatePropagation();
@@ -1385,10 +1369,12 @@ export function createAgent(app: AppContext): Page {
       }
     };
     scrim.addEventListener("click", (ev) => {
-      if (ev.target === scrim || (ev.target as Element).closest('[data-lb="close"]')) close();
+      if ((ev.target as Element).closest('[data-lb="close"]')) close();
     });
     document.addEventListener("keydown", onKey, true);
     document.body.append(scrim);
+    closeLightbox = close;
+    stopOutside = registerDismissal(scrim.querySelector<HTMLElement>(".lb-card")!, close);
     scrim.querySelector<HTMLElement>('[data-lb="close"]')?.focus();
   }
 
@@ -1445,7 +1431,9 @@ export function createAgent(app: AppContext): Page {
     if (!source || look().regenerateTurnId !== source.turn.id) return;
     const member = memberId(), turn = source.turn;
     const requestId = crypto.randomUUID();
-    const draft = draftFor(turn);
+    const epoch = attachmentEpoch;
+    const draft = await draftFor(turn);
+    if (memberId() !== member || attachmentEpoch !== epoch) return;
     if (draft.missing.length) { restoreDraft(draft); toaster.info(t("chat.reattach")); return; }
     regenerating.add(turn.id);
     rememberDraft(requestId, draft);
@@ -1473,13 +1461,30 @@ export function createAgent(app: AppContext): Page {
     while (drafts.size > 1 && (drafts.size > 20 || bytes() > 64 * 1024 * 1024)) drafts.delete(drafts.keys().next().value!);
   }
 
-  function draftFor(turn: AgentTurn): ComposerDraft {
-    return drafts.get(turn.session_id ?? "") ?? { text: turn.question, attached: null, files: [], missing: turn.attachments ?? [], quote: turn.quote ?? undefined };
+  async function draftFor(turn: Pick<AgentTurn, "session_id" | "question" | "attachments" | "quote">): Promise<ComposerDraft> {
+    const cached = drafts.get(turn.session_id ?? "");
+    if (cached) return cached;
+    const draft: ComposerDraft = { text: turn.question, files: [], missing: [], quote: turn.quote ?? undefined };
+    for (const file of turn.attachments ?? []) {
+      if (file.id) {
+        try {
+          const stored = await api.core<{ mime: string; data: string }>("attachments.get", { id: file.id });
+          if (typeof stored.data !== "string" || typeof stored.mime !== "string") throw new Error("unavailable");
+          const size = file.size ?? Math.floor(stored.data.length * 3 / 4) - (stored.data.endsWith("==") ? 2 : stored.data.endsWith("=") ? 1 : 0);
+          draft.files.push({ id: ++fileIds, name: file.name, mime: stored.mime, data: stored.data, size });
+          continue;
+        } catch {
+          // Old metadata or a missing stored copy needs an explicit replacement from the owner.
+        }
+      }
+      draft.missing.push({ ...file });
+    }
+    return draft;
   }
 
   function restoreDraft(draft: ComposerDraft): void {
     input.value = draft.text;
-    attached = draft.attached;
+    attachmentEpoch++;
     files = [...draft.files];
     missingFiles = draft.missing.map(file => ({ ...file }));
     replacing = draft.replacing;
@@ -1488,10 +1493,12 @@ export function createAgent(app: AppContext): Page {
     drawFile(); fit(); focusComposer();
   }
 
-  function editMessage(control: HTMLElement): void {
+  async function editMessage(control: HTMLElement): Promise<void> {
     const source = messageSource(control);
     if (!source || source.key !== "question") return;
-    restoreDraft({ ...draftFor(source.turn), replacing: source.turn.id });
+    const member = memberId(), epoch = attachmentEpoch;
+    const draft = await draftFor(source.turn);
+    if (memberId() === member && attachmentEpoch === epoch) restoreDraft({ ...draft, replacing: source.turn.id });
   }
 
   async function cancelMessage(control?: HTMLElement): Promise<void> {
@@ -1501,10 +1508,10 @@ export function createAgent(app: AppContext): Page {
     const session = pending?.requestId ?? turn?.session_id;
     if (!session || retracting.has(session)) return;
     const member = memberId();
-    const draft = pending ? drafts.get(session) ?? { text: pending.text, attached: null, files: [], missing: pending.files, quote: pending.quote } : draftFor(turn!);
     retracting.add(session);
     try {
       await api.agentRetract(session, member, turn?.id);
+      const draft = await draftFor(pending ? { session_id: session, question: pending.text, attachments: pending.files, quote: pending.quote } : turn!);
       retracted.add(session);
       outgoing = outgoing.filter(item => item.requestId !== session);
       turns = turns.filter(item => item.session_id !== session && item.id !== turn?.id);
@@ -1562,7 +1569,7 @@ export function createAgent(app: AppContext): Page {
         void copyMessage(act);
         break;
       case "edit-message":
-        editMessage(act);
+        void editMessage(act);
         break;
       case "cancel-message":
         void cancelMessage(act);
@@ -1592,6 +1599,14 @@ export function createAgent(app: AppContext): Page {
         render();
         break;
       }
+      case "attachment-image": {
+        const src = attachmentMedia.source(act);
+        if (src) openLightbox(act, src);
+        break;
+      }
+      case "attachment-open":
+        void api.openAttachment(act.dataset.id ?? "").catch(() => toaster.info(t("agent.fileUnavailable")));
+        break;
       case "lightbox":
         openLightbox(act);
         break;
@@ -1610,11 +1625,6 @@ export function createAgent(app: AppContext): Page {
       case "attach":
         picker.value = "";
         picker.click();
-        break;
-      case "unattach":
-        attached = null;
-        drawFile();
-        input.focus();
         break;
       case "unattach-file": {
         const id = Number(act.dataset.file);
@@ -1640,7 +1650,7 @@ export function createAgent(app: AppContext): Page {
     void send();
   });
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !input.value.trim() && !files.length && !attached && !listening) {
+    if (e.key === "Escape" && !input.value.trim() && !files.length && !listening) {
       e.preventDefault(); e.stopPropagation(); void cancelMessage(); return;
     }
     if (!sendsOnEnter(e)) return;
@@ -1652,13 +1662,9 @@ export function createAgent(app: AppContext): Page {
     const chosen = Array.from(picker.files ?? []);
     if (chosen.length > 0) void attachAll(chosen);
   });
-  // An image pasted into the field is attached (the words pasted with it, if any, are not lost: a
-  // paste that holds no image is the field's own).
+  // Clipboard files are attached; any accompanying plain text stays in the composer.
   input.addEventListener("paste", (e) => {
-    const pasted = Array.from(e.clipboardData?.files ?? []).filter((file) => {
-      const kind = attachmentType(file);
-      return kind !== null && kind !== "text";
-    });
+    const pasted = Array.from(e.clipboardData?.files ?? []);
     if (pasted.length === 0) return;
     const words = e.clipboardData?.getData("text/plain") ?? "";
     e.preventDefault();
@@ -1739,7 +1745,7 @@ export function createAgent(app: AppContext): Page {
   });
 
   app.onEvent((event) => {
-    if (event.type === "Hotkey" && event.kind === "cancel" && visible && document.activeElement === input && !input.value.trim() && !files.length && !attached && !listening) void cancelMessage();
+    if (event.type === "Hotkey" && event.kind === "cancel" && visible && document.activeElement === input && !input.value.trim() && !files.length && !listening) void cancelMessage();
     members.follow(event);
     if (wantsRefresh(event)) {
       // a turn of another thread changes only that member's row
@@ -1810,6 +1816,9 @@ export function createAgent(app: AppContext): Page {
       const wasVisible = visible;
       visible = true;
       messageResize?.observe(scroller);
+      dropResize?.observe(stage);
+      dropResize?.observe(composer);
+      dropResize?.observe(askCard);
       void members.load();
       // A draft goes into the field at once; the composer may then move (the empty page has it
       // under Raphael, the thread under the turns) or give way to a question, which takes the
@@ -1841,8 +1850,12 @@ export function createAgent(app: AppContext): Page {
       pacing.flush();
       loadedThread = false;
       visible = false;
+      closeLightbox?.();
+      resetDrop();
+      attachmentMedia.reset();
       previews.pause();
       messageResize?.disconnect();
+      dropResize?.disconnect();
       members.hide();
       clearTimeout(clearTimer);
       clearTimeout(holdTimer);

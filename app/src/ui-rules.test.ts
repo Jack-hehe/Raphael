@@ -226,7 +226,8 @@ describe("icons", () => {
   test("an icon is shown at 16 or 20 px, never 12 to 15", () => {
     const bad = iconRules().flatMap(({ file, selector, body }) =>
       [...body.matchAll(/(?:^|;)\s*(width|height)\s*:\s*([^;]+)/g)]
-        .filter(([, , value]) => !SIZES.has(value.trim()))
+        // The full-thread file drop target explicitly uses a 28 px pictogram.
+        .filter(([, , value]) => !SIZES.has(value.trim()) && !(file === "agent.css" && selector === ".attachment-drop > .i" && value.trim() === "28px"))
         .map(([, prop, value]) => `${file}: ${selector} { ${prop}: ${value.trim()} }`),
     );
     expect(iconRules().length).toBeGreaterThan(10);

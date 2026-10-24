@@ -364,6 +364,18 @@ describe("a continuous typed turn", () => {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(document.querySelector(".media-lightbox")).toBeNull();
 
+    document.querySelector<HTMLButtonElement>('[data-act="lightbox"]')!.click();
+    const press = (start: Element, end = start) => {
+      start.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 1, isPrimary: true }));
+      end.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, pointerId: 1, isPrimary: true }));
+      end.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+    };
+    press(document.querySelector(".lb-img")!, document.body);
+    expect(document.querySelector(".media-lightbox")).not.toBeNull();
+    press(document.body);
+    expect(document.querySelector(".media-lightbox")).toBeNull();
+    expect(document.activeElement).toBe(document.querySelector('[data-act="lightbox"]'));
+
     // Clicking PDF expand toggles .is-expanded
     const pdfBtn = document.querySelector<HTMLButtonElement>('[data-act="pdf-expand"]')!;
     pdfBtn.click();

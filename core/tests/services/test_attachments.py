@@ -6,7 +6,7 @@ import pytest
 
 from raphael_core.services.attachments import (
     MAX_ATTACHMENTS,
-    MAX_IMAGE_BYTES,
+    MAX_FILE_BYTES,
     AttachmentError,
     checked,
     from_wire,
@@ -45,17 +45,16 @@ def test_webp_and_the_jpg_alias_are_known():
 @pytest.mark.parametrize(
     ("mime", "data", "kind"),
     [
-        ("text/plain", b"hello", "type"),
         ("image/png", b"MZ\x90\x00 an executable", "type"),  # named an image, is not one
         ("application/pdf", PNG, "type"),
         ("image/png", b"", "size"),
         ("image/png", None, "size"),  # one byte over the limit, made in the test
     ],
-    ids=["text", "exe-as-png", "png-as-pdf", "empty", "too-big"],
+    ids=["exe-as-png", "png-as-pdf", "empty", "too-big"],
 )
 def test_a_file_that_is_not_what_it_says_or_too_big_is_refused(mime, data, kind):
     if data is None:
-        data = PNG + b"\x00" * (MAX_IMAGE_BYTES - len(PNG) + 1)
+        data = PNG + b"\x00" * (MAX_FILE_BYTES - len(PNG) + 1)
     with pytest.raises(AttachmentError) as caught:
         checked("f", mime, data)
     assert caught.value.kind == kind

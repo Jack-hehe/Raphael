@@ -343,3 +343,6 @@ export async function subscribeMainEvents(handler: (event: MainEvent) => void): 
   const channel = new Channel<MainEvent>(handler);
   await invoke("main_events", { channel });
 }
+
+/** Open only an opaque stored attachment, never a path supplied by a page. */
+export const openAttachment = (id: string): Promise<void> => invoke("open_attachment", { id });

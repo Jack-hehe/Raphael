@@ -8,10 +8,10 @@ import {
   localListHTML,
 } from "./local-models";
 import { formatPerMinute, formatPerMtok } from "./pricing";
-import { providerMark } from "./provider-marks";
+import { modelMark, providerMark } from "./provider-marks";
 import { CLIS, cliModels } from "./cli-brains";
 import type { CatalogModel, CliBrain, CliBrainId, ModelCatalog, ModelRole, ModelProvider } from "./types";
-import { CHECK, btn, esc, ico } from "./ui";
+import { CHECK, btn, esc, ico, openMenu, sel } from "./ui";
 import { openDialog, type Dialog } from "./member-dialogs";
 
 // ---------- what the list shows ----------
@@ -202,7 +202,7 @@ const ORDERS: Record<PickerSort, (a: CatalogModel, b: CatalogModel) => number> =
  * searches rank exact and prefix names first. Direct connections precede OpenRouter, with favourites,
  * role compatibility and the chosen order retained inside each connection and relevance tier.
  */
-export function pickerRows(models: CatalogModel[], role: PickerRole, state: PickerState, favorites: readonly string[] = [], current?: string): PickerRow[] {
+export function pickerRows(models: CatalogModel[], role: PickerRole, state: PickerState, favorites: readonly string[] = []): PickerRow[] {
   const matches = matcher(state.query);
   const starred = new Set(favorites);
   const subscription = models.length > 0 && models.every((model) => connectionId(model).startsWith("cli:"));
@@ -218,10 +218,6 @@ export function pickerRows(models: CatalogModel[], role: PickerRole, state: Pick
     return name === query ? 0 : name.startsWith(query) ? 1 : 2;
   };
   return rows.sort((a, b) => {
-    if (!state.connection && !searching) {
-      const pinned = Number(b.model.id === current) - Number(a.model.id === current);
-      if (pinned) return pinned;
-    }
     if (!state.connection && searching && query) {
       const relevance = rank(a.model) - rank(b.model);
       if (relevance) return relevance;
@@ -370,7 +366,7 @@ export class PickerList {
   }
 
   private refresh(keep: string | null): void {
-    const models = pickerRows(this.models, this.role, this.state, this.favorites, this.current);
+    const models = pickerRows(this.models, this.role, this.state, this.favorites);
     const lead = this.lead && matcher(this.state.query)(this.lead.name) ? [leadRow(this.lead)] : [];
     this.rows = [...lead, ...models];
     const kept = keep === null ? -1 : this.rows.findIndex((row) => row.model.id === keep);
@@ -514,7 +510,7 @@ function buttonFace(o: ModelPickerLook): { inner: string; label: string } {
   const name = local ? local.split(" · ").slice(1).join(" · ") : o.lead?.id === ref ? o.lead.name : model?.name ?? shortName(ref);
   const source = local ? t("picker.tabLocal") : model ? connectionName(model) : ref.startsWith("cli:") ?
     `${CLIS.find((c) => ref.startsWith(`cli:${c.id}`))?.name ?? ""} ${t("brains.subscription")}` : o.lead?.id === ref ? t("chooser.same") : "";
-  return { inner: `${model ? providerMark(model.provider, true) : ""}<span class="mp-ttext"><strong class="mp-tname">${esc(name)}</strong><span class="mp-source">${esc(source)}</span></span>${ico("down")}`,
+  return { inner: `${model ? modelMark(model) : ""}<span class="mp-ttext"><strong class="mp-tname">${esc(name)}</strong><span class="mp-source">${esc(source)}</span></span>${ico("down")}`,
     label: `${o.label}: ${name}${source ? ` · ${source}` : ""}` };
 }
 
@@ -540,6 +536,10 @@ const effortText = (effort: string): string => {
 };
 
 /** Radio rows are shared by the dialog and the catalog's pure rendering tests. */
+/** A source's mark: its brand's, or for the models on this PC (and a custom connection) a plain one, so every row lines up. */
+const sourceMark = (source: ChooserSource): string =>
+  providerMark(source.kind, true) || `<span class="mono md" aria-hidden="true">${ico(source.id === "local-speech" ? "mic" : "plug")}</span>`;
+
 export function listHTML(list: PickerList, selected = list.current, models: readonly CatalogModel[] = [], stars = false): string {
   return list.rows.map(({ model, usable, lead }) => {
     const chosen = model.id === selected;
@@ -550,7 +550,7 @@ export function listHTML(list: PickerList, selected = list.current, models: read
       !usable ? reasonText(fitFor(model, list.role).reason) : ""].filter(Boolean).join(" · ");
     const price = lead ? "" : chooserPrice(model, models, list.role);
     return `<div class="mc-item"><button type="button" role="radio" class="mc-row mp-opt${lead ? " mp-lead" : ""}" aria-checked="${chosen}" data-model="${esc(model.id)}" data-id="${esc(model.id)}"${chosen ? ' data-current="true"' : ""}${!usable ? ' disabled aria-disabled="true"' : ""}>` +
-      `<span class="mc-radio" aria-hidden="true"></span>${lead ? "" : providerMark(model.provider, true)}<span class="mc-model"><span class="mc-model-line"><strong>${esc(model.name)}</strong>${model.is_default ? `<span class="mc-default">${esc(t("chooser.default"))}</span>` : ""}</span>` +
+      `<span class="mc-radio" aria-hidden="true"></span>${lead ? "" : modelMark(model)}<span class="mc-model"><span class="mc-model-line"><strong>${esc(model.name)}</strong></span>` +
       `<span class="mc-description">${esc(sub)}</span></span>${price ? `<span class="mc-price num">${esc(price)}</span>` : ""}</button>` +
       (stars && !lead ? `<button type="button" class="mp-star" data-star="${esc(model.id)}" aria-pressed="${list.favorites.includes(model.id)}" aria-label="${esc(t(list.favorites.includes(model.id) ? "picker.favRemove" : "picker.favAdd", { p0: model.name }))}">${ico("star")}</button>` : "") + `</div>`;
   }).join("");
@@ -568,7 +568,6 @@ class MountedPicker implements ModelPicker {
   private maker = "";
   private localDraft: string | null = null;
   private confirm: LocalConfirm | null = null;
-  private recent: string[] = [];
 
   constructor(container: HTMLElement, options: ModelPickerOptions) {
     this.o = { ...options };
@@ -611,7 +610,6 @@ class MountedPicker implements ModelPicker {
   }
   private show(): void {
     opened?.close();
-    try { this.recent = JSON.parse(localStorage.getItem(`raphael.chooser.recent.${this.o.role}`) ?? "[]").filter((id: unknown) => typeof id === "string").slice(0, 8); } catch { this.recent = []; }
     this.dialog = openDialog({ title: t("chooser.title"), cls: "model-chooser", body: "",
       actions: { secondary: `<span class="mc-selection"></span>${btn(esc(t("common.cancel")), "", ' data-dlg="close"')}`,
         primary: { label: esc(t("chooser.use")), attrs: ' data-dlg="use"' } },
@@ -632,12 +630,6 @@ class MountedPicker implements ModelPicker {
       const input = event.target as HTMLInputElement;
       if (input.matches(".mc-search")) { this.query = input.value; this.paintRows(); }
     });
-    this.dialog.el.addEventListener("change", (event) => {
-      const select = event.target as HTMLSelectElement;
-      if (select.matches("[data-sort]")) this.sort = select.value as PickerSort;
-      if (select.matches("[data-maker]")) this.maker = select.value;
-      this.paintRows();
-    });
     this.dialog.el.addEventListener("keydown", (event) => {
       const row = (event.target as HTMLElement).closest<HTMLButtonElement>(".mc-row, .lm-main");
       if (!row || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
@@ -648,7 +640,8 @@ class MountedPicker implements ModelPicker {
     });
     this.paint(); this.paintButton();
     const selected = this.dialog.el.querySelector<HTMLElement>('.mc-row[aria-checked="true"], .lm-main[aria-checked="true"]');
-    selected?.scrollIntoView?.({ block: "nearest" }); selected?.focus({ preventScroll: true });
+    // the list keeps its order: it opens where the chosen model is, not with the model moved to the top
+    selected?.scrollIntoView?.({ block: "center" }); selected?.focus({ preventScroll: true });
   }
   private sources(): ChooserSource[] { return chooserSources(this.o); }
   private selectedSource(): ChooserSource | undefined { return this.sources().find((source) => source.id === this.source); }
@@ -664,7 +657,7 @@ class MountedPicker implements ModelPicker {
       return !items.length ? "" : `<section><h3>${esc(t(groupKeys[group]))}</h3>` + items.map((source) => {
         const status = source.id.startsWith("cli:") ? !this.o.clis ? t("common.loading") : t(!source.cli?.installed ? "brains.missing" : source.cli.logged_in === true ? "brains.ready" : "brains.signedOut") :
           t(source.group === "local" ? "chooser.localCount" : "chooser.modelCount", { n: source.id === "local-speech" && Array.isArray(this.o.local?.models) ? this.o.local.models.length : source.models.length });
-        return `<button type="button" class="btn mc-source" data-source="${esc(source.id)}" aria-pressed="${this.source === source.id}">${providerMark(source.kind, true)}<span><strong>${esc(source.name)}</strong><small>${esc(status)}</small></span>${source.id === (this.o.local?.active ? "local-speech" : savedSource) ? '<i class="mc-current" aria-hidden="true"></i>' : ""}</button>`;
+        return `<button type="button" class="btn mc-source" data-source="${esc(source.id)}" aria-pressed="${this.source === source.id}">${sourceMark(source)}<span><strong>${esc(source.name)}</strong><small>${esc(status)}</small></span>${source.id === (this.o.local?.active ? "local-speech" : savedSource) ? '<i class="mc-current" aria-hidden="true"></i>' : ""}</button>`;
       }).join("") + `</section>`;
     }).join("");
     const inherit = this.o.lead ? `<button type="button" class="btn mc-inherit" data-model="${esc(this.o.lead.id)}" aria-pressed="${this.draft === this.o.lead.id}">${esc(this.o.lead.name)}</button>` : "";
@@ -676,16 +669,16 @@ class MountedPicker implements ModelPicker {
     if (!pane) return;
     if (!source) { pane.innerHTML = `<p class="mc-empty">${esc(t("chooser.empty"))}</p>`; this.paintFooter(); return; }
     const note = source.group === "subscriptions" ? "chooser.subscriptionNote" : source.group === "local" ? "chooser.localNote" : "chooser.apiNote";
-    pane.innerHTML = `<header class="mc-pane-head">${providerMark(source.kind, true)}<span><h3>${esc(source.name)}</h3><p>${esc(t(note))}</p></span></header>`;
+    pane.innerHTML = `<header class="mc-pane-head">${sourceMark(source)}<span><h3>${esc(source.name)}</h3><p>${esc(t(note))}</p></span></header>`;
     if (source.group === "subscriptions" && (!source.cli?.installed || source.cli.logged_in !== true)) {
       pane.innerHTML += `<div class="mc-empty"><p>${esc(t(source.cli?.installed ? "chooser.loginNote" : "chooser.installNote"))}</p>${this.o.clis ? btn(esc(t(source.cli?.installed ? "brains.login" : "brains.install")), "", ' data-dlg="login"') : esc(t("common.loading"))}</div>`;
       this.paintFooter(); return;
     }
     if (source.models.length > 12) {
       const makers = providerChoices(source.models);
-      const options = (choices: PickerChoice[], current: string) => choices.map((choice) => `<option value="${esc(choice.value)}"${current === choice.value ? " selected" : ""}>${esc(choice.label)}</option>`).join("");
-      pane.innerHTML += `<div class="mc-tools"><input type="search" class="mc-search" aria-label="${esc(t("chooser.search"))}" placeholder="${esc(t("chooser.search"))}" value="${esc(this.query)}"><select class="sel" data-sort aria-label="${esc(t("chooser.sort"))}">${options(sortChoices(), this.sort)}</select>` +
-        (makers.length > 2 ? `<select class="sel" data-maker aria-label="${esc(t("chooser.maker"))}">${options(makers, this.maker)}</select>` : "") + `</div>`;
+      // the app's own dropdowns (ui.ts `sel` and its menu), as everywhere else, never the system's list
+      pane.innerHTML += `<div class="mc-tools"><input type="search" class="mc-search" aria-label="${esc(t("chooser.search"))}" placeholder="${esc(t("chooser.search"))}" value="${esc(this.query)}">` +
+        sel(sortChoices(), this.sort, t("chooser.sort"), " data-sort") + (makers.length > 2 ? sel(makers, this.maker, t("chooser.maker"), " data-maker") : "") + `</div>`;
     }
     pane.innerHTML += `<div class="mc-scroll"><div class="mc-list" role="radiogroup" aria-label="${esc(t("chooser.title"))}"></div></div><div class="mc-effort"></div>`;
     this.paintRows();
@@ -702,12 +695,13 @@ class MountedPicker implements ModelPicker {
       });
     } else {
       const list = new PickerList(this.o.role, source.models, this.draft, { query: this.query, sort: this.sort, provider: this.maker }, this.o.favorites ?? []);
-      const recent = source.group === "api" ? list.rows.filter((row) => this.recent.includes(row.model.id) && !row.lead) : [];
-      if (recent.length && !this.query) {
-        const all = list.rows; list.rows = recent;
+      // the favourites always come first, under their own heading; the rest keep the chosen order
+      const favorites = list.rows.filter((row) => row.favorite && !row.lead);
+      if (favorites.length && favorites.length < list.rows.length && !this.query) {
+        const all = list.rows; list.rows = favorites;
         const first = listHTML(list, this.draft, pickerModels(this.o), !!this.o.onFavorite);
-        list.rows = all.filter((row) => !recent.includes(row));
-        listEl.innerHTML = `<h4>${esc(t("chooser.recent"))}</h4>${first}<h4>${esc(t("chooser.all"))}</h4>${listHTML(list, this.draft, pickerModels(this.o), !!this.o.onFavorite)}`;
+        list.rows = all.filter((row) => !favorites.includes(row));
+        listEl.innerHTML = `<h4>${esc(t("chooser.favorites"))}</h4>${first}<h4>${esc(t("chooser.all"))}</h4>${listHTML(list, this.draft, pickerModels(this.o), !!this.o.onFavorite)}`;
       } else listEl.innerHTML = listHTML(list, this.draft, pickerModels(this.o), !!this.o.onFavorite);
       if (!list.rows.length) listEl.innerHTML = `<p class="mc-empty">${esc(t(this.o.loading ? "common.loading" : "chooser.empty"))}</p>`;
     }
@@ -734,9 +728,27 @@ class MountedPicker implements ModelPicker {
     use.disabled = local ? !localModel || !!this.o.local?.download : !lead && !available;
   }
   private click(event: MouseEvent): void {
+    const dropdown = (event.target as Element).closest<HTMLButtonElement>(".mc-tools .sel");
+    if (dropdown) {
+      const sorting = dropdown.matches("[data-sort]");
+      const source = this.selectedSource();
+      const choices = sorting ? sortChoices() : providerChoices(source?.models ?? []);
+      openMenu(dropdown, choices, sorting ? this.sort : this.maker, (value) => {
+        if (sorting) this.sort = value as PickerSort; else this.maker = value;
+        const label = choices.find((choice) => choice.value === value)?.label ?? value;
+        dropdown.querySelector("span")!.textContent = label;
+        dropdown.title = label;
+        this.paintRows();
+      });
+      return;
+    }
     const target = (event.target as Element).closest<HTMLElement>("[data-source], [data-model], [data-effort], [data-act], [data-star]");
     if (!target || (target as HTMLButtonElement).disabled) return;
-    if (target.dataset.source !== undefined) { this.source = target.dataset.source; this.query = ""; this.maker = ""; this.confirm = null; this.paint(); }
+    if (target.dataset.source !== undefined) {
+      this.source = target.dataset.source; this.query = ""; this.maker = ""; this.confirm = null; this.paint();
+      // the source holding the chosen model opens where that model is
+      this.dialog?.el.querySelector<HTMLElement>('.mc-list .mc-row[aria-checked="true"]')?.scrollIntoView?.({ block: "center" });
+    }
     if (target.dataset.model !== undefined) {
       this.draft = target.dataset.model; this.effort = "";
       this.dialog?.el.querySelector(".mc-inherit")?.setAttribute("aria-pressed", String(this.draft === this.o.lead?.id));
@@ -765,7 +777,6 @@ class MountedPicker implements ModelPicker {
     const model = pickerModels(this.o).find((m) => m.id === this.draft);
     const ref = model?.effort_models?.[this.effort] ??
       (model?.reasoning_efforts?.includes(this.effort) ? `${this.draft}?effort=${this.effort}` : this.draft);
-    try { localStorage.setItem(`raphael.chooser.recent.${this.o.role}`, JSON.stringify([this.draft, ...this.recent.filter((id) => id !== this.draft)].slice(0, 8))); } catch { /* Storage is optional. */ }
     this.close(); if (ref !== this.o.current || this.o.local?.active) this.o.onChoose(ref);
   }
 }

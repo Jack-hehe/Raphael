@@ -20,6 +20,7 @@
     "windows": [
       {
         "label": "main",
+        "dragDropEnabled": false,
         "create": false,
         "title": "Raphael",
         "url": "index.html",
@@ -37,8 +38,8 @@
         "default-src": "'self'",
         "script-src": "'self'",
         "style-src": "'self' 'unsafe-inline'",
-        "img-src": "'self' data: https:",
-        "media-src": "'self' data: https:",
+        "img-src": "'self' data: blob: https:",
+        "media-src": "'self' data: blob: https:",
         "frame-src": "'self' https://www.youtube-nocookie.com https://www.youtube.com",
         "connect-src": "ipc: http://ipc.localhost",
         "object-src": "'none'",

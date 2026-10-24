@@ -341,7 +341,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 66] = [
+const ALLOWED_METHODS: [&str; 67] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -388,6 +388,7 @@ const ALLOWED_METHODS: [&str; 66] = [
     // (never a key), and a key put in or taken out of the vault. Named one by one as well.
     "services.status",
     "links.preview",
+    "attachments.get",
     "services.set_key",
     "services.clear_key",
     // The members of the owner's team, their groups and their routines (the 拉斐爾 page's member
@@ -1402,6 +1403,16 @@ fn is_external_url(url: &str) -> bool {
         && parsed.password().is_none()
 }
 
+/// Open a stored copy by opaque ID. The core resolves it inside its attachment folder.
+#[tauri::command]
+pub async fn open_attachment(app: AppHandle, webview: Webview, id: String) -> Result<(), String> {
+    require_main(&webview)?;
+    let core = app.try_state::<Arc<CoreProcess>>().ok_or(CORE_NOT_RUNNING)?;
+    let result = core.call("attachments.path", json!({"id": id})).await.map_err(|_| "attachment unavailable".to_owned())?;
+    let path = result.get("path").and_then(Value::as_str).ok_or("attachment unavailable")?;
+    launch_link(path)
+}
+
 /// Chat links may open only a web address, and only at the main window's request.
 #[tauri::command]
 pub fn open_external_url(webview: Webview, url: String) -> Result<(), String> {
@@ -1699,6 +1710,7 @@ mod tests {
                 "keyboard_has_altgr",
                 "main_events",
                 "mic_access",
+                "open_attachment",
                 "open_external_url",
                 "open_link",
                 "window_hotkey",

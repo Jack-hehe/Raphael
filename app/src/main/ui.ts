@@ -3,6 +3,7 @@
 // the core wrote goes through `esc` first.
 
 import { onLocaleChange, t, translatedMessage } from "./i18n";
+import { registerDismissal } from "./dismissals";
 
 import { type Notifier, UNDO_MS } from "./undo";
 
@@ -331,11 +332,12 @@ export function swapHTML(host: HTMLElement, html: string): void {
 // ---------- menu ----------
 
 /** The menu or panel that is open, the button that opened it, and what it does with keys of its own. */
-let menu: { el: HTMLElement; anchor: HTMLElement; onKey?: (e: KeyboardEvent) => boolean } | null = null;
+let menu: { el: HTMLElement; anchor: HTMLElement; stopOutside(): void; onKey?: (e: KeyboardEvent) => boolean } | null = null;
 let menuListening = false;
 
 export function closeMenu(): void {
   if (!menu) return;
+  menu.stopOutside();
   menu.anchor.setAttribute("aria-expanded", "false");
   menu.anchor.removeAttribute("aria-controls");
   menu.el.remove();
@@ -349,14 +351,6 @@ const menuItems = (el: HTMLElement): HTMLButtonElement[] =>
 function listenForMenuEvents(): void {
   if (menuListening) return;
   menuListening = true;
-  document.addEventListener(
-    "pointerdown",
-    (e) => {
-      // A click on the button that opened the menu closes it (the page's click handler toggles).
-      if (menu && e.target instanceof Node && !menu.el.contains(e.target) && !menu.anchor.contains(e.target)) closeMenu();
-    },
-    true,
-  );
   document.addEventListener("keydown", (e) => {
     if (!menu) return;
     if (menu.onKey?.(e)) {
@@ -451,6 +445,8 @@ export function placeMenu(): void {
   const { el, anchor } = menu;
   const r = anchor.getBoundingClientRect();
   const headerBottom = document.getElementById("window-chrome")?.getBoundingClientRect().bottom ?? 0;
+  // A dropdown's menu is at least as wide as the dropdown itself (owner, 2026-10-24).
+  if (anchor.classList?.contains("sel")) el.style.minWidth = `${Math.round(r.width)}px`;
   // Release the previous side's height limit before measuring a menu after scrolling or redraw.
   el.style.maxHeight = `${Math.max(0, innerHeight - headerBottom - 16)}px`;
   const placement = menuPlacement(r, { width: el.offsetWidth, height: el.offsetHeight }, {
@@ -485,7 +481,7 @@ export function openPopover(anchor: HTMLElement, html: string, o: PopoverOptions
   if (o.label) el.setAttribute("aria-label", o.label);
   el.innerHTML = html;
   document.body.append(el);
-  menu = { el, anchor, onKey: o.onKey };
+  menu = { el, anchor, stopOutside: registerDismissal(el, () => { closeMenu(); anchor.focus({ preventScroll: true }); }, undefined, anchor), onKey: o.onKey };
   anchor.setAttribute("aria-expanded", "true");
   anchor.setAttribute("aria-controls", el.id);
   placeMenu();

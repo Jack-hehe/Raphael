@@ -41,7 +41,6 @@ function mount() {
     member: () => LIST.members.find((m) => m.id === current)!,
     list: () => LIST,
     presets: () => [],
-    catalog: async () => null,
     update: vi.fn(async (_id: number, _patch: MemberPatch) => true),
     setPicture: vi.fn(async () => {}),
     close: vi.fn<() => void>(),
@@ -69,19 +68,6 @@ beforeEach(() => {
 });
 
 describe("a member's panel", () => {
-  test("a subscription brain appears under the name with its official mark", () => {
-    const before = LIST.members[1];
-    LIST.members[1] = { ...before, model: "cli:claude:sonnet" };
-    try {
-      const panel = mount();
-      const line = panel.el.querySelector(".mb-brain")!;
-      expect(line).not.toBeNull();
-      expect(line.textContent).toBe("Claude Code · 訂閱");
-      expect(line.querySelector(".mono")).not.toBeNull();
-      expect(panel.el.querySelector("#mb-det-name")!.nextElementSibling).toBe(line);
-      expect(line.querySelector("button")).toBeNull();
-    } finally { LIST.members[1] = before; }
-  });
   test("a personality draft survives redraws and is saved to its original member on switching", async () => {
     const panel = mount();
     await flush();
@@ -121,10 +107,16 @@ describe("a member's panel", () => {
   test("personality is separate from instructions and saved on blur", async () => {
     const panel = mount();
     await flush();
+    // closed, a long field is its name and its first line behind a button; open, the box
+    const head = panel.el.querySelector<HTMLButtonElement>('[data-field="mb-det-personality"]')!;
+    expect(head.getAttribute("aria-expanded")).toBe("false");
+    expect(head.textContent).toContain("個性");
+    expect(panel.el.querySelector<HTMLElement>("#mb-det-personality-body")!.hidden).toBe(true);
+    head.click();
     const box = panel.el.querySelector<HTMLTextAreaElement>("#mb-det-personality");
-    expect(box).not.toBeNull();
+    expect(panel.el.querySelector<HTMLElement>("#mb-det-personality-body")!.hidden).toBe(false);
+    expect(document.activeElement).toBe(box);
     expect(box!.maxLength).toBe(2000);
-    expect(panel.el.querySelector('label[for="mb-det-personality"]')!.textContent).toBe("個性");
     box!.value = "  嚴厲但耐心。\n直接稱呼你。  ";
     box!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     await flush();
@@ -187,10 +179,10 @@ describe("a member's panel", () => {
     expect(host.update).toHaveBeenCalledWith(3, { group_id: 21 });
   });
 
-  test("the model picker starts with 與拉斐爾相同, and the group's places are chips", async () => {
+  test("no member has a model of its own, and the group's places are chips", async () => {
     const panel = mount();
     await flush();
-    expect(panel.el.querySelector(".mb-model .mp-trigger")!.textContent).toContain("與拉斐爾相同");
+    expect(panel.el.querySelector(".mb-model, .mp-trigger, .mb-brain")).toBeNull();
     expect([...panel.el.querySelectorAll(".mb-chips .mb-chip")].map((c) => c.textContent)).toEqual(["example/app"]);
   });
 
