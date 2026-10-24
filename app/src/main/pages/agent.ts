@@ -23,8 +23,8 @@
 // details panel on the right, and the centred pill over the chat. Each member has one thread, as
 // Raphael has: picking a member loads its turns (`agent.history.list {member_id}`), and the composer
 // asks it (`agent_ask_text {memberId}`). A member's answers are plain bubbles, with none of Raphael's
-// 《prefix。》, its composer says "Message <name>" and has no voice button (the voice always goes to
-// Raphael), and the gold card shows in the thread whose member asked. Raphael's thread is exactly as
+// 《prefix。》, its composer says "Message <name>" and shares Raphael's emblem voice button,
+// and the gold card shows in the thread whose member asked. Raphael's thread is exactly as
 // it was. While the page is on screen the main sidebar is an icon rail (main.ts). Above the composer
 // is the slot of the thread's questions from the background (background-mount.ts). A member's
 // thread is its own: the search looks in it alone, and no turn of another thread shows in it but
@@ -39,6 +39,9 @@ import { replyLine } from "../../shared/anime";
 import * as api from "../api";
 import { createLinkPreviews, type LinkPreview } from "../link-previews";
 import { messagePlainText } from "../message-content";
+import { messageTooltip } from "../message-tooltip";
+import { quoteHTML, selectionQuote } from "../message-quote";
+import { ReplyPacing } from "../reply-pacing";
 import { avatarHTML, onAvatarChange } from "../avatar";
 import "../background-questions.css";
 import type { BackgroundQuestions } from "../background-questions";
@@ -68,7 +71,7 @@ import {
   turnHTML,
   wantsRefresh,
 } from "../timeline";
-import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, Page, SettingsPane, TurnAttachment, WireAttachment } from "../types";
+import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, MessageQuote, Page, SettingsPane, TurnAttachment, WireAttachment } from "../types";
 import { btn, copyText, esc, ico, iconButton, toaster } from "../ui";
 import { VoiceMode } from "../voice-mode";
 import "../agent.css";
@@ -88,7 +91,7 @@ const CLEAR_CONFIRM_MS = 4000;
 const SEARCH_DELAY_MS = 200;
 /** The longest words the search takes (the core's and the app's limit for `agent.history.search`). */
 const SEARCH_MAX_CHARS = 200;
-/** The most a typed question may hold, an attached file included (the app's own limit is the same). */
+/** The most a typed question may hold (the app's own limit is the same). */
 export const TYPED_MAX_CHARS = 100_000;
 /** The composer grows with its text up to this many lines, then scrolls. */
 const COMPOSER_LINES = 6;
@@ -134,15 +137,11 @@ export function openRaphaelSettings(app: Pick<AppContext, "go">): void {
 export const greetingLine = (): string => t("agent.greet");
 
 /**
- * What a typed question is, from the field and the attached text file: the words, then the file's
- * name in 「」 and its text. Null when there is nothing to send or it is too long. With images or
- * PDFs attached (`withFiles`), no words at all is a question too: "", which the core takes as
- * 「看這個」.
+ * The question's words stay separate from all file types. Null when there is nothing to send or
+ * it is too long. With files attached, no words is a question too: "", interpreted by the core.
  */
-export function typedQuestion(words: string, file: { name: string; text: string } | null, withFiles = false): string | null {
-  const head = words.trim();
-  const body = file ? `「${file.name}」\n${file.text.trim()}` : "";
-  const text = [head, body].filter(Boolean).join("\n\n");
+export function typedQuestion(words: string, withFiles = false): string | null {
+  const text = words.trim();
   if ((text === "" && !withFiles) || text.length > TYPED_MAX_CHARS) return null;
   return text;
 }
@@ -200,12 +199,22 @@ export function draftText(arg: SettingsPane | AgentDraft | undefined): string | 
 /** A turn typed here that the history does not have yet. */
 interface Outgoing {
   key: string;
+  requestId: string;
   /** The member whose thread it was typed in (0: Raphael's). */
   member: number;
   text: string;
   sentAt: number;
-  /** The images and PDFs it went with, by name and type, for its chips. */
+  /** Files it went with, including previews until their stored copies reach history. */
   files: TurnAttachment[];
+  quote?: MessageQuote;
+}
+
+interface ComposerDraft {
+  text: string;
+  files: ComposerFile[];
+  missing: TurnAttachment[];
+  replacing?: number;
+  quote?: MessageQuote;
 }
 
 export function createAgent(app: AppContext): Page {
@@ -284,18 +293,27 @@ export function createAgent(app: AppContext): Page {
   composer.className = "composer";
   composer.noValidate = true;
   composer.innerHTML =
+    `<div class="cmp-quote" hidden></div>` +
     `<div class="cmp-file" hidden></div>` +
     `<div class="cmp-row">` +
     `<button type="button" class="btn cmp-attach" data-act="attach">${ico("plus")}</button>` +
     `<textarea class="cmp-input" rows="1" autocomplete="off" enterkeyhint="send"></textarea>` +
+    iconButton("send", t("chat.send"), " disabled", "cmp-send").replace('type="button"', 'type="submit"').replace(" title=", " data-tooltip=") +
     `<button type="button" class="btn cmp-voice" data-act="voice"></button>` +
     `</div>` +
     `<input class="cmp-picker" type="file" multiple hidden>`;
   const input = composer.querySelector<HTMLTextAreaElement>(".cmp-input")!;
   const attachButton = composer.querySelector<HTMLElement>(".cmp-attach")!;
   const voiceButton = composer.querySelector<HTMLButtonElement>(".cmp-voice")!;
+  const sendButton = composer.querySelector<HTMLButtonElement>(".cmp-send")!;
   const fileChip = composer.querySelector<HTMLElement>(".cmp-file")!;
   const picker = composer.querySelector<HTMLInputElement>(".cmp-picker")!;
+  const hideTooltip = messageTooltip(el);
+  const quoteCard = composer.querySelector<HTMLElement>(".cmp-quote")!;
+  const hideSelection = selectionQuote({ host: el, thread, active: () => visible,
+    author: message => message.matches(".bubble") ? t("chat.you") : members.nameOf(memberId()),
+    onQuote: quote => { composerQuote = quote; drawQuote(); focusComposer(); },
+  });
   input.placeholder = COMPOSER_PLACEHOLDER;
   input.setAttribute("aria-label", COMPOSER_PLACEHOLDER);
 
@@ -324,6 +342,10 @@ export function createAgent(app: AppContext): Page {
   let pending = false;
   let loads = 0;
   let visible = false;
+  let loadedThread = false;
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+  const pacing = new ReplyPacing(() => { if (visible) render(); }, () => reducedMotion?.matches ?? false);
+  reducedMotion?.addEventListener("change", () => { pacing.flush(); if (visible) render(); });
   const details = new Set<number>();
   const state: TimelineState = emptyTimelineState();
   const attachmentMedia = createAttachmentMedia(scroller, id => api.core("attachments.get", { id }));
@@ -340,13 +362,20 @@ export function createAgent(app: AppContext): Page {
   /** Questions typed here whose turns have not come yet. */
   let outgoing: Outgoing[] = [];
   let sent = 0;
-  /** A question said aloud is being answered: since when, and the newest turn there was then. */
-  let hearing: { since: number; after: number } | null = null;
+  /** A spoken question's recipient and history boundary stay fixed across thread changes. */
+  let hearing: { since: number; after: number; member: number } | null = null;
   /** Ends `hearing` at `HEARING_MAX_MS` when neither its turn nor any other word of the core comes. */
   let hearingTimer: ReturnType<typeof setTimeout> | undefined;
   /** Draft file bytes, kept in memory until the request is sent. */
   let files: ComposerFile[] = [];
   let fileIds = 0;
+  let missingFiles: TurnAttachment[] = [];
+  let replacing: number | undefined;
+  let composerQuote: MessageQuote | undefined;
+  const drafts = new Map<string, ComposerDraft>();
+  const restored = new Map<number, ComposerDraft>();
+  const retracting = new Set<string>();
+  const retracted = new Set<string>();
   let attachmentEpoch = 0;
   let attaching = 0;
   let attachQueue: Promise<void> = Promise.resolve();
@@ -393,24 +422,23 @@ export function createAgent(app: AppContext): Page {
   const shownTurns = (): AgentTurn[] => turns.filter((turn) => turn.id > clearedUpTo);
   const newestId = (): number => turns.reduce((max, turn) => Math.max(max, turn.id), 0);
   const isEmpty = (): boolean =>
-    shownTurns().length === 0 && !outgoing.some((sent) => sent.member === memberId()) && (hearing === null || !inRaphael());
+    shownTurns().length === 0 && !outgoing.some((sent) => sent.member === memberId()) && hearing?.member !== memberId();
 
   const look = (): TurnLook => {
     const latest = shownTurns().filter(turn => turn.question.trim() && sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && turn.route !== "exchange" && (turn.text.trim() || turn.messages?.some(m => m.kind === "reply"))).reduce((id, turn) => Math.max(id, turn.id), 0);
-    const busy = regenerating.size > 0 || outgoing.some(sent => sent.member === memberId()) || shownTurns().some(turn => turn.status === "running" || isLive(turn.task));
-    const shared = { regenerateTurnId: busy ? undefined : latest, query: searching ? query : "", openExchanges, memberName: members.nameOf, memberFace: (id: number) => members.faceOf(id, 18) };
+    const busy = pacing.active || regenerating.size > 0 || outgoing.some(sent => sent.member === memberId()) || shownTurns().some(turn => turn.status === "running" || isLive(turn.task));
+    const shared = { regenerateTurnId: busy ? undefined : latest, revealing: (id: number) => pacing.waiting(id), query: searching ? query : "", openExchanges, memberName: members.nameOf, memberFace: (id: number) => members.faceOf(id, 18) };
     if (inRaphael()) return { ...shared, face: (loop) => avatarHTML({ size: 26, loop }) };
     const member = members.member();
     return { ...shared, face: () => faceHTML(member, 26), plain: true };
   };
   /**
-   * The question that waits now (null: none), and whose thread it is in: the member a typed
-   * question was on its way to when it came, whose answer is what asks; else Raphael's (the voice
-   * and the overlay are his). The thread is kept with the question, so that what is typed later
+   * The question that waits now (null: none), and whose thread it is in: the member a typed or
+   * spoken question was on its way to when it came. The thread is kept with the question, so what is typed later
    * does not move it.
    */
   function setQuestion(next: AgentQuestion | null): void {
-    if (next !== null && next.id !== question?.id) questionOwner = askingMember ?? RAPHAEL_ID;
+    if (next !== null && next.id !== question?.id) questionOwner = next.member_id ?? askingMember ?? RAPHAEL_ID;
     question = next;
   }
 
@@ -418,7 +446,7 @@ export function createAgent(app: AppContext): Page {
     stage,
     button: () => (voiceButton.isConnected && !composer.hidden && !voiceButton.hidden ? voiceButton : null),
     composer: () => (composer.isConnected && !composer.hidden ? composer : null),
-    target: () => (empty.hidden ? null : hero.querySelector<HTMLElement>(".av")),
+    target: () => (empty.hidden || !inRaphael() ? null : hero.querySelector<HTMLElement>(".av")),
     face: () => avatarHTML({ size: 132, loop: true }),
     onClick: () => void endVoice(),
   });
@@ -436,7 +464,7 @@ export function createAgent(app: AppContext): Page {
 
   /**
    * The face of who the thread is with, where the composer, the card and the empty page show it:
-   * Raphael's (his voice button too), or the member's (whose composer has no voice button).
+   * Raphael's or the member's. Every thread's voice button uses Raphael's emblem.
    */
   function drawFaces(): void {
     voiceButton.innerHTML = avatarHTML({ size: 34 });
@@ -451,12 +479,11 @@ export function createAgent(app: AppContext): Page {
     voice.redraw();
   }
 
-  /** The composer of the thread: "Ask Raphael" and his voice button, or "Message <name>" with none. */
+  /** The thread's prompt and the shared emblem voice button. */
   function drawComposer(): void {
     const words = inRaphael() ? COMPOSER_PLACEHOLDER : memberPlaceholder(members.member().name);
     input.placeholder = words;
     input.setAttribute("aria-label", words);
-    voiceButton.hidden = !inRaphael();
     settingsButton.hidden = !inRaphael();
     empty.classList.toggle("is-member", !inRaphael());
   }
@@ -468,6 +495,8 @@ export function createAgent(app: AppContext): Page {
   function drawWords(): void {
     dropOverlay.querySelector("span")!.textContent = t("agent.dropFiles");
     heading.textContent = t("agent.title");
+    sendButton.setAttribute("aria-label", t("chat.send"));
+    sendButton.dataset.tooltip = t("chat.send");
     for (const [button, label] of [
       [settingsButton, t("agent.settings")],
       [searchButton, t("agent.search")],
@@ -485,10 +514,12 @@ export function createAgent(app: AppContext): Page {
     askCard.setAttribute("aria-label", t("agent.asking"));
     drawFile();
     drawClear();
+    drawQuote();
   }
 
   /** Keep draft cards mounted while their filenames and remove labels stay current. */
   function drawFile(): void {
+    const label = esc(t("agent.unattach"));
     const follows = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= BOTTOM_SLACK_PX;
     for (const [id, chip] of fileChips) {
       if (files.some((file) => file.id === id)) continue;
@@ -506,8 +537,19 @@ export function createAgent(app: AppContext): Page {
       x.setAttribute("aria-label", t("agent.unattach"));
       x.title = t("agent.unattach");
     }
-    fileChip.hidden = files.length === 0;
+    fileChip.querySelectorAll("[data-missing]").forEach(chip => chip.remove());
+    for (const [index, file] of missingFiles.entries()) fileChip.insertAdjacentHTML("beforeend",
+      `<span class="cmp-chip" data-missing><span class="cmp-chip-t">${esc(file.name)} · ${esc(t("chat.reattach"))}</span>` +
+      `<button type="button" class="chip-x" data-act="drop-missing" data-index="${index}" aria-label="${label}">${ico("x")}</button></span>`);
+    fileChip.hidden = files.length === 0 && missingFiles.length === 0;
+    sendButton.disabled = missingFiles.length > 0 || typedQuestion(input.value, files.length > 0) === null;
     if (follows) scroller.scrollTop = scroller.scrollHeight;
+  }
+
+  function drawQuote(): void {
+    quoteCard.hidden = !composerQuote;
+    quoteCard.innerHTML = composerQuote ? quoteHTML(composerQuote) +
+      iconButton("x", t("chat.removeQuote"), ' data-act="remove-quote"').replace(" title=", " data-tooltip=") : "";
   }
 
   /** A draft card with a thumbnail or type icon, size and a remove button. */
@@ -571,12 +613,11 @@ export function createAgent(app: AppContext): Page {
     const out = threadItems(base, state.nowMs).map((item) =>
       item.kind === "day"
         ? { key: item.key, html: dayHTML(item.label) }
-        : { key: item.key, html: turnHTML(item.turn, state, details.has(item.turn.id), shape, item.inner), turnId: item.turn.id },
+        : { key: item.key, html: turnHTML(pacing.view(item.turn), state, details.has(item.turn.id), shape, item.inner), turnId: item.turn.id },
     );
     if (!(searching && query.trim() !== "")) {
-      for (const sent of outgoing) if (sent.member === memberId()) out.push({ key: sent.key, html: pendingTurnHTML(sent.text, TYPED, shape, sent.files) });
-      // the voice always goes to Raphael
-      if (hearing && inRaphael()) out.push({ key: "hearing", html: pendingTurnHTML(null, VOICE, shape) });
+      for (const sent of outgoing) if (sent.member === memberId()) out.push({ key: sent.key, html: pendingTurnHTML(sent.text, TYPED, shape, sent.files, { id: sent.requestId, time: sent.sentAt, quote: sent.quote }) });
+      if (hearing?.member === memberId()) out.push({ key: "hearing", html: pendingTurnHTML(null, VOICE, shape) });
     }
     return out;
   }
@@ -587,6 +628,7 @@ export function createAgent(app: AppContext): Page {
    * is, and the lines that are new are put in their places without moving the others.
    */
   function drawThread(): void {
+    hideSelection();
     const wanted = lines();
     const before = new Map<string, Element>();
     for (const child of [...thread.children]) before.set((child as HTMLElement).dataset.key ?? "", child);
@@ -649,6 +691,7 @@ export function createAgent(app: AppContext): Page {
     searchButton.hidden = shown.length === 0;
     if (shown.length === 0 && searching) closeSearch(false);
     if (isEmpty()) {
+      thread.replaceChildren();
       scroller.hidden = dock.hidden = true;
       empty.hidden = false;
       empty.classList.toggle("is-failed", failure !== null);
@@ -716,7 +759,7 @@ export function createAgent(app: AppContext): Page {
           ...(before === undefined ? {} : { before_id: before }),
           ...(member === RAPHAEL_ID ? {} : { member_id: member }),
         })
-      ).turns;
+      ).turns.filter(turn => !turn.session_id || !retracted.has(turn.session_id));
     } catch (err) {
       // A newer load of the newest turns took over: what this one shows does not count, but an
       // earlier page that failed must still let the reader page up again.
@@ -739,6 +782,8 @@ export function createAgent(app: AppContext): Page {
       if (earlier) loadingEarlier = false;
       return;
     }
+    pacing.observe(turns, got, visible && loadedThread && !earlier && !searching, new Set(outgoing.filter(item => item.member === memberId()).map(item => item.requestId)));
+    loadedThread = true;
     let routinesChanged = false;
     for (const turn of got) {
       for (const message of turn.messages ?? []) {
@@ -782,14 +827,14 @@ export function createAgent(app: AppContext): Page {
             (turn) =>
               (turn.member_id ?? RAPHAEL_ID) === sent.member &&
               sourceOf(turn) === TYPED &&
-              turn.question.trim() === sent.text.trim() &&
+              (turn.session_id ? turn.session_id === sent.requestId : turn.question.trim() === sent.text.trim()) &&
               turn.created_at_ms >= sent.sentAt - 5_000,
           )
         : undefined;
     outgoing = outgoing.filter((sent) => sinceSent(sent) === undefined);
     if (
       hearing &&
-      ((inRaphael() && turns.some((turn) => turn.id > hearing!.after && sourceOf(turn) === VOICE)) ||
+      ((hearing.member === current && turns.some((turn) => turn.id > hearing!.after && sourceOf(turn) === VOICE)) ||
         Date.now() - hearing.since > HEARING_MAX_MS)
     ) {
       stopHearing();
@@ -802,8 +847,8 @@ export function createAgent(app: AppContext): Page {
    * own, because a core that crashed or restarted sends neither a turn nor a phase, and no history
    * load would come to settle it.
    */
-  function startHearing(): void {
-    hearing = { since: Date.now(), after: newestId() };
+  function startHearing(member: number): void {
+    hearing = { since: Date.now(), after: listeningAfter, member };
     clearTimeout(hearingTimer);
     hearingTimer = setTimeout(() => {
       hearingTimer = undefined;
@@ -835,42 +880,41 @@ export function createAgent(app: AppContext): Page {
       await attachQueue;
       if (epoch !== attachmentEpoch) return;
     }
-    const text = typedQuestion(input.value, null, files.length > 0);
+    if (missingFiles.length > 0) { toaster.info(t("chat.reattach")); return; }
+    const text = typedQuestion(input.value, files.length > 0);
     if (text === null) {
       if (input.value.trim() !== "") toaster.info(t("agent.tooLong"));
       return;
     }
     const sending = files;
     const member = memberId();
-    const mine: Outgoing = { key: `out:${++sent}`, member, text, sentAt: Date.now(), files: sending.map(({ name, mime, data, size }) => ({ name, mime, size, preview: fileKind(mime) !== "file" ? `data:${mime};base64,${data}` : undefined })) };
+    const requestId = crypto.randomUUID();
+    const draft: ComposerDraft = { text: input.value, files: sending, missing: [], replacing, quote: composerQuote };
+    rememberDraft(requestId, draft);
+    const mine: Outgoing = { key: `out:${++sent}`, requestId, member, text, sentAt: Date.now(), files: sending.map(({ name, mime, data, size }) => ({ name, mime, size, preview: fileKind(mime) !== "file" ? `data:${mime};base64,${data}` : undefined })), quote: composerQuote };
     outgoing.push(mine);
     input.value = "";
     files = [];
+    replacing = undefined;
+    composerQuote = undefined;
+    drawQuote();
     drawFile();
     fit();
     render(true);
     askingMember = member;
     try {
-      if (member === RAPHAEL_ID) await api.agentAskText(text, wireAttachments(sending));
-      else await api.agentAskText(text, wireAttachments(sending), member);
+      await api.agentAskText(text, wireAttachments(sending), member, { requestId, ...(draft.replacing !== undefined ? { replaceTurnId: draft.replacing } : {}), ...(draft.quote ? { quote: draft.quote } : {}) });
     } catch (err) {
+      if (retracted.has(requestId)) return;
       if (askingMember === member) askingMember = null;
       outgoing = outgoing.filter((item) => item !== mine);
-      if (memberId() === member) {
-        if (input.value === "") {
-          input.value = text;
-          fit();
-        }
-        // The files come back to the composer, unless others were attached meanwhile.
-        if (files.length === 0 && sending.length > 0) {
-          files = sending;
-          drawFile();
-        }
-      }
+      if (memberId() === member && input.value === "" && !files.length) restoreDraft(draft);
+      else restored.set(member, draft);
       toaster.info(describeError(err));
       render();
       return;
     }
+    if (retracted.has(requestId)) return;
     if (askingMember === member) askingMember = null;
     // The turn is written by now: the history brings it, and the question waits no more.
     if (memberId() === member) await load(false);
@@ -881,6 +925,7 @@ export function createAgent(app: AppContext): Page {
 
   /** The field grows with its text, up to `COMPOSER_LINES` lines. */
   function fit(): void {
+    sendButton.disabled = missingFiles.length > 0 || typedQuestion(input.value, files.length > 0) === null;
     input.style.height = "auto";
     const line = parseFloat(getComputedStyle(input).lineHeight) || 22;
     input.style.height = `${Math.min(input.scrollHeight, line * COMPOSER_LINES + 2)}px`;
@@ -959,6 +1004,8 @@ export function createAgent(app: AppContext): Page {
       return false;
     }
     files = [...files, { id: ++fileIds, name, mime, data, size: file.size }];
+    const missing = missingFiles.findIndex(file => file.name === name && file.mime === mime);
+    if (missing >= 0) missingFiles.splice(missing, 1);
     drawFile();
     input.focus();
     return true;
@@ -969,6 +1016,11 @@ export function createAgent(app: AppContext): Page {
   let listenTimer: ReturnType<typeof setTimeout> | undefined;
   /** Whether the app said it is listening since the voice button last sent the key. */
   let listening = false;
+  let voiceMember = RAPHAEL_ID;
+  let listeningAfter = 0;
+  let pressedMember = RAPHAEL_ID;
+  const sendVoice = (edge: "down" | "up", member: number): Promise<void> =>
+    member === RAPHAEL_ID ? api.agentVoice(edge) : api.agentVoice(edge, member);
 
   /**
    * The voice button went down: the question key went down (a click is a press and a release).
@@ -977,8 +1029,13 @@ export function createAgent(app: AppContext): Page {
    */
   function voiceDown(): void {
     if (question) return;
-    const starting = !voice.isUp;
-    voice.up();
+    pressedMember = memberId();
+    const starting = !listening;
+    if (starting) {
+      voiceMember = pressedMember;
+      listeningAfter = newestId();
+    }
+    if (voiceMember === memberId()) voice.up();
     if (starting) {
       listening = false;
       clearTimeout(listenTimer);
@@ -986,19 +1043,19 @@ export function createAgent(app: AppContext): Page {
         if (!listening) voice.down();
       }, LISTEN_WAIT_MS);
     }
-    void api.agentVoice("down").catch((err) => {
+    void sendVoice("down", pressedMember).catch((err) => {
       voice.down();
       toaster.info(describeError(err));
     });
   }
-  const voiceUp = (): void => void api.agentVoice("up").catch(() => {});
+  const voiceUp = (): void => void sendVoice("up", pressedMember).catch(() => {});
 
   /** A click on the flyer: in toggle mode, a second press of the key ends the recording. */
   async function endVoice(): Promise<void> {
     if (app.device().dictation_mode === "hold") return; // the release of the button ends it
     try {
-      await api.agentVoice("down");
-      await api.agentVoice("up");
+      await sendVoice("down", voiceMember);
+      await sendVoice("up", voiceMember);
     } catch {
       // the hotkeys are not running: Esc or the overlay ends it
     }
@@ -1040,6 +1097,7 @@ export function createAgent(app: AppContext): Page {
   // ---------- the search ----------
 
   function openSearch(): void {
+    pacing.flush();
     searching = true;
     find.hidden = false;
     searchButton.setAttribute("aria-expanded", "true");
@@ -1122,6 +1180,7 @@ export function createAgent(app: AppContext): Page {
 
   /** The conversation is gone in the core: the page drops every turn it loaded and shows the empty page. */
   function forgetTurns(): void {
+    pacing.flush();
     turns = [];
     state.stopping.clear();
     forgetReruns(state, turns);
@@ -1195,6 +1254,10 @@ export function createAgent(app: AppContext): Page {
    * closes, the composer and the card become that thread's, and nothing of the last thread moves in.
    */
   function switchThread(): void {
+    hideTooltip();
+    hideSelection();
+    pacing.flush();
+    loadedThread = false;
     loads++;
     attachmentEpoch++;
     attachmentMedia.reset();
@@ -1215,6 +1278,12 @@ export function createAgent(app: AppContext): Page {
     if (voice.isUp) voice.drop();
     input.value = "";
     files = [];
+    missingFiles = [];
+    replacing = undefined;
+    composerQuote = undefined;
+    drawQuote();
+    const draft = restored.get(memberId());
+    if (draft) { restored.delete(memberId()); restoreDraft(draft); }
     drawFile();
     fit();
     drawComposer();
@@ -1224,6 +1293,7 @@ export function createAgent(app: AppContext): Page {
     delete askCard.dataset.id;
     drawBackgroundQuestions();
     render();
+    if (listening && voiceMember === memberId() && !question) voice.up();
     if (visible) {
       void load(false).then(() => {
         if (visible && !scroller.hidden) scroller.scrollTop = scroller.scrollHeight;
@@ -1350,8 +1420,9 @@ export function createAgent(app: AppContext): Page {
 
   async function copyMessage(control: HTMLElement): Promise<void> {
     const source = messageSource(control);
-    if (!source) return;
-    try { await copyText(messagePlainText(source.text, source.markdown)); }
+    const pending = outgoing.find(item => item.requestId === control.closest<HTMLElement>("[data-session]")?.dataset.session);
+    if (!source && !pending) return;
+    try { await copyText(source ? messagePlainText(source.text, source.markdown) : pending!.text); }
     catch (err) { toaster.info(describeError(err)); }
   }
 
@@ -1359,13 +1430,18 @@ export function createAgent(app: AppContext): Page {
     const source = messageSource(control);
     if (!source || look().regenerateTurnId !== source.turn.id) return;
     const member = memberId(), turn = source.turn;
+    const requestId = crypto.randomUUID();
+    const epoch = attachmentEpoch;
+    const draft = await draftFor(turn);
+    if (memberId() !== member || attachmentEpoch !== epoch) return;
+    if (draft.missing.length) { restoreDraft(draft); toaster.info(t("chat.reattach")); return; }
     regenerating.add(turn.id);
-    const mine: Outgoing = { key: `out:${++sent}`, member, text: turn.question, sentAt: Date.now(), files: [] };
+    rememberDraft(requestId, draft);
+    const mine: Outgoing = { key: `out:${++sent}`, requestId, member, text: turn.question, sentAt: Date.now(), files: draft.files.map(({ name, mime }) => ({ name, mime })), quote: draft.quote };
     outgoing.push(mine); render(true);
     askingMember = member;
     try {
-      if (member === RAPHAEL_ID) await api.agentAskText(turn.question);
-      else await api.agentAskText(turn.question, [], member);
+      await api.agentAskText(turn.question, wireAttachments(draft.files), member, { requestId, ...(draft.quote ? { quote: draft.quote } : {}) });
       if (visible && memberId() === member) await load(false);
       else members.changed();
     } catch (err) { toaster.info(describeError(err)); }
@@ -1378,6 +1454,76 @@ export function createAgent(app: AppContext): Page {
   }
 
   // ---------- input ----------
+
+  function rememberDraft(id: string, draft: ComposerDraft): void {
+    drafts.set(id, draft);
+    const bytes = (): number => [...drafts.values()].reduce((sum, item) => sum + item.files.reduce((size, file) => size + file.data.length, 0), 0);
+    while (drafts.size > 1 && (drafts.size > 20 || bytes() > 64 * 1024 * 1024)) drafts.delete(drafts.keys().next().value!);
+  }
+
+  async function draftFor(turn: Pick<AgentTurn, "session_id" | "question" | "attachments" | "quote">): Promise<ComposerDraft> {
+    const cached = drafts.get(turn.session_id ?? "");
+    if (cached) return cached;
+    const draft: ComposerDraft = { text: turn.question, files: [], missing: [], quote: turn.quote ?? undefined };
+    for (const file of turn.attachments ?? []) {
+      if (file.id) {
+        try {
+          const stored = await api.core<{ mime: string; data: string }>("attachments.get", { id: file.id });
+          if (typeof stored.data !== "string" || typeof stored.mime !== "string") throw new Error("unavailable");
+          const size = file.size ?? Math.floor(stored.data.length * 3 / 4) - (stored.data.endsWith("==") ? 2 : stored.data.endsWith("=") ? 1 : 0);
+          draft.files.push({ id: ++fileIds, name: file.name, mime: stored.mime, data: stored.data, size });
+          continue;
+        } catch {
+          // Old metadata or a missing stored copy needs an explicit replacement from the owner.
+        }
+      }
+      draft.missing.push({ ...file });
+    }
+    return draft;
+  }
+
+  function restoreDraft(draft: ComposerDraft): void {
+    input.value = draft.text;
+    attachmentEpoch++;
+    files = [...draft.files];
+    missingFiles = draft.missing.map(file => ({ ...file }));
+    replacing = draft.replacing;
+    composerQuote = draft.quote;
+    drawQuote();
+    drawFile(); fit(); focusComposer();
+  }
+
+  async function editMessage(control: HTMLElement): Promise<void> {
+    const source = messageSource(control);
+    if (!source || source.key !== "question") return;
+    const member = memberId(), epoch = attachmentEpoch;
+    const draft = await draftFor(source.turn);
+    if (memberId() === member && attachmentEpoch === epoch) restoreDraft({ ...draft, replacing: source.turn.id });
+  }
+
+  async function cancelMessage(control?: HTMLElement): Promise<void> {
+    const source = control ? messageSource(control) : null;
+    const pending = control ? outgoing.find(item => item.requestId === control.closest<HTMLElement>("[data-session]")?.dataset.session) : [...outgoing].reverse().find(item => item.member === memberId());
+    const turn = pending ? turns.find(turn => turn.session_id === pending.requestId) : source?.turn ?? (!control ? shownTurns().find(turn => sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && (turn.status === "running" || turn.status === "confirm" || isLive(turn.task) || turn.task?.state === "waiting")) : undefined);
+    const session = pending?.requestId ?? turn?.session_id;
+    if (!session || retracting.has(session)) return;
+    const member = memberId();
+    retracting.add(session);
+    try {
+      await api.agentRetract(session, member, turn?.id);
+      const draft = await draftFor(pending ? { session_id: session, question: pending.text, attachments: pending.files, quote: pending.quote } : turn!);
+      retracted.add(session);
+      outgoing = outgoing.filter(item => item.requestId !== session);
+      turns = turns.filter(item => item.session_id !== session && item.id !== turn?.id);
+      if (found) found = found.filter(item => item.session_id !== session && item.id !== turn?.id);
+      if (questionOwner === member && (turn?.status === "confirm" || pending)) setQuestion(null);
+      if (askingMember === member) askingMember = null;
+      if (memberId() === member) { render(); restoreDraft(draft); }
+      else restored.set(member, draft);
+      members.changed();
+    } catch (err) { toaster.info(describeError(err)); }
+    finally { retracting.delete(session); }
+  }
 
   el.addEventListener("auxclick", (e) => {
     const link = (e.target as Element).closest<HTMLElement>('[data-act="open-url"]');
@@ -1421,6 +1567,20 @@ export function createAgent(app: AppContext): Page {
       }
       case "copy-message":
         void copyMessage(act);
+        break;
+      case "edit-message":
+        void editMessage(act);
+        break;
+      case "cancel-message":
+        void cancelMessage(act);
+        break;
+      case "drop-missing":
+        missingFiles.splice(Number(act.dataset.index), 1);
+        drawFile();
+        break;
+      case "remove-quote":
+        composerQuote = undefined;
+        drawQuote(); focusComposer();
         break;
       case "copy-code": {
         const code = act.closest(".message-code")?.querySelector("code")?.textContent;
@@ -1490,6 +1650,9 @@ export function createAgent(app: AppContext): Page {
     void send();
   });
   input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !input.value.trim() && !files.length && !listening) {
+      e.preventDefault(); e.stopPropagation(); void cancelMessage(); return;
+    }
     if (!sendsOnEnter(e)) return;
     e.preventDefault();
     void send();
@@ -1582,6 +1745,7 @@ export function createAgent(app: AppContext): Page {
   });
 
   app.onEvent((event) => {
+    if (event.type === "Hotkey" && event.kind === "cancel" && visible && document.activeElement === input && !input.value.trim() && !files.length && !listening) void cancelMessage();
     members.follow(event);
     if (wantsRefresh(event)) {
       // a turn of another thread changes only that member's row
@@ -1603,13 +1767,21 @@ export function createAgent(app: AppContext): Page {
       voice.level(event.value);
     } else if (event.type === "Dictation" && event.agent) {
       if (event.phase === "listening") {
+        const member = event.member_id ?? RAPHAEL_ID;
+        if (!listening || voiceMember !== member) listeningAfter = newestId();
+        voiceMember = member;
         listening = true;
-        if (visible && !question && inRaphael()) voice.up();
+        if (visible && !question && voiceMember === memberId()) voice.up();
       } else {
+        if (event.phase === "processing") {
+          const member = event.member_id ?? RAPHAEL_ID;
+          if (!listening || voiceMember !== member) listeningAfter = newestId();
+          voiceMember = member;
+        }
         listening = false;
         voice.down();
         if (event.phase === "processing") {
-          startHearing();
+          startHearing(voiceMember);
           if (visible) render(true);
         } else if (hearing) {
           stopHearing();
@@ -1667,11 +1839,16 @@ export function createAgent(app: AppContext): Page {
         .catch(() => {});
       void load(false).then(() => {
         if (visible && !scroller.hidden && (!wasVisible || draft !== null)) scroller.scrollTop = scroller.scrollHeight;
+        if (visible && listening && voiceMember === memberId() && !question) voice.up();
         refocus();
       });
       drawBackgroundQuestions();
     },
     hide() {
+      hideTooltip();
+      hideSelection();
+      pacing.flush();
+      loadedThread = false;
       visible = false;
       closeLightbox?.();
       resetDrop();

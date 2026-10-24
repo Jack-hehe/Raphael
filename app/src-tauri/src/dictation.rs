@@ -187,6 +187,7 @@ enum Started {
 struct Session {
     id: String,
     kind: Kind,
+    member: u64,
     started: watch::Receiver<Started>,
 }
 
@@ -278,7 +279,11 @@ pub trait Desk: Send + Sync {
         text: &str,
         attachments: Vec<Value>,
         member: u64,
+        request_id: Option<String>,
+        replace_turn_id: Option<u64>,
+        quote: Option<Value>,
     ) -> Result<JoinHandle<()>, Busy>;
+    fn retract(&self, session: String, member: u64, turn_id: Option<u64>) -> JoinHandle<Result<Value, RpcError>>;
     /// The YES/NO question that waits for its answer now, with the time it has left as its
     /// `timeout_ms`.
     fn open_question(&self) -> Option<AskPrompt>;
@@ -381,7 +386,7 @@ impl State {
 
 /// Told where a dictation (`agent` false) or a question to Raphael (`agent` true) is: the first-run
 /// guide's lessons follow it. Only the phase, never what was said.
-pub type PhaseReport = Arc<dyn Fn(DictationPhase, bool) + Send + Sync>;
+pub type PhaseReport = Arc<dyn Fn(DictationPhase, bool, Option<u64>) + Send + Sync>;
 
 /// Told the microphone's loudness (0 to 1) while a question to Raphael is being recorded: the main
 /// window's voice mode lets the ring around the person's picture follow it, as the overlay does.
@@ -526,7 +531,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// Tells the report, if there is one, that a dictation or question reached `phase`.
     fn tell(&self, phase: DictationPhase, agent: bool) {
         if let Some(report) = &self.phase_report {
-            report(phase, agent);
+            let member = lock(&self.state).session.as_ref().map(|session| session.member);
+            report(phase, agent, member.filter(|member| agent && *member != 0));
         }
     }
 
@@ -599,7 +605,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 let action = lock(&self.state).holdtap.on_up();
                 self.act(action, now_ms)
             }
-            HotkeyEvent::AgentDown => self.agent_down(now_ms),
+            HotkeyEvent::AgentDown => self.agent_down(now_ms, 0),
+            HotkeyEvent::MemberDown(member) => self.agent_down(now_ms, member),
             HotkeyEvent::AgentUp => {
                 let action = lock(&self.state).agent_holdtap.on_up();
                 match action {
@@ -790,7 +797,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         match action {
             Action::StartRecording => {
                 log::info!("dictation: recording ({} mode)", self.mode.get().as_str());
-                self.start(Kind::Dictation, now_ms)
+                self.start(Kind::Dictation, now_ms, 0)
             }
             Action::StopRecording => {
                 log::info!("dictation: stopping");
@@ -804,7 +811,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// Alt, the first half of Right Alt+Space, has just started (see [`Self::agent_down`]): that
     /// one is dropped, the emblem it showed is kept and greets the question, and the core hears of
     /// the question only after it has cancelled the dictation.
-    fn start(&self, kind: Kind, now_ms: u64) -> Option<JoinHandle<()>> {
+    fn start(&self, kind: Kind, now_ms: u64, member: u64) -> Option<JoinHandle<()>> {
         let id = uuid::Uuid::new_v4().to_string();
         let (answered, started) = watch::channel(Started::Pending);
         let replaced = {
@@ -823,6 +830,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             state.session = Some(Session {
                 id: id.clone(),
                 kind,
+                member,
                 started,
             });
             state.agent = (kind == Kind::Agent).then_some(AgentStage::Listening);
@@ -1308,7 +1316,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// longer is a real one, and the key does nothing. Neither does it while something is being
     /// processed, nor a moment after Right Alt ended a question: that is the Space of a Right
     /// Alt+Space pressed to end it, even if the question is over by then (it heard nothing, say).
-    fn agent_down(&self, now_ms: u64) -> Option<JoinHandle<()>> {
+    fn agent_down(&self, now_ms: u64, member: u64) -> Option<JoinHandle<()>> {
         {
             let state = lock(&self.state);
             if state.phase != Phase::Recording
@@ -1341,7 +1349,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         match action {
             Action::StartRecording => {
                 log::info!("agent: listening ({} mode)", mode.as_str());
-                self.start(Kind::Agent, now_ms)
+                self.start(Kind::Agent, now_ms, member)
             }
             Action::StopRecording => {
                 log::info!("agent: stopping");
@@ -1443,7 +1451,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         if !self.set_stage(&id, AgentStage::Thinking) {
             return;
         }
-        self.converse(&id, question, target_app, None, Vec::new(), 0)
+        self.converse(&id, question, target_app, None, Vec::new(), session.member, None, None)
             .await;
     }
 
@@ -1476,9 +1484,21 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         attachments: Vec<Value>,
         member: u64,
     ) -> Result<JoinHandle<()>, Busy> {
+        self.ask_composed(text, attachments, member, None, None, None)
+    }
+
+    pub fn ask_composed(
+        &self,
+        text: &str,
+        attachments: Vec<Value>,
+        member: u64,
+        request_id: Option<String>,
+        replace_turn_id: Option<u64>,
+        quote: Option<Value>,
+    ) -> Result<JoinHandle<()>, Busy> {
         let _transition = lock(&self.transitions);
         self.end_speaking();
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         {
             let mut state = lock(&self.state);
             if state.phase != Phase::Idle {
@@ -1491,6 +1511,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             state.session = Some(Session {
                 id: id.clone(),
                 kind: Kind::Agent,
+                member,
                 started,
             });
             state.agent = Some(AgentStage::Thinking);
@@ -1499,7 +1520,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         log::info!("agent: a typed question");
         let (this, text) = (self.clone(), text.to_owned());
         Ok(tokio::spawn(async move {
-            this.converse(&id, &text, None, Some(TYPED_SOURCE), attachments, member)
+            this.converse(&id, &text, None, Some(TYPED_SOURCE), attachments, member, replace_turn_id, quote)
                 .await;
         }))
     }
@@ -1519,6 +1540,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         source: Option<&str>,
         attachments: Vec<Value>,
         member: u64,
+        replace_turn_id: Option<u64>,
+        quote: Option<Value>,
     ) {
         let mut params = json!({
             "session_id": id,
@@ -1534,6 +1557,12 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
         if member != 0 {
             params["member_id"] = json!(member);
+        }
+        if let Some(turn) = replace_turn_id {
+            params["replace_turn_id"] = json!(turn);
+        }
+        if let Some(quote) = quote {
+            params["quote"] = quote;
         }
         let mut reply = self.core.call("agent.ask", params).await;
         let mut asked = 0;
@@ -1610,6 +1639,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 lock(&self.state).go_idle();
                 self.cancel.set(false);
             }
+            // A member's recording may have shown the shared listening overlay. Its answer
+            // stays in the thread, so no answer overlay will replace that listening state.
+            self.overlay.hide();
             return None;
         }
         let parsed = if may_ask {
@@ -1630,7 +1662,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 }
                 None
             }
-            Ok(Reply::Ask(prompt)) => {
+            Ok(Reply::Ask(mut prompt)) => {
+                prompt.member_id = (member != 0).then_some(member);
                 let (answer, wait) = oneshot::channel();
                 {
                     let mut state = lock(&self.state);
@@ -1986,8 +2019,33 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Desk
         text: &str,
         attachments: Vec<Value>,
         member: u64,
+        request_id: Option<String>,
+        replace_turn_id: Option<u64>,
+        quote: Option<Value>,
     ) -> Result<JoinHandle<()>, Busy> {
-        DictationController::ask_typed_with(self, text, attachments, member)
+        self.ask_composed(text, attachments, member, request_id, replace_turn_id, quote)
+    }
+
+    fn retract(&self, session: String, member: u64, turn_id: Option<u64>) -> JoinHandle<Result<Value, RpcError>> {
+        let _transition = lock(&self.transitions);
+        let current = {
+            let mut state = lock(&self.state);
+            if state.session.as_ref().is_some_and(|active| active.id == session && active.member == member) {
+                state.go_idle();
+                self.cancel.set(false);
+                true
+            } else { false }
+        };
+        if current {
+            self.overlay.hide();
+            self.tell(DictationPhase::Cancelled, true);
+        }
+        let core = self.core.clone();
+        tokio::spawn(async move {
+            let mut params = json!({"session_id": session, "member_id": member});
+            if let Some(turn_id) = turn_id { params["turn_id"] = json!(turn_id); }
+            core.call("agent.history.retract", params).await
+        })
     }
 
     fn open_question(&self) -> Option<AskPrompt> {
@@ -2294,10 +2352,11 @@ mod app {
                     mode,
                 )
                 .with_language(language.clone())
-                .with_phase_report(Arc::new(|phase, agent| {
+                .with_phase_report(Arc::new(|phase, agent, member_id| {
                     crate::commands::tell_main_window(crate::commands::MainEvent::Dictation {
                         phase,
                         agent,
+                        member_id,
                     });
                 }))
                 .with_question_report(Arc::new(|news| {
@@ -2409,7 +2468,7 @@ mod app {
                                 log::info!("hotkey {event:?} ignored: the core is not running");
                                 if matches!(
                                     event,
-                                    HotkeyEvent::DictationDown | HotkeyEvent::AgentDown
+                                    HotkeyEvent::DictationDown | HotkeyEvent::AgentDown | HotkeyEvent::MemberDown(_)
                                 ) && !told_no_core
                                 {
                                     told_no_core = true;
@@ -5553,6 +5612,7 @@ mod tests {
     /// The prompt of [`question`].
     fn prompt(id: &str, timeout_ms: u64) -> AskPrompt {
         AskPrompt {
+            member_id: None,
             always: None,
             id: id.to_owned(),
             tier: Tier::T2,
@@ -5603,6 +5663,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn composed_requests_keep_their_id_and_replacement_and_retraction_drops_late_replies() {
+        let (core, gate) = agent_core(answer("答", "late")).gated("agent.ask");
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let turn = c.ask_composed("corrected", Vec::new(), 3, Some("request-1".into()), Some(17), None).unwrap();
+        settle().await;
+        assert_eq!(c.core().call_params("agent.ask")["session_id"], "request-1");
+        assert_eq!(c.core().call_params("agent.ask")["replace_turn_id"], 17);
+        c.retract("request-1".into(), 3, Some(18)).await.unwrap().unwrap();
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.core().call_params("agent.history.retract"), json!({"session_id":"request-1", "member_id":3, "turn_id":18}));
+        gate.notify_one(); turn.await.unwrap();
+        assert!(!c.overlay().events().iter().any(|event| event.starts_with("say:")));
+    }
+
+    #[tokio::test]
+    async fn retracting_an_old_message_leaves_a_new_request_alone() {
+        let (core, gate) = agent_core(answer("答", "new answer")).gated("agent.ask");
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let turn = c.ask_composed("new", Vec::new(), 3, Some("new".into()), None, None).unwrap();
+        settle().await;
+        c.retract("old".into(), 3, Some(1)).await.unwrap().unwrap();
+        assert_eq!(c.agent_stage(), Some(AgentStage::Thinking));
+        gate.notify_one(); turn.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_quote_is_sent_separately_and_voice_requests_have_no_quote() {
+        let c = agent(answer("答", "Explanation"));
+        let quote = json!({"text":"しかねません", "author":"Teacher"});
+        c.ask_composed("Explain", Vec::new(), 3, Some("quote-1".into()), None, Some(quote.clone()))
+            .unwrap().await.unwrap();
+        let params = c.core().call_params("agent.ask");
+        assert_eq!(params["text"], "Explain");
+        assert_eq!(params["quote"], quote);
+        let c = agent(answer("答", "Hello"));
+        c.ask_typed("Hi").unwrap().await.unwrap();
+        assert!(c.core().call_params("agent.ask").get("quote").is_none());
+    }
+
+    #[tokio::test]
     async fn a_question_typed_in_a_members_thread_names_the_member_and_raphaels_names_none() {
         let c = agent(answer("答", "好"));
         c.ask_typed_with("今天的進度？", Vec::new(), 3)
@@ -5640,6 +5740,47 @@ mod tests {
         let c = agent(answer("答", "好"));
         ask_aloud(&c).await;
         assert_eq!(c.core().call_params("agent.ask").get("source"), None);
+    }
+
+    #[tokio::test]
+    async fn a_members_voice_press_keeps_its_thread_until_the_turn_ends() {
+        let phases = Arc::new(Mutex::new(Vec::new()));
+        let sink = phases.clone();
+        let c = agent(answer("", "A member's answer"))
+            .with_phase_report(Arc::new(move |phase, agent, member| {
+                sink.lock().unwrap().push((phase, agent, member));
+            }));
+        run(&c, HotkeyEvent::MemberDown(3), 0).await;
+        run(&c, AgentUp, 900).await;
+        let params = c.core().call_params("agent.ask");
+        assert_eq!(params["member_id"], json!(3));
+        assert_eq!(params.get("source"), None);
+        assert_eq!(c.agent_stage(), None);
+        assert_eq!(*phases.lock().unwrap(), [
+            (DictationPhase::Listening, true, Some(3)),
+            (DictationPhase::Processing, true, Some(3)),
+        ]);
+        assert_eq!(c.overlay().events().last().map(String::as_str), Some("hide"));
+        assert!(c.overlay().events().iter().all(|event| !event.starts_with("notice")));
+        // The next global hotkey has no member target left over from the composer.
+        run(&c, AgentDown, 2000).await;
+        run(&c, AgentUp, 2900).await;
+        assert_eq!(c.core().call_params("agent.ask").get("member_id"), None);
+    }
+
+    #[tokio::test]
+    async fn a_members_voice_confirmation_carries_its_recipient_when_reopened() {
+        let (c, heard) = questioning(question("c-1", 30_000));
+        run(&c, HotkeyEvent::MemberDown(3), 0).await;
+        let turn = c.on_hotkey(AgentUp, 900).unwrap();
+        until_stage(&c, AgentStage::Asking).await;
+        let prompt = c.open_question().unwrap();
+        assert_eq!(prompt.member_id, Some(3));
+        assert!(matches!(&heard.lock().unwrap()[0], QuestionNews::Open(prompt) if prompt.member_id == Some(3)));
+        c.on_confirm("c-1", false);
+        turn.await.unwrap();
+        assert_eq!(c.core().call_params("agent.ask")["member_id"], json!(3));
+        assert_eq!(c.agent_stage(), None);
     }
 
     #[tokio::test]
@@ -7866,7 +8007,7 @@ mod tests {
     fn reporting(core: FakeCore, paster: FakePaster) -> (Ctl, Seen) {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = seen.clone();
-        let c = controller(core, paster).with_phase_report(Arc::new(move |phase, agent| {
+        let c = controller(core, paster).with_phase_report(Arc::new(move |phase, agent, _member| {
             sink.lock().unwrap().push((phase, agent));
         }));
         (c, seen)

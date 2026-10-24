@@ -516,6 +516,12 @@ PRAGMA user_version = 19;
 COMMIT;
 """,
     20: _migrate_v20,
+    21: """
+BEGIN;
+ALTER TABLE agent_turns ADD COLUMN quote TEXT;
+PRAGMA user_version = 21;
+COMMIT;
+""",
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

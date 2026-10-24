@@ -147,6 +147,7 @@ pub fn run() {
             commands::mic_access,
             commands::main_events,
             commands::agent_ask_text,
+            commands::agent_retract,
             commands::agent_question_open,
             commands::agent_question_answer,
             commands::agent_page_shown,

@@ -181,6 +181,7 @@ def build_user_message(
     say_ja: bool = False,
     narrated: bool = False,
     member: bool = False,
+    quote: dict[str, str] | None = None,
 ) -> str:
     """What the model is shown: the summary of the earlier conversation, the latest turns
     (oldest first), the date and time, the results of the tools, the question in tags, which mark it
@@ -207,6 +208,9 @@ def build_user_message(
         parts.append("Tool results:\n" + "\n".join(_tool_line(result) for result in tools))
     if background:  # the block of the tasks in the background (`background.brief`), as data
         parts.append(background)
+    if quote:
+        from .quotes import quote_context
+        parts.append(quote_context(quote))
     parts.append(f"<question>\n{question}\n</question>")
     if looked_up:
         parts.append(

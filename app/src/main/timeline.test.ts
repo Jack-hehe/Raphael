@@ -374,18 +374,20 @@ describe("a turn", () => {
 
   test("the person on the right without 「」 with where and when; Raphael on the left with his face and 《》", () => {
     const html = turnHTML(turn(5), emptyTimelineState(), false, LOOK);
-    expect(html).toContain('<span class="me-src" role="img" aria-label="語音 · 09:00" title="語音 · 09:00">');
+    expect(html).not.toContain('class="me-src"');
+    expect(html).toContain('data-act="edit-message"');
     expect(html).toContain('<div class="bubble">台北天氣如何，順便記到行事曆</div>');
     expect(html).toContain('<span class="ra-face" title="gpt-6-luna · US$0.0012"><i class="face"></i></span>');
     expect(html).toContain('<div class="ans"><div class="message-text"><p>《答。台北現在 24 度。》</p>');
     expect(html).not.toContain("tn-foot"); // nothing more to open
   });
 
-  test("where it came from: a microphone, Telegram's mark or a keyboard, named", () => {
-    expect(turnHTML(turn(5, { source: "telegram" }), emptyTimelineState(), false, LOOK)).toContain('aria-label="Telegram · 09:00"');
-    const typed = turnHTML(turn(5, { source: "app" }), emptyTimelineState(), false, LOOK);
-    expect(typed).toContain('aria-label="打字 · 09:00"');
-    expect(sourceIcon("app")).toBe(sourceIcon("app"));
+  test("source data stays available but no source marks are drawn", () => {
+    for (const source of ["voice", "telegram", "app"]) {
+      const html = turnHTML(turn(5, { source }), emptyTimelineState(), false, LOOK);
+      expect(html).not.toContain('class="me-src"');
+      expect(pendingTurnHTML("Pending", source, LOOK)).not.toContain('class="me-src"');
+    }
     expect(new Set(["voice", "telegram", "app"].map(sourceIcon)).size).toBe(3);
     setLocale("en");
     expect(sourceName("app")).toBe("Typed");

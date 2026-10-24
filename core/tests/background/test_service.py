@@ -136,6 +136,31 @@ async def test_the_turn_of_the_history_that_handed_the_task_over_is_completed_wi
     assert done.question == TASK_TEXT
 
 
+async def test_retracting_a_running_turn_cannot_write_its_late_report_into_a_reused_id(make_rig, conn):
+    rig = make_rig()
+    history = AgentHistory(conn, rig.wall)
+    entered = asyncio.Event()
+
+    async def hold(**kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    rig.client.replies = [hold]
+    old = history.add(session_id="s1", question="Old", route="delegate", prefix="",
+                      text="Working", status="done")
+    task_id = rig.submit()
+    rig.service.attach_turn(task_id, old)
+    await asyncio.wait_for(entered.wait(), 5)
+    await rig.service.cancel_session("s1")
+    history.delete(old)
+    new = history.add(session_id="new", question="New", route="chat", prefix="",
+                      text="New answer", status="done")
+    assert new == old
+    await rig.wait_for_reports()
+    assert history.get(new).text == "New answer"
+    assert history.messages([new]) == {}
+
+
 async def test_the_report_is_in_the_language_of_the_request(make_rig):
     rig = make_rig()
     await look_twice_then_report(rig)

@@ -192,6 +192,18 @@ async def test_a_turn_in_a_thread_that_is_not_on_screen_is_unread_until_it_is_re
     assert not listed[member["id"]]["unread"] and listed[0]["unread"]
 
 
+async def test_an_unseen_members_voice_reply_is_unread_because_it_is_text_only(rig, conn):
+    member = (await rig.call("members.create", {"name": "Voice recipient"}))["member"]
+    await rig.call("members.viewing", {"id": 0})
+    turn_id = AgentHistory(conn).add(
+        session_id="voice", question="Question", route="answer", prefix="", text="Answer",
+        status="done", source="voice", member_id=member["id"],
+    )
+    rig.service.turn_arrived(turn_id)
+    listed = {m["id"]: m for m in (await rig.call("members.list"))["members"]}
+    assert listed[member["id"]]["unread"]
+
+
 async def test_a_thread_waits_while_a_question_waits_there_or_the_background_says_so(rig, conn):
     member = (await rig.call("members.create", {"name": "A"}))["member"]
     other = (await rig.call("members.create", {"name": "B"}))["member"]

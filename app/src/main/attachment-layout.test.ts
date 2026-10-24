@@ -29,6 +29,16 @@ test("pictures and video have no visible filename, size, or separate information
   expect(parse(sentFileHTML(video)).querySelector("video[controls]")).not.toBeNull();
 });
 
+test("a quote stays at the top of the text bubble below the owner's media", () => {
+  const root = parse(pendingTurnHTML("Question", "app", { face: () => "" }, [image], {
+    id: "pending", time: 1000, quote: { text: "Selected passage", author: "You" },
+  }));
+  const owner = root.querySelector(".owner-content")!;
+  expect([...owner.children].map(node => node.className)).toEqual(["me-files", "bubble"]);
+  expect(owner.querySelector(".bubble")!.firstElementChild?.className).toBe("message-quote");
+  expect(owner.querySelector(".bubble")!.textContent).toBe("YouSelected passageQuestion");
+});
+
 test("audio has one pill with controls; documents open from their whole card", () => {
   const sound = parse(sentFileHTML(audio));
   expect(sound.querySelector(".attachment-audio [data-audio-toggle]")).not.toBeNull();

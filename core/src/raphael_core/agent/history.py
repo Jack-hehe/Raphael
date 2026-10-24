@@ -40,8 +40,10 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from ..clock import wall_clock_ms
+from ..protocol import RpcError
 from ..memory.terms import QueryWord, fts_quote, index_terms, query_words
 from .steps import Step
+from .quotes import quote_from_wire
 
 # Where a turn came from when nobody says: the hotkey and the overlay.
 VOICE = "voice"
@@ -67,11 +69,12 @@ class Turn:
     member_id: int = 0  # whose thread it is in: 0 for Raphael
     peer_id: int | None = None  # for an exchange, the member on the other side
     messages: list[str] = field(default_factory=list)
+    quote: dict[str, str] | None = None
 
 
 _COLUMNS = (
     "id, created_at_ms, session_id, question, route, prefix, text, detail, status, cost_usd,"
-    " source, model, attachments, member_id, peer_id"
+    " source, model, attachments, member_id, peer_id, quote"
 )
 _STEP_COLUMNS = "turn_id, kind, tool, server, outcome, ms, reason, at_ms, detail"
 _TURN_COLUMNS = ", ".join(f"t.{name.strip()}" for name in _COLUMNS.split(","))
@@ -102,6 +105,11 @@ def _attachments(saved: str | None) -> list[dict[str, str | int]] | None:
 def _to_turn(row: sqlite3.Row) -> Turn:
     data = dict(row)
     data["attachments"] = _attachments(data.get("attachments"))
+    try:
+        data["quote"] = quote_from_wire(json.loads(data["quote"])) if data.get("quote") else None
+    except (ValueError, TypeError, RpcError):
+        # Damaged saved context must not prevent reading the rest of a thread.
+        data["quote"] = None
     return Turn(**data)
 
 
@@ -148,6 +156,7 @@ class AgentHistory:
         attachments: Sequence[Mapping[str, str | int]] = (),
         member_id: int = 0,
         peer_id: int | None = None,
+        quote: dict[str, str] | None = None,
     ) -> int:
         """Store a new turn, made now, in the thread of `member_id`, with the steps taken for it,
         and return its id. `attachments` are the names and the types of the files handed with the
@@ -156,8 +165,8 @@ class AgentHistory:
         with self._conn:
             cursor = self._conn.execute(
                 "INSERT INTO agent_turns (created_at_ms, session_id, question, route, prefix,"
-                " text, detail, status, cost_usd, source, model, attachments, member_id, peer_id)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " text, detail, status, cost_usd, source, model, attachments, member_id, peer_id, quote)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     self._now_ms(),
                     session_id,
@@ -173,6 +182,7 @@ class AgentHistory:
                     json.dumps(files, ensure_ascii=False) if files else None,
                     member_id,
                     peer_id,
+                    json.dumps(quote, ensure_ascii=False) if quote else None,
                 ),
             )
             turn_id = cursor.lastrowid
@@ -459,6 +469,22 @@ class AgentHistory:
             self._conn.execute("DELETE FROM agent_turns_fts")
             cursor = self._conn.execute("DELETE FROM agent_turns")
         return cursor.rowcount
+
+    def for_session(self, session_id: str) -> list[Turn]:
+        rows = self._conn.execute(
+            f"SELECT {_COLUMNS} FROM agent_turns WHERE session_id = ?", (session_id,)
+        ).fetchall()
+        return [_to_turn(row) for row in rows]
+
+    def delete(self, turn_id: int) -> bool:
+        """Remove a single turn and its public lines, steps and search terms."""
+        with self._conn:
+            self._conn.execute("UPDATE worker_tasks SET turn_id = NULL WHERE turn_id = ?", (turn_id,))
+            self._conn.execute("DELETE FROM agent_messages WHERE turn_id = ?", (turn_id,))
+            self._conn.execute("DELETE FROM agent_steps WHERE turn_id = ?", (turn_id,))
+            self._conn.execute("DELETE FROM agent_turns_fts WHERE rowid = ?", (turn_id,))
+            cursor = self._conn.execute("DELETE FROM agent_turns WHERE id = ?", (turn_id,))
+        return cursor.rowcount > 0
 
     def clear_member(self, member_id: int) -> int:
         """Delete the thread of `member_id` and the exchanges of the other threads with it, with

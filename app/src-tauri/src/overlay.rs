@@ -115,6 +115,9 @@ impl Tier {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AskPrompt {
     pub id: String,
+    /// The recipient of the request, supplied by the controller rather than the model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_id: Option<u64>,
     pub tier: Tier,
     pub prefix: String,
     pub text: String,
@@ -1285,6 +1288,7 @@ mod tests {
 
     fn prompt(tier: Tier) -> AskPrompt {
         AskPrompt {
+            member_id: None,
             always: None,
             id: "c-7".into(),
             tier,

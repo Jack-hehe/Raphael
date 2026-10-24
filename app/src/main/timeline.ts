@@ -1,6 +1,6 @@
 import { fileKind, sentFileHTML } from "./attachments";
 // A turn of the conversation as the 拉斐爾 page shows it: the person's words on the right, with a
-// small mark of where they were said; Raphael on the left, with his face and each public message
+// their actions below each bubble; Raphael on the left, with his face and each public message
 // in order. Events are small chips, questions mount inline, and pending work shows three dots.
 // Raw steps remain available to older detail callers, outside the main conversation flow.
 //
@@ -14,10 +14,11 @@ import type { MessageKey } from "./i18n/zh-TW";
 import { replyLine, userLine } from "../shared/anime";
 import { TYPED, VOICE, hasDetail, highlightHTML, sourceOf } from "./conversation";
 import { messageHTML } from "./message-content";
+import { quoteHTML } from "./message-quote";
 import { previewCardsHTML } from "./link-previews";
 import { formatClock, formatUsd } from "./format";
 import { SERVICE_ICONS, brandStyle, hasLogo, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
-import type { AgentStep, AgentTask, AgentTurn, MainEvent, MediaPayload, TurnAttachment, TurnMessage } from "./types";
+import type { AgentStep, AgentTask, AgentTurn, MainEvent, MediaPayload, MessageQuote, TurnAttachment, TurnMessage } from "./types";
 import { btn, esc, ico, iconBtn } from "./ui";
 
 /** The small turning ring of something under way. */
@@ -489,6 +490,7 @@ export function answerMeta(turn: AgentTurn): string {
 
 /** How a turn is drawn besides its data. */
 export interface TurnLook {
+  revealing?: (turnId: number) => boolean;
   regenerateTurnId?: number;
   /** The face of who answers (Raphael's, avatar.ts, or the member's): `loop` while at work on it. */
   face: (loop: boolean) => string;
@@ -566,16 +568,19 @@ function taskActionsHTML(turn: AgentTurn, state: TimelineState): string {
     (RERUNNABLE.has(task.state) ? btn(esc(t("agent.rerun")), "sm rerun", ` data-act="rerun" data-task="${esc(task.id)}"${state.rerunning.has(task.id) ? " disabled" : ""}`) : "") + `</div>`;
 }
 
-/** Attachments stand above the owner's optional text bubble. */
-function bubbleHTML(words: string, files: readonly TurnAttachment[] | undefined): string {
-  const bubble = words ? `<div class="bubble">${words}</div>` : "";
+/** Media stands above the owner's bubble, whose quote precedes the words. */
+function bubbleHTML(words: string, files: readonly TurnAttachment[] | undefined, quote?: MessageQuote | null): string {
+  const bubble = words || quote ? `<div class="bubble">${quote ? quoteHTML(quote) : ""}${words}</div>` : "";
   return files?.length ? `<div class="owner-content">${filesHTML(files)}${bubble}</div>` : bubble;
 }
 
-function messageActionsHTML(time: number, regenerate = false): string {
+function messageActionsHTML(time: number, regenerate = false, owner?: "edit" | "cancel"): string {
+  const action = (icon: Parameters<typeof iconBtn>[0], label: string, act: string): string =>
+    iconBtn(icon, label, ` data-act="${act}"`).replace(" title=", " data-tooltip=");
   return `<div class="message-actions"><time datetime="${esc(new Date(time).toISOString())}">${esc(formatClock(time))}</time>` +
-    iconBtn("copy", t("chat.copy"), ' data-act="copy-message"') +
-    (regenerate ? iconBtn("refresh", t("chat.regenerate"), ' data-act="regenerate"') : "") + `</div>`;
+    action("copy", t("chat.copy"), "copy-message") +
+    (owner ? action(owner === "edit" ? "pencil" : "x", t(owner === "edit" ? "chat.edit" : "common.cancel"), `${owner}-message`) : "") +
+    (regenerate ? action("refresh", t("chat.regenerate"), "regenerate") : "") + `</div>`;
 }
 
 function messageBlockHTML(turn: AgentTurn, key: string, text: string, time: number, query: string, state: TimelineState, reply: boolean, regenerate = false): string {
@@ -839,8 +844,7 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
   const said = turn.question.trim() !== "" && !routine;
   const asked = said || (turn.attachments?.length ?? 0) > 0;
   const live = turn.status === "running" || isLive(turn.task);
-  const source = sourceOf(turn);
-  const where = esc(`${sourceName(source)} · ${formatClock(turn.created_at_ms)}`);
+  const revealing = look.revealing?.(turn.id) ?? false;
   const meta = esc(answerMeta(turn));
   const more = detail
     ? `<div class="tn-foot">${btn(ico("down"), "sm icon tn-more", ` data-act="detail" aria-expanded="${detailOpen}" aria-controls="tn-detail-${id}" aria-label="${esc(t("agent.detail"))}" title="${esc(t("agent.detail"))}"`)}</div>`
@@ -850,18 +854,18 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
     `<li class="tn${look.plain ? " tn-plain" : ""}" data-id="${id}" data-status="${esc(turn.status)}"${live ? ' data-live="true"' : ""}>` +
     (routine ? routineLineHTML(turn) : "") +
     (asked
-      ? `<div class="me"><span class="me-src" role="img" aria-label="${where}" title="${where}">${sourceIcon(source)}</span>` +
+      ? `<div class="me">` +
         `<div class="chat-message owner-message" data-message="question">` +
-        bubbleHTML(said ? messageHTML(turn.question.trim(), query) : "", turn.attachments) + messageActionsHTML(turn.created_at_ms) + `</div>` +
+        bubbleHTML(said ? messageHTML(turn.question.trim(), query) : "", turn.attachments, turn.quote) + messageActionsHTML(turn.created_at_ms, false, live || turn.status === "confirm" || turn.task?.state === "waiting" ? "cancel" : "edit") + `</div>` +
         `</div>`
       : "") +
-    `<div class="ra"><span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live)}</span><div class="ra-body">` +
+    `<div class="ra"><span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live || revealing)}</span><div class="ra-body">` +
     (hasMsgs
       ? turnMessagesHTML(turn, state, query, look.plain, regenerate, inner.map((x) => exchangeLine(x, look, "div")).join(""))
       : (turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm")
         ? "" : turn.text.trim() ? messageBlockHTML(turn, "reply", look.plain ? turn.text : replyLine(turn.prefix, turn.text), turn.created_at_ms, query, state, true, regenerate) : "") +
     (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +
-    (live ? typingHTML() : "") +
+    (live || revealing ? typingHTML() : "") +
     (detail ? `<div class="tn-detail" id="tn-detail-${id}"${detailOpen ? "" : " hidden"}>${messageHTML(turn.detail, query, true)}</div>` : "") +
     more +
     taskActionsHTML(turn, state) +
@@ -877,13 +881,12 @@ export const dayHTML = (label: string): string => `<li class="day"><span>${esc(l
  * a bubble with light passing over it until the words arrive) and Raphael thinking. A typed
  * question shows the chips of the files it was sent with.
  */
-export function pendingTurnHTML(question: string | null, source: string, look: TurnLook, files: readonly TurnAttachment[] = []): string {
-  const where = esc(sourceName(source));
+export function pendingTurnHTML(question: string | null, _source: string, look: TurnLook, files: readonly TurnAttachment[] = [], request?: { id: string; time: number; quote?: MessageQuote }): string {
   const words =
     question === null ? `<span class="shimmer">${esc(t("agent.hearing"))}</span>` : question.trim() === "" ? "" : messageHTML(question.trim());
   return (
-    `<li class="tn is-pending${look.plain ? " tn-plain" : ""}">` +
-    `<div class="me"><span class="me-src" role="img" aria-label="${where}" title="${where}">${sourceIcon(source)}</span>${bubbleHTML(words, files)}</div>` +
+    `<li class="tn is-pending${look.plain ? " tn-plain" : ""}"${request ? ` data-session="${esc(request.id)}"` : ""}>` +
+    `<div class="me"><div class="chat-message owner-message" data-message="question">${bubbleHTML(words, files, request?.quote)}${request ? messageActionsHTML(request.time, false, "cancel") : ""}</div></div>` +
     `<div class="ra"><span class="ra-face">${look.face(true)}</span><div class="ra-body">` +
     typingHTML() +
     `</div></div></li>`

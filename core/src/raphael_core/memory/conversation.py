@@ -161,6 +161,9 @@ def turn_text(turn: Turn, *, detail: bool) -> str:
     requester, speaker = turn_speakers(turn)
     heading = "(Between assistants)\n" if turn.route == "exchange" else "(Routine)\n" if turn.route == "routine" else ""
     lines = heading + labelled_lines(requester, turn.question) + "\n" + labelled_lines(speaker, said)
+    if turn.quote:
+        from ..agent.quotes import quote_context
+        lines = quote_context(turn.quote) + "\n" + lines
     longer = (turn.detail or "").strip()
     if detail and longer and longer != said:
         cut = longer if len(longer) <= DETAIL_CHARS else longer[:DETAIL_CHARS].rstrip() + "…"

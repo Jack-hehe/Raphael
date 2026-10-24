@@ -129,12 +129,16 @@ export const agentHistorySearch = (query: string, memberId = 0): Promise<{ turns
  * when there are some: a question with files may have no words. `memberId` asks a member in its
  * own thread instead of Raphael (`agent.ask`'s `member_id`); it goes only when it is not 0.
  */
-export const agentAskText = (text: string, attachments: WireAttachment[] = [], memberId = 0): Promise<void> =>
+export const agentAskText = (text: string, attachments: WireAttachment[] = [], memberId = 0, options: { requestId?: string; replaceTurnId?: number; quote?: import("./types").MessageQuote } = {}): Promise<void> =>
   invoke("agent_ask_text", {
     text,
     ...(attachments.length > 0 ? { attachments } : {}),
     ...(memberId ? { memberId } : {}),
+    ...options,
   });
+/** Stops and removes exactly one owner's request, including a request still on its way. */
+export const agentRetract = (sessionId: string, memberId: number, turnId?: number): Promise<void> =>
+  invoke("agent_retract", { sessionId, memberId, ...(turnId !== undefined ? { turnId } : {}) });
 /** The YES/NO question that waits for an answer now, if one does. */
 export const agentQuestionOpen = (): Promise<AgentQuestion | null> => invoke("agent_question_open");
 /**
@@ -149,8 +153,9 @@ export const agentQuestionAnswer = (id: string, approved: boolean, always = fals
  * alone: its voice mode, the conversation and the card, and nothing at the bottom right.
  */
 export const agentPageShown = (shown: boolean): Promise<void> => invoke("agent_page_shown", { shown });
-/** The question key pressed (`down`) or let go (`up`) from the page's voice button: the same path as the key itself. */
-export const agentVoice = (edge: "down" | "up"): Promise<void> => invoke("window_hotkey", { kind: edge === "down" ? "agent_down" : "agent_up" });
+/** A thread's voice button uses the key's recording flow, with its recipient fixed at the press. */
+export const agentVoice = (edge: "down" | "up", memberId = 0): Promise<void> =>
+  invoke("window_hotkey", { kind: edge === "down" ? "agent_down" : "agent_up", ...(memberId === 0 ? {} : { memberId }) });
 
 // ---------- members, their groups and their routines (the 拉斐爾 page) ----------
 
