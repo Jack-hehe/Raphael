@@ -140,7 +140,7 @@ def test_the_yes_and_no_buttons_are_short():
 _LINES = [
     field.name
     for field in dataclasses.fields(persona.Phrases)
-    if field.name not in ("sources", "yes", "no")
+    if field.name not in ("sources", "yes", "no", "speech_missing")
 ]
 _QUESTIONS = (
     "copy_last",

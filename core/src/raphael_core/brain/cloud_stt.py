@@ -145,6 +145,7 @@ class CloudTranscriber:
         self._settings = settings
         self._spend = spend
         self._has_key = has_key
+        self._slots = asyncio.Semaphore(2)
 
     async def transcribe(self, params: dict) -> dict[str, Any]:
         audio, seconds = _audio_seconds(params)
@@ -188,6 +189,13 @@ class CloudTranscriber:
         language: str | None,
         candidates: list[str],
         seconds: float,
+    ) -> Any:
+        async with self._slots:
+            return await self._hear_once(model, audio, hints, language, candidates, seconds)
+
+    async def _hear_once(
+        self, model: str, audio: str, hints: list[str], language: str | None,
+        candidates: list[str], seconds: float,
     ) -> Any:
         """One transcription by the client, written to the spend; an RpcError when it fails."""
         timeout = timeout_for(seconds)

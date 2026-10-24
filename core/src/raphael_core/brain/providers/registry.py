@@ -569,6 +569,11 @@ class ProviderRouter:
     def warm_up(self):
         self.openrouter.warm_up()
 
+    def start_connection_warmup(self):
+        warm = getattr(self.openrouter, "start_connection_warmup", None)
+        if warm is not None:
+            warm()
+
     async def aclose(self):
         await self.registry.aclose()
         await self.openrouter.aclose()

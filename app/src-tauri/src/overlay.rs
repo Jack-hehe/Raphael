@@ -76,6 +76,8 @@ pub struct Progress {
     pub done: u32,
     pub total: u32,
     pub audio_seconds: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<&'static str>,
 }
 
 impl Progress {
@@ -85,6 +87,7 @@ impl Progress {
         done: 0,
         total: 0,
         audio_seconds: 0.0,
+        label: None,
     };
 }
 
@@ -787,8 +790,15 @@ impl OverlayApi for Overlay {
         self.publish(OverlayEvent::Complete);
     }
 
-    fn progress(&self, progress: Progress) {
+    fn progress(&self, mut progress: Progress) {
         self.keep_in_sight(self.place_window());
+        if let OverlayEvent::Settings { language, .. } = &lock(&self.bus).settings {
+            progress.label = match progress.stage {
+                Stage::Transcribing => Some(crate::notices::TRANSCRIBING.text(language)),
+                Stage::Cleaning => Some(crate::notices::CLEANING.text(language)),
+                Stage::Done => None,
+            };
+        }
         self.publish(OverlayEvent::Progress(progress));
     }
 }
@@ -1263,7 +1273,8 @@ mod tests {
                 stage: Stage::Transcribing,
                 done: 1,
                 total: 3,
-                audio_seconds: 4.5
+                audio_seconds: 4.5,
+                label: None,
             })),
             r#"{"type":"progress","stage":"transcribing","done":1,"total":3,"audio_seconds":4.5}"#
         );

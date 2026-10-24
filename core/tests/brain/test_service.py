@@ -63,6 +63,49 @@ METHODS = [
 ]
 
 
+@pytest.mark.parametrize(("language", "marker"), [
+    ("zh-TW", "（這段沒有聽清楚）"),
+    ("ja", "（この部分は聞き取れませんでした）"),
+    ("en", "(this part was not heard)"),
+])
+async def test_incomplete_transcript_keeps_gap_marker_in_paste_and_history(
+    router, fake_client, keys, language, marker,
+):
+    keys.set(KEY)
+    await router.call("settings.set", {"key": "languages", "value": ["zh-CN"]})
+    await router.call("dictionary.add", {"word": "replacement", "misheard": [marker]})
+    result = await finalize(
+        router, raw_text=f"Before. {marker} After.", incomplete=True, ui_language=language,
+    )
+    assert result["text"] == f"Before. {marker} After."
+    assert result["fallback_reason"] == "incomplete_stt"
+    assert fake_client.calls == []
+    latest = await router.call("history.latest", {})
+    assert latest["item"]["text"] == result["text"]
+
+
+@pytest.mark.parametrize("text", ["Hello world.", "明天見。", "Is this ready?", "準備好了！"])
+async def test_short_punctuated_sentence_needs_no_model(router, fake_client, keys, text):
+    keys.set(KEY)
+    result = await finalize(router, raw_text=text)
+    assert result["text"] == text
+    assert result["cleaned"]
+    assert result["llm_ms"] == 0
+    assert fake_client.calls == []
+
+
+@pytest.mark.parametrize("text", [
+    "hello world", "Um, hello world.", "不對，明天見。", "I I agree.",
+    "First, open it. Second, close it.", "Run `rm`.", "A sentence. Another sentence.",
+    "One\ntwo.", "x" * 81 + ".",
+])
+async def test_uncertain_short_text_still_uses_cleanup(router, fake_client, keys, text):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": text})
+    await finalize(router, raw_text=text)
+    assert fake_client.calls
+
+
 def completion(data, cost=0.0002, model="google/gemini-3.1-flash-lite"):
     """A Completion carrying `data`, as the client returns it."""
     return Completion(
@@ -401,11 +444,11 @@ async def test_a_fallback_after_the_call_pastes_the_converted_raw_text(router, f
         "我們只要有一個干擾，就會停下來。",
     ],
 )
-async def test_a_fallback_pastes_and_saves_traditional_speech_as_it_is(router, spoken):
+async def test_short_clean_text_pastes_and_saves_traditional_speech_as_it_is(router, spoken):
     # No key: the text that is pasted is the speech-to-text result. It is Traditional Chinese
     # already, and OpenCC over the whole sentence would write 隻要, 幹擾 and 釋出 into it.
     r = await finalize(router, spoken)
-    assert (r["cleaned"], r["fallback_reason"]) == (False, "no_key")
+    assert (r["cleaned"], r["fallback_reason"]) == (True, None)
     assert r["text"] == r["raw_text"] == spoken
     row = (await router.call("history.latest", {}))["item"]
     assert (row["text"], row["raw_text"]) == (spoken, spoken)

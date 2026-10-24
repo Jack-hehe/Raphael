@@ -15,7 +15,7 @@ import { Emblem, canvasSize, loadGlyphTexture, pictureStyle, type Mode, type Pha
 import { noticeDurationMs } from "./notice";
 import type { ProgressReport, Stage } from "./progress";
 import { ProgressArc } from "./progress";
-import { COMPLETION_MS, formatProgress, progressPercent } from "./progress-caption";
+import { COMPLETION_MS, formatProgress, processingCaption, progressPercent } from "./progress-caption";
 import { WAITING_LINE_MS, nextWaitingLine } from "./waiting-lines";
 import { EntranceTimer, FrameWatch, describeError, guardHandler, subscribeWithRetry, type LogLevel, type PageLog } from "./diagnostics";
 
@@ -48,7 +48,7 @@ export type OverlayEvent =
    */
   | { type: "mode"; mode: Mode; quiet?: boolean; lines?: string[] }
   | { type: "level"; value: number }
-  | { type: "progress"; stage: Stage; done: number; total: number; audio_seconds: number }
+  | { type: "progress"; stage: Stage; done: number; total: number; audio_seconds: number; label?: string }
   | { type: "notice"; text: string }
   | { type: "learned"; text: string }
   | { type: "say"; prefix: string; text: string; hold?: boolean }
@@ -107,7 +107,7 @@ export interface OverlayView {
   showLine(text: string, language: UiLanguage): void;
   clearLine(): void;
   /** Processing progress is separate from spoken subtitles; null hides it. */
-  showProgress(percent: number | null): void;
+  showProgress(percent: number | null, caption?: string): void;
   /** The waiting line of a question being thought about, in the progress caption's place; null hides it. */
   showWaiting(text: string | null, language: UiLanguage): void;
   /** The buttons (two, or three with `always`) come in under the line. */
@@ -190,6 +190,8 @@ export class OverlayController {
   private progressTimer: ReturnType<typeof setInterval> | undefined;
   private progressClock = 0;
   private lastProgress: number | null = null;
+  private lastProgressCaption: string | undefined;
+  private processingLabel = "";
   /** The waiting lines are rotating beside the emblem: Raphael is thinking about a question. */
   private waitingTimer: ReturnType<typeof setInterval> | undefined;
   private waitingLines: string[] = [];
@@ -233,6 +235,7 @@ export class OverlayController {
           done: event.done,
           total: event.total,
           audioSeconds: event.audio_seconds,
+          label: event.label,
         });
         break;
       case "complete":
@@ -501,6 +504,8 @@ export class OverlayController {
     if (!this.activeShow) return;
     // The percentage takes the caption from the waiting lines.
     this.stopWaiting();
+    if (report.stage !== this.progress.currentStage) this.processingLabel = "";
+    if (report.label) this.processingLabel = report.label;
     this.progress.report(report);
     this.renderProgress();
     this.startProgressTimer();
@@ -521,9 +526,11 @@ export class OverlayController {
     const stage = this.progress.currentStage;
     if (!stage || !this.activeShow) return;
     const percent = progressPercent(stage, this.progress.fraction);
-    if (percent === this.lastProgress) return;
+    const caption = processingCaption(stage, this.progress.elapsedSeconds, this.processingLabel);
+    if (percent === this.lastProgress && caption === this.lastProgressCaption) return;
     this.lastProgress = percent;
-    this.view.showProgress(percent);
+    this.lastProgressCaption = caption;
+    this.view.showProgress(percent, caption);
   }
 
   private stopProgress(): void {
@@ -531,6 +538,8 @@ export class OverlayController {
     this.progressTimer = undefined;
     this.progress.reset();
     this.lastProgress = null;
+    this.lastProgressCaption = undefined;
+    this.processingLabel = "";
     this.view.showProgress(null);
   }
 
@@ -673,9 +682,9 @@ class DomView implements OverlayView {
     this.line.textContent = "";
   }
 
-  showProgress(percent: number | null): void {
+  showProgress(percent: number | null, caption?: string): void {
     this.progress.hidden = percent === null;
-    this.progress.textContent = percent === null ? "" : formatProgress(percent);
+    this.progress.textContent = percent === null ? "" : (caption ?? formatProgress(percent));
     // Digits are set as the page is, whatever language the waiting lines were in.
     this.progress.removeAttribute("lang");
   }

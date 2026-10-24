@@ -2824,8 +2824,13 @@ async def test_the_start_up_copes_with_no_local_model(tmp_path):
         await app.aclose()
 
 
+@pytest.mark.parametrize(("language", "marker"), [
+    ("zh-TW", "（這段沒有聽清楚）"),
+    ("ja", "（この部分は聞き取れませんでした）"),
+    ("en", "(this part was not heard)"),
+])
 async def test_a_later_segment_that_fails_with_no_local_model_keeps_the_first_part_and_says_so(
-    make_app, openrouter_mock
+    make_app, openrouter_mock, language, marker,
 ):
     kit = make_kit()
     app = make_app(kit, fake_llm=False)
@@ -2840,9 +2845,10 @@ async def test_a_later_segment_that_fails_with_no_local_model_keeps_the_first_pa
     openrouter_mock(app, first_then_fail)
     await wait_until(lambda: kit.engines)
     await app.call("models.local_delete", {"name": "qwen3-asr"})
-    result = await dictate(app)
-    assert result["text"] == "one" and result["incomplete"] is True
-    assert (await app.call("history.latest"))["item"]["text"] == "one"
+    await app.call("dictation.start", {"session_id": "s1", "ui_language": language})
+    result = await app.call("dictation.stop", {"session_id": "s1", "target_app": "notepad.exe"})
+    assert result["text"] == f"one {marker}" and result["incomplete"] is True
+    assert (await app.call("history.latest"))["item"]["text"] == f"one {marker}"
 
 
 async def test_a_complete_dictation_is_not_marked_incomplete(make_app):
@@ -2898,7 +2904,7 @@ async def test_a_fallback_that_is_not_downloaded_cuts_the_dictation_short_like_n
 
     openrouter_mock(app, first_then_fail)
     result = await dictate(app)
-    assert result["text"] == "one" and result["incomplete"] is True
+    assert result["text"] == "one （這段沒有聽清楚）" and result["incomplete"] is True
 
 
 async def test_deletes_that_overlap_never_leave_the_fallback_on_a_deleted_model(

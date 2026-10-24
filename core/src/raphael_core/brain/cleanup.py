@@ -46,6 +46,26 @@ CLEANUP_SCHEMA = {
 }
 
 
+def already_clean_short(text: str) -> bool:
+    """Conservative fast path: one punctuated sentence, at most 80 characters/16 words.
+
+    Do not guess punctuation, remove fillers, repair repetition, format lists, or interpret code.
+    Dictionary replacement and script selection still happen in Brain before and after this.
+    """
+    if not text or len(text) > 80 or len(text.split()) > 16 or "\n" in text or "\r" in text:
+        return False
+    if text[-1] not in ".!?。！？" or any(c in ".!?。！？" for c in text[:-1]):
+        return False
+    if any(not (c.isalpha() or c in " ,，、'’。！？.!?") for c in text):
+        return False
+    if re.search(r"\b(?:um|uh|er|actually|first|second|third)\b|\bI mean\b|\b(\w+)\s+\1\b",
+                 text, re.IGNORECASE):
+        return False
+    if any(word in text for word in ("嗯", "呃", "那個", "就是", "不對", "應該說", "第一", "第二")):
+        return False
+    return True
+
+
 def timeout_for(audio_seconds: float) -> float:
     """Seconds to wait for the cleanup of `audio_seconds` of speech: 10, plus 1 for every 3 of
     audio, with no ceiling.

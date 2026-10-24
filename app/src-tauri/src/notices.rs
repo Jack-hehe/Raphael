@@ -61,6 +61,19 @@ impl Notice {
     }
 }
 
+/// The captions of dictation processing, followed by elapsed seconds in the overlay.
+pub const TRANSCRIBING: Notice = Notice {
+    zh: "轉錄中",
+    en: "Transcribing",
+    ja: "文字起こし中",
+};
+
+pub const CLEANING: Notice = Notice {
+    zh: "整理中",
+    en: "Cleaning",
+    ja: "整文中",
+};
+
 /// The target window runs elevated, so the text was only copied.
 pub const ELEVATED: Notice = Notice {
     zh: "《告。此視窗權限較高，無法貼上。文字已複製，請按 Ctrl+V。》",
@@ -126,12 +139,11 @@ pub const NO_LOCAL_MODEL: Notice = Notice {
     ja: "《否。クラウド認識に失敗しました。ローカルモデルがありません。》",
 };
 
-/// The cloud stopped hearing partway and no local model could go on (`incomplete` in the result
-/// of `dictation.stop`): the first part was pasted.
+/// Some segments still failed after the final retry; the pasted text marks each gap.
 pub const INCOMPLETE: Notice = Notice {
-    zh: "《否。雲端辨識中斷，只貼上前半段。》",
-    en: "《Negative. Cloud transcription stopped. Only the first part was pasted.》",
-    ja: "《否。クラウド認識が中断しました。前半のみ貼り付けました。》",
+    zh: "《否。部分語音無法辨識，文字已標示缺漏。》",
+    en: "《Negative. Some speech could not be transcribed. Gaps are marked in the text.》",
+    ja: "《否。一部の音声を認識できませんでした。欠落箇所を表示しました。》",
 };
 
 /// The core is not running, so nothing can be dictated.

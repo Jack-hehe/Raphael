@@ -104,6 +104,23 @@ async def transcribe(router, **overrides):
     return await router.call("stt.transcribe", params)
 
 
+async def test_cloud_transcription_has_at_most_two_requests_in_flight(router, fake_client):
+    active = peak = 0
+
+    async def hear(**kwargs):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(.01)
+        active -= 1
+        return fake_client.result
+
+    fake_client.transcribe = hear
+    results = await asyncio.gather(*(transcribe(router) for _ in range(6)))
+    assert len(results) == 6
+    assert peak == 2
+
+
 def spend_rows(conn):
     return [
         tuple(row)

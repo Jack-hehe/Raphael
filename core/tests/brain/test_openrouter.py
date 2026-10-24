@@ -32,6 +32,21 @@ SCHEMA = {
 }
 
 
+async def test_connection_warmup_uses_same_client_without_key_or_paid_request(client_with):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"data": []})
+
+    client = client_with(handler)
+    await client.warm_connection()
+    await client.models()
+    assert [r.method for r in calls] == ["HEAD", "GET"]
+    assert all(r.url.path == "/api/v1/models" for r in calls)
+    assert all("authorization" not in r.headers for r in calls)
+
+
 @pytest.fixture
 async def client_with():
     """`client_with(handler, key=KEY)` is a client whose HTTP goes to `handler`.
@@ -988,6 +1003,25 @@ async def test_warm_up_makes_the_http_client_ahead_of_the_first_request():
     assert client._own_http is made  # once
     await client.aclose()
     assert made.is_closed
+
+
+async def test_installed_h2_builds_the_real_http2_client_without_fallback(monkeypatch):
+    pytest.importorskip("h2")
+    build = httpx.AsyncClient
+    requested = []
+
+    def capture(**kwargs):
+        requested.append(kwargs.get("http2", False))
+        return build(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", capture)
+    client = OpenRouterClient(lambda: KEY)
+    try:
+        client.warm_up()
+        client.warm_up()
+        assert requested == [True]
+    finally:
+        await client.aclose()
 
 
 async def test_warm_up_leaves_a_client_it_was_given_alone():
