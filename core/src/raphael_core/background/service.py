@@ -99,7 +99,7 @@ from ..agent.speaker import MAX_DEPTH, RAPHAEL, Speaker
 from ..agent.team import Team, team_tools_for, roster_prompt
 from ..agent.tools import ToolResult, Tools
 from ..brain.providers.base import ModelProvider
-from ..brain.settings import DEFAULTS, SettingsStore
+from ..brain.settings import DEFAULTS, SettingsStore, api_model
 from ..brain.spend import SpendTracker
 from ..clock import wall_clock_ms
 from ..protocol import BUSY, INVALID_PARAMS, NOT_FOUND, RpcError, invalid_params
@@ -751,7 +751,7 @@ class BackgroundService:
         self._store.start(task.id)
         limits = self._limits
         ledger = Ledger(self._spend)
-        model = self._models.pop(task.id, DEFAULTS["agent_model"])
+        model = api_model(self._settings, self._models.pop(task.id, DEFAULTS["agent_model"]))
         context = self._context(task)
         memory = self._memory_of(task.member_id)
         team = team_tools_for(self._team, speaker, always=True) if self._team_tool else []

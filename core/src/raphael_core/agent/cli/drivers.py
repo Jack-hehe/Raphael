@@ -5,6 +5,7 @@ reasoning blocks, command output and provider credentials never become UI messag
 """
 
 import asyncio
+import base64
 import json
 import os
 import logging
@@ -55,7 +56,7 @@ class Driver:
         if self.child:
             await self.child.kill()
 
-    async def run(self, *, user, system, endpoint, token, session=None, permission, cwd=None):
+    async def run(self, *, user, system, endpoint, token, session=None, permission, cwd=None, images=()):
         files = PrivateFiles()
         try:
             await files.secure()
@@ -102,7 +103,11 @@ class Driver:
             self.child = Child(command, environ=environ, cwd=cwd or str(files.path))
             await self.child.start()
             if self.name == "claude":
-                await self.child.send({"type": "user", "message": {"role": "user", "content": user}})
+                content = ([{"type": "text", "text": user}] + [
+                    {"type": "image", "source": {"type": "base64", "media_type": image.mime,
+                     "data": base64.b64encode(image.data).decode("ascii")}} for image in images
+                ]) if images else user
+                await self.child.send({"type": "user", "message": {"role": "user", "content": content}})
                 self.child.process.stdin.close()
                 async for event in self._claude():
                     yield event
@@ -112,7 +117,14 @@ class Driver:
                 async for event in self._antigravity():
                     yield event
             else:
-                async for event in self._rpc(user, system, endpoint, token, session, permission):
+                image_paths = []
+                for number, image in enumerate(images):
+                    # Copy only this turn's validated bytes; owner-supplied names are never paths.
+                    suffix = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}[image.mime]
+                    path = files.path / f"image-{number}{suffix}"
+                    path.write_bytes(image.data)
+                    image_paths.append(str(path.resolve()))
+                async for event in self._rpc(user, system, endpoint, token, session, permission, image_paths):
                     yield event
         except (OSError, ValueError, TimeoutError, EOFError, asyncio.IncompleteReadError) as error:
             logger.warning("CLI transport failed: %s", type(error).__name__)
@@ -154,7 +166,6 @@ class Driver:
                     self.quota(self.name, data)
 
     async def _claude(self):
-        text = ""
         partial = False
         while True:
             packet = await self._read()
@@ -167,7 +178,6 @@ class Driver:
                 delta = event.get("delta", {})
                 if delta.get("type") == "text_delta":
                     partial = True
-                    text = (text + delta.get("text", ""))[-64000:]
                     yield Event("text_delta", delta.get("text", ""))
                 elif event.get("type") == "content_block_start":
                     block = event.get("content_block", {})
@@ -176,7 +186,6 @@ class Driver:
             elif kind == "assistant":
                 for block in packet.get("message", {}).get("content", []):
                     if block.get("type") == "text" and not partial:
-                        text = (text + block.get("text", ""))[-64000:]
                         yield Event("text_delta", block.get("text", ""))
                     elif block.get("type") == "tool_use":
                         yield Event("tool_start", data={"name": block.get("name", "tool")})
@@ -193,11 +202,10 @@ class Driver:
                 if packet.get("is_error") or packet.get("subtype") != "success":
                     yield self._event("error", "cli_failed")
                 else:
-                    yield self._event("final", packet.get("result") or text)
+                    yield self._event("final", packet.get("result") or "")
                 return
 
     async def _antigravity(self):
-        text = ""
         while True:
             packet = await self._read()
             kind = packet.get("event")
@@ -207,7 +215,6 @@ class Driver:
             elif kind == "step_update":
                 step = packet.get("step_update") or {}
                 if step.get("step_type") == "agent_response" and step.get("text_delta"):
-                    text = (text + step["text_delta"])[-64000:]
                     yield Event("text_delta", step["text_delta"])
                 elif step.get("step_type") == "tool":
                     name = step.get("tool_name") or "tool"
@@ -225,10 +232,10 @@ class Driver:
                     error = str(result.get("error") or "").lower()
                     yield self._event("error", "quota" if "quota" in error or "rate limit" in error else "cli_failed")
                 else:
-                    yield self._event("final", result.get("response") or text)
+                    yield self._event("final", result.get("response") or "")
                 return
 
-    async def _rpc(self, user, system, endpoint, token, session, permission):
+    async def _rpc(self, user, system, endpoint, token, session, permission, image_paths=()):
         """Codex app-server: JSON-RPC over stdio."""
         pending = {}
         sequence = 0
@@ -244,7 +251,7 @@ class Driver:
                                    **({"error": error} if error else {"result": result})})
 
         await request("initialize", {"clientInfo": {"name": "raphael", "version": "0.2.0"}, "capabilities": {}}, "initialize")
-        text = ""
+        final_text = ""
         while True:
             packet = await self._read()
             method, params = packet.get("method", ""), packet.get("params", {})
@@ -270,13 +277,15 @@ class Driver:
                     if not self.session:
                         raise ValueError("missing_session")
                     yield Event("session", self.session)
-                    await request("turn/start", {"threadId": self.session, "input": [{"type": "text", "text": user}],
+                    inputs = [{"type": "text", "text": user}] + [{"type": "localImage", "path": path} for path in image_paths]
+                    await request("turn/start", {"threadId": self.session, "input": inputs,
                                   **({"effort": self.effort} if self.effort else {})}, "turn")
                 elif label == "turn":
                     self.turn = (result.get("turn") or {}).get("id")
             elif "id" in packet and method:
                 if method in ("item/commandExecution/requestApproval", "item/fileChange/requestApproval",
                               "execCommandApproval", "applyPatchApproval"):
+                    final_text = ""
                     yield Event("permission", data={"method": method})
                     decision = await permission({"method": method, **params})
                     await response(packet["id"], {"decision": {"once": "accept", "always": "acceptForSession"}.get(decision, "decline")})
@@ -290,14 +299,20 @@ class Driver:
                     # No filesystem, terminal or arbitrary client-side RPC outside our gate.
                     await response(packet["id"], error={"code": -32601, "message": "Unsupported client capability"})
             elif method == "item/agentMessage/delta":
-                delta = params.get("delta", "")
-                text = (text + delta)[-64000:]
-                yield Event("text_delta", delta)
+                yield Event("text_delta", params.get("delta", ""))
             elif method == "item/reasoning/summaryTextDelta":
                 yield Event("thinking", params.get("delta", ""))
             elif method in ("item/started", "item/completed"):
                 item = params.get("item", {})
+                if item.get("type") == "agentMessage":
+                    if method == "item/started":
+                        final_text = ""
+                    else:
+                        # Phase-less legacy messages are answers only after the most recent tool.
+                        final_text = "" if item.get("phase") == "commentary" else item.get("text", "")
                 if item.get("type") in ("commandExecution", "fileChange", "mcpToolCall", "webSearch"):
+                    if method == "item/started":
+                        final_text = ""
                     yield Event("tool_start" if method.endswith("started") else "tool_end", data={
                         "name": item.get("tool", item["type"]), "effect": item["type"] == "fileChange",
                         "ok": item.get("status") == "completed"})
@@ -307,7 +322,7 @@ class Driver:
                 self.turn = (params.get("turn") or {}).get("id")
             elif method == "turn/completed":
                 if (params.get("turn") or {}).get("status") == "completed":
-                    yield self._event("final", text)
+                    yield self._event("final", final_text)
                 else:
                     yield self._event("error", "cli_turn_failed")
                 return

@@ -77,7 +77,7 @@ class Sessions:
 class CliLoop:
     def __init__(self, *, brains, sessions, member_id, model, ledger, language, plain,
                  system, user, tools, progress, thinking, event, execute, expire=None, spoken=False,
-                 conversation_id=None, quota=None):
+                 conversation_id=None, quota=None, attachments=()):
         self.brains, self.sessions, self.member_id, self.model = brains, sessions, member_id, model
         self.conversation_id = sessions.conversations.resolve(member_id, conversation_id) if sessions else conversation_id
         self.quota = quota
@@ -96,6 +96,7 @@ class CliLoop:
             )
         )
         self.user, self.tools = user, list(tools) + [APPROVE]
+        self.images = [attachment for attachment in attachments if attachment.is_image]
         self.progress, self.thinking, self.event, self.execute = progress, thinking, event, execute
         self.seen, self.batch_calls = [], []
         self.response = None
@@ -238,7 +239,7 @@ class CliLoop:
                     self.driver = Driver(name, command, model=model, effort=brain_effort(self.model), environ=self.brains.environ, quota=self.quota)
                     async with aclosing(self.driver.run(user=self.user, system=self.system, endpoint=server.url,
                             token=server.token, session=self.sessions.get(self.member_id, self.model, self.conversation_id), permission=self._native_permission,
-                            cwd=str(workspace))) as stream:
+                            cwd=str(workspace), images=self.images if name in ("codex", "claude") else ())) as stream:
                         async for event in stream:
                             if event.kind == "session":
                                 self.sessions.put(self.member_id, self.model, event.text, self.conversation_id)
@@ -259,8 +260,9 @@ class CliLoop:
                                 self._failure("quota" if event.text == "quota" else "error", NAMES[name])
                                 return
                             elif event.kind == "final":
-                                final = self._buffer.strip() or event.text.strip()
+                                final = event.text.strip()
                                 if not final:
+                                    self._progress()
                                     self._failure("error", NAMES[name])
                                 else:
                                     self._queue.put_nowait(Outcome("done", final=final))

@@ -299,6 +299,13 @@ def japanese_line(value: Any) -> str:
     return cut[: end + 1] if end > SAY_JA_MAX // 3 else cut
 
 
+_REPLY_OPEN = re.compile(
+    r"^《(" + "|".join(re.escape(prefix) for prefixes in PREFIXES.values() for prefix in prefixes)
+    + r")[。.：:]\s*", re.I,
+)
+_REPLY_FRAME = re.compile(_REPLY_OPEN.pattern + r"(.*?)》$", re.S | re.I)
+
+
 def parse_reply(data: Any, language: str, *, plain: bool = False, long: bool = False) -> Reply:
     """The model's JSON as Raphael's words. AgentFailure if it says nothing (an empty text is
     taken only beside a note to write or delete, or a lookup to make).
@@ -322,6 +329,21 @@ def parse_reply(data: Any, language: str, *, plain: bool = False, long: bool = F
         if (plain or long) and isinstance(items, list) else []
     )
     full = _plain_text(data.get("text")) if plain or long else " ".join(_one_line_text(data.get("text")).split())
+    prefix = data.get("prefix")
+    if long and not plain:
+        # Some CLI models supply the display frame despite being asked for bare message bodies.
+        # Normalize only recognized persona labels, preserving ordinary quoted book titles.
+        if (len(messages) > 1 and not _REPLY_FRAME.fullmatch(messages[0])
+                and (opening := _REPLY_OPEN.match(messages[0])) and messages[-1].endswith("》")):
+            prefix = prefix or opening[1]
+            messages[0] = messages[0][opening.end():].strip()
+            messages[-1] = messages[-1][:-1].strip()
+        framed = [_REPLY_FRAME.fullmatch(text) for text in messages or [full]]
+        if framed and framed[0] is not None and not prefix:
+            prefix = framed[0][1]
+        messages = [match[2].strip() if match else text for text, match in zip(messages, framed)]
+        if match := _REPLY_FRAME.fullmatch(full):
+            full = match[2].strip()
     if messages:
         full = messages[-1]
     if not full and not (memory or read or search):
@@ -351,7 +373,7 @@ def parse_reply(data: Any, language: str, *, plain: bool = False, long: bool = F
         detail = convert_leftover_simplified(detail)
         messages = [convert_leftover_simplified(text) for text in messages]
     return Reply(
-        prefix=canonical_prefix(data.get("prefix"), language, default=PREFIXES[language].answer),
+        prefix=canonical_prefix(prefix, language, default=PREFIXES[language].answer),
         text=line,
         detail=detail if detail and detail != line else None,
         memory=memory,

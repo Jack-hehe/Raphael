@@ -64,6 +64,8 @@ DEFAULTS: dict[str, Any] = {
     # The voice assistant (raphael_core.agent). The model that words its answers, and that decides
     # what a request is when Jev (agent/routing.py, not a setting) fails or is unsure.
     "agent_model": "openai/gpt-6-luna",
+    # API-only work when the conversational brain is a subscription CLI or local model.
+    "assistant_model": "",
     # Empty purpose-specific primaries inherit the answer/vision model, as before.
     "router_model": "",
     "memory_model": "",
@@ -162,7 +164,7 @@ _CHOICES: dict[str, tuple[Any, ...]] = {
 }
 # The settings that hold the id of an OpenRouter model.
 MODEL_SETTINGS = ("cleanup_model", "stt_cloud_model", "agent_model")
-OPTIONAL_MODEL_SETTINGS = ("vision_model", "router_model", "memory_model", "pdf_model")
+OPTIONAL_MODEL_SETTINGS = ("vision_model", "router_model", "memory_model", "pdf_model", "assistant_model")
 FALLBACK_SETTINGS = tuple(purpose + "_fallbacks" for purpose in
                           ("agent", "cleanup", "router", "vision", "pdf", "stt", "memory"))
 _TRIMMED = (*MODEL_SETTINGS, "agent_city")
@@ -318,6 +320,24 @@ def checked(key: str, value: Any) -> tuple[str, Any]:
     if key == "tts_fish_model":
         value = _fish_model(key, value)
     return key, value
+
+
+def api_model(settings, *candidates: object, api_providers=()) -> str:
+    """Select a model for API work without inheriting a CLI or local model reference.
+
+    Explicit API candidates retain their order. The owner's auxiliary API preference and the
+    built-in answer model are used only when none of those candidates can be sent to the API.
+    A provider router may explicitly identify hosted API providers whose references it resolves.
+    """
+    try:
+        assistant = settings.get("assistant_model")
+    except (KeyError, sqlite3.Error):
+        assistant = ""
+    for value in (*candidates, assistant, DEFAULTS["agent_model"]):
+        if isinstance(value, str) and (model := value.strip()) and not model.startswith("cli:"):
+            if not model.startswith("@") or model[1:].partition(":")[0] in api_providers:
+                return model
+    return DEFAULTS["agent_model"]
 
 
 class SettingsStore:
