@@ -524,6 +524,72 @@ COMMIT;
 """,
     22: """
 BEGIN;
+ALTER TABLE members ADD COLUMN blurb TEXT NOT NULL DEFAULT '';
+ALTER TABLE members ADD COLUMN reply_style TEXT NOT NULL DEFAULT 'full' CHECK (reply_style IN ('full', 'conversational'));
+ALTER TABLE members ADD COLUMN voice TEXT NOT NULL DEFAULT '';
+ALTER TABLE members ADD COLUMN read_aloud INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE members ADD COLUMN notify INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE members ADD COLUMN ask_before_members INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE members ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE members ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE member_skills (id INTEGER PRIMARY KEY AUTOINCREMENT, member_id INTEGER NOT NULL,
+  name TEXT NOT NULL, description TEXT NOT NULL, source TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(member_id, name));
+CREATE INDEX member_skills_member ON member_skills(member_id);
+CREATE TABLE member_commands (id INTEGER PRIMARY KEY AUTOINCREMENT, member_id INTEGER NOT NULL,
+  name TEXT NOT NULL COLLATE NOCASE, description TEXT NOT NULL, template TEXT NOT NULL,
+  UNIQUE(member_id, name));
+CREATE INDEX member_commands_member ON member_commands(member_id);
+PRAGMA user_version = 22;
+COMMIT;
+""",
+}
+_MIGRATIONS[23] = """
+BEGIN;
+CREATE TABLE routine_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    routine_id INTEGER NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
+    started INTEGER NOT NULL,
+    scheduled INTEGER,
+    finished INTEGER,
+    status TEXT NOT NULL,
+    turn_id INTEGER REFERENCES agent_turns(id) ON DELETE SET NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    cost REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX routine_runs_routine ON routine_runs(routine_id, id);
+CREATE TABLE rooms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    group_id INTEGER REFERENCES member_groups(id) ON DELETE SET NULL,
+    created INTEGER NOT NULL,
+    is_team INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX rooms_team ON rooms(is_team) WHERE is_team = 1;
+CREATE TABLE room_members (
+    room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    member_id INTEGER NOT NULL,
+    PRIMARY KEY(room_id, member_id)
+);
+CREATE TABLE room_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    member_id INTEGER,
+    text TEXT NOT NULL,
+    created INTEGER NOT NULL,
+    request_id TEXT,
+    attachments TEXT,
+    reply_to INTEGER REFERENCES room_messages(id) ON DELETE CASCADE,
+    turn_id INTEGER REFERENCES agent_turns(id) ON DELETE SET NULL,
+    UNIQUE(room_id, request_id),
+    UNIQUE(reply_to, member_id)
+);
+CREATE INDEX room_messages_room ON room_messages(room_id, id);
+PRAGMA user_version = 23;
+COMMIT;
+"""
+_MIGRATIONS[24] = """
+BEGIN;
 CREATE TABLE conversations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     member_id INTEGER NOT NULL,
@@ -566,10 +632,9 @@ CREATE TABLE subscription_quotas (
     reset_at_ms INTEGER,
     updated_at_ms INTEGER NOT NULL
 );
-PRAGMA user_version = 22;
+PRAGMA user_version = 24;
 COMMIT;
-""",
-}
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

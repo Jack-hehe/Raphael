@@ -126,7 +126,7 @@ async def test_live_prompt_separates_ui_narration_language_and_persona_replies(s
     assert "at most 2 sentences (about 60 CJK characters)" in system
     assert "25 CJK characters or 25 words" in system
     assert '"text": the reply, at most 2000 characters' in system
-    assert '"messages": up to four replies' in system
+    assert '"messages": the reply as the chat messages a person would send' in system
     assert '"text": the reply as one line' not in system
     assert name in user and "Owner's UI language:" in user
     assert "Reply messages follow the persona's language rules" in user

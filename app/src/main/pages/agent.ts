@@ -35,6 +35,7 @@ import { openActions } from "../member-column";
 import { confirmDelete } from "../member-dialogs";
 import { createAttachmentMedia } from "../attachment-media";
 import { fileMime, fileKind, fileSize, fileIcon, mountFileDrop } from "../attachments";
+import { mountSlashMenu } from "../slash-menu";
 import { getLocale, onLocaleChange, t } from "../i18n";
 import { isTopLayer, registerDismissal } from "../dismissals";
 
@@ -75,7 +76,9 @@ import {
   wantsRefresh,
 } from "../timeline";
 import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, MessageQuote, Page, SettingsPane, TurnAttachment, WireAttachment } from "../types";
-import { btn, closeMenu, copyText, esc, ico, iconButton, openMenu, openPopover, toaster } from "../ui";
+import { btn, copyText, esc, ico, iconButton, openPopover, toaster } from "../ui";
+import { createRoomPane } from "../group-chats";
+import { composerHTML, openComposerMenu } from "../chat-composer";
 import { VoiceMode } from "../voice-mode";
 import "../agent.css";
 import "../members.css";
@@ -297,7 +300,6 @@ export function createAgent(app: AppContext): Page {
   const conversationCache = new Map<number, ConversationInfo[]>();
   let conversationList: ReturnType<typeof mountConversationList> | null = null;
   let targetTurn: number | undefined;
-  let actionMode: "ask" | "direct" = "direct";
   const quotaHost = document.createElement("div"); quotaHost.className = "quota-chips";
   quotaHost.hidden = true;
   let quotas: { provider: string; reset_at_ms: number | null }[] = [];
@@ -328,7 +330,7 @@ export function createAgent(app: AppContext): Page {
 
   function openConversation(member: number, id: number, turnId?: number): void {
     const changed = memberId() !== member;
-    if (!changed && conversationId() === id && turnId === undefined) return;
+    if (!changed && !roomPane.active && conversationId() === id && turnId === undefined) return;
     chosenConversations.set(member, id); targetTurn = turnId;
     if (changed) members.select(member); else switchThread();
     drawConversation();
@@ -364,42 +366,36 @@ export function createAgent(app: AppContext): Page {
   async function readQuotas(): Promise<void> {
     try { const result = await api.core<{ quotas: typeof quotas }>("quota.list"); if (Array.isArray(result?.quotas)) { quotas = result.quotas; drawQuotas(); } } catch { /* Preserve the last known reset until reconnection. */ }
   }
-  async function readActionMode(): Promise<void> {
-    try { const result = await api.core<{ settings: { action_mode?: "ask" | "direct" } }>("settings.get"); actionMode = result?.settings?.action_mode ?? "direct"; } catch { /* The next open reads again. */ }
-  }
-  function attachMenu(): void {
-    void readActionMode().then(() => {
-      openMenu(attachButton, [], "", () => {}, undefined, [
-        { label: t("agent.attach"), icon: "file", run() { closeMenu(); picker.value = ""; picker.click(); } },
-        { label: t("chat.beforeAct"), desc: t(actionMode === "ask" ? "chat.askFirst" : "chat.direct"), icon: "shield", submenu: true, run(row) {
-          openMenu(row, [{ value: "ask", label: t("chat.askFirst") }, { value: "direct", label: t("chat.direct") }], actionMode, mode => {
-            void api.core("settings.set", { key: "action_mode", value: mode }).then(() => { actionMode = mode as typeof actionMode; }).catch(err => toaster.info(describeError(err)));
-          }, t("chat.beforeAct"), [], { placement: "beside" });
-        } },
-      ]);
-    });
-  }
   /** The member whose thread is open: 0 is Raphael. */
   const memberId = (): number => members.current();
   const inRaphael = (): boolean => memberId() === RAPHAEL_ID;
   drawConversation();
+
+  const memberChat = el.querySelector<HTMLElement>(".mb-chat")!;
+  let roomDetails = members.detailsOpen();
+  const roomPane = createRoomPane(app, () => {
+    el.classList.remove("is-room"); memberChat.hidden = false;
+    el.querySelector(".mb-head-l")!.append(members.picker);
+    members.setDetails(roomDetails);
+  }, () => { if (visible) attachmentMedia.sync(); });
+  el.append(roomPane.el);
+  window.addEventListener("raphael:open-room", event => {
+    if (!el.isConnected) return;
+    if (!roomPane.active) roomDetails = members.detailsOpen();
+    members.setDetails(false); el.classList.add("is-room"); memberChat.hidden = true;
+    roomPane.el.querySelector(".room-picker")!.append(members.picker);
+    void members.load();
+    void roomPane.open((event as CustomEvent<{roomId:number}>).detail.roomId);
+  });
 
   // ---------- the composer and the approval card ----------
 
   const composer = document.createElement("form");
   composer.className = "composer";
   composer.noValidate = true;
-  composer.innerHTML =
-    `<div class="cmp-quote" hidden></div>` +
-    `<div class="cmp-file" hidden></div>` +
-    `<div class="cmp-row">` +
-    `<button type="button" class="btn cmp-attach" data-act="attach">${ico("plus")}</button>` +
-    `<textarea class="cmp-input" rows="1" autocomplete="off" enterkeyhint="send"></textarea>` +
-    iconButton("send", t("chat.send"), " disabled", "cmp-send").replace('type="button"', 'type="submit"').replace(" title=", " data-tooltip=") +
-    `<button type="button" class="btn cmp-voice" data-act="voice"></button>` +
-    `</div>` +
-    `<input class="cmp-picker" type="file" multiple hidden>`;
+  composer.innerHTML = composerHTML();
   const input = composer.querySelector<HTMLTextAreaElement>(".cmp-input")!;
+  const slashMenu = mountSlashMenu(input, { memberId });
   const attachButton = composer.querySelector<HTMLElement>(".cmp-attach")!;
   const voiceButton = composer.querySelector<HTMLButtonElement>(".cmp-voice")!;
   const sendButton = composer.querySelector<HTMLButtonElement>(".cmp-send")!;
@@ -445,7 +441,7 @@ export function createAgent(app: AppContext): Page {
   reducedMotion?.addEventListener("change", () => { pacing.flush(); if (visible) render(); });
   const details = new Set<number>();
   const state: TimelineState = emptyTimelineState();
-  const attachmentMedia = createAttachmentMedia(scroller, id => api.core("attachments.get", { id }));
+  const attachmentMedia = createAttachmentMedia(el, id => api.core("attachments.get", { id }));
   const previews = createLinkPreviews(scroller, url => api.core<LinkPreview | null>("links.preview", { url }));
   const regenerating = new Set<number>();
   const messageResize = typeof ResizeObserver === "function" ? new ResizeObserver(() => measureMessages()) : null;
@@ -1370,6 +1366,8 @@ export function createAgent(app: AppContext): Page {
    */
   function switchThread(): void {
     drawConversation();
+    if (roomPane.active) roomPane.close();
+    void slashMenu.refresh();
     hideTooltip();
     hideSelection();
     pacing.flush();
@@ -1411,8 +1409,9 @@ export function createAgent(app: AppContext): Page {
     render();
     if (listening && voiceMember === memberId() && !question) voice.up();
     if (visible) {
+      const generation = loads + 1;
       void load(false).then(() => {
-        if (visible && !scroller.hidden && !thread.querySelector(".is-search-target")) scroller.scrollTop = scroller.scrollHeight;
+        if (generation === loads && visible && !scroller.hidden && !thread.querySelector(".is-search-target")) scroller.scrollTop = scroller.scrollHeight;
       });
       focusComposer();
     }
@@ -1779,7 +1778,7 @@ export function createAgent(app: AppContext): Page {
         void rerun(act);
         break;
       case "attach":
-        attachMenu();
+        void openComposerMenu(attachButton, () => { picker.value = ""; picker.click(); });
         break;
       case "unattach-file": {
         const id = Number(act.dataset.file);
@@ -1905,7 +1904,7 @@ export function createAgent(app: AppContext): Page {
     if (event.type === "ConversationsChanged") conversationChange(event.member_id);
     if (event.type === "AgentTurn") conversationChange(event.member_id ?? RAPHAEL_ID);
     if (event.type === "QuotaChanged") void readQuotas();
-    if (event.type === "ActionModeChanged") void readActionMode();
+    if (event.type === "MembersChanged") void slashMenu.refresh();
     if (wantsRefresh(event)) {
       // a turn of another thread changes only that member's row
       if (event.type !== "AgentTurn" || (event.member_id ?? RAPHAEL_ID) === memberId()) scheduleRefresh();
@@ -1958,6 +1957,7 @@ export function createAgent(app: AppContext): Page {
   });
 
   onLocaleChange(() => {
+    void slashMenu.refresh();
     drawWords();
     drawQuotas();
     drawComposer();
@@ -1968,6 +1968,30 @@ export function createAgent(app: AppContext): Page {
   drawFaces();
   drawComposer();
   drawBackgroundQuestions();
+
+  let memberJump = 0;
+  window.addEventListener("raphael:open-member", event => {
+    if (!el.isConnected) return;
+    if (roomPane.active) roomPane.close();
+    const jump = ++memberJump;
+    const { memberId, turnId } = (event as CustomEvent<{ memberId: number; turnId?: number }>).detail;
+    void members.load().then(async () => {
+      members.select(memberId);
+      if (!turnId) return;
+      await load(false);
+      const generation = loads;
+      const result = await api.agentHistoryList({ member_id: memberId, before_id: turnId + 1, limit: PAGE_SIZE });
+      if (!visible || jump !== memberJump || generation !== loads || memberId !== members.current()) return;
+      const target = result.turns.find(turn => turn.id === turnId);
+      if (target?.conversation_id !== undefined) {
+        openConversation(memberId, target.conversation_id, turnId);
+        return;
+      }
+      turns = mergeTurns(turns, result.turns);
+      render();
+      el.querySelector<HTMLElement>(`.tn[data-id="${turnId}"]`)?.scrollIntoView({ block: "center" });
+    }).catch(error => toaster.info(describeError(error)));
+  });
 
   return {
     id: "agent",
@@ -1980,7 +2004,7 @@ export function createAgent(app: AppContext): Page {
       dropResize?.observe(composer);
       dropResize?.observe(askCard);
       void members.load();
-      void readQuotas(); void readActionMode();
+      void readQuotas();
       // A draft goes into the field at once; the composer may then move (the empty page has it
       // under Raphael, the thread under the turns) or give way to a question, which takes the
       // focus away: it is given back once each of those is known.
@@ -2018,6 +2042,7 @@ export function createAgent(app: AppContext): Page {
       messageResize?.disconnect();
       dropResize?.disconnect();
       members.hide();
+      input.dispatchEvent(new Event("blur"));
       clearTimeout(clearTimer);
       clearTimeout(holdTimer);
       clearTimeout(listenTimer);

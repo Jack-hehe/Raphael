@@ -28,6 +28,9 @@ import type {
   NewMember,
   Routine,
   RoutineOffer,
+  RoutineRun,
+  Room,
+  RoomMessage,
   DeviceSettings,
   DictionaryEntry,
   HistoryItem,
@@ -192,7 +195,7 @@ export const groupsUpdate = (id: number, patch: Partial<Pick<MemberGroup, "name"
 /** Deletes a group; its members are 未分組 from then on. */
 export const groupsDelete = (id: number): Promise<{ deleted: boolean }> => core("groups.delete", { id });
 
-export const routinesList = (memberId: number): Promise<{ routines: Routine[] }> => core("routines.list", { member_id: memberId });
+export const routinesList = (memberId?: number): Promise<{ routines: Routine[] }> => core("routines.list", memberId === undefined ? {} : { member_id: memberId });
 export const routinesCreate = (
   routine: Pick<Routine, "member_id" | "title" | "prompt" | "schedule"> & { enabled?: boolean },
 ): Promise<{ routine: Routine }> => core("routines.create", routine);
@@ -348,3 +351,24 @@ export async function subscribeMainEvents(handler: (event: MainEvent) => void): 
 
 /** Open only an opaque stored attachment, never a path supplied by a page. */
 export const openAttachment = (id: string): Promise<void> => invoke("open_attachment", { id });
+
+// Group threads reuse the same worker and safety gate as individual conversations.
+export const routineRuns = (routineId: number): Promise<{ runs: RoutineRun[]; total?: number }> => core("routines.runs", { routine_id: routineId });
+export const roomsList = (): Promise<{ rooms: Room[] }> => core("rooms.list");
+export const roomsCreate = (room: { name: string; member_ids: number[]; group_id?: number | null; is_team?: boolean }): Promise<{ room: Room }> => core("rooms.create", room);
+export const roomsDelete = (roomId: number): Promise<{ deleted: boolean }> => core("rooms.delete", { room_id: roomId });
+export const roomsUpdate = (roomId: number, patch: { name?: string; member_ids?: number[] }): Promise<{ room: Room }> => core("rooms.update", { room_id: roomId, ...patch });
+export const roomTranscribe = (data: string, uiLanguage: string): Promise<{ text: string }> => core("rooms.transcribe", { data, ui_language: uiLanguage });
+export const roomMessages = (roomId: number, before?: number): Promise<{ messages: RoomMessage[] }> => core("rooms.messages", { room_id: roomId, before });
+export const roomSend = (roomId: number, text: string, requestId: string, uiLanguage: string, attachments: WireAttachment[] = []): Promise<{ message_id: number; duplicate: boolean }> => core("rooms.send", { room_id: roomId, text, request_id: requestId, ui_language: uiLanguage, ...(attachments.length ? { attachments } : {}) });
+export const keepAwakeGet = (): Promise<boolean> => invoke("schedule_keep_awake_get");
+export const keepAwakeSet = (enabled: boolean): Promise<boolean> => invoke("schedule_keep_awake_set", { enabled });
+// Member profile resources use the same member boundary as conversations.
+export const membersSkillsList = (memberId: number): Promise<{ skills: import("./types").MemberSkill[] }> => core("members.skills.list", { member_id: memberId });
+export const membersSkillsImport = (memberId: number, source: string): Promise<{ skill: import("./types").MemberSkill; skills?: import("./types").MemberSkill[] }> => core("members.skills.import", { member_id: memberId, source });
+export const membersSkillsUpdate = (memberId: number, id: number, enabled: boolean): Promise<unknown> => core("members.skills.update", { member_id: memberId, id, enabled });
+export const membersSkillsDelete = (memberId: number, id: number): Promise<unknown> => core("members.skills.delete", { member_id: memberId, id });
+export const membersCommandsList = (memberId: number): Promise<{ commands: import("./types").MemberCommand[] }> => core("members.commands.list", { member_id: memberId });
+export const membersCommandsSave = (memberId: number, command: Omit<import("./types").MemberCommand, "id"> & { id?: number }): Promise<unknown> => core("members.commands.save", { member_id: memberId, ...command });
+export const membersCommandsDelete = (memberId: number, id: number): Promise<unknown> => core("members.commands.delete", { member_id: memberId, id });
+export const membersVoices = (): Promise<{ voices: import("./types").MemberVoice[]; configured: boolean }> => core("members.voices");

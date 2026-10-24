@@ -95,7 +95,7 @@ from ..agent.persona import (
 from ..agent.plugins import preview
 from ..agent.policy import Action, Approval, Confirmations, Outcome, Pending
 from ..agent.safety import asked_with
-from ..agent.speaker import RAPHAEL, Speaker
+from ..agent.speaker import MAX_DEPTH, RAPHAEL, Speaker
 from ..agent.team import Team, team_tools_for, roster_prompt
 from ..agent.tools import ToolResult, Tools
 from ..brain.providers.base import ModelProvider
@@ -738,6 +738,10 @@ class BackgroundService:
         chain = self._chains.pop(task.id, None)
         if speaker is not None and chain is not None:
             speaker = dataclasses.replace(speaker, depth=chain[0], chain=chain[1])
+        origin = self._history.get(task.turn_id) if task.turn_id else None
+        if speaker is not None and origin is not None and origin.source == "room":
+            # The persisted origin survives a retry or restart after the in-memory chain is gone.
+            speaker = dataclasses.replace(speaker, depth=MAX_DEPTH)
         if speaker is None:  # the member was deleted while its task waited
             self._conclude(
                 task, None, "failed", PREFIXES[language].negative,
@@ -784,6 +788,7 @@ class BackgroundService:
             attachments=files,
             team=self._team_call(speaker, task, ledger) if team else None,
             can_wait=True,
+            ask_before_members=speaker.ask_before_members,
         )
         system, user = _prompts(
             language,

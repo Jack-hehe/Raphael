@@ -243,7 +243,7 @@ class ServiceHub:
             return False
         return service != "fish" or bool(self._text("tts_fish_voice"))
 
-    def speech(self, text: str) -> AsyncIterator[bytes]:
+    def speech(self, text: str, *, voice: str | None = None) -> AsyncIterator[bytes]:
         """The speech of `text` by the voice service chosen (`tts.stream`) as chunks of PCM
         (`tts.PCM_RATE`, mono, 16-bit), with its key, voice and model as the settings and the vault
         hold them now. Close it (`contextlib.aclosing`) unless it is read to its end. ServiceError
@@ -256,7 +256,7 @@ class ServiceHub:
             text,
             http=self._client(),
             key=key,
-            voice=self._text("tts_fish_voice"),
+            voice=self._text("tts_fish_voice") if voice is None else voice,
             model=self._text("tts_fish_model"),
         )
 

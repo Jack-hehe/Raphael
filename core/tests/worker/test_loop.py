@@ -320,3 +320,29 @@ async def test_a_task_goes_on_from_the_conversation_it_is_given():
     outcome = await run_task(host, system="", user="", tools=TOOLS, messages=given)
     assert outcome.status == "done" and host.conversations[0] == given
     assert outcome.messages is None
+
+
+async def test_calls_that_keep_failing_steer_the_model_once_and_then_stop_the_task():
+    # every call fails; the topics differ so that no call is refused as a repeat
+    failing = lambda name, arguments: ToolOutcome(False, "error", "")
+    turns = [Turn("", [ask("Notes__look", {"topic": f"t{i}"}, f"c{i}")]) for i in range(10)]
+    host = FakeHost(turns, answer=failing)
+    outcome = await run(host)
+    assert (outcome.status, outcome.kind, outcome.detail) == ("stopped", "failed", "tool_failures")
+    assert outcome.tool_calls == 8
+    notes = [m for m in host.conversations[-1] if m["role"] == "user" and "harness_note" in m["content"]]
+    assert len(notes) == 1  # told once, after the fifth failure in a row
+    fifth = host.conversations[5]
+    assert fifth[-1]["role"] == "user" and "Several tool calls in a row have failed" in fifth[-1]["content"]
+
+
+async def test_a_call_that_works_starts_the_count_of_failures_again():
+    calls = iter(range(100))
+    # four failures, one success, four failures: never five in a row
+    pattern = [False] * 4 + [True] + [False] * 4
+    answer = lambda name, arguments: ToolOutcome(pattern[next(calls)], None, "x")
+    turns = [Turn("", [ask("Notes__look", {"topic": f"t{i}"}, f"c{i}")]) for i in range(9)] + [report()]
+    host = FakeHost(turns, answer=answer)
+    outcome = await run(host)
+    assert outcome.status == "done"
+    assert not any(m["role"] == "user" and "harness_note" in m["content"] for m in host.conversations[-1])

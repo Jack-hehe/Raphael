@@ -1,4 +1,7 @@
 .conversation-list { min-width: 0; }
+.mb-det .conversation-list { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.mb-det .conversation-open, .mb-det .conversation-new { border: 0; background: transparent; }
+.mb-det .conversation-open:hover, .mb-det .conversation-new:hover { background: var(--hover); }
 .conversation-tools { display: flex; align-items: center; gap: 6px; padding: 8px; }
 .conversation-tools input, .conversation-name { min-width: 0; min-height: var(--h-ctl); padding: 6px 10px; border: 1px solid var(--edge); border-radius: var(--r-sm); background: var(--panel); color: var(--text); outline: none; }
 .conversation-tools input { width: 0; flex: 1; }

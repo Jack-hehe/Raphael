@@ -3,6 +3,8 @@
 // how a row shows a question that waits and a thread with news.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { type ColumnHost, columnHTML, createMemberColumn } from "./member-column";
+import { openNewGroupChat } from "./group-chats";
+vi.mock("./group-chats", () => ({ createRoomsSection: () => document.createElement("section"), openNewGroupChat: vi.fn() }));
 import type { Member, MembersList } from "./types";
 
 const member = (id: number, more: Partial<Member> = {}): Member => ({
@@ -113,7 +115,7 @@ describe("the column, used", () => {
     host = {
       view: () => ({ list: LIST, current: 0, previews, fresh: new Set() }),
       select: vi.fn(), newMember: vi.fn(), newGroup: vi.fn(), moveMember: vi.fn(), deleteMember: vi.fn(),
-      renameGroup: vi.fn(), editSources: vi.fn(), deleteGroup: vi.fn(),
+      renameGroup: vi.fn(), editSources: vi.fn(), deleteGroup: vi.fn(), newConversation: vi.fn(), memberAction: vi.fn(),
     } as never;
   });
   const mount = () => {
@@ -157,17 +159,27 @@ describe("the column, used", () => {
     const column = mount();
     column.el.querySelector<HTMLElement>('[data-col="add"]')!.click();
     const items = [...document.querySelectorAll<HTMLElement>("#app-popover [data-pick]")];
-    expect(items.map((b) => b.textContent)).toEqual(["新增成員", "新增分組"]);
-    items[1].click();
+    expect(items.map(b => b.dataset.pick)).toEqual(["conversation", "member", "group", "group-chat"]);
+    items[0].click();
+    expect(host.newConversation).toHaveBeenCalled();
+  });
+
+  test("the plus menu retains group creation and opens the shared group chat creator", () => {
+    const column = mount();
+    column.el.querySelector<HTMLElement>('[data-col="add"]')!.click();
+    document.querySelector<HTMLElement>('#app-popover [data-pick="group"]')!.click();
     expect(host.newGroup).toHaveBeenCalled();
+    column.el.querySelector<HTMLElement>('[data-col="add"]')!.click();
+    document.querySelector<HTMLElement>('#app-popover [data-pick="group-chat"]')!.click();
+    expect(openNewGroupChat).toHaveBeenCalled();
   });
 
   test("a row's more gives 移到分組 and 刪除; a right click gives the same", () => {
     const column = mount();
     column.el.querySelector<HTMLElement>('[data-member-more="2"]')!.click();
-    expect([...document.querySelectorAll("#app-popover [data-pick]")].map((b) => b.textContent)).toEqual(["移到分組", "刪除"]);
-    document.querySelector<HTMLElement>('#app-popover [data-pick="delete"]')!.click();
-    expect(host.deleteMember).toHaveBeenCalledWith(2);
+    expect([...document.querySelectorAll<HTMLElement>("#app-popover [data-pick]")].map(b => b.dataset.pick)).toEqual(["pin", "move", "unread", "read-all", "edit", "duplicate", "clear", "hide"]);
+    document.querySelector<HTMLElement>('#app-popover [data-pick="hide"]')!.click();
+    expect(host.memberAction).toHaveBeenCalledWith(2, "hide");
     column.el.querySelector('[data-member="1"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     document.querySelector<HTMLElement>('#app-popover [data-pick="move"]')!.click();
     expect(host.moveMember).toHaveBeenCalledWith(1, null, expect.any(HTMLElement));

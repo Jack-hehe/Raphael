@@ -71,6 +71,7 @@ from .agent.tools import Tools
 from .background.service import BackgroundService
 from .background.tasks import FINAL_STATES
 from .members.service import MembersService
+from .members.rooms import RoomsService
 from .computer.bridge import ShellBridge
 from .computer.run import ComputerRuns
 from .brain import textnorm
@@ -838,6 +839,11 @@ class App(Router):
             connections=self.integrations.connections,
         )
         self.members.register(self)
+        self.rooms = RoomsService(self._conn, members=self.members, background=self.background,
+                                  notify=self.notify, transcribe=self._transcribe_from_messaging,
+                                  attachment_store=self.attachment_store)
+        self.rooms.register(self)
+        self.members.use_speech(self.speaker)
         self.memory.member_exists = self.members.member_exists
         self.agent = AgentService(
             self._conn,
@@ -1250,6 +1256,7 @@ class App(Router):
         thread, unless that thread is on screen (`MembersService.turn_arrived`)."""
         if method == "agent.turn" and type(params.get("turn_id")) is int:
             self.members.turn_arrived(params["turn_id"])
+            self.rooms.turn_arrived(params["turn_id"])
         self.notify(method, params)
 
     def _worker_notice(self, method: str, params: dict) -> None:
@@ -1259,12 +1266,15 @@ class App(Router):
         ended completed its turn, which is news in its thread."""
         self.notify(method, params)
         if method == "background.question" and params.get("state") == "waiting":
+            if type(params.get("member_id")) is int:
+                self.members.needs_input(params["member_id"])
             self._tell_chat_to_answer_here(params.get("task_id"))
             return
         if method == "worker.changed" and params.get("state") in FINAL_STATES:
             ended = self.background.task(params["task_id"]) if type(params.get("task_id")) is int else None
             if ended is not None and ended.turn_id:
                 self.members.turn_arrived(ended.turn_id)
+                self.rooms.turn_arrived(ended.turn_id)
         if method != "worker.report" or type(params.get("task_id")) is not int:
             return
         task = self.background.task(params["task_id"])

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, test, vi } from "vitest";
-const api = vi.hoisted(() => ({ core: vi.fn(), agentHistoryList: vi.fn(), agentQuestionOpen: vi.fn(), agentAskText: vi.fn() }));
+const api = vi.hoisted(() => ({ core: vi.fn(), agentHistoryList: vi.fn(), agentQuestionOpen: vi.fn(), agentAskText: vi.fn(), membersList: vi.fn(), roomsList: vi.fn(), roomMessages: vi.fn(), membersCommandsList: vi.fn(), membersRead: vi.fn(), roomSend: vi.fn() }));
 vi.mock("../api", () => api);
 import { createAgent } from "./agent";
 import { Cleared } from "../cleared";
@@ -38,7 +38,7 @@ test("switching conversations scopes history, quotes the entire answer and sends
   const page = createAgent({ go() {}, device: () => ({}), onEvent: () => () => {}, undo: { begin() {} }, cleared: new Cleared() } as unknown as AppContext);
   document.body.append(page.el); page.show(); await flush();
   page.el.querySelector<HTMLButtonElement>(".conversation-trigger")!.click(); await flush();
-  document.querySelector<HTMLButtonElement>('[data-conversation-open="2"]')!.click(); await flush();
+  document.querySelector<HTMLButtonElement>('#app-popover [data-conversation-open="2"]')!.click(); await flush();
   expect(api.agentHistoryList).toHaveBeenLastCalledWith(expect.objectContaining({ conversation_id: 2 }));
   page.el.querySelector<HTMLButtonElement>('.ra [data-act="reply-message"]')!.click();
   expect(page.el.querySelector(".cmp-quote .quote-text")?.textContent).toBe("《Entire answer\nSecond paragraph.》");
@@ -49,5 +49,31 @@ test("switching conversations scopes history, quotes the entire answer and sends
   expect(document.querySelector('[data-pick="speak"]')).not.toBeNull();
   document.querySelector<HTMLButtonElement>('[data-pick="speak"]')!.click(); await flush();
   expect(api.core).toHaveBeenCalledWith("agent.speak", { member_id: 0, conversation_id: 2, turn_id: 2 });
+  page.hide();
+});
+
+test("rooms hide the member picker and a room reply opens its own named member conversation", async () => {
+  const people = { members: [{ id: 0, name: "Raphael", avatar: "", role: "", instructions: "", group_id: null }], groups: [] };
+  const conversations = [{ id: 1, member_id: 0, title: "Main", is_default: 1 }, { id: 2, member_id: 0, title: "Research" }];
+  api.membersList.mockResolvedValue(people);
+  api.membersRead.mockResolvedValue({});
+  api.membersCommandsList.mockResolvedValue({ commands: [] });
+  api.roomsList.mockResolvedValue({ rooms: [{ id: 7, name: "Planning room", member_ids: [0] }] });
+  api.roomMessages.mockResolvedValue({ messages: [{ id: 9, member_id: 0, text: "Room answer", created: 1000, turn_id: 2 }] });
+  api.agentQuestionOpen.mockResolvedValue(null);
+  api.core.mockImplementation(async method => method === "conversations.list" ? { conversations } : method === "background.questions.list" ? { questions: [] } : {});
+  api.agentHistoryList.mockImplementation(async params => ({ turns: params.before_id || params.conversation_id === 2
+    ? [{ id: 2, member_id: 0, conversation_id: 2, question: "Research", text: "Named answer", status: "done", created_at_ms: 1000, source: "app", route: "answer", prefix: "" }] : [] }));
+  const page = createAgent({ go() {}, device: () => ({}), onEvent: () => () => {}, undo: { begin() {} }, cleared: new Cleared() } as unknown as AppContext);
+  document.body.append(page.el); page.show(); await flush();
+  window.dispatchEvent(new CustomEvent("raphael:open-room", { detail: { roomId: 7 } })); await flush();
+  expect(page.el.querySelector<HTMLElement>(".mb-chat:not(.au-room-pane)")!.hidden).toBe(true);
+  expect(page.el.querySelector<HTMLElement>(".au-room-pane")!.hidden).toBe(false);
+  expect(page.el.querySelector(".au-room-pane .conversation-trigger")).toBeNull();
+  expect(page.el.querySelector(".au-room-pane [data-act='reply-message']")).toBeNull();
+  page.el.querySelector<HTMLButtonElement>('[data-room-act="turn"]')!.click(); await flush(); await flush();
+  expect(page.el.querySelector<HTMLElement>(".au-room-pane")!.hidden).toBe(true);
+  expect(api.agentHistoryList).toHaveBeenLastCalledWith(expect.objectContaining({ conversation_id: 2, around_id: 2 }));
+  expect(page.el.querySelector(".conversation-caption")!.textContent).toBe("Research");
   page.hide();
 });

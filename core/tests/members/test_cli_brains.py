@@ -27,7 +27,7 @@ assert "PRIVATE-INSTRUCTIONS" in Path(sys.argv[sys.argv.index("--append-system-p
 json.loads(sys.stdin.readline())
 if "--resume" in sys.argv:
     assert sys.argv[sys.argv.index("--resume")+1] == "thread-one"
-print(json.dumps({"type":"result","subtype":"success","session_id":"thread-one","result":"Hello\\n\\nNext lesson.","usage":{"input_tokens":3,"output_tokens":5}}), flush=True)
+print(json.dumps({"type":"result","subtype":"success","session_id":"thread-one","result":"Hello\\n<<<next message>>>\\nNext lesson.","usage":{"input_tokens":3,"output_tokens":5}}), flush=True)
 ''')
     for _ in range(2):
         result = await typed(rig, "Teach me", teacher.id)
@@ -68,6 +68,18 @@ print(json.dumps({"type":"result", "subtype":"success", "session_id":native, "re
     assert rows[0]["workspace"] == rows[2]["workspace"]
     assert len({row["workspace"] for row in rows}) == 3
 
+
+async def test_a_cli_reply_is_one_message_unless_the_model_breaks_it(setup, tmp_path, client):
+    # paragraphs are one message: only the model's own break makes several (owner, 2026-10-24)
+    rig, team = setup
+    teacher = member(team, model="cli:claude:sonnet")
+    fake_brain(rig, tmp_path, """import json, sys
+json.loads(sys.stdin.readline())
+print(json.dumps({"type":"result","subtype":"success","session_id":"t","result":"One.\\n\\nTwo.\\n\\nThree.","usage":{}}), flush=True)
+""")
+    await typed(rig, "Hi", teacher.id)
+    turn = (await rig.call("agent.history.list", {"member_id": teacher.id}))["turns"][0]
+    assert [m["text"] for m in turn["messages"] if m["kind"] == "reply"] == ["One.\n\nTwo.\n\nThree."]
 
 async def test_missing_cli_is_a_clear_reply_and_event_without_api_key(setup, tmp_path):
     rig, team = setup

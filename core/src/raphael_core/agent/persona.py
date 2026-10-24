@@ -572,8 +572,7 @@ _FINAL_FORMAT = (
 )
 _NARRATED_REPLY_TEXT = """\
 "text": the reply, at most 2000 characters. Replies follow the persona and the owner's instructions.
-- "messages": up to four replies in order, each at most 2000 characters. Put corrections,
-examples and exercises in separate messages. Set "text" to the last message.
+- "messages": the reply as the chat messages a person would send, in order, each at most 2000 characters. Usually one. Send several only when they are naturally separate (an answer, then a separate exercise or question), at most four; never split one thought or pad to fill. Set "text" to the last message.
 - "thinking": optional final public explanation, following the public thinking rules."""
 
 _SHARED_CONTRACT = """\
@@ -983,8 +982,7 @@ def member_system_prompt(
         final_format=_FINAL_FORMAT,
         reply_text=_NARRATED_REPLY_TEXT if narrated else (
             f'"text": your reply, at most about {_MEMBER_LIMIT_WORDS[language]}, in plain sentences.\n'
-            '- "messages": one to four short messages in order, each at most 2000 characters. '
-            'Put each correction, example, or next exercise in its own message. Set "text" to the last message.'
+            '- "messages": the reply as the chat messages a person would send, in order, each at most 2000 characters. Usually one. Send several only when they are naturally separate (an answer, then a separate exercise or question), at most four; never split one thought or pad to fill. Set "text" to the last message.'
         ),
         route=_MEMBER_ROUTE_RULES[route],
     )

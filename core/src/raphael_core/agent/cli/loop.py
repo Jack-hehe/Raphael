@@ -22,6 +22,9 @@ from .process import secure_directory
 
 logger = logging.getLogger(__name__)
 
+# The line a CLI brain puts between two chat messages of one reply.
+MESSAGE_BREAK = "<<<next message>>>"
+
 APPROVE = {"type": "function", "function": {"name": "approve", "description": "Ask the owner for permission. Never grants permission by itself.",
            "parameters": {"type": "object", "properties": {"tool_name": {"type": "string"}, "input": {"type": "object"}}, "additionalProperties": True}}}
 MEMORY_TOOLS = [{"type": "function", "function": {"name": name, "description": "Change only a memory the owner explicitly asked to remember or forget.",
@@ -61,6 +64,15 @@ class Sessions:
             self.conn.execute("DELETE FROM agent_conversation_cli_sessions")
             self.conn.execute("DELETE FROM agent_cli_sessions")
 
+    def clear_member(self, member_id):
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM agent_conversation_cli_sessions WHERE conversation_id IN "
+                "(SELECT id FROM conversations WHERE member_id = ?)",
+                (member_id,),
+            )
+            self.conn.execute("DELETE FROM agent_cli_sessions WHERE member_id = ?", (member_id,))
+
 
 class CliLoop:
     def __init__(self, *, brains, sessions, member_id, model, ledger, language, plain,
@@ -73,9 +85,15 @@ class CliLoop:
         self.spoken = spoken
         self.system = system + "\n" + PUBLIC_PROGRESS_RULES + "\nUse only Raphael MCP tools for actions and lookups. "
         self.system += (
-            'For the spoken reply only, return one JSON object with text, messages (at most four), '
+            'For the spoken reply only, return one JSON object with text, messages (usually one; several only '
+            'when naturally separate, at most four), '
             'and say_ja (the Japanese rendering for the voice). No other fields or prose.'
-            if spoken else "Reply in plain text, at most four paragraphs. Never output a JSON reply envelope."
+            if spoken else (
+                "Reply in plain text (Markdown is fine). It is one chat message unless it is naturally "
+                "several (an answer, then a separate exercise or question): then put a line with only "
+                f"{MESSAGE_BREAK} between them, at most four. Never split one thought or pad to fill. "
+                "Never output a JSON reply envelope."
+            )
         )
         self.user, self.tools = user, list(tools) + [APPROVE]
         self.progress, self.thinking, self.event, self.execute = progress, thinking, event, execute
@@ -275,7 +293,9 @@ class CliLoop:
             data = next((obj for obj in reversed(objects) if isinstance(obj, dict) and ("text" in obj or "messages" in obj)), None)
             if data is not None:
                 return parse_reply(data, self.language, plain=self.plain, long=True)
-        paragraphs = [part.strip() for part in re.split(r"\n\s*\n", outcome.final) if part.strip()]
-        if len(paragraphs) > 4:
-            paragraphs = paragraphs[:3] + ["\n\n".join(paragraphs[3:])]
-        return parse_reply({"text": outcome.final, "messages": paragraphs}, self.language, plain=self.plain, long=True)
+        # paragraphs stay in one message; only the model's own breaks make several
+        parts = [part.strip() for part in re.split(rf"^\s*{re.escape(MESSAGE_BREAK)}\s*$", outcome.final, flags=re.M) if part.strip()]
+        if len(parts) > 4:
+            parts = parts[:3] + ["\n\n".join(parts[3:])]
+        text = "\n\n".join(parts) if parts else outcome.final
+        return parse_reply({"text": text, "messages": parts or [outcome.final]}, self.language, plain=self.plain, long=True)

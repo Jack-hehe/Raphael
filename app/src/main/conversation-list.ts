@@ -30,7 +30,7 @@ export function relativeTime(ms: number, now = Date.now()): string {
   return t("conversations.days", { p0: Math.floor(minutes / 1440) });
 }
 
-export function mountConversationList(host: HTMLElement, options: { memberId: number; onOpen(id: number): void }): { refresh(): Promise<void>; destroy(): void } {
+export function mountConversationList(host: HTMLElement, options: { memberId: number; onOpen(id: number): void; collapseWhenEmpty?: boolean; onVisibility?(visible: boolean): void }): { refresh(): Promise<void>; destroy(): void } {
   let conversations: ConversationInfo[] = [];
   let epoch = 0, destroyed = false;
   host.classList.add("conversation-list");
@@ -40,6 +40,8 @@ export function mountConversationList(host: HTMLElement, options: { memberId: nu
   const rows = host.querySelector<HTMLElement>(".conversation-rows")!;
 
   function draw(): void {
+    host.hidden = !!options.collapseWhenEmpty && conversations.length === 0;
+    options.onVisibility?.(!host.hidden);
     input.placeholder = t("conversations.search");
     input.setAttribute("aria-label", t("conversations.search"));
     const found = conversations.filter(c => conversationTitle(c).toLocaleLowerCase().includes(input.value.trim().toLocaleLowerCase()));
@@ -52,7 +54,7 @@ export function mountConversationList(host: HTMLElement, options: { memberId: nu
     const mine = ++epoch;
     try {
       const result = await api.core<{ conversations: ConversationInfo[] }>("conversations.list", { member_id: options.memberId });
-      if (!destroyed && mine === epoch) { conversations = result.conversations; draw(); }
+      if (!destroyed && mine === epoch) { conversations = Array.isArray(result?.conversations) ? result.conversations : []; draw(); }
     } catch (error) {
       if (!destroyed && mine === epoch) rows.textContent = describeError(error);
     }
@@ -77,7 +79,7 @@ export function mountConversationList(host: HTMLElement, options: { memberId: nu
     });
   }
 
-  host.addEventListener("click", event => {
+  const clicked = (event: MouseEvent): void => {
     const target = event.target as Element;
     const open = target.closest<HTMLElement>("[data-conversation-open]");
     if (open) { closeMenu(); options.onOpen(Number(open.dataset.conversationOpen)); return; }
@@ -98,11 +100,12 @@ export function mountConversationList(host: HTMLElement, options: { memberId: nu
         conversationChange(options.memberId); closeMenu(); options.onOpen(result.conversation.id);
       }).catch(error => toaster.info(describeError(error)));
     }
-  });
+  };
+  host.addEventListener("click", clicked);
   input.addEventListener("input", draw);
   const changed = (event: Event): void => { if ((event as CustomEvent<number>).detail === options.memberId) void refresh(); };
   window.addEventListener("conversations-changed", changed);
   const stopLocale = onLocaleChange(draw);
   draw(); void refresh();
-  return { refresh, destroy() { destroyed = true; epoch++; stopLocale(); window.removeEventListener("conversations-changed", changed); host.replaceChildren(); } };
+  return { refresh, destroy() { destroyed = true; epoch++; host.removeEventListener("click", clicked); input.removeEventListener("input", draw); stopLocale(); window.removeEventListener("conversations-changed", changed); host.replaceChildren(); } };
 }

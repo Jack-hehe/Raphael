@@ -5,6 +5,7 @@ mod agent;
 mod avatar;
 mod background;
 mod commands;
+mod schedule_awake;
 mod computer;
 mod core_process;
 mod data_layout;
@@ -16,6 +17,7 @@ mod hotkey;
 mod identity;
 mod learn;
 mod media;
+mod member_notifications;
 mod mic_access;
 mod notices;
 mod overlay;
@@ -115,6 +117,7 @@ pub fn run() {
         .plugin(log_plugin())
         // The file dialog of 頭像 (avatar.rs). Used from Rust only: no page may open it.
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .on_window_event(|window, event| {
             // The app lives in the tray, so closing the main window only hides it.
             // "Quit" in the tray menu is the way out.
@@ -134,6 +137,8 @@ pub fn run() {
             overlay::overlay_log,
             overlay::overlay_confirm,
             commands::core_call,
+            commands::schedule_keep_awake_get,
+            commands::schedule_keep_awake_set,
             commands::device_settings_get,
             commands::device_settings_set,
             commands::device_computer_app_remove,
@@ -157,6 +162,7 @@ pub fn run() {
             avatar::avatar_clear,
         ])
         .setup(move |app| {
+            if let Err(error) = schedule_awake::get() { log::warn!("could not restore scheduler awake setting: {error}"); }
             // Tauri keeps only the last `setup` call, so each part of the app starts in its own
             // section of this one closure, in dependency order: a part that needs another part's
             // handle comes after it.
@@ -278,6 +284,9 @@ pub fn run() {
             // theme, autostart) and keeps the core told which microphone to use. It takes the
             // overlay, the core and the hotkeys from the app state, so it comes after them.
             commands::start(app.handle());
+
+            // A member's desktop notices follow the core even while the main window is hidden.
+            member_notifications::spawn(app.handle());
 
             // ---- First run ----
             // Until the first-run guide has been gone through, the main window opens by itself.

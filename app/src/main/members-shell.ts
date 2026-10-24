@@ -15,6 +15,7 @@
 
 import * as api from "./api";
 import { describeError } from "./format";
+import { currentRoomId, openNewGroupChat, openRoomsMenu } from "./group-chats";
 import { getLocale, onLocaleChange, t } from "./i18n";
 import { createMemberColumn } from "./member-column";
 import { createDetails } from "./member-details";
@@ -27,10 +28,12 @@ import {
   groupValue,
   offerRoutine,
   openNewMember,
+  openEditMemberDialog,
+  openDialog,
 } from "./member-dialogs";
 import { RAPHAEL_ID, faceHTML, memberOf, memberSections, raphaelOf } from "./members";
 import type { AppContext, AvatarPreset, MainEvent, Member, MemberPatch, MembersList, WireAttachment } from "./types";
-import { type Choice, closeMenu, esc, ico, leave, openMenu, toaster } from "./ui";
+import { type Choice, btn, closeMenu, esc, ico, leave, openMenu, toaster } from "./ui";
 
 /** Below this window width the details panel lies over the chat instead of taking a column of its own. */
 export const DETAILS_COLUMN_MIN_PX = 1120;
@@ -101,10 +104,13 @@ export function createMembers(host: MembersHost): MembersShell {
 
   const column = createMemberColumn({
     openMessage: (member, conversation, turn) => host.onOpenConversation?.(member, conversation, turn),
-    view: () => ({ list, current, previews, fresh }),
+    view: () => ({ list, current: currentRoomId() === null ? current : -1, previews, fresh }),
     select: (id) => select(id),
     newMember: (groupId) => newMember(groupId),
     newGroup: () => void newGroup(),
+    newConversation: () => newConversation(),
+    newGroupChat: () => void openNewGroupChat(),
+    memberAction: (id, action) => void memberAction(id, action),
     moveMember: (id, _group, anchor) => moveMember(id, anchor),
     deleteMember: (id) => void deleteMember(id),
     renameGroup: (id) => void renameGroup(id),
@@ -120,6 +126,9 @@ export function createMembers(host: MembersHost): MembersShell {
     update,
     setPicture,
     close: () => setDetails(false),
+    edit: m => editMember(m),
+    hide: m => void memberAction(m.id, "hide"),
+    openConversation: host.onOpenConversation ? (member, conversation) => host.onOpenConversation!(member, conversation) : undefined,
   });
 
   const pill = document.createElement("button");
@@ -177,6 +186,7 @@ export function createMembers(host: MembersHost): MembersShell {
     fresh = known === null ? new Set() : new Set([...ids].filter((id) => !known!.has(id)));
     known = ids;
     list = read;
+    details.refreshMemory(current);
     if (current !== RAPHAEL_ID && !ids.has(current)) {
       current = RAPHAEL_ID;
       host.onSelect(current);
@@ -236,6 +246,7 @@ export function createMembers(host: MembersHost): MembersShell {
 
   function select(id: number): void {
     if (id === current) {
+      if (currentRoomId() !== null) { host.onSelect(id); drawAll(); }
       // the member already open: on a narrow window its panel comes back
       return;
     }
@@ -277,6 +288,7 @@ export function createMembers(host: MembersHost): MembersShell {
   }
 
   pill.addEventListener("click", () => setDetails(!open));
+  pill.addEventListener("contextmenu", event => { if (current !== RAPHAEL_ID) { event.preventDefault(); column.menu(current, pill); } });
   picker.addEventListener("click", () => {
     const people: Choice[] = [raphaelOf(list), ...memberSections(list ?? { members: [], groups: [] }).flatMap((s) => s.members)].map((m) => ({
       value: String(m.id),
@@ -286,6 +298,8 @@ export function createMembers(host: MembersHost): MembersShell {
     }));
     openMenu(picker, people, String(current), (value) => select(Number(value)), undefined, [
       { label: t("chat.searchAll"), icon: "search", run: () => column.openSearch(picker) },
+      { label: t("rooms.title"), icon: "chat", run: () => { closeMenu(); void openRoomsMenu(picker); } },
+      { label: t("members.sideNewConversation"), icon: "chat", run: () => { closeMenu(); newConversation(); } },
       {
         label: t("members.newMember"),
         icon: "plus",
@@ -359,10 +373,73 @@ export function createMembers(host: MembersHost): MembersShell {
             if (current === id) details.showMember();
           }, 0);
         }
-        return true;
+        return answer.member;
       },
     });
   }
+
+  function editMember(m: Member): void {
+    openEditMemberDialog({groups: list?.groups ?? [], presets, taken: (list?.members ?? []).filter(other => other.id !== m.id).map(other => other.name), update, setPicture, saved: () => void load()}, m);
+  }
+
+  async function memberAction(id: number, action: string): Promise<void> {
+    const m = memberOf(list, id);
+    if (!m || id === RAPHAEL_ID) return;
+    if (action === "edit") return editMember(m);
+    try {
+      if (action === "pin") await update(id, {pinned: !m.pinned});
+      else if (action === "hide") {
+        await api.membersUpdate(id, {hidden: true});
+        if (current === id) select(RAPHAEL_ID);
+        await load();
+      } else if (action === "unread") {
+        await api.core("members.unread", {id});
+        // Marking the open conversation unread moves away so viewing does not immediately clear it.
+        if (current === id) select(RAPHAEL_ID);
+        await load();
+      } else if (action === "read-all") {
+        await api.core("members.mark_all_read", {}); await load();
+      } else if (action === "duplicate") {
+        const result = await api.core<{member: Member}>("members.duplicate", {id});
+        await load(); select(result.member.id);
+      } else if (action === "clear") {
+        openDialog({title: t("members.sideClearConfirm", {p0: m.name}), body: `<p>${esc(t("members.sideClearHint"))}</p>`, cls: "mb-confirm",
+          actions: {secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), destructive: {label: esc(t("members.sideClear")), attrs: ' data-dlg="clear"'}},
+          onAct(pick, _button, dialog) {
+            if (pick !== "clear") return dialog.close();
+            void api.core("agent.history.clear", {member_id: id}).then(() => { dialog.close(); if (current === id) host.onSelect(id); void load(); }).catch(err => toaster.info(describeError(err)));
+          },
+        });
+      }
+    } catch (err) { toaster.info(describeError(err)); }
+  }
+
+  function newConversation(): void {
+    const dialog = openDialog({title: t("members.sideNewConversation"), cls: "mb-chat-picker",
+      body: `<input class="mb-fin" type="search" data-chat-search placeholder="${esc(t("members.sidePickerHint"))}" aria-label="${esc(t("members.sidePickerHint"))}"><div class="mb-chat-choices"></div>`,
+      actions: {secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"')},
+      onAct(action, target, d) {
+        if (action === "member") { d.close(); newMember(null); }
+        else if (action === "conversation") { d.close(); select(Number(target.dataset.id)); }
+        else d.close();
+      },
+    });
+    const input = dialog.el.querySelector<HTMLInputElement>("[data-chat-search]")!;
+    const choices = dialog.el.querySelector<HTMLElement>(".mb-chat-choices")!;
+    const draw = () => {
+      const q = input.value.trim().toLocaleLowerCase();
+      choices.innerHTML = btn(`${ico("plus")}<span>${esc(t("members.newMember"))}</span>`, "mb-chat-choice", ' data-dlg="member"') +
+        [raphaelOf(list), ...memberSections(list ?? {members: [], groups: []}).flatMap(section => section.members)]
+          .filter(m => `${m.name} ${m.role} ${m.blurb ?? ""}`.toLocaleLowerCase().includes(q))
+          .map(m => btn(`${faceHTML(m, 34)}<span><b>${esc(m.name)}</b><small>${esc(m.blurb || m.role)}</small></span>`, "mb-chat-choice", ` data-dlg="conversation" data-id="${m.id}"`)).join("");
+    };
+    input.addEventListener("input", draw); draw();
+  }
+  window.addEventListener("keydown", event => {
+    if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "n" && host.visible() && !document.querySelector(".mb-scrim")) {
+      event.preventDefault(); newMember(null);
+    }
+  });
 
   function moveMember(id: number, anchor: HTMLElement): void {
     const m = list?.members.find((other) => other.id === id);
@@ -423,7 +500,7 @@ export function createMembers(host: MembersHost): MembersShell {
     await groupChange(() => api.groupsDelete(id));
   }
 
-  onLocaleChange(drawAll);
+  onLocaleChange(() => { drawAll(); details.refreshMemory(current); });
   details.el.hidden = !open;
   drawAll();
 
