@@ -16,6 +16,12 @@ def test_defaults_and_set(conn):
     assert s.get("monthly_limit_usd") == 20.0
 
 
+def test_catppuccin_skin_is_saved_and_read_back(conn):
+    store = SettingsStore(conn)
+    store.set("skin", "catppuccin")
+    assert SettingsStore(conn).get("skin") == "catppuccin"
+
+
 def test_rejects_unknown_key_and_wrong_type(conn):
     s = SettingsStore(conn)
     with pytest.raises(KeyError):

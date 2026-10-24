@@ -325,11 +325,11 @@
 .cmp-input::placeholder { color: var(--text-3); }
 .cmp-input:focus-visible { outline: 0; }
 .page-agent .btn.cmp-voice { flex: none; width: var(--pa-cmp-btn); min-height: var(--pa-cmp-btn); padding: 0; border: 0; border-radius: 50%; background: transparent; transition: transform 0.16s ease; }
-.page-agent .btn.cmp-send { flex: none; width: var(--pa-cmp-btn); height: var(--pa-cmp-btn); min-height: var(--pa-cmp-btn); padding: 9px; border-radius: 50%; border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
-.page-agent .btn.cmp-send:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
-.page-agent .btn.cmp-send:active:not(:disabled) { border-color: var(--accent-pressed); background: var(--accent-pressed); }
-/* nothing to send: a quiet outline of the same circle */
-.page-agent .btn.cmp-send:disabled { border-color: transparent; background: transparent; color: var(--text-3); opacity: 0.6; cursor: default; }
+.composer .btn.cmp-send { flex: none; width: var(--pa-cmp-btn); height: var(--pa-cmp-btn); min-height: var(--pa-cmp-btn); padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--accent-icon); }
+.composer .btn.cmp-send .i { width: var(--pa-cmp-av); height: var(--pa-cmp-av); }
+.composer .btn.cmp-send:hover:not(:disabled) { background: var(--hover); color: var(--accent-icon); }
+.composer .btn.cmp-send:active:not(:disabled) { background: var(--pressed); color: var(--accent-icon); }
+.composer .btn.cmp-send:disabled { background: transparent; color: var(--text-3); opacity: 1; cursor: default; }
 .page-agent .btn.cmp-voice .av { --av: var(--pa-cmp-av) !important; }
 .page-agent .btn.cmp-voice:hover:not(:disabled) { background: transparent; transform: scale(1.08); }
 .page-agent .btn.cmp-voice:active:not(:disabled) { background: transparent; transform: scale(0.96); }

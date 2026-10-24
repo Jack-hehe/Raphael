@@ -130,7 +130,7 @@ describe("colours", () => {
     for (const file of mainFiles.filter((f) => f.endsWith(".css"))) {
       let css = stripComments(read(file));
       // the token blocks: custom properties only
-      if (rel(file) === "styles.css") css = css.replace(/(?::root(?:\[data-(?:theme|skin)="[a-z]+"\])?|\[data-preview="[a-z]+"\])\s*\{[^}]*\}/g, "");
+      if (rel(file) === "styles.css") css = css.replace(/(?::root(?:\[data-(?:theme|skin)="[a-z]+"\]){0,2}(?:,\s*\.skin-sample\[data-preview="[a-z]+"\]\[data-mode="(?:light|dark)"\])?|\.skin-sample\[data-preview="[a-z]+"\]\[data-mode="(?:light|dark)"\])\s*\{[^}]*\}/g, "");
       css.split("\n").forEach((line, i) => COLOUR.test(line) && bad.push(`${rel(file)}:${i + 1}: ${line.trim().slice(0, 80)}`));
     }
     expect(bad).toEqual([]);
@@ -226,8 +226,8 @@ describe("icons", () => {
   test("an icon is shown at 16 or 20 px, never 12 to 15", () => {
     const bad = iconRules().flatMap(({ file, selector, body }) =>
       [...body.matchAll(/(?:^|;)\s*(width|height)\s*:\s*([^;]+)/g)]
-        // The full-thread file drop target explicitly uses a 28 px pictogram.
-        .filter(([, , value]) => !SIZES.has(value.trim()) && !(file === "agent.css" && selector === ".attachment-drop > .i" && value.trim() === "28px"))
+        // The owner requested the send glyph match the adjacent voice portrait exactly.
+        .filter(([, , value]) => !SIZES.has(value.trim()) && !(file === "agent.css" && ((selector === ".attachment-drop > .i" && value.trim() === "28px") || (selector === ".composer .btn.cmp-send .i" && value.trim() === "var(--pa-cmp-av)"))))
         .map(([, prop, value]) => `${file}: ${selector} { ${prop}: ${value.trim()} }`),
     );
     expect(iconRules().length).toBeGreaterThan(10);

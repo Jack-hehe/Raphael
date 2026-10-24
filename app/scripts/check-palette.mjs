@@ -22,15 +22,22 @@ const ratio = (a, b) => {
   return result;
 };
 const surfaces = ["side", "content", "panel", "surface-2", "menu", "btn", "key", "hover", "pressed", "selected", "accent-soft"];
-const skins = Object.fromEntries([...css.matchAll(/:root\[data-skin="([^"]+)"\]\s*\{([\s\S]*?)\n\}/g)].map(([, name, block]) => [name, tokens(block)]));
-if (Object.keys(skins).length !== 7) throw new Error("Expected seven complete skin palettes");
+const skinSource = readFileSync(new URL("../src/main/owner-settings.ts", import.meta.url), "utf8");
+const skinNames = [...skinSource.match(/export const SKINS = \[([^\]]+)\]/)[1].matchAll(/"([^"]+)"/g)].map(([, name]) => name);
+const skins = Object.fromEntries([...css.matchAll(/:root\[data-skin="([^"]+)"\]\[data-theme="(light|dark)"\],\s*\.skin-sample\[data-preview="\1"\]\[data-mode="\2"\]\s*\{([\s\S]*?)\n\}/g)].map(([, name, mode, block]) => [`${name}/${mode}`, tokens(block)]));
+for (const name of skinNames.filter(name => name !== "default")) {
+  for (const mode of ["light", "dark"]) {
+    if (!skins[`${name}/${mode}`]) throw new Error(`Missing skin mode: ${name}/${mode}`);
+  }
+}
+if (Object.keys(skins).length !== (skinNames.length - 1) * 2) throw new Error("Unexpected skin palettes");
 for (const [name, palette] of Object.entries(skins)) {
   for (const token of Object.keys(tokens(css.match(/:root\[data-theme="dark"\]\s*\{([\s\S]*?)\n\}/)[1]))) {
     if (!(token in palette)) throw new Error(`Missing skin token: ${name}/${token}`);
   }
 }
 const report = {};
-for (const [theme, palette] of Object.entries({ light, dark, ...skins })) {
+for (const [theme, palette] of Object.entries({ "default/light": light, "default/dark": dark, ...skins })) {
   const contrast = {};
   for (const [label, token] of Object.entries({ body: "text", secondary: "text-2", muted: "text-3", links: "accent-text" })) {
     const measured = surfaces.map((surface) => ({ surface, ratio: ratio(palette[token], palette[surface]) }));
@@ -46,13 +53,16 @@ for (const [theme, palette] of Object.entries({ light, dark, ...skins })) {
   if (Math.min(...Object.values(contrast.toast)) < 4.5) process.exitCode = 1;
   contrast.destructive = Object.fromEntries(["panel", "btn", "menu", "danger-hover", "danger-pressed"].map(surface => [surface, +ratio(palette.err, palette[surface]).toFixed(2)]));
   if (Object.values(contrast.destructive).some(value => value < 4.5)) process.exitCode = 1;
-  for (const token of ["hover", "pressed", "hover-edge", "scroll-hover", "toast-hover"]) {
+  // Published Catppuccin interaction colors retain the palette's lavender hue.
+  for (const token of theme.startsWith("catppuccin/") ? [] : ["hover", "pressed", "hover-edge", "scroll-hover", "toast-hover"]) {
     const channels = palette[token].slice(1).match(/../g).map(value => parseInt(value, 16));
     if (Math.max(...channels) - Math.min(...channels) > 12) throw new Error(`Non-neutral interaction token: ${theme}/${token}`);
   }
   // Chart marks need 3:1 against their surface; legend text uses the ordinary text palette.
   contrast.usageCharts = Object.fromEntries(usageColors.map(token => [token, +ratio(palette[token], palette.panel).toFixed(2)]));
   if (usageColors.some(token => ratio(palette[token], palette.panel) < 3)) process.exitCode = 1;
+  contrast.sendIcon = Object.fromEntries(["panel", "hover", "pressed"].map(surface => [surface, +ratio(palette["accent-icon"], palette[surface]).toFixed(2)]));
+  if (Object.values(contrast.sendIcon).some(value => value < 3)) process.exitCode = 1;
   report[theme] = { tokens: palette, contrast };
 }
 // White labels on a translucent neutral overlay fill: a white desktop is the worst case.

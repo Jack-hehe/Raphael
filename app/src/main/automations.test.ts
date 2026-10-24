@@ -55,11 +55,15 @@ test("Escape closes a menu first and the editor second",()=>{
   openRoutineDialog({members,date:"2030-10-24"});click('[data-dlg="more"]');click('[data-dlg="end"]');document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}));expect(document.querySelector('.au-routine-dialog')).not.toBeNull();document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}));expect(document.querySelector('.au-routine-dialog')).toBeNull();
 });
 
-test("list toggles a routine, persists system-awake preference and opens history",async()=>{
+test("list explains routines, links results and persists switches without a run log",async()=>{
   const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();
   expect(page.el.textContent).toContain("Review");click('[data-au="toggle"]');await flush();expect(api.routinesUpdate).toHaveBeenCalledWith(1,{enabled:false});
   click('[data-au="awake"]');await flush();expect(api.keepAwakeSet).toHaveBeenCalledWith(true);expect(page.el.querySelector('[data-au="awake"]')!.getAttribute("aria-checked")).toBe("true");
-  click('[data-au="runs"]');await flush();expect(document.querySelector('.au-runs-dialog')!.textContent).toContain("Not run yet");page.hide();
+  expect(page.el.querySelector('[data-au="runs"]')).toBeNull();
+  expect(page.el.textContent).toContain("automatically");
+  expect(page.el.querySelector('.au-sentence')!.textContent).toContain("Alice");
+  expect(page.el.querySelector('.au-sentence')!.textContent).toContain("Review");
+  click('[data-au="destination"]');expect(document.querySelector('.au-runs-dialog')).toBeNull();page.hide();
 });
 
 test("live routine notifications refresh the list, and hide invalidates pending responses",async()=>{
@@ -142,7 +146,18 @@ test("empty ungrouped column is available only while dragging",async()=>{
  const card=page.el.querySelector<HTMLElement>('[data-team-member="1"]')!;card.dispatchEvent(new Event('dragstart',{bubbles:true}));expect(target.hidden).toBe(false);card.dispatchEvent(new Event('dragend',{bubbles:true}));expect(target.hidden).toBe(true);page.hide();
 });
 
-test("run log sorts rows newest first and includes all status chips",async()=>{
- api.routineRuns.mockResolvedValue({runs:[{id:1,started:1,status:"done",summary:"First",cost:0.01,turn_id:12},{id:2,started:3,status:"skipped",summary:"Skipped",cost:0},{id:3,started:2,status:"error",summary:"Failed",cost:0}]});
- const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();click('[data-au="runs"]');await flush();const rows=[...document.querySelectorAll('.au-run')];expect(rows.map(r=>r.querySelector('.au-run-status')!.getAttribute('data-status'))).toEqual(["skipped","error","done"]);expect(rows[2].querySelector('[data-dlg="turn"]')).not.toBeNull();page.hide();
+test("each empty-state example opens a prefilled routine that can be saved",async()=>{
+ api.routinesList.mockResolvedValue({routines:[]});
+ const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();
+ expect(page.el.querySelectorAll('[data-au="example"]')).toHaveLength(3);
+ for (let i=0;i<3;i++) {
+   click(`[data-au="example"][data-example="${i}"]`);
+   expect(document.querySelector<HTMLInputElement>('#au-title')!.value.length).toBeGreaterThan(5);
+   expect(document.querySelector<HTMLTextAreaElement>('#au-prompt')!.value.length).toBeGreaterThan(5);
+   expect(document.querySelector<HTMLInputElement>('#au-time')!.value).toBe(i===2?"21:00":"08:00");
+   expect(document.querySelector('[data-kind="'+(i===1?'weekly':'daily')+'"][aria-pressed="true"]')).not.toBeNull();
+   click('[data-dlg="save"]');await flush();
+ }
+ expect(api.routinesCreate).toHaveBeenCalledTimes(3);
+ expect(api.routinesCreate.mock.calls[1][0].schedule.days).toEqual([1]);page.hide();
 });
