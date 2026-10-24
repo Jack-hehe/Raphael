@@ -1,0 +1,2184 @@
+{
+  "now": 1792807200000,
+  "device": {
+    "dictation_keys": [
+      "AltRight"
+    ],
+    "dictation_mode": "toggle",
+    "paste_last_keys": [
+      "AltRight+V"
+    ],
+    "agent_keys": [
+      "AltRight+Space"
+    ],
+    "microphone": null,
+    "emblem_size": 150,
+    "subtitles": "on",
+    "appearance": "light",
+    "ui_language": "zh-TW",
+    "autostart": true,
+    "onboarded": true,
+    "computer_apps": []
+  },
+  "settings": {
+    "owner_name": "Jack",
+    "owner_about": "請用繁體中文回答，保留有助理解的英文術語，並提供具體例子。",
+    "owner_photo": "",
+    "skin": "default",
+    "agent_model": "openai/gpt-6-sol",
+    "cleanup_model": "openai/gpt-6-luna",
+    "stt_engine": "cloud",
+    "stt_cloud_model": "elevenlabs/scribe-v2",
+    "monthly_limit_usd": 20,
+    "languages": [
+      "zh-TW",
+      "en-US"
+    ],
+    "history_retention_days": 30,
+    "worker_enabled": true,
+    "worker_cost_cap_usd": 0.2,
+    "worker_timeout_s": 1800,
+    "action_mode": "ask"
+  },
+  "status": {
+    "openrouter": {
+      "state": "ok",
+      "latency_ms": 120,
+      "checked_at_ms": 1792807200000,
+      "error": null,
+      "key": null,
+      "usage": null
+    },
+    "spend": {
+      "month_usd": 1.24,
+      "today_usd": 0.04,
+      "limit_usd": 20,
+      "forecast_usd": 2,
+      "daily": [
+        0.01,
+        0.04,
+        0.03
+      ]
+    },
+    "last": null
+  },
+  "members": [
+    {
+      "id": 0,
+      "name": "拉斐爾",
+      "role": "幕僚長",
+      "instructions": "回答時請附上具體例子，並區分已確認的事實與推測。",
+      "personality": "溫和、細心，重視資料來源。",
+      "avatar": "",
+      "avatar_url": "/brand/in-app-icon.png",
+      "group_id": null,
+      "model": "",
+      "tools": null,
+      "position": 0,
+      "created": 1792202400000,
+      "unread": false,
+      "waiting": false,
+      "preview": "研究摘要已整理完成，接著確認下週的安排。",
+      "last_at": 1792807140000,
+      "voice": null,
+      "read_aloud": false,
+      "notify": true
+    },
+    {
+      "id": 1,
+      "name": "小晴",
+      "role": "研究與資訊整理",
+      "instructions": "回答時請附上具體例子，並區分已確認的事實與推測。",
+      "personality": "溫和、細心，重視資料來源。",
+      "avatar": "",
+      "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+      "group_id": 1,
+      "model": "",
+      "tools": null,
+      "position": 1,
+      "created": 1792202400000,
+      "unread": false,
+      "waiting": false,
+      "preview": "研究摘要已整理完成，接著確認下週的安排。",
+      "last_at": 1792807140000,
+      "voice": null,
+      "read_aloud": false,
+      "notify": true
+    },
+    {
+      "id": 2,
+      "name": "小森",
+      "role": "專案進度",
+      "instructions": "回答時請附上具體例子，並區分已確認的事實與推測。",
+      "personality": "溫和、細心，重視資料來源。",
+      "avatar": "",
+      "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2YzkzODkiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+      "group_id": 1,
+      "model": "",
+      "tools": null,
+      "position": 2,
+      "created": 1792202400000,
+      "unread": true,
+      "waiting": false,
+      "preview": "研究摘要已整理完成，接著確認下週的安排。",
+      "last_at": 1792807140000,
+      "voice": null,
+      "read_aloud": false,
+      "notify": true
+    },
+    {
+      "id": 3,
+      "name": "紫苑",
+      "role": "日文老師",
+      "instructions": "回答時請附上具體例子，並區分已確認的事實與推測。",
+      "personality": "溫和、細心，重視資料來源。",
+      "avatar": "",
+      "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiNhNzdjOTEiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+      "group_id": 2,
+      "model": "",
+      "tools": null,
+      "position": 3,
+      "created": 1792202400000,
+      "unread": false,
+      "waiting": false,
+      "preview": "研究摘要已整理完成，接著確認下週的安排。",
+      "last_at": 1792807140000,
+      "voice": null,
+      "read_aloud": false,
+      "notify": true
+    }
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "name": "專案工作",
+      "position": 0,
+      "sources": []
+    },
+    {
+      "id": 2,
+      "name": "語言學習",
+      "position": 1,
+      "sources": []
+    }
+  ],
+  "rooms": [
+    {
+      "id": 1,
+      "name": "網站上線研究室",
+      "member_ids": [
+        0,
+        1,
+        2
+      ],
+      "group_id": 1,
+      "created": 1792720800000,
+      "is_team": 0
+    },
+    {
+      "id": 2,
+      "name": "專案工作",
+      "member_ids": [
+        0,
+        1,
+        2
+      ],
+      "group_id": 1,
+      "created": 1792720800000,
+      "is_team": 1
+    }
+  ],
+  "messages": [
+    {
+      "id": 1,
+      "room_id": 1,
+      "member_id": null,
+      "text": "@小晴 @小森 整理一下今天的上線進度。",
+      "created": 1792807110000,
+      "status": "done",
+      "request_id": null,
+      "reply_to": null,
+      "turn_id": null
+    },
+    {
+      "id": 2,
+      "room_id": 1,
+      "member_id": 1,
+      "text": "主要流程都已通過，剩下兩項文案需要確認。",
+      "created": 1792807140000,
+      "status": "done",
+      "request_id": null,
+      "reply_to": null,
+      "turn_id": 1
+    },
+    {
+      "id": 3,
+      "room_id": 1,
+      "member_id": 2,
+      "text": "我會更新專案清單，並將剩餘事項放進例行任務。",
+      "created": 1792807170000,
+      "status": "done",
+      "request_id": null,
+      "reply_to": null,
+      "turn_id": 1
+    }
+  ],
+  "conversations": [
+    {
+      "id": 1,
+      "member_id": 0,
+      "title": "這週的研究與安排",
+      "is_default": true,
+      "created_at_ms": 1792720800000,
+      "updated_at_ms": 1792807140000
+    },
+    {
+      "id": 2,
+      "member_id": 0,
+      "title": "專案規劃與會議記錄",
+      "is_default": false,
+      "created_at_ms": 1792720800000,
+      "updated_at_ms": 1792807140000
+    },
+    {
+      "id": 3,
+      "member_id": 0,
+      "title": "日本旅行行程",
+      "is_default": false,
+      "created_at_ms": 1792720800000,
+      "updated_at_ms": 1792807140000
+    },
+    {
+      "id": 11,
+      "member_id": 1,
+      "title": "研究資料整理",
+      "is_default": true,
+      "created_at_ms": 1792720800000,
+      "updated_at_ms": 1792807140000
+    }
+  ],
+  "turns": [
+    {
+      "id": 1,
+      "session_id": "look-research",
+      "member_id": 0,
+      "conversation_id": 1,
+      "created_at_ms": 1792807154000,
+      "question": "幫我整理這週的研究重點，並列出下週的安排。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "答",
+      "text": "研究摘要已整理完成。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.021,
+      "model": "openai/gpt-6-sol",
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "thinking",
+          "text": "先比較資料日期與來源，再整理共同重點。",
+          "at_ms": 1792807156000
+        },
+        {
+          "seq": 2,
+          "kind": "progress",
+          "text": "已核對三份報告，正在彙整研究結論。",
+          "at_ms": 1792807160000
+        },
+        {
+          "seq": 3,
+          "kind": "event",
+          "text": "完成來源比對",
+          "at_ms": 1792807170000
+        },
+        {
+          "seq": 4,
+          "kind": "reply",
+          "text": "這週的研究有三個重點：\n\n- **產品驗證**：訪談資料已整理，接著確認主要使用情境。\n- **技術方向**：先完成核心流程，再接上介面。\n- **下週安排**：週一討論需求，週三檢查原型，週五回顧結果。\n\n我已把相關資料整理成摘要，方便你接著討論。",
+          "at_ms": 1792807180000
+        }
+      ],
+      "steps": [
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "outcome": "ok",
+          "ms": 720,
+          "reason": null
+        },
+        {
+          "kind": "model",
+          "tool": null,
+          "server": null,
+          "outcome": "ok",
+          "ms": 1800,
+          "reason": null
+        }
+      ],
+      "attachments": [
+        {
+          "id": "look-notes",
+          "name": "研究訪談摘要.pdf",
+          "mime": "application/pdf",
+          "size": 24576
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "session_id": "look-member",
+      "member_id": 1,
+      "conversation_id": 11,
+      "created_at_ms": 1792807154000,
+      "question": "幫我整理這週的研究重點，並列出下週的安排。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "答",
+      "text": "研究摘要已整理完成。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.021,
+      "model": "openai/gpt-6-sol",
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "thinking",
+          "text": "先比較資料日期與來源，再整理共同重點。",
+          "at_ms": 1792807156000
+        },
+        {
+          "seq": 2,
+          "kind": "progress",
+          "text": "已核對三份報告，正在彙整研究結論。",
+          "at_ms": 1792807160000
+        },
+        {
+          "seq": 3,
+          "kind": "event",
+          "text": "完成來源比對",
+          "at_ms": 1792807170000
+        },
+        {
+          "seq": 4,
+          "kind": "reply",
+          "text": "這週的研究有三個重點：\n\n- **產品驗證**：訪談資料已整理，接著確認主要使用情境。\n- **技術方向**：先完成核心流程，再接上介面。\n- **下週安排**：週一討論需求，週三檢查原型，週五回顧結果。\n\n我已把相關資料整理成摘要，方便你接著討論。",
+          "at_ms": 1792807180000
+        }
+      ],
+      "steps": [
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "outcome": "ok",
+          "ms": 720,
+          "reason": null
+        },
+        {
+          "kind": "model",
+          "tool": null,
+          "server": null,
+          "outcome": "ok",
+          "ms": 1800,
+          "reason": null
+        }
+      ],
+      "attachments": []
+    }
+  ],
+  "routines": [
+    {
+      "id": 1,
+      "member_id": 0,
+      "title": "每天早上的進度",
+      "prompt": "查看專案資料，整理值得留意的進度，並附上待辦事項。",
+      "schedule": {
+        "kind": "daily",
+        "time": "09:00"
+      },
+      "enabled": true,
+      "last_run": 1792803600000,
+      "next_run": 1792890000000
+    },
+    {
+      "id": 2,
+      "member_id": 1,
+      "title": "午間資訊摘要",
+      "prompt": "查看專案資料，整理值得留意的進度，並附上待辦事項。",
+      "schedule": {
+        "kind": "weekdays",
+        "time": "12:30"
+      },
+      "enabled": true,
+      "last_run": 1792803600000,
+      "next_run": 1792890000000
+    },
+    {
+      "id": 3,
+      "member_id": 3,
+      "title": "每週單字複習",
+      "prompt": "查看專案資料，整理值得留意的進度，並附上待辦事項。",
+      "schedule": {
+        "kind": "weekly",
+        "days": [
+          1,
+          3,
+          5
+        ],
+        "time": "18:00"
+      },
+      "enabled": false,
+      "last_run": null,
+      "next_run": null
+    }
+  ],
+  "routineRuns": [
+    {
+      "id": 1,
+      "routine_id": 1,
+      "scheduled": 1792720800000,
+      "started": 1792720800000,
+      "finished": 1792720820000,
+      "status": "done",
+      "turn_id": 1,
+      "summary": "已完成進度整理，沒有新增待辦事項。",
+      "cost": 0.0032
+    },
+    {
+      "id": 2,
+      "routine_id": 1,
+      "scheduled": 1792634400000,
+      "started": 1792634400000,
+      "finished": 1792634420000,
+      "status": "error",
+      "turn_id": null,
+      "summary": "連線暫時無法使用，請稍後重試。",
+      "cost": 0
+    },
+    {
+      "id": 3,
+      "routine_id": 1,
+      "scheduled": 1792548000000,
+      "started": 1792548000000,
+      "finished": 1792548020000,
+      "status": "skipped",
+      "turn_id": null,
+      "summary": "前一項任務仍在進行，已略過此次執行。",
+      "cost": 0
+    }
+  ],
+  "usage": {
+    "range": "week",
+    "start_day": "2026-10-18",
+    "end_day": "2026-10-24",
+    "summary": {
+      "duration_ms": 123000,
+      "cost_usd": 0.084,
+      "tokens": 56800,
+      "ai_steps": 12,
+      "tools": 24,
+      "errors": 0
+    },
+    "groups": {
+      "member": [
+        {
+          "label": "拉斐爾",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1,
+          "member_id": 0,
+          "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM1Njc0ODEiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+"
+        },
+        {
+          "label": "小晴",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1,
+          "member_id": 1,
+          "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+"
+        },
+        {
+          "label": "小森",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1,
+          "member_id": 2,
+          "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2YzkzODkiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+"
+        },
+        {
+          "label": "紫苑",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1,
+          "member_id": 3,
+          "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiNhNzdjOTEiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+"
+        },
+        {
+          "label": "小夏（已封存）",
+          "tokens": 1800,
+          "cost_usd": 0.003,
+          "runs": 1,
+          "member_id": 4
+        },
+        {
+          "label": "小秋（已封存）",
+          "tokens": 1200,
+          "cost_usd": 0.002,
+          "runs": 1,
+          "member_id": 5
+        }
+      ],
+      "model": [
+        {
+          "label": "openai/gpt-6-sol",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        },
+        {
+          "label": "cli:codex:gpt-6.1",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        },
+        {
+          "label": "openai/gpt-6-luna",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        }
+      ],
+      "day": [
+        {
+          "label": "2026-10-24",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        },
+        {
+          "label": "2026-10-23",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        },
+        {
+          "label": "2026-10-22",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        }
+      ],
+      "provider": [
+        {
+          "label": "OpenRouter",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        },
+        {
+          "label": "Codex CLI",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        }
+      ],
+      "routine": [
+        {
+          "label": "午間資訊摘要",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        },
+        {
+          "label": "每天早上的進度",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        }
+      ]
+    },
+    "runs": [
+      {
+        "kind": "turn",
+        "id": 1,
+        "at_ms": 1792806900000,
+        "started_at_ms": 1792806879000,
+        "duration_ms": 21000,
+        "member_id": 0,
+        "member_name": "拉斐爾",
+        "avatar": "",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM1Njc0ODEiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "比較研究資料，整理下週的安排",
+        "model": "openai/gpt-6-sol",
+        "provider": "OpenRouter",
+        "routine": "",
+        "cost_usd": 0.021,
+        "tokens": 14200,
+        "ai_steps": 3,
+        "tools": 6,
+        "errors": 0
+      },
+      {
+        "kind": "routine",
+        "id": 2,
+        "at_ms": 1792800000000,
+        "started_at_ms": 1792806879000,
+        "duration_ms": 34000,
+        "member_id": 1,
+        "member_name": "小晴",
+        "avatar": "",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "整理午間資訊摘要",
+        "model": "openai/gpt-6-sol",
+        "provider": "OpenRouter",
+        "routine": "午間資訊摘要",
+        "cost_usd": 0.021,
+        "tokens": 14200,
+        "ai_steps": 3,
+        "tools": 6,
+        "errors": 0,
+        "status": "done"
+      },
+      {
+        "kind": "turn",
+        "id": 3,
+        "at_ms": 1792796400000,
+        "started_at_ms": 1792806879000,
+        "duration_ms": 34000,
+        "member_id": 2,
+        "member_name": "小森",
+        "avatar": "",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2YzkzODkiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "更新專案里程碑",
+        "model": "openai/gpt-6-sol",
+        "provider": "OpenRouter",
+        "routine": "",
+        "cost_usd": 0.021,
+        "tokens": 14200,
+        "ai_steps": 3,
+        "tools": 6,
+        "errors": 0,
+        "status": "done"
+      },
+      {
+        "kind": "turn",
+        "id": 4,
+        "at_ms": 1792792800000,
+        "started_at_ms": 1792806879000,
+        "duration_ms": 34000,
+        "member_id": 3,
+        "member_name": "紫苑",
+        "avatar": "",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiNhNzdjOTEiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "準備本週日文複習",
+        "model": "openai/gpt-6-sol",
+        "provider": "OpenRouter",
+        "routine": "",
+        "cost_usd": 0.021,
+        "tokens": 14200,
+        "ai_steps": 3,
+        "tools": 6,
+        "errors": 0,
+        "status": "done"
+      }
+    ],
+    "total": 4
+  },
+  "traces": [
+    {
+      "run": {
+        "kind": "turn",
+        "id": 1,
+        "at_ms": 1792806900000,
+        "started_at_ms": 1792806879000,
+        "duration_ms": 21000,
+        "member_id": 0,
+        "member_name": "拉斐爾",
+        "avatar": "",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM1Njc0ODEiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "比較研究資料，整理下週的安排",
+        "model": "openai/gpt-6-sol",
+        "provider": "OpenRouter",
+        "routine": "",
+        "cost_usd": 0.021,
+        "tokens": 14200,
+        "ai_steps": 3,
+        "tools": 6,
+        "errors": 0
+      },
+      "summary": {
+        "duration_ms": 21000,
+        "cost_usd": 0.021,
+        "tokens": 14200,
+        "ai_steps": 3,
+        "tools": 6,
+        "errors": 0
+      },
+      "spans": [
+        {
+          "kind": "model",
+          "model": "openai/gpt-6-sol",
+          "server": "openai/gpt-6-sol",
+          "tool": "",
+          "at_ms": 1792806882100,
+          "ms": 3100,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806883000,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806885100,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806887200,
+          "ms": 4200,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806889300,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806891400,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806893500,
+          "ms": 700,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "run": {
+        "kind": "routine",
+        "id": 2,
+        "at_ms": 1792800000000,
+        "started_at_ms": 1792806879000,
+        "duration_ms": 34000,
+        "member_id": 1,
+        "member_name": "小晴",
+        "avatar": "",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "整理午間資訊摘要",
+        "model": "openai/gpt-6-sol",
+        "provider": "OpenRouter",
+        "routine": "午間資訊摘要",
+        "cost_usd": 0.021,
+        "tokens": 14200,
+        "ai_steps": 3,
+        "tools": 6,
+        "errors": 0,
+        "status": "done"
+      },
+      "summary": {
+        "duration_ms": 21000,
+        "cost_usd": 0.021,
+        "tokens": 14200,
+        "ai_steps": 3,
+        "tools": 6,
+        "errors": 0
+      },
+      "spans": [
+        {
+          "kind": "model",
+          "model": "openai/gpt-6-sol",
+          "server": "openai/gpt-6-sol",
+          "tool": "",
+          "at_ms": 1792806882100,
+          "ms": 3100,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806883000,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806885100,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806887200,
+          "ms": 4200,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806889300,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806891400,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806893500,
+          "ms": 700,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "run": {
+        "kind": "turn",
+        "id": 3,
+        "at_ms": 1792796400000,
+        "started_at_ms": 1792806879000,
+        "duration_ms": 34000,
+        "member_id": 2,
+        "member_name": "小森",
+        "avatar": "",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2YzkzODkiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "更新專案里程碑",
+        "model": "openai/gpt-6-sol",
+        "provider": "OpenRouter",
+        "routine": "",
+        "cost_usd": 0.021,
+        "tokens": 14200,
+        "ai_steps": 3,
+        "tools": 6,
+        "errors": 0,
+        "status": "done"
+      },
+      "summary": {
+        "duration_ms": 21000,
+        "cost_usd": 0.021,
+        "tokens": 14200,
+        "ai_steps": 3,
+        "tools": 6,
+        "errors": 0
+      },
+      "spans": [
+        {
+          "kind": "model",
+          "model": "openai/gpt-6-sol",
+          "server": "openai/gpt-6-sol",
+          "tool": "",
+          "at_ms": 1792806882100,
+          "ms": 3100,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806883000,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806885100,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806887200,
+          "ms": 4200,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806889300,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806891400,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806893500,
+          "ms": 700,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "run": {
+        "kind": "turn",
+        "id": 4,
+        "at_ms": 1792792800000,
+        "started_at_ms": 1792806879000,
+        "duration_ms": 34000,
+        "member_id": 3,
+        "member_name": "紫苑",
+        "avatar": "",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiNhNzdjOTEiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "準備本週日文複習",
+        "model": "openai/gpt-6-sol",
+        "provider": "OpenRouter",
+        "routine": "",
+        "cost_usd": 0.021,
+        "tokens": 14200,
+        "ai_steps": 3,
+        "tools": 6,
+        "errors": 0,
+        "status": "done"
+      },
+      "summary": {
+        "duration_ms": 21000,
+        "cost_usd": 0.021,
+        "tokens": 14200,
+        "ai_steps": 3,
+        "tools": 6,
+        "errors": 0
+      },
+      "spans": [
+        {
+          "kind": "model",
+          "model": "openai/gpt-6-sol",
+          "server": "openai/gpt-6-sol",
+          "tool": "",
+          "at_ms": 1792806882100,
+          "ms": 3100,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806883000,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806885100,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806887200,
+          "ms": 4200,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806889300,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806891400,
+          "ms": 700,
+          "outcome": "ok"
+        },
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "at_ms": 1792806893500,
+          "ms": 700,
+          "outcome": "ok"
+        }
+      ]
+    }
+  ],
+  "allowances": {
+    "quotas": [],
+    "brains": [
+      {
+        "id": "claude",
+        "name": "Claude CLI",
+        "source": "reported",
+        "windows": [
+          {
+            "period": "fiveHour",
+            "remaining_percent": 76,
+            "resets_at": 1792814400
+          },
+          {
+            "period": "weekly",
+            "remaining_percent": 89,
+            "resets_at": 1792893600
+          }
+        ]
+      },
+      {
+        "id": "codex",
+        "name": "Codex CLI",
+        "source": "reported",
+        "windows": [
+          {
+            "period": "fiveHour",
+            "remaining_percent": 76,
+            "resets_at": 1792814400
+          },
+          {
+            "period": "weekly",
+            "remaining_percent": 89,
+            "resets_at": 1792893600
+          }
+        ]
+      },
+      {
+        "id": "gemini",
+        "name": "Gemini CLI",
+        "source": "reported",
+        "windows": [
+          {
+            "period": "fiveHour",
+            "remaining_percent": 76,
+            "resets_at": 1792814400
+          },
+          {
+            "period": "weekly",
+            "remaining_percent": 89,
+            "resets_at": 1792893600
+          }
+        ]
+      }
+    ]
+  },
+  "servers": [
+    {
+      "id": "notes",
+      "name": "專案筆記",
+      "enabled": false,
+      "status": "disabled",
+      "error": null,
+      "auth": "none",
+      "catalog_id": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "notes-server"
+      ],
+      "url": "",
+      "env": [
+        "API_KEY"
+      ],
+      "headers": [],
+      "result_size_limit": 8000,
+      "tool_count": 2,
+      "enabled_count": 2,
+      "write_count": 1,
+      "read_count": 1,
+      "checked_at_ms": 1792807200000,
+      "tools": [
+        {
+          "name": "search",
+          "description": "搜尋專案筆記",
+          "enabled": true,
+          "kind": "read"
+        },
+        {
+          "name": "save",
+          "description": "儲存專案摘要",
+          "enabled": true,
+          "kind": "write"
+        }
+      ]
+    },
+    {
+      "id": "remote",
+      "name": "團隊資料庫",
+      "enabled": false,
+      "status": "disabled",
+      "error": null,
+      "auth": "none",
+      "catalog_id": null,
+      "transport": "http",
+      "command": "",
+      "args": [],
+      "url": "https://tools.example.test/mcp",
+      "env": [],
+      "headers": [
+        "Authorization"
+      ],
+      "result_size_limit": 8000,
+      "tool_count": 2,
+      "enabled_count": 2,
+      "write_count": 1,
+      "read_count": 1,
+      "checked_at_ms": 1792807200000,
+      "tools": [
+        {
+          "name": "search",
+          "description": "搜尋專案筆記",
+          "enabled": true,
+          "kind": "read"
+        },
+        {
+          "name": "save",
+          "description": "儲存專案摘要",
+          "enabled": true,
+          "kind": "write"
+        }
+      ]
+    }
+  ],
+  "candidates": [
+    {
+      "id": "candidate",
+      "name": "本機專案筆記",
+      "enabled": false,
+      "status": "disabled",
+      "error": null,
+      "auth": "none",
+      "catalog_id": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "notes-server"
+      ],
+      "url": "",
+      "env": [
+        "API_KEY"
+      ],
+      "headers": [],
+      "result_size_limit": 8000,
+      "tool_count": 2,
+      "enabled_count": 2,
+      "write_count": 1,
+      "read_count": 1,
+      "checked_at_ms": 1792807200000,
+      "tools": [
+        {
+          "name": "search",
+          "description": "搜尋專案筆記",
+          "enabled": true,
+          "kind": "read"
+        },
+        {
+          "name": "save",
+          "description": "儲存專案摘要",
+          "enabled": true,
+          "kind": "write"
+        }
+      ],
+      "source": "Codex"
+    }
+  ],
+  "services": [
+    {
+      "id": "notion",
+      "name": "Notion",
+      "publisher": "Notion",
+      "url": "https://mcp.notion.com/mcp",
+      "category": "docs",
+      "icon": "notion",
+      "popular": true,
+      "summary": {
+        "zh-TW": "搜尋與整理工作區",
+        "en": "Search and organize your workspace",
+        "ja": "ワークスペースを検索"
+      },
+      "about": {
+        "zh-TW": "連接你的工作區",
+        "en": "Connect your workspace",
+        "ja": "ワークスペースを接続"
+      },
+      "examples": {
+        "zh-TW": [
+          "整理這週的專案筆記"
+        ],
+        "en": [
+          "Organize project notes"
+        ],
+        "ja": [
+          "今週のメモを整理"
+        ]
+      },
+      "server_id": null
+    }
+  ],
+  "providers": [
+    {
+      "id": "openrouter",
+      "kind": "openrouter",
+      "name": "OpenRouter",
+      "base_url": "https://openrouter.ai/api/v1",
+      "has_key": true,
+      "enabled": true,
+      "status": "ok",
+      "models": 2
+    }
+  ],
+  "providerKinds": [
+    {
+      "kind": "openrouter",
+      "name": "OpenRouter",
+      "group": "gateway",
+      "fields": [
+        "key"
+      ],
+      "default_base_url": "https://openrouter.ai/api/v1",
+      "available": true
+    }
+  ],
+  "catalog": {
+    "llm": [
+      {
+        "id": "openai/gpt-6-sol",
+        "name": "GPT-6 Sol",
+        "provider": "OpenAI",
+        "input_per_mtok": 1,
+        "output_per_mtok": 2,
+        "per_minute": null,
+        "free": false,
+        "variable_price": false,
+        "context_length": 128000,
+        "created_at_ms": null,
+        "capabilities": {
+          "structured_output": true,
+          "tool_calling": true
+        },
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "roles": {
+          "answer": {
+            "usable": true,
+            "reason": null
+          },
+          "cleanup": {
+            "usable": true,
+            "reason": null
+          }
+        }
+      },
+      {
+        "id": "openai/gpt-6-luna",
+        "name": "GPT-6 Luna",
+        "provider": "OpenAI",
+        "input_per_mtok": 1,
+        "output_per_mtok": 2,
+        "per_minute": null,
+        "free": false,
+        "variable_price": false,
+        "context_length": 128000,
+        "created_at_ms": null,
+        "capabilities": {
+          "structured_output": true,
+          "tool_calling": true
+        },
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "roles": {
+          "answer": {
+            "usable": true,
+            "reason": null
+          },
+          "cleanup": {
+            "usable": true,
+            "reason": null
+          }
+        }
+      }
+    ],
+    "stt": [
+      {
+        "id": "elevenlabs/scribe-v2",
+        "name": "Scribe v2",
+        "provider": "ElevenLabs",
+        "input_per_mtok": null,
+        "output_per_mtok": null,
+        "per_minute": 0.004,
+        "free": false,
+        "variable_price": false,
+        "context_length": 128000,
+        "created_at_ms": null,
+        "capabilities": {
+          "structured_output": true,
+          "tool_calling": true
+        },
+        "input_modalities": [
+          "audio"
+        ],
+        "roles": {
+          "stt": {
+            "usable": true,
+            "reason": null
+          }
+        }
+      }
+    ],
+    "source": "builtin",
+    "fetched_at_ms": 1792807200000,
+    "replaced": []
+  },
+  "clis": [
+    {
+      "id": "claude",
+      "name": "Claude CLI",
+      "installed": true,
+      "logged_in": true,
+      "login_command": "claude",
+      "models": [
+        {
+          "id": "sonnet",
+          "name": "Sonnet"
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "name": "Codex CLI",
+      "installed": true,
+      "logged_in": true,
+      "login_command": "codex",
+      "models": [
+        {
+          "id": "gpt-6.1",
+          "name": "GPT-6.1"
+        }
+      ]
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini CLI",
+      "installed": true,
+      "logged_in": true,
+      "login_command": "gemini",
+      "models": [
+        {
+          "id": "gemini-pro",
+          "name": "Gemini Pro"
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "today": {
+      "dictations": 48,
+      "words": 12000,
+      "audio_seconds": 3600,
+      "cost_usd": 1.24
+    },
+    "week": {
+      "dictations": 48,
+      "words": 12000,
+      "audio_seconds": 3600,
+      "cost_usd": 1.24
+    },
+    "month": {
+      "dictations": 48,
+      "words": 12000,
+      "audio_seconds": 3600,
+      "cost_usd": 1.24
+    },
+    "all": {
+      "dictations": 48,
+      "words": 12000,
+      "audio_seconds": 3600,
+      "cost_usd": 1.24
+    },
+    "streak_days": 5,
+    "active_days": 26,
+    "longest_streak_days": 8,
+    "speed_wpm": 200,
+    "time_saved_seconds": 5400,
+    "by_day": [
+      {
+        "date": "2026-07-17",
+        "dictations": 0,
+        "words": 100
+      },
+      {
+        "date": "2026-07-18",
+        "dictations": 4,
+        "words": 104
+      },
+      {
+        "date": "2026-07-19",
+        "dictations": 4,
+        "words": 108
+      },
+      {
+        "date": "2026-07-20",
+        "dictations": 0,
+        "words": 112
+      },
+      {
+        "date": "2026-07-21",
+        "dictations": 4,
+        "words": 116
+      },
+      {
+        "date": "2026-07-22",
+        "dictations": 4,
+        "words": 120
+      },
+      {
+        "date": "2026-07-23",
+        "dictations": 0,
+        "words": 124
+      },
+      {
+        "date": "2026-07-24",
+        "dictations": 4,
+        "words": 128
+      },
+      {
+        "date": "2026-07-25",
+        "dictations": 4,
+        "words": 132
+      },
+      {
+        "date": "2026-07-26",
+        "dictations": 0,
+        "words": 136
+      },
+      {
+        "date": "2026-07-27",
+        "dictations": 4,
+        "words": 140
+      },
+      {
+        "date": "2026-07-28",
+        "dictations": 4,
+        "words": 144
+      },
+      {
+        "date": "2026-07-29",
+        "dictations": 0,
+        "words": 148
+      },
+      {
+        "date": "2026-07-30",
+        "dictations": 4,
+        "words": 152
+      },
+      {
+        "date": "2026-07-31",
+        "dictations": 4,
+        "words": 156
+      },
+      {
+        "date": "2026-08-01",
+        "dictations": 0,
+        "words": 160
+      },
+      {
+        "date": "2026-08-02",
+        "dictations": 4,
+        "words": 164
+      },
+      {
+        "date": "2026-08-03",
+        "dictations": 4,
+        "words": 168
+      },
+      {
+        "date": "2026-08-04",
+        "dictations": 0,
+        "words": 172
+      },
+      {
+        "date": "2026-08-05",
+        "dictations": 4,
+        "words": 176
+      },
+      {
+        "date": "2026-08-06",
+        "dictations": 4,
+        "words": 180
+      },
+      {
+        "date": "2026-08-07",
+        "dictations": 0,
+        "words": 184
+      },
+      {
+        "date": "2026-08-08",
+        "dictations": 4,
+        "words": 188
+      },
+      {
+        "date": "2026-08-09",
+        "dictations": 4,
+        "words": 192
+      },
+      {
+        "date": "2026-08-10",
+        "dictations": 0,
+        "words": 196
+      },
+      {
+        "date": "2026-08-11",
+        "dictations": 4,
+        "words": 200
+      },
+      {
+        "date": "2026-08-12",
+        "dictations": 4,
+        "words": 204
+      },
+      {
+        "date": "2026-08-13",
+        "dictations": 0,
+        "words": 208
+      },
+      {
+        "date": "2026-08-14",
+        "dictations": 4,
+        "words": 212
+      },
+      {
+        "date": "2026-08-15",
+        "dictations": 4,
+        "words": 216
+      },
+      {
+        "date": "2026-08-16",
+        "dictations": 0,
+        "words": 220
+      },
+      {
+        "date": "2026-08-17",
+        "dictations": 4,
+        "words": 224
+      },
+      {
+        "date": "2026-08-18",
+        "dictations": 4,
+        "words": 228
+      },
+      {
+        "date": "2026-08-19",
+        "dictations": 0,
+        "words": 232
+      },
+      {
+        "date": "2026-08-20",
+        "dictations": 4,
+        "words": 236
+      },
+      {
+        "date": "2026-08-21",
+        "dictations": 4,
+        "words": 240
+      },
+      {
+        "date": "2026-08-22",
+        "dictations": 0,
+        "words": 244
+      },
+      {
+        "date": "2026-08-23",
+        "dictations": 4,
+        "words": 248
+      },
+      {
+        "date": "2026-08-24",
+        "dictations": 4,
+        "words": 252
+      },
+      {
+        "date": "2026-08-25",
+        "dictations": 0,
+        "words": 256
+      },
+      {
+        "date": "2026-08-26",
+        "dictations": 4,
+        "words": 260
+      },
+      {
+        "date": "2026-08-27",
+        "dictations": 4,
+        "words": 264
+      },
+      {
+        "date": "2026-08-28",
+        "dictations": 0,
+        "words": 268
+      },
+      {
+        "date": "2026-08-29",
+        "dictations": 4,
+        "words": 272
+      },
+      {
+        "date": "2026-08-30",
+        "dictations": 4,
+        "words": 276
+      },
+      {
+        "date": "2026-08-31",
+        "dictations": 0,
+        "words": 280
+      },
+      {
+        "date": "2026-09-01",
+        "dictations": 4,
+        "words": 284
+      },
+      {
+        "date": "2026-09-02",
+        "dictations": 4,
+        "words": 288
+      },
+      {
+        "date": "2026-09-03",
+        "dictations": 0,
+        "words": 292
+      },
+      {
+        "date": "2026-09-04",
+        "dictations": 4,
+        "words": 296
+      },
+      {
+        "date": "2026-09-05",
+        "dictations": 4,
+        "words": 300
+      },
+      {
+        "date": "2026-09-06",
+        "dictations": 0,
+        "words": 304
+      },
+      {
+        "date": "2026-09-07",
+        "dictations": 4,
+        "words": 308
+      },
+      {
+        "date": "2026-09-08",
+        "dictations": 4,
+        "words": 312
+      },
+      {
+        "date": "2026-09-09",
+        "dictations": 0,
+        "words": 316
+      },
+      {
+        "date": "2026-09-10",
+        "dictations": 4,
+        "words": 320
+      },
+      {
+        "date": "2026-09-11",
+        "dictations": 4,
+        "words": 324
+      },
+      {
+        "date": "2026-09-12",
+        "dictations": 0,
+        "words": 328
+      },
+      {
+        "date": "2026-09-13",
+        "dictations": 4,
+        "words": 332
+      },
+      {
+        "date": "2026-09-14",
+        "dictations": 4,
+        "words": 336
+      },
+      {
+        "date": "2026-09-15",
+        "dictations": 0,
+        "words": 340
+      },
+      {
+        "date": "2026-09-16",
+        "dictations": 4,
+        "words": 344
+      },
+      {
+        "date": "2026-09-17",
+        "dictations": 4,
+        "words": 348
+      },
+      {
+        "date": "2026-09-18",
+        "dictations": 0,
+        "words": 352
+      },
+      {
+        "date": "2026-09-19",
+        "dictations": 4,
+        "words": 356
+      },
+      {
+        "date": "2026-09-20",
+        "dictations": 4,
+        "words": 360
+      },
+      {
+        "date": "2026-09-21",
+        "dictations": 0,
+        "words": 364
+      },
+      {
+        "date": "2026-09-22",
+        "dictations": 4,
+        "words": 368
+      },
+      {
+        "date": "2026-09-23",
+        "dictations": 4,
+        "words": 372
+      },
+      {
+        "date": "2026-09-24",
+        "dictations": 0,
+        "words": 376
+      },
+      {
+        "date": "2026-09-25",
+        "dictations": 4,
+        "words": 380
+      },
+      {
+        "date": "2026-09-26",
+        "dictations": 4,
+        "words": 384
+      },
+      {
+        "date": "2026-09-27",
+        "dictations": 0,
+        "words": 388
+      },
+      {
+        "date": "2026-09-28",
+        "dictations": 4,
+        "words": 392
+      },
+      {
+        "date": "2026-09-29",
+        "dictations": 4,
+        "words": 396
+      },
+      {
+        "date": "2026-09-30",
+        "dictations": 0,
+        "words": 400
+      },
+      {
+        "date": "2026-10-01",
+        "dictations": 4,
+        "words": 404
+      },
+      {
+        "date": "2026-10-02",
+        "dictations": 4,
+        "words": 408
+      },
+      {
+        "date": "2026-10-03",
+        "dictations": 0,
+        "words": 412
+      },
+      {
+        "date": "2026-10-04",
+        "dictations": 4,
+        "words": 416
+      },
+      {
+        "date": "2026-10-05",
+        "dictations": 4,
+        "words": 420
+      },
+      {
+        "date": "2026-10-06",
+        "dictations": 0,
+        "words": 424
+      },
+      {
+        "date": "2026-10-07",
+        "dictations": 4,
+        "words": 428
+      },
+      {
+        "date": "2026-10-08",
+        "dictations": 4,
+        "words": 432
+      },
+      {
+        "date": "2026-10-09",
+        "dictations": 0,
+        "words": 436
+      },
+      {
+        "date": "2026-10-10",
+        "dictations": 4,
+        "words": 440
+      },
+      {
+        "date": "2026-10-11",
+        "dictations": 4,
+        "words": 444
+      },
+      {
+        "date": "2026-10-12",
+        "dictations": 0,
+        "words": 448
+      },
+      {
+        "date": "2026-10-13",
+        "dictations": 4,
+        "words": 452
+      },
+      {
+        "date": "2026-10-14",
+        "dictations": 4,
+        "words": 456
+      },
+      {
+        "date": "2026-10-15",
+        "dictations": 0,
+        "words": 460
+      },
+      {
+        "date": "2026-10-16",
+        "dictations": 4,
+        "words": 464
+      },
+      {
+        "date": "2026-10-17",
+        "dictations": 4,
+        "words": 468
+      },
+      {
+        "date": "2026-10-18",
+        "dictations": 0,
+        "words": 472
+      },
+      {
+        "date": "2026-10-19",
+        "dictations": 4,
+        "words": 476
+      },
+      {
+        "date": "2026-10-20",
+        "dictations": 4,
+        "words": 480
+      },
+      {
+        "date": "2026-10-21",
+        "dictations": 0,
+        "words": 484
+      },
+      {
+        "date": "2026-10-22",
+        "dictations": 4,
+        "words": 488
+      },
+      {
+        "date": "2026-10-23",
+        "dictations": 4,
+        "words": 492
+      },
+      {
+        "date": "2026-10-24",
+        "dictations": 1,
+        "words": 496
+      }
+    ]
+  },
+  "history": [
+    {
+      "id": 1,
+      "kind": "dictation",
+      "text": "今天的會議記錄已整理完成，請確認下週的研究安排。",
+      "raw_text": "今天的會議記錄已整理完成請確認下週的研究安排",
+      "created_at_ms": 1792806900000,
+      "target_app": "notepad.exe",
+      "cleaned": true,
+      "stt_ms": 320,
+      "llm_ms": 450,
+      "cost_usd": 0.001
+    }
+  ],
+  "dictionary": [
+    {
+      "id": 1,
+      "word": "Raphael",
+      "misheard": [
+        "Rafael"
+      ],
+      "source": "manual",
+      "created_at_ms": 1792720800000
+    },
+    {
+      "id": 2,
+      "word": "Methelia",
+      "misheard": [],
+      "source": "learned",
+      "created_at_ms": 1792720800000
+    }
+  ],
+  "memories": [
+    {
+      "id": 1,
+      "member_id": 1,
+      "text": "專案每週三檢查原型，週五回顧結果。",
+      "created_at_ms": 1792720800000,
+      "name": "project-review.md",
+      "description": "專案每週三檢查原型，週五回顧結果。",
+      "type": "project",
+      "origin": "owner",
+      "updated": "2026-10-24",
+      "expires": null
+    }
+  ],
+  "analytics": {
+    "range": "7d",
+    "days": [
+      "2026-10-18",
+      "2026-10-19",
+      "2026-10-20",
+      "2026-10-21",
+      "2026-10-22",
+      "2026-10-23",
+      "2026-10-24"
+    ],
+    "tz": "Asia/Taipei",
+    "start_day": "2026-10-18",
+    "end_day": "2026-10-24",
+    "today_day": "2026-10-24",
+    "cost_by": {
+      "purpose": {
+        "total": 0,
+        "series": []
+      },
+      "model": {
+        "total": 0,
+        "series": []
+      },
+      "provider": {
+        "total": 0,
+        "series": []
+      }
+    },
+    "tools": {
+      "total": 0,
+      "series": []
+    },
+    "members": [],
+    "messages_by": {
+      "model": {
+        "total": 0,
+        "series": []
+      },
+      "source": {
+        "total": 0,
+        "series": []
+      }
+    },
+    "dictation": {
+      "dictations": [
+        4,
+        0,
+        4,
+        4,
+        0,
+        4,
+        4
+      ],
+      "words": [
+        100,
+        0,
+        200,
+        300,
+        0,
+        250,
+        400
+      ],
+      "estimated": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "estimated_words": 0,
+      "estimated_dictations": 0,
+      "day_basis": "capture_local"
+    }
+  },
+  "avatar": {
+    "url": "data:image/png;base64,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",
+    "crop": {
+      "x": 0.5,
+      "y": 0.5,
+      "zoom": 1
+    }
+  },
+  "serviceStatus": {
+    "search": {
+      "enabled": true,
+      "service": "builtin",
+      "options": [
+        {
+          "id": "builtin",
+          "needs_key": false,
+          "has_key": false,
+          "key_optional": false
+        }
+      ]
+    },
+    "read": {
+      "enabled": true,
+      "service": "builtin",
+      "options": [
+        {
+          "id": "builtin",
+          "needs_key": false,
+          "has_key": false,
+          "key_optional": false
+        }
+      ]
+    },
+    "pdf": {
+      "enabled": true,
+      "service": "builtin",
+      "options": [
+        {
+          "id": "builtin",
+          "needs_key": false,
+          "has_key": false,
+          "key_optional": false
+        }
+      ]
+    },
+    "voice": {
+      "enabled": false,
+      "service": "fish",
+      "options": [
+        {
+          "id": "fish",
+          "needs_key": true,
+          "has_key": false,
+          "key_optional": false
+        }
+      ],
+      "fish_voice_set": false
+    },
+    "vision": {
+      "enabled": true,
+      "model": "",
+      "resolved_model": "openai/gpt-6-sol",
+      "supports_images": true
+    }
+  },
+  "usageCsv": "time,member,title,model,provider,duration_ms,tokens,cost_usd,ai_steps,tools,errors\r\n2026-10-24,拉斐爾,研究摘要,openai/gpt-6-sol,OpenRouter,21000,14200,.021,3,6,0\r\n",
+  "presets": [],
+  "skills": [],
+  "commands": [],
+  "voices": {
+    "voices": [],
+    "configured": false
+  },
+  "speech": {
+    "ready": true
+  },
+  "safetyRules": [],
+  "modelStatus": {
+    "models": [
+      {
+        "name": "qwen3-asr",
+        "ready": true
+      },
+      {
+        "name": "silero-vad",
+        "ready": true
+      }
+    ]
+  },
+  "localModels": [],
+  "languages": [],
+  "audioDevices": {
+    "devices": [
+      {
+        "index": 0,
+        "name": "桌上型麥克風",
+        "is_default": true
+      }
+    ],
+    "selected": null,
+    "automatic_device": "桌上型麥克風"
+  },
+  "messaging": {
+    "connected": false,
+    "enabled": false,
+    "allowed": [],
+    "pending": []
+  }
+}
