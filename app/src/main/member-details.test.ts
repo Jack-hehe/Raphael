@@ -181,7 +181,7 @@ describe("a member's panel", () => {
     await flush();
     expect(panel.el.querySelector<HTMLInputElement>("#mb-det-name")!.value).toBe("日文老師");
     expect(panel.el.querySelector<HTMLInputElement>("#mb-det-role")!.value).toBe("N2 嚴格版");
-    expect(panel.el.querySelector(".mb-avbtn .mb-av-letter")!.textContent).toBe("日");
+    expect(panel.el.querySelector(".mb-avbtn .mb-av-placeholder svg")).not.toBeNull();
     expect([...panel.el.querySelectorAll<HTMLElement>(".mb-panel-pages [data-tab]")].map(b => b.dataset.tab)).toEqual(["routines", "memory", "skills", "commands", "voice"]);
     panel.el.querySelector<HTMLElement>('[data-tab="skills"]')!.click();
     expect(panel.el.querySelector<HTMLElement>(".mb-who")!.hidden).toBe(true);
@@ -368,7 +368,7 @@ describe("a member's panel", () => {
     name.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     role.focus();
     await flush();
-    expect(panel.el.querySelector(".mb-avbtn .mb-av-letter")!.textContent).toBe("老");
+    expect(panel.el.querySelector(".mb-avbtn .mb-av-placeholder svg")).not.toBeNull();
     LIST.members[1] = { ...LIST.members[1], name: "日文老師" };
   });
 

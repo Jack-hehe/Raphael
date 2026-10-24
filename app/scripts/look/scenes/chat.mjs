@@ -1,4 +1,4 @@
-import { scene, click, hover, type, wait, member, room, search, check } from "./steps.mjs";
+import { scene, click, hover, type, wait, member, room, search, check, key, waitScrollEnd } from "./steps.mjs";
 
 const picker = [click(".conversation-trigger"), wait("#app-popover [data-conversation-open]"), check("conversation-picker")];
 const details = [member(1), member(1), wait(".mb-det:not([hidden])")];
@@ -6,6 +6,12 @@ const composer = [click(".cmp-attach"), wait("#app-popover")];
 export default [
   scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]")]),
   scene("running", "Conversation while a reply is being prepared", [], { running: true }),
+  scene("admin-approval", "Raphael asks before creating a member", [wait('.ask-card:not([hidden])'), check("admin-approval")], { adminApproval: "create" }),
+  scene("admin-approval-batch", "One approval lists eight members and the new group", [wait('.ask-card:not([hidden])'), click('.ask-q'), key("End"), waitScrollEnd('.ask-q'), check("admin-approval-batch")], { adminApproval: "batch" }),
+  scene("admin-approval-long", "Complete long instructions remain readable in the approval card", [wait('.ask-card:not([hidden])'), click('.ask-q'), key("End"), waitScrollEnd('.ask-q'), check("admin-approval-long")], { adminApproval: "long" }),
+  scene("admin-delete-approval", "Deleting a member always requires held approval", [wait('.ask-card[data-tier="T3"]:not([hidden])'), check("admin-approval")], { adminApproval: "delete" }),
+  scene("admin-approved", "Approve creation and select the live member", [wait('.ask-card:not([hidden])'), click('.ask-yes'), member(8), member(8), wait('.mb-det:not([hidden])'), check("admin-created")], { adminApproval: "create" }),
+  scene("admin-denied", "Declining creation leaves the team unchanged", [wait('.ask-card:not([hidden])'), click('.ask-no'), wait('.composer:not([hidden])'), check("admin-denied")], { adminApproval: "create" }),
   scene("empty", "Conversation without turns", [], { turns: [] }),
   scene("picker", "Conversation picker", picker),
   scene("no-conversations", "Conversation picker search without matches", [...picker, type("#app-popover .conversation-tools input", "沒有這個對話"), wait("#app-popover .conversation-empty"), check("conversation-picker")]),

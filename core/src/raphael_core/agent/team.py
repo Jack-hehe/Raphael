@@ -9,7 +9,7 @@
   C, C asks nobody) and has no cycle (`Speaker.can_ask`). The exchange is written in the two threads
   of the two who had it, as one line each (`route` "exchange"), and nowhere else.
 - `create_member {name, role, instructions, personality?, group?}` adds a member when the owner asks for one
-  (「幫我加一個管行程的成員」), through any directly addressed speaker.
+  (「幫我加一個管行程的成員」), through Raphael, as an alias of `member_create`.
 
 Both are T1 in the gate (`gate.TEAM_TOOLS`): they run at once, through the gate like every tool.
 Adding a member changes something, so the owner's safety rules judge it first, as they judge a
@@ -35,6 +35,7 @@ from typing import Any, Protocol
 from .plugins import PluginTool
 from .policy import Tier
 from .speaker import RAPHAEL_NAMES, Speaker
+from .team_admin import DEFINITIONS as ADMIN_DEFINITIONS
 
 ASK_MEMBER = "ask_member"
 CREATE_MEMBER = "create_member"
@@ -91,25 +92,7 @@ def _definition(name: str) -> dict[str, Any]:
                 "required": ["member", "request"],
             },
         }
-    return {
-        "description": (
-            "Add a member to the owner's team, only when the owner asks for one: its name (at most "
-            "16 characters), its role in a few words, its personality and speaking style, the "
-            "instructions for its work, and the name of "
-            "a group to put it in, if the owner said one."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "The member's name."},
-                "role": {"type": "string", "description": "Its role, at most 24 characters."},
-                "personality": {"type": "string", "description": "Character, tone and form of address, at most 2000 characters."},
-                "instructions": {"type": "string", "description": "What work it is to do, and how."},
-                "group": {"type": "string", "description": "The name of a group, or empty."},
-            },
-            "required": ["name", "role", "instructions"],
-        },
-    }
+    return ADMIN_DEFINITIONS["member_create"]
 
 
 def description(name: str) -> str:
@@ -168,6 +151,15 @@ class Team(Protocol):
     async def routine_tool(self, member_id: int, name: str, arguments: dict) -> dict:
         ...
 
+    async def admin_batch(self, member_id: int, operations: list[dict]) -> list[dict]:
+        ...
+
+    async def admin_tool(self, member_id: int, name: str, arguments: dict) -> dict:
+        ...
+
+    def admin_confirmation(self, name: str, arguments: dict, language: str, *, question: bool = True) -> str:
+        ...
+
     def create(self, *, name: Any, role: Any, instructions: Any, group: Any, personality: Any = "") -> Speaker:
         """Add a member; `members.store.MemberError` when it cannot be added."""
         ...
@@ -206,7 +198,7 @@ def team_tools_for(
     team: Team | None, speaker: Speaker, text: str = "", *, always: bool = False
 ) -> list[str]:
     """The team tools `speaker` may be offered for the request `text`: `ask_member` when there is
-    someone it may ask (Raphael, for a member; another member), and `create_member` for a speaker at
+    someone it may ask (Raphael, for a member; another member), and `create_member` for Raphael at
     the owner's request (not when asked by another). Without `always` (the voice fast tier) only
     the ones the request is about: it names someone it may ask, or asks for a new member."""
     tools = [SKILL_READ] if team is not None and getattr(team, "enabled_skills", lambda member_id: [])(speaker.id) else []
@@ -220,6 +212,6 @@ def team_tools_for(
         anyone = bool(named) or raphael
     if anyone:
         tools.append(ASK_MEMBER)
-    if speaker.depth == 0 and (always or asks_to_create_member(text)):
+    if speaker.is_raphael and speaker.depth == 0 and (always or asks_to_create_member(text)):
         tools.append(CREATE_MEMBER)
     return tools

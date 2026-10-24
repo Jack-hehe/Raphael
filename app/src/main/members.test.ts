@@ -97,12 +97,13 @@ describe("the faces", () => {
     expect(html).not.toMatch(/mb-av|letter|拉/);
   });
 
-  test("a member's picture is a data URL of an image, anything else the first character of its name", () => {
+  test("a member's picture is a data URL of an image, otherwise a neutral silhouette", () => {
     expect(faceHTML(member(1, { name: "進度官", avatar_url: PNG }), 34)).toContain(`<img src="${PNG}"`);
     for (const url of [undefined, "file:///C:/x.png", "https://x/y.png", "data:text/html;base64,AAAA"]) {
       const html = faceHTML(member(1, { name: "進度官", avatar_url: url }), 34);
-      expect(html).toContain('class="av mb-av mb-av-letter"');
-      expect(html).toContain(">進</span>");
+      expect(html).toContain('class="av mb-av mb-av-placeholder"');
+      expect(html).toContain("<svg");
+      expect(html).not.toContain("進");
       expect(html).not.toContain("<img");
     }
     expect(isPictureUrl(PNG)).toBe(true);
@@ -110,8 +111,8 @@ describe("the faces", () => {
     expect(initialOf("😀 Bot")).toBe("😀");
   });
 
-  test("a name goes into the page escaped", () => {
-    expect(faceHTML(member(1, { name: "<b>x" }), 34)).toContain("&lt;");
+  test("a name cannot introduce markup into a placeholder", () => {
+    expect(faceHTML(member(1, { name: "<b>x" }), 34)).not.toContain("<b>");
   });
 });
 

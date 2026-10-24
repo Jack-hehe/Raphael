@@ -7,6 +7,12 @@ export function installMock(fixture, config = {}, target = window) {
   data.settings.skin = config.skin ?? "default";
   if (variant.onlyRaphael) data.members = data.members.filter(member => member.id === 0);
   if (variant.problem) data.status.openrouter.state = "no_key";
+  let adminQuestion = variant.adminApproval ? data.adminQuestions[variant.adminApproval] : null;
+  if (adminQuestion) {
+    data.turns[0].status = "confirm";
+    data.turns[0].messages = data.turns[0].messages.filter(message => message.kind !== "reply");
+    data.turns[0].text = "";
+  }
   if (variant.running) {
     data.turns[0].status = "running";
     data.turns[0].messages = data.turns[0].messages.filter(message => message.kind !== "reply");
@@ -126,7 +132,24 @@ export function installMock(fixture, config = {}, target = window) {
       if (command === "device_settings_get") return copy(data.device);
       if (command === "device_settings_set") { Object.assign(data.device, args.patch); notify("DeviceSettings", { settings: copy(data.device) }); return copy(data.device); }
       if (command === "avatar_get") return copy(data.avatar);
-      if (["agent_question_open", "avatar_pick"].includes(command)) return null;
+      if (command === "agent_question_open") return copy(adminQuestion);
+      if (command === "agent_question_answer" && adminQuestion) {
+        if (args.id !== adminQuestion.id) throw new Error("Unknown approval question");
+        if (args.approved && adminQuestion.tier !== "T3") {
+          data.groups.push(copy(data.adminGroup));
+          data.members.push({ ...data.members[1], ...data.adminMember });
+          data.conversations.push({ id: 80, member_id: data.adminMember.id, title: "", is_default: true, created_at_ms: data.now, updated_at_ms: data.now });
+          notify("MembersChanged", { member_id: data.adminMember.id });
+        }
+        data.turns[0].status = args.approved ? "done" : "denied";
+        data.turns[0].text = args.approved ? "已建立 COO：營運長。" : "已取消建立成員。";
+        data.turns[0].messages.push({ seq: 4, kind: "reply", text: data.turns[0].text, at_ms: data.now });
+        notify("AgentQuestionClosed", { id: adminQuestion.id });
+        notify("AgentTurn", { turn_id: data.turns[0].id, member_id: 0 });
+        adminQuestion = null;
+        return;
+      }
+      if (command === "avatar_pick") return null;
       if (command === "plugin:app|version") return "0.2.0";
       if (command === "plugin:event|listen") return ++callbackId;
       if (["plugin:window|is_maximized", "keyboard_has_altgr"].includes(command)) return false;

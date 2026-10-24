@@ -465,7 +465,7 @@ class MembersService:
 
     def _avatar_url(self, avatar: str) -> str | None:
         """The picture a member's `avatar` names, as a data URL; None for none, or one that is
-        gone (the app shows the first character of the name)."""
+        gone (the app shows the default silhouette)."""
         kind, _, name = avatar.partition(":")
         if kind == "file" and name:
             return self._data_url(self._avatars / MEMBERS_DIR / name)
@@ -928,17 +928,132 @@ class MembersService:
         return routine_id
 
     async def routine_tool(self, member_id: int, name: str, arguments: dict) -> dict:
-        """The same routine API, scoped to the calling speaker; tool data cannot select a peer."""
+        """Raphael can select any member; peers stay within their own routines."""
         handlers = {"routine_list": self._routines_list, "routine_create": self._routine_create,
                     "routine_update": self._routine_update, "routine_delete": self._routine_delete}
         if name not in handlers:
             raise invalid_params("unknown routine tool")
-        params = {**arguments, "member_id": member_id}
+        target = _whole(arguments, "member_id") if "member_id" in arguments else member_id
+        if member_id != 0 and target != member_id:
+            raise invalid_params("routine belongs to another speaker")
+        params = {**arguments, "member_id": target}
         if name in ("routine_update", "routine_delete"):
             routine_id = self._routine_id(params)
-            if self.store.routine(routine_id).member_id != member_id:
+            if self.store.routine(routine_id).member_id != target:
                 raise invalid_params("routine belongs to another speaker")
         return await handlers[name](params)
+
+    def admin_confirmation(self, name: str, arguments: dict, language: str, *, question: bool = True) -> str:
+        from ..agent.team_admin import confirmation
+
+        identifier = arguments.get("member_id", 0) if name.startswith("routine_") else arguments.get("member_id", arguments.get("id"))
+        target = ""
+        if type(identifier) is int:
+            if name == "group_rename":
+                group = self.store.group(identifier)
+                target = group.name if group else ""
+            else:
+                target = self.name_of(identifier) or ""
+        if name in ("routine_update", "routine_delete") and type(arguments.get("id")) is int:
+            routine = self.store.routine(arguments["id"])
+            if routine:
+                target += f" / {routine.title}"
+        if name in ("member_create", "create_member", "member_update"):
+            current = self.store.member(identifier) if name == "member_update" and type(identifier) is int else None
+            group = self.store.group(current.group_id) if current and current.group_id else None
+            arguments = {"name": current.name if current else "", "role": current.role if current else "",
+                         "blurb": current.blurb if current else "", "group": group.name if group else "", **arguments}
+        return confirmation(name, arguments, language, target, question=question)
+
+    async def admin_batch(self, member_id: int, operations: list[dict]) -> list[dict]:
+        """Apply the approved list atomically and publish only committed roster changes."""
+        from ..agent.team_admin import BATCH_TOOLS
+
+        if member_id != 0 or not operations or any(op["name"] not in BATCH_TOOLS for op in operations):
+            raise invalid_params("invalid team administration batch")
+        # Finish filesystem work before opening the transaction; its handlers must not yield.
+        presets = (await self._presets({}))["presets"]
+        notifications, pictures = [], []
+        notify, remove_picture = self._notify, self._remove_picture
+        self._notify = lambda method, data: notifications.append((method, data))
+        self._remove_picture = pictures.append
+        try:
+            with self.store.transaction():
+                results = [await self.admin_tool(member_id, "member_create" if op["name"] == "create_member" else op["name"], op["arguments"], presets=presets)
+                           for op in operations]
+        finally:
+            self._notify, self._remove_picture = notify, remove_picture
+        for picture in pictures:
+            remove_picture(picture)
+        if notify is not None:
+            for method, data in notifications:
+                notify(method, data)
+        return results
+
+    async def admin_tool(self, member_id: int, name: str, arguments: dict, *, presets: list[dict] | None = None) -> dict:
+        """Adapt Raphael's registry to the same RPC handlers, defaults and notifications."""
+        from ..agent.team_admin import DEFINITIONS
+
+        if type(member_id) is not int or member_id != 0 or name not in DEFINITIONS:
+            raise invalid_params("team administration requires Raphael")
+        schema = DEFINITIONS[name]["parameters"]
+        if (set(arguments) - set(schema["properties"]) or
+                any(field not in arguments for field in schema["required"])):
+            raise invalid_params("invalid team administration fields")
+        if name == "team_overview":
+            roster = await self._list({})
+            groups = {group["id"]: group["name"] for group in roster["groups"]}
+            members = []
+            for item in roster["members"]:
+                identifier = item["id"]
+                members.append({**{field: item[field] for field in ("id", "name", "role", "blurb")},
+                                "group": groups.get(item["group_id"]),
+                                "skills_count": len(self.capabilities.skills(identifier)) if identifier else 0,
+                                "commands_count": len(self.capabilities.commands(identifier)) if identifier else 0,
+                                "routines": (await self._routines_list({"member_id": identifier}))["routines"]})
+            return {"members": members, "groups": roster["groups"],
+                    "avatar_presets": [{"avatar": preset["avatar"], "name": preset["name"]}
+                                       for preset in (await self._presets({}))["presets"]]}
+        if name in ("member_create", "member_update"):
+            params = dict(arguments)
+            if name == "member_update":
+                self._member_id(params)
+            if presets is None:
+                presets = (await self._presets({}))["presets"]
+            available = {preset["avatar"] for preset in presets}
+            if "avatar_preset" in params:
+                avatar = params.pop("avatar_preset")
+                if not isinstance(avatar, str):
+                    raise invalid_params("invalid avatar preset")
+                if avatar and not avatar.startswith("preset:"):
+                    avatar = "preset:" + avatar
+                if avatar and avatar not in available:
+                    raise invalid_params("unavailable avatar preset")
+                params["avatar"] = avatar
+            elif name == "member_create":
+                used = {member.avatar for member in self.store.members()}
+                params["avatar"] = next((preset["avatar"] for preset in presets if preset["avatar"] not in used), "")
+            created_group = None
+            if "group" in params:
+                group_name = params.pop("group")
+                if not isinstance(group_name, str):
+                    raise invalid_params("invalid group name")
+                group_name = group_name.strip()
+                group = self.store.group_by_name(group_name) if group_name else None
+                if group_name and group is None:
+                    created_group = (await self._group_create({"name": group_name}))["group"]
+                params["group_id"] = group.id if group else created_group["id"] if created_group else None
+            try:
+                return await (self._create(params) if name == "member_create" else self._update(params))
+            except RpcError:
+                # Failed validation must not leave behind the automatically created group.
+                if created_group:
+                    await self._group_delete({"id": created_group["id"]})
+                raise
+        handlers = {"member_delete": self._delete, "group_create": self._group_create,
+                    "group_rename": self._group_update, "member_skill_import": self._skills_import,
+                    "member_command_save": self._commands_save}
+        return await handlers[name](dict(arguments))
 
     async def _routines_list(self, params: dict) -> dict:
         member_id = self._routine_member(params) if "member_id" in params else None

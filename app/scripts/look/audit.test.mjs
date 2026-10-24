@@ -3,6 +3,14 @@ import { describe, expect, it } from "vitest";
 import { auditDocument, failedChecks } from "./audit.mjs";
 
 describe("rendered look checks", () => {
+  it("rejects non-finite durations in visible work summaries", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<button class="work-toggle">已處理 NaN 秒</button><div hidden><span class="step-ms">Infinity</span></div>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    const result = { ...auditDocument(window.document, { width: 1120, height: 900 }, []), runtimeErrors: [] };
+    expect(result.invalidDurations).toHaveLength(1);
+    expect(failedChecks(result)).toBe(true);
+  });
   it("reports visible raw translation keys and native controls, ignoring hidden pages", () => {
     const window = new Window();
     window.document.body.innerHTML = '<p>members.missingLabel</p><select><option>One</option></select><input type="time"><div hidden><select></select><p>settings.hidden</p></div>';

@@ -78,7 +78,8 @@
 
 /* ---------- the members' faces (never Raphael's: see the top) ---------- */
 .av.mb-av { overflow: hidden; border-radius: 50%; }
-.av.mb-av-letter { display: inline-flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--text-2); font: 650 calc(var(--av) * 0.42) / 1 var(--display); line-height: 1; user-select: none; }
+.av.mb-av-placeholder { display: inline-flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--text-2); user-select: none; }
+.av.mb-av-placeholder > svg.i { width: 20px; height: 20px; }
 .av.mb-av-pic > img { object-fit: cover; }
 
 /* ---------- the chat's top row: the narrow windows' dropdown, the pill, the tools ---------- */

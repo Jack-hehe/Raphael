@@ -378,11 +378,11 @@
 .attachment-file .attachment-name { flex: 1; gap: 2px; }
 
 /* ---------- Raphael asks: his gold, a soft breathing glow, his face, 否 outlined and 是 gold ---------- */
-.ask-card { display: grid; grid-template-columns: var(--pa-ask-face) minmax(0, 1fr) auto; align-items: center; gap: calc(12px + 4 * var(--pa-u)); padding: calc(12px + 4 * var(--pa-u)) calc(14px + 6 * var(--pa-u)) calc(12px + 4 * var(--pa-u)) calc(12px + 6 * var(--pa-u)); border: 1px solid var(--rg-edge); background: var(--rg-bg); border-radius: var(--pa-ask-r); box-shadow: 0 0 0 3px var(--rg-glow), 0 10px 30px var(--rg-glow); }
+.ask-card { display: grid; grid-template-columns: var(--pa-ask-face) minmax(0, 1fr); align-items: center; gap: calc(12px + 4 * var(--pa-u)); padding: calc(12px + 4 * var(--pa-u)) calc(14px + 6 * var(--pa-u)) calc(12px + 4 * var(--pa-u)) calc(12px + 6 * var(--pa-u)); border: 1px solid var(--rg-edge); background: var(--rg-bg); border-radius: var(--pa-ask-r); box-shadow: 0 0 0 3px var(--rg-glow), 0 10px 30px var(--rg-glow); }
 .ask-face { display: block; width: var(--pa-ask-face); height: var(--pa-ask-face); }
 .ask-face .av { --av: var(--pa-ask-face) !important; }
-.ask-q { margin: 0; font: 600 var(--pa-ask-fs)/calc(23px + 6 * var(--pa-u)) var(--voice); color: var(--rg-ink); overflow-wrap: anywhere; }
-.ask-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.ask-q { margin: 0; max-height: min(42vh, 320px); overflow-y: auto; white-space: pre-wrap; font: 600 var(--pa-ask-fs)/calc(23px + 6 * var(--pa-u)) var(--voice); color: var(--rg-ink); overflow-wrap: anywhere; }
+.ask-row { grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .page-agent .btn.ask-no, .page-agent .btn.ask-always { min-height: var(--pa-ask-btn); padding: 4px calc(14px + 4 * var(--pa-u)); border-color: var(--rg-edge); background: transparent; color: var(--rg-ink); font-size: calc(13px + 3 * var(--pa-u)); font-weight: 600; }
 .page-agent .btn.ask-no:hover:not(:disabled), .page-agent .btn.ask-always:hover:not(:disabled) { background: var(--rg-glow); border-color: var(--rg-edge); }
 .page-agent .btn.ask-yes { position: relative; overflow: hidden; min-height: var(--pa-ask-btn); padding: 4px calc(16px + 6 * var(--pa-u)); border-color: var(--rg-btn); background: var(--rg-btn); color: var(--rg-on); font-size: calc(13px + 3 * var(--pa-u)); font-weight: 650; }

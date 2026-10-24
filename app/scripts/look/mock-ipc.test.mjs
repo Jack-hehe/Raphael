@@ -4,6 +4,18 @@ import { installMock } from "./mock-ipc.js";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
 describe("shared look IPC boundary", () => {
+  it("creates the approved member in the promised group with an empty conversation", async () => {
+    const target = {};
+    installMock(fixture, { fixture: { adminApproval: "create" } }, target);
+    const invoke = target.__TAURI_INTERNALS__.invoke;
+    const question = await invoke("agent_question_open");
+    await invoke("agent_question_answer", { id: question.id, approved: true });
+    const roster = await invoke("core_call", { method: "members.list" });
+    const created = roster.members.find(member => member.id === 8);
+    expect(roster.groups.find(group => group.id === created.group_id)?.name).toBe("個人公司");
+    expect(created.preview).toBe("");
+    expect(created.last_at).toBeNull();
+  });
   it("isolates conversations by member and turns by conversation", async () => {
     const target = {};
     installMock(fixture, {}, target);

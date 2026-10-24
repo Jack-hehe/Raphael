@@ -5,6 +5,7 @@ export const wait = selector => ({ action: "wait", selector });
 export const check = name => ({ action: "check", name });
 export const key = value => ({ action: "key", key: value });
 export const scroll = selector => ({ action: "scroll", selector });
+export const waitScrollEnd = selector => ({ action: "wait-scroll-end", selector });
 export const page = name => click(`#nav .nav[data-go="${name}"]`);
 export const settings = pane => [page("settings"), wait(".modal-scrim [data-pane]"), click(`.modal-scrim [data-pane="${pane}"]`)];
 export const scene = (name, description, steps = [], fixture = {}) => ({ name, description, steps, fixture });

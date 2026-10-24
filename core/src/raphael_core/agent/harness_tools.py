@@ -3,6 +3,7 @@
 from .commands import COMMANDS
 from .plugins import PluginTool
 from .policy import Tier
+from .team_admin import DEFINITIONS as ADMIN_TOOLS, TIERS as ADMIN_TIERS
 
 
 class HarnessToolError(Exception):
@@ -40,6 +41,20 @@ for name, command in COMMANDS.items():
 
 TIERS = {name: Tier.T0 if name in ("show", "routine_list", "computer") else Tier.T1 for name in DEFINITIONS if name not in COMMANDS}
 ROUTINE_TOOLS = frozenset(name for name in DEFINITIONS if name.startswith("routine_"))
+DEFINITIONS.update(ADMIN_TOOLS)
+TIERS.update(ADMIN_TIERS)
+
+
+def definitions_for(member_id: int):
+    """Administration is never offered to peers; only Raphael can select routine targets."""
+    for name, item in DEFINITIONS.items():
+        if name in ADMIN_TOOLS and member_id != 0:
+            continue
+        if name in ROUTINE_TOOLS and member_id == 0:
+            schema = item["parameters"]
+            item = {**item, "description": item["description"] + " Raphael may supply member_id to manage any member's routines.",
+                    "parameters": {**schema, "properties": {**schema["properties"], "member_id": {"type": "integer", "minimum": 0}}}}
+        yield name, item
 
 
 def tool(name: str) -> PluginTool:

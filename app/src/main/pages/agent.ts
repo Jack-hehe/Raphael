@@ -418,7 +418,7 @@ export function createAgent(app: AppContext): Page {
   askCard.hidden = true;
   askCard.setAttribute("role", "group");
   askCard.innerHTML =
-    `<span class="ask-face"></span><p class="ask-q"></p>` +
+    `<span class="ask-face"></span><p class="ask-q" tabindex="0"></p>` +
     `<div class="ask-row"><button type="button" class="btn ask-no" data-act="no"></button>` +
     `<button type="button" class="btn ask-always" data-act="always" hidden></button>` +
     `<button type="button" class="btn ask-yes" data-act="yes"><span class="ask-yes-t"></span><i class="ask-fill" aria-hidden="true"></i></button></div>`;

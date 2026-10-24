@@ -93,7 +93,9 @@ async def test_a_members_task_runs_as_the_member_and_asks_raphael_with_the_team_
     assert "You are 小研究" in system and "PRIVATE-INSTRUCTIONS" in system
     assert "background worker" not in system
     # Stored member tool lists no longer limit capabilities.
-    assert {"weather", "web_search", "web_read", "local_time", "ask_member", "create_member"} <= {t["function"]["name"] for t in first["tools"]}
+    offered = {t["function"]["name"] for t in first["tools"]}
+    assert {"weather", "web_search", "web_read", "local_time", "ask_member"} <= offered
+    assert "create_member" not in offered
     assert team.asked == [(MEMBER.id, "ask_member", {"member": "拉斐爾", "request": "主人住哪裡？"}, "zh-TW", "s1")]
     # Its report is in its thread, plain, and never said on the overlay.
     assert rig.reports() == []

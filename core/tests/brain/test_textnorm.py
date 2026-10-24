@@ -690,3 +690,13 @@ def test_remove_stutters_leaves_a_text_that_has_none_exactly_as_it_is():
 def test_remove_stutters_is_idempotent():
     once = textnorm.remove_stutters("the, the, the config，任何，任何事情")
     assert textnorm.remove_stutters(once) == once
+
+
+@pytest.mark.parametrize("text,expected", [
+    ('《告。{"text":"我先確認可用介面…","messages":[…],"say_ja":"…"}》', ""),
+    ('《告。{"text":"我先確認可用介面…","messages":[],"say_ja":"秘密"}》', "我先確認可用介面…"),
+    ('```json\n{"progress":"正在確認介面。","reasoning":"PRIVATE"}\n```', "正在確認介面。"),
+    ('{"text":"確認中", "messages":[', ""),
+])
+def test_public_progress_never_exposes_a_reply_envelope(text, expected):
+    assert textnorm.public_line(text, "zh-TW") == expected

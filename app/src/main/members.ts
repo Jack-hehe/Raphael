@@ -6,14 +6,14 @@
 //
 // A member's picture is the image the core hands as a `data:image/...` URL (`avatar_url`, the way
 // Raphael's own picture comes from `avatar_get`), and only that: anything else is the neutral
-// placeholder, the first character of the name on `--surface-2`. Raphael's face is the emblem or
+// silhouette on `--surface-2`. Raphael's face is the emblem or
 // his picture (avatar.ts), never the placeholder.
 
 import { avatarHTML } from "./avatar";
 import { catalogs, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 import type { Member, MemberGroup, MemberSource, MembersList, RoutineSchedule } from "./types";
-import { esc } from "./ui";
+import { esc, ico } from "./ui";
 
 /** Raphael's id among the members: member 0 everywhere in the core's API. */
 export const RAPHAEL_ID = 0;
@@ -111,8 +111,8 @@ export const initialOf = (name: string): string => Array.from(name.trim())[0] ??
 
 /**
  * A face at `size` px: Raphael's emblem or picture (avatar.ts, bare, never cut into a frame of
- * ours), a member's picture in a circle, or the placeholder: the first character of the name on
- * `--surface-2`. Decorative: whoever shows it names it.
+ * ours), a member's picture in a circle, or a neutral person silhouette.
+ * Decorative: whoever shows it names it.
  */
 export function faceHTML(member: { id: number; name: string; avatar_url?: string | null }, size: number, o: { loop?: boolean; cls?: string } = {}): string {
   if (member.id === RAPHAEL_ID) return avatarHTML({ size, loop: o.loop, cls: o.cls });
@@ -121,7 +121,7 @@ export function faceHTML(member: { id: number; name: string; avatar_url?: string
   if (isPictureUrl(member.avatar_url)) {
     return `<span class="${cls} mb-av-pic" ${box} aria-hidden="true"><img src="${esc(member.avatar_url)}" alt="" draggable="false"></span>`;
   }
-  return `<span class="${cls} mb-av-letter" ${box} aria-hidden="true">${esc(initialOf(member.name))}</span>`;
+  return `<span class="${cls} mb-av-placeholder" ${box} aria-hidden="true">${ico("person")}</span>`;
 }
 
 // ---------- routines ----------

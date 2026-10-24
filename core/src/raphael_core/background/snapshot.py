@@ -46,7 +46,7 @@ from ..agent.plugins import MAX_OFFERED, Offer, PluginHub, make_offer
 from ..agent.policy import Tier
 from ..agent.speaker import RAPHAEL, Speaker
 from ..agent.team import TEAM_TIER, TEAM_TOOLS, worker_definition
-from ..agent.harness_tools import DEFINITIONS as HARNESS_DEFINITIONS, tool as harness_tool
+from ..agent.harness_tools import DEFINITIONS as HARNESS_DEFINITIONS, definitions_for, tool as harness_tool
 from ..computer.tools import PRESENCE_TOOLS
 from ..agent.toolpick import (
     PICK_MAX,
@@ -259,7 +259,7 @@ def take_snapshot(
             definitions.append(worker_definition(name))
     snapshot = Snapshot(refs, definitions)
     if interactive:
-        for name, item in HARNESS_DEFINITIONS.items():
+        for name, item in definitions_for(speaker.id):
             native = harness_tool(name)
             refs[name] = ToolRef(BUILTIN, name, BUILTIN_SERVER, name, native.tier)
             definitions.append({"type": "function", "function": {"name": name, **item}})

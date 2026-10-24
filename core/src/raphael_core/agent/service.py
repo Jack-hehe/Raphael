@@ -91,10 +91,10 @@ conversation view. A request routed to `operate` or to a command makes nothing o
 The members of the owner's team (`raphael_core.members`) are a parameter of all this, not a path of
 their own (`speaker.Speaker`). `agent.ask` takes `member_id` (0, Raphael, by default): a message
 typed in the app or a chat connection is answered by the same narrated harness, gate and worker,
-as the chosen speaker: its persona, model, conversation and memory. Every member has the same
-tools as Raphael; desktop operations require the owner's local presence regardless of speaker.
+as the chosen speaker: its persona, model, conversation and memory. Members share ordinary
+tools; team administration is Raphael-only. Desktop operations require the owner's local presence.
 The voice alone may use the fast router, with recent conversation included. The team tools (`team`)
-let any assistant ask any other (`ask_member`) or add a member at the owner's request
+let any assistant ask any other (`ask_member`), and let Raphael add a member at the owner's request
 (`create_member`, 《了。已建立「…」。》). The one asked answers through `answer_for`, as itself and
 never on the desktop, within a chain at most two deep and with no cycle (`Speaker.can_ask`); the
 exchange is written in the two threads alone. Nobody waits at the overlay for such an answer, so
@@ -174,6 +174,7 @@ from .harness_tools import (
     DEFINITIONS as HARNESS_TOOLS, ROUTINE_TOOLS, HarnessToolError,
     routine_event, tool as harness_tool,
 )
+from .team_admin import DEFINITIONS as ADMIN_TOOLS, CONFIRM_TOOLS, LEADERSHIP, BATCH_TOOLS
 from .local import extract_target, match_command
 from .opening import Opening, clean_target, match_settings, parse_domain, validate_url
 from .persona import (
@@ -422,6 +423,9 @@ class _Ask:
     voiced: bool = False
     # The turn whose announcement to the app is held until the voice is ready (`_turn_changed`).
     held: int | None = None
+    member_creates: int = 0
+    admin_pending: list[PlannedCall] = field(default_factory=list)
+    admin_screenings: list[Screening] = field(default_factory=list)
 
     @property
     def nested(self) -> bool:
@@ -452,6 +456,7 @@ class _Followup:
     results: list[ToolResult]
     loop: NarratedLoop | CliLoop | None = None
     memory_reply: tuple[str, Reply, Ledger] | None = None
+    admin_batch: bool = False
 
 
 class AgentService:
@@ -1390,6 +1395,8 @@ class AgentService:
                     memory_index=index, narrated=True,
                 )
             system += roster_prompt(self._team, ask.speaker, ask.language) + owner_context(self._settings)
+            if ask.speaker.is_raphael:
+                system += LEADERSHIP
             user = build_user_message(
                 labelled_lines(ask.exchange_speakers[0], ask.text) if ask.exchange_speakers else ask.text,
                 self._moment(), context.turns, [], ask.language,
@@ -1479,8 +1486,22 @@ class AgentService:
                     loop.tools.extend(definitions)
                     return ToolOutcome(True, content="\n".join(lines), tools=definitions)
                 planned = plan(name, args)
+                screened = [screenings[call_id]] if call_id in screenings else None
+                if planned is not None and name in BATCH_TOOLS and ask.speaker.is_raphael and not ask.nested:
+                    screening = screened[0] if screened else await self._screen_call(ask, planned, ledger)
+                    screened = [screening]
+                    if screening.verdict == DENY:
+                        ask.admin_pending.clear()
+                        loop.response = self._finish(ask, "answer", "negative", forbidden(ask.language, screening), ledger)
+                        raise Stop("finished")
+                    if ask.admin_pending or needs_yes(False, screening):
+                        creates = sum(call.tool.key in ("member_create", "create_member") for call in ask.admin_pending)
+                        if name in ("member_create", "create_member") and ask.member_creates + creates >= 10:
+                            return ToolOutcome(False, "member_create_limit")
+                        ask.admin_pending.append(planned)
+                        ask.admin_screenings.append(screening)
+                        return ToolOutcome(True, content="pending_approval: true. Queued for one approval at the end of this turn. Nothing has been changed. Continue collecting requested changes; do not retry this operation.")
                 if planned is not None:
-                    screened = [screenings[call_id]] if call_id in screenings else None
                     outcome = await self._carry_out(ask, [planned], [], ledger, screenings=screened)
                     if isinstance(outcome, dict):
                         loop.response = outcome
@@ -1564,6 +1585,15 @@ class AgentService:
         reply = loop.reply(outcome)
         if isinstance(loop, CliLoop) and loop.failed:
             return self._finish(ask, "answer", "negative", reply.text, ledger, status="error")
+        if ask.admin_pending:
+            operations = [{"name": call.tool.key, "arguments": dict(call.arguments)} for call in ask.admin_pending]
+            text = "\n\n".join(asked_with(ask.language, screening, self._team.admin_confirmation(op["name"], op["arguments"], ask.language, question=False))
+                                  for op, screening in zip(operations, ask.admin_screenings))
+            text += {"en": "\n\nAllow all these changes?", "zh-TW": "\n\n允許以上所有變更嗎？", "ja": "\n\nすべての変更を許可しますか？"}[ask.language]
+            action = Action("team_admin_batch", {"operations": operations})
+            result = self._open_question(ask, action, "answer", text, ledger)
+            self._followups[result["confirm"]["id"]] = _Followup(ask, ask.admin_pending[0], loop.seen, admin_batch=True)
+            return result
         return self._finish_reply(ask, "exchange" if ask.nested else "answer", reply, loop.seen, ledger)
 
     async def _cli_permission(self, ask: _Ask, args: dict, ledger: Ledger, loop: CliLoop) -> ToolOutcome:
@@ -1832,7 +1862,7 @@ class AgentService:
         tool its server says only reads. Member contact preferences can require the owner's yes."""
         tool = call.tool
         if tool.key in HARNESS_TOOLS:
-            if tool.key in ("routine_list", "show", "computer"):
+            if tool.key in ("routine_list", "team_overview", "show", "computer"):
                 return PASS
             return await self._gate.screen(Proposed(tool.key, tool.description, summarize(call.arguments)), language=ask.language, ledger=ledger)
         if tool.key in TEAM_TOOLS:
@@ -1909,7 +1939,15 @@ class AgentService:
         began = time.perf_counter()
         try:
             self._gate.check(action or Action(name, args), approval)
-            if name in ROUTINE_TOOLS:
+            if name in ADMIN_TOOLS:
+                if not ask.speaker.is_raphael or self._team is None:
+                    raise HarnessToolError("unavailable")
+                if name == "member_create" and ask.member_creates >= 10:
+                    raise HarnessToolError("member_create_limit")
+                data = await self._team.admin_tool(ask.speaker.id, name, args)
+                if name == "member_create":
+                    ask.member_creates += 1
+            elif name in ROUTINE_TOOLS:
                 if self._team is None:
                     raise HarnessToolError("unavailable")
                 data = await self._team.routine_tool(ask.speaker.id, name, args)
@@ -1943,7 +1981,9 @@ class AgentService:
             result = ToolResult(name, True, data)
         except HarnessToolError as error:
             result = ToolResult(name, False, None, str(error))
-        except (ValueError, RpcError, NotApproved, UnknownTool):
+        except RpcError as error:
+            result = ToolResult(name, False, {"field": (error.data or {}).get("kind", "")}, "bad_arguments")
+        except (ValueError, NotApproved, UnknownTool):
             result = ToolResult(name, False, None, "bad_arguments")
         except Exception as exc:
             logger.warning("A harness tool failed: %s", type(exc).__name__)
@@ -2001,6 +2041,9 @@ class AgentService:
                 what=parenthesized(language, shown),
             ),
         )
+        if call.tool.key in CONFIRM_TOOLS and self._team is not None:
+            text = asked_with(language, screening,
+                              self._team.admin_confirmation(call.tool.key, call.arguments, language))
         action = Action(call.tool.key, dict(call.arguments))
         reply = self._open_question(ask, action, "answer", text, ledger)
         self._followups[reply["confirm"]["id"]] = _Followup(ask, call, results)
@@ -2091,14 +2134,19 @@ class AgentService:
         """A team tool the picking call asked for, made for `ask` (see `team_tool`); a step of
         `steps` (the request's own when none is given), whatever came of it."""
         began = time.perf_counter()
-        result = await self.team_tool(
-            ask.speaker,
-            call.tool.key,
-            call.arguments,
-            language=ask.language,
-            ledger=ledger,
-            session_id=ask.session_id, conversation_id=ask.conversation_id, approval=approval, action=action,
-        )
+        if call.tool.key == CREATE_MEMBER and ask.member_creates >= 10:
+            result = ToolResult(CREATE_MEMBER, False, None, "member_create_limit")
+        else:
+            result = await self.team_tool(
+                ask.speaker,
+                call.tool.key,
+                call.arguments,
+                language=ask.language,
+                ledger=ledger,
+                session_id=ask.session_id, conversation_id=ask.conversation_id, approval=approval, action=action,
+            )
+            if call.tool.key == CREATE_MEMBER and result.ok:
+                ask.member_creates += 1
         outcome = "ok" if result.ok else ("blocked" if result.error == "blocked" else "error")
         if result.error == "timeout":
             outcome = "timeout"
@@ -2128,7 +2176,7 @@ class AgentService:
         team = self._team
         if team is None or name not in TEAM_TOOLS or (name != SKILL_READ and not speaker.may_ask):
             return ToolResult(name, False, None, "blocked")
-        if name == CREATE_MEMBER and speaker.depth:
+        if name == CREATE_MEMBER and (not speaker.is_raphael or speaker.depth):
             return ToolResult(name, False, None, "blocked")
         try:
             self._gate.check(action or Action(name, dict(arguments)), approval)
@@ -2141,20 +2189,14 @@ class AgentService:
                               None if text is not None else "not_found", untrusted=True)
         if name == CREATE_MEMBER:
             try:
-                created = team.create(
-                    name=arguments.get("name"),
-                    role=arguments.get("role", ""),
-                    instructions=arguments.get("instructions", ""),
-                    group=arguments.get("group"),
-                    personality=arguments.get("personality", ""),
-                )
-            except ValueError as error:  # the store's MemberError: which field, never its text
-                return ToolResult(name, False, {"field": getattr(error, "kind", "")}, "bad_arguments")
+                created = await team.admin_tool(0, "member_create", dict(arguments))
+            except RpcError as error:
+                return ToolResult(name, False, {"field": (error.data or {}).get("kind", "")}, "bad_arguments")
             except sqlite3.Error as exc:
                 logger.warning("Could not add a member: %s", type(exc).__name__)
                 return ToolResult(name, False, None, "error")
             logger.info("A member was added by the assistant")
-            return ToolResult(name, True, {"created": created.name})
+            return ToolResult(name, True, {"created": created["member"]["name"]})
         wanted = arguments.get("member")
         request = arguments.get("request")
         if not isinstance(wanted, str) or not isinstance(request, str) or not request.strip():
@@ -2272,6 +2314,28 @@ class AgentService:
     ) -> dict:
         """The yes came: make the call, then word what came of it."""
         language = pending.language
+        if followup.admin_batch:
+            ledger = followup.ask.ledger or Ledger(self._spend)
+            operations = pending.action.args["operations"]
+            began = time.perf_counter()
+            try:
+                self._gate.check_admin_batch(pending.action, approval)
+                results = await self._team.admin_batch(followup.ask.speaker.id, operations)
+            except (RpcError, ValueError, NotApproved, UnknownTool):
+                self._gate.record_unrun("team_admin_batch", outcome="error")
+                step = self._step("tool", "team_admin_batch", BUILTIN_SERVER, "error", began, "bad_arguments")
+                self._write(lambda: self._history.add_steps(pending.turn_id, [step]))
+                return self._outcome(pending, "negative", phrase(language, "failed"), "error", cost_usd=ledger.total)
+            names = []
+            for operation, result in zip(operations, results):
+                self._gate.record_builtin(operation["name"], outcome="ok", approver="user")
+                item = result.get("member") or result.get("group") or {}
+                names.append(item.get("name", "") + (" (" + item["role"] + ")" if item.get("role") else ""))
+            step = self._step("tool", "team_admin_batch", BUILTIN_SERVER, "ok", began, None)
+            self._write(lambda: self._history.add_steps(pending.turn_id, [step]))
+            followup.ask.admin_pending.clear()
+            text = {"en": "Applied: ", "zh-TW": "已套用：", "ja": "適用済み："}[language] + ", ".join(names)
+            return self._outcome(pending, "understood", text, "done", cost_usd=ledger.total)
         if followup.memory_reply is not None:
             route, reply, ledger = followup.memory_reply
             applied = self._remember(followup.ask, replace(reply, memory=reply.memory[:1]), followup.results, approval=approval, action=pending.action)

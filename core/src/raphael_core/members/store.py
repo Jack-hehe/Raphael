@@ -26,6 +26,7 @@ import re
 import sqlite3
 import unicodedata
 from collections.abc import Callable
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -353,6 +354,18 @@ class MemberStore:
     def __init__(self, conn: sqlite3.Connection, now_ms: Callable[[], int] = wall_clock_ms) -> None:
         self._conn = conn
         self._now_ms = now_ms
+        self._transaction_depth = 0
+
+    @contextmanager
+    def transaction(self):
+        """Compose existing writes without committing part of an approved batch."""
+        outer = self._transaction_depth == 0
+        self._transaction_depth += 1
+        try:
+            with self._conn if outer else nullcontext():
+                yield
+        finally:
+            self._transaction_depth -= 1
 
     def _move(self, table: str, row_id: int, position: int) -> None:
         """Put the row `row_id` of `table` (groups or members) at `position` in the order of all of
@@ -363,7 +376,7 @@ class MemberStore:
             if int(row[0]) != row_id
         ]
         ids.insert(min(position, len(ids)), row_id)
-        with self._conn:
+        with self.transaction():
             for place, each in enumerate(ids):
                 self._conn.execute(f"UPDATE {table} SET position = ? WHERE id = ?", (place, each))
 
@@ -386,7 +399,7 @@ class MemberStore:
         name = clean_group_name(name)
         if len(self.groups()) >= MAX_GROUPS:
             raise MemberError("full", f"there are {MAX_GROUPS} groups already")
-        with self._conn:
+        with self.transaction():
             (position,) = self._conn.execute(
                 "SELECT COALESCE(MAX(position), -1) + 1 FROM member_groups"
             ).fetchone()
@@ -420,7 +433,7 @@ class MemberStore:
             )
         if changes:
             assignments = ", ".join(f"{column} = ?" for column in changes)
-            with self._conn:
+            with self.transaction():
                 self._conn.execute(
                     f"UPDATE member_groups SET {assignments} WHERE id = ?",
                     [*changes.values(), group_id],
@@ -433,7 +446,7 @@ class MemberStore:
 
     def delete_group(self, group_id: int) -> bool:
         """Delete a group; its members go to 未分組 (no group). Whether there was one."""
-        with self._conn:
+        with self.transaction():
             self._conn.execute("UPDATE members SET group_id = NULL WHERE group_id = ?", (group_id,))
             self._conn.execute("UPDATE rooms SET group_id = NULL WHERE group_id = ?", (group_id,))
             cursor = self._conn.execute("DELETE FROM member_groups WHERE id = ?", (group_id,))
@@ -506,7 +519,7 @@ class MemberStore:
         picked = clean_tools(tools)
         if len(self.members()) >= MAX_MEMBERS:
             raise MemberError("full", f"there are {MAX_MEMBERS} members already")
-        with self._conn:
+        with self.transaction():
             (position,) = self._conn.execute(
                 "SELECT COALESCE(MAX(position), -1) + 1 FROM members"
             ).fetchone()
@@ -547,7 +560,7 @@ class MemberStore:
                 raise MemberError(field, f"{field} cannot be changed")
         if changes:
             assignments = ", ".join(f"{column} = ?" for column in changes)
-            with self._conn:
+            with self.transaction():
                 self._conn.execute(
                     f"UPDATE members SET {assignments} WHERE id = ?", [*changes.values(), member_id]
                 )
@@ -560,7 +573,7 @@ class MemberStore:
     def delete_member(self, member_id: int) -> bool:
         """Delete a member's row, its routines and its unread mark; whether there was one. Its
         conversation, memory and picture are the service's to delete."""
-        with self._conn:
+        with self.transaction():
             self._conn.execute("DELETE FROM routine_runs WHERE routine_id IN (SELECT id FROM routines WHERE member_id = ?)", (member_id,))
             self._conn.execute("DELETE FROM room_members WHERE member_id = ?", (member_id,))
             self._conn.execute("DELETE FROM member_skills WHERE member_id = ?", (member_id,))
