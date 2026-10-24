@@ -183,6 +183,8 @@ pub enum MainEvent {
     RoutinesChanged { member_id: u64 },
     MembersChanged,
     ProvidersChanged,
+    SettingsChanged,
+    ConnectionsChanged,
     BrainsChanged,
     MemoryChanged {
         member_id: u64,
@@ -341,7 +343,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 67] = [
+const ALLOWED_METHODS: [&str; 71] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -363,6 +365,10 @@ const ALLOWED_METHODS: [&str; 67] = [
     "providers.models",
     "stats.summary",
     "usage.analytics",
+    "usage.runs",
+    "usage.trace",
+    "usage.export",
+    "usage.allowances",
     "messaging.telegram.status",
     "messaging.telegram.connect",
     "messaging.telegram.set_enabled",
@@ -644,6 +650,26 @@ pub async fn core_call(
     Ok(result)
 }
 
+/// Saves an already exported CSV only at the location chosen in the native save dialog. The
+/// webview cannot supply a path. Cancel is a normal result and writes nothing.
+#[tauri::command]
+pub async fn save_usage_csv(app: AppHandle, webview: Webview, csv: String) -> Result<bool, String> {
+    require_main(&webview)?;
+    if csv.len() > 32 * 1024 * 1024 || !csv.starts_with("time,member,title,model,provider,") {
+        return Err("invalid usage CSV".to_owned());
+    }
+    let window = webview.window();
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let chosen = app.dialog().file().set_parent(&window)
+            .add_filter("CSV", &["csv"]).set_file_name("raphael-usage.csv").blocking_save_file();
+        let Some(chosen) = chosen else { return Ok(false); };
+        let path = chosen.into_path().map_err(|_| "invalid save location".to_owned())?;
+        std::fs::write(path, format!("\u{feff}{csv}")).map_err(|err| err.to_string())?;
+        Ok(true)
+    }).await.map_err(|err| format!("a background task failed: {err}"))?
+}
+
 // ---------- questions to Raphael from the window ----------
 
 /// The longest question the composer may send, in characters (`TYPED_MAX_CHARS` of
@@ -864,6 +890,8 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
         }),
         "members.changed" => Some(MainEvent::MembersChanged),
         "providers.changed" => Some(MainEvent::ProvidersChanged),
+        "settings.changed" => Some(MainEvent::SettingsChanged),
+        "integrations.changed" => Some(MainEvent::ConnectionsChanged),
         "brains.changed" => Some(MainEvent::BrainsChanged),
         "memory.changed" => {
             let space = match params.get("space") {
@@ -1713,6 +1741,7 @@ mod tests {
                 "open_attachment",
                 "open_external_url",
                 "open_link",
+                "save_usage_csv",
                 "window_hotkey",
             ]
         );
@@ -1948,7 +1977,10 @@ mod tests {
         assert!(is_allowed_method("usage.analytics"));
         assert!(validate_core_call("usage.analytics", &json!({"range": "7d"})).is_ok());
         assert!(!is_allowed_method("usage.clear"));
-        assert!(!is_allowed_method("usage.export"));
+        assert!(is_allowed_method("usage.export"));
+        assert!(is_allowed_method("usage.runs"));
+        assert!(is_allowed_method("usage.trace"));
+        assert!(is_allowed_method("usage.allowances"));
         assert!(ensure_caller(crate::MAIN_WINDOW, crate::MAIN_WINDOW).is_ok());
         assert!(ensure_caller("overlay", crate::MAIN_WINDOW).is_err());
         assert!(ensure_caller("worker", crate::MAIN_WINDOW).is_err());

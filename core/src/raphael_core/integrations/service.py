@@ -42,6 +42,7 @@ import asyncio
 import json
 import logging
 import secrets
+import copy
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -64,6 +65,7 @@ from .config import (
 from .oauth import OpenBrowser, VaultTokenStorage, open_in_browser, revoke
 from .toolsets import tool_kind
 from .vault import SecretTooLong, SecretVault, secret_name
+from .imports import McpImports
 
 if TYPE_CHECKING:
     from .pool import McpPool
@@ -116,6 +118,7 @@ class IntegrationsService:
         open_browser: OpenBrowser = open_in_browser,
         login_timeout_s: float = LOGIN_TIMEOUT_S,
         notify: Callable[[str, dict], None] | None = None,
+        import_home: Path | None = None,
     ) -> None:
         self._config = ConfigStore(directory)
         self._vault = vault
@@ -129,6 +132,7 @@ class IntegrationsService:
         self._open_browser = open_browser
         self._login_timeout_s = login_timeout_s
         self._notify = notify
+        self._imports = McpImports(import_home)
         # The login that is under way (one at a time: there is one browser and one user).
         self._login: asyncio.Task | None = None
         self._login_for = ""  # the id of the server it signs in to
@@ -139,6 +143,11 @@ class IntegrationsService:
             "integrations.connect": self._connect,
             "integrations.connect_cancel": self._connect_cancel,
             "integrations.add": self._add,
+            "integrations.update": self._update,
+            "integrations.test": self._test,
+            "integrations.preview": self._preview,
+            "integrations.discover": self._discover,
+            "integrations.import": self._import,
             "integrations.set_enabled": self._set_enabled,
             "integrations.disconnect": self._disconnect,
             "integrations.refresh": self._refresh,
@@ -149,6 +158,7 @@ class IntegrationsService:
         }
         for method, handler in methods.items():
             router.register(method, handler)
+        self._notify_change = lambda: router.notify("integrations.changed", {})
 
     # --- views ----------------------------------------------------------------------------------
 
@@ -182,6 +192,7 @@ class IntegrationsService:
             "write_count": sum(1 for tool in server.tools if tool_kind(tool) == "write"),
             "read_count": sum(1 for tool in server.tools if tool_kind(tool) == "read"),
             "checked_at_ms": server.tools_checked_at_ms,
+            "result_size_limit": server.result_size_limit,
         }
 
     @staticmethod
@@ -205,6 +216,11 @@ class IntegrationsService:
             self._config.save()
         except OSError as exc:
             raise _not_saved(exc) from None
+        self._changed()
+
+    def _changed(self) -> None:
+        if hasattr(self, "_notify_change"):
+            self._notify_change()
 
     # --- the methods of the window --------------------------------------------------------------
 
@@ -356,7 +372,118 @@ class IntegrationsService:
             self._forget(stored)
             logger.warning("Could not store a plugin's secrets: %s", type(exc).__name__)
             raise RpcError(INTERNAL_ERROR, "Could not store the secrets") from None
+        self._changed()
         return {"server": self._view(server)}
+
+    def _draft(self, params: dict) -> tuple[Any, ServerConfig | None]:
+        """Validate an edit without revealing saved values to the page. Blank keeps a named
+        secret, omission removes it. Validation and vault reads precede every mutation."""
+        old = self._server(params) if params.get("id") else None
+        raw = copy.deepcopy(params)
+        if old:
+            for field, kind in (("env", "env"), ("headers", "header")):
+                for pair in raw.get(field, []):
+                    if isinstance(pair, dict) and pair.get("value") == "" and pair.get("name") in getattr(old, field):
+                        pair["value"] = self._vault.get(secret_name(old.id, kind, pair["name"])) or ""
+        try:
+            new = parse_new_server(raw, [s.name for s in self._config.servers() if s is not old])
+        except (TypeError, ValueError) as exc:
+            raise invalid_params(str(exc)) from None
+        return new, old
+
+    async def _update(self, params: dict) -> dict:
+        new, old = self._draft(params)
+        if old is None or old.auth != "none" or old.catalog_id:
+            raise invalid_params("Only a custom MCP server may be edited")
+        async with self._locks.setdefault(old.id, asyncio.Lock()):
+            previous = copy.deepcopy(old)
+            new.config.id, new.config.enabled = old.id, old.enabled
+            before = {secret_name(old.id, kind, key): self._vault.get(secret_name(old.id, kind, key))
+                      for field, kind in (("env", "env"), ("headers", "header"))
+                      for key in set(getattr(old, field)) | set(getattr(new.config, field))}
+            try:
+                for values, kind in ((new.env, "env"), (new.headers, "header")):
+                    for key, value in values.items():
+                        self._vault.set(secret_name(old.id, kind, key), value)
+                old.__dict__.update(new.config.__dict__)
+                self._config.save()
+            except Exception as exc:
+                old.__dict__.update(previous.__dict__)
+                for name, value in before.items():
+                    try:
+                        self._vault.delete(name) if value is None else self._vault.set(name, value)
+                    except Exception:
+                        logger.warning("Could not restore an MCP secret")
+                raise RpcError(INTERNAL_ERROR, "Could not save the MCP server") from None
+            removed = [secret_name(old.id, kind, key)
+                       for field, kind in (("env", "env"), ("headers", "header"))
+                       for key in set(getattr(previous, field)) - set(getattr(old, field))]
+            self._forget(removed)
+            self._connector.invalidate(old.id)
+            self._failure.pop(old.id, None)
+            self._changed()
+            return {"server": self._view(old)}
+
+    async def _test(self, params: dict) -> dict:
+        if params.get("id") and "name" not in params:
+            server = self._server(params)
+            try:
+                tools = await self._connector.list_tools(server)
+                return {"ok": True, "tools": [tool.name for tool in tools]}
+            except McpFailure as failure:
+                return {"ok": False, "error": failure.kind, "tools": []}
+        new, _ = self._draft(params)
+        server, stored = new.config, []
+        try:
+            for values, kind in ((new.env, "env"), (new.headers, "header")):
+                for key, value in values.items():
+                    name = secret_name(server.id, kind, key)
+                    self._vault.set(name, value)
+                    stored.append(name)
+            tools = await self._connector.list_tools(server)
+            return {"ok": True, "tools": [tool.name for tool in tools]}
+        except McpFailure as failure:
+            return {"ok": False, "error": failure.kind, "tools": []}
+        except Exception:
+            raise RpcError(INTERNAL_ERROR, "Could not test the MCP server") from None
+        finally:
+            self._connector.invalidate(server.id)
+            self._forget(stored)
+
+    async def _preview(self, params: dict) -> dict:
+        return self._imports.pasted(params.get("text"), [s.name for s in self._config.servers()])
+
+    async def _discover(self, params: dict) -> dict:
+        return self._imports.discover([s.name for s in self._config.servers()])
+
+    async def _import(self, params: dict) -> dict:
+        ids = params.get("ids")
+        if not isinstance(ids, list) or not ids or len(ids) > 20 or any(not isinstance(i, str) for i in ids) or len(set(ids)) != len(ids):
+            raise invalid_params("Select between one and twenty MCP servers")
+        try:
+            drafts = [self._imports.pending[i] for i in ids]
+        except KeyError:
+            raise invalid_params("Preview the MCP definitions again") from None
+        names = [s.name for s in self._config.servers()]
+        if len(names) + len(ids) > 20:
+            raise invalid_params("At most twenty MCP servers")
+        for draft in drafts:
+            try:
+                parse_new_server(draft, names)
+            except ValueError as exc:
+                raise invalid_params(str(exc)) from None
+            names.append(draft["name"])
+        added = []
+        try:
+            for draft in drafts:
+                added.append((await self._add(draft))["server"])
+        except BaseException:
+            for server in added:
+                await self._disconnect({"id": server["id"]})
+            raise
+        for ident in ids:
+            self._imports.pending.pop(ident, None)
+        return {"servers": added}
 
     def _forget(self, names: list[str]) -> None:
         """Take secrets out of the vault again (best effort: a failure is logged by its type)."""
@@ -401,6 +528,7 @@ class IntegrationsService:
             [secret_name(server.id, "env", key) for key in server.env]
             + [secret_name(server.id, "header", key) for key in server.headers]
         )
+        self._changed()
         return {"removed": True, "revoked": revoked}
 
     async def _refresh(self, params: dict) -> dict:

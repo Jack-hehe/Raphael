@@ -234,6 +234,9 @@ class Brain:
         self._client = client
         self._providers = providers
         self._notify_providers = lambda: None
+        self._notify_settings = lambda: None
+        from .runs import RunAnalytics
+        self._runs = RunAnalytics(conn, now_ms, providers)
         self._keys = keys
         self._now_ms = now_ms
         self._key_check_timeout_s = key_check_timeout_s
@@ -295,6 +298,7 @@ class Brain:
 
     def register(self, router: Router) -> None:
         """Put every method of the brain on `router`."""
+        self._notify_settings = lambda: router.notify("settings.changed", {})
         if self._providers:
             self._notify_providers = lambda: router.notify("providers.changed", {})
         methods = {
@@ -322,6 +326,9 @@ class Brain:
             "models.catalog": self._models_catalog,
             "stats.summary": self._stats_summary,
             "usage.analytics": self._usage.read,
+            "usage.runs": self._runs.read,
+            "usage.trace": self._runs.trace,
+            "usage.export": self._runs.export,
         }
         for method, handler in methods.items():
             router.register(method, handler)
@@ -587,6 +594,7 @@ class Brain:
             self._settings.set(key, value)
         if key == "history_retention_days":
             self._prune_history()
+        self._notify_settings()
         return {"settings": self._settings.all()}
 
     def _check_model(self, role: Role, value: Any) -> None:

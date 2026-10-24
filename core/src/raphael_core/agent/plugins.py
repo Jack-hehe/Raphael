@@ -375,6 +375,7 @@ class Planner:
             cost_usd=plan.cost_usd,
             prompt_tokens=plan.prompt_tokens,
             completion_tokens=plan.completion_tokens,
+            ms=plan.latency_ms,
         )
         asked = [(call.name, call.arguments) for call in plan.calls]
         planned = resolve_calls(offer, asked)

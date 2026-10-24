@@ -1,0 +1,29 @@
+// @vitest-environment happy-dom
+import { afterEach, expect, it, vi } from "vitest";
+const api = vi.hoisted(() => ({ toolsetsList:vi.fn(), integrationsCatalog:vi.fn(), integrationsAudit:vi.fn(), integrationsTest:vi.fn(), integrationsDisconnect:vi.fn() }));
+vi.mock("./api", () => api);
+import { connectionsHTML, createConnections } from "./connections";
+import { closeMenu } from "./ui";
+import type { ConnectionGroup } from "./types";
+afterEach(() => { closeMenu(); document.body.replaceChildren(); });
+it("opens custom server actions in an app menu and edits from that menu", async () => {
+  const group = {id:"own",name:"Workspace",command:"npx",args:["workspace"],transport:"stdio",url:"",env:[],headers:[],tools:[],enabled:false,status:"disabled",auth:"none",catalog_id:null} as unknown as ConnectionGroup;
+  api.toolsetsList.mockResolvedValue({groups:[group]}); api.integrationsCatalog.mockResolvedValue({services:[]}); api.integrationsAudit.mockResolvedValue({entries:[]});
+  const root = document.createElement("div"); document.body.append(root);
+  const control = createConnections({visible:()=>true,redraw:()=>{root.innerHTML=connectionsHTML(control.view());},tryPrompt:vi.fn(),root});
+  await control.load();
+  expect(root.querySelector('.mcp-item .chev')).toBeNull();
+  expect(root.querySelector('[data-conn="edit-server"]')).toBeNull();
+  control.click(root.querySelector('[data-conn="server-menu"]')!);
+  const menu = document.querySelector('[role="menu"]')!;
+  expect(Array.from(menu.querySelectorAll('button')).map(button=>button.textContent)).toEqual(["測試","編輯伺服器","刪除"]);
+  expect(menu.querySelector('[data-conn="disconnect"]')?.classList.contains("danger")).toBe(true);
+  menu.querySelector<HTMLButtonElement>('[data-conn="edit-server"]')!.click();
+  expect(document.querySelector('[role="menu"]')).toBeNull();
+  expect(control.view().form?.id).toBe("own");
+  control.click(root.querySelector('[data-conn="form-cancel"]')!);
+  control.click(root.querySelector('[data-conn="server-menu"]')!);
+  document.querySelector<HTMLButtonElement>('.menu [data-conn="disconnect"]')!.click();
+  expect(document.querySelector('.menu [data-conn="disconnect"]')?.textContent).toContain("確定");
+  expect(api.integrationsDisconnect).not.toHaveBeenCalled();
+});

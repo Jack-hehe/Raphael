@@ -9,6 +9,7 @@ export interface UsageSeries {
 export interface UsageGroup { total: number; series: UsageSeries[] }
 export interface UsageRequest { range: "7d" | "30d"; end_day?: string; tz?: string }
 export interface UsageMember {
+  avatar_url?: string | null;
   id: number;
   name: string;
   role: string;

@@ -92,7 +92,8 @@ test("expands models and shows more than five members, preserving focus", async 
   expect((document.activeElement as HTMLElement).dataset.member).toBe("0");
   const details = host.querySelector(`#${host.querySelector('[data-member="0"]')!.getAttribute("aria-controls")}`)!;
   expect(details.hasAttribute("hidden")).toBe(false);
-  expect(details.textContent).toContain("vendor/model");
+  expect(details.textContent).toContain("model");
+  expect(details.textContent).not.toContain("vendor/model");
   click(host, "more");
   expect(host.querySelector('[data-member="6"]')).not.toBeNull();
   click(host, "member-0");
@@ -182,11 +183,11 @@ test("ignores stale responses and pending work after destroy", async () => {
 test("escapes names and exposes exact tooltips on hover, focus and Escape", async () => {
   const { host } = await setup(async () => {
     const result = data();
-    result.members[0]!.name = '<img src="bad" onerror="alert(1)">';
+    result.members[1]!.name = '<img src="bad" onerror="alert(1)">';
     result.cost_by.purpose.series[0]!.label = "Safe";
     return result;
   });
-  expect(host.querySelector("img")).toBeNull();
+  expect(host.querySelector('img[src="bad"], [onerror]')).toBeNull();
   expect(host.textContent).toContain('<img src="bad"');
   const mark = host.querySelector<SVGElement>("[data-tooltip]")!;
   mark.dispatchEvent(new Event("pointerover", { bubbles: true }));

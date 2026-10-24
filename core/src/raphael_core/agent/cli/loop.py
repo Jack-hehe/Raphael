@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import traceback
+import time
 from contextlib import aclosing
 
 from ...worker.loop import Call, Outcome, Stop, ToolOutcome, WAITING
@@ -196,6 +197,7 @@ class CliLoop:
             self._failure("busy", NAMES[name])
             return
         async with lock:
+            began = time.perf_counter()
             usage = {}
             try:
                 # A stable, empty workspace keeps native CLI resume independent of turn temp files.
@@ -248,6 +250,7 @@ class CliLoop:
                     value = next((usage[key] for key in keys if key in usage), 0)
                     return value if type(value) is int and 0 <= value < 10**10 else 0
                 self.ledger.add(model=self.model, cost_usd=0,
+                    ms=int((time.perf_counter() - began) * 1000),
                     prompt_tokens=tokens("input_tokens", "inputTokens", "promptTokenCount"),
                     completion_tokens=tokens("output_tokens", "outputTokens", "candidatesTokenCount"))
 

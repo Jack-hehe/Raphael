@@ -410,7 +410,7 @@ class SafetyJudge:
         except Exception as exc:  # an OpenRouterError among them: its kind is enough
             logger.warning("The safety judge failed: %s", getattr(exc, "kind", type(exc).__name__))
             return None
-        ledger.add(model=self._model, cost_usd=decision.cost_usd)
+        ledger.add(model=self._model, cost_usd=decision.cost_usd, ms=decision.latency_ms)
         answers = decision.answers if isinstance(decision.answers, Mapping) else {}
         matched: set[int] = set()
         for rule in rules:

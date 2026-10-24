@@ -29,6 +29,7 @@ Nothing here logs the question, the context, the tool results or the reply.
 """
 
 import asyncio
+import time
 import json
 import logging
 import re
@@ -431,6 +432,7 @@ class Voice:
         else:
             system = system_prompt(language, route, memory_index, say_ja=say_ja)
         system += roster
+        began = time.perf_counter()
         try:
             completion = await asyncio.wait_for(
                 self._client.complete_json(
@@ -462,6 +464,7 @@ class Voice:
             cost_usd=completion.cost_usd,
             prompt_tokens=completion.prompt_tokens,
             completion_tokens=completion.completion_tokens,
+            ms=int((time.perf_counter() - began) * 1000),
         )
         result = parse_reply(completion.data, language, plain=plain)
         result.detail = _with_sources(result.detail, tools, language)

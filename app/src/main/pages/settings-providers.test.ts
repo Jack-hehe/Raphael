@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   keyboardHasAltgr: vi.fn(), languagesList: vi.fn(), modelsCatalog: vi.fn(), modelsLocal: vi.fn(), hotkeysPause: vi.fn(), audioMonitor: vi.fn(),
   providersKinds: vi.fn(), providersList: vi.fn(), providersModels: vi.fn(), providersAdd: vi.fn(), servicesStatus: vi.fn(), usageAnalytics: vi.fn(),
   brainsCli: vi.fn(), brainsCliLogin: vi.fn(), openExternalUrl: vi.fn(),
+  usageRuns: vi.fn(), usageTrace: vi.fn(), usageExport: vi.fn(), usageAllowances: vi.fn(), saveUsageCsv: vi.fn(),
 }));
 vi.mock("../api", () => api);
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: async () => "test" }));
@@ -53,6 +54,8 @@ beforeEach(() => {
   api.providersKinds.mockResolvedValue({ kinds: [] });
   api.providersList.mockResolvedValue({ providers: [] });
   api.brainsCli.mockResolvedValue({ clis: [] });
+  api.usageRuns.mockResolvedValue({ range: "month", start_day: "2026-10-01", end_day: "2026-10-24", summary: { duration_ms: 0, cost_usd: 0, tokens: 0, ai_steps: 0, tools: 0, errors: 0 }, groups: { member: [], model: [], day: [], provider: [], routine: [] }, runs: [], total: 0 });
+  api.usageAllowances.mockResolvedValue({ brains: [] });
   api.usageAnalytics.mockImplementation(async ({ range }: UsageRequest) => {
     const group = { total: 0, series: [] };
     const days = Array.from({ length: range === "30d" ? 30 : 7 }, (_, i) => `2026-10-${String(i + 1).padStart(2, "0")}`);
@@ -64,6 +67,18 @@ beforeEach(() => {
   api.settingsSet.mockImplementation(async (key: string, value: string) => ({ settings: { stt_engine: "cloud", [key]: value } }));
 });
 afterEach(() => { page?.hide(); document.body.innerHTML = ""; setLocale("zh-TW"); });
+
+test("profile notifications update idle fields and preserve the field currently being typed", async () => {
+  api.settingsGet.mockResolvedValue({ settings: { stt_engine: "cloud", owner_name: "Before", owner_about: "Before" } });
+  await mount("general");
+  const about = page.el.querySelector<HTMLTextAreaElement>('[data-owner="owner_about"]')!;
+  about.focus(); about.value = "My unfinished description";
+  api.settingsGet.mockResolvedValue({ settings: { stt_engine: "cloud", owner_name: "Updated elsewhere", owner_about: "Updated elsewhere" } });
+  send({ type: "SettingsChanged" }); await flush();
+  expect(page.el.querySelector<HTMLInputElement>('[data-owner="owner_name"]')!.value).toBe("Updated elsewhere");
+  expect(page.el.querySelector<HTMLTextAreaElement>('[data-owner="owner_about"]')!.value).toBe("My unfinished description");
+  expect(document.activeElement).toBe(page.el.querySelector('[data-owner="owner_about"]'));
+});
 
 test("outside gestures close the provider or chooser before settings, preserving inside-start selections", async () => {
   await mount(); click('[data-pv="directory"]');
@@ -143,6 +158,15 @@ test("Models contains no spending and Usage mounts analytics once, preserving fi
   expect(page.el.querySelector('.sel[data-control="cost"]')?.getAttribute("title")).toBe(t("usage.provider"));
   expect(page.el.querySelector(".ua-total")?.textContent).toBe("US$3.00");
   expect(page.el.querySelector('[data-range="30d"]')?.getAttribute("aria-pressed")).toBe("true");
+});
+
+test("the run period menu survives settings delegation and Escape closes only its menu", async () => {
+  await mount("usage");
+  click('[data-run-act="period"]');
+  expect(document.querySelector('.menu [data-value="last_month"]')).not.toBeNull();
+  document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  expect(document.querySelector(".menu")).toBeNull();
+  expect(page.el.hidden).toBe(false);
 });
 
 test("analytics refreshes on completed activity while visible, and is destroyed on pane leave or Settings close", async () => {

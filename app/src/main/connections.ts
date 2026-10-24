@@ -19,13 +19,14 @@
 // levels to choose: that is the whole of the permission.
 
 import * as api from "./api";
+import { openMcpImport } from "./mcp-import";
 import { isTopLayer, registerDismissal } from "./dismissals";
 import { dayLabel, describeError, formatClock } from "./format";
 import { getLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 import { SERVICE_ICONS, type ServiceIconId, brandStyle, hasLogo, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import type { AuditEntry, ConnectionGroup, ConnectionTool, MainEvent, NewConnection, StoreService, Words } from "./types";
-import { DISCONNECT_CONFIRM_MS, type Choice, actionRow, btn, copyText, esc, fieldHTML, ico, iconButton, leave, row, st, tabs, tg, toaster } from "./ui";
+import { DISCONNECT_CONFIRM_MS, type Choice, actionRow, btn, closeMenu, copyText, esc, fieldHTML, ico, iconButton, leave, openPopover, row, st, tabs, tg, toaster } from "./ui";
 
 /** `t` for a key that is chosen at run time (its placeholders, if any, are none). */
 const tr = t as unknown as (key: MessageKey) => string;
@@ -50,17 +51,26 @@ export interface PairDraft {
   value: string;
 }
 
+/** Split on the first equals sign only: tokens frequently contain padding or other equals signs. */
+export function parseMcpPairs(text: string): PairDraft[] {
+  return text.split(/\r?\n/).filter(line => line.trim()).map(line => {
+    const at = line.indexOf("=");
+    if (at < 1) throw new Error(t("mcp.badPair"));
+    return { name: line.slice(0, at).trim(), value: line.slice(at + 1) };
+  });
+}
+
 /** The form that connects a server of the user's own. */
 export interface ConnectionForm {
+  id?: string;
+  pairLines?: string;
+  limit?: number;
+  testReport?: string;
   type: "stdio" | "http";
   name: string;
   command: string;
   args: string;
   url: string;
-  /** The variables (or headers) added so far; the page shows their names and never their values. */
-  pairs: PairDraft[];
-  pairName: string;
-  pairValue: string;
   busy: boolean;
   error: (() => string) | null;
 }
@@ -130,9 +140,7 @@ const emptyForm = (): ConnectionForm => ({
   command: "",
   args: "",
   url: "",
-  pairs: [],
-  pairName: "",
-  pairValue: "",
+  pairLines: "",
   busy: false,
   error: null,
 });
@@ -203,16 +211,9 @@ function groupIcon(g: ConnectionGroup, v: ConnectionsView, size: "md" | "xl"): s
 /** The picture of a service of the store (the first-run guide draws it too). */
 export const entryIcon = (s: StoreService, size: "md" | "xl"): string => iconHTML(s.name, isIcon(s.icon) ? s.icon : null, size);
 
-/** Where a service of the user's own is reached, in a few words. */
+/** The command or URL of a custom service; the row ellipsizes it and its title keeps it whole. */
 function where(g: ConnectionGroup): string {
-  if (g.transport === "http") {
-    try {
-      return new URL(g.url).host;
-    } catch {
-      return g.url;
-    }
-  }
-  return g.command;
+  return g.transport === "http" ? g.url : [g.command, ...g.args].join(" ");
 }
 
 /** The short line under a service's name: what it is for, or what is wrong with it. */
@@ -257,14 +258,16 @@ function itemHTML(g: ConnectionGroup, v: ConnectionsView): string {
   const busy = v.busy.has(g.id) || v.login?.target === g.id;
   const id = esc(g.id);
   return (
-    `<div class="cs-item" data-conn="open" data-id="${id}">` +
+    `<div class="cs-item${g.catalog_id ? "" : " mcp-item"}" data-conn="open" data-id="${id}">` +
     btn(
-      `<span class="ic">${groupIcon(g, v, "md")}</span><span class="tx"><span class="nm">${esc(g.name)}</span><span class="ds">${lineOf(g, v)}</span></span>`,
+      `<span class="ic">${groupIcon(g, v, "md")}</span><span class="tx"><span class="nm">${esc(g.name)}</span><span class="ds${g.catalog_id ? "" : " code"}"${g.catalog_id ? "" : ` title="${esc(where(g))}"`}>${g.catalog_id ? lineOf(g, v) : esc(where(g))}</span>` +
+      (!g.catalog_id && (needsLogin(g) || g.status === "error" || g.status === "unchecked") ? `<span class="ds">${lineOf(g, v)}</span>` : "") + `</span>`,
       "cs-open",
       ` data-conn="open" data-id="${id}" data-k="cs-open:${id}" aria-haspopup="dialog" title="${esc(t("conn.open", { p0: g.name }))}"`,
     ) +
     tg(g.enabled, t("conn.switch", { p0: g.name }), ` data-conn="enable" data-id="${id}" data-k="cs-enable:${id}"${busy ? " disabled" : ""}`) +
-    `<span class="chev" aria-hidden="true">${ico("right")}</span></div>`
+    (g.catalog_id ? "" : iconButton("more", t("mcp.actions"), ` data-conn="server-menu" data-id="${id}" aria-haspopup="menu"${busy ? " disabled" : ""}`)) +
+    (g.catalog_id ? `<span class="chev" aria-hidden="true">${ico("right")}</span>` : "") + `</div>`
   );
 }
 
@@ -496,21 +499,8 @@ const fld = (label: string, control: string, hint = "", forId = ""): string =>
 function pairsHTML(f: ConnectionForm): string {
   const http = f.type === "http";
   const label = http ? t("conn.form.headers") : t("conn.form.env");
-  const added = f.pairs
-    .map(
-      (p, i) =>
-        `<div class="secret-row"><span class="nm">${esc(p.name)}</span><span class="where">${ico("lock")}${esc(t("conn.form.willStore"))}</span>` +
-        btn(esc(t("conn.remove")), "sm danger", ` data-conn="pair-drop" data-i="${i}" aria-label="${esc(t("conn.form.pairDrop", { p0: p.name }))}"`) +
-        `</div>`,
-    )
-    .join("");
-  const adder =
-    `<div class="pair">` +
-    fieldHTML(http ? t("conn.form.headerName") : t("conn.form.envName"), f.pairName, { id: "conn-pair-name" }) +
-    fieldHTML(t("conn.form.value"), f.pairValue, { id: "conn-pair-value", type: "password" }) +
-    btn(esc(t("conn.form.pairAdd")), "", ' data-conn="pair-add"') +
-    `</div>`;
-  return fld(label, added + adder, t("conn.form.secretNote"));
+  const adder = `<textarea class="field mcp-lines" id="conn-pairs" rows="4" ${f.busy ? "disabled" : ""} spellcheck="false" aria-label="${esc(label)}" placeholder="${http ? 'Authorization=Bearer ...' : 'API_KEY=...'}">${esc(f.pairLines ?? "")}</textarea>`;
+  return fld(label, adder, t(f.id ? "mcp.keepSecrets" : "conn.form.secretNote"));
 }
 
 function formHTML(f: ConnectionForm): string {
@@ -519,24 +509,26 @@ function formHTML(f: ConnectionForm): string {
     f.type === "stdio"
       ? `<div class="two">` +
         fld(t("conn.form.command"), fieldHTML(t("conn.form.commandHint"), f.command, { id: "conn-command", label: t("conn.form.command"), disabled: off }), "", "conn-command") +
-        fld(t("conn.form.args"), fieldHTML(t("conn.form.argsHint"), f.args, { id: "conn-args", label: t("conn.form.args"), disabled: off }), "", "conn-args") +
+        fld(t("mcp.args"), `<textarea class="field mcp-lines" id="conn-args" rows="4" ${off ? "disabled" : ""}>${esc(f.args)}</textarea>`, "", "conn-args") +
         `</div>`
       : fld(t("conn.form.url"), fieldHTML(t("conn.form.urlHint"), f.url, { id: "conn-url", label: t("conn.form.url"), disabled: off }), "", "conn-url");
   const error = f.error ? `<div class="note" role="alert">${st("err", f.error())}</div>` : "";
-  const typeSel = `<button type="button" class="sel" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(t("conn.form.type"))}" title="${esc(t(f.type === "stdio" ? "conn.type.stdio" : "conn.type.http"))}" data-k="conn-type"${off ? " disabled" : ""}><span>${esc(t(f.type === "stdio" ? "conn.type.stdio" : "conn.type.http"))}</span>${ico("down")}</button>`;
+  const typeSel = `<div class="mcp-tabs" role="tablist">${(["stdio", "http"] as const).map(type => `<button type="button" class="btn" role="tab" aria-selected="${f.type === type}" tabindex="${f.type === type ? 0 : -1}" data-conn="form-type" data-type="${type}" ${off ? "disabled" : ""}>${esc(t(type === "stdio" ? "mcp.commandTab" : "mcp.urlTab"))}</button>`).join("")}</div>`;
   return (
-    `<h2 class="big">${esc(t("conn.add.title"))}</h2><p class="cd-help">${esc(t("conn.add.lead"))}</p>` +
+    `<h2 class="big">${esc(t(f.id ? "mcp.edit" : "mcp.add"))}</h2><p class="cd-help">${esc(t("mcp.startsOff"))}</p>` +
     `<div class="add-grid">` +
     `<div class="two">${fld(t("conn.form.type"), typeSel)}${fld(t("conn.form.name"), fieldHTML(t("conn.form.nameHint"), f.name, { id: "conn-name", label: t("conn.form.name"), disabled: off }), "", "conn-name")}</div>` +
     fields +
     pairsHTML(f) +
-    `<div class="trust">${ico("shield")}<span><b>${esc(t("conn.form.trustTitle"))}</b> ${esc(t("conn.form.trustBody"))}</span></div>` +
+    fld(t("mcp.limit"), `<input class="field" type="number" id="conn-limit" min="100" max="100000" value="${f.limit ?? 8000}" ${off ? "disabled" : ""}>`, "", "conn-limit") +
+    (f.testReport ? `<p role="status">${esc(f.testReport)}</p>` : "") +
+    `</div><div class="trust">${ico("shield")}<span><b>${esc(t("conn.form.trustTitle"))}</b> ${esc(t("conn.form.trustBody"))}</span></div>` +
     error +
     actionRow({
       cls: "add-acts", sticky: true,
-      secondary: btn(esc(t("conn.form.cancel")), "", ` data-conn="form-cancel"${off ? " disabled" : ""}`),
-      primary: { label: esc(off ? t("conn.form.connecting") : t("conn.form.connect")), attrs: ` data-conn="connect"${off ? " disabled" : ""}` },
-    }) + `</div>`
+      secondary: btn(t("mcp.test"), "", ` data-conn="test-draft"${off ? " disabled" : ""}`) + btn(esc(t("conn.form.cancel")), "", ` data-conn="form-cancel"${off ? " disabled" : ""}`),
+      primary: { label: esc(off ? t("conn.form.connecting") : t("mcp.save")), attrs: ` data-conn="connect"${off ? " disabled" : ""}` },
+    })
   );
 }
 
@@ -780,6 +772,7 @@ export function createConnections(host: ConnectionsHost): Connections {
   }
 
   function followEvent(event: MainEvent): void {
+    if (event.type === "ConnectionsChanged" && host.visible()) { void load(); return; }
     if (event.type !== "DeviceCode" || !login) return;
     device = { catalog_id: event.catalog_id, user_code: event.user_code, verification_uri: event.verification_uri };
     redraw();
@@ -797,25 +790,9 @@ export function createConnections(host: ConnectionsHost): Connections {
     }
   }
 
-  function addPair(f: ConnectionForm): boolean {
-    const name = f.pairName.trim();
-    if (!name || !f.pairValue) return false;
-    f.pairs.push({ name, value: f.pairValue });
-    f.pairName = "";
-    f.pairValue = "";
-    return true;
-  }
-
   async function connectCustom(): Promise<void> {
     const f = form;
     if (!f || f.busy) return;
-    const half = (f.pairName.trim() !== "") !== (f.pairValue !== "");
-    if (half) {
-      f.error = () => t("conn.form.needPair");
-      redraw();
-      return;
-    }
-    addPair(f);
     const missing = !f.name.trim()
       ? "conn.form.needName"
       : f.type === "stdio" && !f.command.trim()
@@ -828,23 +805,22 @@ export function createConnections(host: ConnectionsHost): Connections {
       redraw();
       return;
     }
-    const pairs = f.pairs.map((p) => ({ name: p.name, value: p.value }));
+    const pairs: { name: string; value: string }[] = [];
     const request: NewConnection =
       f.type === "stdio"
-        ? { name: f.name.trim(), transport: "stdio", command: f.command.trim(), args: f.args.split(/\s+/).filter(Boolean), env: pairs }
+        ? { name: f.name.trim(), transport: "stdio", command: f.command.trim(), args: f.args.split(/\r?\n/).map(line => line.trim()).filter(Boolean), env: pairs }
         : { name: f.name.trim(), transport: "http", url: f.url.trim(), headers: pairs };
     f.busy = true;
     f.error = null;
     redraw();
     try {
-      const added = await api.integrationsAdd(request);
+      request.result_size_limit = f.limit ?? 8000;
+      request.env = f.type === "stdio" ? parseMcpPairs(f.pairLines ?? "") : undefined;
+      request.headers = f.type === "http" ? parseMcpPairs(f.pairLines ?? "") : undefined;
+      if (f.id) await api.integrationsUpdate(f.id, request);
+      else await api.integrationsAdd(request);
       form = null; // the values were sent to the core's vault: nothing of them stays here
       tab = "installed";
-      try {
-        await api.integrationsRefresh(added.server.id);
-      } catch {
-        // the service says it could not read the tools
-      }
       toaster.info(t("conn.connected", { p0: request.name }));
       await load();
       return;
@@ -855,6 +831,19 @@ export function createConnections(host: ConnectionsHost): Connections {
     }
     await load();
     redraw();
+  }
+
+  async function testDraft(): Promise<void> {
+    const f = form;
+    if (!f || f.busy) return;
+    f.busy = true; f.error = null; redraw();
+    try {
+      const values = parseMcpPairs(f.pairLines ?? "");
+      const result = await api.integrationsTest({ ...(f.id ? { id: f.id } : {}), name: f.name.trim(), transport: f.type, command: f.command.trim(), args: f.args.split(/\r?\n/).filter(Boolean), url: f.url.trim(),
+        env: f.type === "stdio" ? values : undefined, headers: f.type === "http" ? values : undefined, result_size_limit: f.limit ?? 8000 });
+      f.testReport = result.ok ? `${t("mcp.testOk")} (${result.tools.length}): ${result.tools.join(", ")}` : `${t("mcp.testFailed")}: ${result.error ?? ""}`;
+    } catch (error) { const message = describeError(error); f.error = () => message; }
+    f.busy = false; redraw();
   }
 
   /** Shows another view; what was typed in the form is dropped with it. */
@@ -872,6 +861,39 @@ export function createConnections(host: ConnectionsHost): Connections {
     if (!button) return false;
     const id = button.dataset.id ?? "";
     switch (button.dataset.conn) {
+      case "server-menu": {
+        const panel = openPopover(button, [
+          ["test-server", t("mcp.test")], ["edit-server", t("mcp.edit")],
+          ["disconnect", t(confirming === id ? "conn.disconnectConfirm" : "mcp.delete")],
+        ].map(([act, label]) => `<button type="button" role="menuitem"${act === "disconnect" ? ' class="danger"' : ""} data-conn="${act}" data-id="${esc(id)}">${esc(label)}</button>`).join(""), { className: "menu", role: "menu", label: t("mcp.actions") });
+        panel.addEventListener("click", event => {
+          const action = (event.target as Element).closest("[data-conn]");
+          if (action) {
+            const confirm = (action as HTMLElement).dataset.conn === "disconnect" && confirming !== id;
+            closeMenu(); click(action);
+            if (confirm) {
+              const anchor = Array.from((host.root ?? document).querySelectorAll<HTMLElement>('[data-conn="server-menu"]')).find(anchor => anchor.dataset.id === id);
+              if (anchor) { click(anchor); document.querySelector<HTMLButtonElement>('.menu [data-conn="disconnect"]')?.focus(); }
+            }
+          }
+        });
+        panel.querySelector<HTMLButtonElement>("button")?.focus();
+        break;
+      }
+      case "form-type": menuFor("conn-type")?.pick(button.dataset.type ?? ""); break;
+      case "test-server":
+        void api.integrationsTest({ id }).then(result => toaster.info(result.ok ? t("mcp.testOk") + ` (${result.tools.length})` : t("mcp.testFailed") + `: ${result.error ?? ""}`), error => toaster.info(describeError(error)));
+        break;
+      case "edit-server": {
+        const group = groupById(id);
+        if (!group || group.catalog_id) return true;
+        closeDialog();
+        form = { ...emptyForm(), id, type: group.transport, name: group.name, command: group.command, args: group.args.join("\n"), url: group.url, limit: group.result_size_limit ?? 8000,
+          pairLines: (group.transport === "stdio" ? group.env : group.headers).map(name => `${name}=`).join("\n") };
+        redraw(); focusOn("#conn-name");
+        break;
+      }
+      case "test-draft": void testDraft(); break;
       case "tab":
         if (id === "installed" || id === "store") show(id);
         break;
@@ -973,19 +995,6 @@ export function createConnections(host: ConnectionsHost): Connections {
         form = null; // an unsent value is dropped with the form
         redraw();
         break;
-      case "pair-add":
-        if (form) {
-          addPair(form);
-          redraw();
-          focusOn("#conn-pair-name");
-        }
-        break;
-      case "pair-drop":
-        if (form) {
-          form.pairs.splice(Number(button.dataset.i), 1);
-          redraw();
-        }
-        break;
       case "connect":
         void connectCustom();
         break;
@@ -1003,6 +1012,8 @@ export function createConnections(host: ConnectionsHost): Connections {
     }
     if (!form || !el.id.startsWith("conn-")) return false;
     switch (el.id) {
+      case "conn-pairs": form.pairLines = el.value; break;
+      case "conn-limit": form.limit = Number(el.value); break;
       case "conn-name":
         form.name = el.value;
         break;
@@ -1015,12 +1026,6 @@ export function createConnections(host: ConnectionsHost): Connections {
       case "conn-url":
         form.url = el.value;
         break;
-      case "conn-pair-name":
-        form.pairName = el.value;
-        break;
-      case "conn-pair-value":
-        form.pairValue = el.value;
-        break;
       default:
         return false;
     }
@@ -1028,6 +1033,14 @@ export function createConnections(host: ConnectionsHost): Connections {
   }
 
   function key(e: KeyboardEvent): boolean {
+    const tab = (e.target as Element | null)?.closest?.<HTMLElement>('[data-conn="form-type"]');
+    if (tab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key) && form && !form.busy) {
+      e.preventDefault();
+      const type = e.key === "Home" ? "stdio" : e.key === "End" ? "http" : form.type === "stdio" ? "http" : "stdio";
+      menuFor("conn-type")?.pick(type);
+      focusOn(`[data-conn="form-type"][data-type="${type}"]`);
+      return true;
+    }
     const panel = typeof document !== "undefined" ? (host.root ?? document).querySelector<HTMLElement>("#cs-dialog") : null;
     if (e.key === "Escape" && panel && !isTopLayer(panel)) return false;
     if (e.key === "Escape" && open?.tab === "installed" && !e.defaultPrevented) {
@@ -1036,13 +1049,9 @@ export function createConnections(host: ConnectionsHost): Connections {
       return true;
     }
     const el = e.target as HTMLElement | null;
-    if (e.key !== "Enter" || !form || !el?.id?.startsWith("conn-")) return false;
+    if (e.key !== "Enter" || !form || !el?.id?.startsWith("conn-") || el instanceof HTMLTextAreaElement) return false;
     e.preventDefault();
-    if (el.id.startsWith("conn-pair")) {
-      addPair(form);
-      redraw();
-      focusOn("#conn-pair-name");
-    } else void connectCustom();
+    void connectCustom();
     return true;
   }
 
@@ -1050,9 +1059,10 @@ export function createConnections(host: ConnectionsHost): Connections {
     switch (k) {
       case "conn-add":
         return {
-          choices: [{ value: "custom", label: t("conn.addCustom") }],
+          choices: [{ value: "custom", label: t("mcp.add") }, { value: "paste", label: t("mcp.paste") }, { value: "import", label: t("mcp.fromApps") }],
           current: "", // nothing is checked: it is an act, not a state
           pick: (value) => {
+            if (value === "paste" || value === "import") { openMcpImport(value === "import", () => void load()); return; }
             if (value !== "custom" || form?.busy) return;
             open = null;
             form = emptyForm();
@@ -1068,9 +1078,8 @@ export function createConnections(host: ConnectionsHost): Connections {
               pick: (value) => {
                 if (form && (value === "stdio" || value === "http") && value !== form.type) {
                   form.type = value;
-                  form.pairs = []; // variables and headers are different things
-                  form.pairName = "";
-                  form.pairValue = "";
+                  form.pairLines = ""; // Variables and headers are different things.
+                  form.testReport = undefined;
                   redraw();
                 }
               },

@@ -121,6 +121,7 @@ class NarratedLoop:
         self.batch_calls = []
 
     async def chat(self, messages: Sequence[dict], tools: Sequence[dict]) -> Turn:
+        began = time.perf_counter()
         try:
             answer = await asyncio.wait_for(self.client.chat_tools(
                 model=self.model, fallbacks=CLEANUP_FALLBACKS,
@@ -128,18 +129,22 @@ class NarratedLoop:
                 max_tokens=4000, reasoning_effort="none",
             ), 60)
         except OpenRouterError as error:
+            self.ledger.add(model=self.model, cost_usd=0, ms=int((time.perf_counter()-began)*1000), outcome="error")
             raise Stop("failed", failure_kind(error)) from None
         except TimeoutError:
-            self.ledger.add(model=self.model, cost_usd=estimate_cost(self.model, len(str(messages))))
+            self.ledger.add(model=self.model, cost_usd=estimate_cost(self.model, len(str(messages))),
+                            ms=int((time.perf_counter()-began)*1000), outcome="timeout")
             raise Stop("failed", "timeout") from None
         except asyncio.CancelledError:
-            self.ledger.add(model=self.model, cost_usd=estimate_cost(self.model, len(str(messages))))
+            self.ledger.add(model=self.model, cost_usd=estimate_cost(self.model, len(str(messages))),
+                            ms=int((time.perf_counter()-began)*1000), outcome="cancelled")
             raise
         self.ledger.add(
             model=answer.model, cost_usd=answer.cost_usd if answer.usage_known else max(
                 answer.cost_usd, estimate_cost(self.model, len(str(messages)))
             ),
             prompt_tokens=answer.prompt_tokens, completion_tokens=answer.completion_tokens,
+            ms=int((time.perf_counter() - began) * 1000),
         )
         if answer.content.strip():
             # Only explicitly public fields are published, including those in final content.

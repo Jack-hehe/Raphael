@@ -57,6 +57,9 @@ METHODS = [
     "models.catalog",
     "stats.summary",
     "usage.analytics",
+    "usage.runs",
+    "usage.trace",
+    "usage.export",
 ]
 
 

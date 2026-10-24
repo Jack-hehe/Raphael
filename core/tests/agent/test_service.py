@@ -43,6 +43,7 @@ METHODS = [
     "agent.history.search",
     "brains.cli",
     "brains.cli_login",
+    "usage.allowances",
 ]
 GEOCODING = {
     "results": [

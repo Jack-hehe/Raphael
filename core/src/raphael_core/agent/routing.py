@@ -415,7 +415,7 @@ class Router:
             except Exception as exc:  # whatever else the client lets out
                 logger.warning("Jev failed unexpectedly: %s", type(exc).__name__)
                 return JevOutcome(None, "bad_response")
-            ledger.add(model=self._jev_model, cost_usd=decision.cost_usd)
+            ledger.add(model=self._jev_model, cost_usd=decision.cost_usd, ms=decision.latency_ms)
             taken = parse_answers(decision.answers, CONFIDENCE_FLOOR)
             if taken is not None:
                 return JevOutcome(taken)
@@ -505,5 +505,6 @@ class Router:
             cost_usd=completion.cost_usd,
             prompt_tokens=completion.prompt_tokens,
             completion_tokens=completion.completion_tokens,
+            ms=completion.latency_ms,
         )
         return completion

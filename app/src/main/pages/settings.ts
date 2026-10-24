@@ -8,6 +8,7 @@
 // Raphael listens, learning from corrections) has no switch: it is simply on.
 
 import { isUiLocale, onLocaleChange, t } from "../i18n";
+import { createOwnerControls } from "../owner-settings";
 
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
@@ -189,6 +190,7 @@ export function createSettings(app: AppContext): SettingsPage {
   let pendingJump: SearchHit | null = null;
 
   let brain: BrainSettings | null = null;
+  const ownerControls = createOwnerControls(el, settings => { brain = settings; if (visible) render(); });
   let hasKey = false;
   let openrouter: Status["openrouter"] | null = null;
   let spend: Status["spend"] | null = null;
@@ -264,6 +266,7 @@ export function createSettings(app: AppContext): SettingsPage {
   const providers = createProviders({ root: el, visible: () => visible && pane === "models" && modelsTab === "models", redraw: () => render() });
   app.onEvent((event) => {
     providers.followEvent(event);
+    if (event.type === "SettingsChanged" && visible) void api.settingsGet().then(result => { brain = result.settings; render(); }, () => {});
     cliBrains.followEvent(event);
     if (event.type === "ProvidersChanged" && visible) void loadCatalog();
     if (event.type === "ProvidersChanged" || event.type === "AgentTurn" || event.type === "Dictation" && event.phase === "pasted") refreshUsage();
@@ -398,6 +401,8 @@ export function createSettings(app: AppContext): SettingsPage {
     const usageFocus = active && usageHost.contains(active) ? active : null;
     const focused = active?.dataset?.k;
     const focusedId = active?.id;
+    const ownerFocus = active?.dataset?.owner;
+    const ownerDrafts = Array.from(el.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-owner]:not(:disabled)')).filter(input => input === active).map(input => [input.dataset.owner!, input.value] as const);
     const keyDraft = el.querySelector<HTMLInputElement>("#key-input")?.value;
     const activeLimit = focusedId === "limit-input" ? el.querySelector<HTMLInputElement>("#limit-input")?.value : undefined;
     // What is being typed in 服務's fields stays through a drawing (a status that came in, say): it
@@ -414,11 +419,16 @@ export function createSettings(app: AppContext): SettingsPage {
     const slot = body.querySelector<HTMLElement>("[data-usage-host]");
     if (slot) {
       slot.replaceWith(usageHost);
-      usage ??= mountUsageAnalytics(usageHost, { usageAnalytics: api.usageAnalytics });
+      usage ??= mountUsageAnalytics(usageHost, { usageAnalytics: api.usageAnalytics, usageRuns: api.usageRuns, usageTrace: api.usageTrace, usageExport: api.usageExport, usageAllowances: api.usageAllowances, saveUsageCsv: api.saveUsageCsv, modelsCatalog: api.modelsCatalog, brainsCli: api.brainsCli });
       if (usageFocus?.isConnected) usageFocus.focus({ preventScroll: true });
     }
     // Before the focus goes back by `data-k`, which the pickers' buttons have too.
     mountPickers();
+    for (const [key, value] of ownerDrafts) {
+      const input = el.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-owner="${key}"]`);
+      if (input && !input.disabled) input.value = value;
+    }
+    if (ownerFocus) el.querySelector<HTMLElement>(`[data-owner="${ownerFocus}"]`)?.focus({ preventScroll: true });
     const keyInput = el.querySelector<HTMLInputElement>("#key-input");
     if (keyInput && keyDraft !== undefined) keyInput.value = keyDraft;
     const limitInput = el.querySelector<HTMLInputElement>("#limit-input");
@@ -1139,6 +1149,7 @@ export function createSettings(app: AppContext): SettingsPage {
 
   el.addEventListener("click", (e) => {
     const target = e.target as Element;
+    if (ownerControls.click(target)) return;
     const modelTab = target.closest<HTMLElement>("[data-models-tab]");
     if (modelTab) { switchModelsTab(modelTab.dataset.modelsTab as ModelsTab); return; }
     const paneButton = target.closest<HTMLElement>("[data-pane]");
@@ -1157,7 +1168,7 @@ export function createSettings(app: AppContext): SettingsPage {
     if (providers.click(target)) return;
     // the usage view opens its own dropdowns' menus (usage-analytics.ts)
     const choose = target.closest<HTMLElement>(".sel");
-    if (choose && !choose.closest(".usage-analytics")) {
+    if (choose && !choose.closest(".usage-analytics, .run-analytics")) {
       if (menuIsOpenFor(choose)) {
         closeMenu();
         return;
@@ -1244,6 +1255,7 @@ export function createSettings(app: AppContext): SettingsPage {
   // the exception: it is sent by Enter or 貼上 only, never by leaving the field (keyfield.ts), so
   // that 取消 after typing a replacement does not store it.
   el.addEventListener("change", (e) => {
+    void ownerControls.change(e.target as Element);
     void providers.change(e.target as Element);
     const input = e.target as HTMLInputElement;
     if (input.id === "limit-input") commitLimit(input);

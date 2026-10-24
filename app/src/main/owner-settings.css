@@ -1,0 +1,21 @@
+.owner-profile .slist { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 18px; }
+.owner-profile label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; font-size: var(--fs-sm); }
+.owner-profile .field { width: 100%; min-width: 0; padding: 8px 10px; background: var(--panel); border: 1px solid var(--btn-edge); border-radius: 8px; }
+.owner-profile textarea { resize: vertical; min-height: 110px; }
+.owner-actions { display: flex; align-items:center; flex-wrap: wrap; gap: 8px; }
+.owner-photo-preview { width:40px; height:40px; border-radius:50%; background:var(--surface-2); display:grid; place-items:center; flex:none; }
+.owner-photo-preview .owner-photo { width:40px; height:40px; }
+.owner-photo-preview .i { width:20px; height:20px; color:var(--text-2); }
+.owner-photo { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+.skin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 12px; }
+.skin-card.btn { display: flex; flex-direction: column; align-items: stretch; padding: 9px; gap: 7px; height: auto; text-align: left; white-space: normal; background: var(--panel); }
+.skin-card[aria-pressed="true"] { outline: 2px solid var(--focus); outline-offset: 1px; }
+.skin-card strong { font-size: var(--fs-sm); }
+.skin-card small { color: var(--text-3); font-size: var(--fs-xs); line-height: 1.5; }
+.skin-preview { display: block; position: relative; width: 100%; height: 76px; border: 1px solid var(--btn-edge); border-radius: 6px; overflow: hidden; background: var(--preview-content, var(--content)); }
+.skin-preview i { display: block; position: absolute; border-radius: 4px; }
+.skin-sidebar { left: 0; top: 0; bottom: 0; width: 24%; background: var(--preview-side, var(--side)); border-right: 1px solid var(--line); }
+.skin-sidebar::after { content: ''; position: absolute; left: 20%; top: 12px; width: 60%; height: 3px; background: var(--text-3); box-shadow: 0 8px var(--line), 0 16px var(--line); }
+.skin-bubble { right: 7%; top: 9px; width: 48%; height: 13px; background: var(--preview-accent, var(--accent)); }
+.skin-reply { left: 30%; top: 29px; width: 54%; height: 19px; background: var(--preview-panel, var(--panel)); border-top: 2px solid var(--text-3); }
+.skin-composer { left: 30%; bottom: 7px; width: 63%; height: 12px; border: 1px solid var(--text-3); }

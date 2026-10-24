@@ -16,6 +16,8 @@ import { createDictionary } from "./pages/dictionary";
 import { createHistory } from "./pages/history";
 import { createHome } from "./pages/home";
 import { createSettings } from "./pages/settings";
+import { createNavigationPage } from "./navigation-pages";
+import { applySkin, ownerButtonHTML } from "./owner-settings";
 import { DeviceState } from "./device";
 import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
@@ -30,7 +32,7 @@ import type { AgentDraft, AppContext, DeviceSettings, MainEvent, Page, PageId, S
 import { spendMini } from "./spend";
 import { Undoable } from "./undo";
 import { Cleared } from "./cleared";
-import { type IconName, esc, ico, leave, toaster } from "./ui";
+import { type IconName, closeMenu, esc, ico, leave, openMenu, openMenuOnArrow, toaster } from "./ui";
 import "./styles.css";
 
 /** The glyph ring texture (app/public/brand/glyph-ring.png); if it fails to load the emblem draws a plain ring. */
@@ -59,6 +61,8 @@ const RESHOW_MS = 1000;
 const NAV: { id: Exclude<PageId, "settings">; name: string; icon: IconName | "face" }[] = [
   { id: "home", get name() { return t("main.001"); }, icon: "home" },
   { id: "agent", get name() { return t("nav.agent"); }, icon: "face" },
+  { id: "automations", get name() { return t("nav.automations"); }, icon: "repeat" },
+  { id: "team", get name() { return t("nav.team"); }, icon: "grid" },
   { id: "history", get name() { return t("main.002"); }, icon: "clock" },
   { id: "dictionary", get name() { return t("main.003"); }, icon: "book" },
 ];
@@ -66,6 +70,8 @@ const NAV: { id: Exclude<PageId, "settings">; name: string; icon: IconName | "fa
 // ---------- the theme ----------
 
 const prefersDark = matchMedia("(prefers-color-scheme: dark)");
+let skin = "default";
+let ownerPhoto = "";
 /** The device settings, kept right when reads and writes overlap. */
 const device = new DeviceState(
   DEFAULT_DEVICE,
@@ -79,7 +85,7 @@ const device = new DeviceState(
 /** Light or dark, as `appearance` says; `system` follows the system. */
 function applyTheme(): void {
   const { appearance } = device.get();
-  document.documentElement.dataset.theme = appearance === "system" ? (prefersDark.matches ? "dark" : "light") : appearance;
+  applySkin(skin, appearance, prefersDark.matches);
 }
 prefersDark.addEventListener("change", applyTheme);
 
@@ -151,7 +157,7 @@ async function start(): Promise<void> {
   const home = createHome(ctx);
   const agent = createAgent(ctx);
   const settings = createSettings(ctx);
-  const pages: Record<PageId, Page> = { home, agent, history, dictionary, settings };
+  const pages: Record<PageId, Page> = { home, agent, history, dictionary, settings, automations: createNavigationPage("automations", ctx), team: createNavigationPage("team", ctx) };
 
   const nav = document.getElementById("nav")!;
   const main = document.getElementById("main")!;
@@ -163,7 +169,7 @@ async function start(): Promise<void> {
     NAV.map((item) => button(item.id, item.name, item.icon)).join("") +
     `<div class="side-fill"></div>` +
     `<button type="button" class="usage-box" data-go="settings" data-pane="usage" hidden></button>` +
-    t("main.004", { p0: ico("gear") });
+    `<div class="side-foot">${ownerButtonHTML(ownerPhoto)}</div>`;
   const usageBox = nav.querySelector<HTMLElement>(".usage-box")!;
   const agentItem = nav.querySelector<HTMLElement>('.nav[data-go="agent"]')!;
   // 拉斐爾 shows Raphael's face, the person's picture once there is one.
@@ -185,7 +191,8 @@ async function start(): Promise<void> {
     homeButton.title = t("nav.home");
     markQuestion(waitingQuestion);
     for (const item of NAV) labelNavItem(nav, item.id, item.name);
-    nav.querySelector<HTMLElement>(".nav-bottom span")!.textContent = t("nav.settings");
+    nav.querySelector<HTMLElement>(".nav-bottom span")!.textContent = t("nav.you");
+    nav.querySelector<HTMLElement>("[data-owner-menu]")!.setAttribute("aria-label", t("nav.you"));
     nameRailItems();
   }
 
@@ -210,9 +217,41 @@ async function start(): Promise<void> {
     void refreshUsage();
   });
   nav.addEventListener("click", (e) => {
+    const owner = (e.target as Element).closest<HTMLElement>("[data-owner-menu]");
+    if (owner) {
+      openMenu(owner, [
+        { value: "usage", label: t("nav.usage") }, { value: "general", label: t("nav.settings") },
+        { value: "help", label: t("nav.help") }, { value: "about", label: t("common.about") },
+      ], "", value => {
+        closeMenu();
+        if (value === "help") void api.openExternalUrl("https://github.com/Jack-hehe/Raphael/issues").catch(error => toaster.info(String(error)));
+        else go("settings", value as SettingsPane);
+      });
+      return;
+    }
     const target = (e.target as Element).closest<HTMLElement>("[data-go]");
     if (target) go(target.dataset.go as PageId, target.dataset.pane as SettingsPane | undefined);
   });
+  nav.addEventListener("keydown", event => {
+    const owner = (event.target as Element).closest<HTMLElement>("[data-owner-menu]");
+    if (owner && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); event.stopPropagation(); owner.click(); }
+    else openMenuOnArrow(event);
+  });
+  async function refreshOwner(): Promise<void> {
+    try {
+      const { settings: value } = await api.settingsGet();
+      skin = value.skin ?? "default";
+      ownerPhoto = value.owner_photo ?? "";
+      applyTheme();
+      const old = nav.querySelector<HTMLElement>("[data-owner-menu]");
+      const focused = old === document.activeElement;
+      if (old) old.outerHTML = ownerButtonHTML(ownerPhoto);
+      if (focused) nav.querySelector<HTMLElement>("[data-owner-menu]")?.focus();
+      nameRailItems();
+    } catch { /* The window remains usable while the core restarts. */ }
+  }
+  ctx.onEvent(event => { if (event.type === "SettingsChanged") void refreshOwner(); });
+  void refreshOwner();
   for (const page of Object.values(pages)) if (page !== settings) main.append(page.el);
   // The panel goes before the window controls, which come last in the document.
   document.getElementById("window-chrome")!.before(settings.el);

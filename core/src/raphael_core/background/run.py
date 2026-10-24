@@ -423,6 +423,7 @@ class TaskRun:
             cost_usd=cost,
             prompt_tokens=turn.prompt_tokens,
             completion_tokens=turn.completion_tokens,
+            ms=_ms(began),
         )
         self._step(kind="model", outcome="ok", cost_usd=cost, ms=_ms(began))
         if turn.calls and turn.content.strip():

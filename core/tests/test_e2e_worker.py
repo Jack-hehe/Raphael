@@ -49,6 +49,7 @@ def connect_the_fake_server(core, **tiers):
         "integrations.add",
         {"name": "Notes", "transport": "stdio", "command": sys.executable, "args": [str(FAKE_SERVER)]},
     )["server"]
+    result(core, "integrations.set_enabled", {"id": added["id"], "enabled": True})
     refreshed = result(core, "integrations.refresh", {"id": added["id"]}, timeout=60)
     assert refreshed["server"]["status"] == "ready", refreshed
     # every tool of a new server is on: leave on the ones named and no others

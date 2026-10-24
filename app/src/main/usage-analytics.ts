@@ -1,5 +1,10 @@
 /** Self-contained analytics view. Mount in a settings slot and destroy when the page leaves. */
 import "./usage-analytics.css";
+import { mountRunAnalytics } from "./run-analytics";
+import { usageModel } from "./usage-models";
+import { faceHTML } from "./members";
+import type { CatalogModel } from "./types";
+import type { RunAnalyticsApi } from "./run-analytics-types";
 import { formatUsd } from "./format";
 import { onLocaleChange, t } from "./i18n";
 import { openMenu, sel, type Choice } from "./ui";
@@ -7,7 +12,7 @@ import type { MessageKey } from "./i18n/zh-TW";
 import type { UsageAnalytics, UsageGroup, UsageRequest, UsageSeries } from "./usage-analytics-types";
 
 export type { UsageAnalytics, UsageRequest } from "./usage-analytics-types";
-export interface UsageAnalyticsApi { usageAnalytics(params: UsageRequest): Promise<UsageAnalytics> }
+export interface UsageAnalyticsApi extends Partial<RunAnalyticsApi> { usageAnalytics(params: UsageRequest): Promise<UsageAnalytics> }
 export interface UsageAnalyticsMount {
   /** Initial request completion (errors render in the component). */
   ready: Promise<void>;
@@ -37,23 +42,23 @@ const choiceKeys = {
   "7d": "usage.7d", "30d": "usage.30d", purpose: "usage.purpose", model: "usage.model",
   provider: "usage.provider", source: "usage.source", dictations: "usage.dictations", words: "usage.words",
 } as const;
-function seriesLabel(series: UsageSeries, category: string): string {
+function seriesLabel(series: UsageSeries, category: string, models: CatalogModel[] = []): string {
   // A model or a connection's name is user data even when it matches a translated category.
   const key = series.key;
   if (key === "__other__" || key === "unknown" || (category !== "model" && category !== "provider")) {
     const translated = labelKeys[key];
     if (translated) return t(translated);
   }
-  return series.label;
+  return category === "model" ? usageModel(series.key,models).name : series.label;
 }
 
-function legend(group: UsageGroup, category: string, money = false): string {
+function legend(group: UsageGroup, category: string, money = false, models: CatalogModel[] = []): string {
   return `<ul class="ua-legend">${group.series.map((s, i) => `<li><i class="ua-color ua-color-${i}" aria-hidden="true"></i>` +
-    `<span>${esc(seriesLabel(s, category))}</span><strong>${money ? share(s.share) : count(s.total)}</strong></li>`).join("")}</ul>`;
+    `<span>${category === "model" && s.key !== "__other__" ? usageModel(s.key,models).html : esc(seriesLabel(s, category,models))}</span><strong>${money ? share(s.share) : count(s.total)}</strong></li>`).join("")}</ul>`;
 }
 
 /** All exact values remain keyboard-accessible; line styles also distinguish series without color. */
-function chart(days: string[], group: UsageGroup, title: string, category: string, mode: "bars" | "lines", money = false): string {
+function chart(days: string[], group: UsageGroup, title: string, category: string, mode: "bars" | "lines", money = false, models: CatalogModel[] = []): string {
   if (!group.series.length || group.total === 0) return `<p class="ua-empty">${t("usage.empty")}</p>`;
   const left = 64, width = 640, top = 18, height = 154, bottom = top + height;
   const totals = days.map((_, i) => group.series.reduce((sum, s) => sum + s.values[i]!, 0));
@@ -72,7 +77,7 @@ function chart(days: string[], group: UsageGroup, title: string, category: strin
   }
   const prior = days.map(() => 0);
   group.series.forEach((s, seriesIndex) => {
-    const name = seriesLabel(s, category);
+    const name = seriesLabel(s, category,models);
     if (mode === "lines") {
       svg += `<path class="ua-line ua-color-${seriesIndex}" stroke-dasharray="${["none", "8 3", "3 3", "10 3 2 3", "2 4", "12 4"][seriesIndex]}" d="` +
         s.values.map((v, i) => `${i ? "L" : "M"}${x(i)},${y(v)}`).join(" ") + `"/>`;
@@ -92,7 +97,7 @@ function chart(days: string[], group: UsageGroup, title: string, category: strin
   days.forEach((day, i) => {
     if (i % stride === 0 || i === days.length - 1) svg += `<text class="ua-axis" x="${x(i)}" y="196" text-anchor="middle">${esc(day.slice(5).replace("-", "/"))}</text>`;
   });
-  return `<div class="ua-chart-scroll">${svg}</svg></div>${legend(group, category, money)}`;
+  return `<div class="ua-chart-scroll">${svg}</svg></div>${legend(group, category, money,models)}`;
 }
 
 /** The groupings a dropdown offers, as the app's own dropdown (ui.ts `sel`) lists them. */
@@ -106,6 +111,10 @@ export function mountUsageAnalytics(host: HTMLElement, api: UsageAnalyticsApi): 
   const root = document.createElement("section");
   root.className = "usage-analytics";
   host.replaceChildren(root);
+  const runsHost = document.createElement("div");
+  host.prepend(runsHost);
+  let modelData: CatalogModel[] = [];
+  const runs = api.usageRuns ? mountRunAnalytics(runsHost, api as RunAnalyticsApi, trace => { root.hidden = trace; }, models => { modelData=models; render(); }) : null;
   const tooltipId = `usage-tooltip-${++nextId}`;
   let data: UsageAnalytics | null = null;
   let range: UsageRequest["range"] = "7d";
@@ -135,7 +144,7 @@ export function mountUsageAnalytics(host: HTMLElement, api: UsageAnalyticsApi): 
       root.innerHTML += `<div class="ua-cost-head"><div><p class="ua-dates">${esc(usage.start_day)} — ${esc(usage.end_day)} · ${esc(usage.tz)}</p>` +
         `<strong class="ua-total">${formatUsd(costs.total)}</strong></div>` +
         sel(choices("cost"), costBy, t("usage.costGrouping"), ' data-control="cost"') + `</div>` +
-        chart(usage.days, costs, t("usage.history"), costBy, "bars", true) + `<p class="ua-note">${t("usage.recordedCosts")}</p>`;
+        chart(usage.days, costs, t("usage.history"), costBy, "bars", true,modelData) + `<p class="ua-note">${t("usage.recordedCosts")}</p>`;
       root.innerHTML += `<section class="ua-section"><h3>${t("usage.members")}</h3>`;
       if (!usage.members.length) root.innerHTML += `<p class="ua-empty">${t("usage.empty")}</p>`;
       else {
@@ -143,9 +152,9 @@ export function mountUsageAnalytics(host: HTMLElement, api: UsageAnalyticsApi): 
           usage.members.slice(0, more ? undefined : 5).map(m => {
             const open = expanded.has(m.id), detailsId = `${tooltipId}-member-${m.id}`;
             return `<tr><th scope="row"><button type="button" class="btn" data-control="member-${m.id}" data-member="${m.id}" aria-expanded="${open}" aria-controls="${detailsId}">` +
-              `<span aria-hidden="true">${open ? "⌄" : "›"}</span> ${esc(m.deleted ? t("usage.deleted", { id: m.id }) : m.name)}</button>` +
+              `<span aria-hidden="true">${open ? "⌄" : "›"}</span> ${faceHTML(m,24)}${esc(m.deleted ? t("usage.deleted", { id: m.id }) : m.id === 0 ? t("nav.agent") : m.name)}</button>` +
               (m.role ? `<small>${esc(m.role)}</small>` : "") + `</th><td>${count(m.turns)}</td><td>${formatUsd(m.cost_usd)}</td><td>${share(m.share)}</td></tr>` +
-              `<tr id="${detailsId}" ${open ? "" : "hidden"}><td colspan="4"><ul class="ua-models">${m.models.map(model => `<li><span>${esc(model.model === "unknown" ? t("usage.unknown") : model.model)}</span><span>${count(model.turns)} · ${formatUsd(model.cost_usd)}</span></li>`).join("")}</ul></td></tr>`;
+              `<tr id="${detailsId}" ${open ? "" : "hidden"}><td colspan="4"><ul class="ua-models">${m.models.map(model => `<li>${usageModel(model.model,modelData).html}<span>${count(model.turns)} · ${formatUsd(model.cost_usd)}</span></li>`).join("")}</ul></td></tr>`;
           }).join("") + `</tbody></table></div>`;
         if (usage.members.length > 5) root.innerHTML += `<button type="button" class="btn ua-more" data-control="more">${t(more ? "usage.less" : "usage.more")}</button>`;
       }
@@ -154,7 +163,7 @@ export function mountUsageAnalytics(host: HTMLElement, api: UsageAnalyticsApi): 
         chart(usage.days, usage.tools, t("usage.tools"), "tools", "lines") + `<p class="ua-note">${t("usage.retained")}</p></section>` +
         `<section class="ua-section"><div class="ua-section-head"><div><h3>${t("usage.messages")}</h3><strong class="ua-total">${count(usage.messages_by[messageBy].total)}</strong></div>` +
         sel(choices("messages"), messageBy, t("usage.messageGrouping"), ' data-control="messages"') + `</div>` +
-        chart(usage.days, usage.messages_by[messageBy], t("usage.messages"), messageBy, "lines") + `</section>`;
+        chart(usage.days, usage.messages_by[messageBy], t("usage.messages"), messageBy, "lines",false,modelData) + `</section>`;
       const values = usage.dictation[dictationBy], total = values.reduce((a, b) => a + b, 0);
       const dictation = { total, series: [{ key: dictationBy, label: t(choiceKeys[dictationBy]), values, total, share: 1 }] };
       root.innerHTML += `<section class="ua-section"><div class="ua-section-head"><div><h3>${t("usage.dictation")}</h3><strong class="ua-total">${count(total)}</strong></div>` +
@@ -240,9 +249,9 @@ export function mountUsageAnalytics(host: HTMLElement, api: UsageAnalyticsApi): 
   window.addEventListener("scroll", hideTooltip, true);
   window.addEventListener("resize", hideTooltip);
   const stopLocale = onLocaleChange(render);
-  const ready = refresh();
+  const ready = Promise.all([refresh(), runs?.ready]).then(() => {});
   const controller: UsageAnalyticsMount = {
-    ready, refresh,
+    ready, refresh: async () => { await Promise.all([refresh(), runs?.refresh()]); },
     destroy() {
       disposed = true;
       ++revision;
@@ -255,6 +264,8 @@ export function mountUsageAnalytics(host: HTMLElement, api: UsageAnalyticsApi): 
       root.removeEventListener("click", clicked);
       window.removeEventListener("scroll", hideTooltip, true);
       window.removeEventListener("resize", hideTooltip);
+      runs?.destroy();
+      runsHost.remove();
       root.remove();
       if (mounted.get(host) === controller) mounted.delete(host);
     },

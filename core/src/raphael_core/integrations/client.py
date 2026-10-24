@@ -419,7 +419,7 @@ class McpConnector:
                         result = await client.call_tool(tool, arguments)
         except Exception as exc:
             raise _failure("tool call", exc) from None
-        text, truncated = render_result(result)
+        text, truncated = render_result(result, server.result_size_limit)
         return CallOutcome(
             text=text,
             is_error=bool(getattr(result, "is_error", False)),
@@ -433,7 +433,7 @@ class McpConnector:
         )
 
 
-def render_result(result: Any) -> tuple[str, bool]:
+def render_result(result: Any, limit: int = MAX_RESULT_CHARS) -> tuple[str, bool]:
     """The text of a tool's result, cut to MAX_RESULT_CHARS, and whether it was cut. Other kinds
     of content (an image, audio, a file) are named and left out."""
     parts: list[str] = []
@@ -451,6 +451,6 @@ def render_result(result: Any) -> tuple[str, bool]:
         with contextlib.suppress(TypeError, ValueError):
             parts.append(json.dumps(structured, ensure_ascii=False))
     text = "\n".join(parts).strip()
-    if len(text) > MAX_RESULT_CHARS:
-        return text[:MAX_RESULT_CHARS] + "…", True
+    if len(text) > limit:
+        return text[:limit] + "…", True
     return text, False

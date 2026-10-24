@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildInfo, checksums, collectTools, main, prepareReleaseAssets } from "./prepare-release-assets.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
-const fixtureDirectory = join(scripts, "..", "node_modules", ".cache", "release-assets-tests");
+const fixtureDirectory = join(scripts, "..", ".test-cache", "release-assets-tests");
 const temporaryRoots = [];
 const env = {
   GITHUB_SHA: "0123456789abcdef0123456789abcdef01234567", GITHUB_REF: "refs/heads/fix/release-licensing",

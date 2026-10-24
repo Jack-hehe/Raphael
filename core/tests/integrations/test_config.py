@@ -48,7 +48,7 @@ def test_a_stdio_server_is_made_and_its_secrets_set_apart():
     assert new.config.env == ["API_KEY"]  # the name stays in the config...
     assert new.env == {"API_KEY": "s3cret-value"}  # ...the value is apart, for the vault
     assert "s3cret-value" not in repr(new.config)
-    assert new.config.enabled and new.config.tools == [] and new.config.disabled_tools == set()
+    assert not new.config.enabled and new.config.tools == [] and new.config.disabled_tools == set()
 
 
 def test_an_http_server_is_made_and_its_secrets_set_apart():

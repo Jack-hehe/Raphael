@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readVersions, releaseVersion } from "./check-release-version.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
-const fixtureDirectory = join(scripts, "..", "node_modules", ".cache", "release-version-tests");
+const fixtureDirectory = join(scripts, "..", ".test-cache", "release-version-tests");
 const temporaryRoots = [];
 
 afterEach(() => {

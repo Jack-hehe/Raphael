@@ -282,7 +282,12 @@ SCHEMA_V20 = {**SCHEMA_V19, "dictation_daily": [
     "estimated_dictations INTEGER NOT NULL DEFAULT 0",
 ]}
 SCHEMA_V21 = {**SCHEMA_V20, "agent_turns": [*SCHEMA_V20["agent_turns"], "quote TEXT"]}
-LATEST = 21
+SCHEMA_V22 = {**SCHEMA_V21, "run_metrics": [
+    "kind TEXT PK NOT NULL", "run_id INTEGER PK NOT NULL", "started_at_ms INTEGER NOT NULL",
+    "finished_at_ms INTEGER", "tokens INTEGER NOT NULL DEFAULT 0", "ai_steps INTEGER NOT NULL DEFAULT 0",
+    "model_spans TEXT NOT NULL DEFAULT '[]'",
+]}
+LATEST = 22
 
 
 def schema_names(conn, kind):
@@ -306,7 +311,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V21) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V22) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -320,7 +325,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V21.items():
+    for table, columns in SCHEMA_V22.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [

@@ -227,6 +227,7 @@ def smoke_without_a_key(executable: Path) -> dict:
             require(rpc.call("toolsets.list") == {"groups": []}, "The plugins did not start empty")
             added = rpc.call("integrations.add", {"name": "Smoke", "transport": "stdio",
                                                   "command": "raphael-smoke-no-such-program"})["server"]
+            rpc.call("integrations.set_enabled", {"id": added["id"], "enabled": True})
             refreshed = rpc.call("integrations.refresh", {"id": added["id"]})["server"]
             require(refreshed["status"] == "error" and refreshed["error"] == "not_found",
                     f"The MCP SDK did not load in the bundle (a missing program should be not_found, "

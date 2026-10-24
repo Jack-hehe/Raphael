@@ -522,6 +522,21 @@ ALTER TABLE agent_turns ADD COLUMN quote TEXT;
 PRAGMA user_version = 21;
 COMMIT;
 """,
+    # Run metrics contain only timing and usage metadata. Deleting retained history deletes them.
+    22: """
+BEGIN;
+CREATE TABLE run_metrics (kind TEXT NOT NULL CHECK(kind IN ('turn','task')), run_id INTEGER NOT NULL,
+  started_at_ms INTEGER NOT NULL, finished_at_ms INTEGER, tokens INTEGER NOT NULL DEFAULT 0,
+  ai_steps INTEGER NOT NULL DEFAULT 0, model_spans TEXT NOT NULL DEFAULT '[]', PRIMARY KEY(kind,run_id));
+CREATE TRIGGER clear_turn_metrics AFTER DELETE ON agent_turns BEGIN
+  DELETE FROM run_metrics WHERE kind='turn' AND run_id=OLD.id;
+END;
+CREATE TRIGGER clear_task_metrics AFTER DELETE ON worker_tasks BEGIN
+  DELETE FROM run_metrics WHERE kind='task' AND run_id=OLD.id;
+END;
+PRAGMA user_version = 22;
+COMMIT;
+""",
 }
 LATEST_VERSION = max(_MIGRATIONS)
 

@@ -9,7 +9,7 @@ import {
 } from "./collect-release-notices.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
-const fixtureDirectory = join(scripts, "..", "node_modules", ".cache", "release-notices-tests");
+const fixtureDirectory = join(scripts, "..", ".test-cache", "release-notices-tests");
 const temporaryRoots = [];
 // `rustc --print cfg --target x86_64-pc-windows-msvc`, kept here so the tests need no Rust toolchain.
 const windowsX64Cfg = [

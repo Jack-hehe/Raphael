@@ -134,6 +134,7 @@ pub fn run() {
             overlay::overlay_log,
             overlay::overlay_confirm,
             commands::core_call,
+            commands::save_usage_csv,
             commands::device_settings_get,
             commands::device_settings_set,
             commands::device_computer_app_remove,

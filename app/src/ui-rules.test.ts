@@ -130,7 +130,7 @@ describe("colours", () => {
     for (const file of mainFiles.filter((f) => f.endsWith(".css"))) {
       let css = stripComments(read(file));
       // the token blocks: custom properties only
-      if (rel(file) === "styles.css") css = css.replace(/:root(\[data-theme="dark"\])?\s*\{[^}]*\}/g, "");
+      if (rel(file) === "styles.css") css = css.replace(/(?::root(?:\[data-(?:theme|skin)="[a-z]+"\])?|\[data-preview="[a-z]+"\])\s*\{[^}]*\}/g, "");
       css.split("\n").forEach((line, i) => COLOUR.test(line) && bad.push(`${rel(file)}:${i + 1}: ${line.trim().slice(0, 80)}`));
     }
     expect(bad).toEqual([]);

@@ -315,6 +315,7 @@ class Tools:
             cost_usd=found.cost_usd,
             prompt_tokens=found.prompt_tokens,
             completion_tokens=found.completion_tokens,
+            ms=found.latency_ms,
         )
         data = {"answer": found.text, "sources": found.sources}
         return ToolResult("web_search", True, data, detail="openrouter")

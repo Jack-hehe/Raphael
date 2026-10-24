@@ -43,6 +43,10 @@ from ..device.models import LOCAL_STT_MODELS
 from ..languages import DEFAULT_LANGUAGES, checked_languages
 
 DEFAULTS: dict[str, Any] = {
+    "owner_name": "",
+    "owner_about": "",
+    "owner_photo": "",
+    "skin": "default",
     "monthly_limit_usd": 10.0,
     # Chosen from the cleanup eval of 2026-10-18 for its cost and its speed (~1.25 s on average).
     # The cases and the prompt have changed since, so no pass rate is claimed for it: compare the
@@ -148,6 +152,7 @@ URL_MAX_CHARS = 300
 # What one background task may cost, as the settings page offers it.
 WORKER_COST_CAPS = (0.10, 0.20, 0.50, 1.00)
 _CHOICES: dict[str, tuple[Any, ...]] = {
+    "skin": ("default", "paper", "graphite", "lagoon", "dusk", "midnight", "meadow", "ink"),
     "worker_cost_cap_usd": WORKER_COST_CAPS,
     "stt_engine": STT_ENGINES,
     "stt_local_model": tuple(entry.name for entry in LOCAL_STT_MODELS),
@@ -289,6 +294,13 @@ def checked(key: str, value: Any) -> tuple[str, Any]:
     if value is None and key in _NULLABLE:
         return key, None
     value = _allowed(key, _checked(key, value))
+    if key in ("owner_name", "owner_about"):
+        value = value.strip()
+        if len(value) > (100 if key == "owner_name" else 4000) or "\x00" in value:
+            raise ValueError("Owner profile text is too long or contains a null character")
+    if key == "owner_photo" and value:
+        if len(value) > 400000 or not re.fullmatch(r"data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+=*", value):
+            raise ValueError("Owner photo must be a small PNG, JPEG or WebP data URL")
     if key in _TRIMMED:
         value = _trimmed(key, value)
     if key == "model_favorites":

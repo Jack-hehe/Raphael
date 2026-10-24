@@ -45,6 +45,7 @@ async def add(rpc, servers, name="Notes", **overrides):
     """Connect a server that lives in the test, and read its tools. Returns its id."""
     servers.add(name)
     added = await rpc.call("integrations.add", stdio(name, **overrides))
+    await rpc.call("integrations.set_enabled", {"id": added["server"]["id"], "enabled": True})
     await rpc.call("integrations.refresh", {"id": added["server"]["id"]})
     return added["server"]["id"]
 
@@ -70,7 +71,7 @@ async def test_a_server_is_added_and_its_secrets_go_to_the_vault_only(
 ):
     added = await rpc.call("integrations.add", stdio())
     server = added["server"]
-    assert (server["name"], server["transport"], server["status"]) == ("Notes", "stdio", "unchecked")
+    assert (server["name"], server["transport"], server["status"]) == ("Notes", "stdio", "disabled")
     assert (server["command"], server["args"], server["env"]) == ("npx", ["-y", "notes-server"], ["API_KEY"])
     assert vault.get(secret_name(server["id"], "env", "API_KEY")) == SECRET
     # The value is nowhere else: not in what went back, not in the file.

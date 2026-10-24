@@ -159,6 +159,7 @@ from .narration import NarratedLoop
 from .cli.discovery import CliBrains, brain_ref
 from .cli.loop import CliLoop, MEMORY_TOOLS, Sessions as CliSessions
 from .persona import cli_system_prompt
+from ..brain.owner import owner_context
 from .cities import cities_in
 from .commands import COMMANDS, AppCatalog, run_command
 from .device import DeviceActions
@@ -387,6 +388,8 @@ class _Ask:
     text: str
     language: str
     source: str = VOICE
+    started_at_ms: int = field(default_factory=wall_clock_ms)
+    call_base: int = 0
     # What was done for the request so far; written with its turn.
     steps: list[Step] = field(default_factory=list)
     # The files handed with the request, in memory only.
@@ -530,6 +533,7 @@ class AgentService:
         self._now_ms = now_ms
         self._actions = actions
         self._settings = SettingsStore(conn)
+        self._metrics_conn = conn
         self._spend = SpendTracker(conn, now_ms, tz)
         self._history = AgentHistory(conn, now_ms)
         self._confirmations = Confirmations(clock)
@@ -592,10 +596,15 @@ class AgentService:
             "agent.history.clear": self._history_clear,
             "agent.history.retract": self._history_retract,
             "brains.cli": self._list_clis,
+            "usage.allowances": self._allowances,
             "brains.cli_login": self._login_cli,
         }
         for method, handler in methods.items():
             router.register(method, handler)
+
+    async def _allowances(self, params: dict) -> dict:
+        from .cli.allowances import read_allowances
+        return await read_allowances(self._cli_brains)
 
     async def _list_clis(self, params: dict) -> dict:
         return await self._cli_brains.list(params)
@@ -720,6 +729,7 @@ class AgentService:
             raise invalid_params("there is no such member")
         ask = _Ask(
             session_id=session_id,
+            started_at_ms=self._now_ms(),
             text=text,
             language=normalize_language(ui_language),
             attachments=list(attachments),
@@ -931,7 +941,7 @@ class AgentService:
                 looked_up=looked_up,
                 speaker=ask.speaker,
                 say_ja=ask.voiced and ask.language != "ja",
-                roster=roster_prompt(self._team, ask.speaker, ask.language),
+                roster=roster_prompt(self._team, ask.speaker, ask.language) + owner_context(self._settings),
             )
 
         reply = await word(tools, False)
@@ -1324,7 +1334,7 @@ class AgentService:
                     instructions=ask.speaker.instructions, personality=ask.speaker.personality,
                     memory_index=index, narrated=True,
                 )
-            system += roster_prompt(self._team, ask.speaker, ask.language)
+            system += roster_prompt(self._team, ask.speaker, ask.language) + owner_context(self._settings)
             user = build_user_message(
                 labelled_lines(ask.exchange_speakers[0], ask.text) if ask.exchange_speakers else ask.text,
                 self._moment(), context.turns, [], ask.language,
@@ -2133,6 +2143,7 @@ class AgentService:
             exchange_speakers=(requester, respondent),
             exchange_owner_sources=sources,
             cost_base=ledger.total,
+            call_base=len(ledger.calls),
         )
         settings = self._read_settings(ask.speaker)
         failure = self._blocked(settings)
@@ -2160,6 +2171,7 @@ class AgentService:
             speaker=asker,
             peer=target.id,
             cost_base=ledger.total,
+            call_base=len(ledger.calls),
         )
         mirror.text = labelled_lines(requester, request)
         self._record(mirror, "exchange", "", said, "done" if ok else "error", None, ledger)
@@ -3038,6 +3050,9 @@ class AgentService:
                 )
                 ask.turn_id = turn_id
             ask.recorded_cost = cost
+            from ..brain.runs import save_metrics
+            save_metrics(self._metrics_conn, "turn", turn_id, ask.started_at_ms,
+                         None if status in ("running", "confirm") else self._now_ms(), ledger.calls[ask.call_base:])
             ask.recorded_steps = len(ask.steps)
         except sqlite3.Error as exc:
             logger.warning("Could not write the turn to the history: %s", type(exc).__name__)

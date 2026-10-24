@@ -375,6 +375,7 @@ class BackgroundService:
         self._store = TaskStore(conn, now_ms)
         self._history = AgentHistory(conn, now_ms)
         self._settings = SettingsStore(conn)
+        self._metrics_conn = conn
         self._spend = SpendTracker(conn, now_ms, tz)
         self._queue: deque[int] = deque()
         # task id -> the model it runs on (the assistant's model, as it was when it was handed over)
@@ -796,7 +797,8 @@ class BackgroundService:
             attachments=files,
             speaker=speaker,
         )
-        system += roster_prompt(self._team, speaker, language)
+        from ..brain.owner import owner_context
+        system += roster_prompt(self._team, speaker, language) + owner_context(self._settings)
         spec = {
             "task_id": task.id,
             "system": system,
@@ -1336,6 +1338,10 @@ class BackgroundService:
                     task.id, model_calls=run.model_calls, tool_calls=run.tool_calls, cost_usd=cost
                 )
             self._store.finish(task.id, state, prefix=prefix, text=text, detail=detail, reason=reason)
+            if run is not None:
+                from ..brain.runs import save_metrics
+                save_metrics(self._metrics_conn, "task", task.id, task.started_at_ms or task.created_at_ms,
+                             self._now_ms(), run.ledger.calls)
         except sqlite3.Error as exc:
             logger.warning("Could not write down the end of a task: %s", type(exc).__name__)
         if self._has_linked_turn(task):

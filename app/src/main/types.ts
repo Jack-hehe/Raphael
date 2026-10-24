@@ -383,6 +383,10 @@ export interface DictionaryEntry {
 
 /** `settings.get`: the settings of the brain. */
 export interface BrainSettings {
+  owner_name?: string;
+  owner_about?: string;
+  owner_photo?: string;
+  skin?: string;
   agent_fallbacks?: string[];
   cleanup_fallbacks?: string[];
   router_fallbacks?: string[];
@@ -559,6 +563,8 @@ export type MainEvent =
   | { type: "RoutinesChanged"; member_id: number }
   | { type: "MembersChanged" }
   | { type: "ProvidersChanged" }
+  | { type: "SettingsChanged" }
+  | { type: "ConnectionsChanged" }
   | { type: "BrainsChanged" }
   | { type: "MemoryChanged"; member_id: number; space?: "own" | "shared" }
   /** A background task moved on: a step, a start or an end. */
@@ -725,10 +731,10 @@ export type TrayAction = "add-word";
 
 // ---------- what the pages share with main.ts ----------
 
-export type PageId = "home" | "agent" | "history" | "dictionary" | "settings";
+export type PageId = "home" | "agent" | "history" | "dictionary" | "settings" | "automations" | "team";
 
 /** The tabs of the settings panel. */
-export type SettingsPane = "general" | "dictation" | "agent" | "connections" | "messaging" | "models" | "usage" | "data" | "about";
+export type SettingsPane = "general" | "appearance" | "dictation" | "agent" | "connections" | "messaging" | "models" | "usage" | "data" | "about";
 
 /**
  * What the 拉斐爾 page is to put in its composer when it opens, ready to be sent or changed: the
@@ -796,6 +802,7 @@ export interface ConnectionTool {
 
 /** One connected service, as `toolsets.list` has it. Never a secret, only the names of them. */
 export interface ConnectionGroup {
+  result_size_limit?: number;
   id: string;
   name: string;
   enabled: boolean;
@@ -857,6 +864,7 @@ export interface AuditEntry {
 
 /** What the user typed to connect a server. The values of `env` and `headers` go to the vault of the core and nowhere else. */
 export interface NewConnection {
+  result_size_limit?: number;
   name: string;
   transport: "stdio" | "http";
   command?: string;
@@ -865,3 +873,10 @@ export interface NewConnection {
   env?: { name: string; value: string }[];
   headers?: { name: string; value: string }[];
 }
+
+export interface McpCandidate {
+  id: string; source: string; name: string; transport: "stdio" | "http";
+  command: string; args: string[]; url: string; env: string[]; headers: string[];
+}
+export interface McpPreview { candidates: McpCandidate[]; rejected: number }
+export interface McpTest { ok: boolean; tools: string[]; error?: string }

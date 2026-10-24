@@ -25,6 +25,7 @@ class Ledger:
         self.total = 0.0
         # The model of the latest paid call: the one that worded the answer, for the history.
         self.model: str | None = None
+        self.calls: list[dict] = []
 
     def add(
         self,
@@ -33,6 +34,8 @@ class Ledger:
         cost_usd: float,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
+        ms: int = 0,
+        outcome: str = "ok",
     ) -> None:
         """Write down a call that was paid for. A cost the spend refuses (negative, not a number)
         is counted as nothing, and a database that fails does not lose the request: both are
@@ -42,6 +45,9 @@ class Ledger:
             logger.warning("A cost the spend cannot take was counted as nothing: ValueError")
             return
         self.total += cost_usd
+        self.calls.append({"model": model or "", "at_ms": self._spend._now_ms(), "ms": max(0, int(ms)),
+                           "tokens": max(0, prompt_tokens) + max(0, completion_tokens),
+                           "cost_usd": cost_usd, "outcome": outcome})
         if model:
             self.model = model
         try:

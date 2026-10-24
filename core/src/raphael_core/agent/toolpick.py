@@ -219,6 +219,7 @@ class ToolPicker:
             cost_usd=plan.cost_usd,
             prompt_tokens=plan.prompt_tokens,
             completion_tokens=plan.completion_tokens,
+            ms=plan.latency_ms,
         )
         named: list[str] = []
         for call in plan.calls:

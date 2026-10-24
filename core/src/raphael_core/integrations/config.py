@@ -87,6 +87,7 @@ class ServerConfig:
     auth: str = "none"  # "oauth": a login in the browser, "device": a code typed at the service; tokens are in the vault
     catalog_id: str = ""  # the entry of the store this was added from, if it was
     revocation_url: str = ""  # where the login's token is revoked when the server is disconnected
+    result_size_limit: int = 8000
 
     def tool(self, name: str) -> ToolRecord | None:
         return next((tool for tool in self.tools if tool.name == name), None)
@@ -223,7 +224,10 @@ def parse_new_server(params: dict, taken_names: list[str]) -> NewServer:
     transport = params.get("transport")
     if transport not in TRANSPORTS:
         raise ValueError("transport must be stdio or http")
-    config = ServerConfig(id=secrets.token_hex(6), name=name, transport=transport)
+    limit = params.get("result_size_limit", 8000)
+    if type(limit) is not int or not 100 <= limit <= 100000:
+        raise ValueError("result_size_limit must be between 100 and 100000")
+    config = ServerConfig(id=secrets.token_hex(6), name=name, transport=transport, enabled=False, result_size_limit=limit)
     env: dict[str, str] = {}
     headers: dict[str, str] = {}
     if transport == "stdio":
@@ -276,6 +280,7 @@ def _server_to_json(server: ServerConfig) -> dict[str, Any]:
         "auth": server.auth,
         "catalog_id": server.catalog_id,
         "revocation_url": server.revocation_url,
+        "result_size_limit": server.result_size_limit,
     }
 
 
@@ -308,6 +313,8 @@ def _server_from_json(raw: Any) -> ServerConfig | None:
         revocation_url=raw["revocation_url"] if isinstance(raw.get("revocation_url"), str) else "",
     )
     checked = raw.get("tools_checked_at_ms")
+    limit = raw.get("result_size_limit", 8000)
+    server.result_size_limit = limit if type(limit) is int and 100 <= limit <= 100000 else 8000
     server.tools_checked_at_ms = checked if type(checked) is int else None
     for item in raw.get("tools", []) if isinstance(raw.get("tools"), list) else []:
         if not isinstance(item, dict):

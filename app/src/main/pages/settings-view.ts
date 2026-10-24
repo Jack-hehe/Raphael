@@ -13,6 +13,7 @@
 // it (`SEARCH_INDEX`, `searchSettings`).
 
 import { catalogs, t } from "../i18n";
+import { ownerProfileHTML, skinsHTML } from "../owner-settings";
 import type { MessageKey } from "../i18n/zh-TW";
 
 import { brandIcon } from "../brand";
@@ -86,6 +87,7 @@ export const PANE_GROUPS: Record<PaneGroup, () => string> = {
  */
 export const PANES: { id: SettingsPane; group: PaneGroup; icon: IconName | "emblem"; title: () => string; purpose: (d: DeviceSettings) => string }[] = [
   { id: "general", group: "basics", icon: "gear", title: () => t("settings.paneGeneral"), purpose: () => t("settings.purposeGeneral") },
+  { id: "appearance", group: "basics", icon: "grid", title: () => t("skin.title"), purpose: () => t("skin.about") },
   { id: "dictation", group: "basics", icon: "mic", title: () => t("settings.paneDictation"), purpose: () => t("settings.purposeDictation") },
   { id: "agent", group: "basics", icon: "emblem", title: () => t("settings.paneAgent"), purpose: agentPurpose },
   { id: "connections", group: "integrations", icon: "plug", title: () => t("settings.paneConnections"), purpose: () => t("settings.purposeConnections") },
@@ -133,9 +135,11 @@ export interface SearchEntry {
  * entry here (its name's key), or the search does not know it.
  */
 export const SEARCH_INDEX: readonly SearchEntry[] = [
+  { pane: "general", label: "owner.profile" },
+  { pane: "appearance", label: "skin.styles" },
   ...PANES.map((p) => ({ pane: p.id })),
   { pane: "general", label: "settings.059" },
-  { pane: "general", label: "settings.067", words: ["dark", "light"] },
+  { pane: "appearance", label: "settings.067", words: ["dark", "light"] },
   { pane: "general", label: "settings.069" },
   { pane: "general", label: "settings.071" },
   { pane: "general", label: "settings.073" },
@@ -191,6 +195,7 @@ const allLanguages = (key: MessageKey): string[] => Object.values(catalogs).map(
 
 /** The keys of the tabs' names, in every language. */
 const PANE_TITLE_KEYS: Record<SettingsPane, MessageKey> = {
+  appearance: "skin.title",
   general: "settings.paneGeneral", dictation: "settings.paneDictation", agent: "settings.paneAgent", connections: "settings.paneConnections",
   messaging: "settings.paneMessaging", models: "settings.paneUsage", usage: "settings.paneUsage", data: "settings.paneData", about: "common.about",
 };
@@ -547,9 +552,9 @@ function generalHTML(v: SettingsView): string {
   const d = v.device;
   return (
     headingHTML(v) +
+    coreNote(v) + ownerProfileHTML(v.brain) +
     section(t("settings.groupAppearance"), [
       row(t("settings.059"), "", sel(UI_LANGUAGES, d.ui_language, t("settings.059"), ' data-k="ui-language"')),
-      row(t("settings.067"), "", sel(APPEARANCES, d.appearance, t("settings.067"), ' data-k="appearance"')),
       row(t("settings.069"), "", sel(SIZES, String(d.emblem_size), t("settings.069"), ' data-k="size"')),
       row(t("settings.071"), t("settings.072"), tg(d.subtitles !== "off", t("settings.071"), ' data-k="subtitles"')),
     ]) +
@@ -693,12 +698,12 @@ function modelsHTML(v: SettingsView): string {
   const selected = v.modelsTab ?? (v.pane === "usage" ? "usage" : "models");
   const content = selected === "models" ? section(t("models.used"), MODEL_ROWS.map((r) => modelRow(v, r)), priceSpan(v, "note")) +
     cliBrainsHTML(v.cliBrains ?? emptyCliBrainsView()) + providersHTML(providers) + providersAddHTML(providers) :
-    `<section class="sgroup" aria-label="${esc(t("models.usage"))}"><div class="slist">` + [
+    `<div data-usage-host></div><section class="sgroup" aria-label="${esc(t("models.usage"))}"><div class="slist">` + [
       keyRow(v),
       ...(v.keyError ? [note(st("err", v.keyError()), ' role="alert"')] : []),
       spendRow(v),
       usageRow(v),
-    ].join("") + `</div><p class="foot">${esc(t("settings.usageDifference"))}</p></section><div data-usage-host></div>`;
+    ].join("") + `</div><p class="foot">${esc(t("settings.usageDifference"))}</p></section>`;
   return headingHTML(v) + coreNote(v) + `<div class="models-page">` +
     tabs((["models", "usage"] as const).map((id) => ({
       id, label: id === "models" ? t("providers.title") : t("models.usage"),
@@ -723,6 +728,8 @@ function aboutHTML(v: SettingsView): string {
 /** The tab that is open, as HTML. */
 export function paneHTML(v: SettingsView): string {
   switch (v.pane) {
+    case "appearance":
+      return headingHTML(v) + coreNote(v) + skinsHTML(v.brain) + (!v.brain?.skin || v.brain.skin === "default" ? section("", [row(t("settings.067"), "", sel(APPEARANCES, v.device.appearance, t("settings.067"), ' data-k="appearance"'))]) : "");
     case "general":
       return generalHTML(v);
     case "dictation":

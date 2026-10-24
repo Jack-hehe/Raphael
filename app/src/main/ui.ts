@@ -20,6 +20,7 @@ export const esc = (s: unknown): string => String(s).replace(/[&<>"']/g, (c) => 
 // 15 px, or moved by a fractional transform, loses that and blurs. Dots (`info`, `steps`, `more`)
 // are small closed circles the stroke fills.
 const ICON = {
+  person: "M10.75 4.75A3 3 0 1 1 4.75 4.75A3 3 0 1 1 10.75 4.75ZM2.75 13.25C2.75 8.25 12.75 8.25 12.75 13.25",
   home: "M2.25 6.75 7.75 2.25 13.25 6.75M3.75 5.75V11.75A1.5 1.5 0 0 0 5.25 13.25H6.25V9.25H9.25V13.25H10.25A1.5 1.5 0 0 0 11.75 11.75V5.75",
   clock: "M13.25 7.75A5.5 5.5 0 1 1 2.25 7.75A5.5 5.5 0 1 1 13.25 7.75ZM7.75 4.25V7.75L10.25 9.25",
   book: "M4.75 2.75H10.75A1.5 1.5 0 0 1 12.25 4.25V13.25H4.75A1.5 1.5 0 0 1 3.25 11.75V4.25A1.5 1.5 0 0 1 4.75 2.75M3.25 11.75A1.5 1.5 0 0 1 4.75 10.25H12.25M6.25 5.75H9.25",

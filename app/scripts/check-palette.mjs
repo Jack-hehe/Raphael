@@ -22,8 +22,15 @@ const ratio = (a, b) => {
   return result;
 };
 const surfaces = ["side", "content", "panel", "surface-2", "menu", "btn", "key", "hover", "pressed", "selected", "accent-soft"];
+const skins = Object.fromEntries([...css.matchAll(/:root\[data-skin="([^"]+)"\]\s*\{([\s\S]*?)\n\}/g)].map(([, name, block]) => [name, tokens(block)]));
+if (Object.keys(skins).length !== 7) throw new Error("Expected seven complete skin palettes");
+for (const [name, palette] of Object.entries(skins)) {
+  for (const token of Object.keys(tokens(css.match(/:root\[data-theme="dark"\]\s*\{([\s\S]*?)\n\}/)[1]))) {
+    if (!(token in palette)) throw new Error(`Missing skin token: ${name}/${token}`);
+  }
+}
 const report = {};
-for (const [theme, palette] of Object.entries({ light, dark })) {
+for (const [theme, palette] of Object.entries({ light, dark, ...skins })) {
   const contrast = {};
   for (const [label, token] of Object.entries({ body: "text", secondary: "text-2", muted: "text-3", links: "accent-text" })) {
     const measured = surfaces.map((surface) => ({ surface, ratio: ratio(palette[token], palette[surface]) }));

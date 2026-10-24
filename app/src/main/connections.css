@@ -1,7 +1,7 @@
 /* The 「連接」 tab of the settings, drawn like Codex's page of plugins: quiet tabs and a search, one
    rounded list of the connected services, a dialog for each over the settings, and the store as cards
    in two columns. Colours are the app's tokens. */
-.cs { margin-top: 18px; }
+.cs { margin-top: 18px; container: connections / inline-size; }
 .cs h2.big { margin: 0; font: 650 18px/1.3 var(--display); }
 .cs h2 { margin: 0 0 10px 2px; font-size: var(--fs-md); font-weight: 650; }
 .cs h3 { margin: 0 0 8px 2px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
@@ -158,3 +158,22 @@
 .cs-cap { display: inline-grid; place-items: center; width: 36px; height: 46px; border: 1px solid var(--key-edge); border-bottom-width: 3px; border-radius: 8px; background: var(--key); color: var(--text); font: 600 24px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; }
 .cs-dash { padding: 0 4px; color: var(--text-3); font: 600 24px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; }
 .cs-device-acts { gap: 10px; }
+.mcp-lines { width: 100%; min-height: 96px; padding: 9px 11px; resize: vertical; font-family: ui-monospace, monospace; white-space: pre; }
+.mcp-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.mcp-tabs [aria-selected="true"] { background: var(--selected); border-color: var(--focus); }
+.mcp-row-actions { display: flex; align-items: center; gap: 5px; }
+.cs-item.mcp-item { grid-template-columns: minmax(0, 1fr) auto auto; }
+.mcp-item > .chev { display:none; }
+.modal-body:has(.cs-form) { display:flex; flex-direction:column; overflow:hidden; }
+.cs-form { display:flex; flex-direction:column; flex:1; min-height:0; }
+.cs-form > h2,.cs-form > .cd-help { flex:none; }
+.cs-form > .trust { flex:none; margin-top:12px; }
+.cs-form .add-grid { overflow-y:auto; min-height:0; padding:0 4px 72px 0; scrollbar-gutter:stable; }
+.cs-form .add-acts.is-sticky { flex:none; position:relative; background:var(--content); margin-top:0; }
+.mcp-import-label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.mcp-import-label textarea { width: 100%; min-height: 170px; padding: 10px; font-family: ui-monospace, monospace; }
+.mcp-candidates { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 14px; }
+.mcp-candidates label { display: flex; gap: 10px; align-items: start; padding: 10px; border: 1px solid var(--edge); border-radius: 8px; }
+.mcp-candidates label span { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+.mcp-candidates code { overflow-wrap: anywhere; font-size: var(--fs-xs); }
+.mcp-candidates small { color: var(--text-3); }

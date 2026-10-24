@@ -104,6 +104,14 @@ const view = (over: Partial<SettingsView> = {}): SettingsView => ({
   cityDraft: null, cityError: null, languageGroups: GROUPS, now: NOW, connections: emptyConnectionsView(), messaging: emptyMessagingView(),
   confirmingClear: null, localModels: LOCAL_MODELS, localDownload: null, ...over,
 });
+
+test("only the default skin offers a system, light or dark override", () => {
+  expect(paneHTML(view({ pane: "general" }))).not.toContain('data-k="appearance"');
+  for (const pane of ["appearance"] as const) {
+    expect(paneHTML(view({ pane, brain: { ...brain, skin: "default" } }))).toContain('data-k="appearance"');
+    expect(paneHTML(view({ pane, brain: { ...brain, skin: "graphite" } }))).not.toContain('data-k="appearance"');
+  }
+});
 test("Telegram is in the 訊息平台 tab, and only there", () => {
   expect(tab("messaging")).toContain("data-msg-section");
   for (const id of ["general", "dictation", "agent", "connections", "usage", "data", "about"] as const) expect(tab(id)).not.toContain("data-msg");
@@ -191,11 +199,11 @@ const described = (html: string): string[] =>
 
 describe("the tabs", () => {
   test("are General, Dictation, Raphael; Connections, Messaging; Models & usage, Data and About, in each language", () => {
-    expect(IDS).toEqual(["general", "dictation", "agent", "connections", "messaging", "models", "data", "about"]);
+    expect(IDS).toEqual(["general", "appearance", "dictation", "agent", "connections", "messaging", "models", "data", "about"]);
     const titles = {
-      "zh-TW": ["一般", "聽寫", "拉斐爾", "連接", "訊息平台", "模型與用量", "資料", "關於"],
-      en: ["General", "Dictation", "Raphael", "Connections", "Messaging", "Models & usage", "Data", "About"],
-      ja: ["一般", "音声入力", "ラファエル", "接続", "メッセージ", "モデルと使用量", "データ", "アプリ情報"],
+      "zh-TW": ["一般", "外觀", "聽寫", "拉斐爾", "連接", "訊息平台", "模型與用量", "資料", "關於"],
+      en: ["General", "Appearance", "Dictation", "Raphael", "Connections", "Messaging", "Models & usage", "Data", "About"],
+      ja: ["一般", "外観", "音声入力", "ラファエル", "接続", "メッセージ", "モデルと使用量", "データ", "アプリ情報"],
     };
     for (const locale of LOCALES) {
       setLocale(locale);
@@ -206,7 +214,7 @@ describe("the tabs", () => {
   test("sit in three groups: the basics with no name, then 整合 and 帳戶 in small grey words", () => {
     const list = paneListHTML();
     const order = [...list.matchAll(/class="nav-group">([^<]+)<|data-pane="(\w+)"/g)].map((m) => m[1] ?? m[2]);
-    expect(order).toEqual(["general", "dictation", "agent", "整合", "connections", "messaging", "帳戶", "models", "data", "about"]);
+    expect(order).toEqual(["general", "appearance", "dictation", "agent", "整合", "connections", "messaging", "帳戶", "models", "data", "about"]);
     setLocale("en");
     expect(paneListHTML()).toContain('<div class="nav-group">Integrations</div>');
     expect(paneListHTML()).toContain('<div class="nav-group">Account</div>');
@@ -216,7 +224,7 @@ describe("the tabs", () => {
 
   test("every tab is a real button; 拉斐爾's has Raphael's emblem, in a version for each theme", () => {
     const list = paneListHTML();
-    expect(list.match(/<button type="button" class="nav" data-pane="\w+" aria-current="false">/g)).toHaveLength(8);
+    expect(list.match(/<button type="button" class="nav" data-pane="\w+" aria-current="false">/g)).toHaveLength(9);
     const agent = list.slice(list.indexOf('data-pane="agent"'), list.indexOf('data-pane="connections"'));
     expect(agent).toContain('src="/brand/app-emblem-light-64.webp"');
     expect(agent).toContain('src="/brand/app-emblem-dark-64.webp"');
@@ -243,7 +251,7 @@ describe("the tabs", () => {
 
   test("say in a line what they are for", () => {
     const purpose = (id: SettingsPane, over: Partial<SettingsView> = {}): string => /<p class="purpose">(.*?)<\/p>/.exec(tab(id, over))![1];
-    expect(purpose("general")).toBe("介面和桌面圖案的外觀");
+    expect(purpose("general")).toBe("個人資料、介面語言與桌面設定");
     expect(purpose("dictation")).toBe("按快捷鍵說話，拉斐爾把你說的打出來");
     expect(purpose("agent")).toBe("按 右 Alt + Space 問拉斐爾");
     expect(purpose("usage")).toBe(t("providers.about"));
@@ -274,6 +282,11 @@ describe("the rules for every tab, in every language", () => {
   test("no tab shows the options of a setting in a row: no segmented controls, radio rows or chips", () => {
     for (const id of IDS) {
       const html = tab(id);
+      if (id === "appearance") {
+        expect(html.match(/data-skin-choice=/g)).toHaveLength(8);
+        expect(html.match(/aria-pressed="true"/g)).toHaveLength(1);
+        continue;
+      }
       expect(html).not.toMatch(/role="radio|aria-pressed|class="tabs"|class="chip|lchip/);
     }
   });
@@ -290,9 +303,9 @@ describe("the rules for every tab, in every language", () => {
 describe("一般", () => {
   test("has the interface language, the theme and the emblem's size as dropdowns, the subtitles and the start as switches", () => {
     const html = tab("general");
-    expect(groups(html)).toEqual(["外觀", "啟動"]);
-    expect(names(html)).toEqual(["介面語言", "主題", "桌面圖案大小", "字幕", "開機時自動啟動", "重新導覽"]);
-    for (const k of ["ui-language", "appearance", "size"]) expect(html).toMatch(new RegExp(`<button type="button" class="sel"[^>]*data-k="${k}"`));
+    expect(groups(html)).toEqual(["個人資料", "介面與桌面", "啟動"]);
+    expect(names(html)).toEqual(["介面語言", "桌面圖案大小", "字幕", "開機時自動啟動", "重新導覽"]);
+    for (const k of ["ui-language", "size"]) expect(html).toMatch(new RegExp(`<button type="button" class="sel"[^>]*data-k="${k}"`));
     for (const k of ["subtitles", "autostart"]) expect(html).toMatch(new RegExp(`class="tg" role="switch"[^>]*data-k="${k}"`));
   });
 
@@ -696,8 +709,8 @@ describe("關於", () => {
 describe("while the core does not answer", () => {
   test("the tabs that need it say so, and its settings cannot be changed; this computer's still can", () => {
     const down = { brain: null };
-    for (const id of ["dictation", "agent", "usage", "data"] as const) expect(tab(id, down)).toContain("core-note");
-    for (const id of ["general", "about"] as const) expect(tab(id, down)).not.toContain("core-note");
+    for (const id of ["general", "appearance", "dictation", "agent", "usage", "data"] as const) expect(tab(id, down)).toContain("core-note");
+    expect(tab("about", down)).not.toContain("core-note");
     expect(rowOf(tab("data", down), "保留聽寫紀錄")).toMatch(/data-k="retention" disabled>/);
     expect(rowOf(tab("data", down), "清除拉斐爾的對話")).not.toContain("disabled");
     const dictation = tab("dictation", down);

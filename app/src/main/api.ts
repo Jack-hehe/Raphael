@@ -8,6 +8,7 @@ import type { LanguageGroup } from "./languages";
 import type { TelegramStatus } from "./messaging";
 import type { AvatarCrop } from "./avatar";
 import type { UsageAnalytics, UsageRequest } from "./usage-analytics-types";
+import type { CliAllowances, RunReport, RunRequest, RunTrace, UsageRun } from "./run-analytics-types";
 import type {
   AgentQuestion,
   AgentTurn,
@@ -66,8 +67,13 @@ export const statusCheckOpenrouter = (): Promise<Status["openrouter"]> => core("
 export const statsSummary = (days?: number): Promise<StatsSummary> =>
   core("stats.summary", days === undefined ? {} : { days });
 /** Daily local usage, without conversation contents or provider credentials. */
-export const usageAnalytics = (params: UsageRequest): Promise<UsageAnalytics> =>
-  core("usage.analytics", params);
+export async function usageAnalytics(params: UsageRequest): Promise<UsageAnalytics> {
+  const [report,members] = await Promise.all([core<UsageAnalytics>("usage.analytics",params),membersList().catch(() => null)]);
+  return !report.members ? report : {...report,members:report.members.map(row => {
+    const member=members?.members?.find(member=>member.id===row.id);
+    return {...row,name:member?.name ?? row.name,avatar_url:member?.avatar_url};
+  })};
+}
 /** Every OpenRouter model Raphael could use, with its price and what each role can make of it. */
 export const modelsCatalog = (): Promise<ModelCatalog> => core("models.catalog");
 export const brainsCli = (): Promise<{ clis: CliBrain[] }> => core("brains.cli");
@@ -259,6 +265,11 @@ export const integrationsConnect = (target: { catalog_id: string } | { id: strin
 export const integrationsConnectCancel = (): Promise<{ cancelled: boolean }> => core("integrations.connect_cancel");
 /** Connects a server of the user's own. The values of its variables and headers go to the vault and never come back. */
 export const integrationsAdd = (server: NewConnection): Promise<{ server: { id: string } }> => core("integrations.add", server);
+export const integrationsUpdate = (id: string, server: NewConnection): Promise<{ server: { id: string } }> => core("integrations.update", { ...server, id });
+export const integrationsTest = (server: (NewConnection & { id?: string }) | { id: string }): Promise<import("./types").McpTest> => core("integrations.test", server);
+export const integrationsPreview = (text: string): Promise<import("./types").McpPreview> => core("integrations.preview", { text });
+export const integrationsDiscover = (): Promise<import("./types").McpPreview> => core("integrations.discover");
+export const integrationsImport = (ids: string[]): Promise<unknown> => core("integrations.import", { ids });
 export const integrationsRefresh = (id: string): Promise<Record<string, unknown>> => core("integrations.refresh", { id });
 export const integrationsSetEnabled = (id: string, enabled: boolean): Promise<Record<string, unknown>> =>
   core("integrations.set_enabled", { id, enabled });
@@ -346,3 +357,23 @@ export async function subscribeMainEvents(handler: (event: MainEvent) => void): 
 
 /** Open only an opaque stored attachment, never a path supplied by a page. */
 export const openAttachment = (id: string): Promise<void> => invoke("open_attachment", { id });
+
+// Retained execution metrics; exporting always requests the entire selected period.
+function runPicture(run: UsageRun, members: MembersList | null): UsageRun {
+  const member = members?.members.find(member => member.id === run.member_id);
+  return { ...run, member_name: member?.name ?? run.member_name, avatar_url: member?.avatar_url };
+}
+export async function usageRuns(params: RunRequest): Promise<RunReport> {
+  const [report, members] = await Promise.all([core<RunReport>("usage.runs", params), membersList().catch(() => null)]);
+  return { ...report, runs: report.runs.map(run => runPicture(run, members)), ...(report.groups ? { groups: { ...report.groups, member: report.groups.member.map(group => {
+    const member = members?.members.find(member => member.name === group.label || member.id === 0 && group.label === "Raphael");
+    return { ...group, member_id: member?.id ?? (group.label === "Raphael" ? 0 : undefined), avatar_url: member?.avatar_url };
+  }) } } : {}) };
+}
+export async function usageTrace(params: { kind: "turn" | "task"; id: number }): Promise<RunTrace> {
+  const [trace, members] = await Promise.all([core<RunTrace>("usage.trace", params), membersList().catch(() => null)]);
+  return { ...trace, run: runPicture(trace.run, members) };
+}
+export const usageExport = (params: RunRequest): Promise<{ csv: string }> => core("usage.export", params);
+export const usageAllowances = (): Promise<CliAllowances> => core("usage.allowances");
+export const saveUsageCsv = (csv: string): Promise<boolean> => invoke("save_usage_csv", { csv });

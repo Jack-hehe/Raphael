@@ -9,6 +9,8 @@ const api = vi.hoisted(() => ({
   integrationsConnect: vi.fn(),
   integrationsConnectCancel: vi.fn(),
   integrationsAdd: vi.fn(),
+  integrationsUpdate: vi.fn(),
+  integrationsTest: vi.fn(),
   integrationsRefresh: vi.fn(),
   integrationsSetEnabled: vi.fn(),
   integrationsDisconnect: vi.fn(),
@@ -74,7 +76,7 @@ const view = (over: Partial<ConnectionsView> = {}): ConnectionsView => ({
   ...emptyConnectionsView(), groups: GROUPS, catalog: CATALOG, audit: AUDIT, now: NOW, ...over,
 });
 const form = (over: Partial<ConnectionForm> = {}): ConnectionForm => ({
-  type: "stdio", name: "", command: "", args: "", url: "", pairs: [], pairName: "", pairValue: "", busy: false, error: null, ...over,
+  type: "stdio", name: "", command: "", args: "", url: "", pairLines: "", busy: false, error: null, ...over,
 });
 const lastToast = (): string => {
   const calls = vi.mocked(toaster.info).mock.calls;
@@ -112,7 +114,7 @@ describe("the two views", () => {
 
 describe("已安裝", () => {
   const html = connectionsHTML(view());
-  const items = (out: string): string[] => out.split('<div class="cs-item"').slice(1);
+  const items = (out: string): string[] => out.split(/<div class="cs-item(?: mcp-item)?"/).slice(1);
 
   test("is one list, a row for each service: its mark, its name and a line, a switch, a chevron; the row opens the dialog", () => {
     expect(html.match(/class="cs-list"/g)).toHaveLength(1);
@@ -134,6 +136,8 @@ describe("已安裝", () => {
     expect(files).toContain("npx");
     expect(files).toContain(ico("plug"));
     expect(files).not.toContain(">F<");
+    const remote = connectionsHTML(view({ groups: [{ ...custom, transport: "http", url: "https://example.com/mcp" }] }));
+    expect(remote).toContain('class="ds code" title="https://example.com/mcp">https://example.com/mcp</span>');
   });
 
   test("the switch is the whole service's and shows it off", () => {
@@ -443,31 +447,32 @@ describe("the page of a store service", () => {
 });
 
 describe("the form that connects a server of the user's own", () => {
-  test("takes the place of the tab: a type dropdown, fields for that type, a warning, two buttons", () => {
+  test("takes the place of the tab with transport tabs, multiline fields and test and save actions", () => {
     const html = connectionsHTML(view({ form: form() }));
-    expect(html).toContain("自訂伺服器");
-    expect(html).toContain('data-k="conn-type"');
+    expect(html).toContain("新增 MCP 伺服器");
+    expect(html).toContain('data-conn="form-type"');
+    expect(html).toContain('id="conn-args" rows="4"');
     expect(html).toContain('id="conn-command"');
     expect(html).toContain("只接你信任的程式。");
-    expect(html).toContain("全部開啟");
+    expect(html).toContain("新伺服器預設關閉");
     expect(html).toContain('data-conn="connect"');
     expect(html).toContain('data-conn="form-cancel"');
     expect(html.indexOf('data-conn="form-cancel"')).toBeLessThan(html.indexOf('data-conn="connect"'));
     expect(html).toContain('class="action-row add-acts is-sticky"');
-    expect(html).not.toContain('role="tablist"');
+    expect(html).toContain('role="tablist"');
     expect(html).not.toContain('role="dialog"');
   });
 
   test("an address and a header for the network type; the values of secrets are never printed", () => {
-    const f = form({ type: "http", name: "Remote", url: "https://example.com/mcp", pairs: [{ name: "Authorization", value: "Bearer TOPSECRET" }], pairName: "X-Key", pairValue: "ALSOSECRET" });
+    const f = form({ id: "remote", type: "http", name: "Remote", url: "https://example.com/mcp", pairLines: "Authorization=" });
     const html = connectionsHTML(view({ form: f }));
     expect(html).toContain('id="conn-url"');
     expect(html).not.toContain('id="conn-command"');
     expect(html).toContain("Authorization");
-    expect(html).toContain("標頭名稱");
+    expect(html).toContain("標頭");
     expect(html).not.toContain("TOPSECRET");
-    const valueField = /<input[^>]*id="conn-pair-value"[^>]*>/.exec(html)![0];
-    expect(valueField).toContain('type="password"'); // typed, not yet added: shown as dots, and only here
+    expect(html).toContain('id="conn-pairs"');
+    expect(html).toContain('id="conn-limit"');
   });
 });
 
@@ -481,7 +486,7 @@ describe("the rules for this tab", () => {
     installedPage("ab12", { toolsKind: "read" }),
     installedPage("ab12", { groups: [{ ...notes, status: "error", error: "auth" }] }),
     storePage("linear", { loginError: { target: "linear", kind: "denied" } }),
-    connectionsHTML(view({ form: form({ pairs: [{ name: "TOKEN", value: "x" }] }) })),
+    connectionsHTML(view({ form: form({ pairLines: "TOKEN=" }) })),
   ];
 
   test("everything that does something is a button or a switch with a shape, and every choice is a dropdown", () => {
@@ -564,6 +569,26 @@ describe("what the tab does", () => {
     expect(c.view().catalog).toEqual(CATALOG);
     expect(c.view().audit).toEqual(AUDIT);
     expect(c.view().tab).toBe("installed");
+  });
+
+  test("edits a custom server with blank existing secrets, tests without saving, then persists the draft", async () => {
+    api.integrationsTest.mockResolvedValue({ ok: true, tools: ["list"] });
+    api.integrationsUpdate.mockResolvedValue({ server: custom });
+    const c = createConnections(host);
+    await c.load();
+    c.click(button("edit-server", { id: "cu1" }));
+    expect(c.view().form).toMatchObject({ id: "cu1", pairLines: "API_KEY=", command: "npx", limit: 8000 });
+    c.input(input("conn-command", "uvx"));
+    c.input(input("conn-limit", "2400"));
+    c.click(button("test-draft")); await settle();
+    expect(api.integrationsTest).toHaveBeenCalledWith(expect.objectContaining({ id: "cu1", command: "uvx", env: [{ name: "API_KEY", value: "" }], result_size_limit: 2400 }));
+    expect(api.integrationsUpdate).not.toHaveBeenCalled();
+    expect(c.view().form).not.toBeNull();
+    c.click(button("connect")); await settle();
+    expect(api.integrationsUpdate).toHaveBeenCalledWith("cu1", expect.objectContaining({ command: "uvx", result_size_limit: 2400 }));
+    expect(c.view().form).toBeNull();
+    c.click(button("test-server", { id: "cu1" })); await settle();
+    expect(api.integrationsTest).toHaveBeenLastCalledWith({ id: "cu1" });
   });
 
   test("with nothing connected yet it starts on the store, once", async () => {
@@ -848,10 +873,10 @@ describe("what the tab does", () => {
   describe("a server of the user's own", () => {
     const menu = (c: ReturnType<typeof createConnections>) => c.menuFor("conn-add")!;
 
-    test("the 新增 menu has one item, 自訂伺服器, which opens the form", async () => {
+    test("the add menu offers a form, JSON paste and app discovery", async () => {
       const c = createConnections(host);
       await c.load();
-      expect(menu(c).choices.map((x) => x.label)).toEqual(["自訂伺服器"]);
+      expect(menu(c).choices.map((x) => x.value)).toEqual(["custom", "paste", "import"]);
       menu(c).pick("custom");
       expect(c.view().form).not.toBeNull();
       expect(c.menuFor("nothing")).toBeNull();
@@ -865,18 +890,14 @@ describe("what the tab does", () => {
       menu(c).pick("custom");
       c.input(input("conn-name", " Notes "));
       c.input(input("conn-command", "npx"));
-      c.input(input("conn-args", "-y   notes-server"));
-      c.input(input("conn-pair-name", "API_KEY"));
-      c.input(input("conn-pair-value", "TOPSECRET"));
-      c.click(button("pair-add"));
-      expect(c.view().form!.pairs).toEqual([{ name: "API_KEY", value: "TOPSECRET" }]);
-      expect(c.view().form!.pairValue).toBe("");
+      c.input(input("conn-args", "-y\nnotes-server\npath with spaces"));
+      c.input(input("conn-pairs", "API_KEY=TOPSECRET"));
       c.click(button("connect"));
       await settle();
       expect(api.integrationsAdd).toHaveBeenCalledWith({
-        name: "Notes", transport: "stdio", command: "npx", args: ["-y", "notes-server"], env: [{ name: "API_KEY", value: "TOPSECRET" }],
+        name: "Notes", transport: "stdio", command: "npx", args: ["-y", "notes-server", "path with spaces"], env: [{ name: "API_KEY", value: "TOPSECRET" }], headers: undefined, result_size_limit: 8000,
       });
-      expect(api.integrationsRefresh).toHaveBeenCalledWith("new1");
+      expect(api.integrationsRefresh).not.toHaveBeenCalled();
       expect(c.view().form).toBeNull();
       expect(c.view().tab).toBe("installed");
       expect(JSON.stringify(c.view())).not.toContain("TOPSECRET");
@@ -896,15 +917,16 @@ describe("what the tab does", () => {
       c.click(button("connect"));
       expect(c.view().form!.error!()).toBe("請填網址");
       c.input(input("conn-url", "https://example.com/mcp"));
-      c.input(input("conn-pair-name", "Authorization"));
+      c.input(input("conn-pairs", "Authorization"));
       c.click(button("connect"));
-      expect(c.view().form!.error!()).toBe("請先按「加入」，或清掉這一列");
-      c.input(input("conn-pair-value", "Bearer TOKEN"));
-      c.click(button("connect")); // both parts are there: the pair counts
+      await settle();
+      expect(c.view().form!.error!()).toBe("請使用每行 KEY=value 的格式");
+      c.input(input("conn-pairs", "Authorization=Bearer TOKEN"));
+      c.click(button("connect"));
       await settle();
       expect(api.integrationsAdd).toHaveBeenCalledTimes(1);
       expect(api.integrationsAdd).toHaveBeenCalledWith({
-        name: "Remote", transport: "http", url: "https://example.com/mcp", headers: [{ name: "Authorization", value: "Bearer TOKEN" }],
+        name: "Remote", transport: "http", url: "https://example.com/mcp", headers: [{ name: "Authorization", value: "Bearer TOKEN" }], env: undefined, result_size_limit: 8000,
       });
     });
 
@@ -933,8 +955,7 @@ describe("what the tab does", () => {
     c.click(button("join", { id: "linear" }));
     c.menuFor("conn-add")!.pick("custom");
     c.input(input("conn-name", "Half"));
-    c.input(input("conn-pair-name", "TOKEN"));
-    c.input(input("conn-pair-value", "TOPSECRET"));
+    c.input(input("conn-pairs", "TOKEN=TOPSECRET"));
     c.reset();
     expect(c.view()).toMatchObject({ tab: "installed", open: null, toolsKind: null, auditOpen: false, form: null, confirmingDisconnect: null, search: "" });
     expect(c.view().login).not.toBeNull();
