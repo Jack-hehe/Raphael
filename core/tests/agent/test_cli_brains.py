@@ -101,6 +101,7 @@ else:
                 send({"method":"item/started", "params":{"item":{"type":"mcpToolCall","tool":"routine_list"}}})
                 send({"method":"item/completed", "params":{"item":{"type":"mcpToolCall","tool":"routine_list","status":"completed"}}})
                 send({"method":"item/agentMessage/delta", "params":{"delta":"Hello"}})
+                send({"method":"item/completed", "params":{"item":{"id":"final", "type":"agentMessage", "text":"Hello"}}})
                 send({"method":"turn/completed", "params":{"turn":{"status":"completed"}}})
             else:
                 assert msg["result"]["outcome"]["optionId"] == "yes"
@@ -146,7 +147,9 @@ def finish():
         if name == "codex": send({"method":"account/rateLimits/updated", "params":{"rateLimits":limits}})
         else: send({"type":"rate_limit_event", "event":"rate_limit_event", "rateLimits":limits})
     if name == "codex":
-        if state != "failed": send({"method":"item/agentMessage/delta", "params":{"delta":"Public answer."}})
+        if state != "failed":
+            send({"method":"item/agentMessage/delta", "params":{"delta":"Public answer."}})
+            send({"method":"item/completed", "params":{"item":{"id":"final", "type":"agentMessage", "text":"Public answer."}}})
         send({"method":"turn/completed", "params":{"turn":{"status":"failed" if state == "failed" else "completed"}}})
     elif name == "claude":
         send({"type":"result", "subtype":"error_during_execution" if state == "failed" else "success",

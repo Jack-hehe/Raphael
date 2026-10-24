@@ -373,6 +373,16 @@ async def test_a_site_nobody_listed_is_found_by_the_model_opened_and_learned(rig
     assert "open reddit" in client.json_calls[0]["user"]
 
 
+async def test_cli_brain_open_target_resolution_uses_auxiliary_api_model(rig, client, actions):
+    rig.settings.set("agent_model", "cli:codex")
+    rig.settings.set("assistant_model", "anthropic/claude-haiku-5.5")
+    client.decisions.append(decision("command", "open"))
+    client.replies.append(site("https://www.reddit.com/", "Reddit"))
+    await rig.ask("open reddit", language="en")
+    assert did(actions) == [("open_url", "https://www.reddit.com/")]
+    assert client.json_calls[0]["model"] == "anthropic/claude-haiku-5.5"
+
+
 async def test_a_name_that_opened_once_opens_the_next_time_with_no_model(rig, client, actions):
     client.decisions.append(decision("command", "open"))
     client.replies.append(site("https://www.reddit.com/", "Reddit"))

@@ -26,7 +26,7 @@ async def test_reported_two_fenced_objects_publish_narration_then_only_final_mes
     assert turn["messages"][0]["text"] == "主人說不會這段文章，先從基礎開始。"
     expected = ["我來逐句拆解這段新聞。", "先看第一句。", "弱點是弱點。", "換你練習。"]
     if speaker == "raphael":
-        expected = ["《告。我來逐句拆解這段新聞。》", *[f"《答。{text}》" for text in expected[1:]]]
+        expected = ["《告。我來逐句拆解這段新聞。》", "《答。先看第一句。", "弱點是弱點。", "換你練習。》"]
     assert [m["text"] for m in turn["messages"][1:]] == expected
 
 

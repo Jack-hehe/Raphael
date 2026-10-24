@@ -19,7 +19,7 @@ from ...protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
 from ..catalog import CatalogEntry, ModelPrice
 from ..openrouter import OpenRouterError
 from ..secrets import KeyStore
-from ..settings import DEFAULTS, SettingsStore
+from ..settings import DEFAULTS, SettingsStore, api_model
 from .base import ModelProvider
 from .presets import BY_KIND, KINDS, OPTIONAL_KEY_KINDS
 from .clients import AnthropicProvider, CompatibleProvider, is_transcription, model_info, validate_base_url
@@ -115,7 +115,7 @@ class ProviderRegistry:
         return self.settings.get(key) if saved else None
 
     def resolve(self, reference: str) -> tuple[str, str]:
-        if not isinstance(reference, str) or not reference or len(reference) > 2048 or any(c.isspace() for c in reference):
+        if not isinstance(reference, str) or not reference or reference.startswith("cli:") or len(reference) > 2048 or any(c.isspace() for c in reference):
             raise ValueError("Invalid model reference")
         if not reference.startswith("@"):
             return "openrouter", reference
@@ -437,8 +437,8 @@ class ProviderRouter:
 
     def model_for(self, reference):
         if self.purpose in ("router", "memory", "pdf"):
-            return self.registry.settings.get(self.purpose + "_model") or reference
-        return reference
+            reference = self.registry.settings.get(self.purpose + "_model") or reference
+        return api_model(self.registry.settings, reference) if reference.startswith("cli:") else reference
 
     def available(self, model):
         references = [self.model_for(model), *self.registry.settings.get(self.purpose + "_fallbacks")]
@@ -459,7 +459,8 @@ class ProviderRouter:
 
     def cleanup_fallback(self, primary):
         """The mandatory cleanup retry follows the owner's provider preference order."""
-        candidates = [DEFAULTS["cleanup_model"], self.registry.settings.get("agent_model"),
+        api_providers = {pid for pid in self.registry.ids() if BY_KIND[self.registry.config(pid)["kind"]]["group"] != "local"}
+        candidates = [DEFAULTS["cleanup_model"], api_model(self.registry.settings, self.registry.settings.get("agent_model"), api_providers=api_providers),
                       *self.registry.settings.get("cleanup_fallbacks")]
         for pid in self.registry.ids():
             models = self.registry._successful_models.get(pid, [])

@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import asyncio
+import base64
 
 import pytest
 
@@ -9,13 +10,103 @@ from raphael_core.agent.cli.discovery import CliBrains
 from .test_answering import client, setup, member, typed  # noqa: F401
 
 
-def fake_brain(rig, tmp_path, script):
+@pytest.mark.parametrize("name", ["claude", "codex"])
+async def test_cli_turn_delivers_only_current_images_natively(setup, tmp_path, client, name):
+    rig, team = setup
+    teacher = member(team, model=f"cli:{name}")
+    image = base64.b64encode(b"\x89PNG\r\n\x1a\ncurrent-image").decode()
+    fake_brain(rig, tmp_path, '''import base64, json, sys
+from pathlib import Path
+def send(value): print(json.dumps(value), flush=True)
+if NAME == "claude":
+    content = json.loads(sys.stdin.readline())["message"]["content"]
+    if "--resume" in sys.argv:
+        assert isinstance(content, str)
+    else:
+        assert isinstance(content, list)
+        assert [block["type"] for block in content] == ["text", "image"]
+        assert content[1]["source"]["data"] == IMAGE
+        assert "read_attachment" in content[0]["text"]
+    send({"type":"result","subtype":"success","session_id":"images-session","result":"I can see the image."})
+else:
+    resumed = False
+    for line in sys.stdin:
+        msg = json.loads(line)
+        if msg.get("method") == "initialize": send({"id":msg["id"], "result":{}})
+        elif msg.get("method") in ("thread/start", "thread/resume"):
+            resumed = msg["method"] == "thread/resume"
+            send({"id":msg["id"], "result":{"thread":{"id":"images-session"}}})
+        elif msg.get("method") == "turn/start":
+            content = msg["params"]["input"]
+            if resumed:
+                assert len(content) == 1
+            else:
+                assert len(content) == 2 and content[1]["type"] == "localImage"
+                assert Path(content[1]["path"]).read_bytes() == base64.b64decode(IMAGE)
+                assert "read_attachment" in content[0]["text"]
+            send({"method":"item/completed", "params":{"item":{"type":"agentMessage", "id":"final", "phase":"final_answer", "text":"I can see the image."}}})
+            send({"method":"turn/completed", "params":{"turn":{"status":"completed"}}})
+            break
+'''.replace("IMAGE", repr(image)).replace("NAME", repr(name)), name=name)
+    result = await rig.call("agent.ask", {"session_id": "images", "text": "Explain the screenshot", "source": "app", "ui_language": "en",
+        "member_id": teacher.id, "attachments": [
+            {"name": "screenshot.png", "mime": "image/png", "data": image},
+            {"name": "notes.txt", "mime": "text/plain", "data": base64.b64encode(b"notes").decode()},
+        ]})
+    assert result["text"] == "I can see the image."
+    assert (await typed(rig, "Continue", teacher.id, language="en"))["text"] == "I can see the image."
+    assert not client.chat_calls and not client.json_calls
+
+
+@pytest.mark.parametrize("answer", ["", "The final answer."])
+async def test_progress_only_turn_fails_and_terminal_answer_is_authoritative(setup, tmp_path, answer):
+    rig, team = setup
+    teacher = member(team, model="cli:claude")
+    fake_brain(rig, tmp_path, '''import json, sys
+json.loads(sys.stdin.readline())
+print(json.dumps({"type":"assistant", "message":{"content":[{"type":"text", "text":"Still checking."}]}}),flush=True)
+print(json.dumps({"type":"result", "subtype":"success", "result":ANSWER}),flush=True)
+'''.replace("ANSWER", repr(answer)))
+    result = await typed(rig, "Inspect this", teacher.id, language="en")
+    [turn] = (await rig.call("agent.history.list", {"member_id": teacher.id}))["turns"]
+    replies = [message["text"] for message in turn["messages"] if message["kind"] == "reply"]
+    if answer:
+        assert result["text"] == answer and replies == [answer]
+    else:
+        assert turn["status"] == "error"
+        assert result["text"] == "Claude Code stopped unexpectedly. Check its login and try again."
+        assert [message["text"] for message in turn["messages"] if message["kind"] == "progress"] == ["Still checking."]
+        assert "Still checking." not in replies
+
+
+@pytest.mark.parametrize("language,prefix", [("zh-TW", "答。"), ("en", "Answer. "), ("ja", "解。")])
+@pytest.mark.parametrize("wrapped", [False, True, "grouped"])
+async def test_raphael_frames_a_multi_message_reply_only_once(setup, tmp_path, language, prefix, wrapped):
+    rig, _ = setup
+    rig.settings.set("agent_model", "cli:claude")
+    parts = ["First.", "Second.", "Last."]
+    answer = "\n<<<next message>>>\n".join(f"《{prefix}{part}》" if wrapped is True else part for part in parts)
+    if wrapped == "grouped":
+        answer = f"《{prefix}{answer}》"
+    fake_brain(rig, tmp_path, '''import json, sys
+json.loads(sys.stdin.readline())
+print(json.dumps({"type":"result","subtype":"success","result":ANSWER}),flush=True)
+'''.replace("ANSWER", repr(answer)))
+    result = await typed(rig, "Explain", 0, language=language)
+    [turn] = (await rig.call("agent.history.list", {}))["turns"]
+    assert [message["text"] for message in turn["messages"] if message["kind"] == "reply"] == [
+        f"《{prefix}First.", "Second.", "Last.》",
+    ]
+    assert result["text"] == "Last."
+
+
+def fake_brain(rig, tmp_path, script, *, name="claude"):
     path = tmp_path / "fake.py"
     path.write_text(script, encoding="utf-8")
     home = tmp_path / "home"
-    (home / ".claude").mkdir(parents=True)
-    (home / ".claude" / ".credentials.json").touch()
-    rig.service._cli_brains = CliBrains(home=home, environ={**os.environ, "PYTHONUTF8": "1"}, commands={"claude": [sys.executable, str(path)]})
+    (home / f".{name}").mkdir(parents=True)
+    (home / f".{name}" / ("auth.json" if name == "codex" else ".credentials.json")).touch()
+    rig.service._cli_brains = CliBrains(home=home, environ={**os.environ, "PYTHONUTF8": "1"}, commands={name: [sys.executable, str(path)]})
 
 
 async def test_cli_member_uses_persona_records_zero_cost_and_resumes(setup, tmp_path, client):
@@ -116,6 +207,7 @@ for line in sys.stdin:
     elif packet.get("id")=="permit":
         decision=packet["result"]["decision"]
         send({"method":"item/agentMessage/delta","params":{"delta":decision}})
+        send({"method":"item/completed","params":{"item":{"id":"final","type":"agentMessage","text":decision}}})
         send({"method":"turn/completed","params":{"turn":{"status":"completed"}}})
 ''', encoding="utf-8")
     home = tmp_path / "home"
@@ -168,19 +260,27 @@ async def test_rpc_detection_is_registered_without_exposing_process_details(setu
     assert str(tmp_path) not in json.dumps(result)
 
 
-async def test_raphaels_voice_keeps_fast_routing_and_uses_cli_for_the_answer(setup, tmp_path, client):
-    from agent.conftest import decision
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_raphaels_voice_keeps_fast_routing_and_uses_cli_for_the_answer(setup, tmp_path, client, fallback):
+    from agent.conftest import classification, completion, decision
     rig, _ = setup
     rig.settings.set("agent_model", "cli:claude")
+    rig.settings.set("assistant_model", "anthropic/claude-haiku-5.5")
     fake_brain(rig, tmp_path, '''import json, sys
 json.loads(sys.stdin.readline())
 print(json.dumps({"type":"result","subtype":"success","result":"Answer from subscription."}),flush=True)
 ''')
-    client.decisions.append(decision("chat"))
+    client.decisions.append(decision("chat", route_confidence=0.1 if fallback else 0.93))
+    if fallback:
+        client.replies.append(completion(classification()))
     result = await rig.ask("Explain it")
     assert result["text"] == "Answer from subscription."
-    assert len(client.decide_calls) == 1 and client.decide_calls[0]["model"] != "cli:claude"
-    assert not client.chat_calls and not client.json_calls
+    assert len(client.decide_calls) == 1 and client.decide_calls[0]["model"] == "typesafe/jev-1.14"
+    assert not client.chat_calls
+    if fallback:
+        assert client.json_calls[0]["model"] == "anthropic/claude-haiku-5.5"
+    else:
+        assert not client.json_calls
 
 
 async def test_not_logged_in_never_starts_the_fake_cli(setup, tmp_path):
@@ -235,6 +335,18 @@ for number, (name, arguments) in enumerate(CALLS,1):
         assert response["result"]["isError"] is (not ALLOWED)
 print(json.dumps({"type":"result","subtype":"success","result":"Finished."}),flush=True)
 '''.replace("CALLS", repr(calls)).replace("ALLOWED", repr(allowed)))
+
+
+async def test_cli_web_search_uses_auxiliary_api_model(setup, tmp_path, client):
+    from agent.test_service import found
+
+    rig, team = setup
+    teacher = member(team, model="cli:claude")
+    rig.settings.set("assistant_model", "anthropic/claude-haiku-5.5")
+    client.texts.append(found("Search results."))
+    fake_mcp(rig, tmp_path, [("web_search", {"query": "Weather news"})])
+    assert (await typed(rig, "Search weather news", teacher.id))["text"] == "Finished."
+    assert client.text_calls[0]["model"] == "anthropic/claude-haiku-5.5"
 
 
 @pytest.mark.parametrize("approved", [True, False, "always"])

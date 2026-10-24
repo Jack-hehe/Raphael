@@ -10,6 +10,37 @@ from raphael_core.brain.providers.registry import ProviderRegistry, ProviderRout
 from raphael_core.brain.secrets import MemoryKeyStore
 from raphael_core.protocol import INVALID_PARAMS, RpcError
 from raphael_core.router import Router
+from raphael_core.brain.settings import DEFAULTS, SettingsStore
+
+
+@pytest.mark.parametrize("purpose", ["router", "memory", "pdf"])
+async def test_cli_purpose_override_uses_auxiliary_api_model(setup_registry, purpose):
+    conn, keys, _, _, _, legacy, registry, _, _ = setup_registry
+    keys.set("test-key")
+    settings = SettingsStore(conn)
+    settings.set("assistant_model", "anthropic/claude-haiku-5.5")
+    settings.set(purpose + "_model", "cli:codex")
+    client = ProviderRouter(registry, legacy).for_purpose(purpose)
+    assert client.model_for("openai/gpt-6-luna") == "anthropic/claude-haiku-5.5"
+
+
+@pytest.mark.parametrize("brain", ["cli", "local"])
+async def test_cleanup_fallback_does_not_inherit_non_api_brain(setup_registry, brain):
+    conn, keys, _, _, _, legacy, registry, _, _ = setup_registry
+    keys.set("test-key")
+    model = "cli:codex"
+    if brain == "local":
+        pid = (await registry.add({"kind": "ollama"}))["provider"]["id"]
+        model = f"@{pid}:local-model"
+    SettingsStore(conn).set("agent_model", model)
+    SettingsStore(conn).set("assistant_model", "anthropic/claude-haiku-5.5")
+    assert ProviderRouter(registry, legacy).for_purpose("cleanup").cleanup_fallback(DEFAULTS["cleanup_model"]) == "anthropic/claude-haiku-5.5"
+
+
+async def test_subscription_reference_is_never_resolved_as_an_api_slug(setup_registry):
+    *_, registry, _, _ = setup_registry
+    with pytest.raises(ValueError):
+        registry.resolve("cli:codex:gpt-5.6-terra?effort=high")
 
 
 @pytest.fixture

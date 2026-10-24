@@ -193,6 +193,33 @@ def test_what_the_owner_said_is_written_as_said_and_its_turn_is_noted(memory):
 # --- when the background runs --------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("model_id", ["cli:codex:gpt-5.6-terra?effort=high", "@local:text"])
+@pytest.mark.parametrize("work", ["fold", "reflect", "consolidate"])
+async def test_memory_api_work_uses_assistant_model(memory, history, model, conn, model_id, work):
+    settings = SettingsStore(conn)
+    settings.set("agent_model", model_id)
+    settings.set("assistant_model", "anthropic/claude-haiku-5.5")
+    if work == "fold":
+        from raphael_core.memory.conversation import FOLD_AT_TURNS
+        for number in range(FOLD_AT_TURNS + 1):
+            add_turn(history, f"Question {number}")
+        model.replies.extend([{"summary": "Context:\n- Earlier questions"}, {"actions": []}])
+        memory.after_turn()
+        await memory.wait_idle()
+        assert memory.conversation.summary().text
+    elif work == "reflect":
+        add_turn(history, "A preference")
+        model.replies.append({"actions": []})
+        await memory.reflect()
+    else:
+        memory.store.write("preference-tea", type="preference", description="Tea", body="The owner likes tea.")
+        memory.store.write("preference-coffee", type="preference", description="Coffee", body="The owner likes coffee.")
+        model.replies.append({"actions": []})
+        await memory.consolidate()
+    assert model.calls
+    assert all(call["model"] == "anthropic/claude-haiku-5.5" for call in model.calls)
+
+
 async def test_the_pass_runs_after_ten_turns_and_moves_its_watermark(memory, history, model, conn):
     model.replies.append({"actions": [memory_item()]})
     ids = [add_turn(history, f"q{n}") for n in range(REFLECT_AFTER_TURNS)]

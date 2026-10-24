@@ -16,6 +16,27 @@ from .pdfs import FAKE_JPEG, make_pdf
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
 
+@pytest.mark.parametrize("kind", ["image", "pdf"])
+async def test_attachment_api_calls_use_assistant_model_for_antigravity(conn, ledger, kind):
+    from raphael_core.brain.settings import SettingsStore
+    from raphael_core.services.hub import ServiceHub, offline_transport
+    from raphael_core.services.keys import memory_keys
+
+    settings = SettingsStore(conn)
+    settings.set("agent_model", "cli:gemini")
+    settings.set("assistant_model", "anthropic/claude-haiku-5.5")
+    settings.set("pdf_service", "openrouter")
+    client = Client("The attachment was read.")
+    hub = ServiceHub(conn, client, memory_keys(), transport=offline_transport())
+    attachment = checked("image.png", "image/png", PNG) if kind == "image" else checked("report.pdf", "application/pdf", make_pdf(["hello"]))
+    try:
+        result_kind, result = await hub.read_attachment(attachment, "What does it say?", ledger)
+        assert result_kind == kind and result["text"] == "The attachment was read."
+        assert client.calls[0]["model"] == "anthropic/claude-haiku-5.5"
+    finally:
+        await hub.aclose()
+
+
 class Client:
     def __init__(self, *answers):
         self.answers = list(answers)

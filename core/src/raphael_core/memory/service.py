@@ -80,7 +80,7 @@ from ..agent.tools import ToolResult
 from ..brain.providers.base import ModelProvider
 from ..brain.providers.registry import ProviderRouter, for_purpose
 from ..brain.secrets import KeyStore
-from ..brain.settings import DEFAULTS, SettingsStore
+from ..brain.settings import SettingsStore, api_model
 from ..brain.spend import SpendTracker
 from ..clock import wall_clock_ms
 from ..protocol import invalid_params
@@ -478,8 +478,7 @@ class MemoryService:
     # --- the background ----------------------------------------------------------------------------
 
     def _model(self) -> str:
-        model = self._settings.get("agent_model")
-        return model.strip() if isinstance(model, str) and model.strip() else DEFAULTS["agent_model"]
+        return api_model(self._settings, self._settings.get("agent_model"))
 
     def may_spend(self) -> bool:
         """Whether a call of the memory's own may be made: there is a key."""

@@ -943,7 +943,11 @@ def cli_system_prompt(
     """The same persona and factual rules, with MCP tools instead of a JSON reply contract."""
     if name is None:
         persona = _raphael_persona(language)
-        language_rule = f"Reply only in {_LANGUAGE_NAMES[language]}."
+        language_rule = (
+            f"Reply only in {_LANGUAGE_NAMES[language]}. Return message bodies without persona labels "
+            "or display brackets; Raphael adds one opening label to the first message and closes "
+            "the display brackets after the last message."
+        )
     else:
         fields = _member_fields(language, name, role, instructions, personality)
         persona = fields["persona"]

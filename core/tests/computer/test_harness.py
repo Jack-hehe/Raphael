@@ -6,6 +6,23 @@ from agent.test_narration import chat
 from .test_operate import operating, shell, PRESS_SEVEN  # noqa: F401
 
 
+async def test_cli_computer_tool_uses_auxiliary_api_model_and_keeps_approval_flow(operating, client, shell, conn, tmp_path):
+    from members.test_cli_brains import fake_mcp
+    from raphael_core.brain.settings import SettingsStore
+
+    settings = SettingsStore(conn)
+    settings.set("agent_model", "cli:claude")
+    settings.set("assistant_model", "anthropic/claude-haiku-5.5")
+    fake_mcp(operating, tmp_path, [("computer", {"request": "Press seven in Calculator"})])
+    client.chats = list(PRESS_SEVEN)
+    asked = await operating.call("agent.ask", {"session_id": "cli-computer", "source": "app", "text": "Press seven", "ui_language": "en"})
+    assert asked["status"] == "confirm"
+    done = await operating.confirm(asked["confirm"]["id"])
+    assert done["text"] == "Finished."
+    assert client.chat_calls and all(call["model"] == "anthropic/claude-haiku-5.5" for call in client.chat_calls)
+    assert any(operation == "act" for operation, _ in shell.requests)
+
+
 async def test_desktop_permission_resumes_the_same_harness_turn(operating, client, shell):
     client.chats = [chat('先用計算機確認結果。', ('computer', {'request': '在小算盤按七'})), *PRESS_SEVEN, chat('{"text":"已按下七。","detail":""}')]
     asked = await operating.call('agent.ask', {'session_id':'live', 'source':'app', 'text':'在小算盤按七', 'ui_language':'zh-TW'})

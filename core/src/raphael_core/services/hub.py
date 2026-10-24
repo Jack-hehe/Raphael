@@ -45,7 +45,7 @@ import httpx
 from ..agent.ledger import Ledger
 from ..brain.catalog import IMAGE_INPUT, LLM, CatalogEntry, find
 from ..brain.providers.base import ModelProvider
-from ..brain.settings import DEFAULTS, SettingsStore
+from ..brain.settings import DEFAULTS, SettingsStore, api_model
 from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError, invalid_params
 from ..router import Router
 from . import pdf, tts, web
@@ -192,7 +192,7 @@ class ServiceHub:
         """The model that reads images (the `vision_model` setting, or the answer model when it is
         ""), and whether OpenRouter's list says it reads them: None when the list does not say."""
         chosen = self._text("vision_model")
-        model = chosen or self._text("agent_model") or DEFAULTS["agent_model"]
+        model = api_model(self._settings, chosen or self._text("agent_model"))
         return model, self._sees(model)
 
     def _text(self, key: str) -> str:

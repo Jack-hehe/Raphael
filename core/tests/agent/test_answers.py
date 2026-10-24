@@ -39,6 +39,17 @@ def test_member_replies_keep_up_to_four_separate_messages_with_a_limit_per_messa
     assert reply.text == "Your turn?"
 
 
+def test_display_frame_normalization_preserves_notice_and_ordinary_quoted_titles():
+    reply = parse_reply({"messages": ["《Notice. Finished.》", "Read 《The Book》 next."]}, "en", long=True)
+    assert reply.prefix == "Notice"
+    assert reply.messages == ["Finished.", "Read 《The Book》 next."]
+
+
+def test_member_text_is_not_interpreted_as_raphael_display_frames():
+    reply = parse_reply({"messages": ["《Answer. A quoted example.》"]}, "en", plain=True, long=True)
+    assert reply.prefix == "" and reply.text == "《Answer. A quoted example.》"
+
+
 def completion(data, cost=0.0009, model="openai/gpt-6-luna"):
     return Completion(
         data=data, model=model, cost_usd=cost, prompt_tokens=700, completion_tokens=45,
