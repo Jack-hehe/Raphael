@@ -87,28 +87,46 @@ describe("buttons", () => {
     expect(all).not.toMatch(/icon-btn|class="link"|class="quiet"/);
   });
 
-  // A text button has a border; an icon-only button (trash, ×, chevron, search, settings, sliders)
-  // has none, only a fill under the pointer and the focus ring. The rule changed from "every button
-  // is bordered": the border is what tells a button with words in it.
-  test("icon-only buttons are borderless: a fill under the pointer and a focus ring, never an edge", () => {
+  // Text buttons keep their surfaces; icon controls communicate through color and focus.
+  test("icon-only controls have no hover/active surface and keep keyboard focus", () => {
     const strip = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, "");
     const styles = strip(read(join(MAIN, "styles.css")));
-    const base = /(?:^|\n)\.btn\.icon\s*\{([^}]*)\}/.exec(styles)?.[1] ?? "";
-    expect(base).toMatch(/border-color:\s*transparent/);
-    expect(base).toMatch(/background:\s*transparent/);
-    expect(styles).toMatch(/\.btn\.icon:hover:not\(:disabled\)\s*\{[^}]*background:\s*var\(--hover\)[^}]*border-color:\s*transparent/);
+    expect(styles).toMatch(/\.btn\.icon\s*\{[^}]*background:\s*transparent/);
     expect(styles).toMatch(/\.btn\.icon:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--focus\)/);
-    // No other rule gives one an edge back. The exceptions: a primary one is filled with the accent
-    // (its edge is its fill), and one that grows words while it asks again (確定清除？) is a text button.
-    const bad: string[] = [];
-    for (const file of mainFiles.filter((f) => f.endsWith(".css"))) {
-      for (const [, selector, body] of strip(read(file)).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-        const icon = selector.split(",").filter((s) => /\.btn(\.[\w-]+)*\.icon\b/.test(s) && !/\.pri\b|\.is-confirm\b/.test(s));
-        if (!icon.length) continue;
-        const edge = /(^|;)\s*border(-top|-right|-bottom|-left)?(-color)?\s*:\s*(?!\s|transparent|0\b|none)[^;]+/.exec(body);
-        if (edge) bad.push(`${rel(file)}: ${icon.join(",").trim()} { ${edge[0].trim()} }`);
+    const classes = new Set(["icon", "cmp-attach", "cmp-send", "cmp-voice", "mp-star", "lm-del", "chip-x", "window-button", "window-close"]);
+    // Read the optional class argument of every iconButton/iconBtn call, balancing nested calls.
+    for (const file of sources) {
+      const source = read(file);
+      for (const call of source.matchAll(/\bicon(?:Button|Btn)\(/g)) {
+        let depth = 1, quote = "", arg = "";
+        const args: string[] = [];
+        for (let i = call.index! + call[0].length; i < source.length && depth; i++) {
+          const c = source[i]!;
+          if (quote) { arg += c; if (c === "\\") { arg += source[++i]; } else if (c === quote) quote = ""; continue; }
+          if (c === '"' || c === "'" || c === "`") { quote = c; arg += c; }
+          else if (c === "(") { depth++; arg += c; }
+          else if (c === ")") { if (--depth) arg += c; else args.push(arg); }
+          else if (c === "," && depth === 1) { args.push(arg); arg = ""; }
+          else arg += c;
+        }
+        for (const match of (args[3] ?? "").matchAll(/["'`]([a-z][\w -]*)["'`]/g))
+          match[1]!.split(/\s+/).forEach(cls => classes.add(cls));
       }
     }
+    for (const modifier of ["pri", "sm", "row", "danger", "btn"]) classes.delete(modifier);
+    const allowlist: readonly string[] = []; // Frozen: may only shrink.
+    const violations = (css: string): string[] => [...strip(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap(([, selectors, body]) => {
+      const surfaces = [...body!.matchAll(/(?:^|;)\s*background(?:-color|-image)?\s*:\s*([^;]+)/g)]
+        .filter(([, value]) => !/^(?:transparent|none)\s*(?:!important)?$/.test(value!.trim()));
+      if (!surfaces.length) return [];
+      return selectors!.split(/,(?![^()]*\))/).filter(selector => /:(?:hover|active)\b/.test(selector) &&
+        [...selector.matchAll(/\.([\w-]+)/g)].some(([, cls]) => classes.has(cls!))).map(selector => selector.trim());
+    });
+    // Guard the guard: both the shared class and a helper's custom class must be caught.
+    expect(violations(".btn.icon:hover { background: var(--hover); }")).toEqual([".btn.icon:hover"]);
+    expect(violations(".cmp-send:active { background-color: var(--pressed); }")).toEqual([".cmp-send:active"]);
+    const bad = mainFiles.filter(file => file.endsWith(".css")).flatMap(file =>
+      violations(read(file)).map(selector => `${rel(file)}: ${selector}`).filter(rule => !allowlist.includes(rule)));
     expect(bad).toEqual([]);
   });
 
@@ -227,7 +245,7 @@ describe("icons", () => {
     const bad = iconRules().flatMap(({ file, selector, body }) =>
       [...body.matchAll(/(?:^|;)\s*(width|height)\s*:\s*([^;]+)/g)]
         // The owner requested the send glyph match the adjacent voice portrait exactly.
-        .filter(([, , value]) => !SIZES.has(value.trim()) && !(file === "agent.css" && ((selector === ".attachment-drop > .i" && value.trim() === "28px") || (selector === ".composer .btn.cmp-send .i" && value.trim() === "var(--pa-cmp-av)"))))
+        .filter(([, , value]) => !SIZES.has(value.trim()) && !(file === "agent.css" && ((selector === ".attachment-drop > .i" && value.trim() === "28px") || (selector === ".composer .cmp-pair .cmp-send .i" && value.trim() === "32px"))))
         .map(([, prop, value]) => `${file}: ${selector} { ${prop}: ${value.trim()} }`),
     );
     expect(iconRules().length).toBeGreaterThan(10);

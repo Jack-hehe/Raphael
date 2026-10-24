@@ -12,8 +12,9 @@ export function composerHTML(): string {
   return `<div class="cmp-quote" hidden></div><div class="cmp-file" hidden></div><div class="cmp-row">` +
     `<button type="button" class="btn cmp-attach" data-act="attach" aria-haspopup="menu" aria-expanded="false">${ico("plus")}</button>` +
     `<textarea class="cmp-input" rows="1" autocomplete="off" enterkeyhint="send"></textarea>` +
+    `<span class="cmp-pair">` +
     iconButton("send", t("chat.send"), " disabled", "cmp-send").replace('type="button"', 'type="submit"').replace(" title=", " data-tooltip=") +
-    `<button type="button" class="btn cmp-voice" data-act="voice"></button></div><input class="cmp-picker" type="file" multiple hidden>`;
+    `<button type="button" class="btn cmp-voice" data-act="voice"></button></span></div><input class="cmp-picker" type="file" multiple hidden>`;
 }
 
 /** The same attachment and global action policy menu for member, room and team composers. */
@@ -49,7 +50,7 @@ export function createChatComposer(options: { placeholder(): string; transcriptT
   let revision=0;
   el.addEventListener("click",e=>e.stopPropagation());
   let files:WireAttachment[]=[],busy=false,attaching=false,recording=false,starting=false,stream:MediaStream|undefined,recorder:MediaRecorder|undefined;
-  const draw=():void=>{input.placeholder=options.placeholder();input.setAttribute("aria-label",input.placeholder);send.disabled=busy||attaching||recording||starting||(!input.value.trim()&&!files.length);voice.innerHTML=avatarHTML({size:34,loop:recording});voice.setAttribute("aria-label",t(recording?"rooms.stopVoice":"agent.voice"));voice.setAttribute("aria-pressed",String(recording));voice.disabled=starting||busy;el.querySelector(".cmp-attach")!.setAttribute("aria-label",t("agent.attach"));const chips=el.querySelector<HTMLElement>(".cmp-file")!;chips.hidden=!files.length;chips.innerHTML=files.map((f,i)=>`<span class="cmp-chip"><span>${esc(f.name)}</span>${iconButton("x",t("common.cancel"),` data-file="${i}"`)}</span>`).join("");};
+  const draw=():void=>{input.placeholder=options.placeholder();input.setAttribute("aria-label",input.placeholder);send.disabled=busy||attaching||recording||starting||(!input.value.trim()&&!files.length);voice.innerHTML=avatarHTML({size:32,loop:recording});voice.setAttribute("aria-label",t(recording?"rooms.stopVoice":"agent.voice"));voice.setAttribute("aria-pressed",String(recording));voice.disabled=starting||busy;el.querySelector(".cmp-attach")!.setAttribute("aria-label",t("agent.attach"));const chips=el.querySelector<HTMLElement>(".cmp-file")!;chips.hidden=!files.length;chips.innerHTML=files.map((f,i)=>`<span class="cmp-chip"><span>${esc(f.name)}</span>${iconButton("x",t("common.cancel"),` data-file="${i}"`)}</span>`).join("");};
   const fit=():void=>{input.style.height="auto";input.style.height=`${Math.min(180,input.scrollHeight)}px`;draw();};
   el.addEventListener("submit",e=>{e.preventDefault();if(send.disabled)return;const text=input.value,snapshot=files,submitted=revision;busy=true;draw();void options.send(text.trim(),snapshot).then(()=>{if(submitted===revision){if(input.value===text)input.value="";if(files===snapshot)files=[];}}).catch(error=>toaster.info(describeError(error))).finally(()=>{busy=false;fit();input.focus();});});
   input.addEventListener("input",fit);input.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();el.requestSubmit();}});

@@ -99,7 +99,7 @@
 .lm-bar { display: block; height: 4px; margin-top: 6px; border-radius: 2px; background: var(--line); overflow: hidden; }
 .lm-bar i { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width 0.15s linear; }
 .model-chooser .lm-del { flex: none; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; width: 28px; height: var(--h-ctl-sm); min-height: 0; margin: 5px 2px 0 0; padding: 0; border-radius: 7px; background: transparent; color: var(--text-3); }
-.model-chooser .lm-del:hover { background: var(--hover); color: var(--text); }
+.model-chooser .lm-del:hover { background: transparent; color: var(--text); }
 .model-chooser .lm-row .btn { flex: none; width: auto; justify-content: center; min-height: var(--h-ctl-sm); margin: 4px 4px 0 0; padding: 4px 10px; border: 1px solid var(--btn-edge); border-radius: var(--r-sm); background: var(--btn); font-size: var(--fs-xs); color: var(--text); }
 .model-chooser .lm-row .btn:hover { background: var(--hover); border-color: var(--text-3); }
 .model-chooser .lm-row .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
@@ -111,7 +111,7 @@
 .model-chooser .lm-confirm .btn { margin: 0; }
 
 .mp-star { position: absolute; right: 8px; top: 20px; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; width: 24px; height: 28px; color: var(--text-3); background: transparent; border: 0; border-radius: 4px; }
-.mp-star:hover { background: var(--hover); color: var(--text); }
+.mp-star:hover { background: transparent; color: var(--text); }
 .mp-star[aria-pressed="true"] { color: var(--accent-text); }
 .mc-item:has(.mp-star) .mc-row { padding-right: 38px; }
 

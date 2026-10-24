@@ -1,7 +1,7 @@
 """Run-level analytics over retained conversations and tasks, with measured timing metadata.
 
 The spend ledger remains the source for the monthly bill. Run totals describe retained work;
-legacy rows without metrics remain untimed. CSV includes all matching runs, not just a UI page.
+legacy rows without metrics remain untimed. The RPC returns aggregates; CSV includes all matching runs.
 """
 
 import csv
@@ -144,9 +144,6 @@ class RunAnalytics:
 
     async def read(self, params):
         period, zone, start, end, lower, upper = self._period(params)
-        offset, limit = params.get("offset", 0), params.get("limit", 50)
-        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 200:
-            raise invalid_params("Invalid run page")
         rows = self._rows(lower, upper)
         groups = {}
         for grouping in ("member", "model", "day", "provider", "routine"):
@@ -160,29 +157,7 @@ class RunAnalytics:
                 entry["runs"] += 1
             groups[grouping] = sorted([{"label": label, **value} for label, value in values.items()], key=lambda v: (-v["tokens"], -v["cost_usd"], v["label"]))
         return {"range": period, "start_day": start.isoformat() if start else None, "end_day": (end-timedelta(days=1)).isoformat(),
-                "summary": self.summary(rows), "groups": groups, "runs": rows[offset:offset+limit], "total": len(rows)}
-
-    async def trace(self, params):
-        kind, ident = params.get("kind"), params.get("id")
-        if kind not in ("turn", "task", "routine") or type(ident) is not int or ident <= 0:
-            raise invalid_params("Expected a run kind and id")
-        run = next((r for r in self._rows(0, 2**53, (kind, ident)) if r["id"] == ident and r["kind"] == kind), None)
-        if run is None: raise invalid_params("Run no longer exists")
-        if kind == "routine":
-            record = self.conn.execute("SELECT * FROM routine_runs WHERE id=?", (ident,)).fetchone()
-            source_kind, source = self._routine_source(record)
-            if not source:
-                return {"run": run, "summary": self.summary([run]), "spans": []}
-            kind, ident = source_kind, source["id"]
-        metric = self.conn.execute("SELECT model_spans FROM run_metrics WHERE kind=? AND run_id=?", (kind, ident)).fetchone()
-        spans = [{**s, "kind": "model", "tool": "", "server": s.get("model")} for s in json.loads(metric[0])] if metric else []
-        table, field = ("agent_steps", "turn_id") if kind == "turn" else ("worker_steps", "task_id")
-        for step in self.conn.execute(f"SELECT at_ms,kind,tool,server,outcome,ms FROM {table} WHERE {field}=? ORDER BY n", (ident,)):
-            data = dict(step)
-            if data["kind"] == "model" and metric and data["outcome"] == "ok": continue
-            spans.append(data)
-        spans.sort(key=lambda s: (s["at_ms"] - s["ms"], s["at_ms"]))
-        return {"run": run, "summary": self.summary([run]), "spans": spans}
+                "summary": self.summary(rows), "groups": groups, "total": len(rows)}
 
     async def export(self, params):
         _, _, _, _, lower, upper = self._period(params)

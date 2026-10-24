@@ -40,7 +40,7 @@ describe("the page's fluid sizes", () => {
     expect(block![2]).toContain("--pa-col: clamp(260px, 21vw, 400px);");
     expect(block![2]).toContain("--pa-det: clamp(300px, 24vw, 460px);");
     expect(members).toContain(".page.page-agent { position: relative; max-width: none; height: 100%; padding: 0; display: grid; grid-template-columns: var(--pa-col) minmax(0, 1fr);");
-    expect(members).toContain('.page.page-agent[data-det="open"] { grid-template-columns: var(--pa-col) minmax(0, 1fr) var(--pa-det); }');
+    expect(members).toContain('.page.page-agent[data-det="open"]:not(.is-room) { grid-template-columns: var(--pa-col) minmax(0, 1fr) var(--pa-det); }');
   });
 
   test("a small window keeps the sizes of the first design, a maximised one the Grok-like ones", () => {

@@ -2,10 +2,10 @@
    own (styles.css); these are the few things only this group has. Colours are the app's tokens. Its
    icon-only buttons (the chevron, the pencil, the trash can) are the app's own, borderless with a
    16 px icon (styles.css); here they are only sized like Telegram's, and one whose part is open (the
-   chevron of the open list, the pencil of the open note) keeps the hover fill while it is. */
+   chevron of the open list, the pencil of the open note) keeps the accent color while it is. */
 .mem .ctl { gap: var(--sp-2); align-items: center; }
 .mem .btn.icon { width: 32px; min-height: 32px; padding: 0; }
-.mem .btn.icon[aria-expanded="true"] { background: var(--hover); }
+.mem .btn.icon[aria-expanded="true"] { background: transparent; }
 .mem-more .i { transition: transform 0.22s ease; }
 .mem-more[aria-expanded="true"] .i { transform: rotate(180deg); }
 /* the notes sit under the row of the memory, set in as its own */
