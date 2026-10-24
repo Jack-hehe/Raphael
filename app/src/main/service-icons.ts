@@ -11,7 +11,7 @@
 // - the brand's own full-colour logo, a file in `service-logos/` (with where each came from in
 //   `sources.json`), for the brands Simple Icons does not have: the Microsoft marks are not in
 //   it, removed at their owners' request. A logo that is dark in its official form has a light twin
-//   (`<id>.dark.svg`) that the dark theme shows instead.
+//   (`<id>.dark.svg` or `<id>.dark.png`) that the dark theme shows instead.
 // The marks belong to their owners, who do not sponsor or endorse Raphael. They are drawn bare, with no
 // tile of ours behind them. A program that is none of them gets a generic plug icon, never a letter.
 
@@ -78,8 +78,10 @@ for (const id of LOGO_IDS) {
   const light = svgFiles[`./service-logos/${id}.svg`];
   const dark = svgFiles[`./service-logos/${id}.dark.svg`];
   const png = pngFiles[`./service-logos/${id}.png`];
+  const darkPng = pngFiles[`./service-logos/${id}.dark.png`];
   if (!light && !png) continue; // Reserved provider ids use the plug until artwork arrives.
-  LOGOS[id] = { light: light ? svgUri(light) : (png ?? ""), ...(dark ? { dark: svgUri(dark) } : {}) };
+  const twin = dark ? svgUri(dark) : darkPng;
+  LOGOS[id] = { light: light ? svgUri(light) : (png ?? ""), ...(twin ? { dark: twin } : {}) };
 }
 
 /** Does the brand have a full-colour logo file (rather than a drawn path)? */

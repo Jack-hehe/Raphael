@@ -190,7 +190,7 @@ describe("the marks of well-known programs", () => {
 
   test("the logo files and the list of ids are the same, and each has its source written down", () => {
     const files = readdirSync("src/main/service-logos");
-    const ids = new Set(files.filter((f) => /\.(svg|png)$/.test(f)).map((f) => f.replace(/\.dark\.svg$|\.(svg|png)$/, "")));
+    const ids = new Set(files.filter((f) => /\.(svg|png)$/.test(f)).map((f) => f.replace(/\.dark\.(svg|png)$|\.(svg|png)$/, "")));
     const installed = LOGO_IDS.filter(hasLogo);
     expect([...ids].sort()).toEqual([...installed].sort());
     const sources = JSON.parse(readFileSync("src/main/service-logos/sources.json", "utf8")) as Record<string, { file: string; url: string }>;

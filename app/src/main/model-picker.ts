@@ -205,9 +205,11 @@ const ORDERS: Record<PickerSort, (a: CatalogModel, b: CatalogModel) => number> =
 export function pickerRows(models: CatalogModel[], role: PickerRole, state: PickerState, favorites: readonly string[] = [], current?: string): PickerRow[] {
   const matches = matcher(state.query);
   const starred = new Set(favorites);
+  const subscription = models.length > 0 && models.every((model) => connectionId(model).startsWith("cli:"));
   const rows = models
     .filter((model) => (!state.connection || connectionId(model) === state.connection) && (state.provider === "" || model.provider === state.provider) && matches(searched(model)))
-    .sort(ORDERS[state.sort])
+    // a subscription lists its models in the CLI's own order (strongest first), not by name
+    .sort(subscription ? () => 0 : ORDERS[state.sort])
     .map((model) => ({ model: { ...model, id: modelRef(model) }, usable: usableFor(model, role), favorite: starred.has(modelRef(model)) }));
   const query = squeeze(state.query.trim().toLowerCase());
   const searching = state.query.trim() !== "";

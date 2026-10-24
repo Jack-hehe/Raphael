@@ -18,7 +18,7 @@
 .mc-inherit[aria-pressed="true"] { background: var(--selected); }
 .mc-rail section + section { margin-top: 16px; }
 .mc-rail h3 { margin: 0 10px 6px; color: var(--text-3); font-size: var(--fs-xs); font-weight: 500; }
-.mc-source { position: relative; display: flex; align-items: center; gap: 10px; padding: 9px 10px; width: 100%; min-height: 52px; text-align: left; background: transparent; color: var(--text); border: 1px solid transparent; border-radius: var(--r-sm); }
+.mc-source { position: relative; display: flex; align-items: center; justify-content: flex-start; gap: 10px; padding: 9px 10px; width: 100%; min-height: 52px; text-align: left; background: transparent; color: var(--text); border: 1px solid transparent; border-radius: var(--r-sm); }
 .mc-source:hover { background: var(--hover); }
 .mc-source[aria-pressed="true"] { background: var(--panel); border-color: var(--edge); }
 .mc-source > span:not(.mono) { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; min-width: 0; }
@@ -113,3 +113,8 @@
 .mp-star:hover { background: var(--hover); color: var(--text); }
 .mp-star[aria-pressed="true"] { color: var(--accent-text); }
 .mc-item:has(.mp-star) .mc-row { padding-right: 38px; }
+
+/* Every brand mark sits in the same 24 px box, drawn at most 20 px, so names line up whatever the artwork's proportions. */
+.mc-source > .mono, .mc-row .mono, .mc-pane-head .mono { width: 24px; height: 24px; flex: none; }
+.mc-source > .mono .logo, .mc-row .mono .logo, .mc-pane-head .mono .logo { width: 20px; height: 20px; margin: auto; }
+.mc-source > .mono svg, .mc-row .mono svg, .mc-pane-head .mono svg { width: 20px; height: 20px; }
