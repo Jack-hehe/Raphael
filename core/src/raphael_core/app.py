@@ -109,6 +109,7 @@ from .protocol import (
 )
 from .router import Router
 from .services.attachments import Attachment
+from .services.attachment_store import AttachmentStore
 from .services.hub import ServiceHub, offline_transport
 from .services.keys import ServiceKeys, credential_keys, memory_keys
 from .services.speaker import Speaker
@@ -776,11 +777,14 @@ class App(Router):
         self.providers.register(self)
         # The services the tools stand on, as the owner chose them (`services.*`). With the fake LLM
         # every one of them is offline: a run of the tests reaches no network.
+        self.attachment_store = AttachmentStore(data_dir)
+        self.attachment_store.register(self)
         self.services = ServiceHub(
             self._conn,
             self.client,
             service_keys,
             models=self.brain.known_models,
+            transcribe=self._transcribe_from_messaging,
             transport=offline_transport() if fake_llm else None,
         )
         self.services.register(self)
@@ -848,6 +852,7 @@ class App(Router):
             computer=self.computer,
             memory=self.memory,
             services=self.services,
+            attachment_store=self.attachment_store,
             team=self.members,
             speaker=self.speaker,
         )

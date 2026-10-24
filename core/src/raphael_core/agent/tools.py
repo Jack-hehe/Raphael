@@ -359,14 +359,12 @@ class Tools:
     async def read_attachment(
         self, attachment: Attachment, question: str, ledger: Ledger, *, number: int = 1
     ) -> ToolResult:
-        """What the file `attachment` holds, for `question`: an image as the vision model sees it,
-        a PDF's text by the PDF service chosen. `number` is its place among the request's files,
-        which the model is told. The vision model's call is written to the spend through
-        `ledger`. What it says is untrusted."""
-        kind = "pdf" if attachment.is_pdf else "image"
+        """Read a supplied file through its configured reader. `number` identifies it among the
+        request's files. Paid vision calls use `ledger`; every result remains untrusted data."""
+        kind = "pdf" if attachment.is_pdf else "image" if attachment.is_image else "file"
         if self.services is None:
             return self._failed("read_attachment", "unavailable", kind)
-        if not self.services.enabled("pdf" if attachment.is_pdf else "vision"):
+        if (attachment.is_pdf or attachment.is_image) and not self.services.enabled("pdf" if attachment.is_pdf else "vision"):
             return self._failed("read_attachment", DISABLED, kind)
         try:
             kind, found = await asyncio.wait_for(

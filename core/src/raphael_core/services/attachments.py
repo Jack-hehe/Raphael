@@ -1,21 +1,15 @@
-"""The files the owner hands Raphael with a request: an image or a PDF.
+"""Files supplied with a request, as bounded bytes rather than caller-supplied paths.
 
-They come from the app (the composer's 「＋」) and from a chat app (a photo or a document sent to
-the bot), always as bytes with the request itself, never as a path: nothing in the core opens a file
-because a request named it. On the wire, `agent.ask` takes them as `attachments`, a list of
-`{name, mime, data}` with the bytes in base64; `from_wire` turns that list into `Attachment`s and
-refuses anything else whole, so a request either comes with every file it was sent or fails as a bad
-request (a text file is not one of these: the app puts its text into the question).
-
-What is checked here: at most MAX_ATTACHMENTS, a type of ACCEPTED_TYPES, and the first bytes really
-of that type (a file named photo.png that is an executable is refused), and at most the size of its
-kind. The name is only for showing the owner which file a turn had; it is cut to MAX_NAME_CHARS.
-
-Nothing here logs a name or a byte of a file.
+Every MIME type is accepted. Known vision/PDF types still require their magic bytes;
+all files share the per-file and total limits. Readers treat contents as untrusted data.
+Stored IDs are assigned only by the local attachment store, never taken from the wire.
+No file names, contents or bytes are logged.
 """
 
 import base64
 import binascii
+import mimetypes
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +18,9 @@ IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
 PDF_TYPE = "application/pdf"
 ACCEPTED_TYPES = (*IMAGE_TYPES, PDF_TYPE)
 MAX_ATTACHMENTS = 4
+MAX_FILE_BYTES = 50 * 1024 * 1024
+MAX_TOTAL_BYTES = 100 * 1024 * 1024
+# Legacy avatar and messaging download budgets stay independent of composer uploads.
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_PDF_BYTES = 20 * 1024 * 1024
 MAX_NAME_CHARS = 120
@@ -53,6 +50,13 @@ class Attachment:
     name: str
     mime: str
     data: bytes
+    stored_id: str | None = None
+
+    def metadata(self) -> dict:
+        result = {"name": self.name, "mime": self.mime}
+        if self.stored_id:
+            result.update(id=self.stored_id, size=len(self.data))
+        return result
 
     @property
     def is_image(self) -> bool:
@@ -74,17 +78,18 @@ def sniff_ok(mime: str, data: bytes) -> bool:
     return any(data.startswith(magic) for magic in _MAGIC.get(mime, ()))
 
 
-def checked(name: str, mime: str, data: bytes) -> Attachment:
+def checked(name: str, mime: str, data: bytes, *, max_bytes: int = MAX_FILE_BYTES) -> Attachment:
     """An `Attachment` of these parts, or AttachmentError when one of them is not acceptable."""
     mime = mime.strip().lower()
     if mime == "image/jpg":
         mime = "image/jpeg"
-    if mime not in ACCEPTED_TYPES:
-        raise AttachmentError("type")
-    limit = MAX_PDF_BYTES if mime == PDF_TYPE else MAX_IMAGE_BYTES
-    if not data or len(data) > limit:
+    if not re.fullmatch(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+", mime):
+        mime = "application/octet-stream"
+    if mime == "application/octet-stream":
+        mime = mimetypes.guess_type(name)[0] or mime
+    if not data or len(data) > max_bytes:
         raise AttachmentError("size")
-    if not sniff_ok(mime, data):
+    if mime in ACCEPTED_TYPES and not sniff_ok(mime, data):
         raise AttachmentError("type")
     name = " ".join(name.split())[:MAX_NAME_CHARS]
     if not name:
@@ -110,11 +115,13 @@ def from_wire(items: Any) -> list[Attachment]:
             raise AttachmentError("data")
         # base64 of the largest file a request may carry, plus a little: anything longer is refused
         # before it is decoded.
-        if len(data) > (MAX_PDF_BYTES * 4) // 3 + 8:
+        if len(data) > (MAX_FILE_BYTES * 4) // 3 + 8:
             raise AttachmentError("size")
         try:
             raw = base64.b64decode(data, validate=True)
         except (binascii.Error, ValueError):
             raise AttachmentError("data") from None
         result.append(checked(name, mime, raw))
+        if sum(len(a.data) for a in result) > MAX_TOTAL_BYTES:
+            raise AttachmentError("size")
     return result

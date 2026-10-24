@@ -365,7 +365,7 @@ class Switchboard:
                     raise too_large(limit) from None
                 raise
             try:
-                taken.append(checked(item.name or "file", item.mime or "", data))
+                taken.append(checked(item.name or "file", item.mime or "", data, max_bytes=limit))
             except AttachmentError as error:
                 if error.kind == "size":
                     raise too_large(limit) from None

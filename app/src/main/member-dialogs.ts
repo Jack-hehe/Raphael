@@ -296,11 +296,11 @@ function base64(bytes: Uint8Array): string {
 export async function readPicture(file: File): Promise<WireAttachment | null> {
   const mime = pictureType(file);
   if (mime === null) {
-    toaster.info(t("agent.attachKind"));
+    toaster.info(t("backend.avatarKind"));
     return null;
   }
   if (file.size <= 0 || file.size > PICTURE_MAX_BYTES) {
-    toaster.info(t("agent.attachTooBig", { p0: file.name, p1: 10, p2: 20 }));
+    toaster.info(t("agent.attachTooBig", { p0: file.name, p1: 10 }));
     return null;
   }
   try {

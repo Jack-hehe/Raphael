@@ -50,8 +50,8 @@ describe("content security policy", () => {
           expect(name, "'unsafe-inline' is for style attributes only").toBe("style-src");
         } else if (name === "frame-src") {
           expect(frameHosts, `${name} ${source}`).toContain(source);
-        } else if ((name === "img-src" || name === "media-src") && source === "https:") {
-          expect(source).toBe("https:");
+        } else if ((name === "img-src" || name === "media-src") && (source === "https:" || source === "blob:")) {
+          expect(["https:", "blob:"]).toContain(source);
         } else {
           expect(allowed, `${name} ${source}`).toContain(source);
         }
@@ -60,6 +60,10 @@ describe("content security policy", () => {
     expect(policy().get("frame-src")).toEqual(
       expect.arrayContaining(["https://www.youtube-nocookie.com", "https://www.youtube.com"]),
     );
+  });
+
+  test("the main window lets HTML5 drops deliver file bytes to its composer", () => {
+    expect(config.app.windows.find((window: { label: string }) => window.label === "main").dragDropEnabled).toBe(false);
   });
 
   test("plugins, objects, base tags, framing and forms are shut", () => {
