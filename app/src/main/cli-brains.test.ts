@@ -7,7 +7,7 @@ import { createCliBrains, cliBrainsHTML } from "./cli-brains";
 const CLIS = [
   { id: "claude" as const, name: "Claude Code", installed: true, logged_in: true, version: "2.1.69 (Claude Code)", login_command: "claude auth login", models: [{ id: "cli:claude", name: "CLI default" }, { id: "cli:claude:sonnet", name: "sonnet" }] },
   { id: "codex" as const, name: "Codex CLI", installed: true, logged_in: false, login_command: "codex login", models: [] },
-  { id: "gemini" as const, name: "Gemini CLI", installed: false, logged_in: false, login_command: "gemini", models: [] },
+  { id: "gemini" as const, name: "Antigravity", installed: false, logged_in: false, login_command: "agy", models: [] },
 ];
 afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); document.body.innerHTML = ""; });
 test("detection follows notifications and polls only while Settings is open; unknown auth is not ready", async () => {
@@ -36,7 +36,7 @@ test("subscription cards show readiness and only their applicable action; login 
   await controller.click(cards[1].querySelector("button")!);
   expect(api.brainsCliLogin).toHaveBeenCalledWith("codex");
   await controller.click(cards[2].querySelector("button")!);
-  expect(api.openExternalUrl).toHaveBeenCalledWith("https://geminicli.com/docs/get-started/installation/");
+  expect(api.openExternalUrl).toHaveBeenCalledWith("https://antigravity.google/download");
 });
 
 test("loading and failed discovery offer no install actions; a failed login leaves a retryable real button", async () => {

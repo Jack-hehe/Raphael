@@ -89,6 +89,7 @@ export function createMembers(host: MembersHost): MembersShell {
   let presetsRead = false;
   let catalog: Promise<ModelCatalog | null> | null = null;
   let clis: ReturnType<typeof api.brainsCli> | null = null;
+  let providers: ReturnType<typeof api.providersList> | null = null;
   let loads = 0;
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let open = typeof innerWidth === "number" ? innerWidth >= DETAILS_COLUMN_MIN_PX : true;
@@ -119,6 +120,7 @@ export function createMembers(host: MembersHost): MembersShell {
     presets: () => presets,
     catalog: () => (catalog ??= api.modelsCatalog().then((read) => read, () => null)),
     clis: async () => (await (clis ??= Promise.resolve().then(() => api.brainsCli()).catch(() => ({ clis: [] })))).clis,
+    providers: async () => (await (providers ??= Promise.resolve().then(() => api.providersList()).catch(() => ({ providers: [] })))).providers,
     update,
     setPicture,
     close: () => setDetails(false),
@@ -456,6 +458,7 @@ export function createMembers(host: MembersHost): MembersShell {
       if (event.type === "BrainsChanged") { clis = null; details.refreshCatalog(); }
       if (event.type === "ProvidersChanged") {
         catalog = null;
+        providers = null;
         details.refreshCatalog();
       }
       if (!host.visible()) return;

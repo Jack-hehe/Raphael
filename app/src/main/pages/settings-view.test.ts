@@ -158,8 +158,8 @@ test("服務 is in the 拉斐爾 tab, after its settings and before the memory, 
   // 看圖片 is the model picker, of the models that read images, in the dialog's page for 「指定模型」
   const picker = tab("agent", { services: { ...emptyServicesView(), open: { kind: "vision", service: "model" } }, brain: { ...brain, vision_model: "anthropic/claude-haiku-5.5" } });
   expect(picker).toMatch(/<span class="mp-slot" data-model-picker="vision"><button type="button" class="sel mp-trigger"[^>]*data-k="svc-vision">/);
-  expect(picker).toContain('<span class="mp-tname">Claude Haiku 5.5</span>');
-  expect(tab("agent", { services: { ...emptyServicesView(), open: { kind: "vision", service: "model" } } })).toContain('<span class="mp-tname">與回答相同</span>');
+  expect(picker).toContain('<strong class="mp-tname">Claude Haiku 5.5</strong>');
+  expect(tab("agent", { services: { ...emptyServicesView(), open: { kind: "vision", service: "model" } } })).toContain('<strong class="mp-tname">與回答相同</strong>');
   for (const id of ["general", "dictation", "connections", "messaging", "usage", "data", "about"] as const) {
     expect(tab(id, { services: emptyServicesView() })).not.toContain("data-svc");
   }
@@ -435,10 +435,10 @@ describe("拉斐爾", () => {
 describe("Models", () => {
   test("puts providers and model choices on Models, existing usage controls and analytics slot on Usage", () => {
     const html = tab("models");
-    expect(groups(html)).toEqual(["訂閱帳號", "供應商", "使用的模型"]);
+    expect(groups(html)).toEqual(["使用的模型", "訂閱帳號", "供應商"]);
     expect(names(html)).toEqual(["拉斐爾的回答", "整理文字", "語音轉文字"]);
     expect(html.indexOf('data-pv="directory"')).toBeGreaterThanOrEqual(0);
-    expect(html.indexOf('data-pv="directory"')).toBeLessThan(html.indexOf('data-row="stt-model"'));
+    expect(html.indexOf('data-pv="directory"')).toBeGreaterThan(html.indexOf('data-row="stt-model"'));
     expect(html).not.toContain('data-row="raphael-spend"');
     expect(html).not.toContain("data-usage-host");
     expect(html).not.toContain("data-fallback");
@@ -496,7 +496,7 @@ describe("Models", () => {
           `<div class="ctl"><span class="mp-slot" data-model-picker="${role}"><button type="button" class="sel mp-trigger" aria-haspopup="dialog"`,
       );
       // The button names what is chosen and leaves its price to the line under the row's name.
-      expect(row).toMatch(new RegExp(`data-k="${k}"><span class="mp-tname">${chosen}</span><svg`));
+      expect(row).toMatch(new RegExp(`data-k="${k}">.*<strong class="mp-tname">${chosen}</strong>.*<svg`));
       expect(row).not.toContain("mp-tprice");
       expect(buttons(row).filter((tag) => tag.includes('class="sel mp-trigger"'))).toHaveLength(1);
       expect(row).toContain('class="models-purpose-note"');
@@ -538,7 +538,7 @@ describe("Models", () => {
     const local = view({ brain: { ...brain, stt_engine: "local", stt_local_model: "sensevoice" } });
     expect(modelPickerLook(local, "stt").current).toBe("elevenlabs/scribe-v2");
     const row = rowOf(tab("models", { brain: { ...brain, stt_engine: "local", stt_local_model: "sensevoice" } }), "語音轉文字");
-    expect(row).toContain('<span class="mp-tname">本機 · SenseVoice</span>');
+    expect(row).toContain('<strong class="mp-tname">SenseVoice</strong><span class="mp-source">本機</span>');
     expect(row).toContain('data-price="stt-model">免費</span>');
   });
 
@@ -560,7 +560,7 @@ describe("Models", () => {
 
   test("shows a saved model the catalog does not have by its id, with an unknown price", () => {
     const row = rowOf(tab("models", { brain: { ...brain, cleanup_model: "x/old" } }), "整理文字");
-    expect(row).toContain('<span class="mp-tname">old</span>');
+    expect(row).toContain('<strong class="mp-tname">old</strong>');
     expect(row).toContain('data-price="model">價格未知</span>');
   });
 });

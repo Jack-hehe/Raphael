@@ -96,7 +96,7 @@ export function openDialog(o: DialogOptions): Dialog {
     } else if (e.key === "Tab") {
       const stops = [
         ...dialog.el.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), input:not([type=file]):not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+          'button:not(:disabled), input:not([type=file]):not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
         ),
       ];
       if (stops.length === 0) return;

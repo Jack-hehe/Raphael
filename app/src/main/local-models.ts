@@ -11,7 +11,7 @@
 import { GB, MB } from "./format";
 import { t } from "./i18n";
 import type { LocalModel } from "./types";
-import { CHECK, actionRow, btn, esc, ico, tabs } from "./ui";
+import { CHECK, actionRow, btn, esc, ico } from "./ui";
 
 /** What the local tab is drawn from. */
 export interface LocalView {
@@ -106,16 +106,6 @@ export function faceTitle(view: LocalView): string | null {
   return `${t("picker.tabLocal")} · ${model?.title ?? view.active}`;
 }
 
-/** The two tabs over the picker, 雲端 and 本機: real buttons, the open one selected and the only Tab stop. */
-export function tabsHTML(open: "cloud" | "local"): string {
-  const tab = (which: "cloud" | "local", label: string) => ({
-    id: which,
-    label,
-    attrs: ` id="mp-tab-${which}" data-tab="${which}" tabindex="${open === which ? 0 : -1}" aria-controls="mp-pane-${which}"`,
-  });
-  return tabs([tab("cloud", t("picker.tabCloud")), tab("local", t("picker.tabLocal"))], open, { label: t("picker.tabs"), kind: "nav", fill: true });
-}
-
 /** The question before a deletion; the fallback's adds who backs up the cloud afterwards, if anyone. */
 function deleteQuestion(model: LocalModel, view: LocalView): string {
   const ask = t("local.confirmDelete", { p0: model.title, p1: formatSize(model.size) });
@@ -124,7 +114,7 @@ function deleteQuestion(model: LocalModel, view: LocalView): string {
   return `${ask}${next ? t("local.afterNext", { p0: next.title }) : t("local.afterNone")}`;
 }
 
-function rowHTML(model: LocalModel, view: LocalView, confirm: LocalConfirm | null): string {
+function rowHTML(model: LocalModel, view: LocalView, confirm: LocalConfirm | null, selectionOnly: boolean): string {
   const state = localState(model, view);
   const busy = view.download !== null;
   const size = formatSize(model.size);
@@ -150,14 +140,14 @@ function rowHTML(model: LocalModel, view: LocalView, confirm: LocalConfirm | nul
     ? `<span class="lm-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${state.kind === "installing" ? 100 : state.percent}" aria-label="${esc(model.title)}"><i style="width:${state.kind === "installing" ? 100 : state.percent}%"></i></span>`
     : "";
   const main =
-    `<button type="button" class="lm-main" data-act="use" data-name="${esc(model.name)}"${state.kind === "active" ? ' aria-current="true"' : ""}${busy ? " disabled" : ""} aria-label="${esc(label)}">` +
+    `<button type="button" class="lm-main"${selectionOnly ? ' role="radio"' : ""} data-act="use" data-name="${esc(model.name)}"${state.kind === "active" ? ' aria-current="true"' : ""}${busy ? " disabled" : ""} aria-label="${esc(label)}">` +
     `<span class="ck">${state.kind === "active" ? CHECK : ""}</span>` +
     `<span class="mp-main"><span class="mp-line"><span class="mp-name">${esc(model.title)}</span><span class="lm-state num" data-state>${esc(stateText(state))}</span></span>` +
     `<span class="mp-sub">${esc(sub)}</span>${bar}</span></button>`;
   let action = "";
   if (fetching) {
     action = btn(esc(t("local.cancel")), "sm", ` data-act="cancel" aria-label="${esc(t("local.cancelDownload", { p0: model.title }))}"`);
-  } else if (!model.ready && !busy) {
+  } else if (!model.ready && !busy && !selectionOnly) {
     action = btn(esc(t("local.download")), "sm", ` data-act="download" data-name="${esc(model.name)}" aria-label="${esc(t("local.downloadLabel", { p0: model.title, p1: size }))}"`);
   } else if (model.ready && state.kind !== "active" && !busy) {
     const text = t("local.deleteLabel", { p0: model.title });
@@ -167,8 +157,8 @@ function rowHTML(model: LocalModel, view: LocalView, confirm: LocalConfirm | nul
 }
 
 /** The rows of the local tab, with the question being asked in one of them. */
-export function localListHTML(view: LocalView, confirm: LocalConfirm | null): string {
+export function localListHTML(view: LocalView, confirm: LocalConfirm | null, selectionOnly = false): string {
   if (view.models === "loading") return `<p class="mp-empty" role="status">${esc(t("common.loading"))}</p>`;
   if (view.models === "failed") return `<p class="mp-empty" role="status">${esc(t("local.unavailable"))}</p>`;
-  return view.models.map((model) => rowHTML(model, view, confirm)).join("");
+  return view.models.map((model) => rowHTML(model, view, confirm, selectionOnly)).join("");
 }

@@ -1,42 +1,18 @@
-// The model picker: a button that shows the model chosen for one of Raphael's roles and its price,
-// and a panel to choose another from enabled providers (`models.catalog`). The panel
-// has a search field, the order and the maker as two small dropdowns, and the models of the role's
-// kind: those the role can use first, then the others, greyed, with the reason in plain words.
-// The models the user starred (`favorites`, kept by the core for each role) are listed first, under
-// 我的最愛, whatever the order, and a search narrows them like the others. Every row has a star
-// button beside its option. The stars are out of the tab order but for the star of the highlighted
-// row, which is one stop of it: the arrows still move the highlight, and the star is reached with a
-// Tab and pressed with Enter or Space.
-// The speech-to-text picker has two tabs over it, 雲端 (all of this) and 本機 (local-models.ts: the
-// speech models that run on this computer, downloaded only when the user chooses one).
-// The picker of 看圖片 (Settings › 拉斐爾 › 服務, the role `vision`) lists the language models too,
-// those that read images first (`acceptsImages`), and above them all a row of its own (`lead`):
-// 「與回答相同」, the value "", which is the model that answers.
-// Keys: the arrows and Enter in the list, typing searches, Tab goes between the tabs, the search, the
-// star of the highlighted row and the two dropdowns, Left and Right change the tab, Esc closes. The panel is the app's popover (ui.ts), so
-// it closes the way menus do.
-//
-// The settings page draws its rows as HTML, and draws them again often: a row holds the picker's
-// button (`modelPickerHTML`, a dropdown to the page's rules and styles), and the page mounts the
-// picker on it after each drawing. A list that was open stays open on the new button, with what
-// was being searched.
-
+// A two-phase model chooser shared by settings, services and member details.
 import "./model-picker.css";
-import { t } from "./i18n";
+import { getLocale, t } from "./i18n";
 import {
   type LocalConfirm,
   type LocalView,
   faceTitle,
   localListHTML,
-  localState,
-  stateText,
-  tabsHTML,
 } from "./local-models";
-import { formatPerMinute, formatPerMtok, pricingNote } from "./pricing";
+import { formatPerMinute, formatPerMtok } from "./pricing";
 import { providerMark } from "./provider-marks";
-import { cliModels, subscriptionMarks } from "./cli-brains";
-import type { CatalogModel, CliBrain, ModelCatalog, ModelRole, ModelProvider } from "./types";
-import { CHECK, closeMenu, esc, ico, menuIsOpenFor, openPopover, placeMenu } from "./ui";
+import { CLIS, cliModels } from "./cli-brains";
+import type { CatalogModel, CliBrain, CliBrainId, ModelCatalog, ModelRole, ModelProvider } from "./types";
+import { CHECK, btn, esc, ico } from "./ui";
+import { openDialog, type Dialog } from "./member-dialogs";
 
 // ---------- what the list shows ----------
 
@@ -131,13 +107,6 @@ export function formatContext(tokens: number): string {
 }
 
 /** The day OpenRouter added a model: 「2026 年 10 月 18 日上架」. */
-function addedText(ms: number): string {
-  const d = new Date(ms);
-  const day = t("format.003", { p0: d.getMonth() + 1, p1: d.getDate() });
-  return t("picker.added", { p0: t("format.004", { p0: d.getFullYear(), p1: day }) });
-}
-
-/** The plain words for each reason the core gives why a role cannot use a model (brain/catalog.py). */
 const REASONS = new Map<string, () => string>([
   ["no_structured_output", () => t("picker.reasonJson")],
   ["reasoning_required", () => t("picker.reasonReasoning")],
@@ -151,14 +120,6 @@ export const reasonText = (reason: string | null | undefined): string =>
   (reason ? REASONS.get(reason)?.() : undefined) ?? t("picker.reasonOther");
 
 /** The heading over the models a role cannot use. */
-const UNUSABLE: Record<PickerRole, () => string> = {
-  cleanup: () => t("picker.unusableCleanup"),
-  answer: () => t("picker.unusableAnswer"),
-  stt: () => t("picker.unusableStt"),
-  vision: () => t("picker.unusableVision"),
-};
-
-/** A row of the list: a model, whether the role can use it, and whether the user starred it. */
 export interface PickerRow {
   model: CatalogModel;
   usable: boolean;
@@ -340,7 +301,6 @@ export class PickerList {
     public favorites: readonly string[] = [],
     /** The choice above every model, if the picker has one (`PickerLead`). */
     private readonly lead: PickerLead | null = null,
-    private readonly connectionsInfo: readonly ModelProvider[] = [],
   ) {
     this.state = { ...DEFAULT_PICKER_STATE, ...state };
     this.refresh(current);
@@ -371,27 +331,6 @@ export class PickerList {
   setConnection(connection: string): void {
     this.state = { ...this.state, connection, provider: "" };
     this.refresh(this.current);
-  }
-
-  connections(): PickerChoice[] {
-    const groups = new Map<string, CatalogModel[]>();
-    for (const model of this.models) {
-      const id = connectionId(model);
-      const group = groups.get(id) ?? [];
-      group.push(model); groups.set(id, group);
-    }
-    for (const provider of this.connectionsInfo) {
-      if (provider.enabled && !groups.has(provider.id)) groups.set(provider.id, []);
-    }
-    const name = (id: string, models: CatalogModel[]) => this.connectionsInfo.find((p) => p.id === id)?.name ?? connectionName(models[0]);
-    return [{ value: "", label: t("picker.allConnections"), detail: String(this.models.length) },
-      ...[...groups].sort(([a, am], [b, bm]) => a === "openrouter" ? 1 : b === "openrouter" ? -1 : collator.compare(name(a, am), name(b, bm)))
-        .map(([value, models]) => ({ value, label: name(value, models), detail: String(models.length) }))];
-  }
-
-  mark(id: string, fallback: string): string {
-    if (id === "subscription") return subscriptionMarks();
-    return providerMark(this.connectionsInfo.find((p) => p.id === id)?.kind ?? fallback);
   }
 
   /** The makers to narrow the list to. */
@@ -437,159 +376,7 @@ export class PickerList {
   }
 }
 
-// ---------- the HTML ----------
 
-/** The star beside a row: a real button that adds the model to 我的最愛 or takes it out. It is not a stop of the Tab key (see `MountedPicker.cycle`). */
-function starHTML(model: CatalogModel, on: boolean): string {
-  const label = t(on ? "picker.favRemove" : "picker.favAdd", { p0: model.name });
-  return (
-    `<button type="button" class="mp-star" tabindex="-1" data-star="${esc(model.id)}"${on ? " data-on" : ""} ` +
-    `aria-label="${esc(label)}" title="${esc(t(on ? "picker.favRemoveTitle" : "picker.favAddTitle"))}">${ico("star")}</button>`
-  );
-}
-
-/** One row: the name, the price, and a line with the maker, the context or the dictionary, the date when the list is newest first, and why the role cannot use it; the star is beside it. */
-function optionHTML(row: PickerRow, index: number, list: PickerList): string {
-  const { model } = row;
-  const chosen = model.id === list.current;
-  if (row.lead) return leadHTML(model.id, model.name, index, chosen);
-  const details = [model.provider];
-  if (model.context_length !== null) details.push(t("picker.context", { p0: formatContext(model.context_length) }));
-  if (model.capabilities.dictionary_hints) details.push(t("picker.dictionary"));
-  if (list.state.sort === "newest" && model.created_at_ms !== null) details.push(addedText(model.created_at_ms));
-  const reason = row.usable ? "" : reasonText(fitFor(model, list.role).reason);
-  if (reason) details.push(reason);
-  const price = priceText(model, list.role);
-  // What a screen reader says of the row, in an order that makes sense when heard.
-  const heard = [model.name, connectionName(model), model.provider, priceDescription(model, list.role)];
-  if (row.favorite) heard.push(t("picker.favorites"));
-  if (chosen) heard.push(t("picker.current"));
-  if (reason) heard.push(reason);
-  return (
-    `<div class="mp-row" role="presentation">` +
-    `<button type="button" class="mp-opt" role="option" id="mp-o-${index}" tabindex="-1" data-id="${esc(model.id)}" aria-selected="false"` +
-    `${row.usable ? "" : ' aria-disabled="true"'}${chosen ? " data-current" : ""} aria-label="${esc(heard.join(", "))}" title="${esc(model.id)}">` +
-    `<span class="ck">${chosen ? CHECK : ""}</span>` +
-    `<span class="mp-main"><span class="mp-line"><span class="mp-row-mark" aria-hidden="true">${model.id.startsWith("cli:") ? providerMark(model.provider) : list.mark(connectionId(model), connectionName(model))}</span><span class="mp-name">${esc(model.name)}</span>` +
-    `<span class="mp-price num">${esc(price)}</span></span>` +
-    (details.length ? `<span class="mp-sub">${esc(details.join(" · "))}</span>` : "") +
-    `</span></button>` +
-    starHTML(model, row.favorite) +
-    `</div>`
-  );
-}
-
-/** The lead's row: its name alone, checked when it is chosen; no price, no maker, and a gap where a star would be. */
-function leadHTML(id: string, name: string, index: number, chosen: boolean): string {
-  const heard = chosen ? `${name}, ${t("picker.current")}` : name;
-  return (
-    `<div class="mp-row" role="presentation">` +
-    `<button type="button" class="mp-opt mp-lead" role="option" id="mp-o-${index}" tabindex="-1" data-id="${esc(id)}" aria-selected="false"` +
-    `${chosen ? " data-current" : ""} aria-label="${esc(heard)}">` +
-    `<span class="ck">${chosen ? CHECK : ""}</span>` +
-    `<span class="mp-main"><span class="mp-line"><span class="mp-name">${esc(name)}</span></span></span></button>` +
-    `<span class="mp-star-gap" aria-hidden="true"></span>` +
-    `</div>`
-  );
-}
-
-const headingHTML = (text: string): string => `<div class="mp-group" aria-hidden="true">${esc(text)}</div>`;
-
-/**
- * The pinned choice, provider groups and their favourites each have a heading. Search relevance can
- * split a provider into more than one group. Unusable models retain their reason and section heading.
- */
-export function listHTML(list: PickerList): string {
-  const { rows } = list;
-  const pinned = !list.state.connection && !list.state.query.trim();
-  return rows
-    .map((row, index) => {
-      let heading = "";
-      const previous = rows[index - 1];
-      const isPinned = pinned && row.model.id === list.current;
-      const newGroup = !previous || previous.lead || pinned && previous.model.id === list.current || connectionId(previous.model) !== connectionId(row.model);
-      if (!row.lead && isPinned) heading = headingHTML(t("picker.current"));
-      else if (!row.lead && newGroup) {
-        heading += `<div class="mp-provider"><span class="mp-provider-mark" aria-hidden="true">${list.mark(connectionId(row.model), connectionName(row.model))}</span><span>${esc(connectionName(row.model))}</span></div>`;
-      }
-      if (!row.lead && !isPinned) {
-        if (row.favorite && (newGroup || !previous?.favorite)) heading += headingHTML(t("picker.favorites"));
-        else if (!row.favorite && !row.usable && (newGroup || previous?.favorite || previous?.usable)) heading += headingHTML(UNUSABLE[list.role]());
-        else if (!row.favorite && previous?.favorite && !newGroup) heading += headingHTML(t("picker.others"));
-      }
-      return heading + optionHTML(row, index, list);
-    })
-    .join("");
-}
-
-function dropdownButtonHTML(which: "sort" | "provider", label: string, shown: string): string {
-  return (
-    `<button type="button" class="mp-dd" data-dd="${which}" aria-haspopup="listbox" aria-expanded="false" aria-label="${esc(`${label}: ${shown}`)}">` +
-    `<span>${esc(shown)}</span>${ico("down")}</button>`
-  );
-}
-
-function dropdownHTML(which: "sort" | "provider", label: string, choices: PickerChoice[], chosen: string): string {
-  return (
-    `<div class="mp-ddlist" role="listbox" id="mp-dd-${which}" aria-label="${esc(label)}">` +
-    choices
-      .map(
-        (c) =>
-          `<button type="button" role="option" tabindex="-1" data-value="${esc(c.value)}" aria-selected="${c.value === chosen}">` +
-          `<span class="ck">${c.value === chosen ? CHECK : ""}</span><span class="mt">${esc(c.label)}</span>` +
-          (c.detail ? `<span class="md num">${esc(c.detail)}</span>` : "") +
-          `</button>`,
-      )
-      .join("") +
-    `</div>`
-  );
-}
-
-const sortLabel = (sort: PickerSort): string => sortChoices().find((c) => c.value === sort)?.label ?? sort;
-const providerLabel = (provider: string): string => provider || t("picker.allProviders");
-
-/** The panel, empty: its list, its line under the list and its small print are filled in apart. With `tab`, the picker has the local tab too. */
-function panelHTML(list: PickerList, label: string, tab: "cloud" | "local" | null): string {
-  const search = t("picker.search");
-  const cloud =
-    `<div class="mp-pane" id="mp-pane-cloud"${tab ? ` role="tabpanel" aria-labelledby="mp-tab-cloud"${tab === "cloud" ? "" : " hidden"}` : ""}>` +
-    `<div class="mp-connections" role="group" aria-label="${esc(t("picker.connections"))}">${connectionsHTML(list)}</div>` +
-    `<div class="mp-head">` +
-    `<label class="field mp-search">${ico("search")}<input id="mp-search" type="text" role="combobox" aria-autocomplete="list" aria-expanded="true" ` +
-    `aria-controls="mp-list" aria-label="${esc(search)}" placeholder="${esc(search)}" autocomplete="off" spellcheck="false"></label>` +
-    `<div class="mp-filters">` +
-    dropdownButtonHTML("sort", t("picker.sort"), sortLabel(list.state.sort)) +
-    dropdownButtonHTML("provider", t("picker.provider"), providerLabel(list.state.provider)) +
-    `</div></div>` +
-    `<div class="mp-cols" aria-hidden="true"><span>${esc(t("picker.model"))}</span>` +
-    `<span>${esc(KIND[list.role] === "llm" ? t("picker.tokenPrices") : t("picker.prices"))}</span></div>` +
-    `<div class="mp-scroll"><div class="mp-list" id="mp-list" role="listbox" aria-label="${esc(label)}"></div>` +
-    `<p class="mp-empty" role="status" hidden></p></div>` +
-    `<p class="mp-foot"></p></div>`;
-  if (!tab) return cloud;
-  return (
-    tabsHTML(tab) +
-    cloud +
-    `<div class="mp-pane" id="mp-pane-local" role="tabpanel" aria-labelledby="mp-tab-local"${tab === "local" ? "" : " hidden"}>` +
-    `<div class="mp-scroll"><div class="lm-list" id="mp-locallist" aria-label="${esc(label)}"></div></div>` +
-    `<p class="mp-foot">${esc(t("local.intro"))}</p></div>`
-  );
-}
-
-function connectionsHTML(list: PickerList): string {
-  return list.connections().map((c) => `<button type="button" class="btn mp-connection" data-connection="${esc(c.value)}" aria-pressed="${c.value === (list.state.connection ?? "")}">` +
-    (c.value ? `<span class="mp-row-mark" aria-hidden="true">${list.mark(c.value, c.label)}</span>` : "") +
-    `<span>${esc(c.label)}</span><span class="num">${esc(c.detail)}</span></button>`).join("");
-}
-
-/** The small print under the list: how many models it shows, and where their prices are from. */
-export function footText(catalog: ModelCatalog | null, shown: number, nowMs = Date.now()): string {
-  if (!catalog) return "";
-  const where = (catalog.source === "builtin" ? `${t("picker.builtin")} ` : "") + pricingNote(catalog, nowMs);
-  return `${t("picker.count", { p0: shown })} · ${where}`;
-}
-
-/** What to tell the user of each chosen model that OpenRouter no longer lists and that went back to its default (`replaced`). */
 export function replacementNotices(catalog: ModelCatalog): string[] {
   const role = { cleanup: "picker.roleCleanup", answer: "picker.roleAnswer", stt: "picker.roleStt" } as const;
   return catalog.replaced.map((r) => {
@@ -598,10 +385,6 @@ export function replacementNotices(catalog: ModelCatalog): string[] {
   });
 }
 
-/** The name of a model the catalog does not have (yet): the last part of its id. */
-const shortName = (id: string): string => id.slice(id.lastIndexOf("/") + 1) || id;
-
-// ---------- on the page ----------
 
 export interface ModelPickerOptions {
   /** What the model is for. */
@@ -626,6 +409,8 @@ export interface ModelPickerOptions {
   disabled?: boolean;
   /** The user chose `id`: never the model chosen now, never one the role cannot use. The page saves it. */
   onChoose: (id: string) => void;
+  onSources?: () => void;
+  onCliAction?: (id: CliBrainId) => void;
   /** The speech models of this computer (a second tab) and what is under way: only the speech-to-text picker has it. */
   local?: LocalView;
   /** The user chose the local model `name`, or pressed 下載 on it. The page downloads it if it is not on disk, saves it and hands the progress back with `update`. */
@@ -654,663 +439,331 @@ export interface ModelPicker {
   readonly button: HTMLButtonElement;
 }
 
-/** What the button shows: the chosen model (or choice), and its price unless the page shows that. */
-function buttonFace(o: ModelPickerLook): { inner: string; label: string; title: string } {
-  // The lead chosen: its name alone, with no price.
-  if (o.lead && o.current === o.lead.id && !o.local) {
-    return { inner: `<span class="mp-tname">${esc(o.lead.name)}</span>${ico("down")}`, label: `${o.label}: ${o.lead.name}`, title: o.lead.name };
-  }
-  const local = o.local ? faceTitle(o.local) : null;
-  const model = local ? undefined : pickerModels(o).find((m) => m.id === o.current);
-  const name = local ?? model?.name ?? shortName(o.current);
-  const price = local ? t("settings.sttLocalPrice") : model ? priceText(model, o.role) : o.loading ? "…" : "";
-  const said = local ? t("settings.sttLocalPrice") : model ? priceDescription(model, o.role) : "";
-  return {
-    inner:
-      `<span class="mp-tname">${esc(name)}</span>` +
-      (price && o.showPrice !== false ? `<span class="mp-tprice num">${esc(price)}</span>` : "") +
-      ico("down"),
-    label: `${o.label}: ${name}${said ? `, ${said}` : ""}`,
-    title: local ?? (model ? `${model.provider}: ${model.name}` : o.current),
-  };
+export interface ChooserSource {
+  id: string;
+  name: string;
+  kind: string;
+  group: "subscriptions" | "api" | "local";
+  models: CatalogModel[];
+  cli?: CliBrain;
 }
 
-/** The button alone. It is a dropdown (`sel`): it looks and lines up like the page's others. */
+const baseRef = (ref: string): string => ref.split("?effort=")[0];
+const effortOf = (ref: string, models: CatalogModel[]): string => ref.split("?effort=")[1] ??
+  models.flatMap((model) => Object.entries(model.effort_models ?? {})).find(([, value]) => value === ref)?.[0] ?? "";
+const groupKeys = { subscriptions: "chooser.subscriptions", api: "chooser.api", local: "chooser.local" } as const;
+const isLocal = (kind: string): boolean => ["ollama", "lmstudio", "lm_studio"].includes(kind);
+const shortName = (id: string): string => {
+  const raw = baseRef(id).replace(/^@[^:]+:/, "").replace(/^cli:[^:]+:/, "");
+  return raw.slice(raw.lastIndexOf("/") + 1) || id;
+};
+
+function pickerModels(o: ModelPickerLook): CatalogModel[] {
+  const models = o.catalog ? modelsFor(o.catalog, o.role).filter((m) =>
+    !m.id.startsWith("cli:") && o.providers?.find((p) => p.id === connectionId(m))?.enabled !== false) : [];
+  return [...models, ...(o.role === "answer" ? cliModels(o.clis ?? []) : [])];
+}
+
+export function chooserSources(o: ModelPickerLook): ChooserSource[] {
+  const models = pickerModels(o);
+  const sources: ChooserSource[] = o.role === "answer" ? CLIS.map((known) => ({
+    id: `cli:${known.id}`, name: known.name, kind: known.mark, group: "subscriptions" as const,
+    cli: o.clis?.find((c) => c.id === known.id), models: models.filter((m) => connectionId(m) === `cli:${known.id}`),
+  })) : [];
+  for (const provider of o.providers ?? []) {
+    if (provider.enabled) sources.push({ id: provider.id, name: provider.name, kind: provider.kind,
+      group: isLocal(provider.kind) ? "local" : "api", models: models.filter((m) => connectionId(m) === provider.id) });
+  }
+  for (const model of models) {
+    const id = connectionId(model);
+    if (!sources.some((source) => source.id === id)) {
+      const name = connectionName(model), kind = id === "openrouter" ? "openrouter" : name.toLowerCase();
+      sources.push({ id, name, kind, group: isLocal(kind) ? "local" : "api", models: models.filter((m) => connectionId(m) === id) });
+    }
+  }
+  if (o.local) sources.push({ id: "local-speech", name: t("chooser.localSpeech"), kind: "", group: "local", models: [] });
+  return sources;
+}
+
+/** A fallback is allowed only for an exact maker and model identifier, never a similar name. */
+export function chooserPrice(model: CatalogModel, models: readonly CatalogModel[], role: PickerRole): string {
+  if (model.id.startsWith("cli:")) return "";
+  if (model.free || model.variable_price || model.per_minute !== null || hasTokenPrice(model)) return priceText(model, role);
+  const raw = model.id.replace(/^@[^:]+:/, "");
+  const maker = model.provider.toLowerCase();
+  const priced = models.find((other) => connectionId(other) === "openrouter" &&
+    other.provider.toLowerCase() === maker &&
+    (other.id === raw || other.id === `${maker}/${raw}`) &&
+    (hasTokenPrice(other) || other.per_minute !== null || other.free));
+  return priced ? priceText(priced, role) : "";
+}
+
+function concreteCurrent(o: ModelPickerLook, models = pickerModels(o)): string {
+  const ref = baseRef(o.current);
+  return /^cli:[^:]+$/.test(ref) ? models.find((m) => connectionId(m) === ref && m.is_default)?.id ?? ref :
+    models.find((m) => Object.values(m.effort_models ?? {}).includes(ref))?.id ?? ref;
+}
+
+function buttonFace(o: ModelPickerLook): { inner: string; label: string } {
+  // Public cached names remain useful after logout; only pickerModels can supply runnable rows.
+  const models = [...pickerModels(o).filter((m) => !m.id.startsWith("cli:")), ...cliModels(o.clis ?? [], false)];
+  const ref = concreteCurrent(o, models), model = models.find((m) => m.id === ref);
+  const local = o.local?.active ? faceTitle(o.local) : null;
+  const name = local ? local.split(" · ").slice(1).join(" · ") : o.lead?.id === ref ? o.lead.name : model?.name ?? shortName(ref);
+  const source = local ? t("picker.tabLocal") : model ? connectionName(model) : ref.startsWith("cli:") ?
+    `${CLIS.find((c) => ref.startsWith(`cli:${c.id}`))?.name ?? ""} ${t("brains.subscription")}` : o.lead?.id === ref ? t("chooser.same") : "";
+  return { inner: `${model ? providerMark(model.provider, true) : ""}<span class="mp-ttext"><strong class="mp-tname">${esc(name)}</strong><span class="mp-source">${esc(source)}</span></span>${ico("down")}`,
+    label: `${o.label}: ${name}${source ? ` · ${source}` : ""}` };
+}
+
 function buttonHTML(o: ModelPickerLook): string {
   const face = buttonFace(o);
-  return (
-    `<button type="button" class="sel mp-trigger" aria-haspopup="dialog" aria-expanded="false" aria-label="${esc(face.label)}" title="${esc(face.title)}"` +
-    `${o.key ? ` data-k="${esc(o.key)}"` : ""}${o.disabled ? " disabled" : ""}>${face.inner}</button>`
-  );
+  return `<button type="button" class="sel mp-trigger" aria-haspopup="dialog" aria-expanded="false" aria-label="${esc(face.label)}"` +
+    `${o.key ? ` data-k="${esc(o.key)}"` : ""}${o.disabled ? " disabled" : ""}>${face.inner}</button>`;
 }
 
-/** A picker's button in its slot, for a page drawn as HTML; `mountModelPicker` on the slot makes it work. */
-export const modelPickerHTML = (o: ModelPickerLook): string =>
-  `<span class="mp-slot" data-model-picker="${o.role}">${buttonHTML(o)}</span>`;
-
-/** Makes a picker of `container`: the button drawn in it (`modelPickerHTML`), or a new one in its place. */
+export const modelPickerHTML = (o: ModelPickerLook): string => `<span class="mp-slot" data-model-picker="${o.role}">${buttonHTML(o)}</span>`;
+const mounted = new WeakMap<HTMLElement, MountedPicker>();
+let opened: MountedPicker | null = null;
 export function mountModelPicker(container: HTMLElement, options: ModelPickerOptions): ModelPicker {
+  const button = container.querySelector<HTMLElement>(".mp-trigger");
+  const previous = button ? mounted.get(button) : undefined;
+  if (previous) { previous.update(options); return previous; }
   return new MountedPicker(container, options);
 }
 
-/** A key that types something: a letter, a digit, a mark (Space is no such key: it presses buttons). */
-const typing = (e: KeyboardEvent): boolean => e.key.length === 1 && e.key !== " " && !e.ctrlKey && !e.metaKey && !e.altKey;
+const effortText = (effort: string): string => {
+  const keys = { none: "chooser.none", minimal: "chooser.minimal", low: "chooser.low", medium: "chooser.medium", high: "chooser.high", xhigh: "chooser.xhigh", max: "chooser.max" } as const;
+  return effort in keys ? t(keys[effort as keyof typeof keys]) : effort;
+};
 
-/** The picker whose list is open: a redraw hands its list to the same control. */
-let opened: { picker: MountedPicker; role: PickerRole; button: HTMLElement } | null = null;
-
-function pickerModels(o: ModelPickerLook): CatalogModel[] {
-  const apiModels = o.catalog ? modelsFor(o.catalog, o.role).filter((m) => !m.id.startsWith("cli:") && o.providers?.find((p) => p.id === connectionId(m))?.enabled !== false) : [];
-  return [...apiModels, ...(o.role === "answer" ? cliModels(o.clis ?? []) : [])];
-}
-
-interface Dropdown {
-  which: "sort" | "provider";
-  el: HTMLElement;
-  button: HTMLElement;
+/** Radio rows are shared by the dialog and the catalog's pure rendering tests. */
+export function listHTML(list: PickerList, selected = list.current, models: readonly CatalogModel[] = [], stars = false): string {
+  return list.rows.map(({ model, usable, lead }) => {
+    const chosen = model.id === selected;
+    const descriptions = { "cli:claude:sonnet": "chooser.sonnet", "cli:claude:opus": "chooser.opus", "cli:claude:haiku": "chooser.haiku" } as const;
+    const key = descriptions[model.id as keyof typeof descriptions];
+    const description = key ? t(key) : getLocale() === "en" ? model.description : "";
+    const sub = [description || [model.provider, model.context_length ? formatContext(model.context_length) : ""].filter(Boolean).join(" · "),
+      !usable ? reasonText(fitFor(model, list.role).reason) : ""].filter(Boolean).join(" · ");
+    const price = lead ? "" : chooserPrice(model, models, list.role);
+    return `<div class="mc-item"><button type="button" role="radio" class="mc-row mp-opt${lead ? " mp-lead" : ""}" aria-checked="${chosen}" data-model="${esc(model.id)}" data-id="${esc(model.id)}"${chosen ? ' data-current="true"' : ""}${!usable ? ' disabled aria-disabled="true"' : ""}>` +
+      `<span class="mc-radio" aria-hidden="true"></span>${lead ? "" : providerMark(model.provider, true)}<span class="mc-model"><span class="mc-model-line"><strong>${esc(model.name)}</strong>${model.is_default ? `<span class="mc-default">${esc(t("chooser.default"))}</span>` : ""}</span>` +
+      `<span class="mc-description">${esc(sub)}</span></span>${price ? `<span class="mc-price num">${esc(price)}</span>` : ""}</button>` +
+      (stars && !lead ? `<button type="button" class="mp-star" data-star="${esc(model.id)}" aria-pressed="${list.favorites.includes(model.id)}" aria-label="${esc(t(list.favorites.includes(model.id) ? "picker.favRemove" : "picker.favAdd", { p0: model.name }))}">${ico("star")}</button>` : "") + `</div>`;
+  }).join("");
 }
 
 class MountedPicker implements ModelPicker {
   readonly button: HTMLButtonElement;
   private o: ModelPickerOptions;
-  private list: PickerList | null = null;
-  private panel: HTMLElement | null = null;
-  private dropdown: Dropdown | null = null;
-  /** The row drawn as highlighted. */
-  private lit: HTMLElement | null = null;
-  /** The tab that is open, when there are two. */
-  private tab: "cloud" | "local" = "cloud";
-  /** The question the local tab is asking, if it is. */
+  private dialog: Dialog | null = null;
+  private source = "";
+  private draft = "";
+  private effort = "";
+  private query = "";
+  private sort: PickerSort = "name";
+  private maker = "";
+  private localDraft: string | null = null;
   private confirm: LocalConfirm | null = null;
-  /** What the local tab was drawn from, to tell a new byte count (drawn in place) from a new state (drawn again). */
-  private localDrawn = "";
+  private recent: string[] = [];
 
   constructor(container: HTMLElement, options: ModelPickerOptions) {
     this.o = { ...options };
-    if (!container.querySelector(".mp-trigger")) container.innerHTML = buttonHTML(this.o);
+    if (!container.querySelector(".mp-trigger")) container.innerHTML = buttonHTML(options);
     this.button = container.querySelector<HTMLButtonElement>(".mp-trigger")!;
+    mounted.set(this.button, this);
     this.paintButton();
-    this.button.addEventListener("click", (e) => {
-      // The page's own handler of dropdowns (`sel`) would close the list this click opens.
-      e.stopPropagation();
-      if (this.isOpen) this.close();
-      else this.open();
+    this.button.addEventListener("click", (event) => { event.stopPropagation(); this.open(); });
+    this.button.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); this.open(); }
     });
-    this.button.addEventListener("keydown", (e) => this.buttonKey(e));
-    this.takeOver();
+    if (opened && !opened.button.isConnected && opened.o.role === options.role && opened.o.key === options.key) {
+      const previous = opened;
+      this.source = previous.source; this.draft = previous.draft; this.effort = previous.effort;
+      this.query = previous.query; this.sort = previous.sort; this.maker = previous.maker; this.localDraft = previous.localDraft;
+      previous.close(); this.show();
+    }
   }
 
-  get isOpen(): boolean {
-    return this.panel !== null && menuIsOpenFor(this.button);
-  }
-
+  get isOpen(): boolean { return this.dialog !== null; }
   update(changes: Partial<ModelPickerLook>): void {
-    this.o = { ...this.o, ...changes, role: this.o.role };
-    this.paintButton();
-    if (!this.isOpen || !this.list) return;
-    if (this.o.disabled) {
-      this.close();
-      return;
-    }
-    // The list is made again, as it was searched and highlighted: the choices may have changed too.
-    const highlighted = this.list.activeId();
-    this.list = this.newList(this.list.state);
-    if (highlighted) this.list.point(highlighted);
-    this.paintFilters();
-    this.paintList(null);
-    this.paintLocal();
-    placeMenu(); // the small print may have grown
+    this.o = { ...this.o, ...changes, role: this.o.role }; this.paintButton();
+    if (this.o.disabled) this.close(); else if (this.dialog) this.paint();
   }
-
   open(query = ""): void {
-    this.tab = this.o.local?.active ? "local" : "cloud";
-    this.show(this.newList({ query }), {});
+    if (this.o.disabled || this.dialog) return;
+    const models = pickerModels(this.o);
+    this.draft = concreteCurrent(this.o, models); this.effort = effortOf(this.o.current, models);
+    this.localDraft = this.o.local?.active ?? null;
+    this.source = this.localDraft ? "local-speech" : models.find((m) => m.id === this.draft)?.provider_id ??
+      (this.draft.startsWith("cli:") ? this.draft.split(":").slice(0, 2).join(":") : this.draft.startsWith("@") ? this.draft.slice(1).split(":")[0] : "openrouter");
+    this.query = query; this.maker = ""; this.sort = "name";
+    this.show();
   }
-
-  close(): void {
-    const had = this.panel !== null;
-    this.forget();
-    if (menuIsOpenFor(this.button)) closeMenu();
-    if (had && this.button.isConnected) this.button.focus();
-  }
-
-  // ---------- drawing ----------
-
-  private models(): CatalogModel[] {
-    return pickerModels(this.o);
-  }
-
-  private newList(state: Partial<PickerState>): PickerList {
-    let connection = state.connection;
-    if (connection === undefined) {
-      try { connection = localStorage.getItem(`raphael.picker.connection.${this.o.role}`) ?? ""; }
-      catch { connection = ""; }
-    }
-    const models = this.models();
-    const list = new PickerList(this.o.role, models, this.o.current, { ...state, connection }, this.o.favorites ?? [], this.o.lead ?? null, this.o.providers ?? []);
-    if (connection && !list.connections().some((c) => c.value === connection)) list.setConnection("");
-    return list;
-  }
-
+  close(): void { this.dialog?.close(); }
   private paintButton(): void {
-    const face = buttonFace(this.o);
-    this.button.innerHTML = face.inner;
-    this.button.disabled = this.o.disabled === true;
-    this.button.title = face.title;
-    this.button.setAttribute("aria-label", face.label);
-    if (this.o.key) this.button.dataset.k = this.o.key;
+    const face = buttonFace(this.o); this.button.innerHTML = face.inner;
+    this.button.setAttribute("aria-label", face.label); this.button.disabled = !!this.o.disabled;
+    this.button.setAttribute("aria-expanded", String(this.isOpen));
   }
-
-  private search(): HTMLInputElement | null {
-    return this.panel?.querySelector<HTMLInputElement>("#mp-search") ?? null;
-  }
-
-  private show(list: PickerList, restore: { caret?: number; scroll?: number }): void {
-    if (this.button.disabled) return;
-    this.list = list;
-    if (!this.o.local) this.tab = "cloud";
-    this.confirm = null;
-    this.localDrawn = "";
-    const panel = openPopover(this.button, panelHTML(list, this.o.label, this.o.local ? this.tab : null), {
-      className: "menu mp-panel",
-      role: "dialog",
-      label: this.o.label,
+  private show(): void {
+    opened?.close();
+    try { this.recent = JSON.parse(localStorage.getItem(`raphael.chooser.recent.${this.o.role}`) ?? "[]").filter((id: unknown) => typeof id === "string").slice(0, 8); } catch { this.recent = []; }
+    this.dialog = openDialog({ title: t("chooser.title"), cls: "model-chooser", body: "",
+      actions: { secondary: `<span class="mc-selection"></span>${btn(esc(t("common.cancel")), "", ' data-dlg="close"')}`,
+        primary: { label: esc(t("chooser.use")), attrs: ' data-dlg="use"' } },
+      onAct: (act) => {
+        if (act === "use") this.use();
+        if (act === "sources") { this.close(); this.o.onSources?.(); }
+        if (act === "login") {
+          const id = this.source.slice(4) as CliBrainId;
+          if (this.o.onCliAction) this.o.onCliAction(id);
+        }
+      },
+      onClose: () => { this.dialog = null; if (opened === this) opened = null; this.paintButton(); if (this.button.isConnected) this.button.focus({ preventScroll: true }); },
     });
-    this.panel = panel;
-    opened = { picker: this, role: this.o.role, button: this.button };
-    panel.addEventListener("keydown", (e) => this.panelKey(e));
-    panel.addEventListener("input", (e) => this.searched(e));
-    panel.addEventListener("click", (e) => this.clicked(e));
-    // A click on a row or its star leaves the focus in the search, where the keys work.
-    panel.addEventListener("mousedown", (e) => {
-      if ((e.target as Element).closest(".mp-opt, .mp-star")) e.preventDefault();
+    opened = this;
+    this.dialog.el.querySelector(".mb-dlg-head h2")?.insertAdjacentHTML("afterend", `<span class="mc-slot">${esc(t("chooser.slot", { name: this.o.label }))}</span>`);
+    this.dialog.el.addEventListener("click", (event) => this.click(event));
+    this.dialog.el.addEventListener("input", (event) => {
+      const input = event.target as HTMLInputElement;
+      if (input.matches(".mc-search")) { this.query = input.value; this.paintRows(); }
     });
-    panel.addEventListener("pointermove", (e) => this.pointed(e));
-    const input = this.search()!;
-    input.value = list.state.query;
-    // With favourites the list opens at its top, where they are, and not at the model in use.
-    this.paintList(list.rows.some((row) => row.favorite) ? "top" : "center");
-    this.paintLocal();
-    if (restore.scroll !== undefined) panel.querySelector(".mp-scroll")!.scrollTop = restore.scroll;
-    // Placed again now that it is filled in: the popover was placed empty, without its small print,
-    // and above its button it would now cover it.
-    placeMenu();
-    if (this.tab === "local") {
-      panel.querySelector<HTMLElement>("#mp-tab-local")?.focus({ preventScroll: true });
-      return;
-    }
-    input.focus({ preventScroll: true });
-    const caret = Math.min(restore.caret ?? input.value.length, input.value.length);
-    input.setSelectionRange(caret, caret);
+    this.dialog.el.addEventListener("change", (event) => {
+      const select = event.target as HTMLSelectElement;
+      if (select.matches("[data-sort]")) this.sort = select.value as PickerSort;
+      if (select.matches("[data-maker]")) this.maker = select.value;
+      this.paintRows();
+    });
+    this.dialog.el.addEventListener("keydown", (event) => {
+      const row = (event.target as HTMLElement).closest<HTMLButtonElement>(".mc-row, .lm-main");
+      if (!row || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const rows = [...this.dialog!.el.querySelectorAll<HTMLButtonElement>(".mc-row:not(:disabled), .lm-main:not(:disabled)")];
+      const at = rows.indexOf(row), next = moveIndex(rows.length, at, event.key);
+      if (next !== null) { rows[next]?.click(); this.dialog?.el.querySelector<HTMLButtonElement>('.mc-row[aria-checked="true"], .lm-main[aria-checked="true"]')?.focus(); }
+    });
+    this.paint(); this.paintButton();
+    const selected = this.dialog.el.querySelector<HTMLElement>('.mc-row[aria-checked="true"], .lm-main[aria-checked="true"]');
+    selected?.scrollIntoView?.({ block: "nearest" }); selected?.focus({ preventScroll: true });
   }
-
-  /** The page was drawn again while this control's list was open: the list opens here, as it was. */
-  private takeOver(): void {
-    const before = opened;
-    if (!before || before.role !== this.o.role || before.picker.o.key !== this.o.key || before.button.isConnected || !menuIsOpenFor(before.button)) return;
-    const { list, panel } = before.picker;
-    const caret = before.picker.search()?.selectionStart ?? undefined;
-    const scroll = panel?.querySelector(".mp-scroll")?.scrollTop;
-    const highlighted = list?.activeId();
-    const tab = before.picker.tab;
-    before.picker.forget();
-    this.tab = tab;
-    const again = this.newList(list?.state ?? {});
-    if (highlighted) again.point(highlighted);
-    this.show(again, { caret, scroll });
+  private sources(): ChooserSource[] { return chooserSources(this.o); }
+  private selectedSource(): ChooserSource | undefined { return this.sources().find((source) => source.id === this.source); }
+  private paint(): void {
+    if (!this.dialog) return;
+    if (/^cli:[^:]+$/.test(this.draft)) this.draft = concreteCurrent({ ...this.o, current: this.draft });
+    const sources = this.sources();
+    if (!sources.some((source) => source.id === this.source)) this.source = sources[0]?.id ?? "";
+    const saved = concreteCurrent(this.o), savedModel = pickerModels(this.o).find((m) => m.id === saved);
+    const savedSource = savedModel ? connectionId(savedModel) : saved.startsWith("cli:") ? saved.split(":").slice(0, 2).join(":") : "";
+    const rail = (["subscriptions", "api", "local"] as const).map((group) => {
+      const items = sources.filter((source) => source.group === group);
+      return !items.length ? "" : `<section><h3>${esc(t(groupKeys[group]))}</h3>` + items.map((source) => {
+        const status = source.id.startsWith("cli:") ? !this.o.clis ? t("common.loading") : t(!source.cli?.installed ? "brains.missing" : source.cli.logged_in === true ? "brains.ready" : "brains.signedOut") :
+          t(source.group === "local" ? "chooser.localCount" : "chooser.modelCount", { n: source.id === "local-speech" && Array.isArray(this.o.local?.models) ? this.o.local.models.length : source.models.length });
+        return `<button type="button" class="btn mc-source" data-source="${esc(source.id)}" aria-pressed="${this.source === source.id}">${providerMark(source.kind, true)}<span><strong>${esc(source.name)}</strong><small>${esc(status)}</small></span>${source.id === (this.o.local?.active ? "local-speech" : savedSource) ? '<i class="mc-current" aria-hidden="true"></i>' : ""}</button>`;
+      }).join("") + `</section>`;
+    }).join("");
+    const inherit = this.o.lead ? `<button type="button" class="btn mc-inherit" data-model="${esc(this.o.lead.id)}" aria-pressed="${this.draft === this.o.lead.id}">${esc(this.o.lead.name)}</button>` : "";
+    this.dialog.el.querySelector(".mb-dlg-body")!.innerHTML = `<div class="mc-layout"><aside class="mc-rail">${inherit}<div class="mc-source-list">${rail}</div>${btn(`${ico("plus")}${esc(t("chooser.sources"))}`, "ghost", ' data-dlg="sources"')}</aside><div class="mc-pane"></div></div>`;
+    this.paintPane();
   }
-
-  /** Lets go of the panel without touching it: the popover closed, or a new button took the list over. */
-  private forget(): void {
-    this.panel = null;
-    this.list = null;
-    this.dropdown = null;
-    this.lit = null;
-    this.confirm = null;
-    this.localDrawn = "";
-    if (opened?.picker === this) opened = null;
+  private paintPane(): void {
+    const source = this.selectedSource(), pane = this.dialog?.el.querySelector(".mc-pane");
+    if (!pane) return;
+    if (!source) { pane.innerHTML = `<p class="mc-empty">${esc(t("chooser.empty"))}</p>`; this.paintFooter(); return; }
+    const note = source.group === "subscriptions" ? "chooser.subscriptionNote" : source.group === "local" ? "chooser.localNote" : "chooser.apiNote";
+    pane.innerHTML = `<header class="mc-pane-head">${providerMark(source.kind, true)}<span><h3>${esc(source.name)}</h3><p>${esc(t(note))}</p></span></header>`;
+    if (source.group === "subscriptions" && (!source.cli?.installed || source.cli.logged_in !== true)) {
+      pane.innerHTML += `<div class="mc-empty"><p>${esc(t(source.cli?.installed ? "chooser.loginNote" : "chooser.installNote"))}</p>${this.o.clis ? btn(esc(t(source.cli?.installed ? "brains.login" : "brains.install")), "", ' data-dlg="login"') : esc(t("common.loading"))}</div>`;
+      this.paintFooter(); return;
+    }
+    if (source.models.length > 12) {
+      const makers = providerChoices(source.models);
+      const options = (choices: PickerChoice[], current: string) => choices.map((choice) => `<option value="${esc(choice.value)}"${current === choice.value ? " selected" : ""}>${esc(choice.label)}</option>`).join("");
+      pane.innerHTML += `<div class="mc-tools"><input type="search" class="mc-search" aria-label="${esc(t("chooser.search"))}" placeholder="${esc(t("chooser.search"))}" value="${esc(this.query)}"><select class="sel" data-sort aria-label="${esc(t("chooser.sort"))}">${options(sortChoices(), this.sort)}</select>` +
+        (makers.length > 2 ? `<select class="sel" data-maker aria-label="${esc(t("chooser.maker"))}">${options(makers, this.maker)}</select>` : "") + `</div>`;
+    }
+    pane.innerHTML += `<div class="mc-scroll"><div class="mc-list" role="radiogroup" aria-label="${esc(t("chooser.title"))}"></div></div><div class="mc-effort"></div>`;
+    this.paintRows();
   }
-
-  private paintFilters(): void {
-    if (!this.panel || !this.list) return;
-    const focused = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.connection : undefined;
-    this.panel.querySelector(".mp-connections")!.innerHTML = connectionsHTML(this.list);
-    if (focused !== undefined) {
-      const chips = [...this.panel.querySelectorAll<HTMLElement>("[data-connection]")];
-      (chips.find((el) => el.dataset.connection === focused) ?? chips.find((el) => el.getAttribute("aria-pressed") === "true"))?.focus({ preventScroll: true });
-    }
-    const shown = { sort: sortLabel(this.list.state.sort), provider: providerLabel(this.list.state.provider) };
-    const labels = { sort: t("picker.sort"), provider: t("picker.provider") };
-    for (const which of ["sort", "provider"] as const) {
-      const button = this.panel.querySelector<HTMLElement>(`.mp-dd[data-dd="${which}"]`)!;
-      button.querySelector("span")!.textContent = shown[which];
-      button.setAttribute("aria-label", `${labels[which]}: ${shown[which]}`);
-    }
-  }
-
-  /** Draws the rows again; `scroll` says where the list goes: to the highlighted row (in the middle, or just into sight), to the top, or nowhere. */
-  private paintList(scroll: "center" | "nearest" | "top" | null): void {
-    if (!this.panel || !this.list) return;
-    const list = this.list;
-    this.panel.querySelector(".mp-list")!.innerHTML = listHTML(list);
-    const empty = this.panel.querySelector<HTMLElement>(".mp-empty")!;
-    const missing = this.o.loading ? t("common.loading") : t("picker.failed");
-    empty.textContent = list.rows.length > 0 ? "" : this.o.catalog ? t("picker.empty") : missing;
-    empty.hidden = list.rows.length > 0;
-    const subscription = list.state.connection === "subscription";
-    this.panel.querySelector(".mp-cols > span:last-child")!.textContent = t(subscription || KIND[this.o.role] !== "llm" ? "picker.prices" : "picker.tokenPrices");
-    this.panel.querySelector(".mp-foot")!.textContent = subscription ? t("picker.count", { p0: list.modelCount() }) : footText(this.o.catalog, list.modelCount());
-    this.lit = null;
-    if (scroll === "top") this.panel.querySelector(".mp-scroll")!.scrollTop = 0;
-    this.paintActive(scroll === "center" || scroll === "nearest" ? scroll : null);
-  }
-
-  /** Marks the highlighted row for the eye and for the search, which owns the keys (`aria-activedescendant`). */
-  private paintActive(block: ScrollLogicalPosition | null): void {
-    if (!this.panel || !this.list) return;
-    this.lit?.setAttribute("aria-selected", "false");
-    const row = this.list.active >= 0 ? this.panel.querySelector<HTMLElement>(`#mp-o-${this.list.active}`) : null;
-    row?.setAttribute("aria-selected", "true");
-    this.lit = row;
-    const input = this.search();
-    if (row) input?.setAttribute("aria-activedescendant", row.id);
-    else input?.removeAttribute("aria-activedescendant");
-    if (row && block) row.scrollIntoView({ block });
-  }
-
-  /**
-   * Draws the local tab. A new byte count only moves the bar and the percentage of the row being
-   * downloaded, so that the focus stays where it is; anything else (a state changed, a question
-   * asked) draws the rows again and gives the focus back to the same button.
-   */
-  private paintLocal(): void {
-    const local = this.o.local;
-    const host = this.panel?.querySelector<HTMLElement>("#mp-locallist");
-    if (!local || !host) return;
-    const models = local.models;
-    const shape = JSON.stringify([
-      typeof models === "string" ? models : models.map((m) => [m.name, m.ready, localState(m, local).kind]),
-      local.active,
-      local.download?.name ?? null,
-      this.confirm,
-    ]);
-    if (shape === this.localDrawn && typeof models !== "string") {
-      for (const model of models) {
-        const row = host.querySelector<HTMLElement>(`.lm-row[data-name="${CSS.escape(model.name)}"]`);
-        const state = localState(model, local);
-        if (!row || state.kind !== "downloading") continue;
-        row.querySelector("[data-state]")!.textContent = stateText(state);
-        row.querySelector<HTMLElement>(".lm-bar")!.setAttribute("aria-valuenow", String(state.percent));
-        row.querySelector<HTMLElement>(".lm-bar i")!.style.width = `${state.percent}%`;
-      }
-      return;
-    }
-    const focused = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? document.activeElement : null;
-    const back = focused ? { act: focused.dataset.act, name: focused.dataset.name } : null;
-    host.innerHTML = localListHTML(local, this.confirm);
-    this.localDrawn = shape;
-    if (back) {
-      const find = (act: string | undefined): HTMLElement | null =>
-        host.querySelector<HTMLElement>(`[data-act="${act}"][data-name="${CSS.escape(back.name ?? "")}"]`);
-      (find(back.act) ?? find("use") ?? host.querySelector<HTMLElement>("button:not(:disabled)"))?.focus();
-    }
-    placeMenu();
-  }
-
-  private setTab(tab: "cloud" | "local", focus: boolean): void {
-    if (!this.panel || !this.o.local || tab === this.tab) return;
-    this.tab = tab;
-    this.confirm = null;
-    this.closeDropdown(false);
-    for (const which of ["cloud", "local"] as const) {
-      const button = this.panel.querySelector<HTMLElement>(`#mp-tab-${which}`)!;
-      button.setAttribute("aria-selected", String(which === tab));
-      button.tabIndex = which === tab ? 0 : -1;
-      this.panel.querySelector<HTMLElement>(`#mp-pane-${which}`)!.hidden = which !== tab;
-    }
-    this.paintLocal();
-    placeMenu();
-    if (focus) this.panel.querySelector<HTMLElement>(`#mp-tab-${tab}`)!.focus();
-  }
-
-  /** The arrows between the rows of the local tab. */
-  private localKey(e: KeyboardEvent): void {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    const rows = Array.from(this.panel?.querySelectorAll<HTMLElement>("#mp-locallist .lm-main:not(:disabled)") ?? []);
-    const at = rows.indexOf(document.activeElement as HTMLElement);
-    const next = moveIndex(rows.length, at, e.key);
-    if (next === null) return;
-    e.preventDefault();
-    rows[next].focus();
-  }
-
-  /** Starts downloading the local model `name` at once: its row then shows the progress and 取消. */
-  private download(name: string): void {
-    this.confirm = null;
-    this.o.onUseLocal?.(name);
-    this.paintLocal();
-  }
-
-  /** A button of the local tab. */
-  private localAct(button: HTMLElement): void {
-    const local = this.o.local;
-    const name = button.dataset.name ?? "";
-    if (!local) return;
-    switch (button.dataset.act) {
-      case "use": {
-        if (name === local.active) {
-          this.close();
-          return;
-        }
-        const model = typeof local.models === "string" ? undefined : local.models.find((m) => m.name === name);
-        if (!model) return;
-        if (model.ready) {
-          this.close();
-          this.o.onUseLocal?.(name);
-        } else {
-          this.download(name);
-        }
-        return;
-      }
-      case "download":
-        this.download(name);
-        return;
-      case "delete":
-        this.confirm = { kind: "delete", name };
-        this.paintLocal();
-        this.panel?.querySelector<HTMLElement>('[data-act="confirm"]')?.focus();
-        return;
-      case "confirm": {
-        const asked = this.confirm;
-        this.confirm = null;
-        if (asked?.kind === "delete") this.o.onDeleteLocal?.(name);
-        this.paintLocal();
-        return;
-      }
-      case "dismiss":
-        this.confirm = null;
-        this.paintLocal();
-        return;
-      case "cancel":
-        this.o.onCancelLocal?.();
-        return;
-    }
-  }
-
-  // ---------- what the user does ----------
-
-  private buttonKey(e: KeyboardEvent): void {
-    if (this.button.disabled || this.isOpen) return;
-    const arrow = e.key === "ArrowDown" || e.key === "ArrowUp";
-    if (!arrow && !typing(e)) return; // Enter and Space press the button
-    // The page and the menus listen on the document: this key is the picker's alone.
-    e.preventDefault();
-    e.stopPropagation();
-    this.open(arrow ? "" : e.key);
-  }
-
-  private searched(e: Event): void {
-    const input = e.target as HTMLInputElement;
-    if (input.id !== "mp-search" || !this.list) return;
-    this.list.setQuery(input.value);
-    this.paintList("top");
-  }
-
-  private pointed(e: PointerEvent): void {
-    const row = (e.target as Element).closest<HTMLElement>(".mp-row")?.querySelector<HTMLElement>(".mp-opt");
-    if (!row || !this.list || !this.panel) return;
-    delete this.panel.dataset.kbd;
-    if (row.dataset.id === this.list.activeId()) return;
-    this.list.point(row.dataset.id ?? "");
-    this.paintActive(null);
-  }
-
-  private clicked(e: MouseEvent): void {
-    const target = e.target as Element;
-    const connection = target.closest<HTMLElement>("[data-connection]");
-    if (connection) {
-      this.pickConnection(connection.dataset.connection ?? "");
-      return;
-    }
-    const tab = target.closest<HTMLElement>(".mp-panel .tab");
-    if (tab) {
-      this.setTab(tab.dataset.tab === "local" ? "local" : "cloud", false);
-      return;
-    }
-    const act = target.closest<HTMLElement>("#mp-locallist [data-act]");
-    if (act) {
-      this.localAct(act);
-      return;
-    }
-    const star = target.closest<HTMLElement>(".mp-star");
-    if (star) {
-      this.star(star.dataset.star ?? "", document.activeElement === star ? "nearest" : null);
-      return;
-    }
-    const row = target.closest<HTMLElement>(".mp-opt");
-    if (row) {
-      if (row.getAttribute("aria-disabled") !== "true") this.choose(row.dataset.id ?? "");
-      return;
-    }
-    const choice = target.closest<HTMLElement>(".mp-ddlist [data-value]");
-    if (choice) {
-      this.pick(choice.dataset.value ?? "");
-      return;
-    }
-    const opener = target.closest<HTMLElement>(".mp-dd");
-    if (opener) {
-      const which = opener.dataset.dd as Dropdown["which"];
-      if (this.dropdown?.which === which) this.closeDropdown();
-      else this.openDropdown(which, "chosen");
-      return;
-    }
-    if (this.dropdown && !target.closest(".mp-ddlist")) this.closeDropdown(false);
-  }
-
-  private panelKey(e: KeyboardEvent): void {
-    // Every key stays in the panel: the menus of ui.ts would move the focus between its buttons.
-    e.stopPropagation();
-    if (e.isComposing || !this.list) return; // an input method is at work in the search
-    if (this.dropdown) {
-      this.dropdownKey(e, this.dropdown);
-      return;
-    }
-    if (e.key === "Escape") {
-      e.preventDefault();
-      this.close();
-      return;
-    }
-    if (e.key === "Tab") {
-      e.preventDefault();
-      this.cycle(e.shiftKey);
-      return;
-    }
-    const target = e.target as HTMLElement;
-    if (target.matches("[data-connection]")) {
-      const chips = [...this.panel!.querySelectorAll<HTMLButtonElement>("[data-connection]")];
-      const at = chips.indexOf(target as HTMLButtonElement);
-      const next = e.key === "ArrowRight" ? (at + 1) % chips.length : e.key === "ArrowLeft" ? (at + chips.length - 1) % chips.length :
-        e.key === "Home" ? 0 : e.key === "End" ? chips.length - 1 : null;
-      if (next !== null) {
-        e.preventDefault(); this.pickConnection(chips[next].dataset.connection ?? "");
-      }
-      return;
-    }
-    if (target.closest(".mp-panel .tab") && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
-      e.preventDefault();
-      this.setTab(e.key === "ArrowLeft" || e.key === "Home" ? "cloud" : "local", true);
-      return;
-    }
-    if (this.tab === "local") {
-      this.localKey(e);
-      return;
-    }
-    if (target.id === "mp-search") {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        const id = this.list.chosen();
-        if (id !== null) this.choose(id);
-      } else if (["ArrowDown", "ArrowUp", "PageDown", "PageUp"].includes(e.key)) {
-        e.preventDefault();
-        if (this.list.move(e.key) && this.panel) {
-          this.panel.dataset.kbd = "";
-          this.paintActive("nearest");
-        }
-      }
-      return; // anything else types in the search; Home and End move in it
-    }
-    if (target.closest(".mp-star") && moveIndex(this.list.rows.length, this.list.active, e.key) !== null) {
-      // On a star the arrows still move the highlight, and the focus goes with it to its star.
-      e.preventDefault();
-      this.list.move(e.key);
-      this.panel?.setAttribute("data-kbd", "");
-      this.paintActive("nearest");
-      this.activeStar()?.focus();
-      return;
-    }
-    const opener = target.closest<HTMLElement>(".mp-dd");
-    if (opener && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
-      e.preventDefault();
-      this.openDropdown(opener.dataset.dd as Dropdown["which"], e.key === "ArrowUp" ? "last" : "chosen");
-    } else if (typing(e)) {
-      e.preventDefault();
-      this.typeIntoSearch(e.key);
-    }
-  }
-
-  private dropdownKey(e: KeyboardEvent, dropdown: Dropdown): void {
-    const items = Array.from(dropdown.el.querySelectorAll<HTMLElement>("[data-value]"));
-    const at = items.indexOf(document.activeElement as HTMLElement);
-    if (e.key === "Escape") {
-      e.preventDefault();
-      this.closeDropdown();
-    } else if (e.key === "Tab") {
-      e.preventDefault();
-      this.closeDropdown(false);
-      this.cycle(e.shiftKey, dropdown.button);
-    } else if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      if (at >= 0) this.pick(items[at].dataset.value ?? "");
+  private paintRows(): void {
+    const source = this.selectedSource(), listEl = this.dialog?.el.querySelector(".mc-list");
+    if (!listEl || !source) return;
+    if (source.id === "local-speech" && this.o.local) {
+      listEl.innerHTML = localListHTML(this.o.local, this.confirm, true);
+      listEl.querySelectorAll<HTMLElement>('[data-act="use"]').forEach((row) => {
+        const selected = row.dataset.name === this.localDraft;
+        row.setAttribute("aria-current", String(selected)); row.setAttribute("aria-checked", String(selected));
+        const check = row.querySelector(".ck"); if (check) check.innerHTML = selected ? CHECK : "";
+      });
     } else {
-      const next = moveIndex(items.length, at, e.key);
-      if (next !== null) {
-        e.preventDefault();
-        items[next].focus();
-      } else if (typing(e)) {
-        // To the next choice that starts with the letter, as a list of the system does.
-        e.preventDefault();
-        const letter = e.key.toLowerCase();
-        const after = [...items.slice(at + 1), ...items.slice(0, at + 1)];
-        after.find((item) => item.textContent?.trim().toLowerCase().startsWith(letter))?.focus();
-      }
+      const list = new PickerList(this.o.role, source.models, this.draft, { query: this.query, sort: this.sort, provider: this.maker }, this.o.favorites ?? []);
+      const recent = source.group === "api" ? list.rows.filter((row) => this.recent.includes(row.model.id) && !row.lead) : [];
+      if (recent.length && !this.query) {
+        const all = list.rows; list.rows = recent;
+        const first = listHTML(list, this.draft, pickerModels(this.o), !!this.o.onFavorite);
+        list.rows = all.filter((row) => !recent.includes(row));
+        listEl.innerHTML = `<h4>${esc(t("chooser.recent"))}</h4>${first}<h4>${esc(t("chooser.all"))}</h4>${listHTML(list, this.draft, pickerModels(this.o), !!this.o.onFavorite)}`;
+      } else listEl.innerHTML = listHTML(list, this.draft, pickerModels(this.o), !!this.o.onFavorite);
+      if (!list.rows.length) listEl.innerHTML = `<p class="mc-empty">${esc(t(this.o.loading ? "common.loading" : "chooser.empty"))}</p>`;
     }
+    const model = pickerModels(this.o).find((m) => m.id === this.draft);
+    const supported = model?.reasoning_efforts ?? [];
+    const levels = source.models.some((m) => m.id === model?.id) ? supported : [];
+    if (!supported.includes(this.effort)) this.effort = model?.default_effort ?? supported[0] ?? "";
+    const efforts = this.dialog!.el.querySelector(".mc-effort")!;
+    efforts.innerHTML = levels.length ? `<span>${esc(t("chooser.effort"))}</span><div class="mc-segments" role="group" aria-label="${esc(t("chooser.effort"))}">${levels.map((level) => `<button type="button" class="btn sm" data-effort="${esc(level)}" aria-pressed="${this.effort === level}">${esc(effortText(level))}</button>`).join("")}</div>` : "";
+    this.paintFooter();
   }
-
-  /** The star of the highlighted row. */
-  private activeStar(): HTMLElement | null {
-    const row = this.list && this.list.active >= 0 ? this.panel?.querySelector<HTMLElement>(`#mp-o-${this.list.active}`) : null;
-    return row?.closest(".mp-row")?.querySelector<HTMLElement>(".mp-star") ?? null;
+  private paintFooter(): void {
+    if (!this.dialog) return;
+    const source = this.selectedSource(), model = pickerModels(this.o).find((m) => m.id === this.draft);
+    const local = source?.id === "local-speech";
+    const localModel = Array.isArray(this.o.local?.models) ? this.o.local.models.find((m) => m.name === this.localDraft) : null;
+    const lead = this.o.lead?.id === this.draft;
+    const name = local ? localModel?.title : lead ? this.o.lead?.name : model?.name;
+    const modelSource = local ? t("picker.tabLocal") : model ? connectionName(model) : "";
+    this.dialog.el.querySelector(".mc-selection")!.textContent = name ? `${t("chooser.selection")}${name} · ${modelSource}${!local && model?.reasoning_efforts?.length && this.effort ? ` · ${t("chooser.effort")} ${effortText(this.effort)}` : ""}` : "";
+    const available = model && usableFor(model, this.o.role);
+    const use = this.dialog.el.querySelector<HTMLButtonElement>('[data-dlg="use"]')!;
+    use.textContent = t(local && localModel && !localModel.ready ? "chooser.downloadUse" : "chooser.use");
+    use.disabled = local ? !localModel || !!this.o.local?.download : !lead && !available;
   }
-
-  /**
-   * Tab and Shift+Tab go round the tab that is open, the search, the star of the highlighted row and
-   * the two dropdowns (in the local tab: its buttons), from `from` (the focus, else). The other stars are not stops: a list of hundreds would be no
-   * way to Tab through, and the arrows reach every row's star.
-   */
-  private cycle(back: boolean, from: Element | null = document.activeElement): void {
-    if (!this.panel) return;
-    const open = this.panel.querySelector<HTMLElement>(`#mp-tab-${this.tab}`);
-    const inside =
-      this.tab === "local"
-        ? Array.from(this.panel.querySelectorAll<HTMLElement>("#mp-pane-local button:not(:disabled)"))
-        : [...Array.from(this.panel.querySelectorAll<HTMLElement>("[data-connection]")), this.search(), this.activeStar(), ...Array.from(this.panel.querySelectorAll<HTMLElement>(".mp-dd"))];
-    const stops = [open, ...inside].filter((s): s is HTMLElement => s !== null);
-    const at = Math.max(0, stops.indexOf(from as HTMLElement));
-    stops[(at + (back ? stops.length - 1 : 1)) % stops.length]?.focus();
+  private click(event: MouseEvent): void {
+    const target = (event.target as Element).closest<HTMLElement>("[data-source], [data-model], [data-effort], [data-act], [data-star]");
+    if (!target || (target as HTMLButtonElement).disabled) return;
+    if (target.dataset.source !== undefined) { this.source = target.dataset.source; this.query = ""; this.maker = ""; this.confirm = null; this.paint(); }
+    if (target.dataset.model !== undefined) {
+      this.draft = target.dataset.model; this.effort = "";
+      this.dialog?.el.querySelector(".mc-inherit")?.setAttribute("aria-pressed", String(this.draft === this.o.lead?.id));
+      this.paintRows(); this.paintFooter();
+    }
+    if (target.dataset.effort) { this.effort = target.dataset.effort; this.paintRows(); }
+    if (target.dataset.star) {
+      const id = target.dataset.star, on = !this.o.favorites?.includes(id);
+      this.o.favorites = withFavorite(this.o.favorites ?? [], id, on);
+      this.paintRows(); this.o.onFavorite?.(id, on);
+    }
+    const act = target.dataset.act, name = target.dataset.name;
+    if (act === "use" && name) { this.localDraft = name; this.paintRows(); }
+    if (act === "cancel") this.o.onCancelLocal?.();
+    if (act === "delete" && name) { this.confirm = { kind: "delete", name }; this.paintRows(); }
+    if (act === "dismiss") { this.confirm = null; this.paintRows(); }
+    if (act === "confirm" && name) { this.confirm = null; this.o.onDeleteLocal?.(name); }
   }
-
-  /** A key typed on one of the dropdowns goes to the search, which searches. */
-  private typeIntoSearch(char: string): void {
-    const input = this.search();
-    if (!input || !this.list) return;
-    input.focus();
-    input.value += char;
-    input.setSelectionRange(input.value.length, input.value.length);
-    this.list.setQuery(input.value);
-    this.paintList("top");
-  }
-
-  private openDropdown(which: Dropdown["which"], focus: "chosen" | "last"): void {
-    if (!this.panel || !this.list) return;
-    this.closeDropdown(false);
-    const button = this.panel.querySelector<HTMLElement>(`.mp-dd[data-dd="${which}"]`)!;
-    const sort = which === "sort";
-    const choices = sort ? sortChoices() : this.list.providers();
-    const chosen = sort ? this.list.state.sort : this.list.state.provider;
-    button.insertAdjacentHTML("afterend", dropdownHTML(which, sort ? t("picker.sort") : t("picker.provider"), choices, chosen));
-    const el = button.nextElementSibling as HTMLElement;
-    el.style.left = `${button.offsetLeft}px`;
-    button.setAttribute("aria-expanded", "true");
-    button.setAttribute("aria-controls", el.id);
-    this.dropdown = { which, el, button };
-    const items = el.querySelectorAll<HTMLElement>("[data-value]");
-    const first = focus === "last" ? items[items.length - 1] : (el.querySelector<HTMLElement>('[aria-selected="true"]') ?? items[0]);
-    first?.focus();
-    first?.scrollIntoView({ block: "nearest" });
-  }
-
-  private closeDropdown(focusButton = true): void {
-    const dropdown = this.dropdown;
-    if (!dropdown) return;
-    this.dropdown = null;
-    dropdown.el.remove();
-    dropdown.button.setAttribute("aria-expanded", "false");
-    dropdown.button.removeAttribute("aria-controls");
-    if (focusButton) dropdown.button.focus();
-  }
-
-  /** A choice in one of the dropdowns: another order, or another maker. */
-  private pick(value: string): void {
-    const dropdown = this.dropdown;
-    if (!dropdown || !this.list) return;
-    if (dropdown.which === "sort") this.list.setSort(value as PickerSort);
-    else this.list.setProvider(value);
-    this.closeDropdown();
-    this.paintFilters();
-    // The highlighted model stays highlighted where it went, if it is still listed.
-    this.paintList("nearest");
-  }
-
-  private pickConnection(id: string): void {
-    if (!this.list) return;
-    this.closeDropdown(false);
-    this.list.setConnection(id);
-    try { localStorage.setItem(`raphael.picker.connection.${this.o.role}`, id); } catch { /* Storage may be unavailable. */ }
-    this.paintFilters(); this.paintList("top");
-    const chip = [...this.panel!.querySelectorAll<HTMLElement>("[data-connection]")].find((el) => el.dataset.connection === id);
-    chip?.focus(); chip?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }
-
-  /** Stars the model of `id`, or takes it out of the favourites if it is one. `scroll` is where the list goes: with the focus, when it is on a star, else nowhere. */
-  private star(id: string, scroll: "nearest" | null): void {
-    if (!this.list || id === "") return;
-    const on = !this.list.favorites.includes(id);
-    const favorites = withFavorite(this.list.favorites, id, on);
-    this.o = { ...this.o, favorites };
-    this.list.point(id);
-    this.list.setFavorites(favorites);
-    this.paintList(scroll);
-    if (scroll !== null) this.activeStar()?.focus();
-    this.o.onFavorite?.(id, on);
-  }
-
-  private choose(id: string): void {
-    // "" is no model, but it is the lead's value when the picker has one.
-    const changed = (id !== "" || this.o.lead?.id === "") && id !== this.o.current;
-    this.close();
-    if (!changed) return;
-    this.o = { ...this.o, current: id };
-    this.paintButton();
-    this.o.onChoose(id);
+  private use(): void {
+    if (this.dialog?.el.querySelector<HTMLButtonElement>('[data-dlg="use"]')?.disabled) return;
+    if (this.source === "local-speech" && this.localDraft) {
+      const model = Array.isArray(this.o.local?.models) ? this.o.local.models.find((m) => m.name === this.localDraft) : null;
+      if (model?.ready) this.close();
+      this.o.onUseLocal?.(this.localDraft); return;
+    }
+    const model = pickerModels(this.o).find((m) => m.id === this.draft);
+    const ref = model?.effort_models?.[this.effort] ??
+      (model?.reasoning_efforts?.includes(this.effort) ? `${this.draft}?effort=${this.effort}` : this.draft);
+    try { localStorage.setItem(`raphael.chooser.recent.${this.o.role}`, JSON.stringify([this.draft, ...this.recent.filter((id) => id !== this.draft)].slice(0, 8))); } catch { /* Storage is optional. */ }
+    this.close(); if (ref !== this.o.current || this.o.local?.active) this.o.onChoose(ref);
   }
 }

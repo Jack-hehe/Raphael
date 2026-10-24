@@ -12,7 +12,6 @@ import {
   localListHTML,
   localState,
   stateText,
-  tabsHTML,
 } from "./local-models";
 import type { LocalModel } from "./types";
 
@@ -257,27 +256,6 @@ describe("while there is no catalogue", () => {
   test("says it is being read, or that it cannot be had", () => {
     expect(localListHTML(view({ models: "loading" }), null)).toContain("正在載入…");
     expect(localListHTML(view({ models: "failed" }), null)).toContain("目前無法取得本機模型清單");
-  });
-});
-
-describe("the tabs", () => {
-  test("are two real buttons, the open one selected", () => {
-    const html = tabsHTML("local");
-    expect(html).toContain('role="tablist"');
-    expect(html).toMatch(/<button type="button" class="tab" role="tab" aria-selected="false" id="mp-tab-cloud"[^>]*>雲端<\/button>/);
-    expect(html).toMatch(/<button type="button" class="tab" role="tab" aria-selected="true" id="mp-tab-local"[^>]*>本機<\/button>/);
-    expect(tabsHTML("cloud")).toMatch(/aria-selected="true"[^>]*id="mp-tab-cloud"/);
-  });
-
-  test("only the open one is a stop of the Tab key", () => {
-    expect(tabsHTML("cloud")).toMatch(/id="mp-tab-cloud"[^>]*tabindex="0"/);
-    expect(tabsHTML("cloud")).toMatch(/id="mp-tab-local"[^>]*tabindex="-1"/);
-  });
-
-  test("speak the language of the window", () => {
-    setLocale("ja");
-    expect(tabsHTML("cloud")).toContain(">クラウド</button>");
-    expect(tabsHTML("cloud")).toContain(">ローカル</button>");
   });
 });
 

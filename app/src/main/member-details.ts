@@ -43,9 +43,9 @@ import {
   scheduleText,
   sourceLabel,
 } from "./members";
-import { cliBrainLine } from "./cli-brains";
+import { CLIS, cliBrainLine } from "./cli-brains";
 import { type ModelPicker, mountModelPicker } from "./model-picker";
-import type { AppContext, AvatarPreset, CliBrain, Member, MemberPatch, MembersList, ModelCatalog, Routine, RoutineSchedule, WireAttachment } from "./types";
+import type { AppContext, AvatarPreset, CliBrain, Member, MemberPatch, MembersList, ModelCatalog, ModelProvider, Routine, RoutineSchedule, WireAttachment } from "./types";
 import { actionRow, btn, esc, iconButton, openMenu, sel, tabs, tg, toaster } from "./ui";
 
 export type DetailsTab = "details" | "memory";
@@ -94,6 +94,7 @@ export interface DetailsHost {
   /** The catalog of the model picker, read the first time the panel needs it. */
   catalog(): Promise<ModelCatalog | null>;
   clis?(): Promise<readonly CliBrain[]>;
+  providers?(): Promise<readonly ModelProvider[]>;
   /** Changes the member and reads the list again; false (with a toast) when the core refused. */
   update(id: number, patch: MemberPatch): Promise<boolean>;
   /** A picture of this PC for the member; then the list again. */
@@ -130,6 +131,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
   let draft: RoutineDraft | null = null;
   let catalog: ModelCatalog | null = null;
   let clis: readonly CliBrain[] = [];
+  let providers: readonly ModelProvider[] = [];
   let catalogAsked = false;
   let catalogLoads = 0;
   let picker: ModelPicker | null = null;
@@ -321,10 +323,17 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     const slot = body.querySelector<HTMLElement>(".mb-model");
     if (!slot) return;
     picker = mountModelPicker(slot, {
+      onSources: () => host.app.go("settings", "models"),
+      onCliAction: (id) => {
+        const cli = clis.find((c) => c.id === id), known = CLIS.find((c) => c.id === id)!;
+        if (cli?.installed) void api.brainsCliLogin(id).catch(() => toaster.info(t("providers.error")));
+        else void api.openExternalUrl(known.install).catch(() => toaster.info(t("providers.error")));
+      },
       role: "answer",
       current: member.model ?? "",
       catalog,
       clis,
+      providers,
       loading: catalog === null && catalogAsked,
       label: t("members.model"),
       key: "det-model",
@@ -340,11 +349,12 @@ export function createDetails(host: DetailsHost): DetailsPanel {
   async function loadCatalog(): Promise<void> {
     const mine = ++catalogLoads;
     catalogAsked = true;
-    const [read, brains] = await Promise.all([host.catalog(), host.clis?.() ?? Promise.resolve([])]);
+    const [read, brains, connections] = await Promise.all([host.catalog(), host.clis?.() ?? Promise.resolve([]), host.providers?.() ?? Promise.resolve([])]);
     if (mine !== catalogLoads) return;
     catalog = read;
     clis = brains;
-    picker?.update({ catalog: read, clis, loading: false });
+    providers = connections;
+    picker?.update({ catalog: read, clis, providers, loading: false });
   }
 
   // ---------- routines ----------

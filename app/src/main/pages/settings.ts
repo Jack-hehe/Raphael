@@ -840,6 +840,7 @@ export function createSettings(app: AppContext): SettingsPage {
         "vision",
         mountModelPicker(vision, {
           ...visionPickerLook(v),
+          onSources: () => openPane("models", "models"),
           onChoose: (id) => void services.chooseVision(id),
           onFavorite: (id, on) => void changeFavorite("answer", id, on),
         }),
@@ -852,6 +853,11 @@ export function createSettings(app: AppContext): SettingsPage {
           role,
           mountModelPicker(slot, {
             ...modelPickerLook(v, role),
+            onSources: () => openPane("models", "models"),
+            onCliAction: (id) => {
+              const button = document.createElement("button"); button.dataset.cli = id;
+              void cliBrains.click(button);
+            },
             onChoose: (id) => void chooseModel(role, id),
             onFavorite: (id, on) => void changeFavorite(role, id, on),
             onUseLocal: (name) => void useLocal(name),
