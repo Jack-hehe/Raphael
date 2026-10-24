@@ -675,3 +675,14 @@ def test_a_player_waits_for_chunks_that_are_late_and_stops_when_told():
     stopped.set()
     worker.join(2)
     assert not worker.is_alive() and "abort" in log
+
+
+async def test_member_voice_override_uses_configured_service_without_mutating_default(rig):
+    import json
+
+    rig.set_up()
+    member_voice = "b" * 32
+    await rig.speaker.say_member("Member answer.", voice=member_voice, turn_id=123)
+    await until(lambda: bool(rig.requests))
+    assert json.loads(rig.requests[0].content)["reference_id"] == member_voice
+    assert rig.settings.get("tts_fish_voice") == VOICE

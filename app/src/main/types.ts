@@ -616,6 +616,14 @@ export interface Member {
   instructions: string;
   /** Character and speaking style; absent in older cached member lists. */
   personality?: string;
+  blurb?: string;
+  reply_style?: "full" | "conversational";
+  voice?: string;
+  read_aloud?: boolean;
+  notify?: boolean;
+  ask_before_members?: boolean;
+  pinned?: boolean;
+  hidden?: boolean;
   /** `""`, `"preset:<stem>"` or `"file:<stored name>"`. */
   avatar: string;
   avatar_url?: string;
@@ -667,13 +675,19 @@ export interface NewMember {
   tools?: string[];
   model?: string;
   ui_language?: string;
+  blurb?: string;
+  reply_style?: "full" | "conversational";
+  voice?: string;
+  read_aloud?: boolean;
+  notify?: boolean;
+  ask_before_members?: boolean;
 }
 
 /**
  * What `members.update` may change, beside its `id`: the avatar only as `""` or `"preset:<stem>"`
  * (a picture of the PC goes by `members.set_avatar`).
  */
-export type MemberPatch = Partial<Pick<Member, "name" | "role" | "personality" | "instructions" | "group_id" | "model" | "tools" | "avatar" | "position">>;
+export type MemberPatch = Partial<Pick<Member, "name" | "role" | "personality" | "instructions" | "group_id" | "model" | "tools" | "avatar" | "position" | "blurb" | "reply_style" | "voice" | "read_aloud" | "notify" | "ask_before_members" | "pinned" | "hidden">>;
 
 /** An image of the presets folder (`members.presets`): its avatar value, its file stem, and the picture as a data URL. */
 export interface AvatarPreset {
@@ -883,3 +897,8 @@ export interface NewConnection {
   env?: { name: string; value: string }[];
   headers?: { name: string; value: string }[];
 }
+
+/** Member-owned resources; command templates expand only in the core. */
+export interface MemberSkill { id: number; name: string; description: string; enabled: boolean; source: string }
+export interface MemberCommand { id: number; name: string; description: string; template: string }
+export interface MemberVoice { id: string; name: string }

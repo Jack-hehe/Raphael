@@ -45,9 +45,9 @@ export function isMemberNameTaken(name: string, taken: readonly string[]): boole
 const fold = (text: string): string => text.normalize("NFKC").toLocaleLowerCase();
 
 /** Whether a member answers the column's search: in its name or its role. Blank matches all. */
-export function memberMatches(member: Pick<Member, "name" | "role">, query: string): boolean {
+export function memberMatches(member: Pick<Member, "name" | "role" | "blurb">, query: string): boolean {
   const q = fold(query.trim());
-  return q === "" || fold(member.name).includes(q) || fold(member.role ?? "").includes(q);
+  return q === "" || fold(member.name).includes(q) || fold(member.role ?? "").includes(q) || fold(member.blurb ?? "").includes(q);
 }
 
 /** A section of the column: a group (null: 未分組) and its members that answer the search. */
@@ -66,7 +66,7 @@ export function memberSections(list: MembersList, query = ""): MemberSection[] {
   const searching = query.trim() !== "";
   const groups = [...list.groups].sort((a, b) => a.position - b.position || a.id - b.id);
   const known = new Set(groups.map((group) => group.id));
-  const people = list.members.filter((member) => member.id !== RAPHAEL_ID && memberMatches(member, query));
+  const people = list.members.filter((member) => member.id !== RAPHAEL_ID && !member.hidden && memberMatches(member, query));
   const sections: MemberSection[] = groups.map((group) => ({ group, members: people.filter((member) => member.group_id === group.id) }));
   sections.push({ group: null, members: people.filter((member) => member.group_id === null || !known.has(member.group_id)) });
   return sections.filter((section) => (searching || section.group === null ? section.members.length > 0 : true));

@@ -211,7 +211,7 @@ from .policy import (
 )
 from .routing import OpenAnswer, RouteDecision, Router
 from .speaker import RAPHAEL, RAPHAEL_NAMES, Speaker
-from .safety import DENY, PASS, Proposed, Screening, asked_with, forbidden, needs_yes, summarize
+from .safety import ASK, DENY, PASS, Proposed, Screening, asked_with, forbidden, needs_yes, summarize
 from .steps import Step, reason_of
 from .targets import OpenTargets
 from .team import (
@@ -221,6 +221,7 @@ from .team import (
     REQUEST_MAX_CHARS,
     TEAM_SERVER,
     TEAM_TOOLS,
+    SKILL_READ,
     Team,
     asks_to_create_member,
     names_raphael,
@@ -386,6 +387,7 @@ class _Ask:
     session_id: str
     text: str
     language: str
+    original_text: str | None = None
     source: str = VOICE
     # What was done for the request so far; written with its turn.
     steps: list[Step] = field(default_factory=list)
@@ -551,6 +553,7 @@ class AgentService:
         self._voice = Voice(client)
         self._decider = decider if decider is not None else Router(client)
         self._inflight: dict[str, asyncio.Task[dict]] = {}
+        self._inflight_members: dict[str, int] = {}
         self._clock = clock
         # session id -> when agent.cancel named it (the monotonic clock).
         self._cancelled: dict[str, float] = {}
@@ -718,8 +721,15 @@ class AgentService:
         speaker = self._speaker(member_id)
         if speaker is None:
             raise invalid_params("there is no such member")
+        original_text = None
+        expand = getattr(self._team, "expand_command", None)
+        if expand is not None:
+            expanded = expand(member_id, text)
+            if expanded != text:
+                original_text, text = text, expanded
         ask = _Ask(
             session_id=session_id,
+            original_text=original_text,
             text=text,
             language=normalize_language(ui_language),
             attachments=list(attachments),
@@ -761,6 +771,7 @@ class AgentService:
         await asyncio.gather(*(loop.aclose() for loop in list(self._cli_loops) if loop.task and loop.task.cancelling()))
         task = asyncio.ensure_future(self._voice_answer(ask) if ask.source == VOICE else self._answer(ask))
         self._inflight[ask.session_id] = task
+        self._inflight_members[ask.session_id] = ask.speaker.id
         try:
             result = await task
             return await self._said(result, ask.source, ask.speaker.id, ask.language)
@@ -778,6 +789,7 @@ class AgentService:
                              ask.ledger or Ledger(self._spend), status="denied")
             if self._inflight.get(ask.session_id) is task:
                 del self._inflight[ask.session_id]
+                self._inflight_members.pop(ask.session_id, None)
             self._release(ask.held)  # a turn announced late must never be left unannounced
 
     async def _voice_answer(self, ask: _Ask) -> dict:
@@ -1760,7 +1772,7 @@ class AgentService:
 
     async def _screen_call(self, ask: _Ask, call: PlannedCall, ledger: Ledger) -> Screening:
         """What the owner's safety rules say of a call of a plugin's tool or a team tool: PASS for a
-        tool its server says only reads, and for `ask_member`, which are never judged."""
+        tool its server says only reads. Member contact preferences can require the owner's yes."""
         tool = call.tool
         if tool.key in HARNESS_TOOLS:
             if tool.key in ("routine_list", "show", "computer"):
@@ -1769,6 +1781,8 @@ class AgentService:
         if tool.key in TEAM_TOOLS:
             # Asking another assistant changes nothing (what the one asked does is judged as it
             # does it); adding a member does, and is judged by its own name.
+            if tool.key == ASK_MEMBER and ask.speaker.ask_before_members:
+                return Screening(ASK)
             if tool.key != CREATE_MEMBER:
                 return PASS
             proposed = Proposed(CREATE_MEMBER, tool.description, summarize(call.arguments))
@@ -1965,7 +1979,7 @@ class AgentService:
         try:
             turn_id = self._history.add(
                 session_id=ask.session_id,
-                question=ask.text,
+                question=ask.original_text if ask.original_text is not None else ask.text,
                 route="delegate",
                 prefix=_prefix(language, "understood") if speaker.is_raphael else "",
                 text=phrase(language, "handoff"),
@@ -2045,7 +2059,7 @@ class AgentService:
         for a failure of the world: "blocked" when the speaker may not, "bad_arguments" for
         arguments it cannot take, "not_found" for nobody of that name."""
         team = self._team
-        if team is None or name not in TEAM_TOOLS or not speaker.may_ask:
+        if team is None or name not in TEAM_TOOLS or (name != SKILL_READ and not speaker.may_ask):
             return ToolResult(name, False, None, "blocked")
         if name == CREATE_MEMBER and speaker.depth:
             return ToolResult(name, False, None, "blocked")
@@ -2053,6 +2067,11 @@ class AgentService:
             self._gate.check(Action(name, dict(arguments)), None)
         except (UnknownTool, NotApproved):
             return ToolResult(name, False, None, "blocked")
+        if name == SKILL_READ:
+            read = getattr(team, "skill_read", None)
+            text = None if read is None else read(speaker.id, arguments.get("name"))
+            return ToolResult(name, text is not None, {"text": text} if text is not None else None,
+                              None if text is not None else "not_found", untrusted=True)
         if name == CREATE_MEMBER:
             try:
                 created = team.create(
@@ -2539,6 +2558,7 @@ class AgentService:
 
         task = asyncio.ensure_future(resume())
         self._inflight[ask.session_id] = task
+        self._inflight_members[ask.session_id] = ask.speaker.id
         try:
             return await task
         except asyncio.CancelledError:
@@ -2550,6 +2570,7 @@ class AgentService:
                 self._finish(ask, "answer", "understood", phrase(ask.language, "denied"), run.ledger, status="denied")
             if self._inflight.get(ask.session_id) is task:
                 del self._inflight[ask.session_id]
+                self._inflight_members.pop(ask.session_id, None)
 
     async def _resume_narrated(
         self, pending: Pending, approval: Approval | None, followup: _Followup
@@ -2558,6 +2579,7 @@ class AgentService:
         task = asyncio.ensure_future(self._confirm_plugin(pending, approval, followup))
         session_id = followup.ask.session_id
         self._inflight[session_id] = task
+        self._inflight_members[session_id] = followup.ask.speaker.id
         try:
             return await task
         except asyncio.CancelledError:
@@ -2570,6 +2592,7 @@ class AgentService:
                              followup.loop.ledger, status="denied")
             if self._inflight.get(session_id) is task:
                 del self._inflight[session_id]
+                self._inflight_members.pop(session_id, None)
 
     def _outcome(
         self,
@@ -2768,6 +2791,32 @@ class AgentService:
     async def _history_clear(self, params: dict) -> dict:
         """Clear the conversations: every thread, with every summary (each member's too), what
         opening taught Raphael and the background tasks."""
+        if "member_id" in params:
+            member_id = self._member_param(params)
+            sessions = {row[0] for row in self._conn.execute("SELECT DISTINCT session_id FROM agent_turns WHERE member_id = ?", (member_id,))}
+            sessions |= {session for session, owner in self._inflight_members.items() if owner == member_id}
+            tasks = [self._inflight[session] for session in sessions if session in self._inflight]
+            for session in sessions:
+                self.stop_session(session)
+                if self._computer is not None:
+                    self._computer.stop_session(session)
+            await asyncio.gather(*tasks, return_exceptions=True)
+            loops = [loop for loop in self._cli_loops if loop.member_id == member_id]
+            await asyncio.gather(*(loop.aclose() for loop in loops))
+            self._cli_loops.difference_update(loops)
+            self._cli_sessions.clear_member(member_id)
+            self._background.forget_member(member_id)
+            deleted = self._history.clear_member(member_id)
+            self._conversation_of(member_id).clear_summary()
+            if self._memory is not None:
+                self._memory.forget_member_turns(member_id)
+            if self._team is not None and hasattr(self._team, "store"):
+                self._team.store.mark_read(member_id)
+            if self._notify is not None:
+                self._notify("agent.turn", {"turn_id": 0, "member_id": member_id})
+            if self._team is not None and hasattr(self._team, "_changed"):
+                self._team._changed()
+            return {"deleted": deleted}
         if self._cli_loops:
             for task in self._inflight.values():
                 task.cancel()
@@ -2822,8 +2871,7 @@ class AgentService:
     # --- the parts every reply uses -------------------------------------------------------------
 
     def _read_settings(self, speaker: Speaker = RAPHAEL) -> _Settings:
-        """The settings of the assistant; one that is not valid reads as its default. A member of
-        the team that has a model of its own answers with that one."""
+        """Global assistant settings, including for legacy profiles with a stored model."""
         model = self._settings.get("agent_model")
         city = self._settings.get("agent_city")
         return _Settings(
@@ -3008,7 +3056,7 @@ class AgentService:
         its request; 0 if that fails, since the answer matters more. A request one member handed
         another is written as an exchange with the asker (`peer_id`)."""
         member_id = ask.speaker.id
-        question = ask.text
+        question = ask.original_text if ask.original_text is not None else ask.text
         if ask.exchange_speakers is not None:
             requester, respondent = ask.exchange_speakers
             question = labelled_lines(requester, question)

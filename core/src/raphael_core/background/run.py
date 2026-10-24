@@ -59,7 +59,7 @@ from ..agent.ledger import Ledger
 from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult
 from ..agent.steps import reason_of
 from ..agent.policy import Action, Approval, NotApproved, Tier, UnknownTool
-from ..agent.safety import DENY, PASS, Proposed, Screening, needs_yes, summarize
+from ..agent.safety import ASK, DENY, PASS, Proposed, Screening, needs_yes, summarize
 from ..agent.team import ASK_MEMBER, CREATE_MEMBER, TEAM_TOOLS
 from ..agent.team import description as team_description
 from ..agent.tools import ToolResult, Tools
@@ -214,6 +214,7 @@ class TaskRun:
         attachments: Sequence[Attachment] = (),
         team: "TeamCall | None" = None,
         can_wait: bool = False,
+        ask_before_members: bool = False,
     ) -> None:
         self._memory = memory
         # The team tools (`agent.team`), made for this task's speaker on this task's ledger.
@@ -221,6 +222,7 @@ class TaskRun:
         # Whether a call that needs the owner's yes pauses the task (the background service's runs)
         # or is refused (any other).
         self.can_wait = can_wait
+        self.ask_before_members = ask_before_members
         # The call the task paused on, until the service takes it.
         self.waiting: Waiting | None = None
         # The files of the task, by number from 1, and the addresses it has seen (see the module).
@@ -493,6 +495,8 @@ class TaskRun:
         """What the owner's safety rules say of a call: PASS for a tool its server says only reads,
         and for Raphael's own but `create_member`, which are never judged. The judge is paid, so the
         limits on money are read first."""
+        if ref.name == ASK_MEMBER and self.ask_before_members:
+            return Screening(ASK)
         if self._gate.safety is None:
             return PASS
         if ref.kind == BUILTIN:
@@ -665,7 +669,7 @@ class TaskRun:
         except (UnknownTool, NotApproved):
             gate.record_builtin(ref.name, outcome="blocked", task_id=self.task_id)
             return _refused(), "blocked", None if tier is None else tier.name, None
-        if ref.name == CREATE_MEMBER and tier is not None:
+        if (ref.name == CREATE_MEMBER or (ref.name == ASK_MEMBER and self.ask_before_members)) and tier is not None:
             screening = await self._screen(ref, arguments)
             if screening.verdict == DENY:
                 gate.record_builtin(ref.name, outcome="blocked", task_id=self.task_id)
@@ -689,7 +693,8 @@ class TaskRun:
             outcome = "ok" if result.ok else ("timeout" if result.error == "timeout" else "error")
         gate.record_builtin(ref.name, outcome=outcome, task_id=self.task_id)
         if result.ok:
-            limit = MAX_TEXT_RESULT_CHARS if ref.name in ("web_read", "read_attachment") else None
+            limit = (2 * 128 * 1024 + 1000 if ref.name == "skill_read" else
+                     MAX_TEXT_RESULT_CHARS if ref.name in ("web_read", "read_attachment") else None)
             text, cut = _cut(json.dumps(result.data, ensure_ascii=False), limit)
             reply = {"ok": True, "kind": None, "content": text, "truncated": cut}
         else:

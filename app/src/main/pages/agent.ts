@@ -32,6 +32,7 @@
 
 import { createAttachmentMedia } from "../attachment-media";
 import { fileMime, fileKind, fileSize, fileIcon, mountFileDrop } from "../attachments";
+import { mountSlashMenu } from "../slash-menu";
 import { onLocaleChange, t } from "../i18n";
 import { isTopLayer, registerDismissal } from "../dismissals";
 
@@ -313,6 +314,7 @@ export function createAgent(app: AppContext): Page {
   composer.noValidate = true;
   composer.innerHTML = composerHTML();
   const input = composer.querySelector<HTMLTextAreaElement>(".cmp-input")!;
+  const slashMenu = mountSlashMenu(input, { memberId });
   const attachButton = composer.querySelector<HTMLElement>(".cmp-attach")!;
   const voiceButton = composer.querySelector<HTMLButtonElement>(".cmp-voice")!;
   const sendButton = composer.querySelector<HTMLButtonElement>(".cmp-send")!;
@@ -1265,6 +1267,7 @@ export function createAgent(app: AppContext): Page {
    */
   function switchThread(): void {
     if (roomPane.active) roomPane.close();
+    void slashMenu.refresh();
     hideTooltip();
     hideSelection();
     pacing.flush();
@@ -1759,6 +1762,7 @@ export function createAgent(app: AppContext): Page {
   app.onEvent((event) => {
     if (event.type === "Hotkey" && event.kind === "cancel" && visible && document.activeElement === input && !input.value.trim() && !files.length && !listening) void cancelMessage();
     members.follow(event);
+    if (event.type === "MembersChanged") void slashMenu.refresh();
     if (wantsRefresh(event)) {
       // a turn of another thread changes only that member's row
       if (event.type !== "AgentTurn" || (event.member_id ?? RAPHAEL_ID) === memberId()) scheduleRefresh();
@@ -1811,6 +1815,7 @@ export function createAgent(app: AppContext): Page {
   });
 
   onLocaleChange(() => {
+    void slashMenu.refresh();
     drawWords();
     drawComposer();
     for (const child of thread.children) drawnHTML.delete(child);
@@ -1888,6 +1893,7 @@ export function createAgent(app: AppContext): Page {
       messageResize?.disconnect();
       dropResize?.disconnect();
       members.hide();
+      input.dispatchEvent(new Event("blur"));
       clearTimeout(clearTimer);
       clearTimeout(holdTimer);
       clearTimeout(listenTimer);

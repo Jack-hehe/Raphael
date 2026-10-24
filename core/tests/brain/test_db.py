@@ -282,13 +282,24 @@ SCHEMA_V20 = {**SCHEMA_V19, "dictation_daily": [
     "estimated_dictations INTEGER NOT NULL DEFAULT 0",
 ]}
 SCHEMA_V21 = {**SCHEMA_V20, "agent_turns": [*SCHEMA_V20["agent_turns"], "quote TEXT"]}
-SCHEMA_V22 = {**SCHEMA_V21,
+SCHEMA_V22 = {
+    **SCHEMA_V21,
+    "members": [*SCHEMA_V21["members"], "blurb TEXT NOT NULL DEFAULT ''",
+                "reply_style TEXT NOT NULL DEFAULT 'full'", "voice TEXT NOT NULL DEFAULT ''",
+                *[f"{field} INTEGER NOT NULL DEFAULT 0" for field in
+                  ("read_aloud", "notify", "ask_before_members", "pinned", "hidden")]],
+    "member_skills": ["id INTEGER PK", "member_id INTEGER NOT NULL", "name TEXT NOT NULL",
+                      "description TEXT NOT NULL", "source TEXT NOT NULL", "enabled INTEGER NOT NULL DEFAULT 1"],
+    "member_commands": ["id INTEGER PK", "member_id INTEGER NOT NULL", "name TEXT NOT NULL",
+                        "description TEXT NOT NULL", "template TEXT NOT NULL"],
+}
+SCHEMA_V23 = {**SCHEMA_V22,
     "routine_runs": ["id INTEGER PK", "routine_id INTEGER NOT NULL", "started INTEGER NOT NULL", "scheduled INTEGER", "finished INTEGER", "status TEXT NOT NULL", "turn_id INTEGER", "summary TEXT NOT NULL DEFAULT ''", "cost REAL NOT NULL DEFAULT 0"],
     "rooms": ["id INTEGER PK", "name TEXT NOT NULL", "group_id INTEGER", "created INTEGER NOT NULL", "is_team INTEGER NOT NULL DEFAULT 0"],
     "room_members": ["room_id INTEGER PK NOT NULL", "member_id INTEGER PK NOT NULL"],
     "room_messages": ["id INTEGER PK", "room_id INTEGER NOT NULL", "member_id INTEGER", "text TEXT NOT NULL", "created INTEGER NOT NULL", "request_id TEXT", "attachments TEXT", "reply_to INTEGER", "turn_id INTEGER"],
 }
-LATEST = 22
+LATEST = 23
 
 
 def schema_names(conn, kind):
@@ -312,7 +323,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V22) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V23) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -326,7 +337,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V22.items():
+    for table, columns in SCHEMA_V23.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
@@ -1064,11 +1075,11 @@ def test_v21_quotes_preserve_old_turns_and_survive_reopening(tmp_path):
     reopened.close()
 
 
-def test_v22_automation_and_rooms_survive_reopen_and_keep_existing_routines(tmp_path):
+def test_v23_automation_and_rooms_survive_reopen_and_keep_existing_routines(tmp_path):
     path = tmp_path / "automations.db"
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
-    for version in range(1, 22):
+    for version in range(1, 23):
         step = db._MIGRATIONS[version]
         step(conn) if callable(step) else conn.executescript(step)
     conn.execute("INSERT INTO routines (member_id,title,prompt,schedule,enabled,created_at_ms) VALUES (0,'Report','Check','{\"kind\":\"daily\",\"time\":\"09:00\"}',1,1)")
@@ -1085,4 +1096,25 @@ def test_v22_automation_and_rooms_survive_reopen_and_keep_existing_routines(tmp_
     assert reopened.execute("SELECT text FROM room_messages").fetchone()[0] == "Hello"
     with pytest.raises(sqlite3.IntegrityError):
         reopened.execute("INSERT INTO room_messages (room_id,text,created,request_id) VALUES (1,'Again',1,'request')")
+    reopened.close()
+
+
+def test_v22_preserves_old_members_and_adds_private_preferences(tmp_path):
+    path = tmp_path / "v21.db"
+    raw = sqlite3.connect(path)
+    for version in range(1, 22):
+        step = db._MIGRATIONS[version]
+        step(raw) if callable(step) else raw.executescript(step)
+    raw.execute("INSERT INTO members (name, position, created_at_ms, instructions) VALUES ('Ada', 0, 1, 'Existing instructions')")
+    raw.commit()
+    raw.close()
+    migrated = db.connect(path)
+    row = migrated.execute("SELECT * FROM members").fetchone()
+    assert row["instructions"] == "Existing instructions"
+    assert row["reply_style"] == "full" and row["blurb"] == ""
+    assert all(row[field] == 0 for field in ("read_aloud", "notify", "ask_before_members", "pinned", "hidden"))
+    migrated.close()
+    reopened = db.connect(path)
+    assert reopened.execute("SELECT COUNT(*) FROM member_commands").fetchone()[0] == 0
+    assert reopened.execute("SELECT COUNT(*) FROM member_skills").fetchone()[0] == 0
     reopened.close()

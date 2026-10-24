@@ -17,6 +17,7 @@ mod hotkey;
 mod identity;
 mod learn;
 mod media;
+mod member_notifications;
 mod mic_access;
 mod notices;
 mod overlay;
@@ -116,6 +117,7 @@ pub fn run() {
         .plugin(log_plugin())
         // The file dialog of 頭像 (avatar.rs). Used from Rust only: no page may open it.
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .on_window_event(|window, event| {
             // The app lives in the tray, so closing the main window only hides it.
             // "Quit" in the tray menu is the way out.
@@ -282,6 +284,9 @@ pub fn run() {
             // theme, autostart) and keeps the core told which microphone to use. It takes the
             // overlay, the core and the hotkeys from the app state, so it comes after them.
             commands::start(app.handle());
+
+            // A member's desktop notices follow the core even while the main window is hidden.
+            member_notifications::spawn(app.handle());
 
             // ---- First run ----
             // Until the first-run guide has been gone through, the main window opens by itself.

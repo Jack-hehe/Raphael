@@ -83,9 +83,12 @@ from ..clock import wall_clock_ms
 from ..protocol import INVALID_PARAMS, RpcError, invalid_params
 from ..router import Router
 from ..services.attachments import IMAGE_TYPES, MAX_IMAGE_BYTES, AttachmentError, checked, sniff_ok
+from .capabilities import MemberCapabilities, download_skills
 from .schedule import Schedule, next_run
 from .store import (
     PROMPT_MAX,
+    PROFILE_FIELDS,
+    NAME_MAX,
     Group,
     Member,
     MemberError,
@@ -222,6 +225,10 @@ class MembersService:
         tick_s: float = TICK_S,
     ) -> None:
         self.store = MemberStore(conn, now_ms)
+        self.capabilities = MemberCapabilities(conn, local_dir / "member-skills", self.store)
+        self._speech = None
+        self._delivered: set[tuple[int, int, str]] = set()
+        self._speech_tasks: set[asyncio.Task] = set()
         self._conn = conn
         self._history = AgentHistory(conn, now_ms)
         self._settings = SettingsStore(conn)
@@ -242,6 +249,16 @@ class MembersService:
 
     def register(self, router: Router) -> None:
         methods = {
+            "members.skills.list": self._skills_list,
+            "members.skills.import": self._skills_import,
+            "members.skills.update": self._skills_update,
+            "members.skills.delete": self._skills_delete,
+            "members.commands.list": self._commands_list,
+            "members.commands.save": self._commands_save,
+            "members.commands.delete": self._commands_delete,
+            "members.duplicate": self._duplicate,
+            "members.mark_all_read": self._mark_all_read,
+            "members.voices": self._voices,
             "members.list": self._list,
             "members.create": self._create,
             "members.update": self._update,
@@ -249,6 +266,7 @@ class MembersService:
             "members.set_avatar": self._set_avatar,
             "members.presets": self._presets,
             "members.read": self._read,
+            "members.unread": self._unread,
             "members.viewing": self._viewing_now,
             "members.tool_choices": self._tool_choices,
             "groups.create": self._group_create,
@@ -299,7 +317,7 @@ class MembersService:
 
     def roster(self) -> list[Speaker]:
         return [RAPHAEL] + [
-            Speaker(id=member.id, name=member.name, role=member.role)
+            Speaker(id=member.id, name=member.name, role=member.role, blurb=member.blurb)
             for member in self.store.members()
         ]
 
@@ -346,6 +364,8 @@ class MembersService:
         try:
             self._finish_run(turn_id)
             turn = self._history.get(turn_id)
+            if turn is not None and turn.member_id:
+                self._deliver_turn(turn)
             if turn is None or (turn.source == "voice" and turn.member_id == 0) or turn.member_id == self._viewing:
                 return
             was_unread = turn.member_id in self.store.unread()
@@ -354,6 +374,34 @@ class MembersService:
                 self._changed()
         except sqlite3.Error as exc:
             logger.warning("Could not mark a thread unread: %s", type(exc).__name__)
+
+    def _deliver_turn(self, turn: Turn) -> None:
+        kind = "needs_input" if turn.status == "confirm" else "finished" if turn.status == "done" else None
+        if kind is None or turn.id is None or (turn.id, turn.created_at_ms, kind) in self._delivered:
+            return
+        self._delivered.add((turn.id, turn.created_at_ms, kind))
+        # Bound the delivery cache without retaining any message contents.
+        if len(self._delivered) > 2000:
+            self._delivered = {(turn.id, turn.created_at_ms, kind)}
+        member = self.store.member(turn.member_id)
+        if member is None:
+            return
+        self._notice(member, kind)
+        if kind == "finished" and member.read_aloud and turn.text and self._speech is not None:
+            task = asyncio.get_running_loop().create_task(self._speech.say_member("\n".join(turn.messages) if turn.messages else turn.text, voice=member.voice, turn_id=turn.id))
+            self._speech_tasks.add(task)
+            task.add_done_callback(self._speech_tasks.discard)
+            task.add_done_callback(lambda done: done.cancelled() or done.exception())
+
+    def _notice(self, member: Member, kind: str) -> None:
+        if member.notify and self._notify is not None:
+            self._notify("member.notice", {"member_id": member.id, "name": member.name,
+                                          "kind": kind, "notify": True})
+
+    def needs_input(self, member_id: int) -> None:
+        member = self.store.member(member_id)
+        if member is not None:
+            self._notice(member, "needs_input")
 
     def add_waiting_source(self, source: Callable[[], Iterable[int]]) -> None:
         """Add a source of threads with a question waiting for the owner: the members it names
@@ -460,6 +508,7 @@ class MembersService:
     ) -> dict[str, Any]:
         last = latest.get(member.id)
         view: dict[str, Any] = {
+            **{field: getattr(member, field) for field in PROFILE_FIELDS},
             "id": member.id,
             "name": member.name,
             "role": member.role,
@@ -486,6 +535,8 @@ class MembersService:
     ) -> dict[str, Any]:
         last = latest.get(0)
         view: dict[str, Any] = {
+            "blurb": "", "reply_style": "full", "voice": "", "read_aloud": False,
+            "notify": False, "ask_before_members": False, "pinned": False, "hidden": False,
             "id": 0,
             "name": RAPHAEL_NAMES[language],
             "role": "",
@@ -525,6 +576,123 @@ class MembersService:
 
     # --- members.* -----------------------------------------------------------------------------------
 
+    def expand_command(self, member_id: int, text: str) -> str:
+        return self.capabilities.expand(member_id, text)
+
+    def enabled_skills(self, member_id: int) -> list[dict]:
+        return [] if member_id == 0 else [skill for skill in self.capabilities.skills(member_id) if skill["enabled"]]
+
+    def skill_read(self, member_id: int, name: object) -> str | None:
+        try:
+            return self.capabilities.read_skill(member_id, name)
+        except (OSError, MemberError):
+            return None
+
+    def _cap(self, method, *args):
+        try:
+            return method(*args)
+        except MemberError as error:
+            raise _rpc_error(error) from None
+
+    def _cap_member(self, params: dict) -> int:
+        member_id = _whole(params, "member_id", least=1)
+        self._cap(self.capabilities.check, member_id)
+        return member_id
+
+    async def _skills_list(self, params: dict) -> dict:
+        return {"skills": self._cap(self.capabilities.skills, self._cap_member(params))}
+
+    async def _skills_import(self, params: dict) -> dict:
+        member_id = self._cap_member(params)
+        added = []
+        try:
+            documents = await download_skills(params.get("source"))
+            for source, text in documents:
+                added.append(self.capabilities.keep_skill(member_id, source, text))
+        except MemberError as error:
+            for skill in added:
+                self.capabilities.delete_skill(member_id, skill["id"])
+            raise _rpc_error(error) from None
+        self._changed("members.skills.changed", member_id)
+        self._changed()
+        return {"skill": added[0], "skills": added}
+
+    async def _skills_update(self, params: dict) -> dict:
+        member_id = self._cap_member(params)
+        skill = self._cap(self.capabilities.update_skill, member_id, _whole(params, "id", least=1), params.get("enabled"))
+        self._changed("members.skills.changed", member_id)
+        self._changed()
+        return {"skill": skill}
+
+    async def _skills_delete(self, params: dict) -> dict:
+        member_id = self._cap_member(params)
+        deleted = self._cap(self.capabilities.delete_skill, member_id, _whole(params, "id", least=1))
+        self._changed("members.skills.changed", member_id)
+        self._changed()
+        return {"deleted": deleted}
+
+    async def _commands_list(self, params: dict) -> dict:
+        return {"commands": self._cap(self.capabilities.commands, self._cap_member(params))}
+
+    async def _commands_save(self, params: dict) -> dict:
+        member_id = self._cap_member(params)
+        command_id = _whole(params, "id", least=1) if "id" in params else None
+        command = self._cap(self.capabilities.save_command, member_id, command_id,
+                            params.get("name"), params.get("description", ""), params.get("template"))
+        self._changed("members.commands.changed", member_id)
+        self._changed()
+        return {"command": command}
+
+    async def _commands_delete(self, params: dict) -> dict:
+        member_id = self._cap_member(params)
+        deleted = self._cap(self.capabilities.delete_command, member_id, _whole(params, "id", least=1))
+        self._changed("members.commands.changed", member_id)
+        self._changed()
+        return {"deleted": deleted}
+
+    async def _mark_all_read(self, params: dict) -> dict:
+        with self._conn:
+            self._conn.execute("DELETE FROM member_unread")
+        self._changed()
+        return {}
+
+    async def _duplicate(self, params: dict) -> dict:
+        member_id = self._member_id(params)
+        original = self.store.member(member_id)
+        assert original is not None
+        for number in range(2, 1000):
+            suffix = f" ({number})"
+            name = original.name[:NAME_MAX - len(suffix)] + suffix
+            if self.store.by_name(name) is None:
+                break
+        fields = {field: getattr(original, field) for field in
+                  ("role", "personality", "instructions", "group_id", "avatar", *PROFILE_FIELDS)}
+        copy = None
+        try:
+            copy = self.store.create_member(name=name, **fields)
+            for command in self.capabilities.commands(member_id):
+                self.capabilities.save_command(copy.id, None, command["name"], command["description"], command["template"])
+            for skill in self.capabilities.skills(member_id):
+                text = self.capabilities._path(member_id, skill["id"]).read_text(encoding="utf-8")
+                saved = self.capabilities.keep_skill(copy.id, skill["source"], text)
+                self.capabilities.update_skill(copy.id, saved["id"], skill["enabled"])
+        except (MemberError, OSError) as error:
+            if copy is not None:
+                for skill in self.capabilities.skills(copy.id):
+                    self.capabilities.delete_skill(copy.id, skill["id"])
+                self.store.delete_member(copy.id)
+            raise _rpc_error(error if isinstance(error, MemberError) else MemberError("io", "could not copy skills")) from None
+        self._changed()
+        return {"member": self.view_of(copy)}
+
+    def use_speech(self, speech) -> None:
+        self._speech = speech
+
+    async def _voices(self, params: dict) -> dict:
+        voice = self._settings.get("tts_fish_voice")
+        configured = bool(self._speech and self._speech.speaks())
+        return {"voices": [{"id": voice, "name": "Fish Audio"}] if voice else [], "configured": configured}
+
     async def _list(self, params: dict) -> dict:
         language = self._ui_language(params)
         unread = self.store.unread()
@@ -562,6 +730,7 @@ class MembersService:
                 avatar=avatar if avatar is not None else "",
                 tools=params.get("tools"),
                 model=params.get("model", "") or "",
+                **{field: params[field] for field in PROFILE_FIELDS if field in params},
             )
         except MemberError as error:
             raise _rpc_error(error) from None
@@ -575,7 +744,7 @@ class MembersService:
         member_id = self._member_id(params)
         fields = {
             name: params[name]
-            for name in ("name", "role", "personality", "instructions", "group_id", "avatar", "tools", "model", "position")
+            for name in ("name", "role", "personality", "instructions", "group_id", "avatar", "tools", "model", "position", *PROFILE_FIELDS)
             if name in params
         }
         avatar = fields.get("avatar")
@@ -592,7 +761,8 @@ class MembersService:
         except MemberError as error:
             raise _rpc_error(error) from None
         if old is not None and "avatar" in fields and old.avatar != member.avatar:
-            self._remove_picture(old.avatar)
+            if not any(other.id != member_id and other.avatar == old.avatar for other in self.store.members()):
+                self._remove_picture(old.avatar)
         self._changed()
         return {"member": self.view_of(member)}
 
@@ -607,7 +777,11 @@ class MembersService:
             logger.warning("Could not delete a member's conversation: %s", type(exc).__name__)
         if self._memory is not None:
             await self._memory.forget_member(member_id)
-        self._remove_picture(member.avatar)
+        for skill in self.capabilities.skills(member_id):
+            self.capabilities.delete_skill(member_id, skill["id"])
+        # Uploaded avatars can be shared by a duplicated profile.
+        if not any(other.id != member_id and other.avatar == member.avatar for other in self.store.members()):
+            self._remove_picture(member.avatar)
         deleted = self.store.delete_member(member_id)
         if self._viewing == member_id:
             self._viewing = None
@@ -649,7 +823,8 @@ class MembersService:
         old = self.store.member(member_id)
         member = self.store.update_member(member_id, avatar=f"file:{stored}")
         if old is not None and old.avatar != member.avatar:
-            self._remove_picture(old.avatar)
+            if not any(other.id != member_id and other.avatar == old.avatar for other in self.store.members()):
+                self._remove_picture(old.avatar)
         logger.info("A member's picture was set (%s, %d bytes)", picture.mime, len(picture.data))
         self._changed()
         return {"member": self.view_of(member)}
@@ -661,6 +836,14 @@ class MembersService:
             if url is not None:
                 presets.append({"avatar": f"preset:{path.stem}", "name": path.stem, "url": url})
         return {"presets": presets}
+
+    async def _unread(self, params: dict) -> dict:
+        member_id = _whole(params, "id")
+        if not self.store.exists(member_id):
+            raise invalid_params("no such member")
+        self.store.mark_unread(member_id)
+        self._changed()
+        return {}
 
     async def _read(self, params: dict) -> dict:
         member_id = _whole(params, "id")
@@ -943,6 +1126,9 @@ class MembersService:
             self._notify("agent.turn", {"turn_id": turn_id, "member_id": routine.member_id})
 
     async def aclose(self) -> None:
+        for task in self._speech_tasks:
+            task.cancel()
+        await asyncio.gather(*self._speech_tasks, return_exceptions=True)
         ticking, self._ticking = self._ticking, None
         if ticking is not None and not ticking.done():
             ticking.cancel()

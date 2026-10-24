@@ -522,8 +522,29 @@ ALTER TABLE agent_turns ADD COLUMN quote TEXT;
 PRAGMA user_version = 21;
 COMMIT;
 """,
+    22: """
+BEGIN;
+ALTER TABLE members ADD COLUMN blurb TEXT NOT NULL DEFAULT '';
+ALTER TABLE members ADD COLUMN reply_style TEXT NOT NULL DEFAULT 'full' CHECK (reply_style IN ('full', 'conversational'));
+ALTER TABLE members ADD COLUMN voice TEXT NOT NULL DEFAULT '';
+ALTER TABLE members ADD COLUMN read_aloud INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE members ADD COLUMN notify INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE members ADD COLUMN ask_before_members INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE members ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE members ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE member_skills (id INTEGER PRIMARY KEY AUTOINCREMENT, member_id INTEGER NOT NULL,
+  name TEXT NOT NULL, description TEXT NOT NULL, source TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(member_id, name));
+CREATE INDEX member_skills_member ON member_skills(member_id);
+CREATE TABLE member_commands (id INTEGER PRIMARY KEY AUTOINCREMENT, member_id INTEGER NOT NULL,
+  name TEXT NOT NULL COLLATE NOCASE, description TEXT NOT NULL, template TEXT NOT NULL,
+  UNIQUE(member_id, name));
+CREATE INDEX member_commands_member ON member_commands(member_id);
+PRAGMA user_version = 22;
+COMMIT;
+""",
 }
-_MIGRATIONS[22] = """
+_MIGRATIONS[23] = """
 BEGIN;
 CREATE TABLE routine_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -564,7 +585,7 @@ CREATE TABLE room_messages (
     UNIQUE(reply_to, member_id)
 );
 CREATE INDEX room_messages_room ON room_messages(room_id, id);
-PRAGMA user_version = 22;
+PRAGMA user_version = 23;
 COMMIT;
 """
 LATEST_VERSION = max(_MIGRATIONS)

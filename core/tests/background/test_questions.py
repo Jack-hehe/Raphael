@@ -459,3 +459,29 @@ async def test_adding_a_member_is_judged_in_the_background(make_rig, clock, conn
         await rig.wait_for_reports()
         assert team.created == ["MEMBER-NAME"]
     assert judge.shown[0].tool == "create_member"
+
+
+@pytest.mark.parametrize("approved", [True, False])
+async def test_member_contact_preference_pauses_background_until_owner_answer(make_rig, approved):
+    class Contacting(OneMember):
+        def __init__(self):
+            self.contacts = []
+
+        def speaker(self, member_id):
+            return Speaker(id=3, name="Researcher", ask_before_members=True) if member_id == 3 else Speaker()
+
+        async def tool(self, speaker, name, arguments, **kwargs):
+            self.contacts.append((speaker.id, name))
+            return ToolResult(name, True, {"answer": "Found."})
+
+    rig = make_rig()
+    team = Contacting()
+    rig.service.use_team(team, team.tool)
+    rig.client.replies = [turn(calls=[call("ask_member", {"member": "Raphael", "request": "Find it"}, "c1")]),
+                          turn(json.dumps({"text": "Finished.", "detail": ""}))]
+    task_id = rig.service.submit(session_id="s", text="Research", language="en", model="fake/model", member_id=3)
+    asked = await paused(rig, task_id)
+    assert team.contacts == [] and asked["member_id"] == 3
+    await rig.rpc.call("background.answer", {"task_id": task_id, "question_id": asked["question_id"], "approved": approved})
+    await until(lambda: rig.task(task_id).state == "done")
+    assert team.contacts == ([(3, "ask_member")] if approved else [])

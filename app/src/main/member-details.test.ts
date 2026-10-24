@@ -68,6 +68,33 @@ beforeEach(() => {
 });
 
 describe("a member's panel", () => {
+  test("editing belongs to the header and hiding is a resource row", async () => {
+    const panel = mount();
+    host.edit = vi.fn();
+    host.hide = vi.fn();
+    await flush();
+    const edit = panel.el.querySelector<HTMLButtonElement>('[data-det="edit"]')!;
+    expect(edit.closest(".mb-det-head")).not.toBeNull();
+    expect(edit.classList.contains("icon")).toBe(true);
+    expect(edit.getAttribute("aria-label")).toBe("編輯成員");
+    expect(edit.nextElementSibling?.getAttribute("data-det")).toBe("close");
+    expect(panel.el.querySelector(".mb-tabs")!.childElementCount).toBe(0);
+    edit.click();
+    expect(host.edit).toHaveBeenCalledWith(LIST.members[1]);
+    const hide = panel.el.querySelector<HTMLButtonElement>('[data-det="hide"]')!;
+    expect(hide.closest(".mb-panel-pages")).not.toBeNull();
+    expect(hide.classList.contains("mb-panel-row")).toBe(true);
+    expect(hide.textContent).toContain("從側欄隱藏");
+    expect(hide.querySelector("small")!.textContent).toContain("設定");
+    hide.click();
+    expect(host.hide).toHaveBeenCalledWith(LIST.members[1]);
+    expect(panel.el.querySelector('[data-slot="conversations"]')!.childNodes.length).toBe(0);
+    current = 0;
+    panel.showMember();
+    expect(edit.hidden).toBe(true);
+    expect(panel.el.querySelector('[data-det="hide"]')).toBeNull();
+  });
+
   test("a personality draft survives redraws and is saved to its original member on switching", async () => {
     const panel = mount();
     await flush();
@@ -134,7 +161,11 @@ describe("a member's panel", () => {
     expect(panel.el.querySelector<HTMLInputElement>("#mb-det-name")!.value).toBe("日文老師");
     expect(panel.el.querySelector<HTMLInputElement>("#mb-det-role")!.value).toBe("N2 嚴格版");
     expect(panel.el.querySelector(".mb-avbtn .mb-av-letter")!.textContent).toBe("日");
-    expect([...panel.el.querySelectorAll(".mb-tabs .tab")].map((b) => b.textContent)).toEqual(["詳細資訊", "記憶"]);
+    expect([...panel.el.querySelectorAll<HTMLElement>(".mb-panel-pages [data-tab]")].map(b => b.dataset.tab)).toEqual(["routines", "memory", "skills", "commands", "voice"]);
+    panel.el.querySelector<HTMLElement>('[data-tab="skills"]')!.click();
+    expect(panel.el.querySelector<HTMLElement>(".mb-who")!.hidden).toBe(true);
+    panel.el.querySelector<HTMLElement>('[data-tab="details"]')!.click();
+    expect(panel.el.querySelector<HTMLElement>(".mb-who")!.hidden).toBe(false);
   });
 
   test("the name is saved when it loses the focus; a blank or a taken one goes back", async () => {
@@ -190,6 +221,7 @@ describe("a member's panel", () => {
     const panel = mount();
     await flush();
     expect(api.routinesList).toHaveBeenCalledWith(3);
+    panel.el.querySelector<HTMLElement>('[data-tab="routines"]')!.click();
     const row = panel.el.querySelector<HTMLElement>('[data-routine="9"]')!;
     expect(row.textContent).toContain("每天的單字");
     expect(row.textContent).toContain("每天 08:00");
@@ -203,6 +235,7 @@ describe("a member's panel", () => {
   test("a new routine: title, a schedule from the dropdown, what to do; saved with routines.create", async () => {
     const panel = mount();
     await flush();
+    panel.el.querySelector<HTMLElement>('[data-tab="routines"]')!.click();
     panel.el.querySelector<HTMLElement>('[data-det="routine-add"]')!.click();
     document.querySelector<HTMLInputElement>("#au-title")!.value = "每週回顧";
     document.querySelector<HTMLTextAreaElement>("#au-prompt")!.value = "整理這週";
@@ -219,10 +252,33 @@ describe("a member's panel", () => {
   test("a routine without a title is not sent", async () => {
     const panel = mount();
     await flush();
+    panel.el.querySelector<HTMLElement>('[data-tab="routines"]')!.click();
     panel.el.querySelector<HTMLElement>('[data-det="routine-add"]')!.click();
     document.querySelector<HTMLElement>('[data-dlg="save"]')!.click();
     await flush();
     expect(api.routinesCreate).not.toHaveBeenCalled();
+  });
+
+  test("the shared HH:MM field rejects invalid times and saves a valid time", async () => {
+    const panel = mount();
+    await flush();
+    panel.el.querySelector<HTMLElement>('[data-tab="routines"]')!.click();
+    panel.el.querySelector<HTMLElement>('[data-det="routine-add"]')!.click();
+    const form = document.querySelector<HTMLElement>(".au-routine-dialog")!;
+    const time = form.querySelector<HTMLInputElement>("#au-time")!;
+    expect(time.type).toBe("text");
+    expect(time.placeholder).toBe("HH:MM");
+    form.querySelector<HTMLInputElement>("#au-title")!.value = "Review";
+    form.querySelector<HTMLTextAreaElement>("#au-prompt")!.value = "Summarize progress";
+    form.querySelector<HTMLElement>('[data-kind="daily"]')!.click();
+    form.querySelector<HTMLInputElement>("#au-time")!.value = "25:61";
+    form.querySelector<HTMLElement>('[data-dlg="save"]')!.click();
+    await flush();
+    expect(api.routinesCreate).not.toHaveBeenCalled();
+    form.querySelector<HTMLInputElement>("#au-time")!.value = "08:45";
+    form.querySelector<HTMLElement>('[data-dlg="save"]')!.click();
+    await flush();
+    expect(api.routinesCreate).toHaveBeenCalledWith({ member_id: 3, title: "Review", prompt: "Summarize progress", schedule: expect.objectContaining({ kind: "daily", time: "08:45" }) });
   });
 
   test("記憶: 共同記憶 and the member's own, each read with its space", async () => {
@@ -300,6 +356,7 @@ describe("a member's panel", () => {
     api.routinesCreate.mockImplementation(() => new Promise<Record<string, never>>((r) => (finish = () => r({}))));
     const panel = mount();
     await flush();
+    panel.el.querySelector<HTMLElement>('[data-tab="routines"]')!.click();
     panel.el.querySelector<HTMLElement>('[data-det="routine-add"]')!.click();
     document.querySelector<HTMLInputElement>("#au-title")!.value = "早報";
     document.querySelector<HTMLTextAreaElement>("#au-prompt")!.value = "摘要";
@@ -323,6 +380,7 @@ describe("Raphael's panel", () => {
     expect(panel.el.querySelector(".mb-avbtn .av")!.innerHTML).toContain("app-emblem");
     expect(panel.el.querySelector("#mb-det-instr")).toBeNull();
     expect(panel.el.querySelector('[data-det="group"]')).toBeNull();
+    expect([...panel.el.querySelectorAll<HTMLElement>(".mb-panel-pages [data-tab]")].map(row => row.dataset.tab)).toEqual(["routines", "memory"]);
     expect(api.routinesList).toHaveBeenCalledWith(0);
   });
 
@@ -359,7 +417,7 @@ test("live routines update while instructions retain their node, draft and caret
   api.routinesList.mockResolvedValue({ routines: [{ ...ROUTINE, title: "Changed live" }] });
   panel.refreshRoutines();
   await flush();
-  expect(panel.el.querySelector(".mb-rts")!.textContent).toContain("Changed live");
+  expect(panel.el.querySelector('[data-tab="routines"]')!.textContent).toContain("1");
   expect(panel.el.querySelector("#mb-det-instr")).toBe(box);
   expect(document.activeElement).toBe(box);
   expect(box.value).toBe("Unsaved instructions");
@@ -370,6 +428,7 @@ test("live routines update while instructions retain their node, draft and caret
 test("a remote deletion keeps the routine draft editable and refresh failure keeps rows", async () => {
   const panel = mount();
   await flush();
+  panel.el.querySelector<HTMLElement>('[data-tab="routines"]')!.click();
   panel.el.querySelector<HTMLElement>('[data-det="routine-edit"]')!.click();
   const title = document.querySelector<HTMLInputElement>("#au-title")!;
   title.value = "Unsaved routine";
@@ -401,6 +460,7 @@ test("a late routine response cannot replace the newly selected member's routine
   await flush();
   resolve({ routines: [ROUTINE] });
   await flush();
+  panel.el.querySelector<HTMLElement>('[data-tab="routines"]')!.click();
   expect(panel.el.querySelector(".mb-rts")!.textContent).toContain("Other member");
   expect(panel.el.querySelector('[data-routine="9"]')).toBeNull();
 });
@@ -420,4 +480,16 @@ test("a focused name keeps its draft while the remote role updates", async () =>
   expect(document.activeElement).toBe(name);
   expect(name.value).toBe("Draft name");
   expect(name.selectionStart).toBe(2);
+});
+
+test("resource rows count saved skills including disabled ones and only active routines", async () => {
+  api.core.mockImplementation(async (method: string) => {
+    if (method === "members.skills.list") return { skills: [{ enabled: true }, { enabled: false }] };
+    if (method === "members.commands.list") return { commands: [{ id: 1 }] };
+    return { memories: [] };
+  });
+  api.routinesList.mockResolvedValue({ routines: [ROUTINE, { ...ROUTINE, id: 10, enabled: false }] });
+  const panel = mount(); await flush();
+  expect(panel.el.querySelector('[data-tab="skills"] small')!.textContent).toContain("2");
+  expect(panel.el.querySelector('[data-tab="routines"] small')!.textContent).toContain("1");
 });

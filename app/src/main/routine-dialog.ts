@@ -17,6 +17,9 @@ export interface RoutineDialogOptions {
   time?: string;
   onSaved?(routine: Routine): void;
   onDeleted?(): void;
+  /** Profiles can keep routines local until a new member has been created. */
+  save?(fields: Pick<Routine, "member_id" | "title" | "prompt" | "schedule">): Promise<Routine>;
+  delete?(): Promise<void>;
 }
 
 export function openRoutineDialog(o: RoutineDialogOptions): Dialog {
@@ -71,7 +74,8 @@ export function openRoutineDialog(o: RoutineDialogOptions): Dialog {
     saving = true;
     dialog.el.querySelector<HTMLButtonElement>('[data-dlg="save"]')!.disabled = true;
     try {
-      const result = routine ? await api.routinesUpdate(routine.id, { title: title.trim(), prompt: prompt.trim(), schedule }) : await api.routinesCreate({ member_id: memberId, title: title.trim(), prompt: prompt.trim(), schedule });
+      const fields = { member_id: memberId, title: title.trim(), prompt: prompt.trim(), schedule };
+      const result = o.save ? { routine: await o.save(fields) } : routine ? await api.routinesUpdate(routine.id, { title: fields.title, prompt: fields.prompt, schedule }) : await api.routinesCreate(fields);
       dialog.close(); o.onSaved?.(result.routine);
     } catch (error) { toaster.info(describeError(error)); }
     finally { saving = false; const save = dialog.el.querySelector<HTMLButtonElement>('[data-dlg="save"]'); if (save) save.disabled = false; }
@@ -93,7 +97,7 @@ export function openRoutineDialog(o: RoutineDialogOptions): Dialog {
       else if (act === "end") openMenu(target, endChoices(), ending, value => { ending = value; draw(); });
       else if (act === "delete" && routine) void confirmDelete(routine.title).then(async yes => {
         if (!yes) return;
-        try { await api.routinesDelete(routine.id); dialog.close(); o.onDeleted?.(); } catch (error) { toaster.info(describeError(error)); }
+        try { if (o.delete) await o.delete(); else await api.routinesDelete(routine.id); dialog.close(); o.onDeleted?.(); } catch (error) { toaster.info(describeError(error)); }
       });
     },
   });

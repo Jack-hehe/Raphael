@@ -843,6 +843,7 @@ class App(Router):
                                   notify=self.notify, transcribe=self._transcribe_from_messaging,
                                   attachment_store=self.attachment_store)
         self.rooms.register(self)
+        self.members.use_speech(self.speaker)
         self.memory.member_exists = self.members.member_exists
         self.agent = AgentService(
             self._conn,
@@ -1265,6 +1266,8 @@ class App(Router):
         ended completed its turn, which is news in its thread."""
         self.notify(method, params)
         if method == "background.question" and params.get("state") == "waiting":
+            if type(params.get("member_id")) is int:
+                self.members.needs_input(params["member_id"])
             self._tell_chat_to_answer_here(params.get("task_id"))
             return
         if method == "worker.changed" and params.get("state") in FINAL_STATES:
