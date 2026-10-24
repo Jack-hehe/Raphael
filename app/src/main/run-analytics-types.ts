@@ -11,7 +11,15 @@ export interface RunGroup { label: string; tokens: number; cost_usd: number; run
 export interface RunReport { range: RunPeriod; start_day: string | null; end_day: string; summary: RunSummary; groups: Record<RunGrouping, RunGroup[]>; runs: UsageRun[]; total: number }
 export interface RunSpan { at_ms: number; ms: number; kind: string; tool: string; server: string; outcome: string; model?: string }
 export interface RunTrace { run: UsageRun; summary: RunSummary; spans: RunSpan[] }
-export interface CliAllowances { quotas?: { provider: string; reset_at_ms: number | null }[]; brains: { id: string; name: string; windows: { period: "fiveHour" | "weekly"; remaining_percent: number; resets_at: number | null }[] }[] }
+export interface CliAllowanceWindow {
+  period: "fiveHour" | "weekly" | "weeklyOpus" | "weeklySonnet";
+  remaining_percent: number | null; resets_at: number | null;
+  status?: "allowed" | "allowed_warning" | "rejected"; updated_at_ms?: number;
+}
+export interface CliAllowances {
+  quotas?: { provider: string; reset_at_ms: number | null }[];
+  brains: { id: string; name: string; source?: "live" | "reported" | "unavailable"; windows: CliAllowanceWindow[] }[];
+}
 export interface RunAnalyticsApi {
   modelsCatalog?(): Promise<import("./types").ModelCatalog>;
   brainsCli?(): Promise<{ clis: import("./types").CliBrain[] }>;

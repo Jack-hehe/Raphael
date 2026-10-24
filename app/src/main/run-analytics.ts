@@ -2,7 +2,8 @@
 import "./run-analytics.css";
 import { t, onLocaleChange } from "./i18n";
 import { usageModel } from "./usage-models";
-import { cliModels } from "./cli-brains";
+import { CLIS, cliModels } from "./cli-brains";
+import { providerMark } from "./provider-marks";
 import { modelsFor } from "./model-picker";
 import type { CatalogModel } from "./types";
 import { formatUsd, describeError } from "./format";
@@ -12,7 +13,7 @@ import type { MessageKey } from "./i18n/zh-TW";
 import type { CliAllowances, RunAnalyticsApi, RunGrouping, RunPeriod, RunReport, RunSpan, RunSummary, RunTrace } from "./run-analytics-types";
 
 const btn = (label: string, attrs = "") => uiBtn(label, "", attrs);
-type RunKey = Exclude<Extract<MessageKey, `runs.${string}`>, "runs.minutesSeconds" | "runs.seconds">;
+type RunKey = Exclude<Extract<MessageKey, `runs.${string}`>, "runs.minutesSeconds" | "runs.seconds" | "runs.allowanceUpdated">;
 const periodKey: Record<RunPeriod, RunKey> = { week: "runs.week", month: "runs.month", last_month: "runs.lastMonth", all: "runs.all" };
 const groupKey: Record<RunGrouping, RunKey> = { member: "runs.member", model: "runs.model", day: "runs.day", provider: "runs.provider", routine: "runs.routine" };
 const number = (n: number) => new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(n);
@@ -45,6 +46,28 @@ export function mountRunAnalytics(host: HTMLElement, api: RunAnalyticsApi, onTra
   let allowance: CliAllowances = { brains: [] }, busy = false, exportBusy = false, allowanceBusy = false, error = "", revision = 0, disposed = false;
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const params = () => ({ range, tz });
+  function allowanceHTML(): string {
+    return allowance.brains.map(brain => {
+      const cli = CLIS.find(c => c.id === brain.id), name = brain.id === "claude" ? "Claude" : cli?.name ?? brain.name;
+      const quota = allowance.quotas?.find(q => q.provider === brain.id);
+      const reported = brain.source === "reported";
+      const periods = { fiveHour: "runs.fiveHour", weekly: "runs.weekly", weeklyOpus: "runs.weeklyOpus", weeklySonnet: "runs.weeklySonnet" } as const;
+      return `<article class="run-subscription"><header><h4>${providerMark(cli?.mark ?? brain.id)}${esc(name)}</h4>` +
+        (brain.windows.length ? `<span class="run-allowance-source">${t(reported ? "runs.lastReported" : "runs.liveAllowance")}</span>` : "") + `</header>` +
+        (quota ? `<p class="run-quota"><strong>${t("runs.exhausted")}</strong><small>${quota.reset_at_ms ? `${t("runs.resets")} ${esc(time(quota.reset_at_ms))}` : t("runs.resetUnknown")}</small></p>` : "") +
+        (!brain.windows.length ? `<p class="run-allowance-unavailable">${t("runs.allowanceUnavailable")}</p>` : brain.windows.map(w => {
+          const known = typeof w.remaining_percent === "number" && Number.isFinite(w.remaining_percent);
+          const remaining = Math.min(100,Math.max(0,w.remaining_percent ?? 0));
+          return `<div class="run-window"><span>${t(periods[w.period])}</span>` +
+            (known ? `<strong>${remaining}% ${t("runs.remaining")}</strong>` : `<span>${t("runs.allowancePercentUnknown")}</span>`) +
+            (w.status ? `<small>${t(w.status === "allowed" ? "runs.allowanceAllowed" : w.status === "allowed_warning" ? "runs.allowanceWarning" : "runs.exhausted")}</small>` : "") +
+            (known ? `<div class="run-bar-track" role="progressbar" aria-label="${esc(name)} ${esc(t(periods[w.period]))}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${remaining}"><i style="width:${remaining}%"></i></div>` : "") +
+            (w.resets_at ? `<small>${t("runs.resets")} ${esc(time(w.resets_at * 1000))}</small>` : "") +
+            (reported && w.updated_at_ms ? `<small>${t("runs.allowanceUpdated", { time: time(w.updated_at_ms) })}</small>` : "") +
+            (reported && w.resets_at && w.resets_at * 1000 <= Date.now() ? `<small>${t("runs.allowanceExpired")}</small>` : "") + `</div>`;
+        }).join("")) + `</article>`;
+    }).join("");
+  }
   function bars(group: RunGrouping): string {
     const all = report!.groups[group], values = group === "member" && !allMembers ? all.slice(0,5) : all, peak = Math.max(1, ...all.map(g => g.tokens || g.runs));
     return values.length ? `<ul class="run-bars">${values.map(g => `<li><div><span class="run-group-label">${group === "model" ? modelHTML(g.label) : group === "member" ? faceHTML({id:g.member_id ?? (g.label === "Raphael" ? 0 : -1),name:g.label,avatar_url:g.avatar_url},24) + esc(memberName(g.member_id,g.label)) : esc(g.label === "unknown" ? t("runs.unknown") : g.label)}</span><strong>${number(g.tokens || g.runs)}</strong></div>` +
@@ -93,9 +116,7 @@ export function mountRunAnalytics(host: HTMLElement, api: RunAnalyticsApi, onTra
     if (busy) html += `<p role="status" class="ua-status">${t("usage.loading")}</p>`;
     if (error) html += `<p role="alert">${esc(error)}</p>${btn(t("usage.retry"), ' data-run-act="retry"')}`;
     if (!trace) html += `<section class="run-allowance"><header><h3>${t("runs.allowance")}</h3>${btn(t("runs.refresh"), ` data-run-act="allowance"${allowanceBusy ? " disabled" : ""}`)}</header>` +
-      (allowance.quotas ?? []).map(quota => `<div class="run-window"><h4>${esc(({codex:"Codex CLI",claude:"Claude",gemini:"Gemini"} as Record<string,string>)[quota.provider] ?? quota.provider)}</h4><strong>${t("runs.exhausted")}</strong><small>${quota.reset_at_ms ? `${t("runs.resets")} ${esc(time(quota.reset_at_ms))}` : t("runs.resetUnknown")}</small></div>`).join("") +
-      allowance.brains.map(brain => `<h4>${esc(brain.name)}</h4>${brain.windows.map(w => `<div class="run-window"><span>${t(w.period === "fiveHour" ? "runs.fiveHour" : "runs.weekly")}</span><strong>${w.remaining_percent}% ${t("runs.remaining")}</strong><div class="run-bar-track" role="progressbar" aria-label="${esc(brain.name)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${w.remaining_percent}"><i style="width:${Math.min(100,Math.max(0,w.remaining_percent))}%"></i></div>` +
-        (w.resets_at ? `<small>${t("runs.resets")} ${esc(time(w.resets_at * 1000))}</small>` : "") + `</div>`).join("")}`).join("") + `</section>`;
+      allowanceHTML() + `</section>`;
     root.innerHTML = html;
     if (focus) root.querySelector<HTMLElement>(`[data-run-act="${focus}"]`)?.focus({ preventScroll: true });
   }

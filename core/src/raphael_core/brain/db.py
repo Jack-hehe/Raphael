@@ -649,6 +649,20 @@ END;
 PRAGMA user_version = 25;
 COMMIT;
 """
+_MIGRATIONS[26] = """
+BEGIN;
+CREATE TABLE subscription_allowances (
+    provider TEXT NOT NULL,
+    period TEXT NOT NULL,
+    remaining_percent REAL,
+    resets_at INTEGER,
+    status TEXT NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    PRIMARY KEY(provider, period)
+);
+PRAGMA user_version = 26;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

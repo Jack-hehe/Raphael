@@ -1,6 +1,7 @@
 """Persistent subscription exhaustion hints. Provider text is parsed and discarded at ingress."""
 
 import json
+import math
 import re
 import sqlite3
 from datetime import datetime, timedelta
@@ -23,15 +24,37 @@ def _timestamp(value):
 
 def parse_quota(packet: dict, now_ms: int) -> dict | None:
     """Accept Codex windows or CLI error messages; never return any provider prose."""
+    if packet.get("type") == "rate_limit_event" and "rate_limit_info" in packet:
+        info = packet["rate_limit_info"]
+        if not isinstance(info, dict):
+            return None
+        status = info.get("status")
+        period = {"five_hour": "fiveHour", "seven_day": "weekly", "seven_day_opus": "weeklyOpus",
+                  "seven_day_sonnet": "weeklySonnet"}.get(info.get("rateLimitType", info.get("rate_limit_type")))
+        if status not in ("allowed", "allowed_warning", "rejected") or not period:
+            return None
+        reset = _timestamp(info.get("resetsAt", info.get("resets_at")))
+        used = info.get("utilization")
+        remaining = round(100 * (1 - used), 2) if type(used) in (int, float) and math.isfinite(used) and 0 <= used <= 1 else None
+        exhausted = status == "rejected" and (reset is None or reset > now_ms)
+        return {"exhausted": exhausted, "reset_at_ms": reset if exhausted else None,
+                "windows": [{"period": period, "remaining_percent": remaining,
+                             "resets_at": reset // 1000 if reset else None, "status": status}]}
     text = json.dumps(packet, ensure_ascii=False, default=str)[:64000]
     windows = []
+    reported = []
 
     def visit(item):
         if isinstance(item, dict):
             percent = item.get("usedPercent", item.get("used_percent"))
-            if isinstance(percent, (int, float)) and not isinstance(percent, bool):
+            if type(percent) in (int, float) and math.isfinite(percent):
                 reset = _timestamp(item.get("resetsAt", item.get("resets_at")))
                 windows.append((percent >= 100, reset))
+                period = {300: "fiveHour", 10080: "weekly"}.get(item.get("windowDurationMins"))
+                if period and 0 <= percent <= 100:
+                    reported.append({"period": period, "remaining_percent": 100 - percent,
+                                     "resets_at": reset // 1000 if reset else None,
+                                     "status": "rejected" if percent >= 100 else "allowed"})
             for value in item.values():
                 visit(value)
         elif isinstance(item, list):
@@ -41,7 +64,8 @@ def parse_quota(packet: dict, now_ms: int) -> dict | None:
     visit(packet)
     if windows:
         exhausted = [reset for full, reset in windows if full and (reset is None or reset > now_ms)]
-        return {"exhausted": bool(exhausted), "reset_at_ms": max((r for r in exhausted if r), default=None)}
+        return {"exhausted": bool(exhausted), "reset_at_ms": max((r for r in exhausted if r), default=None),
+                **({"windows": reported} if reported else {})}
     if not _LIMIT.search(text):
         return None
     resets = []
@@ -90,6 +114,20 @@ class Quotas:
             return
         reset = data.get("reset_at_ms")
         with self.conn:
+            for window in data.get("windows", []):
+                period, status = window.get("period"), window.get("status")
+                if period not in ("fiveHour", "weekly", "weeklyOpus", "weeklySonnet") or status not in ("allowed", "allowed_warning", "rejected"):
+                    continue
+                remaining, stamp = window.get("remaining_percent"), window.get("resets_at")
+                remaining = remaining if type(remaining) in (int, float) and math.isfinite(remaining) and 0 <= remaining <= 100 else None
+                self.conn.execute("INSERT INTO subscription_allowances VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(provider, period) DO UPDATE SET remaining_percent=excluded.remaining_percent, resets_at=excluded.resets_at, status=excluded.status, updated_at_ms=excluded.updated_at_ms",
+                                  (provider, period, remaining, stamp if type(stamp) is int and stamp > 0 else None, status, self.now_ms()))
+            if data.get("windows") or not data.get("exhausted") and self.allowances(provider):
+                # A healthy short window must not clear a still-rejected weekly window.
+                rejected = [w for w in self.allowances(provider) if w["status"] == "rejected"
+                            and (w["resets_at"] is None or w["resets_at"] * 1000 > self.now_ms())]
+                data = {"exhausted": bool(rejected)}
+                reset = None if any(w["resets_at"] is None for w in rejected) else max((w["resets_at"] * 1000 for w in rejected), default=None)
             if not data.get("exhausted") or (type(reset) is int and reset <= self.now_ms()):
                 self.conn.execute("DELETE FROM subscription_quotas WHERE provider = ?", (provider,))
             else:
@@ -97,6 +135,10 @@ class Quotas:
                                   (provider, reset if type(reset) is int else None, self.now_ms()))
         if self.notify:
             self.notify("quota.changed", {})
+
+    def allowances(self, provider: str) -> list[dict]:
+        return [dict(row) for row in self.conn.execute(
+            "SELECT period, remaining_percent, resets_at, status, updated_at_ms FROM subscription_allowances WHERE provider = ? ORDER BY period", (provider,))]
 
     def list(self) -> list[dict]:
         with self.conn:
