@@ -11,6 +11,7 @@ from ...worker.loop import Call, Outcome, Stop, ToolOutcome, WAITING
 from ...worker.guards import RepeatGuard, wrap_untrusted
 from ..answers import parse_reply
 from ..mcp_server import RaphaelMcp
+from ...brain.textnorm import public_line
 from ..narration import PUBLIC_PROGRESS_RULES
 from ..narration import _content
 from ..policy import CONFIRM_TIMEOUT_S
@@ -81,8 +82,8 @@ class CliLoop:
         self.expire = expire
 
     def _progress(self):
-        if self._buffer.strip():
-            self.progress(self._buffer.strip()[:400])
+        if line := public_line(self._buffer.strip()[:400], self.language):
+            self.progress(line)
         self._buffer = ""
 
     async def _tool(self, identifier, name, args):
@@ -213,9 +214,9 @@ class CliLoop:
                                 self._thought = (self._thought + event.text)[-240:]
                             elif event.kind in ("tool_start", "permission"):
                                 self._progress()
-                                if self._thought.strip():
-                                    self.thinking(self._thought.strip()[:240])
-                                    self._thought = ""
+                                if line := public_line(self._thought.strip()[:240], self.language):
+                                    self.thinking(line)
+                                self._thought = ""
                             elif event.kind == "usage":
                                 usage = event.data
                             elif event.kind == "tool_end" and event.data.get("effect") and event.data.get("ok"):

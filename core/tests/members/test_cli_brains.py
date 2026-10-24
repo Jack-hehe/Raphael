@@ -70,7 +70,7 @@ for line in sys.stdin:
         send({"id":packet["id"],"result":{"thread":{"id":"one"}}})
     elif method=="turn/start":
         send({"id":packet["id"],"result":{"turn":{"id":"turn"}}})
-        send({"method":"item/agentMessage/delta","params":{"delta":"Checking the action."}})
+        send({"method":"item/agentMessage/delta","params":{"delta":"我先確認這個動作。"}})
         send({"id":"permit","method":"item/commandExecution/requestApproval","params":{"command":"echo hello"}})
     elif packet.get("id")=="permit":
         decision=packet["result"]["decision"]
@@ -88,7 +88,7 @@ for line in sys.stdin:
     turn = (await rig.call("agent.history.list", {"member_id": teacher.id}))["turns"][0]
     assert turn["id"] == pending["turn_id"] and turn["status"] == "done"
     assert any(step["tool"] == "cli_permission" for step in turn["steps"])
-    assert any(msg["kind"] == "progress" and msg["text"] == "Checking the action." for msg in turn["messages"])
+    assert any(msg["kind"] == "progress" and msg["text"] == "我先確認這個動作。" for msg in turn["messages"])
     assert not rig.service._cli_loops
 
 

@@ -443,3 +443,21 @@ def remove_stutters(text: str) -> str:
             break
         text = fixed
     return text
+
+
+_HAN = re.compile(r"[㐀-鿿豈-﫿]")
+_KANA = re.compile(r"[぀-ヿ]")
+
+
+def public_line(text: str, language: str) -> str:
+    """A thinking or progress line as the owner sees it: Traditional characters for zh-TW, and
+    nothing at all when the line is not written in the owner's language (a model that drifts into
+    English mid-task must not put an English line in a Chinese conversation)."""
+    text = text.strip()
+    if not text:
+        return ""
+    if language == "zh-TW":
+        return convert_leftover_simplified(text) if _HAN.search(text) else ""
+    if language == "ja":
+        return text if (_KANA.search(text) or _HAN.search(text)) else ""
+    return text

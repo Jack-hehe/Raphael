@@ -99,7 +99,8 @@ async def test_public_narration_has_hard_length_and_sentence_caps(setup, client,
     final = '{"text":"Done."}'
     client.chats = ([chat(public, ("local_time", {})), chat(final)] if before_tool
                     else [chat(public + "\n" + final)])
-    await typed(rig, "Explain this", teacher.id)
+    # a line not in the owner's language is never shown, so the English cases run in English
+    await typed(rig, "Explain this", teacher.id, language="en" if content.isascii() else "zh-TW")
     [turn] = (await rig.call("agent.history.list", {"member_id": teacher.id}))["turns"]
     [message] = [m for m in turn["messages"] if m["kind"] == kind]
     assert message["text"] == expected and len(message["text"]) <= limit
@@ -134,3 +135,14 @@ async def test_live_prompt_separates_ui_narration_language_and_persona_replies(s
         assert "Reply ONLY in" not in system
         assert "Replies follow the persona and the owner's instructions" in system
     assert result["text"] == "練習しましょう。"
+
+
+async def test_a_progress_line_in_another_language_is_not_shown(setup, client):
+    rig, team = setup
+    teacher = member(team)
+    client.chats = [chat('{"thinking": "Let me open the page.", "progress": "我先打開頁面。"}', ("local_time", {})),
+                    chat('{"text":"好了。"}')]
+    await typed(rig, "Explain this", teacher.id, language="zh-TW")
+    [turn] = (await rig.call("agent.history.list", {"member_id": teacher.id}))["turns"]
+    shown = [(m["kind"], m["text"]) for m in turn["messages"] if m["kind"] in ("thinking", "progress")]
+    assert shown == [("progress", "我先打開頁面。")]
