@@ -9,6 +9,7 @@ the Authorization header. Nothing here logs it: a failure is logged with its sta
 the type of the exception behind it when there is one, and nothing else.
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -658,6 +659,7 @@ class OpenRouterClient:
         self._http = http
         self._own_http: httpx.AsyncClient | None = None
         self._own_http_lock = threading.Lock()  # warm_up runs on another thread than the requests
+        self._connection_warm: asyncio.Task | None = None
 
     async def complete_json(
         self,
@@ -905,11 +907,27 @@ class OpenRouterClient:
         """
         self._client()
 
+    def start_connection_warmup(self) -> None:
+        """Start TLS while recording, without delaying the microphone or making a paid call."""
+        if self._connection_warm is None or self._connection_warm.done():
+            self._connection_warm = asyncio.create_task(self.warm_connection())
+
+    async def warm_connection(self) -> None:
+        try:
+            client = await asyncio.to_thread(self._client)
+            await client.head(BASE_URL + "/models", headers=_APP_HEADERS, timeout=2.0)
+        except Exception as exc:
+            logger.debug("OpenRouter connection warmup failed: %s", type(exc).__name__)
+
     async def aclose(self) -> None:
         """Close the httpx client this object made. One it was given stays open.
 
         A call after this makes a new client.
         """
+        if self._connection_warm is not None and not self._connection_warm.done():
+            self._connection_warm.cancel()
+            await asyncio.gather(self._connection_warm, return_exceptions=True)
+        self._connection_warm = None
         own_http, self._own_http = self._own_http, None
         if own_http is not None:
             await own_http.aclose()
@@ -933,7 +951,14 @@ class OpenRouterClient:
                 # Dictations can be minutes apart, and httpx drops an idle connection after 5 s.
                 # Two minutes spares most dictations the DNS, TCP and TLS set-up. A connection the
                 # server closed in the meantime is noticed and replaced before it is used.
-                self._own_http = httpx.AsyncClient(limits=httpx.Limits(keepalive_expiry=120))
+                limits = httpx.Limits(keepalive_expiry=120)
+                try:
+                    self._own_http = httpx.AsyncClient(http2=True, limits=limits)
+                except ImportError:
+                    # An existing dev venv may not have been synced after the HTTP/2 extra was
+                    # added. Keep dictation usable until `uv sync --locked` can install it.
+                    logger.warning("HTTP/2 dependencies missing; using HTTP/1.1 until uv sync --locked")
+                    self._own_http = httpx.AsyncClient(limits=limits)
             return self._own_http
 
     async def _request(

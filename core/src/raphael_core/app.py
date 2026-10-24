@@ -1112,7 +1112,9 @@ class App(Router):
         from .device.cloud_stt import CloudSttEngine  # numpy: the kit has loaded it already
 
         return CloudSttEngine(
-            self._call_from_thread, fallback=self._fallback_engine, warned=self._stt_warned
+            self._call_from_thread, fallback=self._fallback_engine, warned=self._stt_warned,
+            race_local=(self._speech.engine_name is not None
+                        and self.manager.is_ready(self._speech.engine_name)),
         )
 
     def _fallback_engine(self) -> Any:
@@ -1603,6 +1605,10 @@ class App(Router):
         self._starts += 1
         try:
             await self._read_stt_engine()
+            if self._stt_engine == "cloud":
+                warm = getattr(self.client, "start_connection_warmup", None)
+                if warm is not None:
+                    warm()
             self._speech.require_models(engine_needed=self._stt_engine == "local")
             await self._meter("make way for the dictation", lambda m: m.suspend())
             return await self._inner.call(method, params)

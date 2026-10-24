@@ -54,7 +54,7 @@ class Segmenter:
         self,
         model_path: Path,
         *,
-        min_silence_s: float = 0.5,
+        min_silence_s: float = 0.35,
         max_segment_s: float = 20.0,
         threshold: float = 0.5,
     ) -> None:

@@ -865,6 +865,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
         self.tell(DictationPhase::Listening, kind == Kind::Agent);
 
+        let ui_language = self.language.get();
         let this = self.clone();
         Some(tokio::spawn(async move {
             // The core runs one session at a time: the dictation this one took over from has to
@@ -880,8 +881,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 }
             }
             let params = match kind {
-                Kind::Dictation => json!({ "session_id": id }),
-                Kind::Agent => json!({ "session_id": id, "purpose": "agent" }),
+                Kind::Dictation => json!({ "session_id": id, "ui_language": ui_language }),
+                Kind::Agent => json!({ "session_id": id, "purpose": "agent", "ui_language": ui_language }),
             };
             let reply = this.core.call("dictation.start", params).await;
             let Err(err) = reply else {
@@ -1025,13 +1026,15 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                     },
                     false,
                 );
-                // Said every time: the end of what was said is missing.
+                // Incomplete text is reported every time, in the language of this recording.
                 let fallback = if incomplete {
                     Some(notices::INCOMPLETE)
                 } else {
                     this.first_time(notices::notice_for_fallback(reason.as_deref()))
                 };
-                this.report(delivery.as_ref(), fallback, true);
+                let language = reply.get("ui_language").and_then(Value::as_str)
+                    .map(str::to_owned).unwrap_or_else(|| this.language.get());
+                this.report_in_language(delivery.as_ref(), fallback, true, &language);
                 this.learn_after_paste(text, target.as_ref(), delivery);
             });
         }))
@@ -1217,6 +1220,16 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         fallback: Option<Notice>,
         hide_if_quiet: bool,
     ) {
+        self.report_in_language(delivery, fallback, hide_if_quiet, &self.language.get());
+    }
+
+    fn report_in_language(
+        &self,
+        delivery: Option<&PasteDelivery>,
+        fallback: Option<Notice>,
+        hide_if_quiet: bool,
+        language: &str,
+    ) {
         let outcome = delivery.map(|item| item.outcome);
         let completed = hide_if_quiet
             && delivery
@@ -1233,7 +1246,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         };
         let mut shown = false;
         for notice in copied.into_iter().chain(fallback) {
-            self.show(notice);
+            self.overlay.notice(notice.text(language));
             shown = true;
         }
         if !shown && hide_if_quiet && !completed {
@@ -2116,6 +2129,7 @@ fn parse_progress(params: &Value) -> Option<(&str, Progress)> {
             done: count("done")?,
             total: count("total")?,
             audio_seconds,
+            label: None,
         },
     ))
 }
@@ -3913,6 +3927,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_gap_and_its_post_paste_notice_use_the_dictation_language() {
+        for (language, text, expected) in [
+            ("zh-TW", "前文（這段沒有聽清楚）後文", "《否。部分語音無法辨識，文字已標示缺漏。》"),
+            ("ja", "前文（この部分は聞き取れませんでした）後文", "《否。一部の音声を認識できませんでした。欠落箇所を表示しました。》"),
+            ("en", "Before (this part was not heard) after", "《Negative. Some speech could not be transcribed. Gaps are marked in the text.》"),
+        ] {
+            let (core, gate) = FakeCore::with("dictation.stop", json!({
+                "text": text, "incomplete": true, "ui_language": language,
+            })).gated("dictation.stop");
+            let (paster, paste_entered, paste_release) = FakePaster::pasting("notepad.exe").gated();
+            let c = controller(core, paster);
+            c.language().set(language);
+            run(&c, HotkeyEvent::DictationDown, 0).await;
+            assert_eq!(c.core().call_params("dictation.start")["ui_language"], language);
+            let task = c.on_hotkey(HotkeyEvent::DictationUp, 900).unwrap();
+            settle().await;
+            assert_eq!(c.core().count("dictation.stop"), 1);
+            assert!(c.paster().delivered().is_empty());
+            assert!(!c.overlay().events().contains(&notice(expected)));
+            c.language().set(if language == "en" { "ja" } else { "en" });
+            gate.notify_one();
+            paste_entered.notified().await;
+            assert!(!c.overlay().events().contains(&notice(expected)));
+            paste_release.send(()).unwrap();
+            task.await.unwrap();
+            assert_eq!(c.paster().delivered(), vec![text]);
+            ends_with_notice(&c, expected);
+        }
+    }
+
+    #[tokio::test]
     async fn not_configured_at_stop_says_the_model_is_not_ready() {
         let c = controller(
             FakeCore::failing("dictation.stop", RpcError::new(1001, "not configured")),
@@ -5434,7 +5479,7 @@ mod tests {
         let id = session_of(&c);
         assert_eq!(
             c.core().call_params("dictation.start"),
-            json!({"session_id": id, "purpose": "agent"})
+            json!({"session_id": id, "purpose": "agent", "ui_language": "zh-TW"})
         );
 
         run(&c, AgentUp, 900).await;

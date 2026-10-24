@@ -332,7 +332,7 @@ async def test_brain_cleanup_rpc_uses_its_fallback_setting_without_an_openrouter
         await rpc.call("settings.set", {"key": "cleanup_fallbacks", "value": [f"@{pid}:backup"]})
         assert (await rpc.call("settings.get"))["settings"]["cleanup_fallbacks"] == [f"@{pid}:backup"]
         await rpc.call("status.get", {})
-        result = await rpc.call("brain.finalize_dictation", {"raw_text": "Hello world.", "audio_seconds": 1, "stt_ms": 1})
+        result = await rpc.call("brain.finalize_dictation", {"raw_text": "Hello world", "audio_seconds": 1, "stt_ms": 1})
         assert result["cleaned"]
         assert (await rpc.call("history.list", {}))["items"][0]["model"] == f"@{pid}:backup"
         assert len([r for r in requests if r.url.host == "api.groq.com"]) == 1

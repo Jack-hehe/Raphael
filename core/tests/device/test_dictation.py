@@ -1610,20 +1610,21 @@ async def test_an_engine_that_cannot_be_made_is_an_internal_error(rig, router):
     assert not rig.service.active
 
 
-async def test_a_segment_that_fails_to_decode_is_skipped(rig, router, caplog):
+async def test_a_failed_segment_is_retried_at_stop_in_its_original_position(rig, router, caplog):
     rig.engine.fail_on = {1}
-    rig.engine.texts = ["甲", "乙", "丙"]
+    rig.engine.texts = ["甲", "", "丙", "乙"]
     rig.recorder.chunks = [chunk(1.0)] * 3
     await start(router)
     await rig.recorder.fed(3)
     with caplog.at_level(logging.WARNING, logger=LOGGER):
         r = await stop(router)
-    assert r["text"] == "甲丙"
+    assert r["text"] == "甲乙丙"
+    assert not r["incomplete"]
     assert any(record.levelno >= logging.WARNING for record in caplog.records)
 
 
 async def test_when_every_segment_fails_the_error_comes_out(rig, router):
-    rig.engine.fail_on = {0, 1}
+    rig.engine.fail_on = set(range(100))
     rig.recorder.chunks = [chunk(1.0)] * 2
     await start(router)
     await rig.recorder.fed(2)
@@ -1631,6 +1632,73 @@ async def test_when_every_segment_fails_the_error_comes_out(rig, router):
         await stop(router)
     assert e.value.code == INTERNAL_ERROR
     assert not rig.service.active
+
+
+async def test_failed_audio_is_retried_before_stop_without_ending_recording(rig, router):
+    rig.engine.fail_on = {0}
+    rig.engine.texts = ["", "Recovered."]
+    rig.recorder.chunks = [chunk(1.0)]
+    await start(router)
+    await wait_until(lambda: len(rig.engine.calls) >= 2)
+    assert rig.service.active
+    result = await stop(router)
+    assert result["text"] == "Recovered."
+    assert not result["incomplete"]
+
+
+async def test_due_retry_is_not_starved_by_new_segments(rig, router):
+    second_started, release_second = threading.Event(), threading.Event()
+    order = []
+
+    def decode(samples, **kwargs):
+        seconds = samples.size // RATE
+        order.append(seconds)
+        if len(order) == 1:
+            raise RuntimeError("temporary failure")
+        if seconds == 2:
+            second_started.set()
+            assert release_second.wait(5)
+        return f"segment {seconds}."
+
+    rig.engine.transcribe = decode
+    rig.recorder.chunks = [chunk(1), chunk(2), chunk(3)]
+    await start(router)
+    try:
+        await wait_until(second_started.is_set)
+        await asyncio.sleep(1.05)
+        release_second.set()
+        await wait_until(lambda: len(order) >= 4)
+        assert order[:4] == [1, 2, 1, 3]
+    finally:
+        release_second.set()
+        await stop(router)
+
+
+@pytest.mark.parametrize(("language", "marker"), [
+    ("zh-TW", "（這段沒有聽清楚）"),
+    ("ja", "（この部分は聞き取れませんでした）"),
+    ("en", "(this part was not heard)"),
+])
+async def test_unrecoverable_gap_is_marked_in_pasted_text_for_any_engine_error(
+    rig, router, language, marker,
+):
+    class MissingEngine:
+        name = "missing"
+        gate = None
+
+        def transcribe(self, samples, **kwargs):
+            if samples.size == RATE:
+                raise RuntimeError("provider unavailable")
+            return "Before." if samples.size == 2 * RATE else "After."
+
+    rig.engine = MissingEngine()
+    rig.recorder.chunks = [chunk(2.0), chunk(1.0), chunk(3.0)]
+    await router.call("dictation.start", {"session_id": "s1", "ui_language": language})
+    await rig.recorder.fed(3)
+    result = await stop(router)
+    assert result["text"] == f"Before. {marker} After."
+    assert result["incomplete"]
+    assert result["ui_language"] == language
 
 
 async def test_a_segmenter_that_fails_ends_the_recording_with_an_error(rig, router):

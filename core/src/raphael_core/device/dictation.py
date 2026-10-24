@@ -60,6 +60,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 
+from raphael_core.agent.persona import DEFAULT_LANGUAGE, normalize_language, phrase
 from raphael_core.protocol import (
     BUSY,
     INTERNAL_ERROR,
@@ -160,9 +161,11 @@ class _Session:
         loop: asyncio.AbstractEventLoop,
         now: float,
         purpose: str = PURPOSE_DICTATION,
+        ui_language: str = DEFAULT_LANGUAGE,
     ) -> None:
         self.id = session_id
         self.purpose = purpose
+        self.ui_language = ui_language
         self.loop = loop
         # "starting" (being set up), "recording", "stopping" (the last words are transcribed), or
         # "ended". Only the loop reads and writes it.
@@ -214,6 +217,7 @@ class _Session:
         # The loop reads these once `done` is set. The transcriber's:
         self.engine: SttEngine | None = None
         self.texts: list[str] = []
+        self.missing = 0
         self.stt_used: list[str] = []  # the model that heard each segment, in order
         # The listener's:
         self.fed_any = False
@@ -352,9 +356,15 @@ class DictationService:
     async def _start(self, params: dict) -> dict:
         session_id = _session_id(params)
         purpose = _purpose(params)
+        ui_language = params.get("ui_language", DEFAULT_LANGUAGE)
+        if not isinstance(ui_language, str):
+            raise RpcError(INVALID_PARAMS, "ui_language must be a string")
         if self._session is not None:
             raise RpcError(BUSY, "A dictation is already in progress")
-        session = _Session(session_id, asyncio.get_running_loop(), self._clock(), purpose)
+        session = _Session(
+            session_id, asyncio.get_running_loop(), self._clock(), purpose,
+            normalize_language(ui_language),
+        )
         self._session = session
         try:
             await self._set_up(session)
@@ -562,18 +572,47 @@ class DictationService:
                 session.flushed = True
             self._report_progress(session)
             for segment in rest:
-                session.segments.put(segment)
+                session.segments.put((segment, True))
 
     def _transcribe_all(self, session: _Session) -> None:
         """The transcriber: each stretch of speech in the order it was cut, until the listener says
         there is no more. A stretch is let go once it has been transcribed."""
-        while True:
-            segment = session.segments.get()
-            if segment is _FLUSH or segment is _CANCEL:
+        # Failed audio stays here until a retry succeeds or stop makes the final attempt.
+        # Successful segments release their audio immediately. Keep slots so retries cannot
+        # move an earlier sentence after the words that followed it.
+        pending: dict[int, tuple[np.ndarray, float, int]] = {}
+        while not session.cancelled:
+            deadline = min((due for _, due, _ in pending.values()), default=None)
+            timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
+            if timeout == 0 and session.state != "stopping":
+                index = min(pending, key=lambda i: pending[i][1])
+                audio, _, attempts = pending[index]
+                if self._transcribe(session, audio, index):
+                    del pending[index]
+                    self._segment_done(session)
+                else:
+                    pending[index] = (audio, time.monotonic() + min(30, 2 ** min(attempts, 5)), attempts + 1)
+                continue
+            try:
+                segment = session.segments.get(timeout=timeout if session.state != "stopping" else None)
+            except queue.Empty:
+                continue
+            if segment is _CANCEL:
                 return
-            self._transcribe(session, segment)
-            del segment
-            self._segment_done(session)
+            if segment is _FLUSH:
+                for index, (audio, _, _) in sorted(pending.items()):
+                    if session.cancelled:
+                        return
+                    self._transcribe(session, audio, index, final=True)
+                    self._segment_done(session)
+                return
+            index = len(session.texts)
+            session.texts.append("")
+            segment, tail = segment if isinstance(segment, tuple) else (segment, False)
+            if self._transcribe(session, segment, index, tail=tail):
+                self._segment_done(session)
+            elif not session.fatal:
+                pending[index] = (segment, time.monotonic() + 1.0, 1)
 
     def _segment_done(self, session: _Session) -> None:
         with session.lock:
@@ -616,29 +655,40 @@ class DictationService:
             },
         )
 
-    def _transcribe(self, session: _Session, segment: np.ndarray) -> None:
+    def _transcribe(
+        self, session: _Session, segment: np.ndarray, index: int, *, final: bool = False,
+        tail: bool = False,
+    ) -> bool:
         if session.cancelled or session.fatal:
-            return
+            return False
         if session.engine is None:
             try:
                 session.engine = self._engine_provider()
             except Exception as exc:
                 logger.exception("The speech-to-text engine is not available")
                 self._fail_for_good(session, exc)
-                return
+                return False
         try:
-            text = session.engine.transcribe(segment, hints=session.hints)
+            method = "transcribe_final" if final else "transcribe_tail"
+            transcribe = getattr(session.engine, method, None) if final or tail else None
+            text = (transcribe or session.engine.transcribe)(segment, hints=session.hints)
         except Exception as exc:
-            logger.exception("A stretch of speech could not be transcribed; it is left out")
-            session.fail(exc, fatal=False)
-            return
+            # Exception messages and tracebacks can contain provider text or credentials.
+            logger.warning("Dictation segment failed; %s (%s)",
+                           "final attempt" if final else "audio retained for retry", type(exc).__name__)
+            if final:
+                session.fail(exc, fatal=False)
+                session.missing += 1
+                session.texts[index] = phrase(session.ui_language, "speech_missing")
+            return False
         text = str(text).strip()
         if text and not session.cancelled:
-            session.texts.append(text)
+            session.texts[index] = text
             # A cloud engine says which model heard the segment (it may have fallen back).
             used = getattr(session.engine, "last_used", None) or getattr(session.engine, "name", "")
             if used and used not in session.stt_used:
                 session.stt_used.append(used)
+        return True
 
     # --- the microphone watchdog ----------------------------------------------------------------
 
@@ -737,9 +787,10 @@ class DictationService:
         # With no text at all the failure is the answer. A dictation whose later stretches the
         # cloud could not hear, with no local model behind it, still delivers the first part and
         # says `incomplete`; an agent's transcript is not delivered in pieces.
-        cut_short = session.failure is not None and _is_no_local_model(session.failure)
+        cut_short = session.failure is not None
         if session.failure is not None and (
-            not text or (cut_short and session.purpose == PURPOSE_AGENT)
+            not text or session.missing == session.found
+            or (cut_short and session.purpose == PURPOSE_AGENT)
         ):
             raise _failure_as_error(session.failure)
         # The segmenter's own count, but not if it never heard this recording: a segmenter that is
@@ -790,6 +841,8 @@ class DictationService:
                     "target_app": target_app,
                     "stt": "+".join(session.stt_used) or None,
                     "session_id": session.id,
+                    "incomplete": cut_short,
+                    **({"ui_language": session.ui_language} if cut_short else {}),
                 },
             )
         finally:
@@ -802,6 +855,7 @@ class DictationService:
             "stt_ms": stt_ms,
             "silent": False,
             "incomplete": cut_short,
+            **({"ui_language": session.ui_language} if cut_short else {}),
         }
 
     async def _agent_transcript(self, session: _Session, text: str, speech: float) -> dict:

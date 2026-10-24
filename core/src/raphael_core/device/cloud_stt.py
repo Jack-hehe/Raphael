@@ -21,6 +21,7 @@ import base64
 import concurrent.futures
 import io
 import logging
+import threading
 import time
 import wave
 from collections.abc import Callable, Sequence
@@ -29,7 +30,7 @@ from typing import Any
 import numpy as np
 
 from raphael_core.textjoin import join_segments
-from raphael_core.protocol import BUDGET_EXCEEDED, NO_LOCAL_MODEL, NOT_CONFIGURED, RpcError
+from raphael_core.protocol import BUDGET_EXCEEDED, INTERNAL_ERROR, NO_LOCAL_MODEL, NOT_CONFIGURED, RpcError
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +44,27 @@ _MARGIN_S = 3.0
 # The kinds of failure that pass, and the waits before each new try of the same segment.
 _PASSING = frozenset({"rate_limit", "server"})
 _RETRY_WAITS_S = (1.0, 2.0)
+# Local decoders are shared across sessions and are not reentrant. A losing tail race may
+# still be decoding when the next recording starts.
+_LOCAL_DECODE_LOCK = threading.Lock()
 
 Call = Callable[[str, dict, float], Any]
+
+
+def _race_task(call: Callable[[], str]) -> concurrent.futures.Future[str]:
+    """A bounded tail contender must not keep the core alive after cancellation/shutdown."""
+    future: concurrent.futures.Future[str] = concurrent.futures.Future()
+
+    def run() -> None:
+        if not future.set_running_or_notify_cancel():
+            return
+        try:
+            future.set_result(call())
+        except BaseException as exc:
+            future.set_exception(exc)
+
+    threading.Thread(target=run, name="raphael-stt-tail", daemon=True).start()
+    return future
 
 
 def wait_for(seconds: float) -> float:
@@ -95,13 +115,64 @@ class CloudSttEngine:
         fallback: Callable[[], Any],
         warned: set[str],
         sleep: Callable[[float], None] = time.sleep,
+        race_local: bool = False,
     ) -> None:
         self._call = call
         self._sleep = sleep
         self._fallback = fallback
         self._warned = warned
         self._failed: str | None = None
+        self._race_local = race_local
         self.last_used: str | None = None
+
+    def transcribe_tail(
+        self, samples: np.ndarray, *, hints: Sequence[str] = (), language: str = "auto"
+    ) -> str:
+        """First nonempty result from cloud and an installed local model, for the flushed tail.
+
+        A running loser finishes in the background (and cloud spend is still recorded). Never
+        wait for the loser on the winner's delivery path. Each contender owns its model
+        attribution, so a late loser cannot overwrite `last_used`.
+        """
+        if not self._race_local or self._failed is not None:
+            return self.transcribe(samples, hints=hints, language=language)
+        cloud = CloudSttEngine(self._call, fallback=self._fallback, warned=self._warned,
+                               sleep=self._sleep)
+        local = CloudSttEngine(self._call, fallback=self._fallback, warned=self._warned,
+                               sleep=self._sleep)
+        tasks = {
+            _race_task(lambda: cloud._cloud_with_retries(samples, hints, language)): cloud,
+            _race_task(lambda: local._local(samples, hints, language)): local,
+        }
+        error: Exception = RpcError(INTERNAL_ERROR, "Neither engine returned speech")
+        try:
+            for task in concurrent.futures.as_completed(tasks):
+                try:
+                    text = task.result()
+                    if not text.strip():
+                        continue
+                except Exception as exc:
+                    error = exc
+                    continue
+                self.last_used = tasks[task].last_used
+                return text
+            raise error
+        finally:
+            for task in tasks:
+                task.cancel()
+
+    def transcribe_final(
+        self, samples: np.ndarray, *, hints: Sequence[str] = (), language: str = "auto"
+    ) -> str:
+        """One final cloud attempt, then local, even if this session previously fell back.
+
+        Backoff already happened while recording. Do not add another pair of retry sleeps to
+        the delivery path for every retained segment.
+        """
+        try:
+            return self._cloud(samples, hints, language)
+        except Exception:
+            return self._local(samples, hints, language)
 
     def transcribe(
         self, samples: np.ndarray, *, hints: Sequence[str] = (), language: str = "auto"
@@ -148,8 +219,8 @@ class CloudSttEngine:
         }
         result = self._call("stt.transcribe", params, wait_for(samples.size / SAMPLE_RATE))
         text = result.get("text") if isinstance(result, dict) else None
-        if not isinstance(text, str):
-            raise RpcError(0, "The reply has no text", {"kind": "bad_response"})
+        if not isinstance(text, str) or not text.strip():
+            raise RpcError(0, "The reply has no speech text", {"kind": "bad_response"})
         model = result.get("model")
         self.last_used = model if isinstance(model, str) and model else self.name
         return text
@@ -172,11 +243,18 @@ class CloudSttEngine:
         logger.warning(message, kind)
 
     def _local(self, samples: np.ndarray, hints: Sequence[str], language: str) -> str:
+        with _LOCAL_DECODE_LOCK:
+            return self._local_locked(samples, hints, language)
+
+    def _local_locked(self, samples: np.ndarray, hints: Sequence[str], language: str) -> str:
         engine = self._fallback()
         self.last_used = getattr(engine, "name", None) or "local"
         limit = int(MAX_LOCAL_SECONDS * SAMPLE_RATE)
         count = -(-samples.size // limit)  # ceiling
         pieces = [samples] if count <= 1 else np.array_split(samples, count)
-        return join_segments(
+        text = join_segments(
             [str(engine.transcribe(piece, hints=hints, language=language)) for piece in pieces]
         )
+        if not text.strip():
+            raise RpcError(INTERNAL_ERROR, "The local engine returned no speech text", {"kind": "bad_response"})
+        return text

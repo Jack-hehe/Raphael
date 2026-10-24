@@ -113,7 +113,7 @@ def test_defaults(fake_detector, model_file):
     Segmenter(model_file)
     config = fake_detector.instances[0].config
     assert config.silero_vad.threshold == pytest.approx(0.5)
-    assert config.silero_vad.min_silence_duration == pytest.approx(0.5)
+    assert config.silero_vad.min_silence_duration == pytest.approx(0.35)
     assert config.silero_vad.max_speech_duration == pytest.approx(20.0)
 
 

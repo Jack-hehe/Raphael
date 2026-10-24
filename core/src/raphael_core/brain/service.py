@@ -62,7 +62,7 @@ from .catalog import (
     choice_problem,
     find,
 )
-from .cleanup import CleanupService, join_parts, split_for_cleanup
+from .cleanup import CleanupResult, CleanupService, already_clean_short, join_parts, split_for_cleanup
 from .cloud_stt import CloudTranscriber
 from .dictionary import DictionaryStore, Learned
 from .history import HistoryItem, HistoryStore
@@ -343,12 +343,26 @@ class Brain:
         target_app = _opt_str(params, "target_app")
         stt = _opt_str(params, "stt")
         session_id = _opt_str(params, "session_id")
+        incomplete = params.get("incomplete", False)
+        if not isinstance(incomplete, bool):
+            raise invalid_params("incomplete must be a boolean")
         self._prune_history_if_due()
 
         rules = self._dictionary.replacements()
         # The Chinese written form the user chose decides the script of the text (or none).
         chinese = chinese_variant(self._settings.get("languages"))
-        normalized = normalize_transcript(raw_text, rules, chinese=chinese)
+        if incomplete:
+            from ..agent.persona import DEFAULT_LANGUAGE, normalize_language, phrase
+
+            language = _opt_str(params, "ui_language") or DEFAULT_LANGUAGE
+            marker = phrase(normalize_language(language), "speech_missing")
+            # UI text keeps its language even when speech uses another written form or dictionary.
+            normalized = marker.join(
+                normalize_transcript(piece, rules, chinese=chinese)
+                for piece in raw_text.split(marker)
+            )
+        else:
+            normalized = normalize_transcript(raw_text, rules, chinese=chinese)
         if not normalized.strip():
             return {
                 "id": None,
@@ -376,14 +390,19 @@ class Brain:
         if session_id is not None:
             self._cleaning[session_id] = False
         try:
-            result = await self._cleanup.clean(
-                normalized,
-                audio_seconds=audio_seconds,
-                heard=apply_replacements(raw_text, rules),
-                target_app=target_app,
-                chunks=chunks,
-                is_cancelled=lambda: self._cleaning.get(session_id, False),
-            )
+            if incomplete:
+                result = CleanupResult(normalized, False, "incomplete_stt", None, 0, 0)
+            elif already_clean_short(raw_text.strip()) and already_clean_short(normalized):
+                result = CleanupResult(normalized, True, None, None, 0, 0)
+            else:
+                result = await self._cleanup.clean(
+                    normalized,
+                    audio_seconds=audio_seconds,
+                    heard=apply_replacements(raw_text, rules),
+                    target_app=target_app,
+                    chunks=chunks,
+                    is_cancelled=lambda: self._cleaning.get(session_id, False),
+                )
         finally:
             # Taken in the same breath as the text is saved, so that no cancel comes in between.
             cancelled = self._cleaning.pop(session_id, False)

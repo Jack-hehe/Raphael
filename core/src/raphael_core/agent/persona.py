@@ -90,6 +90,7 @@ class Phrases:
     offline: str  # the network cannot be reached
     timeout: str  # the request took too long
     error: str  # anything else that went wrong
+    speech_missing: str  # an inline dictation gap, not a line spoken by Raphael
     denied: str  # the user said no, or cancelled
     expired: str  # nobody answered the question in time
     failed: str  # the action was tried and did not work
@@ -177,6 +178,7 @@ PHRASES: dict[str, Phrases] = {
         offline="無法連線至網路。",
         timeout="回應時間過長，請再試一次。",
         error="處理過程中發生異常。請再試一次。",
+        speech_missing="（這段沒有聽清楚）",
         denied="已取消。",
         expired="逾時未獲回應。未執行。",
         failed="執行失敗。",
@@ -245,6 +247,7 @@ PHRASES: dict[str, Phrases] = {
         offline="The network is unreachable.",
         timeout="The request took too long. Please try again.",
         error="An error occurred during processing. Please try again.",
+        speech_missing="(this part was not heard)",
         denied="Cancelled.",
         expired="No response in time. Nothing was executed.",
         failed="Execution failed.",
@@ -333,6 +336,7 @@ PHRASES: dict[str, Phrases] = {
         offline="ネットワークに接続できません。",
         timeout="応答に時間がかかりすぎました。もう一度お試しください。",
         error="処理中に異常が発生しました。再度お試しください。",
+        speech_missing="（この部分は聞き取れませんでした）",
         denied="取り消しました。",
         expired="応答がないため、実行を見送りました。",
         failed="実行に失敗しました。",
