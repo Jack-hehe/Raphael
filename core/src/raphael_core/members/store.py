@@ -98,6 +98,15 @@ class Member:
     tools: tuple[str, ...] | None = None
     personality: str = ""
 
+    blurb: str = ""
+    reply_style: str = "full"
+    voice: str = ""
+    read_aloud: bool = False
+    notify: bool = False
+    ask_before_members: bool = False
+    pinned: bool = False
+    hidden: bool = False
+
     def speaker(self) -> Speaker:
         """The member as the assistant takes it (`agent.speaker.Speaker`)."""
         return Speaker(
@@ -106,7 +115,10 @@ class Member:
             role=self.role,
             instructions=self.instructions,
             personality=self.personality,
-            model=self.model,
+            model="",
+            blurb=self.blurb,
+            reply_style=self.reply_style,
+            ask_before_members=self.ask_before_members,
             tools=None if self.tools is None else frozenset(self.tools),
         )
 
@@ -274,8 +286,34 @@ def _tools_of(saved: str | None) -> tuple[str, ...] | None:
         return None
 
 
+def _boolean(value: Any) -> bool:
+    if type(value) is not bool:
+        raise MemberError("boolean", "preference must be true or false")
+    return value
+
+
+def _reply_style(value: Any) -> str:
+    if value not in ("full", "conversational"):
+        raise MemberError("reply_style", "reply_style must be full or conversational")
+    return value
+
+
+def _voice(value: Any) -> str:
+    if value != "" and (not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{32}", value)):
+        raise MemberError("voice", "voice must be a configured Fish voice id or empty")
+    return value
+
+
+PROFILE_FIELDS: dict[str, Callable[[Any], Any]] = {
+    "blurb": lambda value: _text(value, "blurb", 200),
+    "reply_style": _reply_style,
+    "voice": _voice,
+    **{name: _boolean for name in ("read_aloud", "notify", "ask_before_members", "pinned", "hidden")},
+}
+
 _MEMBER_COLUMNS = (
-    "id, name, role, instructions, avatar, group_id, model, position, created_at_ms, tools, personality"
+    "id, name, role, instructions, avatar, group_id, model, position, created_at_ms, tools, personality,"
+    " blurb, reply_style, voice, read_aloud, notify, ask_before_members, pinned, hidden"
 )
 _ROUTINE_COLUMNS = (
     "id, member_id, title, prompt, schedule, enabled, last_run_ms, next_run_ms, created_at_ms"
@@ -287,12 +325,15 @@ _MEMBER_FIELDS: dict[str, Callable[[Any], Any]] = {
     "personality": clean_personality,
     "avatar": clean_avatar,
     "model": clean_model,
+    **PROFILE_FIELDS,
 }
 
 
 def _member(row: sqlite3.Row) -> Member:
     data = dict(row)
     data["tools"] = _tools_of(data.get("tools"))
+    for field in ("read_aloud", "notify", "ask_before_members", "pinned", "hidden"):
+        data[field] = bool(data[field])
     return Member(**data)
 
 
@@ -401,7 +442,7 @@ class MemberStore:
 
     def members(self) -> list[Member]:
         rows = self._conn.execute(
-            f"SELECT {_MEMBER_COLUMNS} FROM members ORDER BY position, id"
+            f"SELECT {_MEMBER_COLUMNS} FROM members ORDER BY pinned DESC, position, id"
         ).fetchall()
         return [_member(row) for row in rows]
 
@@ -444,6 +485,7 @@ class MemberStore:
         avatar: Any = "",
         tools: Any = None,
         model: Any = "",
+        **preferences: Any,
     ) -> Member:
         name = clean_name(name)
         self._check_name(name, None)
@@ -456,6 +498,10 @@ class MemberStore:
             "avatar": clean_avatar(avatar),
             "model": clean_model(model),
         }
+        for field, value in preferences.items():
+            if field not in PROFILE_FIELDS:
+                raise MemberError(field, "unknown member preference")
+            values[field] = PROFILE_FIELDS[field](value)
         picked = clean_tools(tools)
         if len(self.members()) >= MAX_MEMBERS:
             raise MemberError("full", f"there are {MAX_MEMBERS} members already")
@@ -463,15 +509,11 @@ class MemberStore:
             (position,) = self._conn.execute(
                 "SELECT COALESCE(MAX(position), -1) + 1 FROM members"
             ).fetchone()
+            values.update(position=position, created_at_ms=self._now_ms(),
+                          tools=None if picked is None else json.dumps(list(picked), ensure_ascii=False))
             cursor = self._conn.execute(
-                "INSERT INTO members (name, role, instructions, personality, group_id, avatar, model, position,"
-                " created_at_ms, tools) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    *values.values(),
-                    position,
-                    self._now_ms(),
-                    None if picked is None else json.dumps(list(picked), ensure_ascii=False),
-                ),
+                f"INSERT INTO members ({', '.join(values)}) VALUES ({', '.join('?' for _ in values)})",
+                list(values.values()),
             )
         member = self.member(int(cursor.lastrowid or 0))
         assert member is not None
@@ -518,6 +560,8 @@ class MemberStore:
         """Delete a member's row, its routines and its unread mark; whether there was one. Its
         conversation, memory and picture are the service's to delete."""
         with self._conn:
+            self._conn.execute("DELETE FROM member_skills WHERE member_id = ?", (member_id,))
+            self._conn.execute("DELETE FROM member_commands WHERE member_id = ?", (member_id,))
             self._conn.execute("DELETE FROM routines WHERE member_id = ?", (member_id,))
             self._conn.execute("DELETE FROM member_unread WHERE member_id = ?", (member_id,))
             cursor = self._conn.execute("DELETE FROM members WHERE id = ?", (member_id,))

@@ -63,6 +63,7 @@ Nothing here logs a memory, a question or an answer.
 """
 
 import asyncio
+import secrets
 import logging
 import shutil
 import sqlite3
@@ -208,6 +209,7 @@ class MemoryService:
 
     def register(self, router: RpcRouter) -> None:
         methods = {
+            "memory.create": self._create,
             "memory.list": self._list,
             "memory.get": self._get,
             "memory.update": self._update,
@@ -389,6 +391,12 @@ class MemoryService:
                 (own if own.get(name) is not None else self.shared).add_turn(name, turn_id)
             except OSError as exc:
                 logger.warning("Could not note a memory's turn: %s", type(exc).__name__)
+
+    def forget_member_turns(self, member_id: int) -> None:
+        """Invalidate in-flight reflection while preserving every member's notes."""
+        self._turn_clears += 1
+        with self._conn:
+            self._conn.execute("DELETE FROM memory_state WHERE key = ?", (_watermark(member_id),))
 
     def forget_turns(self) -> None:
         """The conversations were cleared: every reflection pass starts again from the first turn
@@ -742,6 +750,26 @@ class MemoryService:
 
     def _store(self, params: dict) -> MemoryStore:
         return self.space(self._space_of(params), self._member(params))
+
+    async def _create(self, params: dict) -> dict:
+        if self._space_of(params) != "own":
+            raise invalid_params("new notes belong to the member's own space")
+        member_id = self._member(params)
+        body = params.get("body")
+        description = params.get("description")
+        if not isinstance(body, str) or not body.strip():
+            raise invalid_params("body must be nonempty text")
+        if description is None:
+            description = " ".join(body.split())[:80]
+        if not isinstance(description, str):
+            raise invalid_params("description must be text")
+        name = "reference-" + secrets.token_hex(8)
+        try:
+            memory = self.store_for(member_id).write(name, type="reference", description=description,
+                                                      body=body, origin="said")
+        except MemoryRefused as refused:
+            raise invalid_params(f"{refused.kind}: {refused}") from None
+        return {"note": memory.view()}
 
     async def _list(self, params: dict) -> dict:
         space = self._space_of(params)

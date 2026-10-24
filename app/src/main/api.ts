@@ -346,3 +346,13 @@ export async function subscribeMainEvents(handler: (event: MainEvent) => void): 
 
 /** Open only an opaque stored attachment, never a path supplied by a page. */
 export const openAttachment = (id: string): Promise<void> => invoke("open_attachment", { id });
+
+// Member profile resources use the same member boundary as conversations.
+export const membersSkillsList = (memberId: number): Promise<{ skills: import("./types").MemberSkill[] }> => core("members.skills.list", { member_id: memberId });
+export const membersSkillsImport = (memberId: number, source: string): Promise<{ skill: import("./types").MemberSkill; skills?: import("./types").MemberSkill[] }> => core("members.skills.import", { member_id: memberId, source });
+export const membersSkillsUpdate = (memberId: number, id: number, enabled: boolean): Promise<unknown> => core("members.skills.update", { member_id: memberId, id, enabled });
+export const membersSkillsDelete = (memberId: number, id: number): Promise<unknown> => core("members.skills.delete", { member_id: memberId, id });
+export const membersCommandsList = (memberId: number): Promise<{ commands: import("./types").MemberCommand[] }> => core("members.commands.list", { member_id: memberId });
+export const membersCommandsSave = (memberId: number, command: Omit<import("./types").MemberCommand, "id"> & { id?: number }): Promise<unknown> => core("members.commands.save", { member_id: memberId, ...command });
+export const membersCommandsDelete = (memberId: number, id: number): Promise<unknown> => core("members.commands.delete", { member_id: memberId, id });
+export const membersVoices = (): Promise<{ voices: import("./types").MemberVoice[]; configured: boolean }> => core("members.voices");

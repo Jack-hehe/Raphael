@@ -113,7 +113,7 @@ describe("the column, used", () => {
     host = {
       view: () => ({ list: LIST, current: 0, previews, fresh: new Set() }),
       select: vi.fn(), newMember: vi.fn(), newGroup: vi.fn(), moveMember: vi.fn(), deleteMember: vi.fn(),
-      renameGroup: vi.fn(), editSources: vi.fn(), deleteGroup: vi.fn(),
+      renameGroup: vi.fn(), editSources: vi.fn(), deleteGroup: vi.fn(), newConversation: vi.fn(), memberAction: vi.fn(),
     } as never;
   });
   const mount = () => {
@@ -148,17 +148,17 @@ describe("the column, used", () => {
     const column = mount();
     column.el.querySelector<HTMLElement>('[data-col="add"]')!.click();
     const items = [...document.querySelectorAll<HTMLElement>("#app-popover [data-pick]")];
-    expect(items.map((b) => b.textContent)).toEqual(["新增成員", "新增分組"]);
-    items[1].click();
-    expect(host.newGroup).toHaveBeenCalled();
+    expect(items.map(b => b.dataset.pick)).toEqual(["conversation", "member"]);
+    items[0].click();
+    expect(host.newConversation).toHaveBeenCalled();
   });
 
   test("a row's more gives 移到分組 and 刪除; a right click gives the same", () => {
     const column = mount();
     column.el.querySelector<HTMLElement>('[data-member-more="2"]')!.click();
-    expect([...document.querySelectorAll("#app-popover [data-pick]")].map((b) => b.textContent)).toEqual(["移到分組", "刪除"]);
-    document.querySelector<HTMLElement>('#app-popover [data-pick="delete"]')!.click();
-    expect(host.deleteMember).toHaveBeenCalledWith(2);
+    expect([...document.querySelectorAll<HTMLElement>("#app-popover [data-pick]")].map(b => b.dataset.pick)).toEqual(["pin", "move", "unread", "read-all", "edit", "duplicate", "clear", "hide"]);
+    document.querySelector<HTMLElement>('#app-popover [data-pick="hide"]')!.click();
+    expect(host.memberAction).toHaveBeenCalledWith(2, "hide");
     column.el.querySelector('[data-member="1"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     document.querySelector<HTMLElement>('#app-popover [data-pick="move"]')!.click();
     expect(host.moveMember).toHaveBeenCalledWith(1, null, expect.any(HTMLElement));

@@ -341,7 +341,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 67] = [
+const ALLOWED_METHODS: [&str; 79] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -378,6 +378,7 @@ const ALLOWED_METHODS: [&str; 67] = [
     // Raphael's memory, in the settings (`validate_core_call` checks the name and the text). Named
     // one by one, like the messaging methods: a method added to the memory later stays closed.
     "memory.list",
+    "memory.create",
     "memory.get",
     "memory.update",
     "memory.delete",
@@ -403,6 +404,17 @@ const ALLOWED_METHODS: [&str; 67] = [
     "members.read",
     "members.viewing",
     "members.tool_choices",
+    "members.skills.list",
+    "members.skills.import",
+    "members.skills.update",
+    "members.skills.delete",
+    "members.commands.list",
+    "members.commands.save",
+    "members.commands.delete",
+    "members.voices",
+    "members.duplicate",
+    "members.mark_all_read",
+    "members.unread",
     "groups.create",
     "groups.update",
     "groups.delete",
@@ -475,7 +487,7 @@ fn validate_history_search(params: &Value) -> Result<(), String> {
 }
 
 /// The params of a memory method: `name` a memory's name where one is needed, and for
-/// `memory.update` a `body` of text within the limit and, if given, a `description` within its own.
+/// `memory.update` or `memory.create` a `body` within the limit and an optional short description.
 fn validate_memory_call(method: &str, params: &Value) -> Result<(), String> {
     let needs_name = matches!(
         method,
@@ -489,14 +501,22 @@ fn validate_memory_call(method: &str, params: &Value) -> Result<(), String> {
     {
         return Err(format!("{method} needs the name of a memory"));
     }
-    if method != "memory.update" {
+    if !matches!(method, "memory.update" | "memory.create") {
         return Ok(());
     }
     let chars = |value: &Value| value.as_str().map(|text| text.chars().count());
+    if method == "memory.create"
+        && params
+            .get("body")
+            .and_then(Value::as_str)
+            .is_some_and(|body| body.trim().is_empty())
+    {
+        return Err("memory.create needs a non-empty body".to_owned());
+    }
     match params.get("body").and_then(chars) {
         Some(count) if count <= MEMORY_BODY_MAX => {}
         Some(_) => return Err("記憶內容最多 1,200 字".to_owned()),
-        None => return Err("memory.update needs the body of the memory".to_owned()),
+        None => return Err(format!("{method} needs the body of the memory")),
     }
     match params.get("description") {
         None | Some(Value::Null) => Ok(()),
@@ -1832,6 +1852,18 @@ mod tests {
     #[test]
     fn the_main_window_manages_the_members_by_their_names_only() {
         for method in [
+            "memory.create",
+            "members.unread",
+            "members.skills.list",
+            "members.skills.import",
+            "members.skills.update",
+            "members.skills.delete",
+            "members.commands.list",
+            "members.commands.save",
+            "members.commands.delete",
+            "members.voices",
+            "members.duplicate",
+            "members.mark_all_read",
             "members.list",
             "members.create",
             "members.update",
@@ -1855,6 +1887,9 @@ mod tests {
         for method in [
             "members.",
             "members",
+            "members.skills.run",
+            "members.commands.execute",
+            "member.notice",
             "members.ask",
             "groups.",
             "routines.run",
@@ -2042,6 +2077,10 @@ mod tests {
         assert!(ok("memory.get", json!({"name": "user-city"})));
         assert!(ok("memory.delete", json!({"name": "user-city"})));
         assert!(ok(
+            "memory.create",
+            json!({"member_id": 3, "space": "own", "body": "Owner note"})
+        ));
+        assert!(ok(
             "memory.update",
             json!({"name": "user-city", "body": "主人住在台北。"})
         ));
@@ -2054,6 +2093,11 @@ mod tests {
             json!({"name": "user-city", "body": "長".repeat(1200), "description": null})
         ));
         for (method, params) in [
+            ("memory.create", json!({"member_id": 3})),
+            ("memory.create", json!({"body": "  "})),
+            ("memory.create", json!({"body": 5})),
+            ("memory.create", json!({"body": "x".repeat(1201)})),
+            ("memory.create", json!({"body": "x", "description": "x".repeat(81)})),
             ("memory.get", json!({})),
             ("memory.get", json!({"name": "../raphael"})),
             ("memory.delete", json!({"name": 3})),

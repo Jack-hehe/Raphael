@@ -43,19 +43,20 @@ describe("新增成員", () => {
   test("picture, name, role, instructions and group, with 取消 and 建立", () => {
     const { dialog } = open();
     expect(dialog.el.querySelector("h2")!.textContent).toBe("新增成員");
-    expect([...dialog.el.querySelectorAll(".mb-frow > span:first-child")].map((s) => s.textContent)).toEqual(["名字", "角色", "個性", "指示", "分組"]);
-    expect(dialog.el.querySelector(".mb-new-av .mb-av-letter")).not.toBeNull();
+    expect([...dialog.el.querySelectorAll("#mp-page-identity .mb-frow > span:first-child")].map((s) => s.textContent)).toEqual(["名字", "角色", "簡介", "分組"]);
+    expect(dialog.el.querySelectorAll('[role="tab"]')).toHaveLength(7);
+    expect(dialog.el.querySelector(".mb-new-av .mp-person")).not.toBeNull();
     expect([...dialog.el.querySelectorAll(".mb-dlg-act .btn")].map((b) => b.textContent)).toEqual(["取消", "建立"]);
     // the name takes the focus
     expect(document.activeElement?.id).toBe("mb-new-name");
   });
 
-  test("the placeholder picture is the first character of the name typed", () => {
+  test("the default silhouette remains visible after typing a name", () => {
     const { $ } = open();
     const name = $<HTMLInputElement>("#mb-new-name");
     name.value = "日文老師";
     name.dispatchEvent(new Event("input"));
-    expect($(".mb-av-letter").textContent).toBe("日");
+    expect($(".mp-person svg")).not.toBeNull();
   });
 
   test("建立 hands over what was typed", async () => {
@@ -66,22 +67,23 @@ describe("新增成員", () => {
     $('[data-dlg="create"]').click();
     await flush();
     expect(create).toHaveBeenCalledWith({
-      member: { name: "日文老師", role: "N2 嚴格版", personality: "", instructions: "每天出 10 題", group_id: 2 },
+      member: { name: "日文老師", role: "N2 嚴格版", personality: "", instructions: "每天出 10 題", group_id: 2, blurb: "", reply_style: "full", voice: "", read_aloud: false, notify: false, ask_before_members: false },
       picture: null,
     });
     expect(document.querySelector(".mb-scrim")).toBeNull();
   });
 
-  test("the group is a dropdown, and nothing else is asked in the dialog", async () => {
+  test("the group is a dropdown and no model or tool override is offered", async () => {
     const { $, create } = open();
     $('[data-dlg="group"]').click();
     document.querySelector<HTMLElement>('#app-popover [data-value="1"]')!.click();
     expect($('[data-dlg="group"]').textContent).toContain("專案");
-    expect($(".tg")).toBeNull();
+    expect(document.querySelector("select")).toBeNull();
+    expect(document.querySelector('[data-dlg="model"], [data-dlg="tools"]')).toBeNull();
     $<HTMLInputElement>("#mb-new-name").value = "進度官";
     $('[data-dlg="create"]').click();
     await flush();
-    expect(create.mock.calls[0]![0]).toEqual({ member: { name: "進度官", role: "", personality: "", instructions: "", group_id: 1 }, picture: null });
+    expect(create.mock.calls[0]![0]).toMatchObject({ member: { name: "進度官", role: "", personality: "", instructions: "", group_id: 1 }, picture: null });
   });
 
   test("no name, or a name already taken, is not sent", async () => {
@@ -123,14 +125,22 @@ describe("新增成員", () => {
     expect([...document.querySelectorAll("#app-popover button")].map((b) => b.textContent)).toEqual(["從電腦選…"]);
   });
 
-  test("a preset whose picture URL is missing still updates the initial letter when typing the name", () => {
+  test("the computer picker stays inside its dialog so its synthetic click cannot dismiss the profile", () => {
+    const { $, dialog } = open();
+    $('[data-dlg="avatar"]').click();
+    document.querySelector<HTMLElement>('#app-popover [data-pick="0"]')!.click();
+    expect(dialog.el.isConnected).toBe(true);
+    expect(dialog.el.querySelector('input[type="file"]')).not.toBeNull();
+  });
+
+  test("a preset without a picture URL keeps the default silhouette after typing a name", () => {
     const { $ } = open({ presets: [{ avatar: "preset:a", name: "a", url: "" }] });
     $('[data-dlg="avatar"]').click();
     document.querySelector<HTMLElement>('#app-popover [data-preset="preset:a"]')!.click();
     const name = $<HTMLInputElement>("#mb-new-name");
     name.value = "進度官";
     name.dispatchEvent(new Event("input"));
-    expect($(".mb-av-letter").textContent).toBe("進");
+    expect($(".mp-person svg")).not.toBeNull();
   });
 
   test("Enter in name or role submits (unless composing), and Tab wraps inside the dialog", async () => {

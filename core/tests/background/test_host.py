@@ -421,6 +421,41 @@ async def test_after_a_crash_our_end_of_its_stdin_is_closed_and_the_process_is_r
     assert link.process.returncode is not None
 
 
+async def test_stopping_a_process_waits_for_its_stdin_pipe_to_finish_closing():
+    from types import SimpleNamespace
+
+    from raphael_core.background.host import ProcessLink
+
+    closing = asyncio.Event()
+    closed = asyncio.Event()
+
+    class Stdin:
+        def is_closing(self):
+            return closing.is_set()
+
+        def close(self):
+            closing.set()
+
+        async def wait_closed(self):
+            await closed.wait()
+
+    async def exited():
+        return 0  # A process may exit before its Proactor pipe callbacks finish.
+
+    link = ProcessLink(SimpleNamespace(stdin=Stdin(), wait=exited))
+    stop = asyncio.create_task(link.stop())
+    try:
+        await closing.wait()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert not stop.done(), "the pipe still belongs to the running event loop"
+        closed.set()
+        await asyncio.wait_for(stop, 1)
+    finally:
+        closed.set()
+        await stop
+
+
 async def test_a_log_line_longer_than_the_limit_is_dropped_and_the_pipe_keeps_draining(
     hosts, rig, monkeypatch, caplog
 ):

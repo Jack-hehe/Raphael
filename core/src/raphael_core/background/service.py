@@ -784,6 +784,7 @@ class BackgroundService:
             attachments=files,
             team=self._team_call(speaker, task, ledger) if team else None,
             can_wait=True,
+            ask_before_members=speaker.ask_before_members,
         )
         system, user = _prompts(
             language,

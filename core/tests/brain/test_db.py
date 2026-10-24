@@ -282,7 +282,18 @@ SCHEMA_V20 = {**SCHEMA_V19, "dictation_daily": [
     "estimated_dictations INTEGER NOT NULL DEFAULT 0",
 ]}
 SCHEMA_V21 = {**SCHEMA_V20, "agent_turns": [*SCHEMA_V20["agent_turns"], "quote TEXT"]}
-LATEST = 21
+SCHEMA_V22 = {
+    **SCHEMA_V21,
+    "members": [*SCHEMA_V21["members"], "blurb TEXT NOT NULL DEFAULT ''",
+                "reply_style TEXT NOT NULL DEFAULT 'full'", "voice TEXT NOT NULL DEFAULT ''",
+                *[f"{field} INTEGER NOT NULL DEFAULT 0" for field in
+                  ("read_aloud", "notify", "ask_before_members", "pinned", "hidden")]],
+    "member_skills": ["id INTEGER PK", "member_id INTEGER NOT NULL", "name TEXT NOT NULL",
+                      "description TEXT NOT NULL", "source TEXT NOT NULL", "enabled INTEGER NOT NULL DEFAULT 1"],
+    "member_commands": ["id INTEGER PK", "member_id INTEGER NOT NULL", "name TEXT NOT NULL",
+                        "description TEXT NOT NULL", "template TEXT NOT NULL"],
+}
+LATEST = 22
 
 
 def schema_names(conn, kind):
@@ -306,7 +317,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V21) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V22) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -320,7 +331,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V21.items():
+    for table, columns in SCHEMA_V22.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
@@ -1055,4 +1066,25 @@ def test_v21_quotes_preserve_old_turns_and_survive_reopening(tmp_path):
     reopened = db.connect(path)
     assert AgentHistory(reopened).get(new_id).quote == quote
     assert AgentHistory(reopened).get(1).question == "q"
+    reopened.close()
+
+
+def test_v22_preserves_old_members_and_adds_private_preferences(tmp_path):
+    path = tmp_path / "v21.db"
+    raw = sqlite3.connect(path)
+    for version in range(1, 22):
+        step = db._MIGRATIONS[version]
+        step(raw) if callable(step) else raw.executescript(step)
+    raw.execute("INSERT INTO members (name, position, created_at_ms, instructions) VALUES ('Ada', 0, 1, 'Existing instructions')")
+    raw.commit()
+    raw.close()
+    migrated = db.connect(path)
+    row = migrated.execute("SELECT * FROM members").fetchone()
+    assert row["instructions"] == "Existing instructions"
+    assert row["reply_style"] == "full" and row["blurb"] == ""
+    assert all(row[field] == 0 for field in ("read_aloud", "notify", "ask_before_members", "pinned", "hidden"))
+    migrated.close()
+    reopened = db.connect(path)
+    assert reopened.execute("SELECT COUNT(*) FROM member_commands").fetchone()[0] == 0
+    assert reopened.execute("SELECT COUNT(*) FROM member_skills").fetchone()[0] == 0
     reopened.close()

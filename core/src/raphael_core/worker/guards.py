@@ -20,6 +20,9 @@ from typing import Any
 # The most of a result the model is shown, in characters. The beginning of a page says what it is
 # and the end often says how it ended, so both are kept.
 MAX_RESULT_CHARS = 6000
+# A skill import is already bounded to 128 KiB. Keep its complete Markdown (including JSON
+# escaping) when the dedicated reader returns it, while retaining the untrusted-data wrapper.
+MAX_SKILL_RESULT_CHARS = 2 * 128 * 1024 + 1000
 HEAD_SHARE = 0.65
 CUT_MARK = "\n[... {skipped} characters left out ...]\n"
 # How many of the latest rounds of calls keep their results in full.
@@ -57,7 +60,8 @@ def head_tail_split(text: str, limit: int = MAX_RESULT_CHARS) -> tuple[str, bool
 def wrap_untrusted(tool: str, text: str, *, ok: bool) -> str:
     """A tool's result as the model reads it: cut, neutralized and inside tags that say it is data
     from outside, never to be obeyed."""
-    shown, cut = head_tail_split(neutralize(text))
+    limit = MAX_SKILL_RESULT_CHARS if tool == "skill_read" else MAX_RESULT_CHARS
+    shown, cut = head_tail_split(neutralize(text), limit)
     status = "ok" if ok else "error"
     note = " cut_short=true" if cut else ""
     return (
