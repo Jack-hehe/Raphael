@@ -21,7 +21,7 @@
 .pv-card .ds { font-size: var(--fs-sm); color: var(--text-2); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pv-card .chev { display: inline-flex; color: var(--text-3); }
 .btn.pv-create { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: var(--sp-3); min-height: 96px; padding: var(--sp-4); border: 1px dashed var(--edge); border-radius: var(--r-lg); background: var(--panel); text-align: start; }
-.btn.pv-create:hover:not(:disabled), .btn.pv-create:active:not(:disabled) { border-color: var(--edge); }
+.btn.pv-create:hover:not(:disabled), .btn.pv-create:active:not(:disabled) { border-color: var(--hover-edge); }
 /* The add card uses a 24px mark, matching the provider artwork beside it. */
 .pv-create .i { inline-size: 24px; block-size: 24px; }
 .pv-add { grid-template-columns: 24px minmax(0, 1fr) auto; gap: var(--sp-3); padding: var(--sp-4); }

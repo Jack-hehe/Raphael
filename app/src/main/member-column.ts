@@ -112,7 +112,7 @@ export function openActions(anchor: HTMLElement, items: readonly { id: string; l
     items
       .map(
         (item) =>
-          `<button type="button" role="menuitem" tabindex="-1" data-pick="${esc(item.id)}"${item.sub ? ' aria-haspopup="menu"' : ""}>` +
+          `<button type="button" role="menuitem"${item.icon === "trash" ? ' class="danger"' : ""} tabindex="-1" data-pick="${esc(item.id)}"${item.sub ? ' aria-haspopup="menu"' : ""}>` +
           `<span class="ck">${item.icon ? ico(item.icon) : ""}</span><span class="mt">${esc(item.label)}</span>${item.sub ? ico("right") : ""}</button>`,
       )
       .join(""),
