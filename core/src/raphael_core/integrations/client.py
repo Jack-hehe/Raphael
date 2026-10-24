@@ -249,6 +249,14 @@ class McpConnector:
         # The pools that hold connections made with this connector's secrets.
         self._pools: "weakref.WeakSet[McpPool]" = weakref.WeakSet()
         self._device_http = device_http or {}  # a test's transport and clock for the device login
+        self.managed_opener: Any = None
+
+    def _open(self, server: ServerConfig, secrets: Secrets):
+        if server.managed_by:
+            if self.managed_opener is None:
+                raise McpFailure("denied")
+            return self.managed_opener(server, secrets)
+        return self._opener(server, secrets)
 
     def _secrets(self, server: ServerConfig, *, signing_in: bool = False) -> Secrets:
         secrets = Secrets()
@@ -259,7 +267,8 @@ class McpConnector:
                     raise McpFailure("missing_secret")
                 secrets.env[key] = value
             for key in server.headers:
-                value = self._vault.get(secret_name(server.id, "header", key))
+                reference = server.header_refs.get(key) if server.managed_by == "composio" else None
+                value = self._vault.get(reference or secret_name(server.id, "header", key))
                 if value is None:
                     raise McpFailure("missing_secret")
                 secrets.headers[key] = value
@@ -322,7 +331,7 @@ class McpConnector:
         try:
             async with asyncio.timeout(timeout_s):
                 await self._ready()
-                async with self._opener(server, secrets) as client:
+                async with self._open(server, secrets) as client:
                     return await self._list(client)
         except Exception as exc:
             raise _failure("tool list", exc) from None
@@ -349,7 +358,7 @@ class McpConnector:
             secrets.oauth = access
             async with asyncio.timeout(timeout_s + REFRESH_TOTAL_S):
                 await self._ready()
-                async with self._opener(server, secrets) as client:
+                async with self._open(server, secrets) as client:
                     tools = await self._list(client)
         except Exception as exc:
             raise _failure("login", exc) from None
@@ -374,7 +383,7 @@ class McpConnector:
             secrets = self._secrets(server, signing_in=True)
             secrets.oauth = access
             async with asyncio.timeout(REFRESH_TOTAL_S):
-                async with self._opener(server, secrets) as client:
+                async with self._open(server, secrets) as client:
                     tools = await self._list(client)
         except Exception as exc:
             raise _failure("login", exc) from None
@@ -405,13 +414,13 @@ class McpConnector:
                     self._pools.add(pool)
                     result, current, listed = await pool.call(
                         server.id,
-                        lambda: self._opener(server, secrets),
+                        lambda: self._open(server, secrets),
                         self._list,
                         tool,
                         arguments,
                     )
                 else:
-                    async with self._opener(server, secrets) as client:
+                    async with self._open(server, secrets) as client:
                         listed = await self._list(client)
                         current = next((t for t in listed if t.name == tool), None)
                         if current is None:

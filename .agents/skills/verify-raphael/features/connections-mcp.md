@@ -31,3 +31,21 @@ Fixture server `notes` supplies edit flows; tests/discovery return synthetic res
 Browser network is blocked except the owned Vite origin; favicon returns empty 204.
 UI success does not prove OAuth, credentials, process launch, HTTP transport, local
 config scanning or actual tools.
+
+## Managed connectors core (UI pending)
+
+Composio and Google (private) use connectors.* RPCs documented in CONN-NOTES.md.
+This branch adds no dialog or catalog UI. Existing look scenes are regression
+proof only. Use connectors.tools for Composio toggles; MCP meta-tools are locked.
+Generic integration mutations refuse managed entries. The connectors.changed
+notification reaches the existing ConnectionsChanged main event.
+
+Offline verification: npm run verify -- --core --rust includes HTTP doubles,
+a real isolated loopback listener driven by a simulated browser, scope/draft policy,
+one-use approvals, privacy and Rust bridge tests. For native acceptance use an
+isolated data directory and owner-provided test project/client: save a scoped
+Composio key, connect by browser/poll, read through the agent gate, disable a tool,
+disconnect/revoke; separately configure a Desktop Google client, exercise partial
+consent/refresh and draft-only denial, approve an intentional test send or event,
+then revoke. Repeat availability for Raphael and a member. Check expiry and
+secret-free logs. These live/native steps remain pending in this core branch.

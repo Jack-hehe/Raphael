@@ -347,7 +347,17 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 99] = [
+const ALLOWED_METHODS: [&str; 109] = [
+    "connectors.catalog",
+    "connectors.categories",
+    "connectors.connect",
+    "connectors.status",
+    "connectors.disconnect",
+    "connectors.tools",
+    "connectors.set_tools",
+    "connectors.set_key",
+    "connectors.google.configure",
+    "connectors.google.connect",
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -938,7 +948,7 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
         "action_mode.changed" => Some(MainEvent::ActionModeChanged),
         "providers.changed" => Some(MainEvent::ProvidersChanged),
         "settings.changed" => Some(MainEvent::SettingsChanged),
-        "integrations.changed" => Some(MainEvent::ConnectionsChanged),
+        "integrations.changed" | "connectors.changed" => Some(MainEvent::ConnectionsChanged),
         "brains.changed" => Some(MainEvent::BrainsChanged),
         "memory.changed" => {
             let space = match params.get("space") {
@@ -1893,6 +1903,15 @@ mod tests {
     }
 
     #[test]
+    fn connector_change_events_never_forward_private_payloads() {
+        let event = main_event_from(
+            &notification("connectors.changed", json!({"key": "private", "mail": "private"})),
+            true,
+        ).unwrap();
+        assert_eq!(serde_json::to_value(event).unwrap(), json!({"type": "ConnectionsChanged"}));
+    }
+
+    #[test]
     fn providers_are_main_window_methods_and_emit_an_empty_change_event() {
         for method in [
             "providers.kinds",
@@ -2387,6 +2406,16 @@ mod tests {
     #[test]
     fn the_whole_list_of_allowed_methods() {
         for method in [
+            "connectors.catalog",
+            "connectors.categories",
+            "connectors.connect",
+            "connectors.status",
+            "connectors.disconnect",
+            "connectors.tools",
+            "connectors.set_tools",
+            "connectors.set_key",
+            "connectors.google.configure",
+            "connectors.google.connect",
             "history.list",
             "history.latest",
             "history.delete",
@@ -2466,6 +2495,10 @@ mod tests {
         }
         for method in [
             "",
+            "connectors.",
+            "connectors.execute",
+            "connectors.google.revoke",
+            "xconnectors.status",
             "safety.",
             "safety.rules.",
             "background.",
