@@ -33,6 +33,7 @@ import {
   toggleTranscriptionLanguage,
 } from "../languages";
 import { createHotkeyRecording } from "../hotkey-recording";
+import { isTopLayer, registerDismissal } from "../dismissals";
 import { type ModelPicker, type ModelPickerLook, type PickerRole, mountModelPicker, replacementNotices, withFavorite } from "../model-picker";
 import { createServices } from "../services";
 import { createCliBrains } from "../cli-brains";
@@ -226,6 +227,7 @@ export function createSettings(app: AppContext): SettingsPage {
   /** The search for microphones that 「重新搜尋麥克風」 started is under way. */
   let searchingMicrophones = false;
   let visible = false;
+  let stopOutside = (): void => {};
   let loading = false;
   let loads = 0;
   /** In 資料, the clear that was pressed once and waits for its second press. */
@@ -233,6 +235,7 @@ export function createSettings(app: AppContext): SettingsPage {
   let clearTimer: ReturnType<typeof setTimeout> | undefined;
   /** The 「連接」 tab: it keeps its own state and asks to be drawn again. 「試試看」 leaves for the 拉斐爾 page with a draft. */
   const connections = createConnections({
+    root: el,
     visible: () => visible && pane === "connections",
     redraw: () => render(),
     tryPrompt: (text) => app.go("agent", `draft:${text}`),
@@ -256,7 +259,7 @@ export function createSettings(app: AppContext): SettingsPage {
   /** The owner's safety rules, in the 「拉斐爾」 tab: what Raphael asks about first, does at once, or never does. */
   const rules = createRules({ visible: () => visible && pane === "agent", redraw: () => render(), undo: app.undo });
   /** 服務, in the 「拉斐爾」 tab: who does the work of Raphael's tools. Choosing is a change of the brain's settings. */
-  const services = createServices({ visible: () => visible && pane === "agent", redraw: () => render(), brain: () => brain, changeSetting: (key, value) => changeBrain(key, value) });
+  const services = createServices({ root: el, visible: () => visible && pane === "agent", redraw: () => render(), brain: () => brain, changeSetting: (key, value) => changeBrain(key, value) });
   const cliBrains = createCliBrains({ visible: () => visible, redraw: () => render() });
   const providers = createProviders({ root: el, visible: () => visible && pane === "models" && modelsTab === "models", redraw: () => render() });
   app.onEvent((event) => {
@@ -1136,10 +1139,6 @@ export function createSettings(app: AppContext): SettingsPage {
 
   el.addEventListener("click", (e) => {
     const target = e.target as Element;
-    if (target === el) {
-      app.closeSettings(); // a click on the dimmed window around the panel
-      return;
-    }
     const modelTab = target.closest<HTMLElement>("[data-models-tab]");
     if (modelTab) { switchModelsTab(modelTab.dataset.modelsTab as ModelsTab); return; }
     const paneButton = target.closest<HTMLElement>("[data-pane]");
@@ -1271,7 +1270,7 @@ export function createSettings(app: AppContext): SettingsPage {
     const chrome = document.getElementById("window-chrome");
     if (!visible || !(e.target instanceof Node) || !ownsSettingsKey(e.target, [el, chrome], [document.body, document.documentElement])) return;
     if (openMenuOnArrow(e)) return;
-    if (e.key === "Escape" && !recording.active() && !e.defaultPrevented) {
+    if (e.key === "Escape" && isTopLayer(el.querySelector(".modal")) && !recording.active() && !e.defaultPrevented) {
       e.preventDefault();
       app.closeSettings();
     } else if (e.key === "Tab") {
@@ -1316,6 +1315,8 @@ export function createSettings(app: AppContext): SettingsPage {
     async show(open?: SettingsPane) {
       const hadUsage = usage !== null;
       visible = true;
+      stopOutside();
+      stopOutside = registerDismissal(el.querySelector<HTMLElement>(".modal")!, () => app.closeSettings(), () => !recording.active());
       cliBrains.start();
       document.addEventListener("keydown", settingsKey);
       const mine = ++loads;
@@ -1397,6 +1398,8 @@ export function createSettings(app: AppContext): SettingsPage {
     },
     hide() {
       visible = false;
+      stopOutside();
+      for (const picker of pickers.values()) picker.close();
       cliBrains.stop();
       destroyUsage();
       connections.reset();

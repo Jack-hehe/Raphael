@@ -650,7 +650,7 @@ describe("what the tab does", () => {
     expect(c.view()).toMatchObject({ open: { tab: "installed", id: "ab12" }, toolsKind: null, auditOpen: false });
   });
 
-  test("the dialog closes with its ×, with Esc, and with a click on the dimmed part around it, not inside it", async () => {
+  test("the dialog controller closes with its X or Escape and leaves raw backdrop targets to shared gesture handling", async () => {
     const c = createConnections(host);
     await c.load();
     c.click(button("open", { id: "ab12" }));
@@ -669,8 +669,10 @@ describe("what the tab does", () => {
     // a click inside the dialog on no control finds the dimmed part around it, and does nothing
     expect(c.click({ closest: () => scrim } as unknown as Element)).toBe(true);
     expect(c.view().open).not.toBeNull();
-    // a click on the dimmed part itself closes it
+    // A raw target cannot establish where the pointer press began.
     expect(c.click(scrim as unknown as Element)).toBe(true);
+    expect(c.view().open).not.toBeNull();
+    c.click(button("close"));
     expect(c.view().open).toBeNull();
   });
 

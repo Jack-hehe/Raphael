@@ -32,6 +32,7 @@
 // tested without a browser); `createServices` holds the state and does what the buttons say.
 
 import * as api from "./api";
+import { isTopLayer, registerDismissal } from "./dismissals";
 import { iconHTML } from "./connections";
 import { describeError } from "./format";
 import { t } from "./i18n";
@@ -395,6 +396,7 @@ export function servicesHTML(v: ServicesView, visionPicker: string, brain: Brain
 // ---------- state ----------
 
 export interface ServicesHost {
+  root?: HTMLElement;
   visible(): boolean;
   redraw(): void;
   /** The settings of the brain as the window holds them now (null before they are read). */
@@ -428,9 +430,14 @@ export function createServices(host: ServicesHost): ServicesPanel {
   let loads = 0;
   /** The dialog is on its way out (140 ms): a second close waits for the first. */
   let closing = false;
+  let stopOutside: (() => void) | null = null;
 
   const redraw = (): void => {
     if (host.visible()) host.redraw();
+    if (open && !stopOutside && typeof document !== "undefined") {
+      const root = host.root ?? document.querySelector("#svc-dialog")?.parentElement?.parentElement;
+      if (root) stopOutside = registerDismissal(() => root.querySelector<HTMLElement>("#svc-dialog"), closeDialog);
+    } else if (!open) { stopOutside?.(); stopOutside = null; }
   };
   const view = (): ServicesView => ({ status, busy, open, slide });
   const current = (): ServicesStatus | null => (typeof status === "object" ? status : null);
@@ -666,8 +673,7 @@ export function createServices(host: ServicesHost): ServicesPanel {
         void toggle(id as Capability);
         return true;
       case "scrim":
-        // the dimmed part around the dialog closes it; a click inside it (on no control) does nothing
-        if (target === button) closeDialog();
+        // Outside gestures are handled by the shared dismissal layer.
         return true;
       case "close":
         closeDialog();
@@ -702,6 +708,8 @@ export function createServices(host: ServicesHost): ServicesPanel {
 
   /** Esc closes the dialog; Enter in a key's field sends it, as 「儲存」 does; Enter in the address or the voice id saves it. */
   function key(e: KeyboardEvent): boolean {
+    const panel = typeof document !== "undefined" ? (host.root ?? document).querySelector<HTMLElement>("#svc-dialog") : null;
+    if (e.key === "Escape" && panel && !isTopLayer(panel)) return false;
     if (e.key === "Escape" && open && !e.defaultPrevented) {
       e.preventDefault();
       closeDialog();
@@ -732,6 +740,7 @@ export function createServices(host: ServicesHost): ServicesPanel {
   }
 
   function reset(): void {
+    stopOutside?.(); stopOutside = null;
     loads++;
     busy = null;
     open = null;

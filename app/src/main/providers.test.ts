@@ -347,6 +347,9 @@ test("connected cards show status, a switch and a dialog button; the add dialog 
   expect(root.querySelector<HTMLButtonElement>('[data-pv="add"][data-id="bedrock"]')?.disabled).toBe(true);
   expect(root.querySelector('[data-pv="open"] .ic')?.textContent).toBe("");
   click('[data-pv="toggle"]'); await flush();
+  expect(root.querySelector('[role="dialog"]')).toBeNull();
+  expect(api.providersUpdate).not.toHaveBeenCalled();
+  click('[data-pv="toggle"]'); await flush();
   expect(api.providersUpdate).toHaveBeenCalledWith({ id: "p3", enabled: false });
 });
 
