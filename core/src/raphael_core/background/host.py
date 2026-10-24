@@ -232,6 +232,11 @@ class ProcessLink:
             if not task.done():
                 task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
+        # Process.wait() can return as soon as its exit code is known. The stdin pipe's
+        # connection_lost callback must also finish while its event loop is still alive.
+        if self.process.stdin is not None:
+            with contextlib.suppress(OSError):
+                await asyncio.wait_for(self.process.stdin.wait_closed(), PIPES_END_S)
 
 
 async def connect_process(command: Sequence[str] | None = None) -> Link:

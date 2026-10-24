@@ -36,6 +36,8 @@ async def test_raphael_is_first_in_the_list_in_the_language_asked(rig):
     assert listed["groups"] == []
     (raphael,) = listed["members"]
     assert raphael == {
+        "blurb": "", "reply_style": "full", "voice": "", "read_aloud": False,
+        "notify": False, "ask_before_members": False, "pinned": False, "hidden": False,
         "id": 0, "name": "Raphael", "role": "", "personality": "", "instructions": "", "avatar": "", "group_id": None,
         "model": "", "tools": None, "position": -1, "created": 0, "unread": False,
         "waiting": False, "preview": "", "last_at": None,

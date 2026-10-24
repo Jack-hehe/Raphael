@@ -50,6 +50,10 @@ class Sessions:
         self.conn.execute("DELETE FROM agent_cli_sessions")
         self.conn.commit()
 
+    def clear_member(self, member_id):
+        self.conn.execute("DELETE FROM agent_cli_sessions WHERE member_id = ?", (member_id,))
+        self.conn.commit()
+
 
 class CliLoop:
     def __init__(self, *, brains, sessions, member_id, model, ledger, language, plain,

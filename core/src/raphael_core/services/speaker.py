@@ -130,6 +130,7 @@ class _Utterance:
     turn_id: int | None = None
     finished: bool = False
     playing: bool = False
+    voice: str | None = None
 
 
 class Speaker:
@@ -192,6 +193,20 @@ class Speaker:
         except TimeoutError:
             pass  # the answer goes out without the sound, which follows when it comes
 
+    async def say_member(self, text: str, *, voice: str = "", turn_id: int | None = None) -> None:
+        """Speak a member's reply through the configured service with an optional voice override."""
+        self.stop()
+        if not self._hub.enabled("voice"):
+            return
+        spoken = line("", text)
+        if not spoken:
+            return
+        utterance = self._start(spoken, turn_id, voice=voice or None)
+        try:
+            await asyncio.wait_for(utterance.ready.wait(), self._first_audio_wait_s)
+        except TimeoutError:
+            pass
+
     def stop(self) -> None:
         """End the speech at once: the sound, a request still on its way, and the wait for it."""
         utterance, self._current = self._current, None
@@ -203,8 +218,8 @@ class Speaker:
         if task is not None and not task.done():
             task.cancel()
 
-    def _start(self, spoken: str, turn_id: int | None = None) -> _Utterance:
-        utterance = _Utterance(turn_id=turn_id)
+    def _start(self, spoken: str, turn_id: int | None = None, *, voice: str | None = None) -> _Utterance:
+        utterance = _Utterance(turn_id=turn_id, voice=voice)
         self._current = utterance
         task = asyncio.get_running_loop().create_task(self._speak(spoken, utterance))
         utterance.task = task
@@ -249,7 +264,8 @@ class Speaker:
                 pass
 
         try:
-            async with aclosing(self._hub.speech(spoken)) as chunks:
+            sound = self._hub.speech(spoken) if utterance.voice is None else self._hub.speech(spoken, voice=utterance.voice)
+            async with aclosing(sound) as chunks:
                 try:
                     first = await asyncio.wait_for(anext(chunks), self._late_drop_s)
                 except TimeoutError:

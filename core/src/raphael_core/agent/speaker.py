@@ -59,6 +59,9 @@ class Speaker:
     # The ids of the assistants that asked on the way to this one (not this one itself).
     chain: frozenset[int] = frozenset()
     personality: str = ""
+    blurb: str = ""
+    reply_style: str = "full"
+    ask_before_members: bool = False
 
     @property
     def is_raphael(self) -> bool:
