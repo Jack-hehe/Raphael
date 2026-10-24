@@ -1,4 +1,4 @@
-"""Claude stream-json, Codex app-server and Gemini ACP, normalized at one boundary.
+"""Claude stream-json, Codex app-server and Antigravity stream-json, normalized at one boundary.
 
 Only public text and explicit reasoning summaries are forwarded. Raw diagnostics,
 reasoning blocks, command output and provider credentials never become UI messages.
@@ -9,6 +9,7 @@ import json
 import os
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .process import Child, PrivateFiles
 
@@ -36,8 +37,6 @@ class Driver:
                 if self.name == "codex" and self.session and self.turn:
                     await asyncio.wait_for(self.child.send({"jsonrpc": "2.0", "id": "interrupt", "method": "turn/interrupt",
                         "params": {"threadId": self.session, "turnId": self.turn}}), .25)
-                elif self.name == "gemini" and self.session:
-                    await asyncio.wait_for(self.child.send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": self.session}}), .25)
             except (OSError, TimeoutError, RuntimeError):
                 pass
         if self.child:
@@ -68,20 +67,34 @@ class Driver:
                 command += ["app-server", "-c", f"mcp_servers.raphael.url={json.dumps(endpoint)}",
                             "-c", 'mcp_servers.raphael.bearer_token_env_var="RAPHAEL_MCP_TOKEN"']
             elif self.name == "gemini":
-                command += ["--experimental-acp", "--approval-mode", "default", "--allowed-mcp-server-names", "raphael"]
+                # Google's Antigravity CLI (`agy`; Gemini CLI was retired). It reads MCP servers and
+                # rules only from its home folder, so it runs with a private home inside the
+                # member's workspace: Raphael's server and the persona are there, the owner's own
+                # agy settings are never touched, and the login (in the OS store) still applies.
+                home = antigravity_home(cwd or str(files.path), endpoint, token, system)
+                command += ["--input-format", "stream-json", "--output-format", "stream-json", "-p="]
                 if self.model:
                     command += ["--model", self.model]
+                if session:
+                    command += ["--conversation", session]
             else:
                 raise ValueError("unknown_cli")
             environ = dict(os.environ if self.environ is None else self.environ)
             if self.name == "codex":
                 environ["RAPHAEL_MCP_TOKEN"] = token
+            elif self.name == "gemini":
+                environ["USERPROFILE"] = environ["HOME"] = str(home)
             self.child = Child(command, environ=environ, cwd=cwd or str(files.path))
             await self.child.start()
             if self.name == "claude":
                 await self.child.send({"type": "user", "message": {"role": "user", "content": user}})
                 self.child.process.stdin.close()
                 async for event in self._claude():
+                    yield event
+            elif self.name == "gemini":
+                await self.child.send({"event": "user", "message": {"role": "user", "content": user}})
+                self.child.process.stdin.close()
+                async for event in self._antigravity():
                     yield event
             else:
                 async for event in self._rpc(user, system, endpoint, token, session, permission):
@@ -94,6 +107,8 @@ class Driver:
                 await self.interrupt()
             finally:
                 files.close()
+                if self.name == "gemini":
+                    forget_antigravity_server(cwd or str(files.path))
 
     async def _read(self):
         line = await self.child.process.stdout.readline()
@@ -147,7 +162,40 @@ class Driver:
                     yield Event("final", packet.get("result") or text)
                 return
 
+    async def _antigravity(self):
+        text = ""
+        while True:
+            packet = await self._read()
+            kind = packet.get("event")
+            if kind == "init" and packet.get("conversation_id"):
+                self.session = packet["conversation_id"]
+                yield Event("session", self.session)
+            elif kind == "step_update":
+                step = packet.get("step_update") or {}
+                if step.get("step_type") == "agent_response" and step.get("text_delta"):
+                    text = (text + step["text_delta"])[-64000:]
+                    yield Event("text_delta", step["text_delta"])
+                elif step.get("step_type") == "tool":
+                    name = step.get("tool_name") or "tool"
+                    if step.get("state") == "ACTIVE":
+                        yield Event("tool_start", data={"name": name})
+                    elif step.get("state") in ("DONE", "ERROR"):
+                        yield Event("tool_end", data={"name": name, "ok": step.get("state") == "DONE"})
+            elif kind == "result":
+                result = packet.get("result") or {}
+                if result.get("conversation_id"):
+                    self.session = result["conversation_id"]
+                    yield Event("session", self.session)
+                yield Event("usage", data=result.get("usage") or {})
+                if result.get("status") != "SUCCESS":
+                    error = str(result.get("error") or "").lower()
+                    yield Event("error", "quota" if "quota" in error or "rate limit" in error else "cli_failed")
+                else:
+                    yield Event("final", result.get("response") or text)
+                return
+
     async def _rpc(self, user, system, endpoint, token, session, permission):
+        """Codex app-server: JSON-RPC over stdio."""
         pending = {}
         sequence = 0
 
@@ -161,12 +209,8 @@ class Driver:
             await self.child.send({"jsonrpc": "2.0", "id": identifier,
                                    **({"error": error} if error else {"result": result})})
 
-        codex = self.name == "codex"
-        await request("initialize", {"clientInfo": {"name": "raphael", "version": "0.2.0"}, "capabilities": {}} if codex else
-                      {"protocolVersion": 1, "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},
-                       "clientInfo": {"name": "raphael", "version": "0.2.0"}}, "initialize")
+        await request("initialize", {"clientInfo": {"name": "raphael", "version": "0.2.0"}, "capabilities": {}}, "initialize")
         text = ""
-        tool_kinds = {}
         while True:
             packet = await self._read()
             method, params = packet.get("method", ""), packet.get("params", {})
@@ -177,55 +221,31 @@ class Driver:
                     return
                 result = packet.get("result") or {}
                 if label == "initialize":
-                    if codex:
-                        await self.child.send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
-                        config = {"mcp_servers": {"raphael": {"url": endpoint,
-                                  "http_headers": {"Authorization": f"Bearer {token}"}}}}
-                        arguments = {"developerInstructions": system, "approvalPolicy": "untrusted",
-                                     "sandbox": "read-only", "config": config, "cwd": self.child.cwd}
-                        if self.model:
-                            arguments["model"] = self.model
-                        if session:
-                            arguments["threadId"] = session
-                        await request("thread/resume" if session else "thread/start", arguments, "session")
-                    else:
-                        arguments = {"cwd": self.child.cwd, "mcpServers": [
-                            {"name": "raphael", "type": "http", "url": endpoint,
-                             "headers": [{"name": "Authorization", "value": f"Bearer {token}"}]}]}
-                        if session:
-                            arguments["sessionId"] = session
-                        await request("session/load" if session else "session/new", arguments, "session")
+                    await self.child.send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+                    config = {"mcp_servers": {"raphael": {"url": endpoint,
+                              "http_headers": {"Authorization": f"Bearer {token}"}}}}
+                    arguments = {"developerInstructions": system, "approvalPolicy": "untrusted",
+                                 "sandbox": "read-only", "config": config, "cwd": self.child.cwd}
+                    if self.model:
+                        arguments["model"] = self.model
+                    if session:
+                        arguments["threadId"] = session
+                    await request("thread/resume" if session else "thread/start", arguments, "session")
                 elif label == "session":
-                    self.session = (result.get("thread") or {}).get("id") if codex else result.get("sessionId")
+                    self.session = (result.get("thread") or {}).get("id")
                     if not self.session:
                         raise ValueError("missing_session")
                     yield Event("session", self.session)
-                    if codex:
-                        await request("turn/start", {"threadId": self.session, "input": [{"type": "text", "text": user}]}, "turn")
-                    else:
-                        await request("session/prompt", {"sessionId": self.session, "prompt": [
-                            {"type": "text", "text": system + "\n\n" + user}]}, "turn")
+                    await request("turn/start", {"threadId": self.session, "input": [{"type": "text", "text": user}]}, "turn")
                 elif label == "turn":
-                    if codex:
-                        self.turn = (result.get("turn") or {}).get("id")
-                    else:
-                        if result.get("stopReason") not in ("end_turn", "max_tokens"):
-                            yield Event("error", "cli_turn_failed")
-                        else:
-                            yield Event("final", text)
-                        return
+                    self.turn = (result.get("turn") or {}).get("id")
             elif "id" in packet and method:
                 if method in ("item/commandExecution/requestApproval", "item/fileChange/requestApproval",
-                              "execCommandApproval", "applyPatchApproval", "session/request_permission"):
+                              "execCommandApproval", "applyPatchApproval"):
                     yield Event("permission", data={"method": method})
                     decision = await permission({"method": method, **params})
-                    if codex:
-                        await response(packet["id"], {"decision": {"once": "accept", "always": "acceptForSession"}.get(decision, "decline")})
-                    else:
-                        kinds = ("allow_always", "allow_once") if decision == "always" else ("allow_once",) if decision == "once" else ("reject_once", "reject_always")
-                        option = next((item for kind in kinds for item in params.get("options", []) if item.get("kind") == kind), None)
-                        await response(packet["id"], {"outcome": {"outcome": "selected", "optionId": option["optionId"]} if option else {"outcome": "cancelled"}})
-                elif codex and method == "mcpServer/elicitation/request":
+                    await response(packet["id"], {"decision": {"once": "accept", "always": "acceptForSession"}.get(decision, "decline")})
+                elif method == "mcpServer/elicitation/request":
                     # Codex asks before it calls an MCP tool. Raphael's own server screens every call
                     # through the safety gate (and asks the owner when the rules say so), so a call to
                     # it is accepted here; any other server is declined.
@@ -234,47 +254,54 @@ class Driver:
                 else:
                     # No filesystem, terminal or arbitrary client-side RPC outside our gate.
                     await response(packet["id"], error={"code": -32601, "message": "Unsupported client capability"})
-            elif codex:
-                if method == "item/agentMessage/delta":
-                    delta = params.get("delta", "")
-                    text = (text + delta)[-64000:]
-                    yield Event("text_delta", delta)
-                elif method == "item/reasoning/summaryTextDelta":
-                    yield Event("thinking", params.get("delta", ""))
-                elif method in ("item/started", "item/completed"):
-                    item = params.get("item", {})
-                    if item.get("type") in ("commandExecution", "fileChange", "mcpToolCall", "webSearch"):
-                        yield Event("tool_start" if method.endswith("started") else "tool_end", data={
-                            "name": item.get("tool", item["type"]), "effect": item["type"] == "fileChange",
-                            "ok": item.get("status") == "completed"})
-                elif method == "thread/tokenUsage/updated":
-                    yield Event("usage", data=(params.get("tokenUsage") or {}).get("last", {}))
-                elif method == "turn/started":
-                    self.turn = (params.get("turn") or {}).get("id")
-                elif method == "turn/completed":
-                    if (params.get("turn") or {}).get("status") == "completed":
-                        yield Event("final", text)
-                    else:
-                        yield Event("error", "cli_turn_failed")
-                    return
-                elif method == "error":
-                    yield Event("error", "cli_error")
-                    return
-            elif method == "session/update":
-                update = params.get("update", {})
-                kind = update.get("sessionUpdate")
-                if kind == "agent_message_chunk" and update.get("content", {}).get("type") == "text":
-                    delta = update["content"].get("text", "")
-                    text = (text + delta)[-64000:]
-                    yield Event("text_delta", delta)
-                # ACP agent_thought_chunk is private reasoning, not a public summary.
-                elif kind in ("tool_call", "tool_call_update"):
-                    identifier = update.get("toolCallId")
-                    if update.get("kind"):
-                        tool_kinds[identifier] = update["kind"]
-                    yield Event("tool_end" if update.get("status") in ("completed", "failed") else "tool_start", data={
-                        "name": "fileChange" if tool_kinds.get(identifier) in ("edit", "delete", "move") else "tool",
-                        "effect": tool_kinds.get(identifier) in ("edit", "delete", "move"),
-                        "ok": update.get("status") == "completed"})
-                elif kind == "usage_update":
-                    yield Event("usage", data=update)
+            elif method == "item/agentMessage/delta":
+                delta = params.get("delta", "")
+                text = (text + delta)[-64000:]
+                yield Event("text_delta", delta)
+            elif method == "item/reasoning/summaryTextDelta":
+                yield Event("thinking", params.get("delta", ""))
+            elif method in ("item/started", "item/completed"):
+                item = params.get("item", {})
+                if item.get("type") in ("commandExecution", "fileChange", "mcpToolCall", "webSearch"):
+                    yield Event("tool_start" if method.endswith("started") else "tool_end", data={
+                        "name": item.get("tool", item["type"]), "effect": item["type"] == "fileChange",
+                        "ok": item.get("status") == "completed"})
+            elif method == "thread/tokenUsage/updated":
+                yield Event("usage", data=(params.get("tokenUsage") or {}).get("last", {}))
+            elif method == "turn/started":
+                self.turn = (params.get("turn") or {}).get("id")
+            elif method == "turn/completed":
+                if (params.get("turn") or {}).get("status") == "completed":
+                    yield Event("final", text)
+                else:
+                    yield Event("error", "cli_turn_failed")
+                return
+            elif method == "error":
+                yield Event("error", "cli_error")
+                return
+
+def antigravity_home(workspace, endpoint, token, system):
+    """The private home Antigravity runs with, inside the member's private workspace: Raphael's MCP
+    server (its tools allowed and nothing else, since print mode denies every other permission),
+    and the persona as the home's global rules."""
+    home = Path(workspace) / "home"
+    gemini = home / ".gemini"
+    (gemini / "config").mkdir(parents=True, exist_ok=True)
+    (gemini / "antigravity-cli").mkdir(parents=True, exist_ok=True)
+    server = {"serverUrl": endpoint, "headers": {"Authorization": f"Bearer {token}"}, "disabled": False}
+    (gemini / "config" / "mcp_config.json").write_text(
+        json.dumps({"mcpServers": {"raphael": server}}), encoding="utf-8")
+    (gemini / "antigravity-cli" / "settings.json").write_text(
+        json.dumps({"permissions": {"allow": ["mcp(raphael/*)"]}}), encoding="utf-8")
+    (gemini / "GEMINI.md").write_text(system, encoding="utf-8")
+    return home
+
+
+def forget_antigravity_server(workspace):
+    """The run's bearer token does not stay on disk after the run."""
+    try:
+        path = Path(workspace) / "home" / ".gemini" / "config" / "mcp_config.json"
+        if path.exists():
+            path.write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
+    except OSError:
+        pass

@@ -62,6 +62,18 @@ if name == "claude":
     send({"type":"stream_event", "event":{"type":"content_block_start", "content_block":{"type":"tool_use","name":"mcp__raphael__routine_list"}}})
     send({"type":"user", "message":{"content":[{"type":"tool_result","is_error":False}]}})
     send({"type":"result", "subtype":"success", "result":"Hello", "usage":{"input_tokens":4,"output_tokens":2}})
+elif name == "gemini":
+    assert sys.argv[sys.argv.index("--conversation") + 1] == "previous"
+    home = os.environ["USERPROFILE"]
+    config = json.load(open(os.path.join(home, ".gemini", "config", "mcp_config.json"), encoding="utf-8"))
+    assert config["mcpServers"]["raphael"]["headers"]["Authorization"] == "Bearer ephemeral"
+    assert open(os.path.join(home, ".gemini", "GEMINI.md"), encoding="utf-8").read() == "persona"
+    assert json.loads(sys.stdin.readline())["message"]["content"] == "question"
+    send({"event":"init", "conversation_id":"next", "init":{}})
+    send({"event":"step_update", "step_update":{"step_type":"tool", "state":"ACTIVE", "tool_name":"call_mcp_tool"}})
+    send({"event":"step_update", "step_update":{"step_type":"tool", "state":"DONE", "tool_name":"call_mcp_tool"}})
+    send({"event":"step_update", "step_update":{"step_type":"agent_response", "state":"ACTIVE", "text_delta":"Hello"}})
+    send({"event":"result", "result":{"conversation_id":"next", "status":"SUCCESS", "response":"Hello", "usage":{"input_tokens":4}}})
 else:
     for line in sys.stdin:
         msg = json.loads(line)
@@ -107,7 +119,8 @@ else:
     assert all("PRIVATE-REASONING" not in event.text for event in events)
     assert any(event.kind == "thinking" for event in events) == (name == "codex")
     assert {"tool_start", "tool_end"} <= {event.kind for event in events}
-    assert len(permissions) == (0 if name == "claude" else 1)
+    # Antigravity's print mode denies every permission but Raphael's own tools: nothing to ask
+    assert len(permissions) == (1 if name == "codex" else 0)
 
 
 async def test_discovery_reports_changes_without_reading_credentials(tmp_path, monkeypatch):
@@ -135,9 +148,9 @@ def test_known_windows_directory_and_powershell_shim(tmp_path):
     entry.touch()
     node = npm / "node.exe"
     node.touch()
-    (npm / "gemini.ps1").write_text('& "$basedir/node$exe" "$basedir/entry.mjs" $args', encoding="utf-8")
+    (npm / "claude.ps1").write_text('& "$basedir/node$exe" "$basedir/entry.mjs" $args', encoding="utf-8")
     brains = CliBrains(home=tmp_path, environ={"APPDATA": str(tmp_path), "PATH": ""})
-    assert brains.command("gemini") == [str(node), str(entry)]
+    assert brains.command("claude") == [str(node), str(entry)]
     assert brains.command("codex") is None
 
 
@@ -230,3 +243,11 @@ print(json.dumps({"type":"result","subtype":"success","result":"Done"}),flush=Tr
     assert events[-1].kind == "final" and events[-1].text == "Done"
     with pytest.raises(ValueError, match="command_too_long"):
         await Child([sys.executable, "x" * 30000]).start()
+
+
+def test_antigravity_is_found_in_its_own_folder(tmp_path):
+    agy = tmp_path / "agy" / "bin"
+    agy.mkdir(parents=True)
+    (agy / "agy.exe").touch()
+    brains = CliBrains(home=tmp_path, environ={"LOCALAPPDATA": str(tmp_path), "PATH": ""})
+    assert brains.command("gemini") == [str((agy / "agy.exe").resolve())]

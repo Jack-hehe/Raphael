@@ -9,9 +9,11 @@ from pathlib import Path
 
 from .process import Child, subscription_env
 
-NAMES = {"claude": "Claude Code", "codex": "Codex CLI", "gemini": "Gemini CLI"}
+# "gemini" is Google's Antigravity CLI (`agy`), which replaced Gemini CLI.
+NAMES = {"claude": "Claude Code", "codex": "Codex CLI", "gemini": "Antigravity"}
 MODELS = {"claude": ("sonnet", "opus", "haiku"), "codex": (), "gemini": ()}
-LOGIN = {"claude": "claude auth login", "codex": "codex login", "gemini": "gemini"}
+LOGIN = {"claude": "claude auth login", "codex": "codex login", "gemini": "agy"}
+EXECUTABLE = {"claude": "claude", "codex": "codex", "gemini": "agy"}
 
 
 def brain_ref(value):
@@ -55,16 +57,17 @@ class CliBrains:
     def command(self, name):
         if self.commands is not None:
             return self.commands.get(name)
-        found = shutil.which(name, path=self.environ.get("PATH", ""))
+        executable = EXECUTABLE.get(name, name)
+        found = shutil.which(executable, path=self.environ.get("PATH", ""))
         roots = [self.home / ".local" / "bin", self.home / ".bun" / "bin"]
         if self.environ.get("APPDATA"):
             roots.append(Path(self.environ["APPDATA"]) / "npm")
         if self.environ.get("LOCALAPPDATA"):
             local = Path(self.environ["LOCALAPPDATA"])
-            roots.extend([local / "Microsoft" / "WinGet" / "Links", local / "Programs" / name,
-                          local / "Programs" / "Claude", local / "npm"])
+            roots.extend([local / "Microsoft" / "WinGet" / "Links", local / "Programs" / executable,
+                          local / "Programs" / "Claude", local / "npm", local / "agy" / "bin"])
         candidates = [Path(found)] if found else []
-        candidates.extend(root / (name + suffix) for root in roots for suffix in (".exe", ".cmd", ".ps1", ""))
+        candidates.extend(root / (executable + suffix) for root in roots for suffix in (".exe", ".cmd", ".ps1", ""))
         for path in candidates:
             if path.is_file():
                 try:
@@ -76,18 +79,18 @@ class CliBrains:
     def logged_in(self, name):
         claude = Path(self.environ.get("CLAUDE_CONFIG_DIR", self.home / ".claude"))
         codex = Path(self.environ.get("CODEX_HOME", self.home / ".codex"))
-        gemini = Path(self.environ.get("GEMINI_CLI_HOME", self.home)) / ".gemini"
+        gemini = self.home / ".gemini"
         files = {
             "claude": (claude / ".credentials.json", claude / "credentials.json"),
             "codex": (codex / "auth.json",),
-            "gemini": (gemini / "oauth_creds.json",),
+            "gemini": (gemini / "google_accounts.json", gemini / "oauth_creds.json"),
         }
         try:
             if any(path.is_file() for path in files[name]):
                 return True
         except OSError:
             return None
-        # Claude also uses OS credential storage. Settings alone do not establish Gemini login.
+        # Claude also uses OS credential storage. Settings alone do not establish a Google login.
         return None if name == "claude" else False
 
     async def _one(self, name):

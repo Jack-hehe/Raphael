@@ -168,12 +168,14 @@ class CliLoop:
             "login": f"請先在設定 › 模型與用量登入 {name}。",
             "busy": "這個對話仍有 CLI 回合執行中，請先完成或取消它。",
             "error": f"{name} 回合中斷。請確認 CLI 登入狀態後再試一次。",
+            "quota": f"{name} 的訂閱額度暫時用完了，請稍後再試，或換一個模型。",
         }
         if self.language != "zh-TW":
             messages = {"missing": f"Install {name}, then sign in in Settings > Models & usage.",
                         "login": f"Sign in to {name} in Settings > Models & usage.",
                         "busy": "This thread has an active CLI turn. Finish or cancel it first.",
-                        "error": f"{name} stopped unexpectedly. Check its login and try again."}
+                        "error": f"{name} stopped unexpectedly. Check its login and try again.",
+                        "quota": f"{name} has used up its subscription quota for now. Try again later or pick another model."}
         self.event(messages[reason])
         self._queue.put_nowait(Outcome("done", final=messages[reason]))
 
@@ -222,7 +224,7 @@ class CliLoop:
                             elif event.kind == "tool_end" and event.data.get("effect") and event.data.get("ok"):
                                 self.event("CLI 回報檔案已變更" if self.language == "zh-TW" else "CLI reported a file change")
                             elif event.kind == "error":
-                                self._failure("error", NAMES[name])
+                                self._failure("quota" if event.text == "quota" else "error", NAMES[name])
                                 return
                             elif event.kind == "final":
                                 final = self._buffer.strip() or event.text.strip()
