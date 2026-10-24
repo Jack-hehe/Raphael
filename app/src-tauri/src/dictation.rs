@@ -2129,7 +2129,6 @@ fn parse_progress(params: &Value) -> Option<(&str, Progress)> {
             done: count("done")?,
             total: count("total")?,
             audio_seconds,
-            label: None,
         },
     ))
 }
