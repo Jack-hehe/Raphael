@@ -2,7 +2,7 @@
 // Exercise provider notifications through the real settings panel with a fake core API.
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { AppContext, MainEvent, ModelCatalog, SettingsPane } from "../types";
-import { setLocale } from "../i18n";
+import { setLocale, t } from "../i18n";
 import * as analytics from "../usage-analytics";
 import type { UsageRequest } from "../usage-analytics-types";
 
@@ -111,8 +111,7 @@ test("Models contains no spending and Usage mounts analytics once, preserving fi
   expect(page.el.querySelector('[data-pv="directory"]')).toBeNull();
   const node = page.el.querySelector(".usage-analytics");
   click('[data-range="30d"]'); await flush();
-  const grouping = page.el.querySelector<HTMLSelectElement>('[data-control="cost"]')!;
-  grouping.value = "provider"; grouping.dispatchEvent(new Event("change", { bubbles: true }));
+  click('.sel[data-control="cost"]'); click('.menu [data-value="provider"]');
   expect(page.el.querySelector(".ua-total")?.textContent).toBe("US$3.00");
   setLocale("ja"); await flush();
   expect(page.el.querySelector(".usage-analytics")).toBe(node);
@@ -121,7 +120,7 @@ test("Models contains no spending and Usage mounts analytics once, preserving fi
   click('[data-models-tab="usage"]'); await flush();
   expect(page.el.querySelector(".usage-analytics")).toBe(node);
   expect(mountAnalytics).toHaveBeenCalledTimes(1);
-  expect(page.el.querySelector('[data-control="cost"] option[selected]')?.getAttribute("value")).toBe("provider");
+  expect(page.el.querySelector('.sel[data-control="cost"]')?.getAttribute("title")).toBe(t("usage.provider"));
   expect(page.el.querySelector(".ua-total")?.textContent).toBe("US$3.00");
   expect(page.el.querySelector('[data-range="30d"]')?.getAttribute("aria-pressed")).toBe("true");
 });

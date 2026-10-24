@@ -885,8 +885,9 @@ class Brain:
         return view
 
     def _replace_vanished(self, entries: list[CatalogEntry]) -> list[dict[str, str]]:
-        """Set each chosen model that is not on OpenRouter's list (`entries`) back to its role's
-        default, and say which: `{key, role, model, default}`. Only while the default is on the
+        """Set each chosen OpenRouter model that is not on its list (`entries`) back to its role's
+        default (a model of another provider, `@id:…`, or of a subscription, `cli:…`, is not on that
+        list and stays), and say which: `{key, role, model, default}`. Only while the default is on the
         list: if it went too, it is no better a choice. A value that is no text is no choice and is
         left alone: the store's readers fall back on their own."""
         replaced: list[dict[str, str]] = []
@@ -894,7 +895,7 @@ class Brain:
             chosen, default = self._settings.get(role.setting), role.default
             if (
                 not isinstance(chosen, str)
-                or chosen.startswith("@")
+                or chosen.startswith(("@", "cli:"))  # another provider's, or a subscription's
                 or chosen == default
                 or find(entries, role.kind, chosen) is not None
                 or find(entries, role.kind, default) is None

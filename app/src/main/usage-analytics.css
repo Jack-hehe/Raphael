@@ -11,13 +11,13 @@
 .usage-analytics h3 { font-size: var(--fs-md); font-weight: 650; }
 .ua-header, .ua-period, .ua-cost-head, .ua-section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; }
 .ua-period { justify-content: flex-end; gap: var(--sp-1); }
-.usage-analytics button, .usage-analytics select {
+.usage-analytics button:not(.sel) {
   min-height: var(--h-ctl); border: 1px solid var(--btn-edge); border-radius: var(--r-sm);
   padding: 4px 10px; background: var(--btn); color: var(--text); font: inherit; cursor: pointer;
 }
 .usage-analytics button:hover:not(:disabled) { background: var(--hover); }
 .usage-analytics button:disabled { color: var(--text-3); cursor: default; }
-:root[data-keys] .usage-analytics button:focus-visible, :root[data-keys] .usage-analytics select:focus-visible, :root[data-keys] .usage-analytics .ua-mark:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+:root[data-keys] .usage-analytics button:focus-visible, :root[data-keys] .usage-analytics .ua-mark:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .ua-segment { display: flex; padding: 3px; border-radius: var(--r-md); background: var(--surface-2); }
 .ua-segment button { border-color: transparent; background: transparent; min-height: var(--h-ctl-sm); }
 .ua-segment button[aria-pressed="true"] { background: var(--panel); box-shadow: var(--tab-shadow); color: var(--accent-text); font-weight: 650; }

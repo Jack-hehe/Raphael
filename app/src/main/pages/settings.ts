@@ -1156,8 +1156,9 @@ export function createSettings(app: AppContext): SettingsPage {
 
     if (target.closest("[data-cli]")) { void cliBrains.click(target); return; }
     if (providers.click(target)) return;
+    // the usage view opens its own dropdowns' menus (usage-analytics.ts)
     const choose = target.closest<HTMLElement>(".sel");
-    if (choose) {
+    if (choose && !choose.closest(".usage-analytics")) {
       if (menuIsOpenFor(choose)) {
         closeMenu();
         return;

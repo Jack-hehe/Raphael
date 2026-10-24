@@ -287,10 +287,12 @@ describe("the keys", () => {
   test("the list opens on the chosen model, and Enter chooses the highlighted one", () => {
     const list = new PickerList("cleanup", LLMS, "openai/gpt-6-luna");
     expect(list.activeId()).toBe("openai/gpt-6-luna");
+    // the chosen model stays where the order puts it: the list opens there, not with it moved to the top
+    const ids = list.rows.map((row) => row.model.id);
+    const at = ids.indexOf("openai/gpt-6-luna");
+    expect(at).toBeGreaterThan(0);
     expect(list.move("ArrowDown")).toBe(true);
-    expect(list.chosen()).toBe("nvidia/nemotron:free");
-    expect(list.move("ArrowUp") && list.move("ArrowUp")).toBe(true);
-    expect(list.chosen()).toBeNull();
+    expect(list.activeId()).toBe(ids[at + 1]);
     expect(list.move("x")).toBe(false);
   });
 

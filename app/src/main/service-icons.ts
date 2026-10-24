@@ -27,6 +27,8 @@ export const LOGO_IDS = [
   "moonshot", "dashscope", "zai", "minimax", "stepfun", "arcee", "gmi", "ollama_cloud", "meta", "opencode_zen", "kilocode",
   "chutes", "siliconflow", "baidu_qianfan", "volcengine_ark", "venice", "featherless", "inference_net", "lambda", "scaleway", "ovhcloud", "cohere", "ai21",
   "vllm", "sglang", "llamacpp", "jan", "koboldcpp", "localai", "text_generation_webui", "vertex", "bedrock",
+  // the makers of models (the author in a model's id, "qwen/qwen3-…")
+  "qwen", "microsoft", "tencent", "aionlabs", "bytedance", "xiaomi", "amazon", "sakana", "poolside", "inception", "inclusionai", "upstage", "nousresearch", "liquid", "perceptron", "ibm", "reka", "relace", "morph", "typesafe", "dotsstudio", "meituan", "dolphin", "thinkingmachines", "thedrummer", "moondream", "scaledown", "nex_agi", "sao10k", "xingchen_agi", "prism_ml", "writer", "anthracite", "undi95", "gryphe", "alibaba", "assemblyai", "baai", "baseten", "bfl", "cloudflare", "elevenlabs", "krea", "kling", "recraft", "runway", "voyage", "deepgram", "sesame", "canopylabs", "nace_ai", "sentence_transformers", "hexgrad", "thenlper", "jaredpalmer",
 ] as const;
 export type LogoIconId = (typeof LOGO_IDS)[number];
 

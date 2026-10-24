@@ -2,6 +2,7 @@
 import "./usage-analytics.css";
 import { formatUsd } from "./format";
 import { onLocaleChange, t } from "./i18n";
+import { openMenu, sel, type Choice } from "./ui";
 import type { MessageKey } from "./i18n/zh-TW";
 import type { UsageAnalytics, UsageGroup, UsageRequest, UsageSeries } from "./usage-analytics-types";
 
@@ -94,9 +95,9 @@ function chart(days: string[], group: UsageGroup, title: string, category: strin
   return `<div class="ua-chart-scroll">${svg}</svg></div>${legend(group, category, money)}`;
 }
 
-function options(keys: readonly (keyof typeof choiceKeys)[], selected: string): string {
-  return keys.map(key => `<option value="${key}" ${key === selected ? "selected" : ""}>${t(choiceKeys[key])}</option>`).join("");
-}
+/** The groupings a dropdown offers, as the app's own dropdown (ui.ts `sel`) lists them. */
+const GROUPINGS = { cost: ["purpose", "model", "provider"], messages: ["model", "source"], dictation: ["dictations", "words"] } as const;
+const choices = (control: keyof typeof GROUPINGS): Choice[] => GROUPINGS[control].map((key) => ({ value: key, label: t(choiceKeys[key]) }));
 
 let nextId = 0;
 const mounted = new WeakMap<HTMLElement, UsageAnalyticsMount>();
@@ -133,7 +134,7 @@ export function mountUsageAnalytics(host: HTMLElement, api: UsageAnalyticsApi): 
       const costs = usage.cost_by[costBy];
       root.innerHTML += `<div class="ua-cost-head"><div><p class="ua-dates">${esc(usage.start_day)} — ${esc(usage.end_day)} · ${esc(usage.tz)}</p>` +
         `<strong class="ua-total">${formatUsd(costs.total)}</strong></div>` +
-        `<select data-control="cost" aria-label="${t("usage.costGrouping")}">${options(["purpose", "model", "provider"], costBy)}</select></div>` +
+        sel(choices("cost"), costBy, t("usage.costGrouping"), ' data-control="cost"') + `</div>` +
         chart(usage.days, costs, t("usage.history"), costBy, "bars", true) + `<p class="ua-note">${t("usage.recordedCosts")}</p>`;
       root.innerHTML += `<section class="ua-section"><h3>${t("usage.members")}</h3>`;
       if (!usage.members.length) root.innerHTML += `<p class="ua-empty">${t("usage.empty")}</p>`;
@@ -152,12 +153,12 @@ export function mountUsageAnalytics(host: HTMLElement, api: UsageAnalyticsApi): 
         `<section class="ua-section"><h3>${t("usage.tools")}</h3><strong class="ua-total">${count(usage.tools.total)}</strong>` +
         chart(usage.days, usage.tools, t("usage.tools"), "tools", "lines") + `<p class="ua-note">${t("usage.retained")}</p></section>` +
         `<section class="ua-section"><div class="ua-section-head"><div><h3>${t("usage.messages")}</h3><strong class="ua-total">${count(usage.messages_by[messageBy].total)}</strong></div>` +
-        `<select data-control="messages" aria-label="${t("usage.messageGrouping")}">${options(["model", "source"], messageBy)}</select></div>` +
+        sel(choices("messages"), messageBy, t("usage.messageGrouping"), ' data-control="messages"') + `</div>` +
         chart(usage.days, usage.messages_by[messageBy], t("usage.messages"), messageBy, "lines") + `</section>`;
       const values = usage.dictation[dictationBy], total = values.reduce((a, b) => a + b, 0);
       const dictation = { total, series: [{ key: dictationBy, label: t(choiceKeys[dictationBy]), values, total, share: 1 }] };
       root.innerHTML += `<section class="ua-section"><div class="ua-section-head"><div><h3>${t("usage.dictation")}</h3><strong class="ua-total">${count(total)}</strong></div>` +
-        `<select data-control="dictation" aria-label="${t("usage.dictation")}">${options(["dictations", "words"], dictationBy)}</select></div>` +
+        sel(choices("dictation"), dictationBy, t("usage.dictation"), ' data-control="dictation"') + `</div>` +
         chart(usage.days, dictation, t("usage.dictation"), "dictation", "bars") + `<p class="ua-note">${t("usage.captureDays")}</p>` +
         (usage.dictation.estimated.some(Boolean) ? `<p class="ua-note ua-estimates">${t("usage.estimates", { dictations: count(usage.dictation.estimated_dictations), words: count(usage.dictation.estimated_words) })}</p>` : "") + `</section>`;
     }
@@ -205,7 +206,15 @@ export function mountUsageAnalytics(host: HTMLElement, api: UsageAnalyticsApi): 
     const button = (event.target as Element).closest<HTMLButtonElement>("button");
     if (!button || button.disabled) return;
     const control = button.dataset.control;
-    if (button.dataset.range) {
+    if (button.matches(".sel") && (control === "cost" || control === "messages" || control === "dictation")) {
+      const current = control === "cost" ? costBy : control === "messages" ? messageBy : dictationBy;
+      openMenu(button, choices(control), current, (value) => {
+        if (control === "cost") costBy = value as typeof costBy;
+        else if (control === "messages") messageBy = value as typeof messageBy;
+        else dictationBy = value as typeof dictationBy;
+        render();
+      });
+    } else if (button.dataset.range) {
       const next = button.dataset.range as UsageRequest["range"];
       if (next !== range) { range = next; void refresh(); }
     } else if (control === "retry") void refresh();
@@ -222,21 +231,12 @@ export function mountUsageAnalytics(host: HTMLElement, api: UsageAnalyticsApi): 
       render();
     }
   }
-  function changed(event: Event): void {
-    const select = event.target as HTMLSelectElement;
-    if (select.dataset.control === "cost") costBy = select.value as typeof costBy;
-    else if (select.dataset.control === "messages") messageBy = select.value as typeof messageBy;
-    else if (select.dataset.control === "dictation") dictationBy = select.value as typeof dictationBy;
-    else return;
-    render();
-  }
   root.addEventListener("focusin", showTooltip);
   root.addEventListener("pointerover", showTooltip);
   root.addEventListener("focusout", hideTooltip);
   root.addEventListener("pointerout", hideTooltip);
   root.addEventListener("keydown", keydown);
   root.addEventListener("click", clicked);
-  root.addEventListener("change", changed);
   window.addEventListener("scroll", hideTooltip, true);
   window.addEventListener("resize", hideTooltip);
   const stopLocale = onLocaleChange(render);
@@ -253,7 +253,6 @@ export function mountUsageAnalytics(host: HTMLElement, api: UsageAnalyticsApi): 
       root.removeEventListener("pointerout", hideTooltip);
       root.removeEventListener("keydown", keydown);
       root.removeEventListener("click", clicked);
-      root.removeEventListener("change", changed);
       window.removeEventListener("scroll", hideTooltip, true);
       window.removeEventListener("resize", hideTooltip);
       root.remove();

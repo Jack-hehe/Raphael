@@ -9,8 +9,8 @@ from .process import Child
 
 # Alias display names are deliberately centralized for CLI releases that expose no model-list API.
 CLAUDE_MODELS = (
-    ("sonnet", "Claude Sonnet 5.5", "Balanced speed and reasoning", ("low", "medium", "high")),
     ("opus", "Claude Opus 5.5", "Complex reasoning and demanding work", ("low", "medium", "high", "max")),
+    ("sonnet", "Claude Sonnet 5.5", "Balanced speed and reasoning", ("low", "medium", "high")),
     ("haiku", "Claude Haiku 5.5", "Fast everyday tasks", ()),
 )
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")

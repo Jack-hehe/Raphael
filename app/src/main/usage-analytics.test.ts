@@ -40,7 +40,7 @@ test("renders all five analytics sections, exact values and estimated dictation 
   const { host, api } = await setup();
   expect(api.usageAnalytics).toHaveBeenCalledWith({ range: "7d", tz: "Asia/Taipei" });
   for (const label of ["用量走勢", "各角色用量", "工具使用", "訊息", "聽寫"]) expect(host.textContent).toContain(label);
-  expect(host.querySelectorAll("svg")).toHaveLength(4);
+  expect(host.querySelectorAll("svg:not(.i)")).toHaveLength(4);
   expect(host.textContent).toContain("100.0%");
   expect(host.textContent).toContain("US$2.00");
   expect(host.textContent).toContain("估算");
@@ -54,9 +54,9 @@ function click(host: HTMLElement, control: string) {
   host.querySelector<HTMLButtonElement>(`[data-control="${control}"]`)!.click();
 }
 function select(host: HTMLElement, control: string, value: string) {
-  const input = host.querySelector<HTMLSelectElement>(`[data-control="${control}"]`)!;
-  input.value = value;
-  input.dispatchEvent(new Event("change", { bubbles: true }));
+  // the app's own dropdown: its button opens a menu, and the menu's item chooses
+  host.querySelector<HTMLButtonElement>(`.sel[data-control="${control}"]`)!.click();
+  document.querySelector<HTMLButtonElement>(`.menu [data-value="${value}"]`)!.click();
 }
 
 test("a chart mark has only our tooltip, never the system's own on top of it", async () => {
@@ -73,7 +73,7 @@ test("a chart mark has only our tooltip, never the system's own on top of it", a
 test("changes cost, message and dictation grouping without another RPC", async () => {
   const { host, api } = await setup();
   select(host, "cost", "provider");
-  expect(host.querySelector(".ua-cost-head select")?.getAttribute("data-control")).toBe("cost");
+  expect(host.querySelector(".ua-cost-head .sel")?.getAttribute("data-control")).toBe("cost");
   expect(host.querySelector(".ua-legend")?.textContent).toContain("openrouter");
   select(host, "messages", "source");
   expect(host.querySelectorAll(".ua-legend")[2]?.textContent).toContain("應用程式");
@@ -154,7 +154,7 @@ test("recovers from an RPC error using the retry button", async () => {
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("無法載入");
   expect(host.textContent).not.toContain("private backend detail");
   click(host, "retry");
-  await vi.waitFor(() => expect(host.querySelectorAll("svg")).toHaveLength(4));
+  await vi.waitFor(() => expect(host.querySelectorAll("svg:not(.i)")).toHaveLength(4));
 });
 
 test("ignores stale responses and pending work after destroy", async () => {
@@ -166,7 +166,7 @@ test("ignores stale responses and pending work after destroy", async () => {
   click(host, "30d");
   expect(resolvers).toHaveLength(2);
   resolvers[1]!(data());
-  await vi.waitFor(() => expect(host.querySelectorAll("svg")).toHaveLength(4));
+  await vi.waitFor(() => expect(host.querySelectorAll("svg:not(.i)")).toHaveLength(4));
   const stale = data(); stale.cost_by.purpose = group("stale", 999);
   resolvers[0]!(stale);
   await mounted.ready;
@@ -221,5 +221,5 @@ test("remounting one host disposes its previous locale listeners and pending req
   expect(host.querySelectorAll(".usage-analytics")).toHaveLength(1);
   expect(host.textContent).toContain("Usage history");
   await old.refresh();
-  expect(host.querySelectorAll("svg")).toHaveLength(4);
+  expect(host.querySelectorAll("svg:not(.i)")).toHaveLength(4);
 });
