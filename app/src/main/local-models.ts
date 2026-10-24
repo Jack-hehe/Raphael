@@ -161,7 +161,7 @@ function rowHTML(model: LocalModel, view: LocalView, confirm: LocalConfirm | nul
     action = btn(esc(t("local.download")), "sm", ` data-act="download" data-name="${esc(model.name)}" aria-label="${esc(t("local.downloadLabel", { p0: model.title, p1: size }))}"`);
   } else if (model.ready && state.kind !== "active" && !busy) {
     const text = t("local.deleteLabel", { p0: model.title });
-    action = `<button type="button" class="lm-del" data-act="delete" data-name="${esc(model.name)}" aria-label="${esc(text)}" title="${esc(text)}">${ico("trash")}</button>`;
+    action = `<button type="button" class="lm-del danger" data-act="delete" data-name="${esc(model.name)}" aria-label="${esc(text)}" title="${esc(text)}">${ico("trash")}</button>`;
   }
   return `${open}${main}${action}</div>`;
 }

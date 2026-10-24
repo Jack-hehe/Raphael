@@ -17,4 +17,3 @@
 .msg-avatar { display: grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-text); font: 700 12px/1 var(--display); }
 .msg-token { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-2); }
 .msg-token .field { width: 240px; max-width: 100%; }
-.btn.sm.danger { color: var(--err); border-color: var(--err); }

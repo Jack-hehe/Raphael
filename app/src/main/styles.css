@@ -20,7 +20,10 @@
 
   /* surfaces: the window (sidebar), the page, the panels on it, a recessed fill */
   --side: #edf2fa; --content: #f7f9fd; --panel: #ffffff; --surface-2: #e7eef8;
-  --edge: #dce4f0; --line: #e1e8f2; --hover: #eaf0f9;
+  --edge: #dce4f0; --line: #e1e8f2;
+  /* Neutral interaction surfaces; blue is reserved for primary and selected states. */
+  --hover: #eceef1; --pressed: #e0e3e7; --hover-edge: #8d9198;
+  --danger-hover: #fff0f3; --danger-pressed: #fce5eb;
   /* text: body, secondary, muted (all at least AA on every surface above) */
   --text: #1b2942; --text-2: #465873; --text-3: #536580;
   --accent: #a8c9ed; --accent-text: #3b64aa; --on-accent: #1b3154; --accent-soft: #e4edf9;
@@ -34,16 +37,18 @@
   --tab-shadow: 0 1px 2px rgba(10, 34, 70, 0.12);
   /* the window's close button under the pointer: Windows' own red, the same in both themes */
   --close: #c42b1c; --on-close: #ffffff;
-  --toast-action: #c8e0f8; --toast-hover: #2e4264;
+  --toast-action: #c8e0f8; --toast-hover: #35383d;
   --heat-0: #e7eef8; --heat-1: #d0e8f8; --heat-2: #b8d0f8; --heat-3: #90b0e0; --heat-4: #5e86c8; --hatch: #c3cede;
-  --scroll-thumb: #bbc8dc; --scroll-hover: #8b9fbe;
+  --scroll-thumb: #bbc8dc; --scroll-hover: #8d9198;
   /* Raphael's own gold, from the emblem: only where he himself asks (the card of his YES/NO question) */
   --rg-bg: #fff7e2; --rg-edge: #e2b85a; --rg-ink: #6b4a08; --rg-btn: #e0a52e; --rg-on: #2b1c00; --rg-glow: rgba(224, 165, 46, 0.22);
   color-scheme: light;
 }
 :root[data-theme="dark"] {
   --side: #121826; --content: #182133; --panel: #1f2a40; --surface-2: #283650;
-  --edge: #303e57; --line: #334159; --hover: #2a3954;
+  --edge: #303e57; --line: #334159;
+  --hover: #343840; --pressed: #3f434b; --hover-edge: #93979e;
+  --danger-hover: #432b36; --danger-pressed: #50303e;
   --text: #edf3fd; --text-2: #c0cee3; --text-3: #a8bad4;
   --accent: #a8ccf2; --accent-text: #b8d8f8; --on-accent: #1b3154; --accent-soft: #2a3e5d;
   --accent-hover: #c8e0f8; --accent-pressed: #90b0e0;
@@ -53,9 +58,9 @@
   --btn: #283650; --btn-edge: #536581; --key: #283650; --key-edge: #536581;
   --track: #34435f; --menu: #1f2a40; --scrim: rgba(7, 13, 26, 0.58);
   --pop: 0 20px 64px rgba(4, 10, 24, 0.48), 0 3px 10px rgba(4, 10, 24, 0.3);
-  --toast-action: #284c82; --toast-hover: #dce8f8;
+  --toast-action: #284c82; --toast-hover: #d8dbe0;
   --heat-0: #283650; --heat-1: #354c70; --heat-2: #5e7da9; --heat-3: #90b0e0; --heat-4: #c8e0f8; --hatch: #465a7a;
-  --scroll-thumb: #465777; --scroll-hover: #8198bf;
+  --scroll-thumb: #465777; --scroll-hover: #93979e;
   --rg-bg: #2a2314; --rg-edge: #b8862a; --rg-ink: #f6d58a; --rg-btn: #f0be55; --rg-on: #2b1c00; --rg-glow: rgba(240, 190, 85, 0.18);
   color-scheme: dark;
 }
@@ -144,7 +149,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .side-fill { flex: 1; min-height: 12px; }
 /* This month's spend, a way into the settings. */
 .usage-box { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; width: 100%; padding: 11px 12px 12px; border-radius: 12px; border: 1px solid var(--edge); background: var(--panel); text-align: left; color: var(--text); }
-.usage-box:hover { border-color: var(--btn-edge); }
+.usage-box:hover { border-color: var(--hover-edge); }
 .usage-t { font-size: var(--fs-xs); color: var(--text-2); }
 .usage-num { font-size: var(--fs-xs); color: var(--text-2); }
 .side-foot { margin-top: var(--sp-2); padding-top: var(--sp-2); border-top: 1px solid var(--line); }
@@ -198,33 +203,34 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .tg[aria-checked="mixed"]::after { transform: translateX(8px); background: var(--accent-text); }
 .sel { display: inline-flex; align-items: center; gap: var(--sp-2); height: var(--h-ctl); max-width: 260px; padding: 0 10px 0 12px; border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--btn); font-size: var(--fs-sm); color: var(--text); }
 .sel > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sel:hover { border-color: var(--text-3); }
+.sel:hover { border-color: var(--hover-edge); }
 .sel:disabled { opacity: 0.55; cursor: default; }
 .sel:disabled:hover { border-color: var(--btn-edge); }
 .sel .i { color: var(--text-2); }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--h-ctl); padding: 6px 13px; border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--btn); font-size: var(--fs-sm); line-height: 1.4; color: var(--text); white-space: nowrap; }
 /* Every action is a button with a shape: an edge at rest, a fill under the pointer, a deeper one
    when pressed. Never a word alone that can be clicked. */
-.btn:hover:not(:disabled) { background: var(--hover); border-color: var(--text-3); }
-.btn:active:not(:disabled) { background: var(--selected); border-color: var(--text-3); filter: none; }
+.btn:hover:not(:disabled) { background: var(--hover); border-color: var(--hover-edge); }
+.btn:active:not(:disabled) { background: var(--pressed); border-color: var(--hover-edge); filter: none; }
 .btn:disabled { opacity: 0.55; cursor: default; }
 .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
-.btn.pri:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-.btn.pri:active { background: var(--accent-pressed); border-color: var(--accent-pressed); }
+.btn.pri:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.pri:active:not(:disabled) { background: var(--accent-pressed); border-color: var(--accent-pressed); }
 .btn.sm { min-height: var(--h-ctl-sm); padding: 4px 10px; font-size: var(--fs-xs); }
 /* A button with an icon only (trash, the close cross, a chevron, search, settings, sliders) has no
    border: only a fill under the pointer, a deeper one when pressed, and the focus ring. A border is
    what tells a button with words in it. A primary one (the approval of a pairing code) keeps its fill. */
 .btn.icon { width: var(--h-ctl); padding: 0; border-color: transparent; background: transparent; color: var(--text-2); }
 .btn.icon:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--text); }
-.btn.icon:active:not(:disabled) { background: var(--selected); border-color: transparent; }
+.btn.icon:active:not(:disabled) { background: var(--pressed); border-color: transparent; }
 :where(:root[data-keys]) .btn.icon:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .btn.icon.pri { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .btn.icon.pri:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--on-accent); }
+.btn.icon.pri:active:not(:disabled) { background: var(--accent-pressed); border-color: var(--accent-pressed); color: var(--on-accent); }
 /* The small one on a row: copy, delete, close, previous month. */
 .btn.icon.row { width: var(--h-ctl-sm); min-height: var(--h-ctl-sm); padding: 0; }
-/* Destructive actions stay distinct before and during confirmation. */
-.btn.danger { color: var(--err); border-color: var(--err); }
+/* Scope interaction tokens so menu, icon and page-specific controls retain destructive intent. */
+.danger { --hover: var(--danger-hover); --pressed: var(--danger-pressed); --hover-edge: var(--err); --btn-edge: var(--err); --text: var(--err); --text-2: var(--err); --text-3: var(--err); --accent-text: var(--err); color: var(--err); }
 /* Form actions share their visual and keyboard order, including narrow, wrapped rows. */
 .action-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-2); min-width: 0; }
 .action-destructive { display: flex; margin-inline-end: auto; }
@@ -348,11 +354,11 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .dsearch { margin-left: auto; display: flex; flex: 1; justify-content: flex-end; min-width: 160px; }
 .dsearch .field { max-width: 260px; }
 .chip { display: inline-flex; align-items: center; height: 26px; border-radius: 13px; border: 1px dashed var(--btn-edge); background: transparent; font-size: var(--fs-xs); color: var(--text); }
-.chip:hover, :where(:root[data-keys]) .chip:focus-within { border-style: solid; border-color: var(--accent); }
+.chip:hover, :where(:root[data-keys]) .chip:focus-within { border-style: solid; border-color: var(--hover-edge); }
 .chip button { display: inline-flex; align-items: center; height: 100%; border: 0; background: transparent; color: inherit; font: inherit; }
 .wgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 18px; }
 .wchip { position: relative; display: flex; align-items: center; gap: var(--sp-2); min-height: 46px; padding: 8px 6px 8px 14px; border-radius: 11px; border: 1px solid var(--edge); background: var(--panel); min-width: 0; }
-.wchip:hover { border-color: var(--btn-edge); }
+.wchip:hover { border-color: var(--hover-edge); }
 .wchip .spark { display: inline-flex; color: var(--accent-text); }
 .wchip .spark .i { fill: currentColor; }
 .wchip .wtext { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
@@ -463,7 +469,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .menu-head { padding: 6px 10px; font-size: var(--fs-xs); color: var(--text-3); text-align: right; border-bottom: 1px solid var(--line); margin-bottom: var(--sp-1); }
 /* An item that does something rather than choose (「重新搜尋麥克風」), after a line under the choices. */
 .menu-sep { height: 1px; margin: 4px 6px; background: var(--line); }
-.menu .menu-action { color: var(--accent-text); }
+.menu .menu-action { color: var(--text); }
 .menu .menu-action[aria-disabled="true"] { color: var(--text-3); cursor: default; }
 /* The languages: one dropdown that says which are chosen, and a panel of them in which a chosen
    language with several written forms has them under it. */

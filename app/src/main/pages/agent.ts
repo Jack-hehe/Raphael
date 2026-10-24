@@ -238,7 +238,7 @@ export function createAgent(app: AppContext): Page {
     `<section class="mb-chat">` +
     `<div class="page-head mb-head"><h1 class="mb-h1">${esc(t("agent.title"))}</h1><span class="mb-head-l"></span><span class="mb-head-c"></span><div class="ra-tools">` +
     iconButton("search", t("agent.search"), ' data-act="search" aria-expanded="false" hidden', "ra-tool") +
-    btn("", "icon ra-tool ra-clear", ' data-act="clear" hidden') +
+    btn("", "icon danger ra-tool ra-clear", ' data-act="clear" hidden') +
     iconButton("sliders", t("agent.settings"), ' data-act="settings"', "ra-tool") +
     `</div></div>` +
     `<div class="ra-find" hidden><span class="ra-find-ic">${ico("search")}</span>` +

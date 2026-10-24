@@ -200,7 +200,7 @@ export function actionRow(o: ActionRowOptions): string {
  * (styles.css `.btn.icon`): a border is what tells a button with words in it.
  */
 export const iconButton = (name: IconName, label: string, attrs = "", cls = ""): string =>
-  `<button type="button" class="btn icon${cls ? " " + cls : ""}" aria-label="${esc(label)}" title="${esc(label)}"${attrs}>${ico(name)}</button>`;
+  `<button type="button" class="btn icon${name === "trash" ? " danger" : ""}${cls ? " " + cls : ""}" aria-label="${esc(label)}" title="${esc(label)}"${attrs}>${ico(name)}</button>`;
 
 /** The small icon button on a row (copy, delete, close): `iconButton` at the row's size, borderless too. */
 export const iconBtn = (name: IconName, label: string, attrs = "", cls = ""): string => iconButton(name, label, attrs, `row${cls ? " " + cls : ""}`);

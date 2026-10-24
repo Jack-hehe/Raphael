@@ -20,7 +20,8 @@
 .mp-head .mp-search .i { color: var(--text-3); }
 .mp-connections { display: flex; flex: none; gap: var(--sp-2); overflow-x: auto; padding: 12px 12px 4px; }
 .menu.mp-panel .mp-connection { flex: none; width: auto; min-height: var(--h-ctl-sm); padding: 4px 10px; border: 1px solid var(--btn-edge); background: var(--btn); border-radius: var(--r-sm); gap: var(--sp-2); white-space: nowrap; }
-.menu.mp-panel .mp-connection[aria-pressed="true"] { border-color: var(--accent-text); color: var(--accent-text); background: var(--hover); }
+.menu.mp-panel .mp-connection:hover { border-color: var(--hover-edge); background: var(--hover); }
+.menu.mp-panel .mp-connection[aria-pressed="true"] { border-color: var(--accent-text); color: var(--accent-text); background: var(--accent-soft); }
 :where(:root[data-keys]) .menu.mp-panel .mp-connection:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; box-shadow: none; }
 .mp-connection .num { color: var(--text-3); font-size: var(--fs-xs); }
 .mp-row-mark { display: inline-flex; flex: none; align-self: center; }
@@ -29,7 +30,7 @@
 .mp-row-mark .mono.md, .mp-row-mark .logo, .mp-row-mark .i { width: 16px; height: 16px; }
 .mp-filters { position: relative; display: flex; flex-wrap: wrap; gap: 6px; }
 .menu.mp-panel .mp-dd { width: auto; max-width: 62%; min-height: 0; height: var(--h-ctl-sm); gap: 6px; padding: 0 8px 0 10px; border: 1px solid var(--btn-edge); border-radius: 7px; background: var(--btn); font-size: var(--fs-xs); color: var(--text-2); }
-.menu.mp-panel .mp-dd:hover { border-color: var(--text-3); background: var(--btn); color: var(--text); }
+.menu.mp-panel .mp-dd:hover { border-color: var(--hover-edge); background: var(--hover); color: var(--text); }
 .menu.mp-panel .mp-dd:focus-visible { background: var(--btn); box-shadow: none; }
 :where(:root[data-keys]) .menu.mp-panel .mp-dd:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .menu.mp-panel .mp-dd[aria-expanded="true"] { color: var(--text); }
@@ -81,7 +82,7 @@
 .menu.mp-panel .tabs.switch { flex: none; margin: 12px 12px 0; }
 .menu.mp-panel .tabs .tab { width: auto; gap: 0; font-size: var(--fs-sm); color: var(--text-2); }
 .menu.mp-panel .tabs .tab:hover { background: var(--hover); color: var(--text); }
-.menu.mp-panel .tabs .tab[aria-selected="true"] { color: var(--text); }
+.menu.mp-panel .tabs .tab[aria-selected="true"] { background: var(--selected); color: var(--text); }
 .tabs.switch + .mp-pane > .mp-head { padding-top: 10px; }
 /* As tall as the cloud tab, so that the panel does not jump between the two. */
 #mp-pane-local .mp-scroll { height: min(520px, calc(100vh - 150px)); }
@@ -101,7 +102,7 @@
 .menu.mp-panel .lm-del:hover { background: var(--hover); color: var(--text); }
 /* A .btn in the menu keeps its border and its fill: ".menu button" would take them away. */
 .menu.mp-panel .lm-row .btn { flex: none; width: auto; justify-content: center; min-height: var(--h-ctl-sm); margin: 4px 4px 0 0; padding: 4px 10px; border: 1px solid var(--btn-edge); border-radius: var(--r-sm); background: var(--btn); font-size: var(--fs-xs); color: var(--text); }
-.menu.mp-panel .lm-row .btn:hover { background: var(--hover); border-color: var(--text-3); }
+.menu.mp-panel .lm-row .btn:hover { background: var(--hover); border-color: var(--hover-edge); }
 .menu.mp-panel .lm-row .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 .menu.mp-panel .lm-row .btn.pri:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .menu.mp-panel .lm-row .btn:focus-visible { box-shadow: none; }

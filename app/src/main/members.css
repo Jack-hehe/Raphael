@@ -34,7 +34,7 @@
 .nav.mb-chief > .av { --av: var(--pa-chief-av) !important; }
 .nav.mb-chief:hover, .nav.mb-chief[aria-current="true"] { background: transparent; }
 .nav.mb-chief b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--pa-chief-fs); font-weight: 650; }
-.nav.mb-chief:hover b { color: var(--accent-text); }
+.nav.mb-chief:hover b { color: var(--text); }
 .nav.mb-chief[aria-current="true"] b { color: var(--accent-text); }
 .nav.mb-chief > .mb-dot { position: absolute; top: 10px; right: 12px; }
 
@@ -89,7 +89,7 @@
 .mb-head .ra-tools { justify-self: end; }
 .page-agent .btn.mb-pill { max-width: min(calc(260px + 140 * var(--pa-u)), 100%); min-height: var(--pa-pill-h); gap: calc(8px + 4 * var(--pa-u)); padding: 3px calc(12px + 8 * var(--pa-u)) 3px calc(5px + 5 * var(--pa-u)); border-radius: var(--r-pill); border-color: var(--edge); background: var(--panel); font-weight: 600; font-size: var(--pa-pill-fs); box-shadow: 0 4px 14px color-mix(in srgb, var(--text) 6%, transparent); }
 .page-agent .btn.mb-pill .av { --av: var(--pa-pill-av) !important; }
-.page-agent .btn.mb-pill:hover:not(:disabled) { border-color: var(--btn-edge); background: var(--panel); }
+.page-agent .btn.mb-pill:hover:not(:disabled) { border-color: var(--hover-edge); background: var(--hover); }
 .mb-pill-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sel.mb-pick { display: none; max-width: 180px; }
 .sel.mb-pick .mb-dot { margin-left: -2px; }
@@ -100,11 +100,12 @@
 .ask-card.is-member { border-color: var(--edge); background: var(--panel); box-shadow: none; animation: none; }
 .ask-card.is-member .ask-q { color: var(--text); }
 .page-agent .ask-card.is-member .btn { border-color: var(--edge); color: var(--text); background: var(--surface-2); }
-.page-agent .ask-card.is-member .btn:hover:not(:disabled) { border-color: var(--edge); background: var(--surface-2); }
+.page-agent .ask-card.is-member .btn:hover:not(:disabled) { border-color: var(--hover-edge); background: var(--hover); }
 .page-agent .ask-card.is-member .ask-fill { background: var(--text-2); }
 .bgq-card.is-member { border-color: var(--edge); background: var(--panel); box-shadow: none; animation: none; }
 .bgq-card.is-member .bgq-q, .bgq-card.is-member .bgq-name { color: var(--text); }
-.bgq-card.is-member .btn, .bgq-card.is-member .btn:hover:not(:disabled) { border-color: var(--edge); color: var(--text); background: var(--surface-2); }
+.bgq-card.is-member .btn { border-color: var(--edge); color: var(--text); background: var(--surface-2); }
+.bgq-card.is-member .btn:hover:not(:disabled) { border-color: var(--hover-edge); background: var(--hover); }
 /* the line of a routine's run, and an exchange between members */
 .sys { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; font-size: var(--pa-sys); color: var(--text-3); }
 .sys .av { --av: var(--pa-sys-face) !important; }
@@ -138,7 +139,7 @@
 .page-agent .btn.mb-avbtn:hover:not(:disabled), .page-agent .btn.mb-avbtn:active:not(:disabled) { border-color: transparent; background: transparent; opacity: 0.85; }
 .mb-who-name { max-width: 100%; font-size: var(--pa-dname); font-weight: 650; overflow-wrap: anywhere; }
 .mb-edit { width: 100%; min-width: 0; padding: 2px 6px; border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; text-align: center; color: var(--text); outline: 0; }
-.mb-edit:hover { border-color: var(--edge); }
+.mb-edit:hover { border-color: var(--hover-edge); }
 .mb-edit:focus-visible { outline: 0; }
 .mb-who-role { font-size: var(--pa-drole); color: var(--text-3); }
 .mb-brain { display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2); max-width: 100%; color: var(--text-2); font-size: var(--fs-sm); }

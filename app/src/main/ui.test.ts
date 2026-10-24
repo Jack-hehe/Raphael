@@ -2,7 +2,13 @@
 import { describe, expect, test } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { btn, menuPlacement, meter, sel, selText, setMeter } from "./ui";
+import { btn, iconButton, iconBtn, menuPlacement, meter, sel, selText, setMeter } from "./ui";
+
+test("trash actions share destructive styling while other icon controls remain neutral", () => {
+  expect(iconButton("trash", "Delete")).toContain('class="btn icon danger"');
+  expect(iconBtn("trash", "Remove", ' data-act="delete"', "mb-tool")).toContain('class="btn icon danger row mb-tool"');
+  expect(iconButton("search", "Search")).not.toContain("danger");
+});
 
 describe("popover placement", () => {
   const viewport = { width: 720, height: 480, headerBottom: 32 };
@@ -108,6 +114,6 @@ describe("the main window's actions", () => {
     const css = read(path.join(root, "styles.css"));
     expect(css).toMatch(/\.btn \{[^}]*border: 1px solid var\(--btn-edge\)/);
     expect(css).toMatch(/\.btn:hover:not\(:disabled\) \{[^}]*background: var\(--hover\)/);
-    expect(css).toMatch(/\.btn:active:not\(:disabled\) \{[^}]*background: var\(--selected\)/);
+    expect(css).toMatch(/\.btn:active:not\(:disabled\) \{[^}]*background: var\(--pressed\)/);
   });
 });
