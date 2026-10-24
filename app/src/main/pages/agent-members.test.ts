@@ -86,6 +86,18 @@ const pick = async (id: number) => {
   await flush();
 };
 
+test("files dropped into a member's thread are sent only to that member", async () => {
+  const agent = mount(); await flush(); await pick(3);
+  const event = new Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: { types: ["Files"], files: [new File(["report"], "report.csv", { type: "text/csv" })] } });
+  agent.el.querySelector(".ra-stage")!.dispatchEvent(event);
+  await flush(); await new Promise(resolve => setTimeout(resolve, 0)); await flush();
+  expect(agent.el.querySelector(".cmp-chip-t")?.textContent).toBe("report.csv");
+  agent.el.querySelector<HTMLFormElement>(".composer")!.requestSubmit(); await flush();
+  expect(api.agentAskText).toHaveBeenCalledWith("", [{ name: "report.csv", mime: "text/csv", data: btoa("report") }], 3);
+  agent.hide();
+});
+
 beforeEach(() => {
   document.body.innerHTML = "";
   for (const fn of Object.values(api)) fn.mockReset();

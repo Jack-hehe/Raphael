@@ -146,6 +146,7 @@ from ..protocol import INVALID_PARAMS, RpcError, invalid_params
 from ..router import Router as RpcRouter
 from ..memory.conversation import Conversation, asks_to_remember
 from ..memory.store import MemoryIndex
+from ..services.attachment_store import AttachmentStore
 from ..services.attachments import MAX_ATTACHMENTS, Attachment, AttachmentError, from_wire
 from ..services.urls import urls_in
 from ..services.urls import SeenUrls
@@ -497,7 +498,9 @@ class AgentService:
         team: Team | None = None,
         speaker: "Speaking | None" = None,
         cli_brains: CliBrains | None = None,
+        attachment_store: AttachmentStore | None = None,
     ) -> None:
+        self._attachment_store = attachment_store
         self._conn = conn
         self._keys = keys
         # Raphael's voice (`services.speaker`): says the answers of the owner's own requests to
@@ -718,6 +721,8 @@ class AgentService:
             return self._done(
                 0, ask.language, "understood", phrase(ask.language, "denied"), silent=True
             )
+        if self._attachment_store and ask.attachments:
+            ask.attachments = [await asyncio.to_thread(self._attachment_store.save, a) for a in ask.attachments]
         ask.voiced = self._voiced(ask.source, ask.speaker.id)
         # The questions that ran out are expired, and a new request replaces those that still wait.
         self._expire(self._confirmations.sweep())
@@ -1572,7 +1577,7 @@ class AgentService:
             )
             jobs.append(self._tool(ask, look, "read_attachment"))
         for number, attachment in files:
-            if attachment.is_pdf:
+            if not attachment.is_image:
                 jobs.append(
                     self._tool(
                         ask,
@@ -2980,7 +2985,7 @@ class AgentService:
                     route="exchange" if ask.nested else route, prefix=prefix, text=text,
                     detail=detail, status=status, cost_usd=cost,
                     source=ask.source, model=ledger.model, steps=ask.steps,
-                    attachments=[{"name": a.name, "mime": a.mime} for a in ask.attachments],
+                    attachments=[a.metadata() for a in ask.attachments],
                     member_id=member_id, peer_id=ask.peer,
                 )
                 ask.turn_id = turn_id

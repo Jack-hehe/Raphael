@@ -41,7 +41,10 @@ async def test_a_photo_from_a_chat_is_asked_about_with_its_file_and_lands_in_the
     assert text.strip()
     (turn,) = (await app.call("agent.history.list", {}))["turns"]
     assert turn["question"] == "看這個"
-    assert turn["attachments"] == [{"name": "photo.png", "mime": "image/png"}]
+    (file,) = turn["attachments"]
+    assert (file["name"], file["mime"], file["size"]) == ("photo.png", "image/png", len(PNG))
+    stored = await app.call("attachments.get", {"id": file["id"]})
+    assert stored["mime"] == "image/png" and stored["data"]
     assert [s["tool"] for s in turn["steps"]] == ["read_attachment"]
 
 

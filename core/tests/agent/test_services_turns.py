@@ -234,7 +234,6 @@ async def test_no_words_and_no_files_is_still_unclear(services_rig, client):
     [
         ("not a list", "data"),
         ([wire("a.png", "image/png", PNG)] * 5, "count"),
-        ([wire("a.exe", "application/x-msdownload", b"MZ")], "type"),
         ([wire("fake.png", "image/png", b"MZ\x90\x00")], "type"),
         ([{"name": "a.png", "mime": "image/png", "data": "!!!"}], "data"),
     ],

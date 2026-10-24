@@ -50,6 +50,7 @@ from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError, invalid_params
 from ..router import Router
 from . import pdf, tts, web
 from .attachments import Attachment
+from .file_reader import read_file, Transcribe
 from .common import ServiceError
 from .fetch import PageFetcher, Resolver, system_resolver
 from .links import LinkPreviews, THUMBNAIL_BYTES
@@ -123,7 +124,9 @@ class ServiceHub:
         models: Callable[[], Sequence[CatalogEntry] | None] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         resolver: Resolver = system_resolver,
+        transcribe: Transcribe | None = None,
     ) -> None:
+        self._transcribe = transcribe
         self._settings = SettingsStore(conn)
         self._keys = keys
         self._models = models
@@ -260,9 +263,8 @@ class ServiceHub:
     async def read_attachment(
         self, attachment: Attachment, question: str, ledger: Ledger
     ) -> tuple[str, dict]:
-        """("image" or "pdf", what the file holds) for `question`: an image as the vision model
-        sees it (`{text}`), a PDF read with the PDF service chosen (`{pages, text, truncated}`).
-        ServiceError of a kind."""
+        """The reader kind and bounded data for a supplied file. Images/PDFs retain their
+        configured services; other files use local extraction or the existing STT callback."""
         if attachment.is_pdf:
             service = self.pdf_service()
             # The scanned pages of a PDF are read as images, so with the images off they stay
@@ -276,7 +278,9 @@ class ServiceHub:
                 ledger=ledger,
             )
             return "pdf", found
-        return "image", await self.vision.look([attachment], question, ledger)
+        if attachment.is_image:
+            return "image", await self.vision.look([attachment], question, ledger)
+        return await read_file(attachment, self._transcribe)
 
     async def look(self, images: Sequence[Attachment], question: str, ledger: Ledger) -> dict:
         """What the vision model sees in several images at once, for `question`: one call."""

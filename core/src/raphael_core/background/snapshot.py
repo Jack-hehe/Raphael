@@ -102,7 +102,8 @@ _DEFINITIONS: dict[str, dict[str, Any]] = {
     "read_attachment": {
         "description": (
             "[Raphael] Read a file the user handed over with the task, by its number (1 for "
-            "the first): the text of a PDF, or what an image shows. Ask a question about it to "
+            "the first): images, PDF/text/Office documents, or transcribed audio/video. Unsupported "
+            "formats return metadata and a reading limitation. Ask a question about it to "
             "say what to look for."
         ),
         "parameters": {
