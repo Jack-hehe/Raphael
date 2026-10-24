@@ -2,11 +2,6 @@
 .owner-profile label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; font-size: var(--fs-sm); }
 .owner-profile .field { width: 100%; min-width: 0; padding: 8px 10px; background: var(--panel); border: 1px solid var(--btn-edge); border-radius: 8px; }
 .owner-profile textarea { resize: vertical; min-height: 110px; }
-.owner-actions { display: flex; align-items:center; flex-wrap: wrap; gap: 8px; }
-.owner-photo-preview { width:40px; height:40px; border-radius:50%; background:var(--surface-2); display:grid; place-items:center; flex:none; }
-.owner-photo-preview .owner-photo { width:40px; height:40px; }
-.owner-photo-preview .i { width:20px; height:20px; color:var(--text-2); }
-.owner-photo { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
 .skin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 12px; }
 .skin-card.btn { display: flex; flex-direction: column; align-items: stretch; padding: 9px; gap: 7px; height: auto; text-align: left; white-space: normal; background: var(--panel); }
 .skin-card[aria-pressed="true"] { outline: 2px solid var(--focus); outline-offset: 1px; }

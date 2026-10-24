@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AgentTurn, AppContext, MainEvent, Member, MembersList, Routine } from "../types";
 
-const api = vi.hoisted(() => ({
+const api = vi.hoisted(() => ({ statusGet: vi.fn(async () => ({ openrouter: { state: "ok" }, spend: { month_usd: 0, limit_usd: 10 } })),
   agentHistoryList: vi.fn(),
   agentHistoryClear: vi.fn(),
   agentHistorySearch: vi.fn(),
@@ -355,7 +355,7 @@ test("routine notifications refresh the open panel immediately and keep the rout
   mount();
   await flush();
   await pick(3);
-  $(".mb-pill").click();
+  $(".mb-col [data-member][aria-current=\"true\"]").click();
   $('[data-tab="routines"]').click();
   const routine: Routine = { id: 9, member_id: 3, title: "Daily review", prompt: "Review", schedule: { kind: "daily", time: "09:00" }, enabled: true, next_run: null, last_run: null };
   api.routinesList.mockResolvedValue({ routines: [routine] });
@@ -384,7 +384,7 @@ test("a chat event refreshes routines even when its explicit change notification
   mount();
   await flush();
   await pick(3);
-  $(".mb-pill").click();
+  $(".mb-col [data-member][aria-current=\"true\"]").click();
   $('[data-tab="routines"]').click();
   const routine = { id: 9, member_id: 3, title: "Created from chat", prompt: "Review", schedule: { kind: "daily", time: "09:00" }, enabled: true, next_run: null, last_run: null };
   api.routinesList.mockResolvedValue({ routines: [routine] });
@@ -418,7 +418,7 @@ test("memory notifications refresh the visible own and shared lists with correct
   mount();
   await flush();
   await pick(3);
-  $(".mb-pill").click();
+  $(".mb-col [data-member][aria-current=\"true\"]").click();
   $('[data-tab="memory"]').click();
   await flush();
   api.core.mockClear();
@@ -502,7 +502,7 @@ describe("a member's thread", () => {
     expect($(".cmp-voice").hidden).toBe(false);
     expect($(".mb-pill-t").textContent).toBe("日文老師");
     // 清除全部 and Raphael's settings are his thread's
-    expect($('[data-act="clear"]').hidden).toBe(true);
+    expect(document.querySelector('[data-act="clear"]')).toBeNull();
     expect($('[data-act="settings"]').hidden).toBe(true);
     $<HTMLTextAreaElement>(".cmp-input").value = "考我";
     $<HTMLFormElement>(".composer").requestSubmit();
@@ -889,14 +889,14 @@ describe("the details panel", () => {
     await vi.runOnlyPendingTimersAsync();
     const panel = $(".mb-det");
     const open = panel.hidden === false;
-    if (!open) $(".mb-pill").click();
+    if (!open) $(".mb-col [data-member][aria-current=\"true\"]").click();
     expect($(".mb-det").hidden).toBe(false);
     expect($(".page-agent").dataset.det).toBe("open");
     $('[data-det="close"]').click();
     await vi.advanceTimersByTimeAsync(200);
     expect($(".mb-det").hidden).toBe(true);
     expect($(".page-agent").dataset.det).toBeUndefined();
-    $(".mb-pill").click();
+    $(".mb-col [data-member][aria-current=\"true\"]").click();
     expect($(".mb-det").hidden).toBe(false);
   });
 
@@ -904,7 +904,7 @@ describe("the details panel", () => {
     mount();
     await flush();
     await pick(3);
-    if ($(".mb-det").hidden) $(".mb-pill").click();
+    if ($(".mb-det").hidden) $(".mb-col [data-member][aria-current=\"true\"]").click();
     api.membersUpdate.mockResolvedValue({ member: { ...LIST.members[1], name: "嚴格老師" } });
     api.membersList.mockResolvedValue({
       ...structuredClone(LIST),

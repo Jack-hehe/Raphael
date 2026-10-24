@@ -87,9 +87,6 @@
 .mb-head-l { justify-self: start; min-width: 0; max-width: 100%; }
 .mb-head-c { justify-self: center; min-width: 0; max-width: 100%; }
 .mb-head .ra-tools { justify-self: end; }
-.page-agent .btn.mb-pill { max-width: min(calc(260px + 140 * var(--pa-u)), 100%); min-height: var(--pa-pill-h); gap: calc(8px + 4 * var(--pa-u)); padding: 3px calc(12px + 8 * var(--pa-u)) 3px calc(5px + 5 * var(--pa-u)); border-radius: var(--r-pill); border-color: var(--edge); background: var(--panel); font-weight: 600; font-size: var(--pa-pill-fs); box-shadow: 0 4px 14px color-mix(in srgb, var(--text) 6%, transparent); }
-.page-agent .btn.mb-pill .av { --av: var(--pa-pill-av) !important; }
-.page-agent .btn.mb-pill:hover:not(:disabled) { border-color: var(--hover-edge); background: var(--hover); }
 .mb-pill-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sel.mb-pick { display: none; max-width: 180px; }
 .sel.mb-pick .mb-dot { margin-left: -2px; }

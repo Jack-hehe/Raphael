@@ -17,7 +17,7 @@
 // (background-questions.ts), answered here only.
 //
 // Raphael's own settings (the question key, the weather city) are the 拉斐爾 tab of Settings, which
-// the sliders button at the top opens; Telegram is in its 訊息平台 tab.
+// the gear button at the top opens; Telegram is in its 訊息平台 tab.
 //
 // The page is also where the members are (members-shell.ts): the member column on the left, the
 // details panel on the right, and the centred pill over the chat. Each member has one thread, as
@@ -76,9 +76,10 @@ import {
   wantsRefresh,
 } from "../timeline";
 import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, MessageQuote, Page, SettingsPane, TurnAttachment, WireAttachment } from "../types";
-import { btn, copyText, esc, ico, iconButton, openPopover, toaster } from "../ui";
+import { copyText, esc, ico, iconButton, openPopover, toaster } from "../ui";
 import { createRoomPane } from "../group-chats";
 import { composerHTML, openComposerMenu } from "../chat-composer";
+import { createProblemNotice } from "../problem-notice";
 import { VoiceMode } from "../voice-mode";
 import "../agent.css";
 import "../members.css";
@@ -91,8 +92,6 @@ const BOTTOM_SLACK_PX = 80;
 const TOP_SLACK_PX = 160;
 /** Events that come together (a task's step and its turn) bring the turns once. */
 const REFRESH_DELAY_MS = 150;
-/** How long 「清除全部」 waits for its second press. */
-const CLEAR_CONFIRM_MS = 4000;
 /** The search waits for the typing to pause this long. */
 const SEARCH_DELAY_MS = 200;
 /** The longest words the search takes (the core's and the app's limit for `agent.history.search`). */
@@ -134,7 +133,7 @@ export function askLabels(q: AgentQuestion | null): { yes: string; no: string; a
   };
 }
 
-/** The sliders button: Settings, open on the 拉斐爾 tab, as the sidebar's 設定 opens it on its first. */
+/** The gear button: Settings, open on the 拉斐爾 tab, as the sidebar's 設定 opens it on its first. */
 export function openRaphaelSettings(app: Pick<AppContext, "go">): void {
   app.go("settings", "agent");
 }
@@ -231,10 +230,10 @@ export function createAgent(app: AppContext): Page {
   el.hidden = true;
   el.innerHTML =
     `<section class="mb-chat">` +
-    `<div class="page-head mb-head"><h1 class="mb-h1">${esc(t("agent.title"))}</h1><span class="mb-head-l"></span><span class="mb-head-c"></span><div class="ra-tools">` +
+    `<div class="page-head mb-head"><h1 class="mb-h1">${esc(t("agent.title"))}</h1><span class="mb-head-l">` +
     iconButton("search", t("agent.search"), ' data-act="search" aria-expanded="false" hidden', "ra-tool") +
-    btn("", "icon danger ra-tool ra-clear", ' data-act="clear" hidden') +
-    iconButton("sliders", t("agent.settings"), ' data-act="settings"', "ra-tool") +
+    `</span><span class="mb-head-c"></span><div class="ra-tools">` +
+    iconButton("gear", t("agent.settings"), ' data-act="settings"', "ra-tool") +
     `</div></div>` +
     `<div class="ra-find" hidden><span class="ra-find-ic">${ico("search")}</span>` +
     `<input type="search" class="ra-find-input" autocomplete="off" spellcheck="false" maxlength="${SEARCH_MAX_CHARS}">` +
@@ -250,7 +249,6 @@ export function createAgent(app: AppContext): Page {
     `</section>`;
   const heading = el.querySelector<HTMLElement>("h1")!;
   const searchButton = el.querySelector<HTMLElement>('[data-act="search"]')!;
-  const clearButton = el.querySelector<HTMLElement>('[data-act="clear"]')!;
   const settingsButton = el.querySelector<HTMLElement>('[data-act="settings"]')!;
   const find = el.querySelector<HTMLElement>(".ra-find")!;
   const findInput = el.querySelector<HTMLInputElement>(".ra-find-input")!;
@@ -278,10 +276,12 @@ export function createAgent(app: AppContext): Page {
     app,
     onOpenConversation: (member, conversation, turn) => openConversation(member, conversation, turn),
     visible: () => visible,
+    focusHeader: () => conversationButton.focus({ preventScroll: true }),
     onSelect: () => switchThread(),
     onUpdate: () => {
       drawComposer();
       drawFaces();
+      drawConversation();
       hi.textContent = emptyLine();
       if (visible && !scroller.hidden) drawThread();
     },
@@ -293,8 +293,10 @@ export function createAgent(app: AppContext): Page {
   const head = document.createElement("div"); head.className = "conversation-head";
   const conversationButton = document.createElement("button");
   conversationButton.type = "button"; conversationButton.className = "btn conversation-trigger";
-  conversationButton.setAttribute("aria-haspopup", "menu"); conversationButton.setAttribute("aria-expanded", "false");
-  head.append(members.pill, document.createTextNode(" / "), conversationButton);
+  conversationButton.setAttribute("aria-haspopup", "dialog"); conversationButton.setAttribute("aria-expanded", "false");
+  const caption = document.createElement("span"); caption.className = "conversation-caption";
+  conversationButton.append(members.pill, caption);
+  head.append(conversationButton);
   el.querySelector(".mb-head-c")!.append(head);
   const chosenConversations = new Map<number, number>();
   const conversationCache = new Map<number, ConversationInfo[]>();
@@ -302,6 +304,7 @@ export function createAgent(app: AppContext): Page {
   let targetTurn: number | undefined;
   const quotaHost = document.createElement("div"); quotaHost.className = "quota-chips";
   quotaHost.hidden = true;
+  const problemNotice = createProblemNotice(app, () => { if (!problemNotice.el.hidden) composer.before(problemNotice.el); });
   let quotas: { provider: string; reset_at_ms: number | null }[] = [];
   let quotaTimer: ReturnType<typeof setTimeout> | undefined;
   const conversationId = (): number | undefined => chosenConversations.get(memberId());
@@ -310,8 +313,8 @@ export function createAgent(app: AppContext): Page {
   function drawConversation(): void {
     const selected = conversationCache.get(memberId())?.find(c => c.id === conversationId());
     const title = conversationTitle(selected);
-    conversationButton.innerHTML = `<span class="conversation-caption">${esc(title)}</span>${ico("down")}`;
-    conversationButton.setAttribute("aria-label", title); conversationButton.title = title;
+    caption.textContent = title;
+    conversationButton.setAttribute("aria-label", `${members.member().name}: ${title}`); conversationButton.title = title;
   }
 
   async function readConversations(member: number): Promise<void> {
@@ -339,7 +342,7 @@ export function createAgent(app: AppContext): Page {
   conversationButton.addEventListener("click", () => {
     conversationList?.destroy();
     const panel = openPopover(conversationButton, `<div class="conversation-menu-list"></div>`, { className: "menu conversation-picker", role: "dialog", label: t("conversations.search"), onClose() { conversationList?.destroy(); conversationList = null; } });
-    conversationList = mountConversationList(panel.querySelector<HTMLElement>(".conversation-menu-list")!, { memberId: memberId(), onOpen: id => openConversation(memberId(), id) });
+    conversationList = mountConversationList(panel.querySelector<HTMLElement>(".conversation-menu-list")!, { memberId: memberId(), manage: false, onOpen: id => openConversation(memberId(), id) });
     panel.querySelector<HTMLInputElement>("input")?.focus();
   });
   window.addEventListener("conversations-changed", (event) => {
@@ -445,12 +448,7 @@ export function createAgent(app: AppContext): Page {
   const previews = createLinkPreviews(scroller, url => api.core<LinkPreview | null>("links.preview", { url }));
   const regenerating = new Set<number>();
   const messageResize = typeof ResizeObserver === "function" ? new ResizeObserver(() => measureMessages()) : null;
-  /** While the toast of 「清除全部」 waits: the turns up to this id are left out. */
-  let clearedUpTo = 0;
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-  /** 「清除全部」 was pressed once: a second press within a few seconds clears. */
-  let confirmingClear = false;
-  let clearTimer: ReturnType<typeof setTimeout> | undefined;
   let ticker: ReturnType<typeof setInterval> | null = null;
   /** Questions typed here whose turns have not come yet. */
   let outgoing: Outgoing[] = [];
@@ -513,14 +511,13 @@ export function createAgent(app: AppContext): Page {
   let drewOnce = false;
 
   const atBottom = (): boolean => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= BOTTOM_SLACK_PX;
-  const shownTurns = (): AgentTurn[] => turns.filter((turn) => turn.id > clearedUpTo);
   const newestId = (): number => turns.reduce((max, turn) => Math.max(max, turn.id), 0);
   const isEmpty = (): boolean =>
-    shownTurns().length === 0 && !outgoing.some(belongs) && hearing?.member !== memberId();
+    turns.length === 0 && !outgoing.some(belongs) && hearing?.member !== memberId();
 
   const look = (): TurnLook => {
-    const latest = shownTurns().filter(turn => turn.question.trim() && sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && turn.route !== "exchange" && (turn.text.trim() || turn.messages?.some(m => m.kind === "reply"))).reduce((id, turn) => Math.max(id, turn.id), 0);
-    const busy = pacing.active || regenerating.size > 0 || outgoing.some(belongs) || shownTurns().some(turn => turn.status === "running" || isLive(turn.task));
+    const latest = turns.filter(turn => turn.question.trim() && sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && turn.route !== "exchange" && (turn.text.trim() || turn.messages?.some(m => m.kind === "reply"))).reduce((id, turn) => Math.max(id, turn.id), 0);
+    const busy = pacing.active || regenerating.size > 0 || outgoing.some(belongs) || turns.some(turn => turn.status === "running" || isLive(turn.task));
     const shared = { regenerateTurnId: busy ? undefined : latest, revealing: (id: number) => pacing.waiting(id), query: searching ? query : "", openExchanges, memberName: members.nameOf, memberFace: (id: number) => members.faceOf(id, 18) };
     if (inRaphael()) return { ...shared, face: (loop) => avatarHTML({ size: 26, loop }) };
     const member = members.member();
@@ -546,15 +543,6 @@ export function createAgent(app: AppContext): Page {
   });
 
   // ---------- drawing ----------
-
-  /** The trash button: an icon, and the words of the question while it waits for the second press. */
-  function drawClear(): void {
-    const label = confirmingClear ? t("agent.clearConfirm") : t("agent.clear");
-    clearButton.classList.toggle("is-confirm", confirmingClear);
-    clearButton.setAttribute("aria-label", label);
-    clearButton.title = label;
-    clearButton.innerHTML = ico("trash") + (confirmingClear ? `<span>${esc(label)}</span>` : "");
-  }
 
   /**
    * The face of who the thread is with, where the composer, the card and the empty page show it:
@@ -605,9 +593,9 @@ export function createAgent(app: AppContext): Page {
     findInput.setAttribute("aria-label", t("agent.search"));
     hi.textContent = emptyLine();
     drawAskLabels();
+    drawConversation();
     askCard.setAttribute("aria-label", t("agent.asking"));
     drawFile();
-    drawClear();
     drawQuote();
   }
 
@@ -676,9 +664,10 @@ export function createAgent(app: AppContext): Page {
     if (backgroundSlot.parentElement !== home) home.prepend(backgroundSlot);
     if (composer.parentElement !== home) home.append(composer);
     if (!quotaHost.hidden && quotaHost.nextElementSibling !== composer) home.insertBefore(quotaHost, composer);
+    if (!problemNotice.el.hidden) home.insertBefore(problemNotice.el, composer);
     const asking = question !== null && questionOwner === memberId() &&
       (question.conversation_id !== undefined ? question.conversation_id === conversationId() : conversationCache.get(memberId())?.find(c => c.id === conversationId())?.is_default !== 0);
-    const waitingTurn = [...shownTurns()].reverse().find((turn) => turn.status === "confirm");
+    const waitingTurn = [...turns].reverse().find((turn) => turn.status === "confirm");
     const inline = asking && waitingTurn ? thread.querySelector<HTMLElement>(`[data-question-turn="${waitingTurn.id}"]`) : null;
     const cardHome = inline ?? home;
     if (askCard.parentElement !== cardHome) cardHome.append(askCard);
@@ -704,7 +693,7 @@ export function createAgent(app: AppContext): Page {
 
   /** One line of the thread as HTML, with the key it keeps across draws. */
   function lines(): { key: string; html: string; turnId?: number }[] {
-    const base = searching && query.trim() !== "" ? (found ?? shownTurns().filter((turn) => turnMatches(turn, query))) : shownTurns();
+    const base = searching && query.trim() !== "" ? (found ?? turns.filter((turn) => turnMatches(turn, query))) : turns;
     const shape = look();
     const out = threadItems(base, state.nowMs).map((item) =>
       item.kind === "day"
@@ -777,13 +766,11 @@ export function createAgent(app: AppContext): Page {
       wait.innerHTML = loadingHTML();
       wait.hidden = false;
       scroller.hidden = empty.hidden = dock.hidden = true;
-      searchButton.hidden = clearButton.hidden = true;
+      searchButton.hidden = true;
       return;
     }
     wait.hidden = true;
-    const shown = shownTurns();
-    // 清除全部 empties Raphael's conversation; a member's thread goes with the member
-    clearButton.hidden = shown.length === 0 || !inRaphael();
+    const shown = turns;
     searchButton.hidden = shown.length === 0;
     if (shown.length === 0 && searching) closeSearch(false);
     if (isEmpty()) {
@@ -823,7 +810,7 @@ export function createAgent(app: AppContext): Page {
   function tick(): void {
     const now = Date.now();
     state.nowMs = now;
-    for (const turn of shownTurns().filter(turn => turn.status === "running" || isLive(turn.task))) {
+    for (const turn of turns.filter(turn => turn.status === "running" || isLive(turn.task))) {
       const label = thread.querySelector<HTMLElement>(`[data-thinking-turn="${turn.id}"] .work-time`);
       if (label) label.textContent = t("chat.workingFor", { p0: Math.max(0, Math.round((now - turn.created_at_ms) / 1000)) });
     }
@@ -1254,48 +1241,12 @@ export function createAgent(app: AppContext): Page {
     render(true);
   }
 
-  // ---------- 清除全部 ----------
-
-  /** A first press asks; the second clears the page at once and the core when the toast has run out. */
-  function clearAll(): void {
-    const shown = shownTurns();
-    if (shown.length === 0) return;
-    if (!confirmingClear) {
-      confirmingClear = true;
-      drawClear();
-      clearTimeout(clearTimer);
-      clearTimer = setTimeout(() => {
-        confirmingClear = false;
-        drawClear();
-      }, CLEAR_CONFIRM_MS);
-      return;
-    }
-    clearTimeout(clearTimer);
-    confirmingClear = false;
-    drawClear();
-    clearedUpTo = Math.max(...shown.map((turn) => turn.id));
-    render();
-    app.undo.begin({
-      message: t("agent.cleared"),
-      commit: async () => {
-        await api.agentHistoryClear();
-        forgetTurns();
-      },
-      restore: () => {
-        clearedUpTo = 0;
-        render(true);
-      },
-      failure: (err) => t("undo.001", { p0: () => describeError(err) }),
-    });
-  }
-
   /** The conversation is gone in the core: the page drops every turn it loaded and shows the empty page. */
   function forgetTurns(): void {
     pacing.flush();
     turns = [];
     state.stopping.clear();
     forgetReruns(state, turns);
-    clearedUpTo = 0;
     canLoadEarlier = false;
     newestDrawn = 0;
     if (visible) render();
@@ -1308,9 +1259,6 @@ export function createAgent(app: AppContext): Page {
     pending = false;
     loadingEarlier = false;
     failure = null;
-    clearTimeout(clearTimer);
-    confirmingClear = false;
-    drawClear();
     forgetTurns();
   });
 
@@ -1382,7 +1330,6 @@ export function createAgent(app: AppContext): Page {
     loadingEarlier = false;
     pending = false;
     failure = null;
-    clearedUpTo = 0;
     newestDrawn = 0;
     drewOnce = false;
     details.clear();
@@ -1653,7 +1600,7 @@ export function createAgent(app: AppContext): Page {
   async function cancelMessage(control?: HTMLElement): Promise<void> {
     const source = control ? messageSource(control) : null;
     const pending = control ? outgoing.find(item => item.requestId === control.closest<HTMLElement>("[data-session]")?.dataset.session) : [...outgoing].reverse().find(item => item.member === memberId());
-    const turn = pending ? turns.find(turn => turn.session_id === pending.requestId) : source?.turn ?? (!control ? shownTurns().find(turn => sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && (turn.status === "running" || turn.status === "confirm" || isLive(turn.task) || turn.task?.state === "waiting")) : undefined);
+    const turn = pending ? turns.find(turn => turn.session_id === pending.requestId) : source?.turn ?? (!control ? turns.find(turn => sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && (turn.status === "running" || turn.status === "confirm" || isLive(turn.task) || turn.task?.state === "waiting")) : undefined);
     const session = pending?.requestId ?? turn?.session_id;
     if (!session || retracting.has(session)) return;
     const member = memberId(), sentConversation = conversationId();
@@ -1686,9 +1633,6 @@ export function createAgent(app: AppContext): Page {
     const act = (e.target as Element).closest<HTMLElement>("[data-act]");
     if (!act || (act as HTMLButtonElement).disabled) return;
     switch (act.dataset.act) {
-      case "clear":
-        clearAll();
-        break;
       case "settings":
         openRaphaelSettings(app);
         break;
@@ -1999,6 +1943,7 @@ export function createAgent(app: AppContext): Page {
     show(arg) {
       const wasVisible = visible;
       visible = true;
+      problemNotice.show();
       messageResize?.observe(scroller);
       dropResize?.observe(stage);
       dropResize?.observe(composer);
@@ -2035,6 +1980,7 @@ export function createAgent(app: AppContext): Page {
       pacing.flush();
       loadedThread = false;
       visible = false;
+      problemNotice.hide();
       closeLightbox?.();
       resetDrop();
       attachmentMedia.reset();
@@ -2043,11 +1989,8 @@ export function createAgent(app: AppContext): Page {
       dropResize?.disconnect();
       members.hide();
       input.dispatchEvent(new Event("blur"));
-      clearTimeout(clearTimer);
       clearTimeout(holdTimer);
       clearTimeout(listenTimer);
-      confirmingClear = false;
-      drawClear();
       loads++;
       loadingEarlier = false;
       stopTicker();

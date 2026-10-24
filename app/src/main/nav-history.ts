@@ -3,7 +3,7 @@
 // Alt+Left / Alt+Right take the steps (nav-input.ts); main.ts says where the window is and puts it
 // where a step lands. Nothing here reads the page, so the rules can be tested without a browser.
 
-import type { PageId, SettingsPane } from "./types";
+import type { DictationTab, PageId, SettingsPane } from "./types";
 
 /** How many places are kept; the oldest go first. */
 export const NAV_LIMIT = 50;
@@ -16,10 +16,11 @@ export interface Place {
   pane?: SettingsPane;
   /** The one day, `2026-10-14`, that the history shows; absent for all days, and on any other page. */
   day?: string;
+  tab?: DictationTab;
 }
 
 /** Whether the page on screen is the same, whatever is open over it. */
-export const samePage = (a: Place, b: Place): boolean => a.page === b.page && a.day === b.day;
+export const samePage = (a: Place, b: Place): boolean => a.page === b.page && a.day === b.day && a.tab === b.tab;
 
 /** Whether the window looks the same at both: the same page, and the same tab open over it if any. */
 export const samePlace = (a: Place, b: Place): boolean => samePage(a, b) && a.pane === b.pane;

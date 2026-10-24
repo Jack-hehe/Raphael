@@ -48,21 +48,19 @@ describe("a clear of 資料 is heard by the pages that show it", () => {
     expect(said).toBeGreaterThan(core);
   });
 
-  test("the history, the 拉斐爾 page and home listen, and the window hands every page the same signal", () => {
+  test("the history, conversation and dictation overview listen, and the window hands every page the same signal", () => {
     expect(source("pages/history.ts")).toContain('app.cleared.on("dictation"');
     expect(source("pages/agent.ts")).toContain('app.cleared.on("conversation"');
-    const home = source("pages/home.ts");
-    expect(home).toContain('app.cleared.on("dictation"');
-    expect(home).toContain('app.cleared.on("conversation"');
+    const overview = source("pages/dictation-overview.ts");
+    expect(overview).toContain('app.cleared.on("dictation"');
     expect(source("main.ts")).toContain("cleared: new Cleared()");
   });
 
-  test("the 拉斐爾 page forgets its turns the same way for its own 清除全部 and for the settings' clear", () => {
+  test("the conversation page drops loaded turns and pending reads when settings clears its data", () => {
     const agent = source("pages/agent.ts");
     const listener = /app\.cleared\.on\("conversation", \(\) => \{([\s\S]*?)\n  \}\);/.exec(agent)![1];
     expect(listener).toContain("forgetTurns()");
     expect(listener).toContain("loads++"); // a load that started before the clear brings nothing back
-    const own = agent.slice(agent.indexOf("function clearAll"));
-    expect(/await api\.agentHistoryClear\(\);\s*forgetTurns\(\);/.test(own)).toBe(true);
+    expect(agent).not.toContain("function clearAll");
   });
 });

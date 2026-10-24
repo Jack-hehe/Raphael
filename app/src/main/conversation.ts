@@ -1,15 +1,12 @@
 // The conversation with Raphael as the main window shows it (`agent.history.list`): one thread of
 // every turn, by voice, from a chat app or typed in the 拉斐爾 page, oldest first under the days
-// they were had; and the small list of the home page. The person's words are in 「…」 and Raphael's
+// they were had. The person's words are in 「…」 and Raphael's
 // in 《prefix。text》. The functions that make HTML put every word that came from the core or from
 // the person through `esc` first.
 
-import { t } from "./i18n";
-
-import { replyLine, userLine } from "../shared/anime";
-import { dayLabel, formatClock } from "./format";
-import type { AgentTurn } from "./types";
 import { esc } from "./ui";
+import { dayLabel } from "./format";
+import type { AgentTurn } from "./types";
 
 /** A question said to the emblem (the key and the overlay): the core's default source. */
 export const VOICE = "voice";
@@ -129,21 +126,4 @@ export function refreshTurns(
 /** The id to ask the core for the turns before, or undefined for the first page. */
 export function oldestId(turns: readonly AgentTurn[]): number | undefined {
   return turns.length === 0 ? undefined : Math.min(...turns.map((turn) => turn.id));
-}
-
-/** When a turn happened, short: the time today, 「昨天」, or the date. */
-export function turnStamp(ms: number, nowMs: number): string {
-  const label = dayLabel(ms, nowMs);
-  return label === t("format.001") ? formatClock(ms) : label;
-}
-
-/** A turn in the small list of the home page: when, what was said, what was answered. */
-export function miniTurnHTML(turn: AgentTurn, nowMs: number): string {
-  return (
-    `<div class="mini-turn" data-id="${esc(turn.id)}">` +
-    `<div class="mini-time num">${esc(turnStamp(turn.created_at_ms, nowMs))}</div>` +
-    (turn.question.trim() !== "" ? `<div class="mini-q">${esc(userLine(turn.question))}</div>` : "") +
-    `<div class="mini-a">${esc(replyLine(turn.prefix, turn.text))}</div>` +
-    `</div>`
-  );
 }

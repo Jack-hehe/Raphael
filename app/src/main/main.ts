@@ -1,4 +1,4 @@
-// The main window: a sidebar with home, Raphael's conversations, history and dictionary, this
+// The main window: Raphael conversations first, automation, team and dictation, this
 // month's spend and the way to the settings at the bottom, and the page that is chosen. The
 // settings open as a panel over the window. The pages are in pages/; this file holds what they
 // share. On the 拉斐爾 page the sidebar is a rail of its icons alone (52 px), to leave room for the
@@ -17,10 +17,11 @@ import { configureRooms } from "./group-chats";
 import { createAgent } from "./pages/agent";
 import { createDictionary } from "./pages/dictionary";
 import { createHistory } from "./pages/history";
-import { createHome } from "./pages/home";
+import { createDictationOverview } from "./pages/dictation-overview";
+import { createDictation } from "./pages/dictation";
 import { createSettings } from "./pages/settings";
-import { createNavigationPage, registerNavigationPages } from "./navigation-pages";
-import { applySkin, ownerButtonHTML } from "./owner-settings";
+import { createNavigationPage, registerNavigationPages, resolvePage, START_PAGE } from "./navigation-pages";
+import { applySkin } from "./owner-settings";
 import { DeviceState } from "./device";
 import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
@@ -31,11 +32,11 @@ import { installWindowHotkeys } from "./window-hotkeys";
 import { installFocusKeys } from "./focus-keys";
 import { followTray } from "./tray-open";
 import { installWindowChrome, labelWindowControls, showMaximized } from "./window-chrome";
-import type { AgentDraft, AppContext, DeviceSettings, MainEvent, Page, PageId, SettingsPane } from "./types";
+import type { AgentDraft, AppContext, DeviceSettings, MainEvent, MainPageId, Page, PageId, SettingsPane } from "./types";
 import { spendMini } from "./spend";
 import { Undoable } from "./undo";
 import { Cleared } from "./cleared";
-import { type IconName, closeMenu, esc, ico, leave, openMenu, openMenuOnArrow, toaster } from "./ui";
+import { type IconName, esc, ico, leave, toaster } from "./ui";
 import "./styles.css";
 
 /** The glyph ring texture (app/public/brand/glyph-ring.png); if it fails to load the emblem draws a plain ring. */
@@ -60,21 +61,18 @@ const DEFAULT_DEVICE: DeviceSettings = {
 /** A page that comes on screen again within this time of the last time is not loaded again. */
 const RESHOW_MS = 1000;
 
-/** The pages of the sidebar. 拉斐爾's picture is Raphael's face (avatar.ts), not an icon. */
-const NAV: { id: Exclude<PageId, "settings">; name: string; icon: IconName | "face" }[] = [
-  { id: "home", get name() { return t("main.001"); }, icon: "home" },
+/** Rail destinations; Raphael uses his face rather than a line icon. */
+const NAV: { id: MainPageId; name: string; icon: IconName | "face" }[] = [
   { id: "agent", get name() { return t("nav.agent"); }, icon: "face" },
   { id: "automations", get name() { return t("nav.automations"); }, icon: "repeat" },
   { id: "team", get name() { return t("nav.team"); }, icon: "grid" },
-  { id: "history", get name() { return t("main.002"); }, icon: "clock" },
-  { id: "dictionary", get name() { return t("main.003"); }, icon: "book" },
+  { id: "dictation", get name() { return t("nav.dictation"); }, icon: "mic" },
 ];
 
 // ---------- the theme ----------
 
 const prefersDark = matchMedia("(prefers-color-scheme: dark)");
 let skin = "default";
-let ownerPhoto = "";
 /** The device settings, kept right when reads and writes overlap. */
 const device = new DeviceState(
   DEFAULT_DEVICE,
@@ -157,12 +155,13 @@ async function start(): Promise<void> {
 
   const history = createHistory(ctx);
   const dictionary = createDictionary(ctx);
-  const home = createHome(ctx);
+  const overview = createDictationOverview(ctx);
+  const dictation = createDictation(ctx, { overview, history, dictionary }, tab => navigation.visit(() => { dictation.setTab(tab); main.scrollTop = 0; }));
   const agent = createAgent(ctx);
   const settings = createSettings(ctx);
   configureRooms(ctx);
   registerNavigationPages({ automations: createAutomationsPage, team: createTeamPage });
-  const pages: Record<PageId, Page> = { home, agent, history, dictionary, settings, automations: createNavigationPage("automations", ctx), team: createNavigationPage("team", ctx) };
+  const pages: Record<MainPageId | "settings", Page> = { dictation, agent, settings, automations: createNavigationPage("automations", ctx), team: createNavigationPage("team", ctx) };
 
   const nav = document.getElementById("nav")!;
   const main = document.getElementById("main")!;
@@ -174,7 +173,7 @@ async function start(): Promise<void> {
     NAV.map((item) => button(item.id, item.name, item.icon)).join("") +
     `<div class="side-fill"></div>` +
     `<button type="button" class="usage-box" data-go="settings" data-pane="usage" hidden></button>` +
-    `<div class="side-foot">${ownerButtonHTML(ownerPhoto)}</div>`;
+    `<div class="side-foot">${button("settings", t("nav.settings"), "gear")}</div>`;
   const usageBox = nav.querySelector<HTMLElement>(".usage-box")!;
   const agentItem = nav.querySelector<HTMLElement>('.nav[data-go="agent"]')!;
   // 拉斐爾 shows Raphael's face, the person's picture once there is one.
@@ -196,8 +195,7 @@ async function start(): Promise<void> {
     homeButton.title = t("nav.home");
     markQuestion(waitingQuestion);
     for (const item of NAV) labelNavItem(nav, item.id, item.name);
-    nav.querySelector<HTMLElement>(".nav-bottom span")!.textContent = t("nav.you");
-    nav.querySelector<HTMLElement>("[data-owner-menu]")!.setAttribute("aria-label", t("nav.you"));
+    labelNavItem(nav, "settings", t("nav.settings"));
     nameRailItems();
   }
 
@@ -206,7 +204,7 @@ async function start(): Promise<void> {
   /** In the rail each icon says its page in its tooltip; in the whole sidebar the name is beside it. */
   function nameRailItems(): void {
     nav.querySelectorAll<HTMLElement>(".nav").forEach((item) => {
-      const name = item.querySelector(".nav-t, .nav-bottom span")?.textContent ?? "";
+      const name = item.querySelector(".nav-t")?.textContent ?? "";
       if (rail && name) item.title = name;
       else item.removeAttribute("title");
     });
@@ -222,37 +220,14 @@ async function start(): Promise<void> {
     void refreshUsage();
   });
   nav.addEventListener("click", (e) => {
-    const owner = (e.target as Element).closest<HTMLElement>("[data-owner-menu]");
-    if (owner) {
-      openMenu(owner, [
-        { value: "usage", label: t("nav.usage") }, { value: "general", label: t("nav.settings") },
-        { value: "help", label: t("nav.help") }, { value: "about", label: t("common.about") },
-      ], "", value => {
-        closeMenu();
-        if (value === "help") void api.openExternalUrl("https://github.com/Jack-hehe/Raphael/issues").catch(error => toaster.info(String(error)));
-        else go("settings", value as SettingsPane);
-      });
-      return;
-    }
     const target = (e.target as Element).closest<HTMLElement>("[data-go]");
     if (target) go(target.dataset.go as PageId, target.dataset.pane as SettingsPane | undefined);
-  });
-  nav.addEventListener("keydown", event => {
-    const owner = (event.target as Element).closest<HTMLElement>("[data-owner-menu]");
-    if (owner && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); event.stopPropagation(); owner.click(); }
-    else openMenuOnArrow(event);
   });
   async function refreshOwner(): Promise<void> {
     try {
       const { settings: value } = await api.settingsGet();
       skin = value.skin ?? "default";
-      ownerPhoto = value.owner_photo ?? "";
       applyTheme();
-      const old = nav.querySelector<HTMLElement>("[data-owner-menu]");
-      const focused = old === document.activeElement;
-      if (old) old.outerHTML = ownerButtonHTML(ownerPhoto);
-      if (focused) nav.querySelector<HTMLElement>("[data-owner-menu]")?.focus();
-      nameRailItems();
     } catch { /* The window remains usable while the core restarts. */ }
   }
   ctx.onEvent(event => { if (event.type === "SettingsChanged") void refreshOwner(); });
@@ -260,10 +235,10 @@ async function start(): Promise<void> {
   for (const page of Object.values(pages)) if (page !== settings) main.append(page.el);
   // The panel goes before the window controls, which come last in the document.
   document.getElementById("window-chrome")!.before(settings.el);
-  // Keep the version outside the scroll container's containing block.
-  document.querySelector(".wbody")!.append(pages.home.el.querySelector(".home-version")!);
+  // Keep the overview version outside the scroll container's containing block.
+  document.querySelector(".wbody")!.append(overview.el.querySelector(".home-version")!);
 
-  let current: Exclude<PageId, "settings"> | null = null;
+  let current: MainPageId | null = null;
   let settingsOpen = false;
   /** What had the focus before the settings opened: it gets it back when they close. */
   let opener: HTMLElement | null = null;
@@ -287,7 +262,8 @@ async function start(): Promise<void> {
     if (!current) return null;
     const place: Place = { page: current };
     if (settingsOpen) place.pane = settings.pane();
-    const day = current === "history" ? history.day() : null;
+    if (current === "dictation") place.tab = dictation.tab();
+    const day = current === "dictation" && dictation.tab() === "history" ? history.day() : null;
     if (day !== null) place.day = day;
     return place;
   }
@@ -303,7 +279,8 @@ async function start(): Promise<void> {
       const here = where();
       // Back from the settings panel only closes it: the page under it is on screen already.
       if (!here || !samePage(here, place)) {
-        if (place.page === "history") history.setDay(place.day ?? null);
+        if (place.page === "dictation" && place.tab) dictation.setTab(place.tab, false);
+        if (place.tab === "history" || place.page === "history") history.setDay(place.day ?? null);
         showPage(place.page);
       }
       if (place.pane !== undefined) openSettings(place.pane);
@@ -327,9 +304,11 @@ async function start(): Promise<void> {
    * Shows a page in place of the one on screen. A page that comes on screen fades in and rises a
    * little (styles.css, on its becoming visible); the same page shown again stands still.
    */
-  function showPage(id: Exclude<PageId, "settings">, arg?: SettingsPane | AgentDraft): void {
+  function showPage(target: Exclude<PageId, "settings">, arg?: SettingsPane | AgentDraft): void {
+    const { page: id, tab } = resolvePage(target);
     if (settingsOpen) closeSettings(false);
     if (current && current !== id) pages[current].hide();
+    if (tab) dictation.setTab(tab, false);
     current = id;
     setRail(id === "agent");
     for (const page of Object.values(pages)) if (page !== settings) page.el.hidden = page.id !== id;
@@ -434,7 +413,7 @@ async function start(): Promise<void> {
           guide.hidden = true;
           showPages();
           tellAgentPage();
-          if (mode === "first" || !current) go("home");
+          if (mode === "first" || !current) go(START_PAGE);
           if (result.toSettings) go("settings", "usage");
           // The speech models that the guide did not wait for come on in the background.
           void resumeModels({ status: api.modelsStatus, ensure: api.modelsEnsure }, (message) => console.warn("main:", message));
@@ -450,7 +429,7 @@ async function start(): Promise<void> {
     startGuide("first");
   } else {
     showPages();
-    go("home");
+    go(START_PAGE);
     // A guide that was left before the speech models were all there: fetch what is missing.
     void resumeModels({ status: api.modelsStatus, ensure: api.modelsEnsure }, (message) => console.warn("main:", message));
   }
