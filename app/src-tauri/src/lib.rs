@@ -508,11 +508,14 @@ mod window_state_tests {
     fn restoring_saved_geometry_cannot_restore_a_native_titlebar_or_show_the_window() {
         let flags = main_window_state_flags();
         assert!(!flags.intersects(StateFlags::VISIBLE | StateFlags::DECORATIONS));
-        assert!(flags.contains(
-            StateFlags::SIZE
-                | StateFlags::POSITION
-                | StateFlags::MAXIMIZED
-                | StateFlags::FULLSCREEN
-        ));
+        assert!(flags.contains(StateFlags::MAXIMIZED | StateFlags::FULLSCREEN));
+    }
+
+    #[test]
+    fn the_window_always_opens_at_its_default_size() {
+        // The owner wants opening and un-maximizing to land on the default size (2026-10-24),
+        // so a size or place from an earlier session is never restored.
+        let flags = main_window_state_flags();
+        assert!(!flags.intersects(StateFlags::SIZE | StateFlags::POSITION));
     }
 }
