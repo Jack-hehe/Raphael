@@ -18,7 +18,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("./api", () => api);
 
-import { createDetails, draftSchedule, newRoutineDraft, routineDraft } from "./member-details";
+import { createDetails } from "./member-details";
 
 const member = (id: number, more: Partial<Member> = {}): Member => ({
   id, name: `成員${id}`, role: "", instructions: "", avatar: "", group_id: null, model: "", tools: null, position: id, created: 0, unread: false, waiting: false, preview: "", last_at: null, ...more,
@@ -204,24 +204,23 @@ describe("a member's panel", () => {
     const panel = mount();
     await flush();
     panel.el.querySelector<HTMLElement>('[data-det="routine-add"]')!.click();
-    panel.el.querySelector<HTMLInputElement>("#mb-r-title")!.value = "每週回顧";
-    panel.el.querySelector<HTMLTextAreaElement>("#mb-r-prompt")!.value = "整理這週";
-    panel.el.querySelector<HTMLElement>('[data-det="r-kind"]')!.click();
-    document.querySelector<HTMLElement>('#app-popover [data-value="every"]')!.click();
+    document.querySelector<HTMLInputElement>("#au-title")!.value = "每週回顧";
+    document.querySelector<HTMLTextAreaElement>("#au-prompt")!.value = "整理這週";
+    document.querySelector<HTMLElement>('[data-dlg="kind"][data-kind="every"]')!.click();
     // the title and the prompt typed are kept across the drawing
-    expect(panel.el.querySelector<HTMLInputElement>("#mb-r-title")!.value).toBe("每週回顧");
-    panel.el.querySelector<HTMLElement>('[data-det="r-hours"]')!.click();
+    expect(document.querySelector<HTMLInputElement>("#au-title")!.value).toBe("每週回顧");
+    document.querySelector<HTMLElement>('[data-dlg="hours"]')!.click();
     document.querySelector<HTMLElement>('#app-popover [data-value="6"]')!.click();
-    panel.el.querySelector<HTMLElement>('[data-det="r-save"]')!.click();
+    document.querySelector<HTMLElement>('[data-dlg="save"]')!.click();
     await flush();
-    expect(api.routinesCreate).toHaveBeenCalledWith({ member_id: 3, title: "每週回顧", prompt: "整理這週", schedule: { kind: "every", hours: 6 } });
+    expect(api.routinesCreate).toHaveBeenCalledWith({ member_id: 3, title: "每週回顧", prompt: "整理這週", schedule: expect.objectContaining({ kind: "every", hours: 6 }) });
   });
 
   test("a routine without a title is not sent", async () => {
     const panel = mount();
     await flush();
     panel.el.querySelector<HTMLElement>('[data-det="routine-add"]')!.click();
-    panel.el.querySelector<HTMLElement>('[data-det="r-save"]')!.click();
+    document.querySelector<HTMLElement>('[data-dlg="save"]')!.click();
     await flush();
     expect(api.routinesCreate).not.toHaveBeenCalled();
   });
@@ -302,9 +301,10 @@ describe("a member's panel", () => {
     const panel = mount();
     await flush();
     panel.el.querySelector<HTMLElement>('[data-det="routine-add"]')!.click();
-    panel.el.querySelector<HTMLInputElement>("#mb-r-title")!.value = "早報";
-    panel.el.querySelector<HTMLTextAreaElement>("#mb-r-prompt")!.value = "摘要";
-    const save = panel.el.querySelector<HTMLElement>('[data-det="r-save"]')!;
+    document.querySelector<HTMLInputElement>("#au-title")!.value = "早報";
+    document.querySelector<HTMLTextAreaElement>("#au-prompt")!.value = "摘要";
+    document.querySelector<HTMLElement>('[data-dlg="kind"][data-kind="daily"]')!.click();
+    const save = document.querySelector<HTMLElement>('[data-dlg="save"]')!;
     save.click();
     save.click();
     expect(api.routinesCreate).toHaveBeenCalledTimes(1);
@@ -349,16 +349,6 @@ describe("Raphael's panel", () => {
   });
 });
 
-describe("the routine form", () => {
-  test("says a schedule only when its time is one", () => {
-    expect(draftSchedule(newRoutineDraft())).toEqual({ kind: "daily", time: "09:00" });
-    expect(draftSchedule({ ...newRoutineDraft(), time: "25:00" })).toBeNull();
-    expect(draftSchedule({ ...newRoutineDraft(), kind: "weekly", days: [3, 1, 3] })).toEqual({ kind: "weekly", days: [1, 3], time: "09:00" });
-    expect(draftSchedule(routineDraft({ ...ROUTINE, schedule: { kind: "every", hours: 30 } }))).toEqual({ kind: "every", hours: 24 });
-  });
-});
-
-
 test("live routines update while instructions retain their node, draft and caret", async () => {
   const panel = mount();
   await flush();
@@ -381,15 +371,15 @@ test("a remote deletion keeps the routine draft editable and refresh failure kee
   const panel = mount();
   await flush();
   panel.el.querySelector<HTMLElement>('[data-det="routine-edit"]')!.click();
-  const title = panel.el.querySelector<HTMLInputElement>("#mb-r-title")!;
+  const title = document.querySelector<HTMLInputElement>("#au-title")!;
   title.value = "Unsaved routine";
   title.focus();
   api.routinesList.mockResolvedValue({ routines: [] });
   panel.refreshRoutines();
   await flush();
-  expect(panel.el.querySelector<HTMLInputElement>("#mb-r-title")!.value).toBe("Unsaved routine");
-  expect(document.activeElement?.id).toBe("mb-r-title");
-  panel.el.querySelector<HTMLElement>('[data-det="r-cancel"]')!.click();
+  expect(document.querySelector<HTMLInputElement>("#au-title")!.value).toBe("Unsaved routine");
+  expect(document.activeElement?.id).toBe("au-title");
+  document.querySelector<HTMLElement>('[data-dlg="cancel"]')!.click();
   api.routinesList.mockResolvedValue({ routines: [ROUTINE] });
   panel.refreshRoutines();
   await flush();

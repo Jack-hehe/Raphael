@@ -148,7 +148,7 @@ describe("the column, used", () => {
     const column = mount();
     column.el.querySelector<HTMLElement>('[data-col="add"]')!.click();
     const items = [...document.querySelectorAll<HTMLElement>("#app-popover [data-pick]")];
-    expect(items.map((b) => b.textContent)).toEqual(["新增成員", "新增分組"]);
+    expect(items.map((b) => b.textContent)).toEqual(["新增成員", "新增分組", "新增群組對話"]);
     items[1].click();
     expect(host.newGroup).toHaveBeenCalled();
   });

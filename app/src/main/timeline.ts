@@ -574,7 +574,7 @@ function bubbleHTML(words: string, files: readonly TurnAttachment[] | undefined,
   return files?.length ? `<div class="owner-content">${filesHTML(files)}${bubble}</div>` : bubble;
 }
 
-function messageActionsHTML(time: number, regenerate = false, owner?: "edit" | "cancel"): string {
+export function messageActionsHTML(time: number, regenerate = false, owner?: "edit" | "cancel"): string {
   const action = (icon: Parameters<typeof iconBtn>[0], label: string, act: string): string =>
     iconBtn(icon, label, ` data-act="${act}"`).replace(" title=", " data-tooltip=");
   return `<div class="message-actions"><time datetime="${esc(new Date(time).toISOString())}">${esc(formatClock(time))}</time>` +

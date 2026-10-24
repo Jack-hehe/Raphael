@@ -176,7 +176,7 @@ export function offerRoutine(offer: RoutineOffer): Promise<boolean> {
 }
 
 /** A group's name: a new group's (`title` 新增分組) or a new name. Resolves with the name, or null when it is left. */
-export function askGroupName(title: string, current = ""): Promise<string | null> {
+export function askGroupName(title: string, current = "", label = t("members.groupName")): Promise<string | null> {
   return new Promise((resolve) => {
     let result: string | null = null;
     const save = (dialog: Dialog): void => {
@@ -192,7 +192,7 @@ export function askGroupName(title: string, current = ""): Promise<string | null
     };
     openDialog({
       title,
-      body: field("mb-group-name", t("members.groupName"), current, GROUP_NAME_MAX),
+      body: field("mb-group-name", label, current, GROUP_NAME_MAX),
       actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), primary: { label: esc(current ? t("members.save") : t("members.create")), attrs: ' data-dlg="save"' } },
       onAct(act, _target, dialog) {
         if (act === "save") save(dialog);

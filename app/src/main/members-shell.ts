@@ -15,6 +15,7 @@
 
 import * as api from "./api";
 import { describeError } from "./format";
+import { currentRoomId, openRoomsMenu } from "./group-chats";
 import { getLocale, onLocaleChange, t } from "./i18n";
 import { createMemberColumn } from "./member-column";
 import { createDetails } from "./member-details";
@@ -99,7 +100,7 @@ export function createMembers(host: MembersHost): MembersShell {
   // ---------- the parts ----------
 
   const column = createMemberColumn({
-    view: () => ({ list, current, previews, fresh }),
+    view: () => ({ list, current: currentRoomId() === null ? current : -1, previews, fresh }),
     select: (id) => select(id),
     newMember: (groupId) => newMember(groupId),
     newGroup: () => void newGroup(),
@@ -234,6 +235,7 @@ export function createMembers(host: MembersHost): MembersShell {
 
   function select(id: number): void {
     if (id === current) {
+      if (currentRoomId() !== null) { host.onSelect(id); drawAll(); }
       // the member already open: on a narrow window its panel comes back
       return;
     }
@@ -283,6 +285,7 @@ export function createMembers(host: MembersHost): MembersShell {
       ...(m.waiting ? { tag: t("members.waitingShort") } : m.unread ? { tag: t("members.unread") } : {}),
     }));
     openMenu(picker, people, String(current), (value) => select(Number(value)), undefined, [
+      { label: t("rooms.title"), icon: "chat", run: () => { closeMenu(); void openRoomsMenu(picker); } },
       {
         label: t("members.newMember"),
         icon: "plus",

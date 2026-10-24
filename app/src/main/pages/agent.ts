@@ -73,6 +73,8 @@ import {
 } from "../timeline";
 import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, MessageQuote, Page, SettingsPane, TurnAttachment, WireAttachment } from "../types";
 import { btn, copyText, esc, ico, iconButton, toaster } from "../ui";
+import { createRoomPane } from "../group-chats";
+import { composerHTML } from "../chat-composer";
 import { VoiceMode } from "../voice-mode";
 import "../agent.css";
 import "../members.css";
@@ -287,21 +289,29 @@ export function createAgent(app: AppContext): Page {
   const memberId = (): number => members.current();
   const inRaphael = (): boolean => memberId() === RAPHAEL_ID;
 
+  const memberChat = el.querySelector<HTMLElement>(".mb-chat")!;
+  let roomDetails = members.detailsOpen();
+  const roomPane = createRoomPane(app, () => {
+    el.classList.remove("is-room"); memberChat.hidden = false;
+    el.querySelector(".mb-head-l")!.append(members.picker);
+    members.setDetails(roomDetails);
+  }, () => { if (visible) attachmentMedia.sync(); });
+  el.append(roomPane.el);
+  window.addEventListener("raphael:open-room", event => {
+    if (!el.isConnected) return;
+    if (!roomPane.active) roomDetails = members.detailsOpen();
+    members.setDetails(false); el.classList.add("is-room"); memberChat.hidden = true;
+    roomPane.el.querySelector(".room-picker")!.append(members.picker);
+    void members.load();
+    void roomPane.open((event as CustomEvent<{roomId:number}>).detail.roomId);
+  });
+
   // ---------- the composer and the approval card ----------
 
   const composer = document.createElement("form");
   composer.className = "composer";
   composer.noValidate = true;
-  composer.innerHTML =
-    `<div class="cmp-quote" hidden></div>` +
-    `<div class="cmp-file" hidden></div>` +
-    `<div class="cmp-row">` +
-    `<button type="button" class="btn cmp-attach" data-act="attach">${ico("plus")}</button>` +
-    `<textarea class="cmp-input" rows="1" autocomplete="off" enterkeyhint="send"></textarea>` +
-    iconButton("send", t("chat.send"), " disabled", "cmp-send").replace('type="button"', 'type="submit"').replace(" title=", " data-tooltip=") +
-    `<button type="button" class="btn cmp-voice" data-act="voice"></button>` +
-    `</div>` +
-    `<input class="cmp-picker" type="file" multiple hidden>`;
+  composer.innerHTML = composerHTML();
   const input = composer.querySelector<HTMLTextAreaElement>(".cmp-input")!;
   const attachButton = composer.querySelector<HTMLElement>(".cmp-attach")!;
   const voiceButton = composer.querySelector<HTMLButtonElement>(".cmp-voice")!;
@@ -348,7 +358,7 @@ export function createAgent(app: AppContext): Page {
   reducedMotion?.addEventListener("change", () => { pacing.flush(); if (visible) render(); });
   const details = new Set<number>();
   const state: TimelineState = emptyTimelineState();
-  const attachmentMedia = createAttachmentMedia(scroller, id => api.core("attachments.get", { id }));
+  const attachmentMedia = createAttachmentMedia(el, id => api.core("attachments.get", { id }));
   const previews = createLinkPreviews(scroller, url => api.core<LinkPreview | null>("links.preview", { url }));
   const regenerating = new Set<number>();
   const messageResize = typeof ResizeObserver === "function" ? new ResizeObserver(() => measureMessages()) : null;
@@ -1254,6 +1264,7 @@ export function createAgent(app: AppContext): Page {
    * closes, the composer and the card become that thread's, and nothing of the last thread moves in.
    */
   function switchThread(): void {
+    if (roomPane.active) roomPane.close();
     hideTooltip();
     hideSelection();
     pacing.flush();
@@ -1295,8 +1306,9 @@ export function createAgent(app: AppContext): Page {
     render();
     if (listening && voiceMember === memberId() && !question) voice.up();
     if (visible) {
+      const generation = loads + 1;
       void load(false).then(() => {
-        if (visible && !scroller.hidden) scroller.scrollTop = scroller.scrollHeight;
+        if (generation === loads && visible && !scroller.hidden) scroller.scrollTop = scroller.scrollHeight;
       });
       focusComposer();
     }
@@ -1808,6 +1820,25 @@ export function createAgent(app: AppContext): Page {
   drawFaces();
   drawComposer();
   drawBackgroundQuestions();
+
+  let memberJump = 0;
+  window.addEventListener("raphael:open-member", event => {
+    if (!el.isConnected) return;
+    if (roomPane.active) roomPane.close();
+    const jump = ++memberJump;
+    const { memberId, turnId } = (event as CustomEvent<{ memberId: number; turnId?: number }>).detail;
+    void members.load().then(async () => {
+      members.select(memberId);
+      if (!turnId) return;
+      await load(false);
+      const generation = loads;
+      const result = await api.agentHistoryList({ member_id: memberId, before_id: turnId + 1, limit: PAGE_SIZE });
+      if (!visible || jump !== memberJump || generation !== loads || memberId !== members.current()) return;
+      turns = mergeTurns(turns, result.turns);
+      render();
+      el.querySelector<HTMLElement>(`.tn[data-id="${turnId}"]`)?.scrollIntoView({ block: "center" });
+    }).catch(error => toaster.info(describeError(error)));
+  });
 
   return {
     id: "agent",

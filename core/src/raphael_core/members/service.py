@@ -259,6 +259,7 @@ class MembersService:
             "routines.update": self._routine_update,
             "routines.delete": self._routine_delete,
             "routines.template": self._routine_template,
+            "routines.runs": self._routine_runs,
         }
         for method, handler in methods.items():
             router.register(method, handler)
@@ -343,6 +344,7 @@ class MembersService:
         """A turn was written or completed: its thread is unread, unless it is on screen or the
         owner heard Raphael's turn said (`source` "voice", member 0)."""
         try:
+            self._finish_run(turn_id)
             turn = self._history.get(turn_id)
             if turn is None or (turn.source == "voice" and turn.member_id == 0) or turn.member_id == self._viewing:
                 return
@@ -727,7 +729,7 @@ class MembersService:
 
     # --- routines.* ----------------------------------------------------------------------------------
 
-    def _next(self, schedule: Schedule) -> int:
+    def _next(self, schedule: Schedule) -> int | None:
         return next_run(schedule, self._now_ms(), tz=self._tz)
 
     def _routine_member(self, params: dict) -> int:
@@ -756,8 +758,43 @@ class MembersService:
         return await handlers[name](params)
 
     async def _routines_list(self, params: dict) -> dict:
-        member_id = self._routine_member(params)
+        member_id = self._routine_member(params) if "member_id" in params else None
         return {"routines": [routine_view(r) for r in self.store.routines(member_id)]}
+
+    def _finish_run(self, turn_id: int) -> None:
+        run = self._conn.execute(
+            "SELECT id, routine_id FROM routine_runs WHERE turn_id = ? AND finished IS NULL", (turn_id,)
+        ).fetchone()
+        if run is None:
+            return
+        turn = self._history.get(turn_id)
+        if turn is None or turn.status in ("running", "confirm"):
+            return
+        with self._conn:
+            self._conn.execute(
+                "UPDATE routine_runs SET finished = ?, status = ?, summary = ?, cost = ? WHERE id = ?",
+                (self._now_ms(), turn.status, _line(turn.text or turn.detail or ""), turn.cost_usd, run["id"]),
+            )
+        routine = self.store.routine(run["routine_id"])
+        if routine is not None:
+            self._changed("routines.changed", routine.member_id)
+
+    async def _routine_runs(self, params: dict) -> dict:
+        routine_id = _whole(params, "routine_id", least=1)
+        if self.store.routine(routine_id) is None:
+            raise invalid_params("no such routine")
+        for row in self._conn.execute(
+            "SELECT turn_id FROM routine_runs WHERE routine_id = ? AND finished IS NULL", (routine_id,)
+        ).fetchall():
+            if row[0] is not None:
+                self._finish_run(row[0])
+        rows = self._conn.execute(
+            "SELECT id, routine_id, scheduled, started, finished, status, turn_id, summary, cost"
+            " FROM routine_runs WHERE routine_id = ? ORDER BY id DESC LIMIT 100", (routine_id,)
+        )
+        runs = [dict(row) for row in rows]
+        total = self._conn.execute("SELECT COUNT(*) FROM routine_runs WHERE routine_id = ?", (routine_id,)).fetchone()[0]
+        return {"runs": runs, "total": total}
 
     async def _routine_create(self, params: dict) -> dict:
         member_id = self._routine_member(params)
@@ -837,6 +874,15 @@ class MembersService:
             missed_ms = now - routine.next_run_ms
             catch_up = missed_ms <= CATCH_UP_MS
             following = next_run(routine.schedule, now, tz=self._tz)
+            count = self._conn.execute(
+                "SELECT COUNT(*) FROM routine_runs WHERE routine_id = ?", (routine.id,)
+            ).fetchone()[0]
+            if routine.schedule.max_runs is not None and count >= routine.schedule.max_runs:
+                self.store.advance(routine.id, next_run_ms=None, ran_at_ms=None)
+                self._changed("routines.changed", routine.member_id)
+                continue
+            if catch_up and routine.schedule.max_runs is not None and count + 1 >= routine.schedule.max_runs:
+                following = None
             still_there = self.store.advance(
                 routine.id, next_run_ms=following, ran_at_ms=now if catch_up else None
             )
@@ -869,6 +915,11 @@ class MembersService:
             member_id=routine.member_id,
         )
         model = self._settings.get("agent_model")
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO routine_runs (routine_id, scheduled, started, status, turn_id) VALUES (?, ?, ?, 'running', ?)",
+                (routine.id, routine.next_run_ms, self._now_ms(), turn_id),
+            )
         model = model.strip() if isinstance(model, str) and model.strip() else DEFAULTS["agent_model"]
         try:
             task_id = self._background.submit(

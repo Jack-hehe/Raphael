@@ -11,6 +11,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { loadGlyphTexture } from "../overlay/emblem";
 import * as api from "./api";
 import { avatarHTML, loadAvatar, onAvatarChange } from "./avatar";
+import { createAutomationsPage } from "./pages/automations";
+import { createTeamPage } from "./pages/team";
+import { configureRooms } from "./group-chats";
 import { createAgent } from "./pages/agent";
 import { createDictionary } from "./pages/dictionary";
 import { createHistory } from "./pages/history";
@@ -59,6 +62,8 @@ const RESHOW_MS = 1000;
 const NAV: { id: Exclude<PageId, "settings">; name: string; icon: IconName | "face" }[] = [
   { id: "home", get name() { return t("main.001"); }, icon: "home" },
   { id: "agent", get name() { return t("nav.agent"); }, icon: "face" },
+  { id: "automations", get name() { return t("auto.title"); }, icon: "repeat" },
+  { id: "team", get name() { return t("team.title"); }, icon: "grid" },
   { id: "history", get name() { return t("main.002"); }, icon: "clock" },
   { id: "dictionary", get name() { return t("main.003"); }, icon: "book" },
 ];
@@ -151,7 +156,10 @@ async function start(): Promise<void> {
   const home = createHome(ctx);
   const agent = createAgent(ctx);
   const settings = createSettings(ctx);
-  const pages: Record<PageId, Page> = { home, agent, history, dictionary, settings };
+  configureRooms(ctx);
+  const automations = createAutomationsPage(ctx);
+  const team = createTeamPage(ctx);
+  const pages: Record<PageId, Page> = { home, agent, history, dictionary, settings, automations, team };
 
   const nav = document.getElementById("nav")!;
   const main = document.getElementById("main")!;

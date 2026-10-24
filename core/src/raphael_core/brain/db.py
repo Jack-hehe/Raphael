@@ -523,6 +523,50 @@ PRAGMA user_version = 21;
 COMMIT;
 """,
 }
+_MIGRATIONS[22] = """
+BEGIN;
+CREATE TABLE routine_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    routine_id INTEGER NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
+    started INTEGER NOT NULL,
+    scheduled INTEGER,
+    finished INTEGER,
+    status TEXT NOT NULL,
+    turn_id INTEGER REFERENCES agent_turns(id) ON DELETE SET NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    cost REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX routine_runs_routine ON routine_runs(routine_id, id);
+CREATE TABLE rooms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    group_id INTEGER REFERENCES member_groups(id) ON DELETE SET NULL,
+    created INTEGER NOT NULL,
+    is_team INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX rooms_team ON rooms(is_team) WHERE is_team = 1;
+CREATE TABLE room_members (
+    room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    member_id INTEGER NOT NULL,
+    PRIMARY KEY(room_id, member_id)
+);
+CREATE TABLE room_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    member_id INTEGER,
+    text TEXT NOT NULL,
+    created INTEGER NOT NULL,
+    request_id TEXT,
+    attachments TEXT,
+    reply_to INTEGER REFERENCES room_messages(id) ON DELETE CASCADE,
+    turn_id INTEGER REFERENCES agent_turns(id) ON DELETE SET NULL,
+    UNIQUE(room_id, request_id),
+    UNIQUE(reply_to, member_id)
+);
+CREATE INDEX room_messages_room ON room_messages(room_id, id);
+PRAGMA user_version = 22;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

@@ -181,6 +181,7 @@ pub enum MainEvent {
     AgentTurn { turn_id: u64, member_id: u64 },
     /// Data changed: the window re-reads it without receiving private content.
     RoutinesChanged { member_id: u64 },
+    RoomsChanged { room_id: u64 },
     MembersChanged,
     ProvidersChanged,
     BrainsChanged,
@@ -341,7 +342,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 67] = [
+const ALLOWED_METHODS: [&str; 75] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -411,6 +412,14 @@ const ALLOWED_METHODS: [&str; 67] = [
     "routines.update",
     "routines.delete",
     "routines.template",
+    "routines.runs",
+    "rooms.list",
+    "rooms.create",
+    "rooms.delete",
+    "rooms.messages",
+    "rooms.send",
+    "rooms.transcribe",
+    "rooms.update",
     // The owner's safety rules, in Settings › 拉斐爾 (the core checks the words and the verdict).
     "safety.rules.list",
     "safety.rules.create",
@@ -862,6 +871,7 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
         "routines.changed" => Some(MainEvent::RoutinesChanged {
             member_id: params.get("member_id")?.as_u64()?,
         }),
+        "rooms.changed" => Some(MainEvent::RoomsChanged { room_id: params.get("room_id")?.as_u64()? }),
         "members.changed" => Some(MainEvent::MembersChanged),
         "providers.changed" => Some(MainEvent::ProvidersChanged),
         "brains.changed" => Some(MainEvent::BrainsChanged),
@@ -1652,6 +1662,19 @@ async fn restore_core<C: CoreApi>(core: &C, microphone: Option<&str>, monitoring
     }
 }
 
+/// The scheduler's persistent system-awake request is applied on its own OS thread.
+#[tauri::command]
+pub fn schedule_keep_awake_get(webview: Webview) -> Result<bool, String> {
+    require_main(&webview)?;
+    crate::schedule_awake::get()
+}
+
+#[tauri::command]
+pub fn schedule_keep_awake_set(webview: Webview, enabled: bool) -> Result<bool, String> {
+    require_main(&webview)?;
+    crate::schedule_awake::set(enabled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1713,6 +1736,8 @@ mod tests {
                 "open_attachment",
                 "open_external_url",
                 "open_link",
+                "schedule_keep_awake_get",
+                "schedule_keep_awake_set",
                 "window_hotkey",
             ]
         );

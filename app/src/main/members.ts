@@ -137,6 +137,8 @@ export const isTime = (text: string): boolean => /^([01]\d|2[0-3]):[0-5]\d$/.tes
 
 /** How a routine's schedule is said in a row: 「每天 09:00」, 「每週日 20:00」, 「每 3 小時」. */
 export function scheduleText(schedule: RoutineSchedule): string {
+  if (schedule.kind === "once") return t("auto.onceAt", { p0: schedule.start_date ?? "", p1: schedule.time });
+  if (schedule.kind === "weekdays") return t("auto.weekdaysAt", { p0: schedule.time });
   if (schedule.kind === "daily") return t("members.dailyAt", { p0: schedule.time });
   if (schedule.kind === "weekly") {
     const days = [...new Set(schedule.days)].sort((a, b) => a - b).map(dayName).join(t("members.daysJoin"));

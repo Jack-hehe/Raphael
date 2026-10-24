@@ -135,6 +135,8 @@ async def test_discovery_reports_changes_without_reading_credentials(tmp_path, m
     script.write_text("print('fake 1.0')", encoding="utf-8")
     changed = []
     brains = CliBrains(home=tmp_path, environ={}, commands={"gemini": [sys.executable, str(script)]}, notify=lambda *args: changed.append(args))
+    # Authentication discovery is independent of asynchronous model-catalog notifications.
+    monkeypatch.setattr(brains, "_needs_models", lambda _name: False)
     assert (await brains.list())["clis"][2]["logged_in"] is False
     (tmp_path / ".gemini").mkdir()
     credentials = tmp_path / ".gemini" / "oauth_creds.json"

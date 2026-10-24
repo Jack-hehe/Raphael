@@ -556,6 +556,7 @@ export type MainEvent =
   | { type: "TrayOpen"; page: TrayPage; action?: TrayAction }
   /** A turn of the conversations was written or completed, in the thread of `member_id` (0: Raphael's; none from an older shell). */
   | { type: "AgentTurn"; turn_id: number; member_id?: number }
+  | { type: "RoomsChanged"; room_id: number }
   | { type: "RoutinesChanged"; member_id: number }
   | { type: "MembersChanged" }
   | { type: "ProvidersChanged" }
@@ -690,10 +691,27 @@ export interface RoutineOffer {
 }
 
 /** When a routine runs: at a time each day, on days of the week (0 is Sunday) at a time, or every 1 to 24 hours. */
-export type RoutineSchedule =
+export type RoutineSchedule = (
+  | { kind: "once"; time: string }
   | { kind: "daily"; time: string }
+  | { kind: "weekdays"; time: string }
   | { kind: "weekly"; days: number[]; time: string }
-  | { kind: "every"; hours: number };
+  | { kind: "every"; hours: number; time?: string }
+) & { start_date?: string; max_runs?: number; until?: string };
+
+export interface RoutineRun {
+  id: number; routine_id: number; scheduled?: number; started: number; finished: number | null;
+  status: string; turn_id: number | null; summary: string; cost: number;
+}
+export interface Room {
+  id: number; name: string; group_id: number | null; created: number;
+  is_team: number; member_ids: number[];
+}
+export interface RoomMessage {
+  id: number; room_id: number; member_id: number | null; text: string; created: number;
+  request_id: string | null; reply_to: number | null; turn_id: number | null;
+  status: string; cost?: number; attachments?: TurnAttachment[];
+}
 
 /** A routine of `routines.list`. Times are ms; null for never. */
 export interface Routine {
@@ -725,7 +743,7 @@ export type TrayAction = "add-word";
 
 // ---------- what the pages share with main.ts ----------
 
-export type PageId = "home" | "agent" | "history" | "dictionary" | "settings";
+export type PageId = "home" | "agent" | "history" | "dictionary" | "automations" | "team" | "settings";
 
 /** The tabs of the settings panel. */
 export type SettingsPane = "general" | "dictation" | "agent" | "connections" | "messaging" | "models" | "usage" | "data" | "about";

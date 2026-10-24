@@ -394,6 +394,7 @@ class MemberStore:
         """Delete a group; its members go to 未分組 (no group). Whether there was one."""
         with self._conn:
             self._conn.execute("UPDATE members SET group_id = NULL WHERE group_id = ?", (group_id,))
+            self._conn.execute("UPDATE rooms SET group_id = NULL WHERE group_id = ?", (group_id,))
             cursor = self._conn.execute("DELETE FROM member_groups WHERE id = ?", (group_id,))
         return cursor.rowcount > 0
 
@@ -518,6 +519,8 @@ class MemberStore:
         """Delete a member's row, its routines and its unread mark; whether there was one. Its
         conversation, memory and picture are the service's to delete."""
         with self._conn:
+            self._conn.execute("DELETE FROM routine_runs WHERE routine_id IN (SELECT id FROM routines WHERE member_id = ?)", (member_id,))
+            self._conn.execute("DELETE FROM room_members WHERE member_id = ?", (member_id,))
             self._conn.execute("DELETE FROM routines WHERE member_id = ?", (member_id,))
             self._conn.execute("DELETE FROM member_unread WHERE member_id = ?", (member_id,))
             cursor = self._conn.execute("DELETE FROM members WHERE id = ?", (member_id,))
@@ -596,7 +599,7 @@ class MemberStore:
         prompt: Any = None,
         schedule: Any = None,
         enabled: Any = None,
-        next_run: Callable[[Schedule], int],
+        next_run: Callable[[Schedule], int | None],
     ) -> Routine:
         """Change the fields given. A routine whose schedule changed, or that was switched on, is
         next due when `next_run` says for its schedule as it is now; one switched off is due never."""
@@ -634,6 +637,7 @@ class MemberStore:
 
     def delete_routine(self, routine_id: int) -> bool:
         with self._conn:
+            self._conn.execute("DELETE FROM routine_runs WHERE routine_id = ?", (routine_id,))
             cursor = self._conn.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
         return cursor.rowcount > 0
 
@@ -646,7 +650,7 @@ class MemberStore:
         ).fetchall()
         return [routine for routine in map(_routine, rows) if routine is not None]
 
-    def advance(self, routine_id: int, *, next_run_ms: int, ran_at_ms: int | None) -> bool:
+    def advance(self, routine_id: int, *, next_run_ms: int | None, ran_at_ms: int | None) -> bool:
         """Set when a routine is next due, and when it ran if it does now (`ran_at_ms`), before it
         is carried out: a routine is run at most once for each time it is due, whatever happens to
         the run. Whether the routine is still there."""

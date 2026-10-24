@@ -33,6 +33,8 @@ const api = vi.hoisted(() => ({
   providersList: vi.fn(),
   brainsCli: vi.fn(),
   core: vi.fn(),
+  roomsList: vi.fn(),
+  roomMessages: vi.fn(),
 }));
 vi.mock("../api", () => api);
 
@@ -99,9 +101,22 @@ test("files dropped into a member's thread are sent only to that member", async 
   agent.hide();
 });
 
+test("a routine run link selects its member and loads the linked older turn", async () => {
+  const agent = mount(); await flush();
+  api.agentHistoryList.mockImplementation(async (q: { member_id?: number; before_id?: number }) => ({ turns: q.before_id === 11 ? [turn(10, { member_id: 3, text: "Linked routine result" })] : THREADS[q.member_id ?? 0] }));
+  window.dispatchEvent(new CustomEvent("raphael:open-member", { detail: { memberId: 3, turnId: 10 } }));
+  await flush(); await flush();
+  expect(api.agentHistoryList).toHaveBeenCalledWith(expect.objectContaining({ member_id: 3, before_id: 11 }));
+  expect(agent.el.querySelector('.tn[data-id="10"]')?.textContent).toContain("Linked routine result");
+  expect(agent.el.querySelector('.mb-col [data-member="3"]')?.getAttribute("aria-current")).toBe("true");
+  agent.hide();
+});
+
 beforeEach(() => {
   document.body.innerHTML = "";
   for (const fn of Object.values(api)) fn.mockReset();
+  api.roomsList.mockResolvedValue({rooms:[{id:1,name:"Launch",member_ids:[0,3],is_team:0}]});
+  api.roomMessages.mockResolvedValue({messages:[{id:1,member_id:3,text:"Ready",created:1,status:"done",turn_id:31}]});
   api.brainsCli.mockResolvedValue({ clis: [] });
   api.providersList.mockResolvedValue({ providers: [] });
   api.agentQuestionOpen.mockResolvedValue(null);
@@ -312,7 +327,7 @@ test("routine notifications refresh the open panel immediately and keep the rout
   await flush();
   expect($(".mb-rts").textContent).toContain("Daily review");
   $('[data-det="routine-edit"]').click();
-  const title = $<HTMLInputElement>("#mb-r-title");
+  const title = document.querySelector<HTMLInputElement>("#au-title")!;
   title.focus();
   title.value = "My unsaved title";
   title.setSelectionRange(3, 5);
@@ -322,9 +337,9 @@ test("routine notifications refresh the open panel immediately and keep the rout
   send({ type: "RoutinesChanged", member_id: 3 });
   await flush();
   expect($(".mb-rts").textContent).toContain("New routine");
-  expect($<HTMLInputElement>("#mb-r-title").value).toBe("My unsaved title");
-  expect(document.activeElement).toBe($("#mb-r-title"));
-  expect($<HTMLInputElement>("#mb-r-title").selectionStart).toBe(3);
+  expect(document.querySelector<HTMLInputElement>("#au-title")!.value).toBe("My unsaved title");
+  expect(document.activeElement).toBe(document.querySelector("#au-title"));
+  expect(document.querySelector<HTMLInputElement>("#au-title")!.selectionStart).toBe(3);
   expect(scroll.scrollTop).toBe(84);
 });
 
@@ -804,7 +819,7 @@ describe("a new member", () => {
     const picker = $<HTMLButtonElement>(".mb-pick");
     picker.click();
     expect(document.getElementById("app-popover")).not.toBeNull();
-    $<HTMLElement>('#app-popover [data-action="0"]').click();
+    $<HTMLElement>('#app-popover [data-action="1"]').click();
     expect(document.getElementById("app-popover")).toBeNull();
     expect(document.querySelector(".mb-dialog")).not.toBeNull();
     expect(document.activeElement?.id).toBe("mb-new-name");
@@ -875,4 +890,12 @@ test("a core without the members: Raphael alone, and the page works as before", 
   expect(document.querySelectorAll(".mb-col .mb-row")).toHaveLength(0);
   expect($(".mb-col .mb-chief").textContent).toBe("拉斐爾");
   expect($(".thread").textContent).toContain("《答。回答 2》");
+});
+
+
+test("rooms replace the main conversation pane and member selection returns to its thread", async()=>{
+ const agent=mount();await flush();const original=agent.el.querySelector<HTMLElement>(".mb-chat")!;
+ window.dispatchEvent(new CustomEvent("raphael:open-room",{detail:{roomId:1}}));await flush();
+ expect(original.hidden).toBe(true);expect(agent.el.querySelector<HTMLElement>(".au-room-pane")!.hidden).toBe(false);expect(agent.el.querySelector(".au-room-heading")!.textContent).toContain("Launch");expect(document.querySelector('[role="dialog"]')).toBeNull();
+ await pick(3);expect(original.hidden).toBe(false);expect(agent.el.querySelector<HTMLElement>(".au-room-pane")!.hidden).toBe(true);expect(agent.el.querySelector(".thread")!.textContent).toContain("10");
 });

@@ -232,6 +232,12 @@ class ProcessLink:
             if not task.done():
                 task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
+        # On Windows wait() can observe the exit before all pipe callbacks have released their
+        # transports. Close the owned transport explicitly before the event loop can shut down.
+        transport = getattr(self.process, "_transport", None)
+        if transport is not None:
+            transport.close()
+            await asyncio.sleep(0)
 
 
 async def connect_process(command: Sequence[str] | None = None) -> Link:

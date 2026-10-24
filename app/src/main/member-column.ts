@@ -12,6 +12,7 @@
 // `columnHTML` draws the list from a snapshot (pure, so its rules can be tested without a browser);
 // `createMemberColumn` keeps the search and the folded groups and hands the clicks over.
 
+import { createRoomsSection, openNewGroupChat } from "./group-chats";
 import { t } from "./i18n";
 import { type MemberSection, faceHTML, memberSections, previewOf, raphaelOf } from "./members";
 import type { Member, MembersList } from "./types";
@@ -143,6 +144,7 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
     iconButton("plus", t("members.add"), ' data-col="add" aria-haspopup="menu" aria-expanded="false"', "mb-tool") +
     `</div>` +
     `<nav class="mb-scroll"><div class="mb-list"></div></nav>`;
+  el.querySelector(".mb-scroll")!.append(createRoomsSection());
   const find = el.querySelector<HTMLElement>(".mb-find")!;
   const findInput = el.querySelector<HTMLInputElement>(".mb-find-input")!;
   const searchButton = el.querySelector<HTMLElement>('[data-col="search"]')!;
@@ -223,8 +225,9 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
         [
           { id: "member", label: t("members.newMember"), icon: "plus" },
           { id: "group", label: t("members.newGroup"), icon: "folder" },
+          { id: "room", label: t("rooms.new"), icon: "chat" },
         ],
-        (pick) => (pick === "member" ? host.newMember(null) : host.newGroup()),
+        (pick) => { if (pick === "room") void openNewGroupChat(); else if (pick === "member") host.newMember(null); else host.newGroup(); },
       );
     }
     const more = target.closest<HTMLElement>("[data-member-more]");

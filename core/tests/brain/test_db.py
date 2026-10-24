@@ -282,7 +282,13 @@ SCHEMA_V20 = {**SCHEMA_V19, "dictation_daily": [
     "estimated_dictations INTEGER NOT NULL DEFAULT 0",
 ]}
 SCHEMA_V21 = {**SCHEMA_V20, "agent_turns": [*SCHEMA_V20["agent_turns"], "quote TEXT"]}
-LATEST = 21
+SCHEMA_V22 = {**SCHEMA_V21,
+    "routine_runs": ["id INTEGER PK", "routine_id INTEGER NOT NULL", "started INTEGER NOT NULL", "scheduled INTEGER", "finished INTEGER", "status TEXT NOT NULL", "turn_id INTEGER", "summary TEXT NOT NULL DEFAULT ''", "cost REAL NOT NULL DEFAULT 0"],
+    "rooms": ["id INTEGER PK", "name TEXT NOT NULL", "group_id INTEGER", "created INTEGER NOT NULL", "is_team INTEGER NOT NULL DEFAULT 0"],
+    "room_members": ["room_id INTEGER PK NOT NULL", "member_id INTEGER PK NOT NULL"],
+    "room_messages": ["id INTEGER PK", "room_id INTEGER NOT NULL", "member_id INTEGER", "text TEXT NOT NULL", "created INTEGER NOT NULL", "request_id TEXT", "attachments TEXT", "reply_to INTEGER", "turn_id INTEGER"],
+}
+LATEST = 22
 
 
 def schema_names(conn, kind):
@@ -306,7 +312,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V21) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V22) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -320,7 +326,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V21.items():
+    for table, columns in SCHEMA_V22.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
@@ -1055,4 +1061,28 @@ def test_v21_quotes_preserve_old_turns_and_survive_reopening(tmp_path):
     reopened = db.connect(path)
     assert AgentHistory(reopened).get(new_id).quote == quote
     assert AgentHistory(reopened).get(1).question == "q"
+    reopened.close()
+
+
+def test_v22_automation_and_rooms_survive_reopen_and_keep_existing_routines(tmp_path):
+    path = tmp_path / "automations.db"
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    for version in range(1, 22):
+        step = db._MIGRATIONS[version]
+        step(conn) if callable(step) else conn.executescript(step)
+    conn.execute("INSERT INTO routines (member_id,title,prompt,schedule,enabled,created_at_ms) VALUES (0,'Report','Check','{\"kind\":\"daily\",\"time\":\"09:00\"}',1,1)")
+    conn.commit()
+    db.migrate(conn)
+    conn.execute("INSERT INTO routine_runs (routine_id, started, status) VALUES (1, 1, 'running')")
+    conn.execute("INSERT INTO rooms (name,created) VALUES ('Team',1)")
+    conn.execute("INSERT INTO room_members VALUES (1,0)")
+    conn.execute("INSERT INTO room_messages (room_id,text,created,request_id) VALUES (1,'Hello',1,'request')")
+    conn.commit(); conn.close()
+    reopened = db.connect(path)
+    assert reopened.execute("SELECT title FROM routines").fetchone()[0] == "Report"
+    assert reopened.execute("SELECT status FROM routine_runs").fetchone()[0] == "running"
+    assert reopened.execute("SELECT text FROM room_messages").fetchone()[0] == "Hello"
+    with pytest.raises(sqlite3.IntegrityError):
+        reopened.execute("INSERT INTO room_messages (room_id,text,created,request_id) VALUES (1,'Again',1,'request')")
     reopened.close()

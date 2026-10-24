@@ -5,6 +5,7 @@ mod agent;
 mod avatar;
 mod background;
 mod commands;
+mod schedule_awake;
 mod computer;
 mod core_process;
 mod data_layout;
@@ -134,6 +135,8 @@ pub fn run() {
             overlay::overlay_log,
             overlay::overlay_confirm,
             commands::core_call,
+            commands::schedule_keep_awake_get,
+            commands::schedule_keep_awake_set,
             commands::device_settings_get,
             commands::device_settings_set,
             commands::device_computer_app_remove,
@@ -157,6 +160,7 @@ pub fn run() {
             avatar::avatar_clear,
         ])
         .setup(move |app| {
+            if let Err(error) = schedule_awake::get() { log::warn!("could not restore scheduler awake setting: {error}"); }
             // Tauri keeps only the last `setup` call, so each part of the app starts in its own
             // section of this one closure, in dependency order: a part that needs another part's
             // handle comes after it.
