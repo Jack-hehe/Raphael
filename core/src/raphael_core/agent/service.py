@@ -2775,7 +2775,7 @@ class AgentService:
         model = self._settings.get("agent_model")
         city = self._settings.get("agent_city")
         return _Settings(
-            model=speaker.model_or(_text_or(model, DEFAULTS["agent_model"])),
+            model=_text_or(model, DEFAULTS["agent_model"]),
             city=_text_or(city, DEFAULTS["agent_city"]),
             limit_usd=self._settings.get("monthly_limit_usd"),
         )

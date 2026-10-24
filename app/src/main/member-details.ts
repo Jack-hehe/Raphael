@@ -3,8 +3,8 @@
 // if the owner has any, and 「從電腦選…」), then its name and role, changed where they are. Then three
 // tabs:
 //
-// - 詳細資訊: 指示 (a box, saved when it loses the focus), 分組 (a dropdown), 模型 (the model picker,
-//   「與拉斐爾相同」 first), 例行任務 (a row each with its switch, a borderless pencil and trash; a
+// - 詳細資訊: 個性 and 指示 (each closed to one line until opened, then a box saved when it loses
+//   the focus), 分組 (a dropdown), 例行任務 (a row each with its switch, a borderless pencil and trash; a
 //   borderless plus adds one in a small form: title, a dropdown of 每天 / 每週 / 每隔幾小時 with its
 //   time, day or interval, and what to do), and 看的地方, the group's places as chips (they are
 //   changed in the group's menu).
@@ -13,7 +13,8 @@
 //
 // Raphael's panel has his picture (changed here and nowhere else: from the PC, cut in the crop
 // dialog of avatar-settings.ts, or 還原 to his emblem), his routines and his memory.
-// His name and role are not changed, and he has no group, model or instructions here.
+// His name and role are not changed, and he has no group or instructions here. No one has a model
+// of their own: every member answers with Raphael's (Settings › 模型與用量).
 //
 // The panel draws itself again from the host's data after each change; what is being typed is kept
 // in the fields (the name, the role, the instructions and the routine form are read back before).
@@ -43,10 +44,8 @@ import {
   scheduleText,
   sourceLabel,
 } from "./members";
-import { CLIS, cliBrainLine } from "./cli-brains";
-import { type ModelPicker, mountModelPicker } from "./model-picker";
-import type { AppContext, AvatarPreset, CliBrain, Member, MemberPatch, MembersList, ModelCatalog, ModelProvider, Routine, RoutineSchedule, WireAttachment } from "./types";
-import { actionRow, btn, esc, iconButton, openMenu, sel, tabs, tg, toaster } from "./ui";
+import type { AppContext, AvatarPreset, Member, MemberPatch, MembersList, Routine, RoutineSchedule, WireAttachment } from "./types";
+import { actionRow, btn, esc, ico, iconButton, openMenu, sel, tabs, tg, toaster } from "./ui";
 
 export type DetailsTab = "details" | "memory";
 
@@ -91,10 +90,6 @@ export interface DetailsHost {
   member(): Member;
   list(): MembersList | null;
   presets(): readonly AvatarPreset[];
-  /** The catalog of the model picker, read the first time the panel needs it. */
-  catalog(): Promise<ModelCatalog | null>;
-  clis?(): Promise<readonly CliBrain[]>;
-  providers?(): Promise<readonly ModelProvider[]>;
   /** Changes the member and reads the list again; false (with a toast) when the core refused. */
   update(id: number, patch: MemberPatch): Promise<boolean>;
   /** A picture of this PC for the member; then the list again. */
@@ -110,7 +105,6 @@ export interface DetailsPanel {
   /** Another member's thread is open: its routines and memory are read, its tab is 詳細資訊. */
   showMember(): void;
   refreshRoutines(): void;
-  refreshCatalog(): void;
   refreshMemory(memberId: number, space?: "own" | "shared"): void;
 }
 
@@ -129,12 +123,8 @@ export function createDetails(host: DetailsHost): DetailsPanel {
   let routines: Routine[] | "loading" | "failed" = "loading";
   let routineLoads = 0;
   let draft: RoutineDraft | null = null;
-  let catalog: ModelCatalog | null = null;
-  let clis: readonly CliBrain[] = [];
-  let providers: readonly ModelProvider[] = [];
-  let catalogAsked = false;
-  let catalogLoads = 0;
-  let picker: ModelPicker | null = null;
+  /** The long fields that are open (個性, 指示): closed, each is one line. */
+  const openFields = new Set<string>();
   /** The member the panel was last drawn for: its fields are drawn afresh when it changes. */
   let drawnFor: number | null = null;
 
@@ -161,7 +151,6 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     return (
       face +
       `<input class="mb-who-name mb-edit" id="mb-det-name" data-member="${member.id}" type="text" maxlength="${NAME_MAX}" value="${esc(member.name)}" aria-label="${esc(t("members.name"))}" autocomplete="off" spellcheck="false">` +
-      cliBrainLine(member.model ?? "") +
       `<input class="mb-who-role mb-edit" id="mb-det-role" data-member="${member.id}" type="text" maxlength="${ROLE_MAX}" value="${esc(member.role)}" placeholder="${esc(t("members.role"))}" aria-label="${esc(t("members.role"))}" autocomplete="off" spellcheck="false">`
     );
   }
@@ -215,20 +204,32 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     return head + (draft && (draft.id === null || !routines.some((r) => r.id === draft?.id)) ? routineFormHTML(draft) : "") + `<div class="mb-rts">${rows}</div>`;
   }
 
+  /**
+   * A long field, closed to its name and its first line (or 「未填寫」) behind a real button; open,
+   * the box under it. Open while it is being typed in, so a redraw never closes it under the owner.
+   */
+  function foldHTML(id: string, label: string, value: string, box: string): string {
+    const open = openFields.has(id);
+    const peek = value.trim().split(/\r?\n/, 1)[0] || t("members.notSet");
+    return `<section class="mb-field mb-fold-field">` +
+      `<button type="button" class="btn mb-fold-head" data-det="fold" data-field="${id}" data-k="fold:${id}" aria-expanded="${open}" aria-controls="${id}-body">` +
+      `<span class="mb-dh">${esc(label)}</span>${open ? "" : `<span class="mb-peek">${esc(peek)}</span>`}${ico("down")}</button>` +
+      `<div class="mb-fold-body" id="${id}-body"${open ? "" : " hidden"}>${box}</div></section>`;
+  }
+
   function detailsHTML(member: Member): string {
     if (member.id === RAPHAEL_ID) return `<section class="mb-field">${routinesHTML()}</section>`;
     const list = host.list();
     const group = list?.groups.find((g) => g.id === member.group_id) ?? null;
     const sources = group?.sources ?? [];
     return (
-      `<section class="mb-field"><label class="mb-dh" for="mb-det-personality">${esc(t("members.personality"))}</label>` +
-      `<textarea id="mb-det-personality" data-member="${member.id}" class="mb-fin mb-ta" rows="3" maxlength="${PERSONALITY_MAX}" placeholder="${esc(t("members.personalityHint"))}">${esc(member.personality ?? "")}</textarea></section>` +
-      `<section class="mb-field"><label class="mb-dh" for="mb-det-instr">${esc(t("members.instructions"))}</label>` +
-      `<textarea id="mb-det-instr" data-member="${member.id}" class="mb-fin mb-ta" rows="4" maxlength="${INSTRUCTIONS_MAX}">${esc(member.instructions ?? "")}</textarea></section>` +
+      foldHTML("mb-det-personality", t("members.personality"), member.personality ?? "",
+        `<textarea id="mb-det-personality" data-member="${member.id}" class="mb-fin mb-ta" rows="3" maxlength="${PERSONALITY_MAX}" placeholder="${esc(t("members.personalityHint"))}">${esc(member.personality ?? "")}</textarea>`) +
+      foldHTML("mb-det-instr", t("members.instructions"), member.instructions ?? "",
+        `<textarea id="mb-det-instr" data-member="${member.id}" class="mb-fin mb-ta" rows="4" maxlength="${INSTRUCTIONS_MAX}">${esc(member.instructions ?? "")}</textarea>`) +
       `<section class="mb-field"><div class="mb-dh">${esc(t("members.group"))}</div>` +
       sel(groupChoices(list?.groups ?? []), groupValue(group ? group.id : null), t("members.group"), ' data-det="group" data-k="det-group"') +
       `</section>` +
-      `<section class="mb-field"><div class="mb-dh">${esc(t("members.model"))}</div><span class="mp-slot mb-model" data-model-picker="answer"></span></section>` +
       `<section class="mb-field">${routinesHTML()}</section>` +
       (sources.length
         ? `<section class="mb-field"><div class="mb-dh">${esc(t("members.sources"))}</div><div class="mb-chips">` +
@@ -296,20 +297,14 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       const next = document.createElement("div");
       next.innerHTML = detailsHTML(member);
       const fresh = Array.from(next.children);
-      picker?.close();
-      picker = null;
       for (const child of Array.from(body.children)) if (child !== kept) child.remove();
       kept.before(...fresh.slice(0, at));
       kept.after(...fresh.slice(at + 1));
-      mountPicker(member);
       scroll.scrollTop = scrollTop;
       return;
     }
     if (typingText) void saveField(focused as HTMLTextAreaElement, true);
-    picker?.close();
-    picker = null;
     body.innerHTML = tab === "details" ? detailsHTML(member) : memoryHTML(shared.view()) + memoryHTML(own.view());
-    if (tab === "details" && member.id !== RAPHAEL_ID) mountPicker(member);
     if (sameMember && typingIn && typingIn !== "mb-det-name" && typingIn !== "mb-det-role") el.querySelector<HTMLElement>(`#${CSS.escape(typingIn)}`)?.focus({ preventScroll: true });
     else if (sameMember && focusKey) el.querySelector<HTMLElement>(`[data-k="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
     if (sameMember && selection && typingIn) {
@@ -317,44 +312,6 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       field?.setSelectionRange(selection[0], selection[1], selection[2] ?? undefined);
     }
     if (sameMember) scroll.scrollTop = scrollTop;
-  }
-
-  function mountPicker(member: Member): void {
-    const slot = body.querySelector<HTMLElement>(".mb-model");
-    if (!slot) return;
-    picker = mountModelPicker(slot, {
-      onSources: () => host.app.go("settings", "models"),
-      onCliAction: (id) => {
-        const cli = clis.find((c) => c.id === id), known = CLIS.find((c) => c.id === id)!;
-        if (cli?.installed) void api.brainsCliLogin(id).catch(() => toaster.info(t("providers.error")));
-        else void api.openExternalUrl(known.install).catch(() => toaster.info(t("providers.error")));
-      },
-      role: "answer",
-      current: member.model ?? "",
-      catalog,
-      clis,
-      providers,
-      loading: catalog === null && catalogAsked,
-      label: t("members.model"),
-      key: "det-model",
-      showPrice: false,
-      lead: { id: "", name: t("members.sameModel") },
-      onChoose: (id) => void host.update(member.id, { model: id }),
-    });
-    if (!catalogAsked) {
-      void loadCatalog();
-    }
-  }
-
-  async function loadCatalog(): Promise<void> {
-    const mine = ++catalogLoads;
-    catalogAsked = true;
-    const [read, brains, connections] = await Promise.all([host.catalog(), host.clis?.() ?? Promise.resolve([]), host.providers?.() ?? Promise.resolve([])]);
-    if (mine !== catalogLoads) return;
-    catalog = read;
-    clis = brains;
-    providers = connections;
-    picker?.update({ catalog: read, clis, providers, loading: false });
   }
 
   // ---------- routines ----------
@@ -498,6 +455,14 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       case "avatar":
         avatarMenu(act);
         break;
+      case "fold": {
+        const field = act.dataset.field ?? "";
+        const opening = !openFields.has(field);
+        if (opening) openFields.add(field); else openFields.delete(field);
+        draw();
+        if (opening) el.querySelector<HTMLTextAreaElement>(`#${CSS.escape(field)}`)?.focus({ preventScroll: true });
+        break;
+      }
       case "tab":
         tab = act.dataset.tab as DetailsTab;
         if (tab === "memory") for (const list of memories) void list.load();
@@ -596,10 +561,6 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     el,
     draw,
     refreshRoutines() { void loadRoutines(); },
-    refreshCatalog() {
-      catalogLoads++; catalog = null; catalogAsked = false;
-      if (picker && el.isConnected && !el.hidden) void loadCatalog();
-    },
     refreshMemory(memberId, space) {
       if (!memoryHost.visible()) return;
       if (space !== "own") void shared.load();

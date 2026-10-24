@@ -88,9 +88,5 @@ class Speaker:
         the chain, with `asker` and those before it in it."""
         return replace(self, depth=asker.depth + 1, chain=asker.chain | {asker.id})
 
-    def model_or(self, default: str) -> str:
-        """The model that answers for it: its own, or `default` (the answer model)."""
-        return self.model.strip() or default
-
 
 RAPHAEL = Speaker()

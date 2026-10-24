@@ -875,7 +875,7 @@ class MembersService:
                 session_id=session_id,
                 text=routine.prompt,
                 language=language,
-                model=speaker.model_or(model),
+                model=model,
                 member_id=routine.member_id,
                 routine_id=routine.id,
             )

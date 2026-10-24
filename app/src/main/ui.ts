@@ -445,6 +445,8 @@ export function placeMenu(): void {
   const { el, anchor } = menu;
   const r = anchor.getBoundingClientRect();
   const headerBottom = document.getElementById("window-chrome")?.getBoundingClientRect().bottom ?? 0;
+  // A dropdown's menu is at least as wide as the dropdown itself (owner, 2026-10-24).
+  if (anchor.classList?.contains("sel")) el.style.minWidth = `${Math.round(r.width)}px`;
   // Release the previous side's height limit before measuring a menu after scrolling or redraw.
   el.style.maxHeight = `${Math.max(0, innerHeight - headerBottom - 16)}px`;
   const placement = menuPlacement(r, { width: el.offsetWidth, height: el.offsetHeight }, {

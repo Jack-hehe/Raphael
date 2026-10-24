@@ -1394,7 +1394,7 @@ class BackgroundService:
         speaker = self._speaker(old.member_id)
         if speaker is None:
             raise RpcError(NOT_FOUND, "The member of that task is gone")
-        model = speaker.model_or(self._text_setting("agent_model"))
+        model = self._text_setting("agent_model")
         try:
             new_id = self.submit(
                 session_id=old.session_id,

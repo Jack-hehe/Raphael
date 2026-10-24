@@ -29,7 +29,8 @@ async def test_a_due_routine_runs_once_as_a_task_of_its_member_and_is_moved_on_f
     (task,) = rig.background.submitted
     assert task == {
         "session_id": f"routine:{routine['id']}", "text": "PRIVATE-PROMPT 看今天的進度",
-        "language": "zh-TW", "model": "own/model", "member_id": member_id, "routine_id": routine["id"],
+        # a model kept on the member is not used: the team answers with Raphael's
+        "language": "zh-TW", "model": "openai/gpt-6-luna", "member_id": member_id, "routine_id": routine["id"],
     }  # fmt: skip
     moved = rig.service.store.routine(routine["id"])
     assert moved.last_run_ms == rig.wall.now
