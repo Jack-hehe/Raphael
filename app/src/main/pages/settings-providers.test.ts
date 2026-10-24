@@ -63,25 +63,25 @@ beforeEach(() => {
 });
 afterEach(() => { page?.hide(); document.body.innerHTML = ""; setLocale("zh-TW"); });
 
-test("subscription accounts precede providers, login uses the core, and live readiness refreshes only the answer picker", async () => {
+test("models in use precede subscription accounts and providers, login uses the core, and live readiness refreshes only the answer picker", async () => {
   const claude = { id: "claude", name: "Claude Code", installed: true, logged_in: false, models: [], login_command: "claude auth login" };
   api.brainsCli.mockResolvedValue({ clis: [claude] });
   api.brainsCliLogin.mockResolvedValue({ started: true });
   await mount();
   const sections = [...page.el.querySelectorAll(".models-content > section h2")].map((el) => el.textContent);
-  expect(sections.slice(0, 2)).toEqual(["Subscription accounts", "Providers"]);
+  expect(sections.slice(0, 3)).toEqual(["Models in use", "Subscription accounts", "Providers"]);
   click('[data-cli="claude"]'); await flush();
   expect(api.brainsCliLogin).toHaveBeenCalledWith("claude");
-  api.brainsCli.mockResolvedValue({ clis: [{ ...claude, logged_in: true, version: "2.1" }] });
+  api.brainsCli.mockResolvedValue({ clis: [{ ...claude, logged_in: true, version: "2.1", models: [{ id: "cli:claude:sonnet", name: "Claude Sonnet", is_default: true }] }] });
   send({ type: "BrainsChanged" }); await flush();
   expect(page.el.querySelector('.cli-card')!.textContent).toContain("Signed in · v2.1");
   expect(page.el.querySelector('[data-cli="claude"]')).toBeNull();
   click('[data-model-picker="answer"] .mp-trigger');
-  expect(document.querySelector('[data-connection="subscription"]')).not.toBeNull();
-  click('.mp-opt[data-id="cli:claude"]'); await flush();
-  expect(api.settingsSet).toHaveBeenCalledWith("agent_model", "cli:claude");
+  expect(document.querySelector('[data-source="cli:claude"]')).not.toBeNull();
+  click('[data-source="cli:claude"]'); click('.mp-opt[data-id="cli:claude:sonnet"]'); click('[data-dlg="use"]'); await flush();
+  expect(api.settingsSet).toHaveBeenCalledWith("agent_model", "cli:claude:sonnet");
   click('[data-model-picker="cleanup"] .mp-trigger');
-  expect(document.querySelector('[data-connection="subscription"]')).toBeNull();
+  expect(document.querySelector('[data-source="cli:claude"]')).toBeNull();
 });
 
 test.each(["usage", "models"] as const)("%s opens the single Models pane without exposing saved fallback settings", async (alias) => {
@@ -225,9 +225,9 @@ test("a late catalog response cannot undo a newer provider notification in an op
   let old!: (catalog: ModelCatalog) => void;
   api.modelsCatalog.mockImplementationOnce(() => new Promise((resolve) => { old = resolve; })).mockResolvedValueOnce(direct);
   send({ type: "ProvidersChanged" }); send({ type: "ProvidersChanged" }); await flush();
-  expect(document.querySelector("#mp-list")?.textContent).toContain("Local example");
+  click('[data-source="p4"]'); expect(document.querySelector(".mc-list")?.textContent).toContain("Local example");
   old(empty); await flush();
-  expect(document.querySelector("#mp-list")?.textContent).toContain("Local example");
+  expect(document.querySelector(".mc-list")?.textContent).toContain("Local example");
 });
 
 test.each([
@@ -236,14 +236,14 @@ test.each([
   api.modelsCatalog.mockResolvedValue(direct);
   await mount();
   click(`[data-model-picker="${role}"] .mp-trigger`);
-  click('[data-id="@p4:local:8b"]'); await flush();
+  click('[data-source="p4"]'); click('[data-id="@p4:local:8b"]'); click('[data-dlg="use"]'); await flush();
   expect(api.settingsSet).toHaveBeenCalledWith(setting, "@p4:local:8b");
   const legacy = { ...direct, llm: direct.llm.map((model) => ({ ...model, id: "openai/example", provider_id: "openrouter", provider_name: "OpenRouter", name: "OpenRouter example" })) };
   legacy.stt = legacy.llm;
   api.modelsCatalog.mockResolvedValue(legacy);
   send({ type: "ProvidersChanged" }); await flush();
   click(`[data-model-picker="${role}"] .mp-trigger`);
-  click('[data-id="openai/example"]'); await flush();
+  click('[data-source="openrouter"]'); click('[data-id="openai/example"]'); click('[data-dlg="use"]'); await flush();
   expect(api.settingsSet).toHaveBeenCalledWith(setting, "openai/example");
 });
 
@@ -274,7 +274,7 @@ test("pickers opened outside Models include enabled connections with zero models
   click('button[data-svc="open"][data-id="vision"]');
   click('button[data-svc="service"][data-service="model"]');
   click('[data-model-picker="vision"] .mp-trigger');
-  expect(document.querySelector('[data-connection="p9"]')?.textContent).toBe("Empty server0");
+  expect(document.querySelector('[data-source="p9"]')?.textContent).toBe("Empty serverLocal · 0 models");
 });
 
 test("vision keeps its primary image picker without fallback controls", async () => {
@@ -291,6 +291,6 @@ test("vision keeps its primary image picker without fallback controls", async ()
   expect(page.el.querySelector('[data-fallback-purpose]')).toBeNull();
   expect(page.el.querySelectorAll('[data-model-picker="vision"]')).toHaveLength(1);
   click('[data-model-picker="vision"] .mp-trigger');
-  click('[data-id="@p4:local:8b"]'); await flush();
+  click('[data-source="p4"]'); click('[data-id="@p4:local:8b"]'); click('[data-dlg="use"]'); await flush();
   expect(api.settingsSet).toHaveBeenCalledWith("vision_model", "@p4:local:8b");
 });

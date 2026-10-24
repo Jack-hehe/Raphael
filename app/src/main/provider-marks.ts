@@ -12,8 +12,8 @@ const MARKS: Record<string, ServiceIconId> = {
 };
 
 /** An unrecognised custom connection, or artwork not installed yet, gets a plug. */
-export function providerMark(kind: string): string {
+export function providerMark(kind: string, officialOnly = false): string {
   const key = kind.toLowerCase().replace(/[\s-]+/g, "_").replace(/_cn$/, "");
   const id = MARKS[key] ?? (LOGO_IDS.includes(key as LogoIconId) ? key as LogoIconId : null);
-  return iconHTML(kind, id ?? null, "md");
+  return officialOnly && !id ? "" : iconHTML(kind, id ?? null, "md");
 }

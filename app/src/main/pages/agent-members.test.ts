@@ -29,6 +29,7 @@ const api = vi.hoisted(() => ({
   toolsetsList: vi.fn(),
   routinesList: vi.fn(),
   modelsCatalog: vi.fn(),
+  providersList: vi.fn(),
   brainsCli: vi.fn(),
   core: vi.fn(),
 }));
@@ -89,6 +90,7 @@ beforeEach(() => {
   document.body.innerHTML = "";
   for (const fn of Object.values(api)) fn.mockReset();
   api.brainsCli.mockResolvedValue({ clis: [] });
+  api.providersList.mockResolvedValue({ providers: [] });
   api.agentQuestionOpen.mockResolvedValue(null);
   api.membersList.mockResolvedValue(structuredClone(LIST));
   api.membersPresets.mockResolvedValue({ presets: [] });
@@ -109,21 +111,22 @@ test("provider changes refresh the member model picker and its qualified model s
   mount(); await flush(); await pick(3);
   $(".mb-pill").click(); await flush();
   $(".mb-model .mp-trigger").click();
-  expect($("#mp-list").textContent).not.toContain("Local example");
+  expect($(".mc-pane").textContent).not.toContain("Local example");
   api.modelsCatalog.mockResolvedValue({ ...catalog, llm: [{
     id: "llama3.1:8b", name: "Local example", provider: "Meta", provider_id: "p4", provider_name: "Ollama",
     input_per_mtok: null, output_per_mtok: null, per_minute: null, free: false, variable_price: false,
     context_length: 8192, created_at_ms: null, capabilities: {}, roles: { answer: { usable: true, reason: null } },
   }] });
   send({ type: "ProvidersChanged" }); await flush();
-  expect($("#mp-list").textContent).toContain("Local example");
+  $('[data-source="p4"]').click();
+  expect($(".mc-pane").textContent).toContain("Local example");
   api.membersUpdate.mockResolvedValue({ member: { ...LIST.members[1], model: "@p4:llama3.1:8b" } });
-  $('[data-id="@p4:llama3.1:8b"]').click(); await flush();
+  $('[data-id="@p4:llama3.1:8b"]').click(); $('[data-dlg="use"]').click(); await flush();
   expect(api.membersUpdate).toHaveBeenCalledWith(3, { model: "@p4:llama3.1:8b" });
 });
 
 test("member picker follows CLI readiness and saves a CLI brain through the existing model control", async () => {
-  const claude = { id: "claude", name: "Claude Code", installed: true, logged_in: true, models: [{ id: "cli:claude:sonnet", name: "sonnet" }], login_command: "claude auth login" };
+  const claude = { id: "claude", name: "Claude Code", installed: true, logged_in: true, models: [{ id: "cli:claude:sonnet", name: "Claude Sonnet", is_default: true }], login_command: "claude auth login" };
   api.modelsCatalog.mockResolvedValue({ llm: [], stt: [], source: "builtin", fetched_at_ms: null, replaced: [] });
   api.brainsCli.mockResolvedValue({ clis: [claude] });
   const agent = mount(); await flush(); await pick(3);
@@ -135,8 +138,19 @@ test("member picker follows CLI readiness and saves a CLI brain through the exis
   api.brainsCli.mockResolvedValue({ clis: [claude] });
   send({ type: "BrainsChanged" }); await flush();
   api.membersUpdate.mockResolvedValue({ member: { ...LIST.members[1], model: "cli:claude:sonnet" } });
-  $('[data-id="cli:claude:sonnet"]').click(); await flush();
+  $('[data-id="cli:claude:sonnet"]').click(); $('[data-dlg="use"]').click(); await flush();
   expect(api.membersUpdate).toHaveBeenCalledWith(3, { model: "cli:claude:sonnet" });
+  agent.hide();
+});
+
+test("the member chooser includes empty connected sources with their real provider kind", async () => {
+  api.providersList.mockResolvedValue({ providers: [{ id: "p9", kind: "ollama", name: "My local server", enabled: true, has_key: false, base_url: "http://localhost:11434", models: 0, status: "unknown" }] });
+  const agent = mount(); await flush(); await pick(3);
+  $(".mb-pill").click(); await flush(); $(".mb-model .mp-trigger").click();
+  const source = $('[data-source="p9"]');
+  expect(source.textContent).toContain("My local server");
+  expect(source.querySelector(".mono")).not.toBeNull();
+  expect(source.closest("section")?.textContent).toContain("自架");
   agent.hide();
 });
 

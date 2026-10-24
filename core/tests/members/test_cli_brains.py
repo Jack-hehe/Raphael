@@ -147,7 +147,7 @@ async def test_not_logged_in_never_starts_the_fake_cli(setup, tmp_path):
     teacher = member(team, model="cli:gemini")
     rig.service._cli_brains = CliBrains(home=tmp_path, environ={}, commands={"gemini": ["this-must-not-run"]})
     result = await typed(rig, "Hello", teacher.id)
-    assert result["text"] == "請先在設定 › 模型與用量登入 Gemini CLI。"
+    assert result["text"] == "請先在設定 › 模型與用量登入 Antigravity。"
 
 
 async def test_crash_does_not_publish_diagnostics_or_private_reasoning(setup, tmp_path, caplog):

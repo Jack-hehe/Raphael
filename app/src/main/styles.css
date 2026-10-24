@@ -21,6 +21,7 @@
   /* surfaces: the window (sidebar), the page, the panels on it, a recessed fill */
   --side: #edf2fa; --content: #f7f9fd; --panel: #ffffff; --surface-2: #e7eef8;
   --edge: #dce4f0; --line: #e1e8f2; --hover: #eaf0f9;
+  --neutral-hover: #f0f0f0;
   /* text: body, secondary, muted (all at least AA on every surface above) */
   --text: #1b2942; --text-2: #465873; --text-3: #536580;
   --accent: #a8c9ed; --accent-text: #3b64aa; --on-accent: #1b3154; --accent-soft: #e4edf9;
@@ -44,6 +45,7 @@
 :root[data-theme="dark"] {
   --side: #121826; --content: #182133; --panel: #1f2a40; --surface-2: #283650;
   --edge: #303e57; --line: #334159; --hover: #2a3954;
+  --neutral-hover: #303030;
   --text: #edf3fd; --text-2: #c0cee3; --text-3: #a8bad4;
   --accent: #a8ccf2; --accent-text: #b8d8f8; --on-accent: #1b3154; --accent-soft: #2a3e5d;
   --accent-hover: #c8e0f8; --accent-pressed: #90b0e0;

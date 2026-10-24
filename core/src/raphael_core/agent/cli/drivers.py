@@ -23,8 +23,9 @@ class Event:
 
 
 class Driver:
-    def __init__(self, name, command, *, model=None, environ=None):
+    def __init__(self, name, command, *, model=None, effort=None, environ=None):
         self.name, self.command, self.model = name, list(command), model
+        self.effort = effort
         self.environ = environ
         self.child = None
         self.session = None
@@ -62,6 +63,8 @@ class Driver:
                     command += ["--resume", session]
                 if self.model:
                     command += ["--model", self.model]
+                if self.effort:
+                    command += ["--effort", self.effort]
             elif self.name == "codex":
                 # The thread's `config` is not applied to MCP servers: they are set when the server
                 # starts, the token passed through the environment, never on the command line.
@@ -201,7 +204,8 @@ class Driver:
                         raise ValueError("missing_session")
                     yield Event("session", self.session)
                     if codex:
-                        await request("turn/start", {"threadId": self.session, "input": [{"type": "text", "text": user}]}, "turn")
+                        await request("turn/start", {"threadId": self.session, "input": [{"type": "text", "text": user}],
+                                      **({"effort": self.effort} if self.effort else {})}, "turn")
                     else:
                         await request("session/prompt", {"sessionId": self.session, "prompt": [
                             {"type": "text", "text": system + "\n\n" + user}]}, "turn")

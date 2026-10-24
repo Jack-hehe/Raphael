@@ -122,12 +122,28 @@ export interface CliBrain {
   logged_in: boolean | null;
   version?: string;
   login_command: string;
-  models: { id: string; name: string }[];
+  models: CliModel[];
   notes?: string;
+}
+
+export interface CliModel {
+  id: string;
+  name: string;
+  provider?: string;
+  effort_models?: Record<string, string>;
+  description?: string;
+  is_default?: boolean;
+  reasoning_efforts?: string[];
+  default_effort?: string | null;
 }
 
 /** A model of `models.catalog`. Prices are US$; null is unknown or does not apply. */
 export interface CatalogModel {
+  effort_models?: Record<string, string>;
+  description?: string;
+  is_default?: boolean;
+  reasoning_efforts?: string[];
+  default_effort?: string | null;
   id: string;
   /** Connection that serves the model; absent on legacy OpenRouter catalogs. */
   provider_id?: string;

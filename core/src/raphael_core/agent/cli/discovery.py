@@ -8,17 +8,22 @@ import subprocess
 from pathlib import Path
 
 from .process import Child, subscription_env
+from .models import claude_models, codex_models, antigravity_models
 
-NAMES = {"claude": "Claude Code", "codex": "Codex CLI", "gemini": "Gemini CLI"}
-MODELS = {"claude": ("sonnet", "opus", "haiku"), "codex": (), "gemini": ()}
-LOGIN = {"claude": "claude auth login", "codex": "codex login", "gemini": "gemini"}
+NAMES = {"claude": "Claude Code", "codex": "Codex CLI", "gemini": "Antigravity"}
+LOGIN = {"claude": "claude auth login", "codex": "codex login", "gemini": "agy"}
+EXECUTABLE = {"claude": "claude", "codex": "codex", "gemini": "agy"}
 
 
 def brain_ref(value):
     if not isinstance(value, str):
         return None
-    match = re.fullmatch(r"cli:(claude|codex|gemini)(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,199}))?", value)
+    match = re.fullmatch(r"cli:(claude|codex|gemini)(?::([A-Za-z0-9][A-Za-z0-9._/-]{0,199}))?(?:\?effort=(none|minimal|low|medium|high|xhigh|max))?", value)
     return (match[1], match[2]) if match else None
+
+
+def brain_effort(value):
+    return value.partition("?effort=")[2] or None if brain_ref(value) else None
 
 
 def resolve_command(path, environ=None):
@@ -51,20 +56,24 @@ class CliBrains:
         self._lock = asyncio.Lock()
         self._watcher = None
         self._last_used = 0.0
+        self._models = {}
+        self._model_refresh = None
+        self._models_at = {}
 
     def command(self, name):
         if self.commands is not None:
             return self.commands.get(name)
-        found = shutil.which(name, path=self.environ.get("PATH", ""))
+        executable = EXECUTABLE.get(name, name)
+        found = shutil.which(executable, path=self.environ.get("PATH", ""))
         roots = [self.home / ".local" / "bin", self.home / ".bun" / "bin"]
         if self.environ.get("APPDATA"):
             roots.append(Path(self.environ["APPDATA"]) / "npm")
         if self.environ.get("LOCALAPPDATA"):
             local = Path(self.environ["LOCALAPPDATA"])
-            roots.extend([local / "Microsoft" / "WinGet" / "Links", local / "Programs" / name,
-                          local / "Programs" / "Claude", local / "npm"])
+            roots.extend([local / "Microsoft" / "WinGet" / "Links", local / "Programs" / executable,
+                          local / "Programs" / "Claude", local / "npm", local / "agy" / "bin"])
         candidates = [Path(found)] if found else []
-        candidates.extend(root / (name + suffix) for root in roots for suffix in (".exe", ".cmd", ".ps1", ""))
+        candidates.extend(root / (executable + suffix) for root in roots for suffix in (".exe", ".cmd", ".ps1", ""))
         for path in candidates:
             if path.is_file():
                 try:
@@ -76,28 +85,27 @@ class CliBrains:
     def logged_in(self, name):
         claude = Path(self.environ.get("CLAUDE_CONFIG_DIR", self.home / ".claude"))
         codex = Path(self.environ.get("CODEX_HOME", self.home / ".codex"))
-        gemini = Path(self.environ.get("GEMINI_CLI_HOME", self.home)) / ".gemini"
+        gemini = self.home / ".gemini"
         files = {
             "claude": (claude / ".credentials.json", claude / "credentials.json"),
             "codex": (codex / "auth.json",),
-            "gemini": (gemini / "oauth_creds.json",),
+            "gemini": (gemini / "google_accounts.json", gemini / "oauth_creds.json"),
         }
         try:
             if any(path.is_file() for path in files[name]):
                 return True
         except OSError:
             return None
-        # Claude also uses OS credential storage. Settings alone do not establish Gemini login.
+        # Claude also uses OS credential storage. Settings alone do not establish Google login.
         return None if name == "claude" else False
 
     async def _one(self, name):
         command = self.command(name)
         item = {"id": name, "name": NAMES[name], "installed": bool(command),
                 "logged_in": self.logged_in(name) if command else False,
-                "login_command": LOGIN[name], "models": [
-                    {"id": f"cli:{name}", "name": "CLI default"},
-                    *[{"id": f"cli:{name}:{model}", "name": model} for model in MODELS[name]],
-                ]}
+                "login_command": LOGIN[name], "models": self._models.get(name, [])}
+        if name == "claude":
+            item["models"] = claude_models(Path(self.environ.get("CLAUDE_CONFIG_DIR", self.home / ".claude")))
         if command:
             child = Child([*command, "--version"], environ=self.environ)
             try:
@@ -122,7 +130,38 @@ class CliBrains:
             self._previous = value
         if self._watcher is None:
             self._watcher = asyncio.create_task(self._watch())
+        if self._model_refresh is None and any(self._needs_models(name) for name in ("codex", "gemini")):
+            self._model_refresh = asyncio.create_task(self._refresh_models())
         return value
+
+    def _needs_models(self, name):
+        lifetime = 3600 if self._models.get(name) else 60
+        return name not in self._models_at or self._last_used - self._models_at[name] > lifetime
+
+    async def _refresh_one(self, name):
+        command = self.command(name)
+        if not self._needs_models(name) or not command or not self.logged_in(name):
+            return
+        try:
+            if name == "codex":
+                models = await codex_models(command, self.environ,
+                    Path(self.environ.get("CODEX_HOME", self.home / ".codex")) / "config.toml")
+            else:
+                models = await antigravity_models(command, self.environ,
+                    self.home / ".gemini" / "antigravity-cli" / "settings.json")
+            if models != self._models.get(name):
+                self._models[name] = models
+                if self.notify:
+                    self.notify("brains.changed", {})
+        except (OSError, ValueError, TimeoutError):
+            pass
+        self._models_at[name] = asyncio.get_running_loop().time()
+
+    async def _refresh_models(self):
+        try:
+            await asyncio.gather(*(self._refresh_one(name) for name in ("codex", "gemini")))
+        finally:
+            self._model_refresh = None
 
     def login(self, name):
         command = self.command(name)
@@ -146,6 +185,9 @@ class CliBrains:
             self._watcher = None
 
     async def aclose(self):
+        if self._model_refresh:
+            self._model_refresh.cancel()
+            await asyncio.gather(self._model_refresh, return_exceptions=True)
         if self._watcher:
             self._watcher.cancel()
             await asyncio.gather(self._watcher, return_exceptions=True)

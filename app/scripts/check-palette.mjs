@@ -20,7 +20,7 @@ const ratio = (a, b) => {
   if (!Number.isFinite(result)) throw new Error(`Invalid contrast pair: ${a}, ${b}`);
   return result;
 };
-const surfaces = ["side", "content", "panel", "surface-2", "menu", "btn", "key", "hover", "selected", "accent-soft"];
+const surfaces = ["side", "content", "panel", "surface-2", "menu", "btn", "key", "hover", "neutral-hover", "selected", "accent-soft"];
 const report = {};
 for (const [theme, palette] of Object.entries({ light, dark })) {
   const contrast = {};

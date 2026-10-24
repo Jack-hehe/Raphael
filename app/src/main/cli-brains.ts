@@ -5,10 +5,10 @@ import { providerMark } from "./provider-marks";
 import type { CatalogModel, CliBrain, CliBrainId, MainEvent } from "./types";
 import { btn, esc } from "./ui";
 
-const CLIS = [
+export const CLIS = [
   { id: "claude", name: "Claude Code", mark: "anthropic", install: "https://code.claude.com/docs/en/setup" },
   { id: "codex", name: "Codex", mark: "openai", install: "https://developers.openai.com/codex/cli/" },
-  { id: "gemini", name: "Gemini CLI", mark: "google", install: "https://geminicli.com/docs/get-started/installation/" },
+  { id: "gemini", name: "Antigravity", mark: "google", install: "https://antigravity.google/download" },
 ] as const;
 export interface CliBrainsView {
   clis: readonly CliBrain[];
@@ -17,18 +17,16 @@ export interface CliBrainsView {
   error: boolean;
 }
 export const emptyCliBrainsView = (): CliBrainsView => ({ clis: [], state: "loading", busy: null, error: false });
-export const subscriptionMarks = (): string => `<span class="cli-marks">${CLIS.map((c) => providerMark(c.mark)).join("")}</span>`;
 export function cliBrainLine(ref: string): string {
   const cli = CLIS.find((c) => ref === `cli:${c.id}` || ref.startsWith(`cli:${c.id}:`));
   return cli ? `<span class="mb-brain">${providerMark(cli.mark)}<span>${esc(cli.name)} · ${esc(t("brains.subscription"))}</span></span>` : "";
 }
-export function cliModels(clis: readonly CliBrain[]): CatalogModel[] {
-  return clis.filter((c) => c.installed && c.logged_in === true).flatMap((c) => {
-    const defaults = [{ id: `cli:${c.id}`, name: t("brains.default") }];
-    const models = [...defaults, ...c.models.filter((m) => m.id !== `cli:${c.id}`).map((m) => ({ ...m, id: m.id.startsWith(`cli:${c.id}:`) ? m.id : `cli:${c.id}:${m.id}` }))];
+export function cliModels(clis: readonly CliBrain[], availableOnly = true): CatalogModel[] {
+  return clis.filter((c) => !availableOnly || c.installed && c.logged_in === true).flatMap((c) => {
+    const models = c.models.filter((m) => m.id !== `cli:${c.id}`).map((m) => ({ ...m, id: m.id.startsWith(`cli:${c.id}:`) ? m.id : `cli:${c.id}:${m.id}` }));
     return models.map((m) => ({
-      id: m.id, name: `${CLIS.find((known) => known.id === c.id)!.name} · ${m.name}`, provider: { claude: "Anthropic", codex: "OpenAI", gemini: "Google" }[c.id],
-      provider_id: "subscription", provider_name: t("brains.subscription"),
+      ...m, provider: m.provider ?? { claude: "Anthropic", codex: "OpenAI", gemini: "Google" }[c.id],
+      provider_id: `cli:${c.id}`, provider_name: `${CLIS.find((known) => known.id === c.id)!.name} ${t("brains.subscription")}`,
       input_per_mtok: null, output_per_mtok: null, per_minute: null, free: false, variable_price: false,
       context_length: null, created_at_ms: null, capabilities: {}, input_modalities: ["text"], roles: { answer: { usable: true, reason: null } },
     }));

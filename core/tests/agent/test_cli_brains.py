@@ -55,6 +55,8 @@ def send(value):
 assert all(key not in os.environ for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"))
 if name == "claude":
     assert "--resume" in sys.argv and "previous" in sys.argv
+    assert sys.argv[sys.argv.index("--model")+1] == "chosen-model"
+    assert sys.argv[sys.argv.index("--effort")+1] == "high"
     json.loads(sys.stdin.readline())
     send({"type":"system", "subtype":"init", "session_id":"next"})
     send({"type":"assistant", "message":{"content":[{"type":"thinking","thinking":"PRIVATE-REASONING"}]}})
@@ -70,8 +72,12 @@ else:
             send({"jsonrpc":"2.0", "id":msg["id"], "result":{}})
         elif method in ("thread/resume", "session/load"):
             assert msg["params"].get("threadId", msg["params"].get("sessionId")) == "previous"
+            if name == "codex":
+                assert msg["params"]["model"] == "chosen-model"
             send({"jsonrpc":"2.0", "id":msg["id"], "result":{"thread":{"id":"next"},"sessionId":"next"}})
         elif method in ("turn/start", "session/prompt"):
+            if name == "codex":
+                assert msg["params"]["effort"] == "high"
             send({"jsonrpc":"2.0", "id":"approval", "method":"item/commandExecution/requestApproval" if name=="codex" else "session/request_permission", "params":{"command":"echo hello", "options":[{"optionId":"yes","kind":"allow_once"},{"optionId":"no","kind":"reject_once"}]}})
             turn_id = msg["id"]
         elif msg.get("id") == "approval":
@@ -98,7 +104,7 @@ else:
         permissions.append(value)
         return "once"
 
-    driver = Driver(name, [sys.executable, str(script), name], environ={**os.environ, "OPENAI_API_KEY": "never-child"})
+    driver = Driver(name, [sys.executable, str(script), name], model="chosen-model", effort="high", environ={**os.environ, "OPENAI_API_KEY": "never-child"})
     events = [event async for event in driver.run(user="question", system="persona", endpoint="http://127.0.0.1:1/mcp", token="ephemeral", session="previous", permission=permission)]
     assert any(event.kind == "text_delta" and event.text == "Hello" for event in events)
     assert any(event.kind == "final" and event.text == "Hello" for event in events)
@@ -120,8 +126,10 @@ async def test_discovery_reports_changes_without_reading_credentials(tmp_path, m
     (tmp_path / ".gemini").mkdir()
     credentials = tmp_path / ".gemini" / "oauth_creds.json"
     credentials.touch()
-    def forbid_read(*args, **kwargs):
-        raise AssertionError("Never open an auth file")
+    read_text = Path.read_text
+    def forbid_read(path, *args, **kwargs):
+        assert path.name not in ("auth.json", "oauth_creds.json", "google_accounts.json", ".credentials.json", "credentials.json")
+        return read_text(path, *args, **kwargs)
     monkeypatch.setattr(Path, "read_text", forbid_read)
     assert (await brains.list())["clis"][2]["logged_in"] is True
     assert changed == [("brains.changed", {})]
@@ -135,7 +143,7 @@ def test_known_windows_directory_and_powershell_shim(tmp_path):
     entry.touch()
     node = npm / "node.exe"
     node.touch()
-    (npm / "gemini.ps1").write_text('& "$basedir/node$exe" "$basedir/entry.mjs" $args', encoding="utf-8")
+    (npm / "agy.ps1").write_text('& "$basedir/node$exe" "$basedir/entry.mjs" $args', encoding="utf-8")
     brains = CliBrains(home=tmp_path, environ={"APPDATA": str(tmp_path), "PATH": ""})
     assert brains.command("gemini") == [str(node), str(entry)]
     assert brains.command("codex") is None
