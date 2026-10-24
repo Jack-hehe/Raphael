@@ -90,6 +90,40 @@ def canonical(arguments: Mapping[str, Any]) -> str:
     return json.dumps(arguments, sort_keys=True, ensure_ascii=False, default=str)
 
 
+# Calls that fail one after another: after STEER_AT the model is told to change its approach, and
+# after STOP_AT the task stops instead of spending its limits on the same wall.
+STEER_AT = 5
+STOP_AT = 8
+STEER_NOTE = (
+    "<harness_note>Several tool calls in a row have failed. Do not retry the same approach: use a "
+    "different tool or source, or stop and report plainly what could not be done.</harness_note>"
+)
+
+
+class FailureGuard:
+    """Counts the calls that failed one after another (any tool); a call that works starts the count
+    again. `failed()` says what to do after a failure: "steer" once when the count reaches
+    `steer_at`, "stop" when it reaches `stop_at`, otherwise None."""
+
+    def __init__(self, steer_at: int = STEER_AT, stop_at: int = STOP_AT) -> None:
+        self._steer_at, self._stop_at = steer_at, stop_at
+        self._row = 0
+        self._steered = False
+
+    def succeeded(self) -> None:
+        self._row = 0
+        self._steered = False
+
+    def failed(self) -> str | None:
+        self._row += 1
+        if self._row >= self._stop_at:
+            return "stop"
+        if self._row >= self._steer_at and not self._steered:
+            self._steered = True
+            return "steer"
+        return None
+
+
 class RepeatGuard:
     """Refuses a call that is the same as two before it: the same tool with the same arguments for
     the third time. Such a call cannot tell the model anything it does not know, and a model that

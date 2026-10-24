@@ -36,6 +36,8 @@ from typing import Any, Protocol
 from .guards import (
     MAX_ARGUMENT_CHARS,
     RepeatGuard,
+    FailureGuard,
+    STEER_NOTE,
     canonical,
     elide_old,
     wrap_untrusted,
@@ -202,6 +204,7 @@ async def run_task(
     )
     messages = conversation
     repeats = RepeatGuard()
+    failures = FailureGuard()
     deadline = clock() + limits.seconds
     model_calls = tool_calls = 0
 
@@ -221,6 +224,7 @@ async def run_task(
             messages.append(_assistant_message(turn))
             if not turn.calls:
                 return Outcome("done", turn.content, None, None, model_calls, tool_calls)
+            steer = False
             for call in turn.calls:
                 refusal = _refusal(call, offered, repeats)
                 if refusal is None:
@@ -239,6 +243,13 @@ async def run_task(
                             messages=list(messages), waiting_call=call.id,
                         )  # fmt: skip
                     content = result_text(call.name, outcome)
+                    if outcome.ok:
+                        failures.succeeded()
+                    else:
+                        verdict = failures.failed()
+                        if verdict == "stop":
+                            raise Stop("failed", "tool_failures")
+                        steer = steer or verdict == "steer"
                     for found in outcome.tools:
                         name = found["function"]["name"]
                         if name not in offered:
@@ -247,6 +258,9 @@ async def run_task(
                 else:
                     content = wrap_untrusted(call.name, refusal, ok=False)
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
+            if steer:
+                # told after the results of this round, so that it reads them first
+                messages.append({"role": "user", "content": STEER_NOTE})
             elide_old(messages)
     except Stop as stop:
         status = "cancelled" if stop.kind == "cancelled" else "stopped"
